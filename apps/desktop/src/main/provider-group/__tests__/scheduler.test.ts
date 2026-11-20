@@ -120,10 +120,29 @@ describe('the most urgent quota comes first for every strategy', () => {
     expect(pickProviderGroupMember(similar, 'weight', { random: () => 0.5 })).toBe('b');
   });
 
-  it('puts computers without readable usage after known ones, and keeps plain strategies when none is known', () => {
+  // 默认(账号池等)：只要有一台读得到，读不到的就不参与；全部读不到时原样交给组策略。
+  it('drops unreadable members by default once one is known, and keeps plain strategies when none is known', () => {
     expect(pickProviderGroupMember([m('shared'), m('own', { urgency: 0.2, running: 3 })], 'order')).toBe('own');
     expect(pickProviderGroupMember([m('a', { running: 1 }), m('b', { urgency: null })], 'order')).toBe('a');
     expect(pickProviderGroupMember([m('a', { running: 1 }), m('b')], 'least')).toBe('b');
+  });
+
+  // 2026-11-19 用户裁决(provider-groups.md §5)：供应商组里读不到用量的电脑(未开放额度的分享)也能被自动分到。
+  // 回归：组里 DP(3 个任务)、DHL(2 个)读得到额度，空闲的分享电脑 David 读不到，最少占用却从来分不到 David。
+  it.each([
+    ['least', {}, 'david'],
+    ['order', {}, 'dp'],
+    ['round', { lastPicked: 'dhl' }, 'david'],
+    ['weight', { random: () => 0.99 }, 'david'],
+  ] as const)('keeps unreadable provider-group members for %s picks', (strategy, options, expected) => {
+    const members = [m('dp', { urgency: 1.2, running: 3 }), m('dhl', { urgency: 1.15, running: 2 }), m('david')];
+    expect(pickProviderGroupMember(members, strategy, { ...options, keepUnknownQuota: true })).toBe(expected);
+  });
+
+  it('still filters known provider-group members below the urgency band while keeping unreadable ones', () => {
+    const members = [m('calm', { urgency: 0.1 }), m('urgent', { urgency: 2, running: 5, limit: 9 }), m('david', { running: 1 })];
+    expect(pickProviderGroupMember(members, 'least', { keepUnknownQuota: true })).toBe('david');
+    expect(pickProviderGroupMember(members.slice(0, 2), 'least', { keepUnknownQuota: true })).toBe('urgent');
   });
 
   // 2026-10-21 用户裁决：5 小时配额快满、离重置还早的先不分新任务(刚开始就撞上限会被迫换电脑)，都是这样时照常分。

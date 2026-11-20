@@ -84,6 +84,7 @@ import {
   normalizeManualProjectOrder,
   mergeVisibleReorder,
   snapshotManualProjectOrder,
+  sidebarContentFilterCount,
   loadDeviceGroupCollapsedKeys,
   persistDeviceGroupCollapsedKeys,
   loadDialogueGroupCollapsedKeys,
@@ -124,7 +125,7 @@ import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
-import { TaskInbox } from '../TaskInbox';
+import { TaskInboxWithTeammates } from '../TaskInboxWithTeammates';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -249,9 +250,8 @@ export interface ProjectsSectionProps {
   projectOptions?: readonly FolderPickerOption[];
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
   onToggleProject: (projectKey: string) => void;
-  onToggleProjectPin: (project: ProjectNodeData, currentlyPinned: boolean) => void;
+  onSettings: (project: ProjectNodeData) => void;
   onRenameProject: (project: ProjectNodeData, alias: string) => Promise<void>;
-  onRemoveFromSidebar: (project: ProjectNodeData) => void;
   onCollapseAll: () => void;
   onExpandAll: () => void;
   /** 在设备行指定的电脑上打开新建项目表单；null 表示本机。 */
@@ -264,8 +264,6 @@ export interface ProjectsSectionProps {
   onOpenConversationSearch: (project: ProjectNodeData) => void;
   /** 在系统文件管理器中打开 project 的 workingDir。 */
   onOpenInExplorer: (workingDir: string) => void;
-  /** 打开设置 → 任务导入，只看这个项目。 */
-  onImportFromTools: (project: ProjectNodeData) => void;
   /** 进入 workdir 文件浏览模式 (vscode-style file tree + body viewer)。 */
   onBrowseFiles: (project: ProjectNodeData) => void;
   /** 右键菜单 → 归档该 project 下所有非执行中的 session（带二次确认）。 */
@@ -318,16 +316,14 @@ export function ProjectsSection({
   projectOptions,
   onScheduleAction,
   onToggleProject,
-  onToggleProjectPin,
+  onSettings,
   onRenameProject,
-  onRemoveFromSidebar,
   onCollapseAll,
   onExpandAll,
   onCreateProject,
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
-  onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
   onSearchDialogues,
@@ -970,10 +966,8 @@ export function ProjectsSection({
       // 按设备分段时段头已写明设备,行内不再重复标注归属(2026-08-12 用户裁决)。
       hideRemoteMachineLabel={deviceGroupingActive}
       onToggle={onToggleProject}
-      isProjectPinned={false}
-      onToggleProjectPin={onToggleProjectPin}
+      onSettings={onSettings}
       onRenameProject={onRenameProject}
-      onRemoveFromSidebar={onRemoveFromSidebar}
       onSessionClick={onSessionClick}
       onAction={onAction}
       onRename={onRename}
@@ -985,7 +979,6 @@ export function ProjectsSection({
       onCreateInProject={onCreateInProject}
       onOpenConversationSearch={onOpenConversationSearch}
       onOpenInExplorer={onOpenInExplorer}
-      onImportFromTools={onImportFromTools}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
     />
@@ -1311,7 +1304,7 @@ export function ProjectsSection({
                     <SectionCollapse collapsed={sectionCollapsed}>
                       <div
                         className={cn(
-                          'flex flex-col gap-1 pl-2',
+                          'flex flex-col gap-1',
                           section.entries.length > 0 && 'pt-1',
                         )}
                       >
@@ -1407,8 +1400,9 @@ export function ProjectsSection({
         </div>
       ) : null}
       {taskListMode === 'inbox' && inboxSessions && (
-        <TaskInbox
+        <TaskInboxWithTeammates
           sessions={inboxSessions}
+          contentFiltered={sidebarContentFilterCount(filter) > 0}
           isTeammateTask={isInboxTeammateTask}
           priorityContext={priorityContext}
           activeSessionId={activeSessionId}
@@ -1621,15 +1615,10 @@ export function SessionGroupNode({
           </div>
         )}
       </div>
-      {/* 组内会话:与 ProjectNode 的会话区同款容器(gap / pt、list 缩进)
+      {/* 组内会话:与 ProjectNode 的会话区同款容器(gap / pt)
           与同一份折叠上限(getProjectSessionCollapseLimit)。 */}
       <SectionCollapse collapsed={collapsed} data-no-drag>
-        <div
-          className={cn(
-            'flex flex-col gap-0.5 pt-0.5 pr-0',
-            sessionVariant === 'list' ? 'pl-2' : 'pl-0',
-          )}
-        >
+        <div className="flex flex-col gap-0.5 pt-0.5">
           <SessionEntryList
             sessions={sessions}
             activeSessionId={activeSessionId}
@@ -1645,7 +1634,6 @@ export function SessionGroupNode({
             onMoveSession={onMoveSession}
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
-            indented
             collapsible
             collapseLimit={getProjectSessionCollapseLimit()}
             disableCollapse={disableSessionCollapse}

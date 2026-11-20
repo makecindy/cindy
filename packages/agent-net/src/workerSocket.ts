@@ -78,6 +78,8 @@ export const AGENT_NET_NETWORK_CHANGE_PROBE_MS = 15_000;
 /** Bytes Main lets wait in one relay WebSocket; on top of it the queue-delay limit in DatagramSendQueue applies. */
 const RELAY_SEND_BUFFER_CAP_BYTES = 1024 * 1024;
 export type AgentNetWorkerSocketOptions = AgentNetSocketOptions & {
+  /** Track this worker's UDP socket bytes until it exits, including direct paths and wrapped relay UDP. */
+  observeUdpTraffic?(read: () => { sent: number; received: number }): () => void;
   log?: AgentNetSocketLog;
   uplinkKeepalive?: AgentNetUplinkKeepalive;
   /** See MAX_DATAGRAM_QUEUE_DELAY_MS; only tests shorten it. */
@@ -151,7 +153,14 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       socket.worker.once('exit', () => { finish(new Error('AGENT_NET_WORKER_EXITED')); socket.dispose(1006); });
     });
     const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
-      log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, ...portable } = options;
+      log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, observeUdpTraffic, ...portable } = options;
+    if (observeUdpTraffic) {
+      // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
+      const bytes = new BigUint64Array(new SharedArrayBuffer(2 * BigUint64Array.BYTES_PER_ELEMENT));
+      portable.udpTraffic = bytes;
+      const stop = observeUdpTraffic(() => ({ sent: Number(Atomics.load(bytes, 0)), received: Number(Atomics.load(bytes, 1)) }));
+      socket.worker.once('exit', stop);
+    }
     socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap });
     try { await ready; setImmediate(() => { if (!socket.closed) socket.emit('open'); }); return socket; }
     catch (error) { socket.dispose(1006); throw error; }
@@ -263,9 +272,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     const own = this.client.delegation && this.delegations.find(d => delegationVisibleTo(d, this.client.identity, this.client.delegation));
     if (this.client.delegation) return own && verifyDelegation(this.client.rootPublicKey, own) ? delegatedPeerTarget(own, peer, 'guest') : null;
     for (const delegation of this.delegations) {
-      const target = verifyDelegation(this.client.rootPublicKey, delegation) && delegationVisibleTo(delegation, this.client.identity)
-        && delegatedPeerTarget(delegation, peer, 'host');
-      if (target) return target;
+      // Each task sweep looks up one guest. Check the peer before revalidating
+      // certificate lifetimes and signatures in the authenticated snapshot.
+      const target = delegatedPeerTarget(delegation, peer, 'host');
+      if (target && delegationVisibleTo(delegation, this.client.identity)
+        && verifyDelegation(this.client.rootPublicKey, delegation)) return target;
     }
     return null;
   }

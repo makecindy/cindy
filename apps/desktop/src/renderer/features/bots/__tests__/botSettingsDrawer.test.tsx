@@ -100,6 +100,33 @@ afterEach(() => {
 });
 
 describe('BotSettingsDrawer', () => {
+  // Settings leave/focus contract (cindy-bots-runtime.md: save before leaving;
+  // DESIGN.md §14.2): real drawer/router/popover + a deferred save boundary.
+  // Existing navigation cases resolve immediately and miss stale destinations
+  // or a pointer lock surviving an allowed navigation. Minimal input: two
+  // destinations while one guard is pending; unit/jsdom, no host or network I/O.
+  // Measured file: 45.71s total / 6.24s execution; these branches 2.232s / 0.967s.
+  it.each([true, false])('keeps pending navigation responsive and applies only the latest destination (allowed=%s)', async (allowed) => {
+    let finish!: (value: boolean) => void;
+    guard.mockImplementationOnce(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    const router = createMemoryRouter([{ path: '*', element: <><LocationProbe /><BotSettingsDrawer /></> }], {
+      initialEntries: ['/bots/bot-1?settings=1'],
+    });
+    render(<RouterProvider router={router} />);
+    await act(async () => { await router.navigate('/cc-agent/task-a'); });
+    expect(guard).toHaveBeenCalledOnce();
+    expect(router.state.location.search).toBe('?settings=1');
+    fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
+    expect(await screen.findByRole('button', { name: 'Model row' })).toBeTruthy();
+    await act(async () => { await router.navigate('/bots/bot-paused'); });
+    expect(guard).toHaveBeenCalledOnce();
+    await act(async () => { finish(allowed); });
+    await waitFor(() => expect(router.state.location.pathname).toBe(allowed ? '/bots/bot-paused' : '/bots/bot-1'));
+    expect(router.state.location.search).toBe(allowed ? '' : '?settings=1');
+    if (allowed) await waitFor(() => expect(document.body.style.pointerEvents).toBe(''));
+    else expect(screen.getByRole('dialog', { name: 'bots.settings' })).toBeTruthy();
+  });
+
   // Unit regression for the reported inert scrim (DESIGN.md §4: side drawers dismiss outside).
   // Existing cases cover navigation, Escape and ×, but not pointer dismissal through the real
   // BotSettingsDrawer. A pointer on the scrim must close only when the save/draft guard permits;

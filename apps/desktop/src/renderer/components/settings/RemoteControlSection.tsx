@@ -278,14 +278,6 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
                   />
                 }
               />
-              {v2.enabled ? (
-                <SettingsRow
-                  id={remoteControlSettings.onlyEncrypted.targetId}
-                  title={t(remoteControlSettings.onlyEncrypted.titleKey)}
-                  hint={t(remoteControlSettings.onlyEncrypted.descriptionKey)}
-                  trailing={<Switch data-setting-id={remoteControlSettings.onlyEncrypted.id} checked={v2.onlyEncrypted} onCheckedChange={v2.setOnlyEncrypted} aria-label={t(remoteControlSettings.onlyEncrypted.titleKey)} />}
-                />
-              ) : null}
             </SettingsCard>
           </SettingsSection>
         ) : null}

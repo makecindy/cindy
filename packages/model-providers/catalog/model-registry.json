@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-18T04:00:00.000Z",
+  "updatedAt": "2026-11-18T05:57:00.000Z",
   "models": [
     {
       "id": "openai/gpt-6.2-sol",
@@ -3446,6 +3446,15 @@
           "agents": []
         }
       ],
+      "nativeApi": "xai-videos"
+    },
+    {
+      "id": "xai/grok-imagine-video-1.5",
+      "name": "Grok Imagine Video 1.5",
+      "modelRef": "xai/grok-imagine-video-1.5",
+      "mode": "video_generation",
+      "status": "active",
+      "routes": [{ "providerId": "xai", "modelId": "xai/grok-imagine-video-1.5", "agents": [] }],
       "nativeApi": "xai-videos"
     },
     {
@@ -9926,6 +9935,16 @@
             "video"
           ]
         }
+      }
+    },
+    {
+      "id": "xai/grok-imagine-video-1.5",
+      "aliases": ["grok-imagine-video-1.5"],
+      "defaults": {
+        "name": "Grok Imagine Video 1.5",
+        "mode": "video_generation",
+        "officialDocs": "https://docs.x.ai/developers/model-capabilities/video/reference-to-video",
+        "modalities": { "input": ["text", "image"], "output": ["video"] }
       }
     },
     {

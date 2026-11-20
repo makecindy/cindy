@@ -51,6 +51,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.hidden': '已隐藏',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
+        'newChat.modelSelector.source.unconfirmed': '模型列表暂未更新',
         'newChat.modelSelector.source.unavailable': '模型不可用',
         'newChat.modelSelector.source.reconnect': '重新连接',
         'newChat.modelSelector.source.manage': '管理来源',
@@ -456,7 +457,7 @@ const ModelSelector = (props: React.ComponentProps<typeof SharedModelSelector>) 
   React.createElement(SharedModelSelector, { unifiedPanel: false, ...props });
 const ModelSelectorContent = (props: React.ComponentProps<typeof SharedModelSelectorContent>) =>
   React.createElement(SharedModelSelectorContent, { unifiedPanel: false, ...props });
-import { makerChatStore } from '@/lib/makerChatStore';
+import { builtinAgentSwitchIntent, makerChatStore } from '@/lib/makerChatStore';
 
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
 
@@ -649,6 +650,79 @@ describe('ModelSelector trigger variants', () => {
       agentCapabilitiesRef.capabilities = originalCapabilities;
       agentCapabilitiesRef.error = null;
       visibleModelsRef.models = originalModels;
+    }
+  });
+
+  // Unit regression: a failed directory read used to put an error on the confirmed
+  // task model even though its remote capability still identifies it and sends can proceed.
+  it('keeps a remote catalog failure in the picker when the current task model is known', async () => {
+    deviceProvidersRef.error = '[DEVICE_LINK_TIMEOUT] directory read timed out';
+    const props: React.ComponentProps<typeof SharedModelSelector> = {
+      remoteAgent: { devices: [], selectedDeviceId: null, homeDeviceId: 'dev-a' },
+      deviceId: 'dev-a',
+      actualRoute: true,
+      agentIdentity: { vendorKey: 'cc', state: 'current' },
+      modelId: 'claude-opus-4-8',
+      effort: 'high',
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+    };
+    const view = render(React.createElement(SharedModelSelector, props));
+    try {
+      const trigger = screen.getByRole('button', { name: /Opus 4\.8/ });
+      expect(trigger.getAttribute('aria-label')).not.toContain('模型读取失败');
+      expect(trigger.querySelector('.lucide-circle-alert')).toBeNull();
+      await act(async () => { fireEvent.click(trigger); });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '重新读取模型' }));
+      });
+      expect(deviceProvidersRef.prefetch).toHaveBeenCalledWith('dev-a');
+
+      deviceProvidersRef.error = '[REMOTE_AGENT_SHARE_UNAVAILABLE] share revoked';
+      view.rerender(React.createElement(SharedModelSelector, props));
+      expect(trigger.querySelector('.lucide-circle-alert')).toBeTruthy();
+    } finally {
+      view.unmount();
+      deviceProvidersRef.error = null;
+    }
+  });
+
+  // Unit regression: the saved route's model can remain in the provider catalog
+  // when the host cannot start the task's engine.
+  it('warns when the current remote engine is unavailable despite a known provider model', () => {
+    const originalCapabilities = agentCapabilitiesRef.capabilities;
+    const originalModels = visibleModelsRef.models;
+    agentCapabilitiesRef.capabilities = null;
+    agentCapabilitiesRef.error = "Agent 'pi' is not registered";
+    visibleModelsRef.models = [];
+    deviceProvidersRef.providers = [{
+      id: 'test-provider',
+      name: 'Test provider',
+      connected: true,
+      agents: ['pi'],
+      routing: { pi: {} },
+      models: { pi: [{ id: 'saved-model', name: 'Saved model', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' }] },
+    }];
+    try {
+      render(React.createElement(SharedModelSelector, {
+        remoteAgent: undefined,
+        deviceId: 'dev-a',
+        actualRoute: true,
+        agentIdentity: { vendorKey: 'pi', state: 'current' },
+        currentProviderId: 'test-provider',
+        modelId: 'saved-model',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+      }));
+      const trigger = screen.getByRole('button', { name: /Saved model/ });
+      expect(trigger.getAttribute('aria-label')).toContain('模型读取失败');
+      expect(trigger.querySelector('.lucide-circle-alert')).toBeTruthy();
+    } finally {
+      agentCapabilitiesRef.capabilities = originalCapabilities;
+      agentCapabilitiesRef.error = null;
+      visibleModelsRef.models = originalModels;
+      deviceProvidersRef.providers = [];
     }
   });
 
@@ -1147,7 +1221,7 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
-  it('closes on composer resize and stays closed after an Agent confirmation settles', async () => {
+  it('closes on composer resize', async () => {
     const originalResizeObserver = globalThis.ResizeObserver;
     const composer = document.createElement('div');
     let width = 500;
@@ -1165,15 +1239,12 @@ describe('ModelSelector trigger variants', () => {
       disconnect() { if (this.observingComposer) notifyResize = undefined; }
     }
     Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: MockResizeObserver });
-    let resolveConfirmation!: (confirmed: boolean) => void;
-    const confirmBrowseSwitch = vi.fn(() => new Promise<boolean>((resolve) => { resolveConfirmation = resolve; }));
     try {
       render(React.createElement(ModelSelector, {
         remoteAgent: undefined,
         modelId: 'claude-opus-4-8', effort: 'high', vendorKey: 'cc',
         onModelChange: vi.fn(), onEffortChange: vi.fn(),
         composerRef: { current: composer },
-        agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch: vi.fn() },
       }));
       const trigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
       await act(async () => fireEvent.click(trigger));
@@ -1184,16 +1255,6 @@ describe('ModelSelector trigger variants', () => {
       act(() => notifyResize?.());
       expect(screen.queryByTestId('model-options-popover')).toBeNull();
 
-      await act(async () => fireEvent.click(trigger));
-      fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
-      await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
-      fireEvent.click(screen.getByTestId('mock-popover-dismiss'));
-      expect(screen.getByTestId('model-options-popover')).toBeTruthy();
-      width = 400;
-      act(() => notifyResize?.());
-      expect(screen.queryByTestId('model-options-popover')).toBeNull();
-      await act(async () => resolveConfirmation(false));
-      expect(screen.queryByTestId('model-options-popover')).toBeNull();
     } finally {
       Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: originalResizeObserver });
     }
@@ -1385,6 +1446,28 @@ describe('ModelSelector trigger variants', () => {
     } finally { providersRef.providers = providersRef.DEFAULT_PROVIDERS; }
   });
 
+  // Unit: the saved route is unchanged while its first account model read times out.
+  // A complete empty list and a failed read previously rendered the same red error.
+  it('keeps Astra identifiable and retries an unconfirmed subscription catalog', async () => {
+    const source = { id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'], routing: { codex: {} } };
+    providersRef.providers = [{ ...source, subscriptionReadUnavailable: true, models: { codex: [] } }];
+    const props = { remoteAgent: undefined, modelId: 'gpt-6.2-astra', effort: 'high' as Effort,
+      onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'codex' as const, currentProviderId: 'openai',
+      actualRoute: true, sourceDisconnected: true, unifiedPanel: true, onReconnectSource: vi.fn() };
+    const refresh = vi.fn(async () => ({ ok: true }));
+    Object.assign(window.electronAPI.maker, { refreshBuiltinProviderModels: refresh });
+    const view = render(React.createElement(ModelSelector, props));
+    const trigger = screen.getByRole('button', { name: /模型列表暂未更新.*astra/i });
+    fireEvent.click(trigger);
+    const retry = await screen.findByRole('button', { name: '重新读取模型' });
+    await act(async () => { fireEvent.click(retry); });
+    expect(refresh).toHaveBeenCalledWith('openai');
+    expect(props.onReconnectSource).not.toHaveBeenCalled();
+    providersRef.providers = [{ ...source, models: { codex: [{ id: props.modelId, name: 'GPT-6.2 Astra', efforts: ['high'] }] } }];
+    view.rerender(React.createElement(ModelSelector, { ...props, sourceDisconnected: false }));
+    expect(screen.getByRole('button', { name: /Select model.*GPT-6.2 Astra/ })).toBeTruthy();
+  });
+
   it('keeps the disconnected status in the compact trigger title', () => {
     render(
       React.createElement(ModelSelector, {
@@ -1467,7 +1550,7 @@ describe('ModelSelector trigger variants', () => {
         onEffortChange: vi.fn(),
         vendorKey: displayAgent === 'codex' ? 'codex' : 'cc',
         // 稳态来自已加载的真实 runtime；intent 是下一条消息的明确目标，不能写成 Current。
-        agentIdentity: resolveModelSelectorAgentIdentity('claude-code', intent?.target),
+        agentIdentity: resolveModelSelectorAgentIdentity('claude-code', builtinAgentSwitchIntent(intent)?.target),
         currentProviderId: intent?.providerId ?? null,
         onProviderChange: vi.fn(),
         onNavigateToProviders: vi.fn(),
@@ -3104,7 +3187,6 @@ describe('ModelSelector trigger variants', () => {
       },
     );
     const onDismiss = vi.fn();
-    const confirmBrowseSwitch = vi.fn(async () => true);
     let releaseFirstSwitch!: () => void;
     const firstSwitch = new Promise<void>((resolve) => {
       releaseFirstSwitch = resolve;
@@ -3143,16 +3225,13 @@ describe('ModelSelector trigger variants', () => {
           onProviderChange: vi.fn(),
           onDismiss,
           modelMemory,
-          agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch },
+          agentSwitch: { currentVendor: 'cc', onSwitch },
         }),
       );
 
       fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
       const row = await screen.findByRole('option', { name: /GPT-5\.5/ });
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
-      // 确认门收**本次目标引擎**(Chris 2026-08-19):调用方靠它判「已有指向该目标的意图」,
-      // 不传目标会让确认框在任何残留意图之后永久静默。
-      expect(confirmBrowseSwitch).toHaveBeenCalledWith('codex');
+      expect(onSwitch).not.toHaveBeenCalled(); // Browsing alone does not stage a switch.
       // 来源 mark 存在说明目标 Agent 仍走 provider sections，而不是退化成 flat。
       expect(row.textContent).toContain('Z');
       // 行尾与悬浮面板同读目标 Agent 的 per-(来源,模型) 记忆，不落模型默认 medium。
@@ -3166,11 +3245,8 @@ describe('ModelSelector trigger variants', () => {
       ).toBe('true');
       fireEvent.click(within(options).getByRole('option', { name: 'low' }));
       expect(setEffort).toHaveBeenCalledWith('codex', 'zeta-codex', 'gpt-5.5', 'low');
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
       await waitFor(() => expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex'));
       expect(onDismiss).not.toHaveBeenCalled();
-      // 配置点击同时选中目标模型；确认门仍只在 Agent 分段切换。
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
 
       fireEvent.click(
         within(screen.getByRole('group', { name: /GPT-5\.5/ })).getByRole('option', {
@@ -3197,67 +3273,9 @@ describe('ModelSelector trigger variants', () => {
           'true',
         ),
       );
-      // 返回当前引擎直接切分段，不重复确认。
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
     }
-  });
-
-  it('keeps the current Agent tab when pre-browse confirmation is canceled', async () => {
-    const confirmBrowseSwitch = vi.fn(async () => false);
-    render(
-      React.createElement(ModelSelectorContent, {
-        remoteAgent: undefined,
-        modelId: 'claude-opus-4-8',
-        effort: 'high',
-        onModelChange: vi.fn(),
-        onEffortChange: vi.fn(),
-        vendorKey: 'cc',
-        agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch: vi.fn() },
-      }),
-    );
-
-    fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
-    await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('tab', { name: /Claude/ }).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByRole('tab', { name: /Codex/ }).getAttribute('aria-selected')).toBe('false');
-    expect(screen.queryByText('newChat.modelSelector.agentSwitch.hint')).toBeNull();
-  });
-
-  it('keeps the expanded model panel open while Agent browse confirmation is shown', async () => {
-    let resolveConfirmation!: (confirmed: boolean) => void;
-    const confirmBrowseSwitch = vi.fn(
-      () =>
-        new Promise<boolean>((resolve) => {
-          resolveConfirmation = resolve;
-        }),
-    );
-    render(
-      React.createElement(ModelSelector, {
-        remoteAgent: undefined,
-        modelId: 'claude-opus-4-8',
-        effort: 'high',
-        onModelChange: vi.fn(),
-        onEffortChange: vi.fn(),
-        vendorKey: 'cc',
-        agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch: vi.fn() },
-      }),
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
-    fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
-    await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
-
-    // 模拟 AlertDialog 被 Popover 判成外部交互而发出的 close 请求；确认未结束时
-    // 面板仍留在原 Agent 页签，取消后也不发生关闭再打开的闪烁。
-    fireEvent.click(screen.getByTestId('mock-popover-dismiss'));
-    expect(screen.getByTestId('model-options-popover')).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /Claude/ }).getAttribute('aria-selected')).toBe('true');
-
-    await act(async () => resolveConfirmation(false));
-    await waitFor(() => expect(screen.getByTestId('model-options-popover')).toBeTruthy());
-    expect(screen.getByRole('tab', { name: /Claude/ }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('shares inactive model presets across conversations while protecting an active model', () => {

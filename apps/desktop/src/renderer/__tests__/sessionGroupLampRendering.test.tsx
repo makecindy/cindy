@@ -21,6 +21,8 @@ vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => {} },
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+// The teammate data adapter owns auth/presence. This fixture exercises task mode switching.
+vi.mock('@/features/bots/useTeammateInboxEntries', () => ({ useTeammateInboxEntries: () => [] }));
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children: ReactNode }) => children }));
 vi.mock('@/features/device-link/useMachineSwitcher', () => ({ useEffectiveSelectedMachineId: () => 'all' }));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
@@ -62,6 +64,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     unclassified: [], projects: [], dialogues: [], allKnownProjects: [], allProjectKeysForOrder: ['local:known-project'],
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
+      hideAutomations: false, setHideAutomations: vi.fn(),
       groupBy: 'project', groupDialogue: true, groupAutomation: false, groupDevice, sortBy: 'recency',
       pinnedSortBy: 'manual', setPinnedSortBy: vi.fn(),
       projectOrder: 'activity', manualProjectOrder: [], projects: 'all', status: 'active', isFilterActive: false,
@@ -75,9 +78,9 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     notifications: new Set(), scheduleSessionIndex: new Map(),
     remoteDeviceIndex: new Map([['remote', { name: 'Remote device', online: true }]]),
     onSessionClick: vi.fn(), onAction: vi.fn(), onRename: vi.fn(), onTogglePin: vi.fn(), onScheduleAction: vi.fn(),
-    onToggleProject: vi.fn(), onToggleProjectPin: vi.fn(), onRenameProject: vi.fn(), onRemoveFromSidebar: vi.fn(),
+    onToggleProject: vi.fn(), onSettings: vi.fn(), onRenameProject: vi.fn(),
     onCollapseAll: vi.fn(), onExpandAll: vi.fn(), onCreateInProject: vi.fn(), onOpenConversationSearch: vi.fn(),
-    onOpenInExplorer: vi.fn(), onImportFromTools: vi.fn(), onBrowseFiles: vi.fn(),
+    onOpenInExplorer: vi.fn(), onBrowseFiles: vi.fn(),
     onArchiveAll: vi.fn(), onCreateDialogue: vi.fn(),
     onSearchDialogues: vi.fn(), onArchiveAllDialogues: vi.fn(),
   };

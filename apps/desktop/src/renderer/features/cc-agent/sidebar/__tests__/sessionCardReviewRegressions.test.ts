@@ -350,10 +350,10 @@ describe('SessionCard review regressions', () => {
   it('keeps selected sidebar hover actions inside the active color system', () => {
     expect(sessionItemSource).toContain('isActive={isActive}');
     expect(sessionItemSource).toContain(
-      "'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'",
+      "'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'",
     );
     expect(sessionItemSource).toContain(
-      "'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground'",
+      "'text-sidebar-action-icon enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground'",
     );
   });
 
@@ -484,11 +484,10 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).not.toContain('sourceLabel={sourceLabel}');
   });
 
-  it('aligns list automation headers with regular tasks and indents only expanded children', () => {
+  it('aligns list automation headers with regular tasks', () => {
     expect(automationGroupSource).toMatch(
-      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: indented\s*\? 'pl-5 pr-2'\s*: 'pl-3 pr-2'/,
+      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: 'pl-3 pr-2'/,
     );
-    expect(automationGroupSource).toContain('<div className="flex flex-col gap-0.5 pl-2">');
     expect(automationGroupSource).toContain("sessionVariant === 'list' ? 'w-3' : 'w-[15px]'");
     expect(automationGroupSource).toContain("sessionVariant === 'list' && 'order-2'");
   });

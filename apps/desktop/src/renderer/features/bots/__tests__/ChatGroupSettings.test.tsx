@@ -352,7 +352,7 @@ it('labels reply and speaking modes with the same words as the local group setti
 it('keeps reply mode and 分工 settings for single-speaker groups and saves mention-only replies', async () => {
   renderAt({ ...group(true), singleSpeaker: true, replyMode: 'all', speakingMode: 'auto', topic: 'Topic' }, 'manage');
   expect(screen.queryByRole('combobox', { name: 'bots.groupChat.settings.speakingMode' })).toBeNull();
-  expect(screen.getByRole('combobox', { name: 'bots.groupChat.organizer' })).toBeTruthy();
+  expect(screen.queryByRole('combobox', { name: 'bots.groupChat.organizer' })).toBeNull();
   expect(screen.getByText(key('projectFolder'))).toBeTruthy();
   fireEvent.click(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }));
   fireEvent.click(screen.getByRole('option', { name: 'bots.groupChat.settings.replyModeMentioned' }));
@@ -409,11 +409,6 @@ it.each([
     replyMode: 'all', autoContinue: false, organizerBotId: 'bot',
     members: enabled === undefined ? members : [...members, cindy], ...(enabled === undefined ? {} : { supportsGroupAssistant: true, assistantEnabled: enabled }) }, 'manage');
   expect(screen.getByText(replyHint)).toBeTruthy();
-  const organizer = screen.getByRole('combobox', { name: 'bots.groupChat.organizer' });
-  expect(sectionOf(organizer)).toBe(key('work'));
-  fireEvent.click(organizer);
-  expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['Partner']);
-  fireEvent.keyDown(screen.getAllByRole('option')[0]!, { key: 'Escape' });
   fireEvent.click(screen.getByRole('combobox', { name: `${SHARED}replyMode` }));
   expect(screen.getByRole('option', { name: allLabel })).toBeTruthy();
   const toggle = screen.queryByTestId('bot-group-assistant');

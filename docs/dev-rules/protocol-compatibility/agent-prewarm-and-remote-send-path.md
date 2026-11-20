@@ -14,6 +14,12 @@ user / desktop / plugin / side-chat、状态 active、非协同、Agent 在本�
 
 同一通道带 purpose: 'pi-skill-dispatch' 时表示用户已发送项目 Skill。Desktop 和 Node Host 在任务发送锁内核验实际引擎和目录，等 Pi 可用后才返回 accepted 和 piRuntimePrepared: true。旧 Desktop 可能只返回 accepted；新版控制端不能据此发送未展开的命令，会保留草稿。Node Host 从任务记录恢复配置，不接受控制端覆盖授权，也不因普通打字请求启动进程。未实现该入口的旧 Node Host 仍可能返回 NOT_FOUND；控制端保留草稿并显示错误。此变化不需要更新中转。
 
+显式发送 Skill 时，`pendingPiRoute` 只能应用与任务上已登记的模型和位置相符的意图。对同账号远控登记的路线，
+两端沿用发送时的窗口核实与重建，拒绝控制端提供的 `confirmedContextWindow`。窗口核实失败时保留旧路线和原生记录。
+`pendingPiRoute.nextInputChars` 可带别名展开前的输入长度，按非负安全整数解析，只用于为待发内容留空间；
+它不能提高重放预算或证明模型窗口。字段缺失时沿用默认重放留白。
+`pendingRouteApplied: true` 只在意图已应用且 Pi 准备成功后返回。
+
 Desktop 新建页的未发送任务：本机普通项目 / 对话草稿开始输入时，任务先建出来（`local-db:sessions:create`
 带 `provisional: true`，只接受本机普通任务），出现在本机任务列表、标题随输入变化，并按上面的规则预热；
 清空输入经本机专用的 `maker:session:discard-provisional` 真正删除（仍未发送且无消息才删），第一次发送前经

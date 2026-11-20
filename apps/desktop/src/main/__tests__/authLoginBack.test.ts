@@ -44,6 +44,8 @@ function setup({ cached = false, sealed = false, credentialStoreUnavailable = fa
     browserAuthorizationSlot: { cancelActive },
     isLoginFlowCommitSealed: () => sealed,
     isOwnerChangeShellPending: () => false,
+    // Not client mode: the refusal while a Host did not start is covered by authColdStartRecovery.test.ts.
+    hostNotStartedInClientMode: () => false,
     stopColdStartRecovery: () => {},
     coldStartAuthInFlight: null,
     readPersistedAuthSession: () => null,

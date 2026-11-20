@@ -1,8 +1,10 @@
 import fs from 'node:fs/promises';
 import { createMakerSteerTransaction } from '../../../desktop/src/main/maker-ipc/makerSteerTransaction.ts';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
+import { readBotDmThreadContextNote } from '../../../desktop/src/main/maker-ipc/botDmThreadContext.ts';
 import { readReplyQuoteNote } from '../../../desktop/src/main/maker-ipc/chatReplyQuoteNote.ts';
 import { publishUiSessionIntervention } from '../../../desktop/src/main/maker-ipc/uiContinuationSignal.ts';
+import { extractPlainText } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import { createSessionOptionsReconciler } from '../../../desktop/src/main/maker-ipc/sessionOptionsReconciler.ts';
 import { createMakerSendTransaction, prepareDirectoryGrantsForBootstrap } from '../../../desktop/src/main/maker-ipc/makerSendTransaction.ts';
@@ -308,8 +310,9 @@ export function createTurnExecutor(deps) {
     readSessionExtraDirsFromDb: deps.readSessionExtraDirs ?? (async () => []),
     readSessionWritableDirsFromDb: deps.readSessionWritableDirs ?? (async () => []),
     withRehydrateCloseSuppressed,
-    bootstrapSession: async opts => {
-      const turn = turns.get(opts.id);
+    bootstrapSession: async (opts, assertStartupCurrent) => {
+      const previous = turns.get(opts.id);
+      const turn = previous?.running ? previous : undefined;
       turn?.check();
       const preparing = (async () => {
         const stored = await readExecutionSession(opts.id);
@@ -322,6 +325,7 @@ export function createTurnExecutor(deps) {
           persistExistingSession: async () => { throw new Error('Host must not rewrite directory grants at startup'); },
         });
         deps.assertCurrent();
+        assertStartupCurrent?.();
         turn?.check();
         const session = await deps.getMaker().createSession({ ...opts,
           resumeSessionId: opts.resumeSessionId ?? (opts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined),
@@ -331,7 +335,8 @@ export function createTurnExecutor(deps) {
         rememberLiveSessionSettings(session, opts);
         setSessionProvider(opts.id, opts.providerId ?? null);
         wireNotes.reset(opts.id);
-        bindTurnSession(opts.id, session);
+        if (turn) bindTurnSession(opts.id, session);
+        else listen(opts.id, session);
         return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
       })();
       if (turn) turn.preparing = preparing;
@@ -339,6 +344,8 @@ export function createTurnExecutor(deps) {
     },
     // Runtime creation updates an existing task; it does not create another row.
     broadcastSessionCreated: id => deps.hub.publish({ type: 'session_changed', sessionId: id }),
+    readReplyQuoteNote,
+    readBotThreadNote: readBotDmThreadContextNote,
     prepareSendUserMessage: deps.prepareUserMessage ?? prepareHostUserMessage,
     // The trusted /learn Skill of a persisted user turn, as on the desktop (learn-capture.ts).
     captureCindyLearnInvocation: deps.captureCindyLearnInvocation ?? createHostLearnInvocationCapture({ getMaker: deps.getMaker }),
@@ -358,7 +365,7 @@ export function createTurnExecutor(deps) {
       const turn = turns.get(id);
       // The shared reconciler refreshes execution settings before bootstrap;
       // recovery also needs the current task directory and native identity.
-      if (!turn?.createOpts) return deps.storedSessionOptions(stored);
+      if (!turn?.running || !turn.createOpts) return deps.storedSessionOptions(stored);
       return { ...turn.createOpts, workingDir: stored.workingDir,
         resumeSessionId: turn.createOpts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined };
     },
@@ -535,6 +542,12 @@ export function createTurnExecutor(deps) {
     const check = turn.check;
     turn.preparing = (async () => {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
+      check();
+      // The send lock is held. Read the committed route and native identity below.
+      const nextInput = typeof message === 'string' ? message : message?.content;
+      const nextInputChars = (typeof nextInput === 'string' ? nextInput : extractPlainText(nextInput)).length;
+      await deps.applyPendingAgentSwitch?.(sessionId, sendOpts.signal, nextInputChars);
+      check();
       const stored = await readExecutionSession(sessionId);
       const queuedPlan = createOpts.planMode;
       await reconcileCreateOptsWithDb(sessionId, createOpts);
@@ -664,11 +677,12 @@ export function createTurnExecutor(deps) {
     steer,
     readExecutionSession,
     readAutoReviewHistory,
-    async preparePiSkillRuntime(id, dir) {
+    async preparePiSkillRuntime(id, dir, assertStartupCurrent) {
       const row = await readExecutionSession(id);
+      assertStartupCurrent();
       if (row.source === 'review' || makerKind(row.agentKind) !== 'pi' || row.workingDir !== dir)
         throw new Error('[PRECONDITION_FAILED] Pi session is unavailable');
-      await transaction.preparePiSkillRuntime(id, dir, {});
+      await transaction.preparePiSkillRuntime(id, dir, {}, assertStartupCurrent);
       deps.assertCurrent();
     },
     async restoreSession(id, options, assertCurrent) {

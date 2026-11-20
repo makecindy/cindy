@@ -1,7 +1,7 @@
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import type { commitContextRebuild } from '../localDb/ipc/messages.js';
 import type { sessions } from '../localDb/schema.js';
-import { buildHandoffText, type HandoffSourceMessage } from './agentHandoff.js';
+import { buildHandoff, type HandoffSourceMessage } from './agentHandoff.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type RecoveryRow = Pick<typeof sessions.$inferSelect,
@@ -12,6 +12,13 @@ export interface SharedSessionResumeRecoveryDeps {
   readGeneration(sessionId: string): number;
   getSessionRow(sessionId: string): Promise<RecoveryRow | undefined>;
   listMessages(sessionId: string): Promise<HandoffSourceMessage[]>;
+  resolveHandoffWindow?(sessionId: string, route: {
+    agentKind: MakerSessionCreateOpts['agentKind'];
+    agentDeviceId: string;
+    model: string;
+    providerId: string | null;
+    workingBudget?: number | null;
+  }): Promise<number | null>;
   commit: typeof commitContextRebuild;
   setPending(sessionId: string, handoff: string, generation: number): void;
   publish(sessionId: string): void;
@@ -32,8 +39,9 @@ export async function withSharedSessionResumeRecovery<T>(
   try {
     return await start();
   } catch (error) {
+    // Shared-provider devices run built-in engines only; a plugin-engine task never takes this path.
     if (!sessionId || !resumeId || !isProviderShareAgentDeviceId(options.agentDeviceId) || options.remoteHostId ||
-      !(error instanceof Error) ||
+      options.agentKind === 'acp' || !(error instanceof Error) ||
       error.message !== '[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer') throw error;
     const assertCurrent = () => {
       deps.assertCurrent();
@@ -47,12 +55,17 @@ export async function withSharedSessionResumeRecovery<T>(
       row.agentDeviceId !== options.agentDeviceId || row.providerId !== (options.providerId ?? null) ||
       row.model !== options.model || !row.model) throw error;
     const history = await deps.listMessages(sessionId);
+    const targetContextWindow = await deps.resolveHandoffWindow?.(sessionId, {
+      agentKind: options.agentKind, agentDeviceId: options.agentDeviceId!, model: row.model,
+      providerId: row.providerId, workingBudget: options.contextWindowBudget,
+    });
     assertCurrent();
-    const handoff = buildHandoffText(history, {
+    const { handoff, handoffCoverage } = buildHandoff(history, {
+      targetContextWindow,
       fromLabel: options.agentKind, toLabel: options.agentKind, sessionId, reason: 'native-session-recovery',
     });
     await deps.commit(sessionId, handoff, {
-      reason: 'native-session-recovery', sourceUserClientId: null,
+      reason: 'native-session-recovery', handoffCoverage, sourceUserClientId: null,
       sourceAgentKind: kind, sourceModel: row.model, sourceProviderId: row.providerId,
       expectedClearedAt: row.clearedAt,
       expectedSdkSessionId: resumeId,
