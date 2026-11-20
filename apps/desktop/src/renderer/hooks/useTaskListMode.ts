@@ -5,19 +5,26 @@ export type TaskListMode = 'tasks' | 'inbox';
 const key = 'sidebar.taskListMode';
 let memory: TaskListMode | undefined;
 const listeners = new Set<() => void>();
+let storageListenerBound = false;
 function read(): TaskListMode {
   if (memory) return memory;
-  try { return localStorage.getItem(key) === 'inbox' ? 'inbox' : 'tasks'; } catch { return 'tasks'; }
+  try {
+    const mode = localStorage.getItem(key) === 'inbox' ? 'inbox' : 'tasks';
+    if (storageListenerBound) memory = mode;
+    return mode;
+  } catch { return 'tasks'; }
 }
 function subscribe(listener: () => void) {
   listeners.add(listener);
-  const onStorage = (event: StorageEvent) => {
-    if (event.key !== key && event.key !== null) return;
-    memory = undefined;
-    listener();
-  };
-  window.addEventListener('storage', onStorage);
-  return () => { listeners.delete(listener); window.removeEventListener('storage', onStorage); };
+  if (!storageListenerBound) {
+    storageListenerBound = true;
+    window.addEventListener('storage', event => {
+      if (event.key !== key && event.key !== null) return;
+      memory = undefined;
+      listeners.forEach(notify => notify());
+    });
+  }
+  return () => { listeners.delete(listener); };
 }
 function setMode(mode: TaskListMode) {
   memory = mode;

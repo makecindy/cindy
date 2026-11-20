@@ -1380,6 +1380,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no permite cambiar de Harness. Elige un modelo en su Harness actual o crea otra tarea SSH con el Harness que necesitas.",
     "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
+    "MODEL_CATALOG_UNCONFIRMED": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
     "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
     "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Inténtalo de nuevo en breve.",
     "INVALID_PARAMS": "Entrada no válida. Revísala e inténtalo de nuevo.",
@@ -15222,6 +15223,9 @@
       "usageLimitAutoContinueTitle": "Si no has realizado ninguna acción cuando se restablezca el límite de uso, esta tarea continuará automáticamente",
       "usageLimitAutoContinueCancel": "Cancelar",
       "usageLimitAutoContinueCancelTitle": "Cancelar la continuación automática. El error y la opción Reintentar seguirán disponibles.",
+      "usageLimitReached": "La cuenta del modelo alcanzó su límite de uso",
+      "usageLimitReachedWithReset": "La cuenta del modelo alcanzó su límite de uso. Se espera que el uso se restablezca el {{resetAt}}.",
+      "usageLimitReachedNoReset": "La cuenta del modelo alcanzó su límite de uso. Espera a que se restablezca el límite o cambia a otro modelo antes de reintentar.",
       "codexOrganizationUsageLimitWithReset": "La cuenta de Codex conectada está administrada por tu organización y alcanzó su límite de uso. Se espera que el uso se restablezca el {{resetAt}}.",
       "codexOrganizationUsageLimit": "La cuenta de Codex conectada está administrada por tu organización y alcanzó su límite de uso. Espera a que se restablezca el límite o cambia a otra cuenta disponible antes de reintentar.",
       "codexUsageLimitWithReset": "La cuenta de Codex conectada alcanzó su límite de uso. Se espera que el uso se restablezca el {{resetAt}}.",
@@ -15293,6 +15297,7 @@
     },
     "backgroundActivity": {
       "status": "Hay subtareas en segundo plano que siguen consumiendo uso del modelo…",
+      "pluginEngineStatus": "Sigue trabajando en segundo plano…",
       "bashWorkStatus_one": "Trabajando en segundo plano ({{count}} comando)…",
       "bashServiceStatus_one": "{{count}} servicio en segundo plano en ejecución",
       "bashWorkStatus_other": "Trabajando en segundo plano ({{count}} comandos)…",
@@ -15332,6 +15337,7 @@
       "continueFailed_many": "No se pudieron reanudar {{count}} sesiones. Ábrelas para volver a intentarlo."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
       "actionScheduled": "La autorización para esta acción caducó. La próxima ejecución sigue programada.",
       "actionExpired": "La autorización de la sesión para esta acción ha caducado. Consulta la última ejecución de la automatización.",
       "actionRecovered": "La autorización para esta acción caducó. La misma automatización se ejecutó correctamente más tarde.",
@@ -16005,7 +16011,9 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no puede cambiar de Harness. Elige un modelo en su Harness actual o crea una nueva tarea SSH con el Harness que necesitas.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "No se pudo compactar el contexto al cambiar de modelo porque esta conexión no permite usar el modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
+      "MODEL_CATALOG_UNCONFIRMED": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
       "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
       "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Vuelve a intentarlo en breve.",
       "REMOTE_DAEMON_CLOSED": "La conexión remota se interrumpió, posiblemente durante una actualización. Este turno ha terminado. Envía el mensaje nuevamente.",
@@ -16243,7 +16251,6 @@
       "opened": "Se abrió una página de vista previa"
     },
     "sideChat": {
-      "openPage": "Abrir página completa de la tarea",
       "returnMain": "Volver a la tarea principal",
       "new": "Nuevo chat secundario",
       "mainWindowDescription": "Los chats secundarios se ejecutan actualmente en la ventana principal. Tu conversación está guardada.",
@@ -16251,6 +16258,14 @@
       "commandDescription": "Abre un chat secundario con el contexto de esta tarea. El texto opcional se convierte en un borrador de pregunta.",
       "title": "Chat secundario",
       "context": "Usa el contexto completado hasta el momento en que lo abriste. La tarea principal sigue ejecutándose. El historial se conserva hasta que cierres esta pestaña.",
+      "viewCollaboration": "Ver colaboración",
+      "openConversation": "Abrir conversación",
+      "openFromTaskList": "También en la lista de tareas de la izquierda.",
+      "returnToSideChat": "Volver a la consulta lateral",
+      "reopenSideChat": "Volver a abrir la consulta lateral",
+      "origin": "Esta conversación comenzó en una consulta lateral.",
+      "originNamed": "Esta conversación comenzó en una consulta lateral de «{{title}}».",
+      "originUnavailable": "Esta conversación comenzó en una consulta lateral. La tarea original no está disponible.",
       "opening": "Abriendo…",
       "notReady": "Espera a que la tarea principal complete su primera respuesta.",
       "unsupported": "El Agent de esta tarea se ejecuta en otro entorno. El chat secundario aún no está disponible aquí.",
@@ -16259,9 +16274,10 @@
       "mainTaskOnly": "Abre un chat secundario desde la tarea principal.",
       "sharedTaskUnavailable": "Los chats secundarios no están disponibles en tareas compartidas.",
       "archivedTask": "Desarchiva esta tarea para abrir un chat secundario.",
-      "closeTitle": "¿Cerrar el chat secundario?",
-      "closeDescription": "Este seguimiento se detendrá y su historial se eliminará. La tarea principal seguirá ejecutándose.",
-      "closeConfirm": "Cerrar y eliminar",
+      "closeTitle": "¿Cerrar y archivar este seguimiento?",
+      "closeDescription": "La tarea correspondiente de la barra lateral izquierda también se archivará.",
+      "closeDescriptionRunning": "La tarea correspondiente de la barra lateral izquierda también se archivará y sus Workers se detendrán.",
+      "closeConfirm": "Cerrar y archivar",
       "closeFailed": "No se pudo cerrar el chat secundario. Inténtalo de nuevo."
     },
     "teammateProcess": {

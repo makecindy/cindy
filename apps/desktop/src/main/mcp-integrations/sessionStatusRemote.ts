@@ -106,7 +106,7 @@ export function createRemoteSessionsStatusSetter(deps: {
       let response: InvokeResultPayload;
       let actionExpiredBeforeSend = false;
       try {
-        response = await deps.invoke(deviceId, 'local-db:sessions:patch-meta', [sessionId, { status }], {
+        const options = {
           preSend: () => {
             assertCurrent();
             try { assertActionCurrent?.(); } catch (error) {
@@ -114,7 +114,18 @@ export function createRemoteSessionsStatusSetter(deps: {
               throw error;
             }
           },
-        });
+        };
+        let promoted = false;
+        if (status === 'deleted') {
+          const snapshot = await deps.invoke(deviceId, 'local-db:sessions:get', [sessionId], options);
+          assertCurrent();
+          if (!snapshot.ok) return fail(index, failure(snapshot.error.code, snapshot.error.message));
+          const task = snapshot.result as { id?: string; sideChatPromoted?: boolean } | null;
+          if (task?.id !== sessionId) return fail(index, { errorCode: 'NOT_FOUND', message: '目标任务不存在。' });
+          promoted = task.sideChatPromoted === true;
+        }
+        response = await deps.invoke(deviceId, 'local-db:sessions:patch-meta',
+          [sessionId, promoted ? { status, deleteTarget: 'task' } : { status }], options);
       } catch (error) {
         if (actionExpiredBeforeSend) {
           changed.forEach((item) => { item.title = null; item.workingDir = null; });

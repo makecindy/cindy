@@ -155,6 +155,12 @@ describe('sidebar inbox Done with a bound automation', () => {
     expect(h.runSessionAction).not.toHaveBeenCalled();
     expect(h.handleSessionClick).toHaveBeenCalledWith('after');
   });
+  it('keeps Done pending if the owner could not mark the run read', async () => {
+    const h = done(new Map([['task', ['PR follow-up']]]));
+    h.markSessionsRead.mockResolvedValue(false);
+    expect(await h.run()).toBeUndefined();
+    expect(h.runSessionAction).not.toHaveBeenCalled();
+  });
   it('archives when no active automation is bound', async () => {
     const h = done(new Map());
     await h.run();
@@ -189,6 +195,59 @@ describe('sidebar inbox Done with a bound automation', () => {
     await moved.run();
     expect(moved.handleSessionClick).not.toHaveBeenCalled();
     expect(moved.navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('explicit read of a remote automation result', () => {
+  function remoteRead() {
+    const remoteIndex = new Map([
+      ['task', { unreadRunIds: ['current-run'] }],
+      ['other', { unreadRunIds: ['unrelated-run'] }],
+    ]);
+    const readRemoteScheduleIndex = vi.fn().mockResolvedValue(remoteIndex);
+    const markScheduleRunsReadAndSync = vi.fn().mockResolvedValue({ processed: ['current-run'], failed: [] });
+    const toast = { error: vi.fn() };
+    const read = callback('markSessionsRead', {
+      clearSessionAttentionMany: vi.fn(), readRemoteScheduleIndex, markScheduleRunsReadAndSync,
+      remoteProjectsStore: { getSessionScheduleInfo: () => undefined },
+      scheduleSessionIndex: new Map([['task', { unreadRunIds: ['local-run'] }]]),
+      toast, t: (key: string) => key,
+    });
+    return { read: () => read(['task'], 'studio', { announce: false }), readRemoteScheduleIndex, markScheduleRunsReadAndSync, toast };
+  }
+  it('reads the owner snapshot when the completion arrives before the mirrored run', async () => {
+    const h = remoteRead();
+    expect(await h.read()).toBe(true);
+    expect(h.readRemoteScheduleIndex).toHaveBeenCalledWith('studio');
+    expect(h.markScheduleRunsReadAndSync).toHaveBeenCalledWith(['current-run'], 'studio');
+  });
+  it('returns a failed write to the Done action', async () => {
+    const h = remoteRead();
+    h.markScheduleRunsReadAndSync.mockResolvedValueOnce({ processed: [], failed: ['current-run'], firstError: 'offline' });
+    expect(await h.read()).toBe(false);
+    expect(h.toast.error).toHaveBeenCalled();
+  });
+  // PR #11796: writes can all succeed while the controller mirror stays stale.
+  it('does not settle Done when the mirror refresh failed after a no-op', async () => {
+    const h = remoteRead();
+    h.readRemoteScheduleIndex.mockResolvedValueOnce(new Map());
+    h.markScheduleRunsReadAndSync.mockResolvedValueOnce({ processed: [], failed: [], firstError: 'gave-up' });
+    expect(await h.read()).toBe(false);
+    expect(h.toast.error).toHaveBeenCalled();
+  });
+  it('refreshes the controller when another device has already read the run', async () => {
+    const h = remoteRead();
+    h.readRemoteScheduleIndex.mockResolvedValueOnce(new Map());
+    h.markScheduleRunsReadAndSync.mockResolvedValueOnce({ processed: [], failed: [] });
+    expect(await h.read()).toBe(true);
+    expect(h.markScheduleRunsReadAndSync).toHaveBeenCalledWith([], 'studio');
+  });
+  it('reports an unavailable owner index without acknowledging the action', async () => {
+    const h = remoteRead();
+    h.readRemoteScheduleIndex.mockRejectedValueOnce(new Error('offline'));
+    expect(await h.read()).toBe(false);
+    expect(h.toast.error).toHaveBeenCalled();
+    expect(h.markScheduleRunsReadAndSync).not.toHaveBeenCalled();
   });
 });
 
