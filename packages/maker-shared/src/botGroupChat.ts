@@ -204,6 +204,13 @@ export interface BotGroupMemberView {
   status: BotGroupMemberStatus;
 }
 
+/** One Stop targets the same attempt before and after its queued input is claimed. */
+export function botGroupStopRunEpoch(execution: { epoch?: number; status: string }): number | undefined {
+  const epoch = execution.epoch;
+  if (typeof epoch !== 'number' || !Number.isSafeInteger(epoch) || epoch < 0) return undefined;
+  return execution.status === 'queued' ? epoch + 1 : epoch;
+}
+
 /** Group roles never confer control of another account's execution. */
 export function canStopBotGroupWork(member: Pick<BotGroupMemberView, 'assistant' | 'isOwned'> | undefined, isSelfRequested: boolean): boolean {
   return !!member && (member.assistant === true ? isSelfRequested : member.isOwned === true);

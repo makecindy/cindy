@@ -1,5 +1,5 @@
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
-import { canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { extractPlainText } from './agentHandoff.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
@@ -4511,11 +4511,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             if (!member || (isAssistant(member) ? !e.requester_id : !member.ownerActorId)) unknownRequester = true;
             continue;
           }
-          try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }); }
+          const epoch = botGroupStopRunEpoch(e);
+          const query = epoch === undefined ? '' : `?runEpoch=${epoch}`;
+          try { await api(`/conversations/${room}/executions/${e.id}/control${query}`, 'POST', { operationId: randomUUID(), action: 'stop' }); }
           catch (error) { if (refused(error)) { refusedExecutions.set(e.id, error); continue; } throw error; }
           stopped = true;
           const run = running.get(e.id);
-          if (run) await cancelExecution(run);
+          if (run && epoch !== undefined && run.execution.epoch === epoch) await cancelExecution(run);
         }
         // A rejection can race another stop or completion. Require an explicit settled
         // state: absence from a recent list is not proof that the target has ended.

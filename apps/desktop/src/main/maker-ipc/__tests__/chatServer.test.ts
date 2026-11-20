@@ -1841,7 +1841,7 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deliveries()).toHaveLength(1);
   });
 
-  it('fences a late prior terminal when the same execution is explicitly retried', async () => {
+  it('fences the prior terminal and Stop receipt when the same execution is explicitly retried', async () => {
     deps.isGroupInputLive = () => true;
     await start();
     const oldInput = vi.mocked(deps.dispatch).mock.calls[0][0].clientId;
@@ -1853,10 +1853,15 @@ describe('Chat Server result delivery and refresh', () => {
         retried = true;
         return { body: { execution: next } };
       }
+      if (route === `/conversations/${roomId}/executions`) return { body: [execution] };
       return response(route);
     });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(deps.dispatch).toHaveBeenCalledTimes(2);
+    // Even a replayed successful receipt from a legacy server cannot abort the new local turn.
+    expect(await service.stopRound(roomId)).toMatchObject({ ok: true });
+    expect(fixture.requests.some(r => r.url.endsWith(`/executions/${execution.id}/control?runEpoch=${execution.epoch}`))).toBe(true);
+    expect(deps.abortLane).not.toHaveBeenCalled();
     const newInput = vi.mocked(deps.dispatch).mock.calls[1][0].clientId;
     expect(newInput).not.toBe(oldInput);
     expect(await service.settleLaneTurn({ ...terminal, activeInputClientId: oldInput })).toBe(false);
@@ -4182,7 +4187,7 @@ describe('Chat Server result delivery and refresh', () => {
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId, scope)).toMatchObject(scope === 'all'
         ? { ok: false, errorCode: 'PERMISSION_DENIED' } : { ok: true });
-      const stops = fixture.requests.slice(from).filter(r => r.url.endsWith('/control'));
+      const stops = fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control'));
       expect(stops.map(r => [Object.entries(ids).find(([, id]) => r.url.includes(id))![0], r.actor || undefined])).toEqual(expected);
     });
 
@@ -4196,7 +4201,7 @@ describe('Chat Server result delivery and refresh', () => {
       ] } : route.endsWith('/snapshot') ? { body: { room: room(roomId), members: members('admin').map(m => m.id === foreignBot ? { ...m, assistant: true } : m), messages: [], cursor: '1' } } : undefined, 'admin');
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject({ ok: true });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control')).map(r => r.url))
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control')).map(r => r.url))
         .toEqual([expect.stringContaining(`/executions/${execution.id}/control`)]);
     });
 
@@ -4213,7 +4218,7 @@ describe('Chat Server result delivery and refresh', () => {
       plan.status = 'waiting';
       expect(await service.dismissPlan({ groupId: roomId, planId: plan.id })).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
       expect(await service.editPlanStep({ groupId: roomId, planId: plan.id, position: 1, action: 'skip' })).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control')).map(r => r.url))
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control')).map(r => r.url))
         .toEqual([expect.stringContaining(`/executions/${execution.id}/control`)]);
       expect(fixture.handle.mock.calls.filter(([route, method]) => route.includes('/plans/') && method === 'POST')).toEqual([]);
     });
@@ -4226,7 +4231,7 @@ describe('Chat Server result delivery and refresh', () => {
       ] } : route.endsWith('/snapshot') ? { body: { room: room(roomId), members: members(role).map(m => m.id === foreignBot ? { ...m, assistant: true } : m), messages: [], cursor: '1' } } : undefined, role);
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'STOP_OWNERSHIP_UNKNOWN' });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toEqual([]);
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control'))).toEqual([]);
     });
 
     it.each([
@@ -4237,7 +4242,7 @@ describe('Chat Server result delivery and refresh', () => {
         : [{ ...execution, status: 'queued', bot_id: foreignBot, requester_id: requester }] } : undefined);
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toEqual([]);
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control'))).toEqual([]);
     });
 
     it.each([['owned', otherBot, true], ['foreign', foreignBot, false]] as const)('uses companion ownership when requester is absent: %s', async (_label, bot, owned) => {
@@ -4246,7 +4251,7 @@ describe('Chat Server result delivery and refresh', () => {
       ] } : undefined);
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject(owned ? { ok: true } : { ok: false, errorCode: 'PERMISSION_DENIED' });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toHaveLength(owned ? 1 : 0);
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control'))).toHaveLength(owned ? 1 : 0);
     });
 
     it.each([
@@ -4261,7 +4266,7 @@ describe('Chat Server result delivery and refresh', () => {
     ])('rechecks a %s stop response and reports the current %s state', async (status, nextStatus, errorCode) => {
       let rejected = false;
       singleSpeaker(route => {
-        if (route.endsWith('/control')) { rejected = true; return { status, body: { error: { code: 'CONTROL_REFUSED' } } }; }
+        if (route.split('?')[0].endsWith('/control')) { rejected = true; return { status, body: { error: { code: 'CONTROL_REFUSED' } } }; }
         if (route === `/conversations/${roomId}/executions`) return { body: rejected && nextStatus === 'absent' ? []
           : [{ ...execution, status: rejected ? nextStatus : 'queued', bot_id: otherBot, requester_id: selfId }] };
       });
@@ -4272,13 +4277,13 @@ describe('Chat Server result delivery and refresh', () => {
     it('still stops an eligible execution when another stop is refused, without reporting full success', async () => {
       const secondId = '40000000-0000-4000-8000-00000000000a';
       singleSpeaker(route => {
-        if (route.endsWith(`/${execution.id}/control`)) return { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } };
+        if (route.endsWith(`/${execution.id}/control?runEpoch=2`)) return { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } };
         if (route === `/conversations/${roomId}/executions`) return { body: [execution.id, secondId].map(id =>
           ({ ...execution, id, status: 'queued', bot_id: otherBot, requester_id: selfId })) };
       });
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
-      expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith('/control')).map(([route]) => route))
-        .toContain(`/conversations/${roomId}/executions/${secondId}/control`);
+      expect(fixture.handle.mock.calls.filter(([route]) => route.split('?')[0].endsWith('/control')).map(([route]) => route))
+        .toContain(`/conversations/${roomId}/executions/${secondId}/control?runEpoch=2`);
     });
 
     // Unit / PR #10861: HTTP rejection coverage misses actPlan's local ownership recheck.
@@ -4307,7 +4312,7 @@ describe('Chat Server result delivery and refresh', () => {
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
       const controls = fixture.handle.mock.calls.filter(([, method, body]) => method === 'POST' && body?.action === 'stop')
         .map(([route]) => route);
-      expect(controls).toEqual([`/conversations/${roomId}/plans/${ownedId}`, `/conversations/${roomId}/executions/${execution.id}/control`]);
+      expect(controls).toEqual([`/conversations/${roomId}/plans/${ownedId}`, `/conversations/${roomId}/executions/${execution.id}/control?runEpoch=2`]);
       expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/plans`)).toHaveLength(2);
     });
 
@@ -4341,7 +4346,7 @@ describe('Chat Server result delivery and refresh', () => {
       await vi.advanceTimersByTimeAsync(0);
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toEqual({ ok: true });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toHaveLength(1);
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control'))).toHaveLength(1);
     });
     it('keeps the full main-group context on an older server', async () => {
       const history = Array.from({ length: 15 }, (_, n) => message(`50000000-0000-4000-8000-0000000001${String(n).padStart(2, '0')}`, `earlier message ${n}`));
