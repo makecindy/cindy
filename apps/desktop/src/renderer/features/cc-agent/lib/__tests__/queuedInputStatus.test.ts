@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 /**
  * queuedInputStatus.test.ts
  * ---------------------------------------------------------------------------

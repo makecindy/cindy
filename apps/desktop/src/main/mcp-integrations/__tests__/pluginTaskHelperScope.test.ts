@@ -8,7 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createLiziMcpProviders, createXdtHelperMcpServer, type LiziMcpSessionContext } from '@cindy/mcps';
 import ts from 'typescript';
-import { expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { botSessionLinks, sessions } from '../../localDb/schema.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import * as surfaces from '../helperSurface.js';
@@ -20,6 +20,10 @@ const callback = source.slice(begin, source.indexOf('      sessionQueue:', begin
 const wired = ts.transpileModule(`return {${callback}}.resolveSurface;`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
+
+// 「行始终不出现」的用例不该真的等满等待预算(见 helperSurface 的 helperSurfaceRowWait)。
+beforeEach(() => { surfaces.helperSurfaceRowWait.budgetMs = 0; });
+afterEach(() => { surfaces.helperSurfaceRowWait.budgetMs = 3_000; });
 
 function fixture() {
   const sqlite = new Database(':memory:');
@@ -40,7 +44,9 @@ function fixture() {
   let execution = { executing: false, input: null as null | { clientId: string; authoredText?: string; autoResume?: boolean; retrySourceClientId?: string; originKind?: string } };
   const deps = { ...surfaces, sessions, botSessionLinks, eq, tryGetDbClient: () => current,
     getSessionInputProvenance: () => execution,
-    isAppSessionBoundaryPending: () => pending };
+    isAppSessionBoundaryPending: () => pending,
+    // 生产回调里的诊断日志要真的 logger;单测里不给它会 ReferenceError。
+    createLogger: () => ({ warn: () => {}, info: () => {}, debug: () => {}, error: () => {} }) };
   const resolve = new Function(...Object.keys(deps), wired)(...Object.values(deps)) as
     (input: { sessionId: string }) => Promise<'default' | 'bot' | 'restricted'>;
   const searchStart = source.indexOf('      searchSessions:');
@@ -95,6 +101,31 @@ it.each(['missing caller', 'missing DB', 'pending', 'switched after read'] as co
     }
     expect(await f.resolve({ sessionId: 'lead' })).toBe('restricted');
   } finally { f.sqlite.close(); }
+});
+
+// #11671:远程控制新建的会话,库里的会话行是 agent 起来之后才写的 —— 首份 MCP
+// 工具清单正好落在这个窗口里。查不到行时不能把这一轮永久判成「受限」:
+// 列表要等会话行可读,而不是只给 list_tools / call_tool 两项。
+it('lists the async question tool once the session row becomes readable', async () => {
+  surfaces.helperSurfaceRowWait.budgetMs = 2_000;
+  const f = fixture();
+  const server = createXdtHelperMcpServer({
+    resolveSurface: f.resolve,
+    askUserQuestionAsync: vi.fn(async () => ({ pendingCount: 0 })) as never,
+    manageUserQuestions: vi.fn(async () => ({ pendingCount: 0 })) as never,
+  } as never, { agentKind: 'claude-code', workingDir: '/answer', sessionId: 'later' });
+  const client = new Client({ name: 'helper-surface-race', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(ct), server.connect(st)]);
+  try {
+    const timer = setTimeout(
+      () => f.sqlite.exec("INSERT INTO sessions(id,source) VALUES ('later','user')"),
+      50,
+    );
+    const tools = await client.listTools();
+    clearTimeout(timer);
+    expect(tools.tools.map((tool) => tool.name)).toContain('ask_user_question_async');
+  } finally { await client.close(); await server.close(); f.sqlite.close(); }
 });
 
 it.each(['codex', 'claude-code', 'pi'] as const)('keeps helper tools available after plugin revocation for %s', async agentKind => {
