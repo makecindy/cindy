@@ -17,11 +17,67 @@ export default {
     scale: { about: '2,000 models across two engines', data: { count: 2000 } },
     keyboard: { about: 'A selected model deep in a long list, keyboard traversal and Chinese search', data: { count: 200, keyboard: true } },
     threshold: { about: 'Favoriting from an open configuration keeps the anchor when crossing the virtualization threshold', data: { count: 79 } },
+    'offline-favorites': { about: 'Tab reaches a selectable model below a viewport of unavailable remote favorites', data: { count: 200, offlineFavorites: true } },
+    'offline-favorites-readable': { about: 'The readable field picker retains keyboard access below unavailable remote favorites', data: { count: 200, offlineFavorites: true, readable: true } },
   },
   async check(page, ui) {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.evaluate(() => document.fonts.ready);
     const trigger = page.locator('[data-perf-trigger] button').first();
+    // Browser regression for #11684: native Tab cannot enter the virtual list
+    // when the first viewport contains only disabled options and the next selectable row is offscreen.
+    if (ui.data.offlineFavorites) {
+      const list = page.getByRole('listbox');
+      await trigger.click();
+      const search = page.getByPlaceholder(await ui.t('newChat.modelSelector.search.placeholderAll'));
+      await page.waitForFunction(label => document.activeElement?.getAttribute('aria-label') === label,
+        await search.getAttribute('aria-label'));
+      await list.locator('[data-unified-anchor^="fav::"][aria-disabled="true"]').first().waitFor();
+      const before = await list.evaluate(el => {
+        const viewport = el.getBoundingClientRect();
+        const rows = [...el.querySelectorAll('[data-unified-anchor]')];
+        const visible = rows.filter(row => {
+          const rect = row.getBoundingClientRect();
+          return rect.bottom > viewport.top && rect.top < viewport.bottom;
+        });
+        return { visibleCount: visible.length, allUnavailable: visible.every(row => row.getAttribute('aria-disabled') === 'true') };
+      });
+      assert.ok(before.visibleCount > 0 && before.allUnavailable,
+        `Expected a viewport of unavailable favorites: ${JSON.stringify(before)}`);
+      const lastRail = page.locator('button[data-rail-item]').last();
+      await lastRail.focus();
+      await page.keyboard.press('Tab');
+      const activeModel = () => page.evaluate(() => document.activeElement?.getAttribute('data-unified-anchor'));
+      const first = await activeModel();
+      assert.ok(first?.startsWith('model::'), 'Tab skipped all selectable model rows');
+      const entryScroll = await list.evaluate(el => {
+        const viewport = el.getBoundingClientRect();
+        const focused = document.activeElement.getBoundingClientRect();
+        return { offset: el.scrollTop, height: el.clientHeight,
+          rowVisible: focused.bottom > viewport.top && focused.top < viewport.bottom };
+      });
+      assert.equal(entryScroll.rowVisible, true, 'Tab did not scroll the focused model into view');
+      await ui.capture('keyboard-after-disabled-favorites');
+      await page.keyboard.press('End');
+      await page.waitForFunction(previous => {
+        const active = document.activeElement?.getAttribute('data-unified-anchor');
+        return active?.startsWith('model::') && active !== previous;
+      }, first, { timeout: 2_000 });
+      assert.ok(await list.evaluate(el => el.scrollTop) > entryScroll.offset + entryScroll.height,
+        'End did not scroll beyond the entry viewport');
+      await page.keyboard.press('Home');
+      await page.waitForFunction(expected => document.activeElement?.getAttribute('data-unified-anchor') === expected, first, { timeout: 2_000 });
+      await page.keyboard.press('Shift+Tab');
+      assert.equal(await lastRail.evaluate(el => el === document.activeElement), true, 'Shift+Tab could not return to the rail');
+      await page.keyboard.press('Tab');
+      assert.ok((await activeModel())?.startsWith('model::'), 'Tab could not reenter the list');
+      const focusedInList = () => page.evaluate(() => !!document.activeElement?.closest('[role="listbox"]'));
+      for (let index = 0; index < 4 && await focusedInList(); index++) {
+        await page.keyboard.press('Tab');
+      }
+      assert.equal(await focusedInList(), false, 'Tab could not leave the list');
+      return;
+    }
     if (ui.case === 'keyboard' || ui.case === 'threshold') {
       const search = page.getByPlaceholder(await ui.t('newChat.modelSelector.search.placeholderAll'));
       const list = page.getByRole('listbox');

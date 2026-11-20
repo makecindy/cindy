@@ -43,6 +43,7 @@ export function useUnifiedModelWindow({ enabled, sections, listRef, flyAnchor, i
 
   const focusedIndex = focusedKey === null ? undefined : byKey.get(focusedKey);
   const flyIndex = flyAnchor ? byAnchor.get(anchorKey(flyAnchor)) : undefined;
+  const firstSelectableIndex = items.findIndex(({ row }) => row && !isRowDisabled(row));
   const getItemKey = useCallback((index: number) => items[index]!.key, [items]);
   const estimateSize = useCallback((index: number) => {
     const item = items[index];
@@ -51,11 +52,12 @@ export function useUnifiedModelWindow({ enabled, sections, listRef, flyAnchor, i
   const rangeExtractor = useCallback((range: Range) => {
     const indexes = defaultRangeExtractor(range);
     // Scrolling must not remove an active DOM focus or the configuration portal's anchor.
-    for (const index of [focusedIndex, flyIndex]) {
-      if (index !== undefined && !indexes.includes(index)) indexes.push(index);
+    // Keep one fallback Tab stop for viewports filled with disabled rows.
+    for (const index of [focusedIndex, flyIndex, firstSelectableIndex]) {
+      if (index !== undefined && index >= 0 && !indexes.includes(index)) indexes.push(index);
     }
     return indexes.sort((a, b) => a - b);
-  }, [focusedIndex, flyIndex]);
+  }, [focusedIndex, flyIndex, firstSelectableIndex]);
 
   const virtualizer = useVirtualizer({
     enabled,
@@ -76,7 +78,7 @@ export function useUnifiedModelWindow({ enabled, sections, listRef, flyAnchor, i
     return row && start < viewportEnd && end > scrollOffset && !isRowDisabled(row);
   });
   const entryKey = focusedIndex === undefined
-    ? items[visibleTabItem?.index ?? -1]?.key
+    ? items[visibleTabItem?.index ?? firstSelectableIndex]?.key
     : focusedKey;
 
   useLayoutEffect(() => {
