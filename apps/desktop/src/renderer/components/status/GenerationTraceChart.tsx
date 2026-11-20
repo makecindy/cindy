@@ -51,7 +51,7 @@ export function GenerationTraceChart({
   width,
   speedHeight: fullSpeedHeight,
   strokeHeight,
-  liveDot = false,
+  keepSpeedHeight = false,
   fixedSize = false,
   label,
   className,
@@ -64,8 +64,8 @@ export function GenerationTraceChart({
   width: number;
   speedHeight: number;
   strokeHeight: number;
-  /** Mark the newest reading, as the live chart does. */
-  liveDot?: boolean;
+  /** Reserve room for the live trace before its first sample arrives. */
+  keepSpeedHeight?: boolean;
   /** Render at exactly the viewBox size instead of scaling to the CSS box. */
   fixedSize?: boolean;
   label: string;
@@ -98,7 +98,7 @@ export function GenerationTraceChart({
   const showThinking = columns.some((column) => column.thinkingTokens !== null);
   // A finished turn too short for a curve keeps only its strokes, not an empty band above them.
   // The live chart holds its height: its curve is still to come.
-  const speedHeight = liveDot || points.some(point => point.settled) || points.length > 1 || !showThinking ? fullSpeedHeight : STROKE_GAP;
+  const speedHeight = keepSpeedHeight || points.some(point => point.settled) || points.length > 1 || !showThinking ? fullSpeedHeight : STROKE_GAP;
   const height = speedHeight + (showThinking ? STROKE_GAP + strokeHeight + 1 : 4);
   const ceiling = Math.max(1, ...points.map((point) => point.rate));
   const yOf = (rate: number) => speedHeight - (rate / ceiling) * (speedHeight - SPEED_TOP);
@@ -107,7 +107,6 @@ export function GenerationTraceChart({
     y: yOf(point.rate),
   }));
   const line = xy.map((point, index) => `${index ? 'L' : 'M'}${point.x},${point.y}`).join(' ');
-  const last = xy.at(-1);
   const pitch = plotWidth / THINKING_COLUMNS;
   const strokeWidth = Math.max(1.5, Math.min(5, pitch * 0.45));
   const columnX = (column: number) => PAD_LEFT + (column + 0.5) * pitch;
@@ -187,14 +186,6 @@ export function GenerationTraceChart({
             <path d={line} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
           </>
         )}
-        {xy.map((point, index) => points[index].settled && (
-          <circle key={index} cx={point.x} cy={point.y} r="2" fill="currentColor">
-            <title>{t('chat.runningStatus.lastRequestRate')}</title>
-          </circle>
-        ))}
-        {liveDot && last && (
-          <circle cx={last.x} cy={last.y} r="2.5" fill="currentColor" opacity={picked === null ? 1 : 0.35} />
-        )}
         {showThinking && columns.map((column) => {
           if (column.thinkingTokens === null) return null;
           const x = columnX(column.column);
@@ -210,24 +201,13 @@ export function GenerationTraceChart({
           );
         })}
         {picked !== null && (
-          <g data-testid="trace-pick">
-            {/* Only between the two values it ties together: from the speed at that moment down to
-                the end of that slice's stroke, or to the baseline when the slice has none. */}
-            <path
-              d={`M${pickedX} ${yOf(pickedRate)}L${columnX(picked)} ${pickedThinking === null ? speedHeight : strokeEnd(pickedThinking)}`}
-              stroke="currentColor"
-              strokeWidth="0.75"
-              opacity="0.55"
-            />
-            <circle
-              cx={pickedX}
-              cy={yOf(pickedRate)}
-              r="3.2"
-              fill="var(--surface-elevated)"
-              stroke="currentColor"
-              strokeWidth="1.5"
-            />
-          </g>
+          <circle
+            data-testid="trace-pick"
+            cx={pickedX}
+            cy={yOf(pickedRate)}
+            r="2"
+            fill="currentColor"
+          />
         )}
       </svg>
       {picked !== null && pick && createPortal(
