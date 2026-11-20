@@ -144,7 +144,7 @@ import { createToolResultLiveLimiter } from './toolResultLiveLimit';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import type { readDeviceLinkSettings } from './settings-store.desktop';
 import type { noteControllerAccessAllowed, noteControllerAccessDenied, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
-import { PLUGIN_OAUTH_CHANNEL, PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
+import { MODEL_GROUPS_REMOTE_CHANNEL, PLUGIN_OAUTH_CHANNEL, PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
 import type { requestPluginOauth, invalidatePluginOauth } from '../plugin-oauth/runtime.js';
 import type { dispatchLocalInvoke } from './invoke-registry';
 import type {
@@ -239,6 +239,12 @@ export interface RemoteAgentHandler {
    * 主人是否同意过这个人显示(转分享)。
    */
   sharedGroupStatus?(providerId: string, guestController?: string): Promise<ProviderShareGroupState[] | null>;
+}
+
+/** 模型组(docs/product-rules/model-groups.md)：同账号电脑在这台开新任务时，按这台自己的模式选路。 */
+export interface ModelGroupsRemoteHandler {
+  /** `model-groups:remote` 请求。 */
+  handle(raw: unknown): Promise<unknown>;
 }
 
 /** 供应商组(docs/product-rules/provider-groups.md)：组摘要只服务同账号电脑。 */
@@ -816,6 +822,11 @@ let providerGroupRemoteHandler: ProviderGroupRemoteHandler | null = null;
 
 function setProviderGroupRemoteHandler(handler: ProviderGroupRemoteHandler | null): void {
   providerGroupRemoteHandler = handler;
+}
+let modelGroupsRemoteHandler: ModelGroupsRemoteHandler | null = null;
+
+function setModelGroupsRemoteHandler(handler: ModelGroupsRemoteHandler | null): void {
+  modelGroupsRemoteHandler = handler;
 }
 let setupSnapshotRemoteHandler: SetupSnapshotRemoteHandler | null = null;
 
@@ -5183,6 +5194,26 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       return { ok: false, error: { code: 'IPC_ERROR', message: /^\[[A-Z_]+\]/.test(message) ? message : '[INTERNAL] provider group request failed' } };
     }
   }
+  if (payload.channel === MODEL_GROUPS_REMOTE_CHANNEL) {
+    // 模型组只给同账号电脑：受邀者与共享任务访客的通道清单里都没有它，这里再兜一层。
+    if (!isSameAccountController(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed` } };
+    }
+    const handler = modelGroupsRemoteHandler;
+    if (!handler) return { ok: false, error: { code: 'IPC_ERROR', message: '[UNAVAILABLE] model groups are not ready yet' } };
+    try {
+      return {
+        ok: true,
+        result: await timing.measure('handler', () => runDeviceLinkInvokeContext(
+          { controllerDeviceId: src, channel: payload.channel },
+          () => handler.handle(payload.args?.[0]),
+        )),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: { code: 'IPC_ERROR', message: /^\[[A-Z_]+\]/.test(message) ? message : '[INTERNAL] model group request failed' } };
+    }
+  }
   if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
     try { return { ok: true, result: await timing.measure('handler', () => requestRemoteDesktop(src, payload.args?.[0])) }; }
     catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : 'DESKTOP_UNAVAILABLE' } }; }
@@ -5653,6 +5684,7 @@ return {
   revalidateRemoteModelAccess,
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
+  setModelGroupsRemoteHandler,
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
   setAgentNetSwitchRemoteHandler,

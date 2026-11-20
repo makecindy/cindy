@@ -27,6 +27,7 @@
 import { FILE_PEER_CHANNEL } from './filePeer.js';
 import { MACHINE_STATUS_CHANNEL } from './machineStatus.js';
 import { AGENT_NET_SWITCH_CHANNEL, AGENT_NET_SWITCH_TIMEOUT_MS } from './agentNetSwitch.js';
+import { MODEL_GROUPS_REMOTE_CHANNEL } from './modelGroups.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import {
@@ -438,6 +439,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 供应商组(被控端 dispatch 拦截执行，不落 ipcMain handler)：同账号电脑问组所在电脑该用组里哪台、
   // 报告运行中的任务与需要冷却的电脑。只给同账号，分享受邀者与共享任务访客在 dispatch 再拒一次。
   PROVIDER_GROUP_REMOTE_CHANNEL,
+  // 模型组(被控端 dispatch 拦截执行，不落 ipcMain handler)：同账号电脑读这台的模式、请这台按自己的模式为
+  // 要建在这台的新任务选路并提交。只给同账号，分享受邀者与共享任务访客在 dispatch 再拒一次。
+  MODEL_GROUPS_REMOTE_CHANNEL,
   // 出方向语音转写(被控端 dispatch 拦截执行,不落 ipcMain handler;复用被控端 ASR 配置)。
   DL_VOICE_TRANSCRIBE_CHANNEL,
   // 临时 voice credential 同步(被控端 dispatch 拦截执行,不落 ipcMain handler;禁止泛化)。

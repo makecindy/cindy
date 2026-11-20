@@ -15,6 +15,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { bindModelGroupSession } from './sessionBindings.js';
 import { readModelGroupsConfig, writeModelGroupsConfig } from './store.js';
 import { readModelGroupRecoveryOffer, resolver } from './desktopResolver.js';
+import { registerModelGroupsRemoteHandler } from './remoteRegistration.js';
 
 function sessionIdOf(value: Record<string, unknown>): string {
   const sessionId = value.sessionId;
@@ -25,6 +26,8 @@ function sessionIdOf(value: Record<string, unknown>): string {
 }
 
 export function registerModelGroupsIpc(): void {
+  // 同账号的另一台电脑在这台开新任务时，用这台的模式与同一个选路实例。
+  registerModelGroupsRemoteHandler(resolver);
   ipcMain.handle(MODEL_GROUPS_IPC.GET, (event) => {
     assertTrustedAppRendererEvent(event);
     return readModelGroupsConfig();

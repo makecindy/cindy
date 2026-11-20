@@ -93,7 +93,8 @@ import { ModelSelector, type RemoteAgentRelocation } from '@/components/new-chat
 import { evictDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { evictDeviceProviders } from '@/hooks/useDeviceProviders';
 import { makerApiForDevice } from '@/lib/makerTransport';
-import { MODEL_FAVORITES_GET } from '@cindy/device-link';
+import { MODEL_FAVORITES_GET, MODEL_GROUPS_REMOTE_CHANNEL } from '@cindy/device-link';
+import { useRemoteModelGroups } from '@/features/model-groups/remoteModelGroups';
 
 const remoteError = () => new Error('[DEVICE_LINK_TIMEOUT] remote device did not respond');
 const capabilities = (modelId: string, modelName: string) => ({
@@ -179,6 +180,7 @@ beforeEach(() => {
       deviceLink: {
         invoke: fixtures.invoke,
         onRemotePush: () => vi.fn(),
+        onPresenceChanged: () => vi.fn(),
         onStatusChanged: () => vi.fn(),
         onPeerLinkReset: () => vi.fn(),
         onResponsivenessChanged: () => vi.fn(),
@@ -261,5 +263,56 @@ describe('Agent 所在电脑离线时的真实模型面板(协同任务与普通
     await openPicker();
 
     expect((await screen.findByRole('status')).textContent).toContain(expectedText);
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：真实 ModelSelector 的打开回调 + 真实 useRemoteModelGroups；草稿开着时那台新建了模式，
+ *   重新打开选择器就列出来，关着时不发请求。
+ * - 规则依据：model-groups.md「在另一台电脑上开的新任务」(2026-11-17 用户裁决：每次打开选择器重读一次，不轮询)。
+ * - 现有覆盖缺口：remoteModelGroups.test.tsx 只覆盖代次变了就重读，没有覆盖选择器打开时给出代次、打开期间不重复读。
+ * - 最小失败输入：先只有 Coding，那台加了 Planning 后关上再打开选择器。
+ * - tier：unit/jsdom，只替换 preload 的 deviceLink 桥。
+ */
+describe('另一台电脑的模型组', () => {
+  it('每次打开选择器向那台重读一次模式，关着时不读', async () => {
+    fixtures.cloudOnline = true;
+    const route = (id: string, name: string) => ({
+      id, name, strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt' }],
+    });
+    let routes = [route('coding', 'Coding')];
+    const base = fixtures.invoke.getMockImplementation()!;
+    fixtures.invoke.mockImplementation(async (deviceId: string, channel: string, args: unknown[]) =>
+      channel === MODEL_GROUPS_REMOTE_CHANNEL ? { config: { routes } } : base(deviceId, channel, args));
+    const listReads = () => fixtures.invoke.mock.calls.filter(([, channel]) => channel === MODEL_GROUPS_REMOTE_CHANNEL).length;
+    function RemoteDraftPicker() {
+      const [reread, setReread] = React.useState(0);
+      const groups = useRemoteModelGroups('cloud-device', true, reread);
+      return (
+        <ModelSelector remoteAgent={undefined}
+          modelId="cloud-model" effort="medium" vendorKey="cc" deviceId="cloud-device" currentProviderId="cloud-provider"
+          onModelChange={vi.fn()} onEffortChange={vi.fn()} onProviderChange={vi.fn()}
+          onPickerOpen={() => setReread((value) => value + 1)}
+          {...(groups.status === 'ready' ? { modelGroups: { config: groups.config, active: null, onSelect: vi.fn(), remote: true } } : {})}
+        />
+      );
+    }
+    render(<RemoteDraftPicker />);
+    await waitFor(() => expect(listReads()).toBe(1));
+    const trigger = screen.getByRole('button');
+
+    fireEvent.click(trigger);
+    expect(await within(await screen.findByRole('listbox')).findByText('Coding')).toBeTruthy();
+    expect(listReads()).toBe(2);
+
+    routes = [route('coding', 'Coding'), route('planning', 'Planning')];
+    fireEvent.click(trigger);
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+    expect(listReads()).toBe(2);
+
+    fireEvent.click(trigger);
+    expect(await within(await screen.findByRole('listbox')).findByText('Planning')).toBeTruthy();
+    expect(listReads()).toBe(3);
   });
 });

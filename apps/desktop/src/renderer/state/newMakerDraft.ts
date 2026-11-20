@@ -1007,6 +1007,11 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
     next.collab = { ...next.collab, workerConfig: undefined };
   }
+  // 模式是按电脑存的(model-groups.md「在另一台电脑上开的新任务」)：换了任务所在电脑，上一台的模式不再适用，
+  // 不带到另一台去，除非同一个 patch 显式给了新值。
+  if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && !('modelGroup' in normalizedPatch)) {
+    next.modelGroup = null;
+  }
   // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
   // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。
   currentDraft = next;

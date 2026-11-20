@@ -956,6 +956,8 @@ interface ChatInputProps {
   pluginModels?: PluginModelsPickerProps;
   /** 新任务的模型组(只有新任务草稿传)。 */
   modelGroups?: ModelGroupsPickerProps;
+  /** 模型选择器每次打开时调用一次(语义同 ModelSelector 的 onPickerOpen)。 */
+  onModelPickerOpen?: () => void;
   /**
    * 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)。只有本机新任务草稿在至少有一个引擎时传。
    * 选中引擎时：模型 pill 显示引擎与模型，权限只给引擎的两档，计划模式等内置引擎专属入口不出现，
@@ -1449,6 +1451,7 @@ export function ChatInput({
   onUnifiedDraftSelect,
   pluginModels,
   modelGroups,
+  onModelPickerOpen,
   pluginEngines,
   pluginEngineSession,
   selectedFavoriteUid = null,
@@ -10263,6 +10266,7 @@ export function ChatInput({
                   {!sessionModelLoading && <ModelSelector
                     openRequest={modelPickerRequest}
                     onOpenRequestConsumed={onModelPickerRequestConsumed}
+                    {...(onModelPickerOpen ? { onPickerOpen: onModelPickerOpen } : {})}
                     sshCodex={sshCodexCatalog}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去

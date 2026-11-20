@@ -146,6 +146,10 @@ async function submit(options: {
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
   /** 选了模型组：发送时解析出的结果。 */
   modelGroupRoute?: ModelGroupResolveResult;
+  /** 远程控制草稿：被控电脑选路的结果，或选路失败。 */
+  remoteModelGroupRoute?: ModelGroupResolveResult | Error;
+  /** 远程控制草稿里选着那台的模式，但那台的模式还没读到 / 这次没读到。 */
+  remoteModelGroupSendBlock?: 'loading' | 'error';
   /** 草稿那台电脑的模型目录读到哪一步；默认 ready。 */
   remoteModelListStatus?: 'ready' | 'loading' | 'error';
   effort?: Effort;
@@ -311,8 +315,15 @@ async function submit(options: {
     deviceDisplayName, dbToMakerAgentKind, chatEligibleSourcesForModel, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
-    activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
+    activeModelGroup: options.modelGroupRoute || options.remoteModelGroupRoute ? { type: 'route', id: 'r1' } : null,
     resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
+    resolveRemoteModelGroup: vi.fn(async () => {
+      if (options.remoteModelGroupRoute instanceof Error) throw options.remoteModelGroupRoute;
+      return options.remoteModelGroupRoute ?? null;
+    }),
+    commitRemoteModelGroup: vi.fn(), buildModelGroupRouteNote: () => null,
+    remoteModelGroupSendBlock: options.remoteModelGroupSendBlock ?? null,
+    setRemoteModelGroupsRetry: vi.fn(),
     bindModelGroupSession: vi.fn(), commitModelGroupDecision: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     // 这些用例都走内置 Harness；插件引擎的新建路径由 newMakerDraft.test.ts 覆盖。
@@ -917,6 +928,42 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: 'dev-2' });
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+  });
+  // model-groups.md §3.2 / unit：给另一台电脑开的新任务由那台选路：选出的来源连同它自己的推理强度建在那台，
+  // 交出后向那台提交，不在本机记绑定。以前远程草稿不提供模式；推理强度曾取界面上的实时值。
+  it.each(['send', 'goal'] as const)('routes %s through the target computer’s model group', async (entry) => {
+    const remoteModelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'PC', modelName: modelId, sourceName: 'Ollama',
+      route: { agentKind: 'pi', model: modelId, providerId, effort: 'high' }, why: 'order', quota: null, trace: [], decisionId: 'pc-receipt',
+    };
+    const result = await submit({ entry, deviceId: 'host-pc', remoteModelGroupRoute, effort: 'low', providers: [provider(providerId, ['low', 'high'])] });
+    expect(result.errors).toEqual([]);
+    expect(result.environment.resolveRemoteModelGroup).toHaveBeenCalledWith('host-pc', { type: 'route', id: 'r1' }, { hasImages: false });
+    expect(result.invokeRemote).toHaveBeenCalledWith('host-pc', 'maker:create-session', [expect.objectContaining({ providerId, model: modelId, effort: 'high' })]);
+    expect(result.environment.commitRemoteModelGroup).toHaveBeenCalledWith('host-pc', remoteModelGroupRoute, expect.any(String), null);
+    expect(result.environment.bindModelGroupSession).not.toHaveBeenCalled();
+  });
+  // PR #10883 review / unit：那台的模式把任务换到第三台电脑时，草稿手上的目录(同名来源只有 low)不是那一处的，
+  // 选出的推理强度要原样带过去。之前按草稿那一处的目录校准，high 被改掉。
+  it.each(['send', 'goal'] as const)('keeps %s effort when the target computer routes to another computer', async (entry) => {
+    const remoteModelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'PC', modelName: modelId, sourceName: 'Ollama',
+      route: { agentKind: 'pi', model: modelId, providerId, effort: 'high', agentDeviceId: 'gpu-box' }, why: 'order', quota: null, trace: [], decisionId: 'pc-receipt',
+    };
+    const result = await submit({ entry, deviceId: 'host-pc', remoteModelGroupRoute, effort: 'low', providers: [provider(providerId, ['low'])], authCatalogKey: 'gpu-box' });
+    expect(result.errors).toEqual([]);
+    expect(result.invokeRemote).toHaveBeenCalledWith('host-pc', 'maker:create-session', [expect.objectContaining({ agentDeviceId: 'gpu-box', effort: 'high' })]);
+  });
+  // §3.2：那台的模式读不到或选路失败时停下保留输入，不改用原模型。Tier: unit。
+  it.each(['send', 'goal'] as const)('stops %s when the target computer cannot route', async (entry) => {
+    for (const failure of [{ remoteModelGroupRoute: new Error('[DEVICE_UNRESPONSIVE] timeout') }, { remoteModelGroupSendBlock: 'error' as const }]) {
+      const result = await submit({ entry, deviceId: 'host-pc', ...failure });
+      expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(false);
+      if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('newChat.modelSelector.remoteLoadFailed');
+      else expect(String(result.errors.at(-1))).toContain('newChat.modelSelector.remoteLoadFailed');
+      // 这次没读到而被挡下：请那台重读一次模式列表。
+      if ('remoteModelGroupSendBlock' in failure) expect(result.environment.setRemoteModelGroupsRetry).toHaveBeenCalled();
+    }
   });
   // #10240 / unit: real creation callbacks must not commit a model-group choice
   // after a cancelled auth gate or a rejected create. Success-only coverage missed both.

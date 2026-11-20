@@ -11,8 +11,9 @@ import {
   type ActivePluginEngine,
   type PluginEngineSelection,
 } from '@/lib/pluginEngineSelection';
-import { bindModelGroupSession, commitModelGroupDecision, modelGroupLocationNameFrom, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
-import { findModelGroupRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
+import { bindModelGroupSession, buildModelGroupRouteNote, commitModelGroupDecision, modelGroupLocationNameFrom, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
+import { commitRemoteModelGroup, resolveRemoteModelGroup, useRemoteModelGroups } from '../model-groups/remoteModelGroups';
+import { findModelGroupRoute, MODEL_GROUPS_DEFAULTS, type ModelGroupResolveResult, type ModelGroupSelection } from '../../../shared/modelGroups';
 import type { GhostModelRoute, GhostPickerModel } from '../../../shared/ghost';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { useRemoteDraftDefaults, useRemoteDraftSelection, useRemoteDraftPush } from './useRemoteDraftDefaults';
@@ -1271,10 +1272,28 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       : undefined,
     [pluginEnginesAllowed, pluginEngineList, activePluginEngine],
   );
-  // 模型组只在本机开的新任务提供(远程控制别的电脑、SSH、协同不提供)。草稿此刻选着在另一台电脑运行的模型也照样提供：
-  // 路线自己决定这次在哪台运行(model-groups.md §3.1)。记住的那一项后来被删掉时按没选处理。
-  const modelGroupsAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca';
-  const { config: modelGroupsConfig } = useModelGroups(modelGroupsAllowed);
+  // 模型组：本机开的新任务用本机的模式；建到另一台电脑(远程控制)的新任务用那台自己的模式，由那台选路
+  // (model-groups.md「在另一台电脑上开的新任务」)，那台版本较旧或还没读到时不显示，也不改用本机的模式。
+  // SSH、协同、共享任务访客不提供。草稿此刻选着在另一台电脑运行的模型也照样提供：路线自己决定这次在哪台运行
+  // (model-groups.md §3.1)。记住的那一项后来被删掉时按没选处理。
+  // 这次没读到时，被挡下的发送触发重读(那台一直在线时不会有重连代次)。
+  const [remoteModelGroupsRetry, setRemoteModelGroupsRetry] = useState(0);
+  const remoteModelGroups = useRemoteModelGroups(
+    effectiveDeviceLinkDeviceId,
+    isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca',
+    remoteModelGroupsRetry,
+  );
+  // 每次打开模型选择器再向那台读一次，那台刚建或改了模式这里也能看到；不轮询。那台版本较旧、正在读或不是另一台电脑时不读。
+  const remoteModelGroupsStatus = remoteModelGroups.status;
+  const handleModelPickerOpen = useCallback(() => {
+    if (remoteModelGroupsStatus === 'ready' || remoteModelGroupsStatus === 'error') setRemoteModelGroupsRetry((value) => value + 1);
+  }, [remoteModelGroupsStatus]);
+  const modelGroupsAllowed = !effectiveRemoteHostId && draft.vendor !== 'orca'
+    && (!isDeviceLinkDraft || remoteModelGroups.status === 'ready');
+  const { config: localModelGroupsConfig } = useModelGroups(modelGroupsAllowed && !isDeviceLinkDraft);
+  const modelGroupsConfig = !isDeviceLinkDraft
+    ? localModelGroupsConfig
+    : remoteModelGroups.status === 'ready' ? remoteModelGroups.config : MODEL_GROUPS_DEFAULTS;
   const activeModelGroup = useMemo(
     () => (modelGroupsAllowed && !activePluginModel && findModelGroupRoute(modelGroupsConfig, draft.modelGroup)
       ? draft.modelGroup
@@ -1287,11 +1306,20 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           config: modelGroupsConfig,
           active: activeModelGroup,
           onSelect: (selection: ModelGroupSelection) => patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null }),
-          onManage: () => navigate('/settings?tab=model-groups'),
+          // 那台的模式在那台的设置里管；这台的设置与收藏管不到。
+          ...(isDeviceLinkDraft ? { remote: true } : { onManage: () => navigate('/settings?tab=model-groups') }),
         }
       : undefined,
-    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate],
+    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate, isDeviceLinkDraft],
   );
+  /**
+   * 草稿里选着那台电脑的模式，但那台的模式还没读到或这次没读到：先不发，提示稍后再试，不悄悄改用原来的模型。
+   * 换电脑时草稿里的模式已清空(newMakerDraft)，所以这里的选择一定是给这台选的。
+   */
+  const remoteModelGroupSendBlock = isDeviceLinkDraft && !effectiveRemoteHostId && draft.modelGroup && !activeModelGroup
+    && (remoteModelGroups.status === 'loading' || remoteModelGroups.status === 'error')
+    ? remoteModelGroups.status
+    : null;
   /** 组里没有能用的模型时，说明里写用户原来选的那个模型的显示名。 */
   const localProvidersForGroupNoteRef = useRef<ReturnType<typeof useProviders>['providers']>([]);
   const keptModelNameForGroupNote = (agentKind: Parameters<typeof dbToMakerAgentKind>[0], providerId: string | null | undefined, model: string) =>
@@ -4746,6 +4774,15 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         }
         return true;
       };
+      if (remoteModelGroupSendBlock && !shouldEnableCollab && !pluginModelAtSend) {
+        if (remoteModelGroupSendBlock === 'error') {
+          setRemoteModelGroupsRetry((value) => value + 1);
+          toast.error(t('newChat.modelSelector.remoteLoadFailed'));
+        } else {
+          toast.warning(t('ccAgent.draft.deviceStillLoading'));
+        }
+        return false;
+      }
       if (!modelGroupAtSend && !draftCatalogReady()) return false;
       if (isDeviceLinkDraft && remoteDraftState.status === 'error') {
         setRemoteDraftRetryEpoch((value) => value + 1);
@@ -4884,9 +4921,24 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             : null;
           if (pluginModelAtSend && !isCurrentDataOwner()) return;
           // 模型组：建任务前按路线的选法选一个现在能用的来源；里面都用不了或组已删除时沿用原来的模型。
-          const modelGroupRoute = modelGroupAtSend
-            ? await resolveModelGroup(modelGroupAtSend, { hasImages: !!files?.some((file) => file.category === 'image') })
-            : null;
+          // 建到另一台电脑的任务由那台按它自己的模式选路；问不到时停下保留输入，不改用原模型或本机的模式。
+          let resolvedGroupRoute: ModelGroupResolveResult | null = null;
+          if (modelGroupAtSend) {
+            const groupContext = { hasImages: !!files?.some((file) => file.category === 'image') };
+            if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {
+              try {
+                resolvedGroupRoute = await resolveRemoteModelGroup(effectiveDeviceLinkDeviceId, modelGroupAtSend, groupContext);
+              } catch (error) {
+                log.warn('[draft send] remote model group resolve failed', error);
+                if (isCurrentDataOwner()) toast.error(t('newChat.modelSelector.remoteLoadFailed'));
+                return;
+              }
+            } else {
+              resolvedGroupRoute = await resolveModelGroup(modelGroupAtSend, groupContext);
+            }
+          }
+          // const 让下面「派发前登记」的闭包能按 outcome 收窄类型。
+          const modelGroupRoute = resolvedGroupRoute;
           if (modelGroupAtSend && !isCurrentDataOwner()) return;
           const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
             ? pluginRoute.route
@@ -4928,6 +4980,13 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             // 撞配额时据此提议换到同一条路线里的下一个来源(model-groups.md §6.1)。
             if (bindLocalGroupBeforeSend) commitModelGroupDecision(modelGroupRoute);
             else if (modelGroupAtSend && pluginRoute?.outcome !== 'routed') void bindModelGroupSession(sessionId, modelGroupAtSend, modelGroupRoute);
+          };
+          // 建到另一台电脑：提交与说明都交给那台(说明的文字按这台的语言写好，运行位置用那台的说法)。
+          const commitRemoteModelGroupRoute = (sessionId: string) => {
+            if (!modelGroupAtSend || !effectiveDeviceLinkDeviceId || pluginRoute?.outcome === 'routed') return;
+            const keptName = keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model);
+            commitRemoteModelGroup(effectiveDeviceLinkDeviceId, modelGroupRoute, sessionId,
+              buildModelGroupRouteNote(modelGroupRoute, keptName, t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName));
           };
           // device-link:远程草稿就绪态以被控端为准(传 deviceId 走隧道查被控端 maker:agent:status);
           // 本地草稿 effectiveDeviceLinkDeviceId 为 undefined → 仍走控制端本机就绪检查(行为不变)。
@@ -5033,13 +5092,15 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               // 路径各自推导曾长出过只在其中一条上复现的缺陷(见该函数注释)。
               candidate: {
                 model,
-                effort: draftInitialEffort === null ? null : effort,
+                // 插件或模型组选出的来源带着自己的推理档位(没有 = 不指定)；没选路时用界面上的实时值。
+                effort: routedTo ? (routedTo.effort ?? null) as Effort | null : draftInitialEffort === null ? null : effort,
                 permissionMode,
                 fastMode: effectiveFastMode,
                 planModeEnabled: effectivePlanMode,
                 providerId,
               },
               deviceProviders: agentCatalogProviders,
+              routedElsewhere: !!routedTo && (routeAgentDeviceId ?? null) !== (effectiveAgentDeviceId ?? null),
               capabilityAgentKind,
               // Agent 在另一台电脑运行:被控电脑把它记进任务,模型与来源属于那台的目录。
               agentDeviceId: routeAgentDeviceId,
@@ -5402,6 +5463,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               });
               if (!isCurrentDataOwner() || !remoteProjectsStore.getCreationPreview(remoteSessionId)) return;
               if (accepted) {
+                commitRemoteModelGroupRoute(remoteSessionId);
                 remoteProjectsStore.clearCreationPreview(remoteSessionId);
                 opts?.onAccepted?.();
                 return;
@@ -5409,6 +5471,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               // 没受理(归属切换 / 会话已删等):撤回首条标记,退回下面的视图交接,与改动前行为一致。
               remoteProjectsStore.clearPendingFirstSend(remoteSessionId);
             }
+            // 首条消息交给任务视图接着发：与本机交接同一时机提交那台的选择(model-groups.md §3)。
+            commitRemoteModelGroupRoute(remoteSessionId);
             setPending(remoteSessionId, {
               text: message,
               builtInSkillIntent: currentBuiltInSkillIntent(),
@@ -6066,6 +6130,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       activePluginModel,
       activeModelGroup,
       modelGroupLocationName,
+      remoteModelGroupSendBlock,
       providers,
       deviceProvidersUnsupported,
       effectiveWorkingDir,
@@ -6277,7 +6342,23 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           : null;
         if (goalPluginModel && !isCurrentDataOwner()) return;
         // 模型组：与 handleSend 同一流程。
-        const modelGroupRoute = goalModelGroup ? await resolveModelGroup(goalModelGroup, { hasImages: false }) : null;
+        if (remoteModelGroupSendBlock && !shouldEnableCollab && !goalPluginModel) {
+          if (remoteModelGroupSendBlock === 'error') setRemoteModelGroupsRetry((value) => value + 1);
+          throw new Error(t(remoteModelGroupSendBlock === 'error' ? 'newChat.modelSelector.remoteLoadFailed' : 'ccAgent.draft.deviceStillLoading'));
+        }
+        let modelGroupRoute: ModelGroupResolveResult | null = null;
+        if (goalModelGroup) {
+          if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {
+            try {
+              modelGroupRoute = await resolveRemoteModelGroup(effectiveDeviceLinkDeviceId, goalModelGroup, { hasImages: false });
+            } catch (error) {
+              log.warn('[draft goal] remote model group resolve failed', error);
+              throw new Error(t('newChat.modelSelector.remoteLoadFailed'));
+            }
+          } else {
+            modelGroupRoute = await resolveModelGroup(goalModelGroup, { hasImages: false });
+          }
+        }
         if (goalModelGroup && !isCurrentDataOwner()) return;
         const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
           ? pluginRoute.route
@@ -6442,6 +6523,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               providerId: chatInitialProviderId,
             },
             deviceProviders: agentCatalogProviders,
+            routedElsewhere: !!routedTo && (routeAgentDeviceId ?? null) !== (effectiveAgentDeviceId ?? null),
             capabilityAgentKind,
             agentDeviceId: routeAgentDeviceId,
           });
@@ -6516,6 +6598,13 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // setPendingGoal → navigate → SessionView 消费时订阅已就绪再 setGoal。
           // 协同同样随交接一起交出去(与发送分支同口径,理由见那段注释):在这里 await
           // 开协同会把目标文案压在内存里等一次可能 30s 的隧道往返。
+          if (goalModelGroup && pluginRoute?.outcome !== 'routed') {
+            commitRemoteModelGroup(deviceId, modelGroupRoute, remoteSessionId, buildModelGroupRouteNote(
+              modelGroupRoute,
+              keptModelNameForGroupNote(goalBaseRoute.persistedAgentKind, goalBaseRoute.providerId, goalBaseRoute.model),
+              t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName,
+            ));
+          }
           setPendingGoal(remoteSessionId, {
             objective,
             limits,
@@ -6825,6 +6914,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       providers,
       deviceProvidersUnsupported,
       modelGroupLocationName,
+      remoteModelGroupSendBlock,
       authVendor,
       effectiveDeviceLinkDeviceId,
       effectiveDeviceLinkDeviceName,
@@ -7418,6 +7508,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     onUnifiedDraftSelect={handleUnifiedDraftSelect}
                     {...(pluginModelsProps ? { pluginModels: pluginModelsProps } : {})}
                     {...(modelGroupsProps ? { modelGroups: modelGroupsProps } : {})}
+                    onModelPickerOpen={handleModelPickerOpen}
                     {...(pluginEnginesProps ? { pluginEngines: pluginEnginesProps } : {})}
                     selectedFavoriteUid={selectedFavoriteUid}
                     // 「+」菜单协同模式项:普通 Lead 的项目/对话 draft 都可用 —— eligible 由
