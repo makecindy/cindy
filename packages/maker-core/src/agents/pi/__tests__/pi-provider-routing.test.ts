@@ -1059,6 +1059,18 @@ describe("Pi provider-aware model routing", () => {
               },
             ],
           },
+          {
+            // #11460: a custom provider has no row in Pi's bundled catalog, so every
+            // model here is a full entry. Custom providers legitimately have no price
+            // sheet, yet Pi still dereferences `model.cost.tiers` when a turn finishes.
+            id: "mify",
+            sourceProviderId: "mify",
+            name: "Mify",
+            baseUrl: "https://mify.example/v1",
+            api: "openai-completions",
+            inheritModels: false,
+            models: [{ id: "xiaomi/mimo-v2.6-flash", name: "MiMo" }],
+          },
         ],
         env: { CINDY_PI_OPENAI_PROXY_KEY: "placeholder-jwt" },
       }),
@@ -1090,7 +1102,7 @@ describe("Pi provider-aware model routing", () => {
     ) as {
       providers: Record<
         string,
-        { api?: string; models?: Array<{ id: string; api?: string }> }
+        { api?: string; models?: Array<{ id: string; api?: string; cost?: Record<string, number> }> }
       >;
     };
     expect(models.providers.anthropic).not.toHaveProperty("api");
@@ -1123,6 +1135,23 @@ describe("Pi provider-aware model routing", () => {
       }),
     ]);
     expect(models.providers.xai?.models?.[0]).not.toHaveProperty("api");
+    // #11460: Pi charges every finished turn through `calculateCost`, which reads
+    // `model.cost.tiers` without a guard, and pi-harness.md §5 makes the host catalog
+    // the only source of rates with "缺省按 0". No row may omit `cost` — otherwise the
+    // turn dies on `undefined is not an object (evaluating 'model.cost.tiers')`.
+    expect(models.providers.mify?.models).toEqual([
+      expect.objectContaining({
+        id: "xiaomi/mimo-v2.6-flash",
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      }),
+    ]);
+    for (const model of [
+      ...(models.providers.mify?.models ?? []),
+      ...(models.providers["openai-codex"]?.models ?? []),
+      ...(models.providers.xai?.models ?? []),
+    ]) {
+      expect(model.cost, `${model.id} cost`).toBeDefined();
+    }
     expect(
       JSON.parse(readFileSync(path.join(configHome, "settings.json"), "utf8")),
     ).toEqual({
