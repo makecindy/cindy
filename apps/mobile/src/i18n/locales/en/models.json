@@ -46,35 +46,21 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "This model can't fit the current conversation",
+    "condensedToast": "Earlier parts of the conversation will be condensed for the new model. Your full conversation history stays available.",
     "remoteTitle": "This remote task can't switch models safely",
-    "description": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short summary and continue. Your chat history stays; it just won't all be passed through verbatim.",
     "remoteDescription": "This remote task already uses {{used}} / {{total}} of the smaller model's context (about {{pct}}%), so Cindy cannot switch safely. Keep the current model or start a new task before choosing this model.",
-    "cancel": "Keep this model",
-    "confirm": "Switch and continue"
+    "cancel": "Keep this model"
   },
   "switchOutcome": {
     "applied": "Model provider switch is now in effect.",
     "failed": "Model provider switch failed. Choose the model again."
   },
   "agentSwitch": {
-    "browseAccessibility": "Browse {{agent}} models",
-    "confirmTitle": "Switch to {{agent}}?",
-    "confirmMessage": "When you send the next message, {{appName}} hands the current session over to {{agent}}. The two agents may interpret context and tools differently, so confirm before choosing the target model.",
-    "cancel": "Cancel",
-    "confirm": "Continue"
-  },
-  "agentRelocation": {
-    "titleOther": "Run the Agent on “{{device}}”?",
-    "titleHost": "Run the Agent on “{{host}}” again?",
-    "titleHostUnnamed": "Run the Agent on the session’s computer again?",
-    "message": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
-    "messageNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
-    "confirm": "Switch computer",
-    "cancel": "Keep as is"
+    "browseAccessibility": "Browse {{agent}} models"
   },
   "unified": {
-    "accountUnassigned": "Account not assigned",
+    "remoteCopyUnavailableOn": "“{{device}}” can’t use {{provider}} right now.",
+    "remoteCopyUnavailableOnTaskComputer": "The task’s computer can’t use {{provider}} right now.",
     "accountCount_one": "{{count}} account",
     "accountCount_other": "{{count}} accounts",
     "accountFallback": "Account {{index}}",
@@ -124,5 +110,12 @@
     "quotaResetIn": "Resets in {{duration}}",
     "quotaAverageHint": "Weekly quota · Equal weight per account",
     "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
+  },
+  "pluginEngines": {
+    "genericName": "Plugin engine",
+    "defaultModel": "Default model",
+    "unavailable": "{{engine}} is unavailable",
+    "unavailableWithHint": "{{engine}} is unavailable: {{hint}}",
+    "worktreeUnsupported": "Plugin engines can’t start tasks in a worktree yet. Turn off worktree to send."
   }
 }

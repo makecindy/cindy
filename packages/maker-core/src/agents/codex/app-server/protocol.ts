@@ -143,6 +143,8 @@ export interface CodexModelListParams {
 export interface CodexMcpServerStatus {
   name: string;
   tools: Record<string, unknown>;
+  /** Native thread state; absent on older runtimes, null after config changes. */
+  runtimeStatus?: 'notStarted' | 'starting' | 'connected' | 'authenticationRequired' | 'failed' | 'cancelled' | 'disabled' | null;
   [k: string]: unknown;
 }
 

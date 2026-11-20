@@ -26,6 +26,8 @@ export {
 // finalizeCodexCitationText = 剥截断残尾 + 归一化(与流式 completed 完全同口径)。
 export { finalizeCodexCitationText, normalizeCodexFileCitations } from './codex/translator.js';
 export { PiAgent } from './pi/index.js';
+// Plugin-provided ACP engines (docs/plans/acp-plugin-bridge.md).
+export * from './acp/index.js';
 export {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
@@ -111,6 +113,7 @@ export { isNetworkishErrorMessage, PI_GATEWAY_DROP_REASON } from './shared/netwo
 export {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE,
   AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
   AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
   AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
@@ -121,6 +124,8 @@ export {
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
+  createAutoReviewUnavailableNotice,
+  isAutoReviewNoAvailableModelNotice,
   annotatePermissionRequestForUnavailableReview,
   annotatePermissionRequestForAutoReview,
   AUTO_REVIEW_REASON_METADATA_KEY,

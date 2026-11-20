@@ -1,3 +1,4 @@
+import { parsePluginInstallationSource } from '@cindy/maker-shared/mcp-apps';
 import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
@@ -88,6 +89,8 @@ import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
 import { permissionItemIcon } from './lib/permissionItemIcon';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
+import { PluginInstallRing } from './PluginInstallRing';
+import { usePluginInstallProgress } from './lib/pluginInstallProgress';
 import './plugin-motion.css';
 
 interface GhostPluginDetailViewProps {
@@ -179,6 +182,13 @@ export function GhostPluginDetailView({
   const { t, i18n } = useTranslation();
   const uiLanguage = i18n.resolvedLanguage ?? i18n.language;
   const { scrolled, onScroll } = usePluginDetailScrolled();
+  // 只有本窗口发起的更新才有进度;远程设备上的插件仍按回执显示。
+  const updateProgress = usePluginInstallProgress(remote ? null : marketItem?.pluginId);
+  const updateFailed = updateProgress?.download.phase === 'failed';
+  const updateLabel =
+    !updateVersion || updateVersion === detail.version
+      ? t('settings.ghosts.market.update')
+      : t('settings.ghosts.market.updateTo', { version: updateVersion });
   const enableSwitchId = useId();
   const publicationBlocked = publishingPreview?.preflight?.actions.canSubmit === false;
   const [githubConnectionVersion, setGithubConnectionVersion] = useState(0);
@@ -257,30 +267,42 @@ export function GhostPluginDetailView({
                 >
                   {t('settings.ghosts.reapproval.action')}
                 </Button>
-              ) : updateVersion ? (
-                // 更新提级(设计定稿):有新版本时黑色主 CTA 直达市场更新确认流。
-                <Button
-                  variant="cta"
-                  size="lg"
-                  loading={updateBusy}
-                  type="button"
-                  onClick={onUpdate}
-                  disabled={updateBusy}
-                  aria-label={
-                    updateVersion === detail.version
-                      ? t('settings.ghosts.market.update')
-                      : t('settings.ghosts.market.updateTo', { version: updateVersion })
-                  }
-                  aria-busy={updateBusy || undefined}
-                >
-                  <>
-                    <ArrowUp size={14} aria-hidden="true" />
-                    {updateVersion === detail.version
-                      ? t('settings.ghosts.market.update')
-                      : t('settings.ghosts.market.updateTo', { version: updateVersion })}
-                  </>
-                </Button>
-              ) : null}
+              ) : (
+                <>
+                  {/* 更新进行中:圆环原位替换更新按钮;失败时圆环停在原处,按钮回来供重试。 */}
+                  {updateProgress && (!updateFailed || updateVersion) ? (
+                    <PluginInstallRing
+                      label={updateLabel}
+                      progress={updateProgress}
+                      size={24}
+                      explainRetry
+                      className="max-w-[260px] px-1 text-13 font-medium"
+                    />
+                  ) : null}
+                  {updateVersion && (!updateProgress || updateFailed) ? (
+                    // 更新提级(设计定稿):有新版本时黑色主 CTA 直达市场更新确认流。
+                    <Button
+                      variant="cta"
+                      size="lg"
+                      loading={updateBusy}
+                      type="button"
+                      onClick={onUpdate}
+                      disabled={updateBusy}
+                      aria-label={updateLabel}
+                      aria-busy={updateBusy || undefined}
+                    >
+                      {updateFailed ? (
+                        t('commonUi.retry')
+                      ) : (
+                        <>
+                          <ArrowUp size={14} aria-hidden="true" />
+                          {updateLabel}
+                        </>
+                      )}
+                    </Button>
+                  ) : null}
+                </>
+              )}
               {!remote && primaryAction !== 'manage' ? (
                 <Button
                   variant={updateVersion ? 'secondary' : 'cta'}
@@ -1081,8 +1103,13 @@ export function DetailsSection({
         ]
       : []),
     {
+      key: 'source',
+      label: t('mcpApps.sourceLabel'),
+      value: t(`mcpApps.source.${parsePluginInstallationSource(detail.installationSource).kind}`, { namespace: detail.installationSource?.namespace }),
+    },
+    {
       key: 'trust',
-      label: t('settings.ghosts.detail.infoTrust'),
+      label: t('mcpApps.signatureLabel'),
       value: t(`settings.ghosts.trust.${trustLabelKey}`, {
         publisher: detail.trust.publisherName ?? t('settings.ghosts.trust.unknownPublisher'),
       }),

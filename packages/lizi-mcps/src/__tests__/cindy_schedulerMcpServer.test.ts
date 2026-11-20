@@ -160,6 +160,7 @@ interface Harness {
 
 async function makeHarness(opts?: {
   schedulerNotReady?: boolean;
+  getSessionProject?: SchedulerMcpDeps['getSessionProject'];
   webhookManagement?: SchedulerMcpDeps['webhookManagement'];
   context?: Parameters<typeof createSchedulerMcpServer>[1];
 }): Promise<Harness> {
@@ -176,6 +177,7 @@ async function makeHarness(opts?: {
   // to compute nextFireAt for any pre-existing actives (none here).
 
   const server = createSchedulerMcpServer({
+    getSessionProject: opts?.getSessionProject,
     webhookManagement: opts?.webhookManagement,
     getScheduler: () => {
       if (opts?.schedulerNotReady) {
@@ -440,6 +442,23 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(fromMcp[0]).toEqual(createdData);
 
     await h.cleanup();
+  });
+
+  // Unit: follow-up tasks run in a sibling checkout; keep the host-attested project across scheduler storage.
+  it('saves the creating task project independently of the requested checkout', async () => {
+    await h.cleanup();
+    const getSessionProject = vi.fn(async () => ({ projectDir: '/projects/app', remoteHostId: null }));
+    h = await makeHarness({ getSessionProject, context: { agentKind: 'codex', workingDir: '/work', sessionId: 'creator' } });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_create', args: { ...baseCreate, workingDir: '/checkouts/pr' },
+      } });
+      expect(parseToolResult(result as { content: unknown[] }).isError).toBe(false);
+      expect(getSessionProject).toHaveBeenCalledWith('creator');
+      expect(await h.scheduler.list()).toMatchObject([{ workingDir: '/checkouts/pr', inheritedProjectDir: '/projects/app' }]);
+    } finally {
+      await h.cleanup();
+    }
   });
 
   it('call_tool(schedule_create) accepts agentKind: pi as a first-class scheduled agent', async () => {
@@ -832,6 +851,28 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(data.prompt).toBe('');
     expect(data.workspaceKind).toBe('project');
     await h.cleanup();
+  });
+
+  // Unit / #10840 parity: the real MCP create/update schemas must accept the
+  // same grants as the UI. Existing script cases only used the older grants;
+  // settings.read + usage.read previously failed before reaching Scheduler.
+  it.each(['schedule_create', 'schedule_update'] as const)('%s persists the shared host-read capabilities', async tool => {
+    try {
+      const scriptConfig = { command: 'node read.mjs', capabilities: ['settings.read', 'usage.read'] };
+      const seed = tool === 'schedule_update' ? await h.scheduler.create({
+        ...baseCreate, executionMode: 'script', scriptConfig: { command: 'node old.mjs', capabilities: [] },
+      }) : undefined;
+      const { envelope, isError } = parseToolResult(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: tool, args: tool === 'schedule_create' ? { ...scriptCreate, scriptConfig } : { id: seed!.id, scriptConfig },
+      } }) as { content: unknown[]; isError?: boolean });
+      expect(isError).toBe(false);
+      expect(envelope).toMatchObject({ ok: true, data: { scriptConfig } });
+      if (!envelope.ok) throw new Error('unexpected validation failure');
+      const saved = await h.storage.get((envelope.data as Schedule).id);
+      expect(saved?.scriptConfig).toEqual(scriptConfig);
+    } finally {
+      await h.cleanup();
+    }
   });
 
   it('call_tool(schedule_create, script without scriptConfig) returns INVALID_PARAMS', async () => {

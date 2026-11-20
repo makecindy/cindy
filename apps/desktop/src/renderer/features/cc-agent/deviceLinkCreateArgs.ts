@@ -31,10 +31,10 @@ export interface DeviceLinkCreateParams {
    */
   workingDir?: string;
   /**
-   * 预生成的 session id(可选)。远程 worktree 流程用:控制端先经隧道调被控端
-   * worktree:create(以该 id 登记 worktreeStore 绑定),再以同一 id 建会话——两步共用
-   * 一个 id,被控端 close-session 时才能按绑定回收 worktree。非 worktree 流程不传,
-   * 由被控端自行生成。
+   * 预生成的 session id。草稿新建远程会话时控制端总会预生成(手机端同口径):标题预览要在
+   * create-session 之前按最终 id 登记。远程 worktree 流程还靠它让 worktree:create 的
+   * worktreeStore 绑定与会话同 id,被控端 close-session 时才能按绑定回收 worktree。
+   * 缺省时由被控端自行生成。
    */
   id?: string;
   model: string;
@@ -64,7 +64,7 @@ export interface DeviceLinkCreateParams {
 
 export interface DeviceLinkCreateArgs {
   agentKind: 'claude-code' | 'codex' | 'pi';
-  /** 仅远程 worktree 流程出现(与 worktree:create 登记的绑定同 id)。 */
+  /** 控制端预生成的会话 id(worktree 流程中与 worktree:create 登记的绑定同 id)。 */
   id?: string;
   /** 仅项目会话出现;dialogue 不带此字段(被控端自行分配运行目录)。 */
   workingDir?: string;
@@ -90,7 +90,7 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
   const dir = p.workingDir?.trim();
   return {
     agentKind: p.agentKind === 'cc' ? 'claude-code' : p.agentKind,
-    // 预生成 id 仅在远程 worktree 流程出现;不传时不放进 args,被控端自行生成。
+    // 没有预生成 id 时不放进 args,被控端自行生成。
     ...(p.id ? { id: p.id } : {}),
     // 有目录 → 项目会话;无目录 → standalone dialogue,不带 workingDir,由被控端分配运行目录。
     ...(dir ? { workingDir: dir } : {}),

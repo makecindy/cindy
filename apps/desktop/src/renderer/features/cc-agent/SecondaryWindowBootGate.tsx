@@ -1,3 +1,4 @@
+import { isCompanionChatTarget } from '../bots/companionChatTarget';
 /**
  * SecondaryWindowBootGate — 「在新窗口打开」副窗的启动路由网关。
  * ---------------------------------------------------------------------------
@@ -44,6 +45,7 @@ export function SecondaryWindowBootGate() {
     const bootDeviceId = getBootDeviceId();
     const messageClientId = getBootMessageClientId();
     void (async () => {
+      if (isCompanionChatTarget(bootSessionId)) return bootSessionId;
       if (!bootDeviceId) return resolveSessionRoute(bootSessionId);
 
       // The remote session is not in the local DB. Pin its origin before any

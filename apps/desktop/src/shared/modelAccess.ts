@@ -59,9 +59,20 @@ export interface ModelAccessCreditPoolUsage {
 
 export type ModelAccessPromotionalGrantState = 'active' | 'depleted' | 'expired' | 'voided';
 
+/** 赠送的结构化来源，只用于明细展示。 */
+export type ModelAccessPromotionalGrantSource =
+  | {
+      type: 'gift_card';
+      /** 礼品卡的赠送方，由发卡时填写。 */
+      senderName: string;
+    }
+  | { type: 'subscription_rollover' };
+
 export interface ModelAccessPromotionalGrantUsage {
   grantId: string;
   displayName: string | null;
+  /** 滚存或礼品卡来源；旧版服务端可缺省。 */
+  source?: ModelAccessPromotionalGrantSource | null;
   originalAmount: string;
   usedAmount: string;
   remainingAmount: string;

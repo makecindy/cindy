@@ -1,3 +1,4 @@
+import { companionDragProps } from './companionDragProps';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import { TeammateRowStatus } from './TeammateStatusDot';
 import { groupTeammateStatus } from './teammateRosterStatus';
@@ -17,8 +18,8 @@ import { groupTeammateStatus } from './teammateRosterStatus';
  * （`incomingMessageTimes`），与本机读位比较；旧宿主没有这份列表时只显示 1。多人群里
  * 别人带来的伙伴按「伙伴名 (主人昵称)」显示（与群聊页同一规则）。
  */
-import type { KeyboardEventHandler, MouseEventHandler, ReactNode } from 'react';
-import { Sparkles } from 'lucide-react';
+import { useId, type KeyboardEventHandler, type MouseEventHandler, type ReactNode } from 'react';
+import { MessagesSquare, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -71,12 +72,13 @@ export function BotGroupSidebarRow({
   islandActivity: ReadonlyMap<string, AgentIslandSessionActivity>;
   now: number;
   selected: boolean;
-  onOpenGroup: (groupId: string) => void;
+  onOpenGroup: (groupId: string, reply?: { messageId: string; threadRootId: string }) => void;
   onContextMenu?: MouseEventHandler<HTMLButtonElement>;
   onKeyDown?: KeyboardEventHandler<HTMLButtonElement>;
   children?: ReactNode;
 }) {
   const { t } = useTranslation();
+  const subtitleId = useId();
 
   const previewText = (group: BotGroupSummary, plan: BotGroupSidebarPlanPreview | null): string => {
     if (plan?.kind === 'proposed') {
@@ -107,10 +109,38 @@ export function BotGroupSidebarRow({
     return text;
   };
 
+  const renderPreview = (plan: BotGroupSidebarPlanPreview | null, mutedClass: string): ReactNode => {
+    const text = previewText(group, plan);
+    // Plan prompts occupy the subtitle too; their click must still open the group.
+    const planPrompt = plan && ['proposed', 'step-done', 'step-failed', 'waiting'].includes(plan.kind);
+    const last = group.lastMessage;
+    if (!planPrompt && last?.threadRootId) {
+      const source = t('bots.groupChat.sidebar.threadReply');
+      const label = `${source} · ${text}`;
+      const content = <>
+        <span className="inline-flex shrink-0 items-center gap-1 text-11 leading-[1.455]">
+          <MessagesSquare size={12} aria-hidden />{source}<span aria-hidden>·</span>
+        </span>
+        <span className="min-w-0 truncate">{text}</span>
+      </>;
+      // Older projections without a message ID can label the source but cannot promise a jump.
+      if (last.messageId) return <button type="button" title={label}
+        aria-label={`${t('bots.groupChat.server.thread.viewThread')}: ${label}`}
+        onContextMenu={onContextMenu} onKeyDown={onKeyDown}
+        onClick={event => {
+          event.stopPropagation();
+          onOpenGroup(group.id, { messageId: last.messageId!, threadRootId: last.threadRootId! });
+        }}
+        className={cn('pointer-events-auto relative -mb-2 flex min-h-6 min-w-0 flex-1 items-start gap-1 text-left text-12 leading-[1.3334] outline-none hover:underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring', mutedClass)}>
+        {content}
+      </button>;
+      return <span title={label} className={cn('flex min-w-0 flex-1 items-center gap-1 text-12 leading-[1.3334]', mutedClass)}>{content}</span>;
+    }
+    return <span className={cn('min-w-0 flex-1 truncate text-12 leading-4', mutedClass)} title={text}>{text}</span>;
+  };
+
   const renderSubtitle = (group: BotGroupSummary, mutedClass: string): ReactNode => {
-    if (group.archived) return <span className={cn('min-w-0 flex-1 truncate text-12 leading-4', mutedClass)}>
-      {previewText(group, null)}
-    </span>;
+    if (group.archived) return renderPreview(null, mutedClass);
     // Several Bots may think at once in a broadcast round's first circle.
     const speakingIds = group.round?.speakers.filter(speaker => speaker.executionStatus !== 'queued').map(speaker => speaker.botId) ?? group.speakingBotIds;
     const speakers = speakingIds
@@ -147,12 +177,7 @@ export function BotGroupSidebarRow({
             : t('bots.groupChat.sidebar.planRunningNoStep', { name: plan.botName || names })
         : null;
     if (speakers.length === 0 && planLine === null) {
-      const text = previewText(group, plan);
-      return (
-        <span className={cn('min-w-0 flex-1 truncate text-12 leading-4', mutedClass)} title={text}>
-          {text}
-        </span>
-      );
+      return renderPreview(plan, mutedClass);
     }
     return (
       <span
@@ -194,46 +219,44 @@ export function BotGroupSidebarRow({
   );
   return (
     <div className="relative">
-    <button
-      key={group.id}
-      type="button"
+    <div
       data-bot-group-id={group.id}
-      aria-current={selected ? 'page' : undefined}
       onClick={() => onOpenGroup(group.id)}
-      onContextMenu={onContextMenu}
-      onKeyDown={onKeyDown}
-      aria-haspopup={onContextMenu ? 'menu' : undefined}
       className={cn(
-        'group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        'group relative flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
         SIDEBAR_LIST_ROW_HEIGHT_CLASS,
         selected
           ? SIDEBAR_LIST_ROW_ACTIVE_CLASS
           : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
       )}
     >
-      <span className="relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} selected={selected} />
+      {/* Sibling hit targets avoid nesting the topic button inside the whole-row button. */}
+      <button type="button" {...companionDragProps(`/bots/groups/${encodeURIComponent(group.id)}`, group.name)} onContextMenu={onContextMenu} onKeyDown={onKeyDown} aria-label={group.name} aria-describedby={subtitleId} aria-current={selected ? 'page' : undefined}
+        aria-haspopup={onContextMenu ? 'menu' : undefined}
+        className="absolute inset-0 w-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" />
+      <span className="pointer-events-none relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} />
       </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span className="pointer-events-none relative flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 truncate text-14 leading-5" title={group.name}>{group.name}</span>
           {group.archived && <span className={cn('shrink-0 text-11 leading-4', mutedClass)}>{t('bots.archived')}</span>}
+          <span
+            data-teammate-timestamp
+            className={cn(
+              'ml-auto min-w-10 shrink-0 whitespace-nowrap text-right text-11 leading-4 tabular-nums',
+              mutedClass,
+            )}
+          >
+            {timestamp}
+          </span>
         </span>
-        <span className="flex min-w-0 items-center gap-2">
+        {/* 未读数字/状态点占自己的列：副标题横贯整行，绝对定位的角标会压在预览文字上。 */}
+        <span id={subtitleId} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2">
           {renderSubtitle(group, mutedClass)}
-          <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} />
+          <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} inline />
         </span>
       </span>
-      <span
-        data-teammate-timestamp
-        className={cn(
-          'min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums',
-          mutedClass,
-        )}
-      >
-        {timestamp}
-        <span aria-hidden className="mt-1 flex items-center justify-end gap-1" />
-      </span>
-    </button>
+    </div>
     {children}
     </div>
   );

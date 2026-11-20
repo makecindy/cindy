@@ -1,4 +1,27 @@
-import type { AgentKind, CatalogModel } from '@cindy/model-providers';
+import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
+import { deriveAvailableModels } from '../maker-host/catalog-to-descriptors.js';
+
+/** Only model discovery can be answered by the published directory, never runtime status. */
+export function isShareAvailabilityRead(channel: string, args: unknown[]): boolean {
+  return channel === 'maker:provider:list' || channel === 'maker:list-available-agents'
+    || (channel === 'maker:get-capabilities' && args.length === 1 && typeof args[0] === 'string'
+      && ['claude-code', 'codex', 'pi'].includes(args[0]));
+}
+
+export function projectShareAvailabilityRead(catalog: { providers: ProviderView[] }, channel: string, args: unknown[]): unknown {
+  if (channel === 'maker:provider:list') return catalog;
+  const agents = [...new Set(catalog.providers.flatMap(provider => provider.agents))];
+  if (channel === 'maker:list-available-agents') return agents;
+  const availableModels = deriveAvailableModels({ version: 'share-availability', providers: catalog.providers }, args[0] as AgentKind);
+  // The directory proves model capabilities, not an executor's optional runtime
+  // features or permission modes. Fast also requires a live policy declaration.
+  return {
+    availableModels: availableModels.map(model => ({ ...model, supportsFastMode: false, supportsUltrafastMode: false })),
+    effortLevels: [...new Set(availableModels.flatMap(model => model.efforts))].map(id => ({ id, displayName: id })),
+    permissionModes: [],
+    hasFastMode: false,
+  };
+}
 
 export interface ShareAvailabilityModel extends Pick<CatalogModel, 'id' | 'name' | 'contextWindow' | 'efforts' | 'defaultEffort'> {
   kind: AgentKind;

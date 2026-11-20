@@ -21,6 +21,7 @@ export default {
     dismissal: { about: 'Scrim and × close, nested layers stay isolated, Escape backs out of subpages, reopening clears route state', data: { role: 'owner' } },
     admin: { about: 'Admin: 群管理 without 解散, cannot manage the owner', data: { role: 'admin' } },
     member: { about: 'Member: no 群管理, read-only 群介绍, 邀请朋友 locked', data: { role: 'member' } },
+    'member-active': { about: 'Ordinary member withdrawing own companion with active group requests', data: { role: 'member', activeRemoval: true } },
     'member-no-about': { about: 'Member of a group without 群介绍: the section is hidden', data: { role: 'member', noAbout: true } },
     alone: { about: 'Only the owner is left: notice, no 退出群聊', data: { role: 'owner', alone: true } },
     archived: { about: 'Archived group seen by its owner', data: { role: 'owner', archived: true } },
@@ -245,6 +246,11 @@ export default {
     await (await row(page, 'Aster')).click();
     await dialog.getByRole('radiogroup').waitFor();
     await ui.capture('companion');
+    await (await row(page, await t('removeOwn'))).click();
+    const withdrawal = page.getByRole('alertdialog');
+    await withdrawal.waitFor();
+    await ui.capture('companion-remove-confirm');
+    await withdrawal.getByRole('button', { name: await ui.t('bots.cancel'), exact: true }).click();
     await back.click();
 
     // 本群资料: nickname and the group-only avatar, without account profile controls.

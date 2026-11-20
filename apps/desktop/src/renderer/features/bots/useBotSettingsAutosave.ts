@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 
 import {
   createBotSettingsAutosave,
@@ -44,6 +45,8 @@ export interface UseBotSettingsAutosaveOptions {
 
 export interface BotSettingsAutosaveController {
   status: BotAutosaveStatus;
+  /** Whether the held success receipt came from a confirmed model selection. */
+  modelSelectionSaved: boolean;
   errorKey: string | null;
   /** 字段变化:文本走防抖,离散选择走即时合并窗口。 */
   onEdit: (trigger: BotAutosaveTrigger) => void;
@@ -54,6 +57,8 @@ export interface BotSettingsAutosaveController {
   /** 是否有已改但未落库的内容。 */
   isDirty: () => boolean;
   hasPendingModelSelection: () => boolean;
+  /** Only after the user explicitly discards unsaved changes. Prevent unmount flush. */
+  discard: () => void;
   /** 挂到文本框上:输入法组合中的拼音不是已完成的编辑,上屏后再进入防抖。 */
   composition: {
     onCompositionStart: () => void;
@@ -84,8 +89,19 @@ export function useBotSettingsAutosave(
   commitRef.current = commit;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  const formOwner = useRef(getDataOwnerGeneration()).current;
+  const intentOwnerRef = useRef(formOwner);
+  // Only an explicit edit/retry can renew intent after a same-owner runtime
+  // refresh. A late receipt or unmount must not renew old work by itself.
+  const captureIntentOwner = useCallback(() => {
+    if (!isDataOwnerIdCurrent(formOwner)) return false;
+    intentOwnerRef.current = getDataOwnerGeneration();
+    return true;
+  }, [formOwner]);
 
   const [status, setStatus] = useState<BotAutosaveStatus>('idle');
+  const [modelSelectionSaved, setModelSelectionSaved] = useState(false);
+  const completedModelSelectionRef = useRef(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
@@ -97,11 +113,15 @@ export function useBotSettingsAutosave(
       savedTimerRef.current = null;
     }
     setStatus(next);
+    setModelSelectionSaved(next === 'saved' && completedModelSelectionRef.current);
     setErrorKey(next === 'error' ? botSettingsSaveErrorKey(error) : null);
     if (next !== 'saved') return;
     savedTimerRef.current = setTimeout(() => {
       savedTimerRef.current = null;
-      if (mountedRef.current) setStatus('idle');
+      if (mountedRef.current) {
+        setStatus('idle');
+        setModelSelectionSaved(false);
+      }
     }, SAVED_HOLD_MS);
   }, []);
 
@@ -114,7 +134,13 @@ export function useBotSettingsAutosave(
       readBaseline: () => baselineRef.current,
       commit: async (next, modelSelection) => {
         if (!enabledRef.current) return;
+        const owner = intentOwnerRef.current;
+        if (!isDataOwnerGenerationCurrent(owner)) throw new Error('Settings owner changed');
         await commitRef.current(next, modelSelection);
+        if (!isDataOwnerGenerationCurrent(owner)) throw new Error('Settings owner changed');
+        // Tag only the real completed commit, never the current page or a newer
+        // pending choice. The scheduler emits its receipt after this resolves.
+        completedModelSelectionRef.current = modelSelection === true;
       },
       onStatusChange: handleStatus,
     });
@@ -138,9 +164,10 @@ export function useBotSettingsAutosave(
     (trigger: BotAutosaveTrigger) => {
       if (!enabledRef.current) return;
       if (trigger === 'text' && composingRef.current) return;
+      if (!captureIntentOwner()) return;
       autosave.schedule(trigger);
     },
-    [autosave],
+    [autosave, captureIntentOwner],
   );
   const composition = useMemo(
     () => ({
@@ -150,10 +177,10 @@ export function useBotSettingsAutosave(
       onCompositionEnd: () => {
         composingRef.current = false;
         committablePayloadRef.current = payloadRef.current;
-        if (enabledRef.current) autosave.schedule('text');
+        if (enabledRef.current && captureIntentOwner()) autosave.schedule('text');
       },
     }),
-    [autosave],
+    [autosave, captureIntentOwner],
   );
 
   const flush = useCallback(() => {
@@ -162,11 +189,18 @@ export function useBotSettingsAutosave(
   }, [autosave]);
 
   const retry = useCallback(() => {
-    if (!enabledRef.current) return Promise.resolve();
+    if (!enabledRef.current || !captureIntentOwner()) return Promise.resolve();
     return autosave.retry();
-  }, [autosave]);
+  }, [autosave, captureIntentOwner]);
 
   const isDirty = useCallback(() => enabledRef.current && autosave.isDirty(), [autosave]);
 
-  return { status, errorKey, onEdit, flush, retry, isDirty, hasPendingModelSelection: autosave.hasPendingModelSelection, composition };
+  const discard = useCallback(() => {
+    autosave.discard();
+    payloadRef.current = baselineRef.current;
+    committablePayloadRef.current = baselineRef.current;
+    handleStatus('idle');
+  }, [autosave, baselineRef, handleStatus]);
+
+  return { status, modelSelectionSaved, errorKey, onEdit, flush, retry, isDirty, discard, hasPendingModelSelection: autosave.hasPendingModelSelection, composition };
 }

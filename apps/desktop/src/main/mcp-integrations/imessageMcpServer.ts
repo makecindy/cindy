@@ -11,7 +11,7 @@ export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSess
   const result = (value: unknown, isError = false) => ({
     content: [{ type: 'text' as const, text: JSON.stringify(value) }], ...(isError ? { isError: true } : {}),
   });
-  const scoped = async (chatId: string | undefined, run: (scope: IMessageToolScope, target: string) => Promise<unknown>) => {
+  const scoped = async (chatId: string | undefined, run: (scope: IMessageToolScope, target: string) => Promise<unknown>, failure?: string) => {
     const context = deps.getSessionContext();
     const scope = readChannelToolScope(context);
     if (scope?.channel !== 'imessage') return result({ error: 'NO_ACTIVE_IMESSAGE_SCOPE' }, true);
@@ -22,7 +22,7 @@ export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSess
     }
     if (!scope.im.listChats().some(chat => chat.guid === target)) return result({ error: 'CHAT_NOT_CONNECTED' }, true);
     try { return result(await run(scope, target)); }
-    catch { return result({ error: 'IMESSAGE_OPERATION_FAILED', message: '操作未确认完成。发送失败时请先查聊天记录，避免重复发送。' }, true); }
+    catch { return result(failure ? { error: failure } : { error: 'IMESSAGE_OPERATION_FAILED', message: '操作未确认完成。发送失败时请先查聊天记录，避免重复发送。' }, true); }
   };
   const chat = z.string().max(512).optional().describe('Default: current chat. Another connected chat requires an owner DM turn.');
   server.tool('send_text', 'Send an immediate iMessage through the active local BlueBubbles connection. Normal final answers are sent automatically.',
@@ -45,6 +45,15 @@ export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSess
     { chat_id: chat, after: z.number().int().min(0).default(0), before: z.number().int().min(0).optional(), offset: z.number().int().min(0).default(0) },
     { readOnlyHint: true, destructiveHint: false },
     ({ chat_id, after, before, offset }) => scoped(chat_id, (scope, target) => scope.im.readHistory(target, after, before ?? Date.now(), offset)));
+  server.tool('archive_history', 'Search the current chat in its local bbcodex SQLite archive, including available cached attachments.',
+    { query: z.string().max(1024).optional(), before: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).default(30) },
+    { readOnlyHint: true, destructiveHint: false },
+    ({ query, before, limit }) => scoped(undefined, async scope => {
+      if (!scope.readArchive) throw new Error();
+      const page = await scope.readArchive(query, before, limit);
+      if (readChannelToolScope(deps.getSessionContext()) !== scope) throw new Error();
+      return page;
+    }, 'IMESSAGE_ARCHIVE_UNAVAILABLE'));
   server.tool('status', 'Read local iMessage connection health and connected chats. Uncertain deliveries require checking history before retrying.', {},
     { readOnlyHint: true, destructiveHint: false },
     () => scoped(undefined, async (scope, target) => ({

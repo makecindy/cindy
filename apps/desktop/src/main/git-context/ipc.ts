@@ -61,6 +61,7 @@ import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
 import {
+  ensurePrRefsBackfill,
   listAllPrRefs,
   listPrRefs,
   managePrRefs,
@@ -77,7 +78,7 @@ import {
 
 import { fetchPrSummary } from './prSummary';
 import { PrFollowWatch } from './prFollowWatch';
-import { getSchedulerIfInitialized } from '../scheduler-host/index.desktop.js';
+import { getSchedulerIfInitialized, getScheduleStorageIfInitialized } from '../scheduler-host/index.desktop.js';
 
 const log = createLogger('git-context/ipc');
 
@@ -148,6 +149,7 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
       mergeable: metadata.mergeable ?? null,
       merge_state: metadata.mergeable_state ?? null,
       updated_at: metadata.updated_at ?? null,
+      merged_at: pr.merged_at ?? null,
       labels: metadata.labels ?? [],
       review_requests: metadata.requested_reviewers ?? [],
     },
@@ -175,16 +177,25 @@ const prFollowWatch = new PrFollowWatch({
   // A passive instance (dev beside a release build on the same data) never starts runs by itself.
   autoRunAllowed: () => getSchedulerIfInitialized()?.isPassive() === false,
   listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
+  hasSuccessfulPrRunSince: async (id, since) => (await getScheduleStorageIfInitialized()?.hasSuccessfulPrRunSince(id, since)) ?? false,
   inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
   hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
-  runNow: async (id, trigger) => {
+  runNow: async (id, trigger, expectedSchedule) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger });
+    return scheduler.runNow(id, { trigger, expectedSchedule, deferToCaller: Boolean(expectedSchedule.prTrigger) });
   },
   log,
 });
 /** Re-read current facts before running the existing follow-up gate. No new agent task. */
+export async function refreshSchedulePr(url: string): Promise<void> {
+  if (!prStatusService) throw new Error('HOST_NOT_READY');
+  const [, owner, repo, , number] = new URL(url).pathname.split('/');
+  const [result] = await prStatusService.getStatuses([{ owner: owner!, repo: repo!, prNumber: Number(number) }],
+    { waitForFresh: true, refresh: true });
+  if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+}
+
 export async function githubPrHeads(urls: readonly string[]): Promise<Record<string, string>> {
   if (!prStatusService) throw new Error('HOST_NOT_READY');
   return cachedGithubPrHeads(prStatusService, urls);
@@ -237,6 +248,7 @@ export function registerGitContextIpc(): void {
     staleTtlMs: 0,
     eventCacheTtlMs: query => query.provider !== 'gitlab' && getScheduleWebhookHost()?.githubEventsHealthy(sessionPrUrl(query))
       ? GITHUB_EVENT_CACHE_TTL_MS : undefined,
+    onInvalidated: () => prFollowWatch.reset(),
     onObserved: (query, result) => prFollowWatch.observe(query, result),
   });
   app.on('browser-window-focus', () => {
@@ -373,7 +385,7 @@ export function registerGitContextIpc(): void {
 
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_REFS_LIST, async (_e, sessionId: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
-
+    void ensurePrRefsBackfill();
     return listPrRefs(sid);
   });
 
@@ -381,7 +393,7 @@ export function registerGitContextIpc(): void {
     // PrRefsProvider 挂在 App 顶层,首次调用通常早于登录后的 db ensureReady。
     // 未就绪时返回 null 当"稍后再试"信号(renderer 定时重试),不抛错刷日志。
     if (getCurrentDbClientUserId() === null) return null;
-
+    void ensurePrRefsBackfill();
     return listAllPrRefs();
   });
 

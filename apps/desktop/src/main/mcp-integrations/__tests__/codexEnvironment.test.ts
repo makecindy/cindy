@@ -124,6 +124,7 @@ describe('codexEnvironment', () => {
     const appProxy = vi.fn((read: () => AppServerConfig, context: McpProviderContext) => {
       expect(read()).toEqual({
         id: 'custom_test',
+        name: 'Custom Test',
         url: 'https://example.test/mcp',
         transport,
         headers: { Authorization: 'Bearer test-only-token' },

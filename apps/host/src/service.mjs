@@ -67,7 +67,16 @@ export function createHostService(deps) {
     if (url.pathname === '/api/project-info/auto-icon') return { status: 200, body: await deps.resolveAutomaticProjectIcon(body) };
     if (url.pathname === '/api/project-info/image') return { status: 200, body: await deps.readProjectIconImage(body) };
     if (url.pathname === '/api/project-info/get') return { status: 200, body: await deps.readProjectInfo() };
-    if (url.pathname === '/api/project-info/set') return { status: 200, body: await deps.updateProjectInfo(body) };
+    if (pathname === '/api/project-info/desktop-set') {
+      if (!context.caller?.startsWith('local-api:') || typeof body?.requestId !== 'string' || !body.requestId)
+        return { status: 403, body: { error: 'desktop_project_request_required' } };
+      return { status: 200, body: await deps.updateProjectInfo(body.input, { desktopRequest: body.requestId }) };
+    }
+    if (pathname === '/api/project-info/set') {
+      // Older Desktop proxies forward page input with the local bearer. They can edit
+      // existing metadata, but cannot introduce a new filesystem or credential grant.
+      return { status: 200, body: await deps.updateProjectInfo(body, { legacyDesktop: context.caller?.startsWith('local-api:') }) };
+    }
     if (url.pathname === '/api/project-aliases/list') {
         return { status: 200, body: await deps.listProjectAliases() };
     }

@@ -130,3 +130,72 @@ describe('async question choices', () => {
     await vi.waitFor(() => expect(f.frames.at(-1)).toMatchObject({ closed: true, card: { buttons: [] } }));
   });
 });
+
+describe('submitting before every question is answered', () => {
+  // 实踩(2026-11-17, 官方飞书两题合卡): 只答了第 1 题就点「提交答案」, 渠道已回「已收到你的选择」,
+  // 卡片却毫无变化, 看起来像点击失效, 用户连点两次后放弃。入口: createQuestionCard().click(提交);
+  // 可观察结果: 卡片正文点名没答的题, 按钮保留, 不交答案。既有用例只断言返回 false, 没看卡片(unit)。
+  it('names the unanswered questions on the card and keeps it answerable', async () => {
+    const f = fixture([
+      { id: 'platform', question: 'Platforms?', multiSelect: true, options: [{ label: 'Android' }, { label: 'iOS' }] },
+      { id: 'source', question: 'Source?', options: [{ label: 'release' }, { label: 'custom' }] },
+    ]);
+    await f.card.ready;
+    await f.click(':0:0');
+    const shown = f.frames.length;
+    expect(await f.click(':submit')).toBe(false);
+    expect(f.frames).toHaveLength(shown + 1);
+    expect(f.frames.at(-1)!.card.body).toContain('Not answered yet: question 2');
+    expect(f.frames.at(-1)!.card.buttons!.some(b => b.id.endsWith(':submit'))).toBe(true);
+    expect(f.controls.answer).not.toHaveBeenCalled();
+
+    await f.click(':1:0');
+    expect(f.frames.at(-1)!.card.body).not.toContain('Not answered yet');
+    expect(await f.click(':submit')).toBe(true);
+    expect(f.controls.answer).toHaveBeenCalledOnce();
+  });
+
+  it('asks for a choice when the only question has none', async () => {
+    const f = fixture([{ question: 'Platforms?', multiSelect: true, options: [{ label: 'Android' }, { label: 'iOS' }] }]);
+    await f.card.ready;
+    expect(await f.click(':submit')).toBe(false);
+    expect(f.frames.at(-1)!.card.body).toContain('No answer yet');
+    expect(f.controls.answer).not.toHaveBeenCalled();
+  });
+});
+
+describe('closing a card with the final answer', () => {
+  // 实踩(2026-11-17, 官方飞书): 答完的卡片上「✅ 已选」写了两遍(题目下面一行, 末尾又汇总一行); 在 App 里
+  // 答了别的选项时, 题目下面还留着卡片上没提交的勾选, 和末尾的最终答案互相矛盾。入口: createQuestionCard
+  // + Host settled; 可观察结果: 收口帧正文里每道题的最终答案只写一次, 且以 Host 的答案为准。既有用例只
+  // 断言收口帧的 closed 与 buttons, 没看正文(unit)。
+  it('writes the final answer once', async () => {
+    const f = fixture([{ id: 'env', question: 'Where?', options: [{ label: 'Staging' }, { label: 'Production' }] }]);
+    await f.card.ready;
+    await f.click(':0:0');
+    f.settle(f.controls.answer.mock.calls[0][0]);
+    await vi.waitFor(() => expect(f.frames.at(-1)!.closed).toBe(true));
+    expect(f.frames.at(-1)!.card.body.split('Selected: Staging')).toHaveLength(2);
+  });
+
+  it('shows the answer given in the App rather than an unsubmitted choice on the card', async () => {
+    const f = fixture([{ id: 'langs', question: 'Languages?', multiSelect: true, options: [{ label: 'English' }, { label: 'Chinese' }] }]);
+    await f.card.ready;
+    await f.click(':0:0');
+    f.settle({ kind: 'ask_user_question', answers: { langs: '["Chinese"]' } });
+    await vi.waitFor(() => expect(f.frames.at(-1)!.closed).toBe(true));
+    expect(f.frames.at(-1)!.card.body).toContain('Selected: Chinese');
+    expect(f.frames.at(-1)!.card.body).not.toContain('Selected: English');
+  });
+});
+
+describe('question card layout', () => {
+  // 飞书: 选项多、文案长时同一行挤多个按钮会压缩文字; 问答卡一行一个满宽按钮。
+  it('lays choices out as a list', async () => {
+    const f = fixture([{ question: 'Pick a long option', options: [
+      { label: 'A fairly long first option label' }, { label: 'Another fairly long option label' },
+    ] }]);
+    await f.card.ready;
+    expect(f.frames[0].card.buttonLayout).toBe('list');
+  });
+});

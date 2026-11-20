@@ -65,6 +65,7 @@
     "noCredentials": "{{agent}} 無法使用：電腦端尚未登入。請在電腦端 {{appName}} 的「設定 → 模型供應商」完成登入後再試。",
     "noEncryption": "{{agent}} 無法使用：電腦端系統安全儲存空間不可用，讀不到已儲存的金鑰。請檢查系統鑰匙圈（macOS）或系統帳號加密（Windows），然後重新啟動電腦端 {{appName}}。",
     "proxyNotReady": "{{agent}} 暫時無法使用：電腦端元件尚未就緒。請稍候重試；若持續出現，請重新啟動電腦端 {{appName}}。",
+    "sharedLinkUnavailable": "{{agent}} 暫時無法使用：電腦端的 Codex 已經登入，但 {{appName}} 讀不到那份登入（建立不出指向它的連結，Windows 上通常是一般權限建立不了）。請確認電腦端的 {{appName}} 有權限建立連結（Windows 上可以用系統管理員身分執行一次，或開啟開發人員模式）後重試。",
     "default": "{{agent}} 無法使用：電腦端登入憑證不可用。請在電腦端 {{appName}} 的「設定 → 模型供應商」重新登入後再試。（{{reason}}）"
   },
   "remoteError": {

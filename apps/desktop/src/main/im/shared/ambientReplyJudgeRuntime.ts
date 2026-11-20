@@ -18,7 +18,7 @@ let shared: AmbientReplyJudge | null = null;
 /** 进程内一份判定器(无状态, 每次调用自己带预算)。 */
 export function getAmbientReplyJudge(): AmbientReplyJudge {
   if (!shared) {
-    shared = createAmbientReplyJudge((prompt, opts) => requestUtilityText(getMaker(), prompt, opts));
+    shared = createAmbientReplyJudge((prompt, opts) => requestUtilityText(getMaker(), prompt, { ...opts, source: 'ambient-reply' }));
   }
   return shared;
 }

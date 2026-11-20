@@ -7,6 +7,7 @@ import { mountPage } from '../../ui-page/harness';
 
 const error = 'queued heartbeat Codex thread provider identity does not match the current session route; api_key=private-fixture-value';
 const resumeError = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+const reviewError = '[AUTO_REVIEW_NO_AVAILABLE_MODEL] No automatic review model is available.';
 const timeoutError = '[REMOTE_AGENT_TIMEOUT] [INVOKE_TIMEOUT] no invoke-result within 30000ms after first socket write\nrequestedTarget=mock-peer; channel=maker:remote-agent';
 
 function Fixture({ kind }: { kind: string }) {
@@ -16,7 +17,13 @@ function Fixture({ kind }: { kind: string }) {
   const onDiagnose = () => setCount((value) => value + 1);
   return (
     <div className="p-4" data-diagnosis-count={count} data-retry-count={retryCount} data-choose-count={chooseCount}>
-      {kind === 'timeout-live' ? (
+      {kind.startsWith('review-') ? (
+        kind === 'review-remote-narrow'
+          ? <ErrorBanner error={reviewError} deviceLinkDeviceId="mock-execution-computer" />
+          : kind === 'review-history-narrow'
+            ? <ErrorMessageCard message={reviewError} canConfigureAutoReview />
+            : <ErrorBanner error={reviewError} />
+      ) : kind === 'timeout-live' ? (
         <ErrorBanner error={timeoutError} agentDeviceId="share:timeout-target" retryText="Check task progress first"
           onChooseComputer={() => setChooseCount((value) => value + 1)}
           onRetry={() => setRetryCount((value) => value + 1)} onDiagnose={onDiagnose} />
@@ -35,7 +42,11 @@ function Fixture({ kind }: { kind: string }) {
         <SubagentErrorNotice rawError={error} onDiagnose={onDiagnose} />
       ) : (
         <UnreadFailedScheduleBanner dataOwnerId="fixture-owner" sessionId="fixture-task"
-          latestFailedRun={{ runId: 'fixture-run', firedAt: 1, errorMsg: error }}
+          latestFailedRun={{ runId: 'fixture-run', firedAt: 1, errorMsg: kind === 'pr-dns' ? 'lookup api.github.com: no such host' : error,
+            ...(kind === 'pr-dns' && { failureKind: 'precheck', prCheckDiagnosis: {
+              kind: 'dns', host: 'api.github.com', device: 'Build Mac', failures: 3, retryAt: Date.UTC(2026, 10, 19, 14, 4),
+            } }),
+          }}
           onDiagnose={onDiagnose} />
       )}
     </div>

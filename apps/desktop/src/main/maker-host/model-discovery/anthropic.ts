@@ -47,6 +47,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import type { CatalogModel, Effort } from '@cindy/model-providers';
+import type { NativeSubscriptionAccount } from '@cindy/maker-core';
 
 import { createLogger } from '../../logger.js';
 import {
@@ -57,9 +58,12 @@ import {
   setAnthropicDiscoveredModels,
 } from '../active-catalog.js';
 import { hasClaudeNativeLogin } from '../claude-native-auth.js';
-import { hasConnectedSubscriptionPool } from '../../subscription-accounts/runtime.js';
+import { hasConnectedSubscriptionPool, refreshSubscriptionPoolClaudeModels, setSubscriptionPoolClaudeModelProbe,
+  resetDefaultSubscriptionClaudeDiscovery } from '../../subscription-accounts/runtime.js';
+import { readPool } from '../../subscription-accounts/store.js';
 
 const log = createLogger('model-discovery:anthropic');
+// Legacy default-profile capture/cache only. Pooled profiles use their own auth and discovery below.
 const hasConnectedClaudeAccount = () => hasClaudeNativeLogin() || hasConnectedSubscriptionPool('anthropic');
 
 const VALID_EFFORTS: ReadonlySet<string> = new Set([
@@ -246,6 +250,34 @@ export interface SdkMappedModel {
   model: CatalogModel;
   hasEffortInfo: boolean;
   hasFastModeInfo: boolean;
+}
+
+/** Partial SDK replies refine explicit capabilities without replacing membership. */
+function mergePartialSdkCapabilities(
+  previous: readonly CatalogModel[], patches: ReadonlyMap<string, SdkMappedModel>,
+): CatalogModel[] {
+  return previous.map(current => {
+    const patch = patches.get(current.id);
+    if (!patch) return current;
+    let next = current;
+    if (patch.hasEffortInfo) next = {
+      ...next,
+      discoveredMetadata: { ...next.discoveredMetadata, ...pickModelMetadata({
+        efforts: patch.model.discoveredMetadata?.efforts,
+        defaultEffort: patch.model.discoveredMetadata?.defaultEffort,
+      }) },
+      efforts: patch.model.efforts,
+      defaultEffort: patch.model.defaultEffort,
+    };
+    if (patch.hasFastModeInfo) next = {
+      ...next,
+      discoveredMetadata: { ...next.discoveredMetadata, ...pickModelMetadata({
+        supportsFastMode: patch.model.discoveredMetadata?.supportsFastMode,
+      }) },
+      supportsFastMode: patch.model.supportsFastMode,
+    };
+    return next;
+  });
 }
 
 /**
@@ -648,38 +680,7 @@ export function noteAnthropicSdkSupportedModels(
         .filter(({ hasEffortInfo, hasFastModeInfo }) => hasEffortInfo || hasFastModeInfo)
         .map((entry) => [entry.model.id, entry] as const),
     );
-    const merged = lastApplied.map((current) => {
-      const patch = capabilityPatches.get(current.id);
-      if (!patch) return current;
-      let next = current;
-      if (patch.hasEffortInfo) {
-        next = {
-          ...next,
-          discoveredMetadata: {
-            ...next.discoveredMetadata,
-            ...pickModelMetadata({
-              efforts: patch.model.discoveredMetadata?.efforts,
-              defaultEffort: patch.model.discoveredMetadata?.defaultEffort,
-            }),
-          },
-          efforts: patch.model.efforts,
-          defaultEffort: patch.model.defaultEffort,
-        };
-      }
-      if (patch.hasFastModeInfo) {
-        next = {
-          ...next,
-          discoveredMetadata: {
-            ...next.discoveredMetadata,
-            ...pickModelMetadata({
-              supportsFastMode: patch.model.discoveredMetadata?.supportsFastMode,
-            }),
-          },
-          supportsFastMode: patch.model.supportsFastMode,
-        };
-      }
-      return next;
-    });
+    const merged = mergePartialSdkCapabilities(lastApplied, capabilityPatches);
     const mergedExplicitEffortIds = new Set(explicitEffortModelIds);
     const mergedExplicitFastModeIds = new Set(explicitFastModeModelIds);
     for (const [id, patch] of capabilityPatches) {
@@ -712,7 +713,7 @@ export function noteAnthropicSdkSupportedModels(
  * 主动清单探测(生产 = maker.refreshAgentLocalModels('claude-code', { onSupportedModels })),
  * maker 就绪后注入。结果只交给传入的回调,不经全局捕获监听器。
  */
-type AnthropicModelProbe = (onModels: (models: unknown[]) => void) => Promise<boolean>;
+type AnthropicModelProbe = (onModels: (models: unknown[]) => void, account?: NativeSubscriptionAccount) => Promise<boolean>;
 let modelProbe: AnthropicModelProbe | null = null;
 /** 同一授权世代内的在途探测;换代后不复用旧世代的探测。 */
 let probeInflight: { generation: number; promise: Promise<boolean> } | null = null;
@@ -721,6 +722,30 @@ let probeInflight: { generation: number; promise: Promise<boolean> } | null = nu
 export function setAnthropicModelProbe(probe: AnthropicModelProbe | null): void {
   modelProbe = probe;
   probeInflight = null;
+  setSubscriptionPoolClaudeModelProbe(probe ? async (account, previous) => {
+    let captured: CatalogModel[] | null = null;
+    const delivered = await probe(raw => {
+      const old = new Map(previous.map(model => [model.id, model]));
+      const mapped = mapAnthropicSdkModels(raw);
+      // Match the established SDK-capture contract: empty/unrecognized replies are
+      // not evidence that an authenticated account lost every model.
+      if (mapped.length === 0) return;
+      captured = mapped.map(({ model, hasEffortInfo, hasFastModeInfo }) => {
+        const known = old.get(model.id);
+        if (!known) return model;
+        return { ...model,
+          ...(!hasEffortInfo ? { efforts: known.efforts, defaultEffort: known.defaultEffort } : {}),
+          ...(!hasFastModeInfo ? { supportsFastMode: known.supportsFastMode } : {}),
+          discoveredMetadata: { ...known.discoveredMetadata, ...model.discoveredMetadata },
+        };
+      });
+      // Keep the established quality guard within this account, never across accounts.
+      if (isDegenerateModelListShrink(previous.length, captured.length)) {
+        captured = mergePartialSdkCapabilities(previous, new Map(mapped.map(entry => [entry.model.id, entry])));
+      }
+    }, account);
+    return delivered ? captured : null;
+  } : null);
 }
 
 /**
@@ -732,6 +757,7 @@ export function setAnthropicModelProbe(probe: AnthropicModelProbe | null): void 
  * 返回本次是否拿到了属于当前世代的清单;未登录或 maker 未就绪时返回 false。
  */
 export function refreshAnthropicModelsFromProbe(): Promise<boolean> {
+  if (readPool('anthropic')) return refreshSubscriptionPoolClaudeModels(true);
   const probe = modelProbe;
   if (!probe || !hasConnectedClaudeAccount()) return Promise.resolve(false);
   const generation = authGeneration;
@@ -767,6 +793,7 @@ export function syncAnthropicModelsWithClaudeLogin(status: {
   loggedIn: boolean;
   email?: string;
 }): void {
+  resetDefaultSubscriptionClaudeDiscovery(status.loggedIn);
   if (!status.loggedIn) {
     if (hasConnectedSubscriptionPool('anthropic')) { requestAnthropicModelProbe(); return; }
     lastClaudeLoginEmail = undefined;
@@ -789,7 +816,10 @@ export function syncAnthropicModelsWithClaudeLogin(status: {
 
 /** 后台请求一次主动探测;失败只记日志。 */
 export function requestAnthropicModelProbe(): void {
-  void refreshAnthropicModelsFromProbe().then(
+  // Login/attach already invalidates the affected account. A background notification
+  // joins its current discovery; only manual refresh needs a forced follow-up.
+  const discovery = readPool('anthropic') ? refreshSubscriptionPoolClaudeModels() : refreshAnthropicModelsFromProbe();
+  void discovery.then(
     (applied) => {
       if (!applied) log.info('anthropic model probe returned no current model list');
     },

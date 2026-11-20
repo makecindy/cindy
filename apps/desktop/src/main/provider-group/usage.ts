@@ -9,6 +9,7 @@ import { codexLimitBucketKey, matchCodexBucketForModel, resolveCodexBucketTable 
 import { accountUsageLimitFromWindows, claudeAccountUsageLimit } from '../../shared/accountUsageLimit.js';
 import type { ProviderGroupMember, ProviderGroupMemberQuota } from '../../shared/providerGroup.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
+import { parseProviderShareInsights } from '../../shared/providerShareInsights.js';
 
 export const PROVIDER_GROUP_USAGE_MAX_AGE_MS = 10 * 60_000;
 export const PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS = 1_500;
@@ -238,12 +239,77 @@ function codexUsageState(snapshot: ProviderGroupCodexUsageSnapshot, model: strin
   };
 }
 
+/**
+ * 分享来的电脑经分享者授权(「允许查看剩余额度」)读到的账号共用额度(provider-groups.md §5「分享边界」，2026-11-19 用户裁决)。
+ * 只留排序要用的窗口；不带账号身份、余额或用量历史。
+ */
+export interface ProviderGroupShareQuotaSnapshot {
+  updatedAt: number;
+  windows: ProviderGroupMemberQuota[];
+}
+
+const SHARE_WINDOW_FALLBACK_MS = { session: FIVE_HOURS_MS, week: WEEK_MS } as const;
+
+/**
+ * 分享者授权的额度回包 → 一个账号的窗口。与额度总览同一取法(menubar/sharedSubscriptions.ts)：只取状态正常、
+ * 没有余额池、周窗口未过期的账号里周剩余最多的那个，不相加百分比、不混用不同账号的窗口。按模型的独立窗口
+ * 对应不到模型，不参与。未开放、读不到或格式不对返回 null(按读不到用量处理)。
+ */
+export function providerGroupShareQuotaFromInsights(raw: unknown, now: number): ProviderGroupShareQuotaSnapshot | null {
+  const view = parseProviderShareInsights(raw);
+  if (!view?.capabilities.quota || view.status.quota !== 'ready' || !view.quota) return null;
+  let best: { remaining: number; account: (typeof view.quota.accounts)[number] } | null = null;
+  for (const account of view.quota.accounts) {
+    if (account.state !== 'ready' || account.balance || account.updatedAt === null) continue;
+    const week = account.windows.find((window) => window.kind === 'week');
+    if (!week || (week.resetsAt !== null && week.resetsAt <= now)) continue;
+    if (!best || week.remainingPercent > best.remaining) best = { remaining: week.remainingPercent, account };
+  }
+  if (!best) return null;
+  return providerGroupShareQuotaSnapshot({
+    updatedAt: best.account.updatedAt,
+    windows: best.account.windows.flatMap((window) => window.kind === 'scoped' ? [] : [{
+      usedPercent: 100 - window.remainingPercent,
+      resetAtMs: window.resetsAt,
+      windowMs: window.windowMinutes && window.windowMinutes > 0
+        ? window.windowMinutes * 60_000 : SHARE_WINDOW_FALLBACK_MS[window.kind],
+    }]),
+  }, now);
+}
+
+/** 缓存里的分享额度按读取时刻复核：快照过期或时间异常时按读不到处理；已过重置时刻的窗口由排序规则自己去掉。 */
+export function providerGroupShareQuotaSnapshot(raw: unknown, now: number): ProviderGroupShareQuotaSnapshot | null {
+  const value = record(raw);
+  if (!value || !currentSnapshot(value.updatedAt, now) || !Array.isArray(value.windows)) return null;
+  const windows = value.windows.flatMap((item): ProviderGroupMemberQuota[] => {
+    const window = record(item);
+    const used = window?.usedPercent;
+    const reset = window?.resetAtMs;
+    const length = window?.windowMs;
+    return typeof used === 'number' && Number.isFinite(used) && used >= 0
+      && (reset === null || (typeof reset === 'number' && Number.isFinite(reset) && reset > 0))
+      && typeof length === 'number' && Number.isFinite(length) && length > 0
+      ? [{ usedPercent: Math.min(100, used), resetAtMs: reset as number | null, windowMs: length }] : [];
+  });
+  return windows.length > 0 ? { updatedAt: value.updatedAt as number, windows } : null;
+}
+
 export function providerGroupMemberUsageState(
-  member: { claudeUsage?: ClaudeSubscriptionUsageSnapshot | null; codexUsage?: ProviderGroupCodexUsageSnapshot | null },
+  member: {
+    claudeUsage?: ClaudeSubscriptionUsageSnapshot | null;
+    codexUsage?: ProviderGroupCodexUsageSnapshot | null;
+    shareQuota?: ProviderGroupShareQuotaSnapshot | null;
+  },
   model: string | null | undefined,
   now: number,
   agentKind?: string,
 ) {
+  if (member.shareQuota) {
+    // 分享的额度只用来排先后：它是分享者账号共用的、只代表其中一个账号，也看不到 credits 等其他准入，
+    // 不能据此判定用完而不分配；真撞到上限时照常由实际错误冷却。
+    const state = quotaWindowsScheduleState(providerGroupShareQuotaSnapshot(member.shareQuota, now)?.windows ?? [], now);
+    return { ...state, limited: false, resetAtMs: null };
+  }
   return member.codexUsage ? codexUsageState(member.codexUsage, model, now, agentKind) : providerGroupUsageState(member.claudeUsage, model, now);
 }
 
@@ -308,12 +374,38 @@ export interface ProviderGroupUsageReaderDeps<T> {
   now(): number;
   parseSnapshot(raw: unknown, now: number): T | null;
   cacheLocal?: boolean;
+  /**
+   * Received shares are read through readRemote with their share agent id. Only the share-quota reader
+   * enables this: subscription channels must never be sent to a sharer's computer.
+   */
+  readShares?: boolean;
+  /** Capture the existing target permission/link generation without allocating a new registry. */
+  captureCurrent?(member: ProviderGroupMember): () => boolean;
+}
+
+export interface ProviderGroupUsageInvalidation {
+  /** Empty string denotes this computer; absent denotes all computers. */
+  agentDeviceId?: string;
+  providerIds?: readonly string[];
+  /** Usage/load notifications do not revoke the identity behind an in-flight read. */
+  preservePending?: boolean;
+}
+
+export function providerGroupUsageMatches(key: string, scope?: ProviderGroupUsageInvalidation): boolean {
+  const [deviceId, providerId] = JSON.parse(key) as [string | null, string];
+  return (scope?.agentDeviceId === undefined || (deviceId ?? '') === scope.agentDeviceId)
+    && (scope?.providerIds === undefined || scope.providerIds.includes(providerId));
 }
 
 /** Per-owner, bounded remote reads. A slow/old peer cannot stall routing or multiply in-flight requests. */
 export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReaderDeps<T>) {
-  const cached = new Map<string, { at: number; snapshot: T | null }>();
-  const pending = new Map<string, Promise<T | null>>();
+  const cached = new Map<string, { at: number; snapshot: T | null; refresh: boolean; current: () => boolean }>();
+  const pending = new Map<string, { result: Promise<T | null>; refresh: boolean; current: () => boolean }>();
+
+  const readable = (member: ProviderGroupMember) => {
+    const share = member.kind === 'share' || (!!member.agentDeviceId && isProviderShareAgentDeviceId(member.agentDeviceId));
+    return deps.readShares ? member.kind === 'share' && isProviderShareAgentDeviceId(member.agentDeviceId) : !share;
+  };
 
   async function bounded(promise: Promise<T | null>) {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -329,44 +421,65 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
   return {
     /** Completed sources remain usable when a caller's overall deadline precedes a sibling read's timeout. */
     peek(member: ProviderGroupMember): T | null {
-      if (!deps.isCurrent() || member.kind === 'share'
-        || (member.agentDeviceId && isProviderShareAgentDeviceId(member.agentDeviceId))
+      if (!deps.isCurrent() || !readable(member)
         || (member.kind === 'local' && !deps.cacheLocal)) return null;
       const previous = cached.get(JSON.stringify([member.agentDeviceId, member.providerId]));
-      return previous && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS
+      return previous?.current() && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS
         ? deps.parseSnapshot(previous.snapshot, deps.now()) : null;
     },
     async read(member: ProviderGroupMember): Promise<T | null> {
-      if (!deps.isCurrent() || member.kind === 'share'
-        || (member.agentDeviceId && isProviderShareAgentDeviceId(member.agentDeviceId))) return null;
+      if (!deps.isCurrent() || !readable(member)) return null;
       const key = JSON.stringify([member.agentDeviceId, member.providerId]);
       const previous = cached.get(key);
-      if ((member.kind !== 'local' || deps.cacheLocal) && previous && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS) {
+      if ((member.kind !== 'local' || deps.cacheLocal) && previous?.current() && !previous.refresh
+        && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS) {
         return deps.parseSnapshot(previous.snapshot, deps.now());
       }
       let request = pending.get(key);
+      if (request && !request.current()) { pending.delete(key); request = undefined; }
       if (!request) {
         if (pending.size >= MAX_CACHED_ACCOUNTS) return null;
-        request = Promise.resolve().then(async () => {
-          if (!deps.isCurrent()) return null;
+        const current = deps.captureCurrent?.(member) ?? deps.isCurrent;
+        const entry = { result: null! as Promise<T | null>, refresh: false, current };
+        request = entry;
+        entry.result = Promise.resolve().then(async () => {
+          if (!deps.isCurrent() || !current()) return null;
           const raw = member.kind === 'local'
             ? await deps.readLocal(member.providerId)
             : await deps.readRemote(member.agentDeviceId!, member.providerId);
-          return deps.isCurrent() ? deps.parseSnapshot(raw, deps.now()) : null;
+          return deps.isCurrent() && current() ? deps.parseSnapshot(raw, deps.now()) : null;
         }).catch(() => null).then((snapshot) => {
           if (pending.get(key) !== request) return null;
           pending.delete(key);
-          if (deps.isCurrent() && (member.kind !== 'local' || deps.cacheLocal)) {
+          if (deps.isCurrent() && current() && (member.kind !== 'local' || deps.cacheLocal)) {
             if (cached.size >= MAX_CACHED_ACCOUNTS) cached.delete(cached.keys().next().value!);
-            cached.set(key, { at: deps.now(), snapshot });
+            cached.set(key, { at: deps.now(), snapshot, refresh: entry.refresh, current });
           }
           return snapshot;
         });
         pending.set(key, request);
       }
-      const snapshot = await bounded(request);
-      return deps.isCurrent() ? deps.parseSnapshot(snapshot, deps.now()) : null;
+      const snapshot = await bounded(request.result);
+      // A usage notification asks for a refresh, not an identity revocation. A
+      // late valid reply must stay useful if the next refresh also exceeds the
+      // wait budget; otherwise a busy slow peer can remain unknown forever.
+      if (snapshot === null && previous?.current() && cached.get(key) === previous
+        && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS) {
+        return deps.parseSnapshot(previous.snapshot, deps.now());
+      }
+      return deps.isCurrent() && request.current() ? deps.parseSnapshot(snapshot, deps.now()) : null;
     },
-    invalidate() { cached.clear(); pending.clear(); },
+    invalidate(scope?: ProviderGroupUsageInvalidation) {
+      for (const [key, entry] of cached) {
+        if (!providerGroupUsageMatches(key, scope)) continue;
+        if (scope?.preservePending) entry.refresh = true;
+        else cached.delete(key);
+      }
+      if (!scope?.preservePending) {
+        for (const key of pending.keys()) if (providerGroupUsageMatches(key, scope)) pending.delete(key);
+      } else {
+        for (const [key, entry] of pending) if (providerGroupUsageMatches(key, scope)) entry.refresh = true;
+      }
+    },
   };
 }

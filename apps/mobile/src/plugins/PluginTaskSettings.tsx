@@ -23,6 +23,7 @@ import {
   normalizeMobileAgentCapabilities,
   type MobileAgentCapabilities,
 } from "@/session/agentCapabilities";
+import { useRemoteAgentCatalogs } from "@/session/useRemoteAgentCatalogs";
 import { permissionPresentation } from "@/session/permissionPresentation";
 import {
   iconSize,
@@ -174,14 +175,28 @@ export function PluginTaskSettings({
       { text: t("plugins.cancel"), style: "cancel" },
     ]);
   };
-  const name =
-    providers.providers
+  const agentDeviceId = config?.agentDeviceId ?? null;
+  // Same sources as an ordinary task on that computer. Older Hosts do not save a run
+  // location, so they keep listing only their own models.
+  const remoteSupported = preferences?.remoteRoutes === true;
+  const remoteCatalogs = useRemoteAgentCatalogs({
+    enabled: remoteSupported && (picker || agentDeviceId !== null),
+    controlledDeviceId: deviceId,
+    keepDeviceIds: agentDeviceId ? [agentDeviceId] : [],
+    keepOnly: !picker,
+  });
+  const location = agentDeviceId
+    ? remoteCatalogs.find((catalog) => catalog.deviceId === agentDeviceId)
+    : undefined;
+  const modelName =
+    (agentDeviceId ? (location?.providers ?? []) : providers.providers)
       .find((p) => p.id === config?.providerId)
       ?.models[agent]?.find((m) => m.id === config?.model)?.name ??
     config?.model;
+  const name = modelName && location ? `${modelName} · ${location.name}` : modelName;
   return (
     <View>
-      <Text style={styles.label}>{t("plugins.taskSettings")}</Text>
+      <Text style={styles.sectionLabel}>{t("plugins.taskSettings")}</Text>
       <View style={styles.card}>
         <Pressable
           accessibilityRole="button"
@@ -229,6 +244,9 @@ export function PluginTaskSettings({
         ) : null}
       </View>
       <Text style={styles.hint}>{t("plugins.taskSettingsHint")}</Text>
+      {agentDeviceId ? (
+        <Text style={styles.hint}>{t("plugins.remoteQuickAnswerHint")}</Text>
+      ) : null}
       {busy || (!preferences && !error) ? (
         <ActivityIndicator color={colors.textSecondary} />
       ) : null}
@@ -270,7 +288,13 @@ export function PluginTaskSettings({
         keyboardAvoidingBehavior={Platform.OS === "ios" ? "padding" : "height"}
         emptyHint={t("plugins.modelsUnavailable")}
         unified={{
-          localOnlyReason: "plugin-task-local-route",
+          remote: remoteSupported
+            ? {
+                catalogs: remoteCatalogs,
+                selectedDeviceId: agentDeviceId,
+                hostDeviceId: deviceId,
+              }
+            : undefined,
           scope: JSON.stringify([owner.accountKey, deviceId]),
           agents: ["claude-code", "codex", "pi"],
           loadCapabilities: async (kind) => {
@@ -280,12 +304,14 @@ export function PluginTaskSettings({
             if (!caps) throw new Error("CAPABILITIES_UNAVAILABLE");
             return caps;
           },
-          onSelect: async (value) => {
+          onSelect: async (value, source) => {
             const result = await save({
               model: {
                 agentKind: value.agent === "claude-code" ? "cc" : value.agent,
                 model: value.modelId,
                 providerId: value.providerId,
+                // Null explicitly selects the Host, including a same-named local model.
+                ...(remoteSupported ? { agentDeviceId: source?.deviceId ?? null } : {}),
                 ...(value.effort ? { effort: value.effort } : {}),
                 fastMode: value.fast,
               },
@@ -301,10 +327,10 @@ export function PluginTaskSettings({
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     fill: { flex: 1 },
-    label: {
+    sectionLabel: {
       fontSize: typeScale.footnote,
-      lineHeight: lineHeight.bodySmall,
-      fontWeight: fontWeight.regular,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.semibold,
       color: colors.textTertiary,
       marginBottom: spacing.sm,
     },
@@ -337,9 +363,9 @@ const makeStyles = (colors: ThemeColors) =>
     },
     hint: {
       fontSize: typeScale.footnote,
-      lineHeight: lineHeight.bodySmall,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.regular,
-      color: colors.textTertiary,
+      color: colors.textSecondary,
       marginVertical: spacing.sm,
     },
   });

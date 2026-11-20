@@ -1,7 +1,9 @@
+import { normalizePrTrigger } from '../pr-trigger.js';
 import { EventEmitter } from 'node:events';
 import type {
   Schedule,
   ScheduleRun,
+  ScheduleClosureFailure,
   CreateScheduleInput,
   UpdateScheduleInput,
   ListFilter,
@@ -122,12 +124,16 @@ function normalizeScriptConfig(
   return { command, capabilities, ...(timeoutMs ? { timeoutMs } : {}) };
 }
 
+/** Plugin-engine route id prefix; same value as maker-core ACP_PLUGIN_PROVIDER_PREFIX. */
+const PLUGIN_ENGINE_PROVIDER_PREFIX = 'acp-plugin:';
+
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId' | 'webhookTrigger' | 'recurring' | 'manual'>,
+  schedule: Pick<Schedule, 'agentKind' | 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId' | 'webhookTrigger' | 'prTrigger' | 'recurring' | 'manual'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
   // 一次事件就会把定时的一次性任务用完。手动任务的 recurring 不参与调度，不受此限。
-  if (schedule.webhookTrigger && !schedule.recurring && !schedule.manual) {
+  if (schedule.prTrigger && schedule.webhookTrigger) throw new Error('Choose a PR trigger or a Webhook trigger');
+  if ((schedule.webhookTrigger || schedule.prTrigger) && !schedule.recurring && !schedule.manual) {
     throw new Error('webhook trigger requires a recurring schedule');
   }
   // A bound agent run only overrides its task's location with an explicit model
@@ -143,8 +149,32 @@ function validateScheduleExecutionShape(
       !schedule.modelAgentKind || !schedule.model?.trim() || !schedule.providerId?.trim()))
   )) throw new Error('Scheduled remote model selection requires a device, Harness, model and provider');
   if (schedule.modelAgentKind != null) {
-    if (!['claude-code', 'codex', 'pi'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
+    if (!['claude-code', 'codex', 'pi', 'acp'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
+    }
+  }
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)只在自动任务所在电脑上、每次新建任务运行：必须指出是
+  // 哪个引擎，不绑定已有任务、不换电脑、不用 worktree、不走脚本执行。旧端只改了其中一半(例如把
+  // agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
+  if (schedule.agentKind === 'acp' || schedule.modelAgentKind === 'acp') {
+    if (schedule.agentKind !== 'acp' || schedule.modelAgentKind !== 'acp') {
+      throw new Error('A plugin engine schedule must choose the plugin engine as its model');
+    }
+    if (!schedule.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
+      || schedule.providerId.length <= PLUGIN_ENGINE_PROVIDER_PREFIX.length) {
+      throw new Error('A plugin engine schedule needs providerId acp-plugin:<plugin>:<harness>');
+    }
+    if ((schedule.executionMode ?? 'agent') !== 'agent') {
+      throw new Error('Script schedules cannot use a plugin engine');
+    }
+    if (schedule.targetSessionId || schedule.persistentSession) {
+      throw new Error('A plugin engine schedule starts a new task each run');
+    }
+    if (schedule.agentDeviceId || schedule.modelAgentDeviceId) {
+      throw new Error('Plugin engines run on the automation host only');
+    }
+    if (schedule.useWorktree) {
+      throw new Error('Plugin engine schedules cannot use a worktree');
     }
   }
   if (schedule.agentDeviceId !== undefined) {
@@ -947,6 +977,7 @@ export class Scheduler extends EventEmitter {
       id: runId,
       scheduleId: schedule.id,
       firedAt,
+      ...(schedule.prTrigger ? { triggerSource: 'pr-check' as const } : {}),
       status: 'running',
       // Script 不产生 agent token，零费用是确定值；agent 费用在 turn done 后异步归因。
       costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
@@ -1006,6 +1037,7 @@ export class Scheduler extends EventEmitter {
       }
       assertAgentContext?.();
       const result = await this.runner.fire(schedule, {
+        timed: true,
         runId,
         firedAt,
         assertFireContext: assertAgentContext,
@@ -1338,7 +1370,7 @@ export class Scheduler extends EventEmitter {
       status: 'running',
       costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
       heartbeatAt: firedAt,
-      ...(options?.webhook ? { triggerSource: 'webhook' as const } : {}),
+      ...(options?.webhook ? { triggerSource: 'webhook' as const } : options?.trigger?.source === 'pr-status' ? { triggerSource: 'pr-status' as const } : {}),
     };
     if (!recovery) await this.storage.insertRun(initialRun);
     if (!recovery && options?.onRunCreated) {
@@ -1652,6 +1684,7 @@ export class Scheduler extends EventEmitter {
     const schedule: Schedule = {
       id,
       ...input,
+      prTrigger: input.prTrigger ? normalizePrTrigger(input.prTrigger) : input.prTrigger,
       webhookTrigger: normalizeWebhookTrigger(input.webhookTrigger, undefined, this.generateId),
       workspaceKind: inferredWorkspaceKind,
       // null(JSON 边界的"清空"表达)归一成 undefined,Schedule 内存形态只有两态
@@ -1725,6 +1758,7 @@ export class Scheduler extends EventEmitter {
     }
     const now = this.clock.now();
     const updates = { ...patch, updatedAt: now } as Partial<Schedule>;
+    if (patch.prTrigger) updates.prTrigger = normalizePrTrigger(patch.prTrigger);
     const expiryChanged = Object.prototype.hasOwnProperty.call(patch, 'expireAt');
     if (expiryChanged) updates.expireAt = normalizeExpireAt(patch.expireAt);
     if (Object.prototype.hasOwnProperty.call(patch, 'scriptConfig')) {
@@ -1965,7 +1999,9 @@ export class Scheduler extends EventEmitter {
     return updated;
   }
 
-  async delete(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<void> {
+  async delete(id: string): Promise<void>;
+  async delete(id: string, opts: { exemptRunId?: string; internalRoutine?: true } | undefined): Promise<ScheduleClosureFailure | undefined>;
+  async delete(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<ScheduleClosureFailure | void> {
     return this.serializeScheduleMutation(id, () => this.deleteUnlocked(id, opts));
   }
 
@@ -1992,7 +2028,7 @@ export class Scheduler extends EventEmitter {
     }
   }
 
-  private async deleteUnlocked(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<void> {
+  private async deleteUnlocked(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<ScheduleClosureFailure | undefined> {
     const schedule = await this.storage.get(id);
     if (!schedule || (schedule.source === 'bot' && !opts?.internalRoutine))
       throw new Error(`Schedule not found: ${id}`);
@@ -2008,10 +2044,18 @@ export class Scheduler extends EventEmitter {
     // schedule 级联删除,结束时 updateRun 落在已删行上是 no-op(storage 容错),
     // fireOne 尾部对 schedule 行的重排 update 同样 no-op —— 均无副作用。
     await this.abortInflightAndWait(id, opts?.exemptRunId);
+    const runId = opts?.exemptRunId;
+    const ownSession = runId && this.inflightByschedule.get(id)?.has(runId) && this.runIdToSessionId.get(runId);
+    // Only the task ending its own follow-up gets a receipt. An ordinary delete
+    // retains no run history. A diagnostic read must never prevent cleanup.
+    const previousFailure = ownSession
+      ? await this.storage.latestClosureFailure?.(id, ownSession).catch(() => undefined)
+      : undefined;
     await this.storage.delete(id);
     this.invalidScheduleIds.delete(id);
     this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
+    return previousFailure;
   }
 
   /** 按 schedule id 串行执行 CRUD，并在队尾完成后释放对应条目。 */

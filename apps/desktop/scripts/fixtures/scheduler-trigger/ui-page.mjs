@@ -18,15 +18,42 @@ export default {
     'src/renderer/features/scheduler/components/TemplateGallery': 'export const TemplateGallery = () => null;',
     'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = () => chip('09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
   },
-  cases: { default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
+  cases: { 'single-pr': { about: '选择一条 PR 并配置定时补查' }, 'script-settings': { about: '现有脚本能力选择器分别显示成员与用量读取及完整范围说明' },
+    default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
     create: { about: '新建表单使用相同的稳定切换布局' },
     scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } },
     expanded: { about: '四十行提示词：卡片仍是原来的三行并滚动，展开编辑铺满弹窗，收起后回到卡片' } },
   async ready(page) {
+    const scriptLabel = await page.evaluate(() => window.__uiPage.ctx.case === 'script-settings'
+      ? window.__uiPage.t('scheduler.editor.script.capabilitiesLabel') : null);
+    if (scriptLabel) {
+      await page.getByRole('button', { name: scriptLabel, exact: true }).waitFor();
+      return;
+    }
     const label = await page.evaluate(() => window.__uiPage.t('scheduler.editor.webhook.eventPicker.choose'));
     await page.getByRole('button', { name: label, exact: true }).waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'single-pr') {
+      await page.getByRole('radio', { name: await ui.t('scheduler.prTrigger.label'), exact: true }).click();
+      await page.getByRole('textbox', { name: await ui.t('scheduler.prTrigger.url') }).fill('https://github.com/example/project/pull/42');
+      await page.getByText(await ui.t('scheduler.prTrigger.timed'), { exact: true }).click();
+      await ui.capture('pull-request-trigger');
+      return;
+    }
+    if (ui.case === 'script-settings') {
+      // Script read scope: render the real selector; unit broker tests cannot
+      // prove translated labels, descriptions and popup geometry remain usable.
+      const label = await ui.t('scheduler.editor.script.capabilitiesLabel');
+      const trigger = page.getByRole('button', { name: label, exact: true });
+      assert.ok((await trigger.textContent()).includes(await ui.t('scheduler.editor.script.capabilities.settings_read')));
+      await trigger.click();
+      await page.getByText(await ui.t('scheduler.editor.script.capabilityDescs.settings_read'), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('settings-read');
+      await page.getByText(await ui.t('scheduler.editor.script.capabilityDescs.usage_read'), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('usage-read');
+      return;
+    }
     // Issue #10224: the compact field still shows the original three lines; a long
     // prompt scrolls inside it, and the expand button above it opens a large editor.
     const prompt = await page.locator('textarea').evaluate((el) => ({

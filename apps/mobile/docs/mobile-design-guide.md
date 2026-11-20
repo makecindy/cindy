@@ -106,7 +106,7 @@
 3. **字号只用 11 档阶梯**:11 / 12 / 13 / 15 / 16 / 17 / 18 / 20 / 24 / 30 / 40。成句的话至少 13。
 4. **每个文字样式都配行高**,按上表成对;单行输入框不设行高。
 
-**登记例外**(只有这些可以偏离上表,新增例外先改本节):群聊正文 `@点名` 按用户 2026-11-04 裁决与 PC 对齐，使用专用 `groupMentionText`（数值正本 `tokens.ts`，对应 CINDY `msg-link`），不加下划线、底色或额外字重，详见根规范 §14.5；话题内“New”分界标签使用 `threadUnreadDivider` 红色、13/18 常规字重(2026-10-29 用户指定,与 0.5pt 横线同色);首页列表与队友行的节奏行高(18/28、15/26、13/22);代码 / diff 的紧凑行高;对话 Markdown 标题与长文 24 行高;与相邻图标 / 按钮对齐的文字;行内强调(Markdown strong 700、搜索命中、价格折扣);登录品牌画布(见根规范 §3 豁免表)。
+**登记例外**(只有这些可以偏离上表,新增例外先改本节):MCP App 卡片的第三方来源、本地安装、来源未知标签按 2026-11-16 定稿使用 `warningFg`、caption 字号/行高与常规字重；只用于宿主安装事实的例外来源，不用于插件名或普通自定义 MCP 标签。群聊正文 `@点名` 按用户 2026-11-04 裁决与 PC 对齐，使用专用 `groupMentionText`（数值正本 `tokens.ts`，对应 CINDY `msg-link`），不加下划线、底色或额外字重，详见根规范 §14.5；话题内“New”分界标签使用 `threadUnreadDivider` 红色、13/18 常规字重(2026-10-29 用户指定,与 0.5pt 横线同色);首页列表与队友行的节奏行高(18/28、15/26、13/22);代码 / diff 的紧凑行高;对话 Markdown 标题与长文 24 行高;与相邻图标 / 按钮对齐的文字;行内强调(Markdown strong 700、搜索命中、价格折扣);登录品牌画布(见根规范 §3 豁免表)。
 
 **机器会拦什么**:阶梯外字号 / 行高 / 字重与裸数字、缺行高、浅色字配粗字重(`typographyTokenDiscipline.test.ts`);文字用了五档中性字色与已登记语义色以外的 token、占位字没用 `textPlaceholder`(`textColorDiscipline.test.ts`,存量按次数登记、只许减少);字号阶梯本身、文字三档与占位字对比度、深浅双模式同键(`themeTokens.test.ts`)。**拦不住、靠 review 的**:角色选错(比如把说明文字放 12 号、把标题写成 500)、例外被滥用。评审时对照上表逐行看。
 
@@ -321,8 +321,9 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 - **一直是实色**：点发送当帧上屏，与正式气泡同款；网络往返、排队、等电脑都不变灰。只有「正在下方输入框编辑」时淡化。
 - **状态只放两处**：气泡左侧图标（转圈 = 发送中 / 上传中，队列图标 = 排队中，时钟 = 等电脑或网络，红色感叹号 `statusError` = 失败），以及气泡下方那一行。送达后正式消息的「复制 / …」占的就是这一行，所以前后行高不变、列表不跳。
 - **本机刚发出的消息**：0.6 秒内不出任何状态，慢了才淡入转圈；入场上浮一次，确认时不重播。
-- **下方那一行**：排队中「排队中 | 插话 编辑 取消」；失败「未发送 | 重试 删除」，有具体原因时原因写在下面；等待「等电脑连上后发送 | 取消」。文字 13/18，按钮命中区补到 44。报错文字保持黑白（`errorText`），只有左侧图标是红色。
+- **下方那一行**：排队中「排队中 | 插话 编辑 取消」；失败「未发送 | 重试 删除」，有具体原因时原因写在下面；等待电脑时显示「连上〈电脑名〉后自动发送」，同账号电脑提供「立即重连」，可取消的消息保留「取消」。文字 13/18，按钮命中区补到 44。报错文字保持黑白（`errorText`），只有左侧图标是红色。
 - **带图**：每张图自己转圈；只有那张没传上去的图上显示重传按钮。
+- **发出后收起输入框（2026-11-18 用户裁决）**：任务页、新建任务页与伙伴群聊在消息被接收后，输入框收回单行简洁态并收起软键盘（与下拉收起同口径）。发送失败或等待期间又输入了内容时不收起，草稿与附件托盘留在原处供重试；只执行斜杠命令、保存排队消息修改不算发出新消息，行为不变。
 
 ## 5. 间距 / 圆角 / 触控 / 安全区
 
@@ -415,9 +416,9 @@ ActivityIndicator。未知结果保留原有退出/修改/同 operationId 重试
 
 内屏竖向适配保留顶部返回按钮、底部工具栏及各 16pt 留白；Duo 外屏和展开后的横屏使用完整画面，系统安全区仅用于安排控件。复古外观按显示器玻璃开口适配，不能让旧的电脑长宽比反过来决定开口。
 
-画面可缩到适配大小以下并自由平移。手势过程中不吸附；捏合的全部手指松开后，大小在适配大小的 80%～120% 内时，以 280ms 动画恢复到适配大小并居中。这里的 1:1 指适配大小，不是电脑像素与手机像素一一对应。偏离更远则保留大小与位置。
+触屏模式下，画面在适配大小及以下保持居中，放大后可拖动查看局部。手势过程中不吸附；捏合的全部手指松开后，大小在适配大小的 80%～120% 内时，以 280ms 动画恢复到适配大小并居中。这里的 1:1 指适配大小，不是电脑像素与手机像素一一对应。偏离更远则保留缩放大小。
 
-在适配大小平移后，水平、垂直独立吸附：距离中心不超过对应可用画面尺寸的 20%（每轴最多 96pt）时，松手后对齐该轴；更远仍可停留。新触摸立即中断动画，减少动态效果时直接到达目标。实现与回归见 `src/remote-desktop/RemoteDesktopScreen.tsx`、`packages/maker-shared/src/remote-desktop/viewerRuntime.js` 及 `screen.test.tsx`、`viewer.test.ts`。
+在允许自由平移的浏览模式下，适配大小的画面按水平、垂直方向独立吸附：距离中心不超过对应可用画面尺寸的 20%（每轴最多 96pt）时，松手后对齐该轴；更远仍可停留。新触摸立即中断动画，减少动态效果时直接到达目标。实现与回归见 `src/remote-desktop/RemoteDesktopScreen.tsx`、`packages/maker-shared/src/remote-desktop/viewerRuntime.js` 及 `screen.test.tsx`、`viewer.test.ts`。
 
 ### 折叠态远程桌面默认键盘（2026-11-01）
 
@@ -448,6 +449,15 @@ ActivityIndicator。未知结果保留原有退出/修改/同 operationId 重试
 
 iOS 使用原生 Form 二级页:顶部是与真实气泡同款的预览,预设与「自定义颜色」同在一个 inline Picker 勾选列表;选中自定义才在其下展开一条彩虹色带(仅选色相,外形对齐系统滑块)。iOS 没有比系统 ColorPicker 更轻的自由选色组件,系统取色面板因功能过多不采用。拖动时只更新本页预览,松手才保存;保存失败的提示提供「重试」。Android 沿用设置页内的面板实现。
 
+### 礼品卡卡面（Mobile，2026-11-16 用户要求）
+
+兑换礼品卡的底部面板（`src/gift-card/GiftCardSheet.tsx`）在「确认」与「到账」两步展示卡面，与桌面端兑换弹窗是同一张卡，登记见根规范 §15.7「gift card face」。这是手机上唯一带品牌图稿的面板内容，不作为其他卡片、确认面板带插画的先例。
+
+- **卡面 = 成品图 + 印在上面的金额**。四张成品图在 `assets/gift-cards/{cindy,cat,bell,leap}.webp`（1200×757，不含金额），与桌面端、分享网页、Platform 后台是同一份文件；`faceCode` 由服务端下发，本版本不认识的卡面按默认卡面显示。金额（币种符号 + 数字，小数末尾的 0 不印）的字形轮廓、位置、字号与两种图稿色都在 `@cindy/maker-shared/gift-card-amount`，用 `react-native-svg` 画成矢量；它属于卡面图稿，不是界面文字，`GiftCardFace.tsx` 自己不写任何颜色，也不加载额外字体。
+- **处理**：容器圆角（`radius.container`）+ 1px `border`，深浅两种面板上都能和背景分开；不倾斜、无阴影、无动效。卡面最宽 420pt，在平板与横屏下居中。
+- **卡面以外全部走本文 token**：来源与到账说明 13/18 `textSecondary` 居中，留言 15/20 `textPrimary` 居中，条款行沿用「行标题 16/22 500 `textPrimary` + 行右侧取值 16/22 400 `textSecondary`」，报错 13/18 `errorText`。金额不在卡面下方重复；只有金额印不上卡面时（本版本没有轮廓的字符）才退回 24/30 600 `textPrimary` 的普通文字。兑换码输入框是 50pt 胶囊，等宽 15 号、自动大写。
+- **容器**：复用 `CompanionSheet`（iOS 系统 sheet，Android 兼容外壳）；主操作撑满宽度，领取请求在途时面板不可关闭。入口是设置页「礼品卡」分组与 `cindy://gift/<code>`、`cindycn://gift/<code>` 链接，两者共用根级 `GiftCardHost`，同时只呈现一张卡。
+
 ### Mobile task home teammate section (owner-approved “A+B”, 2026-10-24)
 
 The task home opens with a “Teammates” section above shared tasks, Pinned and projects. Its header uses the project/Pinned header geometry (56pt, 22 chevron + 20 icon + 16/28 title + 13 count) and a trailing 20pt “+” whose 44pt target ends on the 16pt right edge. Expanded, it shows 78pt teammate rows (teammates and groups mixed by activity), previewing three; the “Show all N” / “Show less” row is 48pt, 15/20 secondary text aligned to the rows’ text column (72pt). Collapsed, it shows the existing avatar strip by default; disabling avatars keeps only the 56pt header and its small create action, with no empty body. The existing home display menu (···) has a “Teammates” submenu whose “Show avatars when collapsed” item controls the horizontally scrolling strip: 36pt avatars in 48pt touch cells, 8pt gap, 16pt side insets, 12/18 names (primary + medium when unread), one 10pt solid status dot in a 2pt surface ring anchored 1pt beyond the bottom-right edge, and a dashed 36pt create circle in the same 48pt touch cell last. Phones scroll instead of the Desktop +N. Desktop, iOS and Android use the same 36px/pt collapsed portrait and 44px/pt list portrait (owner correction, 2026-10-31). Keep collapsed touch targets at least 48px/pt: the portrait has 6px/pt space on each side for the bottom-right dot. Anchor the dot to the portrait, not the touch target; keep the selection plate independent of portrait sizing. The Desktop +N circle and Mobile create circle follow the collapsed portrait size; group portraits scale within the same 36px/pt frame (two-member portraits use 26px/pt images). Status-dot size and meaning are unchanged. A pending decision (cyan) takes priority over error/offline (red), running (orange), completed unread (green), and ordinary unread (blue); idle has no dot. The overflow entry aggregates the highest-priority hidden state. Completion requires a real result and a local unread receipt; selection alone never clears a pending decision. Roster avatars have no online dot or working ring; unread counts remain separate. Teammate selection uses the quiet theme surface with normal sidebar text (never the task sidebar’s inverse fill); Desktop collapsed selection is a 56px quiet-surface plate behind the avatar with the governed 12px container radius (the expanded selected row's fill and radius), not an outline, so stacked group avatars are not cut (owner decision, 2026-10-30; replaces the 1px tertiary circular outline). Selection does not replace or recolor the activity dot. Phones navigate to the full-screen chat and retain their native press feedback, without a persistent selected home row. The avatar preference is an explicit account-scoped override, default on for new and existing users without writing an override, preserving explicit off choices and independent of the remembered fold state; changing it while expanded takes effect on the next collapse. When avatars are hidden, existing attention and bot/group unread (including threads) appear as a small header dot with an accessible status and no fabricated count. New messages never expand the section or enable avatars; header taps only expand/collapse. Both states swap with the list’s 225ms disclosure; reduced motion switches instantly. Every language must fit the header and names without widening; long names truncate to one line within the cell.
@@ -462,3 +472,7 @@ There is one mobile home, as on Desktop (owner decision, 2026-10-24): no separat
   - **Timing guards (not motion)**: a 1.6s native timeout ends a morph whose target never appears; the new-task page restores its normal push animation on `transitionEnd`, with a 1600ms fallback; the JS fallback focus (320ms) and focus-release grace (400ms) in `useComposerPillOpen.ts` only cover a missing native view or refused focus.
   - **Degradation**: under Reduce Motion neither the morph nor the pill opening plays — the page and card land directly in place. Without the native module (non-iOS or older binaries) the JS path navigates and focuses without a morph.
   - **Scope boundary**: this button and pill only. Its overshoot must not leak into other buttons, sheets or navigation; other mobile transitions stay on the §14.4 Motion tokens. Implementation: `CindyComposerMorphModule.swift`, `ComposerMorphSource.ios.tsx`, `ComposerFrame.ios.tsx`, `useComposerPillOpen.ts`; geometry in `composerGeometry.ts`, behavior notes in `apps/mobile/docs/navigation-and-composer.md`.
+
+### Android in-app update card (owner-approved HTML direction, registered 2026-10-16, #6199)
+
+`AndroidUpdateSheet` is one content-height Material bottom sheet for discovery, install permission, download and install. Its paired actions are pills (secondary `surfaceChip` left, primary `cta` right). The only bare-text control is the centered browser-download fallback ("改用浏览器下载" / "Download in Browser Instead") shown under the pills while a decision is pending: frameless, `footnote` 13/18 medium in `textSecondary`, full-width 44pt hit height, pressed opacity 0.72. It is a secondary escape route rather than a commit action, so it stays out of the pill pair; this is not a general exemption for other sheet actions. In short windows the details region scrolls while the actions stay pinned. Floating compatibility presentations round all four container corners. The Light/Dark HTML previews are not Android device screenshots. Behavior rules (download, install permission, fallback) are in [Mobile development](../../../docs/dev-rules/mobile-development.md).

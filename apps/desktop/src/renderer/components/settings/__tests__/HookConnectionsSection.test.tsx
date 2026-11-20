@@ -35,6 +35,8 @@ const authUser = vi.hoisted(() => ({
   current: null as { membershipKind: 'personal' | 'org'; orgSlug?: string | null; orgName?: string | null } | null,
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => authUser.current }));
+const installedGhosts = vi.hoisted(() => ({ current: [] as unknown[] }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installedGhosts.current }));
 
 /** Keep translation keys observable; unwrap the transport label so its actual status is testable. */
 const tCalls: Array<{ key: string; vars?: Record<string, unknown> }> = [];
@@ -354,6 +356,27 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
       workspacePrefsEditor.render.mock.calls.map(([props]) => (props as { alias: string }).alias),
     );
     expect([...aliases].sort()).toEqual(['chat', 'cindy']);
+  });
+
+  // User report 2026-11-17: an IM plugin already ran on these shared settings, but with no official
+  // bot turned on the block was hidden and nothing could be changed. Existing cases always had a bot
+  // on. Minimal inputs: no bot, then a declared but disabled plugin, then an enabled one. Unit (jsdom).
+  it.each([
+    ['no IM plugin', null, false],
+    ['a disabled IM plugin', false, false],
+    ['an enabled IM plugin', true, true],
+  ] as const)('with every official bot off and %s, shows 项目与模型: %s', async (_case, enabled, visible) => {
+    ipc.get.mockResolvedValue({ hook: { ...BASE_HOOK, telegram: { ...BASE_HOOK.telegram, enabled: false, status: 'disabled' } } });
+    installedGhosts.current = enabled === null ? [] : [{ enabled, iconDataUrl: undefined,
+      manifest: { id: 'wechat', name: 'WeChat', imEntrance: true, agent: { tasks: true, targets: true } } }];
+    try {
+      render(<HookConnectionsSection projectsOnly />);
+      await waitFor(() => expect(ipc.get).toHaveBeenCalled());
+      await act(async () => {});
+      expect(screen.queryByText('settings.remoteControl.hook.form.workspacesCardTitle') !== null).toBe(visible);
+      expect(screen.queryByText('settings.remoteControl.hook.form.workspacesCardDescriptionWithPlugins') !== null).toBe(visible);
+      expect(screen.queryByRole('button', { name: TELEGRAM_CARD })).toBeNull();
+    } finally { installedGhosts.current = []; }
   });
 
   it('expands an official channel selected by settings search', async () => {

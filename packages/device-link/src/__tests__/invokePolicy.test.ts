@@ -8,6 +8,14 @@ import {
 } from '../index.js';
 
 describe('remote invoke policy boundaries', () => {
+  it.each(['desktop', 'mobile'] as const)('allows a repository clone to finish on %s without replaying project creation', (platform) => {
+    const channel = 'sidebar-settings:set-project-info';
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ create: true, repositoryUrl: 'https://gitlab.com/a/b' }], platform)).toBe(360_000);
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ create: true }], platform)).toBeUndefined();
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ repositoryUrl: 'https://gitlab.com/a/b' }], platform)).toBeUndefined();
+    expect(isPeerResetRetryableReadChannel(channel)).toBe(false);
+    expect(isCompletedInvokeRetryableReadChannel(channel)).toBe(false);
+  });
   it.each(['desktop', 'mobile'] as const)('budgets MCP App loading on %s without replaying any operation', (platform) => {
     const channel = 'maker:mcp-apps:v1';
     expect(resolveRemoteInvokeTimeoutMs(channel, ['task', { op: 'open' }], platform)).toBe(120_000);
@@ -41,6 +49,14 @@ describe('remote invoke policy boundaries', () => {
     expect(resolveRemoteInvokeTimeoutMs('maker:predict-prompt', [], 'desktop')).toBe(45_000);
     expect(isPeerResetRetryableReadChannel('maker:predict-prompt')).toBe(false);
     expect(isCompletedInvokeRetryableReadChannel('maker:predict-prompt')).toBe(false);
+  });
+
+  // 2026-11-18: two Codex create-session calls took 41.6s/42.4s on the host and both
+  // controllers gave up at 30s while the host was still creating the task.
+  it('waits for a slow agent start on both controllers instead of timing out at 30s', () => {
+    expect(resolveRemoteInvokeTimeoutMs('maker:create-session', [{}], 'desktop')).toBe(120_000);
+    expect(resolveRemoteInvokeTimeoutMs('maker:create-session', [{}], 'mobile')).toBe(120_000);
+    expect(isPeerResetRetryableReadChannel('maker:create-session')).toBe(false);
   });
   it.each(['local-db:sessions:list', 'local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:interrupted-pending', 'maker:list-active'])(
     'explicitly permits retrying completed %s reads', (channel) => {

@@ -22,6 +22,9 @@ import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import type { PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
+import { pluginEngineModelName, resolvePluginEngineEffort, PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
   effectiveSourceIdForModel,
@@ -42,6 +45,7 @@ import {
   DEFAULT_SCHEDULE_INTERVAL_MS,
   resolveScheduleTimingPresentation,
   summarizeConfig,
+  formatIntervalDuration,
   switchScheduleTimingMode,
   WEEKDAY_LABELS,
   DEFAULT_CONFIG,
@@ -290,22 +294,6 @@ const INTERVAL_MENU_MODES: ReadonlyArray<EditableScheduleMenuMode> = [
   'intervalMinutes',
   'interval',
 ];
-
-function formatIntervalDuration(intervalMs: number, locale: string): string {
-  const units: ReadonlyArray<{ factor: number; unit: string }> = [
-    { factor: 24 * 60 * 60_000, unit: 'day' },
-    { factor: 60 * 60_000, unit: 'hour' },
-    { factor: 60_000, unit: 'minute' },
-    { factor: 1_000, unit: 'second' },
-    { factor: 1, unit: 'millisecond' },
-  ];
-  const selected = units.find(({ factor }) => intervalMs % factor === 0) ?? units[units.length - 1];
-  return new Intl.NumberFormat(locale, {
-    style: 'unit',
-    unit: selected.unit,
-    unitDisplay: 'long',
-  }).format(intervalMs / selected.factor);
-}
 
 const WEEKDAY_SHORT: Record<number, string> = {
   1: 'Mo',
@@ -1057,6 +1045,7 @@ export function ModelEffortChip({
   onNavigateToProviders,
   fastMode,
   onChangeFast,
+  pluginEngines,
 }: {
   onSelect: NonNullable<React.ComponentProps<typeof ModelRouteSelectorContent>['onUnifiedSelect']>;
   onFollowSession: () => void;
@@ -1078,6 +1067,11 @@ export function ModelEffortChip({
   /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。绑定任务同样保存，下一次触发时应用。 */
   fastMode?: boolean | 'ultrafast';
   onChangeFast?: (v: boolean | 'ultrafast') => void;
+  /**
+   * 本机的插件引擎(docs/plans/acp-plugin-bridge.md)，只给每次新建任务、在本机运行的自动任务传。
+   * active 有值时触发器显示「引擎 · 模型 · 思考深度」。
+   */
+  pluginEngines?: PluginEnginesPickerProps;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -1170,14 +1164,34 @@ export function ModelEffortChip({
   const agentDeviceTitle = agentDeviceName
     ? t('newChat.modelSelector.trigger.agentDevice', { device: agentDeviceName })
     : null;
+  // 选中插件引擎时触发器写引擎自己的名字、模型与档位(插件停用后用通用名称)，不画内置 Harness 的标志。
+  const activeEngineSelection = pluginEngines?.active ?? null;
+  const activeEngine = activeEngineSelection
+    ? pluginEngines?.engines.find((engine) => engine.providerId === activeEngineSelection.providerId) ?? null
+    : null;
+  const engineDisplay = activeEngineSelection
+    ? [
+        activeEngine?.name ?? t('newChat.pluginEngines.genericName'),
+        pluginEngineModelName(activeEngine, activeEngineSelection.modelId)
+          ?? (activeEngineSelection.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
+            ? t('newChat.pluginEngines.defaultModel')
+            : t('newChat.modelSelector.trigger.unresolved')),
+        (() => {
+          const level = resolvePluginEngineEffort(activeEngine, activeEngineSelection.modelId, activeEngineSelection.effort);
+          return level ? effortLabel(level as EffortValue) : null;
+        })(),
+      ].filter(Boolean).join(' · ')
+    : null;
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <ChipButton
-          icon={agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
-          label={display}
-          title={agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
+          icon={engineDisplay
+            ? <PluginEngineIcon size={14} iconDataUrl={activeEngine?.iconDataUrl} className='text-current' />
+            : agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
+          label={engineDisplay ?? display}
+          title={engineDisplay ? engineDisplay : agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
           active={open}
           disabled={disabled}
           className="[&>span:last-of-type]:min-w-[106px] max-w-[240px] px-2"
@@ -1227,6 +1241,7 @@ export function ModelEffortChip({
           selectedRowClickOpensConfiguration
           overlayContentClassName="z-[10020]"
           discoveringModels={discovery.pending}
+          {...(pluginEngines ? { pluginEngines } : {})}
           followSession={
             followSession
               ? {

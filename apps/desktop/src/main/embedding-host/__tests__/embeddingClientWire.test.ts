@@ -1053,3 +1053,23 @@ describe('EmbeddingClient · 坐标必须是有限数字', () => {
     ).rejects.toThrow(/document 0 chunk 0 embedding is not an array \(got string\)/);
   });
 });
+
+it('records every paid response before vector validation and skips full cache hits', async () => {
+  const observe = vi.fn(async (_body: unknown) => {});
+  const close = vi.fn();
+  const createUsageRecorder = vi.fn(() => ({ observe, close }));
+  let valid = true;
+  const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ model: 'actual-embedding',
+    usage: { prompt_tokens: 5 }, data: valid ? [{ index: 0, embedding: [1, 2, 3, 4] }] : [],
+  }), { status: 200 }));
+  const client = new EmbeddingClient({ baseUrl: 'https://gateway.invalid', getApiKey: () => 'test-key',
+    fetchImpl, createUsageRecorder });
+  await client.embed({ model: 'text-embedding-3-small', texts: ['same'] });
+  await client.embed({ model: 'text-embedding-3-small', texts: ['same'] });
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(observe).toHaveBeenCalledOnce();
+  valid = false;
+  await expect(client.embed({ model: 'text-embedding-3-small', texts: ['new'] })).rejects.toThrow();
+  expect(observe).toHaveBeenCalledTimes(2);
+  expect(close).toHaveBeenCalledTimes(2);
+});

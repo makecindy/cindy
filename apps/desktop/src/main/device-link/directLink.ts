@@ -13,12 +13,23 @@ let starting: Promise<void> | undefined;
 let epoch = 0;
 let registered = false;
 let crashes = 0;
+let retryAt = 0;
+const RESTART_COOLDOWN_BASE_MS = 60_000;
+const RESTART_COOLDOWN_MAX_MS = 5 * 60_000;
 let stableTimer: ReturnType<typeof setTimeout> | undefined;
 const host = new DesktopCaptureWindow(() => {
-  crashes += 1;
-  suspend();
+  failed();
   log.warn('data transport process stopped; active peers fall back to relay');
 }, 'direct');
+
+function failed() {
+  crashes += 1;
+  // Keep the immediate crash-loop guard, but do not permanently disable direct
+  // paths after a transient native failure. Only later authorized demand retries.
+  if (crashes >= 2) retryAt = performance.now() + Math.min(RESTART_COOLDOWN_MAX_MS,
+    RESTART_COOLDOWN_BASE_MS * 2 ** Math.min(crashes - 2, 3));
+  suspend();
+}
 
 function suspend() {
   epoch += 1;
@@ -31,7 +42,7 @@ function suspend() {
 function ensureStarted(): Promise<void> {
   if (detach) return Promise.resolve();
   if (starting) return starting;
-  if (crashes >= 2) return Promise.reject(new Error('DIRECT_RUNTIME_UNAVAILABLE'));
+  if (crashes >= 2 && performance.now() < retryAt) return Promise.reject(new Error('DIRECT_RUNTIME_UNAVAILABLE'));
   if (!registered) {
     registered = true;
     ipcMain.handle(DIRECT_LINK_LOCAL.REGISTER, (event) => host.registered(event));
@@ -49,11 +60,11 @@ function ensureStarted(): Promise<void> {
       if (!contents || contents.isDestroyed()) throw new Error('DIRECT_RUNTIME_CLOSED');
       contents.send(DIRECT_LINK_LOCAL.COMMAND, command);
     });
-    stableTimer = setTimeout(() => { crashes = 0; }, 60_000);
+    stableTimer = setTimeout(() => { crashes = 0; retryAt = 0; }, 60_000);
     stableTimer.unref();
   }).catch((error) => {
     // Constructor/setup failures may precede the window's own failure callback.
-    if (generation === epoch) { crashes += 1; suspend(); }
+    if (generation === epoch) failed();
     throw error;
   }).finally(() => { if (starting === work) starting = undefined; });
   starting = work;
@@ -69,6 +80,7 @@ export const desktopDirectRuntime: DirectRuntime = {
     let session: DirectRuntimeSession | undefined = detach ? bridge.runtime.create(id, events, options) : undefined;
     let closed = false;
     const get = async () => {
+      if (closed || generation !== epoch) throw new Error('DIRECT_RUNTIME_CLOSED');
       await ensureStarted();
       if (closed || generation !== epoch) throw new Error('DIRECT_RUNTIME_CLOSED');
       return session ??= bridge.runtime.create(id, events, options);

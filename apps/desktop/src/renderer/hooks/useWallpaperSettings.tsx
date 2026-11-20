@@ -29,6 +29,7 @@ import { useWallpaperAsset } from './useWallpaperAsset';
 import { useWallpaperBackground } from './useWallpaperBackground';
 import { useReducedMotion } from './useReducedMotion';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
+import type { DownloadRetryReason } from '@/../shared/downloadProgress';
 
 export interface WallpaperSettings {
   customizedKeys?: readonly string[];
@@ -48,6 +49,8 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   downloadPending: boolean;
   downloadFailed: boolean;
   downloadProgress: number;
+  /** Why the selected wallpaper's transfer restarted, while Main waits to retry. */
+  downloadRetryReason?: DownloadRetryReason;
   retryDownload: () => void;
   visibility: number;
   /** Last nonzero saved blur; survives settings-section remounts (default 10). */
@@ -129,6 +132,7 @@ export function WallpaperSettingsProvider({
   const downloadBytes = imageAsset.total + videoAsset.total;
   const downloadProgress =
     downloadBytes > 0 ? (imageAsset.loaded + videoAsset.loaded) / downloadBytes : 0;
+  const downloadRetryReason = imageAsset.retryReason ?? videoAsset.retryReason;
   const retryDownload = useCallback(() => {
     imageAsset.retry();
     videoAsset.retry();
@@ -309,6 +313,7 @@ export function WallpaperSettingsProvider({
       downloadPending,
       downloadFailed,
       downloadProgress,
+      downloadRetryReason,
       retryDownload,
       setWallpaper,
       setVisibility,
@@ -334,6 +339,7 @@ export function WallpaperSettingsProvider({
       downloadPending,
       downloadFailed,
       downloadProgress,
+      downloadRetryReason,
       retryDownload,
     ],
   );

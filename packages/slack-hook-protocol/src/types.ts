@@ -1029,6 +1029,10 @@ export interface QueryRequestPayload {
  * group 是目录分组 id(如 'gpt' / 'gpt-budget'): 骨折版与官方版 displayName
  * 故意同名、仅靠分组区分, server 渲染下拉时据此加区分后缀, 否则出现两个
  * 一模一样的 "GPT-5.5"(线上实撞)。可选 —— 旧桌面端不发, server 视为无分组。
+ * provider 是提供这个模型的供应商的展示名(如 'Cindy AI' / 'OpenRouter'): 不同供应商
+ * 会提供同名模型, server 渲染选择卡时把它写在模型名前面。只用于展示, 不参与选择 ——
+ * 选中后回传的仍只有模型 id, 由桌面端按自己的规则决定走哪家。可选 —— 旧桌面端不发,
+ * server 只显示模型名。
  */
 export interface QueryModelEntry {
   id: string;
@@ -1036,6 +1040,7 @@ export interface QueryModelEntry {
   efforts: string[];
   defaultEffort: string | null;
   group?: string | null;
+  provider?: string | null;
 }
 
 /**
