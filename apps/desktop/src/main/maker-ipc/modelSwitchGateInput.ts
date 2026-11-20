@@ -51,6 +51,27 @@ export function resolveModelSwitchWindows(input: {
   return { verifiedTargetWindow, verifiedCurrentWindow };
 }
 
+/** Keep the owner's fail-closed gate, but name exactly what the user can ask the host to recheck. */
+export function describeOwnerModelWindowVerificationFailure(input: {
+  verifiedCurrentWindow: number | undefined;
+  targetContextWindow: number | undefined;
+  contextTokensKnown: boolean;
+}): string | null {
+  const missing = [
+    !input.verifiedCurrentWindow ? 'the current model context window' : null,
+    !input.targetContextWindow ? 'the target model context window' : null,
+    !input.contextTokensKnown ? 'the current conversation usage' : null,
+  ].filter((requirement): requirement is string => requirement !== null);
+  if (missing.length === 0) return null;
+  const requirements = missing.length === 1
+    ? missing[0]
+    : missing.length === 2
+      ? `${missing[0]} and ${missing[1]}`
+      : `${missing[0]}, ${missing[1]}, and ${missing[2]}`;
+  return `The model was not changed because Cindy could not verify ${requirements}. `
+    + 'Switch back to the previous model or switch models on the computer running this task.';
+}
+
 /**
  * The context usage a model change is judged by: the running runtime's reading when it is
  * authoritative, otherwise the task row's persisted reading (register.ts, as above).

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveModelSwitchContextTokens, resolveModelSwitchWindows } from '../modelSwitchGateInput';
+import { describeOwnerModelWindowVerificationFailure, resolveModelSwitchContextTokens, resolveModelSwitchWindows } from '../modelSwitchGateInput';
 
 // The window gate's input the desktop's model change and the Node Host's share. A shrink is judged
 // only on verified windows (Pi's current window only from its runtime), and the running runtime's
@@ -31,6 +31,45 @@ describe('model switch gate input', () => {
     expect(resolveModelSwitchWindows({ ...base, runtimeAgentKind: 'codex' }).verifiedCurrentWindow).toBe(200_000);
     expect(resolveModelSwitchWindows({ ...base, runtimeAgentKind: 'codex', currentProviderId: 'other' }).verifiedCurrentWindow)
       .toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: 'current window',
+      input: { verifiedCurrentWindow: undefined, targetContextWindow: 64_000, contextTokensKnown: true },
+      missing: ['current model context window'],
+      present: ['target model context window', 'current conversation usage'],
+    },
+    {
+      label: 'target window',
+      input: { verifiedCurrentWindow: 128_000, targetContextWindow: undefined, contextTokensKnown: true },
+      missing: ['target model context window'],
+      present: ['current model context window', 'current conversation usage'],
+    },
+    {
+      label: 'usage',
+      input: { verifiedCurrentWindow: 128_000, targetContextWindow: 64_000, contextTokensKnown: false },
+      missing: ['current conversation usage'],
+      present: ['current model context window', 'target model context window'],
+    },
+  ])('names only the missing $label and gives a recovery action', ({ input, missing, present }) => {
+    const message = describeOwnerModelWindowVerificationFailure(input)!;
+    for (const requirement of missing) expect(message).toContain(requirement);
+    for (const requirement of present) expect(message).not.toContain(requirement);
+    expect(message).toContain('Switch back to the previous model or switch models on the computer running this task.');
+  });
+
+  it('lists every missing requirement together and stays silent when all are verified', () => {
+    expect(describeOwnerModelWindowVerificationFailure({
+      verifiedCurrentWindow: undefined, targetContextWindow: undefined, contextTokensKnown: false,
+    })).toBe(
+      'The model was not changed because Cindy could not verify the current model context window, '
+      + 'the target model context window, and the current conversation usage. '
+      + 'Switch back to the previous model or switch models on the computer running this task.',
+    );
+    expect(describeOwnerModelWindowVerificationFailure({
+      verifiedCurrentWindow: 128_000, targetContextWindow: 64_000, contextTokensKnown: true,
+    })).toBeNull();
   });
 
   it('does not take a persisted reading that is not a valid count', () => {

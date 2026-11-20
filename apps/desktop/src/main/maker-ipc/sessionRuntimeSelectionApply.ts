@@ -45,7 +45,7 @@ import { getSessionLastLiveUsage } from './sessionLastLiveUsage.js';
 import { logColdPiRehydrationFailure, reportColdPiRehydrationFailure, ColdPiRehydrationError } from './coldPiRehydrationFailure.js';
 import { classifyColdPiRehydrationOutcome } from './coldPiRehydration.js';
 import { resolveVerifiedContextWindow } from '../maker-host/catalog-to-descriptors.js';
-import { resolveModelSwitchWindows, resolveModelSwitchContextTokens } from './modelSwitchGateInput.js';
+import { describeOwnerModelWindowVerificationFailure, resolveModelSwitchWindows, resolveModelSwitchContextTokens } from './modelSwitchGateInput.js';
 import { codexThreadTransferSourcePredicate, relinkCodexProviderThread, commitCodexThreadTransfer } from './codexProviderThreadRelink.js';
 import { CredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { withSendToSessionLock } from './sendToSessionLock.js';
@@ -1031,16 +1031,19 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         );
         ownerPiFinalWindow = ownerWindowRebuild && runtimeAgentKind === 'pi' &&
           !!runtimeStatus.sdkSessionId && modelWindowContextNeedsProtection;
+        const windowVerificationFailure = describeOwnerModelWindowVerificationFailure({
+          verifiedCurrentWindow, targetContextWindow, contextTokensKnown,
+        });
         if (ownerWindowRebuild && runtimeAgentKind !== 'codex' && runtimeStatus.sdkSessionId &&
             modelWindowContextNeedsProtection && (
-              !contextTokensKnown || !verifiedCurrentWindow || !targetContextWindow ||
+              windowVerificationFailure !== null ||
               (runtimeAgentKind === 'pi' && (rebuildLiveOrcaWorker ||
                 (piPreview?.action !== 'hot' && piPreview?.action !== 'refresh')))
             )) {
           if (rehydratedColdPiRuntime) await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
           throwIpcError('PRECONDITION_FAILED', runtimeAgentKind === 'pi'
             ? 'Pi final context window could not be verified; runtime selection was not changed'
-            : 'target context window or current usage could not be verified; runtime selection was not changed');
+            : windowVerificationFailure!);
         }
         const modelSwitchPlan = planUserRuntimeModelSwitch({
           agentKind: runtimeAgentKind ?? 'claude-code',
