@@ -328,12 +328,20 @@ export function ImageLightbox(props: ImageLightboxProps) {
   // 逐条发送的图片更是各成一组；两者都会把翻页限制在局部。
   // 这个选择在打开时定死：查看期间新到的图片不能让组件从集合查看器切成
   // 画廊查看器,否则未保存的标注会随卸载丢失。
+  // 只有原集合的每一项都能在历史画廊里找到时，才允许切换到画廊；
+  // 消息里的 PDF、文件型图片（如 SVG 存在 files 里）不在画廊中，切过去会丢失同条附件。
+  const sessionGalleryCoversCollection =
+    openingCollection?.every(
+      (item) =>
+        sessionImages?.some(
+          (image) => image.src === item.source || image.galleryId === item.id,
+        ) ?? false,
+    ) ?? true;
   const [preferSessionGallery] = useState(
     () =>
       props.enableGallery === true &&
       (sessionImages?.length ?? 0) > 1 &&
-      // 混合附件消息（图片 + PDF/文件）保留同条集合，别让图片侧跳过同条附件。
-      !(openingCollection?.some((item) => item.kind !== 'image') ?? false) &&
+      sessionGalleryCoversCollection &&
       (sessionImages?.some(
         (image) =>
           image.src === source ||
