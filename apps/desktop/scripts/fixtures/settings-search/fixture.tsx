@@ -5,6 +5,7 @@ import { WallpaperSettingsProvider } from '../../../src/renderer/hooks/useWallpa
 import { SUBAGENT_MODEL_SETTINGS_DEFAULTS } from '../../../src/shared/subagentModelSettings';
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../../src/shared/appearanceSettings';
+import { installAppearancePresenter } from '../../../src/renderer/appearance/AppearancePresenter';
 
 const read = <T,>(value: T) => async () => value;
 const state = <T extends object>(defaults: T) => ({ ...defaults, defaults, isCustomized: false, customizedKeys: [] });
@@ -28,9 +29,10 @@ Object.assign(window, { visibilityWrites });
 void mountPage({
   route: `/settings?tab=${ctx.data.routeTab ?? ctx.data.tab}`,
   host: {
-    ...(ctx.data.hiddenBackground || ctx.data.glassBackground || ctx.data.previewBackground ? {
+    ...(ctx.data.hiddenBackground || ctx.data.glassBackground || ctx.data.previewBackground || ctx.data.highlightStatic ? {
       appearanceSettings: {
-        getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: ctx.data.hiddenBackground ?? ctx.data.glassBackground ?? ctx.data.previewBackground,
+        getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: ctx.data.hiddenBackground ?? ctx.data.glassBackground ?? ctx.data.previewBackground ?? DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
+          motion: ctx.data.highlightStatic ? 0 : DEFAULT_APPEARANCE_SETTINGS.motion,
           wallpaperVisibility: ctx.data.visibility ?? 0, desktopVisibility: ctx.data.visibility ?? 0, wallpaperBlur: 12 }),
         onChanged: subscription('appearance'),
         setPatch: ctx.data.previewBackground
@@ -114,5 +116,8 @@ void mountPage({
     },
     openExternal: forbid('openExternal'),
   },
-  render: () => <WallpaperSettingsProvider><div className="h-screen"><SettingsView /></div></WallpaperSettingsProvider>,
+  render: () => {
+    if (ctx.data.highlightStatic) installAppearancePresenter(() => {});
+    return <WallpaperSettingsProvider><div className="h-screen"><SettingsView /></div></WallpaperSettingsProvider>;
+  },
 });

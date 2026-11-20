@@ -25,6 +25,7 @@ export default {
   cases: {
     'page-search-highlight': { about: 'Search briefly fills the background of a single navigation option or setting', data: { tab: 'general', fullDatabase: true } },
     'page-search-highlight-motion': { about: 'The highlighted background returns smoothly to its resting color', data: { tab: 'general', highlightMotion: true, fullDatabase: true } },
+    'page-search-highlight-static': { about: 'A zero-motion theme retains visible static search feedback', data: { tab: 'general', highlightStatic: true, fullDatabase: true } },
     'model-tokens': { about: 'One analytics switch controls activity and model totals', data: {tab: 'about', cloud: true, modelTokens: true} },
     'archive-search': { about: 'Searching for auto archive or idle days opens the inline controls inside Storage', data: { tab: 'general', archiveEnabled: true } },
     'archive-legacy': { about: 'The previous Task management link opens Storage and highlights auto archive', data: { tab: 'storage', routeTab: 'task-management' } },
@@ -48,9 +49,14 @@ export default {
     const panel = page.getByRole('tabpanel');
     await panel.waitFor();
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
-    if (ui.case === 'page-search-highlight' || ui.data.highlightMotion) {
+    if (ui.case === 'page-search-highlight' || ui.data.highlightMotion || ui.data.highlightStatic) {
       // Search feedback should fade immediately even when scrolling motion is reduced.
-      await page.emulateMedia({ reducedMotion: ui.data.highlightMotion ? 'no-preference' : 'reduce' });
+      await page.emulateMedia({ reducedMotion: ui.data.highlightMotion || ui.data.highlightStatic ? 'no-preference' : 'reduce' });
+      if (ui.data.highlightStatic) await page.waitForFunction(() => {
+        const style = document.querySelector('style[data-cindy-appearance]');
+        return document.documentElement.dataset.cindyReducedMotion === 'true'
+          && style?.textContent.includes('animation-duration:0ms!important');
+      });
       const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
       const highlights = page.locator('.settings-search-target-highlight');
       for (const [id, titleKey, targetId] of [
@@ -81,7 +87,7 @@ export default {
             return target.top >= sidebar.top && target.bottom <= sidebar.bottom;
           }), `${targetId} must be visible in the settings sidebar`);
         }
-        const style = await highlight.evaluate(el => {
+        const style = await highlight.evaluate((el, staticFeedback) => {
           const nativeField = el.matches('input, textarea, select');
           const face = nativeField ? null : '::after';
           const dark = document.documentElement.classList.contains('dark');
@@ -100,6 +106,15 @@ export default {
           };
           const animation = el.getAnimations({ subtree: true })
             .find(candidate => candidate.animationName === (nativeField ? 'settings-search-field-feedback' : 'settings-search-feedback'));
+          if (staticFeedback) {
+            const fill = getComputedStyle(el, face);
+            const active = brightness(fill);
+            const visible = nativeField ? fill.boxShadow !== 'none' : fill.content !== 'none' && Number(fill.opacity) > 0;
+            el.classList.remove('settings-search-target-highlight');
+            const resting = brightness(getComputedStyle(el, face));
+            el.classList.add('settings-search-target-highlight');
+            return { visible, active, resting, dark, animation: Boolean(animation) };
+          }
           const duration = animation.effect.getComputedTiming().duration;
           const sample = (progress) => {
             animation.currentTime = duration * progress;
@@ -116,7 +131,12 @@ export default {
             outlineColor: fill.outlineColor,
             radius: parseFloat(fill.borderTopLeftRadius), top: parseFloat(fill.top), left: parseFloat(fill.left),
             fieldShadow: nativeField && fill.boxShadow };
-        });
+        }, Boolean(ui.data.highlightStatic));
+        if (ui.data.highlightStatic) {
+          assert.equal(style.animation, false);
+          assert.ok(style.visible && (style.dark ? style.active > style.resting : style.active < style.resting));
+          continue;
+        }
         const distance = frame => Math.abs(style[frame] - style.end);
         assert.equal(style.duration, ui.data.highlightMotion ? 2200 : 550);
         assert.ok(style.dark ? style.peak > style.end : style.peak < style.end);

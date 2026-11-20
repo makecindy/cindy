@@ -2338,6 +2338,16 @@ mark.doc-search-mark [class] {
   animation: settings-search-field-feedback var(--settings-search-feedback-duration) linear;
 }
 
+:root[data-cindy-reduced-motion='true'] .settings-search-target-highlight:not(input, textarea, select)::after {
+  animation: none;
+}
+
+:root[data-cindy-reduced-motion='true'] .settings-search-target-highlight:is(input, textarea, select) {
+  animation: none;
+  background-color: color-mix(in srgb, var(--text-primary) 12%, var(--settings-input-bg));
+  box-shadow: 0 0 0 4px var(--settings-search-feedback-bg);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-search-target-highlight {
     --settings-search-feedback-duration: calc(var(--motion-settings-search-feedback) / 4);

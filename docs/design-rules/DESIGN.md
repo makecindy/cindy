@@ -1493,6 +1493,8 @@ default into components.
 from the highlighted background to its resting color. The fade starts immediately.
 With reduced motion the color-only fade uses a quarter of that duration (550ms)
 and navigation scrolls immediately.
+With theme motion disabled, the tint stays visible without animation until
+the navigation highlight clears.
 
 **Registered looping indicators (maintainer rulings D-05 / D-06 / D-07, 2026-11-11).**
 Registered alongside Running breathing, the loading spinner and the sanctioned classes
