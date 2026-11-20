@@ -1142,10 +1142,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         // ClientOptions 类型未声明 lookup,但 ws 会把额外选项透传给
         // http.request(其 RequestOptions 原生支持 lookup)→ net/tls 建连。
         lookup: relayDnsLookup,
-        // 建连这一刻就把「这条 socket 走没走代理」问出来,并挂到 socket 上:判定只在这条
-        // socket **真的 open** 之后才生效 —— 客户端会按连接世代丢弃过期的建连结果
-        // (packages/device-link/src/client.ts 的 epoch 闸),过期的那次若先写,诊断就会报
-        // 一条根本没被采用的线路(Codex review P1)。
+        // 判定与 agent 同源:openLinkWebSocket 内部用 createOutboundHttpAgentWithDecision
+        // 建连,这里只在 socket 上钉住结果(#9959)。挂载时机见 pinnedSocketProxy.ts ——
+        // 真的 open 才算这条线路被采用,过期建连结果不会写进诊断。
+        // 断言必须落到 LinkWebSocketOptions:断成 ClientOptions 会抹掉回调的
+        // 上下文类型,decision/ws 变成 implicit any(TS7006,CI 四红之源)。
         onOutboundDecision: (decision, ws) => pinnedSocketProxy.track(url, decision, ws),
       } as LinkWebSocketOptions),
     logger: {
