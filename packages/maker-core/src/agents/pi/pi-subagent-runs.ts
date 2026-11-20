@@ -3059,7 +3059,7 @@ export async function hasActivePiSubagentRuns(
 }
 
 /**
- * Final synchronous check at the fenced exit boundary.
+ * Immediate activity check for restart decisions, including the fenced exit boundary.
  *
  * `hostPid` scopes the answer to this process (plus unattributable and orphaned
  * runs). Without it a concurrent instance sharing `pi-agent-home` would make

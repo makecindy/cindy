@@ -5,7 +5,7 @@
  * 绕过 before-quit 链、destroyAll() 掉 Ghost Node runtime、process.exit(0)。所以点下去
  * 之前必须回答一个问题:**当前有没有正在跑的活会被这一下打断?**
  *
- * 这个问题的难点不在判断,而在**来源分散**:仓里「活动」由多个互不相干的跟踪器各自维护,
+ * 这个问题的难点不在判断,而在**来源分散**:仓里「活动」由六个互不相干的跟踪器各自维护,
  * 谁都不知道其它几个的存在。判定收在这里一处,renderer 只问一次结论 —— 新增来源只改这里:
  *
  *   1. 逻辑 turn        —— SessionTurnActivityTracker + live session 的 isTurnRunning()
@@ -23,7 +23,7 @@
  *      里分别记在 jobs 与 inflight 两个 Map。插件面板发起的请求还可能完全不伴随 turn 或
  *      card-action,所以前五个来源都可能不命中
  *
- *   7. Pi 子任务 —— 脱离父任务运行的子任务，按当前宿主的归属检查。
+ * 新增第 7 个来源时改这一个函数,不必再去翻每个调用点。
  *
  * 一个刻意的边界:这份清单**不保证完备** —— 仓里的异步活动持有者是开放集合,每个模块各自在
  * 私有结构里管在途状态,没有统一注册处。但漏掉某个来源**不构成回归**:改动前那次二次确认
@@ -39,8 +39,8 @@
  * (setUpdateAutoRelaunchBusyProbe),不该管手动重启 —— 用户主动点重启时,「有远程设备在看
  * 会话列表」不构成「会被打断的任务」,纳进来只会产生误报警告。
  *
- * Pi 任务状态从磁盘异步读取，然后采样五个内存源。全部空闲才查 scheduler 的 SQLite；
- * 查询返回后再复核 Pi 与内存活动，
+ * 五个内存源同步、scheduler 源要查 SQLite,所以整体是 async:先读同步源,**都空闲**才去
+ * 查 scheduler(省掉绝大多数情况下的一次 SQLite 往返);拿到 scheduler 结果后再复采一次同步源,
  * 关掉「查库期间新 turn 起来了」的窗口 —— 同样的二次采样理由见 updateRelaunchSafety.ts 的
  * hasUpdateRelaunchBusyActivity。
  *
@@ -67,7 +67,7 @@ export interface RelaunchBusyActivitySources {
    */
   anyCindySlotJobRunning: () => boolean;
   /** Detached PI runners continue after parent navigation and need an explicit restart warning. */
-  anyPiSubagentRunning: () => boolean | Promise<boolean>;
+  anyPiSubagentRunning: () => boolean;
   /**
    * scheduler 里是否有 run 处于 running。**必须单独查**:script 模式与 pre-run hook 阶段
    * 都不创建 session,内存来源全看不到它们,而重启会让 run 来不及落终态、脚本子进程变成
@@ -90,15 +90,7 @@ export interface RelaunchBusyActivity {
 export async function evaluateRelaunchBusyActivity(
   sources: RelaunchBusyActivitySources,
 ): Promise<RelaunchBusyActivity> {
-  const readLiveSources = async (): Promise<string[]> => {
-    let piReason: string | undefined;
-    try {
-      if (await sources.anyPiSubagentRunning()) piReason = 'pi-subagent';
-    } catch {
-      piReason = 'pi-subagent-probe-failed';
-    }
-    // Sample in-memory work after the disk/process lookup so a turn that started
-    // during the lookup is visible before reporting idle.
+  const readSyncSources = (): string[] => {
     const hits: string[] = [];
     const probe = (label: string, read: () => boolean): void => {
       try {
@@ -114,11 +106,11 @@ export async function evaluateRelaunchBusyActivity(
     probe('ghost-background-activity', () => sources.anyGhostSessionBusy());
     probe('background-bash', () => sources.anyBackgroundBashRunning());
     probe('cindy-slot-async-job', () => sources.anyCindySlotJobRunning());
-    if (piReason) hits.push(piReason);
+    probe('pi-subagent', () => sources.anyPiSubagentRunning());
     return hits;
   };
 
-  const firstPass = await readLiveSources();
+  const firstPass = readSyncSources();
   // 已经确定要拦了就不必再查库 —— 结论不会变,省一次 SQLite 往返。
   if (firstPass.length > 0) return { busy: true, reasons: firstPass };
 
@@ -129,8 +121,9 @@ export async function evaluateRelaunchBusyActivity(
     reasons.push('scheduler-run-probe-failed');
   }
 
-  // A turn or Pi runner may have started during the scheduler query.
-  reasons.push(...await readLiveSources());
+  // 查库期间可能有新 turn / 后台活动起来,复采一次同步源(理由同
+  // updateRelaunchSafety.hasUpdateRelaunchBusyActivity 的二次采样)。
+  reasons.push(...readSyncSources());
 
   return { busy: reasons.length > 0, reasons };
 }
