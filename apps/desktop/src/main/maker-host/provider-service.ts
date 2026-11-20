@@ -52,6 +52,8 @@ export interface ConnectionReadOptions {
 }
 
 export interface ProviderListOptions extends ConnectionReadOptions {
+  /** Routing callers may need discovery without unrelated account display reads. */
+  includeAccountPresentation?: boolean;
   /**
    * Internal catalog override for policy consumers that need the routing truth
    * rather than the user-selectable projection. Never sourced from IPC input.
@@ -223,13 +225,13 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       );
     }
     const accountInfo = new Map<string, ProviderView['openAiAccount']>();
-    if (!readOpts.snapshotOnly && deps.openAiAccountInfo) {
+    if (!readOpts.snapshotOnly && opts?.includeAccountPresentation !== false && deps.openAiAccountInfo) {
       await Promise.all(catalog.providers.filter((p) => p.id === 'openai' || p.auth.native === 'codex').map(async (p) => {
         accountInfo.set(p.id, await deps.openAiAccountInfo!(p.id));
       }));
     }
     const subscriptionInfo = new Map<string, ProviderView['subscriptionAccount']>();
-    if (!readOpts.snapshotOnly && deps.subscriptionAccountInfo) await Promise.all(catalog.providers
+    if (!readOpts.snapshotOnly && opts?.includeAccountPresentation !== false && deps.subscriptionAccountInfo) await Promise.all(catalog.providers
       .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
     const contextLimits = deps.getModelContextLimits?.() ?? {};

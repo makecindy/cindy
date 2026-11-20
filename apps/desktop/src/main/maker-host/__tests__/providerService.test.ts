@@ -128,7 +128,9 @@ describe('createProviderService', () => {
     expect((await read()).logoKind).toBe('cindy');
     expect(BUNDLED_CATALOG.providers.find(p => p.id === 'xd')?.name).toBe('XD Gateway');
   });
-  it('snapshot mode suppresses side effects and skips both account presentation readers', async () => {
+  // Unit, #11681: cold-pool recovery still needs live discovery, but neither
+  // routing mode should wait for account display data. Default UI reads retain it.
+  it.each([true, false])('omits account presentation with snapshotOnly=%s without weakening connection options', async snapshotOnly => {
     const read = vi.fn((_options: ConnectionReadOptions) => true);
     const account = vi.fn(async () => ({ source: 'unknown' as const }));
     const svc = createProviderService({
@@ -137,10 +139,10 @@ describe('createProviderService', () => {
       openAiAccountInfo: account,
       subscriptionAccountInfo: account,
     });
-    await svc.listProviders({ allowSideEffects: true, snapshotOnly: true });
+    await svc.listProviders({ allowSideEffects: true, snapshotOnly, includeAccountPresentation: false });
     expect(read).toHaveBeenCalledTimes(4);
     for (const [options] of read.mock.calls) {
-      expect(options).toMatchObject({ allowSideEffects: false, snapshotOnly: true });
+      expect(options).toMatchObject({ allowSideEffects: !snapshotOnly, snapshotOnly });
     }
     expect(account).not.toHaveBeenCalled();
     await svc.listProviders();

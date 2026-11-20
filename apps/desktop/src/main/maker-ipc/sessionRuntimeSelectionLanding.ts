@@ -157,13 +157,25 @@ export function createRecoverRenamedSessionModelOnSend(ports: {
     }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     if (!row || row.status !== 'active' || !row.providerId ||
         row.remoteHostId || row.agentDeviceId) return;
-    const providers = await getDesktopProviderService().listProviders({
+    const service = getDesktopProviderService();
+    let providers = await service.listProviders({
       allowSideEffects: false,
       // Rename recovery needs the current catalog, not a native account/quota refresh
       // or account presentation. Keep those reads off every ordinary send's lock.
       snapshotOnly: true,
       catalog: getActiveCatalog(),
     });
+    const provider = providers.find(candidate => candidate.id === row.providerId);
+    if (provider?.subscriptionAccountPool && provider.suspended !== true &&
+        !provider.models[dbToMakerAgentKind(row.agentKind)]?.length) {
+      // A cold pool has no membership yet. Preserve native discovery in this case;
+      // once loaded, ordinary sends use the snapshot without refreshing quota/CLI.
+      providers = await service.listProviders({
+        allowSideEffects: false,
+        includeAccountPresentation: false,
+        getCatalog: getActiveCatalog,
+      });
+    }
     const profiles = await readSessionRuntimeProfiles(sessionId);
     await recoverRenamedSessionModelBeforeSend({
       route: { ...row, agentKind: dbToMakerAgentKind(row.agentKind) },
