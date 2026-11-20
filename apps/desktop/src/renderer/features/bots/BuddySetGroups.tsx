@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { ChevronDown, ChevronRight, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -200,6 +200,9 @@ export function BuddySetNameDialog({ open, initialName, onOpenChange, onSubmit }
   const { t } = useTranslation();
   const copy = buddySetCopy(t);
   const [name, setName] = useState(initialName);
+  // The caller keeps a stable key for "new", so remounting is not enough to
+  // clear the previous draft: reset it whenever a new request opens.
+  useEffect(() => { if (open) setName(initialName); }, [open, initialName]);
   if (!open) return null;
   const save = () => {
     const trimmed = name.trim();

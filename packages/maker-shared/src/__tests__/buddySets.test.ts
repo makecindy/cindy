@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assignBuddyToSet,
   BUDDY_SET_LIMIT,
+  BUDDY_SET_MEMBER_LIMIT,
   createBuddySet,
   deleteBuddySet,
   emptyBuddySets,
@@ -165,6 +166,40 @@ describe('buddy sets: saving one set never changes another set', () => {
     expect(refused).toBe(state);
     expect(reconcileBuddySetMembers(refused, 'one-too-many', ['bot-1'], ['bot-1'])).toBe(state);
     expect(refused.sets[0]!.buddyIds).toEqual(['bot-1']);
+  });
+
+  it('keeps a buddy in its original set when the target is full', () => {
+    const members = Array.from({ length: BUDDY_SET_MEMBER_LIMIT }, (_, i) => `full-${i}`);
+    const state = normalizeBuddySets({
+      version: 1,
+      sets: [
+        { buddySetId: 'set-a', name: 'A', buddyIds: ['moving'] },
+        { buddySetId: 'set-b', name: 'B', buddyIds: members },
+      ],
+    });
+    const after = assignBuddyToSet(state, 'moving', 'set-b');
+    expect(after).toBe(state);
+    expect(after.sets[0]!.buddyIds).toEqual(['moving']);
+    expect(after.sets[1]!.buddyIds).toHaveLength(BUDDY_SET_MEMBER_LIMIT);
+  });
+
+  it('reconciles a full target without orphaning the overflow buddy', () => {
+    const members = Array.from({ length: BUDDY_SET_MEMBER_LIMIT - 1 }, (_, i) => `full-${i}`);
+    const state = normalizeBuddySets({
+      version: 1,
+      sets: [
+        { buddySetId: 'set-a', name: 'A', buddyIds: ['keep', 'first'] },
+        { buddySetId: 'set-b', name: 'B', buddyIds: members },
+      ],
+    });
+    const after = reconcileBuddySetMembers(state, 'set-b', ['keep', 'first'], ['keep', 'first']);
+    // Only one of the two can fit; the other must stay in set-a.
+    const inA = after.sets[0]!.buddyIds;
+    const inB = after.sets[1]!.buddyIds;
+    expect(inB).toHaveLength(BUDDY_SET_MEMBER_LIMIT);
+    expect(inB.filter((id) => ['keep', 'first'].includes(id))).toHaveLength(1);
+    expect(inA).toHaveLength(1);
+    expect(inA[0] === 'keep' || inA[0] === 'first').toBe(true);
   });
 });
 

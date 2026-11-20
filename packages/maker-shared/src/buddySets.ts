@@ -156,13 +156,17 @@ export function assignBuddyToSet(
   buddySetId: string,
 ): BuddySetsState {
   const clean = cleanId(buddyId);
-  if (!clean || !state.sets.some((set) => set.buddySetId === buddySetId)) return state;
+  const target = state.sets.find((set) => set.buddySetId === buddySetId);
+  if (!clean || !target) return state;
+  // Refuse a full target instead of dropping the new member after removing it
+  // from its previous set: the buddy must keep its original membership.
+  if (!target.buddyIds.includes(clean) && target.buddyIds.length >= BUDDY_SET_MEMBER_LIMIT) return state;
   const sets = state.sets.map((set) => {
     const without = set.buddyIds.filter((id) => id !== clean);
     if (set.buddySetId !== buddySetId) {
       return without.length === set.buddyIds.length ? set : { ...set, buddyIds: without };
     }
-    return { ...set, buddyIds: [...without, clean].slice(0, BUDDY_SET_MEMBER_LIMIT) };
+    return { ...set, buddyIds: [...without, clean] };
   });
   return normalizeBuddySets({ version: BUDDY_SETS_STATE_VERSION, sets });
 }
@@ -186,14 +190,20 @@ export function reconcileBuddySetMembers(
   const selected = new Set(
     selectedIds.map(cleanId).filter((id): id is string => id !== null && candidates.has(id)),
   );
+  // Decide who actually fits before touching any set. Buddies beyond the target's
+  // capacity keep their previous membership instead of vanishing from all sets.
+  const target = state.sets.find((set) => set.buddySetId === buddySetId)!;
+  const kept = target.buddyIds.filter((id) => !candidates.has(id));
+  const admitted = [...candidates]
+    .filter((id) => selected.has(id) && !kept.includes(id))
+    .slice(0, Math.max(0, BUDDY_SET_MEMBER_LIMIT - kept.length));
+  const claimed = new Set(admitted);
   const sets = state.sets.map((set) => {
     if (set.buddySetId !== buddySetId) {
-      // A buddy claimed by the target leaves its previous set; everyone else stays.
-      return { ...set, buddyIds: set.buddyIds.filter((id) => !selected.has(id)) };
+      // Only buddies actually admitted to the target leave their previous set.
+      return { ...set, buddyIds: set.buddyIds.filter((id) => !claimed.has(id)) };
     }
-    const kept = set.buddyIds.filter((id) => !candidates.has(id));
-    const added = [...candidates].filter((id) => selected.has(id) && !kept.includes(id));
-    return { ...set, buddyIds: [...kept, ...added].slice(0, BUDDY_SET_MEMBER_LIMIT) };
+    return { ...set, buddyIds: [...kept, ...admitted] };
   });
   return normalizeBuddySets({ version: BUDDY_SETS_STATE_VERSION, sets });
 }

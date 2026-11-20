@@ -4,11 +4,41 @@ import {
   normalizeBuddySets,
   type BuddySetsState,
 } from '@cindy/maker-shared/buddy-sets';
-import { getHomeViewSession, useRetainedHomeState } from './homeViewSession';
+import { getHomeViewSession, useRetainedHomeState, type HomeViewSession } from './homeViewSession';
 import { readBuddySets, saveBuddySets } from './buddySetsStore';
 
 /** Cold-start read state. A failed read must never let a fresh empty state be saved. */
 export type BuddySetsStatus = 'loading' | 'ready' | 'error';
+
+interface Load {
+  promise: Promise<BuddySetsState>;
+  status: BuddySetsStatus;
+  applied: boolean;
+}
+
+/** One read per (view session, account): a second Home/Sidebar mount must not
+ *  start a fresh read that could resolve with an older blob and overwrite edits. */
+const loads = new WeakMap<HomeViewSession, Map<string, Load>>();
+
+function loadFor(session: HomeViewSession, owner: string): Load {
+  let byOwner = loads.get(session);
+  if (!byOwner) {
+    byOwner = new Map();
+    loads.set(session, byOwner);
+  }
+  let load = byOwner.get(owner);
+  if (!load) {
+    load = { promise: readBuddySets(owner), status: 'loading', applied: false };
+    byOwner.set(owner, load);
+  }
+  return load;
+}
+
+/** Read without starting one, so a remount can inherit the settled status. */
+function peekStatus(session: HomeViewSession, owner: string): BuddySetsStatus {
+  const load = loads.get(session)?.get(owner);
+  return owner ? load?.status ?? 'loading' : 'ready';
+}
 
 /**
  * 「伙伴集」展示偏好:首页视图会话持有当前值(与折叠偏好同口径),按账号落本机
@@ -17,9 +47,12 @@ export type BuddySetsStatus = 'loading' | 'ready' | 'error';
 export function useBuddySets(owner: string): [BuddySetsState, (next: BuddySetsState | ((current: BuddySetsState) => BuddySetsState)) => void, BuddySetsStatus, () => void] {
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
-  const statusRef = useRef<BuddySetsStatus>('loading');
-  const [status, setStatus] = useState<BuddySetsStatus>('loading');
   const [attempt, setAttempt] = useState(0);
+  const [status, setStatus] = useState<BuddySetsStatus>(
+    () => peekStatus(getHomeViewSession(), owner),
+  );
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const [state, setState] = useRetainedHomeState<BuddySetsState>(
     getHomeViewSession(),
@@ -37,22 +70,35 @@ export function useBuddySets(owner: string): [BuddySetsState, (next: BuddySetsSt
 
   useEffect(() => {
     let cancelled = false;
-    statusRef.current = 'loading';
-    setStatus('loading');
+    const session = getHomeViewSession();
     if (!owner) {
       // No account means no owner-scoped store; nothing to read or persist.
       statusRef.current = 'ready';
       setStatus('ready');
       return undefined;
     }
-    void readBuddySets(owner).then((stored) => {
-      if (cancelled || ownerRef.current !== owner) return;
-      getHomeViewSession().write('buddySets', stored);
+    const load = loadFor(session, owner);
+    if (load.status !== 'loading') {
+      statusRef.current = load.status;
+      setStatus(load.status);
+      return undefined;
+    }
+    statusRef.current = 'loading';
+    setStatus('loading');
+    void load.promise.then((stored) => {
+      load.status = 'ready';
+      if (cancelled || ownerRef.current !== owner || getHomeViewSession() !== session) return;
+      // Apply the disk snapshot exactly once; never over a value already edited
+      // in this view session (e.g. by an earlier mount that finished sooner).
+      if (!load.applied) {
+        load.applied = true;
+        session.write('buddySets', stored);
+      }
       statusRef.current = 'ready';
       setStatus('ready');
     }).catch(() => {
-      if (cancelled || ownerRef.current !== owner) return;
-      // Leave the view session empty and locked; do not persist anything.
+      load.status = 'error';
+      if (cancelled || ownerRef.current !== owner || getHomeViewSession() !== session) return;
       statusRef.current = 'error';
       setStatus('error');
     });
@@ -64,7 +110,14 @@ export function useBuddySets(owner: string): [BuddySetsState, (next: BuddySetsSt
     setState((current) => normalizeBuddySets(typeof input === 'function' ? input(current) : input));
   }, [setState]);
 
-  const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  const retry = useCallback(() => {
+    const session = getHomeViewSession();
+    // Drop the rejected read so the next effect run performs a fresh one.
+    loads.get(session)?.delete(ownerRef.current);
+    statusRef.current = 'loading';
+    setStatus('loading');
+    setAttempt((value) => value + 1);
+  }, []);
 
   return [owner ? state : emptyBuddySets(), update, status, retry];
 }

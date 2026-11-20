@@ -9,10 +9,15 @@
  * - tier:unit,AsyncStorage 内存 fake、无真实等待。
  */
 const store = vi.hoisted(() => new Map<string, string>());
+const pending = vi.hoisted(() => ({ writeGate: null as Promise<void> | null }));
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
     getItem: vi.fn(async (key: string) => store.get(key) ?? null),
-    setItem: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
+    setItem: vi.fn(async (key: string, value: string) => {
+      // Lets a test hold a write in flight and start a second save + a read.
+      if (pending.writeGate) await pending.writeGate;
+      store.set(key, value);
+    }),
     removeItem: vi.fn(async (key: string) => { store.delete(key); }),
   },
 }));
@@ -21,7 +26,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBuddySet, emptyBuddySets } from '@cindy/maker-shared/buddy-sets';
 import { readBuddySets, saveBuddySets, __testing } from '../session/buddySetsStore';
 
-beforeEach(() => { store.clear(); vi.clearAllMocks(); });
+beforeEach(() => { store.clear(); pending.writeGate = null; vi.clearAllMocks(); });
 
 describe('mobile buddy set display preference', () => {
   it('is empty by default and stays per account', async () => {
@@ -43,6 +48,17 @@ describe('mobile buddy set display preference', () => {
     expect(store.has(key)).toBe(true);
     await saveBuddySets('owner-a', emptyBuddySets());
     expect(store.has(key)).toBe(false);
+  });
+
+  it('reads only after queued writes, so a remount cannot resurrect an older record', async () => {
+    let release!: () => void;
+    pending.writeGate = new Promise<void>((resolve) => { release = resolve; });
+    const first = saveBuddySets('owner-a', createBuddySet(emptyBuddySets(), 'set-1', 'First'));
+    const second = saveBuddySets('owner-a', createBuddySet(emptyBuddySets(), 'set-1', 'Second'));
+    const read = readBuddySets('owner-a');
+    release();
+    await Promise.all([first, second, read]);
+    expect((await read).sets[0]!.name).toBe('Second');
   });
 
   it('reads corrupt JSON back as the default without touching other records', async () => {

@@ -117,10 +117,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 44, paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm, backgroundColor: colors.surface },
   lastRow: { borderBottomWidth: 0 },
-  rowTitle: { flex: 1, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
+  rowTitle: { flex: 1, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   check: { width: 20, height: 20, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.borderStrong,
     alignItems: 'center', justifyContent: 'center' },
   checked: { backgroundColor: colors.cta, borderColor: colors.cta },
   deleteRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44, paddingVertical: spacing.sm },
-  deleteText: { color: colors.destructive, fontSize: typeScale.body, lineHeight: lineHeight.body },
+  deleteText: { color: colors.destructive, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
 });

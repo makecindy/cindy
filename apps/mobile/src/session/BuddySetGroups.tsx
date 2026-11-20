@@ -82,7 +82,7 @@ export function BuddySetGroups({ entries, buddySets, onChange, onEditSet, render
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 40,
+  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44,
     paddingHorizontal: spacing.lg, backgroundColor: colors.surface, borderRadius: radius.container },
   title: { flex: 1, color: colors.textSecondary, fontSize: typeScale.bodySmall,
     lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },

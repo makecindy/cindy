@@ -17,11 +17,19 @@ const BUDDY_SETS_PREFIX = 'cindy.mobile.home.buddySets.v1.';
 // 与 homeViewPreferenceStore 同口径:读 → 合并 → 写串行化,避免并发写互相覆盖。
 let writeChain: Promise<void> = Promise.resolve();
 
-export async function readBuddySets(owner: string): Promise<BuddySetsState> {
-  if (!owner) return emptyBuddySets();
-  // 读失败必须 reject,不能当成空记录回头覆盖仍然有效的 blob。
-  const raw = await AsyncStorage.getItem(BUDDY_SETS_PREFIX + encodeURIComponent(owner));
-  return parseBuddySets(raw);
+export function readBuddySets(owner: string): Promise<BuddySetsState> {
+  if (!owner) return Promise.resolve(emptyBuddySets());
+  // Join the same chain as writes: a cold-start read must never observe the
+  // older of two saves (or let a later save land in the middle of the read).
+  const run = writeChain.then(async () => {
+    // 读失败必须 reject,不能当成空记录回头覆盖仍然有效的 blob。
+    const raw = await AsyncStorage.getItem(BUDDY_SETS_PREFIX + encodeURIComponent(owner));
+    return parseBuddySets(raw);
+  });
+  // Keep later writes behind this read, swallowing the rejection only for the
+  // chain so a failed read stays retryable without poisoning subsequent writes.
+  writeChain = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 export function saveBuddySets(owner: string, state: BuddySetsState): Promise<void> {
