@@ -60,6 +60,17 @@ function harness(bot = true, settlePausedResumeIntoHistory?: true) {
 }
 
 describe('Bot candidate recovery', () => {
+  it('passes a screenshot to ordinary route selection only for a recoverable failure', async () => {
+    const h = harness(false);
+    const input = { ...h.item, files: [{ category: 'image' }] };
+    expect(h.onResumableTurnError('s', { message: '[PI_IMAGE_INPUT_UNSUPPORTED] Image input is not enabled' }, input)).toBeNull();
+    expect(h.fallback).not.toHaveBeenCalled();
+    expect(h.onResumableTurnError('s', { errorStatus: 503, message: 'HTTP 503 Service Unavailable' }, input)).not.toBeNull();
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, false, expect.any(Function), { hasImages: true });
+    expect(h.resume).toHaveBeenCalledWith('s', 1);
+  });
+
   // Unit regression for 8bcdaae10b: the existing recovery cases never paused execution
   // between scheduling and dispatch. Exercise both sides of asynchronous route selection.
   it('runs an unpaused retry after route selection without surfacing the held error', async () => {

@@ -21,6 +21,8 @@ import {
 } from './sessionRuntimeControl.js';
 
 type FallbackPick = Parameters<typeof pickSessionRuntimeFallback>[0];
+type ModelGroupRecovery = { accountUnavailable: boolean; hasImages: boolean };
+export type SessionRuntimeFallbackContext = ModelGroupRecovery | { hasImages: boolean };
 
 /** The runtime selection a fallback candidate is applied through (the desktop: applySessionRuntimeSelection). */
 export type FallbackRuntimeSelection = (
@@ -63,7 +65,7 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
     candidate: SessionRuntimeProfile | null;
     routeLocked?: boolean;
   }>;
-  readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], recovery: { accountUnavailable: boolean; hasImages: boolean }, generation: number): Promise<{
+  readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], recovery: ModelGroupRecovery, generation: number): Promise<{
     candidate: SessionRuntimeProfile | null;
     bindCommittedRoute?(profile: SessionRuntimeProfile): void;
   } | null>;
@@ -104,7 +106,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
     attemptToken: number,
     requireRouteChange = false,
     isCurrent: () => boolean = () => true,
-    groupRecovery?: { accountUnavailable: boolean; hasImages: boolean },
+    recovery?: SessionRuntimeFallbackContext,
   ): Promise<RuntimeFallbackResult<RuntimeSession>> => {
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     let runtimeSession: RuntimeSession | null = null;
@@ -128,6 +130,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       let currentForFallback = profiles.effective;
       let candidate = botFallback.candidate;
+      const groupRecovery = recovery && 'accountUnavailable' in recovery ? recovery : undefined;
       const group = groupRecovery && !botFallback.isBot && readSessionRuntimeFallbackSettings().enabled
         ? await readModelGroupFallbackCandidate?.(sessionId, profiles.effective, profiles.control.visitedRoutes, groupRecovery, profiles.control.generation)
         : null;
@@ -159,6 +162,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             visitedRoutes: profiles.control.visitedRoutes,
             currentHop: profiles.control.fallbackHop,
             maxHops: 2,
+            hasImages: recovery?.hasImages,
           });
       }
       // A Bot with no other route has nothing to exhaust; the caller decides whether
