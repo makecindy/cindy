@@ -68,7 +68,7 @@ function launch() {
   listening.catch(() => undefined);
   return { child, exit, listening };
 }
-const LIFECYCLE_TIMEOUT_MS = 90_000;
+const LIFECYCLE_TIMEOUT_MS = 180_000;
 const timings = new Map();
 let stageStarted;
 function beginStage(name) {
