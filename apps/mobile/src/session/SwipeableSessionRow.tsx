@@ -65,6 +65,22 @@ function actionLabelWidth(windowWidth: number): number {
     windowWidth * FULL_SWIPE_RATIO - BUTTON_GAP * 2 - BUTTON_SIZE + LABEL_ICON_OVERLAP - spacing.lg,
   );
 }
+/**
+ * 文字必须装得进当前胶囊。armedProgress 会用 150ms 淡出，快速回拖时不能单靠它；
+ * 用原生动画图里的实际延伸量同步限制透明度，也覆盖尚未拉长到位的淡入阶段。
+ */
+function actionLabelOpacity(
+  extension: Animated.AnimatedAddition,
+  armedProgress: Animated.Value,
+  labelWidth: number,
+) {
+  const minimumExtension = labelWidth + spacing.lg - LABEL_ICON_OVERLAP;
+  return Animated.multiply(armedProgress, extension.interpolate({
+    extrapolate: 'clamp',
+    inputRange: [minimumExtension, minimumExtension + 1],
+    outputRange: [0, 1],
+  }));
+}
 type SwipeTranslation = Parameters<NonNullable<React.ComponentProps<typeof Swipeable>["renderLeftActions"]>>[1];
 type ReadableSwipeTranslation = SwipeTranslation & { __getValue?(): unknown };
 type ClassicSwipeDirection = 'left' | 'right';
@@ -485,7 +501,7 @@ function LeftActionsContent({
           {/* 文字只在越过全滑阈值(松手即生效)时出现,跟着图标格平移;中间态的胶囊只有图标。 */}
           <Animated.View
             pointerEvents="none"
-            style={[styles.leadingActionLabelWrap, { opacity: armedProgress, width: labelWidth }]}
+            style={[styles.leadingActionLabelWrap, { opacity: actionLabelOpacity(readExtension, armedProgress, labelWidth), width: labelWidth }]}
           >
             <Text numberOfLines={1} style={styles.leadingActionLabel}>{readLabel}</Text>
           </Animated.View>
@@ -629,7 +645,7 @@ function RightActionsContent({
           {/* 文字只在越过全滑阈值(松手即生效)时出现,跟着图标格平移;中间态的胶囊只有图标。 */}
           <Animated.View
             pointerEvents="none"
-            style={[styles.trailingActionLabelWrap, { opacity: armedProgress, width: labelWidth }]}
+            style={[styles.trailingActionLabelWrap, { opacity: actionLabelOpacity(archiveExtension, armedProgress, labelWidth), width: labelWidth }]}
           >
             <Text numberOfLines={1} style={styles.trailingActionLabel}>{archiveLabel}</Text>
           </Animated.View>
