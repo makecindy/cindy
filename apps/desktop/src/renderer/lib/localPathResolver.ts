@@ -835,7 +835,8 @@ export function normalizeMarkdownImageSrc(
   src: string | undefined,
   workingDir: string,
   allowPrivilegedLinks: boolean,
-  origin?: RemoteMediaOrigin,
+  // null = session ownership is pending; undefined = confirmed local/non-session.
+  origin?: RemoteMediaOrigin | null,
 ): string | undefined {
   if (!src) return src;
   if (!allowPrivilegedLinks) {
@@ -844,6 +845,8 @@ export function normalizeMarkdownImageSrc(
   // Legacy hostless image URLs describe a local file, not a session cache entry.
   // Reuse the local-file bridge only after the privileged-link check (#8951).
   if (src.startsWith('xdt-image:///')) {
+    // A missing remote identity is not proof that this path belongs locally.
+    if (origin === null) return undefined;
     const normalized = normalizeXdtFileUrlForRenderer(src.replace(/^xdt-image:/, 'xdt-file:'));
     const localPath = new URL(normalized).searchParams.get('path') ?? '';
     // Decode before checking: encoded slashes must not turn this compatibility

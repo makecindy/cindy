@@ -1939,7 +1939,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
           >
             {(localSrc) => {
               const mediaOrigin = markdownMediaOrigin(localSrc, remoteMediaOrigin, workingDir);
-              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks, mediaOrigin);
+              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks,
+                mediaOrigin ?? (currentSessionId && sessionFileCtx.localConfirmed !== true ? null : undefined));
               if (isManagedMarkdownVideoUrl(normalized)) {
                 // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
                 // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
@@ -2180,7 +2181,8 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
       <WorkspaceMediaSrc src={raw} workingDir={props.workingDir} enabled={resolveInWorkspace} streaming={props.isStreaming ?? false}>
         {(localSrc = raw) => {
           const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined, props.workingDir);
-          const normalized = localSrc.startsWith('xdt-audio://') && allowPrivilegedLinks ? localSrc : normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks, mediaOrigin);
+          const normalized = localSrc.startsWith('xdt-audio://') && allowPrivilegedLinks ? localSrc : normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks,
+            mediaOrigin ?? (props.currentSessionId && sessionFileCtx.localConfirmed !== true ? null : undefined));
           if (!normalized) return null;
           // Local audio has its own extension-checked protocol; xdt-file serves
           // images/documents/video and rejects MP3. Preserve the encoded path and

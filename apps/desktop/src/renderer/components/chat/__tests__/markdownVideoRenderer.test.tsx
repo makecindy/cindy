@@ -483,3 +483,50 @@ describe('MarkdownRenderer allowlisted images', () => {
     expect([...container.querySelectorAll('img')].map((img) => img.getAttribute('src'))).toEqual([resolved]);
   });
 });
+
+// #11607 review: a device origin can arrive after the first image commit.
+// Exercise the real Markdown/rich renderers, not only the URL helper (unit/DOM).
+describe('MarkdownRenderer hostless media ownership', () => {
+  const scenarios = [
+    ['Markdown image', 'image', 'png'],
+    ['rich image', 'image', 'png'],
+    ['rich audio', 'audio', 'mp3'],
+    ['rich video', 'video', 'mp4'],
+  ] as const;
+  const contentFor = (label: string, kind: string, extension: string) => {
+    const src = `xdt-image:///tmp/100%.${extension}`;
+    return label === 'Markdown image' ? `![image](<${src}>)` : '```cindy-ui\n' + JSON.stringify({
+      version: 1, seq: 1, op: 'create', id: 'm', kind, props: { src },
+    }) + '\n```';
+  };
+  const loadedSource = (container: HTMLElement) => {
+    const media = container.querySelector('[data-testid="markdown-video"], img, audio');
+    return media?.getAttribute('data-src') ?? media?.getAttribute('src') ?? null;
+  };
+
+  it.each(scenarios)('does not load %s locally while device identity is pending', (label, kind, extension) => {
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin: { kind: 'local' }, localConfirmed: false };
+    const content = contentFor(label, kind, extension);
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" currentSessionTitle="pending" content={content} renderRichAnswers />);
+    expect(loadedSource(view.container)).toBeNull();
+
+    sessionFile.current = { ...REMOTE_SESSION_FILE, workingDir: '/task' };
+    view.rerender(<MarkdownRenderer workingDir="/task" currentSessionId="s1" currentSessionTitle="device registered" content={content} renderRichAnswers />);
+    expect(parseRemoteMediaUrl(loadedSource(view.container) ?? '')).toEqual({
+      origin: { kind: 'device', deviceId: 'dev-1' },
+      origUrl: `${kind === 'audio' ? 'xdt-audio' : 'xdt-file'}://local/?path=${encodeURIComponent(`/tmp/100%.${extension}`)}`,
+    });
+  });
+
+  it.each(scenarios)('keeps confirmed-local %s and non-session previews working', (label, kind, extension) => {
+    const expected = `${kind === 'audio' ? 'xdt-audio' : 'xdt-file'}://local/?path=${encodeURIComponent(`/tmp/100%.${extension}`)}`;
+    const content = contentFor(label, kind, extension);
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin: { kind: 'local' }, localConfirmed: true };
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={content} renderRichAnswers />);
+    expect(loadedSource(view.container)).toBe(expected);
+    view.unmount();
+    sessionFile.current = { sessionId: undefined, workingDir: '', origin: { kind: 'local' }, localConfirmed: false };
+    const preview = render(<MarkdownRenderer workingDir="/task" content={content} renderRichAnswers />);
+    expect(loadedSource(preview.container)).toBe(expected);
+  });
+});
