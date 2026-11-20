@@ -623,10 +623,17 @@ describe("on-demand mobile HTML previews", () => {
     await preview.close();
   });
 
-  it("isolates missing resources and refuses paths outside the preview root", async () => {
+  // #8805, unit: native HTTP responses must classify the Host's stable missing
+  // marker as 404. The existing NOT_FOUND-only case missed the serialized error.
+  it.each([
+    'NOT_FOUND',
+    'ENOENT',
+    '[MEDIA_SOURCE_MISSING] Media source is missing on this Host',
+    'Error invoking remote method: [MEDIA_FETCH_FAILED] [MEDIA_SOURCE_MISSING] Media source is missing on this Host',
+  ])("isolates missing resources (%s) and refuses paths outside the preview root", async (message) => {
     const { deps } = setup();
     const preview = await prepareMobileHtmlPreview("/site/index.html", deps, new AbortController().signal);
-    mocks.remote.mockRejectedValueOnce(new Error("NOT_FOUND"));
+    mocks.remote.mockRejectedValueOnce(new Error(message));
     request("missing", "missing.js");
     await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, "missing", "", "", 404));
     request("escape", "../secret.html");
@@ -636,6 +643,21 @@ describe("on-demand mobile HTML previews", () => {
     await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, "page", "2", "text/html", 200));
     await preview.close();
   });
+
+  it.each(['[PERMISSION_DENIED] Access denied', 'FILE_PEER_CHANGED', 'Network request failed'])(
+    'keeps non-missing resource failures as 502 (%s) and serves the next resource', async (message) => {
+      const { deps } = setup();
+      const preview = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+      mocks.remote.mockRejectedValueOnce(new Error(message));
+      request('failed', 'asset.js');
+      await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, 'failed', '', '', 502));
+      request('page', 'second.html');
+      await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, 'page', '2', 'text/html', 200));
+      await preview.close();
+      expect(mocks.contents.size).toBe(0);
+      expect(mocks.listeners.size).toBe(0);
+    },
+  );
 
   it("cancels closed requests before publishing and drains cleanup before removing its directory", async () => {
     const { deps } = setup();
