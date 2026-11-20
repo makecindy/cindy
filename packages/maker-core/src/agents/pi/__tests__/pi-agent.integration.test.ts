@@ -2302,6 +2302,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['thinking-duplicate', '1. 验证\n\n1. 交付', ['1. 验证\n\n1. 交付']],
     ['thinking-repeated-ones', '1. 实现\n\n1. 验证\n\n1. 交付\n\n1. 审查', ['1. 实现\n\n1. 验证\n\n1. 交付\n\n1. 审查']],
     ['thinking-unsafe-prefix', '0. 保留\n1. 验证\n\n1. 交付\n2. 审查', ['0. 保留\n1. 验证\n\n1. 交付\n2. 审查']],
+    ['thinking-empty-prefix', '1. [ ]\n2. 验证\n\n1. 交付\n2. 审查', ['1. [ ]\n2. 验证\n\n1. 交付\n2. 审查']],
     ['thinking-empty-heading', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-heading-intro', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-visible-whole', 'Plan:\n1. Investigate alternatives', ['1. 实现\n1. 验证']],
