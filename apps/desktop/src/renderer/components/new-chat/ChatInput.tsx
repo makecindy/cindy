@@ -149,10 +149,11 @@ import {
   type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
 import type { PluginModelsPickerProps } from './PluginModelsSection';
-import type {
-  PluginEnginePendingSelection,
-  PluginEngineSessionPickerProps,
-  PluginEnginesPickerProps,
+import {
+  usePluginEngineChoiceLabel,
+  type PluginEnginePendingSelection,
+  type PluginEngineSessionPickerProps,
+  type PluginEnginesPickerProps,
 } from './PluginEnginesSection';
 import { PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES, isSamePluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsPickerProps } from './ModelGroupsPickerSection';
@@ -1975,19 +1976,24 @@ export function ChatInput({
   // 档位与切换链路只看切到内置引擎的意图，行为与没有插件引擎时一致。
   const agentSwitchIntent = builtinAgentSwitchIntent(storedAgentSwitchIntent);
   const pluginEngineSwitchIntent = pluginEngineAgentSwitchIntent(storedAgentSwitchIntent);
+  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   // 待切到插件引擎时选择器的 trigger 写「下条：引擎 · 模型」；引擎已不在时用通用名称。
   const pluginEnginePending = useMemo<PluginEnginePendingSelection | undefined>(() => {
     const providerId = pluginEngineSwitchIntent?.providerId;
     if (!pluginEngineSwitchIntent || !providerId) return undefined;
-    const engine = pluginEngines?.engines.find((item) => item.providerId === providerId) ?? null;
+    const targetDeviceId = pluginEngineSwitchIntent.agentDeviceId === undefined
+      ? (agentDeviceId ?? null)
+      : pluginEngineSwitchIntent.agentDeviceId;
+    const engine = pluginEngines?.engines.find((item) =>
+      isSamePluginEngineChoice(item, { providerId, deviceId: targetDeviceId })) ?? null;
     return {
       providerId,
       engine,
-      engineName: engine?.name ?? t('newChat.pluginEngines.genericName'),
+      engineName: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
       modelId: pluginEngineSwitchIntent.model,
       effort: pluginEngineSwitchIntent.effort ?? null,
     };
-  }, [pluginEngineSwitchIntent, pluginEngines, t]);
+  }, [pluginEngineSwitchIntent, agentDeviceId, pluginEngines, pluginEngineChoiceLabel, t]);
   const composerSelection = resolveComposerModelSelection({
     current: {
       agentKind: runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey) ?? 'claude-code',
