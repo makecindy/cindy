@@ -1578,6 +1578,7 @@ export const schedules = sqliteTable(
      * 可并存(先问插件再跑脚本)。内存里与 on_failure 合成 `Schedule.preRunPlugin`。
      */
     preRunPluginId: text('pre_run_plugin_id'),
+    primaryHostKey: text('primary_host_key'),
     /** 插件没回应 / 出错 / 不可用时的处理:allow | skip | block。仅 plugin id 非空时有意义。 */
     preRunPluginOnFailure: text('pre_run_plugin_on_failure'),
     /**

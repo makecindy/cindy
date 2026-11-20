@@ -29,9 +29,20 @@ export interface DeviceLinkApiPorts {
   prepareRelayConfig(): Promise<Pick<typeof import('./selfHostedRelayConfig.js'), 'readRelaySecrets'>>;
 }
 
+/** Official account APIs always resolve the account region again before a 401 retry. */
+export function createOfficialDeviceLinkApiFetch({ getClientEndpoint, serverApiFetch }: Pick<DeviceLinkApiPorts, 'getClientEndpoint' | 'serverApiFetch'>) {
+  return function officialDeviceLinkApiFetch<T>(
+    apiPath: string,
+    opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {},
+  ): Promise<T> {
+    return serverApiFetch<T>(apiPath, { ...opts, baseUrl: () => getClientEndpoint('deviceLinkApiBaseUrl') });
+  };
+}
+
 /** Shared routing and credential contract; each launcher supplies its live scope. */
 export function createDeviceLinkApi(ports: DeviceLinkApiPorts) {
 const { getClientEndpoint, serverApiFetch, activeSelfHostedRelay, readCurrentDeviceDirectory, legacyDeviceView } = ports;
+const officialDeviceLinkApiFetch = createOfficialDeviceLinkApiFetch(ports);
 
 async function agentNetOnlyFetch<T>(relay: ActiveSelfHostedRelay, apiPath: string, method: string, body: unknown, assertRoute: () => void, signal?: AbortSignal): Promise<T> {
   const { agentNetClientForRelay } = await ports.prepareAgentNetRuntime();
@@ -130,18 +141,6 @@ function resolveDeviceLinkApiBase(): string {
 /** 官方中转的 REST 基础地址:跨账号连接不随中转选择切换。 */
 function officialDeviceLinkApiBase(): string {
   return getClientEndpoint('deviceLinkApiBaseUrl');
-}
-
-/** 官方服务的 REST 入口。共享任务附件只存在于官方存储,不随中转选择切换。 */
-function officialDeviceLinkApiFetch<T>(
-  apiPath: string,
-  opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {},
-): Promise<T> {
-  return serverApiFetch<T>(apiPath, {
-    ...opts,
-    // 401 重试可随账号区域更新官方端点，不能随中转选择跨到自建地址。
-    baseUrl: () => getClientEndpoint('deviceLinkApiBaseUrl'),
-  });
 }
 
 /**
