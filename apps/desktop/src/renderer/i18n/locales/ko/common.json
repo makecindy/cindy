@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
     "MODEL_SELECTION_UNAVAILABLE": "선택한 모델을 해당 제공자에서 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
+    "MODEL_CATALOG_UNCONFIRMED": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
     "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
     "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
     "INVALID_PARAMS": "입력값이 올바르지 않습니다. 확인 후 다시 시도하세요.",
@@ -15166,6 +15167,7 @@
       "continueFailed_other": "세션 {{count}}개를 이어서 진행하지 못했습니다. 세션을 열어 다시 시도하세요."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
       "actionScheduled": "이 동작에 대한 세션 권한이 만료되었습니다. 다음 실행은 예정대로 진행됩니다.",
       "actionExpired": "이 동작에 대한 세션 권한이 만료되었습니다. 자동화의 최근 실행 결과를 확인하세요.",
       "actionRecovered": "이 동작의 권한이 만료되었습니다. 이후 같은 자동화가 성공적으로 실행되었습니다.",
@@ -15837,6 +15839,7 @@
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
       "MODEL_SELECTION_UNAVAILABLE": "선택한 모델을 해당 제공자에서 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
+      "MODEL_CATALOG_UNCONFIRMED": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
       "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
       "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
       "REMOTE_DAEMON_CLOSED": "원격 연결이 끊겼습니다. 업데이트 중일 수 있습니다. 이번 턴은 종료되었으니 메시지를 다시 보내 주세요.",

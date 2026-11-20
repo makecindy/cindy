@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
     "MODEL_SELECTION_UNAVAILABLE": "選択したモデルは、そのプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
+    "MODEL_CATALOG_UNCONFIRMED": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
     "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
     "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
     "INVALID_PARAMS": "入力内容が無効です。確認して再試行してください。",
@@ -15166,6 +15167,7 @@
       "continueFailed_other": "{{count}} 件のセッションを再開できませんでした。セッションを開いて再試行してください。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
       "actionScheduled": "この操作に対するセッションの許可が失効しました。次の実行は予定されています。",
       "actionExpired": "この操作に対するセッションの許可が失効しました。自動化の直近の実行結果を確認してください。",
       "actionRecovered": "この操作の許可は失効しましたが、その後、同じ自動化が正常に実行されました。",
@@ -15837,6 +15839,7 @@
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
       "MODEL_SELECTION_UNAVAILABLE": "選択したモデルはプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
+      "MODEL_CATALOG_UNCONFIRMED": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
       "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
       "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
       "REMOTE_DAEMON_CLOSED": "リモート接続が切れました。更新中の可能性があります。このターンは終了したので、もう一度送信してください。",

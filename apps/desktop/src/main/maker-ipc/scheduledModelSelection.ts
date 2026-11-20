@@ -211,6 +211,9 @@ export function resolveScheduledModelSelection(
   if (model?.availability === 'requires_payment') {
     throwIpcError('INVALID_PARAMS', `Scheduled model "${selection.model}" requires payment from provider "${providerId ?? 'default'}"`);
   }
+  if (!model && provider?.subscriptionReadUnavailable && !provider.removed) {
+    throwIpcError('MODEL_CATALOG_UNCONFIRMED', 'The model list could not be confirmed. The saved model selection has been kept.');
+  }
   if (!provider || !model ||
     !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
     throwIpcError('MODEL_SELECTION_UNAVAILABLE', `Scheduled model "${selection.model}" is unavailable from provider "${providerId ?? 'default'}"`);
@@ -221,6 +224,33 @@ export function resolveScheduledModelSelection(
     effort: resolveCompatibleSessionRuntimeEffort(model, selection.effort),
     fastMode: model.supportsFastMode === true && (selection.fastMode !== 'ultrafast' || (selection.agentKind === 'codex' && model.supportsUltrafastMode === true)) ? selection.fastMode : false,
   };
+}
+
+/** One read-only recovery attempt, shared with the provider's existing discovery flight.
+ * Never change the saved route or replay a send; only resolve the same selection again.
+ */
+export async function resolveScheduledModelSelectionWithRefresh(
+  selection: ScheduledModelSelection,
+  deps: {
+    readProviders: () => Promise<ProviderView[]>;
+    refreshProvider: (providerId: string) => Promise<unknown>;
+    assertCurrent: () => void;
+  },
+): Promise<ScheduledModelSelection> {
+  let providers = await deps.readProviders();
+  deps.assertCurrent();
+  const provider = providers.find(p => p.id === selection.providerId);
+  if (provider?.connected && !provider.suspended && !provider.removed &&
+    provider.subscriptionAccountPool === 'openai' &&
+    !findCatalogModel(provider, selection.model, selection.agentKind, { exact: true })) {
+    // The native discovery routine retains the last success and marks failed reads.
+    // If recovery itself throws, re-read that state rather than treating it as removal.
+    try { await deps.refreshProvider(provider.id); } catch { deps.assertCurrent(); }
+    deps.assertCurrent();
+    providers = await deps.readProviders();
+    deps.assertCurrent();
+  }
+  return resolveScheduledModelSelection(selection, providers);
 }
 
 /** Resolve against the bound execution computer; the runner owns inactive-target recovery. */

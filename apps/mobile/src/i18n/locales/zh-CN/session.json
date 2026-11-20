@@ -77,6 +77,7 @@
     "back": "返回"
   },
   "failedScheduleNotice": {
+    "modelCatalogUnconfirmed": "暂时无法确认模型列表。已保留你选择的模型，可刷新模型列表后重试。",
     "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
     "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
     "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
@@ -688,6 +689,7 @@
     "SUBSCRIPTION_ACCOUNTS_FULL": "能运行这个任务的账号或电脑都已达到并发上限。等正在运行的任务结束，或在供应商设置里调高上限。",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
     "MODEL_SELECTION_UNAVAILABLE": "所选模型在该供应商下已不可用。请在设置中检查连接，或重新选择可用模型。",
+    "MODEL_CATALOG_UNCONFIRMED": "暂时无法确认模型列表。已保留你选择的模型，可刷新模型列表后重试。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切换。请查看错误详情，待 Harness 就绪后重试。",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用账号已达到用量上限。可换用其他模型，或等配额重置后继续。",
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "供应商组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以在电脑上这个供应商的「远程与分享」页查看组内电脑。",

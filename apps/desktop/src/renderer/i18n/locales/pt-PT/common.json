@@ -1380,6 +1380,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode mudar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness de que precisa.",
     "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado já não está disponível no respetivo fornecedor. Verifique a ligação nas Definições ou escolha outro modelo disponível.",
+    "MODEL_CATALOG_UNCONFIRMED": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualiza a lista de modelos e tenta novamente.",
     "HARNESS_SWITCH_NOT_READY": "A mudança de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
     "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente dentro de instantes.",
     "INVALID_PARAMS": "Entrada inválida. Verifique e tente novamente.",
@@ -15332,6 +15333,7 @@
       "continueFailed_many": "Não foi possível retomar {{count}} sessões. Abra-as para tentar novamente."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualiza a lista de modelos e tenta novamente.",
       "actionScheduled": "A autorização para esta ação expirou. A próxima execução continua agendada.",
       "actionExpired": "A autorização da sessão para esta ação expirou. Consulte a execução mais recente da automatização.",
       "actionRecovered": "A autorização para esta ação expirou. A mesma automatização foi executada com sucesso mais tarde.",
@@ -16006,6 +16008,7 @@
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode mudar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness de que precisa.",
       "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado já não está disponível no respetivo fornecedor. Verifique a ligação nas Definições ou escolha outro modelo disponível.",
+      "MODEL_CATALOG_UNCONFIRMED": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualiza a lista de modelos e tenta novamente.",
       "HARNESS_SWITCH_NOT_READY": "A mudança de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente dentro de instantes.",
       "REMOTE_DAEMON_CLOSED": "A ligação remota caiu, possivelmente durante uma atualização. Este turno terminou. Envie a mensagem novamente.",
