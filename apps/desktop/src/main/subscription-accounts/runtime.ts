@@ -237,7 +237,7 @@ export function onSubscriptionPoolClaudeModelsChanged(listener: () => void): () 
   return () => { claudeModelListeners.delete(listener); };
 }
 function publishClaudeCatalogChange(state: OwnerRuntime): void {
-  if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return;
+  if (!isCurrentRuntime(state)) return;
   const pool = readPool('anthropic');
   const providers = new Set(['anthropic', ...pool?.accounts.map(account => accountProviderId('anthropic', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
@@ -254,7 +254,7 @@ export function onSubscriptionPoolCodexModelsChanged(listener: () => void): () =
   return () => { codexModelListeners.delete(listener); };
 }
 function publishCodexCatalogChange(state: OwnerRuntime, refreshId?: string): void {
-  if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return;
+  if (!isCurrentRuntime(state)) return;
   const pool = readPool('openai');
   const providers = new Set(['openai', ...pool?.accounts.map(account => accountProviderId('openai', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
@@ -324,8 +324,12 @@ function usageFingerprint(provider: SubscriptionProvider, info: AccountSnapshot)
     ? createHash('sha256').update(`claude-usage:${info.auth.identity}`).digest('hex').slice(0, 16) : undefined;
 }
 
+function isCurrentRuntime(state: OwnerRuntime): boolean {
+  return state === runtime && state.owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
+}
+
 function accountStillPresent(state: OwnerRuntime, provider: SubscriptionProvider, id: string): boolean {
-  if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+  if (!isCurrentRuntime(state)) return false;
   const pool = readPool(provider);
   return pool ? pool.accounts.some(account => account.id === id) && !disconnectedFor(pool, provider, id)
     : id === 'default' && defaultAccountBound(provider);
@@ -956,6 +960,7 @@ async function snapshot(
           || current.auth.planTier !== result.auth.planTier || current.auth.planDisplayName !== result.auth.planDisplayName
           || current.auth.planType !== result.auth.planType);
       } catch (error) {
+        assertOwner(state);
         const account = provider === 'anthropic'
           ? readPool(provider)?.accounts.find((account) => account.id === id) : undefined;
         // A failed read says nothing about who is signed in: keep the identity this owner last
@@ -1196,7 +1201,7 @@ export async function refreshSubscriptionPoolClaudeModels(force = false, provide
     }
     const directory = directoryFor('anthropic', id);
     const placement = accountProviderId('anthropic', id);
-    const isCurrent = () => state === runtime && state.owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
+    const isCurrent = () => isCurrentRuntime(state)
       && probe === claudeModelProbe && !loggingIn()
       && !disconnectedFor(readPool('anthropic'), 'anthropic', id)
       && readPool('anthropic')?.accounts.some(account => account.id === id && (!account.paused || historical.has(id))) === true
@@ -1226,7 +1231,7 @@ export async function refreshSubscriptionPoolClaudeModels(force = false, provide
   };
   await Promise.all(accounts.map(account => refreshAccount(account.id)));
   publishClaudeCatalogChange(state);
-  return state === runtime && state.owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
+  return isCurrentRuntime(state)
     && probe === claudeModelProbe && accounts.some(account => {
     const result = state.claudeModels.get(account.id);
     return result?.failedAt === undefined && !!result && result.auth === state.cache.get(keyOf('anthropic', account.id))?.auth
@@ -1291,6 +1296,7 @@ export async function refreshSubscriptionPoolCodexModels(
   const serving = found ? new Set(servingAccounts(found).map(account => account.id)) : null;
   let refreshId: string | undefined;
   const refreshAccount = async (id: string): Promise<void> => {
+    if (!isCurrentRuntime(state)) return;
     const loggingIn = () => [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id);
     const info = state.cache.get(keyOf('openai', id));
     if (info?.unavailable && info.lastConfirmed && !loggingIn()) {
@@ -1312,7 +1318,7 @@ export async function refreshSubscriptionPoolCodexModels(
     }
     const directory = directoryFor('openai', id);
     const isCurrent = () => {
-      if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+      if (!isCurrentRuntime(state)) return false;
       const currentPool = readPool('openai');
       return currentPool?.accounts.some(a => a.id === id && (!a.paused || historical.has(id))) === true
         && !disconnectedFor(currentPool, 'openai', id)
@@ -1527,7 +1533,7 @@ async function restoreConfirmedCodexModels(state: OwnerRuntime, id: string, info
   let saved: Awaited<ReturnType<typeof restoreCodexModelSnapshot>>;
   try { saved = await restoreCodexModelSnapshot(id, confirmed.accountKey); }
   catch { log.warn('could not restore Codex model snapshot'); return; }
-  if (!saved || state !== runtime || state.cache.get(keyOf('openai', id)) !== info) return;
+  if (!saved || !isCurrentRuntime(state) || state.cache.get(keyOf('openai', id)) !== info) return;
   state.codexModels.set(id, { auth: confirmed.auth, accountKey: confirmed.accountKey, models: saved.models,
     confirmedAt: saved.confirmedAt, failedAt: Date.now() });
 }
@@ -1536,7 +1542,7 @@ async function restoreConfirmedCodexModels(state: OwnerRuntime, id: string, info
 async function clearSignedOutCodexModels(state: OwnerRuntime, id: string, stillSignedOut: () => boolean): Promise<void> {
   // Wait for an already-started rename before removing its destination.
   await state.codexModelFlights.get(id)?.saving;
-  if (state !== runtime || !stillSignedOut()) return;
+  if (!isCurrentRuntime(state) || !stillSignedOut()) return;
   try { await clearCodexModelSnapshot(id); }
   catch { log.warn('could not clear signed-out Codex account model snapshot'); }
 }

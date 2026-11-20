@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   usage: vi.fn(),
   modelCacheRead: vi.fn(),
   savedModelFiles: new Map<string, string>(),
+  ownerBoundaryPending: false,
   onSnapshotStage: undefined as (() => void) | undefined,
   rejectSnapshotRename: false,
   directoryEntries: vi.fn(),
@@ -130,7 +131,7 @@ vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.remote 
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => [h.owner, ...parts].join('/'),
   activeOwnerScopeKey: () => h.owner,
-  isAppSessionBoundaryPending: () => false,
+  isAppSessionBoundaryPending: () => h.ownerBoundaryPending,
 }));
 vi.mock('../../maker-host/nativeProviderAuthBinding.js', () => ({
   bindNativeProviderAuth: vi.fn(() => { h.bound = true; h.shared = true; }),
@@ -313,6 +314,7 @@ beforeEach(() => {
   }));
   h.usage.mockReset().mockResolvedValue({});
   h.savedModelFiles.clear();
+  h.ownerBoundaryPending = false;
   h.onSnapshotStage = undefined;
   h.rejectSnapshotRename = false;
   h.modelCacheRead.mockReset().mockRejectedValue(new Error('no account cache'));
@@ -860,6 +862,27 @@ describe('owner-only subscription identity', () => {
     await refreshSubscriptionPoolCodexModels();
     expect(readSubscriptionPoolCodexModels()).toEqual([]);
     expect(h.savedModelFiles.size).toBe(0);
+  });
+
+  // Unit, PR #11754: a default logout yields before deleting its persisted list.
+  // Existing cleanup tests keep the owner stable or replace the runtime on switch.
+  it.each(['an owner switch', 'a pending owner boundary'])('preserves saved models when logout cleanup is interrupted by %s', async transition => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    const ownerFile = `${h.owner}/model-discovery/codex-pool-default.json`;
+    const nextOwnerFile = 'another-owner/model-discovery/codex-pool-default.json';
+    const saved = h.savedModelFiles.get(ownerFile);
+    expect(saved).toBeDefined();
+    h.savedModelFiles.set(nextOwnerFile, saved!);
+
+    resetDefaultSubscriptionCodexDiscovery(false);
+    // Switch without touching the new owner's subscription runtime.
+    if (transition === 'an owner switch') h.owner = 'another-owner';
+    else h.ownerBoundaryPending = true;
+    await Promise.resolve();
+    expect(h.savedModelFiles.get(ownerFile)).toBe(saved);
+    expect(h.savedModelFiles.get(nextOwnerFile)).toBe(saved);
   });
 
   // Unit: reopening the owner's runtime discards memory; transient failure must still
