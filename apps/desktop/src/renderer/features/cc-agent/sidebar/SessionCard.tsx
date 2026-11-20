@@ -1242,7 +1242,7 @@ function TimeActionsSlot({
   session: Session;
   inboxMode?: boolean;
   navigationOnly?: boolean;
-  snoozeAction: SnoozeAction;
+  snoozeAction?: SnoozeAction;
   pieces: readonly SessionInfoPiece[];
   prRef?: SessionPrRef;
   worktree?: SessionWorktreeInfo;
@@ -1266,7 +1266,7 @@ function TimeActionsSlot({
   const { t } = useTranslation();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const actionsOpen = menuOpen || snoozeOpen;
-  const canSnooze = inboxMode && !isArchived && canUnarchive;
+  const canSnooze = inboxMode && !isArchived && canUnarchive && !!snoozeAction;
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">

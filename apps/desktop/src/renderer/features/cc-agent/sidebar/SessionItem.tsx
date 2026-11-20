@@ -848,7 +848,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     />
   ) : null;
 
-  const canSnooze = inboxMode && !isArchived && !remoteWritesBlocked;
+  const canSnooze = inboxMode && !isArchived && !remoteWritesBlocked && !!snoozeAction;
   const actionsOpen = menuPos !== null || snoozeOpen;
   const showAutomationRunAction =
     !inboxMode &&
