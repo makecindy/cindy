@@ -28,7 +28,7 @@ interface BoundaryProps {
 
 const runtime = vi.hoisted(() => ({
   // The native-boundary mock assigns both values before any render/assertion.
-  props: null as unknown as BoundaryProps, release: 0, width: 400, freezeAnimations: false,
+  props: null as unknown as BoundaryProps, release: 0, width: 400, rowWidth: 400, freezeAnimations: false,
   translation: null as unknown as BoundaryTranslation,
   listeners: new Map<string, (event: { value: number }) => void>(),
   removed: vi.fn(), stopped: vi.fn(), close: vi.fn(), reset: vi.fn(),
@@ -36,7 +36,7 @@ const runtime = vi.hoisted(() => ({
 // Keep the UI-to-JS bridge at the native boundary, like the other row fixtures.
 vi.mock('react-native-reanimated', () => ({ runOnJS: (fn: unknown) => fn }));
 vi.mock('react-native', async () => {
-  const { createElement: el } = await import('react');
+  const { createElement: el, useLayoutEffect } = await import('react');
   type Node = { __getValue(): number; interpolate(config: Config): Node };
   type Config = { inputRange: number[]; outputRange: number[] };
   const value = (n: number | Node) => typeof n === 'number' ? n : n.__getValue();
@@ -45,7 +45,9 @@ vi.mock('react-native', async () => {
     interpolate: ({ inputRange: [a, b], outputRange: [x, y] }) => node(() =>
       x + Math.max(0, Math.min(1, (read() - a) / (b - a))) * (y - x)),
   });
-  const View = ({ children, style }: { children?: ReactNode; style?: object[] }) => {
+  const View = ({ children, style, onLayout }: { children?: ReactNode; style?: object[]; onLayout?: (event: { nativeEvent: { layout: { width: number } } }) => void }) => {
+    const width = runtime.rowWidth;
+    useLayoutEffect(() => onLayout?.({ nativeEvent: { layout: { width } } }), [onLayout, width]);
     const flat = Object.assign({}, ...[style].flat().filter(Boolean));
     return el('div', { 'data-opacity': flat.opacity == null ? undefined : value(flat.opacity) }, children);
   };
@@ -131,7 +133,7 @@ function render(id = 'row') {
   })));
 }
 beforeEach(() => {
-  vi.clearAllMocks(); runtime.release = 0; runtime.width = 400; runtime.freezeAnimations = false; runtime.listeners.clear();
+  vi.clearAllMocks(); runtime.release = 0; runtime.width = 400; runtime.rowWidth = 400; runtime.freezeAnimations = false; runtime.listeners.clear();
   host = document.createElement('div'); root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
@@ -140,6 +142,20 @@ afterEach(() => act(() => root.unmount()));
 // regressions protect release-position archiving, lazy native trees and disposal;
 // the old import/substring/layout checks never invoked a gesture or React cleanup.
 describe('classic swipe row lifecycle', () => {
+  // Unit regression: the floating task list can be narrower than the app window.
+  it('archives at the measured task width threshold in a narrow pane', () => {
+    runtime.width = 900;
+    runtime.rowWidth = 320;
+    render();
+    act(() => runtime.props.onSwipeableOpenStartDrag());
+    runtime.release = -175;
+    act(() => runtime.props.onSwipeableWillOpen('right'));
+    expect(controls.onArchive).not.toHaveBeenCalled();
+    runtime.release = -176;
+    act(() => runtime.props.onSwipeableWillOpen('right'));
+    expect(controls.onArchive).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['right', -260, -100, false, 'onArchive'],
     ['right', -260, -260, true, 'onArchive'],

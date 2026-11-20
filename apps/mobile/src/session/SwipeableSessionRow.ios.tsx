@@ -1,10 +1,10 @@
 import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
-import { useWindowWidth } from '@/platform/windowDimension';
+import { useTaskRowSwipeWidth } from './useTaskRowSwipeWidth';
 /**
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
  * 交互契约(2026-07-07 与产品确认):
- *  - 右滑露出「置顶/取消置顶」和「已读」,全滑(超过屏宽 55%)松手标为已读;
+ *  - 右滑露出「置顶/取消置顶」和「已读」,全滑(达到任务行宽的 55%)松手标为已读;
  *  - 左滑露出「选项」+「归档」,全滑=归档(归档按钮越过阈值时扩展盖满,预告松手即触发);
  *  - 删除不做滑动直达,只在「选项」菜单里(带系统 Alert 确认),由页面层承接;
  *  - 同一时间只允许一行滑开:互斥由页面级 SwipeRowRegistry 驱动(开新关旧、滚动关行)。
@@ -77,8 +77,6 @@ const BUTTON_GAP = spacing.md;
 /** 两侧面板都放两个按钮:gap + 圆 + gap + 圆 + gap。 */
 const LEFT_PANEL_WIDTH = BUTTON_GAP * 3 + BUTTON_SIZE * 2;
 const RIGHT_PANEL_WIDTH = BUTTON_GAP * 3 + BUTTON_SIZE * 2;
-/** 全滑触发阈值:位移超过屏宽的这个比例,松手即执行(iOS Mail 惯例的 50-60% 区间)。 */
-const FULL_SWIPE_RATIO = 0.55;
 /** 「归档」按钮越过全滑阈值时扩展盖满右侧面板的过渡时长。 */
 const ARM_ANIMATION_MS = 150;
 const ICON_SIZE = iconSize.swipeAction;
@@ -161,8 +159,7 @@ function SwipeableSessionRowInner({
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const windowWidth = useWindowWidth();
-  const fullSwipeThreshold = windowWidth * FULL_SWIPE_RATIO;
+  const { fullSwipeThreshold, onRowLayout } = useTaskRowSwipeWidth();
 
   const methodsRef = useRef<SwipeableMethods | null>(null);
   // Leave the pane edge's drag band to resizing (see usePaneEdgeInset).
@@ -340,7 +337,7 @@ function SwipeableSessionRowInner({
       renderRightActions={renderRightActions}
       testID={testID}
     >
-      {children}
+      <View onLayout={onRowLayout}>{children}</View>
     </Swipeable>
   );
 }
