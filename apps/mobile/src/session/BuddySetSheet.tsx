@@ -3,11 +3,10 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Check, Trash2 } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import {
-  assignBuddyToSet,
+  BUDDY_SET_LIMIT,
   createBuddySet,
   deleteBuddySet,
-  normalizeBuddySets,
-  removeBuddyFromSet,
+  reconcileBuddySetMembers,
   renameBuddySet,
   type BuddySetsState,
 } from '@cindy/maker-shared/buddy-sets';
@@ -42,22 +41,21 @@ export function BuddySetSheet({ visible, buddySetId, buddySets, candidates, onCh
     setSelected(current?.buddyIds ?? []);
   }, [visible, current?.buddySetId, current?.name]);
 
+  const atLimit = !buddySetId && buddySets.sets.length >= BUDDY_SET_LIMIT;
   const save = () => {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (!trimmed || atLimit) return;
+    // The id is generated once, before the state updater runs: a refused create
+    // must not fall back to "the last set", which would edit an existing set.
+    const newId = `buddy-set-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const targetId = buddySetId ?? newId;
+    const candidateIds = candidates.map((candidate) => candidate.id);
     onChange((state) => {
-      let next = buddySetId
+      const next = buddySetId
         ? renameBuddySet(state, buddySetId, trimmed)
-        : createBuddySet(state, `buddy-set-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, trimmed);
-      const targetId = buddySetId ?? next.sets[next.sets.length - 1]?.buddySetId;
-      if (!targetId) return next;
-      // Reconcile membership: assignBuddyToSet enforces "one buddy, one set".
-      for (const candidate of candidates) {
-        next = selected.includes(candidate.id)
-          ? assignBuddyToSet(next, candidate.id, targetId)
-          : removeBuddyFromSet(next, candidate.id);
-      }
-      return normalizeBuddySets(next);
+        : createBuddySet(state, newId, trimmed);
+      // Reconcile only this set: unchecking a buddy must not clear other sets.
+      return reconcileBuddySetMembers(next, targetId, candidateIds, selected);
     });
     onClose();
   };
@@ -72,7 +70,7 @@ export function BuddySetSheet({ visible, buddySetId, buddySets, candidates, onCh
 
   return <FormSheet visible={visible} title={current ? copy.renameTitle : copy.createTitle} onClose={onClose}
     leadingAction={{ label: copy.close, onPress: onClose, testID: 'buddySet.cancel' }}
-    trailingAction={{ label: copy.save, disabled: !name.trim(), onPress: save, testID: 'buddySet.save' }}
+    trailingAction={{ label: copy.save, disabled: !name.trim() || atLimit, onPress: save, testID: 'buddySet.save' }}
     testID="buddySet.sheet">
     <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
       <View style={styles.field}>
@@ -80,6 +78,7 @@ export function BuddySetSheet({ visible, buddySetId, buddySets, candidates, onCh
         <TextInput value={name} maxLength={80} placeholder={copy.namePlaceholder}
           placeholderTextColor={colors.textPlaceholder} onChangeText={setName}
           style={styles.input} testID="buddySet.name" />
+        {atLimit ? <Text style={styles.limit}>{copy.limitReached}</Text> : null}
       </View>
       <View style={styles.field}>
         <Text style={styles.label}>{copy.membersLabel}</Text>
@@ -111,6 +110,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
   field: { marginBottom: spacing.lg, gap: spacing.sm },
   label: { color: colors.textSecondary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+  limit: { color: colors.destructive, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   input: { borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.container, paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm, color: colors.textPrimary, backgroundColor: colors.surface, fontSize: typeScale.body },
   group: { borderRadius: radius.container, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },

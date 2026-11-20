@@ -17,6 +17,7 @@ import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-ro
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, ChevronUp, Plus, RefreshCw, UsersRound } from 'lucide-react-native';
 import { resolveRemoteText } from '@cindy/device-link';
+import { BUDDY_SET_LIMIT } from '@cindy/maker-shared/buddy-sets';
 import { useAuth } from '@/auth/AuthContext';
 import { openManualChatInvite } from '@/chat/chatInviteIntent';
 import { Text } from '@/components/AppText';
@@ -119,7 +120,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const search = query.trim();
   const entries = useTeammateEntries(items, showGroups ? groups.items : undefined, search);
   // 「伙伴集」:纯本机、按账号的展示容器,只收伙伴私聊行。
-  const [buddySets, updateBuddySets] = useBuddySets(navigation.owner);
+  const [buddySets, updateBuddySets, buddySetsStatus, retryBuddySets] = useBuddySets(navigation.owner);
   const [buddySetEdit, setBuddySetEdit] = useState<{ visible: boolean; buddySetId: string | null }>({ visible: false, buddySetId: null });
   const buddySetCandidates = useMemo<BuddySetCandidate[]>(() => entries
     .filter((entry): entry is TeammateListEntry & { kind: 'bot' } => entry.kind === 'bot')
@@ -164,7 +165,8 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const creator = useTeammateCreateController({ targets: createTargets, groupTargets: groupCreateTargets,
     preferredDeviceId: navigation.lastTeammate?.deviceId,
     onInvite: canInvite ? () => { Keyboard.dismiss(); openManualChatInvite(); } : undefined,
-    onNewBuddySet: () => setBuddySetEdit({ visible: true, buddySetId: null }),
+    onNewBuddySet: buddySetsStatus === 'ready' && buddySets.sets.length < BUDDY_SET_LIMIT
+      ? () => setBuddySetEdit({ visible: true, buddySetId: null }) : undefined,
     onCreated: (host, ref) => { void navigation.openCreatedTeammate(host, ref); },
     onGroupCreated: (host, groupId) => push(botGroupRoute(host, groupId)) });
   // Keep cached rows during recovery. A lasting failure only adds a header action,
@@ -180,8 +182,11 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
     if (groups.error) void groups.refresh();
     if (cloud.error) void refreshCloud();
   };
-  // The invitation trigger is independent of device/roster loading; no empty body is reserved.
-  const shown = visible && (search ? entries.length > 0 : canInvite || !!error || !(!entries.length && (!canCreate || roster.loading)));
+  // Sets are visible even with an empty roster; a failed local read offers a retry.
+  const hasBuddySets = buddySets.sets.length > 0;
+  const buddySetsFailed = buddySetsStatus === 'error';
+  const shown = visible && (search ? entries.length > 0
+    : hasBuddySets || buddySetsFailed || canInvite || !!error || !(!entries.length && (!canCreate || roster.loading)));
   const title = t('devices.companions.title');
   const create = (trigger: (press: () => void, label: string) => ReactElement) => showCreate
     ? creator.renderTrigger(trigger(creator.press, creator.label)) : null;
@@ -214,12 +219,30 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
         <Plus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
       </Pressable>)}
     </View>
-    {headerOnly ? null : !entries.length ? (canCreate ? <DisclosureItem exit>{create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={press}
-      style={({ pressed }) => [styles.addRow, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesAdd">
-      <View style={[styles.addCircle, styles.addCircleRow]}><Plus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} /></View>
-      <Text style={styles.addText} numberOfLines={1}>{t('devices.companions.createTeammate')}</Text>
-    </Pressable>)}</DisclosureItem> : null)
-      : collapsed ? <DisclosureItem exit>
+    {headerOnly ? null : <>
+      {buddySetsFailed ? <Pressable accessibilityRole="button"
+        accessibilityLabel={`${t('devices.resources.loadFailed')} ${t('devices.resources.retry')}`}
+        onPress={retryBuddySets} hitSlop={spacing.xs} testID="home.buddySetsRetry"
+        style={({ pressed }) => [styles.moreRow, pressed && mobileInteractionStyles.pressed]}>
+        <RefreshCw size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
+        <Text style={styles.moreText} numberOfLines={1}>{t('devices.resources.retry')}</Text>
+      </Pressable> : null}
+      {!entries.length ? (<>
+        {hasBuddySets && !collapsed ? <BuddySetGroups
+          entries={[]}
+          buddySets={buddySets}
+          onChange={updateBuddySets}
+          onEditSet={(buddySetId) => setBuddySetEdit({ visible: true, buddySetId })}
+          renderRow={renderRow}
+          query={search}
+        /> : null}
+        {canCreate ? <DisclosureItem exit>{create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={press}
+          style={({ pressed }) => [styles.addRow, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesAdd">
+          <View style={[styles.addCircle, styles.addCircleRow]}><Plus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} /></View>
+          <Text style={styles.addText} numberOfLines={1}>{t('devices.companions.createTeammate')}</Text>
+        </Pressable>)}</DisclosureItem> : null}
+      </>)
+        : collapsed ? <DisclosureItem exit>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip} testID="home.teammatesStrip">
           {entries.map(entry => <StripCell key={`${entry.kind}:${entry.row.key}`} entry={entry}
             online={entry.kind === 'group' ? groups.isOnline(entry.row.host) : roster.isOnline(entry.row.host)}
@@ -253,6 +276,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
             : <ChevronDown color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.medium} />}
         </Pressable> : null}
       </DisclosureItem>}
+    </>}
     {showFooter ? <View style={styles.footer} /> : null}
   </DisclosureItem> : null;
   return <>{body}{creator.sheets}

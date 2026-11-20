@@ -167,6 +167,37 @@ export function assignBuddyToSet(
   return normalizeBuddySets({ version: BUDDY_SETS_STATE_VERSION, sets });
 }
 
+/**
+ * Apply one set's membership form. Only the target set is edited: selected
+ * buddies are claimed by it (and leave any other set, keeping one-buddy-one-set),
+ * while unselected candidates are removed only from it — other sets keep their
+ * members. Buddies not shown in the form (e.g. offline ones) stay in the target.
+ * Returns the input state unchanged when the target set does not exist, so a
+ * refused create (set limit reached) can never edit an existing set by mistake.
+ */
+export function reconcileBuddySetMembers(
+  state: BuddySetsState,
+  buddySetId: string,
+  candidateIds: readonly string[],
+  selectedIds: readonly string[],
+): BuddySetsState {
+  if (!state.sets.some((set) => set.buddySetId === buddySetId)) return state;
+  const candidates = new Set(candidateIds.map(cleanId).filter((id): id is string => id !== null));
+  const selected = new Set(
+    selectedIds.map(cleanId).filter((id): id is string => id !== null && candidates.has(id)),
+  );
+  const sets = state.sets.map((set) => {
+    if (set.buddySetId !== buddySetId) {
+      // A buddy claimed by the target leaves its previous set; everyone else stays.
+      return { ...set, buddyIds: set.buddyIds.filter((id) => !selected.has(id)) };
+    }
+    const kept = set.buddyIds.filter((id) => !candidates.has(id));
+    const added = [...candidates].filter((id) => selected.has(id) && !kept.includes(id));
+    return { ...set, buddyIds: [...kept, ...added].slice(0, BUDDY_SET_MEMBER_LIMIT) };
+  });
+  return normalizeBuddySets({ version: BUDDY_SETS_STATE_VERSION, sets });
+}
+
 /** Unassigning leaves the buddy in the flat roster. */
 export function removeBuddyFromSet(state: BuddySetsState, buddyId: string): BuddySetsState {
   const clean = cleanId(buddyId);

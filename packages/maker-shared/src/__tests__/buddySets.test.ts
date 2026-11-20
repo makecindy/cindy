@@ -13,12 +13,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   assignBuddyToSet,
+  BUDDY_SET_LIMIT,
   createBuddySet,
   deleteBuddySet,
   emptyBuddySets,
   normalizeBuddySets,
   parseBuddySets,
   partitionBuddyRoster,
+  reconcileBuddySetMembers,
   removeBuddyFromSet,
   serializeBuddySets,
   setBuddySetCollapsed,
@@ -109,6 +111,60 @@ describe('buddy sets: non-buddy rows are never collected', () => {
     partitionBuddyRoster([frozen], stateWithTwoSets());
     expect(JSON.stringify(frozen)).toBe(before);
     expect(frozen.profile.name).toBe('Cindy');
+  });
+});
+
+describe('buddy sets: saving one set never changes another set', () => {
+  it('leaves another set\'s buddy in place when it is unchecked in this form', () => {
+    const state = normalizeBuddySets({
+      version: 1,
+      sets: [
+        { buddySetId: 'set-a', name: 'A', buddyIds: ['bot-1'] },
+        { buddySetId: 'set-b', name: 'B', buddyIds: [] },
+      ],
+    });
+    const saved = reconcileBuddySetMembers(state, 'set-b', ['bot-1', 'bot-2'], []);
+    expect(saved.sets[0]!.buddyIds).toEqual(['bot-1']);
+    expect(saved.sets[1]!.buddyIds).toEqual([]);
+    expect(partitionBuddyRoster([row('bot-1', 'buddy')], saved).groups[0]!.rows).toHaveLength(1);
+  });
+
+  it('moves a selected buddy out of its previous set without clearing the rest', () => {
+    const state = normalizeBuddySets({
+      version: 1,
+      sets: [{ buddySetId: 'set-a', name: 'A', buddyIds: ['bot-1', 'bot-2'] }],
+    });
+    const withB = createBuddySet(state, 'set-b', 'B');
+    const saved = reconcileBuddySetMembers(withB, 'set-b', ['bot-1', 'bot-2'], ['bot-1']);
+    expect(saved.sets[0]!.buddyIds).toEqual(['bot-2']);
+    expect(saved.sets[1]!.buddyIds).toEqual(['bot-1']);
+  });
+
+  it('keeps buddies that are not shown in the form (an offline companion)', () => {
+    const state = normalizeBuddySets({
+      version: 1,
+      sets: [{ buddySetId: 'set-a', name: 'A', buddyIds: ['bot-1', 'offline'] }],
+    });
+    const saved = reconcileBuddySetMembers(state, 'set-a', ['bot-1'], ['bot-1']);
+    expect(saved.sets[0]!.buddyIds).toEqual(['offline', 'bot-1']);
+  });
+
+  it('is a no-op when the target set does not exist (a refused create)', () => {
+    const state = normalizeBuddySets({
+      version: 1,
+      sets: [{ buddySetId: 'set-a', name: 'A', buddyIds: ['bot-1'] }],
+    });
+    expect(reconcileBuddySetMembers(state, 'missing', ['bot-1'], ['bot-1'])).toBe(state);
+  });
+
+  it('refuses to create beyond the set limit without editing an existing set', () => {
+    let state = emptyBuddySets();
+    for (let i = 0; i < BUDDY_SET_LIMIT; i++) state = createBuddySet(state, `set-${i}`, `Set ${i}`);
+    state = normalizeBuddySets({ version: 1, sets: state.sets.map((s, i) => i === 0 ? { ...s, buddyIds: ['bot-1'] } : s) });
+    const refused = createBuddySet(state, 'one-too-many', 'Overflow');
+    expect(refused).toBe(state);
+    expect(reconcileBuddySetMembers(refused, 'one-too-many', ['bot-1'], ['bot-1'])).toBe(state);
+    expect(refused.sets[0]!.buddyIds).toEqual(['bot-1']);
   });
 });
 

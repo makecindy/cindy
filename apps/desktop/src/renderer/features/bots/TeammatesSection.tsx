@@ -69,7 +69,7 @@ import {
 import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
 import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, writeTeammatesViewMode, type TeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
 import { BuddySetGroups, BuddySetNameDialog, buddySetCopy, createBuddySet, renameBuddySet, toBuddySetRosterItem } from './BuddySetGroups';
-import { partitionBuddyRoster } from '@cindy/maker-shared/buddy-sets';
+import { partitionBuddyRoster, BUDDY_SET_LIMIT } from '@cindy/maker-shared/buddy-sets';
 import { useBuddySets } from './useBuddySets';
 import {
   canonicalBotSessionId,
@@ -160,6 +160,10 @@ export function TeammatesSection() {
   >(null);
   const submitBuddySetName = (name: string) => {
     if (!buddySetNameRequest) return;
+    if (buddySetNameRequest.kind === 'new' && buddySets.sets.length >= BUDDY_SET_LIMIT) {
+      setBuddySetNameRequest(null);
+      return;
+    }
     updateBuddySets((current) => buddySetNameRequest.kind === 'new'
       ? createBuddySet(current, `buddy-set-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, name)
       : renameBuddySet(current, buddySetNameRequest.buddySetId, name));
@@ -414,6 +418,8 @@ export function TeammatesSection() {
   // 整段收起时保持原有的「仅未读/待处理」行,不把有未读的伙伴藏进收起的集里。
   const buddySetsActive = !collapsed && buddySets.sets.length > 0;
   const buddyRoster = useMemo(() => displayedChats.map(toBuddySetRosterItem), [displayedChats]);
+  // The member picker must see the whole roster, not just the five-row preview.
+  const buddyCandidates = useMemo(() => visibleChats.map(toBuddySetRosterItem), [visibleChats]);
   const buddyPartition = useMemo(() => partitionBuddyRoster(buddySetsActive ? buddyRoster : [], buddySets), [buddyRoster, buddySets, buddySetsActive]);
   const buddySetMemberIds = useMemo(() => new Set(
     buddySetsActive ? buddyPartition.groups.flatMap((group) => group.rows.map((item) => item.id)) : [],
@@ -793,7 +799,8 @@ export function TeammatesSection() {
                   {viewMode === mode && <Check size={15} className="ml-auto" />}
                 </DropdownMenuItem>
               ))}
-              <DropdownMenuItem onSelect={() => setBuddySetNameRequest({ kind: 'new' })}>
+              <DropdownMenuItem onSelect={() => setBuddySetNameRequest({ kind: 'new' })}
+                disabled={buddySets.sets.length >= BUDDY_SET_LIMIT}>
                 {buddySetCopy(t).new}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
@@ -908,6 +915,18 @@ export function TeammatesSection() {
       {archiveError && <p role="alert" className="mb-2 px-2.5 text-12 text-[var(--error-fg)]">{archiveError}</p>}
 
       <div>
+        {/* 「伙伴集」独立于聊天行的空状态:没有伙伴时也能看见、改名、删除空集。 */}
+        {buddySetsActive && buddyPartition.groups.length > 0 ? <div className="flex flex-col gap-0.5">
+          <BuddySetGroups
+            groups={buddyPartition.groups}
+            candidates={buddyCandidates}
+            buddySets={buddySets}
+            renderEntry={renderChatEntry}
+            onChange={updateBuddySets}
+            onNewSet={() => setBuddySetNameRequest({ kind: 'new' })}
+            onRename={(buddySetId, name) => setBuddySetNameRequest({ kind: 'rename', buddySetId, name })}
+          />
+        </div> : null}
         {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 && visibleGroups.length === 0 ? (
           profilesLoaded && profileLoadState === 'ready' ? (
             <div className="px-3 py-3">
@@ -915,18 +934,6 @@ export function TeammatesSection() {
             </div>
           ) : null
         ) : (<>
-          {/* 「伙伴集」容器放在平铺行之前,只收伙伴私聊行;群聊/任务/设备行仍在下面的列表。 */}
-          {buddySetsActive && buddyPartition.groups.length > 0 ? <div className="flex flex-col gap-0.5">
-            <BuddySetGroups
-              groups={buddyPartition.groups}
-              candidates={buddyRoster}
-              buddySets={buddySets}
-              renderEntry={renderChatEntry}
-              onChange={updateBuddySets}
-              onNewSet={() => setBuddySetNameRequest({ kind: 'new' })}
-              onRename={(buddySetId, name) => setBuddySetNameRequest({ kind: 'rename', buddySetId, name })}
-            />
-          </div> : null}
           <div className="flex flex-col gap-0.5">
             {displayedChats.map(entry => {
               if (buddySetMemberIds.has(toBuddySetRosterItem(entry).id)) return null;

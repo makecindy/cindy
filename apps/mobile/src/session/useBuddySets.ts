@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   emptyBuddySets,
   normalizeBuddySets,
@@ -7,14 +7,19 @@ import {
 import { getHomeViewSession, useRetainedHomeState } from './homeViewSession';
 import { readBuddySets, saveBuddySets } from './buddySetsStore';
 
+/** Cold-start read state. A failed read must never let a fresh empty state be saved. */
+export type BuddySetsStatus = 'loading' | 'ready' | 'error';
+
 /**
  * 「伙伴集」展示偏好:首页视图会话持有当前值(与折叠偏好同口径),按账号落本机
- * AsyncStorage。只存 override;冷启动读回,用户已手动改过则不被旧快照覆盖。
+ * AsyncStorage。只存 override;冷启动读回,读取成功前不接受修改,失败时给出重试。
  */
-export function useBuddySets(owner: string): [BuddySetsState, (next: BuddySetsState | ((current: BuddySetsState) => BuddySetsState)) => void] {
+export function useBuddySets(owner: string): [BuddySetsState, (next: BuddySetsState | ((current: BuddySetsState) => BuddySetsState)) => void, BuddySetsStatus, () => void] {
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
-  const touched = useRef(false);
+  const statusRef = useRef<BuddySetsStatus>('loading');
+  const [status, setStatus] = useState<BuddySetsStatus>('loading');
+  const [attempt, setAttempt] = useState(0);
 
   const [state, setState] = useRetainedHomeState<BuddySetsState>(
     getHomeViewSession(),
@@ -22,27 +27,44 @@ export function useBuddySets(owner: string): [BuddySetsState, (next: BuddySetsSt
     emptyBuddySets(),
     (next) => {
       const activeOwner = ownerRef.current;
-      if (activeOwner) void saveBuddySets(activeOwner, next).catch(() => undefined);
+      // Only a successful hydration may unlock writes: otherwise a failed read
+      // followed by a user edit would replace the whole valid on-disk record.
+      if (activeOwner && statusRef.current === 'ready') {
+        void saveBuddySets(activeOwner, next).catch(() => undefined);
+      }
     },
   );
 
   useEffect(() => {
     let cancelled = false;
-    touched.current = false;
-    if (!owner) return undefined;
-    // Hydration writes straight into the view session: it must not re-persist
-    // the restored value, and it must not clobber a user edit made meanwhile.
+    statusRef.current = 'loading';
+    setStatus('loading');
+    if (!owner) {
+      // No account means no owner-scoped store; nothing to read or persist.
+      statusRef.current = 'ready';
+      setStatus('ready');
+      return undefined;
+    }
     void readBuddySets(owner).then((stored) => {
-      if (cancelled || ownerRef.current !== owner || touched.current) return;
+      if (cancelled || ownerRef.current !== owner) return;
       getHomeViewSession().write('buddySets', stored);
-    }).catch(() => undefined);
+      statusRef.current = 'ready';
+      setStatus('ready');
+    }).catch(() => {
+      if (cancelled || ownerRef.current !== owner) return;
+      // Leave the view session empty and locked; do not persist anything.
+      statusRef.current = 'error';
+      setStatus('error');
+    });
     return () => { cancelled = true; };
-  }, [owner]);
+  }, [owner, attempt]);
 
   const update = useCallback((input: BuddySetsState | ((current: BuddySetsState) => BuddySetsState)) => {
-    touched.current = true;
+    if (statusRef.current !== 'ready') return;
     setState((current) => normalizeBuddySets(typeof input === 'function' ? input(current) : input));
   }, [setState]);
 
-  return [owner ? state : emptyBuddySets(), update];
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
+
+  return [owner ? state : emptyBuddySets(), update, status, retry];
 }

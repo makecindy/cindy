@@ -47,8 +47,12 @@ export function BuddySetGroups({ entries, buddySets, onChange, onEditSet, render
   })), [entries, i18n.language]);
   const partition = useMemo(() => partitionBuddyRoster(roster, buddySets), [roster, buddySets]);
 
-  // Search results stay flat: a container must never hide a matching buddy.
-  if (query.trim() || buddySets.sets.length === 0) {
+  // Search results stay flat, but must include buddies that belong to a set:
+  // `entries` is already the full match list, while partition.flat omits them.
+  if (query.trim()) {
+    return <>{roster.map((item, index) => renderRow(item.entry, index === roster.length - 1))}</>;
+  }
+  if (buddySets.sets.length === 0) {
     return <>{partition.flat.map((item, index) => renderRow(item.entry, index === partition.flat.length - 1))}</>;
   }
 
@@ -57,7 +61,7 @@ export function BuddySetGroups({ entries, buddySets, onChange, onEditSet, render
       const collapsed = set.collapsed === true;
       const Chevron = collapsed ? ChevronRight : ChevronDown;
       return <View key={`buddy-set:${set.buddySetId}`} testID={`buddySet.${set.buddySetId}`}>
-        <Pressable accessibilityRole="button" accessibilityLabel={`${set.name}, ${collapsed ? copy.collapse : copy.expand}`}
+        <Pressable accessibilityRole="button" accessibilityLabel={`${set.name}, ${collapsed ? copy.expand : copy.collapse}`}
           accessibilityState={{ expanded: !collapsed }}
           onPress={() => onChange((current) => setBuddySetCollapsed(current, set.buddySetId, !collapsed))}
           onLongPress={() => onEditSet(set.buddySetId)}

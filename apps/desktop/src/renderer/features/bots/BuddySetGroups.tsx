@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   assignBuddyToSet,
+  BUDDY_SET_LIMIT,
   buddySetIdForBuddy,
   createBuddySet,
   deleteBuddySet,
@@ -162,7 +163,7 @@ export function BuddySetGroups<T extends BuddySetChatEntry>({
                     <Pencil size={14} className="mr-2" />
                     {copy.rename}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={onNewSet}>
+                  <DropdownMenuItem onSelect={onNewSet} disabled={buddySets.sets.length >= BUDDY_SET_LIMIT}>
                     <Plus size={14} className="mr-2" />
                     {copy.new}
                   </DropdownMenuItem>
@@ -208,7 +209,10 @@ export function BuddySetNameDialog({ open, initialName, onOpenChange, onSubmit }
     <Dialog.Root open onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
-        <Dialog.Content className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(400px,calc(100vw-32px))] flex-col gap-3 p-4 outline-none">
+        <Dialog.Content
+          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(400px,calc(100vw-32px))] flex-col gap-3 p-4 outline-none"
+          onPointerDownOutside={(event) => event.preventDefault()}
+        >
           <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">
             {initialName ? copy.renameTitle : copy.createTitle}
           </Dialog.Title>
