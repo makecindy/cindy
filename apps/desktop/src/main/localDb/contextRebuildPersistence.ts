@@ -20,6 +20,7 @@ export async function commitContextRebuildWithPorts(
       | 'idle-gap';
     sourceUserClientId: string | null;
     handoffCoverage?: HandoffCoverage;
+    followUpHandoff?: string;
     sourceAgentKind?: 'cc' | 'codex' | 'pi';
     sourceModel?: string | null;
     sourceProviderId?: string | null;
@@ -36,6 +37,7 @@ export async function commitContextRebuildWithPorts(
     markerContent: JSON.stringify({
       handoff,
       handoffCoverage: meta.handoffCoverage,
+      ...(meta.followUpHandoff === undefined ? {} : { followUpHandoff: meta.followUpHandoff }),
       consumed: false,
       reason: meta.reason,
       sourceUserClientId: meta.sourceUserClientId,

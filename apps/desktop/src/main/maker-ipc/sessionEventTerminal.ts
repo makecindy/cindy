@@ -36,6 +36,7 @@ import { type OrcaTeamService } from './orcaTeamService.js';
 import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
+  isPiRequestBodyTooLarge,
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
@@ -309,6 +310,7 @@ export function finishSessionTerminalEvent(
       getSuppressedBroadcasts: () => deps.overflowSuppressedBroadcasts,
       isTerminalTurnErrorEvent: event => isTerminalTurnErrorEvent(event),
       isContextOverflowErrorData: data => isContextOverflowErrorData(data),
+      isPiRequestBodyTooLarge,
       isOversizedHistoryErrorData: data => isOversizedHistoryErrorData(data),
       isUnsupportedRequestOptionErrorData: data => isUnsupportedRequestOptionErrorData(data),
       reserveTurnErrorPersistId: (...args) => reserveTurnErrorPersistId(...args),

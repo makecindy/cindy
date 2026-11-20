@@ -18,6 +18,8 @@
  */
 
 import { markLatestAgentHandoffConsumed } from '../localDb/ipc/messages.js';
+import { findForkParentSessionId, findPendingAgentHandoff } from '../localDb/agentHandoffPendingQueries.js';
+import { composeForkOriginHandoff } from './agentHandoff.js';
 import { createLogger } from '../logger.js';
 import { createAgentHandoffPending } from './agentHandoffPending.js';
 
@@ -29,3 +31,17 @@ export const agentHandoffPending = createAgentHandoffPending({
   markLatestAgentHandoffConsumed: (sessionId) => markLatestAgentHandoffConsumed(sessionId),
   log,
 });
+
+/** Exact retries use the same pending boundary but omit the input they are resending. */
+export async function peekAgentHandoffForSend(sessionId: string, retryUserClientId?: string): Promise<string | null> {
+  const generation = agentHandoffPending.readGeneration(sessionId);
+  const pending = await agentHandoffPending.peek(sessionId);
+  if (!pending || !retryUserClientId) return pending;
+  const [retryHandoff, forkParentSessionId] = await Promise.all([
+    findPendingAgentHandoff(sessionId, retryUserClientId),
+    findForkParentSessionId(sessionId).catch(() => null),
+  ]);
+  if (agentHandoffPending.readGeneration(sessionId) !== generation) return null;
+  if (retryHandoff === null) return pending;
+  return forkParentSessionId ? composeForkOriginHandoff(forkParentSessionId, retryHandoff) : retryHandoff;
+}
