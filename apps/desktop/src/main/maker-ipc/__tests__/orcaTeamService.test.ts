@@ -159,6 +159,7 @@ describe('model Orca cleanup authority', () => {
       markTeamEnded: async () => { events.push('team ended'); },
       markWorkersStatusByTeam: vi.fn(), orcaRemoteWorkers: { releaseEnded: vi.fn() },
       setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
+      clearOrcaMcpHydrated: vi.fn(), clearAcpLeadTeamBriefed: vi.fn(),
       log: { warn: vi.fn(), info: vi.fn() },
     }, `${disable}\nreturn disableOrcaInternal;`);
     const first = run('lead-1', undefined, true);
@@ -284,6 +285,7 @@ describe('model Orca cleanup authority', () => {
         maker: { getSession: () => ({ isTurnRunning: () => false, setVendorOptions: vi.fn() }), closeSession: close },
         orcaTeamService: { clearAutoBridgeState: vi.fn(() => { if (phase === 'before-close') allowed = false; }) },
                 setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
+      clearOrcaMcpHydrated: vi.fn(), clearAcpLeadTeamBriefed: vi.fn(),
         reconcileInactiveTeamWorkersForLead: vi.fn(async () => { if (phase === 'before-close') allowed = false; return ['worker-session-1']; }),
         recycleSessionWorktreeForStatusChange: vi.fn(), captureSessionRecycleScope: vi.fn(),
         cleanupPendingInteractionsForSession: vi.fn(), forgetKnownOrcaWorkerSession: vi.fn(),

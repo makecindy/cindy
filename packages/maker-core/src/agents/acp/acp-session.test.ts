@@ -1053,17 +1053,22 @@ describe('AcpAgent (the acp engine)', () => {
     await handle.close();
   });
 
-  it('defers pending briefing past native slash commands until the next regular prompt', async () => {
+  it('defers pending briefing and its delivery callback past native slash commands until the next regular prompt', async () => {
     const agent = createFakeAgent();
+    const delivered = vi.fn();
     const session = await openAcpSession({
       transport: agent.transport,
       cwd: '/w',
       clientInfo: { name: 'cindy', version: 'test' },
       briefing: 'Orca Lead role instructions',
+      onBriefingDelivered: delivered,
     });
+    expect(delivered).not.toHaveBeenCalled();
+
     await session.send({ type: 'user', content: '/compact' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
     expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/compact' }]);
+    expect(delivered).not.toHaveBeenCalled();
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
 
     await session.send({ type: 'user', content: 'coordinate workers' });
@@ -1072,7 +1077,26 @@ describe('AcpAgent (the acp engine)', () => {
       { type: 'text', text: 'Orca Lead role instructions' },
       { type: 'text', text: 'coordinate workers' },
     ]);
+    expect(delivered).toHaveBeenCalledOnce();
     await session.close();
+  });
+
+  it('probes ACP initialize HTTP MCP support without creating a session', async () => {
+    const { probeAcpHttpMcpSupport } = await import('./session.js');
+    const withHttp = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    await expect(probeAcpHttpMcpSupport({
+      transport: withHttp.transport,
+      clientInfo: { name: 'cindy', version: 'test' },
+    })).resolves.toBe(true);
+    expect(withHttp.methods()).toEqual(['initialize']);
+    expect(withHttp.closedByClient).toBe(true);
+
+    const withoutHttp = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });
+    await expect(probeAcpHttpMcpSupport({
+      transport: withoutHttp.transport,
+      clientInfo: { name: 'cindy', version: 'test' },
+    })).resolves.toBe(false);
+    expect(withoutHttp.methods()).toEqual(['initialize']);
   });
 
   it('retains cleanup responsibility when resume fails and the endpoint is still running', async () => {

@@ -3276,7 +3276,9 @@ describe('maker SEND transaction', () => {
       pluginEngineForceBriefingOnResume: true,
     }));
 
-    const queuePluginEngineBriefing = vi.fn();
+    const queuePluginEngineBriefing = vi.fn((_briefing: string, onDelivered?: () => void) => {
+      onDelivered?.();
+    });
     const setVendorOptions = vi.fn(async () => {});
     const markOrcaMcpHydratedIfNeeded = vi.fn();
     const markAcpLeadTeamBriefed = vi.fn();
@@ -3299,6 +3301,7 @@ describe('maker SEND transaction', () => {
         co.vendorOptions = { ...(co.vendorOptions ?? {}), initialWorker: { workerId: 'w-1', sessionId: 'ws-1' } };
         return 'Lead briefing with worker route';
       }),
+      hasActiveOrcaTeam: vi.fn(async () => true),
       markOrcaMcpHydratedIfNeeded,
       markAcpLeadTeamBriefed,
     });
@@ -3313,9 +3316,39 @@ describe('maker SEND transaction', () => {
       orcaWorkflowId: 'team-2',
       initialWorker: { workerId: 'w-1', sessionId: 'ws-1' },
     }));
-    expect(queuePluginEngineBriefing).toHaveBeenCalledWith('Lead briefing with worker route');
+    expect(queuePluginEngineBriefing).toHaveBeenCalledWith('Lead briefing with worker route', expect.any(Function));
     expect(markOrcaMcpHydratedIfNeeded).toHaveBeenCalledWith('acp-lead-2', expect.objectContaining({ orcaRole: 'lead' }));
     expect(markAcpLeadTeamBriefed).toHaveBeenCalledWith('acp-lead-2', 'team-2');
+
+    // Concurrent disableOrca while awaiting resolveOrcaRoleInstructions must not write stale Lead state back.
+    const staleSetVendorOptions = vi.fn(async () => {});
+    const staleQueueBriefing = vi.fn();
+    const staleMarkHydrated = vi.fn();
+    const staleSession = createSession({
+      id: 'acp-lead-stale', agentKind: 'acp', workDir: 'C:\\repo',
+      pluginEngineResumeSupported: false,
+      pluginEngineHasOrcaMcp: true,
+      setVendorOptions: staleSetVendorOptions,
+      queuePluginEngineBriefing: staleQueueBriefing,
+    });
+    const { deps: depsStale } = createDeps({
+      getSession: vi.fn(() => staleSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async (_id, co) => {
+        co.orcaRole = 'lead';
+        co.vendorOptions = { orcaRole: 'lead', orcaWorkflowId: 'team-stale', orcaLeadSessionId: 'acp-lead-stale' };
+        return true;
+      }),
+      resolveOrcaRoleInstructions: vi.fn(async () => 'Stale Lead briefing'),
+      hasActiveOrcaTeam: vi.fn(async () => false),
+      markOrcaMcpHydratedIfNeeded: staleMarkHydrated,
+    });
+    await expect(createMakerSendTransaction(depsStale).hydrateActiveOrcaSession('acp-lead-stale', {
+      id: 'acp-lead-stale', agentKind: 'claude-code', workingDir: 'C:\\repo', model: 'dsh-pro',
+    })).resolves.toBe(false);
+    expect(staleSetVendorOptions).not.toHaveBeenCalled();
+    expect(staleQueueBriefing).not.toHaveBeenCalled();
+    expect(staleMarkHydrated).not.toHaveBeenCalled();
 
     // Non-resumable live ACP Lead that started without cindy_orca must fail cleanly without closing the session.
     const missingOrcaSession = createSession({

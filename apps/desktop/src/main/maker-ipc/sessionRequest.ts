@@ -166,6 +166,7 @@ export function readCreateSessionOpts(
   const sanitizedBody: Record<string, unknown> = { ...body };
   delete sanitizedBody.pluginEngineBriefing;
   delete sanitizedBody.pluginEngineForceBriefingOnResume;
+  delete sanitizedBody.pluginEngineOnBriefingDelivered;
   delete sanitizedBody.pluginEngineTrustedCaller;
   return {
     ...sanitizedBody,

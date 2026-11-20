@@ -71,6 +71,8 @@ export interface AcpAgentDeps extends AgentDeps {
   clientInfo: AcpClientInfo;
   /** Remembers what the agent offered so pickers can show it before the next start. */
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
+  /** Remembers whether the agent advertised HTTP MCP support during initialize. */
+  onSessionHttpMcpSupport?: (harnessKey: string, supported: boolean) => void;
 }
 
 const NO_INIT = buildAcpCapabilities(
@@ -248,6 +250,7 @@ export class AcpAgent extends BaseAgent {
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
           ...(briefing ? { briefing } : {}),
           ...(opts.pluginEngineForceBriefingOnResume ? { forceBriefingOnResume: true } : {}),
+          ...(opts.pluginEngineOnBriefingDelivered ? { onBriefingDelivered: opts.pluginEngineOnBriefingDelivered } : {}),
           onSetVendorOptions: (patch) => { Object.assign(mutableVendorOptions, patch); },
           logger,
           onEnded: disposeBridge,
@@ -266,6 +269,7 @@ export class AcpAgent extends BaseAgent {
     try {
       const session = await open();
       this.acpDeps.onSessionCapabilities?.(harnessKey, session.capabilities);
+      this.acpDeps.onSessionHttpMcpSupport?.(harnessKey, session.pluginEngineHttpMcpSupported);
       session.onCapabilitiesChange((capabilities) => this.acpDeps.onSessionCapabilities?.(harnessKey, capabilities));
       return session;
     } catch (error) {

@@ -245,6 +245,7 @@ import { redactEventForRenderer } from './rendererEventRedaction.js';
 import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
 import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
 import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
+import { probePluginHarnessHttpMcpSupport } from '../maker-host/acp-host.js';
 import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
 import {
   isPluginEngineKind,
@@ -8993,7 +8994,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Leads and Workers receive their role instructions ahead of the first prompt (or once on
     // promotion/restart resume for Leads). Only Workers receive pluginEngineTrustedCaller so
     // orca_worker_bridge can authorize reports; Leads keep standard unattested caller provenance.
-    let acpLeadBriefedTeamId: string | null = null;
     if (o.agentKind === 'acp' && o.reviewMode !== true) {
       const role = o.vendorOptions?.orcaRole;
       if (role === 'worker') {
@@ -9027,7 +9027,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const briefing = renderOrcaRoleInstructions(o);
           if (briefing) {
             o.pluginEngineBriefing = briefing;
-            acpLeadBriefedTeamId = activeTeam.id;
+            const briefedSessionId = o.id;
+            const briefedTeamId = activeTeam.id;
+            o.pluginEngineOnBriefingDelivered = () => {
+              if (briefedSessionId) markAcpLeadTeamBriefed(briefedSessionId, briefedTeamId);
+            };
             if (o.resumeSessionId && o.id && !isAcpLeadTeamBriefed(o.id, activeTeam.id)) {
               o.pluginEngineForceBriefingOnResume = true;
             }
@@ -9293,9 +9297,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     wireSessionToIpc(session);
     markOrcaMcpHydratedIfNeeded(session.id, o);
-    if (acpLeadBriefedTeamId) {
-      markAcpLeadTeamBriefed(session.id, acpLeadBriefedTeamId);
-    }
     try {
       const db = getDbClient().drizzle;
       // bridge 会话态(effort / fast)同点 hydrate:让 resume / 重启后的首个 bridge 请求就带上
@@ -12011,6 +12012,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           'UNSUPPORTED_CAPABILITY',
           '[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED] this plugin engine does not support HTTP MCP collaboration tools on this session, so it cannot act as a collaboration Lead',
         );
+      }
+      if (!lead) {
+        // Dormant ACP Lead (e.g. after app restart): preflight the plugin harness before committing
+        // a team or creating a Worker so non-HTTP engines fail cleanly with zero side effects.
+        const harnessKey = pluginEngineKeyFromProviderId(leadRow?.providerId);
+        const harness = harnessKey
+          ? getPluginHarnessRegistry().list().find((entry) => entry.key === harnessKey)
+          : undefined;
+        if (!harnessKey || !harness || harness.availability.state === 'unavailable') {
+          throwIpcError(
+            'PROVIDER_ROUTE_UNAVAILABLE',
+            'this plugin engine is currently unavailable, so it cannot start collaboration',
+          );
+        }
+        let httpMcpSupported = false;
+        try {
+          httpMcpSupported = await probePluginHarnessHttpMcpSupport(harnessKey, app.getVersion());
+        } catch (err) {
+          log.warn('assertLeadCollabProjectEnabled: dormant ACP HTTP MCP preflight failed', {
+            leadSessionId,
+            harnessKey,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throwIpcError(
+            'UNSUPPORTED_CAPABILITY',
+            '[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED] could not verify HTTP MCP collaboration tool support for this plugin engine',
+          );
+        }
+        if (!httpMcpSupported) {
+          throwIpcError(
+            'UNSUPPORTED_CAPABILITY',
+            '[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED] this plugin engine does not support HTTP MCP collaboration tools, so it cannot act as a collaboration Lead',
+          );
+        }
       }
     }
     const rawWorkingDir =
@@ -18213,6 +18248,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     resolveOrcaRoleInstructions,
     markOrcaMcpHydratedIfNeeded,
     markAcpLeadTeamBriefed,
+    hasActiveOrcaTeam: async (sessionId, expectedTeamId) => {
+      const team = await getActiveTeamByLead(sessionId);
+      return Boolean(team && (!expectedTeamId || team.id === expectedTeamId));
+    },
     buildCreateOptsWithStderr,
     synthesizeOrcaVendorOptionsFromDb,
     readSessionExtraDirsFromDb,

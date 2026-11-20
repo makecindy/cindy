@@ -126,6 +126,8 @@ export interface OpenAcpSessionOptions {
   briefing?: string;
   /** Deliver `briefing` once even on a resumed/loaded session (mid-session Orca Lead promotion). */
   forceBriefingOnResume?: boolean;
+  /** Invoked once when `briefing` is actually prepended to a dispatched non-command prompt. */
+  onBriefingDelivered?: () => void;
   /** Called when the host mutates per-session vendor options (e.g. Orca Lead role activation/teardown). */
   onSetVendorOptions?: (patch: Record<string, unknown>) => void;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
@@ -230,6 +232,37 @@ class AcpRouter {
       if (dropConfigUpdates && i < cutoff && (kind === 'config_option_update' || kind === 'current_mode_update')) continue;
       session.handleNotification('session/update', params);
     }
+  }
+}
+
+export async function probeAcpHttpMcpSupport(opts: {
+  transport: AcpLineTransport;
+  clientInfo: AcpClientInfo;
+  logger?: Logger;
+  requestTimeoutMs?: number;
+}): Promise<boolean> {
+  const connection = new AcpConnection(opts.transport, {
+    ...(opts.logger ? { logger: opts.logger } : {}),
+    ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
+    onNotification: () => {},
+    onRequest: async (method) => {
+      throw methodNotFound(method);
+    },
+  });
+  try {
+    const init = normalizeInitializeResult(await connection.request('initialize', {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      clientInfo: {
+        name: opts.clientInfo.name,
+        version: opts.clientInfo.version,
+        ...(opts.clientInfo.title ? { title: opts.clientInfo.title } : {}),
+      },
+    }));
+    if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
+    return init.agentCapabilities.mcpCapabilities.http === true;
+  } finally {
+    await connection.close().catch(() => {});
   }
 }
 
@@ -376,6 +409,7 @@ export class AcpSession {
   private readonly pendingPrompts: AcpContentBlock[][] = [];
   /** Sent once, ahead of the first prompt of a new session. */
   private pendingBriefing: string | null;
+  private pendingBriefingDelivered: (() => void) | undefined;
   private sendChain: Promise<void> = Promise.resolve();
   private stopGeneration = 0;
   private readonly permissionControllers = new Set<AbortController>();
@@ -422,6 +456,7 @@ export class AcpSession {
       (init.resumeOutcome === 'new' || init.options.forceBriefingOnResume === true) && init.options.briefing?.trim()
         ? init.options.briefing
         : null;
+    this.pendingBriefingDelivered = this.pendingBriefing ? init.options.onBriefingDelivered : undefined;
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
@@ -492,9 +527,12 @@ export class AcpSession {
     this.resolver = resolver;
   }
 
-  queuePluginEngineBriefing(briefing: string): void {
+  queuePluginEngineBriefing(briefing: string, onDelivered?: () => void): void {
     if (this.ended || this.closing) return;
-    if (briefing.trim()) this.pendingBriefing = briefing;
+    if (briefing.trim()) {
+      this.pendingBriefing = briefing;
+      this.pendingBriefingDelivered = onDelivered;
+    }
   }
 
   async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
@@ -502,6 +540,7 @@ export class AcpSession {
     this.onSetVendorOptions?.(patch);
     if (patch.orcaRole === null) {
       this.pendingBriefing = null;
+      this.pendingBriefingDelivered = undefined;
     }
   }
 
@@ -521,6 +560,9 @@ export class AcpSession {
       if (this.pendingBriefing && !isNativeSlashCommand) {
         prompt.unshift({ type: 'text', text: this.pendingBriefing });
         this.pendingBriefing = null;
+        const onDelivered = this.pendingBriefingDelivered;
+        this.pendingBriefingDelivered = undefined;
+        onDelivered?.();
       }
       this.pendingPrompts.push(prompt);
       this.pump();
