@@ -1,5 +1,5 @@
 {
-  "version": "7",
+  "version": "8",
   "dialect": "sqlite",
   "entries": [
     {
@@ -1076,8 +1076,36 @@
     {
       "idx": 153,
       "version": "6",
+      "when": 1795070787385,
+      "tag": "0153_schedule_inherited_project",
+      "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "6",
+      "when": 1795082828685,
+      "tag": "0154_daily_token_attribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "6",
+      "when": 1795129008697,
+      "tag": "0155_account_usage_first_day",
+      "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "6",
+      "when": 1795157998457,
+      "tag": "0156_schedule_primary_host",
+      "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "6",
       "when": 1795017600190,
-      "tag": "0153_classy_the_renegades",
+      "tag": "0157_classy_the_renegades",
       "breakpoints": true
     }
   ]
