@@ -373,8 +373,8 @@ const HOME_HEADER_MIN_HEIGHT = 48;
  * 沿用历史取值 83,最后一行与圆钮之间留约 20pt。
  */
 const LEGACY_HOME_LIST_BOTTOM_RESERVE = 83;
-/** 项目块「查看全部」行的左缩进(历史取值,与项目内任务文字列大致对齐,保持布局不变)。 */
-const HOME_PROJECT_VIEW_ALL_INSET = 48;
+/** 「查看全部」对齐会话标题（行内边距 + 图标位 + 间距）。 */
+const HOME_VIEW_ALL_INSET = 48;
 /** 连接提示条同步按钮的视觉尺寸;命中区用 hitSlop 补到 navigationChrome.target(44)。 */
 const CONNECTION_ICON_BUTTON_SIZE = 28;
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -3413,7 +3413,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             if (row.item) {
               const content = <HomeSessionRow
                 key={row.key}
-                indented
                 hideDivider={index === sharedRows.length - 1}
                 item={row.item}
                 sharedRole={row.role}
@@ -3434,7 +3433,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             accessibilityRole="button"
             accessibilityLabel={row.task.title + ', ' + t('sharedTask.roleHost')}
             onPress={() => guardedPush({ pathname: '/shared-session', params: { sharedTaskId: row.task.sharedTaskId } })}
-            style={({ pressed }) => [styles.sessionListRow, styles.sessionListRowSingleLine, styles.sessionListRowIndented, pressed && styles.pressed]}
+            style={({ pressed }) => [styles.sessionListRow, styles.sessionListRowSingleLine, pressed && styles.pressed]}
             testID="home.sharedOwnerRow"
           >
             <View style={[styles.sessionIconCell, styles.sessionIconCellSingleLine]}>
@@ -4580,7 +4579,6 @@ function ProjectRow({
                 expandedAutomationGroups={expandedAutomationGroups}
                 // 项目块内最后一个元素不画自己的缩进线:项目块底部的全宽线就是分割线。
                 hideDivider={hiddenRowCount === 0 && index === visibleSessions.length - 1}
-                indented
                 item={item}
                 onOpenAutomationGroup={openRowAutomationGroup}
                 onOpenSession={onOpenSession}
@@ -4621,7 +4619,7 @@ function ProjectRow({
               disabled={kind !== 'dialogue' && !project.deviceId}
               onPress={onOpenProject}
               style={({ pressed }) => [
-                styles.projectViewAllRow,
+                styles.viewAllRow,
                 pressed && styles.pressed,
                 kind !== 'dialogue' && !project.deviceId && styles.disabled,
               ]}
@@ -4698,7 +4696,7 @@ function HomeListRowInner({
 }: {
   inboxMode: boolean;
   expandedAutomationGroups: readonly string[];
-  /** 置顶组展开态:行进入置顶卡片内的缩进/描边形态(CINDY list 视觉)。 */
+  /** 置顶段的末行与下一段共用分隔线。 */
   isLastPinnedRow: boolean;
   /** Teammate conversations of the inbox are drawn by InboxTeammateRow. */
   item: Exclude<HomeRow, { kind: 'teammate' }>;
@@ -4808,11 +4806,9 @@ function HomeSessionRowInner({
   asBlock = false,
   automationChildTestID,
   automationChildrenTestID,
-  deepIndented = false,
   expandedAutomationGroups,
   groupRowTestID,
   hideDivider = false,
-  indented = false,
   item,
   onLongPress,
   onOpenAutomationGroup,
@@ -4831,17 +4827,12 @@ function HomeSessionRowInner({
 }: {
   /**
    * 自动化组行以「块」呈现:上下各一根全宽分割线,与项目组同款,把任务块和普通对话区分开。
-   * 仅顶层列表传 true;项目组内部的自动化组行保持缩进行样式(已有项目块包裹,不再嵌套块)。
+   * 仅顶层列表传 true;项目内已有项目块包裹其运行记录。
    */
   asBlock?: boolean;
   inboxMode?: boolean;
   automationChildTestID?: string;
   automationChildrenTestID?: string;
-  /**
-   * 自动化组子行的深缩进档(缩进全部收在行内 padding,滑动包装才能全宽):
-   * 在 indented 基础上再深一档,保证子行始终比组行(无论组行在 chats 还是项目组内)更深。
-   */
-  deepIndented?: boolean;
   /** 已展开的自动化组 key 列表(页面级 state,列表虚拟化回收行组件也不丢展开态)。 */
   expandedAutomationGroups?: readonly string[];
   groupRowTestID?: string;
@@ -4850,7 +4841,6 @@ function HomeSessionRowInner({
    * 一个元素 —— 块的全宽 border 已经画了线,行内缩进线再画会两根 hairline 叠成一根粗线。
    */
   hideDivider?: boolean;
-  indented?: boolean;
   item: RemoteSessionListItem;
   onLongPress?: () => void;
   /** 组展开后子运行超过限量时,点「查看全部 N 次运行」进入该任务的专属列表页(与项目组一致)。 */
@@ -4983,8 +4973,6 @@ function HomeSessionRowInner({
           styles.sessionListRow,
           active && { backgroundColor: colors.surfaceChip },
           !showPreviewLine && styles.sessionListRowSingleLine,
-          indented && styles.sessionListRowIndented,
-          deepIndented && styles.sessionListRowDeepIndented,
           pressed && styles.pressed,
         ]}
         testID={group ? (groupRowTestID ?? `${testID}.automationGroup`) : testID}
@@ -5040,8 +5028,7 @@ function HomeSessionRowInner({
               <TaskTagDots tags={item.session.tags} surfaceColor={colors.surface} />
             </View>
             {group && groupChevronVisible ? (
-              // 展开箭头紧跟标题(对齐桌面 AutomationSessionGroupItem):不占行首,组行的图标 /
-              // 标题与同级普通任务对齐,展开后的子行(deepIndented)才能稳定比组行深一档。
+              // 展开箭头紧跟标题，组行和运行记录共用普通会话的图标列。
               // 独立热区:即使组行点击直开会话(有需关注内容时),点箭头仍然是展开 / 收起。
               // 热区 44×44 由箭头自身尺寸承担,不靠 hitSlop(会被父容器边界截掉)。箭头不放进
               // 标题组:标题组里的标签色球不收缩(最多 32 个),会把组内箭头挤出边界被截掉;
@@ -5271,7 +5258,6 @@ function AutomationGroupChildren({
         const key = windowingEnabled ? `${group.key}:window:${renderedIndex}` : child.session.id;
         const row = (
           <HomeSessionRow
-            deepIndented
             hideDivider={(inBlock || suppressTrailingDivider) && !hasViewAllRow && index === visibleItems.length - 1}
             item={child}
             onOpenSession={onOpenSession}
@@ -5302,7 +5288,7 @@ function AutomationGroupChildren({
           accessibilityRole="button"
           onPress={() => onOpenGroup?.(group)}
           style={({ pressed }) => [
-            styles.automationViewAllRow,
+            styles.viewAllRow,
             !inBlock && !suppressTrailingDivider && styles.automationViewAllRowDivider,
             pressed && styles.pressed,
           ]}
@@ -5704,14 +5690,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   projectChildren: {
     backgroundColor: colors.surface,
   },
-  projectViewAllRow: {
-    // 永远是项目块的最后一个元素:不画自己的下线,块底部的全宽线就是分割线
-    // (再画会两根 hairline 叠成一根粗线)。
+  viewAllRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: spacing.sm,
     minHeight: HOME_AUTOMATION_VIEW_ALL_ROW_HEIGHT,
-    paddingLeft: HOME_PROJECT_VIEW_ALL_INSET,
+    paddingLeft: HOME_VIEW_ALL_INSET,
     paddingRight: spacing.lg,
   },
   projectViewAllText: {
@@ -5736,19 +5720,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderTopWidth: 0,
   },
   automationGroupChildren: {
-    // 自动化组展开的子运行容器:不再用容器 padding 做缩进(会把子行的滑动包装挤离屏边),
-    // 深一档的缩进由子行自身的 sessionListRowDeepIndented 承担,视觉层级不变。
     backgroundColor: colors.surface,
-  },
-  automationViewAllRow: {
-    // 「查看全部 N 次运行」:与项目组「查看全部 N 条对话」同款行样式,
-    // 左缩进对齐组内子行文字(deepIndented 行的缩进 + 行首图标位)。
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.sm,
-    minHeight: 54,
-    paddingLeft: spacing.md + spacing.lg * 2 + 24 + spacing.md,
-    paddingRight: spacing.lg,
   },
   automationViewAllRowDivider: {
     // 仅非块模式(项目组内部的自动化组)画自己的下线;块模式下块底线负责,不再叠一根。
