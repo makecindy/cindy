@@ -80,7 +80,7 @@ import { publishHostEndpoint, readHostProcessStatus, requestHostStop, requestHos
 import { readAdoptedSessionState } from './credentials/session.mjs';
 import { hostAccountVaultLock, HostRefreshDeferredError, HostSessionMissingError, refreshHostSession } from './auth/refresh.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
-import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
+import { attachAgentsToMakerMemory, type createHostMemoryManager } from './agent/memory.mjs';
 import { createHostAgentGraph } from './agent/runtime.js';
 import { createHostReviewContextResolver } from './agent/review-context.js';
 import { createHostGitSnapshot, type HostGitSnapshot } from './agent/git-snapshot.js';
@@ -1028,14 +1028,14 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const piBinary = harnessBinaryPaths.pi;
   if (claudeBinary || codexBinary || piBinary) {
     const gateway = modelAccess!.gateway;
-    const memoryProfileHold = profileServices.memoryHold;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
     // here sees the same memories as a task started there.
     let memoryReview: ReturnType<ReturnType<typeof createHostAgentGraph>['autoReview']['memoryReview']> | undefined;
-    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId, profileHold: memoryProfileHold, review: {
+    const memory = profileServices.memory({ userDataDir: dataDir, ownerId, review: {
       isOneShotRouteDisabled: agent => memoryReview?.isOneShotRouteDisabled(agent) ?? Promise.resolve(true),
       reviewOneShot: (...args) => memoryReview?.reviewOneShot(...args) ?? Promise.resolve(null),
     } });
+    makerMemory = memory.manager;
     // Flip the flag before the agents are built: their runtimeConfig snapshots it
     // at construction, and native-agent syncoff needs the agents that do not exist yet.
     if (makerMemory.isEnabled()) await makerMemory.enable({ skipAgentSync: true });
@@ -1097,10 +1097,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       readAuthRealm: () => account.realm,
       sharedGlobalSkills,
-      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory, { readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories, profileHold: memoryProfileHold }), pluginGateway.provider]),
+      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...memory.providers({ readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories }), pluginGateway.provider]),
       userDataDir: dataDir,
     });
-    memoryReview = agentGraph.autoReview.memoryReview(memoryProfileHold);
+    memoryReview = agentGraph.autoReview.memoryReview(memory.profileHold);
     // The desktop's Auto-review authorization context (review-context.ts).
     agentGraph.autoReview.setContextResolver(createHostReviewContextResolver({
       acceptedInput: (id: string) => inputQueue.acceptedInputProvenance(id),
