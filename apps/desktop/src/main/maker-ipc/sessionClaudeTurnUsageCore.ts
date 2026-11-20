@@ -1,4 +1,4 @@
-import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } from './turnUsageContextCore.js';
+import { captureTurnUsageContext, tokenAttribution, turnBillingSource, type TurnUsageContext } from './turnUsageContextCore.js';
 import { isOpenAiSubscriptionProviderId } from './turnUsagePorts.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
@@ -26,6 +26,7 @@ import {
 } from '../usage/usageModelKeys.js';
 import {
   billingRouteForExplicitProvider,
+  claudeModelBilling,
   buildClaudeTurnUsageDetails,
   computePriceQuoteTurnMoney,
   normalizeTurnUsageSegments,
@@ -89,7 +90,7 @@ export function recordSessionClaudeTurnUsage(
   // (今日 / session / per-message / 按模型) 同源同值。
   // 守卫: index.ts:388 stream_end fallback / codex done 不带 total_cost_usd, typeof 检查会跳过。
   if (event.type === 'done' && event.source === 'claude-code') {
-    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id);
+    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'claude-code');
     deps.turnUsageContextBySession.delete(session.id);
     const modelPromise =
       deps.turnModelPromiseBySession.get(session.id) ?? deps.readSessionModelForUsage(session.id);
@@ -108,6 +109,7 @@ export function recordSessionClaudeTurnUsage(
           modelUsage?: Record<string, unknown>;
           usageSegments?: unknown;
           usageSegmentsComplete?: unknown;
+          generationTrace?: unknown;
           modelUsageCumulativeStartsAtZero?: unknown;
           assistant_message_id?: unknown;
           is_error?: unknown;
@@ -223,6 +225,7 @@ export function recordSessionClaudeTurnUsage(
     ) {
       // 主路径: 逐模型 HYBRID 定价 (Anthropic→SDK, 非 Anthropic→gateway), 四个 sink
       // 由同一份解析结果驱动。价格表走 main 端内存 + 磁盘缓存, stale 快返并后台刷新。
+      const recordedAt = Date.now();
       const deltas = modelUsageDeltas ?? [];
       void (async () => {
         const sessionProviderForBilling = turnContext.providerId;
@@ -247,7 +250,7 @@ export function recordSessionClaudeTurnUsage(
               (observedClaudeRoute === 'gateway' ? 'xd-gateway' : 'unknown'));
         const pricing =
           billingRoute === 'xd-gateway'
-            ? await getGatewayModelPricingForModel()
+            ? await getGatewayModelPricingForModel().catch(() => null)
             : getReferenceModelPricing();
         const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
           deltas,
@@ -261,6 +264,7 @@ export function recordSessionClaudeTurnUsage(
           claudeUsageSegments,
           claudeUsageSegmentsComplete,
         );
+        const billing = turnBillingSource(turnContext, billingRoute);
         const resolvedUsageDeltas: ModelUsageDeltaEntry[] = perModel.map((item) => ({
           model: item.model,
           costUsdDelta: item.money?.kind === 'actual-cost' ? item.money.amount : 0,
@@ -305,6 +309,9 @@ export function recordSessionClaudeTurnUsage(
             recordModelTurnUsage({
               sessionId: session.id,
               agentKind: 'claude-code',
+              recordedAt,
+              attribution: session.remoteHostId || session.agentDeviceId ? undefined
+                : tokenAttribution(claudeModelBilling(m, billing), turnContext),
               model:
                 isSubscriptionValueRow
                   ? claudeSubscriptionUsageModelKey(m.model)
@@ -336,7 +343,8 @@ export function recordSessionClaudeTurnUsage(
             perModel,
             claudeGenerationDurationMs,
             claudeTurnDurationMs,
-            turnBillingSource(turnContext, billingRoute),
+            billing,
+            doneData?.generationTrace,
           );
           recordTurnSpend(turnMoney);
           recordSessionTurnSpend(session.id, turnMoney);
@@ -371,7 +379,8 @@ export function recordSessionClaudeTurnUsage(
             perModel,
             claudeGenerationDurationMs,
             claudeTurnDurationMs,
-            turnBillingSource(turnContext, billingRoute),
+            billing,
+            doneData?.generationTrace,
           );
           if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
             const changedScheduleId = await recordSchedulerTurnCost({
@@ -419,6 +428,8 @@ export function recordSessionClaudeTurnUsage(
           undefined,
           claudeGenerationDurationMs,
           claudeTurnDurationMs,
+          undefined,
+          doneData?.generationTrace,
         );
         // 本分支有三个"记不了钱"的出口(本轮 cost 未增长 / 订阅直连 / 非明确
         // provider-api 路由)。只保留可证明的模型与时长；进程累计 usage 不能冒充本轮 token。

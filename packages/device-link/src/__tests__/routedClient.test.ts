@@ -294,6 +294,28 @@ describe('RoutedDeviceLinkClient', () => {
     expect(seen).toEqual(['desktop:false:false', 'desktop:true:true']);
     client.stop();
   });
+  // 2026-11-20 真机：手机换网时连 Agent-Net 主连接一起重建，所有会话被关掉、从头再连，约 12 秒才恢复（Device Link 1.8 秒）。
+  // 失效后果：keepPrimary 不生效时主连接被换掉（第二条 v2 socket）；兼容连接不重建时它停在已失效的线路上。
+  it.each([true, false])('restarts the compatibility connection after a network change and the main one only without keepPrimary (%s)', async (keepPrimary) => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-test-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => true, useForPeer: (peer) => peer === 'phone', options: options('ws://v1-relay'),
+    });
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    const primary = sockets.find((s) => s.url === 'ws://v2-node')!, legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
+    primary.ack(); legacy.ack(); await vi.advanceTimersByTimeAsync(1);
+    client.restartConnections('network-path-changed', { keepPrimary });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sockets.filter((s) => s.url === 'ws://v1-relay')).toHaveLength(2);
+    expect(sockets.filter((s) => s.url === 'ws://v2-node')).toHaveLength(keepPrimary ? 1 : 2);
+    expect(client.getStatus()).toBe(keepPrimary ? 'online' : 'connecting');
+    client.stop();
+  });
   // 2026-11-17：Node Host 没有单独的跨账号连接，兼容连接的 401 没人听，令牌一直不刷新、手机一直连不上它，状态里也看不到原因。
   it('reports a problem of the compatibility connection on its own, and leaves the main connection clear', async () => {
     const sockets: FakeWs[] = [];

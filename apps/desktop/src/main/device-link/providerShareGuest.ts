@@ -36,6 +36,9 @@ import {
   crossRegionSendRequest,
   crossRegionWithdraw,
   getCrossRegionReceived,
+  isCrossRegionShareListUnavailable,
+  getMembershipConfirmedCrossRegionReceivedRegions,
+  getUnavailableCrossRegionShareIds,
   getConfirmedCrossRegionRegionBudgets,
   getConfirmedCrossRegionReceivedRegions,
   isCrossRegionReceivedComplete,
@@ -47,7 +50,7 @@ import {
   startProviderShareCrossRegion,
   stopProviderShareCrossRegion,
 } from './providerShareCrossRegion.js';
-import { captureProviderShareGuestPrefsRemoval, pruneProviderShareGuestPrefs } from './providerShareGuestPrefs.js';
+import { captureProviderShareGuestPrefsRemoval, isProviderShareCredentialConsentSkipped, pruneProviderShareGuestPrefs } from './providerShareGuestPrefs.js';
 import { invalidateProviderMetadataContinuity } from './providerMetadataContinuity.js';
 import { hasAgentNetProviderGuestRoute } from './agentNetSharing.js';
 
@@ -90,6 +93,11 @@ interface Runtime {
   received: ProviderShareReceived[];
   unavailable: ReadonlySet<string>;
   authorityIncomplete: boolean;
+  listConfirmed: boolean;
+  listUnavailable: boolean;
+  /** The service retains member IDs for the same share/account across approvals. */
+  knownMembers: Map<string, string>;
+  departureScope: string;
   fetchedAt: number;
   viewAnchor: ViewAnchor | null;
   confirmedShareViews: ReadonlyMap<string, ViewAnchor>;
@@ -127,6 +135,10 @@ let receivedFingerprint = '';
  */
 let notifiedFingerprint = '';
 let viewAnchorSequence = 0;
+let leftMemberSequence = 0;
+type DepartureReceipts = { ids: Set<string>; revision: number };
+// LocalStorage cleanup can outlive a device-link owner handoff within Main.
+const pendingDepartures = new Map<string, DepartureReceipts>();
 /** 用于只读分享投影的在途校验；暂停后恢复也不能复用旧回包。 */
 export function providerShareReceivedRevision(): number { return receivedRevision; }
 
@@ -181,6 +193,16 @@ function confirmedRegions(rt: Runtime): Region[] {
   return [...(rt.fetchedAt > 0 && !rt.authorityIncomplete ? [getActiveAuthRealm()] : []), ...getConfirmedCrossRegionReceivedRegions()];
 }
 
+function membershipConfirmedRegions(rt: Runtime): Region[] {
+  return [...(rt.listConfirmed ? [getActiveAuthRealm()] : []),
+    ...getMembershipConfirmedCrossRegionReceivedRegions()];
+}
+
+function unavailableShareIds(rt: Runtime): Set<string> {
+  return new Set([...rt.unavailable, ...getUnavailableCrossRegionShareIds(),
+    ...(rt.listUnavailable ? rt.received.map(share => share.shareId) : [])]);
+}
+
 let metadataPermissionFingerprint = '';
 let metadataPermissionShares: ProviderShareReceived[] = [];
 const accessEpochs = new Map<string, { fingerprint: string | null; epoch: number }>();
@@ -224,14 +246,22 @@ function emitChanged(rt: Runtime): Promise<void> | void {
   metadataPermissionShares = received;
   const fingerprint = JSON.stringify(received);
   if (fingerprint !== receivedFingerprint) { receivedFingerprint = fingerprint; receivedRevision++; }
-  const notified = JSON.stringify([fingerprint, confirmedRegions(rt), isCrossRegionReceivedComplete()]);
-  // 分享被分享者删除后，它在这台电脑上的本机偏好一起清掉；还没加载的区域不动。
-  const pruning = pruneProviderShareGuestPrefs(new Set(received.map((share) => share.shareId)), confirmedRegions(rt));
+  const unavailable = unavailableShareIds(rt);
+  for (const share of received) {
+    if (unavailable.has(share.shareId)) continue;
+    const previous = rt.knownMembers.get(share.shareId);
+    if (previous && previous !== share.memberId) {
+      void captureProviderShareGuestPrefsRemoval(share.shareId)().catch(() => undefined);
+    }
+    rt.knownMembers.set(share.shareId, share.memberId);
+  }
+  const notified = JSON.stringify([fingerprint, confirmedRegions(rt), isCrossRegionReceivedComplete(), [...unavailable]]);
+  const pruning = pruneProviderShareGuestPrefs(new Set(received.map(share => share.shareId)), membershipConfirmedRegions(rt));
   const notify = () => {
     if (!current(rt)) return;
     const changed = notified !== notifiedFingerprint;
     notifiedFingerprint = notified;
-    rt.events.changed(received, changed);
+    rt.events.changed(received.filter(share => !unavailable.has(share.shareId)), changed);
     for (const listener of receivedListeners) {
       try {
         listener();
@@ -240,13 +270,13 @@ function emitChanged(rt: Runtime): Promise<void> | void {
       }
     }
   };
-  if (pruning) return pruning.then(notify);
+  // An unrelated preference write must not delay retiring this directory.
   notify();
+  return pruning;
 }
 
 /**
- * 已收到的分享变了：供应商组据此把已被删除或已退出的分享移出组(provider-groups.md §3)。只通知，不带内容；
- * 读名单用 {@link getConfirmedReceivedShareIds}。
+ * 已收到的分享变了：供应商组据此把已被删除或已退出的分享移出组(provider-groups.md §3)。
  */
 export function onProviderShareReceivedChanged(listener: () => void): () => void {
   receivedListeners.add(listener);
@@ -255,14 +285,11 @@ export function onProviderShareReceivedChanged(listener: () => void): () => void
   };
 }
 
-/**
- * 完整可信的已收到分享名单：本区域已拉到过，本账号可能有分享的对方区域也都已确认。只有这时才能据此认定某个分享
- * 已被删除或已退出；说不准时为 null(还没拉到、拉取失败、换账号中)。
- */
+/** The group can prune missing members only after both regions confirm membership. */
 export function getConfirmedReceivedShareIds(): ReadonlySet<string> | null {
   const rt = runtime;
-  if (!rt || !current(rt) || rt.fetchedAt === 0 || rt.authorityIncomplete || !isCrossRegionReceivedComplete()) return null;
-  return new Set(allReceived(rt).map((share) => share.shareId));
+  if (!rt || !current(rt) || membershipConfirmedRegions(rt).length !== 2) return null;
+  return new Set(allReceived(rt).map(share => share.shareId));
 }
 
 // ─── 任务绑定 ────────────────────────────────────────────────────
@@ -279,17 +306,30 @@ export function parseProviderShareAgentDeviceId(value: string | null | undefined
   return SHARE_ID.test(shareId) ? shareId : null;
 }
 
-export function findReceivedShare(shareId: string): ProviderShareReceived | null {
+export function findReceivedShare(shareId: string, options?: { existingLease: true }): ProviderShareReceived | null {
   if (runtime?.unavailable.has(shareId)) return null;
+  if (!options?.existingLease && runtime?.listUnavailable && runtime.received.some(share => share.shareId === shareId)) return null;
+  if (!options?.existingLease && isCrossRegionShareListUnavailable(shareId)) return null;
   return allReceived(runtime).find((share) => share.shareId === shareId) ?? null;
 }
 
+/** A saved preference is effective only while this owner's share is currently usable. */
+export function skipsReceivedShareCredentialConsent(agentDeviceId: string): boolean {
+  const rt = runtime;
+  const shareId = parseProviderShareAgentDeviceId(agentDeviceId);
+  if (!rt || !current(rt) || shareId === null) return false;
+  const share = findReceivedShare(shareId);
+  return share?.status === 'active' && rt.knownMembers.get(shareId) === share.memberId
+    && isProviderShareCredentialConsentSkipped(shareId);
+}
+
 /** Only existing Agent Net task execution can use a confirmed transport while the catalog is unavailable. */
-export function findReceivedShareForExecution(shareId: string): ProviderShareReceived | null {
+export function findReceivedShareForExecution(shareId: string, options?: { existingLease: true }): ProviderShareReceived | null {
   const rt = runtime;
   if (!rt || !current(rt)) return null;
-  const share = findReceivedShare(shareId);
+  const share = findReceivedShare(shareId, options);
   if (share) return share;
+  if (!options?.existingLease && rt.listUnavailable) return null;
   if (!rt.unavailable.has(shareId)) return null;
   const retained = allReceived(rt).find(row => row.shareId === shareId && row.status === 'active');
   if (!retained) return null;
@@ -327,7 +367,8 @@ export async function resolveRemoteAgentTargetWhenReady(agentDeviceId: string): 
   if (!shareId) return agentDeviceId;
   const rt = runtime;
   if (!rt || !current(rt)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing is not ready');
-  if (rt.unavailable.has(shareId)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] shared provider service is unavailable');
+  if (rt.unavailable.has(shareId) || (rt.listUnavailable && rt.received.some(share => share.shareId === shareId))
+    || isCrossRegionShareListUnavailable(shareId)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] shared provider service is unavailable');
   // An already loaded share remains usable even while the other region is unavailable.
   if (findReceivedShare(shareId)) return resolveRemoteAgentTarget(agentDeviceId);
   if (rt.fetchedAt === 0) await refreshReceivedShares('resolve');
@@ -346,10 +387,12 @@ export async function resolveRemoteAgentTargetWhenReady(agentDeviceId: string): 
 /** Capture before reading a same-account group, so a late reply cannot activate another account. */
 export function captureProviderShareGroupRecovery(): (agentDeviceIds: readonly string[]) => Promise<void> {
   const rt = runtime;
+  // Failed reads suspend selection, but already discovered rows need no new lookup.
+  const needsDiscovery = (id: string) => rt !== null && (rt.unavailable.has(id) || !allReceived(rt).some(share => share.shareId === id));
   return (agentDeviceIds) => {
     if (!rt || !current(rt)) return Promise.resolve();
     const missing = agentDeviceIds.map(parseProviderShareAgentDeviceId)
-      .filter((id): id is string => !!id && !findReceivedShare(id));
+      .filter((id): id is string => !!id && needsDiscovery(id));
     if (missing.length === 0) return Promise.resolve();
     const recovery = (async () => {
       // Check the local service first: a recently accepted same-region share needs no peer lookup.
@@ -361,7 +404,7 @@ export function captureProviderShareGroupRecovery(): (agentDeviceIds: readonly s
         await rt.refreshing;
       }
       if (!current(rt)) return;
-      await restoreCrossRegionReceivedForRemoteGroup(missing.filter((id) => !findReceivedShare(id)));
+      await restoreCrossRegionReceivedForRemoteGroup(missing.filter(needsDiscovery));
     })();
     rt.groupRecoveries.add(recovery);
     return recovery.finally(() => { rt.groupRecoveries.delete(recovery); });
@@ -383,14 +426,19 @@ function schedule(rt: Runtime): void {
 
 export function startProviderShareGuest(events: ProviderShareGuestEvents, options: { userDataDir?: string } = {}): void {
   stopProviderShareGuest();
+  const scope = providerShareOwnerKey();
   const rt: Runtime = {
     events,
-    scope: providerShareOwnerKey(),
+    scope,
     received: [],
     fetchedAt: 0,
     viewAnchor: null,
     confirmedShareViews: new Map(),
     unavailable: new Set(), authorityIncomplete: false,
+    listConfirmed: false,
+    listUnavailable: false,
+    knownMembers: new Map(),
+    departureScope: JSON.stringify([getActiveAuthRealm(), scope]),
     timer: null,
     refreshing: null,
     pending: new Map(),
@@ -435,9 +483,21 @@ export function refreshReceivedShares(reason: string): Promise<void> {
           // a fresh display window. The readiness timestamp keeps its old meaning.
           if (!current(rt) || getActiveAuthRealm() !== requestedRegion) return;
           if (rt.received !== before) continue;
-          rt.received = received;
-          rt.unavailable = new Set(received.unavailableShareIds);
           rt.authorityIncomplete = received.authorityIncomplete === true;
+          const receivedIds = received.map(share => share.shareId);
+          const unavailable = new Set(received.unavailableShareIds);
+          if (rt.authorityIncomplete) {
+            // A failed source can omit its rows from a partial response. Do not
+            // let renderer retention make those rows selectable again.
+            const present = new Set(receivedIds);
+            for (const id of [...rt.unavailable, ...before.map(share => share.shareId)]) {
+              if (!present.has(id)) unavailable.add(id);
+            }
+          }
+          rt.received = received;
+          rt.unavailable = unavailable;
+          rt.listConfirmed = !rt.authorityIncomplete;
+          rt.listUnavailable = false;
           rt.fetchedAt = Date.now();
           rt.viewAnchor = makeViewAnchor(requestedRegion, requestedAt, requestedMono);
           const confirmed = new Map<string, ViewAnchor>();
@@ -453,14 +513,25 @@ export function refreshReceivedShares(reason: string): Promise<void> {
         } catch (error) {
           if (current(rt) && rt.received !== before) continue;
           if (current(rt)) {
+            const wasConfirmed = rt.listConfirmed;
+            rt.listConfirmed = false;
             log.warn('received shares refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
             if (isAuthoritativeShareListDenial(error)) {
-              // A refusal is authoritative for this account/device: drop the old
-              // rows, mark this region as confirmed empty and fence their metadata.
+              // Retire the directory immediately without interpreting the
+              // authentication refusal as a successful empty membership list.
               rt.received = [];
+              rt.listUnavailable = false;
+              rt.unavailable = new Set();
+              rt.authorityIncomplete = false;
               rt.confirmedShareViews = new Map();
               if (rt.fetchedAt === 0) rt.fetchedAt = Date.now();
               void emitChanged(rt);
+            } else {
+              // Keep the last list for existing verified transports, but do
+              // not expose it as a selectable source or effective trust.
+              const wasUnavailable = rt.listUnavailable;
+              rt.listUnavailable = true;
+              if (wasConfirmed || (!wasUnavailable && rt.received.length > 0)) void emitChanged(rt);
             }
           }
         }
@@ -512,8 +583,13 @@ export function noteProviderShareAccessFailure(refusedShareId?: string): void {
   void refreshReceivedShares('access-failure');
 }
 
-export function getReceivedShares(): readonly ProviderShareReceived[] {
-  return allReceived(runtime);
+export function getReceivedShares(options?: { retainUnavailable: true }): readonly ProviderShareReceived[] {
+  const rt = runtime;
+  if (!rt || !current(rt)) return [];
+  const received = allReceived(rt);
+  if (options?.retainUnavailable) return received;
+  const unavailable = unavailableShareIds(rt);
+  return received.filter(share => !unavailable.has(share.shareId));
 }
 
 /** 首次本区及已标记跨区收到分享的拉取已完成；空列表只有在此状态下才代表真实的空结果。 */
@@ -526,8 +602,13 @@ export function getReceivedSharesSnapshot(recovery?: ProviderShareFavoriteRecove
   const rt = runtime;
   const valid = !!rt && current(rt);
   const ownerStamp = getActiveDataOwnerPushStamp();
+  let departure = valid ? pendingDepartures.get(rt.departureScope) : undefined;
   if (valid && recovery && recovery.ownerStamp.dataOwnerId === ownerStamp.dataOwnerId &&
       recovery.ownerStamp.ownerGeneration === ownerStamp.ownerGeneration) {
+    if (departure && recovery.cleanedLeftMemberRevision === departure.revision) {
+      pendingDepartures.delete(rt.departureScope);
+      departure = undefined;
+    }
     // 不等待对方区域网络，已加载区域的收藏仍立即可用。
     ensureCrossRegionReceivedForFavorites(recovery.regions);
   }
@@ -535,12 +616,14 @@ export function getReceivedSharesSnapshot(recovery?: ProviderShareFavoriteRecove
   const localBudget = valid && rt.viewAnchor && rt.viewAnchor.region === getActiveAuthRealm()
     && rt.fetchedAt > 0 ? { [rt.viewAnchor.region]: viewAnchorBudget(rt.viewAnchor) } : {};
   const regionBudget = valid ? { ...localBudget, ...getConfirmedCrossRegionRegionBudgets() } : {};
-  const unavailableShareIds = valid ? [...rt.unavailable].filter(shareId => !findReceivedShareForExecution(shareId)) : [];
+  const received = valid ? allReceived(rt) : [];
+  const unavailable = valid ? [...unavailableShareIds(rt)] : [];
   return {
     ownerStamp,
     confirmedRegions: loadedRegions,
-    received: valid ? allReceived(rt) : [],
-    ...(unavailableShareIds.length ? { unavailableShareIds } : {}),
+    received,
+    ...(departure ? { leftMemberIds: [...departure.ids], leftMemberRevision: departure.revision } : {}),
+    ...(unavailable.length ? { unavailableShareIds: unavailable } : {}),
     active: valid,
     ...(Object.keys(regionBudget).length > 0 ? { regionBudget } : {}),
   };
@@ -658,14 +741,28 @@ export async function withdrawProviderShareRequest(requestId: string): Promise<v
 
 export async function leaveProviderShare(memberId: string): Promise<void> {
   const rt = requireRuntime();
-  const shareId = allReceived(rt).find((share) => share.memberId === memberId)?.shareId ?? null;
+  const shareId = [...rt.knownMembers].find(([, member]) => member === memberId)?.[0] ?? null;
   const forgetPrefs = shareId ? captureProviderShareGuestPrefsRemoval(shareId) : null;
-  const crossRegion = await crossRegionLeave(memberId);
+  let forgetting: Promise<void> | undefined;
+  let left = false;
+  const noteLeft = () => {
+    if (left) return;
+    left = true;
+    const ids = pendingDepartures.get(rt.departureScope)?.ids ?? new Set<string>();
+    ids.add(memberId);
+    pendingDepartures.set(rt.departureScope, { ids, revision: ++leftMemberSequence });
+    forgetting ??= forgetPrefs?.();
+    // The cross-region leave still awaits its list refresh. Observe a write
+    // rejection now and propagate it through the original promise below.
+    void forgetting?.catch(() => undefined);
+  };
+  const crossRegion = await crossRegionLeave(memberId, noteLeft);
   let refreshed: Promise<void> | undefined;
   let changed: Promise<void> | void = undefined;
   if (!crossRegion) {
     if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
     await providerShareApi.leave(memberId);
+    noteLeft();
     if (current(rt)) {
       // The successful leave is already authoritative, even if its list refresh
       // fails. Replacing the array also fences any older in-flight list/denial.
@@ -674,7 +771,7 @@ export async function leaveProviderShare(memberId: string): Promise<void> {
       // Join/start the post-leave read now, before preference I/O can outlive it.
       refreshed = refreshReceivedShares('left');
     }
-  }
+  } else noteLeft();
   // 退出后这个分享的本机偏好(「信任 {分享者}」)一起忘掉。
-  await Promise.all([forgetPrefs?.(), changed, refreshed]);
+  await Promise.all([forgetting ?? forgetPrefs?.(), changed, refreshed]);
 }

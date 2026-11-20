@@ -1,7 +1,13 @@
+import { registerRuntimeSettingsSection, runtimeSettingsSections } from '../runtime';
+import { registerAppSettingsTools } from '../../../../../../packages/lizi-mcps/src/xdt-helper/app_settings';
+import { XdtHelperToolRegistry } from '../../../../../../packages/lizi-mcps/src/lizi_xdtHelperToolRegistry';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createAppSettingsService } from '../service';
-import { updateMakerMemorySettings } from '../memory';
+import {
+  createMemorySettingsSection,
+  updateMakerMemorySettings,
+} from '../memory';
 import { runMemoryChangeWithCodexRestart } from '../../maker-ipc/deferredCodexRestart';
 import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 
@@ -78,5 +84,89 @@ describe('combined memory settings', () => {
     }
     expect(live).toEqual({ claudeCode: false, codex: false, pi: false });
     expect(setAgentMemory.mock.calls.filter(([kind]) => kind === 'codex')).toEqual([['codex', false]]);
+  });
+});
+
+// #8930, unit: production section -> runtime registry -> real Desktop service ->
+// registered MCP handler. Old tests stubbed section.update/settings.call and missed
+// the throwing guard and wrapped result. Minimal failure: all-off then all-on.
+// In-memory persistence/restart ports; no Electron boot or user settings writes.
+function memoryEntry() {
+  let value = { maker: true, claudeCode: true, codex: true, pi: true };
+  let enabled = true;
+  const wire = () => ({ value: { ...value }, defaults: { maker: true, claudeCode: true, codex: true, pi: true },
+    isCustomized: true, customizedKeys: Object.keys(value) as Array<keyof typeof value> });
+  const write = vi.fn((key: keyof typeof value, next: boolean) => { value = { ...value, [key]: next }; return wire(); });
+  const prepare = vi.fn(async () => {});
+  const setAgentMemory = vi.fn(async () => {});
+  const manager = { isEnabled: () => enabled, enable: async () => { enabled = true; return { effective: 'next-session' as const }; },
+    disable: async () => { enabled = false; return { effective: 'next-session' as const }; }, syncNativeAgentsOff: async () => [] };
+  const maker = { makerMemory: manager, setAgentMemory };
+  const read = vi.fn(wire);
+  registerRuntimeSettingsSection(createMemorySettingsSection({
+    read, readState: wire, isMakerEnabled: () => enabled,
+    updateMaker: (next, patch) => updateMakerMemorySettings(next as boolean, patch, {
+      makerMemory: manager, maker, writeMemorySetting: write,
+      applyChange: parts => runMemoryChangeWithCodexRestart({ prepare, finalize: async () => {}, cancel: () => {},
+        clearDeferredRestart: () => {}, scheduleDeferredRestart: () => {} }, parts), invalidateBridge: async () => {},
+    }),
+    updateNative: () => { throw new Error('Unexpected native-only update'); },
+    reset: () => { throw new Error('Unexpected reset'); },
+  }));
+  const section = runtimeSettingsSections().find(item => item.id === 'memory')!;
+  const service = createAppSettingsService([section]);
+  const guard = vi.fn(async () => {});
+  const registry = new XdtHelperToolRegistry();
+  registerAppSettingsTools(registry, { call: input => service(input, guard) },
+    () => ({ agentKind: 'codex', sessionId: 'memory-entry-test', workingDir: '/fixture' }));
+  const call = async (patch: Record<string, unknown>) => {
+    const result = await registry.call('update_app_settings', { section: 'memory', patch });
+    return JSON.parse((result.content[0] as { text: string }).text);
+  };
+  return { call, guard, write, prepare, setAgentMemory, wire, read };
+}
+
+describe('registered memory settings through Desktop service and MCP', () => {
+  it('returns the real wrapped conflict without writes or restart, preserving maker/Pi', async () => {
+    const entry = memoryEntry();
+    expect(await entry.call({ maker: false, claudeCode: false, codex: false, pi: false })).toMatchObject({ ok: true });
+    entry.write.mockClear(); entry.prepare.mockClear(); entry.setAgentMemory.mockClear();
+    expect(await entry.call({ maker: true, claudeCode: true, codex: true, pi: true })).toMatchObject({
+      ok: false, errorCode: 'MEMORY_SETTINGS_CONFLICT', data: {
+        hint: expect.stringContaining('maker'), result: { conflictingFields: ['claudeCode', 'codex'], requires: { maker: false } },
+      },
+    });
+    expect(entry.wire().value).toEqual({ maker: false, claudeCode: false, codex: false, pi: false });
+    expect(entry.write).not.toHaveBeenCalled(); expect(entry.prepare).not.toHaveBeenCalled();
+    expect(entry.setAgentMemory).not.toHaveBeenCalled();
+    expect(await entry.call({ maker: true, pi: true })).toMatchObject({ ok: true,
+      state: { value: { maker: true, pi: true, claudeCode: false, codex: false } } });
+    for (const patch of [{ codex: true }, { claudeCode: false }]) {
+      expect(await entry.call(patch)).toMatchObject({ ok: false, errorCode: 'MEMORY_SETTINGS_CONFLICT',
+        data: { result: { conflictingFields: Object.keys(patch), requires: { maker: false } } } });
+    }
+    expect(await entry.call({ maker: true })).toMatchObject({ ok: true });
+    expect(await entry.call({ unknown: true })).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
+
+  it('keeps revoked, partial-write and readback failures generic without exposing thrown details', async () => {
+    const revoked = memoryEntry();
+    revoked.guard.mockRejectedValue(new Error('secret revoked detail'));
+    expect(await revoked.call({ maker: true, codex: true })).toMatchObject({ ok: false, errorCode: 'SETTINGS_OPERATION_FAILED' });
+    expect(revoked.write).not.toHaveBeenCalled();
+    const partial = memoryEntry();
+    const persist = partial.write.getMockImplementation()!;
+    partial.write.mockImplementationOnce(persist).mockImplementationOnce(() => { throw new Error('secret persistence detail'); });
+    const failed = await partial.call({ maker: false, codex: false });
+    expect(failed).toMatchObject({ ok: false, errorCode: 'SETTINGS_OPERATION_FAILED' });
+    expect(JSON.stringify(failed)).not.toContain('secret');
+    expect(partial.wire().value).toMatchObject({ maker: true, codex: false });
+    const readback = memoryEntry();
+    readback.read.mockImplementation(() => { throw new Error('secret readback detail'); });
+    expect(await readback.call({ maker: false })).toMatchObject({ ok: false, errorCode: 'SETTINGS_OPERATION_FAILED' });
+    expect(readback.wire().value.maker).toBe(false);
+    const late = memoryEntry();
+    late.guard.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined).mockRejectedValue(new Error('revoked after update'));
+    expect(await late.call({ maker: false })).toMatchObject({ ok: false, errorCode: 'SETTINGS_OPERATION_FAILED' });
   });
 });

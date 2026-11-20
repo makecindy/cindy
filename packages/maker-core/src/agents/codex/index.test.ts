@@ -7383,7 +7383,8 @@ describe('CodexAgent fast mode service tier', () => {
   it.each(['standard', 'priority'] as const)('prices the actual proxy execution (%s) without clearing Fast', async priceVariant => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'turn-1' } } : undefined);
-    const resolveUsagePriceVariant = vi.fn(() => priceVariant);
+    const reportedModel = priceVariant === 'priority' ? 'served-model' : undefined;
+    const resolveUsagePriceVariant = vi.fn(() => reportedModel ? { priceVariant, model: reportedModel } : priceVariant);
     const handle = await agent.startSession({ sessionId: 'session-xai-pricing', model: 'xai/grok-4.7',
       fastMode: true, workingDir: '/repo', resolveUsagePriceVariant });
     const handlers = host.getThreadHandlers()!;
@@ -7399,9 +7400,13 @@ describe('CodexAgent fast mode service tier', () => {
     handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
     await sending;
     await waitForExpectation(() => expect(events.some(e => e.type === 'done')).toBe(true));
+    expect(events.find(e => e.type === 'done')?.data?.usage?.execution).toMatchObject({
+      model: 'xai/grok-4.7', providerId: null, credentialMode: 'provider-oauth',
+    });
     expect(resolveUsagePriceVariant).toHaveBeenCalledWith({ threadId: 'start-thread-id', inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 });
     expect((events.find(e => e.type === 'done')?.data as { usage: { segments: unknown[] } }).usage.segments)
-      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant })]);
+      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant,
+        model: reportedModel ?? 'xai/grok-4.7', modelConfirmed: Boolean(reportedModel) })]);
     expect(handle.getFastMode?.()).toBe(true);
     await handle.close();
   });
@@ -27644,6 +27649,43 @@ describe('CodexAgent turn lifecycle', () => {
 
       expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(1);
       await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  // Native can report the denial with a retry, with a terminal notification, or only on completion.
+  it.each([
+    ['retry', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['terminal', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['completed', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['retry', 'selected', 'http', 'model_unavailable'],
+    ['retry', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+    ['terminal', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+    ['completed', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+  ] as const)('attributes a %s denial of %s via %s to the correct model', async (notification, rejected, transport, reason) => {
+    const agent = new CodexAgent(createDeps({}, {
+      getRejectedCodexDownshiftModel: (session, thread, turn) =>
+        session === 'downshift' && thread === 'start-thread-id' && turn === 'turn-1' ? { model: rejected, transport } : undefined,
+    }));
+    const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? {} : undefined);
+    const handle = await agent.startSession({ sessionId: 'downshift', model: 'selected', workingDir: '/repo' });
+    try {
+      const handlers = host.getThreadHandlers()!;
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      const threadId = 'start-thread-id';
+      const turnId = 'turn-1';
+      const error = { message: transport === 'bridge'
+        ? 'Native provider request failed [phase=adapter-event; HTTP 403; category=permission; request=fixture]'
+        : 'unexpected status 403: {"error":{"code":"user_model_access_denied"}}' };
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      if (notification === 'completed') {
+        handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'failed', error } });
+      } else {
+        handlers.error?.({ threadId, turnId, willRetry: notification === 'retry', error });
+      }
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { reason, isTerminal: true } });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(notification === 'retry' ? 1 : 0);
     } finally {
       await handle.close();
     }

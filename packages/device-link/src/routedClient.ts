@@ -298,8 +298,12 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     for (const connection of this.extraScopedConnections()) connection.notifyNetworkChanged(options);
   }
 
-  override restartConnections(reason?: string): void {
-    this.restartConnection(reason);
+  /**
+   * `keepPrimary`：主连接是 Agent-Net 时由 host 传入（手机换网）。它自己从新地址继续发、在内部重连中转
+   * （AgentNetSocket），在这里重建只会关掉所有会话再从头连；其余走 Device Link 中转的连接照旧重建。
+   */
+  override restartConnections(reason?: string, options?: { keepPrimary?: boolean }): void {
+    if (!options?.keepPrimary) this.restartConnection(reason);
     if (this.crossAccountRunning) this.crossAccount?.restartConnection(reason);
     if (this.legacyRunning) this.legacy?.restartConnection(reason);
     for (const connection of this.extraScopedConnections()) connection.restartConnection(reason);

@@ -38,12 +38,13 @@ import path from 'node:path';
 
 import { app } from 'electron';
 import { materializeTaskImageTextResult, TASK_IMAGE_MAX_BYTES } from '../cindy-media/taskImageDelivery';
-import { localTaskImagePath, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
+import { isUnsafeLocalTaskImagePath, localTaskImagePath, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
   AgentKind,
+  EngineKind,
   InteractionRequest,
   PermissionMode,
   TurnPermissionOrigin,
@@ -59,6 +60,7 @@ import {
 
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { getMaker } from '../maker-host/index.js';
+import { isPluginEngineTask, PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
@@ -167,6 +169,14 @@ import { imText } from '../im/shared/imText.js';
 import { modernLocaleOf } from '../../shared/locale.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
+
+/** Official hooks do not run plugin-engine tasks in phase 1 (docs/plans/acp-plugin-bridge.md). */
+const OFFICIAL_CHANNEL_FEATURE = 'Official bot channels';
+
+/** Refuses only plugin-engine tasks; every other session keeps its existing hook path. */
+function runsOnBuiltinEngine<T extends { agentKind: EngineKind }>(value: T): value is T & { agentKind: AgentKind } {
+  return !isPluginEngineTask(value);
+}
 
 function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin | null {
   switch (value) {
@@ -673,7 +683,7 @@ async function collectOutboundForFinalText(
   const oversizedLocalImages = new Set<string>();
   for (const failed of 'failures' in materialized ? materialized.failures : []) {
     const absPath = localTaskImagePath(failed);
-    if (!absPath) continue;
+    if (!absPath || isUnsafeLocalTaskImagePath(absPath)) continue;
     try {
       if ((await fs.stat(absPath)).size > TASK_IMAGE_MAX_BYTES) oversizedLocalImages.add(absPath);
     } catch { /* 文件已不在: 按普通的未能发送提示 */ }
@@ -823,6 +833,8 @@ export function createMakerHookSessionRunner(deps: {
           workingDir = meta.workDir;
           model = meta.model;
           resumeSessionId = meta.sdkSessionId;
+          // 插件引擎任务不接官方渠道(docs/plans/acp-plugin-bridge.md):明确拒绝,不按内置引擎重开。
+          if (meta.agentKind === 'acp') throw new PluginEngineUnsupportedError(OFFICIAL_CHANNEL_FEATURE);
           effectiveAgentKind = meta.agentKind;
         }
         effort = req.companionBotId ? meta?.effort : undefined;
@@ -1046,7 +1058,8 @@ export function createMakerHookSessionRunner(deps: {
           const recovered = await getSessionRowSnapshotStrict(req.sessionId);
           assertAccount?.();
           if (!recovered || recovered.status === 'deleted') throw new Error('The task route changed');
-          const runtimeOverride = getSessionRuntimeStartOverride(req.sessionId, createOpts.agentKind, createOpts.agentDeviceId);
+          // createOpts.agentKind is effectiveAgentKind (built-in, see above).
+          const runtimeOverride = getSessionRuntimeStartOverride(req.sessionId, effectiveAgentKind, createOpts.agentDeviceId);
           Object.assign(createOpts, { providerId: recovered.providerId ?? null }, runtimeOverride);
           if (runtimeOverride.model) {
             setSessionEffort(req.sessionId, runtimeOverride.effort);
@@ -1110,6 +1123,11 @@ export function createMakerHookSessionRunner(deps: {
           }
           return fail(err instanceof Error ? err.message : String(err));
         }
+      }
+      // maker.createSession 对已活着的同 id 实例直接复用:那个实例若跑在插件引擎上,
+      // 同样明确拒绝(meta 缺失时上方的检查覆盖不到)。
+      if (!runsOnBuiltinEngine(session)) {
+        return fail(new PluginEngineUnsupportedError(OFFICIAL_CHANNEL_FEATURE).message);
       }
 
       // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙)必须先于

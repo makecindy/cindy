@@ -109,5 +109,22 @@
     "quotaResetIn": "{{duration}}后复初",
     "quotaAverageHint": "周限额 · 诸名籍等权均值",
     "quotaResetHint": "依今耗速，重置或尚有余：距 24 小时以内示黄，6 小时以内示红。"
+  },
+  "modelGroups": {
+    "title": "模型组",
+    "sourceCount_other": "{{count}} 源",
+    "strategy": {
+      "expiring": "将废者先用",
+      "order": "依序",
+      "rotate": "轮值",
+      "cheapest": "最省"
+    }
+  },
+  "pluginEngines": {
+    "genericName": "法器引擎",
+    "defaultModel": "预设模型",
+    "unavailable": "{{engine}} 暂不可用",
+    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}",
+    "worktreeUnsupported": "法器引擎尚不能于 worktree 中新建差事，请先取消勾选 worktree 再发"
   }
 }

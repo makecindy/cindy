@@ -44,6 +44,7 @@ import { LocalDbGate } from '../LocalDbGate';
 type ElectronApiStub = {
   localDb: {
     // #7146: keep recovery fixtures checked against the renderer IPC contract.
+    onRuntimeCorruption?: ElectronAPI['localDb']['onRuntimeCorruption'];
     ensureReady: ReturnType<typeof vi.fn<ElectronAPI['localDb']['ensureReady']>>;
   };
   appReadyForBot: ReturnType<typeof vi.fn>;
@@ -246,4 +247,56 @@ describe('LocalDbGate 有限重试', () => {
     // 恰好尝试 3 次(1 次原始 + 2 次重试),没有无限重试
     expect(api.localDb.ensureReady).toHaveBeenCalledTimes(3);
   });
+  // #9555 / unit: runtime failure must unmount the live app and use the
+  // existing recovery screen; stale account/generation events cannot do so.
+  it('isolates runtime corruption in the current generation and allows an explicit retry', async () => {
+    const api = stubElectronApi();
+    let report!: (stamp: { dataOwnerId: string | null; ownerGeneration: number }) => void;
+    const unsubscribe = vi.fn();
+    api.localDb.onRuntimeCorruption = (callback) => { report = callback; return unsubscribe; };
+    const view = renderGate();
+    await flushAsync();
+    expect(screen.getByTestId('main-content')).toBeTruthy();
+    act(() => report({ dataOwnerId: 'other', ownerGeneration: 1 }));
+    act(() => report({ dataOwnerId: 'user-1', ownerGeneration: 0 }));
+    expect(screen.getByTestId('main-content')).toBeTruthy();
+    expect(api.localDb.ensureReady).toHaveBeenCalledWith('user-1');
+    act(() => report({ dataOwnerId: 'user-1', ownerGeneration: 1 }));
+    await flushAsync();
+    expect(screen.queryByTestId('main-content')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'localDbFatal.corrupt.copy' }));
+    await flushAsync();
+    expect(api.copyTextToClipboard).toHaveBeenCalledWith({ text: 'DB_RUNTIME_CORRUPT' });
+    fireEvent.click(screen.getByRole('button', { name: 'localDbFatal.schemaLease.retry' }));
+    await flushAsync();
+    expect(api.localDb.ensureReady).toHaveBeenNthCalledWith(2, 'user-1', { dataOwnerId: 'user-1', ownerGeneration: 1 });
+    expect(screen.getByTestId('main-content')).toBeTruthy();
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalled();
+  });
+  it('does not let late startup readiness overwrite runtime corruption', async () => {
+    const api = stubElectronApi();
+    let finish!: (ready: { ready: true }) => void;
+    api.localDb.ensureReady.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    let report!: (stamp: { dataOwnerId: string | null; ownerGeneration: number }) => void;
+    api.localDb.onRuntimeCorruption = (callback) => { report = callback; return () => {}; };
+    renderGate();
+    act(() => report({ dataOwnerId: 'user-1', ownerGeneration: 1 }));
+    await act(async () => { finish({ ready: true }); });
+    expect(screen.queryByTestId('main-content')).toBeNull();
+  });
+
+  it('cancels a previously scheduled transient retry when corruption arrives', async () => {
+    const api = stubElectronApi();
+    api.localDb.ensureReady.mockRejectedValueOnce(new Error('temporary startup failure'));
+    let report!: (stamp: { dataOwnerId: string | null; ownerGeneration: number }) => void;
+    api.localDb.onRuntimeCorruption = (callback) => { report = callback; return () => {}; };
+    renderGate();
+    await flushAsync();
+    act(() => report({ dataOwnerId: 'user-1', ownerGeneration: 1 }));
+    await advanceRetryDelay();
+    expect(api.localDb.ensureReady).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('main-content')).toBeNull();
+  });
+
 });

@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL,
+  type ProviderPickerModel,
 } from '@cindy/device-link';
 
 import { useAuth } from '@/auth/AuthContext';
@@ -25,8 +26,12 @@ import {
   subscribeDeviceProviders,
   subscribeDeviceProvidersError,
   subscribeDeviceProvidersGen,
+  taskProviderCatalog,
   type DeviceProvidersPayload,
+  type RetainedProviderCatalog,
 } from '@/device-link/deviceProvidersCache';
+import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
+import { useRetainedProviderModel } from '@/device-link/useDeviceProviders';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import {
   getCachedProviderShareCatalogs,
@@ -47,6 +52,7 @@ import {
 } from './remoteAgentCatalogs';
 
 type CatalogState = { status: RemoteAgentCatalog['status']; payload?: DeviceProvidersPayload };
+type DeviceModelRoute = { deviceId: string; route: ProviderPickerModel };
 /** 被控电脑收到的分享;loaded = 已拿到过一次权威列表(含缓存)。 */
 type ShareState = { controlledDeviceId: string; shares: readonly ProviderShareCatalogEntry[]; loaded: boolean };
 
@@ -70,12 +76,16 @@ export interface RemoteAgentCatalogsInput {
   keepDeviceIds: readonly string[];
   /** 只读 keepDeviceIds 里的电脑(选择器没打开、只为模型药丸取 Agent 所在那台的目录时)。 */
   keepOnly?: boolean;
+  retainedModel?: DeviceModelRoute;
+  pendingModel?: DeviceModelRoute;
 }
 
 /** settled = 电脑清单(和分享清单)已读到过一次:此后清单里没有的电脑 / 分享才算真的不在了。 */
 export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput): {
   catalogs: RemoteAgentCatalog[];
   settled: boolean;
+  retainedCatalog?: RetainedProviderCatalog;
+  pendingCatalog?: RetainedProviderCatalog;
 } {
   const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion,
     getPresenceAvailability, rosterVersion = 0, providerShareCatalogVersions = {} } =
@@ -257,19 +267,27 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     });
   }, [input.controlledDeviceId, input.enabled, keepKey, keepOnly, readShares, shareState, t]);
 
+  const retained = useRemoteRetainedModel(input.retainedModel, catalogs, input.enabled, !keepOnly);
+  const pending = useRemoteRetainedModel(input.pendingModel, catalogs, input.enabled, !keepOnly);
+  const retainedDevice = input.retainedModel?.deviceId;
+  const pendingDevice = input.pendingModel?.deviceId;
   const result = useMemo(() => {
     if (devices.length === 0 && shareCatalogs.length === 0) return NO_CATALOGS;
     void presenceVersion;
     const deviceCatalogs = devices.map((device): RemoteAgentCatalog => {
       const state = catalogs.get(device.deviceId);
-      const payload = state?.payload;
+      const retainedHere = device.deviceId === retainedDevice ? retained : undefined;
+      const pendingHere = device.deviceId === pendingDevice ? pending : undefined;
+      const payload = state?.payload && taskProviderCatalog(state.payload, retainedHere?.catalog, pendingHere?.catalog);
       // 设备清单是打开时的快照;面板开着期间上下线以实时 presence 为准(未知时沿用清单)。
       const presence = getPresenceAvailability(device.deviceId);
       const offline = presence === false || (presence !== true && !device.canOpen);
       return {
         deviceId: device.deviceId,
         name: device.name,
-        status: state?.status ?? (device.canOpen ? 'loading' : 'error'),
+        status: retainedHere?.error || pendingHere?.error ? 'error'
+          : retainedHere?.loading || pendingHere?.loading ? 'loading'
+          : state?.status ?? (device.canOpen ? 'loading' : 'error'),
         ...(offline ? { offline: true as const } : {}),
         providers: payload ? remoteAgentProviders(payload.providers) : [],
         ...(payload?.modelVisibilityOverrides !== undefined
@@ -278,8 +296,21 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
       };
     });
     return shareCatalogs.length === 0 ? deviceCatalogs : [...deviceCatalogs, ...shareCatalogs];
-  }, [catalogs, devices, shareCatalogs, presenceVersion, getPresenceAvailability]);
+  }, [catalogs, devices, shareCatalogs, presenceVersion, getPresenceAvailability, retainedDevice, retained.catalog, retained.loading, retained.error,
+    pendingDevice, pending.catalog, pending.loading, pending.error]);
   const settled = input.enabled && devicesLoaded
     && (!readShares || shareState.controlledDeviceId !== input.controlledDeviceId || shareState.loaded);
-  return { catalogs: result, settled };
+  return { catalogs: result, settled, retainedCatalog: retained.catalog, pendingCatalog: pending.catalog };
+}
+
+function useRemoteRetainedModel(
+  target: DeviceModelRoute | undefined,
+  catalogs: ReadonlyMap<string, CatalogState>,
+  enabled: boolean,
+  pickerOpen: boolean,
+) {
+  const device = target?.deviceId;
+  const base = device && enabled ? catalogs.get(device) : undefined;
+  const maker = useMobileMakerTransport(device ?? '');
+  return useRetainedProviderModel(device, maker, base?.status === 'ready' ? base.payload : undefined, target?.route, pickerOpen, remoteAgentProviders);
 }

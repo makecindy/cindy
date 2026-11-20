@@ -231,16 +231,21 @@ privately rather than opening a public issue.
 ## Privacy & telemetry
 
 **Official distribution builds** include [TapDB](https://www.taptap.io/tapdb)
-usage analytics for product-level aggregate statistics, including device identifiers,
-OS / app version, startup and activity events. Events are associated with your account
-ID after sign-in, so this is not fully anonymous. TapDB does **not** collect chat
-content, file content, or working-directory data.
+usage analytics for app launches and return visits, including a device identifier
+and OS / app version. After sign-in, visits use a regional account alias. The same
+alias links daily model choices and token totals from participating desktop
+devices. Payment statistics use a separate alias. Desktop uses a fresh device
+identifier. On mobile, someone with older records may be able to link the new
+alias to the original account ID through the existing device identifier.
+These statistics exclude chats, prompts, files and working-directory data.
 
 **You can disable usage analytics without editing code**: on Desktop, use
 Settings → About → Usage statistics; on Mobile, use Usage statistics in Settings.
 The SDK checks the stored privacy-consent state and the statistics preference,
 which defaults to on. Accepting the Privacy Policy records consent; a one-time
 migration also records consent for eligible existing signed-in users.
+Upgrading keeps the current setting. Per-account model usage starts at upgrade
+and enrollment on each desktop. Earlier usage is not uploaded as account history.
 
 **Known Mobile exception:** enterprise SSO skips the policy-acceptance step. If no
 analytics consent record exists and that sign-in is restored after restarting the

@@ -11,6 +11,7 @@ import {
   homeRowBefore,
   mergeAutomationItems,
   withMergedAutomationPriority,
+  type InboxTeammateEntry,
 } from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
@@ -531,6 +532,35 @@ it('leaves idle teammate tasks out of the inbox until they need the user or run'
   signals.runningSessionIds.add('opened');
   expect(ids('inbox-inbox').sort()).toEqual(['mine', 'routine']);
   expect(ids('inbox-working')).toEqual(['opened']);
+});
+
+// 2026-11-20 user decision: a teammate's main conversation is one inbox row placed by whose turn
+// it is. Unit, through the real section builder; existing cases only cover teammate *tasks*.
+// Smallest failing input: an idle read teammate listed at all, or a snooze outliving new input.
+it('places teammate conversations by whose turn it is, ahead of tasks, and leaves idle ones out', () => {
+  const now = Date.parse('2026-11-20T08:00:00Z');
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const home = presentation({ chats: [listItem('task', iso(now))] });
+  const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const snooze = { snoozedUntil: iso(now + 3_600_000), snoozedAt: iso(now), userSendAt: null };
+  const teammates: InboxTeammateEntry[] = [
+    { key: 'idle', status: 'idle', snooze: null, activityAt: 9 },
+    { key: 'asks', status: 'awaiting', snooze: null, activityAt: 1 },
+    { key: 'replied', status: 'unread', snooze: null, activityAt: 2 },
+    { key: 'busy', status: 'running', snooze: null, activityAt: 3 },
+    { key: 'later', status: 'awaiting', snooze, activityAt: 4 },
+  ];
+  const rows = (at: number, list = teammates) => Object.fromEntries(buildInboxHomeSections(home, new Set(['inbox-working']), signals, at, list)
+    .map(section => [section.key, { count: section.count, keys: section.data.map(row => row.kind === 'teammate' ? row.teammate.key : row.key),
+      labels: section.data.flatMap(row => row.kind === 'teammate' && row.sourceLabel ? [row.sourceLabel] : []) }]));
+  const listed = rows(now);
+  expect(listed['inbox-inbox']).toMatchObject({ count: 3, keys: ['replied', 'asks', 'inbox::task'] });
+  // A collapsed section still counts its teammate.
+  expect(listed['inbox-working']).toMatchObject({ count: 1, keys: [] });
+  expect(listed['inbox-snoozed']).toMatchObject({ count: 1, keys: ['later'], labels: [new Date(now + 3_600_000).toLocaleString('zh-CN')] });
+  // The wake time passes, or the teammate's conversation receives new input first.
+  expect(rows(now + 3_600_000)['inbox-inbox'].keys).toContain('later');
+  expect(rows(now + 1, [{ ...teammates[4], snooze: { ...snooze, userSendAt: iso(now + 1) } }])['inbox-inbox'].keys).toContain('later');
 });
 
 it('puts a quiet followed task in working and returns it to inbox for results, waiting or pause', () => {

@@ -124,6 +124,7 @@ pnpm mobile:sim:whoami -- --mock --json
 - 模拟电脑支持协同：任务或新建任务的「+」面板 →「协同模式」可以直接打开开启协同的表单，角色清单
   （含添加、长按移除）读写的是模拟电脑上的那一份，只在本次进程内生效。
 - 生效条件是开发构建（`__DEV__`）；正式包不包含这条路径。
+- 复古皮肤：`cindy://retro-skin-preview`，可加 `?skin=thinkpad` 等已有外观标识以直接比较各款键盘；在折叠屏竖向半折叠姿态下，使用正式的外壳、键盘及窗口几何显示原生预览；按键事件仅显示在屏幕内，不连接远程电脑。用于检查屏幕边界、素材拼接及真实触摸反馈，不代表远程连接已验证。
 - 设备画面连接页：`cindy://devices/desktop/cindy-visual-mock-mac?liveScreen=cindy-simulator%7Cpreview`。
   mock provider 保持远程桌面请求等待，真实页面展示连接中、等待较久及原有超时状态，供返回按钮与明暗主题截图；不连接真实电脑。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，

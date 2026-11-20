@@ -20,6 +20,7 @@ import { releasePluginUiRegions } from '../mcp-apps/visibility.js';
 import { releasePluginAppearance } from '../mcp-apps/appearance.js';
 import { checkGhostSecret } from './runtime/ghostSecretCheck.js';
 import { PluginDeviceSync } from './deviceSyncSlot.js';
+import { pluginAutomationAccount } from '../device-link/pluginAutomationHost.desktop.js';
 import { deviceSyncKeyStore } from '../device-sync-keys/keyStore.js';
 import { RemotePluginPreferences } from './remotePluginPreferences.js';
 import { readDeviceLinkSettings } from '../device-link/settings-store.desktop.js';
@@ -388,6 +389,7 @@ import {
   setGhostConnectionsHandler,
   setGhostKvStore,
   setGhostModelsHandler,
+  setGhostHarnessesHandler,
   setGhostMediaModelsProvider,
   setGhostAgentModelsProvider,
   setGhostModelPreferencesProvider,
@@ -400,6 +402,8 @@ import {
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
+import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
+import { configurePluginHarnessRegistry, reconcilePluginHarnesses } from './pluginHarnesses.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
 import {
   handleGhostSetupStatusRequest,
@@ -578,6 +582,7 @@ import {
   confirmedAutoTools,
   confirmedCindyModelActions,
   confirmedControlPoints,
+  confirmedHarnesses,
   confirmedUiCapability,
   obtainGhostInstallConsent,
   type GhostInstallConsentDecision,
@@ -768,6 +773,9 @@ import {
 import { getCindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { normalizeImageParameters } from '../cindy-media/imageParameters.js';
 import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
+import { getCustomProvider } from '../maker-host/custom-provider-store.js';
+import { isProviderRouteMutationInProgress, getProviderRouteCredentialRevision } from '../maker-host/provider-route.js';
+import { geminiImageAgent, geminiImageConnectionId, resolveGeminiImageKey, savedGeminiRouteMatches } from '../maker-host/gemini-image-connection.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
 import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
@@ -788,6 +796,7 @@ import { callCindyMedia } from '../cindy-media/invocationService.js';
 import { invokeLegacyMedia, legacyVideoReceipt } from '../cindy-media/legacyMediaInvocation.js';
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
 import { probeImageSize } from './imageProbe.js';
+import { canShareSubscriptionImage } from '../cindy-media/sharedSubscriptionImage.js';
 import {
   configureProviderMediaRuntime,
   listProviderMediaModels,
@@ -2436,7 +2445,43 @@ export function getGhostRuntime(): GhostRuntime {
   return runtimeSingleton;
 }
 
+let primaryChoiceOpen = false;
 export const pluginDeviceSync = new PluginDeviceSync({
+  async automationHost(ghost, key, choice, current) {
+    const account = pluginAutomationAccount(key, current);
+    let role;
+    try { role = await account.read(); }
+    catch (error) {
+      if ((error as { statusCode?: number }).statusCode === 404) return { ok: false, errorCode: 'AUTOMATION_SERVICE_PENDING' };
+      throw error;
+    }
+    if (!current()) return { ok: false, errorCode: 'SYNC_OFFLINE' };
+    if (choice) {
+      if (choice.revision !== role.revision) return { ok: false, errorCode: 'HOST_CHOICE_CHANGED' };
+      const parent = getDeepLinkMainWindow();
+      if (!parent || parent.isDestroyed() || primaryChoiceOpen) return { ok: false, errorCode: 'HOST_NOT_READY' };
+      primaryChoiceOpen = true;
+      try {
+        const message = t(choice.useThisDevice ? 'settings.ghosts.detail.automationHostSelect' : 'settings.ghosts.detail.automationHostClear')
+          .replaceAll('{{name}}', () => ghost.manifest.name);
+        const answer = await dialog.showMessageBox(parent, { type: 'question', message,
+          buttons: [t('commonUi.confirmDialog.confirm'), t('commonUi.confirmDialog.cancel')], defaultId: 1, cancelId: 1, noLink: true });
+        if (answer.response !== 0) return { ok: false, errorCode: 'CANCELLED' };
+        if (!current()) return { ok: false, errorCode: 'SYNC_OFFLINE' };
+        try { role = await account.select(choice.revision, choice.useThisDevice); }
+        catch (err) {
+          if ((err as { statusCode?: number }).statusCode === 409) return { ok: false, errorCode: 'HOST_CHOICE_CHANGED' };
+          throw err;
+        }
+      } finally { primaryChoiceOpen = false; }
+    }
+    if (!current()) return { ok: false, errorCode: 'SYNC_OFFLINE' };
+    if (getCurrentDbClientUserId() !== getActiveAppSession().dataOwnerId) return { ok: false, errorCode: 'HOST_NOT_READY' };
+    const schedules = localDbSchema.schedules;
+    const rows = await getDbClient().drizzle.select({ status: schedules.status }).from(schedules).where(eq(schedules.primaryHostKey, key));
+    const localSchedule = rows.some(r => r.status === 'active') ? 'active' : rows.some(r => r.status === 'paused') ? 'paused' : rows.length ? 'expired' : 'none';
+    return { ok: true, ...role, localSchedule };
+  },
   scope: activeOwnerScopeKey,
   keys: deviceSyncKeyStore,
   getGhost: findGhostForInstanceId,
@@ -3167,6 +3212,15 @@ export const ghostNativeRecoveryObserver: NonNullable<AgentDeps['nativeRecoveryO
 /** 插件发布的模型单独成文件：不进插件自己的 /kv，插件不能绕过校验改它，卸载时一起清。 */
 const publishedModelsStore = () => createGhostKvStore({
   getRootDir: () => ownerScopedUserDataPath('ghost-published-models'),
+  log,
+});
+
+/**
+ * 插件发布的执行引擎可用状态(`PUT /harnesses`)：同 /models 单独成文件、按 owner 隔离；
+ * 停用时保留(注册表不列停用插件)，卸载时一起清。读时按当前清单重新校验。
+ */
+const publishedHarnessesStore = () => createGhostKvStore({
+  getRootDir: () => ownerScopedUserDataPath('ghost-published-harnesses'),
   log,
 });
 
@@ -5361,11 +5415,30 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     registry.register(
       'gemini',
       createGeminiImageChannel({
-        getApiKey: () => getProviderSecretStore().get('gemini'),
+        credentialScope: () => {
+          const id = geminiImageConnectionId();
+          return JSON.stringify([activeOwnerScopeKey(), id, id && getProviderRouteCredentialRevision(id)]);
+        },
+        getApiKey: () => resolveGeminiImageKey(
+          geminiImageConnectionId(),
+          id => isProviderRouteMutationInProgress(id) || isProviderDisabled(readModelDisableOverrides(), id) ? undefined
+            : getActiveCatalog().providers.find(provider => provider.id === id),
+          readCustomProviderKey,
+          () => getProviderSecretStore().get('gemini'),
+        ),
         // googleapis 境外端点经 outboundFetch 吃系统代理:main 的裸 fetch 不读系统
         // 代理设置,代理软件非 TUN 模式下会直连失败(xd 网关域名境内直连,不注)。
         fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+        beforeDispatch: model => {
+          assertMediaModelStillEnabled('image', model);
+          const id = geminiImageConnectionId();
+          if (!id) return;
+          const agent = geminiImageAgent(getActiveCatalog().providers.find(provider => provider.id === id));
+          return getCustomProvider(id).then(config => {
+            if (!savedGeminiRouteMatches(config, agent)) throw new Error('Gemini API 连接已变更，请重新选择连接');
+            assertMediaModelStillEnabled('image', model);
+          });
+        },
       }),
     );
     // OpenAI public Images API(BYO 平台 key):与 xd 网关同 wire,整个客户端复用,
@@ -5721,7 +5794,7 @@ configureProviderMediaRuntime({
     const beforeDispatch = () => {
       assertAllowed();
       const provider = getActiveCatalog().providers.find(candidate => candidate.id === providerId);
-      if (!provider || provider.auth.native !== 'codex' || isOrganizationManagedProvider(provider)
+      if (!provider || !canShareSubscriptionImage(provider, model)
         || !listLocalProviderMediaModels(false, ['image.generate']).some(candidate =>
           candidate.providerId === providerId && candidate.id === model)) {
         throw new Error('SHARED_IMAGE_UNAVAILABLE');
@@ -7848,6 +7921,7 @@ async function installAndDockLocked(
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedCindyModelActions: confirmedCindyModelActions(opts.consent.decision, installedBefore, opts.consent.manifest),
+    approvedHarnesses: confirmedHarnesses(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
@@ -8046,6 +8120,7 @@ async function updateLocalGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           approvedCindyModelActions: confirmedCindyModelActions(consent, previousGhost, inspected.manifest),
+          approvedHarnesses: confirmedHarnesses(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
@@ -8649,6 +8724,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           approvedCindyModelActions: confirmedCindyModelActions(expected.consent, installed, inspected.manifest),
+          approvedHarnesses: confirmedHarnesses(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
@@ -8808,6 +8884,7 @@ async function uninstallGhostAndCleanupLocked(
       log,
     );
     removeGhostKvBestEffort(publishedModelsStore(), storagePart, log);
+    removeGhostKvBestEffort(publishedHarnessesStore(), storagePart, log);
     if (storagePart) {
       try {
         await fs.promises.rm(ownerScopedUserDataPath('ghost-fs', storagePart), {
@@ -8930,6 +9007,12 @@ export function builtinSeedYieldsToStoreVersion(id: string, storeVersion: string
  * spawn 幂等,重复调用零成本;失败走熔断记账,不抛出(fire-and-forget)。
  */
 function spawnIfResident(ghost: InstalledGhost, allowPendingLegacy = false): void {
+  // 同一「该在场了」入口解除 stop() 留下的执行引擎启动闸：停用、更新、卸载进行中不起引擎，
+  // 启用、更新／回滚完成后才放行(回滚失败的路径不会走到这里，闸保持关闭)。
+  const storagePart = installedGhostStoragePart(ghost);
+  if (ghost.enabled && isGhostAvailableForActiveSession(storagePart)) {
+    nodeRuntimeBrokerSingleton?.resumeHarnesses(storagePart);
+  }
   spawnResidentGhost(ghost, {
     isAvailable: isGhostAvailableForActiveSession,
     allowPendingLegacy,
@@ -9419,6 +9502,32 @@ export function registerGhostIpc(): void {
       store: publishedModelsStore(),
       onChanged: () => broadcastGhostsChanged(getGhostManager().list()),
     });
+  });
+  // /harnesses：执行引擎可用状态。内容变化只重算执行引擎注册表，不触发花名册侧效应。
+  setGhostHarnessesHandler(({ ghostId, method, readBodyText, isCurrent }) => {
+    const ghost = findGhostForInstanceId(ghostId);
+    return handleGhostHarnessesRequest({
+      ghostId, method, readBodyText, isCurrent,
+      declared: () => (ghost ? ghost.manifest.harnesses : null),
+      store: publishedHarnessesStore(),
+      onChanged: () => reconcilePluginHarnesses(),
+    });
+  });
+  configurePluginHarnessRegistry({
+    listGhosts: availableGhosts,
+    isAvailable: isGhostAvailableForActiveSession,
+    readAvailability: (ghostId) => publishedHarnessesStore().read(ghostId),
+    uiLocale: () => currentGhostAppContext().context.uiLocale,
+    spawn: (ghostId, harnessId, options) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId, options),
+    requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
+    readUsage: async (ghostId, harnessId) => {
+      const owner = captureDataOwnerBroadcastScope();
+      const response = await getGhostNodeRuntimeBroker().handleRequest(ghostId, {
+        type: 'node-request', method: 'usage', params: { harnessId }, timeoutMs: 26000,
+      });
+      return response.ok && isDataOwnerBroadcastScopeCurrent(owner) ? response.result : null;
+    },
+    log,
   });
   // /secrets 只写通道(network user 与 node.secretBindings 凭证一律由意识
   // settingsHtml 收单入库——宿主凭证渲染 2026-07-13 整体退役):现查在装
@@ -11882,6 +11991,8 @@ function broadcastGhostsChanged(
     sweepRevokedGhostUnread(ghosts, rosterAuthoritative);
     // 浏览器扩展桥接跟着花名册走:启用即开、停用/卸载/换版即关。
     getGhostBrowserExtensionSlot().reconcile(ghosts);
+    // 执行引擎注册表同一对账点:启停、装卸、换版与批准变化后重算,内容不变不通知。
+    reconcilePluginHarnesses(ghosts);
   }
   const visible = ghosts
     .filter((ghost) => isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)))
@@ -12021,6 +12132,8 @@ export function refreshGhostLocalization(previousLocale: SupportedLocale): void 
       // App configs retain localized titles/tool descriptions used by newly published cards.
       refreshPluginApps(ghosts, { find: findGhostForInstanceId,
         evidence: id => manager.approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });
+      // 执行引擎名称按界面语言选取，语言变了要重算(只重投影，不是花名册对账)。
+      reconcilePluginHarnesses(ghosts);
       broadcastGhostsChanged(ghosts, false, { projectionOnly: true });
     },
     sendContextChanged: (ghost, message) => sendToGhostLogic(installedGhostStoragePart(ghost), message),

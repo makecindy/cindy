@@ -866,8 +866,7 @@
         "loading": "正在读取配额…",
         "unavailable": "暂时读不到这台电脑的配额",
         "none": "这个供应商没有配额信息",
-        "offline": "这台电脑不在线，读不到配额",
-        "share": "别人分享的电脑不显示配额"
+        "offline": "这台电脑不在线，读不到配额"
       },
       "runningCount_other": "{{count}} 个任务运行中",
       "limitAria": "{{name}} 的并发上限",
@@ -970,8 +969,8 @@
       "loading": "正在加载图片…"
     },
     "moveToolbar": "左右拖动工具栏",
-    "hint": "单击选中窗口或元素，拖动框选 · 滚轮切换范围 · 空格全屏 · C 复制颜色 · Esc 退出",
-    "hintWithLast": "单击选中窗口或元素，拖动框选 · 滚轮切换范围 · 空格全屏 · R 上次区域 · C 复制颜色 · Esc 退出",
+    "hint": "单击选中窗口或元素，拖动框选 · 滚轮切换范围 · 空格选中整个窗口 · C 复制颜色 · Esc 退出",
+    "hintWithLast": "单击选中窗口或元素，拖动框选 · 滚轮切换范围 · 空格选中整个窗口 · R 上次区域 · C 复制颜色 · Esc 退出",
     "copy": "复制",
     "cancel": "退出截图",
     "captureFailed": "未能截取屏幕",
@@ -1413,6 +1412,7 @@
     "UPSTREAM_ERROR": "上游服务错误（5xx），请稍后重试",
     "UPSTREAM_UNREACHABLE": "无法连接到端点，请检查网络与基础 URL",
     "TIMEOUT": "连接超时，请检查网络与基础 URL",
+    "CERT_ERROR": "证书验证失败，请检查基础 URL 的主机名是否与证书匹配，以及证书链和企业 CA 信任配置",
     "UNKNOWN": "未知错误，请查看日志了解详情",
     "upstreamToast": "供应商「{{provider}}」请求失败：{{message}}"
   },
@@ -1424,6 +1424,10 @@
     "details": "错误详情"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "本地数据库损坏",
+      "description": "检测到本地数据库损坏，已停止访问以保护数据。可重新打开本地数据；若仍失败，请复制技术细节并联系支持人员。请勿覆盖或删除数据库文件。"
+    },
     "schemaLease": {
       "title": "本地数据暂时无法打开",
       "retry": "重新打开本地数据",
@@ -2772,7 +2776,7 @@
       "autoUpdateDisabledToast": "已关闭空闲时自动安装更新",
       "autoUpdateSaveFailed": "保存自动更新设置失败",
       "analyticsLabel": "使用统计",
-      "analyticsDescription": "帮助我们了解 Cindy 的启动与留存情况。上报设备型号、系统版本、应用版本、设备标识符等设备与使用环境信息，登录后还包含你的账号 ID；不包含任何对话内容、文件或提示词。关闭后立即停止上报。",
+      "analyticsDescription": "开启后，我们会用匿名代号代替你的账号和设备 ID，了解回访情况和模型的用量汇总，帮助我们优化产品。你的对话、文件和提示词都不在统计范围内。",
       "analyticsEnabledToast": "已开启使用统计",
       "analyticsDisabledToast": "已关闭使用统计",
       "analyticsSaveFailed": "保存使用统计设置失败",
@@ -3675,6 +3679,8 @@
           "edit": "编辑",
           "editFailed": "请检查地址、协议和密钥后重试。",
           "editNote": "密钥留空会保留已读取的凭证。更改地址或协议后，需填写新密钥。",
+          "useSavedCredential": "使用已保存的凭证",
+          "confirmDestination": "要在此地址使用已保存的 Claude Code 凭证吗？",
           "name": "显示名称",
           "baseUrl": "基础 URL",
           "protocol": "接口协议",
@@ -4076,6 +4082,25 @@
         "refreshFailed": "模型列表刷新失败，请稍后再试",
         "refreshReconnect": "模型列表刷新失败。重新连接此供应商后再试。",
         "refreshFetchDisabled": "模型目录远程拉取未启用，已跳过刷新",
+        "withdrawn": {
+          "refreshFound": "有 {{count}} 个模型上游已不再提供",
+          "refreshAdded": "新增 {{added}} 个模型，另有 {{count}} 个上游已不再提供",
+          "refreshSuspicious": "这次有 {{count}} 个模型没返回，可能是上游暂时返回不全",
+          "refreshAddedSuspicious": "新增 {{added}} 个模型，另有 {{count}} 个没返回，可能是上游暂时返回不全",
+          "review": "查看模型",
+          "heading": "上游已不再提供的模型",
+          "intro": "刷新「{{provider}}」时，上游没有再返回以下模型。勾选要移除的模型；仍返回它们的引擎不受影响。",
+          "suspicious": "这次没返回的模型数量异常多，可能是上游暂时返回不全。建议稍后再刷新一次确认，或只勾选确定已下线的模型。",
+          "selectAll": "全选",
+          "selected": "已选 {{count}} 个，共 {{total}} 个",
+          "consequence": "移除后，这些模型不再出现在模型选择中，已选用它们的地方会显示为不可用。上游重新提供时，再次刷新即可加回。",
+          "confirm": "移除 {{count}} 个模型",
+          "cancel": "暂不移除",
+          "removed": "已移除 {{count}} 个模型",
+          "cleanupIncomplete": "已移除 {{count}} 个模型，但部分显示或停用设置未能清除",
+          "stale": "连接设置已变化，没有可移除的模型。请重新刷新后再查看",
+          "removeFailed": "未能移除模型"
+        },
         "disableModel": "停用此模型",
         "paymentRequired": "付费",
         "paymentUnlock": "付费解锁",
@@ -4364,6 +4389,7 @@
         "authorizedToast": "已登录 {{name}}",
         "authorizeFailed": "{{name}} 登录失败，请重试",
         "nameLabel": "显示名称",
+        "geminiImageKeyNote": "保存后，这把 Key 将用于新连接的对话和此后的 Gemini 生图。只需生图时，可以不勾选对话模型。",
         "onlyAgentNote": "此供应商仅支持 {{agent}}",
         "endpointLabel": "{{agent}} 基础 URL",
         "noAuthNote": "此 Proxy 无需客户端密钥；Cindy 会在转发前移除 CLI 的订阅凭证。",
@@ -6757,9 +6783,23 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "本机连接流量",
+          "range": "统计时间范围",
+          "last5m": "近 5 分钟",
+          "lastHour": "近 1 小时",
+          "lastDay": "近 24 小时",
+          "sent": "发送",
+          "received": "接收",
+          "total": "合计",
+          "scope": "估算直连和中转的收发量，含文件直传。设备发现广播、独立音视频流和 HTTP 传输除外。"
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
+        },
+        "linkTransport": {
+          "webrtc": "WebRTC"
         },
         "onlyEncrypted": "仅使用 Agent-Net",
         "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。",
@@ -7904,6 +7944,7 @@
           "accessDenied": "当前插件操作不被允许，或操作已取消。",
           "notConfigured": "当前环境未提供插件市场。",
           "invalidPackage": "插件安装包异常，无法安装，请联系发布者。",
+          "downloadAuthorizationExpired": "插件下载授权已过期，无法继续安装。请检查系统日期和时间后重新发起安装",
           "downloadTimeout": "插件下载超时，请稍后重试。",
           "downloadFailed": "插件下载失败，请检查网络后重试。",
           "brokerRedirectPortRequired": "该插件声明了授权 broker，但同一项 OAuth 配置缺少 redirectPort，无法从插件市场安装。请联系发布者补充该字段并重新发布。",
@@ -8220,10 +8261,12 @@
         "agentHiddenTasksDetail": "本插件创建的任务可以不出现在任务列表、搜索和通知里。你可以随时在插件详情的「后台任务」中查看、打开，或显示到任务列表；卸载插件时这些任务会恢复显示。",
         "agentModelPreferences": "读取并修改你的模型收藏，读取你最近使用的模型",
         "agentModelPreferencesDetail": "可读取这台电脑上的模型收藏和最近使用的模型（含推理强度与 Fast 设置），并添加、修改或移除收藏，改动会同步显示在 Cindy 的模型选择器里。在插件里选择的模型不会记入最近使用。不包含你其他电脑上或别人分享给你的模型，也不提供任何凭证。",
+        "harnesses": "提供执行引擎：{{names}}",
+        "harnessesDetail": "可以在你的任务里读写工作目录、执行命令，并使用与内置 Pi 相同范围的 Cindy 工具。",
         "agentErrand": "可以新建任务、执行工作并读取结果",
         "agentErrandDetail": "创建的任务会出现在 Cindy 的任务列表中，可以查看过程并继续交流。",
         "agentSchedule": "可以请你新建自动化",
-        "agentScheduleDetail": "它只能为你打开新建自动化的面板并把内容填好，是否创建由你在面板上选好模型后亲手保存决定。创建后由 Cindy 按你设定的时间运行，可能产生模型费用。",
+        "agentScheduleDetail": "它只能为你打开新建自动化的面板并把内容填好，是否创建由你在面板上选好模型后亲手保存决定。创建后由 Cindy 按你设定的时间运行，可能产生模型费用。支持设备同步的插件还可以请你确认由哪台电脑运行自动化。",
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
@@ -8467,6 +8510,13 @@
         "openInSidebar": "在侧边栏中打开",
         "panelPageHosted": "从插件页打开 · 离开插件页自动关闭",
         "panelNone": "这个插件不含面板",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}：允许被远程调用",
+          "description": "开启后，你的其他电脑可以用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。",
+          "unsupported": "这个插件还不支持让其他电脑使用它的引擎。",
+          "remoteControlOff": "这台电脑还没有允许同账号设备远程控制，其他电脑不能使用这个引擎。",
+          "ariaLabel": "允许你的其他电脑使用 {{engine}}"
+        },
         "githubRelease": {
           "title": "插件更新",
           "installed": "当前版本 {{version}}",
@@ -8535,6 +8585,8 @@
         "browserUse": "使用此浏览器扩展",
         "browserActivated": "已选择此浏览器扩展",
         "browserActivationFailed": "未能选择此扩展，请确认扩展已启用，并完成连接切换确认。",
+        "automationHostSelect": "将这台电脑设为「{{name}}」的自动化主机？",
+        "automationHostClear": "取消这台电脑作为「{{name}}」的自动化主机？",
         "browserSwitchTitle": "切换浏览器扩展连接？",
         "browserSwitchMessage": "将此浏览器连接交给「{{name}}」？",
         "browserSwitchDetail": "实例：{{instance}}\n注册名：{{host}}\n这会替换当前注册，扩展将连接到此插件。",
@@ -9754,6 +9806,10 @@
     "cacheLine": "缓存拆分：读取 {{read}} · 写入 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "缓存拆分：读取 {{read}} · 写入 {{create}}",
     "stepsLine": "本轮请求 {{steps}} 次 · 每次约 {{context}} 上下文",
+    "traceChartLabel": "本轮生成速度与每次请求的推理用量",
+    "traceRequests": "本轮请求 {{requests}} 次",
+    "traceThinkingShare": "推理占比 {{share}}",
+    "traceThinkingTokens": "推理 {{thinking}} tokens",
     "modelLine": "模型：{{model}}",
     "multipleModels": "{{count}} 个模型",
     "costBreakdownHeader": "按模型拆分：",
@@ -12995,6 +13051,7 @@
           "overloadRetryingNoCount": "模型服务繁忙，正在自动重试…",
           "overloadFailed": "⚠️ 模型服务繁忙：上游暂时没有可用容量。请直接在这里重发这条消息重试，或在 Cindy 里换一个模型。（在桌面端点「重试」也能继续任务，但结果不会回到这条消息里。）"
         },
+        "audioInputUnavailable": "当前模型连接无法直接读取音频。可以让 Cindy 先把音频转成文字，再继续处理。",
         "toolLoop": {
           "generic": "模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
           "consecutive": "模型重复调用同一个工具 {{n}} 次，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
@@ -13551,6 +13608,8 @@
         },
         "reply": {
           "unsupportedMedia": "当前版本暂不支持处理这类微信媒体。",
+          "delayedReply": "这条延迟回复于 {{createdAt}} 生成，对应 {{receivedAt}} 收到的旧消息，内容可能已过时。",
+          "delayedReplyQuestion": "原消息：{{question}}",
           "stillProcessing": "任务仍在处理中…",
           "ownerOnlyCommands": "只有主人可以使用机器人命令。",
           "companionManagedCommand": "请在 Cindy 中打开这位伙伴：模型在伙伴设置中调整，权限在对话输入框下方切换。",
@@ -14031,6 +14090,8 @@
         "fastBadge": "快速"
       },
       "source": {
+        "lastConfirmed": "上次刷新：{{time}}",
+        "unconfirmed": "模型列表暂未更新",
         "unavailable": "模型不可用",
         "reconnect": "重新连接",
         "manage": "管理来源",
@@ -14139,6 +14200,32 @@
           "bypassPermissions": {
             "label": "完全访问",
             "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
+          }
+        },
+        "acp": {
+          "ask": {
+            "label": "逐项确认",
+            "description": "Agent 请求权限时由你确认。Agent 没有请求确认的操作，Cindy 无法拦截。"
+          },
+          "default": {
+            "label": "默认",
+            "description": "按 Agent 自己的默认方式工作；它请求权限时由你确认。"
+          },
+          "acceptEdits": {
+            "label": "自动接受编辑",
+            "description": "Agent 直接修改文件；其他请求权限的操作由你确认。"
+          },
+          "auto": {
+            "label": "自动",
+            "description": "由 Agent 自行判断哪些操作需要确认；它请求权限时由你确认。"
+          },
+          "plan": {
+            "label": "只规划",
+            "description": "Agent 只分析和制定计划，不修改文件。"
+          },
+          "bypassPermissions": {
+            "label": "全部允许",
+            "description": "Agent 请求的权限一律自动允许。"
           }
         }
       }
@@ -14601,6 +14688,16 @@
       "nowDefault": "已设为默认",
       "switchToSteer": "默认改为插话",
       "switchToQueue": "默认改为排队"
+    },
+    "pluginEngines": {
+      "group": "插件引擎",
+      "genericName": "插件引擎",
+      "defaultModel": "默认模型",
+      "defaultModelHint": "使用引擎自己的默认设置",
+      "unavailable": "暂不可用",
+      "engineMissing": "提供这个引擎的插件已停用或卸载",
+      "worktreeUnsupported": "插件引擎暂不支持在 worktree 中新建任务，请取消勾选 worktree 后再发送",
+      "modelChangeFailed": "未能切换模型"
     }
   },
   "onboarding": {
@@ -14922,11 +15019,14 @@
     },
     "runningStatus": {
       "currentRate": "最近速度",
+      "lastRequestRate": "上次请求均速",
+      "recentTokenRate": "最近 {{rate}} tok/s",
       "waitingSample": "采样中",
       "averageRate": "本轮平均",
       "rateHistory": "生成速度历史",
       "outputTotal": "累计输出",
       "observedPeak": "峰值",
+      "thinkingShare": "推理占比",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "最近一段生成速度，不含工具执行与等待。",
@@ -15032,6 +15132,7 @@
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
+      "pluginEngineStatus": "正在后台继续工作…",
       "bashWorkStatus_one": "正在后台工作（{{count}} 个命令）…",
       "bashServiceStatus_one": "后台服务运行中（{{count}} 个）",
       "bashWorkStatus_other": "正在后台工作（{{count}} 个命令）…",
@@ -15070,6 +15171,11 @@
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "此前有自动运行失败。",
+      "prCheck_dns": "{{device}} 无法解析 {{host}}。如果问题持续，请检查这台设备的网络或 DNS。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
+      "prCheck_timeout": "{{device}} 连接 GitHub 超时。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
+      "prCheck_auth": "请在 {{device}} 上重新登录 GitHub。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
+      "prCheck_rate-limit": "GitHub 暂时限制了 {{device}} 的请求频率。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
+      "prCheck_unknown": "{{device}} 上的 PR 检查失败，请查看运行详情。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
       "precheck": "自动检查暂时受阻。",
       "rateLimited": "自动检查暂时受阻：请求限流。",
       "pluginMissing": "自动检查暂时受阻：「{{name}}」插件未安装，装好后自动恢复。",
@@ -15731,6 +15837,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "当前连接无法使用上一个模型，切换模型时的上下文压缩失败。",
       "MODEL_SELECTION_UNAVAILABLE": "所选模型在该供应商下已不可用。请在设置中检查连接，或重新选择可用模型。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切换。请查看错误详情，待 Harness 就绪后重试。",
       "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
@@ -15780,6 +15887,9 @@
       "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "这台电脑无法恢复任务原来的运行状态。请选择其他电脑或供应商的模型，通过上下文交接继续；原消息会保留。",
       "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "插件引擎未能恢复之前的对话。消息已保留。请选择其他引擎继续，或新建任务。",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "这个插件引擎用不了任务所在电脑的工具，暂时不能从另一台电脑运行这个任务。请换一个引擎或模型。",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "这个插件引擎只能运行本机的任务，还不能让其他电脑使用。",
       "REMOTE_AGENT_RESUME_REJECTED": "运行模型的电脑无法恢复这个任务。请从任务列表新建任务，将需要继续的内容复制过去。原任务和排队消息会保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。是你自己的电脑时，在那台电脑上给这个供应商打开「允许被远程调用」；别人分享给你的，请对方在「远程与分享」中调整。也可以换一个模型。",
@@ -15982,9 +16092,15 @@
       "toggle": "展开或收起「{{title}}」的回信",
       "openTask": "打开任务"
     },
+    "geminiRateLimit": {
+      "retried": "已按 Gemini 建议的时间自动重试",
+      "title": "Gemini 每分钟输入量已达上限",
+      "exhausted": "已自动重试一次，Gemini 仍受限。稍后可手动重试。",
+      "retryIn": "{{seconds}} 秒后自动重试"
+    },
     "subscriptionAccountError": {
-      "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
-      "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
+      "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。",
+      "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。",
       "loginRequired": "此任务使用的订阅账号需要重新登录。请在执行任务的电脑上重新登录该账号，再重试。",
       "signingIn": "此任务使用的订阅账号正在登录，请完成登录后重试。",
       "unavailable": "此任务绑定的订阅账号无法用于本次请求。请在执行任务的电脑上检查模型供应商中的账号设置，或选择其他模型来源。",
@@ -16219,6 +16335,14 @@
       "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
       "remoteNativeOauthUnavailable": "远程任务不能使用 Claude 订阅，请选择网关或 API Key 模型",
       "claudeSubscriptionWorkspaceOverride": "这个工作目录的 .claude 设置修改了 Claude 的上游地址或鉴权方式，不能在这里使用 Claude 订阅。请移除这些设置，或选择网关或 API Key 模型",
+      "savedModel": {
+        "loading": "正在连接所选模型…",
+        "checkFailed": "未能检查所选模型",
+        "engine": "所选引擎不可用，请为本次任务选择模型",
+        "source": "所选来源不可用，请为本次任务选择模型",
+        "model": "所选模型不可用，请为本次任务选择模型",
+        "thisTaskOnly": "所选模型仅用于本次任务"
+      },
       "deviceStillLoading": "远程设备仍在加载中，请稍候",
       "remoteDefaultsLoadFailed": "无法读取远程设备配置。请检查连接，Cindy 正在重试。",
       "branchChanged": "项目当前分支已变成 {{branch}}，请确认后再发送",
@@ -16358,6 +16482,7 @@
       },
       "filterCreatorsHeading": "伙伴",
       "filterCreatorsAny": "全部",
+      "filterHideAutomations": "隐藏自动化任务",
       "filterCreatorsNone": "都不显示",
       "filterSelectedCreators": "已选 {{count}} 位",
       "filterProjectsHeading": "项目",
@@ -16907,6 +17032,12 @@
       "unspecifiedDir": "未指定目录"
     },
     "workdirBrowse": {
+      "previewFile": "预览",
+      "filterDirectory": "筛选当前文件夹…",
+      "projectTree": "项目文件树",
+      "systemPreview": "系统预览",
+      "listView": "列表",
+      "gridView": "缩略图",
       "backToProjects": "返回项目",
       "switchProject": "切换项目",
       "activeSessionCount_one": "{{count}} 个活跃任务",
@@ -17273,6 +17404,7 @@
       "promote": {
         "menu": "提升为项目自动化",
         "noWorkingDir": "未设置工作目录的自动化无法提升为项目自动化",
+        "pluginEngine": "插件引擎只在这台电脑上可用，不能提升为项目自动化",
         "success": "已提升为项目自动化"
       },
       "editProject": {
@@ -17549,6 +17681,7 @@
         "selectThread": "请选择目标任务",
         "selectProject": "请选择项目目录",
         "modelUnavailable": "模型 {{model}} 已不可用，请重新选择",
+        "pluginEngineUnavailable": "所选插件引擎当前不可用，请重新选择模型",
         "reasoningInvalid": "推理强度必须是 {{values}} 之一",
         "preRunHookCommandRequired": "请填写前置检查脚本命令",
         "preRunPluginRequired": "请为前置检查选择插件",
@@ -19269,6 +19402,7 @@
       "permissionLabel": "权限模式",
       "noAvailableModels": "没有可用的 {{agent}} 模型，请在设置中检查供应商连接和凭证。",
       "savedModelUnavailable": "上次选择的模型或来源当前不可用。",
+      "pluginEngineNoWorktree": "插件引擎 Worker 不能使用 worktree，取消勾选 worktree 后再创建。",
       "reselectModel": "重新选择模型",
       "effortLabel": "推理强度",
       "initialTaskLabel": "初始任务",
@@ -19737,7 +19871,8 @@
         "validity": "有效期",
         "validityValue_other": "领取后 {{count}} 天",
         "claimBy": "领取截止",
-        "destination": "存入"
+        "destination": "存入",
+        "validityPermanent": "永久有效"
       },
       "doneTitle": "{{amount}} 已到账",
       "doneDescription": "已存入赠送余额，{{date}} 前有效。",
@@ -19753,10 +19888,13 @@
         "alreadyClaimed": "这张礼品卡已被领取。",
         "expired": "这张礼品卡已过领取期限。",
         "voided": "这张礼品卡已作废。",
+        "voidedPurchased": "这张礼品卡目前不能领取。",
         "rateLimited": "尝试次数过多，请稍后再试。",
         "failed": "暂时无法兑换，请稍后重试。",
         "personalRequired": "礼品卡仅限个人用户领取。"
-      }
+      },
+      "doneDescriptionPurchased": "已存入充值余额，永久有效。",
+      "pendingDescriptionPurchased": "{{amount}} 正在入账，稍后会出现在充值余额中，无需再次领取。"
     },
     "usage": {
       "title": "余额用量",
@@ -19802,7 +19940,8 @@
         "noPayment": "无需付款",
         "page": "第 {{page}} 页",
         "previous": "上一页",
-        "next": "下一页"
+        "next": "下一页",
+        "giftCard_other": "礼品卡 × {{count}}"
       },
       "count": "{{count}} 笔",
       "orderId": "订单号 {{id}}",
@@ -20031,6 +20170,115 @@
         "MONTH": "每月包含 {{amount}}",
         "YEAR": "每年包含 {{amount}}",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "购买礼品卡",
+      "title": "购买礼品卡",
+      "subtitle": "送给朋友，或者留给自己。兑换后存入充值余额，永久有效。",
+      "previewLabel": "对方收到的样子",
+      "sameCards_other": "共 {{count}} 张，卡面、面额、留言相同，每张一个兑换码",
+      "fields": {
+        "face": "卡面",
+        "amount": "面额",
+        "quantity": "数量",
+        "sender": "署名",
+        "senderHint": "显示为「来自 {{sender}}」",
+        "senderPlaceholder": "你的名字",
+        "message": "留言（可选）",
+        "messagePlaceholder": "写一句给对方的话",
+        "tooLong": "最多 {{max}} 个字",
+        "paymentMethod": "支付方式"
+      },
+      "decrease": "少一张",
+      "increase": "多一张",
+      "quantityHint": "{{hours}} 小时内最多买 {{limit}} 张，现在还能买 {{remaining}} 张",
+      "quantityLimitReached": "{{hours}} 小时内最多买 {{limit}} 张，已经买满，请稍后再来",
+      "orderAmountCap": "单笔订单最多 {{amount}}",
+      "totalDetail_other": "{{count}} 张 × {{amount}}",
+      "pay": "去支付",
+      "refundNote": "礼品卡不能兑换现金。卡被领取或兑换后不退款；未领取的卡如需退款，请联系支持。",
+      "cancel": "取消",
+      "loadFailed": "暂时无法读取购买限制，请稍后重试。",
+      "checkoutSubtitle_other": "礼品卡 {{amount}} × {{count}} · 付款成功后立即生成",
+      "faces": {
+        "cindy": "Cindy · 品牌红",
+        "cat": "黑猫 · 夜色",
+        "bell": "铃铛 · 节日",
+        "leap": "跃 · 象牙白"
+      },
+      "errors": {
+        "limitReached": "购买的礼品卡已达上限，请稍后再试。",
+        "amountTooLarge": "这笔订单超过单笔支付上限，请减少张数后再试。"
+      },
+      "done": {
+        "title_other": "{{count}} 张礼品卡已备好",
+        "pendingTitle": "礼品卡已付款",
+        "loading": "正在取回这一单的礼品卡…",
+        "description": "把领取链接发给朋友，对方打开就能领取；也可以留一张兑换给自己。",
+        "missing": "付款已完成，礼品卡稍后会出现在「我买的礼品卡」里。",
+        "cardTitle": "第 {{index}} 张 · {{amount}}",
+        "cardMeta": "尾号 {{tail}} · {{status}}",
+        "linkHint": "领取链接就是这张卡：谁先打开领取就归谁，请只发给要送的人。",
+        "viewAll": "查看我买的礼品卡",
+        "finish": "完成"
+      },
+      "list": {
+        "title": "我买的礼品卡",
+        "description": "把领取链接发给朋友，对方打开就能领取；没送出去的卡不会过期，也可以兑换给自己。兑换后存入充值余额。",
+        "count_other": "{{count}} 张",
+        "loadMore": "加载更多",
+        "loadFailed": "礼品卡列表未能加载",
+        "retry": "重新加载",
+        "status": {
+          "unclaimed": "未领取",
+          "claimedBy": "{{name}} 已领取",
+          "claimed": "已被领取",
+          "redeemedByYou": "已兑换给自己",
+          "refunded": "已退款",
+          "onHold": "处理中，暂不可用"
+        },
+        "meta": {
+          "purchased": "{{date}} 购买 · 尾号 {{tail}}",
+          "claimed": "{{date}} 领取 · 尾号 {{tail}}",
+          "redeemed": "{{date}} 兑换 · 尾号 {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "复制领取链接",
+        "copied": "已复制",
+        "more": "更多操作",
+        "copyCode": "复制兑换码",
+        "redeemSelf": "兑换给自己",
+        "sendEmail": "发送到邮箱"
+      },
+      "toasts": {
+        "linkCopied": "领取链接已复制",
+        "codeCopied": "兑换码已复制",
+        "copyFailed": "复制失败，请重试",
+        "unavailable": "这张卡已被领取或已退款",
+        "revealFailed": "暂时无法取回兑换码，请稍后重试",
+        "emailQueued": "正在发送到 {{email}}"
+      },
+      "email": {
+        "title": "发送到邮箱",
+        "description": "把这张卡的领取链接发到对方邮箱，邮件里会带上你的署名和留言。",
+        "previewLabel": "对方会收到",
+        "previewWithMessage": "「{{message}}」，附领取链接和兑换码",
+        "previewLinkOnly": "附领取链接和兑换码",
+        "recipient": "收件邮箱",
+        "placeholder": "name@example.com",
+        "hint": "可以发到任何邮箱；领取链接谁先打开就归谁。",
+        "cooldown": "{{seconds}} 秒后可以再发送",
+        "invalid": "邮箱格式不正确",
+        "failed": "暂时无法发送，请稍后重试",
+        "send": "发送",
+        "status": {
+          "sending": "正在发送到 {{email}}",
+          "sent": "已发送到 {{email}}",
+          "failed": "发送到 {{email}} 失败",
+          "failedRetry": "发送到 {{email}} 失败，可以重新发送"
+        }
       }
     }
   },
@@ -21869,7 +22117,8 @@
       "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
       "manage": "管理模型组",
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
-      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。"
+      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
+      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"
     },
     "why": {
       "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",

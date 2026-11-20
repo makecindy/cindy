@@ -268,7 +268,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
-    getPeerLinks: getDeviceLinkPeerLinks,
+    getPeerLinks: () => getDeviceLinkPeerLinks(true),
     probeProxyVerdict: probeOutboundPathFor,
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,

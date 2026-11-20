@@ -83,12 +83,21 @@ export interface RemoteSession {
    * 任务与文件仍留在被控电脑;null / 缺省 = Agent 就在被控电脑运行(含旧被控端)。
    */
   agentDeviceId?: string | null;
-  /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
+  /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。只含切到内置引擎的意图。 */
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
+  /**
+   * 下一条消息切到插件引擎的意图(desktop 投影 targetAgentKind = 'acp')；与 agentSwitchIntent 互斥。
+   * 内置引擎的展示与切换链路只读 agentSwitchIntent，插件引擎由模型选择器单独呈现。
+   */
+  pluginEngineSwitchIntent?: import('./pluginEngines').MobilePluginEngineSwitchIntent | null;
   /** 任务来源；null = 已确认是普通任务，缺省 = 来源未知（任务入口须先向电脑核对）。 */
   source?: string | null;
   companion?: import("./teammateTaskSource").TaskCompanion;
   taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
+  /** Owning Lead on this device, when the active team is known. */
+  orcaLeadSessionId?: string;
+  /** Live Worker question state, independent of Agent Island visibility. */
+  orcaHasPendingQuestion?: boolean;
   orcaRole?: 'lead' | 'worker' | string | null;
   /** 运行设备上的远端 Worker 身份；团队在 Lead 电脑上，不作为本机 orcaRole 使用。旧端缺省。 */
   orcaRemoteLead?: {

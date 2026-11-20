@@ -485,6 +485,14 @@ function refreshFavoriteMembership(api: ProviderShareApi): void {
         applyReceivedSnapshotBudget(snapshot, requestStart);
       }
       const cleaned = reconcileProviderShareFavorites(snapshot);
+      if (cleaned && !retired && snapshot.leftMemberRevision !== undefined) {
+        const updated = await api.command({
+          action: 'received-snapshot',
+          favoriteRecovery: { ownerStamp: snapshot.ownerStamp, regions: [], cleanedLeftMemberRevision: snapshot.leftMemberRevision },
+        });
+        if (!current()) return;
+        if (!isDataOwnerPushStampCurrent(updated.ownerStamp) || !reconcileProviderShareFavorites(updated)) { retry(); return; }
+      }
       if (!cleaned || regions.some((region) => !snapshot.confirmedRegions.includes(region))) retry();
       else membershipFailures = 0;
     } catch { retry(); } // 读失败不是撤权，重取最新名单而不是重放旧删除。

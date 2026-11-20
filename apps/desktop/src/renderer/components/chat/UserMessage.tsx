@@ -75,6 +75,7 @@ import {
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { isRemoteFileOrigin, originDeviceId, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { ImageLightbox } from './ImageLightbox';
 import {
   joinChatQuoteTextSegments,
@@ -873,6 +874,9 @@ export function UserMessage({
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
   const makerKind: MakerAgentKind =
     agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  // 插件引擎任务(agent_kind = 'acp')不支持分叉与回退，也不读任何内置 Harness 的能力
+  // (docs/plans/acp-plugin-bridge.md)。
+  const pluginEngineTask = isPluginEngineKind(agentKind);
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
   // 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,deviceId 迟到注册时
@@ -884,14 +888,14 @@ export function UserMessage({
     () => toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir),
     [sessionFileCtx],
   );
-  const { capabilities } = useAgentCapabilities(makerKind, remoteDeviceId);
+  const { capabilities } = useAgentCapabilities(pluginEngineTask ? null : makerKind, remoteDeviceId);
   // 远端 cc daemon 会话暂不支持 Fork/Rewind 依赖的 query rebuild (MVP),
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
   const forkSupported =
-    !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && !pluginEngineTask && (!agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
-    !isRemote &&
+    !isRemote && !pluginEngineTask &&
     (!agentKind || (capabilities?.rewind?.supported ?? true));
 
   const hasImages = images && images.length > 0;
@@ -1189,9 +1193,9 @@ export function UserMessage({
         userSendAt: session.userSendAt,
       });
       // Force chat store to re-fetch messages (server filters rewind_at).
-      makerChatStore.reloadMessages(sessionId);
+      makerChatStore.reloadMessages(sessionId, { rewindFromClientId: messageClientId });
     },
-    [sessionId, draftBody, quoteDraftDocument, images, files],
+    [sessionId, messageClientId, draftBody, quoteDraftDocument, images, files],
   );
 
   // 第一条消息同样可回退：Codex / Pi 回到原生线程开头，Claude 目标之前没有可续接的

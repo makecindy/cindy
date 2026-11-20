@@ -32,7 +32,7 @@ import { desktopInvokeTransferMetrics } from './invokeTransferMetrics';
 import { watchNetworkChanges } from './networkChanges';
 import path from 'node:path';
 import { app, BrowserWindow } from 'electron';
-import WebSocket from 'ws';
+import type WebSocket from 'ws';
 import {
   DeviceLinkClient,
   RoutedDeviceLinkClient,
@@ -47,6 +47,7 @@ import {
   sharedTaskTopics,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
@@ -90,9 +91,11 @@ import { markStartupMilestone } from '../startupTimeline';
 import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
-import { createOutboundHttpAgentWithDecision, type OutboundSocketProxyDecision } from '../maker-host/outbound-fetch.desktop';
+import type { OutboundSocketProxyDecision } from '../maker-host/outbound-fetch.desktop';
 import { createPinnedSocketProxyStore } from './pinnedSocketProxy';
 import { classifyPeerTransportRoute } from './peerTransportRoute';
+import { currentLinkTraffic, flushLinkTraffic } from './linkTraffic.desktop';
+import { openLinkWebSocket } from './linkWebSocket.desktop';
 import {
   DeviceLinkOwnershipArbiter,
   createSqliteExclusiveFileLock,
@@ -788,6 +791,8 @@ const CONTROLLER_CAPABILITIES = [
   // 手机(review P1)。拆包在 main 完成(见 onFrame 的批分支),renderer 的既有
   // maker:event 订阅者零改动。
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  // renderer 认识「待切到插件引擎」的意图(makerChatStore.normalizeAgentSwitchIntent)。
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   // renderer 只用 resolvedContent 显示工具结果(makerChatStore tool_result / tool_result_full),
   // 事件里的 data.fullText / summary 是同一正文的重复副本,被控端对声明者省掉。
   CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
@@ -1063,6 +1068,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   dismissalPublisher.setOnline(true);
   const stopDismissals = onMobileNotificationDismissalsChanged(dismissalPublisher.changed);
   onQuit('notification-dismissals', () => { stopDismissals(); dismissalPublisher.dispose(); });
+  onQuit('device-link-traffic', () => flushLinkTraffic(), 'post-async');
   const deviceNameReady = initializeDeviceName();
   let activityEndpointUnsupported = false;
   let lastActivityUpload: { key: string; at: number } | undefined;
@@ -1118,22 +1124,17 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 行为与不传一致(见 maker-host/outbound-fetch)。
     // lookup:DNS 失败/慢解析时回退最近成功地址(弱网 VPN 下 DNS 单段可吃掉
     // 大半个握手窗口);代理模式下由代理解析域名,本层自然旁路。
-    createWebSocket: async (url, headers) => {
-      // 建连这一刻就把「这条 socket 走没走代理」问出来,并挂到 socket 上:判定只在这条
-      // socket **真的 open** 之后才生效 —— 客户端会按连接世代丢弃过期的建连结果
-      // (packages/device-link/src/client.ts 的 epoch 闸),过期的那次若先写,诊断就会报
-      // 一条根本没被采用的线路(Codex review P1)。
-      const { agent, decision } = await createOutboundHttpAgentWithDecision(url);
-      const ws = new WebSocket(url, {
+    createWebSocket: (url, headers) =>
+      openLinkWebSocket('device-link', url, {
         headers,
-        agent,
         // ClientOptions 类型未声明 lookup,但 ws 会把额外选项透传给
         // http.request(其 RequestOptions 原生支持 lookup)→ net/tls 建连。
         lookup: relayDnsLookup,
-      } as WebSocket.ClientOptions);
-      pinnedSocketProxy.track(url, decision, ws);
-      return ws;
-    },
+        // 判定与 agent 同源:openLinkWebSocket 内部用 createOutboundHttpAgentWithDecision
+        // 建连,这里只在 socket 上钉住结果(#9959)。挂载时机见 pinnedSocketProxy.ts ——
+        // 真的 open 才算这条线路被采用,过期建连结果不会写进诊断。
+        onOutboundDecision: (decision, ws) => pinnedSocketProxy.track(url, decision, ws),
+      } as WebSocket.ClientOptions),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),
@@ -2086,8 +2087,10 @@ export function getDeviceLinkStatus(): DeviceLinkStatus {
 }
 
 /** 远程连接拓扑:本机控制链路和 Agent-Net 传输路径的快照。 */
-export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
-  if (!client || linkTornDown || isAppSessionBoundaryPending()) return { links: [], relayRttMs: null };
+export function getDeviceLinkPeerLinks(includeTraffic = false): DeviceLinkPeerLinksSnapshot {
+  if (isAppSessionBoundaryPending()) return { links: [], relayRttMs: null };
+  const traffic = includeTraffic ? { traffic: currentLinkTraffic().snapshot() } : {};
+  if (!client || linkTornDown) return { links: [], relayRttMs: null, ...traffic };
   const relayProtocol = client.getStatus() === 'online' && !agentNetRelayDown()
     ? (primaryUsesEncryptedTransport ? 'agent-net' : 'device-link')
     : undefined;
@@ -2096,6 +2099,7 @@ export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
   const agentNetRoute = primaryUsesEncryptedTransport ? agentNetRelayRoute() : null;
   const relayTransport = !relayProtocol ? undefined : primaryUsesEncryptedTransport ? agentNetRoute?.via : 'websocket';
   return {
+    ...traffic,
     // 拓扑只画同账号设备;跨账号 peer(共享任务 / 供应商分享)不在这页。
     links: client.getPeerLinkSnapshots().filter((link) => !isScopedPeer(link.deviceId)).map((link) => {
       const core = client!.connectionFor(link.deviceId) === client ? agentNetPeerSnapshot(link.deviceId) : null;
@@ -2111,7 +2115,7 @@ export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
 
 /** 链路拓扑变化的推送合并器:事件只 schedule,250ms 后结构变了才广播全量快照。 */
 const peerLinksPush = createPeerLinksPushScheduler({
-  snapshot: getDeviceLinkPeerLinks,
+  snapshot: () => getDeviceLinkPeerLinks(true),
   broadcast: (snapshot) => broadcast(DEVICE_LINK_PUSH.PEER_LINKS_CHANGED, snapshot),
 });
 // Agent-Net 的路径变化（直连 ↔ 中转、连上、断开）与中转连接的变化不经过 Device Link 的事件：同样触发拓扑页刷新（原来只有 5 秒轮询）。
@@ -2749,7 +2753,7 @@ export async function remoteBackgroundInvoke(
   const shared = deviceId !== agentDeviceId || parseProviderSharePeer(deviceId)?.role === 'host';
   if (!shared) return backgroundInvokeDevice(deviceId, channel, args, options);
   const peer = parseProviderSharePeer(deviceId);
-  const share = peer?.role === 'host' ? getReceivedShares().find(row =>
+  const share = peer?.role === 'host' ? getReceivedShares({ retainUnavailable: true }).find(row =>
     row.shareId === peer.shareId && row.hostDeviceId === peer.deviceId) : undefined;
   const accessEpoch = share ? providerShareAccessEpoch(share.shareId) : undefined;
   const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
@@ -2767,7 +2771,7 @@ export async function remoteBackgroundInvoke(
         throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during catalog read');
       }
       if (providerShareAccessEpoch(share.shareId) !== accessEpoch
-        || !getReceivedShares().some(row => row.shareId === share.shareId
+        || !getReceivedShares({ retainUnavailable: true }).some(row => row.shareId === share.shareId
           && row.hostDeviceId === share.hostDeviceId && row.status === 'active')) {
         throw new DeviceLinkError('ACCESS_REVOKED', PROVIDER_SHARE_UNAVAILABLE_MESSAGE);
       }
@@ -2797,7 +2801,7 @@ export async function remoteBackgroundInvoke(
       ?? { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
   }
 
-  const refusedOwnerShare = peer?.role === 'host' && getReceivedShares().some(share =>
+  const refusedOwnerShare = peer?.role === 'host' && getReceivedShares({ retainUnavailable: true }).some(share =>
     share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId) ? peer.shareId : undefined;
   try {
     // 跨区域分享：分享者电脑在另一个区域的 relay 上，经那条连接发送。
@@ -2904,10 +2908,10 @@ export async function remoteSubscribe(
       liveTopics = liveTopicsNow();
       if (liveTopics.length === 0) return { ok: true, result: null };
     }
-    assertRemoteControlTargetEnabledAfterReopen(deviceId);
     if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
       throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while restoring subscriptions');
     }
+    assertRemoteControlTargetEnabledAfterReopen(deviceId);
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     return client.invoke(deviceId, {
       channel: DL_SUBSCRIBE_CHANNEL,

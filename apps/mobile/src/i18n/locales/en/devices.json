@@ -440,6 +440,7 @@
       "filterEmptyCopy": "Adjust or reset Filters in Display settings.",
       "filterTeammatesHeading": "Buddies",
       "filterAnySource": "All",
+      "filterHideAutomations": "Hide automation tasks",
       "filterHideAllTeammates": "Hide all",
       "filterSelectedTeammates": "{{count}} selected",
       "inbox": {
