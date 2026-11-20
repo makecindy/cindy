@@ -3271,6 +3271,8 @@ const sessions = new Map<string, SessionChatState>();
 let nextSessionIncarnation = 1;
 const sessionIncarnations = new Map<string, number>();
 const listeners = new Map<string, Set<() => void>>();
+type MessageRemovalListener = (clientIds: Iterable<string>) => void;
+const messageRemovalListeners = new Map<string, Set<MessageRemovalListener>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
 
 /**
@@ -10373,6 +10375,33 @@ function subscribe(sessionId: string, cb: () => void): () => void {
   };
 }
 
+function subscribeToMessageRemovals(sessionId: string, listener: MessageRemovalListener): () => void {
+  let subscribers = messageRemovalListeners.get(sessionId);
+  if (!subscribers) {
+    subscribers = new Set();
+    messageRemovalListeners.set(sessionId, subscribers);
+  }
+  subscribers.add(listener);
+  return () => {
+    subscribers.delete(listener);
+    if (subscribers.size === 0) messageRemovalListeners.delete(sessionId);
+  };
+}
+
+function notifyMessageRemovals(sessionId: string, clientIds: Iterable<string>): void {
+  for (const listener of messageRemovalListeners.get(sessionId) ?? []) listener(clientIds);
+}
+
+// Only committed rewinds use this path. A cache reload alone is not evidence of removal.
+function notifyRewoundMessages(sessionId: string, clientId: string): void {
+  if (!messageRemovalListeners.has(sessionId)) return;
+  const messages = sessions.get(sessionId)?.messages ?? [];
+  const index = messages.findIndex((message) => message.clientId === clientId);
+  if (index >= 0) {
+    notifyMessageRemovals(sessionId, messages.slice(index).map((message) => message.clientId));
+  }
+}
+
 function allPendingQuestions(state: SessionChatState): PendingAskUser[] {
   const queue = state.pendingAskUserQueue ?? [];
   return state.pendingAskUser && !queue.some((q) => q.requestId === state.pendingAskUser!.requestId)
@@ -13233,7 +13262,11 @@ async function continuePlanResolutionAfterIdleDiscovery(sessionId: string): Prom
  * view automatically. Resets pagination cursors and isStreaming flags so the
  * slice looks like a clean session (re-)open.
  */
-function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean }): void {
+function reloadMessages(
+  sessionId: string,
+  opts?: { allowCacheHydrate?: boolean; rewindFromClientId?: string },
+): void {
+  if (opts?.rewindFromClientId) notifyRewoundMessages(sessionId, opts.rewindFromClientId);
   discardPendingTextDelta(sessionId);
   if (!opts?.allowCacheHydrate) invalidateRemoteMessageCache(sessionId);
   // 代际递增:作废 in-flight 的 loadOlderMessages 追页窗口(见 _messagesEpoch 注释)。
@@ -13303,6 +13336,7 @@ function removeMessagesByClientIds(
 ): void {
   const deletedClientIds = new Set(clientIds.filter(Boolean));
   if (deletedClientIds.size === 0) return;
+  notifyMessageRemovals(sessionId, deletedClientIds);
   // 远程会话:删消息(菜单删除镜像 / 被控端 messages:deleted 推送)**不会**触发"最新页"
   // 重拉 —— 那是唯一的写缓存路径。盘上那份还带着刚被删掉的行,此刻退出 app,下次离线冷
   // 启动就把它 hydrate 回来(review: codex P1)。缓存是纯优化,清掉即可(下一次成功的
@@ -13384,6 +13418,7 @@ function removeMessageByClientId(sessionId: string, clientId: string): void {
  * selectRewindMessageIds(createdAt >= target)对齐。clientId 不在列表时 no-op。
  */
 function dropMessagesFromClientId(sessionId: string, clientId: string): void {
+  notifyRewoundMessages(sessionId, clientId);
   // edit-last 已经在权威侧提交了 rewind,而"重发"可能失败(受支持的失败路径)—— 那时不会有
   // 任何最新页拉取来刷新缓存,盘上仍是 rewind 之前的尾巴(review: codex P1)。
   invalidateRemoteMessageCache(sessionId);
@@ -19156,6 +19191,7 @@ function mirrorSessionFields(
 export const makerChatStore = {
   initGlobalListeners,
   subscribe,
+  subscribeToMessageRemovals,
   subscribeLight,
   getSnapshot,
   acknowledgeSharedTaskRecovery(sessionId: string, episode: string) {

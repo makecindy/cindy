@@ -201,9 +201,15 @@
     },
     "failed_many": "{{count}} chamadas falharam"
   },
+  "geminiRateLimit": {
+    "retried": "Nova tentativa automática após a espera indicada pelo Gemini",
+    "title": "O limite de entrada por minuto do Gemini foi atingido.",
+    "exhausted": "O Gemini ainda está limitado após uma nova tentativa. Você pode tentar novamente manualmente.",
+    "retryIn": "Nova tentativa automática em {{seconds}} s"
+  },
   "subscriptionAccountError": {
-    "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos. A conta não muda automaticamente.",
-    "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos. A conta não muda automaticamente.",
+    "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos.",
+    "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos.",
     "loginRequired": "A conta de assinatura desta tarefa exige um novo login. Entre novamente no computador que executa a tarefa e tente de novo.",
     "signingIn": "O login na conta de assinatura desta tarefa está em andamento. Tente de novo quando terminar.",
     "unavailable": "A conta de assinatura atribuída a esta tarefa não pode ser usada nesta solicitação. Verifique a conta nas configurações do provedor de modelos no computador que executa a tarefa ou escolha outra origem de modelos.",

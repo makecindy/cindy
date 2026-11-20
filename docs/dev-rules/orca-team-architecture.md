@@ -262,7 +262,16 @@ doc rail 不走右侧栏 tab，也不做 route navigate。WorkdirBrowseRoute 的
 
 Worker 不出现在普通 sidebar。renderer 用 `isOrcaWorkerSession(session) => session.orcaRole === 'worker'` 识别 worker，sidebar filter 直接排除 worker，见 `apps/desktop/src/renderer/lib/orcaSessionIdentity.ts` 的 `isOrcaWorkerSession` 与 `apps/desktop/src/renderer/features/cc-agent/CCAgentSidebarUpper.tsx` 的 `sidebarSessions` filter。worker deep link 会解析到所属 Lead 的普通 route，并通过 `?worker=` 一次性聚焦右侧栏协同 tab，见 `apps/desktop/src/renderer/lib/orcaSessionIdentity.ts` 的 `resolveSessionRoute`。
 
-Worker 虽不进侧栏，它的出错与等待确认会汇总到所属 Lead 行（2026-10 用户裁决，只覆盖本机 Lead）：Lead 行的状态点、项目折叠灯、rail 瓷砖、排序钉住与 Dock 角标都按「Worker 出错（红）> Worker 等待确认（蓝）> Lead 自己的状态」取一档，红 / 蓝同样盖过运行中；Worker 的完成不汇总。汇总只是读侧派生：来源是 Worker 自己在 `sessionAttentionStore` 里的 attention 与 Worker 投影（`workerProjectionStore` 中仍被持有的 Lead；已归档 Worker、已结束协同的团队不在投影里，自然不计），生命周期完全跟随 Worker 的 attention（重试 / 关横幅、Lead 重新派活、确认被回答即消失），点开 Lead 不会清掉，正在看该 Lead 时也照常显示。汇总结果**不得写回** `sessionAttentionStore`：那份会同步到 Main（Dock / 灵动岛 / 远端），并被「导航即已读」的被动清除抹掉，会破坏 Lead 自身的 attention 生命周期与完成保持判定。Dock 角标一个 Lead 只算 1，口径与侧栏行一致。逐行组件（`SessionItem` / `SessionCard` / `SessionStatusIcon`）只能用按 id 的 primitive 订阅 `useOrcaLeadWorkerAttentionKind`，聚合视图用 `useSessionAttentionKindsWithOrcaLeads` / `useOrcaLeadWorkerAttention` 与 `mergeOrcaLeadNotifications`。实现指针：`apps/desktop/src/renderer/features/cc-agent/lib/orcaLeadWorkerAttention.ts`、`workerProjectionStore.ts` 的 `listRetainedWorkerProjections`、`lib/appAttentionCount.ts` 的 `orcaLeadWorkerAttention` 入参。
+Worker 虽不进侧栏，它的出错与等待确认会汇总到所属 Lead 行（2026-10 用户裁决；出错与通用等待确认只覆盖本机 Lead，提问另按下述规则跨设备汇总）：Lead 行的状态点、项目折叠灯、rail 瓷砖、排序钉住与 Dock 角标都按「Worker 出错（红）> Worker 等待确认（蓝）> Lead 自己的状态」取一档，红 / 蓝同样盖过运行中；Worker 的完成不汇总。汇总只是读侧派生：来源是 Worker 自己在 `sessionAttentionStore` 里的 attention 与 Worker 投影（`workerProjectionStore` 中仍被持有的 Lead；已归档 Worker、已结束协同的团队不在投影里，自然不计），生命周期完全跟随 Worker 的 attention（重试 / 关横幅、Lead 重新派活、确认被回答即消失），点开 Lead 不会清掉，正在看该 Lead 时也照常显示。汇总结果**不得写回** `sessionAttentionStore`：那份会同步到 Main（Dock / 灵动岛 / 远端），并被「导航即已读」的被动清除抹掉，会破坏 Lead 自身的 attention 生命周期与完成保持判定。Dock 角标一个 Lead 只算 1，口径与侧栏行一致。逐行组件（`SessionItem` / `SessionCard` / `SessionStatusIcon`）只能用按 id 的 primitive 订阅 `useOrcaLeadWorkerAttentionKind`，聚合视图用 `useSessionAttentionKindsWithOrcaLeads` / `useOrcaLeadWorkerAttention` 与 `mergeOrcaLeadNotifications`。实现指针：`apps/desktop/src/renderer/features/cc-agent/lib/orcaLeadWorkerAttention.ts`、`workerProjectionStore.ts` 的 `listRetainedWorkerProjections`、`lib/appAttentionCount.ts` 的 `orcaLeadWorkerAttention` 入参。
+
+待回答问题可跨设备汇总到主任务。点击时，协同面板选择 Worker 的代理 `sessionId`，
+回答面板则展开 `executionDevice.remoteSessionId`（无运行设备时使用 Worker 自身 ID）。
+真实任务的问题状态由 `makerChatStore` 或对应设备的活动镜像提供，问题出现和清除均更新主任务提示；
+在运行设备本机查看远程 Lead 时，同样订阅真实任务的本机状态，不要求本机任务进入远程活动镜像。
+主任务自己也有问题时优先回答主任务。列表补丁中的 `orcaLeadSessionId` 与
+`orcaHasPendingQuestion` 还允许未打开聊天的控制端显示提示，兼容细则见
+[手机任务列表活动快照](protocol-compatibility/mobile-home-session-activity-snapshot.md)。
+
 
 Desktop 的「开启协同」与「创建新 Worker」共用 `CreateWorkerPopover`，表单按「让 Worker 做什么 → 首条任务 → 更多设置」
 排列（2026-11-10）。预设只决定提交的角色名和任务框里带出的内容，不改变 Agent、模型、权限或能力，逻辑在

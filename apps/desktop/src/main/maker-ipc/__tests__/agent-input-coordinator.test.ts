@@ -3213,6 +3213,28 @@ describe('AgentInputCoordinator send transaction', () => {
     },
   );
 
+  // 测试价值
+  // - 生产入口与可观察结果：真实 AgentInputCoordinator.enqueue → sendToAgent 的发送选项；手动输入才带 reconnectRecovery。
+  // - Bug／规则依据：PR #11751 Codex 审查——本机可信 Pi 命令由 stampTrustedDesktopQueuedOrigin 盖上 desktop 来源，
+  //   原判断 `!item.origin` 把它当成自动输入，分享任务重连撞限时不会换号。
+  // - 现有覆盖缺口：重连换号用例只用无来源输入与定时来源，没有覆盖可信 desktop 来源。
+  // - 最小失败输入：`/pi install npm:example` 经 stampTrustedDesktopQueuedOrigin(…, false) 后以 manualUiSend 入队。
+  // - tier：unit；只用进程内 coordinator 与 fake sendToAgent。
+  it.each(['plain', 'trusted-desktop', 'scheduler'] as const)(
+    'arms shared reconnect recovery only for manual UI input (%s)', async source => {
+      const h = createHarness(), sid = `manual-ui-origin-${source}`;
+      const base = makeItem(`manual-${source}`, '/pi install npm:example', {
+        ...(source === 'scheduler' ? { origin: { kind: 'scheduler', scheduleId: 's', scheduleName: 'n' } as const } : {}),
+      });
+      const item = source === 'trusted-desktop' ? stampTrustedDesktopQueuedOrigin(base, false) : base;
+      if (source === 'trusted-desktop') expect(item.origin?.kind).toBe('desktop');
+      h.coordinator.enqueue(sid, item, { manualUiSend: source !== 'scheduler' });
+      await flush();
+      const sendOpts = h.sendToAgent.mock.calls[0]?.[3];
+      expect(typeof sendOpts?.reconnectRecovery?.isCurrent).toBe(source === 'scheduler' ? 'undefined' : 'function');
+    },
+  );
+
   // unit: a list containing only a reference must neither claim owner authorship
   // nor retain an earlier grant when its empty receipt is restored from history.
   it('clears owner authority and earlier intent for a reference-only list', async () => {
@@ -17863,6 +17885,22 @@ describe('usage-limit wait (ordinary tasks)', () => {
     const candidate = h.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
     return { h, candidate };
   }
+
+  it.each([true, false])('only exhausts Gemini retries sent for this limit (Gemini retry: %s)', async gemini => {
+    const sid = 'minute-limit-retry';
+    const { h, candidate } = await failWithLimit(sid, false);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, Date.now())).toBe(true);
+    const info = { ...INFO, maxAttempts: 1, ...(gemini ? { geminiInputRetry: true as const } : {}) };
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, info)).toBe('resumed');
+    await flush();
+    h.setRunning(false);
+    const message = JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED',
+      message: 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count. Generate content input tokens per minute limit exceeded. Please retry in 56.6s.' } });
+    h.coordinator.onTurnEvent(sid, 'error', message, { errorStatus: 429, usageLimit: true });
+    await flush();
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledTimes(gemini ? 1 : 2);
+    expect(h.coordinator.getProjection(sid).errorReason).toBe(gemini ? 'gemini-input-retry-exhausted' : undefined);
+  });
 
   // Unit: cancellation uses the actual recovery entry, not an activity-field
   // whitelist. The prior phase matrix only used service-generated metadata.

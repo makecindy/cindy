@@ -128,6 +128,7 @@ import {
   getConfirmedCrossRegionReceivedRegions,
   isCrossRegionReceivedReady,
   refreshProviderShareCrossRegion,
+  restoreCrossRegionReceivedForRemoteGroup,
   waitForCrossRegionReceived,
   isCrossRegionProviderShareTarget,
   renewCrossRegionProviderShareLink,
@@ -571,6 +572,24 @@ describe('cross-region provider share', () => {
     expect(state.calls).toHaveLength(1);
   });
 
+  // Unit: an empty directory predating a verified group hint cannot prune that
+  // member while the new cross-region membership read is still pending.
+  it('withholds group removal evidence during discovery after an empty peer list', async () => {
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    expect(getConfirmedReceivedShareIds()?.has(share.shareId)).toBe(false);
+    const response = deferred<unknown>();
+    state.responses.set('/session', response.promise);
+    const restoring = restoreCrossRegionReceivedForRemoteGroup([share.shareId]);
+    try {
+      await refreshReceivedShares('poll');
+      expect(getConfirmedReceivedShareIds()).toBeNull();
+    } finally {
+      response.resolve({ credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });
+      await restoring;
+    }
+    expect(getConfirmedReceivedShareIds()?.has(share.shareId)).toBe(true);
+  });
+
   it('refreshes a newly received same-region group share without contacting the peer region', async () => {
     await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     await refreshReceivedShares('test');
@@ -747,6 +766,29 @@ describe('cross-region provider share', () => {
     expect(state.calls).toHaveLength(1);
     await expect(resolveRemoteAgentTargetWhenReady('share:share-local')).resolves.toBe(providerShareHostPeer('share-local', 'owner-pc'));
     expect(state.clients).toEqual([]);
+  });
+
+  // Unit: a group view of a previously discovered member must not start a
+  // second list lookup on a 503. The unknown-member tests above need that lookup.
+  it.each(['local', 'peer'] as const)('does not rediscover a known %s group member during a list failure', async (source) => {
+    state.localHasGroupShare = source === 'local';
+    if (source === 'peer') state.responses.set('/session', {
+      credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share],
+    });
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await refreshReceivedShares('initial');
+    await refreshProviderShareCrossRegion('global');
+    if (source === 'local') {
+      state.localReceivedError = true;
+      await refreshReceivedShares('failed');
+    } else {
+      state.responses.set('/session', Object.assign(new Error('unavailable'), { statusCode: 503 }));
+      await refreshProviderShareCrossRegion('global');
+    }
+    const reads = [state.localReceivedReads, state.calls.length];
+    await remoteGroup().client.view('group-owner', 'openai');
+    await expect(resolveRemoteAgentTargetWhenReady('share:share-x')).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    expect([state.localReceivedReads, state.calls.length]).toEqual(reads);
   });
 
   it('resolves a newly loaded local share while an unrelated cross-region recovery is pending', async () => {
@@ -1161,6 +1203,14 @@ describe('cross-region provider share', () => {
     expect(getCrossRegionReceived()).toEqual([{ ...offline, hostOnline: true, hostCapable: true }, paused]);
     expect(changed).toHaveBeenCalledOnce();
     expect(catalogChanged).toHaveBeenCalledExactlyOnceWith('share:share-x');
+    const session = state.responses.get('/session');
+    state.responses.set('/session', new Error('network unavailable'));
+    await refreshProviderShareCrossRegion('global');
+    oldPush(push(share.shareId));
+    expect(catalogChanged).toHaveBeenCalledOnce();
+    expect(state.clients[0].stopped).toBe(false);
+    state.responses.set('/session', session);
+    await refreshProviderShareCrossRegion('global');
     stopProviderShareCrossRegion();
     startProviderShareCrossRegion({ changed }, { userDataDir: dir });
     await refreshProviderShareCrossRegion('global');

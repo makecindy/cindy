@@ -197,6 +197,8 @@ export interface AgentInputClearBoundaryOpts {
  * 而不是让 renderer 引用 main 的常量——这样以后调整上限，旧记录仍显示当时的值。
  */
 export interface AutoResumeInfo {
+  /** One retry after the Gemini per-minute input limit, independent of subscription reset. */
+  geminiInputRetry?: true;
   /** 中断原文（terminal error 的 message，通常是 SDK 的英文文案）。 */
   error?: string;
   /**

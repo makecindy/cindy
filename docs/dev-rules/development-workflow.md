@@ -15,6 +15,9 @@
 
 ## 1. Dogfooding：在本仓 worktree 会话里工作
 
+托管 worktree 从刚拉取的远端默认分支切出；拉取失败时 `create_task_worktree` 返回
+`base_fetched: false`，说明起点可能不是最新，要告诉用户。
+
 Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude` 追加所用托管目录的
 根级排除规则，避免基础仓库的未跟踪扫描进入这些目录。保留已有规则，不修改项目
 `.gitignore`，不影响已跟踪文件；写入失败不阻止创建或恢复。不扫描、排除任意第三方目录。
