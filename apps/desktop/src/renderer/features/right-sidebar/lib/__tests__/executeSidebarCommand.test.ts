@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 vi.mock('../../store', () => ({
   ensureHydrated: vi.fn(async () => undefined),
@@ -48,7 +49,12 @@ import { openUrlInSidebarBrowser } from '../openInSidebarBrowser';
 import { openSubagentsTab } from '../openSubagentsTab';
 
 describe('executeSidebarCommand', () => {
-  beforeEach(() => vi.clearAllMocks());
+  const getContext = vi.fn();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getContext.mockResolvedValue({ available: true, sessionId: 's1', deviceLinkDeviceId: null });
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { rightSidebarWindow: { getContext } } });
+  });
 
   // Global resource activation must be executed in the selected renderer. tier: unit.
   it('opens the global named resource in the actual sidebar renderer', async () => {
@@ -143,11 +149,21 @@ describe('executeSidebarCommand', () => {
   });
 
   it('keeps Review when the detached host is still hidden', async () => {
+    getContext.mockResolvedValue({ available: true, sessionId: 's1', deviceLinkDeviceId: 'paired-device' });
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
     await executeSidebarCommand({ type: 'toggle-review-tab', sessionId: 's1' });
     expect(getBucket).toHaveBeenCalledWith('s1');
     expect(closeTab).not.toHaveBeenCalled();
     expect(addOrFocusSingletonTab).toHaveBeenCalledWith('s1', 'review', null);
+  });
+
+  // #11546, unit: a forwarded DIFF action must leave the shared guest's saved tabs untouched.
+  it('ignores a forwarded Review toggle for a shared-task guest', async () => {
+    getContext.mockResolvedValue({ available: true, sessionId: 's1', deviceLinkDeviceId: sharedTaskHostPeer('task', 'host') });
+    await executeSidebarCommand({ type: 'toggle-review-tab', sessionId: 's1' });
+    expect(ensureHydrated).not.toHaveBeenCalled();
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(addOrFocusSingletonTab).not.toHaveBeenCalled();
   });
 
   it('hides Review only after the detached host is already visible', async () => {
