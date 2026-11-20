@@ -11,10 +11,14 @@ import {
   readBotModelChainSettingsState,
   resetBotModelChainSettings,
   readEffectiveBotModelChain,
+  fillBotModelGroupRoutes,
   readEffectiveBotPrimaryRoute,
   setBotModelGroupPreview,
   writeBotModelChainSettings,
 } from '../bot-model-chain-settings-store';
+
+const modelGroups = vi.hoisted(() => ({ config: { routes: [] as Array<Record<string, unknown>> } }));
+vi.mock('../../model-groups/store.js', () => ({ readModelGroupsConfig: () => modelGroups.config }));
 
 const providerService = vi.hoisted(() => ({
   listProviders: vi.fn<() => Promise<ProviderView[]>>(),
@@ -389,5 +393,23 @@ describe('primary route for a new companion conversation', () => {
     const { modelGroup: _group, ...plain } = saved;
     expect(await readEffectiveBotPrimaryRoute({ modelChainOverride: [plain] }, { providers: [] })).toEqual(plain);
     expect(preview).not.toHaveBeenCalled();
+  });
+});
+
+// model-groups.md §6.2, user 2026-11-20「漏了补全客户端」: a phone or another computer records only the group; this
+// computer fills its current source when saving. Production entry: fillBotModelGroupRoutes (remote save/create).
+// Minimal inputs: a deleted group, a usable group, a group with nothing usable. tier: unit.
+describe('filling model groups chosen from another device', () => {
+  afterEach(() => { setBotModelGroupPreview(null); modelGroups.config = { routes: [] }; });
+  const plain = { harness: 'pi' as const, model: 'previous', providerId: 'xd', effort: '', fastMode: false };
+  const picked = { harness: 'codex' as const, model: 'picked', providerId: 'openai', effort: 'high', fastMode: false };
+  it.each([
+    { name: 'drops a group this computer does not have', groups: [], preview: async () => picked, expected: plain },
+    { name: 'saves the group\'s current source', groups: [{ id: 'grp' }], preview: async () => picked, expected: { ...picked, modelGroup: 'grp' } },
+    { name: 'keeps the previous model when the group has nothing usable', groups: [{ id: 'grp' }], preview: async () => null, expected: { ...plain, modelGroup: 'grp' } },
+  ])('$name', async ({ groups, preview, expected }) => {
+    modelGroups.config = { routes: groups };
+    setBotModelGroupPreview(preview);
+    expect(await fillBotModelGroupRoutes([{ ...plain, modelGroup: 'grp' }, plain])).toEqual([expected, plain]);
   });
 });

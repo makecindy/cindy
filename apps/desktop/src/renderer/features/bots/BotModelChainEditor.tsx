@@ -16,7 +16,7 @@ import {
   type BotHarness,
   type BotModelRoute,
 } from '../../../shared/botModelChain';
-import type { ModelGroupSelection } from '../../../shared/modelGroups';
+import { MODEL_GROUPS_DEFAULTS, type ModelGroupSelection, type ModelGroupsConfig } from '../../../shared/modelGroups';
 import { useBotTranslation } from './botPronounContext';
 
 function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
@@ -45,6 +45,7 @@ export function BotModelChainEditor({
   allowFallbacks = true,
   layout = 'inline',
   settingsRows,
+  hostModelGroups,
 }: {
   'data-setting-id'?: string;
   value: BotModelRoute[];
@@ -65,6 +66,11 @@ export function BotModelChainEditor({
    */
   layout?: 'inline' | 'settings';
   settingsRows?: { primaryLabel: string; primaryHint: string };
+  /**
+   * 伙伴在另一台电脑(deviceId)上：那台电脑的模型组，随伙伴设置一起读来。选中只记下组，
+   * 保存时由那台电脑按组此刻会选的来源补全具体模型(model-groups.md §6.2)。旧版本不带时不提供。
+   */
+  hostModelGroups?: ModelGroupsConfig;
 }) {
   const { t } = useBotTranslation();
   const catalog = useDeviceProviders(deviceId);
@@ -78,9 +84,11 @@ export function BotModelChainEditor({
     .filter((vendor) => !hiddenVendors.includes(vendor));
   const unifiedAgents = visibleVendors.map(agentKindFor);
 
-  // 模型组只存在伙伴所在的这台电脑；远程控制与 SSH 读不到那台的组，暂不提供(model-groups.md §6.2)。
-  const groupsAllowed = !remote && !deviceId;
-  const { config: groupsConfig } = useModelGroups(groupsAllowed);
+  // 模型组属于伙伴所在的电脑：本机伙伴读本机的组；远程控制另一台电脑时用那台随设置带来的组；SSH 不提供。
+  const localGroups = !remote && !deviceId;
+  const { config: localGroupsConfig } = useModelGroups(localGroups);
+  const groupsAllowed = localGroups || (!!deviceId && !!hostModelGroups);
+  const groupsConfig = localGroups ? localGroupsConfig : hostModelGroups ?? MODEL_GROUPS_DEFAULTS;
 
   /** `modelGroup: undefined` in a patch means a plain model was chosen: drop the group. */
   const merge = (route: BotModelRoute, patch: Partial<BotModelRoute>): BotModelRoute => {
@@ -121,6 +129,8 @@ export function BotModelChainEditor({
     const name = groupsConfig.routes.find((route) => route.id === selection.id)?.name ?? '';
     const chosenFrom = latest.current.entryAt(index)?.model ?? '';
     replace(index, { modelGroup: selection.id });
+    // 另一台电脑的组在那台选来源：这里只记下组，保存时那台补全具体模型。
+    if (!localGroups) return;
     const result = await previewModelGroup(selection);
     const entry = latest.current.entryAt(index);
     if (seq !== pickSeq.current || entry?.modelGroup !== selection.id || entry.model !== chosenFrom) return;
@@ -202,7 +212,7 @@ export function BotModelChainEditor({
               : null,
             onSelect: (selection: ModelGroupSelection) => { void pickGroup(index, selection); },
             // The editor also renders outside a router (tests, settings drawers); the app routes by hash.
-            onManage: () => { window.location.hash = '#/settings?tab=model-groups'; },
+            ...(localGroups ? { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } } : {}),
           },
         } : {})}
         unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}

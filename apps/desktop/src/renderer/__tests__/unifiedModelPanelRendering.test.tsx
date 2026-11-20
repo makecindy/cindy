@@ -4953,6 +4953,30 @@ describe('Teammate settings with the real model picker', () => {
     expect(saved.length).toBe(count);
   });
 
+  // model-groups.md §6.2, user 2026-11-20「漏了补全客户端」, unit, real editor + picker: editing a companion on
+  // another computer offers that computer's groups (from its settings form). Choosing one only records it — that
+  // computer fills the source on save — and there is no manage entry for this computer's settings.
+  it('offers the host computer\'s groups for a remote companion and records a choice without a local preview', async () => {
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    const resolve = vi.fn();
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: vi.fn(async () => ({ routes: [] })), resolve } });
+    const hostModelGroups = { routes: [{ id: 'host-grp', name: 'Host group', strategy: 'order' as const,
+      candidates: [{ agentKind: 'pi' as const, providerId: 'xd', model: 'a' }] }] };
+    const change = vi.fn();
+    const view = render(<BotModelChainEditor deviceId="mac-2" hostModelGroups={hostModelGroups} value={[route]} onChange={change} />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    expect(document.querySelector('[data-model-groups-manage]')).toBeNull();
+    await act(async () => fireEvent.click(screen.getByText('Host group')));
+    expect(change).toHaveBeenLastCalledWith([{ ...route, modelGroup: 'host-grp' }]);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   // #10207, unit: existing picker tests only supplied ready catalogs. A missing local
   // snapshot must show loading, then update the open picker without rewriting the
   // saved route. The real BotModelChainEditor -> ModelRouteSelector -> ModelSelector

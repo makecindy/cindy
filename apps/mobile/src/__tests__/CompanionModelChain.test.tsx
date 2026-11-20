@@ -191,3 +191,36 @@ it('keeps the selected shared location in the complete route', async () => {
   await h.picker.unified.onSelect({ agent: 'codex', modelId: 'gpt-6', providerId: 'openai:second', effort: 'high', fast: true }, { deviceId: 'share:one' });
   expect(select).toHaveBeenCalledWith({ ...route, agentDeviceId: 'share:one' });
 });
+
+// model-groups.md §6.2, user 2026-11-20「漏了补全客户端」: the phone picks the host computer's model groups for a
+// companion. Production entries: CompanionModelChain (row) and CompanionModelPicker (unified picker options).
+// Observable: a group entry shows the group, not its saved model; the picker lists the host's groups and a pick
+// records the group with a usable saved model (the current one, or the group's first source for a new entry);
+// a plain pick drops the group. Minimal input: one group from the host. tier: unit (jsdom).
+const hostGroup = { id: 'night', name: 'Night', strategy: 'order' as const, sources: 2,
+  fallback: { harness: 'pi' as const, model: 'glm', providerId: 'xd' } };
+it('shows a group entry by its group and lets the picker choose the host\'s groups', async () => {
+  await act(async () => root.render(createElement(CompanionModelChain, {
+    deviceId: 'remote-mac', values: { modelChain: JSON.stringify([{ ...route, modelGroup: 'night' }]), followsDefault: false },
+    onChange: h.change, onPick: () => {}, disabled: false, modelGroups: [hostGroup],
+  })));
+  expect(node.textContent).toContain('Night');
+  expect(node.textContent).toContain('models.modelGroups.sourceCount');
+  expect(node.textContent).not.toContain('GPT-6');
+
+  const select = vi.fn(() => true);
+  const picker = (current?: typeof route) => act(async () => root.render(createElement(CompanionModelPicker, {
+    visible: true, deviceId: 'remote-mac', onClose() {}, onClosed() {}, onSelect: select, modelGroups: [hostGroup],
+    ...(current ? { route: current } : {}),
+  })));
+  await picker({ ...route, modelGroup: 'night' } as typeof route);
+  expect(h.picker.unified.modelGroups.rows).toEqual([expect.objectContaining({ id: 'night', title: 'Night', selected: true })]);
+  await picker(route);
+  h.picker.unified.modelGroups.onSelect('night');
+  expect(select).toHaveBeenLastCalledWith({ ...route, modelGroup: 'night' });
+  await picker();
+  h.picker.unified.modelGroups.onSelect('night');
+  expect(select).toHaveBeenLastCalledWith({ harness: 'pi', model: 'glm', providerId: 'xd', effort: '', fastMode: false, modelGroup: 'night' });
+  await h.picker.unified.onSelect({ agent: 'codex', modelId: 'gpt-6', providerId: 'openai:second', effort: 'high', fast: true });
+  expect(select).toHaveBeenLastCalledWith({ ...route, agentDeviceId: null });
+});

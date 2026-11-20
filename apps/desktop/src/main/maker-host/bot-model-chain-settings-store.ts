@@ -22,6 +22,8 @@ import {
 } from './override-settings-file.js';
 
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from './model-visibility-mirror.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
+import type { ModelGroupsConfig } from '../../shared/modelGroups.js';
 
 const log = desktopMakerLogger.child('bot-model-chain-settings-store');
 
@@ -243,4 +245,29 @@ export async function readEffectiveBotPrimaryRoute(
     return null;
   });
   return picked ? { ...picked, modelGroup: primary.modelGroup } : primary;
+}
+
+/**
+ * 这台电脑的模型组，给远程控制它的手机与电脑在伙伴模型设置里选(model-groups.md §6.2)。
+ * 只有来源的供应商连接 id 与模型 id，与同账号可读的模型目录同一层级，不含凭证。
+ */
+export function listBotModelGroupsForRemote(): ModelGroupsConfig {
+  return readModelGroupsConfig();
+}
+
+/**
+ * 远程保存或新建伙伴时补全模型组项(model-groups.md §6.2)：控制端只记下了组，这里把存下的具体模型换成组此刻会选的来源；
+ * 这台电脑上没有这个组时去掉组、按控制端带来的具体模型；组暂时用不了时保留原来的具体模型。
+ */
+export async function fillBotModelGroupRoutes(chain: readonly BotModelRoute[]): Promise<BotModelRoute[]> {
+  const config = readModelGroupsConfig();
+  return Promise.all(chain.map(async (route) => {
+    if (!route.modelGroup) return route;
+    if (!config.routes.some((group) => group.id === route.modelGroup)) {
+      const { modelGroup: _missing, ...plain } = route;
+      return plain;
+    }
+    const picked = previewModelGroup ? await previewModelGroup(route.modelGroup).catch(() => null) : null;
+    return picked ? { ...picked, modelGroup: route.modelGroup } : route;
+  }));
 }
