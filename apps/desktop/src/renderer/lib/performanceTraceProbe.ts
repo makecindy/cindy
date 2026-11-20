@@ -1,6 +1,6 @@
 import type { PerformanceTraceEvent } from '../../shared/performanceTrace';
 
-/** No key values, DOM target/text, URLs or composition data are read. */
+/** Only fixed interaction labels and timings leave the renderer. */
 export function installPerformanceTraceProbe(
   send: (events: PerformanceTraceEvent[]) => void,
 ): () => void {
@@ -49,13 +49,20 @@ export function installPerformanceTraceProbe(
         });
       }
   });
-  const visibility = () =>
+  const sidebarFrames = new Map<string, number>();
+  const cancelSidebarFrames = () => {
+    for (const frame of sidebarFrames.values()) cancelAnimationFrame(frame);
+    sidebarFrames.clear();
+  };
+  const visibility = () => {
+    if (document.hidden) cancelSidebarFrames();
     record({
       at: Date.now(),
       kind: 'visibility',
       label: document.visibilityState === 'hidden' ? 'hidden' : 'visible',
       durationMs: 0,
     });
+  };
   const focus = () =>
     record({ at: Date.now(), kind: 'visibility', label: 'focused', durationMs: 0 });
   const blur = () =>
@@ -64,6 +71,26 @@ export function installPerformanceTraceProbe(
     record({ at: Date.now(), kind: 'composition', label: 'start', durationMs: 0 });
   const compositionEnd = () =>
     record({ at: Date.now(), kind: 'composition', label: 'end', durationMs: 0 });
+  // Continuous input has no Event Timing entries. Sample the next animation
+  // callback, including time spent waiting for dispatch, while recording only.
+  const sampledAt = new Map<string, number>();
+  const sampleSidebar = (event: Event) => {
+    const type = event.type;
+    const now = performance.now();
+    if (document.hidden || sidebarFrames.has(type) || now - (sampledAt.get(type) ?? -Infinity) < 250) return;
+    if (!(event.target instanceof Element) || !event.target.closest('[data-trace-sidebar-list]')) return;
+    const start = event.timeStamp;
+    sampledAt.set(type, now);
+    sidebarFrames.set(type, requestAnimationFrame(() => {
+      sidebarFrames.delete(type);
+      record({ at: performance.timeOrigin + start, kind: 'input',
+        label: type === 'wheel' ? 'sidebar-wheel-to-frame' : 'sidebar-pointermove-to-frame',
+        durationMs: performance.now() - start, inputDelayMs: now - start });
+    }));
+  };
+  for (const type of ['wheel', 'pointermove']) {
+    document.addEventListener(type, sampleSidebar, { capture: true, passive: true });
+  }
   document.addEventListener('visibilitychange', visibility);
   window.addEventListener('focus', focus);
   window.addEventListener('blur', blur);
@@ -72,6 +99,8 @@ export function installPerformanceTraceProbe(
   visibility();
   const timer = setInterval(flush, 1000);
   return () => {
+    for (const type of ['wheel', 'pointermove']) document.removeEventListener(type, sampleSidebar, true);
+    cancelSidebarFrames();
     clearInterval(timer);
     for (const observer of observers) observer.disconnect();
     document.removeEventListener('visibilitychange', visibility);

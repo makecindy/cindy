@@ -1,7 +1,7 @@
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 
@@ -249,6 +249,23 @@ describe('failed sampling work-group disclosure (#6351)', () => {
 });
 
 describe('WorkGroupBlock — running latest-five preview', () => {
+  it('advances elapsed time without rendering expanded work details again', () => {
+    vi.useFakeTimers();
+    try {
+      const renderNode = vi.fn(() => createElement('div', {}, 'work detail'));
+      render(createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        blockId: 'work:clock', isStreaming: true, startedAtMs: Date.now() - 2000,
+        childItems: [{ kind: 'rendered', key: 'detail', renderNode }] }));
+      clickGroup('chat.workGroup.working');
+      expect(screen.getByText('work detail')).toBeTruthy();
+      renderNode.mockClear();
+      act(() => vi.advanceTimersByTime(1000));
+      expect(screen.getByText('3s')).toBeTruthy();
+      expect(renderNode).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('keeps teammate execution collapsed while streaming and preserves explicit expansion at completion', async () => {
     const props = { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, compact: true, blockId: 'work:bot-public', isStreaming: true,
       childItems: [rendered('progress', 'Checking the market'),

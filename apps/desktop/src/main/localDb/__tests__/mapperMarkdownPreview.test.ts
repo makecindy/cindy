@@ -10,6 +10,14 @@ import { extractMessagePreview, finalizePlainPreview, sessionToCamel } from '../
 import type { SessionRowWithCount } from '../mapper';
 
 describe('sidebar Markdown preview', () => {
+  it('reuses short previews on the next pass through a large task list', () => {
+    const previews = Array.from({ length: 1100 }, (_, i) => `**Task ${i}**`);
+    for (const preview of previews) finalizePlainPreview(preview, 'assistant');
+    const before = vi.mocked(markdownPreviewText).mock.calls.length;
+    expect(previews.map(text => finalizePlainPreview(text, 'assistant')))
+      .toEqual(previews.map((_, i) => `Task ${i}`));
+    expect(vi.mocked(markdownPreviewText).mock.calls.length - before).toBe(0);
+  });
   // Unit regression: repeated task-list reads must reuse the same pure preview
   // without retaining stale text or mixing assistant citation handling with user text.
   // Existing format tests do not cover repeat reads; two identical rows reproduce

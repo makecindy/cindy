@@ -466,6 +466,18 @@ export function TeammateWorkSegment({ blockId, childItems, active = false, onIns
   </div>;
 }
 
+function WorkElapsedTime({ startedAtMs }: { startedAtMs: number }) {
+  const { t } = useTranslation();
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  return <span className="font-mono text-12 text-[var(--msg-tool-card-chevron)]">
+    {formatDuration(Math.max(0, now - startedAtMs), t)}
+  </span>;
+}
+
 function ActivityWorkGroupBlock({
   pluginUi,
   compact = false,
@@ -496,16 +508,6 @@ function ActivityWorkGroupBlock({
     () => deferredRef.current?.setVisible?.(expanded, !compact),
     [deferred?.owner, deferred?.key, deferred?.livePreview, expanded, compact],
   );
-  const [elapsedMs, setElapsedMs] = useState(0);
-
-  useEffect(() => {
-    if (compact || !isStreaming || startedAtMs === undefined) return;
-    setElapsedMs(Math.max(0, Date.now() - startedAtMs));
-    const id = window.setInterval(() => {
-      setElapsedMs(Math.max(0, Date.now() - startedAtMs));
-    }, 500);
-    return () => window.clearInterval(id);
-  }, [isStreaming, startedAtMs, compact]);
 
   // 多取一条即可判断展开是否能露出更多活动，显示仍只取最近 5 条。
   const recentActivities = useMemo(
@@ -633,9 +635,7 @@ function ActivityWorkGroupBlock({
           </span>
           {!fitHeader && <div className="flex-1" />}
           {!compact && isStreaming && startedAtMs !== undefined && (
-            <span className="font-mono text-12 text-[var(--msg-tool-card-chevron)]">
-              {formatDuration(elapsedMs, t)}
-            </span>
+            <WorkElapsedTime startedAtMs={startedAtMs} />
           )}
           {canToggle && (
             <ChevronRight

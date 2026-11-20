@@ -663,11 +663,11 @@ describe('report boundary', () => {
     expect(f.deps.upload).not.toHaveBeenCalled();
     expect(f.deps.reveal).not.toHaveBeenCalled();
   });
-  it('projects only fixed event labels and bounded numeric timings', () => {
+  it.each(['keydown', 'sidebar-wheel-to-frame', 'sidebar-pointermove-to-frame'])('projects only fixed event labels and bounded numeric timings (%s)', label => {
     const input = {
       at: 1200,
       kind: 'input',
-      label: 'keydown',
+      label,
       durationMs: 80,
       inputDelayMs: 50,
       processingMs: 10,
@@ -677,7 +677,7 @@ describe('report boundary', () => {
     expect(projectTraceEvent(input, 1000, 2000)).toEqual({
       at: 1200,
       kind: 'input',
-      label: 'keydown',
+      label,
       durationMs: 80,
       inputDelayMs: 50,
       processingMs: 10,

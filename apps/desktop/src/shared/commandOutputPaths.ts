@@ -651,6 +651,10 @@ const LIBREOFFICE_EXEC_RE = /^(?:soffice(?:\.bin)?|libreoffice)(?:\.(?:exe|com))
 /** 「最后一个位置参数就是输出」的转换器。 */
 const POSITIONAL_OUTPUT_EXEC_RE = /^(?:wkhtmltopdf|wkhtmltoimage|weasyprint)(?:\.exe)?$/i;
 
+// Match substrings so quoted paths, wrappers and platform suffixes still
+// reach the full argument parser.
+const CONVERTER_NAME_HINT = /soffice|libreoffice|wkhtmlto(?:pdf|image)|weasyprint/iu;
+
 /** 命令段切分。合成类判定不需要偏移量,按分隔符切开即可,避免跨命令串味。 */
 function splitCommandSegments(command: string): string[] {
   return command.split(/;|\r?\n|&&|\|\||\|/g);
@@ -739,7 +743,9 @@ export function extractConverterOutputPaths(command: string): string[] {
     const value = match[1] ?? match[2] ?? match[3] ?? '';
     if (value) out.push(value);
   }
+  if (!CONVERTER_NAME_HINT.test(command)) return out.filter(isSynthesizedOutputCandidate);
   for (const segment of splitCommandSegments(command)) {
+    if (!CONVERTER_NAME_HINT.test(segment)) continue;
     const args = extractCommandArguments(segment)
       .map((argument) => argument.value)
       .filter((value) => value.length > 0);
@@ -758,6 +764,7 @@ export function extractConverterOutputPaths(command: string): string[] {
  */
 export function extractCommandOutputPathCandidates(command: string): string[] {
   const tokens = extractCommandPathTokens(command);
+  if (!tokens.length) return [...new Set(extractConverterOutputPaths(command))];
   const index = new CommandScanIndex(command, tokens);
   const seen = new Set<string>();
   const out: string[] = [];

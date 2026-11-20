@@ -7,7 +7,7 @@ import { TRACE_OPERATIONS } from './measure';
 
 const LABELS: Record<PerformanceTraceEvent['kind'], ReadonlySet<string>> = {
   'long-task': new Set(['main-thread']),
-  input: new Set(['click', 'pointerdown', 'keydown']),
+  input: new Set(['click', 'pointerdown', 'keydown', 'sidebar-wheel-to-frame', 'sidebar-pointermove-to-frame']),
   composition: new Set(['start', 'end']),
   visibility: new Set(['visible', 'hidden', 'focused', 'blurred', 'minimized', 'restored']),
   ipc: TRACE_OPERATIONS,
