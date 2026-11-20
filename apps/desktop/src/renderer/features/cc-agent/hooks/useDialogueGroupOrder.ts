@@ -1,13 +1,13 @@
 // The dialogue group is a viewer-side section. Keep its neighbours separate from
 // host project order, whose keys must identify real working directories.
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { readSidebarOwnerStorage, writeSidebarOwnerStorage } from '@/lib/sidebarOwnerStorage';
+import { readSidebarOwnerStorage, sidebarOwnerStorageKey, writeSidebarOwnerStorage } from '@/lib/sidebarOwnerStorage';
 import type { MainListEntry } from '../lib/mainListModel';
 
 const STORAGE_KEY = 'cc-agent.sidebar.dialogueGroupOrder';
 export const DIALOGUE_SORT_ID = 'dialogue-group';
-type Position = { previous: string | null; next: string | null };
+type Position = { previous: string | null; next: string | null; dragRevision?: number };
 type Positions = ReadonlyMap<string, Position>;
 type SortableEntry = Extract<MainListEntry, { kind: 'project' | 'dialogue-group' }>;
 
@@ -28,7 +28,10 @@ function readPositions(owner: string | null): Positions {
       if (pos && typeof pos === 'object' && 'previous' in pos && 'next' in pos &&
           (pos.previous === null || typeof pos.previous === 'string') &&
           (pos.next === null || typeof pos.next === 'string')) {
-        result.set(key, { previous: pos.previous, next: pos.next });
+        result.set(key, {
+          previous: pos.previous, next: pos.next,
+          dragRevision: 'dragRevision' in pos && typeof pos.dragRevision === 'number' && Number.isSafeInteger(pos.dragRevision) ? pos.dragRevision : undefined,
+        });
       }
     }
   } catch { /* A malformed display preference falls back to the existing order. */ }
@@ -39,15 +42,26 @@ export function useDialogueGroupOrder(enabled: boolean) {
   const owner = getDataOwnerGeneration().dataOwnerId;
   const [revision, setRevision] = useState(0);
   const positions = useMemo(() => enabled ? readPositions(owner) : new Map<string, Position>(), [enabled, owner, revision]);
-  const lastGroupDrag = useRef(new Map<string, number>());
+  const storageKey = owner && sidebarOwnerStorageKey(STORAGE_KEY, owner);
+  useEffect(() => {
+    if (!enabled || !storageKey) return;
+    const refresh = () => setRevision(value => value + 1);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === storageKey || event.key === null) refresh();
+    };
+    window.addEventListener(storageKey, refresh);
+    window.addEventListener('storage', onStorage);
+    refresh(); // Include a receipt written between render and subscription.
+    return () => {
+      window.removeEventListener(storageKey, refresh);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [enabled, storageKey]);
   function preparePlacement(
     scope: string, before: readonly string[], after: readonly string[],
     comparisonKey: (key: string) => string, groupOnly: boolean,
   ) {
-    if (getDataOwnerGeneration().dataOwnerId !== owner) return;
-    // A delayed project acknowledgement must not overwrite a newer explicit group drag.
-    if (groupOnly) lastGroupDrag.current.set(scope, (lastGroupDrag.current.get(scope) ?? 0) + 1);
-    const groupDrag = lastGroupDrag.current.get(scope);
+    if (!storageKey || getDataOwnerGeneration().dataOwnerId !== owner) return;
     const index = after.indexOf(DIALOGUE_SORT_ID);
     const saved = readPositions(owner).get(scope);
     let position: Position;
@@ -69,13 +83,16 @@ export function useDialogueGroupOrder(enabled: boolean) {
     // Capture the absolute destination at drop time. Two drops from the same
     // visible order can both succeed; replaying a relative swap would undo it.
     return () => {
-      if (getDataOwnerGeneration().dataOwnerId !== owner || lastGroupDrag.current.get(scope) !== groupDrag) return;
+      if (getDataOwnerGeneration().dataOwnerId !== owner) return;
       const next = new Map(readPositions(owner));
       const current = next.get(scope);
-      if (position.previous === current?.previous && position.next === current?.next) return;
-      next.set(scope, position);
+      // The saved preference owns the last explicit drag, across sidebar mounts.
+      // Project receipts may update its neighbours but never advance its drag revision.
+      if (!groupOnly && current?.dragRevision !== saved?.dragRevision) return;
+      if (!groupOnly && position.previous === current?.previous && position.next === current?.next) return;
+      next.set(scope, { ...position, dragRevision: groupOnly ? (current?.dragRevision ?? 0) + 1 : saved?.dragRevision });
       if (writeSidebarOwnerStorage(STORAGE_KEY, owner, JSON.stringify(Object.fromEntries(next)))) {
-        setRevision(value => value + 1);
+        window.dispatchEvent(new Event(storageKey));
       }
     };
   }

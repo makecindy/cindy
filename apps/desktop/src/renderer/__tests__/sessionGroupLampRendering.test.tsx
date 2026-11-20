@@ -511,6 +511,7 @@ describe('Manual project sorting', () => {
   it.each([
     { kind: 'transient' }, { kind: 'unavailable' }, { kind: 'ok' },
     { kind: 'ok', later: 'repeat' }, { kind: 'ok', later: 'move group' },
+    { kind: 'ok', later: 'remount then move' }, { kind: 'ok', later: 'remount only' },
   ])('keeps the dialogue placement on remote $kind (next gesture: $later)', async ({ kind, later }) => {
     machine.selection = ['remote'];
     setDataOwnerGeneration('remote-reorder');
@@ -534,24 +535,34 @@ describe('Manual project sorting', () => {
           resolve({ kind, snapshot: remoteOrder.snapshot });
         });
       }));
-      const view = render(<ProjectsSection {...p} />);
+      let view = render(<ProjectsSection {...p} />);
       const order = (container: HTMLElement) => Array.from(container.querySelectorAll('[data-sortable-id]'), row => row.getAttribute('data-sortable-id'));
       dropBefore(view.container, 'dialogue-group', b);
       dropBefore(view.container, c, b);
       expect(remoteOrder.apply).toHaveBeenCalledWith('remote', { manualProjectOrder: [a, c, b], projectOrder: 'custom' });
       expect(order(view.container)).toEqual([a, 'dialogue-group', b, c]);
       if (later === 'repeat') dropBefore(view.container, c, b);
-      if (later === 'move group') dropBefore(view.container, 'dialogue-group', a);
+      if (later?.startsWith('remount')) {
+        view.unmount();
+        view = render(<ProjectsSection {...p} />);
+      }
+      const explicitMove = later === 'move group' || later === 'remount then move';
+      if (explicitMove) dropBefore(view.container, 'dialogue-group', a);
       for (const acknowledge of acknowledgements) await act(async () => acknowledge());
       if (kind === 'unavailable') {
         p.filter.manualProjectOrder = [...vi.mocked(p.filter.setManualProjectOrder).mock.lastCall![0]];
       } else {
         expect(p.filter.setManualProjectOrder).not.toHaveBeenCalled();
       }
+      const expected = kind === 'transient' ? [a, 'dialogue-group', b, c]
+        : explicitMove ? ['dialogue-group', a, c, b] : [a, 'dialogue-group', c, b];
+      if (later?.startsWith('remount')) {
+        view.rerender(<ProjectsSection {...p} />);
+        expect(order(view.container)).toEqual(expected);
+      }
       view.unmount();
       const reopened = render(<ProjectsSection {...p} />);
-      const expected = later === 'move group' ? ['dialogue-group', a, c, b] : [a, 'dialogue-group', c, b];
-      expect(order(reopened.container)).toEqual(kind === 'transient' ? [a, 'dialogue-group', b, c] : expected);
+      expect(order(reopened.container)).toEqual(expected);
     } finally {
       remoteOrder.snapshot = original;
       remoteOrder.apply.mockReset();
