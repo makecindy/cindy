@@ -109,5 +109,12 @@
     "quotaResetIn": "Direset dalam {{duration}}",
     "quotaAverageHint": "Kuota mingguan · Bobot sama per akun",
     "quotaResetHint": "Dengan laju saat ini, kuota mungkin masih tersisa saat reset: kuning dalam 24 jam, merah dalam 6 jam."
+  },
+  "pluginEngines": {
+    "genericName": "Mesin plugin",
+    "defaultModel": "Model bawaan",
+    "unavailable": "{{engine}} tidak tersedia",
+    "unavailableWithHint": "{{engine}} tidak tersedia: {{hint}}",
+    "worktreeUnsupported": "Mesin plugin belum bisa memulai tugas di worktree. Nonaktifkan worktree untuk mengirim."
   }
 }

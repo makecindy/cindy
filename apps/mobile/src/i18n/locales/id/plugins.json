@@ -223,6 +223,8 @@
       "agentHiddenTasksDetail": "Tugas buatan Plugin ini bisa tidak muncul di daftar tugas, pencarian, dan notifikasi. Kamu bisa melihat, membuka, atau menampilkannya ke daftar tugas kapan saja di “Tugas latar belakang” pada detail Plugin; saat Plugin dicopot, tugas tersebut tampil kembali.",
       "agentModelPreferences": "Membaca dan mengubah koleksi model serta membaca model yang baru saja kamu pakai",
       "agentModelPreferencesDetail": "Membaca koleksi model dan model yang baru dipakai di komputer ini (termasuk tingkat penalaran dan pengaturan Fast), menambah, mengubah, atau menghapus koleksi; perubahan ikut tampil di pemilih model Cindy. Model yang dipilih di Plugin tidak tercatat sebagai baru dipakai. Tidak mencakup model di komputer lainmu atau model yang dibagikan orang lain, dan tidak menyediakan kredensial apa pun.",
+      "harnesses": "Menyediakan mesin tugas: {{names}}",
+      "harnessesDetail": "Di tugas kamu, ia dapat membaca dan menulis direktori kerja, menjalankan perintah, dan memakai alat Cindy yang sama dengan Pi bawaan.",
       "agentErrand": "Bisa membuat tugas, menjalankan pekerjaan, dan membaca hasilnya",
       "agentErrandDetail": "Tugas yang dibuat muncul di daftar tugas Cindy, tempat kamu bisa melihat prosesnya dan melanjutkan obrolan.",
       "agentSchedule": "Bisa memintamu membuat otomatisasi",

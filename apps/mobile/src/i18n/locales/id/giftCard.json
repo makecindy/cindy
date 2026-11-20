@@ -16,7 +16,9 @@
     "validityValue_other": "Berlaku {{count}} hari setelah diklaim",
     "claimBy": "Batas klaim",
     "destination": "Disimpan ke",
-    "destinationValue": "Saldo bonus"
+    "destinationValue": "Saldo bonus",
+    "destinationPurchased": "Saldo Isi Ulang",
+    "validityPermanent": "Tidak pernah kedaluwarsa"
   },
   "doneTitle": "{{amount}} sudah masuk",
   "doneDescription": "Sudah disimpan ke saldo bonus, berlaku hingga {{date}}.",
@@ -32,8 +34,11 @@
     "alreadyClaimed": "Kartu hadiah ini sudah diklaim orang lain.",
     "expired": "Batas waktu klaim kartu hadiah ini sudah lewat.",
     "voided": "Kartu hadiah ini sudah dibatalkan.",
+    "voidedPurchased": "Kartu hadiah ini tidak dapat ditukarkan saat ini.",
     "rateLimited": "Terlalu banyak percobaan; coba lagi nanti.",
     "failed": "Penukaran belum bisa dilakukan saat ini; coba lagi nanti.",
     "personalRequired": "Kartu hadiah hanya bisa diklaim oleh pengguna pribadi."
-  }
+  },
+  "doneDescriptionPurchased": "Ditambahkan ke Saldo Isi Ulang kamu. Tidak pernah kedaluwarsa.",
+  "pendingDescriptionPurchased": "{{amount}} sedang ditambahkan dan akan segera muncul di Saldo Isi Ulang kamu. Kamu tidak perlu menukarkannya lagi."
 }

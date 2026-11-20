@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "Tambah widget",
+  "widgetGuideIntro": "Widget adalah kartu kecil di Layar Utama. Lihat sisa kuota dan pemakaian token hari ini tanpa membuka Cindy.",
+  "widgetGuideExample": "Widget Cindy di samping ikon aplikasi di Layar Utama ponsel.",
+  "widgetGuidePicker": "Edit → Tambah Widget",
+  "widgetGuideIOS": "Sentuh dan tahan area kosong di Layar Utama, lalu ketuk {{picker}}.\n\nCari Cindy, pilih Kuota langganan atau Pemakaian harian, lalu ketuk Tambah Widget.",
+  "widgetGuideAndroid": "Sentuh dan tahan area kosong di layar utama, lalu ketuk Widget.\n\nTemukan Cindy dan seret Kuota langganan atau Pemakaian harian ke layar utama.",
+  "widgetGuideHome": "Layar Utama",
+  "widgetGuideLock": "Layar Kunci",
+  "widgetGuideLockIOS": "Juga di Layar Kunci: sentuh dan tahan, lalu ketuk Sesuaikan.",
+  "widgetGuideDismiss": "Mengerti",
+  "usageOther": "Lainnya",
+  "usageTitle": "Ringkasan pemakaian",
+  "usageOnlyDevice": "Hanya {{name}}",
+  "usagePlans": "Jatah paket",
+  "usageBudget": "Sisa anggaran periode",
   "management": {
     "title": "Manajemen perangkat",
     "openDevice": "Lihat detail perangkat {{name}}",
@@ -425,6 +440,7 @@
       "filterEmptyCopy": "Bisa disesuaikan atau direset di “Filter” pada pengaturan tampilan.",
       "filterTeammatesHeading": "Rekan",
       "filterAnySource": "Semua",
+      "filterHideAutomations": "Sembunyikan tugas otomatisasi",
       "filterHideAllTeammates": "Sembunyikan semua",
       "filterSelectedTeammates": "{{count}} dipilih",
       "inbox": {
@@ -445,13 +461,13 @@
         "thisEvening": "Malam ini",
         "tomorrow": "Besok",
         "nextWeek": "Minggu depan",
+        "indefinite": "Tanpa batas",
         "custom": "Kustom…",
         "invalidTime": "Pilih tanggal dan waktu dalam rentang satu tahun ke depan."
       },
       "taskListMode": {
-        "heading": "Mode tugas",
-        "tasks": "Daftar tugas",
-        "inbox": "Kotak masuk"
+        "enterInbox": "Beralih ke kotak masuk",
+        "leaveInbox": "Beralih ke daftar tugas"
       }
     },
     "search": {

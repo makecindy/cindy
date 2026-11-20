@@ -866,8 +866,7 @@
         "loading": "Membaca kuota…",
         "unavailable": "Kuota komputer ini belum bisa dibaca",
         "none": "Penyedia ini tidak punya info kuota",
-        "offline": "Komputer ini offline, jadi kuotanya tidak bisa dibaca",
-        "share": "Kuota tidak ditampilkan untuk komputer yang dibagikan orang lain"
+        "offline": "Komputer ini offline, jadi kuotanya tidak bisa dibaca"
       },
       "runningCount_other": "{{count}} tugas berjalan",
       "limitAria": "Batas konkurensi {{name}}",
@@ -1414,6 +1413,7 @@
     "UPSTREAM_ERROR": "Kesalahan server hulu (5xx). Coba lagi nanti.",
     "UPSTREAM_UNREACHABLE": "Tidak bisa menjangkau endpoint. Periksa jaringan dan base URL.",
     "TIMEOUT": "Koneksi timeout. Periksa jaringan dan base URL.",
+    "CERT_ERROR": "Verifikasi sertifikat gagal. Periksa apakah hostname URL dasar cocok dengan sertifikat, serta rantai sertifikat dan konfigurasi kepercayaan CA organisasi kamu.",
     "UNKNOWN": "Kesalahan tidak dikenal. Periksa log untuk detailnya.",
     "upstreamToast": "Permintaan penyedia “{{provider}}” gagal: {{message}}"
   },
@@ -1425,6 +1425,10 @@
     "details": "Detail error"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Database lokal rusak",
+      "description": "Kerusakan database terdeteksi. Akses dihentikan untuk melindungi data kamu. Coba buka lagi data lokal. Jika masih gagal, salin detail teknis dan hubungi dukungan. Jangan timpa atau hapus file database."
+    },
     "schemaLease": {
       "title": "Data lokal belum dapat dibuka",
       "retry": "Buka lagi Data lokal",
@@ -3677,6 +3681,8 @@
           "edit": "Ubah",
           "editFailed": "Periksa alamat, protokol, dan kunci, lalu coba lagi.",
           "editNote": "Biarkan kunci kosong untuk mempertahankan kredensial tersimpan. Jika alamat atau protokol diubah, kunci baru perlu diisi.",
+          "useSavedCredential": "Gunakan kredensial tersimpan",
+          "confirmDestination": "Gunakan kredensial Claude Code tersimpan di alamat ini?",
           "name": "Nama tampilan",
           "baseUrl": "Base URL",
           "protocol": "Protokol API",
@@ -4078,6 +4084,25 @@
         "refreshFailed": "Gagal menyegarkan daftar model, coba lagi nanti",
         "refreshReconnect": "Gagal memuat daftar model. Sambungkan ulang penyedia ini lalu coba lagi.",
         "refreshFetchDisabled": "Pengambilan katalog model jarak jauh tidak aktif, penyegaran dilewati",
+        "withdrawn": {
+          "refreshFound": "Tidak lagi ditawarkan di upstream: {{count}}",
+          "refreshAdded": "Model baru: {{added}}. Tidak lagi ditawarkan di upstream: {{count}}",
+          "refreshSuspicious": "Tidak dikembalikan kali ini: {{count}}. Daftar upstream mungkin tidak lengkap",
+          "refreshAddedSuspicious": "Model baru: {{added}}. Tidak dikembalikan kali ini: {{count}}. Daftar upstream mungkin tidak lengkap",
+          "review": "Tinjau model",
+          "heading": "Model yang tidak lagi ditawarkan di upstream",
+          "intro": "Saat {{provider}} dimuat ulang, layanan upstream tidak mengembalikan model ini. Pilih yang ingin dihapus. Mesin yang masih mencantumkannya tidak terpengaruh.",
+          "suspicious": "Jumlah model yang hilang tidak wajar. Layanan upstream mungkin mengembalikan daftar yang tidak lengkap. Muat ulang nanti untuk memastikan, atau pilih hanya model yang kamu tahu sudah ditarik.",
+          "selectAll": "Pilih semua",
+          "selected": "Dipilih {{count}} dari {{total}}",
+          "consequence": "Model yang dihapus tidak lagi muncul di pemilihan model, dan tempat yang memakainya akan menampilkannya sebagai tidak tersedia. Jika layanan upstream menawarkannya lagi, muat ulang untuk menambahkannya kembali.",
+          "confirm": "Hapus model ({{count}})",
+          "cancel": "Pertahankan model",
+          "removed": "Model dihapus: {{count}}",
+          "cleanupIncomplete": "Model dihapus: {{count}}. Beberapa pengaturan visibilitas atau nonaktif tidak dapat dibersihkan",
+          "stale": "Koneksi berubah, jadi tidak ada yang perlu dihapus. Muat ulang untuk meninjau",
+          "removeFailed": "Tidak dapat menghapus model"
+        },
         "disableModel": "Nonaktifkan model ini",
         "paymentRequired": "Berbayar",
         "paymentUnlock": "Bayar untuk membuka",
@@ -4366,6 +4391,7 @@
         "authorizedToast": "Sudah masuk ke {{name}}",
         "authorizeFailed": "Gagal masuk ke {{name}}, coba lagi",
         "nameLabel": "Nama tampilan",
+        "geminiImageKeyNote": "Menyimpan akan memakai key ini untuk obrolan di koneksi ini dan untuk pembuatan gambar Gemini berikutnya. Untuk gambar saja, biarkan semua model obrolan tidak dicentang.",
         "onlyAgentNote": "Penyedia ini hanya mendukung {{agent}}",
         "endpointLabel": "URL dasar {{agent}}",
         "noAuthNote": "Proxy ini tidak perlu kunci klien; Cindy menghapus kredensial langganan CLI sebelum meneruskan.",
@@ -6758,9 +6784,23 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "Lalu lintas di komputer ini",
+          "range": "Rentang waktu",
+          "last5m": "5 menit terakhir",
+          "lastHour": "1 jam terakhir",
+          "lastDay": "24 jam terakhir",
+          "sent": "Terkirim",
+          "received": "Diterima",
+          "total": "Total",
+          "scope": "Perkiraan lalu lintas melalui koneksi langsung dan relay, termasuk transfer file langsung. Tidak termasuk siaran penemuan perangkat dan transfer audio, video, serta HTTP terpisah."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
+        },
+        "linkTransport": {
+          "webrtc": "WebRTC"
         },
         "onlyEncrypted": "Hanya Agent-Net",
         "onlyEncryptedHint": "Setelah diaktifkan, perangkat lama dan pembagian yang masih memakai koneksi lama tidak akan bisa dipakai. Nonaktif secara bawaan.",
@@ -7906,6 +7946,7 @@
           "accessDenied": "Operasi Plugin ini tidak diizinkan atau sudah dibatalkan.",
           "notConfigured": "Lingkungan ini tidak menyediakan marketplace Plugin.",
           "invalidPackage": "Paket Plugin ini rusak dan tidak bisa dipasang. Hubungi penerbitnya.",
+          "downloadAuthorizationExpired": "Izin unduh plugin sudah kedaluwarsa. Periksa tanggal dan waktu sistem sebelum memulai percobaan pemasangan baru.",
           "downloadTimeout": "Unduhan Plugin melewati batas waktu. Coba lagi nanti.",
           "downloadFailed": "Unduhan Plugin gagal. Periksa jaringan lalu coba lagi.",
           "brokerRedirectPortRequired": "Plugin ini mendeklarasikan broker otorisasi, tetapi konfigurasi OAuth yang sama tidak punya redirectPort, jadi tidak bisa dipasang dari marketplace Plugin. Hubungi penerbit untuk menambahkan field tersebut lalu menerbitkan ulang.",
@@ -8163,6 +8204,7 @@
         "cindyEmbedText": "Bisa mengirim teks untuk dihitung menjadi vektor (untuk pencarian semantik)",
         "cindyModelsDecisions": "Bisa memanggil model keputusan (memakai kuota modelmu)",
         "cindyModelsRerank": "Bisa memanggil model rerank (memakai kuota modelmu)",
+        "cindyModelsMediaRequest": "Dapat memanggil Cindy AI untuk pembuatan gambar dan video, sintesis suara, dan transkripsi (memakai kuota model kamu)",
         "cindyEmbedTextDetail": "Teks dikirim ke model embedding sistem dan diubah menjadi rangkaian angka, paling banyak {{max}} item per panggilan, dan mungkin menimbulkan biaya model. Vektor hasilnya hanya disimpan oleh Plugin itu sendiri, tidak ditulis ke pustaka datamu.",
         "cindySearchWeb": "Bisa mencari di internet publik dengan Cindy AI",
         "cindySearchWebDetail": "Permintaan pencarian akan mengakses internet publik dan bisa memakai kuota Cindy AI.",
@@ -8221,6 +8263,8 @@
         "agentHiddenTasksDetail": "Tugas buatan Plugin ini bisa tidak muncul di daftar tugas, pencarian, dan notifikasi. Kamu bisa melihat, membuka, atau menampilkannya ke daftar tugas kapan saja di “Tugas latar belakang” pada detail Plugin; saat Plugin dicopot, tugas tersebut tampil kembali.",
         "agentModelPreferences": "Membaca dan mengubah koleksi model serta membaca model yang baru saja kamu pakai",
         "agentModelPreferencesDetail": "Membaca koleksi model dan model yang baru dipakai di komputer ini (termasuk tingkat penalaran dan pengaturan Fast), menambah, mengubah, atau menghapus koleksi; perubahan ikut tampil di pemilih model Cindy. Model yang dipilih di Plugin tidak tercatat sebagai baru dipakai. Tidak mencakup model di komputer lainmu atau model yang dibagikan orang lain, dan tidak menyediakan kredensial apa pun.",
+        "harnesses": "Menyediakan mesin tugas: {{names}}",
+        "harnessesDetail": "Di tugas kamu, ia dapat membaca dan menulis direktori kerja, menjalankan perintah, dan memakai alat Cindy yang sama dengan Pi bawaan.",
         "agentErrand": "Bisa membuat tugas, menjalankan pekerjaan, dan membaca hasilnya",
         "agentErrandDetail": "Tugas yang dibuat akan muncul di daftar tugas Cindy, tempat kamu bisa melihat prosesnya dan melanjutkan obrolan.",
         "agentSchedule": "Bisa memintamu membuat otomatisasi",
@@ -9466,6 +9510,31 @@
     "preparing": "Menghubungkan ke layanan login",
     "preparingSubtitle": "Memuat cara login yang tersedia untuk wilayah ini",
     "unavailable": "Login sementara tidak tersedia",
+    "hostUnavailable": {
+      "title": "Layanan latar Cindy tidak mulai",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Data ini milik akun yang berbeda dari sesi masuk yang disimpan layanan latar Cindy.",
+          "action": "Jalankan cindy-host login dengan akun asli, lalu mulai ulang layanan latar Cindy dan buka lagi Cindy."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Aplikasi Cindy lain sedang memakai data ini.",
+          "action": "Tutup aplikasi itu, lalu mulai ulang layanan latar Cindy dan buka lagi Cindy."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "Data akun ini tidak dapat dibuka.",
+          "action": "Jika kamu baru saja memakai versi Cindy yang lebih baru, perbarui Cindy di komputer ini ke versi terbaru, lalu mulai ulang layanan latar Cindy dan buka lagi Cindy. Jika tidak, jalankan cindy-host status untuk melihat penyebabnya."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Layanan latar Cindy tidak dapat menjangkau layanan masuk saat mulai.",
+          "action": "Periksa jaringan kamu, lalu mulai ulang layanan latar Cindy dan buka lagi Cindy."
+        },
+        "HOST_START_FAILED": {
+          "body": "Layanan latar Cindy mengalami error saat mulai.",
+          "action": "Mulai ulang layanan latar Cindy dan buka lagi Cindy. Jika terulang, jalankan cindy-host status untuk melihat penyebabnya."
+        }
+      }
+    },
     "retry": "Coba lagi",
     "browserWaiting": "Selesaikan verifikasi di browser",
     "browserCallback": {
@@ -9736,6 +9805,10 @@
     "cacheLine": "Rincian cache: baca {{read}} · tulis {{create}} · rasio hit {{rate}}",
     "cacheLineNoRate": "Rincian cache: baca {{read}} · tulis {{create}}",
     "stepsLine": "Permintaan giliran ini: {{steps}} · sekitar {{context}} konteks tiap permintaan",
+    "traceChartLabel": "Kecepatan pembuatan dan penalaran per permintaan di giliran ini",
+    "traceRequests": "Permintaan di giliran ini: {{requests}}",
+    "traceThinkingShare": "Penalaran: {{share}} dari output",
+    "traceThinkingTokens": "Penalaran: {{thinking}} token",
     "modelLine": "Model: {{model}}",
     "multipleModels": "{{count}} model",
     "costBreakdownHeader": "Per model:",
@@ -12977,6 +13050,7 @@
           "overloadRetryingNoCount": "Layanan model sedang sibuk. Mencoba ulang otomatis…",
           "overloadFailed": "⚠️ Layanan model sedang sibuk — upstream tidak punya kapasitas saat ini. Kirim ulang pesan ini di sini untuk mencoba lagi, atau ganti ke model lain di Cindy. (Mengklik “Coba lagi” di aplikasi desktop juga melanjutkan tugasnya, tetapi hasilnya tidak akan kembali ke pesan ini.)"
         },
+        "audioInputUnavailable": "Koneksi model ini tidak dapat membaca audio secara langsung. Minta Cindy mentranskripsikan audio dulu, lalu lanjutkan.",
         "toolLoop": {
           "generic": "Model memanggil tool berulang kali terlalu banyak, jadi Cindy menghentikan giliran ini untuk menghindari perulangan tanpa henti. Kirim pesan baru untuk melanjutkan.",
           "consecutive": "Model memanggil tool yang sama sebanyak {{n}} kali, jadi Cindy menghentikan giliran ini untuk menghindari perulangan tanpa henti. Kirim pesan baru untuk melanjutkan.",
@@ -13533,6 +13607,8 @@
         },
         "reply": {
           "unsupportedMedia": "Versi ini belum mendukung pemrosesan media WeChat seperti ini.",
+          "delayedReply": "Balasan tertunda disiapkan pada {{createdAt}}, untuk pesan kamu yang diterima pada {{receivedAt}}. Isinya mungkin sudah kedaluwarsa.",
+          "delayedReplyQuestion": "Pesan asli: {{question}}",
           "stillProcessing": "Tugas masih diproses…",
           "ownerOnlyCommands": "Hanya pemilik yang bisa memakai perintah bot.",
           "companionManagedCommand": "Buka Rekan ini di Cindy: model diatur di pengaturan Rekan, izin diganti di bawah kotak input obrolan.",
@@ -14012,6 +14088,8 @@
         "fastBadge": "Cepat"
       },
       "source": {
+        "lastConfirmed": "Terakhir dimuat ulang: {{time}}",
+        "unconfirmed": "Daftar model belum terbaru",
         "unavailable": "Model tidak tersedia",
         "reconnect": "Sambungkan lagi",
         "manage": "Kelola sumber",
@@ -14120,6 +14198,32 @@
           "bypassPermissions": {
             "label": "Akses penuh",
             "description": "Tindakan rutin diizinkan langsung, termasuk berkas di luar ruang kerja dan perintah jaringan."
+          }
+        },
+        "acp": {
+          "ask": {
+            "label": "Tanya setiap kali",
+            "description": "Kamu mengonfirmasi saat Agent meminta izin. Cindy tidak dapat memblokir tindakan yang tidak diminta Agent."
+          },
+          "default": {
+            "label": "Bawaan",
+            "description": "Berjalan sesuai cara bawaan agent; kamu mengonfirmasi permintaan izinnya."
+          },
+          "acceptEdits": {
+            "label": "Terima edit",
+            "description": "Agent mengedit file langsung; kamu mengonfirmasi permintaan izin lainnya."
+          },
+          "auto": {
+            "label": "Otomatis",
+            "description": "Agent memutuskan apa yang perlu dikonfirmasi; kamu mengonfirmasi permintaan yang dibuatnya."
+          },
+          "plan": {
+            "label": "Hanya rencana",
+            "description": "Agent hanya menganalisis dan merencanakan; tidak mengedit file."
+          },
+          "bypassPermissions": {
+            "label": "Izinkan semua",
+            "description": "Setiap izin yang diminta Agent diberikan otomatis."
           }
         }
       }
@@ -14576,12 +14680,24 @@
       "runningWithWorktree_other": "Tunggu sampai semuanya selesai sebelum memindah branch. Dengan worktree kamu bisa mulai sekarang di salinan terpisah tanpa saling memengaruhi.",
       "runningWithWorktree_many": "Tunggu sampai semuanya selesai sebelum memindah branch. Dengan worktree kamu bisa mulai sekarang di salinan terpisah tanpa saling memengaruhi."
     },
-    "followUpHint": {
-      "queueDefault": "Pesan yang dikirim saat tugas berjalan secara default mengantre.",
-      "steerDefault": "Pesan yang dikirim saat tugas berjalan secara default menyisip ke tugas saat ini.",
-      "switchToSteer": "Ubah default ke sisip",
-      "switchToQueue": "Ubah default ke antre",
-      "dismiss": "Tutup tips"
+    "sendDelivery": {
+      "menuAria": "Cara mengirim pesan ini",
+      "queueHint": "Setelah balasan ini",
+      "steerHint": "Pada langkah berikutnya",
+      "setDefault": "Jadikan bawaan",
+      "nowDefault": "Sekarang menjadi bawaan",
+      "switchToSteer": "Arahkan sebagai bawaan",
+      "switchToQueue": "Antrekan sebagai bawaan"
+    },
+    "pluginEngines": {
+      "group": "Mesin plugin",
+      "genericName": "Mesin plugin",
+      "defaultModel": "Model bawaan",
+      "defaultModelHint": "Memakai bawaan mesin itu sendiri",
+      "unavailable": "Tidak tersedia",
+      "engineMissing": "Plugin yang menyediakan mesin ini dinonaktifkan atau dilepas.",
+      "worktreeUnsupported": "Mesin plugin belum bisa memulai tugas di worktree. Nonaktifkan worktree untuk mengirim.",
+      "modelChangeFailed": "Tidak dapat mengganti model"
     }
   },
   "onboarding": {
@@ -14903,11 +15019,14 @@
     },
     "runningStatus": {
       "currentRate": "Kecepatan terbaru",
+      "lastRequestRate": "Rata-rata permintaan terakhir",
+      "recentTokenRate": "Terbaru {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Rata-rata giliran",
       "rateHistory": "Riwayat kecepatan pembuatan",
       "outputTotal": "Output total",
       "observedPeak": "Puncak",
+      "thinkingShare": "Penalaran",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Kecepatan pembuatan terbaru. Tidak termasuk eksekusi alat dan waktu tunggu.",
@@ -15051,6 +15170,11 @@
       "actionExpired": "Otorisasi tugas untuk operasi ini telah kedaluwarsa. Lihat hasil eksekusi terakhir otomatisasi.",
       "actionRecovered": "Otorisasi untuk operasi ini telah kedaluwarsa. Otomatisasi yang sama kemudian berhasil dijalankan.",
       "text": "Sebelumnya ada eksekusi otomatis yang gagal.",
+      "prCheck_dns": "{{device}} tidak dapat menyelesaikan {{host}}. Periksa jaringan atau DNS di perangkat itu jika ini berlanjut. Kegagalan berturut-turut: {{failures}}. Pemeriksaan otomatis berikutnya: {{retry}}.",
+      "prCheck_timeout": "Koneksi ke GitHub kehabisan waktu di {{device}}. Kegagalan berturut-turut: {{failures}}. Pemeriksaan otomatis berikutnya: {{retry}}.",
+      "prCheck_auth": "Masuk lagi ke GitHub di {{device}}. Kegagalan berturut-turut: {{failures}}. Pemeriksaan otomatis berikutnya: {{retry}}.",
+      "prCheck_rate-limit": "GitHub membatasi permintaan dari {{device}}. Kegagalan berturut-turut: {{failures}}. Pemeriksaan otomatis berikutnya: {{retry}}.",
+      "prCheck_unknown": "Pemeriksaan PR gagal di {{device}}. Lihat detail jalannya. Kegagalan berturut-turut: {{failures}}. Pemeriksaan otomatis berikutnya: {{retry}}.",
       "precheck": "Pemeriksaan otomatis sementara terhalang.",
       "rateLimited": "Pemeriksaan otomatis sementara terhalang: permintaan dibatasi.",
       "pluginMissing": "Pemeriksaan otomatis sementara terhalang: Plugin “{{name}}” belum terpasang. Akan pulih otomatis setelah dipasang.",
@@ -15761,6 +15885,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Agent ini tidak tersedia di komputer itu. Pasang atau masuk di sana dulu, lalu coba lagi, atau pilih Agent lain.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Komputer ini tidak bisa melanjutkan status berjalan tugas sebelumnya. Pilih model dari komputer atau penyedia lain untuk melanjutkan lewat serah terima konteks; pesan asli tetap disimpan.",
       "REMOTE_AGENT_INVALID": "Terjadi kesalahan saat berkomunikasi dengan komputer yang menjalankan Agent. Coba lagi; jika terus terjadi, perbarui Cindy di kedua komputer ke versi terbaru.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "Mesin plugin tidak dapat memulihkan percakapan sebelumnya. Pesan kamu tetap tersimpan. Pilih mesin lain atau mulai tugas baru.",
       "REMOTE_AGENT_RESUME_REJECTED": "Komputer yang menjalankan model tidak bisa melanjutkan tugas ini. Buat tugas baru dari daftar tugas dan salin isi yang perlu dilanjutkan. Tugas asli dan pesan yang mengantre tetap disimpan.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Model ini sudah mencapai batas porsi model yang ditetapkan pemiliknya. Pilih model lain yang tersedia untuk melanjutkan.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Komputer itu belum membuka penyedia atau model yang dipilih untukmu. Jika itu komputermu sendiri, aktifkan “Izinkan komputer lain memakai model komputer ini” di pengaturan Koneksi Jarak Jauh-nya; jika orang lain membagikannya, minta mereka menyesuaikan akses di Remote & Sharing. Atau pilih model lain.",
@@ -16339,6 +16464,7 @@
       },
       "filterCreatorsHeading": "Rekan",
       "filterCreatorsAny": "Semua",
+      "filterHideAutomations": "Sembunyikan tugas otomatisasi",
       "filterCreatorsNone": "Sembunyikan semua",
       "filterSelectedCreators": "{{count}} dipilih",
       "filterProjectsHeading": "Proyek",
@@ -16671,6 +16797,7 @@
         "thisEvening": "Malam ini",
         "tomorrow": "Besok",
         "nextWeek": "Minggu depan",
+        "indefinite": "Tanpa batas",
         "custom": "Kustom…",
         "wakeAt": "Tanggal & waktu pengembalian",
         "timeZone": "Waktu lokal ({{zone}})",
@@ -16887,6 +17014,12 @@
       "unspecifiedDir": "Direktori tidak ditentukan"
     },
     "workdirBrowse": {
+      "previewFile": "Pratinjau",
+      "filterDirectory": "Filter folder ini…",
+      "projectTree": "Pohon proyek",
+      "systemPreview": "Pratinjau sistem",
+      "listView": "Daftar",
+      "gridView": "Gambar mini",
       "backToProjects": "Kembali ke proyek",
       "switchProject": "Ganti proyek",
       "activeSessionCount_one": "{{count}} tugas aktif",
@@ -17253,6 +17386,7 @@
       "promote": {
         "menu": "Jadikan otomasi proyek",
         "noWorkingDir": "Otomasi tanpa direktori kerja tidak bisa dijadikan otomasi proyek",
+        "pluginEngine": "Mesin plugin hanya berjalan di komputer ini, jadi otomatisasi ini tidak bisa menjadi otomatisasi proyek",
         "success": "Dijadikan otomasi proyek"
       },
       "editProject": {
@@ -17529,6 +17663,7 @@
         "selectThread": "Pilih sesi target",
         "selectProject": "Pilih direktori proyek",
         "modelUnavailable": "Model {{model}} sudah tidak tersedia. Pilih model lain.",
+        "pluginEngineUnavailable": "Mesin plugin yang dipilih tidak tersedia saat ini. Pilih model lain.",
         "reasoningInvalid": "Tingkat penalaran harus salah satu dari {{values}}",
         "preRunHookCommandRequired": "Isi perintah skrip pemeriksaan pra-jalan",
         "preRunPluginRequired": "Pilih Plugin untuk pemeriksaan pra-jalan",
@@ -19126,6 +19261,9 @@
     },
     "errors": {
       "piStartupCloudFile": "Ditemukan berkas instruksi yang hanya ada di cloud: {{path}}. Berkas ini bisa membuat Pi menunggu saat mulai. Unduh berkas itu di Finder, pastikan sudah tersimpan di komputer ini, lalu coba lagi; timeout juga bisa punya penyebab lain.",
+      "hostProfileInUseByDesktop": "Data ini sedang dipakai aplikasi desktop Cindy yang berjalan sendiri. Keluar dari aplikasi itu, lalu kirim lagi.",
+      "hostProfileInUseByDesktopAtStart": "Data ini sedang dipakai aplikasi desktop Cindy yang berjalan sendiri, jadi layanan latar Cindy tidak mulai. Keluar dari aplikasi itu, mulai ulang layanan latar Cindy, lalu buka lagi jendela Cindy ini.",
+      "hostProfileInUseByDesktopRetry": "Data ini sedang dipakai aplikasi desktop Cindy yang berjalan sendiri, jadi ini tidak dapat diubah saat ini. Keluar dari aplikasi itu, lalu coba lagi.",
       "openFileFailed": "Berkas tidak bisa dibuka di sistem",
       "emptyResponse": "Model tidak mengembalikan konten. Coba lagi. Jika konteksnya sangat panjang, ganti model juga bisa.",
       "turnFailed": "Tugas gagal (model tidak mengembalikan detail kesalahan). Coba lagi.",
@@ -19246,6 +19384,7 @@
       "permissionLabel": "Mode izin",
       "noAvailableModels": "Tidak ada model {{agent}} yang tersedia. Periksa koneksi dan kredensial penyedia di Pengaturan.",
       "savedModelUnavailable": "Model atau sumber yang dipilih terakhir sedang tidak tersedia.",
+      "pluginEngineNoWorktree": "Worker mesin plugin tidak dapat memakai worktree. Nonaktifkan opsi worktree untuk membuat Worker ini.",
       "reselectModel": "Pilih model lagi",
       "effortLabel": "Tingkat penalaran",
       "initialTaskLabel": "Tugas awal",
@@ -19413,6 +19552,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "Giliran ini gagal.",
+    "blockedReasonUnknown": "Tidak ada alasan spesifik yang diberikan untuk pemblokiran ini.",
+    "blockedNextStep": "Kamu dapat menambahkan informasi di tugas ini. Setelah penyebabnya diatasi, klik “{{action}}” untuk melanjutkan.",
     "status": {
       "active": "Tujuan sedang berjalan",
       "paused": "Dijeda",
@@ -19711,7 +19853,8 @@
         "validity": "Masa berlaku",
         "validityValue_other": "Berlaku {{count}} hari setelah diklaim",
         "claimBy": "Batas klaim",
-        "destination": "Disimpan ke"
+        "destination": "Disimpan ke",
+        "validityPermanent": "Tidak pernah kedaluwarsa"
       },
       "doneTitle": "{{amount}} sudah masuk",
       "doneDescription": "Sudah disimpan ke saldo bonus, berlaku hingga {{date}}.",
@@ -19727,10 +19870,13 @@
         "alreadyClaimed": "Kartu hadiah ini sudah diklaim orang lain.",
         "expired": "Batas waktu klaim kartu hadiah ini sudah lewat.",
         "voided": "Kartu hadiah ini sudah dibatalkan.",
+        "voidedPurchased": "Kartu hadiah ini tidak dapat ditukarkan saat ini.",
         "rateLimited": "Terlalu banyak percobaan; coba lagi nanti.",
         "failed": "Penukaran belum bisa dilakukan saat ini; coba lagi nanti.",
         "personalRequired": "Kartu hadiah hanya bisa diklaim oleh pengguna pribadi."
-      }
+      },
+      "doneDescriptionPurchased": "Ditambahkan ke Saldo Isi Ulang kamu. Tidak pernah kedaluwarsa.",
+      "pendingDescriptionPurchased": "{{amount}} sedang ditambahkan dan akan segera muncul di Saldo Isi Ulang kamu. Kamu tidak perlu menukarkannya lagi."
     },
     "usage": {
       "title": "Pemakaian saldo",
@@ -19747,6 +19893,7 @@
         "empty": "Belum ada catatan pemberian.",
         "incomplete": "Catatan pemberian cukup banyak. Yang ditampilkan hanya {{count}} terbaru.",
         "unnamed": "Saldo bonus",
+        "rolloverName": "Hibah rollover",
         "giftCard": "Kartu hadiah · Dari {{sender}}",
         "original": "Jumlah awal",
         "used": "Terpakai",
@@ -19775,7 +19922,8 @@
         "noPayment": "Tidak perlu pembayaran",
         "page": "Halaman {{page}}",
         "previous": "Halaman sebelumnya",
-        "next": "Halaman berikutnya"
+        "next": "Halaman berikutnya",
+        "giftCard_other": "Kartu hadiah × {{count}}"
       },
       "count": "{{count}} pesanan",
       "orderId": "No. {{id}}",
@@ -19984,6 +20132,8 @@
       "basicModels": "Akses sebagian model",
       "subscription": "Paket langganan",
       "rollover": "Sisa saldo bisa disimpan sampai {{period}}, maksimal {{amount}}",
+      "rolloverMonthly": "Pindahkan hingga {{amount}} saldo tak terpakai sebagai saldo promosi\nBerlaku 1 bulan, tanpa rollover lanjutan\nDipakai sebelum Saldo Paket dan Saldo Isi Ulang",
+      "rolloverMonthlySummary": "Pindahkan hingga {{amount}} saldo tak terpakai, berlaku 1 bulan",
       "nextPeriod": {
         "MONTH": "bulan depan",
         "YEAR": "tahun depan",
@@ -20002,6 +20152,115 @@
         "MONTH": "Termasuk {{amount}} tiap bulan",
         "YEAR": "Termasuk {{amount}} tiap tahun",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Beli Kartu Hadiah",
+      "title": "Beli Kartu Hadiah",
+      "subtitle": "Berikan ke teman atau simpan untuk dirimu sendiri. Kartu yang ditukarkan masuk ke Saldo Isi Ulang dan tidak pernah kedaluwarsa.",
+      "previewLabel": "Yang akan mereka terima",
+      "sameCards_other": "{{count}} kartu dengan desain, nominal, dan pesan yang sama, masing-masing dengan kode tukar sendiri",
+      "fields": {
+        "face": "Desain",
+        "amount": "Nominal",
+        "quantity": "Jumlah",
+        "sender": "Dari",
+        "senderHint": "Ditampilkan sebagai “Dari {{sender}}”",
+        "senderPlaceholder": "Namamu",
+        "message": "Pesan (opsional)",
+        "messagePlaceholder": "Tambahkan catatan untuk mereka",
+        "tooLong": "Maksimal {{max}} karakter",
+        "paymentMethod": "Metode pembayaran"
+      },
+      "decrease": "Kurangi satu kartu",
+      "increase": "Tambah satu kartu",
+      "quantityHint": "Hingga {{limit}} kartu setiap {{hours}} jam · {{remaining}} tersisa sekarang",
+      "quantityLimitReached": "Kamu sudah membeli maksimal {{limit}} kartu dalam {{hours}} jam. Coba lagi nanti.",
+      "orderAmountCap": "Hingga {{amount}} per pesanan",
+      "totalDetail_other": "{{count}} kartu × {{amount}}",
+      "pay": "Lanjut ke Pembayaran",
+      "refundNote": "Kartu hadiah tidak dapat ditukar dengan uang tunai. Kartu yang sudah diklaim atau ditukarkan tidak dapat dikembalikan. Untuk meminta pengembalian dana kartu yang belum diklaim, hubungi dukungan.",
+      "cancel": "Batal",
+      "loadFailed": "Tidak dapat memuat batas pembelian kartu hadiah. Coba lagi nanti.",
+      "checkoutSubtitle_other": "Kartu hadiah {{amount}} × {{count}} · Diterbitkan begitu pembayaran berhasil",
+      "faces": {
+        "cindy": "Cindy · Merah Merek",
+        "cat": "Kucing Hitam · Malam",
+        "bell": "Lonceng · Festif",
+        "leap": "Leap · Gading"
+      },
+      "errors": {
+        "limitReached": "Kamu sudah mencapai batas pembelian kartu hadiah. Coba lagi nanti.",
+        "amountTooLarge": "Pesanan ini melebihi batas pembayaran per pesanan. Pilih lebih sedikit kartu dan coba lagi."
+      },
+      "done": {
+        "title_other": "{{count}} kartu hadiah kamu sudah siap",
+        "pendingTitle": "Kartu hadiah dibayar",
+        "loading": "Mengambil kartu dari pesanan ini…",
+        "description": "Kirim tautan klaim ke teman dan mereka dapat menukarkannya begitu dibuka. Kamu juga bisa menyimpan satu untuk dirimu.",
+        "missing": "Pembayaran selesai. Kartu hadiah kamu akan segera muncul di Kartu Hadiah Saya.",
+        "cardTitle": "Kartu {{index}} · {{amount}}",
+        "cardMeta": "Berakhiran {{tail}} · {{status}}",
+        "linkHint": "Tautan klaim adalah kartunya: siapa pun yang membukanya lebih dulu akan mendapatkannya. Kirim hanya ke orang yang kamu beri.",
+        "viewAll": "Lihat Kartu Hadiah Saya",
+        "finish": "Selesai"
+      },
+      "list": {
+        "title": "Kartu Hadiah Saya",
+        "description": "Kirim tautan klaim ke teman dan mereka dapat menukarkannya begitu dibuka. Kartu yang belum kamu berikan tidak pernah kedaluwarsa, dan kamu bisa menukarkannya sendiri. Kartu yang ditukarkan masuk ke Saldo Isi Ulang.",
+        "count_other": "{{count}} kartu",
+        "loadMore": "Muat lebih banyak",
+        "loadFailed": "Tidak dapat memuat kartu hadiah kamu",
+        "retry": "Muat ulang",
+        "status": {
+          "unclaimed": "Belum diklaim",
+          "claimedBy": "Diklaim oleh {{name}}",
+          "claimed": "Diklaim",
+          "redeemedByYou": "Ditukarkan oleh kamu",
+          "refunded": "Dikembalikan",
+          "onHold": "Diproses, belum tersedia untuk saat ini"
+        },
+        "meta": {
+          "purchased": "Dibeli {{date}} · Berakhiran {{tail}}",
+          "claimed": "Diklaim {{date}} · Berakhiran {{tail}}",
+          "redeemed": "Ditukarkan {{date}} · Berakhiran {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Salin Tautan Klaim",
+        "copied": "Tersalin",
+        "more": "Tindakan lainnya",
+        "copyCode": "Salin Kode Tukar",
+        "redeemSelf": "Tukarkan untuk Diriku",
+        "sendEmail": "Kirim lewat Email"
+      },
+      "toasts": {
+        "linkCopied": "Tautan klaim tersalin",
+        "codeCopied": "Kode tukar tersalin",
+        "copyFailed": "Tidak dapat menyalin. Coba lagi.",
+        "unavailable": "Kartu ini sudah diklaim atau dikembalikan",
+        "revealFailed": "Tidak dapat mengambil kode tukar. Coba lagi nanti.",
+        "emailQueued": "Mengirim ke {{email}}"
+      },
+      "email": {
+        "title": "Kirim lewat Email",
+        "description": "Email tautan klaim kartu ini ke orang yang kamu beri. Email menyertakan namamu dan pesanmu.",
+        "previewLabel": "Mereka akan menerima",
+        "previewWithMessage": "“{{message}}” · dengan tautan klaim dan kode tukar",
+        "previewLinkOnly": "Tautan klaim dan kode tukar",
+        "recipient": "Email penerima",
+        "placeholder": "nama@contoh.com",
+        "hint": "Kamu dapat mengirim ke alamat mana pun. Siapa pun yang membuka tautan klaim lebih dulu akan mendapatkan kartunya.",
+        "cooldown": "Kamu dapat mengirim lagi dalam {{seconds}} dtk",
+        "invalid": "Masukkan alamat email yang valid",
+        "failed": "Tidak dapat mengirim email. Coba lagi nanti.",
+        "send": "Kirim Email",
+        "status": {
+          "sending": "Mengirim ke {{email}}",
+          "sent": "Terkirim ke {{email}}",
+          "failed": "Tidak dapat mengirim ke {{email}}",
+          "failedRetry": "Tidak dapat mengirim ke {{email}}. Kamu dapat mengirimnya lagi."
+        }
       }
     }
   },
@@ -21794,10 +22053,10 @@
     "restoring": "Memulihkan status sesi…",
     "retrying": "Status sesi belum tersinkron. Mencoba lagi…",
     "pairing": "Otorisasi koneksi perlu diperbarui",
-    "pairingHelp": "Biarkan halaman ini tetap terbuka. Di terminal tempat Cindy Host dijalankan, jalankan lagi perintah untuk membuka klien web. Pasangkan halaman baru, lalu kembali ke sini.",
+    "pairingHelp": "Biarkan halaman ini tetap terbuka. Di terminal tempat layanan latar Cindy dijalankan, jalankan lagi perintah untuk membuka klien web. Pasangkan halaman baru, lalu kembali ke sini.",
     "keepDraft": "Draf yang sudah ditulis tetap tersimpan. Status sesi akan tersinkron otomatis setelah koneksi pulih.",
     "retry": "Coba sambungkan lagi",
-    "desktopAuthHelp": "Perbarui pengaturan koneksi Host di terminal peluncur, lalu buka lagi klien eksperimental ini."
+    "desktopAuthHelp": "Perbarui pengaturan koneksi layanan latar Cindy di terminal peluncur, lalu buka lagi klien eksperimental ini."
   },
   "remoteControlConsent": {
     "title": "Izinkan kontrol jarak jauh atas komputer ini?",

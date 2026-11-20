@@ -1,5 +1,6 @@
 {
   "permission": {
+    "install": "Pasang",
     "mcpComplete": "Selesai",
     "mcpCancel": "Batal",
     "mode": {
