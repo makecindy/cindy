@@ -133,7 +133,8 @@ export function OrcaWorkerPanel({
   const navigate = useNavigate();
   // 分离窗只显示占位、不显示 Worker 对话：不能当作用户在看这个 Worker，
   // 否则「已完成」会被自动确认、提醒也会被清掉。
-  const workerConversationVisible = viewVisible && !isSidebarWindow();
+  const separateWindow = isSidebarWindow();
+  const workerConversationVisible = viewVisible && !separateWindow;
   // Worker 可以放 Agent 的其他电脑与分享；Lead 的 Agent 位置未解析时不提供，Worker 跟 Lead。
   const workerAgentDevices = useWorkerAgentDevices({
     controlledDeviceId: agentDeviceId === undefined ? undefined : deviceId,
@@ -229,6 +230,8 @@ export function OrcaWorkerPanel({
     workers.filter((worker) => !worker.executionDevice && worker.sessionId).map((worker) => worker.sessionId),
     workerSessionId && !remoteDevice ? workerSessionId : null,
   );
+  // The task view owns interaction buttons and global shortcuts as soon as it mounts.
+  const workerConversationReady = !focusWritePending && workerPaneReady && workerOriginReady;
 
   // 改名入口的远程兼容门:归属已确认本机时始终可编辑；device-link 被控端必须显式
   // 声明支持 maker:worker:update(旧被控端 allowlist 不认该 channel)。
@@ -299,14 +302,14 @@ export function OrcaWorkerPanel({
     // 隐藏、切 tab 或折叠 RSB 时回落为 lead,避免和主 Lead 视图靠 effect 时序抢归属。
     // 分离窗只显示占位,Worker 对话不可见,同样回落为 lead。
     const visibleSessionIds =
-      workerConversationVisible && workerSessionId && workerSessionId !== leadSessionId
+      workerConversationVisible && workerConversationReady && workerSessionId && workerSessionId !== leadSessionId
         ? [leadSessionId, workerSessionId]
         : leadSessionId;
     if (!sameVisibleSessionPayload(lastAgentIslandPayloadRef.current, visibleSessionIds)) {
       lastAgentIslandPayloadRef.current = visibleSessionIds;
       void window.electronAPI.agentIsland?.setVisibleSession?.(visibleSessionIds);
     }
-  }, [leadSessionId, workerConversationVisible, workerSessionId]);
+  }, [leadSessionId, workerConversationVisible, workerConversationReady, workerSessionId]);
 
   useEffect(() => {
     return () => {
@@ -331,15 +334,19 @@ export function OrcaWorkerPanel({
           hardLimit={hardLimit}
           onSwitchFocus={switchWorker}
           onOpenCreate={() => void handleOpenCreate()}
-          onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings}
+          onOpenSettings={separateWindow || deviceId !== null ? undefined : handleOpenSettings}
           pluginEngineDeviceId={typeof deviceId === 'string' ? deviceId : undefined}
           onArchiveWorker={handleArchiveWorker}
           onEditWorker={canEditWorker ? handleOpenEditWorker : undefined}
-          clearAttentionWhenVisible={workerConversationVisible && workerPaneReady && !focusWritePending}
+          clearAttentionWhenVisible={workerConversationVisible && workerConversationReady}
         />
       </div>
       <div className="chat-rail-compact min-h-0 flex-1">
-        {workerSessionId && isSidebarWindow() ? (
+        {workerSessionId && (focusWritePending || (!separateWindow && !workerConversationReady)) ? (
+          <div aria-busy="true" className="flex h-full items-center justify-center">
+            <Spinner size={16} />
+          </div>
+        ) : workerSessionId && separateWindow ? (
           <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
             <p className="text-sm text-muted-foreground">
               {t('orca.split.workerHiddenInSeparateWindow')}
@@ -354,10 +361,6 @@ export function OrcaWorkerPanel({
               </Button>
             )}
           </div>
-        ) : workerSessionId && (!workerPaneReady || !workerOriginReady || (focusWritePending && deviceId === undefined)) ? (
-          <div aria-busy="true" className="flex h-full items-center justify-center">
-            <Spinner size={16} />
-          </div>
         ) : workerSessionId && remoteDevice ? (
           <RemoteWorkerSessionPane
             key={workerSessionId}
@@ -366,7 +369,6 @@ export function OrcaWorkerPanel({
             onHistoryCommit={onWorkerHistoryCommit}
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
-            readOnly={focusWritePending}
           />
         ) : workerSessionId ? (
           <CCAgentSessionView
@@ -378,7 +380,6 @@ export function OrcaWorkerPanel({
             compactToolbar
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
-            readOnly={focusWritePending}
             searchJumpProp={searchJump}
             onSearchJumpConsumed={onSearchJumpConsumed}
             navigationMode="sidebar-embedded"
