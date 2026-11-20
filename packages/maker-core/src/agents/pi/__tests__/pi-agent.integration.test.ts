@@ -2313,6 +2313,33 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     }
   });
 
+  it('8933 restores plan-only tools after ignoring an interrupted JSONL tail', { timeout: 60_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-partial-plan-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'partial-plan', workingDir, model: 'pi-test-model' });
+      await handle.send({ type: 'user', content: 'Seed the session.' });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      const nativeId = handle.id;
+      await handle.close();
+      writeFileSync(nativeId, readFileSync(nativeId, 'utf8')
+        + '\n{"type":"custom","customType":"plan-mode","data":{"enabled":true,"todos":[{"text":"interrupted');
+      expect(await sessionJsonlScan.scanPiSessionJsonl(nativeId)).toBeNull();
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'partial-plan-resume', workingDir, model: 'pi-test-model', resumeSessionId: nativeId, planMode: true });
+      const before = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Inspect only; do not implement.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBe(before + 1), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      const tools = JSON.parse(seenRequests[before]!.body).tools.map((tool: { name: string }) => tool.name);
+      expect(tools).not.toContain('write');
+      expect(tools).not.toContain('edit');
+    } finally {
+      scriptedResponses.length = 0;
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['mixed', 'Plan:\n1. **读取项目文件**\n2. **实现交互**\n3. **验证**\n4. **交付**\n5. **检查移动端布局**',
       ['读取项目文件', '实现交互', '验证', '交付', '检查移动端布局']],
@@ -2339,6 +2366,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['thinking-visible-prose', 'Plan:\n1. Investigate alternatives', ['先验证，再交付。']],
     ['thinking-final-lists', 'Options:\n1. A\n2. B\n\nFinal steps:\n1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-final-headerless', 'Options:\n1. A\n2. B\n\n1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-analysis-final', 'Analysis:\n1. A\n2. B\n\n1. 验证\n2. 交付', ['验证', '交付']],
   ])('8933 preserves and confirms the native %s plan', { timeout: 60_000 }, async (_name, plan, titles) => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-short-plan-'));
     let handle: AgentSessionHandle | undefined;

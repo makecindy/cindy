@@ -33,7 +33,7 @@ function planEnabledFromPrefix(prefix: string): boolean | undefined {
   return undefined;
 }
 
-function extractEntryMeta(line: string): {
+function extractEntryMeta(line: string, oversized: boolean): {
   type?: string;
   id?: string;
   role?: string;
@@ -41,7 +41,7 @@ function extractEntryMeta(line: string): {
   planEnabled?: boolean;
 } {
   const prefix = line.length > ENTRY_PREFIX_CHARS ? line.slice(0, ENTRY_PREFIX_CHARS) : line;
-  if (line.length <= 64 * 1024) {
+  if (!oversized) {
     try {
       const entry = recordOf(JSON.parse(line));
       if (!entry) return {};
@@ -55,7 +55,7 @@ function extractEntryMeta(line: string): {
         planEnabled: typeof data?.enabled === 'boolean' ? data.enabled : undefined,
       };
     } catch {
-      /* fall through to prefix scan for truncated / huge lines */
+      return {};
     }
   }
   return {
@@ -67,10 +67,10 @@ function extractEntryMeta(line: string): {
   };
 }
 
-function applyEntry(scan: PiSessionJsonlScan, line: string): boolean | undefined {
+function applyEntry(scan: PiSessionJsonlScan, line: string, oversized: boolean): boolean | undefined {
   const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line;
   if (trimmed.length === 0) return;
-  const meta = extractEntryMeta(trimmed);
+  const meta = extractEntryMeta(trimmed, oversized);
   if (meta.type === 'message' && meta.role === 'user' && meta.id) {
     scan.userEntryIds.add(meta.id);
   }
@@ -93,16 +93,15 @@ export async function scanPiSessionJsonl(sessionFile: string): Promise<PiSession
     };
     const stream = createReadStream(sessionFile);
     const decoder = new StringDecoder('utf8');
-    let buffer = '';
-    let prefix = '';
-    let skippingRestOfLine = false;
+    let line = '';
+    let oversized = false;
+    let skeleton = '';
+    let inString = false;
+    let escaped = false;
+    let unicode = 0;
+    let valid = true;
     let settled = false;
     let planStateKnown = true;
-
-    const applyLine = (line: string): void => {
-      const known = applyEntry(scan, line);
-      if (known !== undefined) planStateKnown = known;
-    };
 
     const finish = (result: PiSessionJsonlScan | null): void => {
       if (settled) return;
@@ -110,51 +109,69 @@ export async function scanPiSessionJsonl(sessionFile: string): Promise<PiSession
       resolve(result);
     };
 
-    const consumePrefixLine = (): void => {
-      if (prefix.length === 0) return;
-      applyLine(prefix);
-      prefix = '';
+    // Validate the complete JSON grammar without retaining large string values.
+    // Escapes/control characters are checked before replacing strings with "".
+    // A bounded skeleton that grows too large safely uses the RPC fallback.
+    const validate = (text: string): void => {
+      for (const char of text) {
+        if (!valid) return;
+        if (inString) {
+          if (unicode) {
+            if (!/[0-9a-f]/i.test(char)) valid = false;
+            unicode--;
+          } else if (escaped) {
+            if (char === 'u') unicode = 4;
+            else if (!'"\\/bfnrt'.includes(char)) valid = false;
+            escaped = false;
+          } else if (char === '\\') escaped = true;
+          else if (char === '"') { inString = false; skeleton += '"'; }
+          else if (char.charCodeAt(0) < 32) valid = false;
+        } else {
+          skeleton += char;
+          if (char === '"') inString = true;
+        }
+        if (skeleton.length > 64 * 1024) valid = false;
+      }
     };
 
-    const emitCompleteLines = (): void => {
-      while (true) {
-        if (skippingRestOfLine) {
-          const newlineIndex = buffer.indexOf('\n');
-          if (newlineIndex === -1) {
-            buffer = '';
-            return;
-          }
-          buffer = buffer.slice(newlineIndex + 1);
-          skippingRestOfLine = false;
-          consumePrefixLine();
-          continue;
+    const consumeLine = (): void => {
+      if (line.trim()) {
+        try {
+          if (!valid || inString || escaped || unicode) throw new Error('incomplete JSONL');
+          JSON.parse(skeleton);
+          const known = applyEntry(scan, line, oversized);
+          if (known !== undefined) planStateKnown = known;
+        } catch {
+          // Native resume ignores malformed tails. Do not synthesize their
+          // enabled flag or keep a previous local flag as authoritative.
+          planStateKnown = false;
         }
-        const newlineIndex = buffer.indexOf('\n');
-        if (newlineIndex === -1) {
-          if (buffer.length > ENTRY_PREFIX_CHARS) {
-            prefix = buffer.slice(0, ENTRY_PREFIX_CHARS);
-            buffer = '';
-            skippingRestOfLine = true;
-          }
-          return;
-        }
-        applyLine(buffer.slice(0, newlineIndex));
-        buffer = buffer.slice(newlineIndex + 1);
+      }
+      line = ''; oversized = false; skeleton = '';
+      inString = false; escaped = false; unicode = 0; valid = true;
+    };
+
+    const consume = (text: string): void => {
+      let start = 0;
+      while (start < text.length) {
+        const newline = text.indexOf('\n', start);
+        const part = text.slice(start, newline < 0 ? text.length : newline);
+        validate(part);
+        if (line.length + part.length > 64 * 1024) oversized = true;
+        if (line.length < 64 * 1024) line += part.slice(0, 64 * 1024 - line.length);
+        if (newline < 0) break;
+        consumeLine();
+        start = newline + 1;
       }
     };
 
     stream.on('data', (chunk: Buffer | string) => {
-      buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
-      emitCompleteLines();
+      consume(typeof chunk === 'string' ? chunk : decoder.write(chunk));
     });
     stream.on('error', () => finish(null));
     stream.on('end', () => {
-      buffer += decoder.end();
-      emitCompleteLines();
-      if (!skippingRestOfLine && buffer.length > 0) applyLine(buffer);
-      else consumePrefixLine();
-      // An unreadable latest flag must use the existing RPC fallback, never a
-      // preceding entry's flag (or a guessed default) as current native state.
+      consume(decoder.end());
+      if (line.length) consumeLine();
       finish(planStateKnown ? scan : null);
     });
   });

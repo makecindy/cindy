@@ -75,7 +75,7 @@ function selectPlanText(content) {
     // Section headings make a restart a phase boundary, not a new plan.
     // Keep the complete sectioned plan for ambiguous-id whole-plan tracking.
     const sections = lines.filter(line => /^(?:#{1,6}\s+\S.*|[^\s\d].*[:：])\s*$/.test(line.text.trim())
-      && !/^(?:#{1,6}\s+)?(?:options|alternatives|considerations|选项|备选|思考)\s*[:：]?$/i.test(line.text.trim()));
+      && !/^(?:#{1,6}\s+)?(?:options|alternatives|considerations|analysis|reasoning|brainstorm(?:ing)?|选项|备选|思考|分析|推理)\s*[:：]?$/i.test(line.text.trim()));
     if (sections.length) return native.slice(Math.min(sections[0].start, roots[0].start));
     let start = 0;
     for (let i = 1; i < roots.length; i++) {

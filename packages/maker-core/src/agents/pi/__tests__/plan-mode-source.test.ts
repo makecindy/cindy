@@ -47,6 +47,7 @@ describe('Pi plan title extraction', () => {
   it.each([
     ['Options:\n1. A\n2. B\n\nFinal steps:\n3. 验证\n\nDetails...\n7. 交付', 'Final steps:\n3. 验证\n\nDetails...\n7. 交付'],
     ['1. A\n2. B\n\n1. 验证\n\nDetails...\n2. 交付', '1. 验证\n\nDetails...\n2. 交付'],
+    ['Analysis:\n1. A\n2. B\n\n1. 验证\n2. 交付', '1. 验证\n2. 交付'],
   ])('uses the final thinking list: %s', (thinking, expected) => {
     expect(selectPlan([{ type: 'thinking', thinking }])).toBe(expected);
   });

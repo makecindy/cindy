@@ -20,6 +20,24 @@ async function sessionFile(lines: string[]): Promise<string> {
 }
 
 describe('scanPiSessionJsonl', () => {
+  it.each(['\\q', '\\u12XZ', '" ,]'])('rejects malformed complete oversized plan records: %s', invalid => {
+    return sessionFile(['{"type":"custom","customType":"plan-mode","data":{"enabled":true,"text":"' + 'x'.repeat(90000) + invalid + '"}}'])
+      .then(async file => expect(await scanPiSessionJsonl(file)).toBeNull());
+  });
+
+  it('validates escaped strings across streaming boundaries', async () => {
+    const text = '"\\\n\t你好'.repeat(20000);
+    const file = await sessionFile([JSON.stringify({ type: 'custom', customType: 'plan-mode', data: { enabled: true, text } })]);
+    expect((await scanPiSessionJsonl(file))?.lastPlanModeEnabled).toBe(true);
+  });
+  it.each([false, true])('rejects an incomplete last plan record (oversized=%s)', async oversized => {
+    const file = await sessionFile([JSON.stringify({ type: 'custom', customType: 'plan-mode', data: { enabled: false } })]);
+    await writeFile(file,
+      JSON.stringify({ type: 'custom', customType: 'plan-mode', data: { enabled: false } }) + '\n'
+      + '{"type":"custom","customType":"plan-mode","data":{"enabled":true,"todos":[{"text":"'
+      + (oversized ? 'x'.repeat(90000) : 'interrupted'));
+    expect(await scanPiSessionJsonl(file)).toBeNull();
+  });
   it('collects user entry ids and the last plan-mode flag without loading image payloads', async () => {
     const hugeImage = `{"type":"message","id":"img1","parentId":"root","message":{"role":"user","content":[{"type":"image","data":"${'A'.repeat(8000)}"}]}}`;
     const file = await sessionFile([
