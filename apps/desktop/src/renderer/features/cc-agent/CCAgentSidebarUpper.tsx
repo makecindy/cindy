@@ -137,6 +137,7 @@ import {
 import {
   findOrcaLeadSessionIdForWorker,
   formatOrcaWorkerNotificationTitle,
+  pendingOrcaWorkerQuestion,
   mergeOrcaLeadNotifications,
   shouldNotifyOrcaWorkerEvent,
   useOrcaLeadWorkerAttention,
@@ -190,7 +191,7 @@ import {
   useLocalHostProjectOrder,
   useRemoteHostProjectOrders,
 } from './hooks/useRemoteHostProjectOrders';
-import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { isOrcaWorkerSession, orcaWorkerSessionRoute, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import {
   buildProjectKeyComparisonSet,
   findProjectRepresentativeKey,
@@ -2650,6 +2651,18 @@ function ExpandedView({
       clearNotification(id);
       markAutomationSessionRunsRead(id);
       clearSystemSessionAttention(id);
+      if (target?.orcaRole === 'lead') {
+        const worker = pendingOrcaWorkerQuestion(id);
+        if (worker) {
+          makerChatStore.setAskUserViewerState(worker.chatSessionId, 'expanded');
+          const search = target.deviceLinkDeviceId ? new URLSearchParams({ device: target.deviceLinkDeviceId }).toString() : '';
+          navigate(orcaWorkerSessionRoute(id, worker.workerSessionId, search));
+          return;
+        }
+        if (makerChatStore.getRunningSnapshot().get(id)?.hasPendingAskUser) {
+          makerChatStore.setAskUserViewerState(id, 'expanded');
+        }
+      }
       if (id === activeSessionIdRef.current) return; // No duplicate navigate.
       if (import.meta.env.DEV) perfLog.debug(`sidebar:click sid=${id}`); // 纯诊断,生产剔除
       navigate(await resolveSessionRoute(id, target));

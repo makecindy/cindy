@@ -113,6 +113,18 @@
     "quotaAverageHint": "Quota hebdomadaire · Poids égal par compte",
     "quotaResetHint": "Au rythme actuel, il pourrait rester du quota au moment de la réinitialisation : jaune sous 24 heures, rouge sous 6 heures."
   },
+  "modelGroups": {
+    "title": "Groupes de modèles",
+    "sourceCount_one": "{{count}} source",
+    "sourceCount_many": "{{count}} sources",
+    "sourceCount_other": "{{count}} sources",
+    "strategy": {
+      "expiring": "Bientôt expiré d'abord",
+      "order": "Dans l'ordre",
+      "rotate": "À tour de rôle",
+      "cheapest": "Le moins cher"
+    }
+  },
   "pluginEngines": {
     "genericName": "Moteur de plugin",
     "defaultModel": "Modèle par défaut",
