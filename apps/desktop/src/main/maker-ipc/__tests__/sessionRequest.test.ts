@@ -192,10 +192,24 @@ describe('session IPC request parsing', () => {
     })).toMatchObject({ agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', agentDeviceId: 'device-1' });
   });
 
-  it('accepts a local plugin engine task that names its harness', () => {
-    expect(readCreateSessionOpts({
-      agentKind: 'acp', model: 'deepseek-v4-pro', workingDir: '/workspace', providerId: 'acp-plugin:dsh-acp:dsh',
-    })).toMatchObject({ agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', model: 'deepseek-v4-pro' });
+  it('accepts a local plugin engine task that names its harness and strips host-only privilege fields', () => {
+    const opts = readCreateSessionOpts({
+      agentKind: 'acp',
+      model: 'deepseek-v4-pro',
+      workingDir: '/workspace',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      pluginEngineBriefing: 'spoofed briefing',
+      pluginEngineForceBriefingOnResume: true,
+      pluginEngineTrustedCaller: true,
+    });
+    expect(opts).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      model: 'deepseek-v4-pro',
+    });
+    expect(opts.pluginEngineBriefing).toBeUndefined();
+    expect(opts.pluginEngineForceBriefingOnResume).toBeUndefined();
+    expect(opts.pluginEngineTrustedCaller).toBeUndefined();
   });
 
   it('adds a default stderr logger without replacing caller-provided hook', () => {

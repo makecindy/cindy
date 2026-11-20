@@ -62,6 +62,7 @@ import {
   findPluginEngine,
   requestPluginEnginesRefresh,
   useDevicesPluginEngines,
+  usePluginEngineIdentity,
   usePluginEngines,
   useRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
@@ -3355,10 +3356,15 @@ function CCAgentSessionContent({
   const [createWorkerOpen, setCreateWorkerOpen] = useState(false);
   const collabEnabled = isOrcaLeadSessionView;
   const showOrcaLeadIdentityBar = ownsRoute && collabEnabled;
+  const leadIsPluginEngine = isPluginEngineKind(session?.agentKind);
+  const leadPluginEngine = usePluginEngineIdentity(
+    leadIsPluginEngine ? session?.providerId : undefined,
+    leadIsPluginEngine ? pluginEngineDeviceId : undefined,
+  );
   const leadAgentKind = normalizeOrcaDisplayAgentKind(session?.agentKind);
-  const leadVendor = orcaVendorForAgentKind(leadAgentKind);
+  const leadVendor = leadIsPluginEngine ? 'acp' : orcaVendorForAgentKind(leadAgentKind);
   const leadPaneLabel = t('orca.split.leadLabel', {
-    agent: orcaAgentLabel(leadAgentKind),
+    agent: leadIsPluginEngine ? leadPluginEngine.name : orcaAgentLabel(leadAgentKind),
   });
   const passiveOrcaWorkersRevealSessionRef = useRef<string | null>(null);
   const routeWorkerHint = useMemo(() => {
@@ -6351,6 +6357,9 @@ function CCAgentSessionContent({
                 vendor={leadVendor}
                 size={leadVendor === 'cc' ? 14 : 13}
                 className="text-current"
+                {...(leadIsPluginEngine && leadPluginEngine.iconDataUrl
+                  ? { iconDataUrl: leadPluginEngine.iconDataUrl }
+                  : {})}
               />
               <span className="min-w-0 truncate">{leadPaneLabel}</span>
             </span>
@@ -6913,9 +6922,10 @@ function CCAgentSessionContent({
                   // (worker 自己不能再开协同)。
                   // orcaMode 路由下也保留显示 — ON 态菜单项本身就是
                   // 关闭按钮 (点击触发 onChange({enabled:false}),走 requestStopCollab)。
-                  // 插件引擎任务不支持协同(主进程同样拒绝)：不给入口。
+                  // 本机插件引擎任务支持协同(跨电脑运行或 SSH 仍不支持)。
                   collaboration={
-                    !pluginEngineTask && (allowCollabToggle || (orcaMode && collabEnabled))
+                    (!pluginEngineTask || ((!pluginEngineAgentDeviceId && !session?.remoteHostId) && (!remoteDeviceId || collabEnabled)))
+                    && (allowCollabToggle || (orcaMode && collabEnabled))
                       ? {
                           enabled: collabEnabled,
                           worker: collabWorker,

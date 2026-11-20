@@ -3240,6 +3240,112 @@ describe('maker SEND transaction', () => {
     expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
   });
 
+  // 本机插件引擎晋升 Orca Lead：排队快照的 agentKind 会被归一成 'claude-code'，因此必须按活会话
+  // sess.agentKind === 'acp' 分流。支持恢复的引擎走 rehydrate 并带一次性 forceBriefingOnResume；
+  // 不支持恢复的引擎不得关闭活会话，改为原地同步 vendorOptions、排队注入 Lead 说明并标记已装载；
+  // 若活会话缺少 cindy_orca 且不可恢复，则拒绝继续而不关闭活会话。
+  it('forces one-shot briefing on resume for resumable ACP Lead, queues in-place for non-resumable, and rejects missing cindy_orca', async () => {
+    const resumableOld = createSession({
+      id: 'acp-lead-1', agentKind: 'acp', workDir: 'C:\\repo', pluginEngineResumeSupported: true,
+    });
+    const resumableNew = createSession({ id: 'acp-lead-1', agentKind: 'acp', workDir: 'C:\\repo' });
+    const { deps: depsResumable } = createDeps({
+      getSession: vi.fn(() => resumableOld),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async (_id, co) => {
+        co.orcaRole = 'lead';
+        co.vendorOptions = { orcaRole: 'lead', orcaWorkflowId: 'team-1', orcaLeadSessionId: 'acp-lead-1' };
+        return true;
+      }),
+      reconcileCreateOptsWithDb: vi.fn(async (_id, co) => {
+        co.agentKind = 'acp';
+        co.providerId = 'acp-plugin:agy-acp:antigravity';
+      }),
+      bootstrapSession: vi.fn(async () => ({
+        session: resumableNew, didInjectOrcaInstructions: false, didInjectProjectContext: false,
+      })),
+    });
+    const txResumable = createMakerSendTransaction(depsResumable);
+    // Production queued-send snapshots normalize ACP to 'claude-code' until reconcileCreateOptsWithDb runs.
+    await expect(txResumable.hydrateActiveOrcaSession('acp-lead-1', {
+      id: 'acp-lead-1', agentKind: 'claude-code', workingDir: 'C:\\repo', model: 'gemini-4-neon',
+    })).resolves.toBe(true);
+    expect(depsResumable.closeSession).toHaveBeenCalledWith('acp-lead-1');
+    expect(depsResumable.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp',
+      pluginEngineForceBriefingOnResume: true,
+    }));
+
+    const queuePluginEngineBriefing = vi.fn();
+    const setVendorOptions = vi.fn(async () => {});
+    const markOrcaMcpHydratedIfNeeded = vi.fn();
+    const markAcpLeadTeamBriefed = vi.fn();
+    const nonResumable = createSession({
+      id: 'acp-lead-2', agentKind: 'acp', workDir: 'C:\\repo',
+      pluginEngineResumeSupported: false,
+      pluginEngineHasOrcaMcp: true,
+      queuePluginEngineBriefing,
+      setVendorOptions,
+    });
+    const { deps: depsLive } = createDeps({
+      getSession: vi.fn(() => nonResumable),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async (_id, co) => {
+        co.orcaRole = 'lead';
+        co.vendorOptions = { orcaRole: 'lead', orcaWorkflowId: 'team-2', orcaLeadSessionId: 'acp-lead-2' };
+        return true;
+      }),
+      resolveOrcaRoleInstructions: vi.fn(async (co) => {
+        co.vendorOptions = { ...(co.vendorOptions ?? {}), initialWorker: { workerId: 'w-1', sessionId: 'ws-1' } };
+        return 'Lead briefing with worker route';
+      }),
+      markOrcaMcpHydratedIfNeeded,
+      markAcpLeadTeamBriefed,
+    });
+    const txLive = createMakerSendTransaction(depsLive);
+    await expect(txLive.hydrateActiveOrcaSession('acp-lead-2', {
+      id: 'acp-lead-2', agentKind: 'claude-code', workingDir: 'C:\\repo', model: 'dsh-pro',
+    })).resolves.toBe(false);
+    expect(depsLive.closeSession).not.toHaveBeenCalled();
+    expect(depsLive.bootstrapSession).not.toHaveBeenCalled();
+    expect(setVendorOptions).toHaveBeenCalledWith(expect.objectContaining({
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-2',
+      initialWorker: { workerId: 'w-1', sessionId: 'ws-1' },
+    }));
+    expect(queuePluginEngineBriefing).toHaveBeenCalledWith('Lead briefing with worker route');
+    expect(markOrcaMcpHydratedIfNeeded).toHaveBeenCalledWith('acp-lead-2', expect.objectContaining({ orcaRole: 'lead' }));
+    expect(markAcpLeadTeamBriefed).toHaveBeenCalledWith('acp-lead-2', 'team-2');
+
+    // Non-resumable live ACP Lead that started without cindy_orca must fail cleanly without closing the session.
+    const missingOrcaSession = createSession({
+      id: 'acp-lead-3', agentKind: 'acp', workDir: 'C:\\repo',
+      pluginEngineResumeSupported: false,
+      pluginEngineHasOrcaMcp: false,
+    });
+    const { deps: depsMissingOrca } = createDeps({
+      getSession: vi.fn(() => missingOrcaSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async (_id, co) => {
+        co.orcaRole = 'lead';
+        co.vendorOptions = { orcaRole: 'lead', orcaWorkflowId: 'team-3', orcaLeadSessionId: 'acp-lead-3' };
+        return true;
+      }),
+    });
+    const txMissingOrca = createMakerSendTransaction(depsMissingOrca);
+    await expect(txMissingOrca.sendToAgentAccepted('acp-lead-3', 'coordinate', {
+      id: 'acp-lead-3', agentKind: 'claude-code', workingDir: 'C:\\repo', model: 'dsh-pro',
+    })).resolves.toMatchObject({
+      accepted: false,
+      reason: 'REHYDRATE_FAILED',
+      outcome: expect.objectContaining({
+        message: expect.stringContaining('[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED]'),
+      }),
+    });
+    expect(depsMissingOrca.closeSession).not.toHaveBeenCalled();
+    expect(missingOrcaSession.send).not.toHaveBeenCalled();
+  });
+
   it('reconciles createOpts against DB before closing the old runtime on active Orca rehydrate (#2882)', async () => {
     const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
     const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });

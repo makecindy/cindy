@@ -161,8 +161,14 @@ export function readCreateSessionOpts(
       throwIpcError('INVALID_PARAMS', 'plugin engines are only offered by your own computers');
     }
   }
+  // Strip host-only plugin engine privilege/briefing fields at the IPC boundary so callers
+  // (renderer or device-link) cannot inject system briefings or elevate MCP caller trust.
+  const sanitizedBody: Record<string, unknown> = { ...body };
+  delete sanitizedBody.pluginEngineBriefing;
+  delete sanitizedBody.pluginEngineForceBriefingOnResume;
+  delete sanitizedBody.pluginEngineTrustedCaller;
   return {
-    ...body,
+    ...sanitizedBody,
     id,
     agentKind,
     workspaceKind,

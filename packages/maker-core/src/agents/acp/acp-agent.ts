@@ -183,6 +183,10 @@ export class AcpAgent extends BaseAgent {
     }
 
     const logger = this.deps.logger.child(`acp:${harnessKey}`);
+    // Keep a session-owned mutable object passed by reference into the HTTP MCP bridge (same
+    // pattern as PiAgent): setVendorOptions mutates it in-place so live cindy_orca tools see
+    // updated Lead role/team identity immediately after start_team or end_team.
+    const mutableVendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
     let extra: PiExtraSpawnConfig | null = null;
     // Hosted for another computer: Cindy tools are that computer's and arrive through the tunnel,
     // so this computer's own tool bridge (and its installed plugins, memory, sessions) stays out.
@@ -196,9 +200,9 @@ export class AcpAgent extends BaseAgent {
           workingDir: opts.workingDir,
           ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           memoryEnabled: opts.makerMemoryEnabled === true,
-          ...(opts.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
+          vendorOptions: mutableVendorOptions,
           // The external agent's own sub-agents may call tools; Cindy cannot attest who called. A host
-          // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
+          // that trusts the engine as a whole (collaboration Leads and Workers) treats every call as the task's own.
           mcpCallerKind: opts.pluginEngineTrustedCaller === true ? 'root' : 'unknown',
           mcpCallerAttested: opts.pluginEngineTrustedCaller === true,
         });
@@ -221,6 +225,11 @@ export class AcpAgent extends BaseAgent {
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
       opts.pluginEngineBriefing ?? '',
     ].filter((part) => part.trim()).join('\n\n');
+    const requiredMcpServers = hosted
+      ? [DEVICE_HOSTED_EXEC_MCP_SERVER]
+      : mutableVendorOptions.orcaRole === 'lead'
+        ? ['cindy_orca']
+        : undefined;
     const open = async (): Promise<AcpSession> => {
       const tracked = trackClose(hosted
         ? await this.acpDeps.endpoints.connect(harnessKey, { remoteWorkspace: true })
@@ -231,13 +240,15 @@ export class AcpAgent extends BaseAgent {
           cwd: opts.workingDir,
           clientInfo: this.acpDeps.clientInfo,
           mcpServers: hosted ? acpMcpServersForHostedTask(hosted) : acpMcpServersFromBridge(extra),
-          // Without the replacement file and command tools the agent could do nothing on the project.
-          ...(hosted ? { requiredMcpServers: [DEVICE_HOSTED_EXEC_MCP_SERVER] } : {}),
+          // Hosted tasks require cindy_exec; local collaboration Leads require cindy_orca.
+          ...(requiredMcpServers ? { requiredMcpServers } : {}),
           ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
           ...(opts.model ? { model: opts.model } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
           ...(briefing ? { briefing } : {}),
+          ...(opts.pluginEngineForceBriefingOnResume ? { forceBriefingOnResume: true } : {}),
+          onSetVendorOptions: (patch) => { Object.assign(mutableVendorOptions, patch); },
           logger,
           onEnded: disposeBridge,
         });

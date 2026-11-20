@@ -302,22 +302,22 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
 
 ## 第二期：多 Agent 协同（2026-11-19）
 
-- **能做什么**：本机 Lead 的 Worker 可以放在插件引擎上——开启协同时的第一个 Worker、之后再加的 Worker，以及 Lead
-  用 `create_worker` / `create_workers`（`agent = acp` + `provider_id`，引擎从 `list_available_models` 的
-  `plugin_engines` 取）。插件引擎 Worker 能收 Lead 的派活与插话（不支持同轮插话的按排队处理），能用 `send_to_lead`
-  回报、改写或撤回排队的回报。Worker 页签与手机上的团队列表显示插件引擎，不显示成 Claude Code。
-- **范围**：Worker 只在 Lead 所在的这台电脑运行；SSH Lead、另一台工作电脑、Agent 在另一台电脑、worktree 都明确拒绝
-  （创建面板选了 worktree 时直接提示，不能提交）。插件引擎任务暂不能当 Lead：开启协同、`start_team`、新建 Worker 的
-  所有入口统一拒绝（`PLUGIN_ENGINE_CANNOT_LEAD`）。Lead 不能用 `set_worker_runtime` 改插件引擎 Worker 的模型，需在它
-  自己的任务窗口里改。
+- **能做什么**：本机插件引擎任务既可作为协同 Lead，也可作为协同 Worker——开启协同（界面开关或 `start_team`）、添加
+  内置或插件引擎 Worker（`create_worker` / `create_workers`，`agent = acp` + `provider_id`，引擎从 `list_available_models` 的
+  `plugin_engines` 取），并接收 Worker 回报（`send_to_lead`）。插件引擎 Worker 能收 Lead 的派活与插话（不支持同轮插话的按排队处理），
+  能用 `send_to_lead` 回报、改写或撤回排队的回报。Worker 页签与手机上的团队列表显示插件引擎，不显示成 Claude Code。
+- **范围**：协同仅限本机插件引擎任务；跨电脑运行的插件引擎（`agentDeviceId` 非空）与 SSH Lead 仍拒绝当 Lead（`PLUGIN_ENGINE_CANNOT_LEAD`），
+  缺少 HTTP MCP 能力的插件引擎拒绝当 Lead（`PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED`）。插件引擎 Worker 只在 Lead 所在的这台电脑运行；
+  SSH Lead、另一台工作电脑、Agent 在另一台电脑、worktree 都明确拒绝（创建面板选了 worktree 时直接提示，不能提交）。Lead 不能用
+  `set_worker_runtime` 改插件引擎 Worker 的模型，需在它自己的任务窗口里改。
 - **准入与唤醒**：创建时与在插件引擎上新建任务同一准入（停用、卸载或不可用时创建失败，不回落内置引擎）；休眠后再唤醒
-  按它自己的引擎与 `provider_id` 启动。
-- **角色说明**：插件引擎不收 Cindy system prompt。Worker 不知道自己要用 `send_to_lead` 回报就没法协作，所以把内置
-  Worker 已在用的那段 Worker 说明（原文不改）放在它**新开会话的第一条消息前**一起发送（`pluginEngineBriefing`）；
-  恢复的会话里已有，不重复。内置引擎的提示词与路径不变。
-- **调用方身份**：Cindy 分不清插件 Agent 自己与它内部的子 Agent。按用户决定（整体信任插件 Agent），协同 Worker 的
-  插件引擎会话把工具调用视为任务本身发起（`pluginEngineTrustedCaller`），因此能回报 Lead；它内部的子 Agent 同样能
-  回报。非协同的插件引擎任务仍是「来源未知」。
+  按它自己的引擎与 `provider_id` 启动。活会话中途成为 Lead 时支持原地 `setVendorOptions` 同步 HTTP MCP 桥身份；下一轮前按是否支持
+  恢复决定重建（一次性 `forceBriefingOnResume`）或直接排队注入 Lead 角色说明，不重复发送。
+- **角色说明**：插件引擎不收 Cindy system prompt。协同 Lead 与 Worker 的角色说明（原文不改）通过 `pluginEngineBriefing` 放在
+  新会话第一条消息前（或中途晋升 Lead 后的一次性恢复/排队前）一起发送；普通恢复的会话里已有，不重复。内置引擎的提示词与路径不变。
+- **调用方身份**：Cindy 分不清插件 Agent 自己与它内部的子 Agent。按用户决定（整体信任插件 Worker），只有协同 Worker 的
+  插件引擎会话把工具调用视为任务本身发起（`pluginEngineTrustedCaller`，用于 `orca_worker_bridge` 回报身份校验）。协同 Lead
+  与非协同的插件引擎任务仍是「来源未知」。
 - **兼容**：Worker 列表里插件引擎 Worker 的 `session.agentKind = acp` 并带 `session.providerId`；手机经共享解析器读
   `pluginEngineProviderId`，`agentKind` 仍给旧端可用的占位值。`maker:session:enable-orca` 的 `workerAgent` 与
   `maker:worker:create` 的 `agent` 新增取值 `acp`，只由本机新版电脑的面板发起（远程控制与手机不列插件引擎），
