@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   usage: vi.fn(),
   modelCacheRead: vi.fn(),
   savedModelFiles: new Map<string, string>(),
+  onSnapshotStage: undefined as (() => void) | undefined,
   directoryEntries: vi.fn(),
   login: vi.fn(),
   bound: true,
@@ -125,11 +126,6 @@ vi.mock('../../provider-group/coolingStore.js', () => ({
   clearSubscriptionAccountCooling: h.clearCooling,
 }));
 vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.remote }));
-vi.mock('../../utils/atomicWriteFile.js', async importOriginal => ({
-  ...await importOriginal<typeof import('../../utils/atomicWriteFile.js')>(),
-  atomicWriteFileSync: (file: string, body: string) => { h.savedModelFiles.set(file, body); },
-  readAtomicFileSync: (file: string) => h.savedModelFiles.get(file) ?? null,
-}));
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => [h.owner, ...parts].join('/'),
   activeOwnerScopeKey: () => h.owner,
@@ -161,7 +157,26 @@ vi.mock('../../usage/accountUsageStorage.js', () => ({
     if (current()) h.storedUsage.set(`${kind}:${id}`, structuredClone(value));
   },
 }));
-vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: h.modelCacheRead, readdir: h.directoryEntries,
+vi.mock('node:fs/promises', () => ({
+  mkdir: vi.fn(),
+  readFile: async (file: string) => {
+    if (!file.includes('/model-discovery/')) return h.modelCacheRead(file, 'utf8');
+    const saved = h.savedModelFiles.get(file);
+    if (saved === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return saved;
+  },
+  readdir: h.directoryEntries,
+  writeFile: async (file: string, body: string) => {
+    h.savedModelFiles.set(file, body);
+    h.onSnapshotStage?.();
+  },
+  rename: async (source: string, destination: string) => {
+    const staged = h.savedModelFiles.get(source);
+    if (staged === undefined) throw new Error('missing staged snapshot');
+    h.savedModelFiles.set(destination, staged);
+    h.savedModelFiles.delete(source);
+  },
+  rm: async (file: string) => { h.savedModelFiles.delete(file); },
   default: { mkdir: vi.fn(), writeFile: vi.fn(), rename: vi.fn(), rm: vi.fn(), readdir: h.directoryEntries,
     readFile: h.modelCacheRead, stat: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } },
 }));
@@ -294,6 +309,7 @@ beforeEach(() => {
   }));
   h.usage.mockReset().mockResolvedValue({});
   h.savedModelFiles.clear();
+  h.onSnapshotStage = undefined;
   h.modelCacheRead.mockReset().mockRejectedValue(new Error('no account cache'));
   h.directoryEntries.mockReset().mockResolvedValue([]);
   h.login.mockReset().mockResolvedValue(undefined);
@@ -817,16 +833,35 @@ describe('owner-only subscription identity', () => {
     await refreshSubscriptionPoolCodexModels();
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    h.rpc.mockRejectedValueOnce(new Error('retry timeout'));
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    await refreshSubscriptionPoolCodexModels(true);
     await refreshSubscriptionPoolCodexModels(true);
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+  });
+
+  // Unit: a staged write from the previous owner must be discarded after an account switch.
+  it('discards the staged model list when the owner changes before publication', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }] });
+    await refreshSubscriptionPool('openai');
+    h.onSnapshotStage = () => {
+      h.owner = 'another-owner';
+      readSubscriptionPoolCodexModels();
+    };
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(h.savedModelFiles.size).toBe(0);
   });
 
   // Unit: reopening the owner's runtime discards memory; transient failure must still
   // retain Astra, and two complete matching responses can confirm a real contraction.
   it('recovers persisted membership and corroborates a conflicting smaller model list once', async () => {
     h.pools.openai = { strategy: 'order', accounts: [account('second')] };
-    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }, { id: 'sol' }] });
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }, { id: 'sol', supportedReasoningEfforts: [] }] });
     h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: ['astra', 'sol'].map(slug => ({
       slug, supported_in_api: true, visibility: 'list',
     })) }));
@@ -840,6 +875,8 @@ describe('owner-only subscription identity', () => {
     await refreshSubscriptionPool('openai');
     await refreshSubscriptionPoolCodexModels();
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
+    // An omitted effort list permits registry fallback, while an explicit empty list overrides it.
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.discoveredMetadata?.efforts)).toEqual([undefined, []]);
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
     h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
     await refreshSubscriptionPoolCodexModels(true);

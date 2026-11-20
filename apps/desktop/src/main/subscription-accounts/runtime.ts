@@ -165,6 +165,11 @@ interface CodexModelSnapshot {
   pendingMembership?: string;
   failedAt?: number;
 }
+interface CodexModelFlight {
+  promise: Promise<void>;
+  forced: boolean;
+  saving?: Promise<void>;
+}
 function sameCodexModelAccount(snapshot: CodexModelSnapshot | undefined, info: AccountSnapshot): boolean {
   return !!snapshot && (info.accountKey || snapshot.accountKey
     ? !!info.accountKey && snapshot.accountKey === info.accountKey : snapshot.auth === info.auth);
@@ -185,7 +190,7 @@ interface OwnerRuntime {
   /** Actual account failures outrank optimistic cached quota for new assignments. */
   quotaCooling: Map<string, Record<string, number>>;
   codexModels: Map<string, CodexModelSnapshot>;
-  codexModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
+  codexModelFlights: Map<string, CodexModelFlight>;
   codexCatalogs?: Map<string, readonly CatalogModel[]>;
   publishedCodexCatalog?: Record<string, { models: readonly CatalogModel[] | null; unavailable: boolean }> | null;
   defaultCodexAuthEpoch: number;
@@ -1232,24 +1237,27 @@ export async function refreshSubscriptionPoolCodexModels(
       return;
     }
     const directory = directoryFor('openai', id);
-    const isCurrent = () => state.owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
-      && !disconnectedFor(readPool('openai'), 'openai', id)
-      && readPool('openai')?.accounts.some(a => a.id === id && (!a.paused || historical.has(id))) === true
-      && !loggingIn()
-      && state.cache.get(keyOf('openai', id))?.auth === auth
-      && directoryFor('openai', id) === directory;
+    const isCurrent = () => {
+      if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+      const currentPool = readPool('openai');
+      return currentPool?.accounts.some(a => a.id === id && (!a.paused || historical.has(id))) === true
+        && !disconnectedFor(currentPool, 'openai', id)
+        && !loggingIn()
+        && state.cache.get(keyOf('openai', id))?.auth === auth
+        && directoryFor('openai', id) === directory;
+    };
     refreshId ??= randomUUID();
     const startedAt = Date.now();
     const sameAccount = sameCodexModelAccount(previous, info);
-    const lastVerified = () => {
+    const lastVerified = async () => {
       if (sameAccount && previous?.confirmedAt !== undefined) return previous;
       if (info.accountKey) {
-        try { return restoreCodexModelSnapshot(id, info.accountKey); }
+        try { return await restoreCodexModelSnapshot(id, info.accountKey); }
         catch { log.warn('could not restore Codex model snapshot', { refreshId }); }
       }
       return undefined;
     };
-    const flight = (async () => {
+    const readModels = async () => {
       try {
         const models: CodexModelListItem[] = [];
         const cursors = new Set<string>();
@@ -1296,7 +1304,8 @@ export async function refreshSubscriptionPoolCodexModels(
         // corroborate a nonempty contraction once. Disk-only ids never grant access.
         const reported = new Set(mapped.map(model => model.id));
         const differsFromDisk = mapped.length > 0 && [...cached.keys()].some(model => !reported.has(model));
-        const verified = differsFromDisk ? lastVerified() : undefined;
+        const verified = differsFromDisk ? await lastVerified() : undefined;
+        if (differsFromDisk && !isCurrent()) return;
         // With no verified list (first launch after upgrade), the native file is only
         // a reason to recheck. Expose solely what this authenticated RPC actually returned.
         const needsConfirmation = verified
@@ -1316,29 +1325,31 @@ export async function refreshSubscriptionPoolCodexModels(
         state.codexModels.set(id, { auth, accountKey: info.accountKey, models: mapped, confirmedAt });
         if (info.accountKey && (!sameAccount || !isDeepStrictEqual(previous?.models, mapped)
           || previous?.confirmedAt === undefined || previous.failedAt !== undefined)) {
-          try { saveCodexModelSnapshot(id, info.accountKey, mapped, confirmedAt); }
-          catch { log.warn('could not save Codex model snapshot', { refreshId }); }
+          flight.saving = saveCodexModelSnapshot(id, info.accountKey, mapped, confirmedAt, isCurrent)
+            .catch(() => { log.warn('could not save Codex model snapshot', { refreshId }); });
+          await flight.saving;
         }
         log.debug('subscription model discovery finished', { refreshId, source: 'model/list', force, pages,
           previousCount: sameAccount ? previous?.models.length : undefined, publishedCount: mapped.length,
           cachedCount: cached.size, elapsedMs: confirmedAt - startedAt });
       } catch (error) {
         // Failure is retryable evidence, not an authoritative empty list. Only
-        // this same login may retain its last complete list while recovery runs.
-        if (isCurrent()) {
-          const retained = lastVerified();
-          const source = !retained ? 'unconfirmed' : retained === previous ? 'memory' : 'disk';
-          state.codexModels.set(id, { auth, accountKey: info.accountKey, models: retained?.models ?? [],
-            confirmedAt: retained?.confirmedAt, failedAt: Date.now() });
-          log.warn('subscription account model read failed', {
-            refreshId, source, publishedCount: retained?.models.length ?? 0, confirmedAt: retained?.confirmedAt,
-            elapsedMs: Date.now() - startedAt, error: error instanceof Error ? error.name : typeof error,
-          });
-        }
+        // this same login may retain its verified list or its last live report.
+        if (!isCurrent()) return;
+        const retained = await lastVerified() ?? (sameAccount ? previous : undefined);
+        if (!isCurrent()) return;
+        const source = !retained ? 'unconfirmed' : retained === previous ? 'memory' : 'disk';
+        state.codexModels.set(id, { auth, accountKey: info.accountKey, models: retained?.models ?? [],
+          confirmedAt: retained?.confirmedAt, failedAt: Date.now() });
+        log.warn('subscription account model read failed', {
+          refreshId, source, publishedCount: retained?.models.length ?? 0, confirmedAt: retained?.confirmedAt,
+          elapsedMs: Date.now() - startedAt, error: error instanceof Error ? error.name : typeof error,
+        });
       }
-    })();
-    state.codexModelFlights.set(id, { promise: flight, forced: force });
-    try { await flight; } finally { if (state.codexModelFlights.get(id)?.promise === flight) state.codexModelFlights.delete(id); }
+    };
+    const flight: CodexModelFlight = { promise: readModels(), forced: force };
+    state.codexModelFlights.set(id, flight);
+    try { await flight.promise; } finally { if (state.codexModelFlights.get(id) === flight) state.codexModelFlights.delete(id); }
   };
   await Promise.all(pool.accounts.filter(account => (!serving || serving.has(account.id))
     && (!accountIds || accountIds.has(account.id))
@@ -1420,10 +1431,14 @@ function codexAccountSupportsModel(state: OwnerRuntime, id: string, model: strin
     && sameCodexModelAccount(catalog, info)
     && catalog.models.some(entry => entry.id === model.replace(/^chatgpt\//, ''));
 }
-function discardRemovedAccountModels(state: OwnerRuntime, provider: SubscriptionProvider, id: string): void {
+async function discardRemovedAccountModels(state: OwnerRuntime, provider: SubscriptionProvider, id: string): Promise<void> {
   if (provider !== 'openai') return;
   state.codexModels.delete(id);
-  try { clearCodexModelSnapshot(id); }
+  // Wait for an already-started rename before removing its destination.
+  await state.codexModelFlights.get(id)?.saving;
+  assertOwner(state);
+  if (readPool('openai')?.accounts.some(account => account.id === id)) return;
+  try { await clearCodexModelSnapshot(id); }
   catch { log.warn('could not clear removed Codex account model snapshot'); }
 }
 
@@ -2780,7 +2795,8 @@ export async function runSubscriptionAccountCommand(
     for (const id of managed) {
       assertOwner(state);
       state.cache.delete(keyOf(provider, id));
-      discardRemovedAccountModels(state, provider, id);
+      await discardRemovedAccountModels(state, provider, id);
+      assertOwner(state);
       await writeStoredAccountUsage(provider, id, null);
       assertOwner(state);
       state.quotaCooling.delete(keyOf(provider, id));
@@ -3088,7 +3104,8 @@ async function changeAccountPlacement(
   for (const id of removed) {
     assertOwner(state);
     state.cache.delete(keyOf(kind, id));
-    discardRemovedAccountModels(state, kind, id);
+    await discardRemovedAccountModels(state, kind, id);
+    assertOwner(state);
     await writeStoredAccountUsage(kind, id, null);
     assertOwner(state);
     state.quotaCooling.delete(keyOf(kind, id));
