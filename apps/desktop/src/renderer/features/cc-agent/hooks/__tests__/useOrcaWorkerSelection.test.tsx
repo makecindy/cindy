@@ -12,12 +12,14 @@ import {
   markWorkerAttention,
 } from '../../lib/workerAttentionStore';
 
+type SwitchFocus = (input: { leadSessionId: string; workerIdOrLabel: string }) => Promise<void>;
+
 const mocks = vi.hoisted(() => ({
   workers: [] as WorkerInfo[],
   refresh: vi.fn(),
   createWorker: vi.fn<(input: Record<string, unknown>) => Promise<void>>(async () => undefined),
-  switchFocus: vi.fn(async () => undefined),
-  remoteSwitchFocus: vi.fn(async () => undefined),
+  switchFocus: vi.fn<SwitchFocus>(async () => undefined),
+  remoteSwitchFocus: vi.fn<SwitchFocus>(async () => undefined),
   idleWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-b' })),
   toastError: vi.fn(),
 }));
