@@ -14069,6 +14069,8 @@
         "fastBadge": "疾"
       },
       "source": {
+        "lastConfirmed": "上次重整：{{time}}",
+        "unconfirmed": "模型錄未新",
         "unavailable": "模型不可用",
         "reconnect": "重連",
         "manage": "理來源",

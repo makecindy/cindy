@@ -14070,6 +14070,8 @@
         "fastBadge": "高速"
       },
       "source": {
+        "lastConfirmed": "最終更新：{{time}}",
+        "unconfirmed": "モデル一覧を更新できません",
         "unavailable": "モデルを利用できません",
         "reconnect": "再接続",
         "manage": "接続先を管理",

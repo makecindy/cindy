@@ -14070,6 +14070,8 @@
         "fastBadge": "고속"
       },
       "source": {
+        "lastConfirmed": "마지막 새로고침: {{time}}",
+        "unconfirmed": "모델 목록을 갱신하지 못함",
         "unavailable": "모델 사용 불가",
         "reconnect": "다시 연결",
         "manage": "소스 관리",

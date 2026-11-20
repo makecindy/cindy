@@ -14124,6 +14124,8 @@
         "fastBadge": "Schnell"
       },
       "source": {
+        "lastConfirmed": "Zuletzt aktualisiert: {{time}}",
+        "unconfirmed": "Modellliste nicht aktuell",
         "unavailable": "Modell nicht verfügbar",
         "reconnect": "Erneut verbinden",
         "manage": "Quelle verwalten",

@@ -2,7 +2,7 @@ import { beginProvidersRefresh, commitProvidersSnapshot } from '../../../src/ren
 import { getDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import { ModelSelector } from '../../../src/renderer/components/new-chat/ModelSelector';
 import type { ProviderView } from '@cindy/model-providers';
-import { mountPage, subscription } from '../../ui-page/harness';
+import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import {
   ModelSourceDetails,
   ModelSourceUsageProvider,
@@ -28,8 +28,16 @@ const providers = [
   },
 ] as unknown as ProviderView[];
 
+const partialCodex = ctx.case === 'unconfirmed-codex' || ctx.case === 'retained-codex';
+if (partialCodex) providers.splice(0, providers.length, {
+  id: 'openai', name: 'OpenAI', source: 'builtin', connected: true,
+  auth: { method: 'oauth', native: 'codex' }, agents: ['codex'], routing: { codex: {} },
+  models: { codex: ctx.case === 'retained-codex' ? [{ id: 'gpt-6.2-astra', name: 'GPT-6.2 Astra',
+    contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] : [] }, subscriptionReadUnavailable: true,
+  ...(ctx.case === 'retained-codex' ? { subscriptionModelsConfirmedAt: Date.UTC(2026, 10, 19, 15, 38) } : {}),
+} as ProviderView);
 const owner = getDataOwnerGeneration();
-const snapshot = {dataOwnerId:owner.dataOwnerId,ownerGeneration:owner.generation,providers,providerOrder:['anthropic']};
+const snapshot = {dataOwnerId:owner.dataOwnerId,ownerGeneration:owner.generation,providers,providerOrder:providers.map(provider => provider.id)};
 commitProvidersSnapshot(beginProvidersRefresh(), snapshot);
 
 void mountPage({
@@ -103,6 +111,13 @@ void mountPage({
     },
   }),
   render: (ctx) => {
+    if (partialCodex) return (
+      <main className="flex h-screen items-end justify-end p-4">
+        <ModelSelector modelId="gpt-6.2-astra" currentProviderId="openai" vendorKey="codex"
+          actualRoute sourceDisconnected={ctx.case === 'unconfirmed-codex'} effort="high" onModelChange={() => {}} onEffortChange={() => {}}
+          remoteAgent={undefined} useMorphPopover />
+      </main>
+    );
     if (ctx.case.startsWith('full-panel')) return (
       <main className="flex h-screen items-end justify-end p-4">
         <div data-full-picker-trigger>
