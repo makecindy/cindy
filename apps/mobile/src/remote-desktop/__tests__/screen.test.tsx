@@ -7017,6 +7017,26 @@ describe("remote desktop controls", () => {
     act(() => retroKeys.onTouchEnd({nativeEvent: {identifier: 1}}));
     expect(faceStyle().transform).toEqual([{translateY: 0}]);
     expect(sent()).toContainEqual({type: "events", events: [{kind: "key", code: "KeyA", down: false}]});
+
+    // Unit, #11676: a one-shot Shift previously showed the same lamp as a lock.
+    const tapKey = (code: string) =>
+      act(() => fixture.views[`remoteDesktop.key.${code}`].onAccessibilityAction());
+    const shift = host.querySelector('[data-testid="remoteDesktop.key.ShiftLeft"]')!;
+    const lockLamp = () => shift.querySelector('[data-testid="remoteDesktop.keyLock.ShiftLeft"]');
+    tapKey("ShiftLeft");
+    expect(shift.getAttribute("aria-selected")).toBe("true");
+    expect(lockLamp()).toBeNull();
+    tapKey("KeyB");
+    expect(shift.getAttribute("aria-selected")).toBe("false");
+    tapKey("ShiftLeft");
+    tapKey("ShiftLeft");
+    expect(lockLamp()).not.toBeNull();
+    tapKey("KeyB");
+    expect(lockLamp()).not.toBeNull();
+    tapKey("ShiftLeft");
+    expect(lockLamp()).toBeNull();
+    expect(shift.getAttribute("aria-selected")).toBe("false");
+
     const initialFrame = fixture.views["remoteDesktop.media"].style;
     // Unit: a physical skin must fit the host's actual aspect, not the Duo
     // half-screen aspect; switching hardware must not stretch the desktop.

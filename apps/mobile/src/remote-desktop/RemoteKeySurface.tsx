@@ -262,16 +262,15 @@ const Keycap = memo(function Keycap({
               )}
           </>
         )}
-        {hardware && selected ? (
+        {latch === "locked" && (
           <View
+            testID={`remoteDesktop.keyLock.${rect.id}`}
             style={[
-              styles.hardwareLatch,
-              { backgroundColor: hardware.material.ink },
+              hardware ? styles.hardwareLatch : styles.lockMark,
+              { backgroundColor: hardware?.material.ink ?? foreground },
             ]}
           />
-        ) : latch === "locked" ? (
-          <View style={[styles.lockMark, { backgroundColor: foreground }]} />
-        ) : null}
+        )}
       </Animated.View>
     </View>
   );
