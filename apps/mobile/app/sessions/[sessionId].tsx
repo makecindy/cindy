@@ -13879,9 +13879,11 @@ function ComposerActivityStatus({
     && Number.isFinite(outputTokens)
     && Number.isFinite(generationDurationMs)
     && generationDurationMs > 0;
-  const rateText = rateValue
-    ? t(tokenSpeed?.measurement ? 'session.screen.recentTokenRate' : 'session.screen.tokenRate', { rate: rateValue })
-    : null;
+  const rateText = !rateValue
+    ? null
+    : tokenSpeed?.measurement
+      ? t('session.screen.recentTokenRate', { rate: rateValue })
+      : t('session.screen.tokenRate', { rate: rateValue });
   const showUsageMeta = !showElapsedOnly && (Boolean(rateText) || tokenUsage > 0);
   const usageMeta = (
     <View style={[pillStyles.composerActivityPill, styles.composerActivityMeta]}>
