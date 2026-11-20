@@ -5586,6 +5586,50 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]?.supersedesUserClientId).toBeUndefined();
   });
 
+  // R1 unit: stable authority lineage is not the currently accepted native turn.
+  it('continues the accepted replacement after zero-output retry then quota-limited tool progress', async () => {
+    const h = createHarness();
+    const sid = 'replacement-then-quota';
+    h.setHasAssistantProgressAfter(async () => false);
+    h.coordinator.enqueue(sid, makeItem('original-hidden-after-retry', 'perform the task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'network error');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    const replacementId = h.sendToAgent.mock.calls[1][3].persistUserMessage!.clientId;
+    expect(h.supersedeRetriedUserTurn).toHaveBeenCalledExactlyOnceWith(sid, {
+      supersededUserClientId: 'original-hidden-after-retry', retryUserClientId: replacementId,
+    });
+    h.setHasAssistantProgressAfter(async () => true);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', '400 too many images in request');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    const options = h.sendToAgent.mock.calls[2][3];
+    expect(options.continueUserClientId).toBe(replacementId);
+    expect(options.retryUserClientId).toBeUndefined();
+    expect(h.onDispatchedUserTurn.mock.calls[2][1].retrySourceClientId).toBe('original-hidden-after-retry');
+    expect(h.supersedeRetriedUserTurn).toHaveBeenCalledOnce();
+    const continuationId = options.persistUserMessage!.clientId;
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', '400 too many images in request');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent.mock.calls[3][3].continueUserClientId).toBe(continuationId);
+    h.setHasAssistantProgressAfter(async () => false);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'network error');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent.mock.calls[4][3].continueUserClientId).toBeUndefined();
+    expect(h.onDispatchedUserTurn.mock.calls[4][1].continueUserClientId).toBeUndefined();
+  });
+
   it('chained zero-progress retries anchor each supersede on the previous clone', async () => {
     // 连环失败回归锁:第二次重试的克隆项由 recovery.item(= 第一次的克隆项)
     // 展开而来,取代目标必须显式覆盖为第一次克隆行,不能顺着展开继承退回最初
@@ -13926,7 +13970,8 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     const sid = 'replace-after-clear';
     await h.coordinator.ensureQueueRestored(sid);
     h.setRunning(true);
-    h.coordinator.enqueue(sid, { ...makeItem('q-1', 'before'), retrySourceClientId: 'original-retry-source' });
+    h.coordinator.enqueue(sid, { ...makeItem('q-1', 'before'), retrySourceClientId: 'original-retry-source',
+      continueUserClientId: 'accepted-replacement' });
     await flush();
 
     const projected = h.coordinator.getProjection(sid).pendingQueue[0];
@@ -13936,7 +13981,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 
     // 模拟旧调用方从脱敏投影重建整条消息。coordinator 的最终替换边界仍须
     // 锚定首次 host receipt，避免编辑后持久化出一个无接收时间的快照。
-    expect(h.coordinator.replaceQueuedMessage(sid, 'q-1', makeItem('q-1', 'after'))).toBe(true);
+    expect(h.coordinator.replaceQueuedMessage(sid, 'q-1', { ...makeItem('q-1', 'after'), continueUserClientId: 'forged' })).toBe(true);
     await flush();
     const snapshot = h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? [];
     const acceptedAtMs = authoritative?.hostAcceptedAtMs;
@@ -13945,6 +13990,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
       text: 'after',
       hostAcceptedAtMs: acceptedAtMs,
       retrySourceClientId: 'original-retry-source',
+      continueUserClientId: 'accepted-replacement',
     });
 
     const restarted = createHarness();
@@ -13952,7 +13998,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     restarted.setLoadQueueSnapshot(async () => snapshot);
     await restarted.coordinator.ensureQueueRestored(sid);
     expect(restarted.coordinator.getProjection(sid).pendingQueue).toEqual([
-      expect.objectContaining({ clientId: 'q-1', text: 'after' }),
+      expect.objectContaining({ clientId: 'q-1', text: 'after', continueUserClientId: 'accepted-replacement' }),
     ]);
   });
 

@@ -47,6 +47,18 @@ function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueue
 }
 
 describe('agentInputQueue', () => {
+  it('preserves exact continuation identity separately from retry lineage through edits and restart', () => {
+    const original = { ...queuedMessage([]), retrySourceClientId: 'original-hidden',
+      continueUserClientId: 'accepted-replacement' };
+    const textEdit = updateQueuedMessageText(original, 'Continue carefully');
+    const contentEdit = updateQueuedMessageContent(textEdit, queuedMessage(undefined));
+    const restored = JSON.parse(JSON.stringify(sanitizeQueuedMessageForPersistence(contentEdit)));
+    expect(restored.retrySourceClientId).toBe('original-hidden');
+    expect(restored.continueUserClientId).toBe('accepted-replacement');
+    expect(restored.supersedesUserClientId).toBeUndefined();
+    expect(sanitizeQueuedMessageForPersistence(queuedMessage([])).continueUserClientId).toBeUndefined();
+  });
+
   it.each([false, true])('keeps synthetic text on disk and strips only host text-only model input (%s)', (toolsDisabled) => {
     const text = '[UI_ACTION_TRIGGER]Say hello with cached usage hints.';
     const queued = {
