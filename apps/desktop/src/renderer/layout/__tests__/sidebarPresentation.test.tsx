@@ -5,7 +5,7 @@
  */
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { useSidebarPresentation } from '../sidebarPresentation';
+import { rewritesRevealSource, useSidebarPresentation } from '../sidebarPresentation';
 
 const root = { current: { getBoundingClientRect: () => ({ width: 800 }) } } as never;
 const width = () => 800;
@@ -252,4 +252,17 @@ it('settles without shrinking when the pane is collapsed as readiness disappears
   await act(async () => { rerender({ ready: false, collapsed: true }); });
   expect(resize).not.toHaveBeenCalled();
   expect(settle).toHaveBeenCalledOnce();
+});
+
+// Bug: 面板已经开着时再来一次幂等被动 open（MCP App 的 cindy.ui.open），来源被改写成
+// 「程序强制展示」，设置页往返回来后按 forcedReveal 跳过展开，窗口停在收起后的宽度。
+it('rewrites the reveal source only when the request really changes the pane', () => {
+  const passiveOpen = { visibility: 'open' as const, userInitiated: false };
+  expect(rewritesRevealSource({ ...passiveOpen, collapsed: true })).toBe(true);
+  expect(rewritesRevealSource({ ...passiveOpen, collapsed: false })).toBe(false);
+  const passiveClose = { visibility: 'close' as const, userInitiated: false };
+  expect(rewritesRevealSource({ ...passiveClose, collapsed: false })).toBe(true);
+  expect(rewritesRevealSource({ ...passiveClose, collapsed: true })).toBe(false);
+  // 用户手势照旧改写，合并回来的来源翻转还靠它。
+  expect(rewritesRevealSource({ visibility: 'open', userInitiated: true, collapsed: false })).toBe(true);
 });

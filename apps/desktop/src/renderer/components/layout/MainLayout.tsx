@@ -153,6 +153,7 @@ import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotP
 import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
 import { createUserRevealMarker } from '@/layout/userRevealMarker';
 import { rightSidebarExpansionReady } from '@/layout/rightSidebarReadiness';
+import { rewritesRevealSource } from '@/layout/sidebarPresentation';
 import { readRemoteBots } from '@/features/bots/useRemoteBots';
 import { useSessionEntryLocationCommits } from '@/features/bots/useSessionEntryLocationCommits';
 import { islandEntryRouteState, requestIslandEntryAlertDisposal } from '@/features/bots/islandEntryAlert';
@@ -1127,11 +1128,20 @@ export function MainLayout() {
       if (targetSessionId === currentSessionId) {
         // 前台路径:走 UI + 持久化；全局具名页没有任务时只更新本窗口折叠态。
         const userInitiated = opts.userInitiated !== false;
-        setRightTabsUserToggle(userInitiated);
-        // 程序动作(插件 / agent / MCP App)把面板放出来时不占窗口宽度。这一帧可能正好
-        // 是全局具名页第一次可用:面板第一次就绪且已展开,得按被动展示处理,否则会在
-        // 没有任务语境的页面上把窗口拉宽。
-        if (visibility === 'open') setRightTabsPassiveReveal(!userInitiated);
+        // 程序动作（插件 / agent / MCP App）在面板已经开着时再来一次幂等 open，不改写
+        // 来源：这一帧面板本来就没占窗口宽度这件事不属于它，改掉会让下一次设置页往返
+        // 把开着的面板当成程序强制展示、不再拉宽窗口。
+        if (rewritesRevealSource({
+          visibility,
+          userInitiated,
+          collapsed: isRightSidebarCollapsedRef.current,
+        })) {
+          setRightTabsUserToggle(userInitiated);
+          // 程序动作(插件 / agent / MCP App)把面板放出来时不占窗口宽度。这一帧可能正好
+          // 是全局具名页第一次可用:面板第一次就绪且已展开,得按被动展示处理,否则会在
+          // 没有任务语境的页面上把窗口拉宽。
+          if (visibility === 'open') setRightTabsPassiveReveal(!userInitiated);
+        }
         setIsRightSidebarCollapsed((prev) => {
           if (prev === targetCollapsed) return prev;
           if (shouldAnimateSidebarVisibilityRequest(opts)) {

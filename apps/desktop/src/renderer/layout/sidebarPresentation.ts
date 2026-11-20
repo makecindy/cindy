@@ -9,6 +9,20 @@ export interface SidebarPresentation {
 }
 export const SidebarPresentationContext = createContext<SidebarPresentation | null>(null);
 
+/**
+ * 一次可见性请求要不要改写「这次展开由谁占用窗口宽度」。
+ * 用户手势一律改写；程序请求（插件 / agent / MCP App 的 open）只在真的改变开合时改写——
+ * 已经开着的面板再来一次幂等 open 不该把自己变成「程序强制展示」，否则下一次设置页往返
+ * 会按 forcedReveal 跳过展开，窗口停在收起后的宽度、聊天被挤窄。
+ */
+export function rewritesRevealSource(opts: {
+  visibility: 'open' | 'close';
+  userInitiated: boolean;
+  collapsed: boolean;
+}): boolean {
+  return opts.userInitiated || opts.collapsed !== (opts.visibility === 'close');
+}
+
 /** Hold the old layout while native geometry crosses the IPC/compositor boundary. */
 export function useSidebarPresentation(
   root: RefObject<HTMLDivElement | null>,
