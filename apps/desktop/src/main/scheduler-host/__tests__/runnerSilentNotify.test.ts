@@ -53,7 +53,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner.desktop';
+import { MakerScheduleRunner, type MakerScheduleRunnerDeps } from '../runner.desktop';
 import { projectQuietScheduledOutput, revealScheduledOutput, hasVisibleScheduledOutput } from '../silent-output.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -140,6 +140,7 @@ function createRunnerHarness(
     silenced: boolean;
     abandoned?: boolean;
     notifyImpl?: Notifier['notify'];
+    publishTeammateReport?: MakerScheduleRunnerDeps['publishTeammateReport'];
   },
 ) {
   const notifier: Notifier & { notify: ReturnType<typeof vi.fn> } = {
@@ -159,11 +160,13 @@ function createRunnerHarness(
     getDb: () => ({}) as never,
     notifier,
     logger,
+    publishTeammateReport: opts.publishTeammateReport,
   });
   const isRunSilenced = vi.fn(() => opts.silenced);
   const isRunAbandoned = vi.fn(() => opts.abandoned === true);
-  runner.attachScheduler({ isRunSilenced, isRunAbandoned } as unknown as Scheduler);
-  return { runner, notifier, isRunSilenced, isRunAbandoned };
+  const silenceRun = vi.fn();
+  runner.attachScheduler({ isRunSilenced, isRunAbandoned, silenceRun } as unknown as Scheduler);
+  return { runner, notifier, isRunSilenced, isRunAbandoned, silenceRun };
 }
 
 /** send 接受 + onAccepted 落库,emit done 后 fire 才会 resolve */
@@ -195,6 +198,53 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/repo/project' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+  });
+
+  // Unit, opt-in teammate report delivery: existing tests cover the execution
+  // task and its notifier but no separate publication destination.
+  it.each([
+    { scenario: 'report', text: 'Synthetic final report', handled: true, silenced: false, notices: 0 },
+    { scenario: 'empty after attention request', text: '', handled: true, silenced: false, notices: 0 },
+    { scenario: 'quiet', text: 'Quiet result', handled: true, silenced: true, notices: 0 },
+    { scenario: 'ordinary project', text: 'Ordinary result', handled: false, silenced: false, notices: 1 },
+    { scenario: 'delivery failure', text: 'Keep the original', handled: true, silenced: false, notices: 1 },
+    { scenario: 'execution failure', text: '', handled: true, silenced: true, notices: 1 },
+  ])('settles $scenario through the configured report or ordinary notifier path', async (test) => {
+    const h = createSessionHarness(acceptingSend());
+    const publishTeammateReport = vi.fn<NonNullable<MakerScheduleRunnerDeps['publishTeammateReport']>>()
+      .mockResolvedValue(test.handled);
+    if (test.scenario === 'delivery failure') publishTeammateReport.mockRejectedValue(new Error('storage unavailable'));
+    const { runner, notifier, silenceRun } = createRunnerHarness(h.session, {
+      silenced: test.silenced,
+      publishTeammateReport,
+    });
+    const ctx = { ...createFireContext(), onRunnerNotified: vi.fn() };
+    const pending = runner.fire(baseSchedule({ source: 'project', silentWhenIdle: true }), ctx);
+    const observed = pending.catch(error => error as Error);
+    await vi.waitFor(() => expect(h.session.send).toHaveBeenCalled());
+    if (test.scenario === 'execution failure') {
+      h.emit({ type: 'error', data: { message: 'Synthetic check failed', isTerminal: true } });
+    }
+    h.emit({ type: 'done', data: { result: test.text } });
+    const result = await observed;
+    expect(notifier.notify).toHaveBeenCalledTimes(test.notices);
+    if (test.silenced) expect(publishTeammateReport).not.toHaveBeenCalled();
+    else expect(publishTeammateReport).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      run: expect.objectContaining({ id: ctx.runId, sessionId: h.session.id }),
+      report: test.text,
+    }));
+    if (test.scenario === 'empty after attention request') expect(silenceRun).toHaveBeenCalledExactlyOnceWith(ctx.runId);
+    if (test.scenario === 'delivery failure') {
+      expect(result).toMatchObject({ message: 'Scheduled report could not be delivered to the teammate main chat' });
+      expect(ctx.onRunnerNotified).toHaveBeenLastCalledWith('failure');
+      expect(notifier.notify).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({
+        status: 'failed', sessionId: h.session.id,
+      }));
+      expect(mocks.createMessage).toHaveBeenCalledWith(h.session.id, expect.objectContaining({
+        role: 'assistant', content: test.text,
+      }), expect.anything());
+    }
+    if (test.scenario === 'execution failure') expect(result).toMatchObject({ message: 'Synthetic check failed' });
   });
 
   it.each([true, false])('adds the checkpoint guidance only to recurring teammate work (%s)', async (recurring) => {

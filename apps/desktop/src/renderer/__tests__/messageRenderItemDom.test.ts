@@ -3,12 +3,52 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
 import ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { findRenderItemElement } from '../components/chat/messageViewportCompensation';
-import { pickIntersectingChildAnchor, readViewportChildAnchorClientId, withAssistantAvatar } from '../components/chat/MessageStream';
+import { ConfirmDialogProvider } from '../components/ui/confirm-dialog-provider';
+import { MessageStream, pickIntersectingChildAnchor, readViewportChildAnchorClientId, withAssistantAvatar } from '../components/chat/MessageStream';
 
 describe('render item identity across asynchronous cards', () => {
+  // Unit: the production MessageStream must render a scheduled assistant row
+  // with a fresh companion identity even immediately after active work.
+  it('renders a scheduled report once with the companion portrait and assistant chrome', async () => {
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    const report = 'Synthetic scheduled report';
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    try {
+      await act(async () => {
+        root.render(createElement(MemoryRouter, null, createElement(ConfirmDialogProvider, { children: createElement(MessageStream, {
+          historyLoaded: true, workingDir: '', isSessionStreaming: true,
+          simplifiedBotConversation: true,
+          assistantAvatar: createElement('i', { 'aria-label': '合成测试伙伴' }),
+          messages: [
+            { clientId: 'progress', role: 'assistant', content: 'Working on another request', assistantPhase: 'commentary' },
+            { clientId: 'schedule-main-chat-report:sample-run', role: 'assistant', content: report, turnCompleted: true },
+          ],
+        }) })));
+      });
+      const reports = [...host.querySelectorAll('[data-plugin-appearance-speaker="assistant"]')]
+        .filter(node => node.textContent?.includes(report));
+      expect(reports).toHaveLength(1);
+      const row = reports[0].closest('[data-render-item-key]');
+      const portrait = row?.querySelector('[aria-label="合成测试伙伴"]');
+      expect(portrait).toBeTruthy();
+      expect(portrait?.closest('[aria-hidden="true"]')).toBeNull();
+      expect(row?.querySelector('[data-user-msg-id]')).toBeNull();
+      expect(row?.textContent).not.toMatch(/消息来源|Message source/i);
+    } finally {
+      await act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
   it('keeps the same message when an earlier card mounts or disappears', () => {
     const container = document.createElement('div');
     const message = document.createElement('div');

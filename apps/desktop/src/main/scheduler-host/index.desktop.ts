@@ -55,6 +55,8 @@ import { archiveQuietScheduledTarget, readScheduledTargetStatus } from './quietR
 import { createLogger } from '../logger';
 import type { ScheduleRunner } from '@cindy/maker-scheduler';
 import { ownTeammateProjectState } from './ownTeammateProject.js';
+import { createTeammateScheduledReportPublisher } from './teammateScheduledReport.desktop.js';
+import type { ProjectAutomationLoader } from './project-automation-loader.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
 
@@ -89,6 +91,9 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       getDb: deps.getDb,
       notifier,
       logger: deps.logger,
+      publishTeammateReport: createTeammateScheduledReportPublisher(
+        (workingDir, id) => getProjectAutomationLoader().deliversReportToMainChat(workingDir, id),
+      ),
       diagnosePreRunHookFailure: deps.diagnosePreRunHookFailure,
       beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
       readAutoReviewHistory: async (sessionId) => {
@@ -182,5 +187,5 @@ export const getSchedulerIfInitialized = desktop.getSchedulerIfInitialized;
 export const getScheduler = desktop.getScheduler;
 export const getScheduleStorage = desktop.getScheduleStorage;
 export const getScheduleStorageIfInitialized = desktop.getScheduleStorageIfInitialized;
-export const getProjectAutomationLoader = desktop.getProjectAutomationLoader;
+export const getProjectAutomationLoader: () => ProjectAutomationLoader = desktop.getProjectAutomationLoader;
 export const resetScheduler = desktop.resetScheduler;

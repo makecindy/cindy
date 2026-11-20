@@ -22,13 +22,24 @@ function sameDir(a: string, b: string): boolean {
 }
 
 /** null: not a teammate project of this account (an ordinary folder, whatever its path looks like). */
-export async function ownTeammateProjectState(workingDir: string | null | undefined): Promise<TeammateProjectState | null> {
+export async function resolveOwnTeammateProject(
+  workingDir: string | null | undefined,
+): Promise<{ botId: string; state: 'active' | 'stopped' } | { botId: null; state: 'deleted' } | null> {
   if (!workingDir || !teammateFolderOfProjectPath(workingDir)) return null;
   const root = ownerScopedUserDataPath();
   const rows = await getDbClient().drizzle
     .select({ id: botProfiles.id, status: botProfiles.status }).from(botProfiles);
   const row = rows.find(profile => sameDir(teammateWorkspaceDir(root, profile.id), workingDir));
-  if (row) return row.status === 'active' || row.status === 'error' ? 'active' : 'stopped';
+  if (row) return {
+    botId: row.id,
+    state: row.status === 'active' || row.status === 'error' ? 'active' : 'stopped',
+  };
   // Still in this account's teammates folder, but its teammate is gone.
-  return sameDir(path.dirname(path.dirname(workingDir)), path.join(root, 'bots')) ? 'deleted' : null;
+  return sameDir(path.dirname(path.dirname(workingDir)), path.join(root, 'bots'))
+    ? { botId: null, state: 'deleted' as const }
+    : null;
+}
+
+export async function ownTeammateProjectState(workingDir: string | null | undefined): Promise<TeammateProjectState | null> {
+  return (await resolveOwnTeammateProject(workingDir))?.state ?? null;
 }

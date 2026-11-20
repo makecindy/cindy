@@ -294,6 +294,15 @@ export interface MakerScheduleRunnerDeps {
   getDb: () => SchedulerDrizzleDb;
   notifier: Notifier;
   logger: Logger;
+  /** Desktop's opt-in report publisher. An empty report is handled silently. */
+  publishTeammateReport?: (input: {
+    schedule: Schedule;
+    run: ScheduleRun;
+    report: string;
+    signal: AbortSignal;
+    ownerScope: ReturnType<typeof captureDataOwnerBroadcastScope>;
+    assertCurrent: () => void;
+  }) => Promise<boolean>;
   /** 检查脚本失败时识别「所属插件未安装或未启用」。 */
   diagnosePreRunHookFailure?: DiagnosePreRunHookFailure;
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
@@ -3694,6 +3703,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       finalRun.status === 'success' &&
       !!assistantText.trim();
     let reportPersistFailed = false;
+    let mainChatDeliveryFailed = false;
     if (abandoned) {
       this.deps.logger.info?.(
         '[runner] run was force-released by the stall guard; skipping duplicate notification',
@@ -3758,8 +3768,36 @@ export class MakerScheduleRunner implements ScheduleRunner {
           ctx.onRunnerNotified?.('failure');
         }
       }
+      let reportHandledByMainChat = false;
+      if (!silenced && finalRun.status === 'success' && schedule.source === 'project' && this.deps.publishTeammateReport) {
+        const assertCurrent = () => {
+          ctx.assertFireContext?.();
+          if (ctx.signal.aborted || this.scheduler?.isRunAbandoned?.(ctx.runId) ||
+            !isDataOwnerBroadcastScopeCurrent(ownerScope)) throw new Error('Scheduled report was cancelled');
+        };
+        try {
+          assertCurrent();
+          reportHandledByMainChat = await this.deps.publishTeammateReport({
+            schedule, run: finalRun, report: assistantText, signal: ctx.signal, ownerScope, assertCurrent,
+          });
+          if (reportHandledByMainChat && !assistantText.trim()) this.scheduler?.silenceRun(ctx.runId);
+        } catch {
+          try {
+            assertCurrent();
+            mainChatDeliveryFailed = true;
+            finalRun.status = 'failed';
+            finalRun.resultText = undefined;
+            finalRun.errorMsg = 'Scheduled report could not be delivered to the teammate main chat';
+            ctx.onRunnerNotified?.('failure');
+          } catch {
+            // Superseded runs cannot publish a result or an alert into the new owner.
+            reportHandledByMainChat = true;
+          }
+        }
+      }
       try {
         if (
+          !reportHandledByMainChat &&
           (!silenced || reportPersistFailed) &&
           isDataOwnerBroadcastScopeCurrent(ownerScope) &&
           !(finalRun.status === 'success' && ctx.signal.aborted)
@@ -3773,6 +3811,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
     if (runError) throw new Error(runError);
     if (reportPersistFailed) throw new Error('Scheduled result could not be saved');
+    if (mainChatDeliveryFailed) throw new Error('Scheduled report could not be delivered to the teammate main chat');
     return { sessionId, resultText: resultText || undefined };
   }
 
