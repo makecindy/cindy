@@ -2,6 +2,10 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+`read_lead_history` 通过已有 Worker bridge 的 `args` 接受可选 `order`，显式指定时由支持的 Lead
+原样返回该字段。省略仍按时间正序。旧 Lead 会忽略新参数并返回原有正序分页，响应没有
+`order` 时按旧行为解释。游标须沿用同一排序方向，Worker 的归属校验沿用原通道。
+
 `maker:input:get-projection` 的既有输入投影可选增加 `turnInProgress`，由输入协调器按
 当前派发、运行、交互及终态持久化边界生成；它不表示 vendor 的 `isTurnRunning`。
 Lead 的自动回报同时识别既有 `autoResumePending`、`usageLimitWait` 和隐藏续跑队列，

@@ -22,6 +22,7 @@ import { ProfileEditDialog } from '@/components/settings/ProfileEditDialog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
 import type { BotGroupMemberView, BotGroupSummary, ChatGroupAction } from '../../../shared/botGroupChat';
+import { groupRepositoryLabel, parseGroupRepository } from '../../../shared/botGroupChat';
 import { GroupMaskAvatar, useOpenGroupMask } from './GroupMaskControls';
 import { useGroupMask } from './groupMaskPresentation';
 import { ChatBotAccessField } from './ChatBotAccessField';
@@ -60,7 +61,7 @@ export function resolveChatGroupSettingsPage(group: BotGroupSummary, value: stri
   if (value === 'profile') return self?.actorId ? { kind: 'profile' } : null;
   if (!value.startsWith(COMPANION_PAGE)) return null;
   const actorId = value.slice(COMPANION_PAGE.length);
-  const member = group.members.find(candidate => candidate.actorId === actorId && candidate.actorKind === 'bot' && candidate.isOwned === true);
+  const member = group.members.find(candidate => candidate.actorId === actorId && candidate.actorKind === 'bot' && candidate.isOwned === true && candidate.assistant !== true);
   return member ? { kind: 'companion', member } : null;
 }
 
@@ -123,6 +124,8 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState('');
+  // What choosing a folder did to the group's repository (§7.5), shown under the project.
+  const [projectNotice, setProjectNotice] = useState('');
   const nicknameDirty = useRef(false);
   useEffect(() => { if (!nicknameDirty.current) setNickname(me?.nickname ?? ''); }, [me?.nickname]);
 
@@ -143,7 +146,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
 
   async function mutate(action: ChatGroupAction, exit = false) {
     if (busyRef.current) return false;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError(''); setProjectNotice('');
     const owner = getDataOwnerGeneration();
     try {
       const result = await api().manage({ groupId: group.id, action });
@@ -157,7 +160,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   }
   async function confirmed(action: ChatGroupAction, title: string, note: string, exit = false, confirmText = t(key('confirm'))) {
     const owner = getDataOwnerGeneration();
-    if (await confirm({ presentation: 'standard', title, description: note, confirmText,
+    if (await confirm({ title, description: note, confirmText,
       cancelText: t('bots.cancel'), confirmVariant: 'destructive' }) && mounted.current && isDataOwnerGenerationCurrent(owner)) await mutate(action, exit);
   }
   async function saveRules(change: { replyMode?: BotGroupSummary['replyMode']; speakingMode?: BotGroupSummary['speakingMode'] }) {
@@ -182,15 +185,18 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       refreshBotGroups();
     },
   }), [group.id, me?.actorId, me?.name, me?.groupAvatar, me?.defaultAvatarUrl, t]);
-  async function updateWorkSettings(input: { organizerBotId?: string; projectDir?: string | null; githubRepo?: string | null; autoContinue?: boolean }) {
+  async function updateWorkSettings(input: { projectDir?: string | null; repository?: string | null }) {
     if (busyRef.current) return;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError(''); setProjectNotice('');
     const generation = getDataOwnerGeneration();
     try {
       const result = await window.electronAPI.maker.updateBotGroup({ groupId: group.id, ...input });
       if (!isDataOwnerGenerationCurrent(generation)) return;
-      if (!result.ok) setError(t('autoContinue' in input ? 'bots.groupChat.settings.autoContinueSaveFailed' : 'githubRepo' in input ? key('githubRepoSaveFailed') : 'bots.groupChat.settings.projectDirSaveFailed'));
-      else refreshBotGroups();
+      if (!result.ok) setError(t('repository' in input ? key('githubRepoSaveFailed') : 'bots.groupChat.settings.projectDirSaveFailed'));
+      else {
+        if (result.folderRepository) setProjectNotice(t(key(result.folderRepository.filled ? 'folderRepoFilled' : 'folderRepoDiffers'), { repo: result.folderRepository.repo }));
+        refreshBotGroups();
+      }
     } catch { if (isDataOwnerGenerationCurrent(generation)) setError(t(chatErrorKey('REQUEST_FAILED'))); }
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
   }
@@ -230,22 +236,46 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     next.set('settingsBot', member.botId);
     setSearchParams(next);
   }
+  const removing = useRef(false);
+  async function removeMember(member: BotGroupMemberView) {
+    if (removing.current || busyRef.current) return;
+    removing.current = true;
+    try {
+      const mine = member.actorKind === 'bot' && member.isOwned === true && member.assistant !== true;
+      const active = group.round?.speakers.some(speaker => speaker.botId === member.botId);
+      const note = mine ? t(key('removeOwnHint'), { name: member.name, group: group.name })
+        + (active ? `\n\n${t(key('removeOwnActiveHint'))}` : '') : t(key('removeHint'));
+      const generation = getDataOwnerGeneration();
+      if (!await confirm({ title: t(key('removeTitle'), { name: member.name }), description: note,
+        confirmText: t(key(mine && active ? 'stopAndRemove' : 'removeOwn')), cancelText: t('bots.cancel'), confirmVariant: 'destructive' })
+        || !mounted.current || !isDataOwnerGenerationCurrent(generation)) return;
+      if (await mutate({ type: 'member', actorId: member.actorId!, action: 'remove' }) && mine) go(null);
+    } finally { removing.current = false; }
+  }
   const memberActions: MemberActions = {
     access: member => go(`${COMPANION_PAGE}${member.actorId}`),
     role: member => void mutate({ type: 'member', actorId: member.actorId!, action: 'role', role: member.role === 'admin' ? 'member' : 'admin' }),
     transfer: member => void confirmed({ type: 'transfer', actorId: member.actorId! }, t(key('transferTitle'), { name: member.name }), t(key('transferHint'))),
-    remove: member => void confirmed({ type: 'member', actorId: member.actorId!, action: 'remove' }, t(key('removeTitle'), { name: member.name }), t(key('removeHint'))),
+    remove: member => void removeMember(member),
   };
 
   let body: ReactNode;
   let footer: ReactNode = null;
   if (page?.kind === 'manage') {
-    const activeCompanions = companions.filter(member => member.status === 'active');
     // The group's own Cindy (servers with groupAssistant) answers messages that @ nobody when anyone may
     // reply (bot-group-chat.md「群里的 Cindy」); turned off, or on older servers, the rows read as before.
     const assistantAnswers = group.supportsGroupAssistant === true && group.assistantEnabled === true;
     body = <>
       {group.archived && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
+      {group.supportsMemberInvites && <SettingsSection title={t(key('inviteEntry'))}>
+        <SettingsCard>
+          <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
+            trailing={<Switch aria-label={t(shared('allowMemberInvites'))} checked={group.allowMemberInvites === true}
+              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={allowMemberInvites => {
+                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMemberInvites });
+              }} />} />
+        </SettingsCard>
+      </SettingsSection>}
       {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}
       <SettingsSection title={t(key('replies'))}>
         <SettingsCard>
@@ -276,24 +306,13 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       {/* The group's project: a shared repository and this computer's folder. Replies and 分工 work in it (§7.5). */}
       <SettingsSection title={t(key('project'))} caption={t(key('projectCaption'))}>
         <SettingsCard>
-          {group.supportsGroupProject && <SettingsRow wrap title={t(key('githubRepo'))} hint={t(key('githubRepoHint'))}
-            trailing={<GithubRepoField repo={group.project?.repo ?? ''} busy={busy} onSave={githubRepo => void updateWorkSettings({ githubRepo })} />} />}
-          <SettingsRow wrap title={t(key('projectFolder'))} hint={t(key(group.projectDirAuto ? 'projectDirAutoHint' : 'projectDirHint'))}
+          {group.supportsGroupProject && <SettingsRow wrap title={t(key(group.supportsGroupProjectGit ? 'repository' : 'githubRepo'))} hint={t(key(group.supportsGroupProjectGit ? 'repositoryHint' : 'githubRepoHint'))}
+            trailing={<RepositoryField repo={group.project ? groupRepositoryLabel(group.project) : ''} anyHost={group.supportsGroupProjectGit === true} busy={busy}
+              onSave={repository => void updateWorkSettings({ repository })} />} />}
+          <SettingsRow wrap title={t(key('projectFolder'))} hint={t(group.projectDirAuto ? key('projectDirAutoHint') : 'bots.groupChat.settings.projectDirNote')}
             trailing={<ProjectFolder dir={group.projectDir} auto={group.projectDirAuto === true} busy={busy} onChoose={() => void chooseProjectDir()} onClear={() => void updateWorkSettings({ projectDir: null })} />} />
         </SettingsCard>
-      </SettingsSection>
-      {/* The organizer arranges a 分工 whose steps are not written out (§7.1). */}
-      <SettingsSection title={t(key('work'))} caption={t(key('workCaption'))}>
-        <SettingsCard>
-          {companions.length > 0 && <SettingsRow wrap title={t('bots.groupChat.organizer')} hint={t(key('organizerHint'))}
-            trailing={<Select label={t('bots.groupChat.organizer')} value={group.organizerBotId ?? ''} disabled={busy} size="compact" className="max-w-[220px]" truncateOptions
-              options={activeCompanions.map(member => ({ value: member.botId, label: member.name }))}
-              onValueChange={organizerBotId => void updateWorkSettings({ organizerBotId })} />} />}
-          {/* Kept on this computer like the project folder; only 分工 you start follow it (§7.4). */}
-          {group.autoContinue !== undefined && <SettingsRow title={t('bots.groupChat.plan.autoContinue')} hint={t(key('autoContinueHint'))}
-            trailing={<Switch data-testid="bot-group-auto-continue" checked={group.autoContinue === true} disabled={busy}
-              aria-label={t('bots.groupChat.plan.autoContinue')} onCheckedChange={autoContinue => void updateWorkSettings({ autoContinue })} />} />}
-        </SettingsCard>
+        {projectNotice && <div className="mt-2"><SettingsNotice>{projectNotice}</SettingsNotice></div>}
       </SettingsSection>
       <SettingsSection caption={owner && group.supportsDissolve !== true ? t('bots.groupChat.lifecycle.unavailable') : undefined}>
         <SettingsCard>
@@ -352,6 +371,9 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
         </div>
       </div>
       <ChatBotAccessField groupId={group.id} member={member} disabled={busy} />
+      <SettingsSection caption={t(key('removeOwnScope'))}><SettingsCard>
+        <SettingsRow danger title={t(key('removeOwn'))} disabled={busy} onClick={() => void removeMember(member)} />
+      </SettingsCard></SettingsSection>
       {profiles.some(bot => bot.id === member.botId) && <SettingsSection caption={t(key('capabilityScope'), { name: member.name })}>
         <SettingsCard>
           <SettingsRow title={t(key('capabilitiesRow'), { name: member.name })} onClick={() => openCapabilities(member)}
@@ -430,7 +452,7 @@ function Hero({ group, name, me, invite }: { group: BotGroupSummary; name: strin
   const { t } = useTranslation();
   const role = me?.role === 'owner' ? t(key('youAreOwner')) : me?.role === 'admin' ? t(key('youAreAdmin')) : null;
   return <div className="flex items-center gap-3">
-    <BotGroupSidebarAvatar members={group.members} compact surface="panel" />
+    <BotGroupSidebarAvatar members={group.members} compact />
     <div className="min-w-0 flex-1">
       <p className="text-16 font-medium leading-[1.375] text-[var(--text-primary)] [overflow-wrap:anywhere]">{name}</p>
       <p className="mt-0.5 text-13 leading-[1.38] tabular-nums text-[var(--text-secondary)]">
@@ -473,26 +495,31 @@ function About({ topic, description, canEdit, onEdit }: { topic: string; descrip
   </SettingsSection>;
 }
 
-/** `owner/name`, saved when you leave the field or press Enter; empty clears it. */
-function GithubRepoField({ repo, busy, onSave }: { repo: string; busy: boolean; onSave: (repo: string | null) => void }) {
+/**
+ * The group's repository: `owner/name` for GitHub, or a GitLab, CNB or other git link where the
+ * server keeps those (`anyHost`). Written as you like, saved in its plain form when you leave the
+ * field or press Enter; empty clears it.
+ */
+function RepositoryField({ repo, anyHost, busy, onSave }: { repo: string; anyHost: boolean; busy: boolean; onSave: (repo: string | null) => void }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(repo);
   const focused = useRef(false);
   useEffect(() => { if (!focused.current) setDraft(repo); }, [repo]);
-  const value = draft.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').replace(/\/$/, '');
-  const invalid = !!value && !GITHUB_REPO.test(value);
+  const parsed = draft.trim() ? parseGroupRepository(draft) : null;
+  const usable = parsed && (anyHost || parsed.kind === 'github') ? parsed : null;
+  const value = usable ? groupRepositoryLabel(usable) : '';
+  const invalid = !!draft.trim() && !usable;
   const save = () => {
     focused.current = false;
     if (invalid) return;
     if (value !== repo) onSave(value || null);
     setDraft(value);
   };
-  return <Input size="md" className="w-[220px] max-w-full" mono value={draft} disabled={busy} error={invalid}
-    placeholder="owner/name" aria-label={t(key('githubRepo'))} spellCheck={false} autoComplete="off"
+  return <Input size="md" className="w-[280px] max-w-full" mono value={draft} disabled={busy} error={invalid}
+    placeholder={anyHost ? t(key('repositoryPlaceholder')) : 'owner/name'} aria-label={t(key(anyHost ? 'repository' : 'githubRepo'))} spellCheck={false} autoComplete="off"
     onFocus={() => { focused.current = true; }} onChange={setDraft} onBlur={save}
     onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); (event.target as HTMLInputElement).blur(); } }} />;
 }
-const GITHUB_REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
 
 /**
  * The project folder as a pill: its name with the full path, 更换 and 清除 behind it. A folder found

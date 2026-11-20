@@ -1,23 +1,33 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../shared/ghost';
+import { type InstalledGhost } from '../../../../shared/ghost';
 import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
 import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
 import type { UnifiedCommand } from '@/lib/slashCommands';
-import type { ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
+import { getProviderModelThinking, setProviderModelThinking } from '@/state/providerModelMemory';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { useSshCodexDraftSelection } from '@/features/cc-agent/useSshCodexDraftSelection';
 import { ChatInput } from '../ChatInput';
+import { SessionSubscriptionAccountProvider } from '../SessionSubscriptionAccount';
 import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
 import { getEffortChangeCoordinator } from '../effortChangeQueue';
 import { clearDraft } from '@/lib/composerDraftStore';
 import { peekComposerSubmitRequest, requestComposerSubmit, takeComposerSubmitRequest } from '@/lib/composerActionsBus';
 import { makerChatStore } from '@/lib/makerChatStore';
+import {
+  COMPOSER_FOLLOW_UP_STORAGE_KEY,
+  _resetComposerFollowUpPreferenceForTests,
+} from '@/hooks/useComposerFollowUpPreference';
+import {
+  COMPOSER_SEND_SHORTCUT_STORAGE_KEY,
+  _resetComposerSendShortcutPreferenceForTests,
+} from '@/hooks/useComposerSendShortcutPreference';
 import {
   __testing as promptRecommendations,
   beginPromptRecommendationPrediction,
@@ -28,6 +38,8 @@ import {
 const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor: null as Editor | null, listening: false, stop: vi.fn().mockResolvedValue(undefined),
   cancel: vi.fn().mockResolvedValue(undefined),
   setModel: vi.fn(), selectModel: undefined as undefined | ((id: string) => Promise<void | boolean>), selectEffort: undefined as string | null | undefined, remoteProviders: [] as ProviderView[],
+  setThinkingEnabled: vi.fn(), selectThinking: undefined as undefined | ((enabled: boolean) => void | boolean | Promise<void | boolean>), thinkingValue: undefined as boolean | undefined,
+  switchSessionAgent: vi.fn(),
   localProviders: [] as ProviderView[],
   remoteStatus: 'ready' as 'ready' | 'loading' | 'error',
   sshCatalogHosts: [] as (string | null)[],
@@ -37,8 +49,16 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   ghosts: [] as InstalledGhost[],
   showPluginChoices: false,
   providerCall: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ updates: [] })),
+  subscriptionAccounts: undefined as undefined | { sessionAccount: ReturnType<typeof vi.fn>; onChanged: () => () => void },
 }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => h.ghosts, readInstalledGhostsSnapshot: () => h.ghosts }));
+// A loaded roster lets the real send path tell Desktop commands from paths and Skills.
+const roster = vi.hoisted(() => ({ commands: null as null | readonly unknown[] }));
+vi.mock('@/lib/slashCommands', async (original) => {
+  const actual = await original<typeof import('@/lib/slashCommands')>();
+  return { ...actual, loadAllCommands: (...args: Parameters<typeof actual.loadAllCommands>) =>
+    roster.commands ? Promise.resolve([...roster.commands] as Awaited<ReturnType<typeof actual.loadAllCommands>>) : actual.loadAllCommands(...args) };
+});
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: h.confirm }) }));
@@ -63,10 +83,12 @@ vi.mock('@/components/sidebar/SortableList', () => ({
     </div>
   ),
 }));
-vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort, sshCodex }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null; sshCodex?: typeof h.sshCodex }) => {
+vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort, sshCodex, onThinkingChange, thinkingEnabled }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null; sshCodex?: typeof h.sshCodex; onThinkingChange?: typeof h.selectThinking; thinkingEnabled?: boolean }) => {
   h.sshCodex = sshCodex;
   h.selectModel = onModelChange;
   h.selectEffort = effort;
+  h.selectThinking = onThinkingChange;
+  h.thinkingValue = thinkingEnabled;
   return <button data-testid="model-selector" disabled={disabled}>{modelId}</button>;
 } }));
 vi.mock('@/hooks/useSshCodexProviders', () => ({ useSshCodexProviders: (hostId?: string | null) => {
@@ -106,6 +128,9 @@ const noOp = () => {};
 // External host services are inert; the editor, composer state, and send dispatch run unchanged.
 const api: typeof window.electronAPI = new Proxy({} as typeof window.electronAPI, { get: (_obj, key) => {
   if (key === 'setModel') return h.setModel;
+  if (key === 'setThinkingEnabled') return h.setThinkingEnabled;
+  if (key === 'switchSessionAgent') return h.switchSessionAgent;
+  if (key === 'subscriptionAccounts' && h.subscriptionAccounts) return h.subscriptionAccounts;
   if (key === 'mcpApps') return h.providerCall;
   if (key === 'listSync') return () => ({ ghosts: [] });
   if (key === 'getDataSnapshot') return () => { throw new Error('test bridge unavailable'); };
@@ -123,13 +148,75 @@ const attachments: ComponentProps<typeof ChatInput>['attachmentState'] = {
   removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles: noOp, restoreFiles: (files) => [...files],
 };
 beforeEach(() => { h.platform = 'darwin'; h.listening = false; h.processing = null; h.stop.mockClear(); h.cancel.mockClear(); h.selectEffort = undefined; window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
-afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.sshCatalogHosts = []; h.sshCodex = undefined; h.setModel.mockReset(); h.confirm.mockReset(); h.ghosts = []; h.showPluginChoices = false; h.providerCall.mockReset(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.sshCatalogHosts = []; h.sshCodex = undefined; h.setModel.mockReset(); h.confirm.mockReset(); h.ghosts = []; h.showPluginChoices = false; h.providerCall.mockReset(); h.subscriptionAccounts = undefined; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const props = {
   sessionId: 'loading-test', initialWorkingDir: '/workspace', runtimeAgentKind: 'codex' as const,
   vendorKey: 'codex' as const, deviceLinkDeviceId: 'test-host', attachmentState: attachments,
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
+
+afterEach(() => {
+  h.setThinkingEnabled.mockReset();
+  h.switchSessionAgent.mockReset();
+  h.selectThinking = undefined;
+  makerChatStore.clearAgentSwitchIntent('thinking-write-test');
+});
+
+// #10434, unit: the picker-only failure fixture used a successful-write-first
+// callback. Exercise the real composer's callback with a rejected Pi host write.
+it('confirms a thinking preference only after the real session write succeeds', async () => {
+  h.localProviders = [{ ...buildUserProvider({ id: 'mimo-thinking-test', name: 'MiMo', runtimes: { pi: {
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat',
+    models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }],
+  } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }), connected: true }];
+  setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true);
+  let reject!: (error: Error) => void;
+  h.setThinkingEnabled.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+  const view = render(<ChatInput {...props} sessionId="thinking-write-test" deviceLinkDeviceId={null}
+    runtimeAgentKind="pi" vendorKey="pi" hideRuntimeControls={false}
+    initialModel="mimo-v2.6-pro" initialProviderId="mimo-thinking-test" onSend={vi.fn()} />);
+  await waitFor(() => expect(h.selectThinking).toBeTypeOf('function'));
+  let failed!: Promise<void | boolean>;
+  await act(async () => { failed = Promise.resolve(h.selectThinking!(false)); });
+  expect(h.setThinkingEnabled).toHaveBeenCalledWith('thinking-write-test', false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(true);
+  await act(async () => {
+    const checked = expect(failed).rejects.toThrow('host rejected thinking');
+    reject(new Error('host rejected thinking'));
+    await checked;
+  });
+  expect(h.thinkingValue).toBe(true);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(true);
+  h.setThinkingEnabled.mockResolvedValueOnce(undefined);
+  await act(async () => { await h.selectThinking!(false); });
+  expect(h.thinkingValue).toBe(false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
+  // A staged route changes only that intent; rejection must not fall through
+  // to the old runtime or confirm a new global preference.
+  await act(async () => {
+    makerChatStore.noteAgentSwitchIntent('thinking-write-test', 'pi', {
+      model: 'mimo-v2.6-pro', providerId: 'mimo-thinking-test',
+    });
+  });
+  h.switchSessionAgent.mockRejectedValueOnce(new Error('intent rejected thinking'));
+  // #10445 review, unit: a rejected staged write must report failure to the
+  // real picker's reset transaction, not just leave memory unchanged locally.
+  await act(async () => { expect(await h.selectThinking!(true)).toBe(false); });
+  expect(h.switchSessionAgent).toHaveBeenCalled();
+  expect(h.setThinkingEnabled).toHaveBeenCalledTimes(2);
+  expect(h.thinkingValue).toBe(false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
+  view.rerender(<ChatInput {...props} sessionId="thinking-write-test" deviceLinkDeviceId={null}
+    runtimeAgentKind="pi" vendorKey="pi" hideRuntimeControls={false} settingsLocked
+    initialModel="mimo-v2.6-pro" initialProviderId="mimo-thinking-test" onSend={vi.fn()} />);
+  h.switchSessionAgent.mockClear();
+  await act(async () => { expect(await h.selectThinking!(true)).toBe(false); });
+  expect(h.switchSessionAgent).not.toHaveBeenCalled();
+  expect(h.thinkingValue).toBe(false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
+  await act(async () => { setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true); });
+});
 
 // New completion contract through the real editor/selection entry. The panel is
 // replaced only to select a returned candidate. Existing parser/bridge tests do
@@ -145,7 +232,7 @@ it.each([['@', ''], ['/', ''], ['@', 'suffix'], ['/', 'suffix']] as const)('inse
         ui: { resources: [], tools: { lookup: { visibility: ['app'] } } },
         host: { contributions: [{ id: 'lookup', title: 'Reference', position: 'composer.completion', tool: 'lookup', trigger }] },
       } } };
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); h.ghosts = [ghost];
+  h.ghosts = [ghost];
   h.providerCall.mockResolvedValue({ structuredContent: { items: [{ id: 'one', label: 'Reference', insertText: '<b>plain</b>' }] } });
   render(<PluginUiProvider><ChatInput {...props} sessionId={`completion-${trigger}`} deviceLinkDeviceId={null} onSend={vi.fn()} /></PluginUiProvider>);
   await act(async () => { h.editor!.commands.setContent(`<p>${trigger}ab${suffix}</p>`); h.editor!.commands.setTextSelection(4); });
@@ -216,6 +303,47 @@ it.each([false, undefined])('keeps disconnected ordinary sessions blocked withou
   expect((send as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(send);
   expect(onSend).not.toHaveBeenCalled();
+});
+
+// 2026-11-14 regression (subscription-account-pools.md 旧版直接加入账号池的账号也拆开 / 任务跟着账号走), unit:
+// splitting the old pool left the built-in OpenAI with only a signed-out default login, so the real
+// composer disabled Send for old tasks bound to a split-out account. Goes through the task-account
+// read and its reply parser; the helper table in sourceSwitch.test.ts covers every other guard.
+// Minimal input: built-in source disconnected with no models, task account ready in its own provider.
+it.each([
+  ['ready', false],
+  ['signed-out', true],
+] as const)('lets an old built-in task follow its split-out %s account', async (status, blocked) => {
+  const model = 'gpt-6';
+  h.localProviders = [
+    { ...sshNativeCodexProvider([]), connected: false },
+    { ...sshNativeCodexProvider([sshModel(model)]), id: 'openai-sub-1a2b3c4d' },
+  ];
+  const sessionAccount = vi.fn(async () => ({ providerId: 'openai', state: 'bound', account: {
+    isDefault: false, number: 1, paused: false, status, ownerProviderId: 'openai-sub-1a2b3c4d',
+  } }));
+  h.subscriptionAccounts = { sessionAccount, onChanged: () => noOp };
+  const onSend = vi.fn().mockResolvedValue(true);
+  const route = { agentKind: 'codex' as const, model, providerId: 'openai', effort: null, fastMode: false };
+  render(
+    <SessionSubscriptionAccountProvider providerId="openai" deviceId={null} sessionId={`split-${status}`} nativeSessionId="native-old">
+      <ChatInput {...props} sessionId={`split-${status}`} deviceLinkDeviceId={null} initialModel={model}
+        initialProviderId="openai" runtimeEffective={route} onSend={onSend} />
+    </SessionSubscriptionAccountProvider>,
+  );
+  await act(async () => { h.editor!.commands.setContent('<p>Continue on my account</p>'); });
+  await waitFor(() => expect(sessionAccount).toHaveBeenCalled());
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
+  await waitFor(() => expect(send.disabled).toBe(blocked));
+  await act(async () => { fireEvent.click(send); });
+  if (blocked) {
+    expect(onSend).not.toHaveBeenCalled();
+    return;
+  }
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  // Sending keeps the task's own source; main resumes it on the bound account.
+  expect(onSend.mock.calls[0][6]).toMatchObject({ providerId: 'openai' });
+  expect(h.confirm).not.toHaveBeenCalled();
 });
 
 it('does not use baseline recovery to bypass a pending selection source check', async () => {
@@ -315,21 +443,29 @@ const queueShortcuts = [
   { platform: 'win32', metaKey: false, ctrlKey: true },
 ];
 
-it.each(queueShortcuts)('steers the sole queued message from the empty focused composer on $platform', async shortcut => {
+// The composer's send keys never reach into the queue: an empty document sends
+// nothing and steers nothing, whatever the follow-up default. Only the row's own
+// steer button / focused-row shortcut steers a queued message.
+it.each(queueShortcuts.flatMap(shortcut => (['queue', 'steer'] as const).flatMap(followUp =>
+  [{ ...shortcut, followUp, chord: 'modifier+Enter' }, { platform: shortcut.platform, metaKey: false, ctrlKey: false, followUp, chord: 'Enter' }],
+)))('does not implicitly steer the sole queued message from the empty composer ($chord, $followUp default, $platform)', async shortcut => {
   h.platform = shortcut.platform;
+  localStorage.clear();
+  _resetComposerFollowUpPreferenceForTests();
+  if (shortcut.followUp === 'steer') localStorage.setItem(COMPOSER_FOLLOW_UP_STORAGE_KEY, 'steer');
   h.localProviders = [sshNativeCodexProvider([sshModel('gpt-6-astra')])];
   const onQueueSteer = vi.fn().mockResolvedValue(true);
   const onSend = vi.fn().mockResolvedValue(true);
-  render(<ChatInput {...queueShortcutProps} onQueueSteer={onQueueSteer} onSend={onSend} />);
+  render(<ChatInput {...queueShortcutProps} isStreaming onQueueSteer={onQueueSteer} onSend={onSend} />);
   await waitFor(() => expect(h.editor).not.toBeNull());
   const editor = h.editor!.view.dom;
   editor.focus();
   expect(document.activeElement).toBe(editor);
   expect(h.editor!.getText()).toBe('');
 
-  await act(async () => { fireEvent.keyDown(editor, { key: 'Enter', code: 'Enter', ...shortcut }); });
+  await act(async () => { fireEvent.keyDown(editor, { key: 'Enter', code: 'Enter', metaKey: shortcut.metaKey, ctrlKey: shortcut.ctrlKey }); });
 
-  expect(onQueueSteer).toHaveBeenCalledExactlyOnceWith(queuedMessage.clientId);
+  expect(onQueueSteer).not.toHaveBeenCalled();
   expect(onSend).not.toHaveBeenCalled();
 });
 
@@ -389,7 +525,6 @@ it.each(queueShortcuts)('sends the visible recommendation ahead of a queued mess
 
 function QueueEditHarness({
   onCancel,
-  onRemove,
   onSubmit = async () => true,
   onStartVoiceConversation,
 }: {
@@ -454,6 +589,29 @@ it('sends a remote-only Codex model when the controller has no connected provide
   await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
   expect(onSend.mock.calls[0][1]).toBe('remote-only');
   expect(onSend.mock.calls[0][6]).toEqual(expect.objectContaining({ providerId: 'openai' }));
+});
+
+// #10084, unit through real ChatInput: a new task routed by a model group or plugin picks its own
+// model at send time, so the draft model having no connected source must not grey out Send or
+// stop Enter. Without a router the same draft stays blocked. The send callback rechecks the kept model.
+it.each([
+  ['model group', true, { modelGroups: { config: { routes: [] }, active: { type: 'route', id: 'r1' }, onSelect: noOp, onManage: noOp } }],
+  ['plugin model', true, { pluginModels: { models: [], active: { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' }, onSelect: noOp } }],
+  ['no router', false, {}],
+] as const)('new task with %s and a draft model without a connected source can send: %s', async (_name, sends, router) => {
+  const onSend = vi.fn().mockResolvedValue(true);
+  const view = render(<ChatInput {...props} sessionId={undefined} deviceLinkDeviceId={null}
+    initialModel="draft-only" initialEffort="low" onSend={onSend}
+    {...(router as Partial<ComponentProps<typeof ChatInput>>)} />);
+  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Route me</p>'); });
+  expect((screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement).disabled).toBe(!sends);
+  await act(async () => {
+    fireEvent.keyDown(view.container.querySelector('[contenteditable]')!, { key: 'Enter', code: 'Enter' });
+  });
+  if (!sends) return expect(onSend).not.toHaveBeenCalled();
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(h.confirm).not.toHaveBeenCalled();
 });
 
 // 回归：投影 effort 为 null（目录误判/不可调档）时选择器回落会话已持久化档位，
@@ -731,24 +889,17 @@ it.each([320, 480, 800])('preserves the model slot across hydration (width=%s)',
   const view = render(<ChatInput {...inputProps} />);
   const slot = view.container.querySelector('[data-session-model-slot]') as HTMLElement;
   expect(slot).not.toBeNull();
-  const geometry = slot.className;
+  const sendButton = screen.getByRole('button', { name: 'newChat.sendButton.send' });
   expect(slot.textContent).toBe('');
   expect(slot.querySelector('button, [tabindex]')).toBeNull();
   expect(screen.queryByTestId('model-selector')).toBeNull();
   view.rerender(<ChatInput {...inputProps} initialModel="gpt-6-astra" />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBe(slot);
-  if (narrowToolbar) {
-    expect(slot.className).toBe(geometry);
-  } else {
-    // Loaded wide toolbars must not inherit the loading placeholder's width.
-    expect(slot.classList.contains('w-[148px]')).toBe(false);
-    expect(slot.classList.contains('h-[30px]')).toBe(true);
-    expect(slot.classList.contains('min-w-0')).toBe(true);
-  }
+  expect(screen.getByRole('button', { name: 'newChat.sendButton.send' })).toBe(sendButton);
   expect(slot.contains(screen.getByTestId('model-selector'))).toBe(true);
   view.rerender(<ChatInput {...inputProps} />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBe(slot);
-  expect(slot.className).toBe(geometry);
+  expect(screen.getByRole('button', { name: 'newChat.sendButton.send' })).toBe(sendButton);
   expect(slot.textContent).toBe('');
   view.rerender(<ChatInput {...inputProps} hideRuntimeControls />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBeNull();
@@ -944,4 +1095,152 @@ it('keeps save/cancel when editing a queued companion message', async () => {
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.pendingQueue.editSaveAria' })); });
   expect(onSubmit).toHaveBeenCalledOnce();
   expect(onStartVoiceConversation).not.toHaveBeenCalled();
+});
+
+// Running-turn delivery: the follow-up preference picks queue/steer for the
+// button and the send key; the send shortcut only picks which key sends. Where
+// the task can be steered and Enter sends, modifier+Enter sends the other way.
+describe.each([
+  { followUp: 'queue', sendShortcut: 'enter', plain: 'queue', modifier: 'steer' },
+  { followUp: 'steer', sendShortcut: 'enter', plain: 'steer', modifier: 'queue' },
+  { followUp: 'queue', sendShortcut: 'modifier-enter', plain: null, modifier: 'queue' },
+  { followUp: 'steer', sendShortcut: 'modifier-enter', plain: null, modifier: 'steer' },
+] as const)('running follow-up delivery: $followUp default, $sendShortcut send key', ({ followUp, sendShortcut, plain, modifier }) => {
+  async function mountRunning() {
+    localStorage.clear();
+    _resetComposerFollowUpPreferenceForTests();
+    _resetComposerSendShortcutPreferenceForTests();
+    if (followUp === 'steer') localStorage.setItem(COMPOSER_FOLLOW_UP_STORAGE_KEY, 'steer');
+    if (sendShortcut === 'modifier-enter') localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    const onSend = vi.fn().mockResolvedValue(true);
+    render(<ChatInput {...companionProps()} sessionId="follow-up-delivery" isStreaming onSend={onSend} onQueueSteer={vi.fn()} />);
+    await act(async () => { h.editor!.commands.setContent('<p>Next step</p>'); });
+    return onSend;
+  }
+  const press = async (init: KeyboardEventInit) => {
+    await act(async () => { fireEvent.keyDown(h.editor!.view.dom, { key: 'Enter', ...init }); });
+  };
+  const modeOf = (onSend: ReturnType<typeof vi.fn>) => onSend.mock.calls.at(-1)?.[6]?.deliveryMode;
+
+  it('mouse send uses the selected mode', async () => {
+    const onSend = await mountRunning();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.' + followUp })); });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(modeOf(onSend)).toBe(followUp);
+  });
+
+  it('the send key uses the selected mode, modifier+Enter reverses it only with Enter as the send key, and the others keep their newline', async () => {
+    const onSend = await mountRunning();
+    const sendWith = async (init: KeyboardEventInit) => {
+      const before = onSend.mock.calls.length;
+      await act(async () => { h.editor!.commands.setContent('<p>Next step</p>'); });
+      await press(init);
+      return before;
+    };
+    let before = await sendWith({});
+    if (plain) {
+      await waitFor(() => expect(onSend).toHaveBeenCalledTimes(before + 1));
+      expect(modeOf(onSend)).toBe(plain);
+    } else {
+      expect(onSend).toHaveBeenCalledTimes(before);
+    }
+    before = await sendWith({ metaKey: true });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(before + 1));
+    expect(modeOf(onSend)).toBe(modifier);
+    // Shift never sends: Cmd+Shift+Enter and Shift+Enter send nothing.
+    before = await sendWith({ metaKey: true, shiftKey: true });
+    await press({ shiftKey: true });
+    expect(onSend).toHaveBeenCalledTimes(before);
+  });
+
+  it('does not send during IME composition', async () => {
+    const onSend = await mountRunning();
+    await press({ isComposing: true, metaKey: true });
+    await press({ isComposing: true });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+});
+
+it.each([
+  ['/help me', 'steer'],
+  ['/Users/me/project has a typo in this directory name', 'steer'],
+  ['/compact now', 'steer'],
+].flatMap(([text]) => [false, true].map((rosterReady) => ({ text, rosterReady }))))('forwards $text to the send-time resolver regardless of palette readiness=$rosterReady', async ({ text, rosterReady }) => {
+  localStorage.clear();
+  _resetComposerFollowUpPreferenceForTests();
+  localStorage.setItem(COMPOSER_FOLLOW_UP_STORAGE_KEY, 'steer');
+  roster.commands = rosterReady ? [
+    { kind: 'desktop', name: 'help', description: '' },
+    { kind: 'agent-builtin', name: 'compact', description: '' },
+  ] : null;
+  try {
+    const onSend = vi.fn().mockResolvedValue(true);
+    render(<ChatInput {...companionProps()} sessionId="follow-up-slash" isStreaming onSend={onSend} onQueueSteer={vi.fn()} />);
+    await act(async () => { h.editor!.commands.setContent(`<p>${text}</p>`); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.steer' })); });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0][6].deliveryMode).toBe('steer');
+  } finally {
+    roster.commands = null;
+  }
+});
+
+it('sends idle messages normally under the steer default', async () => {
+  localStorage.clear();
+  _resetComposerFollowUpPreferenceForTests();
+  localStorage.setItem(COMPOSER_FOLLOW_UP_STORAGE_KEY, 'steer');
+  const onSend = vi.fn().mockResolvedValue(true);
+  render(<ChatInput {...companionProps()} sessionId="follow-up-idle" onSend={onSend} onQueueSteer={vi.fn()} />);
+  await act(async () => { h.editor!.commands.setContent('<p>Plain idle message</p>'); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' })); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][6].deliveryMode).toBe('queue');
+});
+
+// 测试价值
+// - 生产入口与可观察结果：真实 ChatInput 的发送键提示（SendDeliveryTip）——打字时不出现；打开后点「对调」
+//   只改默认不发送；点另一行、修饰键+点击都只把这一条按另一种方式发出，默认不变。
+// - 规则依据：DESIGN.md §14.6「Send button delivery tip」；替换原先常驻提示条的开关用例。
+// - 现有覆盖缺口：上面的矩阵只覆盖发送键与默认点击，没有「这一条换一种发法」和「在提示里改默认」。
+// - 最小失败输入：running + 可插话 + 有草稿，右键打开提示后点对调 / 另一行；不可插话的界面右键不出提示。
+// - tier：unit/jsdom（悬停延迟与定位由 ui:check 的 companion-composer 页面覆盖）。
+it('offers both delivery modes for one message from the Send button tip, and changes the default without sending', async () => {
+  localStorage.clear();
+  _resetComposerFollowUpPreferenceForTests();
+  _resetComposerSendShortcutPreferenceForTests();
+  const onSend = vi.fn().mockResolvedValue(true);
+  const running = { ...companionProps(), sessionId: 'send-delivery-tip', isStreaming: true, onSend, onQueueSteer: vi.fn() };
+  const tip = () => screen.queryByRole('menu', { name: 'newChat.sendDelivery.menuAria' });
+  const draft = async (text: string) => { await act(async () => { h.editor!.commands.setContent(`<p>${text}</p>`); }); };
+  const modeOf = () => onSend.mock.calls.at(-1)?.[6]?.deliveryMode;
+  render(<ChatInput {...running} />);
+  await draft('Typing while it runs');
+  expect(tip()).toBeNull();
+
+  await act(async () => { fireEvent.contextMenu(screen.getByRole('button', { name: 'newChat.sendButton.queue' })); });
+  await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'newChat.sendDelivery.switchToSteer' })); });
+  expect(localStorage.getItem(COMPOSER_FOLLOW_UP_STORAGE_KEY)).toBe('steer');
+  expect(onSend).not.toHaveBeenCalled();
+  expect(tip()).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'newChat.sendButton.steer' })).toBeTruthy();
+
+  await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: /followUp\.options\.queue/ })); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(modeOf()).toBe('queue');
+  expect(localStorage.getItem(COMPOSER_FOLLOW_UP_STORAGE_KEY)).toBe('steer');
+  expect(tip()).toBeNull();
+
+  await draft('Second message');
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.steer' }), { ctrlKey: true }); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+  expect(modeOf()).toBe('queue');
+
+  cleanup();
+  render(<ChatInput {...running} onQueueSteer={undefined} />);
+  await draft('No steer surface');
+  await act(async () => { fireEvent.contextMenu(screen.getByRole('button', { name: 'newChat.sendButton.queue' })); });
+  expect(tip()).toBeNull();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.queue' }), { ctrlKey: true }); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3));
+  expect(modeOf()).toBe('queue');
 });

@@ -226,6 +226,10 @@ const GENERATED_DEFAULTS = {
     "light": "#059669",
     "dark": "#34D399"
   },
+  "remote-agent-net-accent": {
+    "light": "#7C5CFF",
+    "dark": "#A993FF"
+  },
   "usage-heatmap-high": {
     "light": "var(--process-agent-task-icon)",
     "dark": "var(--process-agent-task-icon)"
@@ -3187,8 +3191,8 @@ registerColor('button-secondary-pressed', {
   light: 'color-mix(in srgb, var(--button-secondary-hover) 90%, var(--text-primary))',
   dark: 'color-mix(in srgb, var(--button-secondary-hover) 90%, var(--text-primary))',
 }, 'DS-4 button/secondary pressed — 自 hover 再推 10%');
-// cta hover 沿用 §4 既有规定的 --accent-hover（其注释本写明 "CTA pressed/hover"），
-// 只给 Button 一个组件级名字，便于 DS-8 生成 component 层时落回 semantic。
+// cta 的 hover / pressed 由填充色按 §4 Filled button states 算出（2026-11-05 起不再沿用 --accent-hover；
+// 本地或导入主题设置的 accent-hover 只在加载时兼容，见 local-themes-normalize）。
 registerColor('button-cta-hover', {
   light: filledButtonHover('var(--accent-cta-bg-pure)'),
   dark: filledButtonHover('var(--accent-cta-bg-pure)'),
@@ -3293,3 +3297,4 @@ registerColor('plugin-identity-team-text', GENERATED_DEFAULTS["plugin-identity-t
 registerColor('plugin-identity-team-bg', GENERATED_DEFAULTS["plugin-identity-team-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
 registerColor('plugin-identity-custom-text', GENERATED_DEFAULTS["plugin-identity-custom-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
 registerColor('plugin-identity-custom-bg', GENERATED_DEFAULTS["plugin-identity-custom-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('remote-agent-net-accent', GENERATED_DEFAULTS["remote-agent-net-accent"], '远程连接拓扑：Agent-Net 协议标识(图标与文字); owner-approved 2026-11-13');

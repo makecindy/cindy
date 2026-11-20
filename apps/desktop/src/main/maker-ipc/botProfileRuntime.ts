@@ -1,4 +1,4 @@
-import { isChatOnlyGroupLane } from '../../shared/botGroupChat.js';
+import { groupLaneUsesChatWorkspace } from '../../shared/botGroupChat.js';
 import { buildTeammateGuide as buildBotCapabilityContextPrompt } from './teammateGuide.js';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { buildBotMemoryScopeKey, resolveMemoryScopeKey } from '@cindy/maker-core';
@@ -31,6 +31,8 @@ import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botI
 import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { botLearningTracker } from './botLearningTracker.js';
+import { unlinkedTeammateProjectMemoryDir } from './botProjectMemory.js';
+import { createProjectMemoryReceipts } from './botProjectLearning.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -538,7 +540,7 @@ export async function hydrateBotProfileRuntime(
     )
     .limit(1);
   if (!version) return null;
-  const chatOnly = row.role === 'group' && isChatOnlyGroupLane(row.routeKey);
+  const chatOnly = row.role === 'group' && groupLaneUsesChatWorkspace(row.routeKey ?? '');
   const config = normalizeBotToolCapabilities(chatOnly ? {
     toolCapabilityVersion: 1, memory: false, userContextSource: '', skills: [], skillMode: 'allowlist',
     mcpServers: [], mcpMode: 'allowlist', toolsets: [], toolsetMode: 'allowlist',
@@ -623,6 +625,8 @@ export async function hydrateBotProfileRuntime(
     && !path.resolve(opts.workingDir).startsWith(path.dirname(workspaceDir) + path.sep);
   const projectContext = !!workspaceDir && readBotProjectMode(config)
     && (ownerChat ? path.resolve(opts.workingDir) === workspaceDir : ownerGroupProjectLane);
+  // Only the teammate's own working directory discovers its skills and memory natively.
+  const nativeTeammateProject = projectContext && !ownerGroupProjectLane;
   const fullLane = ownerChat;
   // Bot Memory belongs to the Bot Home and is independent from Cindy's global
   // Maker Memory switch. The profile can still explicitly disable its own memory.
@@ -630,7 +634,8 @@ export async function hydrateBotProfileRuntime(
   // by the teammate's own memory setting rather than the global one.
   // Every V2 lane (group and plan lanes too, wherever they run) shares that one project memory.
   const projectMode = !!workspaceDir && readBotProjectMode(config);
-  if (projectMode && opts.id) botLearningTracker.markProjectTeammate(opts.id);
+  if (projectMode && opts.id) await botLearningTracker.prepareProjectTeammate(opts.id,
+    fullLane && config.memory !== false ? () => createProjectMemoryReceipts(workspaceDir) : undefined);
   // V2 (2026-11-10, owner): one capability set in every session of the teammate — its own chats,
   // group and IM lanes, 分工 — so the capability selection no longer narrows any of them. Its Skills
   // are the project's own; lanes still never take the owner's personal Skills, and a chat-only
@@ -819,7 +824,7 @@ export async function hydrateBotProfileRuntime(
       const own = await deps.listOwnSkills({ botId: row.botId });
       // V2: the teammate's Skills live in its project and load natively, and it
       // works like an ordinary task, so the teammate core Skill is not mounted.
-      const learned = projectContext ? [] : own.skills;
+      const learned = nativeTeammateProject ? [] : own.skills;
       const core = own.baseline && fullLane && !projectContext ? own.baseline : null;
       ownSkills = [...(core ? [core.skill] : []), ...learned];
       ownSkillPluginRoots = [
@@ -827,8 +832,7 @@ export async function hydrateBotProfileRuntime(
         ...(learned.length > 0 ? [own.pluginRoot] : []),
       ];
     } catch {
-      ownSkills = [];
-      ownSkillPluginRoots = [];
+      if (!nativeTeammateProject) skillCatalogAvailable = false;
     }
   }
   let mcpCatalog: BotMcpCatalogItem[] = [];
@@ -911,7 +915,10 @@ export async function hydrateBotProfileRuntime(
   // 可在桌面/后台轮次由 feishuTransportRouting.ts 查询 canonical 归属, 经伙伴可用连接
   // 通知已绑定主人; 伙伴连接不可用则拒绝发送, 不回落个人 bot, 也不授予轮次内 API 权限。
   const boundImChannels: readonly BotImChannel[] =
-    fullLane ? (deps.listBotImChannels?.({ botId: row.botId }) ?? []) : [];
+    fullLane ? (deps.listBotImChannels?.({ botId: row.botId }) ?? [])
+      // A scheduler may open this persisted lane before the chat provides vendor options.
+      // Mount the server only. Calls still require a current inbound chat scope.
+      : row.role === 'channel' && row.routeKey?.startsWith('im:imessage:') ? ['imessage'] : [];
   if (boundImChannels.length > 0) {
     opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_IM_CHANNELS_VENDOR_KEY]: [...boundImChannels] };
   }
@@ -1048,6 +1055,12 @@ export async function hydrateBotProfileRuntime(
     ...(projectContext ? { projectMode: true } : {}),
     ...(teammates.length > 0 ? { teammates } : {}),
     contextSections: [
+      ...(ownerGroupProjectLane && projectContext && opts.makerMemoryEnabled ? [
+        `Use the current project's memory tools for group project decisions. For this teammate's own preferences and reusable experience, read or update the Markdown records in ${JSON.stringify(unlinkedTeammateProjectMemoryDir(workspaceDir))} with file tools. Read its README.md before maintaining it.`,
+      ] : []),
+      ...(projectMode && config.memory === false ? [
+        `Memory is disabled for this Cindy task. Do not read, search, save or maintain memories in ${JSON.stringify(path.join(workspaceDir, '.cindy', 'memory'))}, even when project instructions describe a memory route. This runtime setting overrides the project's memory instructions.`,
+      ] : []),
       buildBotProfileContextPrompt(profile.displayName),
       // Hermes-style Bot Mode is a property of the owner's Bot Chat (the permanent
       // Chat and its private topics). Delegation children keep Cindy's normal

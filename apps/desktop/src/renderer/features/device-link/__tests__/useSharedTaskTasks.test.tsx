@@ -5,12 +5,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { notifySharedTaskMembershipChanged, useSharedTaskTasks } from '../useSharedTaskTasks';
+import { acknowledgeSharedTaskCompletion, applyRemoteSessionActivity, clearRemoteSessionActivity, getRemoteSessionActivity } from '../remoteSessionActivityStore';
 
 const state = vi.hoisted(() => ({
   account: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), invoke: vi.fn(),
   subscribe: vi.fn(), unsubscribe: vi.fn(), setSessions: vi.fn(), removeDevice: vi.fn(),
   disconnected: vi.fn(), bind: vi.fn(), reset: vi.fn(),
   rawSessions: vi.fn(), status: undefined as undefined | ((state: { status: string }) => void),
+  peerReset: undefined as undefined | ((event: { deviceId: string; offline?: boolean }) => void),
+  peerReopened: undefined as undefined | ((event: { deviceId: string }) => void),
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ isAuthenticated: true, dataOwnerId: 'guest', dataOwnerRecoveryEpoch: 0 }) }));
 vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { findById: vi.fn() } }));
@@ -29,6 +32,7 @@ async function render() { await act(async () => root.render(createElement(Probe)
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.useFakeTimers(); vi.resetAllMocks(); setDataOwnerGeneration('guest');
+  clearRemoteSessionActivity();
   state.account.mockImplementation(async command => command.action === 'list' ? [task] : {});
   state.openLink.mockResolvedValue(undefined); state.closeLink.mockResolvedValue(undefined);
   state.subscribe.mockResolvedValue(undefined); state.unsubscribe.mockResolvedValue(undefined);
@@ -37,6 +41,8 @@ beforeEach(() => {
     openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke,
     subscribe: state.subscribe, unsubscribe: state.unsubscribe,
     onStatusChanged: (listener: typeof state.status) => { state.status = listener; return () => { state.status = undefined; }; },
+    onPeerLinkReset: (listener: typeof state.peerReset) => { state.peerReset = listener; return () => { state.peerReset = undefined; }; },
+    onPeerLinkReopened: (listener: typeof state.peerReopened) => { state.peerReopened = listener; return () => { state.peerReopened = undefined; }; },
   } } });
   root = createRoot(document.createElement('div'));
 });
@@ -59,6 +65,38 @@ it('keeps ordinary shared task restoration unchanged', async () => {
   expect(state.setSessions).toHaveBeenCalledExactlyOnceWith(peer, task.title, [session]);
   expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'leave' }));
   expect(state.closeLink).not.toHaveBeenCalled();
+});
+
+// Unit regression for #11120: prior tests never replayed an indistinguishable
+// legacy completion after a real hook connection-reset callback. Exercise the
+// activity store, not a mocked cleanup call; unrelated peers and tokened turns survive.
+it.each(['offline', 'reset', 'reopened'])('forgets only legacy read completions on peer %s', async event => {
+  state.invoke.mockResolvedValue({ id: task.sessionId, source: 'desktop' });
+  await render();
+  const other = sharedTaskHostPeer('other-share', 'other-host');
+  const legacy = { sessionId: task.sessionId, phase: 'completed', compactDetail: '', attention: true };
+  const tokened = { ...legacy, sessionId: 'tokened', completionToken: 'turn-1' };
+  const running = { ...legacy, sessionId: 'running', phase: 'running', attention: false };
+  for (const [device, activity] of [[peer, legacy], [other, legacy], [peer, tokened], [peer, running]] as const) {
+    applyRemoteSessionActivity(device, activity);
+    acknowledgeSharedTaskCompletion(activity.sessionId, device);
+  }
+  applyRemoteSessionActivity(peer, legacy);
+  expect(getRemoteSessionActivity(task.sessionId, peer)).toBeUndefined();
+  await act(async () => {
+    if (event === 'reopened') state.peerReopened?.({ deviceId: peer });
+    else state.peerReset?.({ deviceId: peer, offline: event === 'offline' });
+  });
+  applyRemoteSessionActivity(peer, legacy);
+  applyRemoteSessionActivity(other, legacy);
+  applyRemoteSessionActivity(peer, tokened);
+  expect(getRemoteSessionActivity(task.sessionId, peer)?.attention).toBe(true);
+  expect(getRemoteSessionActivity(task.sessionId, other)).toBeUndefined();
+  expect(getRemoteSessionActivity('tokened', peer)).toBeUndefined();
+  expect(getRemoteSessionActivity('running', peer)?.phase).toBe('running');
+  acknowledgeSharedTaskCompletion(task.sessionId, peer);
+  applyRemoteSessionActivity(peer, legacy);
+  expect(getRemoteSessionActivity(task.sessionId, peer)).toBeUndefined();
 });
 
 it('leaves a known hidden membership without waiting for its offline host', async () => {

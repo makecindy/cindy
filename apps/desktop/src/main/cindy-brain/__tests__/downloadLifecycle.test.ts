@@ -98,6 +98,7 @@ it.each([false, true])('uninstall cannot delete private data before MCP exits (f
     run({ uninstall: async () => { events.push('package-removed'); return {}; } }) };
   const { uninstallGhostAndCleanupLocked } = createUninstall({
     beginGhostMutation: () => noop, requireGhostAvailableForActiveSession: noop,
+    withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
     findGhostForInstanceId: () => ghost, getBotAuthorizationService: () => null,
     getGhostManager: () => manager, getGhostRuntime: () => ({ stop: noop }),
     pluginDeviceSync: { beginMutation: () => noop },
@@ -108,7 +109,7 @@ it.each([false, true])('uninstall cannot delete private data before MCP exits (f
     ownerScopedUserDataPath: (...parts: string[]) => '/owner/' + parts.join('/'), activeOwnerScopeKey: () => 'owner',
     pluginTaskUninstaller: async (_id: string, run: () => Promise<void>) => run(), currentPluginUsageService: () => null,
     pluginDownloads: { removePlugin: async () => {} }, removeGhostSecrets: noop,
-    removeGhostKvBestEffort: noop, createGhostKvStore: () => ({}), publishedModelsStore: () => ({}), log: { warn: noop, info: noop },
+    removeGhostKvBestEffort: noop, createGhostKvStore: () => ({}), publishedModelsStore: () => ({}), publishedHarnessesStore: () => ({}), log: { warn: noop, info: noop },
     fs: { promises: { rm: vi.fn(async (dir: string) => { expect(dir).toBe('/owner/ghost-fs/fixture'); events.push('data-removed'); }) } },
     getGhostHandoffStore: () => ({ removeInstance: async (id: string) => { expect(id).toBe('fixture'); events.push('handoff-removed'); } }),
     getGhostLibrarySlot: () => { throw new Error('no library'); },

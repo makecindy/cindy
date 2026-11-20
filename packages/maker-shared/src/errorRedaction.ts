@@ -80,7 +80,7 @@ export function redactSensitiveTextDeep(input: unknown): unknown {
 }
 
 export interface NonSecretErrorSignals {
-  errorStatus?: 401 | 429 | 529;
+  errorStatus?: 401 | 403 | 429 | 529;
   usageLimit: boolean;
 }
 
@@ -118,16 +118,22 @@ export function matchesDeterministicUsageExhaustionText(input: string): boolean 
  */
 export function extractNonSecretErrorSignals(input: string): NonSecretErrorSignals {
   const statusMatch =
-    /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
+    /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|403|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
       input,
-    ) ?? /\brequest\s+rejected\s*\(\s*(401|429|529)\s*\)/i.exec(input);
+    ) ?? /\brequest\s+rejected\s*\(\s*(401|403|429|529)\s*\)/i.exec(input);
   const usageLimit =
     /(?:^|[\s,{;])(?:rate\s+limit(?:ed|s|ing)?|usage\s+limit(?:ed|s|ing)?|too\s+many\s+requests|quota(?:["']?\s*[:=]\s*["']?|\s+)(?:exhausted|exceeded)|(?:["']?(?:code|type|error|message)["']?\s*[:=]\s*["']?)?(?:rate_limit_exceeded|insufficient_quota|exceeded[-_ ]?budget|budget[-_ ]?exceeded))\b/i.test(
       input,
     );
 
+  // Do not promote an unstructured permission denial into the newly supported
+  // provider 403 signal. Callers still preserve an explicit SDK errorStatus.
+  const errorStatus = statusMatch
+    && !(statusMatch[1] === '403' && /permission denied/i.test(input))
+    ? Number(statusMatch[1]) as NonSecretErrorSignals['errorStatus']
+    : undefined;
   return {
-    ...(statusMatch ? { errorStatus: Number(statusMatch[1]) as 401 | 429 | 529 } : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
     usageLimit,
   };
 }
@@ -261,6 +267,8 @@ export function canOfferCodexHistoryRecovery(input: {
 }
 
 const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'PLUGIN_ENGINE_RESUME_UNAVAILABLE',
+  'PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED',
   'SUBSCRIPTION_ACCOUNT_LIMITED',
   'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED',
   'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
@@ -274,10 +282,37 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
   'DEVICE_LINK_MEDIA_ACCESS_DENIED',
   'AUTO_REVIEW_UNAVAILABLE',
+  'AUTO_REVIEW_NO_AVAILABLE_MODEL',
   'AUTO_REVIEW_CONFIRM_UNDELIVERED',
   'MCP_APPROVAL_AUTO_BLOCKED',
   'MCP_APPROVAL_CONFIRMATION_TIMEOUT',
   'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE',
+]);
+
+// Presentation aliases for #7356's fixed Host reasons. Match the entire notice,
+// never a substring in arbitrary reviewer/provider text. Only the alias enters
+// translated copy; the original message remains available in diagnostic details.
+const MCP_AUTO_BLOCK_PREFIX = 'Automatic approval review blocked this tool call. No user rejection was received. ';
+const MCP_AUTO_BLOCK_REASONS = new Map<string, string>([
+  ...[
+    'File-write review needs a concrete destination path.',
+    'Command review needs concrete command text.',
+    'Network review needs a concrete destination or query.',
+    'Unknown actions cannot be reviewed without concrete action details.',
+    'File-change review needs concrete paths.',
+  ].map(reason => [reason, 'MISSING_EVIDENCE'] as const),
+  ['User instructions changed; retry against the current request.', 'INSTRUCTIONS_CHANGED'],
+  ['User instructions changed; retry against the latest authorization.', 'INSTRUCTIONS_CHANGED'],
+  ['Current user instructions are not synchronized with task history; automatic authorization is blocked.', 'INSTRUCTIONS_CHANGED'],
+  ['Directory permissions changed; retry with the current scope.', 'PERMISSIONS_CHANGED'],
+  ['Delegated authorization changed; retry against the current scope.', 'AUTHORIZATION_CHANGED'],
+  ['Plugin or task Auto authorization is no longer active.', 'AUTHORIZATION_INACTIVE'],
+  ['No user request authorizes this action; only reads may run without one.', 'NO_USER_AUTHORIZATION'],
+  ['Team plan exceeds the supported size; automatic authorization is blocked.', 'PLAN_TOO_LARGE'],
+  ['Coordinator does not match its registered route.', 'PLAN_MISMATCH'],
+  ['Worker does not match the active registered plan.', 'PLAN_MISMATCH'],
+  ['Task working directory changed.', 'WORKING_DIRECTORY_CHANGED'],
+  ['Host-registered delegated task scope is missing or invalid.', 'DELEGATION_MISSING'],
 ]);
 
 /** Parse the runtime envelope, including Electron and device-link IPC wrappers.
@@ -289,11 +324,21 @@ export function parseAgentErrorCode(message: string): { code: string; fallback: 
   // `LAZY_CREATE_FAILED:` envelope. Keep accepting that wrapper here so the
   // renderer can still select the actionable remote-provider guidance instead
   // of collapsing the whole failure to the generic "reply failed" card.
-  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
+  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:(?:LAZY_CREATE_FAILED|REHYDRATE_FAILED):\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
   if (!match || (!/^REMOTE_[A-Z_]+$/.test(match[1]) && !AGENT_CHAT_ERROR_CODES.has(match[1]))) {
     return null;
   }
-  return { code: match[1], fallback: match[2] || message };
+  // Released guest hosts and Pi use INVALID for a specific native-history
+  // rejection. Refine only its presentation; keep the wire error and ownership
+  // check intact. Other INVALID errors must not suggest a history recovery.
+  let code = match[1] === 'REMOTE_AGENT_INVALID'
+    && /^this conversation cannot be resumed on this computer\.?$/i.test(match[2].trim())
+    ? 'REMOTE_AGENT_RESUME_UNAVAILABLE' : match[1];
+  if (code === 'MCP_APPROVAL_AUTO_BLOCKED' && match[2].startsWith(MCP_AUTO_BLOCK_PREFIX)) {
+    const reason = MCP_AUTO_BLOCK_REASONS.get(match[2].slice(MCP_AUTO_BLOCK_PREFIX.length).trim());
+    if (reason) code = `${code}_${reason}`;
+  }
+  return { code, fallback: match[2] || message };
 }
 
 /**
@@ -304,7 +349,7 @@ export function parseAgentErrorCode(message: string): { code: string; fallback: 
  */
 export function isRemoteAgentResumeRejectedError(message: string): boolean {
   const parsed = parseAgentErrorCode(message);
-  return parsed?.code === 'REMOTE_AGENT_INVALID'
+  return parsed?.code === 'REMOTE_AGENT_RESUME_UNAVAILABLE'
     && parsed.fallback.trim() === 'this conversation cannot be resumed on this computer';
 }
 
@@ -315,7 +360,9 @@ export function requiresAgentErrorConfigurationChange(message: string): boolean 
     || code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
     || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
     || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
-    || code === 'DEVICE_LINK_CONTROL_DISABLED';
+    || code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
+    || code === 'DEVICE_LINK_CONTROL_DISABLED'
+    || code === 'REMOTE_AGENT_RESUME_UNAVAILABLE';
 }
 
 /** Presentation only: startup failures must not be mistaken for a new retry policy.

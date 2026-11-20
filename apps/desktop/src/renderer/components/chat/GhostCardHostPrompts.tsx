@@ -150,7 +150,7 @@ export function GhostCardLinkConfirm({
         onOpenAutoFocus={dialog.onOpenAutoFocus}
         onCloseAutoFocus={dialog.onCloseAutoFocus}
       >
-        <AlertDialog.Title asChild><div className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>
+        <AlertDialog.Title asChild><div className="text-13 font-medium" style={{ color: 'var(--text-primary)' }}>
           {t('chat.ghostCall.linkConfirmTitle')}
         </div></AlertDialog.Title>
         <AlertDialog.Description asChild><div className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>

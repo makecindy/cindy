@@ -26,7 +26,6 @@ export interface McpAppsServicePorts {
   review?(sessionId: string, serverId: string, tool: string, args: Record<string, unknown>,
     originDescription?: string, toolDefinition?: Pick<Tool, 'name' | 'description' | 'inputSchema'>): Promise<AutoReviewDecision>;
   allowPendingPage?(sessionId: string, requestId: string): void;
-  authorizeGlobalTool?: McpAppsHostDeps['authorizeTool'];
   send: McpAppsHostDeps['sendMessage'];
   pluginFiles?: McpAppsHostDeps['pluginFiles'];
   downloadFile?: McpAppsHostDeps['downloadFile'];
@@ -149,10 +148,6 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
       }
     },
     authorizeTool: async (sessionId, tool, args, signal, source) => {
-      if (sessionId === null) {
-        if (!ports.authorizeGlobalTool) throw new Error('MCP_APP_OWNER_ONLY');
-        return ports.authorizeGlobalTool(sessionId, tool, args, signal, source);
-      }
       const { owner, session } = await assertSession(sessionId);
       signal.throwIfAborted();
       if (session.planModeEnabled || session.permissionMode === 'plan')

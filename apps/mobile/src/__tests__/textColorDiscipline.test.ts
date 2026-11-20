@@ -51,7 +51,11 @@ const SEMANTIC_TEXT_COLORS = [
 ];
 // 规范逐项登记的精确用法(文件 + 样式名 + token),不属于存量。新增例外先改规范,再加到这里。
 const REGISTERED_TEXT_COLOR_USES = new Set([
+  // Approved installation-source exceptions; mobile-design-guide §3.
+  'src/session/McpAppCard.tsx inline warningFg',
   // DESIGN.md quota colors: model-picker reset durations share the existing pace/time rule.
+  'src/widgets/UsageQuotaColumns.tsx quotaResetWarn quotaBarWarn',
+  'src/widgets/UsageQuotaColumns.tsx quotaResetCrit quotaBarCrit',
   'src/session/UnifiedModelPickerView.tsx quotaResetWarn quotaBarWarn',
   'src/session/UnifiedModelPickerView.tsx quotaResetCrit quotaBarCrit',
   'src/session/UnifiedModelPickerView.ios.tsx foregroundStyle quotaBarWarn',

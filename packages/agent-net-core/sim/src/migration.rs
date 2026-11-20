@@ -54,6 +54,8 @@ pub struct Scenario {
     pub download_bytes: u64,
     pub attack: Attack,
     pub time_limit_us: u64,
+    /// 服务端单独的发包上限（新旧版本混用）；不给时两端都按 `config`。
+    pub server_send_packet_size: Option<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -78,6 +80,8 @@ pub struct Report {
     pub connection_ids: [BTreeMap<u64, BTreeSet<u32>>; 2],
     /// 作废以后才到的旧号包，由分发层直接丢弃。
     pub retired_packets: u64,
+    /// 客户端、服务端各自发出的最长的包，字节。
+    pub largest_packet: [usize; 2],
 }
 
 /// 两个方向：0 是上传（客户端写、服务端读），1 是下载。
@@ -152,7 +156,11 @@ fn run_with_ids(scenario: &Scenario, rotate_ids: bool) -> Report {
     let seed = scenario.seed;
     let listener_crypto = TestCrypto::<AesGcm>::from_seed(seed.wrapping_mul(2).wrapping_add(2));
     let client_config = Config { connection_id: seed as u32 ^ 0xC11E_0001, ..scenario.config.clone() };
-    let server_config = Config { connection_id: seed as u32 ^ 0x5E7F_0002, ..scenario.config.clone() };
+    let server_config = Config {
+        connection_id: seed as u32 ^ 0x5E7F_0002,
+        send_packet_size: scenario.server_send_packet_size.unwrap_or(scenario.config.send_packet_size),
+        ..scenario.config.clone()
+    };
     let mut client =
         SecureConnection::connect(TestCrypto::<AesGcm>::from_seed(seed.wrapping_mul(2).wrapping_add(1)), client_config.clone(), PROLOGUE, &listener_crypto.public(), &[], 0)
             .expect("connect");
@@ -238,6 +246,7 @@ fn run_with_ids(scenario: &Scenario, rotate_ids: bool) -> Report {
         }
 
         while let Some((size, path)) = client.poll_transmit_via(now, &mut buffer) {
+            report.largest_packet[0] = report.largest_packet[0].max(size);
             let packet = buffer[..size].to_vec();
             if packet[0] & 0xE0 == 0xA0 && let Some(id) = destination_id(&packet) {
                 report.connection_ids[0].entry(address).or_default().insert(id);
@@ -290,6 +299,7 @@ fn run_with_ids(scenario: &Scenario, rotate_ids: bool) -> Report {
         }
         if let Some(server) = &mut server {
             while let Some((size, path)) = server.poll_transmit_via(now, &mut buffer) {
+                report.largest_packet[1] = report.largest_packet[1].max(size);
                 if buffer[0] & 0xE0 == 0xA0 && path != ATTACKER && let Some(id) = destination_id(&buffer[..size]) {
                     report.connection_ids[1].entry(path).or_default().insert(id);
                 }
@@ -460,5 +470,6 @@ pub fn random_scenario(seed: u64) -> Scenario {
         attack,
         // 和明文矩阵一样只按有没有进展判卡死：让路模式在丢包三成的路径上本来就极慢，那不是换地址的问题。
         time_limit_us: 86_400_000_000,
+        server_send_packet_size: None,
     }
 }

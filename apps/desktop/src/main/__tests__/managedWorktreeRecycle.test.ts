@@ -13,6 +13,7 @@ const query = vi.hoisted(() => vi.fn());
 const git = vi.hoisted(() => vi.fn());
 
 vi.mock('electron', () => ({ app: { getPath: (name: string) => name === 'appData' ? path.join(state.root, 'app-data') : (state.userData || state.root) } }));
+vi.mock('../userDataPath', () => ({ getUserDataDir: () => state.userData || state.root, getAppDataDir: () => path.join(state.root, 'app-data') }));
 vi.mock('../worktree/worktreeStore', () => ({
   get: (id: string) => state.registry.get(id) ?? null,
   getAll: () => [...state.registry.values()], getAllPaths: () => [...state.registry.values()].map((m) => m.path),
@@ -80,6 +81,16 @@ describe('shared worktree recycling', () => {
     await expect(checkpointWorktreeForReuse(meta)).rejects.toThrow('recycling is paused');
     expect(snapshot).toHaveBeenCalledTimes(3);
     expect((await fs.stat(meta.path)).isDirectory()).toBe(true);
+    expect(state.registry.has(meta.sessionId)).toBe(true);
+  });
+
+  it.each(['owner', 'borrower'] as const)('preserves uncommitted files across later recycle attempts after %s project removal', async (role) => {
+    await requestWorktreeRecycle(meta.sessionId);
+    await requestWorktreeRecycle(role === 'owner' ? meta.sessionId : 'borrower', [meta.path], 'keep');
+    await requestWorktreeRecycle(meta.sessionId);
+    expect((await readRecycleRecord(meta.path))?.retryPolicy?.state).toBe('kept');
+    expect(await recycle()).toBe(false);
+    expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
     expect(state.registry.has(meta.sessionId)).toBe(true);
   });
 

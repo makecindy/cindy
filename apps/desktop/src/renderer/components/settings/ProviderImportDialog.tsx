@@ -69,7 +69,6 @@ export function ProviderImportFileButton({ onImported }: { onImported: (id: stri
         {t('settings.providers.import.fromFile')}
       </Button>
       <ConfirmDialog
-        presentation="standard"
         open={open}
         onOpenChange={(next) => { if (!busyRef.current) setOpen(next); }}
         maxWidth={560}
@@ -294,8 +293,9 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
         );
         onDone(result.providerId);
       }
-    } catch {
-      if (alive.current) toast.error(t('settings.providers.import.confirmFailed'));
+    } catch (error) {
+      if (alive.current && extractIpcError(error)?.code !== 'MUTATION_CANCELLED')
+        toast.error(t('settings.providers.import.confirmFailed'));
     } finally {
       savingRef.current = false;
       if (alive.current) setSaving(false);
@@ -318,7 +318,6 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
   return (
     <>
       <ConfirmDialog
-        presentation="standard"
         open={busyCount === null}
         maxWidth={600}
         onOpenChange={(open) => {
@@ -430,7 +429,6 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
         }
       />
       <ConfirmDialog
-        presentation="standard"
         open={busyCount !== null}
         zIndex={10002}
         onOpenChange={(open) => {
@@ -536,7 +534,13 @@ export function ProviderImportBatchDialog({ importIds, onClose, onDone }: {
             patchRow(row.id, { status: result.modelsPending ? 'modelsPending' : 'saved', selected: false });
           } else patchRow(row.id, { status: 'manual', selected: false });
         } catch (error) {
-          if (alive.current) patchRow(row.id, { status: row.preview?.localSource && extractIpcError(error)?.code === 'PRECONDITION_FAILED' ? 'sourceChanged' : 'failed', ...(row.preview?.localSource && extractIpcError(error)?.code === 'PRECONDITION_FAILED' ? { selected: false } : {}) });
+          if (alive.current) {
+            const code = extractIpcError(error)?.code;
+            if (code === 'MUTATION_CANCELLED') patchRow(row.id, { status: 'ready', selected: false });
+            else if (row.preview?.localSource && code === 'PRECONDITION_FAILED')
+              patchRow(row.id, { status: 'sourceChanged', selected: false });
+            else patchRow(row.id, { status: 'failed' });
+          }
         } finally {
           if (!alive.current) void window.electronAPI.maker.cancelProviderImport(row.id).catch(() => undefined);
         }
@@ -555,7 +559,6 @@ export function ProviderImportBatchDialog({ importIds, onClose, onDone }: {
   />;
 
   return <ConfirmDialog
-    presentation="standard"
     open
     maxWidth={600}
     title={t('settings.providers.import.batchTitle', { count: rows.length })}

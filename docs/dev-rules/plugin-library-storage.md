@@ -4,6 +4,13 @@
 > **读取时机**：新增或修改 library 能力（持久作品库）、binding / 目录选择、迁移、
 > 回收站删除、SQLite 语句门、面板 `/library/` 投影、会话级只读 extraDirs 注入，
 > 或任何触碰 `libraries/` / `libraries-binding.json` / `libraries-trash/` 落盘布局的改动之前
+> **适用路径**：`apps/desktop/src/main/cindy-brain/**/{library,ghostLibrary}*`、
+> `apps/desktop/src/main/maker-ipc/**/libraryExtraDir*`、
+> `apps/desktop/src/renderer/features/plugin/GhostLibrarySection.tsx`、
+> `packages/maker-core/src/agents/shared/**/library-native-read*`、
+> `apps/desktop/vite.library-db-worker.config.ts`、
+> `apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-files-and-library.md`、
+> `apps/desktop/src/main/cindy-brain/**/{fsSlot,pickSlot,storageService}*`
 
 `library: true` 给插件一个**用户作品级**的持久存储区，与 `fs: true` 私有储物柜
 （256MiB/2000 文件配额、卸载即回收）是两个语义：不受配额约束（只受磁盘保留
@@ -187,6 +194,16 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
       'saveAs',
     ) === 'unknown'
     ```
+
+## 跨插件副本与统一存储 seam
+
+`storageService.ts` 的 `HostStorageProvider` 统一路由已有 KV、fs:data、Library、handoff 和媒体，
+`storageProviders.ts` 只做适配；Library 的 binding、SQL、原子写、迁移和卸载不删语义保持。
+整体安装批准有效且启用的插件声明 `storage` 后调用 helper `storage_request`，不追加组批准，不能代报调用方或直接读另一个实例。
+分享原子内容快照时，不再弹调用确认；宿主核对双方与实际大小，复核源摘要后调用原 handoff.import；
+目标必须同账号本机、namespace 已确认且同组织范围。个人 root/local 属个人范围。
+接收方拿到自己的 handoff 引用，不获得源 Library 根或后续读取权。准备快照期间不持安装迁移锁，
+最终写入短暂复用 handoff hold，IO 失败保留结果未知语义及原 owner 根补偿。作者参数见 §4.10.4。
 
 ## Review 清单
 

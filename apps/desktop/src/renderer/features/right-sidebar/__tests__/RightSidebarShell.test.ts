@@ -72,6 +72,7 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 import { RightSidebarShell } from '../RightSidebarShell';
 import '../plugins/plugin-task';
 import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
+import { InlineHtmlPreview } from '../plugins/file-browser/InlineHtmlPreview';
 import type { WebBrowserState } from '../plugins/web-browser';
 import type { TabKindBodyProps } from '../types';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
@@ -469,6 +470,56 @@ describe('RightSidebarShell empty state', () => {
     expect(closeOthers.getAttribute('data-disabled')).not.toBeNull();
     left.unmount();
     right.unmount();
+  });
+
+  // #11392, unit: keep the actual preview's DOM in place across tasks and
+  // release it under the same memory pressure as an ordinary browser page.
+  it('preserves an interactive file preview across tasks until its guest is evicted', async () => {
+    const report = vi.fn(async () => true);
+    Object.assign(window.electronAPI.rsbBrowserBridge, { reportPreviewOpener: report });
+    registerTabKind({
+      kind: 'file-browser', menu: { kind: 'file-browser', labelKey: 'files', icon: Globe, order: 1, enabled: true },
+      TabPillTitle: () => createElement('span', null, 'files'),
+      TabBody: ({ ctx, active, shellVisible }: TabKindBodyProps) => createElement(InlineHtmlPreview, {
+        sessionId: ctx.sessionId, tabId: ctx.tabId, workdir: ctx.workdir, relPath: 'form.html',
+        active: active === true && shellVisible !== false, deviceId: null,
+      }), defaultState: () => ({}),
+    });
+    tabsIpc.list.mockImplementation(async ({ sessionId }: { sessionId: string }) => sessionId === 'task-a'
+      ? { tabs: [{ id: 'form', kind: 'file-browser', state: {} }], activeTabId: 'form' }
+      : { tabs: [], activeTabId: null });
+    const shell = (sessionId: string) => createElement(RightSidebarShell, { sessionId, workdir: '/docs', remoteHostId: null, isMac: true });
+    const view = render(shell('task-a'));
+    try {
+      await waitFor(() => expect(view.container.querySelector('webview')?.getAttribute('src')).toContain('form.html'));
+      const entry = browserWebviewPool.peek('form')!;
+      Object.assign(entry.webview, { getWebContentsId: () => 78 });
+      fireEvent(entry.webview, new Event('did-attach'));
+      expect(report).toHaveBeenCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: true });
+      const slot = entry.wrapper.parentElement;
+      const observer = new MutationObserver(() => {});
+      observer.observe(view.container, { childList: true, subtree: true });
+      view.rerender(shell('task-b'));
+      expect([...observer.takeRecords()].flatMap(record => [...record.removedNodes]).some(node => node.contains(entry.webview))).toBe(false);
+      expect(entry.wrapper.isConnected).toBe(true);
+      expect(report).toHaveBeenLastCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: false });
+      view.rerender(shell('task-a'));
+      expect(report).toHaveBeenLastCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: true });
+      expect(view.container.querySelector('webview')).toBe(entry.webview);
+      expect(entry.wrapper.parentElement).toBe(slot);
+      observer.disconnect();
+      view.rerender(shell('task-b'));
+      act(() => { for (let i = 0; i < 5; i++) browserWebviewPool.acquire('pressure-' + i); });
+      expect(entry.wrapper.isConnected).toBe(false);
+      expect(browserWebviewPool.peek('form')).toBeNull();
+      view.rerender(shell('task-a'));
+      await waitFor(() => expect(view.container.querySelector('webview')?.getAttribute('src')).toContain('form.html'));
+      expect(browserWebviewPool.peek('form')?.webview).not.toBe(entry.webview);
+    } finally {
+      view.unmount();
+      browserWebviewPool.releaseAll();
+      unregisterTabKind('file-browser');
+    }
   });
 
   it.each([
@@ -905,13 +956,13 @@ describe('RightSidebarShell empty state', () => {
     const ui = await import('@/cindy-brain/PluginUiView');
     const resource = vi.spyOn(ui, 'PluginUiView').mockImplementation(() => createElement('div', { 'data-testid': 'resource-task-body' }));
     try {
-      const { ghostHostUiApprovalTokens } = await import('../../../../shared/ghost');
+
       const ghost = { enabled: true, dir: '/fixture/planner', uiCapabilityApproved: true,
         approval: { state: 'approved', revision: 'one' }, manifest: { id: 'planner', name: 'Planner', mcpApps: {
           ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
           host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'task' }] },
-        } }, approvedHostUi: [] as string[] };
-      ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest as never);
+        } } };
+
       installedGhostsMock.list = [ghost];
       tabsIpc.list.mockResolvedValueOnce({ tabs: [{ id: 'resource', kind: 'plugin-task', state: { instanceId: 'planner', resourceViewId: 'board' } }], activeTabId: 'resource' });
       const props = { sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, deviceLinkDeviceId: null as string | null, isMac: true };

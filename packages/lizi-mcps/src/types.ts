@@ -301,6 +301,7 @@ export interface SlackHookMcpDeps {
  * @cindy/maker-scheduler still has zero runtime deps per Phase 1).
  */
 export interface SchedulerMcpDeps {
+  getSessionProject?: (sessionId: string) => Promise<{ projectDir: string | null; remoteHostId: string | null }>;
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   /** Live per-call check (Bot main tasks may change automations only on their owner's own turn). */
   authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;
@@ -642,6 +643,11 @@ export type ControlResult<T extends object = object, E extends string = never> =
  * LLM tool calls to fail zod enum validation.
  */
 export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi';
+/**
+ * Orca Worker 的执行引擎：内置引擎，或 'acp' = 本机插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，
+ * 配 provider_id = acp-plugin:<插件>:<引擎>。只用于创建 / 读取 Worker，普通任务仍只认内置引擎。
+ */
+export type ControlWorkerEngine = ControlWorkerAgent | 'acp';
 
 export interface ResolvedBrowserScreenshot {
   buffer: Buffer;
@@ -801,6 +807,10 @@ export interface ComputerDriverPermissionState {
 
 export interface ComputerMcpCallContext {
   sessionId?: string;
+  /** Another attested Host caller; this is not an Agent task identity. */
+  hostCaller?: Extract<import('./tool-call-authority.js').HostToolCaller, { kind: 'plugin' }>;
+  /** Recheck the Host invocation before driver dispatch, including queued input. */
+  assertCurrent?: () => void;
   /** Host-only observation origin; automatic reads must not authorize resumed input. */
   observationPurpose?: 'recovery';
   /** Request cancellation stays on the host side; never serialized to the driver. */
@@ -811,6 +821,8 @@ export interface ComputerMcpCallContext {
 
 export interface ComputerMcpDeps {
   getStatus(): Promise<ComputerDriverStatus>;
+  /** Release the native connection owned by this Host caller. */
+  closeContext?(context?: ComputerMcpCallContext): Promise<void>;
   callTool(
     name: ComputerMcpToolName,
     args: Record<string, unknown>,
@@ -962,6 +974,8 @@ export type LiziMcpCallerKind = 'root' | 'descendant' | 'unknown';
 export interface LiziMcpSessionContext {
   agentKind: string;
   workingDir: string;
+  /** Host-attested plugin caller. This never supplies or inherits a Session identity. */
+  hostCaller?: Extract<import('./tool-call-authority.js').HostToolCaller, { kind: 'plugin' }>;
   /** Host-owned memory namespace override shared with the agent prompt path. */
   memoryScopeKey?: string;
   /**
@@ -1022,6 +1036,8 @@ export interface LiziMcpProvider {
   };
   isEnabled?(context: LiziMcpSessionContext): boolean;
   toClaudeSdkConfig(context: LiziMcpSessionContext): unknown | null;
+  /** Same registered tool handlers, for another attested in-process caller. */
+  toHostTools?(context: LiziMcpSessionContext): import('./host-tool-runtime.js').HostToolRuntime;
   /** Remote MCP config for Codex app-server; SDK instance providers use the host HTTP bridge instead. */
   toCodexMcpConfig?(context: LiziMcpSessionContext): CodexHttpMcpConfig | null;
   /** Extra env required by remote MCP configs, e.g. bearer tokens. */

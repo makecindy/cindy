@@ -64,7 +64,7 @@ export interface MobileUsageWidgetDay {
   /** Subscription-equivalent value by harness: claude-code, codex, pi. */
   money: [number, number, number];
   paid: number;
-  tokens: [number, number, number];
+  tokens: [number, number, number, ...number[]];
   /** Value per `usage.models` entry, then everything else (one more than the model count). */
   models?: number[];
   /** Tokens per `usage.models` entry, then everything else. */
@@ -85,7 +85,7 @@ export interface MobileUsageWidgetSnapshot {
     days: string[];
     daily: MobileUsageWidgetDay[];
     /** Models with the most tokens in the window, in color order; absent from older desktops. */
-    models?: { name: string; harness: 'claude-code' | 'codex' | 'pi' }[];
+    models?: { name: string; harness: 'claude-code' | 'codex' | 'pi' | 'auxiliary' }[];
   };
   /** Localized labels and templates from the desktop's menu bar strings. */
   strings: Record<string, string>;

@@ -5,6 +5,23 @@ import { sharedTaskRecoveryError, sharedTaskRecoveryFor } from '../../shared/sha
 import { i18n } from '@/i18n';
 
 describe('decodeRemoteErrorMessage', () => {
+  // #10796, unit: the enqueue boundary must keep the transport cause for live
+  // localization and diagnostics; reporting failure must not resend the input.
+  it.each(['TIMEOUT', 'LINK_BUSY', 'UNRESPONSIVE'])('retains remote %s through an enqueue rejection without replay', async cause => {
+    const code = `REMOTE_AGENT_${cause}`;
+    const raw = `LAZY_CREATE_FAILED: [${code}] transport diagnostic`;
+    const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+    vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+      autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+    try {
+      const id = `remote-transport-${cause}`;
+      expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+      expect(makerChatStore.getSnapshot(id).error).toBe(raw);
+      expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t(`chat.remoteError.${code}`));
+      expect(sharedTaskRecoveryFor(raw, 'share:provider')).toBe(cause === 'LINK_BUSY' ? 'rate' : 'timeout');
+      expect(enqueue).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
+  });
   // Unit: a real lazy-create rejection must retain the account code and reset
   // metadata until the banner translates them in its active locale.
   it('preserves subscription guidance through the actual enqueue rejection', async () => {
@@ -96,6 +113,13 @@ describe('decodeRemoteErrorMessage', () => {
     expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED'));
   });
 
+  it('explains an SSH Codex source mismatch after lazy creation fails', () => {
+    const raw = 'LAZY_CREATE_FAILED: [REMOTE_CODEX_SOURCE_UNSUPPORTED] SSH Codex uses the remote native connection';
+    const expected = i18n.t('settings.remote.startSession.unsupportedCodexSource');
+    expect(decodeRemoteErrorMessage(raw)).toBe(expected);
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
+  });
+
   // #9855, unit: keep the metadata diagnostic marker through the real store's
   // decoder so ErrorBanner can show recovery before raw details are expanded.
   it('preserves the Pi cloud-file startup diagnostic through lazy-create decoding', () => {
@@ -119,5 +143,58 @@ describe('remote session limit guidance', () => {
     const message = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [' + reason + '] limit reached';
     expect(decodeRemoteErrorMessage(message)).toBe(i18n.t('chat.remoteError.REMOTE_AGENT_' + reason));
     expect(remoteErrorMessageForBanner(message)).toBe(message);
+  });
+});
+
+// #10187: exercise the actual queue rejection projection. The old code kept
+// reporting a communication/update error and never offered shared-task recovery.
+it('preserves rejected shared history and exposes context handoff recovery', async () => {
+  const raw = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+  const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+  vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+    autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+  try {
+    const id = 'shared-history-10187';
+    expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+    expect(makerChatStore.getSnapshot(id).error).toBe(raw);
+    expect(sharedTaskRecoveryFor(raw, 'share:provider')).toBe('history');
+    expect(sharedTaskRecoveryFor(raw, 'same-account-device')).toBeUndefined();
+    expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'));
+    expect(decodeRemoteErrorMessage(raw)).not.toBe(i18n.t('chat.remoteError.REMOTE_AGENT_INVALID'));
+    expect(enqueue).toHaveBeenCalledOnce();
+  } finally { vi.unstubAllGlobals(); }
+});
+
+// 并存方案 A 的 D（审核方 2026-11-17 定）：Host 因单独运行的桌面版占用数据而拒绝发送时，发送失败横幅说清
+// 原因与做法（窗口语言），不再显示 `Error invoking remote method…: [PRECONDITION_FAILED] …` 原文。走真实的
+// sendMessage 失败投影；不带这个标记的错误，横幅文本与之前逐字相同。
+describe('a send refused while a desktop app uses the Host data', () => {
+  it.each([
+    ['running', 'HOST_PROFILE_IN_USE_BY_DESKTOP: In use by the desktop app.', 'logic.errors.hostProfileInUseByDesktop'],
+    ['at start', 'HOST_PROFILE_IN_USE_BY_DESKTOP_AT_START: Quit that app, then restart the Host.', 'logic.errors.hostProfileInUseByDesktopAtStart'],
+  ])('says why and what to do (%s)', async (_label, detail, key) => {
+    const raw = `Error invoking remote method 'maker:input:enqueue': Error: [PRECONDITION_FAILED] ${detail}`;
+    const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+    vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+      autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+    try {
+      const id = `host-profile-held-${key}`;
+      expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+      expect(makerChatStore.getSnapshot(id).error).toBe(i18n.t(key));
+      expect(i18n.t(key)).not.toBe(key);
+      expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t(key));
+      expect(enqueue).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it.each([
+    "Error invoking remote method 'maker:input:enqueue': Error: [PRECONDITION_FAILED] The Host account is not ready",
+    "Error invoking remote method 'maker:input:enqueue': Error: network down",
+    "Error invoking remote method 'maker:input:enqueue': Error: [PRECONDITION_FAILED] blocked: HOST_PROFILE_IN_USE_BY_DESKTOP: later",
+    '[INTERNAL] HOST_PROFILE_IN_USE_BY_DESKTOP: under another code',
+    'LAZY_CREATE_FAILED: [REMOTE_COMPAT_MODE_UNSUPPORTED] local provider',
+    'plain failure text',
+  ])('passes other errors through as before: %s', raw => {
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
   });
 });

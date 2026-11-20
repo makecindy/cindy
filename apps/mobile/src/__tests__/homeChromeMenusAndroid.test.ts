@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("lucide-react-native", () => ({ ListChecks: () => null }));
 import type { MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 
 vi.mock("react-native", () => ({
@@ -92,11 +94,12 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
   it("renders the display menu as the same setting rows and submenus as iOS", () => {
     const actions = buildHomeDisplayPullDownActions(displayInput);
     const sections = buildPullDownMenuSections(actions);
-    // 三段无标题分组 = iOS UIMenu 的三段分隔;每行是进入子菜单的设置项,标题下显示当前值。
-    expect(sections.map((section) => section.title)).toEqual([undefined, undefined, undefined]);
+    // 首行直接切换模式，其余设置保留与 iOS 一致的分组和子菜单。
+    expect(sections.map((section) => section.title)).toEqual([undefined, undefined, undefined, undefined]);
     const rows = sections.flatMap((section) => section.rows);
     expect(rows).toEqual(actions.flatMap((group) => group.subactions ?? []));
     expect(rows.map((action) => [action.id, action.subtitle, !!action.subactions?.length])).toEqual([
+      ["taskListMode.inbox", undefined, false],
       ["group", "devices.list.menu.groupProject", true],
       ["sort", "devices.list.menu.sortBy.priority", true],
       ["projectOrder", "devices.list.menu.projectOrder.custom", true],

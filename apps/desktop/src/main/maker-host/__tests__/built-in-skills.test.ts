@@ -726,6 +726,118 @@ describe('built-in Skills', () => {
     },
   );
 
+  // Unit P02 preparation regression: committed-bundle verification serialized
+  // independent directories too. Existing publication/race cases do not check
+  // this scheduling. A Promise gate exposes concurrency without timing or sleeps.
+  it('prepares an existing bundle with bounded independent verification reads', async () => {
+    const input = fixture();
+    await prepareBuiltInSkills(input);
+    const expected = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
+    const targets = new Set(expected.map(item => fs.realpathSync.native(item.absolutePath)));
+    const readdir = fs.promises.readdir.bind(fs.promises);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let signalStarted!: () => void;
+    const firstStarted = new Promise<void>(resolve => { signalStarted = resolve; });
+    let started = 0;
+    vi.spyOn(fs.promises, 'readdir').mockImplementation(async (...args) => {
+      if (targets.has(fs.realpathSync.native(String(args[0])))) {
+        started += 1;
+        signalStarted();
+        await gate;
+      }
+      return readdir(...args);
+    });
+    const pending = prepareBuiltInSkills(input);
+    await firstStarted;
+    try {
+      expect(started).toBe(4);
+    } finally {
+      release();
+      const prepared = await pending;
+      expect(prepared.projectionSafe).toBe(true);
+      expect(prepared.warnings).toEqual([]);
+      expect(prepared.descriptors).toEqual(expected);
+    }
+  });
+
+  // Unit P02 source-planning regression: even after installed-bundle parallelism,
+  // the four bundled sources were still awaited serially. Gate the public prepare
+  // entry (no timing threshold); failed reads must drain before releasing its lease,
+  // retain descriptor warning order and leave the committed bundle unchanged.
+  it.each([false, true])('reads bundled source fingerprints in four lanes and drains failures (errors=%s)', async (errors) => {
+    const input = fixture();
+    await prepareBuiltInSkills(input);
+    const expected = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
+    const sources = expected.map(item => path.join(input.bundledRoot, item.name, 'SKILL.md'));
+    const stat = fs.promises.stat.bind(fs.promises);
+    let releaseFirst!: () => void;
+    let releaseRest!: () => void;
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const restGate = new Promise<void>(resolve => { releaseRest = resolve; });
+    let signalStarted!: () => void;
+    const firstStarted = new Promise<void>(resolve => { signalStarted = resolve; });
+    let started = 0;
+    let settled = false;
+    vi.spyOn(fs.promises, 'stat').mockImplementation(async (...args) => {
+      const index = sources.indexOf(String(args[0]));
+      if (index >= 0) {
+        started++;
+        signalStarted();
+        await (index === 0 ? firstGate : restGate);
+        if (errors && index < 2) throw new Error('fixture source unavailable');
+      }
+      return stat(...args);
+    });
+    const pending = prepareBuiltInSkills(input).finally(() => { settled = true; });
+    await firstStarted;
+    try {
+      expect(started).toBe(4);
+      releaseFirst();
+      // Let the first rejection propagate; the other three lanes remain gated.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(settled).toBe(false);
+    } finally {
+      releaseFirst();
+      releaseRest();
+      const prepared = await pending;
+      expect(prepared.projectionSafe).toBe(true);
+      expect(prepared.changed).toBe(false);
+      expect(prepared.descriptors).toEqual(expected);
+      expect(prepared.warnings).toEqual(errors ? expected.slice(0, 2).map(item =>
+        `could not materialize built-in Skill ${item.name}: bundled Skill is missing SKILL.md: ${path.join(input.bundledRoot, item.name)}`) : []);
+      expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toEqual(expected);
+    }
+  });
+
+  // Unit P02 regression: one discovery serialized four independent bundle reads.
+  // Existing integrity tests cover bytes/races, not bounded scheduling. Block the
+  // first directory stat (no sleeps) and require all four verification lanes.
+  it('verifies independent built-in Skills in bounded parallel lanes without changing catalog order', async () => {
+    const input = fixture();
+    await prepareBuiltInSkills(input);
+    const expected = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
+    const targets = new Set(expected.map(item => fs.realpathSync.native(item.absolutePath)));
+    const lstat = fs.promises.lstat.bind(fs.promises);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let started = 0;
+    vi.spyOn(fs.promises, 'lstat').mockImplementation(async (...args) => {
+      if (args[1] === undefined && targets.has(fs.realpathSync.native(String(args[0])))) {
+        started += 1;
+        await gate;
+      }
+      return lstat(...args);
+    });
+    const pending = builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir);
+    try {
+      expect(started).toBe(4);
+    } finally {
+      release();
+      await expect(pending).resolves.toEqual(expected);
+    }
+  });
+
   // Unit: yielding identity verification must reject a publication that changes
   // while bytes are being read; synchronous tampering coverage has no such race.
   it('withholds official identity when the manifest changes during async verification', async () => {

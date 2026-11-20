@@ -51,6 +51,11 @@ export interface EmbeddingModelMeta {
 }
 
 export interface EmbeddingClientOptions {
+  createUsageRecorder?: (request: { model: string; inputType?: EmbeddingInputType }) => {
+    observe(body: unknown): Promise<void>;
+    close(): void;
+  };
+
   /**
    * 必填；OpenAI-compatible embeddings base URL，由上层宿主显式注入，不再提供
    * 生产默认值。函数形态 = 每次请求现取(宿主 endpoint 运行期可变,如登录后由

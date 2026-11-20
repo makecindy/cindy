@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 import { Spinner } from '@/components/ui/spinner';
 import type { TabKindHostContext } from '../../types';
 import { getOrCreateXterm, detachXterm, getXtermExit, setXtermExit, onXtermExit, needsXtermAttach, attachXterm, restartXterm, type XtermEntry } from './lib/xtermPool';
+import { TERMINAL_CANVAS } from './lib/terminalCanvasColors';
 import { createTerminalFontController } from './lib/terminalFont';
 import { useTerminalFontSettings } from './lib/useTerminalFontSettings';
 import type {
@@ -313,9 +314,10 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     }
   }, [restarting, tabId, workdir, patchState]);
 
-  // 渲染:slot 撑满,exited / runtimeError 在上面叠一层 overlay
+  // 渲染:slot 撑满,exited / runtimeError 在上面叠一层 overlay。
+  // 底色与 xterm 主题同源,固定深色、不跟随主题(DESIGN.md §2「Terminal canvas」)。
   return (
-    <div className="relative h-full w-full bg-[#1c1c1c]">
+    <div className="relative h-full w-full" style={{ backgroundColor: TERMINAL_CANVAS.background }}>
       <div ref={slotRef} className="absolute top-2 bottom-0 left-2 right-2" />
       {exited != null && !runtimeError && (
         <ExitedOverlay
@@ -394,7 +396,11 @@ function ExitedOverlay({
   onRestart: () => void;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
-  const message = exit.signal
+  // node-pty reports an ordinary Unix exit as signal "0". Treat it as
+  // no signal so the actual exit code remains visible; only non-zero signals
+  // represent termination by signal.
+  const hasTerminationSignal = exit.signal !== null && exit.signal !== '0';
+  const message = hasTerminationSignal
     ? t('rightSidebar.terminal.processKilled', { signal: exit.signal })
     : t('rightSidebar.terminal.processExited', { code: exit.code ?? 0 });
   return (

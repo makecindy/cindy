@@ -8,6 +8,12 @@
  */
 
 export interface CodexImageAuthBinding {
+  acquireRemoteAuth?(providerId: string, modelId: string): Promise<{
+    getAuth: CodexImageAuthBinding['getAuth'];
+    assertDispatchable(): void;
+    onAuthFailure: CodexImageAuthBinding['onAuthFailure'];
+    release(): void;
+  }>;
   hasAuth?(providerId: string): boolean;
   getAuth(providerId?: string): Promise<{ accessToken: string; accountId: string | null }>;
   onAuthFailure(failure: {

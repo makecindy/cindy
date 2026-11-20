@@ -1,6 +1,16 @@
 import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
-import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
+import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
+
+/** A model-specific rate limit leaves other models on the connection available. */
+export function isModelGroupConnectionOutOfCredit(signals: InterruptedTurnErrorSignals): boolean {
+  return signals.errorStatus === 402 || isBillingDepletionError(signals) ||
+    /\binsufficient_quota\b|insufficient[_ -](?:balance|credits?|funds)|credit balance (?:is )?too low|402 payment required|余额不足|欠费/i.test(signals.message ?? '');
+}
+
+/** Host-proven stopped bootstrap, distinct from a turn or opaque startup error. */
+export const BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON = 'bot-subscription-startup-admission';
 
 /** A failed provider may be replaced, even when retrying that provider is forbidden. */
 export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals): boolean {
@@ -13,11 +23,12 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
     'pi-gateway-drop', 'upstream-overload', 'empty-response', 'turn-failed',
     'provider_auth_or_access', 'provider_quota_limit', 'provider_rate_limit',
     'provider_server_error', 'model_unavailable', 'user_model_access_denied', 'agent-start-failed',
+    BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON,
   ].includes(reason)) return false;
   // Exhaustion forbids retrying this account, not trying the user's configured
   // backups. The caller requires a successful route change before resuming.
   if (signals.codexErrorInfo === 'sessionBudgetExceeded') return false;
-  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded'
+  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded' || isBillingDepletionError(signals)
       || matchesDeterministicUsageExhaustionText(signals.message ?? '')) return true;
   if (reason && reason !== 'turn-failed') return true;
   const tag = signals.sdkError ?? '';
@@ -27,6 +38,10 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
   if (/user (?:denied|rejected)|approval (?:denied|required)|context.{0,20}(?:overflow|too long)|prompt too long/i.test(message)) return false;
   if ([401, 402, 403, 429, 500, 502, 503, 504, 529].includes(signals.errorStatus ?? 0)) return true;
   if (/permission denied/i.test(message)) return false;
+  // Older/statusless provider envelopes still need the candidate chain. Keep
+  // local control/permission denials above this narrow provider-text fallback.
+  if (extractNonSecretErrorSignals(message).errorStatus === 403
+    || /\bthe caller does not have permission\b/i.test(message)) return true;
   // Some Claude session-limit envelopes omit both HTTP status and SDK classification.
   // A known input/control error must not be reclassified from this text alone.
   const sessionLimit = (!tag || tag === 'unknown') && /\byou['’]ve hit your session limit\b/i.test(message);

@@ -8,10 +8,11 @@
     "cindy-host-login": "./src/main.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "cross-env NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit -p tsconfig.json",
     "start": "node --import tsx --import ./src/loaders/register-raw.mjs src/main.ts",
-    "test": "node --import tsx --import ./src/loaders/register-raw.mjs --test \"src/**/*.test.mjs\"",
+    "test": "node --import ./src/loaders/test-region.mjs --import tsx --import ./src/loaders/register-raw.mjs --test \"src/**/*.test.mjs\"",
     "build": "node scripts/build.mjs",
+    "test:ipc-route": "node --import tsx --import ./src/loaders/register-raw.mjs scripts/ipc-route.e2e.mjs",
     "test:lifecycle": "node scripts/lifecycle.e2e.mjs",
     "test:scheduler": "node --import tsx --import ./src/loaders/register-raw.mjs scripts/scheduler-runtime.e2e.mjs"
   },
@@ -20,6 +21,7 @@
     "tsx": "^4.19.0"
   },
   "dependencies": {
+    "@cindy/agent-net": "workspace:*",
     "@cindy/anthropic-compat-proxy": "workspace:*",
     "@cindy/auth-client": "workspace:*",
     "@cindy/browser-control-runtime": "workspace:*",
@@ -28,6 +30,7 @@
     "@cindy/maker-shared": "workspace:*",
     "@cindy/mcps": "workspace:*",
     "@cindy/model-providers": "workspace:*",
+    "@cindy/plugin-protocol": "workspace:*",
     "better-sqlite3": "^12.9.0",
     "cindy-tools": "workspace:*",
     "node-machine-id": "^1.1.12",

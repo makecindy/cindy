@@ -61,6 +61,13 @@ export const generalSettings = defineSettings({
     titleKey: 'settings.sections.windowBehavior',
     sectionKey: 'settings.sections.windowBehavior',
   },
+  awayFromComputer: {
+    id: 'general.awayFromComputer',
+    tab: 'general',
+    targetId: 'settings-away-from-computer',
+    titleKey: 'settings.sections.awayFromComputer',
+    sectionKey: 'settings.sections.awayFromComputer',
+  },
   composer: {
     id: 'general.composer',
     tab: 'general',

@@ -1,3 +1,4 @@
+import { ProjectPickerIcon } from './ProjectPickerIcon';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -123,7 +124,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
                 key={workspace.workingDir}
                 title={workspace.title}
                 subtitle={workspace.workingDir}
-                leading={icon(Folder)}
+                leading={<ProjectPickerIcon deviceId={p.selectedDeviceId} workingDir={workspace.workingDir} title={workspace.title} />}
                 selected={
                   p.workspaceKind === "project" &&
                   workspacePathsEqual(p.workingDir, workspace.workingDir)
@@ -134,7 +135,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
               />
             ))}
             <NewTaskSelectionRow
-              title={t("session.new.chooseOtherFolder")}
+              title={p.browseLabel ?? t("session.new.chooseOtherFolder")}
               leading={icon(FolderPlus)}
               trailing={icon(ChevronRight)}
               disabled={workspaceUnavailable}
@@ -144,6 +145,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           </>
         ) : browsing ? (
           <>
+            {p.directoryInput}
             <Text
               testID="newSession.remoteBrowseCurrentPath"
               style={{

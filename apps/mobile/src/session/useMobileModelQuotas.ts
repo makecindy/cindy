@@ -31,6 +31,7 @@ type PickerPool = {
   boundAccountId?: string | null;
   providerId: string;
   configured: boolean;
+  kind?: "openai" | "anthropic";
   accounts: {
     id?: string;
     paused: boolean;
@@ -113,6 +114,7 @@ export function useMobileModelQuotas(
               deviceId: catalog.deviceId,
               key: quotaKey(catalog.deviceId, provider.id),
               source,
+              poolKind: provider.subscriptionAccountPool ?? provider.subscriptionPool,
               identity: provider.openAiAccount ?? provider.subscriptionAccount,
             },
           ]
@@ -159,18 +161,19 @@ export function useMobileModelQuotas(
         key: string;
         deviceId: string;
         source: QuotaSource;
+        poolKind?: "openai" | "anthropic";
       }[];
       const values: QuotaValues = {};
       await Promise.all(
-        items.map(async ({ id, source, key, deviceId: sourceDeviceId }) => {
+        items.map(async ({ id, source, key, deviceId: sourceDeviceId, poolKind }) => {
           try {
             const sourceTaskId =
               sourceDeviceId === deviceId ? taskId : undefined;
             // Same candidate rule as Desktop; identity and quota travel together.
             if (
               !isProviderShareAgentDeviceId(sourceDeviceId) &&
-              ((id === "anthropic" && source === "claude") ||
-                (id === "openai" && source === "codex"))
+              (((poolKind ?? id) === "anthropic" && source === "claude") ||
+                ((poolKind ?? id) === "openai" && source === "codex"))
             ) {
               const pool = await invoke<PickerPool>(
                 sourceDeviceId,
@@ -189,6 +192,7 @@ export function useMobileModelQuotas(
               });
               if (pool && (
                 pool?.providerId !== id ||
+                (poolKind !== undefined && pool.kind !== poolKind) ||
                 typeof pool.configured !== "boolean" ||
                 !Array.isArray(pool.accounts)
               ))

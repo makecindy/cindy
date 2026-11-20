@@ -70,6 +70,12 @@ interface PermissionSelectorProps {
   allowedModes?: readonly PermissionMode[];
   /** Show a retained legacy value honestly instead of presenting the first available mode as selected. */
   fallbackModeLabel?: string;
+  /**
+   * A plugin engine is selected (draft) or runs the task (docs/plans/acp-plugin-bridge.md): offer
+   * exactly the modes it declares instead of a built-in Harness's capabilities. Labels come from
+   * `newChat.permissionSelector.modes.acp.*`.
+   */
+  pluginEngineModes?: readonly PermissionModeDescriptor[];
 }
 
 /**
@@ -127,6 +133,7 @@ export function PermissionSelector({
   disabledModes,
   allowedModes,
   fallbackModeLabel,
+  pluginEngineModes,
 }: PermissionSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -139,9 +146,11 @@ export function PermissionSelector({
   });
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
-  const { capabilities } = useAgentCapabilities(agentKind, deviceId);
+  // 插件引擎自带两档，不读任何内置 Harness 的能力。
+  const { capabilities } = useAgentCapabilities(pluginEngineModes ? null : agentKind, deviceId);
+  const labelNamespace = pluginEngineModes ? 'acp' : agentKind;
 
-  const options: PermissionModeDescriptor[] = (capabilities?.permissionModes ?? []).filter(
+  const options: PermissionModeDescriptor[] = (pluginEngineModes ?? capabilities?.permissionModes ?? []).filter(
     (option) => allowedModes === undefined || allowedModes.includes(option.id),
   );
   const effectiveMode =
@@ -150,13 +159,13 @@ export function PermissionSelector({
   const TriggerIcon = PERMISSION_ICONS[effectiveMode] ?? Hand;
   const labelOf = (option: PermissionModeDescriptor | undefined, fallbackId: string) => {
     const id = option?.id ?? fallbackId;
-    return t(`newChat.permissionSelector.modes.${agentKind}.${id}.label`, {
+    return t(`newChat.permissionSelector.modes.${labelNamespace}.${id}.label`, {
       defaultValue: option?.displayName ?? fallbackId,
     });
   };
   const descriptionOf = (option: PermissionModeDescriptor | undefined, fallbackId: string) => {
     const id = option?.id ?? fallbackId;
-    return t(`newChat.permissionSelector.modes.${agentKind}.${id}.description`, {
+    return t(`newChat.permissionSelector.modes.${labelNamespace}.${id}.description`, {
       defaultValue: option?.description ?? '',
     });
   };
@@ -249,14 +258,15 @@ export function PermissionSelector({
                   )
                 : cn(
                     'rounded-full',
-                    // 文字入口悬停显示胶囊外框；图标入口只显示轻微底色。
+                    // 图标与文字入口共用 composer 胶囊悬停反馈，与相邻的「+」一致。
                     isIconOnly
                       ? 'h-[30px] w-7 min-w-7 justify-center px-0'
                       : 'h-[30px] min-w-[72px] max-w-full shrink px-2.5',
                     'border border-transparent bg-transparent',
+                    'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
                     isIconOnly
-                      ? 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]'
-                      : 'text-[var(--text-primary)] hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
+                      ? 'text-[var(--composer-pill-icon)]'
+                      : 'text-[var(--text-primary)]',
                   ),
               disabled && 'pointer-events-none opacity-50',
             )}
@@ -434,7 +444,7 @@ export function PermissionSelector({
       panelAriaLabel={t('newChat.permissionSelector.listAria')}
       startBg="var(--composer-pill-bg)"
       startBorderColor="var(--border-default)"
-      wrapperClassName="min-w-0 shrink"
+      wrapperClassName={cn('max-w-full shrink', isIconOnly ? 'min-w-[34px]' : 'min-w-[72px]')}
       trigger={triggerButton}
     >
       {optionsList}

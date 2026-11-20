@@ -1,3 +1,4 @@
+import { canLinkFile } from './codexAuthTestFs.js';
 import { configureOwnerContext } from '../../ownerContext.js';
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
@@ -28,22 +29,6 @@ import {
 
 const dirs: string[] = [];
 
-/** 探测真实文件 symlink 能力；Windows 未启用 Developer Mode 时会返回 EPERM。 */
-function canCreateFileSymlink(): boolean {
-  const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-invalidation-link-probe-'));
-  try {
-    const target = path.join(probeRoot, 'target');
-    fs.writeFileSync(target, 'probe');
-    fs.symlinkSync(target, path.join(probeRoot, 'link'), 'file');
-    return true;
-  } catch {
-    return false;
-  } finally {
-    fs.rmSync(probeRoot, { recursive: true, force: true });
-  }
-}
-
-const canLinkFile = canCreateFileSymlink();
 const h = vi.hoisted(() => ({
   userDataDir: '',
   dataOwnerId: null as string | null,
@@ -154,7 +139,7 @@ it('compares Codex hard-link identities without Windows number precision collisi
   expect(haveSameStableFileIdentity({ dev: 7n, ino: 11n }, { dev: 7n, ino: 11n })).toBe(true);
 });
 
-it.each([false, true])('preserves successful shared login and native files when presentation write fails=%s', async (failPresentation) => {
+it.skipIf(!canLinkFile).each([false, true])('preserves successful shared login and native files when presentation write fails=%s', async (failPresentation) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-mode-'));
   dirs.push(root);
   h.userDataDir = path.join(root, 'user-data');
@@ -184,6 +169,8 @@ it.each([false, true])('preserves successful shared login and native files when 
   const chmod = vi.spyOn(fs.promises, 'chmod');
   const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
   const adapter = new DesktopCodexAuthAdapter();
+  // Credential lifecycle only; asset preparation is covered in authAssetPreparation.test.ts.
+  vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
   const finishSuccessfulCodexLogin = (
     adapter as unknown as {
       finishSuccessfulCodexLogin(): Promise<{ authenticated: boolean }>;
@@ -782,7 +769,7 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  it('reclassifies a shared invalidation as isolated after an explicit Cindy login', async () => {
+  it.skipIf(!canLinkFile)('reclassifies a shared invalidation as isolated after an explicit Cindy login', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-to-isolated-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -1014,7 +1001,7 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  it('fails login finalization before rebinding when the recovered scope cannot be persisted', async () => {
+  it.skipIf(!canLinkFile)('fails login finalization before rebinding when the recovered scope cannot be persisted', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-scope-persist-fail-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -1893,7 +1880,7 @@ describe('Codex system credential suppression marker', () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
-  it('remembers a shared source across atomic system replacement and reclaims the renewed login', async () => {
+  it.skipIf(!canLinkFile)('remembers a shared source across atomic system replacement and reclaims the renewed login', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-recovery-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -2317,11 +2304,11 @@ describe('Codex system credential suppression marker', () => {
     await assertDetachedSharedF1Invalidation('darwin');
   });
 
-  it('attributes a detached shared F1 invalidation on Windows', async () => {
+  it.skipIf(!canLinkFile)('attributes a detached shared F1 invalidation on Windows', async () => {
     await assertDetachedSharedF1Invalidation('win32');
   });
 
-  it('tracks a consumed symlink target generation until a later system replacement', async () => {
+  it.skipIf(!canLinkFile)('tracks a consumed symlink target generation until a later system replacement', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-generation-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -2399,7 +2386,7 @@ describe('Codex system credential suppression marker', () => {
     await expect(adapter.getAccessToken()).resolves.toBe('system-f3-token');
   });
 
-  it('ignores a late shared-host invalidation across lossless Windows file IDs', async () => {
+  it.skipIf(!canLinkFile)('ignores a late shared-host invalidation across lossless Windows file IDs', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-host-generation-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -3493,7 +3480,7 @@ describe('Codex 系统凭证备份与旧硬链接 (#9316 review)', () => {
   // 升级前的 profile 把本地这份硬链到系统凭证(nlink=2)。durable disconnect 期间对账被
   // 抑制,硬链一直没迁移;本地登录若只凭「身份相同」就短路,会跳过残留硬链清理 ——
   // 登录报 system-shared,Codex 0.165+ 却因为 nlink>1 存不住新 token(#9316 review)。
-  it('本地登录把升级前的存量硬链拆掉,不再报 system-shared 却存不住凭证', async () => {
+  it.skipIf(!canLinkFile)('本地登录把升级前的存量硬链拆掉,不再报 system-shared 却存不住凭证', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-legacy-hardlink-login-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -3523,6 +3510,8 @@ describe('Codex 系统凭证备份与旧硬链接 (#9316 review)', () => {
 
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
+    // Credential lifecycle only; asset preparation is covered in authAssetPreparation.test.ts.
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
     await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
       authenticated: true,
     });

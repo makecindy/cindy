@@ -2142,7 +2142,8 @@ export class GoalController {
       const limit = this.deps.getAccountLimit
         ? await this.deps
             .getAccountLimit(
-              state.agentKind,
+              // A goal can outlive an engine switch. Read quota for the turn that just ended.
+              event.source ?? this.listenerSessions.get(sessionId)?.agentKind ?? state.agentKind,
               sessionId,
               // 报错原文里的时刻要先确认会话属于订阅账号才可信,交给注入端判定。
               status === 'usageLimited' && outcome.errorKind === 'usage_limit' ? event.data : undefined,
@@ -2416,10 +2417,14 @@ export class GoalController {
     this.cancelUsageResume(sessionId);
     if (this.disposed) return;
     if (resetAtMs == null) return;
-    // clamp 到 setTimeout 的 32-bit 上限(~24.8 天):否则超大 delay 会溢出、被当成 1ms
-    // 立刻触发(限额窗口正常是 5h / weekly,远小于上限;clamp 只是防御异常 resetAt)。
+    // A monthly reset can exceed setTimeout's 32-bit delay. Re-arm for the
+    // remaining time before dispatching the goal.
     const delay = Math.min(Math.max(0, resetAtMs - this.now()), 2_147_483_647);
     const timer = setTimeout(() => {
+      if (resetAtMs > this.now()) {
+        this.scheduleUsageResume(sessionId, resetAtMs);
+        return;
+      }
       void this.autoResumeFromUsageLimit(sessionId).catch((error) => {
         this.deps.logger.warn('[goal] detached usage resume failed', {
           sessionId,

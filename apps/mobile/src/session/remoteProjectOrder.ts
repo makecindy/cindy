@@ -22,17 +22,70 @@ export type HostProjectOrderResult =
   | { kind: 'unavailable' }
   | { kind: 'transient' };
 
-export async function fetchHostProjectOrder(
-  invoke: <T>(deviceId: string, channel: string, args: unknown[]) => Promise<T>,
+type ProjectOrderInvoke = (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>;
+const pendingOrderReads = new Map<string, {
+  invoke: ProjectOrderInvoke;
+  accountGeneration: number;
+  connectionEpoch: number;
+  result: Promise<HostProjectOrderResult>;
+}>();
+
+/** Home and its drawer can be mounted together. Share only an outstanding read
+ * from the same owner and connection, until newer order evidence arrives. */
+export function fetchHostProjectOrder(
+  invoke: ProjectOrderInvoke,
   deviceId: string,
+  accountGeneration: number,
+  connectionEpoch: number,
 ): Promise<HostProjectOrderResult> {
+  const pending = pendingOrderReads.get(deviceId);
+  if (pending?.invoke === invoke && pending.accountGeneration === accountGeneration
+    && pending.connectionEpoch === connectionEpoch) return pending.result;
+  const result = readHostProjectOrder(invoke, deviceId).finally(() => {
+    if (pendingOrderReads.get(deviceId)?.result === result) pendingOrderReads.delete(deviceId);
+  });
+  pendingOrderReads.set(deviceId, { invoke, accountGeneration, connectionEpoch, result });
+  return result;
+}
+
+async function readHostProjectOrder(invoke: ProjectOrderInvoke, deviceId: string): Promise<HostProjectOrderResult> {
   try {
-    const raw = await invoke<unknown>(deviceId, SIDEBAR_GET_PROJECT_ORDER_CHANNEL, []);
+    const raw = await invoke(deviceId, SIDEBAR_GET_PROJECT_ORDER_CHANNEL, []);
     return { kind: 'ok', snapshot: parseSyncedProjectOrderSnapshot(raw) };
   } catch (error) {
     if (isHostProjectOrderChannelMissing(error)) return { kind: 'unavailable' };
     return { kind: 'transient' };
   }
+}
+
+/** One completion covers the existing bounded load, including retry backoff. */
+export function startHostProjectOrderLoad(loadAttempt: () => Promise<boolean>): {
+  completion: Promise<void>;
+  cancel: () => void;
+} {
+  let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let releaseBackoff: (() => void) | undefined;
+  const completion = (async () => {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      if (cancelled) return;
+      const retry = await loadAttempt();
+      if (cancelled || !retry || attempt === 3) return;
+      await new Promise<void>((resolve) => {
+        releaseBackoff = resolve;
+        retryTimer = setTimeout(resolve, 2000);
+      });
+      releaseBackoff = undefined;
+    }
+  })();
+  return {
+    completion,
+    cancel: () => {
+      cancelled = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+      releaseBackoff?.();
+    },
+  };
 }
 
 type RemoteProjectOrderListener = (deviceId: string, snapshot: SyncedProjectOrderSnapshot) => void;
@@ -43,10 +96,12 @@ const stampedRemoteProjectOrderDevices = new Set<string>();
 /** peer 新连接代际 / 主机进程重启后 generation 可能从更小值重计,必须清掉旧水印。 */
 export function resetRemoteProjectOrderPushFence(deviceId?: string): void {
   if (deviceId) {
+    pendingOrderReads.delete(deviceId);
     remoteProjectOrderStamps.delete(deviceId);
     stampedRemoteProjectOrderDevices.delete(deviceId);
     return;
   }
+  pendingOrderReads.clear();
   remoteProjectOrderStamps.clear();
   stampedRemoteProjectOrderDevices.clear();
 }
@@ -92,6 +147,7 @@ export function applyRemoteProjectOrderPush(
     stampedRemoteProjectOrderDevices.add(deviceId);
     remoteProjectOrderStamps.set(deviceId, incoming);
   }
+  pendingOrderReads.delete(deviceId);
   const snapshot = parseSyncedProjectOrderSnapshot(payload);
   for (const listener of remoteProjectOrderListeners) listener(deviceId, snapshot);
   return true;
@@ -110,6 +166,7 @@ export async function applyHostProjectOrder(
   },
 ): Promise<HostProjectOrderResult> {
   if (!snapshot.ownerStamp) return { kind: 'transient' };
+  pendingOrderReads.delete(deviceId);
   try {
     const raw = await invoke<unknown>(deviceId, SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL, [{
       ...snapshot.ownerStamp,
@@ -120,6 +177,7 @@ export async function applyHostProjectOrder(
       ),
       projectOrder: snapshot.projectOrder,
     }]);
+    pendingOrderReads.delete(deviceId);
     return { kind: 'ok', snapshot: parseSyncedProjectOrderSnapshot(raw) };
   } catch (error) {
     if (isHostProjectOrderChannelMissing(error)) return { kind: 'unavailable' };

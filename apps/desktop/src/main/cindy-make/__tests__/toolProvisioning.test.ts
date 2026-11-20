@@ -24,6 +24,15 @@ afterAll(async () => {
 });
 
 describe('pinned platform tool catalog', () => {
+  // pnpm 11 reads this prefix. A differently-cased inherited twin can otherwise
+  // win on Windows and let a version probe download a project-selected manager.
+  it('pins pnpm 11 version switching off without an inherited case twin', () => {
+    const inherited = { PATH: '', PNPM_CONFIG_MANAGE_PACKAGE_MANAGER_VERSIONS: 'true' };
+    const env = makeToolProcessEnvironment({}, inherited, 'win32', 'C:\\home');
+    expect(env.pnpm_config_manage_package_manager_versions).toBe('false');
+    expect(env).not.toHaveProperty('PNPM_CONFIG_MANAGE_PACKAGE_MANAGER_VERSIONS');
+    expect(inherited.PNPM_CONFIG_MANAGE_PACKAGE_MANAGER_VERSIONS).toBe('true');
+  });
   it.each([
     ['win32', 'x64', 5],
     ['darwin', 'x64', 4],
@@ -52,7 +61,8 @@ describe('pinned platform tool catalog', () => {
 });
 
 describe('private, atomic tool installation', () => {
-  const artifact = makeToolCatalog('win32', 'x64').find((a) => a.id === 'pnpm')!;
+  // This suite isolates promotion semantics with a fake raw binary payload.
+  const artifact = { ...makeToolCatalog('win32', 'x64').find((a) => a.id === 'pnpm')!, format: 'binary' as const };
   const setup = () => ({
     root: path.join(temp, String(++sequence)),
     artifact,
@@ -62,6 +72,32 @@ describe('private, atomic tool installation', () => {
   });
   const downloader = vi.fn(async (options: { targetPath: string }) => {
     await writeFile(options.targetPath, 'test executable');
+  });
+
+  // pnpm 11 has no Intel Mac standalone. The real installer must publish a
+  // PATH-discoverable shim beside its modules, rather than fail on a missing entry.
+  // Existing raw-binary promotion tests cannot cover this archive layout. Unit, no process spawn.
+  it('publishes the official Node shim as pnpm for Intel Mac and preserves its sibling modules', async () => {
+    const nodeArtifact = makeToolCatalog('darwin', 'x64').find((entry) => entry.id === 'pnpm')!;
+    const input = { ...setup(), artifact: nodeArtifact };
+    const shim = '#!/usr/bin/env node\nimport("./pnpm.mjs")\n';
+    input.validate.mockImplementation(async (executable) => {
+      expect(path.basename(executable)).toBe('pnpm');
+      expect(await readFile(executable, 'utf8')).toBe(shim);
+      expect(await readFile(path.join(path.dirname(executable), 'pnpm.mjs'), 'utf8')).toBe('entry module');
+      return true;
+    });
+    const executable = await installMakeTool(input, {
+      download: downloader,
+      extract: async (_archive, destination) => {
+        const bin = path.join(destination, 'package', 'bin');
+        await mkdir(bin, { recursive: true });
+        await writeFile(path.join(bin, 'pnpm.cjs'), shim);
+        await writeFile(path.join(bin, 'pnpm.mjs'), 'entry module');
+      },
+    });
+    expect(await installedMakeTool(input.root, nodeArtifact)).toBe(executable);
+    expect(await readFile(executable, 'utf8')).toBe(shim);
   });
 
   it('promotes only after verification, preserves publisher hashes, and discovers the completed install', async () => {
@@ -234,7 +270,7 @@ describe('compatible local tool reuse and scoped environment', () => {
                   ? 'v24.16.0'
                   : command === 'python3'
                     ? 'Python 3.12.10'
-                    : '10.33.2',
+                    : '11.28.9',
           };
         },
       }),

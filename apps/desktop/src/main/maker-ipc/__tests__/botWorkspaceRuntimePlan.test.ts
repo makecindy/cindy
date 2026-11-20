@@ -1,8 +1,10 @@
+import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ sqlite: null as import('better-sqlite3').Database | null }));
 
+vi.mock('../../mcp-integrations/projectManagementCore.js', () => ({ registeredTaskProject: vi.fn() }));
 vi.mock('electron', () => ({ app: { getPath: () => '/legacy-user-data' } }));
 vi.mock('../../appSessionState.js', () => ({ ownerScopedUserDataPath: () => '/owner-root' }));
 vi.mock('../../localDb/client/current.js', async () => {
@@ -20,7 +22,7 @@ function opts(id: string): MakerSessionCreateOpts {
 describe('prepareBotWorkspaceRuntime for 分工 Sessions', () => {
   const ensureWorkspaceDir = vi.fn(async () => '/owner-root/bots/mimi/workspace');
   const directories = new Set(['/work/site-wt']);
-  const deps = { ensureWorkspaceDir, isDirectory: async (dir: string) => directories.has(dir) };
+  const deps = { ensureWorkspaceDir, ownerUserDataPath: () => '/owner-root', dialogueWorkspace: () => '/dialogues/session', registeredProject: async (dir: string) => dir, isDirectory: async (dir: string) => directories.has(dir) };
 
   beforeEach(() => {
     ensureWorkspaceDir.mockClear();
@@ -51,8 +53,8 @@ describe('prepareBotWorkspaceRuntime for 分工 Sessions', () => {
       CREATE TABLE bot_profile_versions (bot_id TEXT NOT NULL, version INTEGER NOT NULL, capabilities_json TEXT NOT NULL);
       INSERT INTO bot_profiles VALUES ('mimi', 1), ('v2', 2);
       INSERT INTO bot_profile_versions VALUES ('mimi', 1, '{}'), ('v2', 1, '{}'), ('v2', 2, '{"projectMode":true}');
-      CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT, workspace_kind TEXT, project_dir TEXT);
-      INSERT INTO sessions VALUES ('v2-main', '/owner-root/bots/v2/workspace', 'dialogue', NULL);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT, workspace_kind TEXT, project_dir TEXT, created_at INTEGER);
+      INSERT INTO sessions VALUES ('v2-main', '/owner-root/bots/v2/workspace', 'dialogue', NULL, 1);
     `);
   });
 
@@ -69,9 +71,18 @@ describe('prepareBotWorkspaceRuntime for 分工 Sessions', () => {
   it('runs a V2 teammate\'s chats as project sessions so the tasks they open stay in its project', async () => {
     const o = opts('v2-main');
     await prepareBotWorkspaceRuntime(o, deps);
-    expect(o).toMatchObject({ workingDir: '/owner-root/bots/mimi/workspace', workspaceKind: 'project', projectDir: '/owner-root/bots/mimi/workspace' });
+    expect(o).toMatchObject({ workingDir: path.join('/owner-root', 'bots', 'v2', 'workspace'), workspaceKind: 'project', projectDir: path.join('/owner-root', 'bots', 'v2', 'workspace') });
     expect(h.sqlite!.prepare('SELECT workspace_kind, project_dir FROM sessions WHERE id = ?').get('v2-main'))
-      .toEqual({ workspace_kind: 'project', project_dir: '/owner-root/bots/mimi/workspace' });
+      .toEqual({ workspace_kind: 'project', project_dir: path.join('/owner-root', 'bots', 'v2', 'workspace') });
+  });
+
+  it('keeps a hidden or unregistered buddy project out of the sidebar on resume', async () => {
+    const o = opts('v2-main');
+    await prepareBotWorkspaceRuntime(o, { ...deps, registeredProject: async () => null });
+    expect(o).toMatchObject({ workspaceKind: 'dialogue', projectDir: undefined, workingDir: '/dialogues/session' });
+    expect(ensureWorkspaceDir).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT project_dir FROM sessions WHERE id = ?').get('v2-main'))
+      .toEqual({ project_dir: null });
   });
 
   it("runs a 分工 Session in its plan's recorded directory", async () => {

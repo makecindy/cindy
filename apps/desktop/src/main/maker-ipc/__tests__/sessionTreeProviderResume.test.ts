@@ -1,4 +1,5 @@
 import { createSessionOptionsReconciler } from '../sessionOptionsReconciler.js';
+import { hydrateProviderIdBeforeSessionStart } from '../sessionProviderBootstrap.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -60,17 +61,15 @@ describe('Pi session-tree lazy resume provider route', () => {
   });
 
   it('keeps the same three-state route contract across every persisted-session bootstrap', async () => {
-    const preHydrate = sourceBetween(
-      'async function hydrateProviderIdBeforeSessionStart',
-      'async function markOrcaRoleIfNeeded',
-    );
     const queued = sourceBetween(
       'async function buildCreateOptsForQueuedSession',
       'async function enqueueSendToSessionMessage',
     );
 
-    expect(preHydrate).toContain('o.providerId = row.providerId?.trim() || null;');
     for (const providerId of [null, undefined, 'selected-provider']) {
+      const options: { id: string; providerId?: string | null } = { id: 'task' };
+      await hydrateProviderIdBeforeSessionStart(options, async () => providerId);
+      expect(options.providerId).toBe(providerId);
       const co = { agentKind: 'pi', providerId: 'stale' } as MakerSessionCreateOpts;
       await createSessionOptionsReconciler({ log: { warn() {} },
         readSession: async () => ({ model: 'm', agentKind: 'pi', providerId }) })('task', co);

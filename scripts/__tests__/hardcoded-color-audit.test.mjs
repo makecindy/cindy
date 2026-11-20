@@ -129,7 +129,8 @@ test('old approved hljs and asset values are narrow, not file bypasses; retired 
   assert.deepEqual(objectPathAt(anonymous, anonymous.indexOf('"#fff"')), []);
   const css = fs.readFileSync(path.join(root,renderer,'styles/globals.css'),'utf8');
   const approvedSelectors = inspect(renderer+'styles/globals.css',css).filter(f=>f.rule==='bare-color' && f.disposition==='allowed');
-  assert.deepEqual(approvedSelectors.map(f=>f.value),['#2573ec','#c9d1d9']);
+  // Composer Stop working glow palette (DESIGN §2, registered 2026-11-18), then the hljs pair.
+  assert.deepEqual(approvedSelectors.map(f=>f.value),['#32c850','#1eb9aa','#ff7828','#6446ff','#f032b4','#b428f0','#288cff','#ff3264','#ffffff','#000000','#2573ec','#c9d1d9']);
   for (const file of ['components/settings/AgentIslandSection.tsx', 'components/settings/WorkLouderCodexKeyboardLayout.tsx']) {
     const source = fs.readFileSync(path.join(root, renderer + file), 'utf8');
     const hits = inspect(renderer + file, source).filter(f => f.rule === 'bare-color');
@@ -304,8 +305,10 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   const summary = workflow.jobs.verify.steps[0];
   for (const checks of ['success','failure','cancelled','skipped']) {
     for (const shards of ['success','failure','cancelled','skipped']) {
+      // The parallel typecheck job blocks verify like the checks it was split from.
+      for (const typecheck of checks === 'success' && shards === 'success' ? ['success','failure','cancelled','skipped'] : ['success']) {
       // Host combinations only matter once the other gates pass.
-      const allGreen = checks === 'success' && shards === 'success';
+      const allGreen = checks === 'success' && shards === 'success' && typecheck === 'success';
       for (const selection of allGreen ? ['success','failure','cancelled','skipped'] : ['success']) {
       for (const required of allGreen ? ['true','false',''] : ['true']) {
       for (const hosts of allGreen ? ['success','failure','cancelled','skipped'] : ['success']) {
@@ -314,6 +317,7 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
       // this contract test behaves the same on Windows and Linux.
       const aggregateScript = summary.run
         .replaceAll('$VERIFY_CHECKS_RESULT', checks)
+        .replaceAll('$TYPECHECK_RESULT', typecheck)
         .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards)
         .replaceAll('$HOST_CHANGES_RESULT', selection)
         .replaceAll('$HOST_REQUIRED', required)
@@ -323,7 +327,8 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
       // Host regressions may be skipped only when selection succeeded and said they are not needed.
       const hostOk = selection === 'success'
         && ((required === 'true' && hosts === 'success') || (required === 'false' && hosts === 'skipped'));
-      assert.equal(aggregate.status === 0, checks === 'success' && shards === 'success' && hostOk);
+      assert.equal(aggregate.status === 0, allGreen && hostOk);
+      }
       }
       }
       }
@@ -331,6 +336,7 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   }
   const propagatedScript = summary.run
     .replaceAll('$VERIFY_CHECKS_RESULT', failed.status ? 'failure' : 'success')
+    .replaceAll('$TYPECHECK_RESULT', 'success')
     .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success')
     .replaceAll('$HOST_CHANGES_RESULT', 'success')
     .replaceAll('$HOST_REQUIRED', 'true')
@@ -437,7 +443,7 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.ok(pkg.scripts['test:runner'].includes('scripts/__tests__/hardcoded-color-audit.test.mjs'));
   assert.equal(workflow.jobs.verify.name,'verify');
   assert.match(workflow.jobs.verify.if,/always\(\)/);
-  assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','linux-unit-shards','host-changes','host-regressions']);
+  assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','typecheck','linux-unit-shards','host-changes','host-regressions']);
   const host = workflow.jobs['host-regressions'];
   assert.equal(host.needs, 'host-changes');
   assert.deepEqual(host.strategy.matrix.os, ['ubuntu-latest', 'windows-latest', 'macos-latest']);

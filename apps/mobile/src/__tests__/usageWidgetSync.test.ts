@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DeviceView } from '@cindy/device-link';
 import { DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL } from '@cindy/maker-shared/device-link-contract';
 
-vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+const native = vi.hoisted(() => ({ readSnapshot: () => null, readPinnedDeviceIds: () => ['b'], writeSnapshot: vi.fn(() => true) }));
+vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => native }));
 
-const { refreshUsageWidgetStore } = await import('@/widgets/usageWidgetSync');
+const { refreshUsageWidgetStore, refreshUsageWidgets } = await import('@/widgets/usageWidgetSync');
 
 function device(deviceId: string, patch: Partial<DeviceView> = {}): DeviceView {
   return {
@@ -78,4 +79,43 @@ describe('refreshUsageWidgetStore', () => {
     const pinned = await refreshUsageWidgetStore(previous, [device('a'), device('b')], answer() as never, ['a'], () => 9);
     expect(pinned.states.a).toEqual({ kind: 'update-desktop', receivedAtMs: 9 });
   });
+});
+
+// Production refreshUsageWidgets: late reads cannot write or issue another peer request
+// after timeout/account change/new refresh (#11178). Prior coverage only tested peer selection.
+// Minimum input: suspend the list, first or last peer; invalidate, resume. Tier: unit; no real waits.
+// Measured wall time for this file: 1.31 s.
+it.each(['list', 'peer', 'last-peer'] as const)('discards an expired refresh waiting on %s', async (stage) => {
+  native.writeSnapshot.mockClear();
+  let resume!: () => void;
+  const suspended = new Promise<void>((resolve) => { resume = resolve; });
+  let active = true;
+  const invoke = vi.fn(async () => { if (stage !== 'list') await suspended; return { ok: true, snapshot }; });
+  const latest = { current: {
+    readDeviceList: async () => { if (stage === 'list') await suspended; return { devices: stage === 'last-peer' ? [device('a')] : [device('a'), device('b')] }; },
+    invoke: invoke as never, accountGeneration: 1, userId: 'account',
+  } };
+  const pending = refreshUsageWidgets(latest, 1, () => active).catch(() => false);
+  await Promise.resolve();
+  active = false;
+  resume();
+  expect(await pending).toBe(false);
+  expect(invoke).toHaveBeenCalledTimes(stage === 'list' ? 0 : 1);
+  expect(native.writeSnapshot).not.toHaveBeenCalled();
+});
+
+// Both mobile surfaces subscribe to the widget's automatic selection. A pinned
+// computer finishing later must not replace it or expose another account's data.
+it('publishes the automatic reading to the active account only', async () => {
+  const { automaticUsageState, readUsageWidgetStore, subscribeUsageWidgetStore, writeUsageWidgetStore } = await import('@/widgets/usageWidgetSync');
+  const store = await refreshUsageWidgetStore(null, [device('a'), device('b')],
+    (async () => ({ ok: true, snapshot })) as never, ['b']);
+  const notify = vi.fn();
+  const unsubscribe = subscribeUsageWidgetStore(notify);
+  writeUsageWidgetStore({ ...store, accountId: 'owner' });
+  expect(notify).toHaveBeenCalledOnce();
+  expect(automaticUsageState(readUsageWidgetStore(), 'owner')).toBe(store.states.a);
+  expect(automaticUsageState(readUsageWidgetStore(), 'other')).toBeNull();
+  expect(automaticUsageState(readUsageWidgetStore())).toBeNull();
+  unsubscribe();
 });

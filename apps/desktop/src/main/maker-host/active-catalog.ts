@@ -1,6 +1,7 @@
 import type { ModelImageInputCatalogModel } from '../../shared/modelImageInputOverride.js';
 import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
 import { projectCurrentModelSources } from './model-source-snapshots.js';
+import { subscriptionImageModelId } from '../cindy-media/sharedSubscriptionImage.js';
 import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
   projectProviderMediaModels, projectSelectionAliases,
@@ -131,6 +132,14 @@ let custom: Provider[] = [];
 let managed: Provider[] = [];
 /** 当前 owner 的原始配置；仅用于 Registry 热更新后的运行时重投影。 */
 let customConfigs: CustomProviderConfig[] | null = null;
+/** A provider Cindy created for subscription accounts (2026-11-13), as shown in the catalog. */
+export interface SubscriptionPoolProviderEntry {
+  id: string;
+  kind: 'openai' | 'anthropic';
+  name: string;
+}
+/** 当前 owner 为订阅账号新建的供应商；在合并目录末尾按同类内置订阅镜像出条目。 */
+let subscriptionPoolProviders: SubscriptionPoolProviderEntry[] = [];
 /**
  * codex cache 派生的规范化模型快照(原始 slug,不带 chatgpt/ 前缀)。先 augment 到
  * openai.codex,再从生效后的 codex 列表投影 openai.claude-code bridge,确保两边名称和排序同源。
@@ -544,7 +553,7 @@ function deriveXdCodexAnthropicBridgeModelIds(models: XdGatewayModelInfo[]): Set
 /** 当前 XD 模型是否由客户端投影给 Codex、并应走 Anthropic Messages bridge。 */
 export function isXdCodexAnthropicBridgeModel(modelId: string): boolean {
   // Codex 会把 1M 上下文选择编码成 wire model 后缀；目录身份仍是原始 model id。
-  // wire model 还可能带 `openai-codex/` / `codex/` 前缀（视觉桥按模型前缀选面时传给路由判定的形态）；
+  // wire model 还可能带 `openai-codex/` / `codex/` 前缀（运行时传给路由判定的形态）；
   // 剥到目录身份再查，否则投影特例不命中、误走 Responses 面。
   const normalized = stripCodexGatewayWirePrefix(modelId.replace(/\[1m\]$/, ''));
   return xdCodexAnthropicBridgeModelIds.has(normalized);
@@ -1182,8 +1191,16 @@ function projectXdGatewayMediaModels(
       ...(model.modalities ? { modalities: model.modalities } : {}),
       discoveredMetadata: pickModelMetadata(model),
     }));
+  const evaluationModels = gatewayModels
+    .filter(model => model.mode === 'evaluation' || model.mode === 'rerank')
+    .map(model => ({
+      ...pickModelMetadata(model), ...gatewayDisplayPricing(model),
+      id: model.id, name: model.name ?? model.id, mode: model.mode,
+      ...(model.availability ? { availability: model.availability } : {}),
+    }));
   const hasEmbeddingEntries = gatewayModels.some((model) => model.mode === 'embedding');
   const identity = { ...provider };
+  delete identity.evaluationModels;
   delete identity.imageModels;
   delete identity.imageDefaults;
   delete identity.videoModels;
@@ -1197,6 +1214,7 @@ function projectXdGatewayMediaModels(
     imageModels,
     videoModels,
     audioModels,
+    ...(evaluationModels.length ? { evaluationModels } : {}),
     ...(embeddingModels.length > 0 ? { embeddingModels } : {}),
     ...(imageModels[0] ? { imageDefaults: { standard: imageModels[0].id } } : {}),
     ...(videoModels[0] ? { videoDefaults: { standard: videoModels[0].id } } : {}),
@@ -1204,7 +1222,7 @@ function projectXdGatewayMediaModels(
   };
 }
 
-function computeMerged(): Catalog {
+function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, claudeModels?: readonly CatalogModel[]): Catalog {
   const source = base ?? BUNDLED_CATALOG;
   const b =
     baseCapabilityEvidence === 'current'
@@ -1252,7 +1270,7 @@ function computeMerged(): Catalog {
 
   // Codex root 消费其发现快照；Pi 后续独立补新型号，不继承 Codex 专属能力。
   const withCodexDiscovery = providers.map((p) =>
-    p.id === 'openai' ? augmentModels(p, 'codex', discoveredCodex, true) : p,
+    p.id === 'openai' ? augmentModels(p, 'codex', [...codexModels], true) : p,
   );
   if (withCodexDiscovery.some((p, index) => p !== providers[index])) {
     providers = withCodexDiscovery;
@@ -1331,7 +1349,7 @@ function computeMerged(): Catalog {
       const discoveredAccountCodex = discoveredByProvider.get(p.id)?.codex ?? [];
       const accountCodex =
         p.id === 'openai'
-          ? discoveredCodex
+          ? codexModels
           : discoveredAccountCodex.length > 0 || p.auth.native !== 'codex'
             ? discoveredAccountCodex
             : (p.models.codex ?? []);
@@ -1415,8 +1433,9 @@ function computeMerged(): Catalog {
     }
     if (providerCatalogId(p) === 'anthropic') {
       // Claude 订阅只供 Claude Code(内置 CLI 用它自己的登录),不向 Codex / Pi 投影。
-      const accountModels = p.id === 'anthropic' ? anthropicModels : [];
-      const seed = accountModels.length > 0 ? accountModels : (p.models['claude-code'] ?? []);
+      const accountModels = p.id === 'anthropic' ? claudeModels ?? anthropicModels : [];
+      const seed = (p.id === 'anthropic' && claudeModels !== undefined) || accountModels.length > 0
+        ? accountModels : (p.models['claude-code'] ?? []);
       // 成员只来自 Claude Code SDK 返回的清单;registry 不补 SDK 没返回的型号。
       const root = assembleRoot(
         'anthropic', 'claude-code', seed, plan, false, false, p.id, accountModels,
@@ -1866,7 +1885,7 @@ function computeMerged(): Catalog {
     if (!isOpenAiSubscriptionProvider(provider) ||
         (provider.id === 'openai' && openAiImagesApiKeyConfigured) ||
         provider.imageModels?.length === 0) return provider;
-    const id = `${provider.id}/gpt-image-2`;
+    const id = subscriptionImageModelId(provider.id);
     const previous = provider.imageModels?.find((model) => model.id === id);
     const defaults: ProviderMediaModel = {
       id,
@@ -1984,6 +2003,17 @@ function computeMerged(): Catalog {
           localOverrides.patches[key].agents?.includes(agent)));
     },
   }));
+  // Providers Cindy created for subscription accounts (2026-11-13) mirror their built-in
+  // subscription's final routes and models; only the accounts behind them differ (placement.ts).
+  // Platform-key media stays with the built-in connection.
+  for (const entry of subscriptionPoolProviders) {
+    const base = providers.find((provider) => provider.id === entry.kind);
+    if (!base || providers.some((provider) => provider.id === entry.id)) continue;
+    providers = [...providers, {
+      ...base, id: entry.id, name: entry.name, subscriptionPool: entry.kind,
+      imageModels: undefined, imageDefaults: undefined, videoModels: undefined, videoDefaults: undefined,
+    }];
+  }
   return { ...b, modelRegistry, providers };
 }
 
@@ -2023,6 +2053,33 @@ export function getActiveCatalog(): Catalog {
     merged = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
   }
   return merged;
+}
+
+let pooledCodexProjection: { revision: number; catalogs: WeakMap<readonly CatalogModel[], Catalog> } | undefined;
+
+/** Reuse the normal metadata/bridge/override pipeline without mutating default-account discovery. */
+export function getActiveCatalogWithCodexModels(models: readonly CatalogModel[]): Catalog {
+  if (pooledCodexProjection?.revision !== revision)
+    pooledCodexProjection = { revision, catalogs: new WeakMap() };
+  const cached = pooledCodexProjection.catalogs.get(models);
+  if (cached) return cached;
+  const catalog = computeMerged(models);
+  const projected = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
+  pooledCodexProjection.catalogs.set(models, projected);
+  return projected;
+}
+
+let pooledClaudeProjection: { revision: number; catalogs: WeakMap<readonly CatalogModel[], Catalog> } | undefined;
+/** Apply the same Registry and user overrides to only this Claude account's membership. */
+export function getActiveCatalogWithClaudeModels(models: readonly CatalogModel[]): Catalog {
+  if (pooledClaudeProjection?.revision !== revision)
+    pooledClaudeProjection = { revision, catalogs: new WeakMap() };
+  const cached = pooledClaudeProjection.catalogs.get(models);
+  if (cached) return cached;
+  const catalog = computeMerged(undefined, models);
+  const projected = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
+  pooledClaudeProjection.catalogs.set(models, projected);
+  return projected;
 }
 
 /**
@@ -2205,6 +2262,20 @@ export function setManagedProviders(providers: Provider[]): void {
 export function setCustomProviders(providers: Provider[]): void {
   customConfigs = null;
   custom = [...providers];
+  // The empty snapshot is also the owner-boundary/reset entry. Account-derived
+  // provider names belong to that same owner and must not survive a failed reload.
+  if (providers.length === 0) subscriptionPoolProviders = [];
+  markChanged();
+}
+
+/**
+ * Publish the current owner's created subscription providers (2026-11-13); each mirrors its
+ * built-in subscription in the merged catalog. Pass an empty list when the owner changes.
+ */
+export function setSubscriptionPoolProviders(entries: readonly SubscriptionPoolProviderEntry[]): void {
+  const next = entries.map(({ id, kind, name }) => ({ id, kind, name }));
+  if (JSON.stringify(next) === JSON.stringify(subscriptionPoolProviders)) return;
+  subscriptionPoolProviders = next;
   markChanged();
 }
 

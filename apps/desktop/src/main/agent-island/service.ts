@@ -174,7 +174,8 @@ import { getActiveAppSession } from '../appSessionState.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
+import { hasTaskChangeListener, publishTaskChange } from '../localDb/taskEvents.js';
 import {
   beginProtectedFolderCheck,
   detectProtectedFolderEperm,
@@ -666,6 +667,13 @@ export class AgentIslandService {
   }
 
   registerIpc(): void {
+    // The native helper has no panel observing screen changes while the target is absent.
+    const refreshDisplays = () => {
+      if (this.isEnabled()) this.publish();
+    };
+    screen.on('display-added', refreshDisplays);
+    screen.on('display-removed', refreshDisplays);
+
     ipcMain.handle(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL, (event, sessionId: unknown) => {
       const sourceWindow = BrowserWindow.fromWebContents(event.sender);
       if (!sourceWindow || sourceWindow.isDestroyed()) {
@@ -867,7 +875,7 @@ export class AgentIslandService {
   ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
     // Keep the OS notification when this event has no enabled Cindy sound.
     if (!hasAgentIslandNotificationSound(this.soundSettings, kind)) return false;
-    if (this.isEnabled()) return true;
+    if (this.hasIslandDisplay()) return true;
     return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
   }
 
@@ -993,7 +1001,7 @@ export class AgentIslandService {
 
   /** True means this surface owns the alert; otherwise the caller uses the OS notification. */
   notifyGroupChat(groupId: string): boolean {
-    if (!this.isEnabled() || this.headless || this.nativeHost.failed || this.nativeHost.available === false) return false;
+    if (!this.hasIslandDisplay() || this.headless || this.nativeHost.failed || this.nativeHost.available === false) return false;
     const chat = this.state.sessions.get(groupChatIslandId(groupId))?.groupChat;
     if (!chat) return false;
     const window = this.deps.getMainWindow();
@@ -2083,6 +2091,15 @@ export class AgentIslandService {
     return [...(this.state.sessions.get(sessionId)?.pendingInteractionIds ?? [])];
   }
 
+  /** Display demand counts execution, including muted and group-chat tasks. */
+  getLocalRunningTaskCount(): number {
+    let count = 0;
+    for (const task of this.state.sessions.values()) {
+      if (task.sourceDeviceId === null && task.running && task.phase === 'running') count++;
+    }
+    return count;
+  }
+
   getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
     return buildAllSessionActivitySnapshots(this.state);
   }
@@ -2174,6 +2191,17 @@ export class AgentIslandService {
       const previous = this.sessionActivitySubscriptionCursor.get(sessionId) ?? null;
       const current = next.get(sessionId) ?? null;
       if (previous && current && sessionActivitySnapshotsEqual(previous, current)) continue;
+      // The plugin topic contains lifecycle edges only. Activity/progress and
+      // display changes stay on existing consumers, without plugin timers.
+      if (hasTaskChangeListener('state') && (!previous || !current
+        || previous.phase !== current.phase || previous.currentTurnActive !== current.currentTurnActive
+        || previous.turnGeneration !== current.turnGeneration || previous.startedAtMs !== current.startedAtMs
+        || previous.recordStatus !== current.recordStatus || previous.gracefulStopState !== current.gracefulStopState
+        || previous.interactionKind !== current.interactionKind)) {
+        publishTaskChange({ kind: 'state', sessionId, state: {
+          activity: current ? canonicalSessionActivity(current) : null, changedAtMs,
+        } }, getSafeDataOwnerPushStamp());
+      }
       for (const listener of this.sessionActivityListeners) {
         try {
           listener({
@@ -2269,7 +2297,19 @@ export class AgentIslandService {
       pillSnapshot,
       this.mascotSkin,
       {
-        needsInput: t('agentIsland.native.needsInput'),
+        countLabels: {
+          attention: t('agentIsland.native.summaryAttention'),
+          inProgress: t('agentIsland.native.summaryInProgress'),
+          pending: t('agentIsland.native.summaryPending'),
+          unread: t('agentIsland.native.summaryUnread'),
+        },
+        needsInput: t(prioritySession?.interactionKind === 'permission'
+          ? 'agentIsland.native.awaitingPermission'
+          : prioritySession?.interactionKind === 'ask_user_question'
+            ? 'agentIsland.native.awaitingQuestion'
+            : prioritySession?.interactionKind === 'plan_review'
+              ? 'agentIsland.native.awaitingPlan'
+              : 'agentIsland.native.needsInput'),
         running: t('agentIsland.native.running'),
         completed: t('agentIsland.native.completed'),
         error: t('agentIsland.native.error'),
@@ -2667,13 +2707,16 @@ export class AgentIslandService {
     ).contentWidth;
   }
 
+  /** Notification ownership requires a connected display that can show the island. */
+  private hasIslandDisplay(): boolean {
+    return this.isEnabled() && this.getTargetDisplays().length > 0;
+  }
+
   private getTargetDisplays(displays = this.getAvailableDisplays()): Display[] {
     if (this.displayTarget.mode === 'display') {
       const selectedDisplay = this.resolveSelectedDisplay(displays);
       if (!selectedDisplay) {
-        // A temporary disconnect uses the current fallback for rendering only;
-        // keep the saved identity so reconnecting restores the user's choice.
-        return [this.getTargetDisplay(displays)];
+        return [];
       }
       const resolvedTarget = this.displayTargetForDisplay(displays, selectedDisplay);
       if (!sameAgentIslandDisplayTarget(this.displayTarget, resolvedTarget)) {

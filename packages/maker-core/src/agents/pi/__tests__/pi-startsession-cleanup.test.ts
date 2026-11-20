@@ -29,6 +29,7 @@ import path from 'node:path';
 import * as childProcess from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
+import { estimateSpawnArgvLength, PI_WINDOWS_SPAWN_ARGV_BUDGET } from '../project-resource-cli.js';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -672,6 +673,27 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(disposed).toBe(1);
     expect(proxyDisposed).toBe(2);
     expect(knobs.closeCount).toBe(1); // 已 spawn → 必须关掉,避免僵尸持有 ?session= 路由
+  });
+
+  // PR #10213 Windows CI: a failed initial durable scan logged through a deps
+  // alias assigned only after startup. Existing cases did not force scan failure
+  // before an RPC rejection, so they missed the unhandled TDZ error (unit tier).
+  it('reports a durable scan failure without masking a failed startup', async () => {
+    knobs.getStateRejects = true;
+    vi.spyOn(piSubagentRuns, 'scanPiSubagentRuns').mockImplementation(async function* () {
+      throw new Error('initial scan unavailable');
+    });
+    const warn = vi.fn();
+    const agent = new PiAgent(buildDeps({ logger: { ...noopLogger, warn } }));
+
+    await expect(agent.startSession(opts())).rejects.toMatchObject({
+      name: 'AgentStartupStoppedError', cause: new Error('get_state rejected (mock)'),
+    });
+    expect(warn).toHaveBeenCalledWith('pi subagent durable status refresh failed', {
+      message: 'initial scan unavailable',
+    });
+    expect(disposed).toBe(1);
+    expect(knobs.closeCount).toBe(1);
   });
 
   // #9855: the startup error previously exposed only the RPC timeout. Exercise
@@ -2785,6 +2807,11 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
   it('routes model resume through the same retained-session helper and returns its generation id', async () => {
     const handle = await new PiAgent(buildDeps()).startSession(opts());
+    // #9705: resume must snapshot the live parent settings, not a stale child home.
+    const settingsFile = path.join(knobs.spawnedEnvs.at(-1)!.PI_CODING_AGENT_DIR!, 'settings.json');
+    const settings = { ...JSON.parse(readFileSync(settingsFile, 'utf8')),
+      shellPath: '/fixture/current shell', shellCommandPrefix: ' export PREFIX=live\n' };
+    writeFileSync(settingsFile, JSON.stringify(settings));
     const resumedId = '123e4567-e89b-42d3-a456-426614174098';
     const resumeSpy = vi.spyOn(piSubagentRuns, 'resumePiSubagentRun').mockResolvedValue(resumedId);
     try {
@@ -2797,6 +2824,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       })));
       expect(resumeSpy).toHaveBeenCalledWith(expect.any(String), '123e4567-e89b-42d3-a456-426614174097',
         'check again', expect.objectContaining({ runtimeOwnerId: expect.any(String), launchRunner: expect.any(Function) }), 'one-child');
+      expect(JSON.parse(resumeSpy.mock.calls[0]![3].runtimeSnapshot!.settingsJson!.toString('utf8'))).toMatchObject({
+        shellPath: settings.shellPath, shellCommandPrefix: settings.shellCommandPrefix,
+      });
     } finally { await handle.close(); }
   });
 
@@ -3056,6 +3086,35 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       ),
     ]);
     await reviewHandle.close();
+  });
+
+  it('collapses oversized project Skill argv into one session directory', async () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      const skills = Array.from({ length: 220 }, (_, index) => {
+        const skillDir = path.join(cwd, '.agents', 'skills', `long-project-skill-${String(index).padStart(3, '0')}-${'nested-path-'.repeat(10)}`);
+        mkdirSync(skillDir, { recursive: true });
+        writeFileSync(path.join(skillDir, 'SKILL.md'), `# skill ${index}\n`);
+        return skillDir;
+      });
+
+      const handle = await new PiAgent(buildDeps()).startSession(opts());
+      try {
+        const args = knobs.spawnedArgs[0]!;
+        const skillArgs = repeatedArgValues(args, '--skill');
+        expect(skillArgs).toHaveLength(1);
+        expect(path.basename(skillArgs[0]!)).toBe('cindy-project-skills');
+        expect(readdirSync(skillArgs[0]!)).toHaveLength(skills.length);
+        expect(readdirSync(skillArgs[0]!).map((entry) => realpathSync(path.join(skillArgs[0]!, entry))).sort())
+          .toEqual(skills.map((skill) => realpathSync(skill)).sort());
+        expect(estimateSpawnArgvLength(args, 'win32')).toBeLessThanOrEqual(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+      } finally {
+        await handle.close();
+      }
+      await waitFor(() => !existsSync(path.join(knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!, 'cindy-project-skills')));
+    } finally {
+      platform.mockRestore();
+    }
   });
 
   it('still loads project resources when a local root session resumes a fork jsonl', async () => {

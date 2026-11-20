@@ -2,6 +2,7 @@ import { kimiUsageWindowMinutes } from '../../../shared/kimiCodingUsage';
 import { opencodeGoUsageWindowMinutes } from '../../../shared/opencodeGoUsage';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { cn } from '@/lib/utils';
 import type { ProviderView } from '@cindy/model-providers';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
 import {
@@ -93,11 +94,13 @@ export function ModelSourceUsageProvider({
   const accountProviders = (enabled ? providers : [])
     .filter(
       (provider) =>
-        (provider.id === 'anthropic' || provider.id === 'openai') &&
+        // Built-in subscriptions and providers Cindy created for subscription accounts
+        // (2026-11-13): each shows the quota of its own accounts.
+        (provider.id === 'anthropic' || provider.id === 'openai' || !!provider.subscriptionPool || !!provider.subscriptionAccountPool) &&
         provider.auth?.method === 'oauth' &&
         !provider.subscriptionAccount?.reconnectRequired,
     )
-    .map((provider) => provider.id as 'anthropic' | 'openai');
+    .map((provider) => provider.id);
   // A shared directory has no private pool, but its rail may also contain an
   // explicitly owned computer. Each rail boundary checks its own source.
   const previewPool = scope !== null;
@@ -213,7 +216,7 @@ function modelSourceQuota(
     const data = usage.claude;
     const weekly = data && (matchScopedWindowForModel(data.scoped, modelId) ?? data.sevenDay);
     return {
-      plan: formatClaudeSubscriptionPlanLabel(data?.subscriptionType),
+      plan: formatClaudeSubscriptionPlanLabel(data?.subscriptionType, data?.planTier, data?.planDisplayName),
       windows: [
         data?.fiveHour && { window: data.fiveHour, windowMinutes: FIVE_HOUR_WINDOW_MINUTES },
         weekly && { window: weekly, windowMinutes: WEEKLY_WINDOW_MINUTES },
@@ -246,23 +249,27 @@ export function ModelSourceDetails({
   label,
   accountIdentity,
   modelId,
+  className,
 }: {
   providerId: string;
   label: string;
   accountIdentity?: string;
   modelId: string;
+  className?: string;
 }) {
   const { t } = useTranslation();
   const usages = useContext(UsageContext);
   const nowMs = useContext(ClockContext);
   const pickerAccount = useModelPickerAccount(providerId);
+  // Created subscription providers (2026-11-13) report their pool kind; built-ins are their own.
+  const codex = (pickerAccount?.kind ?? providerId) === 'openai';
   const poolParts = pickerAccount?.members?.map((account, index) => {
     const view = modelSourceQuota(
       {
-        source: providerId === 'openai' ? 'codex' : 'claude',
+        source: codex ? 'codex' : 'claude',
         codex: {
           buckets: poolCodexBuckets(account.usage),
-          planType: account.plan ?? null,
+          planType: account.planType ?? account.plan ?? null,
           web: null,
           nativeAccountPool: true,
         },
@@ -298,17 +305,17 @@ export function ModelSourceDetails({
       )
       .join(' · ');
     const memberPlan =
-      providerId === 'openai'
-        ? formatCodexPlanLabel(account.plan)
-        : formatClaudeSubscriptionPlanLabel(account.plan);
+      codex
+        ? formatCodexPlanLabel(account.planType ?? account.plan)
+        : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName);
     return { percent, title: [name, memberPlan, detail || '—'].filter(Boolean).join(' · ') };
   });
   const quota = modelSourceQuota(usages.get(providerId), modelId, nowMs);
   const { windows } = quota;
   const plan = pickerAccount
-    ? providerId === 'openai'
-      ? formatCodexPlanLabel(pickerAccount.plan)
-      : formatClaudeSubscriptionPlanLabel(pickerAccount.plan)
+    ? codex
+      ? formatCodexPlanLabel(pickerAccount.planType ?? pickerAccount.plan)
+      : formatClaudeSubscriptionPlanLabel(pickerAccount.plan, pickerAccount.planTier, pickerAccount.planDisplayName)
     : quota.plan;
   const parts = windows
     .filter((window) => Number.isFinite(window.usedPercent))
@@ -346,7 +353,7 @@ export function ModelSourceDetails({
   const identity = poolParts?.length
     ? undefined
     : pickerAccount
-      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      ? pickerAccount.identity
       : accountIdentity;
   const source = [providerAccountLabel(label, identity), plan].filter(Boolean).join(' · ');
   return (
@@ -357,7 +364,10 @@ export function ModelSourceDetails({
           ? [source, ...poolParts.map((part) => part.title)].join('\n')
           : [source, ...parts.map((part) => part.title)].join(' · ')
       }
-      className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
+      className={cn(
+        'flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]',
+        className,
+      )}
     >
       <span className="min-w-0 truncate">{source}</span>
       {tightest && (
