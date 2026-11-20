@@ -8,6 +8,7 @@ import {
   useRemoteSessionTitle,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { botConversationRouteForSession, readLoadedBotProfiles } from '@/features/bots/botSessionOwners';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { toast } from '@/lib/toast';
@@ -59,8 +60,15 @@ export function useSourceSessionOpener(sourceSessionId: string | undefined, host
       }
     : sourceSessionId && sourceTarget
       ? () => {
-          if (hostDeviceId) remoteProjectsStore.pinSessionOrigin(hostDeviceId, sourceSessionId);
-          navigate(`/cc-agent/${encodeURIComponent(sourceSessionId)}`);
+          if (hostDeviceId) {
+            remoteProjectsStore.pinSessionOrigin(hostDeviceId, sourceSessionId);
+            navigate(`/cc-agent/${encodeURIComponent(sourceSessionId)}`);
+            return;
+          }
+          // A teammate's topic or main chat opens as that conversation, not as a bare lane task page.
+          const profiles = readLoadedBotProfiles();
+          navigate((profiles && botConversationRouteForSession(profiles, sourceSessionId))
+            ?? `/cc-agent/${encodeURIComponent(sourceSessionId)}`);
         }
       : null;
   return { sourceTarget, hostDeviceId, liveTitle, open };

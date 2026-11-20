@@ -589,6 +589,10 @@ describe('sendToSession ordering', () => {
     // message source label cannot disagree.
     expect(createBranch).toContain('...(inputAgentMeta ? { agentMeta: inputAgentMeta } : {}),');
     expect(countOccurrences(createBranch, 'sessionOriginFromInputMeta(')).toBe(1);
+    // Only a host-confirmed creation records a source: delivering to or waking an existing
+    // task (the acceptance chain's D) must never write one.
+    expect(countOccurrences(block, 'sessionOriginFromInputMeta(')).toBe(1);
+    expect(countOccurrences(block, 'originSession: serializeSessionOrigin(')).toBe(1);
   });
 
   it('routes ANY_SESSION_IN_TURN through maker active session state', () => {
