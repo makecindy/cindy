@@ -3,7 +3,7 @@
 import os from 'node:os';
 import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } from '../../desktop/src/main/plugin-oauth/runtime.js';
 import WebSocket from 'ws';
-import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload, type LinkOpenOptions } from '@cindy/device-link';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
@@ -297,7 +297,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       primaryCapability: 'agent-net-node-v2',
       prefersPrimary: node.prefersPrimary,
       openOnPrimary: (peer: string, payload: unknown, timeoutMs: number | undefined,
-        primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload> => sessionLinks.openAttested(peer, payload, timeoutMs, primary),
+        primary: () => Promise<LinkAcceptPayload>, options?: LinkOpenOptions): Promise<LinkAcceptPayload> => sessionLinks.openAttested(peer, payload, timeoutMs, primary, options),
       options: { ...relayOptions, transportCapabilities: () => (node.active() ? ['agent-net-node-v2'] : []),
         transportAttestation: node.transportAttestation, verifyTransportAttestation: node.verifyTransportAttestation,
         // Its own rejection decides its refresh (`issue` is the main connection's, which runs on the node with no token).

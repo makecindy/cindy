@@ -38,6 +38,7 @@ import {
   type InvokeResultPayload,
   type LinkOpenPayload,
   type LegacyPeerConnectionOptions,
+  type PeerLinkAcceptanceProof,
   type WsLike,
 } from '@cindy/device-link';
 import * as deviceLink from '@cindy/device-link';
@@ -46,6 +47,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
 import { requiresSessionLink } from '../device-link/linkRecovery';
+import { linkOpenCapabilities } from '../device-link/backgroundLink';
 import { createTransportTimeoutReopenLoop } from '../device-link/transportTimeoutReopen';
 import { createSubscriptionReplayScheduler } from '../device-link/subscriptionReplayScheduler';
 import type * as SubscriptionRegistry from '../device-link/subscriptions';
@@ -109,6 +111,10 @@ const inboundDispatch = new Script(ts.transpileModule([
   productionFunction(dispatchSource, 'handleLinkOpen'),
   'handleLinkOpen;',
 ].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText);
+const openRemoteLinkEntry = new Script(ts.transpileModule(
+  productionFunction(deviceLinkSource, 'openRemoteLink') + '; openRemoteLink;',
+  { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+).outputText);
 const remoteSubscribeEntry = new Script(ts.transpileModule(
   `${productionFunction(deviceLinkSource, 'remoteSubscribe')}\nremoteSubscribe;`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
@@ -504,18 +510,18 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       sessionB = new SessionPeer({ wire: wire(1), laneFor: agentNetSessionLane, ...linksB.handlers('desktop-a') });
     };
     const a = recoveryDesktop(relay, 'desktop-a', raw => routeSessionPeers(raw, linksA), new RecoveryRelay(true),
-      (peer, payload, timeoutMs, primary) => { connectSessions(); return linksA.openAttested(peer, payload, timeoutMs, primary); });
+      (peer, payload, timeoutMs, primary, options) => { connectSessions(); return linksA.openAttested(peer, payload, timeoutMs, primary, options); });
     const b = recoveryDesktop(relay, 'desktop-b', raw => routeSessionPeers(raw, linksB));
     b.context.ports.sameAccountCapabilities = () => ['agent-net-node-v2'];
     if (mode !== 'probe') connectSessions();
     let reciprocal: Promise<unknown> | undefined;
     const broadcast = vi.fn();
     Object.assign(a.context, {
-      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { cancel: () => {} },
-      replayActiveSubscriptions: (_why: string, peer: string) => {
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
+      replayActiveSubscriptions: (_why: string, peer: string, proof?: PeerLinkAcceptanceProof) => {
         if (!a.client.isLinkReady(peer) && !reciprocal) {
           if (mode === 'closed') a.client.closeLink(peer, 'user');
-          reciprocal = a.client.openLink(peer, { controllerName: 'A', protocolVersion: 1, appVersion: 'test' });
+          reciprocal = a.client.openLink(peer, { controllerName: 'A', protocolVersion: 1, appVersion: 'test' }, undefined, { inboundAcceptance: proof });
         }
       },
       sharedHostStreams: new Map(), sharedHostSourceEpoch: 0, broadcast, DEVICE_LINK_PUSH,
@@ -535,6 +541,67 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     } finally {
       relay.releaseConfirmations();
       a.client.stop(); b.client.stop(); a.registry.clearAll(); b.registry.clearAll(); vi.useRealTimers();
+    }
+  });
+
+  // P2: a verified external open during backoff must restore an old Host's
+  // lost topic registry, not just invalidate Renderer state. Real Main open /
+  // subscribe functions and clients deliver the final topic-gated push; unit tier.
+  it('restores pre-reliable subscriptions when an external open completes timeout backoff', async () => {
+    vi.useFakeTimers();
+    const relay = new RecoveryRelay(false, false);
+    const a = recoveryDesktop(relay, 'desktop-a'), c = recoveryDesktop(relay, 'desktop-c');
+    let b = recoveryDesktop(relay, 'desktop-b');
+    const refs = [{ deviceId: 'desktop-b', topics: ['session:remote-b'] },
+      { deviceId: 'desktop-c', topics: ['session:healthy-c'] }];
+    Object.assign(a.context, {
+      sharedTaskTopics, assertNotStandby: () => {}, assertRemoteControlTargetEnabled: () => {},
+      assertRemoteControlTargetEnabledAfterReopen: () => {},
+      snapshotSubscriptions: (peer?: string) => refs.filter(ref => !peer || ref.deviceId === peer),
+      openLinkCloseEpochs: new Map(), openLinkInFlight: new Map(), ensureOnlineForRequest: async () => {},
+      requiresSessionLink, DeviceLinkError, DL_SUBSCRIBE_CHANNEL, deviceName: () => 'Desktop A',
+      CONTROLLER_CAPABILITIES: [], responsivenessTracker: null, app: { getVersion: () => 'test' },
+      linkOpenCapabilities, revokedByRemote: new Set(),
+    });
+    const open = openRemoteLinkEntry.runInContext(a.context) as (peer: string) => Promise<unknown>;
+    a.context.openRemoteLink = open;
+    const remoteSubscribe = remoteSubscribeEntry.runInContext(a.context) as
+      (peer: string, topics: string[]) => Promise<InvokeResultPayload>;
+    const scheduler = createSubscriptionReplayScheduler({
+      snapshotSubscriptions: a.context.snapshotSubscriptions, remoteSubscribe,
+      isLinkTornDown: () => false, isRelayOnline: () => true, isDeviceUnresponsive: () => false,
+      getPresenceAvailability: () => true, isPermanentError: () => true, log: a.diagnostic,
+    });
+    const reopen = vi.fn(async () => { throw new Error('first recovery unavailable'); });
+    const loop = createTransportTimeoutReopenLoop({ reopen, shouldAbort: () => false, baseDelayMs: 1_000 });
+    const broadcast = vi.fn();
+    try {
+      a.client.start(); b.client.start(); c.client.start(); await relay.flush();
+      const seed = Promise.all(refs.map(ref => remoteSubscribe(ref.deviceId, ref.topics)));
+      await relay.flush(); await seed;
+      expect(b.registry.getControllersForTopic('session:remote-b')).toEqual(['desktop-a']);
+      relay.sockets.get('desktop-b')!.close();
+      await vi.advanceTimersByTimeAsync(10); await relay.flush(); c.subscribed.mockClear();
+      expect(b.registry.getControllersForTopic('session:remote-b')).toEqual([]);
+      Object.assign(a.context, { transportTimeoutReopen: loop, replayActiveSubscriptions: scheduler.replay,
+        isScopedPeer, parseSharedTaskPeer, sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+        broadcast, DEVICE_LINK_PUSH });
+      acceptedRegistration.runInContext(a.context);
+      loop.trigger('desktop-b'); await Promise.resolve(); await Promise.resolve();
+      expect(loop.isActive('desktop-b')).toBe(true);
+      const opened = open('desktop-b'); await relay.flush(); await opened; await relay.flush();
+      expect(b.registry.getControllersForTopic('session:remote-b')).toEqual(['desktop-a']);
+      expect(c.subscribed).not.toHaveBeenCalled();
+      expect(loop.isActive('desktop-b')).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000); await relay.flush();
+      expect(reopen).toHaveBeenCalledTimes(1);
+      for (const peer of b.registry.getControllersForTopic('session:remote-b')) b.client.sendPush(peer, 'maker:event', { recovered: true });
+      await relay.flush(); expect(a.pushes).toContainEqual({ channel: 'maker:event', payload: { recovered: true } });
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
+    } finally {
+      loop.dispose(); scheduler.teardown();
+      for (const desktop of [a, b, c]) { desktop.client.stop(); desktop.registry.clearAll(); }
+      vi.useRealTimers();
     }
   });
 
@@ -559,16 +626,16 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       { deviceId: 'desktop-b', topics: ['session:remote-b'] },
       { deviceId: 'desktop-c', topics: ['session:healthy-c'] },
     ];
-    const open = (client: Pick<DeviceLinkClient, 'openLink'>, peer: string) => client.openLink(peer, {
+    const open = (client: Pick<DeviceLinkClient, 'openLink'>, peer: string, options?: Parameters<DeviceLinkClient['openLink']>[3]) => client.openLink(peer, {
       controllerName: 'Test desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test',
       capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
-    });
+    }, undefined, options);
     Object.assign(a.context, {
       sharedTaskTopics, assertNotStandby: () => {}, assertRemoteControlTargetEnabled: () => {},
       assertRemoteControlTargetEnabledAfterReopen: () => {},
       snapshotSubscriptions: (peer?: string) => refs.filter((ref) => !peer || ref.deviceId === peer),
       openLinkCloseEpochs: new Map(), ensureOnlineForRequest: async () => {},
-      requiresSessionLink, openRemoteLink: (peer: string) => open(a.client, peer),
+      requiresSessionLink, openRemoteLink: (peer: string, options?: Parameters<DeviceLinkClient['openLink']>[3]) => open(a.client, peer, options),
       DeviceLinkError, DL_SUBSCRIBE_CHANNEL, deviceName: () => 'Desktop A',
       CONTROLLER_CAPABILITIES: [], responsivenessTracker: null,
     });

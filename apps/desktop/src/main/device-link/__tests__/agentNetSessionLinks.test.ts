@@ -627,7 +627,7 @@ describe('AgentNetSessionLinks', () => {
       if (env.kind !== 'link-open') return;
       links.controller.sendLinkAccept(env.src!, env.id!, { appVersion: 'test', allowlistHash: 'test' });
       // Same call chain as Main's inbound listener → streaming subscription replay.
-      reverse = routed.openLink('a-host', openPayload);
+      reverse = routed.openLink('a-host', openPayload, undefined, { inboundAcceptance: links.controller.captureInboundAcceptance('a-host') });
     });
     try {
       await links.host.openLink('b-controller', openPayload);

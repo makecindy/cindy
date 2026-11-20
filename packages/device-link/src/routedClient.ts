@@ -69,7 +69,7 @@ export interface LegacyPeerConnectionOptions {
    * `primary` otherwise.
    */
   openOnPrimary?(peer: string, payload: unknown, timeoutMs: number | undefined,
-    primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload>;
+    primary: () => Promise<LinkAcceptPayload>, options?: LinkOpenOptions): Promise<LinkAcceptPayload>;
   options: DeviceLinkClientOptions;
 }
 
@@ -432,14 +432,14 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       }));
   }
 
-  override onPeerLinkAccepted(cb: (peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean) => void): () => void {
-    return this.both(super.onPeerLinkAccepted((peer, accepted, continuation) => {
-      if (this.acceptsScopedEvent(this, peer)) cb(peer, accepted, continuation);
-    }), connection => connection.onPeerLinkAccepted((peer, accepted, continuation) => {
+  override onPeerLinkAccepted(cb: (peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean, streamAccepted?: boolean) => void): () => void {
+    return this.both(super.onPeerLinkAccepted((peer, accepted, continuation, streamAccepted) => {
+      if (this.acceptsScopedEvent(this, peer)) cb(peer, accepted, continuation, streamAccepted);
+    }), connection => connection.onPeerLinkAccepted((peer, accepted, continuation, streamAccepted) => {
       if (connection === this.legacy && !isScopedPeer(peer)
         && (this.legacyOptions?.prefersPrimary?.(accepted)
           ?? (this.legacyOptions?.primaryCapability && accepted?.capabilities?.includes(this.legacyOptions.primaryCapability)))) return;
-      if (this.acceptsScopedEvent(connection, peer)) cb(peer, accepted, continuation);
+      if (this.acceptsScopedEvent(connection, peer)) cb(peer, accepted, continuation, streamAccepted);
     }));
   }
 
@@ -518,7 +518,7 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
 
   override openLink(dst: string, payload: unknown, timeoutMs?: number, options?: LinkOpenOptions): Promise<LinkAcceptPayload> {
     const route = this.routed(dst);
-    const local = { ...options, inboundAcceptance: options?.inboundAcceptance ?? this.captureInboundAcceptance(dst) };
+    const local = { ...options };
     if (this.legacyRunning && this.legacy && !isScopedPeer(dst)
       && (route === this.legacy || this.legacyOptions?.probeForPeer?.(dst))) {
       return this.legacy.openLink(dst, payload, timeoutMs, { ...local, continueOnAnotherRoute: accepted =>
@@ -527,10 +527,10 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
         if (this.legacyOptions?.prefersPrimary?.(accepted) ?? (this.legacyOptions?.primaryCapability && accepted.capabilities?.includes(this.legacyOptions.primaryCapability))) {
           this.legacyRoutes.delete(dst); this.legacyPrefersPrimary.add(dst);
           this.routePresence(dst);
-          const final = { ...local, inboundAcceptance: this.legacy!.captureInboundAcceptance(dst) ?? local.inboundAcceptance,
+          const final = { ...local, inboundAcceptance: local.inboundAcceptance,
             continueOnAnotherRoute: undefined };
           const primary = () => super.openLink(dst, payload, timeoutMs, final);
-          return this.legacyOptions?.openOnPrimary ? this.legacyOptions.openOnPrimary(dst, payload, timeoutMs, primary) : primary();
+          return this.legacyOptions?.openOnPrimary ? this.legacyOptions.openOnPrimary(dst, payload, timeoutMs, primary, final) : primary();
         }
         this.legacyPrefersPrimary.delete(dst); this.legacyRoutes.add(dst);
         this.routePresence(dst);

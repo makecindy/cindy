@@ -42,7 +42,7 @@ import {
   type DeviceView,
   type Envelope,
   type InvokeResultPayload,
-  type LinkAcceptPayload,
+  type LinkAcceptPayload, type LinkOpenOptions,
   type PresenceSnapshot,
   type PushPayload,
   type RemoteResourceChangedPayload,
@@ -1429,7 +1429,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       prefersPrimary: mobileAgentNetPrefersPrimary,
       // The computer said on the relay that it runs Agent-Net: its session is about to arrive, open there (AgentNetSessionLinks.openAttested).
       ...(agentNetEnabled ? { openOnPrimary: (peer: string, payload: unknown, timeoutMs: number | undefined,
-        primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload> => sessionLinks!.openAttested(peer, payload, timeoutMs, primary) } : {}),
+        primary: () => Promise<LinkAcceptPayload>, options?: LinkOpenOptions): Promise<LinkAcceptPayload> => sessionLinks!.openAttested(peer, payload, timeoutMs, primary, options) } : {}),
       options: legacyOptions,
     });
     // Agent-Net sessions (docs/agent-net-session-plan.md §10, stage 4), as the Desktop and Node Host assemble them: with a

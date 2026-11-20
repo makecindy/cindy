@@ -655,6 +655,8 @@ export type InboundFrameHandler = (env: Envelope) => unknown | Promise<unknown>;
 /** Request-local recovery evidence; never serialized into a protocol payload. */
 export interface PeerLinkAcceptanceProof {
   readonly deviceId: string;
+  /** Same-source accepts must also pass that transport's stream/reliability checks. */
+  isSource(source: object): boolean;
   current(): boolean;
   consume(): boolean;
 }
@@ -1026,7 +1028,7 @@ export class DeviceLinkClient {
   private presenceHandlers = new Set<(snap: PresenceSnapshot) => void>();
   private frameHandlers = new Set<InboundFrameHandler>();
   private peerStreamAcceptedHandlers = new Set<(peer: string, streamId: string, accepted?: LinkAcceptPayload) => void>();
-  private peerLinkAcceptedHandlers = new Set<(peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean) => void>();
+  private peerLinkAcceptedHandlers = new Set<(peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean, streamAccepted?: boolean) => void>();
   private inboundPeerReleasedHandlers = new Set<(peer: string) => void>();
   private issueHandlers = new Set<(issue: DeviceLinkConnectionIssue | null) => void>();
   private peerRouteStateHandlers = new Set<
@@ -1523,7 +1525,7 @@ export class DeviceLinkClient {
   }
 
   /** Verified outbound accept, including Hosts without a reliable stream. */
-  onPeerLinkAccepted(cb: (peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean) => void): () => void {
+  onPeerLinkAccepted(cb: (peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean, streamAccepted?: boolean) => void): () => void {
     this.peerLinkAcceptedHandlers.add(cb);
     return () => this.peerLinkAcceptedHandlers.delete(cb);
   }
@@ -2434,7 +2436,7 @@ export class DeviceLinkClient {
     const epoch = this.connEpoch;
     const current = () => !this.stopped && this.connEpoch === epoch && this.peerTransport.get(dst) === peer
       && peer.linkAcceptedInbound && peer.inboundAcceptance === marker && peer.linkGeneration === marker.generation;
-    return { deviceId: dst, current, consume: () => {
+    return { deviceId: dst, isSource: source => source === this, current, consume: () => {
       if (!current()) return false;
       peer.inboundAcceptance = undefined;
       return true;
@@ -2598,7 +2600,8 @@ export class DeviceLinkClient {
       let timer = setTimeout(expire, sendWaitMs);
 
       const inboundPeer = env.kind === 'link-open' && env.dst ? this.peerTransport.get(env.dst) : undefined;
-      const continuesInbound = inboundPeer && (inboundPeer.pendingLinkConfirmation && inboundPeer.remoteStreamId
+      const continuesInbound = inboundPeer && linkOpenOptions?.inboundAcceptance?.deviceId === env.dst
+        && linkOpenOptions?.inboundAcceptance?.current() && (inboundPeer.reliable && inboundPeer.remoteStreamId
         || !inboundPeer.reliable && inboundPeer.linkAcceptedInbound
           && inboundPeer.inboundAcceptance?.generation === inboundPeer.linkGeneration);
       const pendingRequest: PendingRequest = {
@@ -3521,6 +3524,10 @@ export class DeviceLinkClient {
         // A missing signaling route is not proof that the authenticated data path died.
         if (snap.online === false) {
           if (!this.retainDirectPathOnSignalingLoss(snap.deviceId, true)) {
+            // Evidence for a delayed reciprocal open cannot survive an observed
+            // peer outage. Retire only the proof, preserving transport ownership.
+            const peer = this.peerTransport.get(snap.deviceId);
+            if (peer) peer.inboundAcceptance = undefined;
             this.detachDirectPath(snap.deviceId, 'peer-offline');
             if (!isScopedPeer(snap.deviceId)) this.peerOfflineGate.markOffline(snap.deviceId);
           }
@@ -3549,7 +3556,8 @@ export class DeviceLinkClient {
             const accepted = env.payload as LinkAcceptPayload | undefined;
             const priorPeer = this.getPeerTransport(env.src);
             const continuation = p.inboundContinuation;
-            const localContinuation = !!continuation && priorPeer.linkAcceptedInbound
+            const localContinuation = !!continuation && p.linkOpenOptions?.inboundAcceptance?.current() === true
+              && priorPeer.linkAcceptedInbound
               && continuation.connectionEpoch === this.connEpoch
               && continuation.linkGeneration === priorPeer.linkGeneration
               && (continuation.streamId === null
@@ -3559,7 +3567,8 @@ export class DeviceLinkClient {
                   && priorPeer.inboundAcceptance?.generation === priorPeer.linkGeneration
                 : priorPeer.receiveReady && continuation.streamId === accepted?.transportStreamId);
             const inherited = p.linkOpenOptions?.inboundAcceptance;
-            const externalContinuation = inherited?.deviceId === env.src && inherited.current();
+            const externalContinuation = inherited?.deviceId === env.src && inherited.current()
+              && (!inherited.isSource(this) || localContinuation);
             let handoff = false;
             try { handoff = p.linkOpenOptions?.continueOnAnotherRoute?.(accepted) === true; }
             catch { /* The routing layer owns a failed classifier; never strand the matched accept. */ }
@@ -3595,7 +3604,7 @@ export class DeviceLinkClient {
             );
             peer.outboundExplicitlyClosed = false;
             for (const cb of this.peerLinkAcceptedHandlers) {
-              try { cb(env.src, accepted, inboundContinuation); }
+              try { cb(env.src, accepted, inboundContinuation, peer.reliable && !!peer.remoteStreamId); }
               catch (error) { this.log.error('peer link accepted handler threw', error); }
             }
             // 注意:不得在此将 linkAcceptedInbound 改回 false。互控场景下本机可能

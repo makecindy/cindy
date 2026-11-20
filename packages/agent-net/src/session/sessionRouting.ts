@@ -75,9 +75,9 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
     return () => { for (const unsubscribe of off) unsubscribe(); };
   };
   const perPeer: Routed = {
+    captureInboundAcceptance: dst => links.captureInboundAcceptance(dst) ?? target.captureInboundAcceptance(dst),
     openLink: (dst, payload, timeoutMs, options) => {
-      const local = { ...options, inboundAcceptance: options?.inboundAcceptance
-        ?? links.captureInboundAcceptance(dst) ?? target.captureInboundAcceptance(dst) };
+      const local = { ...options };
       return routed(dst, (useSession) => {
         // Agent-Net 关着、对端和它无关时不记：和原来的 Device Link 一样（2026-11-17 review）。
         if (useSession || links.involves(dst)) log?.debug(`agent-net session route openLink peer=${dst.slice(0, 24)} session=${useSession} owned=${links.ownsOutbound(dst)}`
