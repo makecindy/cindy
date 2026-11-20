@@ -5,10 +5,15 @@ interface Account {
   run(action: 'acquire' | 'renew' | 'release', runId: string, signal?: AbortSignal): Promise<{ granted?: boolean; validForMs?: number }>;
 }
 
+export function primaryHostTargetIsRemote(schedule: Pick<Schedule, 'primaryHostKey'>,
+  target?: { agentDeviceId?: string | null; remoteHostId?: string | null } | null): boolean {
+  return !!schedule.primaryHostKey && !!(target?.agentDeviceId || target?.remoteHostId);
+}
+
 export function withPluginAutomationHost(runner: ScheduleRunner, accountFor?: (key: string) => Account): ScheduleRunner {
   return { async fire(schedule, ctx) {
     if (!schedule.primaryHostKey) return runner.fire(schedule, ctx);
-    if (!accountFor || schedule.agentDeviceId || schedule.modelAgentDeviceId || schedule.targetSessionId) return { skipped: true, sessionId: '', resultText: 'This automation needs its selected execution computer.' };
+    if (!accountFor || schedule.agentDeviceId || schedule.modelAgentDeviceId || (schedule.targetSessionId && !schedule.persistentSession)) return { skipped: true, sessionId: '', resultText: 'This automation needs its selected execution computer.' };
     return runOnPrimary(runner, schedule, ctx, accountFor(schedule.primaryHostKey));
   } };
 }

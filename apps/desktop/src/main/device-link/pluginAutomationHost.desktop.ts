@@ -1,5 +1,9 @@
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { officialDeviceLinkApiFetch } from './deviceLinkApi.desktop.js';
+import { getClientEndpoint } from '../clientEndpointsService.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
+import { createOfficialDeviceLinkApiFetch } from './deviceLinkApi.js';
+
+const officialDeviceLinkApiFetch = createOfficialDeviceLinkApiFetch({ getClientEndpoint, serverApiFetch });
 
 const endpoint = '/api/device-link/plugin-automation-host';
 export interface AutomationHostChoice {

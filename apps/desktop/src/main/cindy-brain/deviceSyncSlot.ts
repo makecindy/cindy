@@ -42,6 +42,12 @@ interface Deps {
   listGhosts(): InstalledGhost[];
   deliver(ghost: InstalledGhost, message: unknown, isCurrent: () => boolean): Promise<boolean>;
 }
+type HostRequest = {
+  instance: string;
+  selecting: boolean;
+  current(): boolean;
+  promise: Promise<unknown>;
+};
 type Pending = {
   peer: string;
   plugin: Identity;
@@ -80,6 +86,8 @@ export class PluginDeviceSync {
   private scope = '';
   private readonly pending = new Map<string, Pending>();
   private readonly incoming = new Map<string, Incoming>();
+  // Stale operations still count towards the bound until their network call settles.
+  private readonly hostRequests = new Set<HostRequest>();
   private readonly keyReplies = new Map<string, number>();
   private readonly receiving = new Map<string, Promise<void>>();
   private receivingCount = 0;
@@ -176,8 +184,30 @@ export class PluginDeviceSync {
     };
   }
   private atCapacity(instance: string): boolean {
-    return this.pending.size + this.incoming.size >= 32 ||
-      [...this.pending.values(), ...this.incoming.values()].filter(p => p.instance === instance).length >= 2;
+    return this.pending.size + this.incoming.size + this.hostRequests.size >= 32 ||
+      [...this.pending.values(), ...this.incoming.values(), ...this.hostRequests].filter(p => p.instance === instance).length >= 2;
+  }
+  private handleHostRequest(ghost: InstalledGhost, instance: string, key: string,
+    choice: { revision: number; useThisDevice: boolean } | null, current: () => boolean): Promise<unknown> {
+    const active = [...this.hostRequests].find(r => r.instance === instance && r.current());
+    if (active?.selecting) return Promise.resolve(error('SYNC_BUSY'));
+    if (active && !choice) return active.promise;
+    if (this.atCapacity(instance)) return Promise.resolve(error('SYNC_BUSY'));
+    // A read issued before a new selection must never replace its newer result.
+    if (active) active.current = () => false;
+    const request: HostRequest = { instance, selecting: !!choice, current, promise: Promise.resolve() };
+    this.hostRequests.add(request);
+    request.promise = (async () => {
+      try {
+        const result = await this.deps.automationHost!(ghost, key, choice, () => request.current());
+        return request.current() ? result : error('SYNC_RESULT_UNKNOWN');
+      } catch {
+        return error('AUTOMATION_HOST_UNAVAILABLE');
+      } finally {
+        this.hostRequests.delete(request);
+      }
+    })();
+    return request.promise;
   }
   async handle(instance: string, raw: unknown): Promise<unknown> {
     if (this.scope !== this.deps.scope()) this.reset();
@@ -200,10 +230,7 @@ export class PluginDeviceSync {
       const key = pluginAutomationHostKey(plugin.namespace, plugin.id);
       if (raw.op === 'selectAutomationHost' && (typeof raw.revision !== 'number' || !Number.isSafeInteger(raw.revision) || raw.revision < 0 || typeof raw.useThisDevice !== 'boolean')) return error('INVALID_PARAMS');
       const choice = raw.op === 'selectAutomationHost' ? { revision: raw.revision as number, useThisDevice: raw.useThisDevice as boolean } : null;
-      try {
-        const result = await this.deps.automationHost(ghost, key, choice, current);
-        return current() ? result : error('SYNC_RESULT_UNKNOWN');
-      } catch (_) { return error('AUTOMATION_HOST_UNAVAILABLE'); }
+      return this.handleHostRequest(ghost, instance, key, choice, current);
     }
     if (raw.op === 'reply') {
       const p = typeof raw.requestId === 'string' ? this.incoming.get(raw.requestId) : null;

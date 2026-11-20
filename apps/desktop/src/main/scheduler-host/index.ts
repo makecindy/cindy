@@ -1,4 +1,4 @@
-import { withPluginAutomationHost } from './pluginAutomationHostGuard.js';
+import { primaryHostTargetIsRemote, withPluginAutomationHost } from './pluginAutomationHostGuard.js';
 /** Shared scheduler startup, target validation, locking and account-bound teardown. */
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -166,6 +166,9 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
           .from(sessions)
           .where(eq(sessions.id, targetSessionId))
           .limit(1);
+        if (primaryHostTargetIsRemote(selection, row)) {
+          throw new Error('The persistent task must run on the selected automation computer.');
+        }
         if (isReviewSessionSource(row?.source)) {
           throw new Error('Review tasks cannot be targets of scheduled automations');
         }

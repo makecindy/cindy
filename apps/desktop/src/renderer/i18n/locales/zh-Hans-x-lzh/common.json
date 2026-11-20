@@ -8252,7 +8252,7 @@
         "agentErrand": "可立差事、行事并读结果",
         "agentErrandDetail": "所立差事现于 Cindy 差事录中，可观其历程并续言谈。",
         "agentSchedule": "可请君新立自运",
-        "agentScheduleDetail": "其仅能为君启新立自运之面板并填妥内容；立与不立，由君于面板择定模型后亲手存之而决。立后由 Cindy 依君所设之时运行，或生模型费用。插件通诸机者，亦可请君定一机行之。",
+        "agentScheduleDetail": "其仅能为君启新立自运之面板并填妥内容；立与不立，由君于面板择定模型后亲手存之而决。立后由 Cindy 依君所设之时运行，或生模型费用。法器通诸机者，亦可请君定一机行之。",
         "nodeRuntime": "可于此机运行法器所附之 Node 程序",
         "nodeMcp": "可于此机运行法器所附之 stdio MCP",
         "nodeRuntimeDetail": "高风险：其与君本人无异，可读写君名籍所能及之本机文件、访问网络并启动他程序。Cindy 不能以浏览器沙箱约束之。",

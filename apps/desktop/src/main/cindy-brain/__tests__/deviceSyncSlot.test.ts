@@ -32,7 +32,7 @@ function pair(automationHost?: ConstructorParameters<typeof PluginDeviceSync>[0]
   function side(id: string) {
     let scope = 'owner-a';
     const g = {
-      manifest,
+      manifest: { ...manifest },
       enabled: true,
       namespace: null,
       namespaceState: 'confirmed',
@@ -134,6 +134,32 @@ it('declares the capability without changing legacy manifests and projects its p
   expect(ghostPermissionItems(manifest as any)).toContainEqual(
     expect.objectContaining({ key: 'deviceSync' }),
   );
+});
+it('coalesces role reads within the current account and bounds simultaneous selections', async () => {
+  const complete: Array<(value: unknown) => void> = [];
+  const read = vi.fn(() => new Promise(resolve => complete.push(resolve)));
+  const { a } = pair(read);
+  a.g.manifest.agent = { schedule: true };
+  const query = () => a.svc.handle('example-sync', { op: 'automationHost' });
+  const choose = () => a.svc.handle('example-sync', { op: 'selectAutomationHost', revision: 0, useThisDevice: true });
+  const reads = [query(), query(), query()];
+  expect(read).toHaveBeenCalledTimes(1);
+  const choice = choose();
+  expect(await choose()).toMatchObject({ errorCode: 'SYNC_BUSY' });
+  expect(await query()).toMatchObject({ errorCode: 'SYNC_BUSY' });
+  complete[1]({ ok: true, revision: 1 });
+  await expect(choice).resolves.toMatchObject({ revision: 1 });
+  complete[0]({ ok: true, revision: 0 });
+  for (const pending of reads) await expect(pending).resolves.toMatchObject({ errorCode: 'SYNC_RESULT_UNKNOWN' });
+  const old = query();
+  a.setScope('owner-b');
+  a.svc.setActive(true);
+  const fresh = query();
+  expect(read).toHaveBeenCalledTimes(4);
+  complete[2]({ ok: true, revision: 1 });
+  await expect(old).resolves.toMatchObject({ errorCode: 'SYNC_RESULT_UNKNOWN' });
+  complete[3]({ ok: true, revision: 0 });
+  await expect(fresh).resolves.toMatchObject({ revision: 0 });
 });
 it('exchanges encrypted opaque data only with the same plugin, then confirms the reply', async () => {
   const { a, b, frames, flush, ready } = pair();

@@ -1,7 +1,5 @@
 ALTER TABLE `schedules` ADD `primary_host_key` text;
 --> statement-breakpoint
--- Older Contacts drafts had no origin column. Bind its generated prompts and
--- recognizable localized tidy jobs without changing their enabled/paused state.
 UPDATE schedules SET primary_host_key = 'public/cindy-contacts'
 WHERE coalesce(execution_mode, 'agent') = 'agent'
   AND instr(prompt, 'cindy-contacts') > 0 AND instr(prompt, 'maintenance') > 0
