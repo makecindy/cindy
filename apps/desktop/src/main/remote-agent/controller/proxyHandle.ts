@@ -33,6 +33,8 @@ import type {
 import type { ExecutorAction } from '../executor/gate';
 import type { ExecutorConfirmation } from '../executor/executor';
 import type { ExecutorWorkspace } from '../executor/workspace';
+import { resolveExecutorShell } from '../executor/shell';
+import { describePermissionAction } from '@cindy/maker-shared';
 import { isProviderShareCredentialSessionApproval } from '../../../shared/providerShareCredentialConsent';
 import { encodeSendOptions, encodeUserMessage } from '../wire';
 import { RemoteAgentRemoteError, type RemoteAgentRunClient } from './runClient';
@@ -155,16 +157,35 @@ export function innerShellScript(command: string): string {
 export function approvalActionsFor(
   request: InteractionRequest,
   workspace: ExecutorWorkspace,
+  pluginEngine = false,
 ): ExecutorAction[] {
   if (request.kind !== 'permission') return [];
-  const name = request.toolName.replace(/^mcp__cindy_exec__/, '').toLowerCase();
   const input = request.input ?? {};
+  if (pluginEngine) {
+    // Only grant actions shown by the same formatter as the confirmation card.
+    const action = describePermissionAction(request.toolName, input);
+    const tool = request.toolName.toLowerCase();
+    if (tool === 'bash' && action.kind === 'command' && action.preview === input.command) {
+      return [{
+        kind: 'exec',
+        command: workspace.mapCommand(action.preview, resolveExecutorShell().dialect),
+        cwd: workspace.workingDir,
+      }];
+    }
+    const reads = tool === 'read';
+    if (!reads && tool !== 'write' && tool !== 'edit' && tool !== 'notebookedit') return [];
+    const target = tool === 'notebookedit' ? input.notebook_path : input.file_path;
+    if (action.kind !== (reads ? 'file-read' : 'file-write') || action.preview !== target) return [];
+    try {
+      const path = workspace.resolve(action.preview);
+      return reads ? [{ kind: 'read', path, exactFileApproval: true }] : [{ kind: 'write', path }];
+    } catch {
+      return [];
+    }
+  }
+  const name = request.toolName.replace(/^mcp__cindy_exec__/, '').toLowerCase();
   const actions: ExecutorAction[] = [];
-  // 插件引擎(ACP Agent)的确认请求：工具名是那个 Agent 自己起的标题，不能按名字对应。它的文件与命令工具
-  // 只有 Cindy 交过去的那一组，所以按参数认：带 command 的是命令，带路径的是那个文件。登记的仍只是用户
-  // 刚在卡片上看到并同意的这一条命令 / 这一个路径，不因此放宽别的操作。
-  const pluginEngineRequest = Array.isArray((request.metadata as { acpOptions?: unknown } | undefined)?.acpOptions);
-  if (EXEC_TOOLS.has(name) || (pluginEngineRequest && input.command !== undefined)) {
+  if (EXEC_TOOLS.has(name)) {
     const raw = input.command;
     const command = typeof raw === 'string'
       ? raw
@@ -186,9 +207,9 @@ export function approvalActionsFor(
   const target = ['file_path', 'path', 'notebook_path']
     .map((key) => input[key])
     .find((value): value is string => typeof value === 'string' && value.length > 0);
-  if (target && (WRITE_TOOLS.has(name) || READ_TOOLS.has(name) || pluginEngineRequest)) {
+  if (target && (WRITE_TOOLS.has(name) || READ_TOOLS.has(name))) {
     try {
-      // 路径批准对读写同样有效(编辑先读后写)，插件引擎的请求分不清读写时按写登记。
+      // 路径批准对读写同样有效(编辑先读后写)。
       actions.push({ kind: READ_TOOLS.has(name) ? 'read' : 'write', path: workspace.resolve(target) });
     } catch {
       // 路径不合法时不登记。
@@ -645,8 +666,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     }
     let decision = await resolver(localPlanReview(request, deps.workspace));
     if (decision.kind === 'permission' && decision.behavior === 'allow') {
-      const effective = decision.updatedInput ? { ...request, input: decision.updatedInput } : request;
-      for (const action of approvalActionsFor(effective, deps.workspace)) deps.recordApproval(action);
+      const pluginEngine = started.agentKind === 'acp';
+      // ACP selects an option and does not forward edited arguments to the engine.
+      const effective = !pluginEngine && decision.updatedInput ? { ...request, input: decision.updatedInput } : request;
+      for (const action of approvalActionsFor(effective, deps.workspace, pluginEngine)) deps.recordApproval(action);
     }
     // 用户改过的计划按本机路径展示，交回 Agent 前换回它那边的写法。
     if (decision.kind === 'plan_review') {

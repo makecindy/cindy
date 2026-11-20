@@ -1225,8 +1225,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   // 插件引擎(docs/plans/acp-plugin-bridge.md)只在本机开的新任务提供：远程控制别的电脑、SSH、协同
   // 不提供。列出本机的引擎，以及自己其他电脑上开了「允许被远程调用」的引擎(Agent 在那台运行，文件
   // 与命令仍在本机；别人分享的来源不提供插件引擎)。范围同模型组：草稿此刻选着在另一台电脑运行的
-  // 内置模型也照样列出。记住的引擎被停用、卸载、报告不可用或那台关掉了开关时按没选处理，用底下的
-  // 内置模型。本机没有引擎、也没有别的电脑时不传，模型选择器与今天逐像素一致。
+  // 内置模型也照样列出。记住的远程引擎无法确认时，保留草稿直到该引擎恢复或用户重新选模型。
+  // 本机没有引擎、也没有别的电脑时不传，模型选择器与今天逐像素一致。
   const pluginEnginesAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca';
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed);
   const rememberedPluginEngineDeviceId = draft.pluginEngine?.deviceId;
@@ -1248,12 +1248,12 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     const remote = remotePluginEngineChoices(pluginEngineDevices, devicePluginEngines, deviceDisplayName);
     return remote.length ? [...pluginEngineList, ...remote] : pluginEngineList;
   }, [pluginEngineList, pluginEngineDevices, devicePluginEngines]);
-  // 记住的是另一台电脑上的引擎：进入草稿时读一次那几台的列表，否则要等打开模型选择器才认得出它。
+  // 记住的是另一台电脑上的引擎：进入草稿时先读取那台电脑的列表。
   // 只在记住的那台变了、或它进出设备列表时读，不随在线状态刷新反复读。
   const rememberedPluginEngineDeviceListed = !!rememberedPluginEngineDeviceId
     && pluginEngineDeviceIds.includes(rememberedPluginEngineDeviceId);
   useEffect(() => {
-    if (rememberedPluginEngineDeviceListed) readDevicePluginEngines();
+    if (rememberedPluginEngineDeviceListed) readDevicePluginEngines(rememberedPluginEngineDeviceId);
   }, [rememberedPluginEngineDeviceListed, rememberedPluginEngineDeviceId, readDevicePluginEngines]);
   // 打开模型选择器：本机的引擎请插件重报模型(与今天相同，冷却在主进程)，其他电脑各读一次列表。
   const hasLocalPluginEnginesRef = useRef(false);
@@ -4723,6 +4723,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       if (activePluginEngine) {
         return sendWithPluginEngine(activePluginEngine, message, permissionMode, files, mentions, opts);
       }
+      // 远程引擎的目录可能还没到。保留草稿，避免把消息交给未选择的模型。
+      if (rememberedPluginEngineDeviceId) {
+        toast.warning(t('newChat.pluginEngines.unavailable'));
+        return false;
+      }
       if (effectiveCollab.enabled && collabPolicy.loading) {
         toast.warning(t('newChat.collaboration.loadingHint'));
         return false;
@@ -6102,6 +6107,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     [
       NEW_MAKER_DRAFT_KEY,
       activePluginEngine,
+      rememberedPluginEngineDeviceId,
       sendWithPluginEngine,
       activePluginModel,
       activeModelGroup,
@@ -6182,6 +6188,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       // 抛出去则走 save() 的 catch:弹窗保持打开、内联显示原因、objective 原样留在输入框。
       if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) {
         throw new Error(t('goal.newGoalDialog.busy'));
+      }
+      if (rememberedPluginEngineDeviceId) {
+        throw new Error(t('newChat.pluginEngines.unavailable'));
       }
       // 「让插件选」对目标任务同样生效：下面的 const 会遮蔽这些外层值，基准要在 try 之外先取。
       const goalBaseRoute = {
@@ -6849,6 +6858,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     [
       markSendInFlight,
       isDeviceLinkDraft,
+      rememberedPluginEngineDeviceId,
       usesDeviceCatalog,
       isAgentDeviceDraft,
       catalogDeviceId,
@@ -7541,7 +7551,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     }
                     // 首页「新建目标」入口:草稿态没有 sessionId,由本组件 createSession→setGoal。
                     // ChatInput 把输入框当前文字传上来作默认目标内容。
-                    onNewGoal={activePluginEngine ? undefined : (text) => {
+                    onNewGoal={activePluginEngine || rememberedPluginEngineDeviceId ? undefined : (text) => {
                       setNewGoalInitialObjective(text);
                       setNewGoalOpen(true);
                     }}

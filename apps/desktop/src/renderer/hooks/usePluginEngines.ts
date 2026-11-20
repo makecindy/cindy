@@ -208,7 +208,7 @@ const pickerReadAt = new WeakMap<DeviceCatalogue, number>();
  */
 export function useDevicesPluginEngines(deviceIds: readonly string[]): {
   catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>;
-  read: () => void;
+  read: (deviceId?: string) => void;
 } {
   const owner = getDataOwnerGeneration();
   const key = deviceIds.join('\n');
@@ -216,9 +216,10 @@ export function useDevicesPluginEngines(deviceIds: readonly string[]): {
     () => (key ? key.split('\n') : []).map((deviceId) => ({ deviceId, catalogue: deviceCatalogue(owner, deviceId) })),
     [owner, key],
   );
-  const read = useCallback(() => {
+  const read = useCallback((deviceId?: string) => {
     const now = Date.now();
     for (const source of sources) {
+      if (deviceId !== undefined && source.deviceId !== deviceId) continue;
       const last = pickerReadAt.get(source.catalogue);
       if (last !== undefined && now - last < DEVICE_PLUGIN_ENGINES_REREAD_MS) continue;
       pickerReadAt.set(source.catalogue, now);

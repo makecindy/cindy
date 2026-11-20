@@ -682,22 +682,29 @@ describe('exec-server relay gate', () => {
     expect(approvalActionsFor({ kind: 'ask_user_question', requestId: 'r', questions: [] }, workspace)).toEqual([]);
   });
 
-  // 插件引擎(第三期)：ACP Agent 的确认卡工具名是它自己起的标题，按名字对不上 Cindy 的文件与命令工具。
-  // 对不上时用户点了同意，本机闸门仍认不出这是刚批准的操作，高危命令和区外写会一直被拒。
-  // 最小失败输入：标题是任意文字、参数里带 command / file_path 的 ACP 确认请求(metadata.acpOptions)。
-  it('matches a plugin engine confirmation by what it will run, not by the title the agent gave it', () => {
+  // PR #11698: a generic ACP confirmation previously minted a local command or
+  // write grant from its arguments alone. This unit exercises the resulting
+  // grants and the real executor gate, which built-in-tool cases don't cover.
+  it('records only the canonical operation shown on a plugin engine confirmation', () => {
     const workspace = new ExecutorWorkspace({ workingDir: root });
     const acp = { acpToolKind: 'other', acpOptions: [{ name: 'Allow', kind: 'allow_once' }] };
     expect(approvalActionsFor({
       kind: 'permission', requestId: 'r', toolName: 'cindy_exec · Bash', input: { command: 'rm -rf build' }, metadata: acp,
-    }, workspace)).toEqual([{ kind: 'exec', command: 'rm -rf build', cwd: root }]);
+    }, workspace, true)).toEqual([]);
     expect(approvalActionsFor({
-      kind: 'permission', requestId: 'r', toolName: 'Write file', input: { file_path: '.env', content: 'A=1' }, metadata: acp,
-    }, workspace)).toEqual([{ kind: 'write', path: path.join(root, '.env') }]);
-    // A built-in engine's request with an unknown tool name still records nothing.
+      kind: 'permission', requestId: 'r', toolName: 'Bash', input: { command: 'rm -rf build' },
+    }, workspace, true)).toEqual([{ kind: 'exec', command: 'rm -rf build', cwd: root }]);
     expect(approvalActionsFor({
-      kind: 'permission', requestId: 'r', toolName: 'cindy_exec · Bash', input: { command: 'rm -rf build' },
-    }, workspace)).toEqual([]);
+      kind: 'permission', requestId: 'r', toolName: 'Write',
+      input: { file_path: '.env', content: 'A=1', changes: [{ path: 'hidden.txt' }] },
+    }, workspace, true)).toEqual([{ kind: 'write', path: path.join(root, '.env') }]);
+    const gate = new ExecutorGate(workspace, 'normal');
+    const target = path.join(root, '.env');
+    for (const approval of approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Read', input: { file_path: '.env' },
+    }, workspace, true)) gate.recordApproval(approval);
+    expect(gate.authorize({ kind: 'read', path: target }).ok).toBe(true);
+    expect(gate.authorize({ kind: 'write', path: target }).ok).toBe(false);
   });
 });
 

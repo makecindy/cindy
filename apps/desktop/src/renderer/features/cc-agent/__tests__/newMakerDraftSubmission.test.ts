@@ -148,6 +148,7 @@ async function submit(options: {
   modelGroupRoute?: ModelGroupResolveResult;
   /** 草稿那台电脑的模型目录读到哪一步；默认 ready。 */
   remoteModelListStatus?: 'ready' | 'loading' | 'error';
+  rememberedPluginEngineDeviceId?: string;
   effort?: Effort;
   submittedEffort?: Effort;
   model?: string;
@@ -317,6 +318,7 @@ async function submit(options: {
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     // 这些用例都走内置 Harness；插件引擎的新建路径由 newMakerDraft.test.ts 覆盖。
     activePluginEngine: null,
+    rememberedPluginEngineDeviceId: options.rememberedPluginEngineDeviceId,
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
@@ -457,6 +459,18 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // PR #11698: a restored remote engine is absent from the initial catalogue.
+  // Exercise both real submission callbacks in the existing unit fixture. Other
+  // catalogue cases use built-in engines and cannot catch this fallback.
+  it.each(['send', 'goal'] as const)('preserves %s while the selected remote plugin engine is unresolved', async (entry) => {
+    const result = await submit({ entry, rememberedPluginEngineDeviceId: 'engine-computer' });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.setGoal).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    if (entry === 'send') expect(result.toastWarning).toHaveBeenCalledWith('newChat.pluginEngines.unavailable');
+    else expect(result.errors[0]).toMatchObject({ message: 'newChat.pluginEngines.unavailable' });
+  });
   // Unit regression: hold both real submission boundaries open. The previous
   // route only opened after both resolved and navigated even after the user left.
   it('opens one task while create and attachments are pending, then sends the displayed message into it', async () => {
