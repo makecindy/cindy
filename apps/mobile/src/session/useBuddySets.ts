@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import {
   emptyBuddySets,
   normalizeBuddySets,
@@ -12,13 +12,18 @@ export type BuddySetsStatus = 'loading' | 'ready' | 'error';
 
 interface Load {
   promise: Promise<BuddySetsState>;
-  status: BuddySetsStatus;
+  value?: BuddySetsState;
   applied: boolean;
 }
 
 /** One read per (view session, account): a second Home/Sidebar mount must not
  *  start a fresh read that could resolve with an older blob and overwrite edits. */
 const loads = new WeakMap<HomeViewSession, Map<string, Load>>();
+
+const STATUS_PREFIX = 'buddySetsStatus:';
+const SAVE_FAILED_PREFIX = 'buddySetsSaveFailed:';
+const GENERATION_PREFIX = 'buddySetsGeneration:';
+const keyFor = (prefix: string, owner: string): string => prefix + encodeURIComponent(owner);
 
 function loadFor(session: HomeViewSession, owner: string): Load {
   let byOwner = loads.get(session);
@@ -28,34 +33,57 @@ function loadFor(session: HomeViewSession, owner: string): Load {
   }
   let load = byOwner.get(owner);
   if (!load) {
-    load = { promise: readBuddySets(owner), status: 'loading', applied: false };
+    load = { promise: readBuddySets(owner), applied: false };
     byOwner.set(owner, load);
   }
   return load;
 }
 
-/** Read without starting one, so a remount can inherit the settled status. */
-function peekStatus(session: HomeViewSession, owner: string): BuddySetsStatus {
-  const load = loads.get(session)?.get(owner);
-  return owner ? load?.status ?? 'loading' : 'ready';
+/** Status and save failures live in the view session, so every mounted Home /
+ *  sidebar instance observes the same hydration and retry state synchronously. */
+function persist(session: HomeViewSession, owner: string, state: BuddySetsState): void {
+  void saveBuddySets(owner, state).then(
+    () => { session.write(keyFor(SAVE_FAILED_PREFIX, owner), false); },
+    // A write that never landed must not look saved: surface a retry to the user.
+    () => { session.write(keyFor(SAVE_FAILED_PREFIX, owner), true); },
+  );
 }
 
 /**
  * 「伙伴集」展示偏好:首页视图会话持有当前值(与折叠偏好同口径),按账号落本机
  * AsyncStorage。只存 override;冷启动读回,读取成功前不接受修改,失败时给出重试。
  */
-export function useBuddySets(owner: string): [BuddySetsState, (next: BuddySetsState | ((current: BuddySetsState) => BuddySetsState)) => void, BuddySetsStatus, () => void] {
+export function useBuddySets(owner: string): [
+  BuddySetsState,
+  (next: BuddySetsState | ((current: BuddySetsState) => BuddySetsState)) => void,
+  BuddySetsStatus,
+  () => void,
+  boolean,
+  () => void,
+] {
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
-  const [attempt, setAttempt] = useState(0);
-  const [status, setStatus] = useState<BuddySetsStatus>(
-    () => peekStatus(getHomeViewSession(), owner),
-  );
+  const session = getHomeViewSession();
+  const statusKey = keyFor(STATUS_PREFIX, owner);
+  const saveFailedKey = keyFor(SAVE_FAILED_PREFIX, owner);
+  const generationKey = keyFor(GENERATION_PREFIX, owner);
+
+  const subscribeStatus = useCallback((listener: () => void) => session.subscribe(statusKey, listener), [session, statusKey]);
+  const readStatus = useCallback(() => session.read(statusKey, owner ? 'loading' : 'ready') as BuddySetsStatus, [session, statusKey, owner]);
+  const status = useSyncExternalStore(subscribeStatus, readStatus, readStatus);
   const statusRef = useRef(status);
   statusRef.current = status;
 
+  const subscribeSaveFailed = useCallback((listener: () => void) => session.subscribe(saveFailedKey, listener), [session, saveFailedKey]);
+  const readSaveFailed = useCallback(() => session.read(saveFailedKey, false) as boolean, [session, saveFailedKey]);
+  const saveFailed = useSyncExternalStore(subscribeSaveFailed, readSaveFailed, readSaveFailed);
+
+  const subscribeGeneration = useCallback((listener: () => void) => session.subscribe(generationKey, listener), [session, generationKey]);
+  const readGeneration = useCallback(() => session.read(generationKey, 0) as number, [session, generationKey]);
+  const generation = useSyncExternalStore(subscribeGeneration, readGeneration, readGeneration);
+
   const [state, setState] = useRetainedHomeState<BuddySetsState>(
-    getHomeViewSession(),
+    session,
     'buddySets',
     emptyBuddySets(),
     (next) => {
@@ -63,47 +91,47 @@ export function useBuddySets(owner: string): [BuddySetsState, (next: BuddySetsSt
       // Only a successful hydration may unlock writes: otherwise a failed read
       // followed by a user edit would replace the whole valid on-disk record.
       if (activeOwner && statusRef.current === 'ready') {
-        void saveBuddySets(activeOwner, next).catch(() => undefined);
+        persist(getHomeViewSession(), activeOwner, next);
       }
     },
   );
 
   useEffect(() => {
-    let cancelled = false;
-    const session = getHomeViewSession();
+    const active = getHomeViewSession();
     if (!owner) {
       // No account means no owner-scoped store; nothing to read or persist.
-      statusRef.current = 'ready';
-      setStatus('ready');
+      active.write(statusKey, 'ready');
       return undefined;
     }
-    const load = loadFor(session, owner);
-    if (load.status !== 'loading') {
-      statusRef.current = load.status;
-      setStatus(load.status);
+    const load = loadFor(active, owner);
+    const applyIfReady = (stored: BuddySetsState) => {
+      if (load.applied) return;
+      load.applied = true;
+      active.write('buddySets', stored);
+    };
+    const settled = active.read(statusKey, 'loading') as BuddySetsStatus;
+    // A read may have settled while no hook was mounted. Apply its snapshot
+    // before allowing edits, even if this is the first mount to see `ready`.
+    if (settled === 'ready' && load.value !== undefined) {
+      applyIfReady(load.value);
       return undefined;
     }
-    statusRef.current = 'loading';
-    setStatus('loading');
+    if (settled === 'error') return undefined;
+    active.write(statusKey, 'loading');
     void load.promise.then((stored) => {
-      load.status = 'ready';
-      if (cancelled || ownerRef.current !== owner || getHomeViewSession() !== session) return;
-      // Apply the disk snapshot exactly once; never over a value already edited
-      // in this view session (e.g. by an earlier mount that finished sooner).
-      if (!load.applied) {
-        load.applied = true;
-        session.write('buddySets', stored);
-      }
-      statusRef.current = 'ready';
-      setStatus('ready');
+      load.value = stored;
+      // Guard account switches; an abandoned view session must never be revived.
+      if (getHomeViewSession() !== active) return;
+      // Publish `ready` only after the disk snapshot is in the view session:
+      // otherwise an empty state could be edited and overwrite the whole record.
+      applyIfReady(stored);
+      active.write(statusKey, 'ready');
     }).catch(() => {
-      load.status = 'error';
-      if (cancelled || ownerRef.current !== owner || getHomeViewSession() !== session) return;
-      statusRef.current = 'error';
-      setStatus('error');
+      if (getHomeViewSession() !== active) return;
+      active.write(statusKey, 'error');
     });
-    return () => { cancelled = true; };
-  }, [owner, attempt]);
+    return undefined;
+  }, [owner, generation, statusKey]);
 
   const update = useCallback((input: BuddySetsState | ((current: BuddySetsState) => BuddySetsState)) => {
     if (statusRef.current !== 'ready') return;
@@ -111,13 +139,25 @@ export function useBuddySets(owner: string): [BuddySetsState, (next: BuddySetsSt
   }, [setState]);
 
   const retry = useCallback(() => {
-    const session = getHomeViewSession();
-    // Drop the rejected read so the next effect run performs a fresh one.
-    loads.get(session)?.delete(ownerRef.current);
-    statusRef.current = 'loading';
-    setStatus('loading');
-    setAttempt((value) => value + 1);
+    const active = getHomeViewSession();
+    const activeOwner = ownerRef.current;
+    if (!activeOwner) return;
+    // Drop the rejected read; a bumped generation re-runs the effect in every
+    // mounted instance, so all of them leave the error state together.
+    loads.get(active)?.delete(activeOwner);
+    // The fresh read replaces the unsaved in-memory state, so any earlier write
+    // warning no longer describes what the user is looking at.
+    active.write(keyFor(SAVE_FAILED_PREFIX, activeOwner), false);
+    active.write(keyFor(GENERATION_PREFIX, activeOwner), active.read(keyFor(GENERATION_PREFIX, activeOwner), 0) + 1);
+    active.write(keyFor(STATUS_PREFIX, activeOwner), 'loading');
   }, []);
 
-  return [owner ? state : emptyBuddySets(), update, status, retry];
+  const retrySave = useCallback(() => {
+    const active = getHomeViewSession();
+    const activeOwner = ownerRef.current;
+    if (!activeOwner || statusRef.current !== 'ready') return;
+    persist(active, activeOwner, active.read('buddySets', emptyBuddySets()) as BuddySetsState);
+  }, []);
+
+  return [owner ? state : emptyBuddySets(), update, status, retry, saveFailed, retrySave];
 }

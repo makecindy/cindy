@@ -45,7 +45,7 @@ import { useTeammateEntries, useTeammateRowRenderer, type TeammateListEntry } fr
 import { useBuddySets } from './useBuddySets';
 import { BuddySetGroups } from './BuddySetGroups';
 import { BuddySetSheet } from './BuddySetSheet';
-import type { BuddySetCandidate } from './buddySetCopy';
+import { mobileBuddySetCopy, type BuddySetCandidate } from './buddySetCopy';
 import { cloudCompanionRoute } from './teammateNavigation';
 import { useTeammateNavigation } from './useTeammateNavigation';
 import { getHomeViewSession, useRetainedHomeState } from './homeViewSession';
@@ -120,7 +120,8 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const search = query.trim();
   const entries = useTeammateEntries(items, showGroups ? groups.items : undefined, search);
   // 「伙伴集」:纯本机、按账号的展示容器,只收伙伴私聊行。
-  const [buddySets, updateBuddySets, buddySetsStatus, retryBuddySets] = useBuddySets(navigation.owner);
+  const [buddySets, updateBuddySets, buddySetsStatus, retryBuddySets, buddySetsSaveFailed, retrySaveBuddySets] = useBuddySets(navigation.owner);
+  const buddySetCopy = mobileBuddySetCopy(t);
   const [buddySetEdit, setBuddySetEdit] = useState<{ visible: boolean; buddySetId: string | null }>({ visible: false, buddySetId: null });
   const buddySetCandidates = useMemo<BuddySetCandidate[]>(() => entries
     .filter((entry): entry is TeammateListEntry & { kind: 'bot' } => entry.kind === 'bot')
@@ -186,7 +187,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const hasBuddySets = buddySets.sets.length > 0;
   const buddySetsFailed = buddySetsStatus === 'error';
   const shown = visible && (search ? entries.length > 0
-    : hasBuddySets || buddySetsFailed || canInvite || !!error || !(!entries.length && (!canCreate || roster.loading)));
+    : hasBuddySets || buddySetsFailed || buddySetsSaveFailed || canInvite || !!error || !(!entries.length && (!canCreate || roster.loading)));
   const title = t('devices.companions.title');
   const create = (trigger: (press: () => void, label: string) => ReactElement) => showCreate
     ? creator.renderTrigger(trigger(creator.press, creator.label)) : null;
@@ -226,6 +227,14 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
         style={({ pressed }) => [styles.moreRow, pressed && mobileInteractionStyles.pressed]}>
         <RefreshCw size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
         <Text style={styles.moreText} numberOfLines={1}>{t('devices.resources.retry')}</Text>
+      </Pressable> : null}
+      {/* A failed write must never look saved; offer an explicit retry row. */}
+      {buddySetsSaveFailed ? <Pressable accessibilityRole="button"
+        accessibilityLabel={`${buddySetCopy.saveFailed} ${t('devices.resources.retry')}`}
+        onPress={retrySaveBuddySets} hitSlop={spacing.xs} testID="home.buddySetsSaveRetry"
+        style={({ pressed }) => [styles.moreRow, pressed && mobileInteractionStyles.pressed]}>
+        <RefreshCw size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
+        <Text style={styles.moreText} numberOfLines={1}>{buddySetCopy.saveFailed}</Text>
       </Pressable> : null}
       {!entries.length ? (<>
         {hasBuddySets && !collapsed ? <BuddySetGroups

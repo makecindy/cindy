@@ -25,5 +25,6 @@ export function mobileBuddySetCopy(t: TFunction) {
     collapse: t('devices.companions.buddySets.collapse', { defaultValue: 'Collapse buddy set' }),
     expand: t('devices.companions.buddySets.expand', { defaultValue: 'Expand buddy set' }),
     limitReached: t('devices.companions.buddySets.limitReached', { defaultValue: 'Buddy set limit reached' }),
+    saveFailed: t('devices.companions.buddySets.saveFailed', { defaultValue: 'Buddy set changes not saved' }),
   };
 }
