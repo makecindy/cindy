@@ -500,7 +500,8 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
 
   /** Resolves with whether the projection is clean; warnings mean some links may be missing. */
   async ensureSharedGlobalSkills(): Promise<boolean> {
-    return this.sharedGlobalSkills.ensureSharedGlobalSkills();
+    // `await ...();` 形态是 authPassiveSharedInstance guard 的源码文本契约，勿改写。
+    return await this.sharedGlobalSkills.ensureSharedGlobalSkills();
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
