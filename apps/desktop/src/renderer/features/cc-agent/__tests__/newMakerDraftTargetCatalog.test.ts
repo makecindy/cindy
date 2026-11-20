@@ -1525,6 +1525,7 @@ describe('the seeded source is pinned only by an explicit model or source choice
       if (next) Object.assign(dlSel, next);
     });
     const common = {
+      localAlternate: null,
       dlRuntimeTouchedRef,
       dlExplicitChoiceRef,
       setDlSel,
@@ -1581,6 +1582,28 @@ describe('the seeded source is pinned only by an explicit model or source choice
     callback<(modelId: string) => void>('handleModelDidChange', h.common)('other-model');
     expect(h.dlExplicitChoiceRef.current).toBe(true);
     expect(h.explicitProviderId()).toBe('seeded-source');
+  });
+
+  it.each([
+    ['handleModelDidChange', 'other-model', { model: 'other-model' }],
+    ['handleEffortDidChange', 'low', { effort: 'low' }],
+    ['handleProviderDidChange', 'picked-source', { providerId: 'picked-source' }],
+  ])('keeps the alternate draft current after %s', (name, value, patch) => {
+    const h = harness();
+    callback<(value: unknown) => void>(name as string, {
+      ...h.common, localAlternate: { agentDevice: { deviceId: 'remote' } },
+    })(value);
+    expect(h.common.patchActiveTuplePrefs).toHaveBeenCalledWith(patch);
+  });
+
+  it('keeps the alternate draft speed current after a remote Fast edit', () => {
+    const h = harness();
+    const localAlternate = { fast: false, agentDevice: { deviceId: 'remote' } };
+    const setAlternateModel = vi.fn();
+    callback<(value: boolean) => void>('handleFastModeChange', {
+      ...h.common, localAlternate, setAlternateModel,
+    })(true);
+    expect(setAlternateModel).toHaveBeenCalledWith({ ...localAlternate, fast: true });
   });
 
   it('pins the source once the user picks a source explicitly', () => {
@@ -1721,14 +1744,20 @@ it('applies a replacement for an unavailable saved model only to the current loc
 });
 
 // Minimal input: a missing local engine and an alternate on another computer.
-it('keeps a remote alternate engine outside the persisted local defaults', () => {
+it('keeps remote alternates temporary and applies the latest same-device selection to the holder', () => {
   const setAlternateModel = vi.fn();
   const switchVendor = vi.fn();
   const rememberAgentDeviceSelection = vi.fn();
+  const setDlSel = vi.fn();
+  const dlExplicitChoiceRef = { current: false };
+  const dlSeedKeyRef = { current: null };
   const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
-    localModelIssue: 'engine', localAlternate: null, usesDeviceCatalog: false,
+    localModelIssue: null, localAlternate: { agentDevice: { deviceId: 'other-computer' } }, usesDeviceCatalog: true,
     effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12, location: { key: 'draft-page' },
     switchVendor, rememberAgentDeviceSelection, normalizeDbAgentKind, dbToMakerAgentKind,
+    setDlSel, dlExplicitChoiceRef, dlSeedKeyRef, dlRuntimeTouchedRef: { current: false },
+    dlSeedCapabilitiesRef: { current: null }, isDeviceLinkDraft: false,
+    modelCatalogKey, controlledModelRoute: { catalogHostDeviceId: undefined },
   });
   const agentDevice = { deviceId: 'other-computer', name: 'Other computer' };
   select({ vendor: 'pi', providerId: 'xd', modelId: 'auto', effort: 'high',
@@ -1737,5 +1766,23 @@ it('keeps a remote alternate engine outside the persisted local defaults', () =>
   expect(rememberAgentDeviceSelection).toHaveBeenCalledWith('other-computer', 'pi', {
     model: 'auto', providerId: 'xd', effort: 'high', fastMode: false,
   });
+  select({ vendor: 'pi', providerId: 'xd', modelId: 'other-model', effort: 'medium',
+    fast: true, favoriteUid: null, agentDevice });
+  expect(setDlSel).toHaveBeenLastCalledWith({
+    model: 'other-model', providerId: 'xd', effort: 'medium', fastMode: true,
+  });
+  expect(dlExplicitChoiceRef.current).toBe(true);
+  expect(dlSeedKeyRef.current).toBe('other-computer:pi');
+  select({ vendor: 'codex', providerId: 'openai', modelId: 'remote-codex', effort: 'high',
+    fast: false, favoriteUid: null, agentDevice });
+  expect(dlSeedKeyRef.current).toBe('other-computer:codex');
+  expect(setDlSel).toHaveBeenLastCalledWith({
+    model: 'remote-codex', providerId: 'openai', effort: 'high', fastMode: false,
+  });
+  select({ vendor: 'codex', providerId: 'openai', modelId: 'local-model', effort: 'high',
+    fast: false, favoriteUid: null, agentDevice: null });
+  expect(setDlSel).toHaveBeenLastCalledWith(null);
+  expect(dlSeedKeyRef.current).toBeNull();
+  expect(dlExplicitChoiceRef.current).toBe(false);
   expect(switchVendor).not.toHaveBeenCalled();
 });

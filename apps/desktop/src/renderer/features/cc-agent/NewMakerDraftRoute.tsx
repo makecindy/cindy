@@ -3564,6 +3564,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         dlRuntimeTouchedRef.current = true;
         // 换模型 = 明确选了模型(与本机草稿 modelChosenByVendor 同口径):来源随之钉住。
         dlExplicitChoiceRef.current = true;
+        if (localAlternate) patchActiveTuplePrefs({ model: newModelId });
         // 远程草稿:只改 dlSel,绝不写本地 newMakerDraft。capabilities 未就绪时退化为仅换 model。
         if (!capabilities) {
           setDlSel((prev) => (prev ? { ...prev, model: newModelId } : prev));
@@ -3612,6 +3613,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       if (usesDeviceCatalog) {
         dlRuntimeTouchedRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, fastMode: enabled } : prev));
+        if (localAlternate) setAlternateModel({ ...localAlternate, fast: enabled });
         pushActiveDraftPref({ fast: enabled }); // 选中模型 fast 写穿被控端
         return;
       }
@@ -3659,6 +3661,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       if (usesDeviceCatalog) {
         dlRuntimeTouchedRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, effort: newEffort } : prev));
+        if (localAlternate) patchActiveTuplePrefs({ effort: newEffort });
         pushActiveDraftPref({ effort: newEffort }); // 选中模型 effort 写穿被控端
         return;
       }
@@ -3720,6 +3723,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         // 换来源 = 明确选了来源:他选的那家即便清单发现失败也不静默换成别家计费路径。
         dlExplicitChoiceRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, providerId: newProviderId } : prev));
+        if (localAlternate) patchActiveTuplePrefs({ providerId: newProviderId });
         return;
       }
       if (!localAlternate) markDefaultTupleCustomized();
@@ -3755,14 +3759,44 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       /** 远程 Agent:这一行属于哪台电脑(null = 本机);未带 = 面板没有远程 Agent 入口。 */
       agentDevice?: { deviceId: string; name: string } | null;
     }) => {
+      // 任务建到被控电脑时权限在被控电脑上生效,换 Agent 所在电脑不改它。
+      // 这次显式选择就是目标目录里的种子:seed key 按播种 effect 的构造逐字前置,并标记控制端
+      // 已触碰 —— 目标电脑的 capabilities 到达时只做合法性夹紧,不会换成那台的默认模型(与下方
+      // 跨引擎选择同一条修法)。
+      const seedSwitchedCatalog = (targetCatalogDeviceId: string) => {
+        dlRuntimeTouchedRef.current = true;
+        dlExplicitChoiceRef.current = true;
+        dlSeedKeyRef.current = `${targetCatalogDeviceId}:${dbToMakerAgentKind(
+          normalizeDbAgentKind(selection.vendor),
+        )}`;
+        dlSeedCapabilitiesRef.current = null;
+        setDlSel({
+          model: selection.modelId,
+          // 没有档位的模型由播种夹紧按目标目录补成合法值。
+          effort: selection.effort ?? 'high',
+          fastMode: selection.fast,
+          providerId: selection.providerId,
+          ...(isDeviceLinkDraft && deviceLinkInitial?.permissionMode
+            ? { permissionMode: deviceLinkInitial.permissionMode } : {}),
+        });
+      };
       if ((localAlternate || (!usesDeviceCatalog && localModelIssue)) && !effectiveRemoteHostId) {
         if (selection.agentDevice) {
+          seedSwitchedCatalog(
+            modelCatalogKey(selection.agentDevice.deviceId, controlledModelRoute.catalogHostDeviceId)!,
+          );
           rememberAgentDeviceSelection(selection.agentDevice.deviceId,
             dbToMakerAgentKind(normalizeDbAgentKind(selection.vendor)), {
               model: selection.modelId, providerId: selection.providerId,
               effort: selection.effort ?? savedDraft.lastByVendor[selection.vendor].effort,
               fastMode: selection.fast,
             });
+        } else if (localAlternate?.agentDevice) {
+          setDlSel(null);
+          dlSeedKeyRef.current = null;
+          dlSeedCapabilitiesRef.current = null;
+          dlRuntimeTouchedRef.current = false;
+          dlExplicitChoiceRef.current = false;
         }
         setAlternateModel({
           ownerGeneration: dataOwnerGeneration,
@@ -3810,29 +3844,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       const switchesAgentDevice =
         targetAgentDevice !== undefined &&
         (targetAgentDevice?.deviceId ?? null) !== (effectiveAgentDeviceId ?? null);
-      // 任务建到被控电脑时权限在被控电脑上生效,换 Agent 所在电脑不改它。
-      const taskComputerPermission = isDeviceLinkDraft
-        ? deviceLinkInitial?.permissionMode
-        : undefined;
-      // 这次显式选择就是目标目录里的种子:seed key 按播种 effect 的构造逐字前置,并标记控制端
-      // 已触碰 —— 目标电脑的 capabilities 到达时只做合法性夹紧,不会换成那台的默认模型(与下方
-      // 跨引擎选择同一条修法)。
-      const seedSwitchedCatalog = (targetCatalogDeviceId: string) => {
-        dlRuntimeTouchedRef.current = true;
-        dlExplicitChoiceRef.current = true;
-        dlSeedKeyRef.current = `${targetCatalogDeviceId}:${dbToMakerAgentKind(
-          normalizeDbAgentKind(selection.vendor),
-        )}`;
-        dlSeedCapabilitiesRef.current = null;
-        setDlSel({
-          model: selection.modelId,
-          // 没有档位的模型由播种夹紧按目标目录补成合法值。
-          effort: selection.effort ?? 'high',
-          fastMode: selection.fast,
-          providerId: selection.providerId,
-          ...(taskComputerPermission ? { permissionMode: taskComputerPermission } : {}),
-        });
-      };
       if (switchesAgentDevice && targetAgentDevice) {
         seedSwitchedCatalog(
           modelCatalogKey(targetAgentDevice.deviceId, controlledModelRoute.catalogHostDeviceId)!,
