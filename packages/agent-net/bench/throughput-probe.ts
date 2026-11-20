@@ -12,7 +12,7 @@
  *
  * 运行（仓库根目录）：
  *   pnpm --filter @cindy/agent-net run prepare-core
- *   node --import tsx packages/agent-net/bench/throughput-probe.ts [--profiles unshaped,fast,slow] [--modes worker,portable] [--reps 2] [--out probe.json]
+ *   ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron --import tsx packages/agent-net/bench/throughput-probe.ts [--profiles unshaped,fast,slow] [--modes worker,portable] [--reps 2] [--out probe.json]
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
