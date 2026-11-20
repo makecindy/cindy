@@ -341,3 +341,17 @@ describe('host IPC proxy · a Host refused because a desktop app uses its data',
     expect(mapIpcErrorToI18nKey(refused)).toBe('logic.errors.hostProfileInUseByDesktopRetry');
   });
 });
+
+it('old window projects an optional release reason onto the generic precondition', async () => {
+  for (const reason of [undefined, 'HOST_PROFILE_RELEASE_FAILED', 'FUTURE_REASON']) {
+    const { host, proxy } = fakeHost();
+    host.replies.push(() => ({ status: 409, body: { ok: false, error: { code: 'PRECONDITION_FAILED',
+      message: reason === 'HOST_PROFILE_RELEASE_FAILED' ? '/private/fixture.db' : '当前状态下无法执行此操作，请稍后重试。', reason } } }));
+    const refused = await proxy().invoke(ENTRY, ['parent']).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: 'PRECONDITION_FAILED' });
+    if (!(refused instanceof Error)) throw new Error('Host invocation must reject with an Error');
+    expect(refused.message).not.toContain('/private/');
+    expect(refused).not.toHaveProperty('reason');
+    expect(mapIpcErrorToI18nKey(new Error(refused.message))).toBe('ipcError.PRECONDITION_FAILED');
+  }
+});

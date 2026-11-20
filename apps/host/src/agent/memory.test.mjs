@@ -1,3 +1,6 @@
+import { profileReleaseFixture } from '../test-support/profile-release-fixture.mjs';
+import { bindHostProfileServices } from './profile-services.ts';
+import { releaseFailure } from './profile-hold.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -133,11 +136,11 @@ const NOTE = { type: 'project', name: 'release-notes', title: 'Release notes', d
 // Use the real owner files and FTS and both MCP entry points.
 test('profile hold refuses memory store tools and preserves the existing files', async t => {
   const message = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
-  let held = null;
+  const fixture = profileReleaseFixture(t);
   const f = await hostMemoryFixture(t, 'memory-hold-owner', () => ({
     isOneShotRouteDisabled: async () => false,
     reviewOneShot: async () => 'Keep the note',
-  }), () => held);
+  }), bindHostProfileServices(fixture.queue).memoryHold);
   const call = await f.connect(f.root);
   const body = result => JSON.parse(result.content[0].text);
   const seed = await call('memory_write', NOTE);
@@ -157,18 +160,20 @@ test('profile hold refuses memory store tools and preserves the existing files',
     ['memory_consolidate', { sources: ['project_second-note.md'], target: { ...NOTE, name: 'merged-note' } }],
     ['memory_delete', { filename }],
   ];
-  held = message;
+  await fixture.occupy(message);
   for (const [tool, args] of cases) {
     const result = await call(tool, args);
     assert.equal(result.isError, true, tool);
     assert.deepEqual(body(result), { ok: false, code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] ' + message }, tool);
   }
+  await fixture.failRelease();
+  assert.deepEqual(body(await call('memory_write', NOTE)), { ok: false, ...releaseFailure() });
   const cold = await f.connect(path.join(f.root, 'cold-task'));
   assert.equal(body(await cold('memory_list')).code, 'PRECONDITION_FAILED');
   assert.equal(body(await call.listTools()).ok, true);
   assert.equal(body(await call('session_search', { query: 'release' })).ok, true);
   assert.deepEqual(snapshot(), before);
-  held = null;
+  await fixture.recover();
   for (const [tool, args] of cases) {
     const result = await call(tool, args);
     assert.equal(body(result).ok, true, JSON.stringify({ tool, result }));

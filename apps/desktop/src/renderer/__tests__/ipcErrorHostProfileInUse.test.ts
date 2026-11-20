@@ -21,11 +21,12 @@ import { i18n } from '@/i18n';
 
 const WRAP = (text: string) => new Error(`Error invoking remote method 'maker:sessions:set-model': Error: ${text}`);
 const KEYS = ['logic.errors.hostProfileInUseByDesktop', 'logic.errors.hostProfileInUseByDesktopRetry',
-  'logic.errors.hostProfileInUseByDesktopAtStart'];
+  'logic.errors.hostProfileInUseByDesktopAtStart', 'ipcError.PRECONDITION_FAILED'];
 
 describe('mapIpcErrorToI18nKey · a Host refusal while a desktop app uses its data', () => {
   it('maps the marked refusal in every form it reaches a caller', () => {
     const running = 'HOST_PROFILE_IN_USE_BY_DESKTOP: In use by the desktop app.';
+    expect(mapIpcErrorToI18nKey(Object.assign(createIpcError('PRECONDITION_FAILED', '/private/fixture.db'), { reason: 'HOST_PROFILE_RELEASE_FAILED' }))).toBe('ipcError.PRECONDITION_FAILED');
     const atStart = 'HOST_PROFILE_IN_USE_BY_DESKTOP_AT_START: Quit that app, then restart the Host.';
     for (const err of [new Error(`[PRECONDITION_FAILED] ${running}`), WRAP(`[PRECONDITION_FAILED] ${running}`),
       createIpcError('PRECONDITION_FAILED', running), `[PRECONDITION_FAILED] ${running}`]) {

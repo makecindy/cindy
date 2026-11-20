@@ -211,7 +211,7 @@ import {
   mainContiguousRunStartIndex,
   type LoadedWindowIsland,
 } from '@/lib/searchJumpTargeting';
-import { extractIpcError, hostProfileInUseI18nKey } from '@/utils/ipcError';
+import { extractIpcError, hostProfileHoldI18nKey } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -381,7 +381,7 @@ function resolveEstimatedTurnCostUsd(
 /** Translation candidate only; callers must check their active i18n resources.
  * Unknown-code fallback text is diagnostic content, not curated guidance. */
 export function remoteErrorI18nKey(msg: string): string | undefined {
-  const held = hostProfileInUseI18nKey(msg, 'send');
+  const held = hostProfileHoldI18nKey(msg, 'send');
   if (held) return held;
   const recovery = sharedTaskRecoveryReason(msg);
   if (recovery) return `sharedTaskRecovery.reason.${recovery}`;
@@ -392,7 +392,7 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
-  const held = hostProfileInUseI18nKey(msg, 'send');
+  const held = hostProfileHoldI18nKey(msg, 'send');
   if (held) return i18n.t(held);
   const subscriptionGuidance = localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
@@ -407,10 +407,11 @@ export function decodeRemoteErrorMessage(msg: string): string {
 }
 
 /** Keep known codes for the banner's active locale; retain unknown-code fallback behavior. */
-export function remoteErrorMessageForBanner(msg: string): string {
+export function remoteErrorMessageForBanner(error: unknown): string {
+  const msg = error instanceof Error ? error.message : String(error);
   // A Host refusal while a Cindy desktop app uses its data: the banner reads no key from it, so
   // say why and what to do here, in the window's language (the Host's own sentence is not shown).
-  const held = hostProfileInUseI18nKey(msg, 'send');
+  const held = hostProfileHoldI18nKey(error, 'send');
   if (held) return i18n.t(held);
   // Subscription guidance has its own keys and reset metadata. Keep the raw
   // error so live/tail banners can translate it after locale changes.
@@ -12076,7 +12077,7 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
     ...(error !== undefined
       ? {
           // Keep the code so the banner can expose recovery guidance in its active locale.
-          error: remoteErrorMessageForBanner(error instanceof Error ? error.message : String(error)),
+          error: remoteErrorMessageForBanner(error),
           usageLimitRecovery: null,
           errorReason: null,
           toolLoop: null,
@@ -16312,7 +16313,7 @@ async function sendMessageCore(
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
       // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
       // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
-      const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
+      const message = remoteErrorMessageForBanner(err);
       setState(sessionId, (s) => ({
         ...s,
         error: message,
@@ -16364,7 +16365,7 @@ function compactSession(
       // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
       .then(({ projection }) => projection.error === null)
       .catch((err) => {
-        const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
+        const message = remoteErrorMessageForBanner(err);
         setState(sessionId, (s) => ({
           ...s,
           error: message,
@@ -16703,7 +16704,7 @@ async function steerMessageCore(
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
       // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
       // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
-      const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
+      const message = remoteErrorMessageForBanner(err);
       rollbackOptimisticSteer();
       setState(sessionId, (s) => ({
         ...s,

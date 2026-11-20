@@ -1,3 +1,4 @@
+import { holdError, type ProfileHold } from './agent/profile-hold.js';
 /** Node assembly of the existing Device Link host. Identity, admission, replay,
  * visibility and revocation remain in the same dispatcher as desktop. */
 import os from 'node:os';
@@ -142,7 +143,7 @@ export interface HostDeviceLinkPorts {
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
   /** Coexistence plan A: the refusal while a desktop uses this profile, or null. */
-  profileHold?(): string | null;
+  profileHold?(): ProfileHold | null;
   /** The remote plugin OAuth entry; the desktop's plugin-oauth runtime unless a test passes its own. */
   requestPluginOauth?(peer: string, raw: unknown): Promise<unknown>;
   /** Cancels a peer's (or every) pending plugin authorization in memory; the runtime's unless a test passes its own. */
@@ -214,7 +215,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   // calls (they write through the plugin) are refused, as the service refuses other writes.
   const refuseWhileHeld = () => {
     const held = deps.profileHold?.();
-    if (held) throw Object.assign(new Error(`[PRECONDITION_FAILED] ${held}`), { code: 'PRECONDITION_FAILED' });
+    if (held) throw holdError(held);
   };
   // Project-directory browsing uses the same pure helpers as the desktop. The Device Link
   // allowlist admits these channels only for same-account controllers, and the paths always

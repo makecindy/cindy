@@ -1,3 +1,5 @@
+import { bindHostProfileServices } from './profile-services.ts';
+import { profileReleaseFixture } from '../test-support/profile-release-fixture.mjs';
 import { runDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -6205,6 +6207,32 @@ test('plugin settings refused under the write lock preserve the file and emit no
   assert.deepEqual(await settings(id), previous);
 });
 
+// Integration: a failed queue drain must keep the real task plugin preferences and events intact.
+test('assembled task plugin preferences follow the live queue through failed release and retry', async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'release-runtime-prefs';
+  await r.createTask(id);
+  const previous = { 'will-start-turn': [{ pluginId: 'fixture', onFailure: 'block' }] };
+  const next = { 'will-start-turn': [{ pluginId: 'fixture', onFailure: 'allow' }] };
+  await writeRuntimePluginSettings(id, previous);
+  const prefs = ownerScopedPath('runtime-plugin-prefs.json');
+  const before = readFileSync(prefs);
+  const fixture = profileReleaseFixture(t);
+  const events = [];
+  const settings = bindHostProfileServices(fixture.queue).plugins({ maker: r.h.maker, selection: r.selection,
+    resolveGhostControlPointPlugin: (_point, pluginId) => pluginId, publish: event => events.push(event) });
+  await fixture.occupy(HELD);
+  await assert.rejects(settings(id, next), { code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] ' + HELD });
+  await fixture.failRelease();
+  await assert.rejects(settings(id, next), { code: 'PRECONDITION_FAILED', reason: 'HOST_PROFILE_RELEASE_FAILED' });
+  assert.deepEqual(readFileSync(prefs), before);
+  assert.deepEqual(events, []);
+  await fixture.recover();
+  await settings(id, next);
+  assert.deepEqual(await settings(id), next);
+  assert.equal(events.length, 1);
+});
+
 // Rule: the desktop settles an accepted runtime control at the final terminal and reports a
 // runtime-selection-cancelled error if it fails. The ordinary fallback case has an idle engine at
 // selection time. Tier: db, two interrupted turns and a permission acknowledgement overlapping the
@@ -7308,13 +7336,17 @@ test('profile hold: a failed release keeps the reply for the next release to sav
   h.queue.holdForDesktop(HELD);
   await assert.rejects(h.queue.releaseDesktopHold(), /Failed to drain task persistence/);
   assert.equal(h.queue.isHeldForDesktop(), true);
-  const service = createHostService({ profileHold: h.queue.profileHoldMessage });
-  const writeRefusal = { code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] disk full' };
+  const service = createHostService({ profileHold: h.queue.profileHoldReason });
+  const reason = h.queue.profileHoldReason();
+  assert.equal(reason.code, 'PRECONDITION_FAILED');
+  assert.equal(reason.reason, 'HOST_PROFILE_RELEASE_FAILED');
+  assert.doesNotMatch(reason.message, /disk full|HOST_PROFILE_IN_USE_BY_DESKTOP/);
+  const writeRefusal = { code: reason.code, message: `[${reason.code}] ${reason.message}` };
   await assert.rejects(service('/api/input/enqueue'), writeRefusal);
   await assert.rejects(h.queue.enqueue(id, { clientId: 'two', text: 'blocked until storage recovers' }), writeRefusal);
   const paused = await h.queue.getProjection(id);
   assert.equal(paused.queuePaused, true);
-  assert.equal(paused.error, 'disk full');
+  assert.equal(paused.error, reason.message);
   await assert.rejects(h.queue.releaseDesktopHold(), /Failed to drain task persistence/, 'an unsuccessful retry keeps the queue held');
   diskFull = false;
   assert.equal(await h.queue.releaseDesktopHold(), true);
@@ -7351,6 +7383,34 @@ test('profile hold: release retry restores the durable queue after a failed snap
   assert.equal(await h.queue.releaseDesktopHold(), true);
   assert.deepEqual((await h.queue.getProjection(id)).pendingQueue.map(item => item.clientId), ['desktop']);
   assert.deepEqual(saved.map(item => item.clientId), ['desktop']);
+});
+
+// §3.2 integration: the old release test never closed a genuinely occupied owner.
+// A retained write error must still be observable when a new desktop or owner stop supersedes release.
+test('profile hold: a real desktop and an owner stop keep the original queue error', async t => {
+  for (const cause of ['desktop returned', 'owner stopping']) {
+    await t.test(cause, async () => {
+      const id = 'closing-held-task';
+      const raw = 'fixture queue write failed /private/test-only';
+      let writable = false;
+      const h = createHarness({ persistQueueSnapshot: async () => {
+        if (!writable) throw new Error(raw);
+      } });
+      try {
+        await assert.rejects(h.queue.enqueue(id, { clientId: 'failed', text: 'queued' }), { message: raw });
+        h.queue.holdForDesktop(HELD);
+        assert.equal(h.queue.projection(id).error, raw);
+        await assert.rejects(h.queue.releaseDesktopHold(), /Failed to drain task persistence/);
+        assert.doesNotMatch(h.queue.projection(id).error, /private/);
+        if (cause === 'desktop returned') h.queue.holdForDesktop(HELD);
+        else h.queue.beginStop();
+        assert.equal(h.queue.projection(id).error, raw, cause);
+      } finally {
+        writable = true;
+        await h.queue.dispose();
+      }
+    });
+  }
 });
 
 test('profile hold: a durable queue restored while held stays unsent, and resume is refused', async t => {

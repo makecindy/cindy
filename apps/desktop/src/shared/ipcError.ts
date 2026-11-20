@@ -1,4 +1,4 @@
-import { isIpcError, isIpcErrorCode, type IpcError } from './ipc-errors';
+import { isProfileReleaseFailure, isIpcError, isIpcErrorCode, type IpcError } from './ipc-errors';
 
 const IPC_ERROR_MESSAGE_RE = /(?:^|: Error: )\[([A-Z0-9_]+)\]\s*([\s\S]*)$/;
 
@@ -26,8 +26,9 @@ const HOST_PROFILE_IN_USE_RE = /^(?:\[PRECONDITION_FAILED\]\s*)?HOST_PROFILE_IN_
  * The i18n key for that refusal, or null for any other error. `send` words the running case for a
  * failed send ("then send again"); anything else gets "then try again".
  */
-export function hostProfileInUseI18nKey(err: unknown, use: 'send' | 'other' = 'other'): string | null {
+export function hostProfileHoldI18nKey(err: unknown, use: 'send' | 'other' = 'other'): string | null {
   const ipcError = extractIpcError(typeof err === 'string' ? new Error(err) : err);
+  if (isProfileReleaseFailure(err)) return 'ipcError.PRECONDITION_FAILED';
   if (ipcError?.code !== 'PRECONDITION_FAILED') return null;
   const match = HOST_PROFILE_IN_USE_RE.exec(ipcError.message);
   if (!match) return null;
@@ -35,11 +36,13 @@ export function hostProfileInUseI18nKey(err: unknown, use: 'send' | 'other' = 'o
   return use === 'send' ? 'logic.errors.hostProfileInUseByDesktop' : 'logic.errors.hostProfileInUseByDesktopRetry';
 }
 
+export const hostProfileInUseI18nKey = hostProfileHoldI18nKey;
+
 export function mapIpcErrorToI18nKey(
   err: unknown,
   options?: { namespace?: string; fallback?: string },
 ): string {
-  const held = hostProfileInUseI18nKey(err);
+  const held = hostProfileHoldI18nKey(err);
   if (held) return held;
   const ipcError = extractIpcError(err);
   if (!ipcError) return options?.fallback ?? 'ipcError.unknown';

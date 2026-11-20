@@ -1,3 +1,4 @@
+import { holdError } from './profile-hold.ts';
 /**
  * Maker Memory in the host process.
  *
@@ -13,7 +14,6 @@ import { attachAgentsToMakerMemory, createMakerMemoryManagerForHost } from '@cin
 import { createLiziMcpProviders } from '../../../../packages/lizi-mcps/src/index.ts';
 
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.ts';
-import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { hostMemoryManagerPorts } from './memory-manager-ports.ts';
 import { hostMemoryMcpPorts } from './memory-mcp-ports.ts';
 
@@ -40,7 +40,7 @@ export function readMemorySettings(ownerRoot) {
 
 /**
  * The port bag is written out in memory-manager-ports.ts, where `explicitPorts` is type-checked.
- * @param {Pick<import('./memory-manager-ports.ts').HostMemoryManagerPortInput, 'userDataDir' | 'ownerId' | 'review'> & {profileHold?: () => string | null}} options
+ * @param {Pick<import('./memory-manager-ports.ts').HostMemoryManagerPortInput, 'userDataDir' | 'ownerId' | 'review'> & {profileHold?: () => import('./profile-hold.ts').ProfileHold | null}} options
  */
 export function createHostMemoryManager({ userDataDir, ownerId, review, profileHold }) {
   const scope = getActiveAppSession();
@@ -58,7 +58,7 @@ export function createHostMemoryManager({ userDataDir, ownerId, review, profileH
     const getStore = manager.getStore.bind(manager);
     manager.getStore = async (...args) => {
       const held = profileHold();
-      if (held) throwIpcError('PRECONDITION_FAILED', held);
+      if (held) throw holdError(held);
       return getStore(...args);
     };
   }

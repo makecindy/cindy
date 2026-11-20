@@ -4,7 +4,7 @@ import './boot-env.js';
 import './boot-settings.js';
 import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutomaticIcon.js';
 import { readProjectIconImage, readProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
-import { createHostProjectInfoUpdate } from './project-info.js';
+import { bindHostProfileServices } from './agent/profile-services.js';
 import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
 import { runLegacyPluginMigrationPreflight } from './plugins/legacy-approvals.js';
@@ -121,7 +121,7 @@ import { initializeHostPluginRemoteAuthorization } from './plugins/remote-author
 import { ownerScopedPath } from '../../desktop/src/main/dataOwnerPath.js';
 import { createHostPluginRuntime } from './plugins/runtime.js';
 import { createHostPluginGateway } from './plugins/gateway.js';
-import { createHostToolService } from './agent/host-tools.js';
+import type { createHostToolService } from './agent/host-tools.js';
 import { createHostConfirmations } from './host-confirmations.js';
 import { createMainI18n } from '../../desktop/src/main/i18n.js';
 import { createHostMcpDuplicateChoices } from './agent/mcp-duplicate-choices.js';
@@ -154,7 +154,7 @@ import { createInputQueue } from './agent/input-queue.mjs';
 import { createHostSessionActivity } from './agent/session-activity.ts';
 import { readClaudeIdleMinutesFrom } from '../../desktop/src/main/maker-host/claudeIdleReleaseSettingsCore.js';
 import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
-import { createHostRuntimePluginSettings, createHostTaskRuntimePlugins } from './agent/task-runtime-plugins.js';
+import { createHostTaskRuntimePlugins } from './agent/task-runtime-plugins.js';
 import { setGhostToolApprovalResolver } from '../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { warmRuntimePluginSettings } from '../../desktop/src/main/maker-host/runtime-plugin-settings.js';
 import { bindHostSessionRuntimeHooks, createHostRuntimeSelection, hostRuntimeSelectionQueueHooks } from './agent/runtime-selection.ts';
@@ -889,8 +889,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const toolOwnerCurrent = () => activeOwnerScopeKey() === pluginOwner && !isAppSessionBoundaryPending();
   const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
-  hostTools = createHostToolService({ profileDir: dataDir, ownerId,
-    profileHold: () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null,
+  hostTools = profileServices.tools({ profileDir: dataDir, ownerId,
     deviceId: () => currentDeviceId ?? 'local',
     onProjectsChanged: catalogChanged => eventHub.publish({ type: 'project_aliases_changed', catalogChanged }),
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
@@ -941,7 +940,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       } else eventHub.publish({ type: 'plugin_push', channel, payload });
     },
   });
-  if (inputQueue.isHeldForDesktop()) plugins.pauseForDesktop(profileInUseMessage());
+  const held = inputQueue.profileHoldReason();
+  if (held) plugins.pauseForDesktop(held);
 
   if (!plugins.pluginPauseFailure() && pluginManager.hasPendingMutationRecovery()) await pluginManager.retryInterruptedMutationsAfterDbReady();
 
@@ -1028,7 +1028,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const piBinary = harnessBinaryPaths.pi;
   if (claudeBinary || codexBinary || piBinary) {
     const gateway = modelAccess!.gateway;
-    const memoryProfileHold = () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null;
+    const memoryProfileHold = profileServices.memoryHold;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
     // here sees the same memories as a task started there.
     let memoryReview: ReturnType<ReturnType<typeof createHostAgentGraph>['autoReview']['memoryReview']> | undefined;
@@ -1458,7 +1458,11 @@ const sessionMove = createHostSessionMovePorts({
 });
 setLiveCcSessionBridge(sessionMove.liveCcSessionBridge);
 
-const runtimePluginSettings = createHostRuntimePluginSettings({
+const profileServices = bindHostProfileServices({
+  profileHoldReason: inputQueue.profileHoldReason,
+  profileHoldGeneration: inputQueue.profileHoldGeneration,
+});
+const runtimePluginSettings = profileServices.plugins({
   maker: { getSessionMeta: id => {
     if (!agentGraph) throw new Error('Host runtime not ready');
     return agentGraph.maker.getSessionMeta(id);
@@ -1468,8 +1472,6 @@ const runtimePluginSettings = createHostRuntimePluginSettings({
     if (!plugins) throw new Error('Host plugin runtime not ready');
     return plugins.taskPlugins.resolveGhostControlPointPlugin(point, id);
   },
-  profileHold: () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null,
-  holdGeneration: () => inputQueue.profileHoldGeneration(),
   publish: event => eventHub.publish(event),
 });
 const serverDeps = {
@@ -1480,7 +1482,7 @@ const serverDeps = {
   beginOwnerBoundaryStop: () => ownerBoundary.begin(),
   // Coexistence plan A: while a desktop uses this profile, only reads, stops and answers reach the
   // handlers (service.mjs HOST_PATHS_ALLOWED_WHILE_HELD). A failed release reports its write error.
-  profileHold: inputQueue.profileHoldMessage,
+  profileHold: inputQueue.profileHoldReason,
   browserBackend: (handler: keyof NonNullable<typeof platformTools>['browserSettings'], payload: unknown) => {
     if (!platformTools) throw new Error('HOST_RUNTIME_NOT_READY');
     return platformTools.browserSettings[handler](undefined, payload);
@@ -1692,9 +1694,8 @@ const serverDeps = {
   readProjectInfo,
   readProjectIconImage,
   resolveAutomaticProjectIcon,
-  updateProjectInfo: createHostProjectInfoUpdate({
+  updateProjectInfo: profileServices.project({
     platform: () => platformClient,
-    profileHold: () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null,
     changed: catalogChanged => eventHub.publish({ type: 'project_aliases_changed', catalogChanged }),
   }),
   listProjectAliases: async () => {
@@ -1898,7 +1899,7 @@ const serverDeps = {
   },
   chat: createChatHandler({
     readSession: (id: string) => sessionStorage?.get(id),
-    profileHold: inputQueue.profileHoldMessage,
+    profileHold: inputQueue.profileHoldReason,
     createSession: (body: Record<string, unknown>) => serverDeps.createSession(body),
     enqueue: enqueueUserInput,
     inputStatus: (id: string, clientId: string) => inputQueue.inputStatus(id, clientId),
@@ -2239,7 +2240,7 @@ function startDeviceLink(): void {
     },
     // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
     // Coexistence plan A: a new task's runtime and a plugin page's calls are refused while held (device-link.ts).
-    profileHold: inputQueue.profileHoldMessage,
+    profileHold: inputQueue.profileHoldReason,
     createRuntimeSession: input => {
       return createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
       serverDeps,

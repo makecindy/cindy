@@ -264,7 +264,7 @@ const externalUpload = { request: { type: 'fetch-request', url: 'https://example
 
 // Same monitor as main.ts. Supply scan results and the completion of the input
 // rebuild, while the installed plugin, its cleanup and both gates stay real.
-function profileMonitor(t, f) {
+function profileMonitor(t, f, beforeInputRelease = () => {}) {
   let desktops = [];
   let inputHeld = false;
   let rebuilt = 0;
@@ -288,7 +288,7 @@ function profileMonitor(t, f) {
     input: {
       isHeldForDesktop: () => inputHeld,
       holdForDesktop() { inputHeld = true; },
-      async releaseDesktopHold() { inputHeld = false; return true; },
+      async releaseDesktopHold() { beforeInputRelease(); inputHeld = false; return true; },
     },
   });
   t.after(() => monitor.stop());
@@ -311,16 +311,50 @@ test('Host retries a failed pause cleanup and publishes one current list and sta
   const dispose = f.runtime.library.disposeGhost.bind(f.runtime.library);
   let calls = 0;
   t.mock.method(f.runtime.library, 'disposeGhost', async id => {
-    if (++calls === 1) throw new Error('temporary fixture cleanup failure');
+    if (++calls <= 2) throw new Error('temporary fixture cleanup failure /private/fixture');
     await dispose(id);
   });
-  const monitor = profileMonitor(t, f);
+  let storageAvailable = false;
+  const monitor = profileMonitor(t, f, () => {
+    if (!storageAvailable) throw new Error('release write failed /private/fixture');
+  });
   await monitor.scan([42]);
   assert.deepEqual(await f.call(), held);
   f.pushes.length = 0;
   assert.deepEqual(await monitor.scan([]), []);
-  assert.deepEqual(await monitor.scan([]), [true]);
-  assert.equal(calls, 2);
+  assert.deepEqual(await monitor.scan([]), []);
+  const releaseBlocked = await f.call();
+  assert.equal(releaseBlocked.errorCode, 'PRECONDITION_FAILED');
+  assert.equal(releaseBlocked.reason, 'HOST_PROFILE_RELEASE_FAILED');
+  assert.doesNotMatch(releaseBlocked.message, /fixture|HOST_PROFILE_IN_USE_BY_DESKTOP/);
+  await monitor.scan([42]);
+  assert.deepEqual(await f.call(), held);
+  storageAvailable = true;
+  assert.deepEqual(await monitor.scan([]), []);
+  assert.deepEqual(await monitor.scan([]), [false]);
+  const blocked = await f.call();
+  assert.equal(blocked.errorCode, 'PRECONDITION_FAILED');
+  assert.equal(blocked.reason, 'HOST_PROFILE_RELEASE_FAILED');
+  assert.doesNotMatch(blocked.message, /fixture|HOST_PROFILE_IN_USE_BY_DESKTOP/);
+  // During restore, reconciliation may await inventory before publishing its final state.
+  const inventory = Promise.withResolvers();
+  const proceed = Promise.withResolvers();
+  const list = f.manager.listAsync.bind(f.manager);
+  const listing = t.mock.method(f.manager, 'listAsync', async (...args) => {
+    inventory.resolve();
+    await proceed.promise;
+    return list(...args);
+  });
+  const recovered = monitor.scan([]);
+  try {
+    await inventory.promise;
+    assert.deepEqual(await f.call(), blocked);
+  } finally {
+    proceed.resolve();
+    listing.mock.restore();
+  }
+  assert.deepEqual(await recovered, [true]);
+  assert.equal(calls, 3);
   assert.deepEqual(await monitor.scan([]), []);
   assert.equal(monitor.rebuilt(), 1);
   assert.equal(monitor.refreshed(), 1);

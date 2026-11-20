@@ -1,3 +1,4 @@
+import { holdError, holdRefusal, releaseFailure } from './profile-hold.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
@@ -16,7 +17,6 @@ import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskAct
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
 import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/sessionErrorSuppression.ts';
-import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
 import { createIpcError } from '../../../desktop/src/shared/ipc-errors.ts';
 
 const settlementLog = createLogger('host-turn-settlement');
@@ -109,6 +109,7 @@ function composeInput(item, stored) {
 export function createInputQueue(deps) {
   // Coexistence plan A: null, or the refusal a new send gets while a desktop uses this profile.
   let profileHold = null;
+  let drainingHold = null;
   let ownerStopping = false;
   let runtime = createRuntime();
 
@@ -116,7 +117,7 @@ export function createInputQueue(deps) {
     // A blocked route probe must hit Maker's native metadata fence even if its
     // adapter is still starting. This signal never aborts an admitted turn.
     const routeStartup = new AbortController();
-    if (profileHold) routeStartup.abort(createIpcError('PRECONDITION_FAILED', profileHold.message));
+    if (profileHold) routeStartup.abort(holdError(profileHold.reason));
     const states = new Map();
     const schedulePreparations = new Map();
     const scheduleDiscardWatchers = new Map();
@@ -177,7 +178,7 @@ export function createInputQueue(deps) {
     }
     /** A new send while the profile is held: refused, typed, before anything is written. */
     function refuseWhileHeld() {
-      if (profileHold) throwIpcError('PRECONDITION_FAILED', profileHold.message);
+      if (profileHold) throw holdError(profileHold.reason);
     }
     function holdIfHeld(id) {
       if (profileHold) holdTaskForProfile(coordinator, id);
@@ -193,7 +194,12 @@ export function createInputQueue(deps) {
     }
     function project(value) {
       const error = states.get(value.sessionId)?.persistenceError;
-      return error ? { ...value, error, queuePaused: true } : value;
+      if (!error) return value;
+      // A drain can publish before releaseDesktopHold has received its rejection.
+      const releaseError = profileHold && !ownerStopping &&
+        (profileHold === drainingHold || typeof profileHold.reason !== 'string');
+      const message = releaseError ? releaseFailure().message : error;
+      return { ...value, error: message, queuePaused: true };
     }
     function publish(value) {
       if (isCurrent()) deps.hub?.publish({ type: 'input_projection', sessionId: value.sessionId, projection: project(value) });
@@ -662,7 +668,7 @@ export function createInputQueue(deps) {
       startIdleRelease: () => { if (!closing) idleRelease?.start(); },
       /** Hold every task this runtime knows (the profile hold started; later tasks are held as they are read). */
       holdKnownTasks() {
-        routeStartup.abort(createIpcError('PRECONDITION_FAILED', profileHold.message));
+        routeStartup.abort(holdError(profileHold.reason));
         for (const id of states.keys()) holdTaskForProfile(coordinator, id);
         deps.holdTurnSettlements?.(states.keys());
       },
@@ -748,14 +754,15 @@ export function createInputQueue(deps) {
   let profileHoldGeneration = 0;
   api.holdForDesktop = message => {
     const first = profileHold === null;
-    profileHold = { message };
+    profileHold = { reason: message };
     if (first) {
       profileHoldGeneration++;
       runtime.holdKnownTasks();
     }
   };
   api.isHeldForDesktop = () => profileHold !== null;
-  api.profileHoldMessage = () => profileHold?.message ?? null;
+  api.profileHoldReason = () => profileHold?.reason ?? null;
+  api.profileHoldMessage = () => profileHold ? holdRefusal(profileHold.reason).message : null;
   api.profileHoldGeneration = () => profileHoldGeneration;
   /**
    * The desktop is gone: open again only once no turn runs (false: still held, ask again later). The
@@ -768,12 +775,15 @@ export function createInputQueue(deps) {
     if (ownerStopping || runtime.hasRunningTurns()) return false;
     // Keep the old executor and its failed history writes until the next clean scan can drain them.
     const released = profileHold;
+    drainingHold = released;
     const sameHold = () => !ownerStopping && profileHold === released;
     try {
       await runtime.dispose(sameHold);
     } catch (error) {
-      if (sameHold()) released.message = errorText(error instanceof AggregateError ? error.errors[0] ?? error : error);
+      if (sameHold()) released.reason = releaseFailure();
       throw error;
+    } finally {
+      drainingHold = null;
     }
     // A desktop that came back meanwhile replaced the hold: that one stays.
     if (sameHold()) profileHold = null;

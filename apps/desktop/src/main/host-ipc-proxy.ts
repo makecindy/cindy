@@ -24,6 +24,8 @@
  * after the entry's timeout (default HOST_IPC_DEFAULT_TIMEOUT_MS).
  */
 
+import { isProfileReleaseFailure } from '../shared/ipc-errors.js';
+import { createMainI18n } from './i18n.js';
 import type { IpcMainInvokeEvent } from 'electron';
 import {
   HOST_INSTANCE_HEADER,
@@ -249,6 +251,10 @@ export function createHostIpcProxy(deps: HostIpcProxyDeps): HostIpcProxy {
       case HOST_IPC_REJECTION.audienceDenied:
         throw createIpcError('PERMISSION_DENIED', 'The Host refused this window');
       default:
+        if (isProfileReleaseFailure(error)) {
+          const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
+          throw createIpcError(error.code, i18n.t('ipcError.PRECONDITION_FAILED'));
+        }
         if (isIpcErrorCode(code)) throw createIpcError(code, message);
         throw createIpcError('INTERNAL', `Host ${entry.channel} failed`);
     }

@@ -8,6 +8,9 @@
  *   PRECONDITION_FAILED. Clients handle it by its code; it is not a server failure.
  * - Anything else, or an error that is not typed exactly, is the caller's 500.
  */
+import { isProfileReleaseFailure } from '../../desktop/src/shared/ipc-errors.ts';
+import { releaseFailure } from './agent/profile-hold.ts';
+
 export const STATUS_BY_CODE = Object.freeze({
   INVALID_PARAMS: 400,
   PERMISSION_DENIED: 403,
@@ -34,13 +37,13 @@ const CODED_ERROR = /^\[([A-Z][A-Z0-9_]*)\] ([\s\S]*)$/;
  * is `[CODE] message`, and the two codes are the same. Nothing else is serialised to a client.
  *
  * @param {unknown} error
- * @returns {{ code: string, message: string } | null}
+ * @returns {{ code: string, message: string, reason?: 'HOST_PROFILE_RELEASE_FAILED' } | null}
  */
 export function parseTypedError(error) {
   const code = typeof error?.code === 'string' ? error.code : null;
   const match = error instanceof Error ? CODED_ERROR.exec(error.message) : null;
   if (!code || !match || match[1] !== code) return null;
-  return { code, message: match[2] };
+  return isProfileReleaseFailure(error) ? releaseFailure() : { code, message: match[2] };
 }
 
 /**
