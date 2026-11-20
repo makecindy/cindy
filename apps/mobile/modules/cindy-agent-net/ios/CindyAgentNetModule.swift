@@ -5,6 +5,45 @@ public final class CindyAgentNetModule: Module {
   private let queue = DispatchQueue(label: "cindy.agent-net.native")
   private var handles: [String: OpaquePointer] = [:]
   private var destroyed = false
+  /// One engine's own loop, on its own thread from the first `wait` until the engine is destroyed: wait for a datagram or
+  /// the core's next timer, give the engine its turn (it reads, acknowledges, retransmits, keeps connections alive), and
+  /// tell a waiting `wait` call when the engine has something for JS to read with `poll`. It does not depend on the JS
+  /// thread: a busy or stalled JS thread no longer delays acknowledgements. The socket waiter outlives the engine and is
+  /// freed here, after the last wait on it.
+  private final class Pump {
+    private let waiter: OpaquePointer
+    private let condition = NSCondition()
+    private var work = false
+    private var closed = false
+    init(waiter: OpaquePointer) { self.waiter = waiter }
+    var isClosed: Bool { condition.lock(); defer { condition.unlock() }; return closed }
+    func close() { condition.lock(); closed = true; condition.broadcast(); condition.unlock() }
+    /// `turn`: the engine's turn, serialized with its commands; negative once the engine is gone.
+    func run(_ turn: () -> Int64) {
+      var waitMs: Int64 = 0
+      while !isClosed {
+        if waitMs > 0 { _ = cindy_agent_net_wait(waiter, UInt32(waitMs)) }
+        let state = turn()
+        if state < 0 { break }
+        if state & 1 == 1 { condition.lock(); work = true; condition.broadcast(); condition.unlock() }
+        waitMs = max(1, min(250, state >> 1))
+      }
+      close()
+      cindy_agent_net_waiter_free(waiter)
+    }
+    /// True as soon as the engine has something for JS, false after `maxMs` or once the engine is gone.
+    func nextWork(_ maxMs: Int) -> Bool {
+      condition.lock(); defer { condition.unlock() }
+      if !work && !closed { _ = condition.wait(until: Date().addingTimeInterval(Double(max(1, min(maxMs, 60_000))) / 1000)) }
+      let had = work
+      work = false
+      return had
+    }
+  }
+  /// Only touched on `queue`.
+  private var pumps: [String: Pump] = [:]
+  /// `wait` blocks for up to its limit: its own concurrent queue, so `command` on `queue` is never held up by it.
+  private let waitQueue = DispatchQueue(label: "cindy.agent-net.native.wait", attributes: .concurrent)
   // Bonjour and its run-loop delegates live exclusively on the main queue.
   private var lan: [String: AgentNetLan] = [:]
 
@@ -49,7 +88,11 @@ public final class CindyAgentNetModule: Module {
       defer { cindy_agent_net_free_string(result) }
       return String(cString: result)
     }.runOnQueue(queue)
+    AsyncFunction("wait") { (id: String, maxMs: Int, promise: Promise) in
+      self.waitQueue.async { promise.resolve(self.waitForWork(id, maxMs)) }
+    }
     AsyncFunction("destroy") { (id: String) in
+      self.pumps.removeValue(forKey: id)?.close()
       if let handle = self.handles.removeValue(forKey: id) { cindy_agent_net_destroy(handle) }
     }.runOnQueue(queue)
     OnDestroy {
@@ -58,11 +101,36 @@ public final class CindyAgentNetModule: Module {
       }
       self.queue.async {
         self.destroyed = true
+        self.pumps.values.forEach { $0.close() }
+        self.pumps.removeAll()
         let active = self.handles.values
         self.handles.removeAll()
         active.forEach { cindy_agent_net_destroy($0) }
       }
     }
+  }
+  private func waitForWork(_ id: String, _ maxMs: Int) -> Bool {
+    let pump: Pump? = queue.sync {
+      guard !self.destroyed, let handle = self.handles[id] else { return nil }
+      if let existing = self.pumps[id], !existing.isClosed { return existing }
+      guard let waiter = cindy_agent_net_waiter(handle) else { return nil }
+      let created = Pump(waiter: waiter)
+      self.pumps[id] = created
+      let thread = Thread { [weak self] in
+        created.run {
+          guard let self else { return -1 }
+          // Every turn runs on `queue`, like `command`; the blocking wait in between holds nothing.
+          return self.queue.sync { () -> Int64 in
+            guard !self.destroyed, !created.isClosed, let handle = self.handles[id] else { return -1 }
+            return cindy_agent_net_pump(handle)
+          }
+        }
+      }
+      thread.name = "cindy-agent-net-pump"
+      thread.start()
+      return created
+    }
+    return pump?.nextWork(maxMs) ?? false
   }
   private func input(_ value: String) throws -> Data {
     guard let data = value.data(using: .utf8), data.count <= 2 * 1024 * 1024 else { throw failure("AGENT_NET_COMMAND_TOO_LARGE") }

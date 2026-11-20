@@ -70,6 +70,73 @@ fn malformed_admission_is_atomic_and_signing_keys_are_separate_from_transport_ke
     assert_eq!(a.command(&json!({"op":"connect","key":identity["transportKey"],"address":{"link":3}})), Err("PEER_ADDRESS_MISMATCH"));
 }
 
+// The engine's own turn (`pump`) and the socket waiter, as the phone's wait thread uses them (CindyAgentNetModule `wait`):
+// 2026-11-21 every request from a phone took 30–60 ms longer than over Device Link and an idle app kept its JS thread
+// 9–22% busy, because the core only received, acknowledged and ran its timers when JS polled it on a timer.
+// Observable: two engines complete the handshake and move a stream with `pump` alone; `pump` reports work exactly when
+// `poll` has something new for the application and `poll` hands each byte over once, also when `pump` ran many times
+// before it; the waiter times out on a quiet socket and returns as soon as the peer's datagram arrives.
+// The poll-driven test above never calls `pump`, and nothing waited on the socket before.
+#[test]
+fn pump_runs_the_transport_without_the_application_and_the_waiter_wakes_on_a_datagram() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    let mut a = engine(11, "native-a");
+    let mut b = engine(13, "native-b");
+    let ia = command(&mut a, json!({"op":"identity"}));
+    let ib = command(&mut b, json!({"op":"identity"}));
+    command(&mut a, json!({"op":"admit","peers":[{"key":ib["transportKey"],"link":1}]}));
+    command(&mut b, json!({"op":"admit","peers":[{"key":ia["transportKey"],"link":1}]}));
+    let waiter = b.waiter();
+    assert!(!waiter.wait(20), "a quiet socket times out");
+    let id = command(&mut a, json!({"op":"connect","key":ib["transportKey"],"address":{"address":"127.0.0.1","port":ib["udpPort"]}}));
+    // The handshake request goes out on a's turn; b's waiter sees it without b having been polled.
+    a.pump().unwrap();
+    assert!(waiter.wait(2_000), "the peer's datagram wakes the waiter");
+    let pump_until = |a: &mut NativeEngine, b: &mut NativeEngine, done: &mut dyn FnMut(&mut NativeEngine, &mut NativeEngine) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while !done(a, b) {
+            assert!(Instant::now() < deadline, "native pump deadline");
+            a.pump().unwrap(); b.pump().unwrap();
+            sleep(Duration::from_millis(1));
+        }
+    };
+    // Both sides report work once the connection exists; the application reads that state once.
+    let established = |poll: &Value| poll["connections"].as_array().unwrap().iter().any(|c| c["established"] == true);
+    let (mut seen_a, mut seen_b) = (false, false);
+    pump_until(&mut a, &mut b, &mut |a, b| {
+        if a.pump().unwrap().0 { seen_a |= established(&command(a, json!({"op":"poll"}))); }
+        if b.pump().unwrap().0 { seen_b |= established(&command(b, json!({"op":"poll"}))); }
+        seen_a && seen_b
+    });
+    // Settle: with the state read and nothing arriving, there is no work.
+    pump_until(&mut a, &mut b, &mut |a, b| !a.pump().unwrap().0 && !b.pump().unwrap().0);
+    let (work, wake_ms) = b.pump().unwrap();
+    assert!(!work && wake_ms <= 250);
+
+    let stream = command(&mut a, json!({"op":"openStream","id":id}));
+    let payload: Vec<u8> = (0..200_000).map(|n| (n % 251) as u8).collect();
+    let mut written = 0;
+    let mut received = Vec::new();
+    let mut polls = 0;
+    pump_until(&mut a, &mut b, &mut |a, b| {
+        if written < payload.len() {
+            let end = (written + 60_000).min(payload.len());
+            written += command(a, json!({"op":"write","id":id,"stream":stream,"data":URL_SAFE_NO_PAD.encode(&payload[written..end])})).as_u64().unwrap() as usize;
+        }
+        // The application is slow: b's engine takes many turns between two polls and must neither lose nor repeat data.
+        for _ in 0..5 { a.pump().unwrap(); b.pump().unwrap(); }
+        if b.pump().unwrap().0 {
+            polls += 1;
+            for connection in command(b, json!({"op":"poll"}))["connections"].as_array().unwrap() {
+                for chunk in connection["data"].as_array().unwrap() { received.extend(URL_SAFE_NO_PAD.decode(chunk["data"].as_str().unwrap()).unwrap()); }
+            }
+        }
+        received.len() >= payload.len()
+    });
+    assert_eq!(received, payload);
+    assert!(polls >= 1);
+}
+
 // Production background opener: an unrelated expired sender must not invalidate
 // a fresh sender. The transport tests do not exercise persisted notification trust.
 #[test]
