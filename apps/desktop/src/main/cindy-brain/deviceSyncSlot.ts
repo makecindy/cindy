@@ -3,7 +3,7 @@ export { PLUGIN_SYNC_CHANNEL } from '@cindy/device-link';
 import { randomUUID } from 'node:crypto';
 import type { InstalledGhost } from '../../shared/ghost.js';
 import { ghostInstallApprovalToken } from '../../shared/ghost.js';
-import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { installedGhostStoragePart, pluginAutomationHostKey } from '../../shared/pluginIdentity.js';
 import {
   encryptDeviceSyncBytes,
   decryptDeviceSyncBytes,
@@ -33,6 +33,7 @@ export interface PluginSyncTransport {
 }
 interface Deps {
   scope(): string;
+  automationHost?(ghost: InstalledGhost, key: string, choice: { revision: number; useThisDevice: boolean } | null, current: () => boolean): Promise<unknown>;
   keys: Pick<
     DeviceSyncKeyStore,
     'prepare' | 'getIdentity' | 'getPeerPublicKey' | 'pinPeerPublicKey'
@@ -191,6 +192,19 @@ export class PluginDeviceSync {
         peers: this.active ? (this.transport?.peers() ?? []) : [],
         maxBytes: MAX_BYTES,
       };
+    if (raw.op === 'automationHost' || raw.op === 'selectAutomationHost') {
+      const ghost = this.deps.getGhost(instance);
+      if (!ghost || ghost.manifest.agent?.schedule !== true || !this.deps.automationHost) return error('UNSUPPORTED_CAPABILITY');
+      const current = this.capture(instance);
+      if (!current?.()) return error('SYNC_OFFLINE');
+      const key = pluginAutomationHostKey(plugin.namespace, plugin.id);
+      if (raw.op === 'selectAutomationHost' && (typeof raw.revision !== 'number' || !Number.isSafeInteger(raw.revision) || raw.revision < 0 || typeof raw.useThisDevice !== 'boolean')) return error('INVALID_PARAMS');
+      const choice = raw.op === 'selectAutomationHost' ? { revision: raw.revision as number, useThisDevice: raw.useThisDevice as boolean } : null;
+      try {
+        const result = await this.deps.automationHost(ghost, key, choice, current);
+        return current() ? result : error('SYNC_RESULT_UNKNOWN');
+      } catch (_) { return error('AUTOMATION_HOST_UNAVAILABLE'); }
+    }
     if (raw.op === 'reply') {
       const p = typeof raw.requestId === 'string' ? this.incoming.get(raw.requestId) : null;
       if (!p || p.instance !== instance) return error('SYNC_REQUEST_EXPIRED');

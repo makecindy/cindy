@@ -685,6 +685,16 @@ describe('Scheduler', () => {
   });
 
 
+  it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
+    const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';
+    const s = await h.scheduler.create({ ...baseInput, prompt });
+    expect(s.primaryHostKey).toBe('public/cindy-contacts');
+    expect((await h.scheduler.update(s.id, { name: 'renamed' })).primaryHostKey).toBe(s.primaryHostKey);
+    await expect(h.scheduler.update(s.id, { primaryHostKey: undefined })).rejects.toThrow('binding');
+    expect((await h.scheduler.create({ ...baseInput, prompt: prompt + '\nnamespace 传「local」。' })).primaryHostKey).toBe('local/cindy-contacts');
+    expect((await h.scheduler.create({ ...baseInput, prompt: 'compile a list' })).primaryHostKey).toBeUndefined();
+  });
+
   // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19): unit through Scheduler.create /
   // update. A plugin engine only runs as a new task each run on the automation host; the minimal
   // failing inputs are a bound/persistent/worktree/remote/script plugin schedule being saved, or an

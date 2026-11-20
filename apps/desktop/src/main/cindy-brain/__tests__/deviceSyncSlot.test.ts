@@ -25,7 +25,7 @@ const manifest = {
   entry: 'main.js',
   deviceSync: true,
 };
-function pair() {
+function pair(automationHost?: ConstructorParameters<typeof PluginDeviceSync>[0]['automationHost']) {
   vi.useFakeTimers();
   const frames: Array<{ from: string; to: string; data: unknown }> = [];
   const sides = new Map<string, ReturnType<typeof side>>();
@@ -63,6 +63,7 @@ function pair() {
     const ghosts = [g, other];
     const svc = new PluginDeviceSync({
       scope: () => scope,
+      automationHost,
       keys,
       getGhost: (key) => ghosts.find(ghost => ghost.instanceKey === key) ?? null,
       listGhosts: () => ghosts,
@@ -496,4 +497,16 @@ it('denies sync during revoke persistence and releases the temporary deny on fai
   a.svc.reset(); await fresh;
   const committed = b.access.beginRevocation('a'); b.blocked.add('a'); committed();
   expect(b.access.allowed('a')).toBe(false);
+});
+
+it('only a confirmed schedule-enabled sync plugin can request its own account role', async () => {
+  const handle = vi.fn(async () => ({ ok: true, selected: false }));
+  const { a } = pair(handle);
+  const request = { op: 'selectAutomationHost', key: 'public/someone-else', revision: 0, useThisDevice: true };
+  expect(await a.svc.handle('example-sync', request)).toMatchObject({ errorCode: 'UNSUPPORTED_CAPABILITY' });
+  a.g.manifest.agent = { schedule: true };
+  expect(await a.svc.handle('example-sync', request)).toMatchObject({ ok: true });
+  expect(handle).toHaveBeenCalledWith(a.g, 'public/example-sync', { revision: 0, useThisDevice: true }, expect.any(Function));
+  expect(await a.svc.handle('example-sync', { ...request, revision: -1 })).toMatchObject({ errorCode: 'INVALID_PARAMS' });
+  expect(handle).toHaveBeenCalledTimes(1);
 });
