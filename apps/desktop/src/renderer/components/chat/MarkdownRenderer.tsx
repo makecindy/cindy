@@ -1653,7 +1653,9 @@ function MarkdownTargetLink({
   }]);
 
   if (target.kind === 'audio') {
-    return <InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin)} />;
+    const normalized = normalizeMarkdownImageSrc(target.href, workingDir, allowPrivilegedLinks,
+      remoteMediaOrigin ?? (sessionId && fileCtx.localConfirmed !== true ? null : undefined));
+    return normalized ? <InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)} /> : null;
   }
 
   if (target.kind === 'plain-text') {
@@ -2181,7 +2183,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
       <WorkspaceMediaSrc src={raw} workingDir={props.workingDir} enabled={resolveInWorkspace} streaming={props.isStreaming ?? false}>
         {(localSrc = raw) => {
           const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined, props.workingDir);
-          const normalized = localSrc.startsWith('xdt-audio://') && allowPrivilegedLinks ? localSrc : normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks,
+          const normalized = normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks,
             mediaOrigin ?? (props.currentSessionId && sessionFileCtx.localConfirmed !== true ? null : undefined));
           if (!normalized) return null;
           // Local audio has its own extension-checked protocol; xdt-file serves

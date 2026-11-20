@@ -544,3 +544,49 @@ describe('MarkdownRenderer hostless media ownership', () => {
     expect(loadedSource(preview.container)).toBe(expected);
   });
 });
+
+// #11607 discussion_r4641264626: bridge-scheme tests missed direct audio URLs.
+// Real MarkdownRenderer DOM entry, unit tier; pending/SSH must never create a
+// controller-local audio src. Device recovery and local/preview controls remain.
+describe('MarkdownRenderer direct audio ownership', () => {
+  const audioUrl = (directory = '/tmp') => `xdt-audio://local/?path=${encodeURIComponent(`${directory}/100%.mp3`)}`;
+  const contentFor = (entrance: string, src: string) => entrance === 'Markdown audio link'
+    ? `[listen](${src})`
+    : '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'a', kind: 'audio', props: { src } }) + '\n```';
+  const audioSrc = (container: HTMLElement) => container.querySelector('audio')?.getAttribute('src') ?? null;
+  const entrances = ['Markdown audio link', 'rich audio'];
+
+  it.each(entrances)('blocks pending %s and recovers on device identity injection', entrance => {
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin: { kind: 'local' }, localConfirmed: false };
+    const content = contentFor(entrance, audioUrl());
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" currentSessionTitle="pending" content={content} renderRichAnswers />);
+    expect(audioSrc(view.container)).toBeNull();
+    sessionFile.current = { ...REMOTE_SESSION_FILE, workingDir: '/task' };
+    view.rerender(<MarkdownRenderer workingDir="/task" currentSessionId="s1" currentSessionTitle="device registered" content={content} renderRichAnswers />);
+    expect(parseRemoteMediaUrl(audioSrc(view.container) ?? '')).toEqual({
+      origin: { kind: 'device', deviceId: 'dev-1' }, origUrl: audioUrl(),
+    });
+  });
+
+  it.each(entrances)('rejects SSH outside-workdir %s and routes inside-workdir audio remotely', entrance => {
+    const origin = { kind: 'ssh', remoteHostId: 'remote', workdir: '/task' } as const;
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin, localConfirmed: false };
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={contentFor(entrance, audioUrl())} renderRichAnswers />);
+    expect(audioSrc(view.container)).toBeNull();
+    view.rerender(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={contentFor(entrance, audioUrl('/task'))} renderRichAnswers />);
+    expect(parseRemoteMediaUrl(audioSrc(view.container) ?? '')).toEqual({ origin, origUrl: audioUrl('/task') });
+  });
+
+  it.each(entrances)('keeps confirmed-local and non-session %s playable, but rejects untrusted previews', entrance => {
+    const content = contentFor(entrance, audioUrl());
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin: { kind: 'local' }, localConfirmed: true };
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={content} renderRichAnswers />);
+    expect(audioSrc(view.container)).toBe(audioUrl());
+    view.unmount();
+    sessionFile.current = { origin: { kind: 'local' }, localConfirmed: false };
+    const preview = render(<MarkdownRenderer workingDir="/task" content={content} renderRichAnswers />);
+    expect(audioSrc(preview.container)).toBe(audioUrl());
+    preview.rerender(<MarkdownRenderer workingDir="/task" content={content} renderRichAnswers allowPrivilegedLinks={false} />);
+    expect(audioSrc(preview.container)).toBeNull();
+  });
+});

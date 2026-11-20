@@ -842,6 +842,13 @@ export function normalizeMarkdownImageSrc(
   if (!allowPrivilegedLinks) {
     return /^https?:\/\//i.test(src) ? src : undefined;
   }
+  // Direct audio uses its own local-file reader, but has the same source
+  // ownership boundary as bridged images. Preserve its encoded query verbatim.
+  if (src.startsWith('xdt-audio://')) {
+    if (origin === null) return undefined;
+    if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(src, origin.workdir)) return undefined;
+    return src;
+  }
   // Both legacy path-shaped schemes use the local-file bridge. Their raw
   // Markdown destinations must retain the same source-ownership checks.
   const hostlessImage = src.startsWith('xdt-image:///');
