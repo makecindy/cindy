@@ -21456,6 +21456,7 @@
       "reviewed": "已审核",
       "verified-publisher": "发布者已验证"
     },
+    "viewLimit": "同时打开的页面太多。滚动或收起其他页面后，这里会自动打开。",
     "pluginRevoked": "插件已停用或发生变化，此页面已失效",
     "pluginCspRejected": "页面申请了未声明的域名，已拒绝加载",
     "filesOnExecutionComputer": "文件内容请在执行电脑查看",

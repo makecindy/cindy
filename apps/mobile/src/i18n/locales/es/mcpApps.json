@@ -1,6 +1,7 @@
 {
   "sharedTaskReadOnly": "Sólo el propietario de la sesión puede interactuar con esta tarjeta.",
   "retry": "Recargar",
+  "viewLimit": "Hay demasiadas páginas abiertas. Desplaza otra página fuera de la vista o ciérrala para que esta se abra automáticamente.",
   "pluginRevoked": "El complemento se desactivó o cambió. Esta página ya no está disponible.",
   "loadFailed": "La aplicación no se pudo cargar. Revisa la conexión y vuelve a cargarla.",
   "updateRequired": "Esta computadora aún no es compatible con las aplicaciones MCP. Actualiza Cindy en esa computadora y vuelve a intentarlo.",

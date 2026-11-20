@@ -17,6 +17,7 @@ export class McpAppSdkCache {
   async open(
     owner: unknown, peer: string, input: Record<string, unknown>,
     send: (input: Record<string, unknown>) => Promise<unknown>, assertCurrent: () => void,
+    unusedFallbackSlot?: () => void,
   ): Promise<McpAppDocument> {
     assertCurrent();
     if (this.owner !== owner) { this.entries.clear(); this.chars = 0; this.owner = owner; }
@@ -34,11 +35,19 @@ export class McpAppSdkCache {
       // Unknown/incorrect references get one source-only reopen. Retire the first
       // View before opening another; never replay a page tool or reset the link.
       await send({ op: 'teardown', viewId: document.viewId });
-      assertCurrent();
-      document = await send({ ...input, sdkCacheHashes: [] }) as McpAppDocument;
+      try {
+        assertCurrent();
+        document = await send({ ...input, sdkCacheHashes: [] }) as McpAppDocument;
+      } catch (error) {
+        // A successful replacement consumes the slot internally. Only a failed
+        // replacement leaves capacity for another waiting page.
+        unusedFallbackSlot?.();
+        throw error;
+      }
       assertCurrent();
       if (!document.sdk && document.sdkRef !== undefined) {
         await send({ op: 'teardown', viewId: document.viewId });
+        unusedFallbackSlot?.();
         throw new Error('MCP_APP_INVALID_DOCUMENT');
       }
     }

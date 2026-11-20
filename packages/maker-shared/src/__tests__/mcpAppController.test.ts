@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { McpAppController, type AppRpc } from '../mcpAppController.js';
+import { McpAppController, McpAppViewSlots, type AppRpc } from '../mcpAppController.js';
 const document = {
   viewId: 'view',
   html: '<html></html>',
@@ -35,6 +35,61 @@ function linkFixture(authorize: () => Promise<unknown>) {
   return f;
 }
 describe('MCP App transport lifecycle', () => {
+  // Unit: a card can scroll away between the grant and its next open. Exercise the controller
+  // transport so one real release still reaches the second card without an extra executor call.
+  it('passes an unused slot to the next visible card when the granted card leaves before reopening', async () => {
+    const slots = new McpAppViewSlots();
+    const attempts: { card: string; context: unknown }[] = [];
+    let full = true;
+    let refuseNext!: (error: Error) => void;
+    const create = (card: string) => new McpAppController((_session, input) =>
+      slots.control('owner', 'window', 'peer', input, async () => {
+        if (input.op !== 'open') return {};
+        attempts.push({ card, context: input.context });
+        if (full && card === 'next') return new Promise((_resolve, reject) => { refuseNext = reject; });
+        if (full) throw new Error('MCP_APP_VIEW_LIMIT');
+        return { viewId: card, transport: 'sandbox' };
+      }), 'task', card, vi.fn(), vi.fn(), vi.fn());
+    const first = create('first');
+    const next = create('next');
+    const nextOpen = next.open({}, () => true); // Starts first, but receives its refusal second.
+    const firstOpen = first.open({}, waiting => waiting);
+    await flush();
+    await next.context({ theme: 'dark' });
+    refuseNext(new Error('MCP_APP_VIEW_LIMIT'));
+    await flush();
+    full = false;
+    slots.released('owner', 'window', 'peer');
+    await firstOpen;
+    await flush();
+    expect(attempts).toEqual([{ card: 'next', context: {} }, { card: 'first', context: {} },
+      { card: 'next', context: { theme: 'dark' } }]);
+    expect(await nextOpen).toMatchObject({ viewId: 'next' });
+    await Promise.all([first.close(), next.close()]);
+  });
+
+  // Unit: a wait can outlive an explicit device close. A subsequent slot release must not reconnect it.
+  it.each([false, true])('ends the wait on explicit device close without reconnecting (already granted: %s)', async granted => {
+    const slots = new McpAppViewSlots();
+    let epoch = 1;
+    let closeLink!: () => void;
+    const unsubscribe = vi.fn();
+    const send = vi.fn(async () => { throw new Error('MCP_APP_VIEW_LIMIT'); });
+    const controller = new McpAppController((_session, input) =>
+      slots.control('owner', 'window', 'peer', input, send, epoch, closed => {
+        closeLink = closed;
+        return unsubscribe;
+      }), 'task', 'card', vi.fn(), vi.fn(), vi.fn());
+    const pending = controller.open({}, () => true);
+    await flush();
+    if (granted) slots.released('owner', 'window', 'peer');
+    epoch++;
+    closeLink();
+    await expect(pending).rejects.toThrow('MCP_APP_LINK_CLOSED');
+    expect(send).toHaveBeenCalledOnce();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it('keeps local Desktop RPC out of the Renderer while retaining UI state and Host-owned teardown', async () => {
     const f = fixture();
     f.invoke.mockImplementation(async (_session, input) => input.op === 'open'

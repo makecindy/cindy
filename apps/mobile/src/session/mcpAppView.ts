@@ -1,5 +1,5 @@
 import { CryptoDigestAlgorithm, digestStringAsync, getRandomBytes } from 'expo-crypto';
-import { McpAppController, McpAppHeightGuard, mcpAppFailureKey, type AppRpc } from '@cindy/maker-shared/mcp-app-controller';
+import { confirmsMcpAppViewGone, McpAppController, McpAppHeightGuard, McpAppViewSlots, mcpAppFailureKey, type AppRpc } from '@cindy/maker-shared/mcp-app-controller';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { McpAppSdkCache, MCP_APPS_INVOKE, type McpAppDocument } from '@cindy/maker-shared/mcp-apps';
 import { prepareMcpAppNativeDocument, type McpAppNativeDocument } from './mcpAppNativeDocument';
@@ -11,8 +11,9 @@ export interface McpAppViewState {
   filesUnavailable?: boolean;
   error?: ReturnType<typeof mcpAppFailureKey> | 'mcpApps.mobileUpdateRequired' | 'mcpApps.pluginRevoked';
 }
-type Invoke = (device: string, channel: string, args: unknown[], options?: { noResultCache?: boolean }) => Promise<unknown>;
+type Invoke = (device: string, channel: string, args: unknown[], options?: { noResultCache?: boolean; preSend?: () => void }) => Promise<unknown>;
 
+const viewSlots = new McpAppViewSlots();
 const sdkCache = new McpAppSdkCache(text => digestStringAsync(CryptoDigestAlgorithm.SHA256, text));
 
 export const MCP_APP_DEFAULT_HEIGHT = 320;
@@ -59,21 +60,42 @@ export class McpAppView {
     private readonly removed: () => void,
     openLink: (url: string) => Promise<void>, ownerGeneration: number,
     private readonly isPlugin = false,
+    getUserCloseEpoch?: (device: string) => number,
+    onUserClose?: (device: string, listener: () => void) => () => void,
   ) {
     this.heightCacheKey = heightKey(ownerGeneration, deviceId, sessionId, clientId);
     this.state = { loading: true, height: getMcpAppHeight(ownerGeneration, deviceId, sessionId, clientId) ?? MCP_APP_DEFAULT_HEIGHT };
     const sdkOwner = getMobileAuthOwner();
+    const linkEpoch = getUserCloseEpoch?.(deviceId);
+    const released = () => viewSlots.released(sdkOwner, deviceId, deviceId);
     this.controller = new McpAppController(
       (id, input) => {
         const send = (request: Record<string, unknown>) => {
-          if (request.op === 'open' && this.closing) throw new Error('MCP_APP_OPEN_CANCELLED');
-          return request.op === 'open' || request.op === 'poll'
-            ? invoke(deviceId, MCP_APPS_INVOKE, [id, request], { noResultCache: true })
-            : invoke(deviceId, MCP_APPS_INVOKE, [id, request]);
+          const preSend = () => {
+            if (!isMobileAuthOwnerCurrent(sdkOwner)) throw new Error('MCP_APP_OWNER_CHANGED');
+            if (getUserCloseEpoch?.(deviceId) !== linkEpoch) throw new Error('MCP_APP_LINK_CLOSED');
+            if (request.op === 'open' && this.closing) throw new Error('MCP_APP_OPEN_CANCELLED');
+          };
+          preSend();
+          if (request.op === 'open') return invoke(deviceId, MCP_APPS_INVOKE, [id, request], { noResultCache: true, preSend });
+          if (request.op === 'poll') return invoke(deviceId, MCP_APPS_INVOKE, [id, request], { noResultCache: true });
+          const result = invoke(deviceId, MCP_APPS_INVOKE, [id, request]);
+          if (request.op !== 'teardown') return result;
+          return result.catch(error => {
+            // Also applies to a temporary View retired during an SDK source fallback.
+            if (confirmsMcpAppViewGone(error)) released();
+            throw error;
+          });
         };
-        return input.op === 'open' ? sdkCache.open(sdkOwner, deviceId, input, send, () => {
-          if (!isMobileAuthOwnerCurrent(sdkOwner)) throw new Error('MCP_APP_OWNER_CHANGED');
-        }) : send(input);
+        return viewSlots.control(sdkOwner, deviceId, deviceId, input, async () => {
+          if (input.op === 'open') return sdkCache.open(sdkOwner, deviceId, input, send, () => {
+            if (!isMobileAuthOwnerCurrent(sdkOwner)) throw new Error('MCP_APP_OWNER_CHANGED');
+          }, released);
+          const result = await send(input);
+          if (input.op === 'teardown') released();
+          return result;
+        }, typeof input.openId === 'string' ? getUserCloseEpoch?.(deviceId) : undefined,
+          onUserClose ? closed => onUserClose(deviceId, closed) : undefined);
       }, sessionId, clientId,
       (message) => {
         if (this.disposed) return;
@@ -114,9 +136,13 @@ export class McpAppView {
     this.listeners.forEach((listener) => listener(this.state));
     this.changed();
   }
-  async open(context: Record<string, unknown>): Promise<void> {
+  async open(context: Record<string, unknown>, active = () => true): Promise<void> {
     try {
-      const document = await this.controller.open(context);
+      const document = await this.controller.open(context, waiting => {
+        if (this.closing || !active()) return false;
+        this.update({ loading: !waiting, error: waiting ? 'mcpApps.viewLimit' : undefined });
+        return true;
+      });
       if (!document || this.closing) return;
       if (document.transport === 'sandbox') throw new Error('MCP_APP_INVALID_DOCUMENT');
       const nativeDocument = await prepareMcpAppNativeDocument(document, this.bridgeKey);

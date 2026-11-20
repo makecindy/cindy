@@ -58,11 +58,12 @@ function fixture() {
     return {};
   });
   const openLink = vi.fn(async () => {});
-  const views = new RemoteMcpAppViews({ owner: () => owner, closeEpoch: link.closeEpoch, invoke, openLink });
+  const released = vi.fn();
+  const views = new RemoteMcpAppViews({ released, owner: () => owner, closeEpoch: link.closeEpoch, invoke, openLink });
   const control = (input: Record<string, unknown>, caller = 'renderer:1', device = 'device-a', session = 'task') =>
     views.control(caller, device, session, input);
   const open = async () => await control({ op: 'open', clientId: 'card', openId: 'attempt', context: {} }) as McpAppSandboxView;
-  return { invoke, openLink, views, control, open, link, changeOwner: () => { owner = {}; } };
+  return { invoke, openLink, views, control, open, link, released, changeOwner: () => { owner = {}; } };
 }
 beforeEach(() => { state.mounts.clear(); state.next = 0; });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
@@ -314,10 +315,22 @@ describe('Main-bound remote MCP App Views', () => {
     await expect(f.open()).rejects.toThrow('MCP_APP_VIEW_LIMIT');
     await f.views.releaseCaller('renderer:1');
     f.invoke.mockResolvedValueOnce(document);
-    expect(await f.open()).toHaveProperty('transport', 'sandbox');
+    const mounted = await f.open();
+    expect(mounted.transport).toBe('sandbox');
     finishes.forEach((finish) => finish(document));
     await Promise.all(pending);
     expect(state.mounts.size).toBe(1);
+    // Cancelling a pending attempt is not a release. Each late, actually allocated remote
+    // View frees one slot only when its teardown is confirmed by the executor.
+    expect(f.released.mock.calls).toEqual(Array(16).fill([expect.any(Object), 'renderer:1', 'device-a', 'pending']));
+    f.released.mockClear();
+    await f.control({ op: 'teardown', viewId: mounted.viewId });
+    expect(f.released).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'renderer:1', 'device-a', 'mounted');
+    f.invoke.mockResolvedValueOnce(document);
+    const late = await f.open();
+    await f.control({ op: 'teardown', viewId: late.viewId });
+    expect(f.released).toHaveBeenCalledTimes(2);
+    expect(f.invoke.mock.calls.at(-1)?.[2]).toEqual({ op: 'teardown', viewId: 'remote-view' });
   });
   it('stops a failed read after its bounded retry window', async () => {
     const f = fixture();
@@ -437,4 +450,9 @@ it('retires an unresolved SDK reference before a single source fallback and bind
   expect(mounted.document.sdk).toEqual(sdk);
   await mounted.frame({ op: 'poll' });
   expect(f.invoke.mock.calls.at(-1)![2].viewId).toBe('full-source');
+  expect(f.released).not.toHaveBeenCalled(); // The source replacement used the same slot.
+  f.invoke.mockResolvedValueOnce({ ...document, sdkRef: 'f'.repeat(64) })
+    .mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('MCP_APP_SERVER_CHANGED'));
+  await expect(f.open()).rejects.toThrow('MCP_APP_SERVER_CHANGED');
+  expect(f.released).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'renderer:1', 'device-a', 'pending');
 });
