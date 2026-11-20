@@ -1007,7 +1007,7 @@ export class DeviceLinkClient {
   private staleLinkNotifiedAt = new Map<string, number>();
   private presenceHandlers = new Set<(snap: PresenceSnapshot) => void>();
   private frameHandlers = new Set<InboundFrameHandler>();
-  private peerStreamAcceptedHandlers = new Set<(peer: string, streamId: string) => void>();
+  private peerStreamAcceptedHandlers = new Set<(peer: string, streamId: string, accepted?: LinkAcceptPayload) => void>();
   private inboundPeerReleasedHandlers = new Set<(peer: string) => void>();
   private issueHandlers = new Set<(issue: DeviceLinkConnectionIssue | null) => void>();
   private peerRouteStateHandlers = new Set<
@@ -1498,7 +1498,7 @@ export class DeviceLinkClient {
   hasOnlineConnection(): boolean { return this.status === 'online'; }
 
   /** Verified outbound handshake, before recovered business frames are delivered. */
-  onPeerStreamAccepted(cb: (peer: string, streamId: string) => void): () => void {
+  onPeerStreamAccepted(cb: (peer: string, streamId: string, accepted?: LinkAcceptPayload) => void): () => void {
     this.peerStreamAcceptedHandlers.add(cb);
     return () => this.peerStreamAcceptedHandlers.delete(cb);
   }
@@ -3522,7 +3522,7 @@ export class DeviceLinkClient {
             if (peer.reliable) {
               if (env.src === p.dst && peer.remoteStreamId) {
                 for (const cb of this.peerStreamAcceptedHandlers) {
-                  try { cb(env.src, peer.remoteStreamId); }
+                  try { cb(env.src, peer.remoteStreamId, accepted); }
                   catch (error) { this.log.error('peer stream accepted handler threw', error); }
                 }
               }

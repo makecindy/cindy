@@ -420,7 +420,14 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
 
   override onPeerStreamAccepted(cb: (peer: string, streamId: string) => void): () => void {
     return this.both(super.onPeerStreamAccepted((peer, streamId) => { if (this.acceptsScopedEvent(this, peer)) cb(peer, streamId); }),
-      connection => connection.onPeerStreamAccepted((peer, streamId) => { if (this.acceptsScopedEvent(connection, peer)) cb(peer, streamId); }));
+      connection => connection.onPeerStreamAccepted((peer, streamId, accepted) => {
+        // The compatibility handshake may only probe the peer. Its primary or
+        // session open supplies the final acceptance; do not expose the probe.
+        if (connection === this.legacy && !isScopedPeer(peer)
+          && (this.legacyOptions?.prefersPrimary?.(accepted)
+            ?? (this.legacyOptions?.primaryCapability && accepted?.capabilities?.includes(this.legacyOptions.primaryCapability)))) return;
+        if (this.acceptsScopedEvent(connection, peer)) cb(peer, streamId);
+      }));
   }
 
   override onPeerRouteStateChanged(cb: (change: DeviceLinkPeerRouteStateChanged) => void): () => void {

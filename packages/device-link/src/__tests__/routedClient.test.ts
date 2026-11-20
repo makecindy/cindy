@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeviceLinkClientOptions, WsLike } from '../client.js';
 import { RoutedDeviceLinkClient } from '../routedClient.js';
 import { PROTOCOL_VERSION, SHARED_TASK_RELAY_CAPABILITY, sharedTaskHostPeer, type Envelope } from '../protocol.js';
+import { DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM, DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT } from '../transport.js';
 
 type Handler = (...args: unknown[]) => void;
 
@@ -190,6 +191,10 @@ describe('RoutedDeviceLinkClient', () => {
       active: () => true, useForPeer: () => false, probeForPeer: () => true,
       primaryCapability: 'agent-net-node-v2', options: options('ws://v1-relay'),
     });
+    const accepted: string[] = [];
+    client.onPeerStreamAccepted((peer, streamId) => accepted.push(`${peer}:${streamId}`));
+    const secondAccepted = vi.fn();
+    const offAccepted = client.onPeerStreamAccepted(secondAccepted);
     client.start(); await vi.advanceTimersByTimeAsync(1);
     const primary = sockets.find((s) => s.url === 'ws://v2-node')!, legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
     primary.ack(); legacy.ack(); await vi.advanceTimersByTimeAsync(1);
@@ -197,14 +202,42 @@ describe('RoutedDeviceLinkClient', () => {
     const probe = legacy.sent.find((f) => f.kind === 'link-open')!;
     expect(primary.sent.some((f) => f.kind === 'link-open')).toBe(false);
     legacy.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: probe.id, src: 'known-peer', payload: {
-      appVersion: '1', allowlistHash: 'unit', capabilities: newer ? ['agent-net-node-v2'] : [],
+      appVersion: '1', allowlistHash: 'unit', transportStreamId: 'legacy-stream',
+      transportBaseSeq: 1,
+      capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM, DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT, ...(newer ? ['agent-net-node-v2'] : [])],
     } }); await vi.advanceTimersByTimeAsync(1);
+    expect(accepted).toHaveLength(newer ? 0 : 1);
     if (newer) {
       const actual = primary.sent.find((f) => f.kind === 'link-open')!;
       expect(actual).toBeDefined();
-      primary.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: actual.id, src: 'known-peer', payload: { appVersion: '1', allowlistHash: 'unit' } });
+      primary.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: actual.id, src: 'known-peer', payload: {
+        appVersion: '1', allowlistHash: 'unit', transportStreamId: 'primary-stream',
+        transportBaseSeq: 1,
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM, DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+      } });
     }
     await opened;
+    expect(accepted).toEqual([`known-peer:${newer ? 'primary' : 'legacy'}-stream`]);
+    expect(secondAccepted).toHaveBeenCalledTimes(1);
+    offAccepted();
+    // Later genuine opens can retain the same stream; do not dedupe by stream
+    // identity or keep a per-peer "already notified" flag across recoveries.
+    const later = client.openLink('known-peer', {}); await vi.advanceTimersByTimeAsync(1);
+    const laterProbe = legacy.sent.filter(f => f.kind === 'link-open').at(-1)!;
+    legacy.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: laterProbe.id, src: 'known-peer', payload: {
+      appVersion: '1', allowlistHash: 'unit', transportStreamId: 'legacy-stream',
+      capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT, ...(newer ? ['agent-net-node-v2'] : [])],
+    } }); await vi.advanceTimersByTimeAsync(1);
+    if (newer) {
+      const actual = primary.sent.filter(f => f.kind === 'link-open').at(-1)!;
+      primary.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: actual.id, src: 'known-peer', payload: {
+        appVersion: '1', allowlistHash: 'unit', transportStreamId: 'primary-stream',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+      } });
+    }
+    await later;
+    expect(accepted).toEqual(Array(2).fill(`known-peer:${newer ? 'primary' : 'legacy'}-stream`));
+    expect(secondAccepted).toHaveBeenCalledTimes(1);
     void client.invoke('known-peer', { channel: 'private:business', args: ['secret'] }).catch(() => undefined);
     await vi.advanceTimersByTimeAsync(1);
     expect(primary.sent.some((f) => f.kind === 'invoke')).toBe(newer);
@@ -221,6 +254,7 @@ describe('RoutedDeviceLinkClient', () => {
       createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
     });
     const seen: string[] = [];
+    const accepted: string[] = [];
     let ownChannel = true;
     const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
       active: () => true, useForPeer: () => false, probeForPeer: () => true, primaryCapability: 'agent-net-node-v2',
@@ -230,27 +264,36 @@ describe('RoutedDeviceLinkClient', () => {
       },
       options: options('ws://v1-relay'),
     });
+    client.onPeerStreamAccepted((peer, streamId) => accepted.push(`${peer}:${streamId}`));
     client.start(); await vi.advanceTimersByTimeAsync(1);
     const primary = sockets.find((s) => s.url === 'ws://v2-node')!, legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
     primary.ack(); legacy.ack(); await vi.advanceTimersByTimeAsync(1);
     const probeAccepted = async (peer: string) => {
       const probe = legacy.sent.find((f) => f.kind === 'link-open' && f.dst === peer)!;
       legacy.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: probe.id, src: peer, payload: {
-        appVersion: '1', allowlistHash: 'unit', capabilities: ['agent-net-node-v2'] } });
+        appVersion: '1', allowlistHash: 'unit', transportStreamId: 'probe-stream',
+        capabilities: ['agent-net-node-v2', DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT] } });
       await vi.advanceTimersByTimeAsync(1);
     };
     const own = client.openLink('restarting-peer', {}); await vi.advanceTimersByTimeAsync(1);
     await probeAccepted('restarting-peer');
     await expect(own).resolves.toMatchObject({ appVersion: 'own-channel' });
     expect(primary.sent.some((f) => f.kind === 'link-open')).toBe(false);
+    // A session supplies its own acceptance through routeSessionPeers; this
+    // Device Link probe must not add a second notification using its old stream.
+    expect(accepted).toEqual([]);
     ownChannel = false;
     const fallback = client.openLink('other-peer', {}); await vi.advanceTimersByTimeAsync(1);
     await probeAccepted('other-peer');
     const actual = primary.sent.find((f) => f.kind === 'link-open' && f.dst === 'other-peer')!;
     expect(actual).toBeDefined();
-    primary.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: actual.id, src: 'other-peer', payload: { appVersion: '1', allowlistHash: 'unit' } });
+    primary.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: actual.id, src: 'other-peer', payload: {
+      appVersion: '1', allowlistHash: 'unit', transportStreamId: 'primary-stream',
+      capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+    } });
     await expect(fallback).resolves.toMatchObject({ appVersion: '1' });
     expect(seen).toEqual(['restarting-peer', 'other-peer']);
+    expect(accepted).toEqual(['other-peer:primary-stream']);
     client.stop();
   });
   // 2026-11-17 audit: presence arriving on the compatibility socket never reached the host, so phones without the newer
