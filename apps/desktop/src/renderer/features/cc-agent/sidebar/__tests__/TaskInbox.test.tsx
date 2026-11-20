@@ -25,12 +25,12 @@ import { useInboxUnread } from '../useInboxUnread';
 beforeEach(() => following.clear());
 afterEach(() => { cleanup(); clearRemoteSessionActivity(); });
 // The controller still has a running flag when the host sends the unread result.
-it('moves only the finished device’s task to Pending without a pointer or a list refresh', () => {
+it('moves only the waiting or finished device’s task to Pending without a list refresh', () => {
   const sharedId = 'same-id';
   const tasks = ['studio', 'other'].map(deviceLinkDeviceId => ({
     id: sharedId, title: deviceLinkDeviceId, status: 'active', deviceLinkDeviceId,
   } as Session));
-  const push = (device: string, phase: 'running' | 'completed', attention = false) =>
+  const push = (device: string, phase: 'running' | 'needs-interaction' | 'completed', attention = false) =>
     act(() => applyRemoteSessionActivity(device, { sessionId: sharedId, phase, attention }));
   push('studio', 'running');
   push('other', 'running');
@@ -41,6 +41,9 @@ it('moves only the finished device’s task to Pending without a pointer or a li
   const [pending, working] = view.container.querySelectorAll('section');
   const rows = (section: Element) => Array.from(section.querySelectorAll('[data-device]'), row => row.getAttribute('data-device'));
   expect(rows(working)).toEqual(['studio', 'other']);
+  push('studio', 'needs-interaction', true);
+  expect(rows(pending)).toEqual(['studio']);
+  expect(rows(working)).toEqual(['other']);
   push('studio', 'completed', true);
   expect(rows(pending)).toEqual(['studio']);
   expect(rows(working)).toEqual(['other']);
