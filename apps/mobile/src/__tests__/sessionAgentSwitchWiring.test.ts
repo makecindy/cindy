@@ -25,7 +25,9 @@ describe('new task remote Agent wiring', () => {
     expect(select).toContain('setRemoteAgentChoice(null);');
     // 普通创建与目标模式都把远程选择落进草稿,且不按被控电脑的目录 / 登录拦。
     expect(source.split('applyRemoteAgentPick(draft, remoteAgentPick)')).toHaveLength(3);
-    expect(source.split('const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({')).toHaveLength(3);
+    expect(source.split(
+      'const runGuard = () => (effectiveDraft.agentDeviceId || effectiveDraft.pluginEngine) ? Promise.resolve({',
+    )).toHaveLength(3);
     expect(source).toContain('confirmUnauthenticated: effectiveDraft.agentDeviceId');
     expect(source).toContain("agentAuthVerdict === 'unauthenticated' || remoteAgentPick");
     // 恢复的远程位置拆分行为由 newSessionDraftRecovery.test.ts 直接调用生产
@@ -63,7 +65,8 @@ describe('session Agent switch UI wiring', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     expect(source).toContain('maker.getSessionAgentSwitchIntent(sessionId)');
     expect(source).toContain('maker.switchSessionAgent(');
-    expect(source).toContain('agentSwitchIntent: normalizeSessionAgentSwitchIntent(result)');
+    // 回读的权威意图拆成内置 / 插件引擎两个字段(sessionAgentSwitchIntentPatch)。
+    expect(source).toContain('remoteSessionStore.applySessionPatch(deviceId, sessionId, sessionAgentSwitchIntentPatch(result))');
     expect(source).toContain('agentSwitch={sessionAgentSwitchSupported ? {');
     expect(source).toContain('targetAgentKind: modelSheetAgentKind');
     expect(source).toContain('...(agentSwitchIntent ? { agentSwitchIntent: null } : {})');

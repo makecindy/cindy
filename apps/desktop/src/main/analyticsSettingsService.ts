@@ -37,8 +37,7 @@ import {
 const log = createLogger('analytics-settings');
 
 interface ProductTokens {
-  enabled(): boolean;
-  set(enabled: boolean): Promise<void>;
+  prepare(): void;
   interrupt(): void;
   revokeAll(): void;
   report(): Promise<void>;
@@ -96,11 +95,11 @@ export function analyticsSettingsPayload(): AnalyticsSettingsPayload {
     analyticsEnabled: value.analyticsEnabled,
     analyticsEnabledCustomized: isAnalyticsEnabledCustomized(),
     allowed: isReportingAllowedNow(),
-    ...(productTokens && {productTokensEnabled: productTokens.enabled()}),
   };
 }
 
 function broadcastSettingsChange(): void {
+  productTokens?.prepare();
   const payload = analyticsSettingsPayload();
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
@@ -249,6 +248,7 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
   }
   ipcRegistered = true;
   productTokens = reporter;
+  reporter?.prepare();
   // Jitter separates release/restart waves. Idle accounts send no requests.
   const interval = reporter && setInterval(() => void reporter.report(), (45 + Math.random()*30)*60_000);
   interval?.unref();
@@ -272,18 +272,6 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
 
   ipcMain.handle('analytics:settings-get', (event) => {
     assertTrustedAppRendererEvent(event);
-    return analyticsSettingsPayload();
-  });
-
-  ipcMain.handle('analytics:product-tokens-set', async (event, enabled: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    try {
-      if (!productTokens) throw new Error('Reporting unavailable');
-      await productTokens.set(enabled === true);
-    } catch {
-      throwIpcError('INTERNAL', 'failed to persist product token preference');
-    }
-    broadcastSettingsChange();
     return analyticsSettingsPayload();
   });
 

@@ -9,6 +9,7 @@ import { groupSessions } from '../../../src/renderer/features/cc-agent/lib/proje
 import { TaskInbox } from '../../../src/renderer/features/cc-agent/sidebar/TaskInbox';
 import { TaskListModeToggle } from '../../../src/renderer/components/sidebar/TaskListModeToggle';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
+import type { TeammateInboxEntry } from '../../../src/renderer/features/bots/teammateInbox';
 setDataOwnerGeneration('fixture', 1);
 const noop = () => {};
 const hidden = new Set<string>();
@@ -38,7 +39,7 @@ const sessions = [
   snoozedAt: id === 'later' ? new Date(now).toISOString() : null,
   snoozedUntil: id === 'later' ? new Date(now + 3600000).toISOString() : null,
   agentKind: 'codex',
-  pinnedAt: null,
+  pinnedAt: id === 'waiting' ? new Date(now).toISOString() : null,
   sdkSessionId: null,
   remoteHostId: null,
   deviceLinkDeviceId: null,
@@ -59,6 +60,21 @@ declare global {
 const replySessions = ctx.case === 'reply'
   ? [...sessions, ...[1, 2, 3, 4, 5].map((n) => ({ ...sessions[0], id: `note-${n}`, title: `待看的结果 ${n}` }))]
   : sessions;
+// One teammate conversation per inbox state; the idle one must not be listed.
+const noSnooze = { snoozedUntil: null, snoozedAt: null, userSendAt: null };
+const teammate = (id: string, name: string, status: TeammateInboxEntry['status'], extra: Partial<TeammateInboxEntry> = {}) => ({
+  key: `teammate:local:${id}`, name, status, snooze: noSnooze, sessionId: `chat-${id}`, activityAt: now, route: `/bots/${id}`,
+  bot: { id, name, avatar: '', avatarColor: 'teal', lastMessageAt: now },
+  ...extra,
+}) as TeammateInboxEntry;
+const teammates = ctx.case === 'teammates' ? [
+  teammate('pm', '小满', 'awaiting'),
+  teammate('qa', '阿澈', 'unread', { deviceLabel: '书房的电脑' }),
+  teammate('momo', '默默', 'running'),
+  teammate('older', '旧电脑上的伙伴', 'unread', { snooze: null, deviceLabel: 'Studio' }),
+  teammate('lulu', '露露', 'done', { snooze: { snoozedUntil: new Date(now + 7200000).toISOString(), snoozedAt: new Date(now).toISOString(), userSendAt: null } }),
+  teammate('idle', '闲着的伙伴', 'idle'),
+] : undefined;
 function Specimen() {
   const [items, setItems] = useState(replySessions);
   const [selected, setSelected] = useState<string>();
@@ -78,6 +94,7 @@ function Specimen() {
       <TaskInbox
         sessionVariant={ctx.case === 'list' ? 'list' : 'text'}
         sessions={items}
+        teammates={teammates}
         priorityContext={context}
         runningSessionIds={running}
         attachedSessionIds={new Set()}
@@ -211,6 +228,7 @@ void mountPage({
         get: async (id: string) => sessions.find((s) => s.id === id),
         update: async (id: string, patch: Partial<Session>) => {
           document.documentElement.dataset.snoozedUntil = patch.snoozedUntil ?? '';
+          document.documentElement.dataset.snoozedSession = id;
           return { ...sessions.find((s) => s.id === id), ...patch };
         },
       },

@@ -1443,6 +1443,7 @@
     "UPSTREAM_ERROR": "Erreur du serveur en amont (5xx). Réessayez plus tard",
     "UPSTREAM_UNREACHABLE": "Impossible de joindre l'endpoint. Vérifiez votre réseau et l'URL de base",
     "TIMEOUT": "Délai de connexion dépassé. Vérifiez votre réseau et l'URL de base",
+    "CERT_ERROR": "La vérification du certificat a échoué. Vérifiez que le nom d’hôte de l’URL de base correspond au certificat, ainsi que la chaîne de certificats et la configuration de confiance de l’autorité de certification de votre organisation.",
     "UNKNOWN": "Erreur inconnue. Consultez les journaux pour plus de détails",
     "upstreamToast": "Échec de la requête au fournisseur « {{provider}} » : {{message}}"
   },
@@ -1454,6 +1455,10 @@
     "details": "Détails de l'erreur"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Base de données locale endommagée",
+      "description": "Une corruption de la base de données a été détectée. L’accès a été interrompu pour protéger vos données. Vous pouvez essayer de rouvrir les données locales. En cas d’échec, copiez les détails techniques et contactez l’assistance. N’écrasez et ne supprimez pas les fichiers de la base de données."
+    },
     "schemaLease": {
       "title": "Impossible d'ouvrir les données locales pour le moment",
       "retry": "Rouvrir les données locales",
@@ -2839,9 +2844,7 @@
       "autoUpdateDisabledToast": "Installation des mises à jour en période d'inactivité désactivée",
       "autoUpdateSaveFailed": "Impossible d'enregistrer les paramètres de mise à jour automatique",
       "analyticsLabel": "Statistiques d'utilisation",
-      "analyticsDescription": "Nous aide à comprendre à quelle fréquence Cindy est lancée et utilisée dans la durée. Transmet des informations sur l'appareil et l'environnement d'utilisation (modèle de l'appareil, version du système, version de l'application et identifiant de l'appareil), ainsi que, une fois connecté, votre ID de compte ; jamais les conversations, fichiers ou prompts. La désactivation arrête immédiatement la transmission.",
-      "productTokenUsage": "Partager la consommation des modèles",
-      "productTokenUsageHint": "Les nouveaux tokens de ce compte sur cet appareil sont agrégés par source et modèle dans votre région avant leur envoi à TapDB.",
+      "analyticsDescription": "Si vous activez cette option, nous remplaçons les identifiants de votre compte et de votre appareil par des pseudonymes. Les visites récurrentes et les totaux d’utilisation par modèle nous aident à améliorer le produit. Ces statistiques ne contiennent ni vos conversations, ni vos fichiers, ni vos instructions.",
       "analyticsEnabledToast": "Statistiques d'utilisation activées",
       "analyticsDisabledToast": "Statistiques d'utilisation désactivées",
       "analyticsSaveFailed": "Impossible d'enregistrer les paramètres des statistiques d'utilisation",
@@ -3766,6 +3769,8 @@
           "edit": "Modifier",
           "editFailed": "Vérifiez l’URL, le protocole et la clé, puis réessayez.",
           "editNote": "Laissez la clé vide pour conserver les identifiants lus. Une nouvelle URL ou un nouveau protocole exige une nouvelle clé.",
+          "useSavedCredential": "Utiliser les identifiants enregistrés",
+          "confirmDestination": "Utiliser les identifiants Claude Code enregistrés à cette adresse ?",
           "name": "Nom affiché",
           "baseUrl": "URL de base",
           "protocol": "Protocole API",
@@ -4173,6 +4178,25 @@
         "refreshFailed": "Impossible d'actualiser la liste des modèles : réessayez plus tard",
         "refreshReconnect": "La liste des modèles n’a pas pu être actualisée. Reconnectez ce fournisseur, puis réessayez.",
         "refreshFetchDisabled": "La récupération du catalogue de modèles distant est désactivée : actualisation ignorée",
+        "withdrawn": {
+          "refreshFound": "Modèles qui ne sont plus proposés : {{count}}",
+          "refreshAdded": "Nouveaux modèles : {{added}}. Plus proposés : {{count}}",
+          "refreshSuspicious": "Modèles non renvoyés cette fois : {{count}}. La liste est peut-être incomplète",
+          "refreshAddedSuspicious": "Nouveaux modèles : {{added}}. Non renvoyés cette fois : {{count}}. La liste est peut-être incomplète",
+          "review": "Examiner les modèles",
+          "heading": "Modèles qui ne sont plus proposés",
+          "intro": "Lors de l'actualisation de {{provider}}, le service n'a pas renvoyé ces modèles. Sélectionnez ceux à retirer. Les moteurs qui les proposent encore ne sont pas concernés.",
+          "suspicious": "Un nombre inhabituel de modèles manque. Le service a peut-être renvoyé une liste incomplète. Actualisez de nouveau plus tard pour confirmer, ou sélectionnez uniquement les modèles dont le retrait est certain.",
+          "selectAll": "Tout sélectionner",
+          "selected": "{{count}} sur {{total}} sélectionnés",
+          "consequence": "Les modèles retirés n'apparaissent plus dans la sélection de modèles et seront indiqués comme indisponibles là où ils sont utilisés. Si le service les propose de nouveau, actualisez pour les rajouter.",
+          "confirm": "Retirer les modèles ({{count}})",
+          "cancel": "Conserver les modèles",
+          "removed": "Modèles retirés : {{count}}",
+          "cleanupIncomplete": "Modèles retirés : {{count}}. Certains réglages d'affichage ou de désactivation n'ont pas pu être effacés",
+          "stale": "La connexion a changé : aucun modèle à retirer. Actualisez de nouveau pour vérifier",
+          "removeFailed": "Impossible de retirer les modèles"
+        },
         "disableModel": "Désactiver ce modèle",
         "paymentRequired": "Payant",
         "paymentUnlock": "Payer pour débloquer",
@@ -4464,6 +4488,7 @@
         "authorizedToast": "Connecté à {{name}}",
         "authorizeFailed": "Impossible de se connecter à {{name}}. Réessayez.",
         "nameLabel": "Nom affiché",
+        "geminiImageKeyNote": "Après enregistrement, cette clé servira aux discussions de cette connexion et aux prochaines générations d’images Gemini. Pour les images seules, décochez tous les modèles de discussion.",
         "onlyAgentNote": "Ce fournisseur prend uniquement en charge {{agent}}",
         "endpointLabel": "URL de base {{agent}}",
         "noAuthNote": "Ce proxy ne nécessite aucune clé client ; Cindy retire les identifiants d'abonnement de la CLI avant de transmettre les requêtes.",
@@ -8019,6 +8044,7 @@
           "accessDenied": "Cette opération sur le plugin n'est pas autorisée ou a été annulée.",
           "notConfigured": "Le marketplace de plugins n'est pas disponible dans cet environnement.",
           "invalidPackage": "Ce paquet de plugin n'est pas valide et ne peut pas être installé. Contactez l'éditeur.",
+          "downloadAuthorizationExpired": "L’autorisation de téléchargement du plugin a expiré. Vérifiez la date et l’heure du système avant de lancer une nouvelle installation.",
           "downloadTimeout": "Le téléchargement du plugin a expiré. Veuillez réessayer plus tard.",
           "downloadFailed": "Échec du téléchargement du plugin. Vérifiez votre connexion et réessayez.",
           "brokerRedirectPortRequired": "Ce plugin déclare un broker d'autorisation mais redirectPort est absent de la même configuration OAuth : il ne peut donc pas être installé depuis le marketplace de plugins. Contactez l'éditeur pour qu'il ajoute ce champ et publie une nouvelle version.",
@@ -8339,6 +8365,8 @@
         "agentHiddenTasksDetail": "Les tâches créées par ce plugin peuvent ne pas apparaître dans la liste des tâches, la recherche et les notifications. Vous pouvez toujours les voir, les ouvrir ou les afficher dans la liste des tâches depuis Tâches en arrière-plan sur la page de ce plugin ; désinstaller le plugin les fait réapparaître.",
         "agentModelPreferences": "Lire et modifier vos modèles favoris, et lire vos modèles récemment utilisés",
         "agentModelPreferencesDetail": "Peut lire les modèles favoris et récemment utilisés sur cet ordinateur, y compris l’effort de raisonnement et Fast, et ajouter, modifier ou retirer des favoris. Les modifications apparaissent aussi dans le sélecteur de modèle de Cindy. Les modèles choisis dans le plugin ne sont pas ajoutés aux récents. Les modèles de vos autres ordinateurs ou partagés avec vous ne sont pas inclus, et aucun identifiant n’est transmis.",
+        "harnesses": "Fournit des moteurs d'exécution : {{names}}",
+        "harnessesDetail": "Dans vos tâches, peut lire et écrire dans le répertoire de travail, exécuter des commandes et utiliser les mêmes outils de Cindy que Pi intégré.",
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
         "agentErrandDetail": "Les tâches créées apparaissent dans la liste des tâches de Cindy, où vous pouvez suivre leur progression et poursuivre la conversation.",
         "agentSchedule": "Peut vous demander de créer une automatisation",
@@ -13163,6 +13191,7 @@
           "overloadRetryingNoCount": "Le service du modèle est occupé. Nouvelle tentative automatique en cours…",
           "overloadFailed": "⚠️ Le service du modèle est occupé : le service en amont n'a pas de capacité disponible pour le moment. Renvoyez ce message ici pour réessayer, ou passez à un autre modèle dans Cindy. (Cliquer sur « Réessayer » dans l'application de bureau poursuit aussi la tâche, mais le résultat ne reviendra pas dans ce message.)"
         },
+        "audioInputUnavailable": "Cette connexion au modèle ne permet pas de traiter directement l’audio. Demandez à Cindy de le transcrire avant de poursuivre.",
         "toolLoop": {
           "generic": "Le modèle a appelé des outils de façon répétée trop de fois : Cindy a arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
           "consecutive": "Le modèle a appelé le même outil {{n}} fois d'affilée : Cindy a arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
@@ -14210,6 +14239,8 @@
         "fastBadge": "Rapide"
       },
       "source": {
+        "lastConfirmed": "Dernière actualisation : {{time}}",
+        "unconfirmed": "Liste des modèles non actualisée",
         "unavailable": "Modèle indisponible",
         "reconnect": "Se reconnecter",
         "manage": "Gérer la source",
@@ -14318,6 +14349,32 @@
           "bypassPermissions": {
             "label": "Accès complet",
             "description": "Les actions courantes sont directement autorisées, y compris les fichiers hors de l’espace de travail et les commandes réseau."
+          }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmer à chaque fois",
+            "description": "Vous confirmez quand l’Agent demande une autorisation. Cindy ne peut pas bloquer les actions pour lesquelles l’Agent ne demande rien."
+          },
+          "default": {
+            "label": "Par défaut",
+            "description": "L’Agent fonctionne à sa manière par défaut ; vous confirmez ses demandes d’autorisation."
+          },
+          "acceptEdits": {
+            "label": "Accepter les modifications",
+            "description": "L’Agent modifie les fichiers directement ; vous confirmez ses autres demandes d’autorisation."
+          },
+          "auto": {
+            "label": "Automatique",
+            "description": "L’Agent décide de ce qui nécessite une confirmation ; vous confirmez les demandes qu’il fait."
+          },
+          "plan": {
+            "label": "Planifier uniquement",
+            "description": "L’Agent analyse et planifie seulement ; il ne modifie aucun fichier."
+          },
+          "bypassPermissions": {
+            "label": "Tout autoriser",
+            "description": "Toutes les autorisations demandées par l’Agent sont accordées automatiquement."
           }
         }
       }
@@ -14793,6 +14850,16 @@
       "nowDefault": "Désormais par défaut",
       "switchToSteer": "Réorienter par défaut",
       "switchToQueue": "File d'attente par défaut"
+    },
+    "pluginEngines": {
+      "group": "Moteurs de plugins",
+      "genericName": "Moteur de plugin",
+      "defaultModel": "Modèle par défaut",
+      "defaultModelHint": "Utilise le réglage par défaut du moteur",
+      "unavailable": "Indisponible",
+      "engineMissing": "Le plugin qui fournit ce moteur est désactivé ou désinstallé.",
+      "worktreeUnsupported": "Les moteurs de plugins ne peuvent pas encore démarrer de tâche dans un worktree. Désactivez worktree pour envoyer.",
+      "modelChangeFailed": "Impossible de changer de modèle"
     }
   },
   "onboarding": {
@@ -15091,6 +15158,8 @@
     },
     "runningStatus": {
       "currentRate": "Vitesse récente",
+      "lastRequestRate": "Moyenne de la dernière requête",
+      "recentTokenRate": "Dernière mesure {{rate}} tok/s",
       "waitingSample": "Échantillonnage",
       "averageRate": "Moyenne du tour",
       "rateHistory": "Historique de la vitesse de génération",
@@ -15247,6 +15316,11 @@
       "actionExpired": "L’autorisation de la session pour cette action a expiré. Consultez la dernière exécution de l’automatisation.",
       "actionRecovered": "L’autorisation pour cette action a expiré. La même automatisation a ensuite réussi.",
       "text": "Une exécution automatique a échoué.",
+      "prCheck_dns": "{{device}} ne peut pas résoudre {{host}}. Si le problème persiste, vérifiez le réseau ou le DNS sur cet appareil. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
+      "prCheck_timeout": "La connexion à GitHub a expiré sur {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
+      "prCheck_auth": "Reconnectez-vous à GitHub sur {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
+      "prCheck_rate-limit": "GitHub limite les requêtes de {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
+      "prCheck_unknown": "La vérification de la PR a échoué sur {{device}}. Consultez les détails de l’exécution. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
       "precheck": "Les vérifications automatiques sont temporairement bloquées.",
       "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
       "pluginMissing": "Les vérifications automatiques sont bloquées : le plugin {{name}} n'est pas installé. Elles reprendront une fois le plugin installé.",
@@ -15960,6 +16034,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Cet Agent n'est pas disponible sur l'autre ordinateur. Installez-le ou connectez-vous-y sur cet ordinateur, ou choisissez un autre Agent.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Cet ordinateur ne peut pas restaurer l’état précédent de la session. Choisissez un modèle d’un autre ordinateur ou fournisseur pour continuer avec un transfert de contexte. Les messages existants sont conservés.",
       "REMOTE_AGENT_INVALID": "Un problème est survenu lors de la communication avec l'ordinateur qui exécute l'Agent. Réessayez ; si le problème persiste, mettez à jour Cindy sur les deux ordinateurs.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "Le moteur du plugin n’a pas pu restaurer la conversation précédente. Vos messages sont conservés. Choisissez un autre moteur ou démarrez une nouvelle tâche.",
       "REMOTE_AGENT_RESUME_REJECTED": "L’ordinateur qui exécute le modèle ne peut pas reprendre cette session. Créez une nouvelle session depuis la liste des sessions et copiez le contenu nécessaire pour continuer. La session d’origine et les messages en attente sont conservés.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Ce modèle a atteint la limite de partage de modèle définie par son propriétaire. Choisissez un autre modèle disponible pour continuer.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur ne vous a pas ouvert ce fournisseur ou le modèle sélectionné. S’il s’agit de votre propre ordinateur, activez « Autoriser l'utilisation à distance » pour ce fournisseur sur cet ordinateur. S’il vous a été partagé, demandez à son propriétaire d’ajuster l’accès dans Accès distant et partage. Vous pouvez aussi choisir un autre modèle.",
@@ -17155,6 +17230,12 @@
       "unspecifiedDir": "Répertoire non spécifié"
     },
     "workdirBrowse": {
+      "previewFile": "Aperçu",
+      "filterDirectory": "Filtrer ce dossier…",
+      "projectTree": "Arborescence du projet",
+      "systemPreview": "Aperçu système",
+      "listView": "Liste",
+      "gridView": "Miniatures",
       "backToProjects": "Retour aux projets",
       "switchProject": "Changer de projet",
       "activeSessionCount_one": "{{count}} session active",
@@ -17524,6 +17605,7 @@
       "promote": {
         "menu": "Convertir en automatisation de projet",
         "noWorkingDir": "Impossible de convertir une planification sans répertoire de travail",
+        "pluginEngine": "Les moteurs de plugin ne fonctionnent que sur cet ordinateur : impossible de convertir cette planification en automatisation de projet",
         "success": "Convertie en automatisation de projet"
       },
       "editProject": {
@@ -17800,6 +17882,7 @@
         "selectThread": "Sélectionnez une session cible",
         "selectProject": "Sélectionnez un répertoire de projet",
         "modelUnavailable": "Le modèle {{model}} n'est plus disponible. Sélectionnez un autre modèle.",
+        "pluginEngineUnavailable": "Le moteur de plugin sélectionné n’est pas disponible pour le moment. Sélectionnez un autre modèle.",
         "reasoningInvalid": "Le raisonnement doit être l'une des valeurs suivantes : {{values}}",
         "preRunHookCommandRequired": "Saisissez la commande de vérification préalable",
         "preRunPluginRequired": "Choisissez un plugin pour la vérification préalable",
@@ -19538,6 +19621,7 @@
       "permissionLabel": "Mode d'autorisation",
       "noAvailableModels": "Aucun modèle {{agent}} disponible. Vérifiez la connexion au fournisseur et les identifiants dans les Paramètres.",
       "savedModelUnavailable": "Le modèle enregistré ou sa source est indisponible.",
+      "pluginEngineNoWorktree": "Les Workers avec un moteur de plugin ne peuvent pas utiliser de worktree. Désactivez l'option worktree pour créer ce Worker.",
       "reselectModel": "Choisir un modèle",
       "effortLabel": "Effort de raisonnement",
       "initialTaskLabel": "Tâche initiale",

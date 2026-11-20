@@ -60,6 +60,19 @@ describe('bot remote resource projection', () => {
     expect(after.revision).not.toBe(before.revision);
   });
 
+  // Inbox (2026-11-20): controllers place the row by this snooze and offer the action only when
+  // the host sends it, so a change must revise the row and an absent conversation must omit it.
+  it('carries the conversation snooze and revises the row when it changes', () => {
+    const before = botRemoteCollectionItemFromSource(source);
+    const inboxSnooze = { snoozedUntil: '2026-11-21T01:00:00.000Z', snoozedAt: '2026-11-20T01:00:00.000Z', userSendAt: null };
+    const snoozed = botRemoteCollectionItemFromSource({ ...source, inboxSnooze });
+    expect(before.display).not.toHaveProperty('inboxSnooze');
+    expect(snoozed.display.inboxSnooze).toEqual(inboxSnooze);
+    expect(snoozed.revision).not.toBe(before.revision);
+    expect(botRemoteCollectionItemFromSource({ ...source, inboxSnooze: { ...inboxSnooze, userSendAt: '2026-11-20T02:00:00.000Z' } }).revision)
+      .not.toBe(snoozed.revision);
+  });
+
   it('uses generic attention presentation without exposing Bot internals', () => {
     const projected = botRemoteCollectionItemFromSource({
       ...source,

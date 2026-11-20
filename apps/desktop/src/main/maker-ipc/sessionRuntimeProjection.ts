@@ -13,7 +13,7 @@
  * The broadcast itself (localDb/ipc/sessions.ts, which loads Electron) comes in as a port.
  */
 import { and, eq } from 'drizzle-orm';
-import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, isPluginEngineKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { getDbClient } from '../localDb/client/current.js';
 import type { SessionRuntimeProjector } from '../localDb/mapper.js';
@@ -60,7 +60,8 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
-      if (!row) return;
+      // Plugin-engine tasks have no catalog runtime profile to project.
+      if (!row || row.agentKind === 'acp') return;
       baseline = {
         agentKind: dbToMakerAgentKind(row.agentKind),
         model: row.model,
@@ -108,10 +109,14 @@ export interface SessionRuntimeProjectorPorts {
  * The task read projector, as register.ts passed it to setSessionRuntimeProjector: a task with a saved
  * scheduled baseline reads that baseline, any other task its row through projectSessionRuntimeControl
  * (the accepted runtime override, when there is one, is what it reads as effective).
+ * Plugin-engine tasks have no catalog runtime profile, so the row's engine kind and model stay as
+ * stored; projecting them would turn the task into Claude Code.
  */
 export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPorts): SessionRuntimeProjector {
   const { projectScheduledPreferences } = ports;
   return (session) => {
+    const runtimePluginsSelected = ports.runtimePluginsSelected(session.id);
+    if (isPluginEngineKind(session.agentKind)) return { runtimePluginsSelected };
     const baseline = parseScheduledModelBaseline(session.scheduledModelBaseline);
     const projection = baseline ? projectScheduledPreferences(session.id, baseline) : projectSessionRuntimeControl(session.id, {
       agentKind: dbToMakerAgentKind(session.agentKind),
@@ -120,7 +125,7 @@ export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPort
       effort: session.effort as SessionRuntimeProfile['effort'],
       fastMode: session.fastMode,
     });
-    return { ...projection, runtimePluginsSelected: ports.runtimePluginsSelected(session.id) };
+    return { ...projection, runtimePluginsSelected };
   };
 }
 
@@ -157,7 +162,6 @@ export function createSessionRuntimeCleanup(ports: SessionRuntimeCleanupPorts): 
     });
   };
 }
-
 /** updateScheduledPreference, as register.ts declared it. */
 export function createUpdateScheduledPreference(ports: {
   broadcastSessionRuntimeProjection: ReturnType<typeof createSessionRuntimeProjection>['broadcastSessionRuntimeProjection'];

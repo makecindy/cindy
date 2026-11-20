@@ -1,5 +1,5 @@
 import { modelRouteLocationKey } from '@cindy/maker-shared/model-route';
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import { makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { clearAllSessionProviders } from '../maker-host/session-provider-store.js';
@@ -420,13 +420,14 @@ export function getPendingSessionRuntimeMutation(
  * a change applied to a live runtime) rather than the stored route; the provider stays the caller's
  * when a provider group decides the source. Called before the start admission (the desktop's
  * bootstrapSession; the Node Host's runtime starts, which pass false: it refuses provider-group tasks).
- * Returns the task's accepted override (whatever its engine), which the start then reads again: a
+ * Returns the task's accepted built-in route override, which the start then reads again: a
  * started runtime keeps the saved provider baseline and takes its effort and Fast axes from it.
  */
 export function applySessionRuntimeOverrideForStart(
-  o: { id?: string; agentKind: AgentKind; model?: string; providerId?: string | null; effort?: Effort; fastMode?: boolean | 'ultrafast' },
+  o: { id?: string; agentKind: EngineKind; model?: string; providerId?: string | null; effort?: Effort; fastMode?: boolean | 'ultrafast' },
   groupDecidesSource: boolean,
 ): SessionRuntimeProfile | null {
+  if (o.agentKind === 'acp') return null;
   const runtimeOverride =
     typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
   if (runtimeOverride && runtimeOverride.agentKind === o.agentKind) {

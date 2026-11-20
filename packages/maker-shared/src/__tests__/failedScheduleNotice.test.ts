@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeScheduleFailures, compareFailedScheduleRuns, scheduleFailureMessageKey, shouldShowFailedScheduleNotice } from '../scheduleModel';
+import { activeScheduleFailures, compareFailedScheduleRuns, scheduleFailureMessageKey, scheduleFailureMessageParams, shouldShowFailedScheduleNotice } from '../scheduleModel';
 import { buildSessionScheduleIndex } from '../sessionList';
 import type { RemoteScheduleRun } from '../scheduleTypes';
 const run = { runId: 'b', firedAt: 10 };
@@ -84,6 +84,18 @@ describe('historical schedule failure notice', () => {
     expect(scheduleFailureMessageKey({ ...run, errorMsg, nextFireAt: Date.now() + 60_000 })).toBe('actionScheduled');
     expect(scheduleFailureMessageKey({ ...run, errorMsg: 'scheduled task auto-resume failed: ' + errorMsg })).toBe('actionExpired');
     expect(scheduleFailureMessageKey({ ...run, errorMsg: 'script output: ' + errorMsg })).toBe('text');
+  });
+  // Unit: a remote PR probe carried the DNS error in details only. Exercise
+  // both a full mobile record and the sidebar projection with the same deadline.
+  it.each(['full', 'projection'])('presents the executing device and actual probe time from %s', (source) => {
+    const diagnosis = { kind: 'dns', host: 'api.github.com', device: 'Build Mac', failures: 3, retryAt: 1_800_000 };
+    const rows: RemoteScheduleRun[] = [{ id: 'failed', scheduleId: 'a', sessionId: 's', status: 'failed', firedAt: 1,
+      ...(source === 'full' ? { preRunHookResult: { decision: 'block', prCheckDiagnosis: diagnosis } }
+        : { failureKind: 'precheck', prCheckDiagnosis: diagnosis }) }];
+    const failed = buildSessionScheduleIndex([], new Map([['a', rows]])).get('s')!.latestFailedRun!;
+    expect(scheduleFailureMessageKey(failed)).toBe('prCheck_dns');
+    expect(scheduleFailureMessageParams(failed, 'en')).toEqual({ device: diagnosis.device, host: diagnosis.host,
+      failures: 3, retry: new Date(diagnosis.retryAt).toLocaleString('en') });
   });
   it('requires a failed run', () => expect(shouldShowFailedScheduleNotice({ ...visible, latestFailedRun: null })).toBe(false));
   // A check blocked because its plugin was uninstalled used to show only the generic

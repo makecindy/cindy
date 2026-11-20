@@ -1251,6 +1251,7 @@ async function readProfile(
     lastMessageAt: latestMessage.createdAt,
     lastMessageRole: latestMessage.role,
     unreadCount,
+    ...(byId.get(canonicalSessionId ?? '') ? { inboxSnooze: botInboxSnooze(byId.get(canonicalSessionId ?? '')!, latestMessage) } : {}),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
     skills: Array.isArray(config.skills)
@@ -1466,6 +1467,8 @@ export interface BotRemoteResourceSource {
   lastReplyAt?: number;
   /** Host read position of this conversation (botReadStateStore); 0 when none is known. */
   lastReadAt?: number;
+  /** Inbox snooze of the main conversation's Session; absent while there is no conversation. */
+  inboxSnooze?: BotInboxSnooze;
   needsAttention: boolean;
   hiddenAt: number | null;
   pinnedAt: number | null;
@@ -1474,6 +1477,32 @@ export interface BotRemoteResourceSource {
   updatedAt: number;
   /** Open tasks this Bot looks after, for the follow mark on remote task rows. Absent = none. */
   followingSessionIds?: string[];
+}
+
+/**
+ * The inbox snooze of a teammate's main conversation, in the Session's own ISO fields so
+ * controllers reuse the task rule (new input after `snoozedAt` wakes it). `userSendAt` is the
+ * latest input: the Session's own value or the newest visible message, whichever is later. A
+ * message another task sends with a tool does not move the Session's `userSendAt`, and a
+ * teammate asked to get a decision must not stay hidden behind an earlier snooze.
+ */
+export interface BotInboxSnooze {
+  snoozedUntil: string | null;
+  snoozedAt: string | null;
+  userSendAt: string | null;
+}
+
+function botInboxSnooze(
+  row: { snoozedUntil: number | null; snoozedAt: number | null; userSendAt: number | null; activeTurnStartedAt: number | null; lastTurnEndedAt: number | null },
+  latest: { role: BotChatRole | null; createdAt: number | null },
+): BotInboxSnooze {
+  const iso = (ms: number | null) => ms == null ? null : new Date(ms).toISOString();
+  // Streamed text keeps its start timestamp. Use the terminal timestamp only when
+  // the visible reply belongs to that turn, so old replies cannot wake a later snooze.
+  const replyEndedAt = latest.role === 'assistant' && row.activeTurnStartedAt != null
+    && (latest.createdAt ?? 0) >= row.activeTurnStartedAt ? row.lastTurnEndedAt ?? 0 : 0;
+  const inputAt = Math.max(row.userSendAt ?? 0, latest.createdAt ?? 0, replyEndedAt);
+  return { snoozedUntil: iso(row.snoozedUntil), snoozedAt: iso(row.snoozedAt), userSendAt: iso(inputAt || null) };
 }
 
 const MAX_FOLLOWED_TASK_LINKS = 200;
@@ -1525,7 +1554,9 @@ async function readBotRemoteResourceSource(
   const { canonicalSessionId } = await reconcileCanonicalLink(botId, client);
   owner.assertCurrent();
   const [canonical] = canonicalSessionId ? await db
-    .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt })
+    .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt,
+      snoozedUntil: sessions.snoozedUntil, snoozedAt: sessions.snoozedAt, userSendAt: sessions.userSendAt,
+      activeTurnStartedAt: sessions.activeTurnStartedAt, lastTurnEndedAt: sessions.lastTurnEndedAt })
     .from(sessions).where(eq(sessions.id, canonicalSessionId)).limit(1) : [];
   owner.assertCurrent();
   if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
@@ -1552,6 +1583,7 @@ async function readBotRemoteResourceSource(
     lastMessageRole: latest.role,
     lastReplyAt: reply.createdAt ?? 0,
     lastReadAt: hostReadPosition(profile.id),
+    ...(canonical ? { inboxSnooze: botInboxSnooze(canonical, latest) } : {}),
     needsAttention: profile.attentionAt !== null &&
       BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason) &&
       isBotFailureAttentionWorthy(profile.attentionReason as BotFailureReason),

@@ -40,7 +40,7 @@ import path from 'node:path';
 
 import { ipcMain, BrowserWindow, app } from 'electron';
 
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, Maker } from '@cindy/maker-core';
 import type {
   Scheduler,
   Schedule,
@@ -81,6 +81,7 @@ import { isTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { isPluginEngineTask } from '../maker-host/engineKind.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import {
   resolveBoundSessionGenerationRoute,
@@ -88,6 +89,11 @@ import {
 } from './scheduleGenerationRoute.js';
 
 const log = createLogger('maker-ipc:schedule');
+
+/** Refuses only plugin-engine tasks; every other engine keeps its existing path unchanged. */
+function runsOnBuiltinEngine<T extends { agentKind: EngineKind }>(value: T): value is T & { agentKind: AgentKind } {
+  return !isPluginEngineTask(value);
+}
 
 function broadcast(channel: string, payload: unknown): void {
   // device-link tap:schedule:event 在 PUSH_FORWARD_ALLOWLIST,补 tap 才会真正转发给控制端,
@@ -564,6 +570,10 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         ? requestedAgentKind ? { agentKind: requestedAgentKind, model: model ?? '', agentDeviceId: null } : null
         : await maker.getSessionMeta(targetSessionId).catch(() => null);
       if (session?.agentDeviceId) return unsupportedRemoteGeneration(providerId, model ?? session.model, session.agentKind);
+      // A plugin-engine task has no catalog route for utility generation, and
+      // schedules do not run on plugin engines (docs/plans/acp-plugin-bridge.md).
+      // Fail closed with no candidate instead of guessing a built-in transport.
+      if (session && !runsOnBuiltinEngine(session)) return { ok: false as const, reason: 'no_candidate' as const, attempts: [] };
       // Bound-session fallback must use the same live connection snapshot as
       // the provider picker. Never turn an unconnected built-in provider into
       // a routable candidate just because it exists in the catalog.
