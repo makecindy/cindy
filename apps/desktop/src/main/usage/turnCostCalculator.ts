@@ -19,7 +19,7 @@ import {
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { buildTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails.js';
-import { isSubscriptionDirectRoute } from '../../shared/subscriptionModels.js';
+import { isSubscriptionDirectRoute, isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 import type { ModelUsageDeltaEntry } from './modelUsageDelta.js';
 
@@ -35,6 +35,7 @@ export interface TurnTokenDeltas {
 export interface TurnUsageSegment extends TurnTokenDeltas {
   id?: string;
   model?: string;
+  modelConfirmed?: boolean;
   priceVariant?: PriceVariant;
   costUsd?: number;
   complete?: boolean;
@@ -67,6 +68,7 @@ export function normalizeTurnUsageSegments(value: unknown): TurnUsageSegment[] {
       continue;
     if (typeof raw.id === 'string' && raw.id) segment.id = raw.id;
     if (typeof raw.model === 'string' && raw.model.trim()) segment.model = raw.model.trim();
+    if (typeof raw.modelConfirmed === 'boolean') segment.modelConfirmed = raw.modelConfirmed;
     if (
       raw.priceVariant === 'standard' ||
       raw.priceVariant === 'priority' ||
@@ -555,6 +557,21 @@ export function estimateClaudeSubscriptionTurnValue(
   return values.length > 0 ? addRegionalMoney(values) : null;
 }
 
+export function claudeModelBilling(item: ResolvedModelCost, billing?: UsageBillingSource): UsageBillingSource {
+  const billingSource = item.source === 'gateway' ? 'cindy-ai' : item.source === 'subscription'
+    ? 'subscription' : billing?.billingSource;
+  if (billingSource === 'subscription') {
+    const bridge = item.model.startsWith('chatgpt/') ? 'openai' : isExclusiveXaiModelId(item.model) ? 'xai' : undefined;
+    if (bridge && billing?.providerId !== bridge && item.source === 'subscription') {
+      return { providerId: bridge, billingSource };
+    }
+    if (billing?.billingSource === 'subscription' && !billing.providerId) {
+      return { providerId: bridge ?? 'anthropic', billingSource };
+    }
+  }
+  return { ...(billingSource === billing?.billingSource ? billing : {}), billingSource };
+}
+
 export function buildClaudeTurnUsageDetails(
   usage:
     | {
@@ -570,18 +587,12 @@ export function buildClaudeTurnUsageDetails(
   durationMs?: number,
   turnDurationMs?: number,
   billing?: UsageBillingSource,
+  trace?: unknown,
 ): TurnUsageDetails | null {
   const hasModelUsageDeltas = Boolean(deltas && deltas.length > 0);
   const perModelCost = perModel
-    ?.filter((item) => item.money && item.money.amount > 0)
-    .map((item) => {
-      const billingSource = item.source === 'gateway' ? 'cindy-ai' as const
-        : item.source === 'subscription' ? 'subscription' as const : billing?.billingSource;
-      // A bridge can use another account type in the same turn. Never attach
-      // the selected provider's identity to that different billing source.
-      return { model: item.model, money: item.money!,
-        ...(billingSource === billing?.billingSource ? billing : {}), billingSource };
-    });
+    ?.filter(item => item.money && item.money.amount > 0)
+    .map(item => ({ model: item.model, money: item.money!, ...claudeModelBilling(item, billing) }));
   return buildTurnUsageDetails({
     ...billing,
     inputTokens: hasModelUsageDeltas
@@ -598,8 +609,10 @@ export function buildClaudeTurnUsageDetails(
       : usage?.cache_creation_input_tokens,
     model: deltas?.length === 1 ? deltas[0].model : hasModelUsageDeltas ? undefined : fallbackModel,
     models: hasModelUsageDeltas ? deltas?.map((delta) => delta.model) : undefined,
+    perModelTokens: perModel?.map(item => ({ model: item.model, ...item.deltas, ...claudeModelBilling(item, billing) })),
     perModelCost: perModelCost && perModelCost.length > 0 ? perModelCost : undefined,
     durationMs,
     turnDurationMs,
+    trace,
   });
 }

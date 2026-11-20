@@ -323,12 +323,17 @@ export class AgentNetClient {
       return response;
     } finally { clearTimeout(timer); }
   }
-  /** Native media reads are bounded ranges; retain their deadline until consumed. */
-  async withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+  /** Native media reads retain an idle deadline through body consumption. */
+  async withMediaResponse<T>(id: string, range: string, consume: (response: Response, onByteProgress?: (bytes: number) => void) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const controller = new AbortController();
+    let timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+    const onByteProgress = (bytes: number) => {
+      if (controller.signal.aborted || signal?.aborted || !Number.isFinite(bytes) || bytes <= 0) return;
+      clearTimeout(timer); timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+    };
     try {
       const response = await this.mediaResponse(id, range, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
-      return await consume(response);
+      return await consume(response, onByteProgress);
     } finally { clearTimeout(timer); controller.abort(); }
   }
 }

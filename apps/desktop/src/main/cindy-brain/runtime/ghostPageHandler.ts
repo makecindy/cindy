@@ -33,6 +33,8 @@ export interface GhostPagePorts {
   ghostModelPreferencesProvider: GhostModelPreferencesProvider | null;
   ghostMediaModelsProvider: ((id: string, type: GhostMediaModelType) => Promise<GhostMediaModelsResult>) | null;
   ghostModelsHandler: GhostPageEndpoint | null;
+  /** /harnesses: task engine availability. Optional; Hosts without task engines answer 404. */
+  ghostHarnessesHandler?: GhostPageEndpoint | null;
   ghostSecretsHandler: GhostPageEndpoint | null;
   ghostOauthHandler: GhostPageEndpoint | null;
   ghostConnectionsHandler: GhostPageEndpoint | null;
@@ -252,9 +254,12 @@ export function createGhostPageHandler(ports: GhostPagePorts) {
           },
         });
       }
-      if (url.pathname === '/models') {
-        if (!ports.ghostModelsHandler) return new Response(null, { status: 503 });
-        const out = await ports.ghostModelsHandler({
+      // /models 与 /harnesses:插件发布模型列表 / 执行引擎可用状态(只存元数据，整体覆盖)。
+      // /harnesses 只在提供该端点的宿主(Desktop)开放，其余宿主照旧 404。
+      if (url.pathname === '/models' || (url.pathname === '/harnesses' && ports.ghostHarnessesHandler)) {
+        const handler = url.pathname === '/models' ? ports.ghostModelsHandler : ports.ghostHarnessesHandler;
+        if (!handler) return new Response(null, { status: 503 });
+        const out = await handler({
           ghostId: storagePart,
           method: request.method,
           pathname: url.pathname,

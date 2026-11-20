@@ -21,8 +21,12 @@ import { MyDevicesPanel } from '@/components/settings/MyDevicesPanel';
 describe('MyDevicesPanel rename guards', () => {
   afterEach(cleanup);
 
-  it('does not write a manual name when rename is confirmed without changes', () => {
+  it.each([
+    device('self', 'Studio Mac', true),
+    { ...device('self', 'self', true), selfName: 'Studio Mac' },
+  ])('does not write a manual name when confirming the displayed name for $name', (self) => {
     const s = settings();
+    s.devices = [self];
     render(createElement(MyDevicesPanel, { s, variant: 'self' }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.devices.rename' }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.devices.renameConfirm' }));

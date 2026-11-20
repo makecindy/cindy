@@ -57,7 +57,8 @@ export interface OrcaWorkerRecord {
   session: {
     id: string;
     title: string;
-    agentKind: MakerAgentKind;
+    /** 'acp' = 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)。 */
+    agentKind: MakerAgentKind | 'acp';
     workingDir: string;
     model: string;
     effort: string;
@@ -66,6 +67,8 @@ export interface OrcaWorkerRecord {
     sdkSessionId?: string;
     /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)；null = 任务所在电脑。旧端缺省。 */
     agentDeviceId?: string | null;
+    /** 仅插件引擎 Worker：哪一个引擎(acp-plugin:<插件>:<引擎>)，供界面画它的图标。 */
+    providerId?: string;
   };
   /**
    * Worker 在同账号另一台电脑运行时的运行设备与那台上的真实任务 id；缺省 = 本机 Worker。
@@ -796,7 +799,7 @@ function workerToRecord(
     session: {
       id: session.id,
       title: session.title,
-      agentKind: fromDbAgentKind(session.agentKind),
+      agentKind: session.agentKind === 'acp' ? 'acp' : fromDbAgentKind(session.agentKind),
       workingDir: session.workingDir ?? '',
       model: session.model,
       effort: session.effort,
@@ -804,6 +807,7 @@ function workerToRecord(
       fastMode: (session.fastMode ?? false),
       sdkSessionId: session.sdkSessionId ?? undefined,
       agentDeviceId: session.agentDeviceId && !session.remoteHostId ? session.agentDeviceId : null,
+      ...(session.agentKind === 'acp' && session.providerId ? { providerId: session.providerId } : {}),
     },
     ...(worker.executionDeviceId && worker.remoteSessionId
       ? {

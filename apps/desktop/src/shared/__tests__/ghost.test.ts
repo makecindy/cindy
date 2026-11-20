@@ -1,5 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest as validateProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
+import { validateGhostManifest as validateProtocolManifest, validateStoredGhostManifest as validateStoredProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
+
+// 测试价值：validateGhostManifest 的主视图图标提示须在安装解析后保留，
+// 依据 plugin-security-and-authoring §6 的双解析器契约；既有 icon 用例未覆盖 preferredIcon。
+// 最小输入：mainView.preferredIcon='future-icon'；非字符串应忽略而保留兼容 icon。
+// tier=unit，纯内存解析，无新增资源。单文件实测耗时 1.01s。
+it.each([2, 3])('preserves preferred navigation icons and ignores malformed hints in schema v%s', schemaVersion => {
+  const base = {
+    schemaVersion, minCindyVersion: '0.1.61', id: 'icon-hint', name: 'Icon hint',
+    version: '1.0.0', entry: 'index.js',
+    ...(schemaVersion === 2 ? { slots: ['main-view'] } : {}),
+  };
+  for (const preferredIcon of ['podcast', 'future-icon', undefined, 42, null, {}]) {
+    const mainView = { html: 'view.html', icon: 'globe', preferredIcon };
+    const result = validateGhostManifest({ ...base, mainView });
+    expect(result).toMatchObject({ ok: true, manifest: { mainView: { html: 'view.html', icon: 'globe' } } });
+    if (!result.ok) throw new Error(result.reason);
+    if (typeof preferredIcon === 'string') {
+      expect(result.manifest.mainView?.preferredIcon).toBe(preferredIcon);
+    } else {
+      expect(result.manifest.mainView).not.toHaveProperty('preferredIcon');
+    }
+  }
+});
 
 // Host groups are separate install permissions; unknown groups never become permissions.
 it('validates and projects each host tool group independently in both manifest readers', () => {
@@ -18,6 +41,30 @@ it('validates and projects each host tool group independently in both manifest r
   // A command-capable plugin must not be described as unable to access local files.
   expect(ghostPermissionItems(after.manifest).find(item => item.kind === 'code')?.detailKey).toBe('codeDetailTerminal');
   expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key)).toEqual(['agent:host-tools:scheduler', 'agent:host-tools:terminal', 'code']);
+});
+
+// User decision 2026-11-18: `imEntrance` only lists a plugin on the IM bots page. Both manifest readers
+// must agree, it needs the task/target declarations it relies on, and adding it in an update must not
+// add a permission prompt (existing installs keep working). Minimal inputs: with/without tasks+targets.
+it('accepts imEntrance only with tasks and targets, in both readers, without a new permission', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'im-plugin', name: 'IM plugin', version: '1.0.0', entry: 'main.js',
+    agent: { tasks: true, targets: true } };
+  for (const validate of [validateGhostManifest, validateProtocolManifest]) {
+    expect(validate({ ...base, imEntrance: true })).toMatchObject({ ok: true, manifest: { imEntrance: true } });
+    for (const invalid of [{ imEntrance: 'yes' }, { imEntrance: true, agent: { tasks: true } }])
+      expect(validate({ ...base, ...invalid }).ok).toBe(false);
+  }
+  for (const validate of [validateInstalledGhostManifest, validateStoredGhostManifest, validateStoredProtocolManifest]) {
+    // PR #11208 unit regression: former extension values survive stored validation.
+    const historical = { internal: 'legacy' };
+    expect(validate({ ...base, imEntrance: historical })).toMatchObject({ ok: true, manifest: { imEntrance: historical } });
+    expect(validate({ ...base, imEntrance: true, agent: { tasks: true } })).toMatchObject({ ok: true, manifest: { imEntrance: true } });
+  }
+  const before = validateGhostManifest(base);
+  const after = validateGhostManifest({ ...base, imEntrance: true });
+  if (!before.ok || !after.ok) throw new Error('invalid fixture');
+  expect(before.manifest).not.toHaveProperty('imEntrance');
+  expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([]);
 });
 
 // 第23项：HTTPS 域名旧批准不能变成 HTTP 或自定义端口批准；双 validator 与权限 diff 共用真实入口。
@@ -5343,6 +5390,56 @@ describe('liveScreen declaration', () => {
     ).toBe(false);
     const local = validateGhostManifest({ ...base, node, liveScreen: true, taskView: { html: 'task.html' } });
     expect(local.ok && local.manifest.taskView?.remote).toBeUndefined();
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：Desktop validateGhostManifest / validateStoredGhostManifest /
+ *   validateInstalledGhostManifest 对 `harnesses` 的结论与协议正本一致，并投影出独立的 `harnesses` 权限项。
+ * - Bug／规则依据：plugin-security-and-authoring.md §6（两份 validator 同步）、§5 红线（已装快照不因新校验
+ *   失效）、§3.1（独立 key，权限变多可识别）。
+ * - 现有覆盖缺口：新字段；协议侧 manifest.test.ts 只覆盖正本。
+ * - 最小失败输入：entry 指向 node.entry；已装快照里不合新规则的 harnesses。
+ * - tier：unit。实测耗时：随本文件整体约 1–2s。
+ */
+describe('harnesses declaration', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.61', id: 'dsh', name: 'DSH', version: '1.0.0', entry: 'main.js',
+    node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js', 'other.js'] } };
+  const harness = { id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: 'engine.js' };
+
+  it.each<[string, unknown, boolean]>([
+    ['valid', [harness], true],
+    ['unknown protocol kept as data', [{ ...harness, protocol: 'acp/2' }], true],
+    ['four engines', ['a', 'b', 'c', 'd'].map(id => ({ ...harness, id })), true],
+    ['five engines', ['a', 'b', 'c', 'd', 'e'].map(id => ({ ...harness, id })), false],
+    ['main node entry', [{ ...harness, entry: 'worker.js' }], false],
+    ['undeclared entry', [{ ...harness, entry: 'missing.js' }], false],
+    ['id with uppercase', [{ ...harness, id: 'Dsh' }], false],
+    ['description over 200', [{ ...harness, description: 'x'.repeat(201) }], false],
+  ])('agrees with the protocol for %s, and installed snapshots never fail on it', (_label, harnesses, ok) => {
+    const raw = { ...base, harnesses };
+    const desktop = validateGhostManifest(raw);
+    expect(desktop.ok).toBe(ok);
+    expect(validateProtocolManifest(raw).ok).toBe(ok);
+    for (const validate of [validateStoredGhostManifest, validateInstalledGhostManifest]) {
+      const lenient = validate(raw);
+      expect(lenient.ok).toBe(true);
+      if (lenient.ok) expect(lenient.manifest.harnesses).toEqual(ok ? harnesses : undefined);
+    }
+  });
+
+  it('lists engines this Host can run as their own permission and diffs added engines as more permissions', () => {
+    const one = validateGhostManifest({ ...base, harnesses: [harness] });
+    const two = validateGhostManifest({ ...base, harnesses: [harness, { ...harness, id: 'fast', name: 'Fast', entry: 'other.js' }] });
+    const inactive = validateGhostManifest({ ...base, harnesses: [{ ...harness, protocol: 'acp/2' }] });
+    if (!one.ok || !two.ok || !inactive.ok) throw new Error('invalid fixture');
+    expect(ghostPermissionItems(one.manifest)).toContainEqual({ key: 'harnesses', kind: 'agent', labelKey: 'harnesses',
+      labelArgs: { names: 'DeepSeek Harness', ids: 'dsh' }, detailKey: 'harnessesDetail' });
+    expect(ghostPermissionItems(inactive.manifest).some(item => item.key === 'harnesses')).toBe(false);
+    expect(diffGhostPermissionItems(one.manifest, two.manifest).added.map(item => item.key)).toEqual(['harnesses']);
+    expect(diffGhostPermissionItems(two.manifest, one.manifest).added.map(item => item.key)).toEqual(['harnesses']);
+    expect(diffGhostPermissionItems(one.manifest, one.manifest).added).toEqual([]);
   });
 });
 

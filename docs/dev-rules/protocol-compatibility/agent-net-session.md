@@ -47,7 +47,7 @@
   结果 `result {id, result: {ok, result} | {ok:false, error:{code, message}}}` 走请求来的那条流；`push {channel, payload}` 在 v1 里一律走普通流
   （同一方向的推送共用一个顺序，保住「任务列表补丁是任务事件的分界」这类跨主题先后）；`presence {payload}`；
   `cancel {id}`（2026-11-16）：走控制流，调用方超时了，这条请求还没交给业务的话就不再交。
-- **Desktop 的控制链路**（`apps/desktop/src/main/device-link/agentNetSessionLinks.ts`）：`open`/`accept` 的载荷就是 Device Link 的
+- **Desktop 的控制链路**（`packages/agent-net/src/session/sessionLinks.ts`）：`open`/`accept` 的载荷就是 Device Link 的
   `LinkOpenPayload`/`LinkAcceptPayload`，控制端只加推送压缩的字典能力；结果一律包一层 `{ok: true, result: InvokeResultPayload}`，
   外层只表示送达，业务的成功与失败原样在里面，不和会话层自己的失败码混；推送的 `payload` 是整个 `PushPayload`
   （含 `ownerStamp`，可能按建链时声明的字典压缩过）。结果压缩与增量、正文复用、历史页增量、标签目录、模型速度编码和 Device Link
@@ -94,7 +94,16 @@
   2026-11-17 Node Host 接入（Windows 上的 Host ↔ macOS 上打开 Agent-Net 的 Desktop，同一个个人账号，官方 Agent-Net）：Host 加入后
   0.1 秒会话就绪，Desktop 经会话调用 Host 每次 13–15 毫秒（直连）；Host 关掉 Agent-Net 后经 Device Link 中转每次约 300 毫秒，
   再打开不用重启就回到 Agent-Net（已开着的链路按「中途不换路」用到关链）。真机里发现 Host 关着时不签传输方式声明、开着 Agent-Net
-  的 Desktop 拒收（`Untrusted transport mode`），已改成和 Desktop 一样关着也签。手机不宣告会话能力，和它之间照旧走 Device Link。
+  的 Desktop 拒收（`Untrusted transport mode`），已改成和 Desktop 一样关着也签。
+  2026-11-18 手机接入：会话对接（`AgentNetSessionLinks`、选路 `routeSessionPeers`、`PeerLinks`）从 Desktop 移到
+  `packages/agent-net/src/session/`，Desktop、Node Host 与手机共用一份；手机在 `apps/mobile/src/device-link/DeviceLinkContext.tsx`
+  与 `agentNetRuntime.ts` 装配，只在手机能用 Agent-Net 时挂上（没开时客户端和原来完全一样，不经会话层）。手机的原生连接（`packages/agent-net/src/nativeTransport.ts`）有了同样的三条会话通道、宣告与积压读数
+  （核心缓冲按流读回，原生库的 `stream-buffered`）；同账号走会话（含 `presence-v1`），共享任务的受邀者在它的分享连接上走单向会话。
+  手机只控制：不接受链路，`invokeEpoch` 不提供。会话断了又回来时按 Device Link 传输重置的同一流程恢复这个对端（只这一个）。
+  旧安装包的原生库也能走会话（只需要流）；它的 `identity()` 没有 `features` 时不用中转 UDP、STUN 与按流积压，也不调用新操作。
+  回归：`packages/agent-net/src/__tests__/native.integration.test.ts`「carries sessions on the real native engine, relays them over UDP,
+  and keeps working on an older native build」（真实原生库的 C 接口、真实 V2 中转与 Node 节点；去掉原生的会话宣告时会话一直不出现）。
+  真机还没测。
   同日真机里还发现 Host 的 `link-accept` 一直不带 `background-link-v1`（和 Agent-Net 无关，主干上也一样）：电脑的后台读取每次新开链路、
   发现不支持就关（`backgroundLink.ts`），调用方再读又开，一秒几次。Host 的入站处理和 Desktop 是同一套，本来就按后台链路处理，
   现在 Host 开着 Agent-Net 时 `sameAccountCapabilities` 带上这一项（会话上每次后台读都重建一条会话链路）。按用户定的原则「改动只影响
@@ -114,3 +123,11 @@
 （跨账号：会话键、单向、`delegatedOnly`、撤销后两端会话作废）；`packages/agent-net/src/__tests__/portableSocket.test.ts`
 「keeps presence on the session with a new peer and still sends the frame to an older one」（在线状态只在会话上、连接上没有 Device Link 帧，
 老版本对端等过以后收到帧，自报的设备号不算数）。端到端对比用 `packages/agent-net/bench/session-latency.ts --modes v1,session`。
+
+### 自建中继上的新分享
+
+自建中继在 `/info` 广告 `private-sharing-v1` 后，新版桌面端创建的分享使用版本 3 的邀请。新邀请需要支持该版本的客户端。版本 2 的邀请继续使用原身份服务；官方网络及历史成员记录沿用原有权限。
+
+`/private-sharing/` 使用独立的资源和权限记录。创建者提交本网络签发的成员证书和请求签名；访客用设备保存的密钥签名，请求绑定中继根公钥、网络、路径、正文、时间和一次性随机数。供应商分享仍需主人批准；获得业务成员身份后，连接还需要对应资源的委托签名。附件继续经原有端到端加密传输。旧附件按原引用读取，只存于官方服务器的历史附件需要该服务器可达。
+
+桌面和手机分别保存版本 2 与版本 3 的分享路由，回退客户端后版本 2 的路由仍可读取。同一私有网络的已配对设备以主人身份读取自有任务，远程取消共享仍由原房主设备执行。自建中继移除租户时，随网络撤销该租户的分享与邀请。

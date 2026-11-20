@@ -113,6 +113,24 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 > Cindy 自有子代理的委派、控制、结果收口与测试边界见 [Pi 子代理设计](../research/pi-subagent-delegation.md)。与 Orca 协作模式分别维护。
 
+### Chat 网关工具 ID 与子代理兼容配置
+
+Chat Completions 网关在 Gemini 工具 ID 中携带签名时，切到受限后端可能超过
+下游的 64 字符限制。仅在目标模型配置显式声明 `compat.maxToolCallIdLength: 64` 时，
+bridge 才在 `openai-completions` 请求投影中缩短超长 ID，调用与结果使用同一映射，
+并避开已有短 ID；不写回会话历史。这是 Cindy bridge 消费的兼容选项，经过原生
+`models.json` 的模型 `compat` 传递，不作为 HTTP 请求字段发送；生产投影为官方
+OpenAI Chat 端点默认声明此约束。自定义网关通过持久 `perAgent.pi.maxToolCallIdLength`
+覆盖声明（见 [配置规则](configuration-and-overrides.md#pi-chat-工具-id-上限)），不编辑临时
+`models.json`。只给已确认允许重写
+ID 且要求 64 字符上限的目标线路配置，不给依赖签名 ID 的 Gemini 线路配置。
+未声明该选项的线路保留原 ID，包括 `production-flash`、`gemini` 等部署别名；
+不依据用户可自定义的模型名推断能力。自定义 GPT 网关也须显式声明，不能自动猜测。
+Responses 沿用 Pi 原生归一化。子代理自带 bridge，
+并在启动与恢复时继承父模型配置中的 `compat`（含 `supportsStore: false`），无需
+为此转发用户扩展或放开 `--no-extensions`。真实 Pi 回归见
+`pi-agent.integration.test.ts` 的 Gemini 切模与 Chat 子代理恢复用例。
+
 ### 原生请求 Fast 偏好
 
 支持 Fast 的原生模型在 `before_provider_request` 中经现有 RPC 通道发出
@@ -236,6 +254,11 @@ Claude Code、Codex 共用同一模型比例，各自适配原生参数。env:`C
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
+
+桌面本机启动的 Pi（含在该电脑上托管的分享任务）保留显式代理环境。未设置代理变量时，
+其 HTTPS 连接使用桌面回环 CONNECT 桥，按每个目标主机和端口查询执行电脑的系统代理或 PAC。
+切换模型或系统代理后，新连接沿用桌面解析器的短时缓存；已建立的连接继续使用原路径。
+本机地址沿用 Pi 的 `NO_PROXY`，SSH 会话独立使用已配置的远端转发。
 
 用户重试已被 Pi 接受但零产出的失败输入时，用持久化的原生 user entry id 精确定位当前
 分支；确认后续只有空的错误响应及模型／推理档位变更记录，再通过原生树导航回到输入之前重发。

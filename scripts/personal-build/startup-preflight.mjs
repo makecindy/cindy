@@ -35,3 +35,27 @@ export function preflightSharedStartup(c, release, plan) {
   }
   return {shared:true, head:release.head, startupApproval:plan?.startupApproval ?? null};
 }
+
+/** Inspect the candidate's launch policy with the same redirected stdout as a real switch.
+ * Import by file URL so a legacy wrapper cannot enter its CLI (or stop an app).
+ */
+export function preflightPersonalLauncher(node, directory, fixedApp) {
+  const module = pathToFileURL(path.join(directory, 'scripts/restart-desktop-remote.mjs')).href;
+  let policy;
+  try {
+    const result = execFileSync(node, ['--input-type=module', '-e',
+      'const m = await import(process.argv[1]); process.stdout.write(JSON.stringify(m.resolveDesktopLaunchPolicy(process.argv.slice(2))));',
+      module, '--shared', '--wait-ready', '--reuse-terminal'], {
+      cwd:directory, encoding:'utf8', timeout:15000, stdio:['ignore','pipe','pipe'],
+      env:{...process.env, NODE_OPTIONS:'', CINDY_PERSONAL_FIXED_APP:fixedApp,
+        CINDY_PERSONAL_MONITOR_DIR:'preflight', CINDY_PERSONAL_GENERATION:'preflight'},
+    });
+    policy = JSON.parse(result);
+  } catch (error) {
+    const detail = String(error.stderr || error.message).trim();
+    throw Error(`Cannot verify personal cold-start support; rebuild the candidate with the updated launcher. ${detail}`, {cause:error});
+  }
+  check(Number.isSafeInteger(policy?.coldBuildTimeoutMs) && policy.coldBuildTimeoutMs >= 600_000 &&
+    policy.reuseTerminal === false, 'Candidate lacks the supervised cold-build interval or independent Terminal; rebuild before switching.');
+  return policy;
+}

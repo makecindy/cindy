@@ -1,3 +1,5 @@
+import { applyProjectDirectoriesForTurn } from '../projectDirectoryRuntime.js';
+import { createOneShotUsageRecorder } from '../usage/auxiliaryUsage.js';
 import { attachmentPreservation, attachmentStorageRoots } from './oversized-attachment-recovery.js';
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
 import { createCodexSpawnConfig, createCodexRoutingSignature } from './codexSpawnConfigCore.js';
@@ -37,6 +39,8 @@ import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-accou
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
 import { onSubscriptionPoolCodexModelsChanged, onSubscriptionPoolClaudeModelsChanged } from '../subscription-accounts/runtime.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
+import { installPluginEngines } from './acp-host.js';
+import { builtinAgentKindOrNull, requireBuiltinAgentKind } from './engineKind.js';
 import { readCodexThreadStorageReadOnly, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -84,7 +88,6 @@ import {
 } from './codex-model-backfill.js';
 import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cindy/orca-workflow';
 import { LspServerPool } from '@cindy/mcps';
-import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { listCustomMcpRuntimeGenerations } from './custom-mcp-store.desktop.js';
 
 import { createMessage } from '../localDb/ipc/messages.js';
@@ -107,7 +110,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { makerStartupGate } from './startup-gate.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.desktop.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
-import { ghostToolLifecycleControl } from '../cindy-brain/index.js';
+import { ghostNativeRecoveryObserver, ghostToolLifecycleControl } from '../cindy-brain/index.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 import { getActiveInteractionRoute, requestHostInteraction } from '../maker-ipc/interactionRouter.js';
 import { setAgentAppUpdateSessionHost } from '../agent-app-update/index.js';
@@ -187,17 +190,8 @@ import {
   writeCodexHistoryHasProductPrompt,
 } from './session-storage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
-import { guardedOutboundFetch, outboundFetch } from './outbound-fetch.desktop.js';
-import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
-import { createVisionBridge } from '../vision-bridge/vision-bridge.js';
-import {
-  getVisionBridgeController,
-  setVisionBridgeController,
-} from '../vision-bridge/vision-bridge-controller.js';
-import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
-import * as blobStore from '../cindy-media/blobStore.desktop.js';
-import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { captureCodexLocalAuthPolicy, resolveConnectedDefaultProviderIdForModel, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import { guardedOutboundFetch } from './outbound-fetch.desktop.js';
+import { captureCodexLocalAuthPolicy, resolveConnectedDefaultProviderIdForModel } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -215,7 +209,10 @@ import {
   resolveRemotePiBinaryPath,
 } from './pi-remote-transport.js';
 import { ensurePiManagerInstalled } from './pi-manager-client.js';
-import { createPiRemoteProviderForwardLease } from './pi-remote-provider-forward.js';
+import {
+  createPiRemoteProviderForwardLease,
+  probePiRemoteProviderEndpoint,
+} from './pi-remote-provider-forward.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { routeInjectedRemoteMcpApprovalsThroughCindy } from './remote-claude-permission-mode.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
@@ -423,6 +420,7 @@ import {
 } from './mcp-tool-approval-policy.js';
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
 import { prepareSharedProjectSkillLinks } from './shared-global-skills.js';
+import { followReferenceModelPricingAfterProviderChange } from '../usage/referenceModelPricing.js';
 import {
   DESKTOP_CAPABILITY_ROUTING_POLICY,
 } from './capability-routing.js';
@@ -463,9 +461,6 @@ let botRuntimeResourcePreflight:
   | ((opts: MakerSessionCreateOpts) => Promise<BotProfileRuntimeSnapshot | null>)
   | null = null;
 let _registerPiAgent: (() => boolean) | null = null;
-/** 视觉桥实例（层 A/B/C 共用），在 resetMaker 时释放缓存。 */
-let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
-
 let providerAccessRuntimeRefreshListener: (() => void) | null = null;
 let modelContextRuntimeRefreshListener: (() => void) | null = null;
 
@@ -494,11 +489,11 @@ export const reviewAutoPermissionAction: AutoReviewDelegate = createAutoPermissi
   logger: desktopMakerLogger,
   managesRetries: true,
   resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
-  requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
+  requestText: (request, prompt, { signal }) => requestAutoReviewText(prompt, signal, request.sessionId),
 });
 /** 工具循环疑似命中时走共享辅助模型链复核;Claude Code 与 Pi/Codex 共用。 */
 const reviewToolLoop = createToolLoopReviewer({
-  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, opts),
+  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, { ...opts, source: 'tool-loop-review' }),
 });
 
 reviewAutoPermissionAction.prepareRequest = async request => {
@@ -533,6 +528,9 @@ export function refreshSelectableModelsAndBroadcast(payload: Record<string, unkn
     }
   }
   tapWindowBroadcast(MAKER_PUSH.PROVIDER_CHANGED, payload);
+  // Reference prices are keyed by each account provider's current models; keep them in
+  // step with the list the renderer was just told to re-read.
+  followReferenceModelPricingAfterProviderChange();
 }
 
 /**
@@ -931,7 +929,7 @@ export async function listBotRuntimeMcpServers({ agentKind, remoteHostId }: { ag
 function createDesktopBotCapabilityService() {
   return createBotCapabilityService({
     getMaker, getPluginRegistry, isBotToolsetAvailable,
-    listMcpServers: listBotRuntimeMcpServers,
+    listMcpServers: (input) => listBotRuntimeMcpServers({ ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate tools') }),
     markOfficialSkills: markCindyOfficialSkills,
     readConversationConnections: async (botId) => {
       if (!_readBotConversationConnections) throw new Error('Bot conversation connections reader is not initialized');
@@ -966,60 +964,6 @@ export function getPluginRegistry() {
  * MCP 由 @cindy/mcps 包提供 server/tool 定义，desktop main 在这里注入 token、
  * OAuth、缓存、bot 发送等宿主能力，再交给 maker-core 的 ClaudeCodeAgent。
  */
-
-/**
- * 视觉桥用户提示广播（层 B + 层 D 共用）。
- * renderer 仅信任 `source: 'vision-bridge'`，避免普通错误事件误触发视觉桥提示。
- */
-const VISION_BRIDGE_DEDUP_MS = 2_000;
-const _visionBridgeDedup = new Map<string, number>();
-
-function broadcastVisionBridgeEvent(
-  sessionId: string,
-  reason: 'vision-bridge-recognizing' | 'vision-bridge-fallback' | 'vision-bridge-unavailable',
-  extra: { imageCount?: number } = {},
-): void {
-  if (reason === 'vision-bridge-recognizing') {
-    for (const key of _visionBridgeDedup.keys()) {
-      if (key.startsWith(`${sessionId}|`)) _visionBridgeDedup.delete(key);
-    }
-  } else {
-    const key = `${sessionId}|${reason}`;
-    const now = Date.now();
-    const last = _visionBridgeDedup.get(key);
-    if (last !== undefined && now - last < VISION_BRIDGE_DEDUP_MS) return;
-    _visionBridgeDedup.set(key, now);
-  }
-
-  const message = reason === 'vision-bridge-recognizing'
-    ? '正在识别图片中…'
-    : reason === 'vision-bridge-fallback'
-      ? '视觉桥使用了备用视觉后端（主后端不可用）'
-      : '视觉桥当前不可用，图片无法转成文字描述，已以文字提示代替';
-  const payload = {
-    sessionId,
-    event: {
-      type: 'error' as const,
-      data: {
-        message,
-        isTerminal: false,
-        reason,
-        ...(extra.imageCount !== undefined ? { imageCount: extra.imageCount } : {}),
-      },
-      source: 'vision-bridge',
-    },
-  };
-  for (const win of BrowserWindow.getAllWindows()) {
-    try {
-      if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.EVENT, payload);
-    } catch (error) {
-      desktopMakerLogger.child('vision-bridge').warn('vision bridge event broadcast failed', {
-        reason,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-}
 
 /**
  * Client mode: another process (cindy-host) owns the runtime. Every maker access
@@ -1478,6 +1422,7 @@ export function getMaker(): Maker {
     const claudeAgent = new ClaudeCodeAgent({
       resolveLocalMcpDuplicateChoices,
       toolLifecycleControl: ghostToolLifecycleControl,
+      nativeRecoveryObserver: ghostNativeRecoveryObserver,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
@@ -1789,6 +1734,7 @@ export function getMaker(): Maker {
       getDisabledRuntimePluginIds: (workingDir) => getPluginRegistry().getDisabledRuntimePluginIds(workingDir),
     });
     const codexAgent = new CodexAgent({
+      nativeRecoveryObserver: ghostNativeRecoveryObserver,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
@@ -2243,6 +2189,7 @@ export function getMaker(): Maker {
     const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
     const buildPiAgentForDesktop = () => buildPiAgent({
       toolLifecycleControl: ghostToolLifecycleControl,
+      nativeRecoveryObserver: ghostNativeRecoveryObserver,
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,
@@ -2303,25 +2250,15 @@ export function getMaker(): Maker {
         await settleLocalPiPackageRuntimeSnapshot(maker, snapshot, callerSessionId, publishOutcome, createRetirementFailureEvent);
       },
       getGhostRosterPrompt,
-      // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
-      resolvePiVisionBridgeEnv: (model, sessionId) =>
-        buildPiVisionBridgeEnv(
-          {
-            getProviderById: (providerId) =>
-              getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
-            readCustomProviderKey,
-            readGatewayKey: readClaudeApiKey,
-            resolveBackendRoute: (providerId, modelId) =>
-              resolveVisionBackendRoute(providerId, modelId, effectiveXdGatewayBaseUrl() || null),
-            fetch: outboundFetch,
-          },
-          model,
-          sessionId,
-        ),
       // 远端 Pi:给 session 标 remoteHostId 的, PiAgent 通过这个钩子拿远端
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
       // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
       // 远端机器没在 pool / 未连接 → 抛错, PiAgent 把它当 startSession 失败传上去。
+      probeRemotePiProviderEndpoint: async (remoteHostId, baseUrl) => {
+        const host = getRemoteSshPool().get(remoteHostId);
+        if (!host || host.getStatus() !== 'ready') return false;
+        return probePiRemoteProviderEndpoint(host, baseUrl);
+      },
       getRemotePiTransport: async (
         remoteHostId,
         {
@@ -2497,39 +2434,11 @@ export function getMaker(): Maker {
     const piAgent = buildPiAgentForDesktop();
     if (piAgent) makerAgents.pi = withSubscriptionAccounts(piAgent);
 
-    setVisionGatewayKeyReader(readClaudeApiKey);
-    _visionBridgeInstance = createVisionBridge({
-      getProviderById: (providerId) =>
-        getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
-      resolveTargetModel: (modelId, sessionId) => {
-        const session = _maker?.getSession(sessionId);
-        const providerId = getSessionProvider(sessionId);
-        if (!session || !providerId) return null;
-        const provider = getActiveCatalog().providers.find((entry) => entry.id === providerId);
-        return provider?.models[session.agentKind]?.find((model) => model.id === modelId) ?? null;
-      },
-      readCustomProviderKey,
-      readGatewayKey: readClaudeApiKey,
-      resolveGatewayEndpoint: () => effectiveXdGatewayBaseUrl() || null,
-      resolveBackendRoute: (providerId, modelId) =>
-        resolveVisionBackendRoute(providerId, modelId, effectiveXdGatewayBaseUrl() || null),
-      fetch: outboundFetch,
-      logger: desktopMakerLogger.child('vision-bridge'),
-      onStart: (sessionId, imageCount) => {
-        broadcastVisionBridgeEvent(sessionId, 'vision-bridge-recognizing', { imageCount });
-      },
-      onNote: (_note, sessionId, kind) => {
-        broadcastVisionBridgeEvent(
-          sessionId,
-          kind === 'fallback' ? 'vision-bridge-fallback' : 'vision-bridge-unavailable',
-        );
-      },
-    });
-
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
       getUserName: () => getAuthState().user?.name,
-      listSkills: async ({ agentKind, workingDir, remoteHostId }) => {
+      listSkills: async ({ agentKind: engineKind, workingDir, remoteHostId }) => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
+        const agentKind = requireBuiltinAgentKind(engineKind, 'teammate runtime');
         const result = await _maker.listAgentSkills(agentKind, {
           workingDir,
           remoteHostId,
@@ -2537,7 +2446,7 @@ export function getMaker(): Maker {
         });
         return markCindyOfficialSkills(result.skills, remoteHostId);
       },
-      listMcpServers: listBotRuntimeMcpServers,
+      listMcpServers: (input) => listBotRuntimeMcpServers({ ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate runtime') }),
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
       listBotImChannels: ({ botId }) =>
         [...new Set(listBotImConnectionsForBot(botId).map((connection) => connection.channel))],
@@ -2555,7 +2464,7 @@ export function getMaker(): Maker {
                 isBotToolsetAvailable({
                   botId,
                   workingDir,
-                  agentKind,
+                  agentKind: requireBuiltinAgentKind(agentKind, 'teammate runtime'),
                   remoteHostId,
                   toolsetId: plugin.id,
                 }),
@@ -2613,6 +2522,7 @@ export function getMaker(): Maker {
     });
 
     _maker = new Maker({
+      createOneShotUsageRecorder,
       agents: makerAgents,
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,
@@ -2660,11 +2570,11 @@ export function getMaker(): Maker {
         logger: desktopMakerLogger,
       }),
       makerMemory: makerMemoryManager,
-      visionBridge: _visionBridgeInstance.hook,
       toolLoopReviewer: reviewToolLoop,
       // Desktop-specific session 生命周期副作用钩子。maker-core 不知道文件系统细节，
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
+        beforeTurn: applyProjectDirectoriesForTurn,
         prepareStartOptions: async (sessionId, opts) => {
           pendingBotRuntimeSnapshots.delete(sessionId);
           // Agent 在另一台电脑上运行的任务：所有入口(界面、定时任务、IM、协同等)恢复时都以任务
@@ -2681,7 +2591,8 @@ export function getMaker(): Maker {
               });
             }
           }
-          const providerReady = await ensureCurrentAccountProviderReadiness();
+          // Plugin engines bring their own models and sign-in; Cindy account providers are not involved.
+          const providerReady = opts.agentKind === 'acp' ? true : await ensureCurrentAccountProviderReadiness();
           if (!providerReady) {
             // 未登录 / 正在切账号时这里恒 false。主机通路只把失败压成 errorCode +
             // message 两个字符串，所以稳定标记必须写进 message 本身：调用方据此把
@@ -2698,14 +2609,17 @@ export function getMaker(): Maker {
           // 所有创建路径共用的派发边界,opts.providerId 此刻已是本次启动的终值。
           freezeSessionProviderAtStart(sessionId, opts.providerId);
           const interfaceProvider = getActiveCatalog().providers.find(p => p.id === opts.providerId);
-          const interfaceModel = interfaceProvider?.models[opts.agentKind]?.find(m => m.id === opts.model);
-          if (interfaceProvider && interfaceModel) sessionModelInterface(sessionId, interfaceProvider.id, opts.agentKind,
+          // Plugin engines are not catalog providers: no model interface to record.
+          const interfaceKind = builtinAgentKindOrNull(opts.agentKind);
+          const interfaceModel = interfaceKind ? interfaceProvider?.models[interfaceKind]?.find(m => m.id === opts.model) : undefined;
+          if (interfaceKind && interfaceProvider && interfaceModel) sessionModelInterface(sessionId, interfaceProvider.id, interfaceKind,
             interfaceModel, getActiveCatalog().modelRegistry,
-            opts.resumeSessionId ? interfaceProvider.routing[opts.agentKind]?.wireProtocol : undefined);
+            opts.resumeSessionId ? interfaceProvider.routing[interfaceKind]?.wireProtocol : undefined);
 
-          if (!opts.remoteHostId && !opts.agentDeviceId) {
+          const fastPolicyKind = builtinAgentKindOrNull(opts.agentKind);
+          if (fastPolicyKind && !opts.remoteHostId && !opts.agentDeviceId) {
             opts.fastModePolicy = createSubscriptionFastPolicy(sessionId, () => getSessionProvider(sessionId)
-              ?? resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), opts.agentKind, null, opts.model));
+              ?? resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), fastPolicyKind, null, opts.model));
           }
           // 任务级工作上下文预算：调用方显式带值时同样按目录上限与模型级上限重新收敛；
           // 未带则读本任务已保存的档位。口径见 applySessionContextWindowBudgetToCreateOpts
@@ -2724,7 +2638,7 @@ export function getMaker(): Maker {
             if (thinkingEnabled !== undefined) opts.thinkingEnabled = thinkingEnabled;
           }
           if (opts.agentKind === 'codex' || opts.agentKind === 'pi') {
-            opts.resolveUsagePriceVariant = registerUsagePricing(sessionId);
+            opts.resolveUsagePriceVariant = registerUsagePricing(sessionId, true);
           }
           // 主干新增:pi 的价格档跟随会话 Fast 开关。
           if (opts.agentKind === 'pi') {
@@ -2746,7 +2660,7 @@ export function getMaker(): Maker {
               workingDir: createOpts.workingDir,
             });
             skillLinksChanged = result.changed;
-            for (const warning of result.warnings) {
+            for (const warning of result.warningsToReport) {
               desktopMakerLogger.warn('shared project skill link warning', {
                 workingDir: createOpts.workingDir,
                 warning,
@@ -2792,7 +2706,7 @@ export function getMaker(): Maker {
             // V2 teammates (projectContext) get the ordinary task's MCP and plugin surface.
             ...(botRuntimeSnapshot && !createOpts.botRuntimeProfile?.projectContext
               ? {
-                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[createOpts.agentKind] ?? [])
+                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[requireBuiltinAgentKind(createOpts.agentKind, 'teammate runtime')] ?? [])
                     .filter((provider) => isBotMcpServerAllowed(createOpts.botRuntimeProfile?.mcpPolicy, provider.name))
                     .map((provider) => provider.name),
                   [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [
@@ -2815,7 +2729,7 @@ export function getMaker(): Maker {
           // SSH remote 的 workingDir 属于远端文件系统，本机不能为它创建兼容链接。
           if (remoteHostId || !workingDir) return;
           const result = await prepareSharedProjectSkillLinks({ workingDir });
-          for (const warning of result.warnings) {
+          for (const warning of result.warningsToReport) {
             desktopMakerLogger.warn('shared project skill link warning', {
               workingDir,
               warning,
@@ -2933,6 +2847,15 @@ export function getMaker(): Maker {
         skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []),
     });
     installLocalAgentHost(_maker);
+    // Plugin-provided ACP engines (docs/plans/acp-plugin-bridge.md): registered only
+    // once a plugin provides one; the built-in engines are untouched either way.
+    installPluginEngines({
+      maker: _maker,
+      logger: desktopMakerLogger,
+      appVersion: app.getVersion(),
+      mcpProviders: piMcpProviders,
+      makerMemory: makerMemoryManager,
+    });
     botRuntimeResourcePreflight = async (opts) => {
       const preflightOpts = { ...opts };
       return hydrateBotProfileRuntime(preflightOpts, buildBotRuntimeDeps(), {
@@ -2954,10 +2877,6 @@ export function getMaker(): Maker {
       }
       return true;
     };
-    setVisionBridgeController({
-      shouldBridge: _visionBridgeInstance.isTargetModel,
-      describeImage: _visionBridgeInstance.describeImage,
-    });
     // 存量已登录用户补拉:maker 首次就绪后,若 Codex 已登录但当前无 codex 模型
     // (从没跑过会话、models_cache 未生成),fire-and-forget 触发一次 live model/list。
     // 不阻塞 getMaker 返回 / 启动(类比 refreshAnthropicModelsFromHttp 的后台刷新)。
@@ -3176,9 +3095,6 @@ export function resetMaker(): void {
   // Anthropic 清单探测同样捕获了旧 maker:注销后,旧实例的在途结果也不再生效。
   setAnthropicModelProbe(null);
   _initialCustomMcpRefresh = undefined;
-  setVisionBridgeController(null);
-  _visionBridgeInstance?.dispose();
-  _visionBridgeInstance = null;
   resetPluginRegistry();
   resetCustomMcpRegistry();
   // 轮 27 MEDIUM-2:resetMaker 是 account 边界收口 —— PI bridge 必须一并

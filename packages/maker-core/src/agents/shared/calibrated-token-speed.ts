@@ -1,4 +1,4 @@
-import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import type { GenerationTrace, TokenSpeedRequestMark, TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 
 /**
  * Live tok/s for harnesses that report real output only when a request ends
@@ -69,6 +69,10 @@ const SCALE_PRIOR_TOKENS = 300;
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 6;
 const PUBLISH_INTERVAL_MS = 250;
+/** The trace kept for a finished turn: how far apart its speed readings start out. */
+const TRACE_SAMPLE_MS = 1_000;
+/** Above this many entries a trace series is halved, so a long turn costs no more than a short one. */
+const TRACE_MAX_POINTS = 48;
 const COMPACTION_THRESHOLD = 1_024;
 /**
  * Real thinking tokens per estimated token of the summary Claude models stream in
@@ -225,6 +229,18 @@ export class CalibratedTokenSpeedMeter {
   private tps = 0;
   private peak = 0;
   private lastPublishAt = -Infinity;
+  /** Requests this turn finished with real usage, and the newest of them. */
+  private requests = 0;
+  private lastRequest: TokenSpeedRequestMark | undefined;
+  /** `[atMs, tps]` readings and `[atMs, thinkingTokens, requests]` marks of this turn; see `trace()`. */
+  private traceSpeed: GenerationTrace['speed'] = [];
+  private traceSampleMs = TRACE_SAMPLE_MS;
+  private traceMarks: GenerationTrace['marks'] = [];
+  /** Earliest request in each mark's covered time range. */
+  private traceMarkStarts: number[] = [];
+  private traceMarkEnds: number[] = [];
+  /** Output of the requests that reported a reasoning split: what the turn's reasoning is a share of. */
+  private reportedOutputTokens = 0;
 
   constructor(options: TokenSpeedMeterOptions = {}) {
     this.estimate = options.estimate ?? estimateStreamTokens;
@@ -263,6 +279,14 @@ export class CalibratedTokenSpeedMeter {
     this.provisionalTokens = 0;
     this.provisionalOwnMs = 0;
     this.provisionalCreditMs = 0;
+    this.requests = 0;
+    this.lastRequest = undefined;
+    this.traceSpeed = [];
+    this.traceSampleMs = TRACE_SAMPLE_MS;
+    this.traceMarks = [];
+    this.traceMarkStarts = [];
+    this.traceMarkEnds = [];
+    this.reportedOutputTokens = 0;
     this.clearLive();
   }
 
@@ -434,8 +458,12 @@ export class CalibratedTokenSpeedMeter {
         // The exact speed of the request that just ended is the freshest reading there is.
         this.tps = requestTps;
         this.peak = Math.max(this.peak, requestTps);
+        this.sampleTrace(requestTps);
       }
     }
+    // A reported zero is a fact (the request answered without thinking); no report is not.
+    this.markRequest(typeof thinkingTokens === 'number' && Number.isFinite(thinkingTokens) && thinkingTokens >= 0
+      ? Math.min(requestTokens, Math.floor(thinkingTokens)) : undefined, requestTokens);
     return report;
   }
 
@@ -474,6 +502,11 @@ export class CalibratedTokenSpeedMeter {
     this.stopped = false;
   }
 
+  /** Cheap readiness check on the delta hot path, before building a status snapshot. */
+  get hasLiveRate(): boolean {
+    return this.started && !this.stopped && !this.paused && !this.invalid && this.tps > 0;
+  }
+
   snapshot(now = Date.now()): TokenSpeedSnapshot | undefined {
     if (!this.started || this.invalid) return undefined;
     const streaming = !this.stopped && !this.paused;
@@ -494,7 +527,72 @@ export class CalibratedTokenSpeedMeter {
       elapsedMs,
       streaming,
       ...(this.peak > 0 ? { peak: this.peak } : {}),
+      ...(this.lastRequest ? { request: this.lastRequest, trace: this.trace() } : {}),
     };
+  }
+
+  /**
+   * How this turn ran, for showing its chart again after it ended: speed readings
+   * and one mark per finished request, both capped. Undefined until a request
+   * finished with real usage.
+   */
+  trace(): GenerationTrace | undefined {
+    if (this.requests === 0 || this.invalid) return undefined;
+    return {
+      durationMs: Math.round(this.settledMs),
+      requests: this.requests,
+      speed: this.traceSpeed.slice(),
+      marks: this.traceMarks.slice(),
+      reportedOutputTokens: this.reportedOutputTokens,
+    };
+  }
+
+  private markRequest(thinkingTokens: number | undefined, outputTokens: number): void {
+    this.requests += 1;
+    // A later settle can trim provisional time: a mark never sits left of the one before it.
+    const atMs = Math.max(Math.round(this.settledMs), this.traceMarks.at(-1)?.[0] ?? 0);
+    this.lastRequest = {
+      index: this.requests,
+      atMs,
+      ...(thinkingTokens !== undefined ? { thinkingTokens } : {}),
+      outputTokens,
+    };
+    if (thinkingTokens !== undefined) this.reportedOutputTokens += outputTokens;
+    this.traceMarks.push([atMs, thinkingTokens ?? -1, 1]);
+    this.traceMarkStarts.push(atMs);
+    this.traceMarkEnds.push(atMs);
+    if (this.traceMarks.length <= TRACE_MAX_POINTS) return;
+    // Merge the smallest covered time range, preserving a request-weighted position.
+    // Repeatedly halving neighbours moved large early groups to their right edge.
+    let closest = 0;
+    let smallestSpan = Infinity;
+    for (let i = 0; i < this.traceMarks.length - 1; i += 1) {
+      const end = this.traceMarkEnds[i + 1];
+      const span = end - this.traceMarkStarts[i];
+      if (span < smallestSpan) { smallestSpan = span; closest = i; }
+    }
+    const a = this.traceMarks[closest];
+    const b = this.traceMarks[closest + 1];
+    const requests = a[2] + b[2];
+    this.traceMarks.splice(closest, 2, [
+      (a[0] * a[2] + b[0] * b[2]) / requests,
+      a[1] < 0 && b[1] < 0 ? -1 : Math.max(0, a[1]) + Math.max(0, b[1]),
+      requests,
+    ]);
+    this.traceMarkStarts.splice(closest + 1, 1);
+    this.traceMarkEnds.splice(closest, 1);
+  }
+
+  /** Keep a speed reading for the trace, at most one per `traceSampleMs` of generation time. */
+  private sampleTrace(rate: number): void {
+    const atMs = Math.round(this.settledMs + this.liveMs);
+    const last = this.traceSpeed.at(-1);
+    if (last && atMs - last[0] < this.traceSampleMs) return;
+    this.traceSpeed.push([atMs, Math.round(rate * 10) / 10]);
+    if (this.traceSpeed.length <= TRACE_MAX_POINTS) return;
+    // An odd count: every other reading, the newest among them.
+    this.traceSpeed = this.traceSpeed.filter((_, index) => index % 2 === 0);
+    this.traceSampleMs *= 2;
   }
 
   /** A request's first block: what follows was generated from here on, bar the backlog. */
@@ -594,6 +692,7 @@ export class CalibratedTokenSpeedMeter {
     if (reading !== undefined) {
       this.tps = reading;
       this.peak = Math.max(this.peak, reading);
+      this.sampleTrace(reading);
     }
     return this.publishDue(now);
   }

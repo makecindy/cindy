@@ -4,11 +4,13 @@ import type { HomeListSortBy, HomeStatusFilter } from './homeListPriority';
 import type { HomeProjectOrder } from './homeProjectOrder';
 import {
   DEFAULT_HOME_TASK_INFO_FIELDS,
+  DEFAULT_HOME_FILTERS,
   normalizeLastActivityFilter,
   normalizeProjectFilter,
   normalizeTaskInfoFields,
   normalizeVendorFilter,
   normalizeViewMode,
+  type HomeFilterSelection,
   type HomeLastActivityFilter,
   type HomeListViewMode,
   type HomeProjectFilter,
@@ -39,6 +41,10 @@ export interface HomeViewPreferences {
   projectFilterOwner: string;
   vendorFilter: HomeVendorFilter;
   lastActivityFilter: HomeLastActivityFilter;
+  hideAutomations?: boolean;
+  /** 旧记录的顶层筛选属于普通任务列表；收件箱的选择单独保存。 */
+  inboxFilters?: HomeFilterSelection;
+  taskListMode?: 'tasks' | 'inbox';
   /** 缺省列表(带预览行):手机首页一直是这个样子。 */
   viewMode: HomeListViewMode;
   /** 任务行右侧信息;顺序 = 勾选先后。 */
@@ -60,6 +66,8 @@ export interface HomeViewPreferencePatch {
   teammateFilter?: { owner: string; value: HomeTeammateFilter };
   vendorFilter?: HomeVendorFilter;
   lastActivityFilter?: HomeLastActivityFilter;
+  hideAutomations?: boolean;
+  taskListMode?: 'tasks' | 'inbox';
   viewMode?: HomeListViewMode;
   taskInfoFields?: HomeTaskInfoField[];
   selectedDevice?: { deviceId: string; name: string } | null;
@@ -72,24 +80,19 @@ export interface HomeViewPreferencePatch {
 export async function readHomeViewPreferences(owner: string): Promise<HomeViewPreferences> {
   const raw = await AsyncStorage.getItem(STORAGE_KEY);
   if (!raw) return emptyPreferences();
-  let preferences: HomeViewPreferences;
   try {
-    preferences = normalizeStoredPreferences(JSON.parse(raw));
+    return normalizeStoredPreferences(JSON.parse(raw), owner);
   } catch {
     return emptyPreferences();
   }
-  return { ...preferences,
-    ...(!owner || preferences.projectFilterOwner !== owner ? { projectFilter: 'all' as const, projectFilterOwner: '' } : {}),
-    ...(!owner || preferences.teammateFilterOwner !== owner ? { teammateFilter: 'all' as const, teammateFilterOwner: '' } : {}),
-  };
 }
 
 // save 是 read-modify-write:并发调用会拿到同一份旧快照互相覆盖(后落盘者丢掉先落盘的 patch),
 // 用单一 pending 链把「读 → 合并 → 写」串行化,保证每次写都基于上一次写完后的状态。
 let writeChain: Promise<void> = Promise.resolve();
 
-export function saveHomeViewPreferences(patch: HomeViewPreferencePatch): Promise<void> {
-  const next = writeChain.then(() => writeHomeViewPreferences(patch));
+export function saveHomeViewPreferences(patch: HomeViewPreferencePatch, filterMode: 'tasks' | 'inbox' = 'tasks'): Promise<void> {
+  const next = writeChain.then(() => writeHomeViewPreferences(patch, filterMode));
   // 链自身吞掉失败,避免一次异常让后续所有写入跟着 reject。
   writeChain = next.catch(() => undefined);
   return next;
@@ -102,7 +105,7 @@ export function saveHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
  * 其余字段一经用户显式选择就保留为 override,即使恰好等于当前默认值。
  * 旧版本写下的完整记录无法区分是否自定义,按规则不猜测,原样当作 override。
  */
-async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise<void> {
+async function writeHomeViewPreferences(patch: HomeViewPreferencePatch, filterMode: 'tasks' | 'inbox'): Promise<void> {
   // A failed read (disk/lock) must reject so we do not replace a still-valid
   // blob with defaults. Corrupt JSON is different: keeping it makes every
   // computer switch alert "couldn't save" forever.
@@ -118,24 +121,32 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
   assign('statusFilter', patch.statusFilter);
   assign('projectOrder', patch.projectOrder);
   assign('manualProjectOrder', patch.manualProjectOrder ? [...patch.manualProjectOrder] : undefined);
+  assign('taskListMode', patch.taskListMode);
   assign('viewMode', patch.viewMode);
   assign('taskInfoFields', patch.taskInfoFields ? [...patch.taskInfoFields] : undefined);
+  const filters = filterMode === 'inbox' ? { ...readRecord(record.inboxFilters) } : record;
   for (const field of ['projectFilter', 'teammateFilter'] as const) {
     const filter = patch[field];
     if (!filter) continue;
     if (filter.value === 'all') {
-      delete record[field];
-      delete record[`${field}Owner`];
+      delete filters[field];
+      delete filters[`${field}Owner`];
     } else {
-      record[field] = filter.value === 'none' ? 'none' : [...filter.value];
-      record[`${field}Owner`] = filter.owner;
+      filters[field] = filter.value === 'none' ? 'none' : [...filter.value];
+      filters[`${field}Owner`] = filter.owner;
     }
   }
   for (const field of ['vendorFilter', 'lastActivityFilter'] as const) {
     const value = patch[field];
     if (value === undefined) continue;
-    if (value === 'all') delete record[field];
-    else record[field] = value;
+    if (value === 'all') delete filters[field];
+    else filters[field] = value;
+  }
+  if (patch.hideAutomations === true) filters.hideAutomations = true;
+  if (patch.hideAutomations === false) delete filters.hideAutomations;
+  if (filterMode === 'inbox') {
+    if (Object.keys(filters).length) record.inboxFilters = filters;
+    else delete record.inboxFilters;
   }
   // null 是有效值(切回「所有对话」),用 undefined 判断字段是否出现在 patch 里。
   if (patch.selectedDevice !== undefined) {
@@ -174,20 +185,31 @@ function emptyPreferences(): HomeViewPreferences {
     statusFilter: 'active',
     projectOrder: 'activity',
     manualProjectOrder: [],
-    projectFilter: 'all',
-    teammateFilter: 'all',
+    ...DEFAULT_HOME_FILTERS,
     teammateFilterOwner: '',
     projectFilterOwner: '',
-    vendorFilter: 'all',
-    lastActivityFilter: 'all',
+    taskListMode: 'tasks',
     viewMode: 'list',
     taskInfoFields: [...DEFAULT_HOME_TASK_INFO_FIELDS],
   };
 }
 
-function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
+function readFilters(record: Record<string, unknown>, owner: string): HomeFilterSelection {
+  const sameProjectOwner = !!owner && readString(record.projectFilterOwner) === owner;
+  const teammate = owner && readString(record.teammateFilterOwner) === owner ? record.teammateFilter : undefined;
+  return {
+    projectFilter: sameProjectOwner ? normalizeProjectFilter(record.projectFilter) : 'all',
+    teammateFilter: teammate === 'none' ? 'none' : normalizeProjectFilter(teammate),
+    vendorFilter: normalizeVendorFilter(record.vendorFilter),
+    lastActivityFilter: normalizeLastActivityFilter(record.lastActivityFilter),
+    ...(record.hideAutomations === true ? { hideAutomations: true } : {}),
+  };
+}
+
+function normalizeStoredPreferences(value: unknown, owner: string): HomeViewPreferences {
   const record = readRecord(value);
   if (!record) return emptyPreferences();
+  const inbox = readRecord(record.inboxFilters);
   const deviceId = readString(record.deviceId);
   const deviceName = readString(record.deviceName);
   return {
@@ -205,12 +227,11 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
       : 'active',
     projectOrder: record.projectOrder === 'custom' ? 'custom' : 'activity',
     manualProjectOrder: readStringList(record.manualProjectOrder),
-    projectFilter: normalizeProjectFilter(record.projectFilter),
-    teammateFilter: record.teammateFilter === 'none' ? 'none' : normalizeProjectFilter(record.teammateFilter),
-    teammateFilterOwner: readString(record.teammateFilterOwner) ?? '',
-    projectFilterOwner: readString(record.projectFilterOwner) ?? '',
-    vendorFilter: normalizeVendorFilter(record.vendorFilter),
-    lastActivityFilter: normalizeLastActivityFilter(record.lastActivityFilter),
+    ...readFilters(record, owner),
+    projectFilterOwner: readString(record.projectFilterOwner) === owner ? owner : '',
+    teammateFilterOwner: readString(record.teammateFilterOwner) === owner ? owner : '',
+    ...(inbox ? { inboxFilters: readFilters(inbox, owner) } : {}),
+    taskListMode: record.taskListMode === 'inbox' ? 'inbox' : 'tasks',
     viewMode: normalizeViewMode(record.viewMode),
     taskInfoFields: normalizeTaskInfoFields(record.taskInfoFields),
   };

@@ -164,6 +164,12 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
 // rather than a mocked thread, protects the production boundary and shutdown/revocation behavior.
 it('runs encrypted RPC in isolated workers while the host retains its outbound network factory', async () => {
   const f = await network(false, undefined, true); serve(f.host);
+  // MagicLizi's topology needs the authenticated path before any link-open. Existing
+  // RPC assertions only exercised that path after opening the control link. Integration, real worker and relay.
+  const hostSocket = f.sockets.find((socket) => socket.deviceId === 'a-host');
+  if (!(hostSocket instanceof AgentNetWorkerSocket)) throw new Error('Expected the host transport in a worker');
+  await vi.waitFor(() => expect(hostSocket.peerRoutes()).toMatchObject([{ deviceId: 'b-controller', path: 'relay' }]));
+  expect(f.host.getPeerLinkSnapshots()).toEqual([]);
   await f.controller.openLink('a-host', openPayload);
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['worker-business-value'] })).toMatchObject({ ok: true, result: 'worker-business-value' });
   expect(f.sockets.every((socket) => socket instanceof AgentNetWorkerSocket)).toBe(true);
@@ -180,7 +186,11 @@ it('runs encrypted RPC in isolated workers while the host retains its outbound n
   await vi.waitFor(() => expect(f.notifications).toHaveLength(1));
   expect(f.httpCalls).toContain('POST ' + f.a.base + '/api/agent-net/notify');
   expect(f.notifications[0].ciphertext).not.toContain('private-body');
+  const routesChanged = vi.fn();
+  hostSocket.on('peer-routes-changed', routesChanged);
   await f.a.request('DELETE', '/devices/b-controller');
+  await vi.waitFor(() => expect(routesChanged).toHaveBeenCalled());
+  expect(hostSocket.peerRoutes()).toEqual([]);
   await vi.waitFor(() => expect(f.controller.getStatus()).not.toBe('online'));
 });
 
@@ -220,7 +230,11 @@ it('binds inbound src and enforces target remote-control preference without trus
 
 // Real existing scoped DeviceLinkClient contract over encrypted V2 streams.
 // Transport grants must not become full-device control or another resource.
-it.each(['shared-task', 'provider-share'] as const)('carries %s requests with host-signed member scope and revokes only that guest', async kind => {
+it.each([
+  { kind: 'shared-task', ownerOffline: false, purpose: 'revokes only that guest' },
+  { kind: 'provider-share', ownerOffline: false, purpose: 'revokes only that guest' },
+  { kind: 'provider-share', ownerOffline: true, purpose: 'connects to the executor after the owner disconnects' },
+] as const)('carries $kind requests with host-signed member scope and $purpose', async ({ kind, ownerOffline }) => {
   const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const issuer = 'https://auth.example.test';
   const keys = createLocalJWKSet({ keys: [{ ...pair.publicKey.export({ format: 'jwk' }), kid: 'unit-auth', alg: 'RS256' }] });
@@ -276,6 +290,29 @@ it.each(['shared-task', 'provider-share'] as const)('carries %s requests with ho
   const api = new AgentNetClient(f.a.base, guest, f.a.certificate, f.a.rootPublicKey, delegation);
   let visitor = f.make(api, false);
   await visitor.waitUntilOnline(3000);
+  if (ownerOffline) {
+    // A separate outage fixture keeps the owner and its unrelated link intact
+    // in the member-revocation cases.
+    serve(f.controller);
+    const input = { shareId: resourceId, memberId, guestDeviceId: guest.deviceId, executorDeviceId: f.b.identity.deviceId };
+    const prepared = await grantAgentNetSharingExecutor({ client: f.a, sharing: ownerBusiness, assertCurrent() {} }, input);
+    const executorPeer = providerShareHostPeer(resourceId, input.executorDeviceId);
+    const guestPeer = providerShareGuestPeer(resourceId, memberId, guest.deviceId);
+    const guestSocket = f.sockets.find(socket => socket.deviceId === guest.deviceId)!;
+    const executorSocket = f.sockets.find(socket => socket.deviceId === input.executorDeviceId)!;
+    const grant = expect.objectContaining({ generation: prepared.generation });
+    await vi.waitFor(() => {
+      expect(guestSocket.scopedPeerTarget(executorPeer)?.delegation.executors).toContainEqual(grant);
+      expect(executorSocket.scopedPeerTarget(guestPeer)?.delegation.executors).toContainEqual(grant);
+    }, { timeout: 5_000 });
+    f.host.stop();
+    await vi.waitFor(() => expect(f.directories.get(input.executorDeviceId)
+      ?.some(view => view.certificate.deviceId === f.a.identity.deviceId && view.online)).toBe(false), { timeout: 5_000 });
+    await visitor.openLink(executorPeer, openPayload);
+    await expect(visitor.invoke(executorPeer, { channel: 'test:echo', args: ['executor starts while owner is offline'] }))
+      .resolves.toMatchObject({ ok: true, result: 'executor starts while owner is offline' });
+    return;
+  }
   const peer = kind === 'shared-task' ? sharedTaskHostPeer(resourceId, 'a-host') : providerShareHostPeer(resourceId, 'a-host');
   await visitor.openLink(peer, openPayload);
   expect(await visitor.invoke(peer, { channel: 'test:echo', args: ['scoped confidential value'] })).toMatchObject({
@@ -515,7 +552,7 @@ it('keeps one usable encrypted connection after both endpoints dial at the same 
  * - 生产入口与可观察结果：AgentNetSocket 的 peerRule 与 restrictPeers，真实核心与 V2 中转。规则之外的本账号设备证书有效、
  *   在名册里，也拨不出去、拨不进来；放回规则后它等着的那次拨号马上连上、帧送达；再收紧时这一端马上断开、也不再拨。
  * - Bug／规则依据：Device Link 里删掉的设备要重新登录才能再连；官方 Agent-Net 不看那条删除记录，由 Desktop 与 Host 按设备列表拦
- *   （apps/desktop/src/main/device-link/agentNetMembership.ts，docs/dev-rules/protocol-compatibility/agent-net-device-removal.md）。
+ *   （packages/agent-net/src/membership.ts，docs/dev-rules/protocol-compatibility/agent-net-device-removal.md）。
  * - 现有覆盖缺口：只有中转撤销证书一种拦法，没有「名册里有、本机不认」；核心会记住拒过的握手，放开时不换准入版本就要等它过期。
  * - 最小失败输入：开着就不认对端（拨号被拒、对端拨进来挂着），放开后挂着的拨号连上、推送送达，再收紧时连接断开、拨号被拒。
  * - tier：integration，真实回环 WS 中转，不开 UDP。 */

@@ -3,7 +3,7 @@ import { PLUGIN_COLLECTION, type DeviceView } from '@cindy/device-link';
 import { getRemoteResource, listRemoteCollection, normalizeRemoteCollectionItems } from '@/device-link/remoteResources';
 import { invokePlugin } from '@/plugins/pluginClient';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
-import type { RemoteMessage } from '@/session/types';
+import type { RemoteMessage, RemoteSession } from '@/session/types';
 import { UI_MOCK_PROJECTS } from '@cindy/maker-shared/ui-mock';
 import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { FileBrowserReadFileResult, FileBrowserListAllFilesResult } from '@/device-link/mobileMakerTransport';
@@ -347,4 +347,22 @@ it('round-trips project profiles and changes image identity on replacement', asy
   expect(await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, contracts.PROJECT_ICON_IMAGE_CHANNEL, [{projectKey}])).toBe('data:image/png;base64,BBBB');
   await save(null);
   expect(await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, contracts.PROJECT_ICON_IMAGE_CHANNEL, [{projectKey}])).toBe(null);
+});
+
+
+it('keeps snooze metadata through fixture list reload and clears it on wake', async () => {
+  const mock = await import('@/debug/visualMock');
+  const link = mock.createVisualMockDeviceLinkContext();
+  const request = <T>(channel: string, args: unknown[]) => link.invoke<T>(mock.VISUAL_MOCK_DEVICE_ID, channel, args);
+  const rows = await request<RemoteSession[]>('local-db:sessions:list', ['all']);
+  const row = rows.find(item => item.title === '反馈手机上的问题')!;
+  expect(row).toBeDefined();
+  const until = new Date(Date.now() + 3_600_000).toISOString();
+  const saved = await request<RemoteSession>('local-db:sessions:patch-meta', [row.id, { snoozedUntil: until }]);
+  expect(saved).toMatchObject({ snoozedUntil: until, snoozedAt: expect.any(String) });
+  expect((await request<RemoteSession[]>('local-db:sessions:list', ['all'])).find(item => item.id === row.id))
+    .toMatchObject({ snoozedUntil: until, snoozedAt: saved.snoozedAt });
+  await request('local-db:sessions:patch-meta', [row.id, { snoozedUntil: null }]);
+  expect((await request<RemoteSession[]>('local-db:sessions:list', ['all'])).find(item => item.id === row.id))
+    .toMatchObject({ snoozedUntil: null, snoozedAt: null });
 });

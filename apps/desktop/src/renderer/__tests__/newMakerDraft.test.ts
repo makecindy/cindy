@@ -205,7 +205,7 @@ describe('newMakerDraft store', () => {
     expect(getDraft().vendor).toBe('cc');
     sources.push({ ...sources[0]!, id: 'openai', agents: ['codex'],
       access: { kind: 'subscription', product: 'ChatGPT' },
-      models: { codex: [{ id: 'gpt-6.1-sol', name: 'Sol', contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] },
+      models: { codex: [{ id: 'gpt-6.2-sol', name: 'Sol', contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] },
     });
     expect(applySuggestedDefaultTuple(resolve())).toBe(!customized);
     const draft = getDraft();
@@ -634,6 +634,27 @@ describe('newMakerDraft store', () => {
     expect(m2.getDraft().workingDir).toBe('E:/projects/foo');
   });
 
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)记为新任务默认：重启后仍选着它；不是 acp-plugin 来源
+  // 或模型缺失的脏值丢弃(按没选处理，用内置模型)，且不改内置 Harness 的记忆。
+  it.each([
+    ['完整选择', { providerId: 'acp-plugin:dsh-plugin:dsh', modelId: 'default', permissionMode: 'bypassPermissions' },
+      { providerId: 'acp-plugin:dsh-plugin:dsh', modelId: 'default', permissionMode: 'bypassPermissions' }],
+    ['未知权限档丢掉档位', { providerId: 'acp-plugin:dsh-plugin:dsh', modelId: 'm1', permissionMode: 'yolo' },
+      { providerId: 'acp-plugin:dsh-plugin:dsh', modelId: 'm1' }],
+    // 2026-11-19:Agent 自己的工作模式(Antigravity 的 plan 等)与思考深度随引擎选择保留。
+    ['Agent 模式与思考深度', { providerId: 'acp-plugin:agy-plugin:agy', modelId: 'gemini-4-neon', permissionMode: 'plan', effort: 'xhigh' },
+      { providerId: 'acp-plugin:agy-plugin:agy', modelId: 'gemini-4-neon', permissionMode: 'plan', effort: 'xhigh' }],
+    ['不是插件引擎来源', { providerId: 'anthropic', modelId: 'claude-opus-5' }, null],
+    ['缺模型', { providerId: 'acp-plugin:dsh-plugin:dsh', modelId: '' }, null],
+  ])('插件引擎选择跨重启保留,脏值丢弃:%s', async (_label, stored, expected) => {
+    const m1 = await loadModule();
+    const ccBefore = m1.getDraft().lastByVendor.cc;
+    m1.patchDraft({ pluginEngine: stored as never });
+    const m2 = await reloadModule();
+    expect(m2.getDraft().pluginEngine).toEqual(expected);
+    expect(m2.getDraft().lastByVendor.cc).toEqual(ccBefore);
+  });
+
   it('extraDirs 不跨重启还原:运行内生效,重启后一律空(引用目录=单次草稿授权)', async () => {
     const m1 = await loadModule();
     m1.patchDraft({ workingDir: 'E:/projects/foo', extraDirs: ['E:/projects/shared-lib'] });
@@ -831,6 +852,19 @@ describe('newMakerDraft store', () => {
     const m2 = await reloadModule();
     expect(m2.getDraft().modelChosenByVendor).toEqual({ cc: true });
     expect(m2.getPersistedVendorModel('cc')).toBe('claude-opus-4-8');
+  });
+
+  it('restores the remotely selected engine and model on the next draft', async () => {
+    const store = await loadModule();
+    store.patchVendorPrefs('codex', { model: 'old-model' });
+    store.switchVendor('pi');
+    store.patchVendorPrefs('codex', { model: 'chosen-model', providerId: 'chosen-source' }, { selectVendor: true });
+    store.patchVendorPrefsPreservingModelChoice('codex', { model: 'old-model', effort: 'high' });
+
+    const reopened = (await reloadModule()).getDraft();
+    expect(reopened.vendor).toBe('codex');
+    expect(reopened.lastByVendor.codex).toMatchObject({ model: 'chosen-model', providerId: 'chosen-source' });
+    expect(reopened.modelChosenByVendor.codex).toBe(true);
   });
 
   it('patchVendorPrefsFromTaskModelSwitch:新建默认在另一个来源上时,任务内只换模型不改写', async () => {
@@ -2146,6 +2180,16 @@ describe('remote engine is a window-local choice', () => {
     expect(draftStore.getDraftForPreferenceSync().vendor).toBe('pi');
     draftStore.__reloadForTest();
     expect(draftStore.getDraft().vendor).toBe('pi');
+  });
+  it('remembers a controller choice while this window is following another computer', () => {
+    followRemote();
+    draftStore.patchVendorPrefs('codex', { model: 'chosen' }, { selectVendor: true });
+    expect(draftStore.getDraft().vendor).toBe('cc');
+    expect(draftStore.getDraftForPreferenceSync().vendor).toBe('codex');
+    expect(engineFollow.nextRemoteDraftEngine({
+      ownerId: null, deviceId: null, currentVendor: 'cc',
+      defaultsReady: false, selectedAgentKind: undefined,
+    })).toBe('codex');
   });
   it('preserves manual selection even after selecting the followed engine again', () => {
     followRemote();

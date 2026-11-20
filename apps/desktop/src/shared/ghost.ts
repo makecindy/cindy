@@ -1,5 +1,5 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
+import { getGhostGithubReleaseRepository, declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
 import { isValidGhostNetworkHostPattern as isValidPluginNetworkHostPattern, ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
 export { ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
@@ -9,6 +9,8 @@ import { PLUGIN_APPEARANCE_FIELDS } from '@cindy/plugin-protocol/appearance';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
+import { activeGhostHarnesses, parseGhostHarnesses, type GhostHarnessDecl } from '@cindy/plugin-protocol';
+export type { GhostHarnessDecl } from '@cindy/plugin-protocol';
 export type { GhostModelRoute } from '@cindy/plugin-protocol';
 import type { GhostModelRoute } from '@cindy/plugin-protocol';
 import { parseGhostSystemPromptFragments, type GhostSystemPromptFragment, type GhostContextBlock, type GhostMemoryEntry } from '@cindy/plugin-protocol';
@@ -563,6 +565,8 @@ export interface GhostMainViewDecl {
   title?: string;
   /** 侧边栏使用的 Cindy 系统线性图标；缺省为 puzzle。 */
   icon?: GhostMainViewIcon;
+  /** Optional navigation symbol. Readers that do not know the name use icon. */
+  preferredIcon?: string;
   /** 主视图界面入口（安装目录内安全相对路径）。 */
   html: string;
   /**
@@ -675,7 +679,7 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
  * (轻量任务模型链 vs embedding 模型),合成一档就没法只授权其中一样。信任面同 oneshot —— 只花额度,拿不到任何宿主
  * 能力,不进会话。
  */
-export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank'] as const;
+export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank', 'media_request'] as const;
 export type GhostCindyModelsAction = (typeof GHOST_CINDY_MODELS_ACTIONS)[number];
 
 export function declaredGhostCindyModelActions(manifest: GhostManifest): GhostCindyModelsAction[] {
@@ -740,9 +744,9 @@ export interface GhostCindyNeeds {
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
  * 两项在安装或更新确认中展示；整体批准后按当前声明订阅，旧元数据主题语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state', 'tool-execution'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state', 'tool-execution', 'native-recovery'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
-export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state', 'tool-execution'] as const;
+export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state', 'tool-execution', 'native-recovery'] as const;
 export type GhostTaskEventTopic = (typeof GHOST_TASK_EVENT_TOPICS)[number];
 export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subscribe'>): GhostTaskEventTopic[] {
   return GHOST_TASK_EVENT_TOPICS.filter(topic => manifest.subscribe?.topics?.includes(topic));
@@ -1838,6 +1842,13 @@ export interface GhostManifest {
   /** 本插件是否使用宿主默认配置卡；缺省/true 启用，false 隐藏且不读取该插件的卡片配置。 */
   showTaskPreferences?: boolean;
   /**
+   * 本插件是一个 IM 入口，使用 IM 共用的项目与模型（需同时声明 agent.tasks 与 agent.targets）。
+   * 只影响宿主展示：「IM 机器人」设置页列出它并显示「项目与模型」；不授予任何能力。
+   */
+  imEntrance?: boolean;
+  /** Optional GitHub.com owner/repository for local plugin updates. */
+  githubRelease?: unknown;
+  /**
    * 卡片能力；空对象表示基础卡片渲染。
    * externalLinks: true 时卡片内可声明 data-ghost-link,点击经宿主确认框后打开浏览器。
    */
@@ -1865,6 +1876,11 @@ export interface GhostManifest {
   routineEvents?: GhostRoutineEvents;
   /** Models this plugin may add to the model picker; the list is published at runtime. */
   models?: GhostModelsNeeds;
+  /**
+   * 插件提供的任务执行引擎(v3)。每项指向一个 `node.entries` 入口,Cindy 以原样 stdio 启动它;
+   * 安装/更新确认单列 `harnesses` 权限项,运行还要 receipt 的 `approvedHarnesses` 批准事实。
+   */
+  harnesses?: GhostHarnessDecl[];
   /**
    * 网络能力与范围。
    * 域名白名单 + 凭证声明,插件详情逐项展示,运行期主机代发并守门。
@@ -2034,6 +2050,12 @@ export interface InstalledGhost {
   companionsCapabilityApproved?: true;
   /** Only model APIs explicitly shown in an install/update confirmation. Missing means none. */
   approvedCindyModelActions?: GhostCindyModelsAction[];
+  /**
+   * Host receipt fact: task engines (`harnesses[].id`) whose permission row the user confirmed,
+   * filtered to active declarations. Missing means none, so a declaration written before this Host
+   * knew the field never starts silently after an upgrade.
+   */
+  approvedHarnesses?: string[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2243,6 +2265,7 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'embed.text': 'cindyEmbedText',
   'models.decisions': 'cindyModelsDecisions',
   'models.rerank': 'cindyModelsRerank',
+  'models.media_request': 'cindyModelsMediaRequest',
   'search.web': 'cindySearchWeb',
 };
 
@@ -2356,6 +2379,26 @@ export function ghostDeclaresHiddenTasks(manifest: Pick<GhostManifest, 'agent'> 
  */
 export function ghostDeclaresModelPreferences(manifest: Pick<GhostManifest, 'agent'> | null | undefined): boolean {
   return manifest?.agent?.modelPreferences === true;
+}
+
+/**
+ * 本 Host 能运行的已声明任务执行引擎:协议已知(当前只有 `acp`)且清单声明了 node。
+ * 未知协议的声明只作为数据保留,不进权限投影,也不启动。
+ */
+export function declaredGhostHarnesses(manifest: Pick<GhostManifest, 'harnesses' | 'node'>): GhostHarnessDecl[] {
+  return activeGhostHarnesses(manifest);
+}
+
+/**
+ * 当前可作为任务执行引擎使用的声明:整包安装批准有效、已启用、清单声明且 receipt 的
+ * `approvedHarnesses` 明确批准过(旧 receipt 缺字段 = 一个都没批准)。
+ */
+export function approvedGhostHarnesses(
+  ghost: Pick<InstalledGhost, 'enabled' | 'manifest' | 'approval' | 'approvedHarnesses'>,
+): GhostHarnessDecl[] {
+  if (!ghost.enabled || ghost.approval.state !== 'approved') return [];
+  const approved = new Set(ghost.approvedHarnesses ?? []);
+  return declaredGhostHarnesses(ghost.manifest).filter((harness) => approved.has(harness.id));
 }
 
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
@@ -2537,6 +2580,23 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         detailKey: 'nodeChildSpawnDetail',
       });
     }
+  }
+  // 任务执行引擎:独立 key 单列,排在 Node 各项之上。引擎可在用户任务里读写工作目录、执行
+  // 命令并使用 Cindy 工具,并进 node:execute 会让更新里新增引擎时 added 为空、扩权复核拦不住。
+  // labelArgs 取清单原值(不随界面语言变化,它进入权限指纹);ids 不展示,只让引擎集合
+  // 本身(而不只是名称)参与指纹——批准事实按 id 记录,换 id 必须重新确认。
+  const harnesses = declaredGhostHarnesses(manifest);
+  if (harnesses.length > 0) {
+    items.unshift({
+      key: 'harnesses',
+      kind: 'agent',
+      labelKey: 'harnesses',
+      labelArgs: {
+        names: harnesses.map((harness) => harness.name).join(', '),
+        ids: harnesses.map((harness) => harness.id).join(','),
+      },
+      detailKey: 'harnessesDetail',
+    });
   }
   // skill 槽:技能指令由主 Agent 以用户全部权限执行、全项目生效、不受沙箱
   // 约束——信任面仅次于拦截钩子,逐条 unshift 到清单上部(倒序遍历保持声明
@@ -2767,8 +2827,8 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       if (topics?.length) {
         for (const topic of declaredGhostTaskEventTopics(manifest)) items.push({
           key: `subscribe:topics:${topic}`, kind: 'subscribe',
-          labelKey: topic === 'message' ? 'subscribeMessage' : topic === 'tool-execution' ? 'subscribeToolExecution' : 'subscribeTaskState',
-          detailKey: topic === 'message' ? 'subscribeMessageDetail' : topic === 'tool-execution' ? 'subscribeToolExecutionDetail' : 'subscribeTaskStateDetail',
+          labelKey: topic === 'message' ? 'subscribeMessage' : topic === 'tool-execution' ? 'subscribeToolExecution' : topic === 'native-recovery' ? 'subscribeNativeRecovery' : 'subscribeTaskState',
+          detailKey: topic === 'message' ? 'subscribeMessageDetail' : topic === 'tool-execution' ? 'subscribeToolExecutionDetail' : topic === 'native-recovery' ? 'subscribeNativeRecoveryDetail' : 'subscribeTaskStateDetail',
         });
         // 旧 key 只在真订了 turn / session 时产出:纯 activity 插件不该在确认框里
         // 多出一行"旁听轮次与会话事件"——网关根本不给它投 turn / session,那行是凭空
@@ -3070,6 +3130,16 @@ function withoutUnapprovedControlPoints(installed: InstalledGhost): GhostManifes
   return { ...subscribe, hooks: hooks.length ? hooks : undefined };
 }
 
+/**
+ * 声明了但用户从没确认过的执行引擎不算旧权限:Host 认识 `harnesses` 之前就写下的声明,
+ * 下一次更新按新增权限复核,确认后才写入 `approvedHarnesses`。
+ */
+function withoutUnapprovedHarnesses(installed: InstalledGhost): GhostManifest['harnesses'] {
+  const harnesses = installed.manifest.harnesses?.filter((harness) =>
+    installed.approvedHarnesses?.includes(harness.id) === true);
+  return harnesses?.length ? harnesses : undefined;
+}
+
 /** 声明了 `approval: "auto"` 但用户从没确认过的工具,不算旧权限。 */
 function withoutUnapprovedAutoTools(installed: InstalledGhost): GhostManifest['tools'] {
   const tools = installed.manifest.tools;
@@ -3101,6 +3171,7 @@ export function diffInstalledGhostPermissionItems(
       // 仅旧控制节点沿用分项批准；任务运行时节点以已安装 manifest 为比较基线。
       subscribe: withoutUnapprovedControlPoints(installed),
       tools: withoutUnapprovedAutoTools(installed),
+      harnesses: withoutUnapprovedHarnesses(installed),
     };
     // Host declarations belong to the installed version, even when the legacy
     // page grant is absent and its UI resources are omitted from that baseline.
@@ -3601,6 +3672,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'mcpApps',
   'routineEvents',
   'models',
+  'harnesses',
   'systemPrompt',
   'schemaVersion',
   'id',
@@ -3623,6 +3695,8 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'settingsHtml',
   'settingsHeight',
   'showTaskPreferences',
+  'imEntrance',
+  'githubRelease',
   'slots',
   'card',
   'mail',
@@ -4841,7 +4915,8 @@ function validateGhostManifestInput(
       }
     }
     mainView = {
-      ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon', 'open', 'side', 'multiple']),
+      ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon', 'preferredIcon', 'open', 'side', 'multiple']),
+      ...(typeof raw.mainView.preferredIcon === 'string' ? { preferredIcon: raw.mainView.preferredIcon } : {}),
       ...(raw.mainView.title !== undefined ? { title: raw.mainView.title } : {}),
       ...(raw.mainView.icon !== undefined ? { icon: raw.mainView.icon as GhostMainViewIcon } : {}),
       ...(raw.mainView.open !== undefined
@@ -4894,6 +4969,17 @@ function validateGhostManifestInput(
   }
   if (raw.showTaskPreferences !== undefined && typeof raw.showTaskPreferences !== 'boolean') {
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
+  }
+  // Older manifests could use this formerly unknown name. Preserve their snapshot.
+  if (raw.githubRelease !== undefined && !preserveHistoricalParameterSize && !getGhostGithubReleaseRepository(raw)) {
+    return { ok: false, reason: 'githubRelease requires settingsHtml and a GitHub owner/repository' };
+  }
+  if (raw.imEntrance !== undefined && !preserveHistoricalParameterSize) {
+    if (typeof raw.imEntrance !== 'boolean') return { ok: false, reason: 'imEntrance 必须是布尔值' };
+    const imAgent = raw.agent as Record<string, unknown> | undefined;
+    if (raw.imEntrance && (imAgent?.tasks !== true || imAgent?.targets !== true)) {
+      return { ok: false, reason: 'imEntrance: true 需要同时声明 agent.tasks 与 agent.targets' };
+    }
   }
   if (raw.settingsHeight !== undefined) {
     if (raw.settingsHtml === undefined) {
@@ -5492,6 +5578,14 @@ function validateGhostManifestInput(
   }
   if (slots.includes('live-screen') && node === undefined) {
     return { ok: false, reason: 'liveScreen: true 需要同时声明 node 工作进程' };
+  }
+  // 插件提供的任务执行引擎(v3 only;v2 slots 不映射)。与协议正本同一解析器。已存 Release
+  // 与已装快照里在本 Host 认识该字段之前写下、但不合规的值只丢弃:插件其余能力照常可用。
+  let harnesses: GhostHarnessDecl[] | undefined;
+  if (prepared.schemaVersion === 3 && raw.harnesses !== undefined) {
+    const parsed = parseGhostHarnesses(raw.harnesses, node);
+    if (parsed.ok) harnesses = parsed.harnesses;
+    else if (!preserveHistoricalParameterSize) return { ok: false, reason: parsed.reason };
   }
 
   // preview 槽详单:与 slots 含 'preview' **严格成对**(有槽必有详单——域名
@@ -6971,6 +7065,8 @@ function validateGhostManifestInput(
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),
+      ...(raw.githubRelease !== undefined ? { githubRelease: raw.githubRelease } : {}),
+      ...(raw.imEntrance !== undefined ? { imEntrance: raw.imEntrance as boolean } : {}),
       ...(tools !== undefined ? { tools } : {}),
       ...(raw.mail === true ? { mail: true as const } : {}),
       ...(mailReader ? { mailReader: { ...(raw.mailReader as Record<string, unknown>), ...mailReader } } : {}),
@@ -6985,6 +7081,7 @@ function validateGhostManifestInput(
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
+      ...(harnesses !== undefined ? { harnesses } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(preview !== undefined ? { preview } : {}),
@@ -8596,7 +8693,33 @@ export const GHOST_CINDY_EMBED_TIMEOUT_MS = 60_000;
  *   白名单外一律拒。意识自己**不要**替用户做选型。
  * 两者都给时 model 优先。意识永远不经手 key,也决定不了白名单之外的路由。
  */
+export const GHOST_DIRECT_MEDIA_OPERATIONS = [
+  'image.generate', 'video.generate', 'video.poll', 'video.content',
+  'audio.speech', 'audio.transcribe',
+] as const;
+export type GhostDirectMediaOperation = (typeof GHOST_DIRECT_MEDIA_OPERATIONS)[number];
+
+export type GhostDirectMediaRequest = {
+  type: 'cindy-request';
+  kind: 'media_request';
+  model: string;
+} & (
+  | { operation: 'image.generate' | 'video.generate' | 'audio.speech'; body: Record<string, unknown> }
+  | { operation: 'audio.transcribe'; body: Record<string, string>; audioHash: string }
+  | { operation: 'video.poll' | 'video.content'; jobRef: string }
+);
+
+export interface GhostDirectMediaResponse {
+  ok: true;
+  status: number;
+  contentType: string;
+  body: string;
+  encoding: 'utf8' | 'base64';
+  jobRef?: string;
+}
+
 export type GhostPipeCindyRequest =
+  | GhostDirectMediaRequest
   | {
       type: 'cindy-request';
       kind: 'gen_image';
@@ -8942,6 +9065,7 @@ interface GhostCindyEmbedResultMeta {
 
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */
 export type GhostPipeModelResult =
+  | GhostDirectMediaResponse
   | { ok: true; models: Array<{ model: string; providerId: string; name: string }> }
   | { ok: true; model: string; answers?: unknown; results?: Array<{ index: number; relevance_score: number }>;
       usage: unknown; estimatedCost: { amount: number; currency: 'USD' | 'CNY' } | null }
@@ -9116,6 +9240,7 @@ export type GhostActivityEventName =
 /** did- 旁听事件名，按声明并批准的 topic 分发。 */
 export type GhostDidEventName =
   | 'did-tool-execution'
+  | 'did-native-recovery'
   | 'did-message-created'
   | 'did-task-state-changed'
   | 'did-turn-start'
@@ -9180,7 +9305,13 @@ export type GhostEventActivityData = GhostEventThinkingData | GhostEventInteract
 
 /** did- 旁听载荷；消息内容与任务状态使用各自的批准主题。 */
 export type GhostDidEventData =
-  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData | GhostToolExecutionData;
+  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData | GhostToolExecutionData | GhostNativeRecoveryData;
+export interface GhostNativeRecoveryData {
+  sessionId: string;
+  engine: 'claude-code' | 'codex' | 'pi';
+  nativeEvent: string;
+  metadata: Readonly<Record<string, string | number | boolean>>;
+}
 export interface GhostToolExecutionData {
   sessionId: string;
   eventType: string;

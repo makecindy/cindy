@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { History } from 'lucide-react';
+import { useDeleteDeviceDialog } from '@/components/settings/useDeleteDeviceDialog';
 import { deviceLabel } from '@/components/settings/deviceLabels';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -100,6 +101,7 @@ export function RemoteConnectionV2Section({
   deepLink: RemoteDevicesDeepLink;
 }) {
   const { t } = useTranslation();
+  const { requestDelete, dialog } = useDeleteDeviceDialog(s.remove);
   const peerLinks = usePeerLinks(true);
   const recent = useRecentPresence(true);
   const unresponsive = useSyncExternalStore(unresponsiveDevicesStore.subscribe, unresponsiveDevicesStore.getSnapshot);
@@ -116,7 +118,10 @@ export function RemoteConnectionV2Section({
       buildTopology({
         devices: s.devices ?? [],
         links: peerLinks.links,
+        agentNetRoutes: peerLinks.agentNetRoutes,
         relayRttMs: peerLinks.relayRttMs,
+        relayProtocol: peerLinks.relayProtocol,
+        relayTransport: peerLinks.relayTransport,
         relayName,
         selfHosted: relay.state?.mode === 'self-hosted',
         controlledBy: s.controlledBy.map((c) => c.deviceId),
@@ -196,6 +201,7 @@ export function RemoteConnectionV2Section({
               standby={s.standby}
               onToggleOffline={() => setShowOffline((v) => !v)}
               onRemoteDesktop={onRemoteDesktop}
+              onDelete={(node, restoreFocus) => requestDelete({ deviceId: node.id, name: deviceLabel(node, t) }, restoreFocus)}
               focusDeviceId={focusDeviceId}
               focusRequestKey={deepLink.focusRequestKey}
               ready={s.devices !== null && peerLinks.takenAt > 0}
@@ -218,6 +224,7 @@ export function RemoteConnectionV2Section({
           ) : null}
         </SettingsCard>
       </section>
+      {dialog}
     </>
   );
 }

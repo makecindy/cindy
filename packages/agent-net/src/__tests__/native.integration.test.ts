@@ -5,6 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { createHash, verify } from 'node:crypto';
 import WebSocket from 'ws';
@@ -17,13 +18,14 @@ import { approveJoin, createDelegation, createJoinRequest, createPrivateNetwork,
 import { AgentNetClient, submitJoin, uploadEncryptedMedia, openEncryptedMedia, sealNotification } from '@cindy/agent-net-relay/client';
 import { notificationKeyPayload, delegationPayload } from '@cindy/agent-net-protocol';
 import { DeviceLinkClient, providerShareHostPeer, sharedTaskHostPeer, type InvokePayload } from '@cindy/device-link';
+import { PROTOCOL_VERSION } from '@cindy/device-link-protocol';
 import { AgentNetSocket } from '../socket.js';
 import { AgentNetSocket as PortableSocket } from '../portableSocket.js';
 import { NativeTransport, type NativeEnginePort } from '../nativeTransport.js';
 import { PortableAgentNetClient, type BinarySocket } from '../portableClient.js';
 import type { SocketClient } from '../socketPorts.js';
 import { uploadNativeMedia, readNativeMedia } from '../nativeMedia.js';
-import { openNativeMediaStream } from '../nativeMediaStream.js';
+import { openNativeByteStream, openNativeMediaStream } from '../nativeMediaStream.js';
 
 const library = process.env.CINDY_AGENT_NET_NATIVE_LIBRARY;
 const cleanups: Array<() => unknown> = [];
@@ -69,11 +71,15 @@ it.skipIf(!library)('streams only requested native video blocks and closes the l
   expect(reads).toHaveBeenCalledTimes(3);
   const tail = await fetch(stream.url, { headers: { range: 'bytes=-17' } });
   expect(Buffer.from(await tail.arrayBuffer())).toEqual(plain.subarray(-17));
+  // Block 1 remains cached after the tail read, block 2 does not. A mostly
+  // cached range must not regress its progress when network bytes start again.
+  const mixed = await fetch(stream.url, { headers: { range: `bytes=${block + 1}-${2 * block}` } });
+  expect(Buffer.from(await mixed.arrayBuffer())).toEqual(plain.subarray(block + 1, 2 * block + 1));
   expect((await fetch(stream.url, { headers: { range: 'bytes=999999999-' } })).status).toBe(416);
   await host.request('DELETE', '/devices/' + identity.deviceId);
-  // Block 2 has not been downloaded/cached. Revocation cannot yield new bytes.
+  // Block 0 has been evicted from the two-block cache. Revocation cannot yield new bytes.
   await expect((async () => {
-    const denied = await fetch(stream.url, { headers: { range: `bytes=${2 * block}-${2 * block + 9}` } });
+    const denied = await fetch(stream.url, { headers: { range: `bytes=0-9` } });
     return denied.arrayBuffer();
   })()).rejects.toThrow();
   await vi.waitFor(() => expect(stream.isOpen()).toBe(false), { interval: 5 });
@@ -295,11 +301,21 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
       createWebSocket: (url, headers) => new WebSocket(url, { headers }) as unknown as BinarySocket,
     });
     const live = { socket: null as PortableSocket | null };
+    let holdPoll = false, pollPaused = false, pollEntered!: () => void, releasePoll!: () => void, dialEntered!: () => void;
+    const pollHeld = new Promise<void>(resolve => { pollEntered = resolve; });
+    const resumePoll = new Promise<void>(resolve => { releasePoll = resolve; });
+    const dialStarted = new Promise<void>(resolve => { dialEntered = resolve; });
+    cleanups.push(() => releasePoll());
     const visitor = new DeviceLinkClient({ getWsUrl: () => 'ws://local-node.invalid', getToken: async () => 'native-resource',
       getHello: () => ({ deviceName: guest.deviceId, platform: 'unit', appVersion: 'unit', remoteControlEnabled: false, busy: false }),
       createWebSocket: () => PortableSocket.openWithBindings({ client: guestApi, userId: 'global:external-guest', lanDiscovery: false,
         bindings: { verifyCertificate, verifyDelegation, createTransport: options => NativeTransport.create({
-          command: value => peer.call(value), destroy: () => peer.destroy(),
+          async command<T>(value: Record<string, unknown>): Promise<T> {
+            const result = await peer.call(value);
+            if (value.op === 'poll' && holdPoll) { holdPoll = false; pollPaused = true; pollEntered(); await resumePoll; }
+            if (value.op === 'connect' && pollPaused) dialEntered();
+            return result as T;
+          }, destroy: () => peer.destroy(),
         }, options) } }).then(socket => { live.socket = socket; return socket; }),
       timing: { requestTimeoutMs: 4000 }, logger: { debug() {}, info() {}, warn() {}, error() {} },
     });
@@ -318,8 +334,18 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
       await hostApi.request('POST', '/grants', { delegation: endorsed, previousSignature: delegation.signature });
       const target = providerShareHostPeer('native-resource', member.deviceId);
       await until(async () => !!live.socket?.scopedPeerTarget(target));
-      await visitor.openLink(target, { controllerName: 'Native visitor', appVersion: 'unit', protocolVersion: 1 });
+      // Integration regression: the real native bridge returns an old poll after
+      // the new executor dial starts. Existing ABI coverage only ran this race
+      // by chance; keep a successful host peer while opening the second route.
+      holdPoll = true; await pollHeld;
+      const opened = visitor.openLink(target, { controllerName: 'Native visitor', appVersion: 'unit', protocolVersion: 1 });
+      const accepted = expect(opened).resolves.toMatchObject({ appVersion: 'unit' });
+      await dialStarted;
+      await nextTurn(); releasePoll();
+      await accepted;
       expect(await visitor.invoke(target, { channel: 'test:echo', args: ['native executor RPC'] })).toMatchObject({ ok: true, result: 'native executor RPC' });
+      expect(await visitor.invoke(resourcePeer, { channel: 'test:echo', args: ['original host still works'] }))
+        .toMatchObject({ ok: true, result: 'original host still works' });
     }
     await expect(visitor.openLink(member.deviceId, { controllerName: 'Forbidden', appVersion: 'unit', protocolVersion: 1 }))
       .rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -389,3 +415,156 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
   await hostApi.request('DELETE', '/devices/' + member.deviceId);
   await until(async () => { await new Promise(resolve => setTimeout(resolve, 10)); return controller.getStatus() !== 'online'; });
 }, 20_000);
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机用的 PortableSocket.useSessions + NativeTransport，真实编译的原生库（C 接口）、真实 V2 中转与
+ *   Node 节点（电脑一端）。会话上建链、调用、拿回 1 MB 结果；中转转发的数据报经 UDP 收发；STUN 查到的地址成为候选。
+ *   旧安装包里的原生库（没有 features、不认新操作）配新 JS 时，会话照样可用，也不去调新操作。
+ * - Bug／规则依据：docs/agent-net-session-plan.md 第 10 节阶段 4（手机接入会话层与原生接口）、第 8 节中转 UDP；
+ *   docs/dev-rules/mobile-development.md 冷更边界：热更的 JS 必须能在旧原生包上运行。
+ * - 现有覆盖缺口：原生通道没有会话通道，手机只走 Device Link 帧；原生库没有中转 UDP 和 STUN，现有用例都不覆盖。
+ * - 最小失败输入：一次建链、一次请求、一个 1 MB 结果；去掉原生的会话通道（不宣告、不开流）时会话一直不出现，
+ *   去掉中转 UDP 时 1 MB 全经 WebSocket 回来。
+ * - tier：integration，真实回环中转与 UDP，不开局域网发现。 */
+it.skipIf(!library)('carries sessions on the real native engine, relays them over UDP, and keeps working on an older native build', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-native-'));
+  cleanups.push(async () => {
+    if (path.dirname(path.resolve(directory)) !== path.resolve(tmpdir())
+      || !path.basename(directory).startsWith('cindy-agent-net-native-')) throw new Error('UNSAFE_TEST_DIRECTORY');
+    await rm(directory, { recursive: true, force: true });
+  });
+  // The phone has the lower id, so it is the side that dials (PortableSocket.dialRoster), as when it opens a computer.
+  const owner = generateIdentity('b-node-host');
+  const { root, bootstrap } = createPrivateNetwork('native session fixture', owner);
+  const relay = await startAgentNetRelay({ dataDir: directory, bootstrap, udpPort: 0 });
+  cleanups.push(() => relay.close());
+  const udpServer = '127.0.0.1:' + relay.udpAddress!.port, userId = bootstrap.ownerCertificate.subject;
+  const hostApi = new AgentNetClient(relay.url, owner, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
+  const seed = Buffer.alloc(32, 52).toString('base64url'), context = 'unit-native-session';
+  const member = identityFromSeed(context, seed, 'a-native-phone');
+  const code = await hostApi.request<{ joinCode: string }>('POST', '/join-codes');
+  const join = createJoinRequest(member, bootstrap.networkId, code.joinCode, 'Native phone', 'unit-public-pairing-fixture');
+  await submitJoin(relay.url, join);
+  const certificate = approveJoin(root, join, 'unit-public-pairing-fixture', bootstrap.ownerCertificate.subject);
+  await hostApi.request('POST', '/join-requests/' + join.requestId + '/approve', { certificate });
+  const hello = (socket: { send(text: string): void; deviceId: string }) => socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello',
+    payload: { deviceName: socket.deviceId, platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+  const host = await AgentNetSocket.open({ client: hostApi, userId, udp: false, lanDiscovery: false });
+  cleanups.push(() => host.close());
+  const large = 'native-session-result-'.repeat(48_000);
+  host.useSessions({ laneFor: () => 'normal', handlers: () => ({
+    onOpen: (id) => { host.session(member.deviceId)!.accept(id, { appVersion: 'host' }); },
+    onRequest: (request) => { host.session(member.deviceId)!.respond(request.id, { ok: true, result: request.channel === 'test:large' ? large : request.args[0] }); },
+  }) });
+  hello(host);
+  for (const build of ['current', 'older'] as const) {
+    const peer = new NativePeer();
+    await peer.call({ seed, context, deviceId: member.deviceId, enhancedTransport: build === 'current' }, 'create');
+    const newOps: string[] = [];
+    // An installed binary from before this change: no `features`, and the operations it lacks fail as unknown.
+    const port: NativeEnginePort = build === 'current' ? { command: value => peer.call(value), destroy: () => peer.destroy() } : {
+      async command(value) {
+        if (value.op === 'stun' || value.op === 'relayUdp') { newOps.push(value.op); throw new Error('UNKNOWN_NATIVE_OPERATION'); }
+        const result = await peer.call(value);
+        if (value.op === 'identity') { const { features: _features, ...older } = result; return older; }
+        if (value.op === 'poll') { const { mapped: _mapped, relayUdp: _relayUdp, ...older } = result;
+          return { ...older, connections: older.connections.map(({ buffered: _buffered, ...connection }: Record<string, unknown>) => connection) }; }
+        return result;
+      }, destroy: () => peer.destroy() };
+    const api = new PortableAgentNetClient(relay.url, { identity: member, random: () => peer.call({ op: 'random' }),
+      sign: text => peer.call({ op: 'sign', text }) }, certificate, bootstrap.rootPublicKey, {
+      assertCurrent() {}, verifyCertificate, verifyDelegation, relayUdpEnabled: () => true,
+      sha256: data => createHash('sha256').update(data).digest('base64url'),
+      createWebSocket: (url, headers) => new WebSocket(url, { headers }) as unknown as BinarySocket,
+    });
+    let transport: NativeTransport | undefined, relayedOverWebSocket = 0;
+    const phone = await PortableSocket.openWithBindings({ client: api, userId, lanDiscovery: false,
+      bindings: { verifyCertificate, verifyDelegation, createTransport: async options => {
+        const uplink = options.relay!.uplink;
+        transport = await NativeTransport.create(port, { ...options, stunServers: [udpServer], relayUdpServer: udpServer,
+          relay: { ...options.relay!, uplink: { ...uplink, onDatagram: receive => uplink.onDatagram((id, bytes) => {
+            relayedOverWebSocket += bytes.length; receive(id, bytes);
+          }) } } });
+        return transport;
+      } } });
+    phone.useSessions({ laneFor: () => 'normal', handlers: () => ({}) });
+    hello(phone);
+    if (build === 'current') {
+      // The relay's STUN answered on the engine's own port, and relayed datagrams switched to UDP once it acknowledged.
+      await until(async () => transport!.candidates().some(candidate => candidate.address === '127.0.0.1'));
+      await until(async () => transport!.relayOverUdp);
+    }
+    await until(async () => phone.supports(owner.deviceId));
+    expect(await phone.connectSession(owner.deviceId)).toBe(true);
+    await until(async () => !!phone.session(owner.deviceId) && !!host.session(member.deviceId));
+    const session = phone.session(owner.deviceId)!;
+    await expect(session.open({ controllerName: 'phone' }, 5_000)).resolves.toEqual({ appVersion: 'host' });
+    await expect(session.request('test:echo', [build], { timeoutMs: 5_000 })).resolves.toEqual({ ok: true, result: build });
+    const before = relayedOverWebSocket;
+    await expect(session.request('test:large', [], { timeoutMs: 15_000 })).resolves.toEqual({ ok: true, result: large });
+    if (build === 'current') expect(relayedOverWebSocket - before).toBeLessThan(256 * 1024);
+    else { expect(newOps).toEqual([]); expect(relayedOverWebSocket - before).toBeGreaterThan(large.length / 2); }
+    // The next build reconnects as the same phone right away: its new connection replaces this one on the host, which may
+    // not have noticed this close yet (relayed close packets race the relay WebSocket's own close).
+    phone.close();
+  }
+}, 30_000);
+// #10142, integration tier: the old fixed 30s deadline truncates both HTTP
+// bodies. Use real time/C ABI to cross even the new 60s inactivity budget;
+// unit ticket-policy tests cover exact deadline edges without waiting.
+it.skipIf(!library)('keeps progressing and queued native HTTP requests alive beyond a total deadline', async () => {
+  const native = new NativePeer();
+  await native.call({ seed: Buffer.alloc(32, 74).toString('base64url'), context: 'progress-player', deviceId: 'player', udp: false }, 'create');
+  const size = 1024 * 1024, events: unknown[] = [];
+  const began = Date.now();
+  let release!: () => void;
+  const firstDone = new Promise<void>(resolve => { release = resolve; });
+  let first = true, hold = false, cancelled = false;
+  let reading!: () => void;
+  const heldRead = new Promise<void>(resolve => { reading = resolve; });
+  const stream = await openNativeByteStream({ command: async <T>(value: Record<string, unknown>): Promise<T> => {
+    const result = await native.call(value);
+    if (value.op !== 'httpMediaPoll' || (value.updates as unknown[] | undefined)?.length) {
+      events.push({ ms: Date.now() - began, op: value.op, id: value.id, updates: value.updates,
+        result: value.op === 'httpMediaReply' ? result : undefined });
+    }
+    return result as T;
+  }, destroy: () => native.destroy() },
+    'video/mp4', async () => ({ size, close: async () => {}, async read(start, end, write, activity) {
+      if (hold) {
+        hold = false; reading();
+        await new Promise<void>((_, reject) => activity!.signal!.addEventListener('abort', () => {
+          cancelled = true; reject(new Error('PLAYER_CANCELLED'));
+        }, { once: true }));
+      }
+      if (!first) { activity?.('queued'); await firstDone; activity?.('active'); }
+      else {
+        first = false;
+        for (let loaded = 0; loaded < end - start + 1; loaded += 64 * 1024) {
+          // real-wait: prove real Rust C ABI survives >60s with actual incoming bytes.
+          await new Promise(resolve => setTimeout(resolve, 4100));
+          await write(new Uint8Array(Math.min(64 * 1024, end - start + 1 - loaded)).fill(74), loaded);
+        }
+        release(); return;
+      }
+      await write(new Uint8Array(end - start + 1).fill(74), 0);
+    } }));
+  cleanups.push(() => stream.close());
+  const firstResponse = await fetch(stream.url);
+  const firstBody = firstResponse.arrayBuffer();
+  const secondResponse = await fetch(stream.url);
+  const secondBody = secondResponse.arrayBuffer();
+  const result = await Promise.all([firstBody, secondBody]).catch(cause => {
+    throw new Error('NATIVE_HTTP_PROGRESS: ' + JSON.stringify(events), { cause });
+  });
+  for (const bytes of result) expect(Buffer.from(bytes)).toEqual(Buffer.alloc(size, 74));
+  hold = true;
+  const controller = new AbortController();
+  const abandoned = await fetch(stream.url, { signal: controller.signal, headers: { range: 'bytes=0-0' } });
+  const abandonedBody = expect(abandoned.arrayBuffer()).rejects.toThrow();
+  await heldRead; controller.abort(); await abandonedBody;
+  await vi.waitFor(() => expect(cancelled).toBe(true), { interval: 10 });
+  const healthy = await fetch(stream.url, { headers: { range: 'bytes=0-0' } });
+  expect(Buffer.from(await healthy.arrayBuffer())).toEqual(Buffer.from([74]));
+  expect(stream.isOpen()).toBe(true);
+}, 85_000);

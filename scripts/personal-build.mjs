@@ -174,7 +174,26 @@ export function packageHash(dir) {
   }
   return hash.digest('hex');
 }
-export function copyPlugin(id, source, dest) {
+// The browser bridge loads the packaged executable, even when the seed came from source.
+function browserNativeHost(manifest) {
+  return manifest.id === 'my-browser' && manifest.browserExtension?.nativeHost;
+}
+
+function verifyBrowserNative(dir, manifest) {
+  const native = browserNativeHost(manifest);
+  if (!native) return;
+  invariant(native.binary === 'native-host/bin', 'Unsupported Cindy Chrome native host layout');
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    for (const arch of ['arm64', 'x64']) {
+      const filename = 'cindy-browser-native' + (platform === 'win32' ? '.exe' : '');
+      const file = path.join(dir, native.binary, platform + '-' + arch, filename);
+      const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+      invariant(stat?.isFile() && stat.size > 0, 'Missing Cindy Chrome native host: ' + file);
+    }
+  }
+}
+
+export function copyPlugin(id, source, dest, { repositoryRoot } = {}) {
   const files = pluginFiles(source), manifest = json(path.join(source, 'ghost.json'));
   invariant(manifest.id === id, `Plugin manifest ID differs: ${id}`);
   invariant(!fs.existsSync(dest), `Plugin destination already exists: ${id}`);
@@ -182,6 +201,12 @@ export function copyPlugin(id, source, dest) {
   for (const [rel, src] of files) {
     const to = path.join(dest, rel); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.copyFileSync(src, to);
   }
+  if (browserNativeHost(manifest) && repositoryRoot) {
+    invariant(path.resolve(source) === path.resolve(repositoryRoot, id), 'Browser build must use the composed plugin checkout');
+    execFileSync(process.execPath, [path.join(repositoryRoot, 'scripts/build-browser-native.mjs'),
+      path.join(dest, 'native-host'), path.join(dest, 'native-host/bin')], { cwd: repositoryRoot, stdio: 'inherit' });
+  }
+  verifyBrowserNative(dest, manifest);
   // Source versions are facts. Never make an old local tree outrank a public
   // release by manufacturing a higher version during packaging.
   invariant(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(manifest.version), `${id}: invalid version`);
@@ -211,8 +236,10 @@ export function prepareLocalPlugins(config, checkout, destination, provenance = 
   for (const id of Object.keys(config.localPlugins).sort()) {
     const source = localPluginSource(config, id, checkout);
     const dest = path.join(destination, id);
-    const entry = copyPlugin(id, source, dest);
-    invariant(packageHash(source) === entry.sha256, `${id}: source changed while copying`);
+    const sourceHash = packageHash(source);
+    const repositoryRoot = typeof config.localPlugins[id] === 'string' ? undefined : checkout;
+    const entry = copyPlugin(id, source, dest, { repositoryRoot });
+    invariant(packageHash(source) === sourceHash, `${id}: source changed while copying`);
     entries.push({ ...entry, namespace: 'local', contentHash: pluginContentHash(dest),
       provenance: typeof config.localPlugins[id] === 'string' ? { kind: 'directory', directory: source } : { kind: 'repository', ...provenance } });
   }
@@ -286,7 +313,7 @@ export function prepare(config, out, exec = run, { resume = false } = {}) {
           continue;
         }
         const dest = path.join(report.directory, 'apps/desktop/resources/builtin-ghosts/official', id);
-        report.plugins.push({ ...copyPlugin(id, source, dest), localOverride: false });
+        report.plugins.push({ ...copyPlugin(id, source, dest, { repositoryRoot: checkout }), localOverride: false });
       }
       report.localPlugins = prepareLocalPlugins(config, checkout,
         path.join(report.directory, 'apps/desktop/resources/personal-plugins'),
@@ -309,6 +336,10 @@ export function verifyReport(file) {
   for (const p of r.plugins) invariant(packageHash(path.join(r.directory, 'apps/desktop/resources/builtin-ghosts/official', p.id)) === p.sha256, `Plugin ${p.id} changed; prepare again`);
   const personal = path.join(r.directory, 'apps/desktop/resources/personal-plugins');
   invariant((r.localPluginsHash ?? null) === (fs.existsSync(personal) ? packageHash(personal) : null), 'Personal plugin inventory changed; prepare again');
+  for (const base of [path.join(r.directory, 'apps/desktop/resources/builtin-ghosts/official'), personal]) {
+    const dir = path.join(base, 'my-browser');
+    if (fs.existsSync(dir)) verifyBrowserNative(dir, json(path.join(dir, 'ghost.json')));
+  }
   const seeds = path.join(r.directory, 'apps/desktop/resources/builtin-ghosts');
   if (fs.existsSync(seeds)) {
     invariant(fs.readdirSync(seeds).every(n => n === 'official'), 'Unexpected seed root; prepare again');

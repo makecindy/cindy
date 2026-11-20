@@ -15,7 +15,7 @@ vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ isAuthenticated:
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => api.endpoint }));
 vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: api.fetch }));
 vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => { throw new Error(code); } }));
-vi.mock('../agentNetSharing.js', () => ({ checkAgentNetProviderExecutor: async () => null,
+vi.mock('../agentNetSharing.js', () => ({ agentNetProviderExecutorProof: () => null, checkAgentNetProviderExecutor: async () => null,
   grantAgentNetProviderExecutor: async () => null, revokeAgentNetProviderExecutor: async () => false }));
 
 const input = { shareId: 'share', memberId: 'member', guestDeviceId: 'guest', executorDeviceId: 'executor' };

@@ -6,6 +6,8 @@ import { useLoopingAnimation } from '@/hooks/useLoopingAnimation';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { spacing, typeScale, lineHeight, fontWeight, iconSize, iconStroke } from '@/theme/tokens';
 import { sessionAgentRunsOnOtherComputer } from './sessionAgentSwitch';
+import { useTranslation } from 'react-i18next';
+import { isPluginEngineSessionKind, usePluginEngineFor } from './pluginEngines';
 import type { RemoteSessionListItem } from './sessionList';
 const HOME_SESSION_ROW_HEIGHT = 78;
 const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;
@@ -16,10 +18,12 @@ const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;
 export const SESSION_ROW_LONG_PRESS_MS = 400;
 /** Shared by the full home list and its persistent, narrow task pane. */
 export function SessionStatusMark({
+  identityIcon,
   item,
   running,
   showDraftIndicator,
 }: {
+  identityIcon?: ReactNode;
   item: RemoteSessionListItem;
   running: boolean;
   showDraftIndicator: boolean;
@@ -31,9 +35,17 @@ export function SessionStatusMark({
   const attached = readBooleanField(item.session, 'attached') || readBooleanField(item.session, 'deviceLinkAttached');
   // 用户拍板 2026-07-20(对齐桌面):running 一律 Thinking Orange(statusAccent)。
   const glyphColor = running ? colors.statusAccent : colors.textTertiary;
+  // 插件引擎任务：用引擎插件的图标(读到过那台电脑的引擎列表时)，否则通用引擎标识。
+  const { t } = useTranslation();
+  const pluginEngineTask = isPluginEngineSessionKind(item.session.agentKind);
+  const pluginEngine = usePluginEngineFor(
+    pluginEngineTask ? item.session.deviceLinkDeviceId : null,
+    // 列表行的共享类型只声明展示字段；任务行实际是完整的 RemoteSession。
+    pluginEngineTask ? (item.session as { providerId?: string | null }).providerId : null,
+  );
   return (
     <View style={styles.sessionStatusMark}>
-      {archived ? (
+      {identityIcon ?? (archived ? (
         <Archive color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
       ) : orcaLead ? (
         // 与桌面 SessionStatusIcon /「+」菜单协同项同款 UsersRound，不再用旧 Puzzle。
@@ -51,10 +63,13 @@ export function SessionStatusMark({
           // Claude 星标 logo 视觉重量偏小,+1px 光学补偿对齐 Codex 标(刻意非阶梯值)。
           size={isClaudeCodeAgentKind(item.session.agentKind) ? 19 : iconSize.lg}
           vendor={item.session.agentKind}
+          pluginEngine={pluginEngineTask
+            ? { iconDataUrl: pluginEngine?.iconDataUrl, name: pluginEngine?.name ?? t('models.pluginEngines.genericName') }
+            : null}
           // Agent 在被控电脑之外的另一台电脑运行(远程供应商):与桌面侧栏同一个波纹标识。
           remote={sessionAgentRunsOnOtherComputer(item.session)}
         />
-      )}
+      ))}
       {!archived && showDraftIndicator ? (
         <View style={styles.sessionDraftIndicator}>
           {/* 9px:Pencil 微徽标,徽标容器几何依赖(designTokenDiscipline ALLOWLIST 登记豁免)。 */}

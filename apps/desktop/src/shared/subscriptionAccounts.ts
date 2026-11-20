@@ -194,6 +194,8 @@ export interface SubscriptionSessionAccount {
   paused: boolean;
   status: SubscriptionAccountView['status'];
   usage?: SubscriptionAccountUsage;
+  /** Time of the last complete account usage read, in Unix milliseconds. */
+  usageUpdatedAt?: number;
   /**
    * Only for a `model` query on a newer host: the bound account cannot take that model now
    * (remembered failure, exhausted trusted quota or signed out). Replacement admission is reported
@@ -272,6 +274,8 @@ export function parseSubscriptionSessionAccountView(
       ...(usage && typeof usage === 'object' && !Array.isArray(usage)
         ? { usage: usage as SubscriptionAccountUsage }
         : {}),
+      ...(typeof account.usageUpdatedAt === 'number' && Number.isFinite(account.usageUpdatedAt)
+        && account.usageUpdatedAt > 0 ? { usageUpdatedAt: account.usageUpdatedAt } : {}),
       ...(account.blocked === true && account.paused !== true ? { blocked: true as const } : {}),
       ...((account.blocked === true || (route.routeProviderId && account.paused === true)) && typeof account.switchAvailable === 'boolean'
         ? { switchAvailable: account.switchAvailable } : {}),

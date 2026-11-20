@@ -38,7 +38,7 @@ function harness(result: unknown, reject = false, sharedTaskId: string | undefin
     runningSessionIds: new Set(), attachedSessionIdsRef: { current: new Set() },
     loadActiveBoundScheduleNames: async () => new Map(),
     isRemoteSessionWriteBlocked: () => false, resolveWorktreeRemovalPreflight: preflight,
-    archiveBlockedByRunning, confirmDialog, archiveConfirmDescription: () => 'description',
+    archiveBlockedByRunning, confirmTaskArchive: confirmDialog,
     viewedSessionIdRef: { current: 'other' }, viewedSessionId: 'other',
     resolveSessionRemovalRedirect: vi.fn(), unarchiveSession: vi.fn(),
     runSessionAction: async (id: string, action: string, options: { prepareArchive?: (isCurrent: () => boolean) => Promise<boolean> }) => {
@@ -123,6 +123,39 @@ describe('sidebar shared-task archive/delete guard', () => {
   });
 });
 
+// 2026-11-18 user decision: archiving recycled the worktree that each automation round rebuilt.
+// Inbox Done on a task bound to an active automation only marks it read; without one it archives.
+// Minimal input: Done on the open task with one active binding, then with none.
+describe('sidebar inbox Done with a bound automation', () => {
+  function done(names: Map<string, string[]>) {
+    const runSessionAction = vi.fn();
+    const markSessionsRead = vi.fn(async () => {});
+    const session = { id: 'task', deviceLinkDeviceId: undefined };
+    const handler = callback('handleActionClick', {
+      window: { electronAPI: { binding: { resolveSession: async () => ({ attached: false }) } } },
+      toast: { warning: vi.fn() }, t: (key: string) => key,
+      sessionsByIdRef: { current: new Map([['task', session]]) }, attachedSessionIdsRef: { current: new Set() },
+      isRemoteSessionWriteBlocked: () => false, archiveBlockedByRunning: () => false,
+      loadActiveBoundScheduleNames: async () => names, markSessionsRead,
+      viewedSessionIdRef: { current: 'task' },
+      runSessionAction: async (id: string, action: string) => runSessionAction(id, action),
+    });
+    return { run: () => handler('task', 'complete'), runSessionAction, markSessionsRead };
+  }
+  it('marks the task read and keeps it when an active automation is bound', async () => {
+    const h = done(new Map([['task', ['Nightly check']]]));
+    expect(await h.run()).toBe('marked-read');
+    expect(h.markSessionsRead).toHaveBeenCalledWith(['task'], undefined, { announce: false });
+    expect(h.runSessionAction).not.toHaveBeenCalled();
+  });
+  it('archives when no active automation is bound', async () => {
+    const h = done(new Map());
+    await h.run();
+    expect(h.markSessionsRead).not.toHaveBeenCalled();
+    expect(h.runSessionAction).toHaveBeenCalledWith('task', 'archive');
+  });
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
@@ -154,7 +187,6 @@ describe('archive preserves the current task until preflight and confirmation fi
     const runSessionAction = vi.fn((..._args: unknown[]) => leaveTask());
     const setConfirm = vi.fn();
     const confirmDialog = vi.fn(() => decision.promise);
-    const archiveConfirmDescription = vi.fn(() => 'description');
     const resolvePreflight = vi.fn(() => preflight.promise);
     const attachment = vi.fn(async () => ({ attached: false }));
     const schedules = vi.fn(async () =>
@@ -167,7 +199,7 @@ describe('archive preserves the current task until preflight and confirmation fi
       isRemoteSessionWriteBlocked: () => false, remoteWritesBlocked: false,
       resolveWorktreeRemovalPreflight: resolvePreflight,
       loadActiveBoundScheduleNames: schedules,
-      archiveConfirmDescription,
+      confirmTaskArchive: confirmDialog,
       viewedSessionIdRef: { current: 'task' }, viewedSessionId: 'task',
       resolveSessionRemovalRedirect: vi.fn(), unarchiveSession: vi.fn(),
       runSessionAction: async (id: string, action: string, options: { prepareArchive?: (isCurrent: () => boolean) => Promise<boolean> }) => {
@@ -187,7 +219,7 @@ describe('archive preserves the current task until preflight and confirmation fi
       confirmDialog,
     };
     return {
-      preflight, resolvePreflight, decision, runSessionAction, beginRemoteArchive, confirmDialog, archiveConfirmDescription,
+      preflight, resolvePreflight, decision, runSessionAction, beginRemoteArchive, confirmDialog,
       attachment, schedules,
       selected: () => selectedTask, visible: () => rowVisible,
       archive: () => callback(entry.handler, bindings, entrySource)('task', 'archive'),
@@ -235,8 +267,7 @@ describe('archive preserves the current task until preflight and confirmation fi
         await vi.waitFor(() => {
           expect(h.confirmDialog).toHaveBeenCalled();
         });
-        expect(h.archiveConfirmDescription).toHaveBeenCalledWith(expect.anything(),
-          expect.objectContaining({ dirtyWorktree: preflight === 'dirty' }));
+        expect(h.confirmDialog).toHaveBeenCalledWith(preflight, []);
         expect(h.selected()).toBe('task');
         expect(h.visible()).toBe(false);
         expect(h.runSessionAction).not.toHaveBeenCalled();
@@ -279,8 +310,7 @@ describe('archive preserves the current task until preflight and confirmation fi
       await vi.waitFor(() => {
         expect(h.confirmDialog).toHaveBeenCalled();
       });
-      expect(h.archiveConfirmDescription).toHaveBeenCalledWith(expect.anything(),
-        expect.objectContaining({ scheduleNames: ['Daily report'] }));
+      expect(h.confirmDialog).toHaveBeenCalledWith('clean', ['Daily report']);
       expect(h.visible()).toBe(false);
       expect(h.runSessionAction).not.toHaveBeenCalled();
       await h.finish(false);

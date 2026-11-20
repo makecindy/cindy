@@ -1,3 +1,4 @@
+import { createLogger } from '../logger.js';
 import { and, eq } from 'drizzle-orm';
 import type { ToolCallAuthorizer } from '@cindy/mcps';
 import type { Session } from '@cindy/maker-core';
@@ -15,10 +16,13 @@ import {
   admitTaskAction,
   isolateTaskActionAuthorizer,
   createTaskActionAuthorizer,
+  TaskActionAuthorizationError,
   type TaskActionConfirmation,
   taskActionFingerprint,
   type TaskActionScope,
 } from './taskActionAuthorization.js';
+
+const log = createLogger('task-action');
 
 type TaskActionSession = Pick<Session,
   'stablePermissionModeState' | 'stablePlanModeState' |
@@ -30,6 +34,7 @@ type TaskActionSession = Pick<Session,
 function captureScheduledRuntime(
   sessionId: string,
   getSession: (id: string) => TaskActionSession | undefined,
+  expired: (reason: string) => Error,
 ) {
   const session = getSession(sessionId);
   const origin = session?.getCurrentTurnOrigin();
@@ -42,11 +47,12 @@ function captureScheduledRuntime(
   const assertCurrent = () => {
     const currentPermission = session.stablePermissionModeState;
     const currentPlan = session.stablePlanModeState;
-    if (getSession(sessionId) !== session || !currentPermission || !currentPlan ||
+    if (getSession(sessionId) !== session) throw expired('The task runtime changed.');
+    if (!currentPermission || !currentPlan ||
       currentPermission.generation !== permission.generation ||
       currentPermission.mode !== permission.mode || currentPlan.enabled ||
       currentPlan.generation !== plan.generation) {
-      throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      throw expired('The task permission or plan mode changed.');
     }
   };
   return {
@@ -55,7 +61,7 @@ function captureScheduledRuntime(
     assertInputCurrent() {
       assertCurrent();
       if (session.getCurrentTurnOrigin() !== origin) {
-        throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+        throw expired('The scheduled turn changed.');
       }
     },
   };
@@ -88,6 +94,11 @@ export function createDesktopTaskActionAuthorizer(deps: {
     let admittedScope: TaskActionScope | null = null;
     let rejectedDecision: Awaited<ReturnType<ToolCallAuthorizer>> | null = null;
     const fingerprint = taskActionFingerprint(call);
+    // Fixed host descriptions only. Arguments and message contents stay out of diagnostics.
+    const expired = (reason: string) => {
+      log.info('Task action authorization expired', { sessionId: call.sessionId, tool: call.tool, reason });
+      return new TaskActionAuthorizationError(reason);
+    };
     const rewindArgs = call.args as { session_id?: string; message_client_id?: string; stop_if_running?: boolean };
     const selfRewind = call.server === 'cindy_helper' && call.tool === 'rewind_session' &&
       rewindArgs?.stop_if_running === true && typeof rewindArgs.session_id === 'string' &&
@@ -146,13 +157,13 @@ export function createDesktopTaskActionAuthorizer(deps: {
           && permission.isCurrent?.() === true;
         const assertPermissionCurrent = () => {
           if (runtimePermissionApplies && permission?.isCurrent?.() !== true)
-            throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+            throw expired('The task permission changed.');
         };
         const useRuntimePermissions = ownerInput || runtimePermissionApplies;
         // Retain scheduled-review recovery only when no live runtime decision can
         // be reused. A current permission flow must never be reviewed twice.
         const runtime = !useRuntimePermissions && scheduled
-          ? captureScheduledRuntime(sessionId, deps.getSession)
+          ? captureScheduledRuntime(sessionId, deps.getSession, expired)
           : null;
         // A real Worker report continues its ordinary Lead's existing team. It
         // cannot authorize helper writes to unrelated tasks or create a new team.
@@ -203,7 +214,8 @@ export function createDesktopTaskActionAuthorizer(deps: {
         // a delivery check cannot be answered, which is a failed check (kept for retry), not a
         // revocation; once the client is replaced the next check proves the owner changed.
         const assertSameOwner = (revokedAs: string) => {
-          if (db !== tryGetDbClient()) throw new Error(revokedAs);
+          if (db !== tryGetDbClient()) throw revokedAs === 'TASK_ACTION_AUTHORIZATION_EXPIRED'
+            ? expired('The active account changed.') : new Error(revokedAs);
           if (isAppSessionBoundaryPending()) throw new Error('HOST_NOT_READY');
         };
         const assertDeliveryCurrent = async () => {
@@ -221,23 +233,21 @@ export function createDesktopTaskActionAuthorizer(deps: {
             .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
             .where(eq(sessions.id, sessionId))
             .limit(1);
-          if (
-            !fresh ||
-            fresh.status === 'deleted' ||
-            fresh.clearedAt !== caller.clearedAt ||
-            (caller.botId && (fresh.botStatus !== 'active' || fresh.archivedAt !== null))
-            || (canRewind && (fresh.permissionMode !== caller.permissionMode || fresh.planModeEnabled !== caller.planModeEnabled))
-          )
-            throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+          if (!fresh || fresh.status === 'deleted') throw expired('The sending task was deleted.');
+          if (fresh.clearedAt !== caller.clearedAt) throw expired('The sending task was cleared.');
+          if (caller.botId && (fresh.botStatus !== 'active' || fresh.archivedAt !== null))
+            throw expired('The sending teammate is inactive.');
+          if (canRewind && (fresh.permissionMode !== caller.permissionMode || fresh.planModeEnabled !== caller.planModeEnabled))
+            throw expired('The task permission or plan mode changed.');
           // /clear moves the coordinator's fence before persisting cleared_at, and persisting may
           // fail, so the sender's clear is also read from memory. A persisted boundary loaded late
           // (restart) is no newer than what admission already saw in the database.
           const clearedInMemory = deps.input(sessionId).clearBoundaryMs;
           if (clearedInMemory != null && clearedInMemory > Math.max(input.clearBoundaryMs ?? 0, caller.clearedAt ?? 0))
-            throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+            throw expired('The sending task was cleared.');
           if (orcaTeam) {
             if ((await readOrcaTeam())?.id !== orcaTeam.id)
-              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+              throw expired('The team changed.');
           }
           assertSameOwner('OWNER_SCOPE_CHANGED');
         };
@@ -250,31 +260,31 @@ export function createDesktopTaskActionAuthorizer(deps: {
           const current = deps.input(sessionId, selfRewind);
           if (
             isAppSessionBoundaryPending() || db !== tryGetDbClient()
-          ) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+          ) throw expired('The active account is changing.');
           if (canRewind) {
             const boundary = current.rewind;
             if (fingerprint !== taskActionFingerprint(call) || call.sessionId !== sessionId || call.server !== 'cindy_helper' ||
               rewindFinished || rewindRevoked || !boundary || boundary.generation !== input.rewind!.generation ||
               rewindSignal?.aborted || boundary.signal !== rewindSignal)
-              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+              throw expired('The rewind request changed.');
             if (rewindPhase === 'closed') {
-              if (deps.getSession(sessionId) !== undefined) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+              if (deps.getSession(sessionId) !== undefined) throw expired('The task runtime changed.');
             } else {
               const permission = rewindSession!.stablePermissionModeState, plan = rewindSession!.stablePlanModeState;
               if (deps.getSession(sessionId) !== rewindSession || !permission || !plan ||
                 permission.generation !== permissionAtRewind!.generation || permission.mode !== permissionAtRewind!.mode ||
                 plan.generation !== planAtRewind!.generation || plan.enabled !== planAtRewind!.enabled)
-                throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+                throw expired('The task runtime or permission changed.');
             }
             if (rewindPhase !== 'input') {
               if (!boundary.locked || (idleKey !== undefined ? current.key !== idleKey :
-                !boundary.idle && current.key !== input.key)) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+                !boundary.idle && current.key !== input.key)) throw expired('The rewind state changed.');
               if (boundary.idle) idleKey = current.key;
               return;
             }
           }
           if (current.boundary !== input.boundary || current.key !== input.key)
-            throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+            throw expired('The active input changed.');
         };
         const scope: TaskActionScope = {
           key: input.key,
@@ -285,7 +295,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
           assertCurrent: async () => {
             if (fingerprint !== taskActionFingerprint(call) ||
               (canRewind && (call.sessionId !== sessionId || call.server !== 'cindy_helper')))
-              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+              throw expired('The requested action changed.');
             await assertDeliveryCurrent();
             assertCurrentSync();
           },
@@ -294,18 +304,18 @@ export function createDesktopTaskActionAuthorizer(deps: {
             rewindBoundary: async <T>(target: string, clientId: string, phase: 'stop' | 'native-close', operation: () => T | Promise<T>): Promise<T> => {
               if (target !== sessionId || clientId !== rewindArgs.message_client_id ||
                 fingerprint !== taskActionFingerprint(call) || rewindPhase === 'closed')
-                throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+                throw expired('The rewind target changed.');
               await scope.assertCurrent();
               assertCurrentSync();
-              if (!deps.input(sessionId, true).rewind?.locked) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+              if (!deps.input(sessionId, true).rewind?.locked) throw expired('The rewind state changed.');
               if (phase === 'stop') {
-                if (rewindPhase !== 'input') throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+                if (rewindPhase !== 'input') throw expired('The rewind state changed.');
                 const result = operation();
                 const next = deps.input(sessionId, true).rewind;
                 // Stop itself is synchronous. Capture its new abort fence before yielding;
                 // another Stop, /clear or input boundary must never be mistaken for ours.
                 if (!rewindSignal?.aborted || !next || next.signal === rewindSignal)
-                  throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+                  throw expired('The rewind state changed.');
                 rewindSignal = next.signal;
                 rewindPhase = 'stopped';
                 await scope.assertCurrent();

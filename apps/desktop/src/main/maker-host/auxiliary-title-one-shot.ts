@@ -57,6 +57,8 @@ type TitleRequest = {
 };
 
 export interface AuxiliaryTextRequest {
+  source?: string;
+  sessionId?: string;
   agentKind: AgentKind;
   prompt: string;
   maxTokens: number;
@@ -103,6 +105,7 @@ export async function requestAuxiliaryText(
   const beforeSessionAgentDispatch = async (route?: { model?: string }) =>
     !(await isAgentOneShotRouteDisabled(args.agentKind, route?.model)) && await beforeDispatch();
   const result = await deps.requestText(args.prompt, {
+    source: args.source, sessionId: args.sessionId,
     maxTokens: args.maxTokens,
     timeoutMs: args.timeoutMs,
     // Short budgets cannot afford provider-default thinking. Messages /
@@ -126,6 +129,7 @@ export async function requestAuxiliaryText(
   if (canFallbackToSessionAgent) {
     try {
       const fallbackText = await getMaker().oneShot(args.agentKind, args.prompt, {
+        source: args.source, sessionId: args.sessionId,
         maxTokens: args.maxTokens,
         timeoutMs: args.timeoutMs,
         signal: args.signal,
@@ -148,6 +152,7 @@ async function generateAuxiliaryTitle(
   deps: AuxiliaryTitleRuntimeDeps,
 ): Promise<TitleOneShotResult> {
   const result = await requestAuxiliaryText({
+    source: 'title', sessionId: args.sessionId,
     agentKind: args.agentKind,
     prompt: args.prompt,
     maxTokens: AUXILIARY_TITLE_MAX_TOKENS,

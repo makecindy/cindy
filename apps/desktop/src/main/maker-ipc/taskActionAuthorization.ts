@@ -12,7 +12,9 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'send_to_session',
   'steer_session',
   'stop_session_turn',
+  'control_session',
   'set_session_runtime',
+  'set_session_tool_catalog',
   'set_app_default_model',
   'update_app_settings',
   'import_theme_package',
@@ -40,6 +42,15 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'create_shared_task_invitation',
   'request_remote_control',
 ]);
+
+/** Project access writes must never inherit the trusted helper server's silent approval. */
+export function isProjectAccessAction(tool: string | undefined, args: unknown): boolean {
+  if (tool === 'create_project') return true;
+  if (tool !== 'update_project_info') return false;
+  const input = args as { field?: unknown; value?: unknown } | null;
+  if (!input || input.field !== 'profile') return false;
+  return !!input.value && typeof input.value === 'object' && 'directories' in input.value;
+}
 
 export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'start_team',
@@ -139,11 +150,24 @@ export function createTaskActionAuthorizer(deps: {
   return async (call) => {
     const protectedAction =
       call.server === 'cindy_helper'
-        ? TASK_ACTION_TOOLS.has(call.tool) || HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
-        : call.server === 'cindy_scheduler' ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
-        : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
-    if (!protectedAction || (call.tool === 'manage_session_prs' && (call.args as Record<string, unknown>)?.action === 'list') ||
-        (call.tool === 'manage_media_guide' && ['get', 'validate'].includes(String(((call.args as Record<string, unknown>)?.change as Record<string, unknown>)?.action)))) return { ok: true };
+        ? TASK_ACTION_TOOLS.has(call.tool) ||
+          isProjectAccessAction(call.tool, call.args) ||
+          HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
+        : call.server === 'cindy_scheduler'
+          ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
+          : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
+    if (
+      !protectedAction ||
+      (call.tool === 'manage_session_prs' &&
+        (call.args as Record<string, unknown>)?.action === 'list') ||
+      (call.tool === 'manage_media_guide' &&
+        ['get', 'validate'].includes(
+          String(
+            ((call.args as Record<string, unknown>)?.change as Record<string, unknown>)?.action,
+          ),
+        ))
+    )
+      return { ok: true };
     const scope = await deps.capture(call);
     if (!scope) return { ok: true }; // ordinary user-delegated Agent task, unchanged
     if (!call.sessionId) return denied();
@@ -168,8 +192,13 @@ export async function admitTaskAction(
   if (!call.sessionId) return denied();
   try {
     await scope.assertCurrent();
-  } catch {
-    return denied('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'HOST_NOT_READY') {
+      return { ok: false, errorCode: 'HOST_NOT_READY', message: 'The host is not ready to check this action yet.' };
+    }
+    return error instanceof TaskActionAuthorizationError && error.reason
+      ? { ok: false, errorCode: error.code, message: error.reason }
+      : denied('TASK_ACTION_AUTHORIZATION_EXPIRED');
   }
   let consumed = false;
   return {
@@ -271,7 +300,7 @@ export function captureTaskActionGuard(): (() => Promise<void>) | undefined {
 
 export class TaskActionAuthorizationError extends Error {
   readonly code = 'TASK_ACTION_AUTHORIZATION_EXPIRED';
-  constructor() {
+  constructor(readonly reason?: string) {
     super('TASK_ACTION_AUTHORIZATION_EXPIRED');
   }
 }

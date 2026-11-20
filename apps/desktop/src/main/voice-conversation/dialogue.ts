@@ -97,6 +97,7 @@ export class CompanionCallDialogue {
       reference: JSON.stringify({ mainChat: recent.reverse(), memoryIndex: memory }).slice(-40_000),
       generate: async (prompt, systemPrompt, signal, onText) => {
         const result = await requestExplicitUtilityText(prompt, {
+          source: 'voice-dialogue', sessionId: this.input.sessionId,
           ...route,
           systemPrompt,
           signal,
