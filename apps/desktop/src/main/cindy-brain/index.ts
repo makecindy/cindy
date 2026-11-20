@@ -795,6 +795,7 @@ import { callCindyMedia } from '../cindy-media/invocationService.js';
 import { invokeLegacyMedia, legacyVideoReceipt } from '../cindy-media/legacyMediaInvocation.js';
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
 import { probeImageSize } from './imageProbe.js';
+import { canShareSubscriptionImage } from '../cindy-media/sharedSubscriptionImage.js';
 import {
   configureProviderMediaRuntime,
   listProviderMediaModels,
@@ -5756,7 +5757,7 @@ configureProviderMediaRuntime({
     const beforeDispatch = () => {
       assertAllowed();
       const provider = getActiveCatalog().providers.find(candidate => candidate.id === providerId);
-      if (!provider || provider.auth.native !== 'codex' || isOrganizationManagedProvider(provider)
+      if (!provider || !canShareSubscriptionImage(provider, model)
         || !listLocalProviderMediaModels(false, ['image.generate']).some(candidate =>
           candidate.providerId === providerId && candidate.id === model)) {
         throw new Error('SHARED_IMAGE_UNAVAILABLE');
