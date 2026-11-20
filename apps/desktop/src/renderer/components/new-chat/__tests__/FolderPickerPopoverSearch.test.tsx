@@ -162,21 +162,19 @@ describe('FolderPickerPopover project search', () => {
   it('moves the highlight with ArrowDown and picks it on Enter', () => {
     const { onSelect } = renderPicker(manyProjects);
     const input = screen.getByPlaceholderText(SEARCH);
-    const HIGHLIGHT = 'bg-[var(--folder-item-hover)]';
     const rowOf = (name: string) =>
       screen.getByText(name).closest('[data-folder-picker-index]') as HTMLElement;
-    // 行上常驻 hover:bg-[...],按类名整体比较,不能做子串匹配。
-    const isHighlighted = (name: string) =>
-      rowOf(name).className.split(/\s+/).includes(HIGHLIGHT);
+    // 高亮用语义状态断言:样式随时可以改,aria-selected 才是读屏和键盘共用的契约。
+    const isSelected = (name: string) => rowOf(name).getAttribute('aria-selected') === 'true';
 
     fireEvent.change(input, { target: { value: 'cindy' } });
     // 'cindy' 命中 cindy / cindy-server / cindy-official-plugins:输入后默认指向首项。
-    expect(isHighlighted('cindy')).toBe(true);
+    expect(isSelected('cindy')).toBe(true);
 
     fireEvent.keyDown(input, { key: 'ArrowDown' });
-    // 下移后高亮跟到第二项,首项不再高亮。
-    expect(isHighlighted('cindy-server')).toBe(true);
-    expect(isHighlighted('cindy')).toBe(false);
+    // 下移后选中状态跟到第二项,首项不再选中。
+    expect(isSelected('cindy-server')).toBe(true);
+    expect(isSelected('cindy')).toBe(false);
 
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(onSelect).toHaveBeenCalledWith(manyProjects[1].path, 'project', manyProjects[1]);
