@@ -180,7 +180,7 @@ export function McpServersSection() {
     <SettingsSection id="settings-custom-mcp" title={t('settings.mcp.title')} description={t('settings.mcp.subtitle')}>
       <McpDuplicateNotice />
       {loadFailed && <ErrorNotice role="alert" message={t('settings.mcp.loadFailed')}
-        actions={<Button size="sm" variant="secondary" onClick={() => void refetch()}>{t('commonUi.retry')}</Button>} />}
+        actions={<Button size="sm" variant="secondary" data-settings-search-action="Retry loading custom MCP servers" onClick={() => void refetch()}>{t('commonUi.retry')}</Button>} />}
       {/* MCP 列表自带传输类型图标与行尾操作，行样式保留 */}
       {!loading && (
         <SettingsCard className="flex flex-col">
