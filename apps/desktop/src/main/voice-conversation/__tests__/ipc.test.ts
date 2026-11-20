@@ -263,6 +263,27 @@ it('patches playback without replacing the saved route and validates boolean ove
   ).rejects.toThrow();
 });
 
+it('keeps realtime preferences behind the trusted owner and separate from TTS settings', async () => {
+  const provider = buildUserProvider({ id: 'native-api', name: 'OpenAI API', runtimes: { codex: {
+    baseUrl: 'https://api.openai.com/v1', models: [{ id: 'gpt-realtime-2', name: 'Realtime', mode: 'realtime' }],
+  } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  h.catalog = { ...BUNDLED_CATALOG, providers: [provider] };
+  h.readKey.mockReturnValue('fixture-native-key');
+  const selection = { mode: 'realtime', providerId: 'native-api', agent: 'codex', modelId: 'gpt-realtime-2', protocol: 'openai-realtime', voice: 'marin' };
+  expect(JSON.stringify(await call('realtime-models'))).not.toContain('fixture-native-key');
+  await call('set-realtime-preference', 'buddy', selection);
+  expect(await call('preference', 'buddy')).toMatchObject({ selection: null, realtimeSelection: selection });
+  await expect(call('set-realtime-preference', 'buddy', { ...selection, modelId: 'unknown' })).rejects.toThrow();
+  expect(await call('preference', 'buddy')).toMatchObject({ realtimeSelection: selection });
+  h.boundary = true;
+  await expect(call('set-realtime-preference', 'buddy', null)).rejects.toThrow();
+  h.boundary = false;
+  h.trusted.mockImplementationOnce(() => { throw new Error('untrusted'); });
+  await expect(call('realtime-models')).rejects.toThrow('untrusted');
+  await call('set-realtime-preference', 'buddy', null);
+  expect(await call('preference', 'buddy')).not.toHaveProperty('realtimeSelection');
+});
+
 it.each([NaN, Infinity, '1.2', 0.1, 4.1])('rejects invalid speed %s without replacing the saved preference', async (speed) => {
   const choice = { modelId: 'voice-test', voice: 'alloy', speed: 1.15 };
   await call('set-preference', 'bot', choice);
@@ -276,7 +297,7 @@ it('rejects an untrusted sender before returning models or opening a connection'
   });
   await expect(call('models')).rejects.toThrow('untrusted frame');
   await expect(start()).rejects.toThrow('untrusted frame');
-  for (const name of ['voices', 'preview', 'read-preview', 'stop-preview', 'start-playback']) {
+  for (const name of ['voices', 'realtime-custom-voices', 'preview', 'read-preview', 'stop-preview', 'start-playback']) {
     await expect(call(name, {})).rejects.toThrow('untrusted frame');
   }
 });

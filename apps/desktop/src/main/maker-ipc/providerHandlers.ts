@@ -232,18 +232,21 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
     return creating && Object.keys(input).length === 1 && input.bindGeminiImages === true ? { bindGeminiImages: true } : null;
   }
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
+  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'appendRealtimeModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
     return null;
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
   const policy = (input as Record<string, unknown>).codexImageGenerationRestartPolicy;
   const append = (input as Record<string, unknown>).appendSpeechModelsOnly;
+  const realtime = (input as Record<string, unknown>).appendRealtimeModelsOnly;
   const refreshAgents = (input as Record<string, unknown>).speechReferenceRefreshAgents;
   if (refreshAgents !== undefined && (!Array.isArray(refreshAgents) ||
     refreshAgents.length === 0 || refreshAgents.length > VALID_AGENTS.length ||
     refreshAgents.some(agent => !VALID_AGENTS.includes(agent)) ||
     new Set(refreshAgents).size !== refreshAgents.length)) return null;
   if (append !== undefined && append !== true) return null;
+  if (realtime !== undefined && realtime !== true) return null;
+  if (realtime && entries.length !== 1) return null;
   if (policy !== undefined && policy !== 'interrupt') return null;
   if (append && (source || policy || refreshAgents)) return null;
   const withdrawn = (input as Record<string, unknown>).removeWithdrawnModels;
@@ -264,6 +267,7 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
     ...(source === 'manual-settings' ? { source } : {}),
     ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
     ...(append ? { appendSpeechModelsOnly: true as const } : {}),
+    ...(realtime ? { appendRealtimeModelsOnly: true as const } : {}),
     ...(refreshAgents ? { speechReferenceRefreshAgents: refreshAgents as AgentKind[] } : {}),
     ...(withdrawn ? { removeWithdrawnModels: (withdrawn as { agent: AgentKind; modelId: string }[])
       .map(({ agent, modelId }) => ({ agent, modelId })) } : {}),
@@ -2618,9 +2622,12 @@ export function registerProviderHandlers(
           const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
           if (!validation.ok) throwIpcError(validation.code, validation.message);
           separated = splitCustomProviderHeaders(config);
-        } else if (options.appendSpeechModelsOnly) {
+        } else if (options.appendSpeechModelsOnly || options.appendRealtimeModelsOnly) {
           if (Object.keys(keys).length) throwIpcError('INVALID_PARAMS', 'speech additions cannot change credentials');
-          try { config = appendSpeechModels(previous, config, deps.listPresets()); }
+          try {
+            config = appendSpeechModels(previous, config, deps.listPresets(),
+              options.appendRealtimeModelsOnly ? 'realtime' : 'audio_speech', deps.getModelCatalog().modelRegistry);
+          }
           catch { throwIpcError('INVALID_PARAMS', 'connection changed or invalid speech additions'); }
           const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
           if (!validation.ok) throwIpcError(validation.code, validation.message);

@@ -5916,6 +5916,23 @@ describe('speech additions through the real provider update handler', () => {
 });
 
 // A saved explicit default becomes omitted in ProviderView; opening Settings must not make it stale.
+it('appends realtime through the production model mutation queue without changing chat models, keys or other options', async () => {
+  mountDb();
+  const harness = new IpcHarness();
+  const deps = makeDeps();
+  registerProviderHandlers(harness, deps);
+  await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+  const realtime = { id: 'my-native-model', name: 'Realtime', mode: 'realtime' as const, modalities: { input: ['audio', 'text'], output: ['audio', 'text'] } };
+  const request = { ...validConfig, runtimes: { codex: { ...validConfig.runtimes.codex!, models: [realtime] } } };
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, { appendRealtimeModelsOnly: true })).resolves.toEqual({ ok: true });
+  expect((await getCustomProvider(validConfig.id))?.runtimes.codex?.models).toEqual([...validConfig.runtimes.codex!.models, realtime]);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, { appendRealtimeModelsOnly: true, appendSpeechModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, {
+    appendRealtimeModelsOnly: true, removeWithdrawnModels: [{ agent: 'codex', modelId: 'existing' }],
+  })).rejects.toThrow(/INVALID_PARAMS/);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, { codex: 'replacement' }, { appendRealtimeModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+});
+
 it('speech additions accept an unchanged projected default protocol and preserve its declaration', async () => {
   mountDb();
   const harness = new IpcHarness();

@@ -12518,6 +12518,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "System voices",
+        "myVoices": "My voices",
+        "refreshMyVoices": "Refresh my voices",
+        "callMode": "Voice call mode",
+        "messageReadAloud": "Read messages aloud",
+        "callVoice": "Realtime call voice",
+        "readAloudVoice": "Read-aloud voice",
+        "readAloudHint": "Click the speaker below your buddy’s text reply to hear it in this voice.",
+        "resetReadAloud": "Reset read-aloud settings",
+        "title": "Realtime Audio",
+        "add": "Add realtime audio models",
+        "off": "Use text to speech"
+      },
       "openConversation": "Open conversation",
       "inCallWith": "In a call with {{name}}",
       "showDetails": "Show call transcript",
@@ -12539,7 +12553,7 @@
       "settingsTitle": "Voice",
       "openSettings": "Voice settings",
       "startConversation": "Start voice conversation",
-      "settingsHint": "Choose this companion’s speech model and voice, then start a voice conversation from the message composer.",
+      "settingsHint": "When calls use speech synthesis, calls and message playback share the model and voice below.",
       "previewNeedsChat": "Start a conversation with this companion to preview a voice.",
       "voiceId": "Voice ID",
       "manualVoice": "Enter a voice ID",

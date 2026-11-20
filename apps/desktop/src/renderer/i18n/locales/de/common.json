@@ -12518,6 +12518,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "Systemstimmen",
+        "myVoices": "Meine Stimmen",
+        "refreshMyVoices": "Meine Stimmen aktualisieren",
+        "callMode": "Anrufmodus",
+        "messageReadAloud": "Nachrichten vorlesen",
+        "callVoice": "Stimme für Echtzeitanrufe",
+        "readAloudVoice": "Vorlesestimme",
+        "readAloudHint": "Klicke auf den Lautsprecher unter einer Textantwort, um sie mit dieser Stimme vorlesen zu lassen.",
+        "resetReadAloud": "Vorleseeinstellungen zurücksetzen",
+        "title": "Echtzeit-Audio",
+        "add": "Echtzeit-Audiomodelle hinzufügen",
+        "off": "Sprachsynthese verwenden"
+      },
       "openConversation": "Gespräch öffnen",
       "inCallWith": "Im Anruf mit {{name}}",
       "showDetails": "Anruftranskript anzeigen",
@@ -12539,7 +12553,7 @@
       "settingsTitle": "Stimme",
       "openSettings": "Stimmeinstellungen",
       "startConversation": "Sprachgespräch starten",
-      "settingsHint": "Wähle das Sprachmodell und die Stimme dieses Freundes und starte dann ein Sprachgespräch über das Nachrichtenfeld.",
+      "settingsHint": "Bei Anrufen mit Sprachsynthese gelten das folgende Modell und die Stimme auch für das Vorlesen von Nachrichten.",
       "previewNeedsChat": "Starte ein Gespräch mit diesem Freund, um eine Stimme anzuhören.",
       "voiceId": "Stimmen-ID",
       "manualVoice": "Stimmen-ID eingeben",

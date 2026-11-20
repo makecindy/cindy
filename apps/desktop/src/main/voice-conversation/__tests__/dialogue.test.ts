@@ -270,15 +270,15 @@ it('does not read or dispatch through a replaced owner/database', async () => {
 // JSON.parse alone silently discarded them. Unit tier: submit through the real dialogue, write
 // a canonical reply through createMessage into SQLite, then observe the saved
 // call result/reply. Also retain compatibility with JSON-encoded text.
-it.each(['plain', 'json'] as const)('returns a completed %s-text main reply to the call once', async (format) => {
+it.each(['plain', 'json', 'numeric'] as const)('returns a completed %s-text main reply to the call once', async (format) => {
   const call = await start();
   await call.submit('input', 'Check my task list.', true);
   const handoffId = h.dispatch.mock.calls[0][0].clientId;
   await messageStore.createMessage('main', {
     clientId: handoffId, role: 'user', content: 'Check my task list.',
   });
-  const result = '待办清单为空。\n日历还需要完成授权。';
-  const spoken = '待办清单为空，日历还需要完成授权。';
+  const result = format === 'numeric' ? '26' : '待办清单为空。\n日历还需要完成授权。';
+  const spoken = format === 'numeric' ? '26' : '待办清单为空，日历还需要完成授权。';
   await messageStore.createMessage('main', {
     clientId: 'final', role: 'assistant',
     content: format === 'json' ? JSON.stringify(result) : result,
