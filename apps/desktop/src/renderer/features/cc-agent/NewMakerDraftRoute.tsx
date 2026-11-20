@@ -3764,6 +3764,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       // 已触碰 —— 目标电脑的 capabilities 到达时只做合法性夹紧,不会换成那台的默认模型(与下方
       // 跨引擎选择同一条修法)。
       const seedSwitchedCatalog = (targetCatalogDeviceId: string) => {
+        const taskComputerPermission = isDeviceLinkDraft
+          ? deviceLinkInitial?.permissionMode
+          : undefined;
         dlRuntimeTouchedRef.current = true;
         dlExplicitChoiceRef.current = true;
         dlSeedKeyRef.current = `${targetCatalogDeviceId}:${dbToMakerAgentKind(
@@ -3776,8 +3779,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           effort: selection.effort ?? 'high',
           fastMode: selection.fast,
           providerId: selection.providerId,
-          ...(isDeviceLinkDraft && deviceLinkInitial?.permissionMode
-            ? { permissionMode: deviceLinkInitial.permissionMode } : {}),
+          ...(taskComputerPermission ? { permissionMode: taskComputerPermission } : {}),
         });
       };
       if ((localAlternate || (!usesDeviceCatalog && localModelIssue)) && !effectiveRemoteHostId) {
