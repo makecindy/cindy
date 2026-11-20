@@ -55,6 +55,9 @@
     "applied": "Pengalihan sumber model sudah berlaku.",
     "failed": "Pengalihan sumber model gagal. Pilih model lagi."
   },
+  "agentSwitch": {
+    "browseAccessibility": "Jelajahi model {{agent}}"
+  },
   "unified": {
     "remoteCopyUnavailableOn": "{{provider}} di '{{device}}' sedang tidak tersedia.",
     "remoteCopyUnavailableOnTaskComputer": "{{provider}} di komputer tempat tugas berada sedang tidak tersedia.",
