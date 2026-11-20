@@ -11,22 +11,11 @@ import {
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { extractIpcError } from '@/utils/ipcError';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
-import { ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
+import type { InstalledGhost } from '../../shared/ghost';
 import type { GithubPluginReleaseResult } from '../../shared/githubPluginRelease';
+import { checkGithubRelease, recordGithubReleaseReply } from '@/features/plugin/lib/githubReleaseUpdates';
 
 type ReleaseAction = 'check' | 'update' | 'sign-in';
-
-// A rapid reopen can share the pending read. Completed checks are not cached.
-const pendingChecks = new Map<string, Promise<GithubPluginReleaseResult | boolean>>();
-
-function checkRelease(key: string, instanceId: string): Promise<GithubPluginReleaseResult | boolean> {
-  const pending = pendingChecks.get(key);
-  if (pending) return pending;
-  const request = window.electronAPI.ghosts.githubRelease('check', instanceId, undefined)
-    .finally(() => pendingChecks.delete(key));
-  pendingChecks.set(key, request);
-  return request;
-}
 
 export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: InstalledGhost; repository: string }) {
   const { t } = useTranslation();
@@ -38,7 +27,6 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
   const checkedOnOpen = useRef(false);
   const instanceId = installedGhostStoragePart(ghost);
   const installedVersion = ghost.manifest.version;
-  const approvalToken = ghostInstallApprovalToken(ghost.approval);
   useEffect(() => {
     mounted.current = true;
     const unsubscribe = window.electronAPI.ghosts.onGithubReleaseProgress?.((event, ownerStamp) => {
@@ -63,13 +51,17 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
     setBusy(action);
     if (action === 'update') setProgress(initialDownloadProgress('preparing'));
     setFailed(false);
+    const target = { instanceId, repository, installedVersion };
     try {
+      // Opening or clicking "check" always reads fresh; a rapid reopen shares the pending read, and
+      // the answer also updates the Plugin page banner.
       const reply = action === 'check'
-        ? await checkRelease(
-          JSON.stringify([owner.dataOwnerId, owner.generation, instanceId, approvalToken, repository, installedVersion]),
-          instanceId,
-        )
+        ? await checkGithubRelease(target, { force: true })
         : await window.electronAPI.ghosts.githubRelease(action, instanceId, assetId);
+      if (action === 'update') {
+        const offered = release?.assetId === assetId ? release : undefined;
+        recordGithubReleaseReply(owner, target, reply, offered);
+      }
       if (!isCurrent()) return;
       if (typeof reply !== 'boolean') setResult(reply);
       else if (!reply) setFailed(true);
@@ -79,7 +71,7 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
       running.current = false;
       if (mounted.current) setBusy(undefined);
     }
-  }, [approvalToken, instanceId, installedVersion, repository]);
+  }, [instanceId, installedVersion, release, repository]);
 
   useEffect(() => {
     let windowHidden = isWindowHidden();
