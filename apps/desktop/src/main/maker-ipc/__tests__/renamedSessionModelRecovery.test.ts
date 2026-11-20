@@ -87,11 +87,19 @@ describe('recoverRenamedSessionModelBeforeSend', () => {
 });
 
 describe('send-time renamed-model recovery', () => {
-  // Unit regression for PR #11681 review: an empty cold pool projection is not
-  // evidence that a saved model has no rename. Unlike the warm-catalog tests below,
-  // start without pool membership and require recovery after native discovery,
-  // while account presentation remains stalled. Cover built-in and created pools.
-  it.each(['openai', 'openai-sub-cold'])('discovers a cold %s pool before recovering its saved route', async providerId => {
+  // Unit regression for PR #11681: neither a cold empty pool nor an unavailable
+  // retained list proves there is no rename. Exercise the production factory and
+  // provider projection with the retired ID still present after discovery failed;
+  // the previous empty-only fallback missed it. Native discovery owns retries:
+  // a failed refresh is read once, and a suspended provider is never revived.
+  it.each([
+    { providerId: 'openai', unavailable: false, suspended: false, retainedFailure: false },
+    { providerId: 'openai-sub-cold', unavailable: false, suspended: false, retainedFailure: false },
+    { providerId: 'openai', unavailable: true, suspended: false, retainedFailure: false },
+    { providerId: 'openai-sub-cold', unavailable: true, suspended: false, retainedFailure: false },
+    { providerId: 'openai', unavailable: true, suspended: true, retainedFailure: false },
+    { providerId: 'openai', unavailable: true, suspended: false, retainedFailure: true },
+  ])('recovers $providerId (unavailable=$unavailable, suspended=$suspended, retainedFailure=$retainedFailure)', async ({ providerId, unavailable, suspended, retainedFailure }) => {
     vi.useFakeTimers();
     const saved = { ...route, providerId };
     const renamed = 'chatgpt/gpt-6-luna';
@@ -106,11 +114,13 @@ describe('send-time renamed-model recovery', () => {
     const service = createProviderService({
       getCatalog: () => landing.catalog!,
       projectCatalog: catalog => ({ ...catalog, providers: catalog.providers.map(candidate => ({
-        ...candidate, models: { codex: loaded
-          ? [{ id: renamed, name: renamed, contextWindow: 200_000, efforts: ['high'], defaultEffort: 'high' }]
+        ...candidate, models: { codex: (loaded || unavailable)
+          ? [{ id: loaded && !retainedFailure ? renamed : saved.model,
+            name: renamed, contextWindow: 200_000, efforts: ['high'], defaultEffort: 'high' }]
           : [] },
       })) }),
-      projectProvider: candidate => ({ ...candidate, subscriptionAccountPool: 'openai' }),
+      projectProvider: candidate => ({ ...candidate, subscriptionAccountPool: 'openai', suspended }),
+      subscriptionReadUnavailable: () => unavailable && (!loaded || retainedFailure),
       connection: { xd: () => false, anthropic: () => false,
         openai: options => options.snapshotOnly ? loaded : discover(), xai: () => false },
       openAiAccountInfo: readAccount,
@@ -130,11 +140,12 @@ describe('send-time renamed-model recovery', () => {
       expect(apply).not.toHaveBeenCalled();
       releaseDiscovery();
       await vi.advanceTimersByTimeAsync(0);
-      expect(apply.mock.calls[0]?.slice(0, 3)).toEqual(['cold-send', renamed, providerId]);
+      if (suspended || retainedFailure) expect(apply).not.toHaveBeenCalled();
+      else expect(apply.mock.calls[0]?.slice(0, 3)).toEqual(['cold-send', renamed, providerId]);
       expect(readAccount).not.toHaveBeenCalled();
       await sending;
-      await recover('cold-send');
-      expect(discover).toHaveBeenCalledTimes(1);
+      if (!retainedFailure) await recover('cold-send');
+      expect(discover).toHaveBeenCalledTimes(suspended ? 0 : 1);
     } finally {
       releaseDiscovery();
       landing.row = null;
@@ -165,6 +176,7 @@ describe('send-time renamed-model recovery', () => {
     };
     const service = createProviderService({
       getCatalog: () => landing.catalog!,
+      projectProvider: candidate => ({ ...candidate, subscriptionAccountPool: 'openai' }),
       connection: { xd: () => false, anthropic: nativeRead, openai: nativeRead, xai: () => false },
       openAiAccountInfo: readAccount,
       subscriptionAccountInfo: readAccount,

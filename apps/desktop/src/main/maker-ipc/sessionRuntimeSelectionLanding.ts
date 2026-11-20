@@ -167,9 +167,10 @@ export function createRecoverRenamedSessionModelOnSend(ports: {
     });
     const provider = providers.find(candidate => candidate.id === row.providerId);
     if (provider?.subscriptionAccountPool && provider.suspended !== true &&
-        !provider.models[dbToMakerAgentKind(row.agentKind)]?.length) {
-      // A cold pool has no membership yet. Preserve native discovery in this case;
-      // once loaded, ordinary sends use the snapshot without refreshing quota/CLI.
+        (!provider.models[dbToMakerAgentKind(row.agentKind)]?.length || provider.subscriptionReadUnavailable)) {
+      // Empty or failed pool reads cannot rule out a rename, even with retained
+      // models. Let normal discovery own its failure TTL; healthy sends stay on
+      // the snapshot, with no new retry loop or forced refresh here.
       providers = await service.listProviders({
         allowSideEffects: false,
         includeAccountPresentation: false,
