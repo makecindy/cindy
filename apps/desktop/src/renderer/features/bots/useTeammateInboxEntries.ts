@@ -6,18 +6,19 @@ import { useBotProfiles, useBotUnreadCounts } from './botStore';
 import { cloudRemoteBots, withoutShadowedBots } from './companionCloudPresentation';
 import { useCompanionCloud } from './companionCloudStore';
 import { teammateInboxEntries, type TeammateInboxEntry } from './teammateInbox';
-import { useRemoteBots } from './useRemoteBots';
+import { useRemoteBotOmissions, useRemoteBots } from './useRemoteBots';
 
 /** Reads the stores the teammate section already keeps in sync; issues no request of its own. */
 export function useTeammateInboxEntries(): TeammateInboxEntry[] {
   const cloud = useCompanionCloud();
+  const omissions = useRemoteBotOmissions();
   const rosterRemoteBots = useRemoteBots();
   const allBots = useBotProfiles();
   const unreadByBotId = useBotUnreadCounts();
   const activities = useAgentIslandActivityMap();
   const devices = useDeviceLinkDeviceList();
   return useMemo(() => {
-    const remoteBots = cloudRemoteBots(cloud, rosterRemoteBots);
+    const remoteBots = cloudRemoteBots(cloud, rosterRemoteBots, omissions);
     const self = devices?.find((device) => device.isSelf);
     return teammateInboxEntries({
       bots: withoutShadowedBots(allBots, cloud),
@@ -26,5 +27,5 @@ export function useTeammateInboxEntries(): TeammateInboxEntry[] {
       unreadByBotId,
       devices: [...(self ? [self] : []), ...remoteBots.map((bot) => ({ deviceId: bot.deviceId, name: bot.deviceName }))],
     });
-  }, [cloud, rosterRemoteBots, allBots, unreadByBotId, activities, devices]);
+  }, [cloud, rosterRemoteBots, omissions, allBots, unreadByBotId, activities, devices]);
 }

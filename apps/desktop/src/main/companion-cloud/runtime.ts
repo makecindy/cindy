@@ -235,7 +235,7 @@ export function startCompanionCloud(input: {
   /** Publish the registry snapshot after a local home change. */
   publish?: () => void;
   /** The set of hidden local copies changed (a copy was demoted or taken over): what depends on it re-reads. */
-  onShadowChanged?: () => void;
+  onShadowChanged?: (botIds: readonly string[]) => void;
   /** Publish the companions' actor name and avatar now (they sync outside the preferences). */
   syncProfile?: (botId: string) => Promise<void>;
   /** Room files (chatServerMedia): the mirror uploads the owner's attachments; readers download them. */
@@ -301,12 +301,14 @@ export function startCompanionCloud(input: {
   const pick = (only: Set<string> | null) => input.bots()
     .filter(bot => (!only || only.has(bot.botId)) && installOwner(bot.botId) === 'mine');
   const actorOf = (botId: string) => (input.actors?.() ?? []).find(a => a.kind === 'bot' && !a.disabled && (a.externalId === botId || a.id === botId));
-  let shadowKey = '';
+  let publishedShadows = new Set<string>();
   const publish = () => {
     if (!live()) return;
     input.publish?.();
-    const key = [...state.demotedBotIds(), ...[...installs].flatMap(([botId, value]) => value.owner === 'other' ? [botId] : [])].sort().join('|');
-    if (key !== shadowKey) { shadowKey = key; input.onShadowChanged?.(); }
+    const next = new Set([...state.demotedBotIds(), ...[...installs].flatMap(([botId, value]) => value.owner === 'other' ? [botId] : [])]);
+    const changed = [...new Set([...publishedShadows, ...next])].filter(id => publishedShadows.has(id) !== next.has(id));
+    publishedShadows = next;
+    if (changed.length) input.onShadowChanged?.(changed);
   };
 
   /** Explicit home actions must leave a diagnostic, without logging response text or paths. */

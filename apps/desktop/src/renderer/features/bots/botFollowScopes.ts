@@ -11,7 +11,7 @@ import { createLogger } from '@/lib/logger';
 
 import { isTeammateTaskSession } from '../../../shared/sessionSource';
 import { isWorkbenchTaskSource } from '../../../shared/botWorkbench';
-import { useRemoteBots, useRemoteCindyIds } from './useRemoteBots';
+import { useRemoteBotOmissions, useRemoteBots, useRemoteCindyIds } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from './companionCloudPresentation';
 import { taskCreatorFilterKey } from './cindyDeviceRoster';
@@ -152,10 +152,11 @@ export function useTaskCreatorOptions(): TaskBotIdentity[] {
   const profiles = useBotProfiles();
   const remote = useRemoteBots();
   const cloud = useCompanionCloud();
+  const omissions = useRemoteBotOmissions();
   const cindyIds = useRemoteCindyIds();
   return useMemo(() => {
     const grouped = new Map<string, TaskBotIdentity>();
-    for (const source of [...withoutShadowedBots(profiles, cloud).filter(bot => !bot.hiddenAt && bot.status !== 'deleting'), ...cloudRemoteBots(cloud, remote)]) {
+    for (const source of [...withoutShadowedBots(profiles, cloud).filter(bot => !bot.hiddenAt && bot.status !== 'deleting'), ...cloudRemoteBots(cloud, remote, omissions)]) {
       const bot = cindyIds.has(source.id) ? { ...source, templateId: 'cindy' } : source;
       const key = taskCreatorFilterKey(bot, cloud);
       const memberKeys = [taskBotKey(bot), ...(cloud.enabled && cloud.actors.some(actor => actor.externalId === bot.id)
@@ -177,7 +178,7 @@ export function useTaskCreatorOptions(): TaskBotIdentity[] {
       if (option && !option.filterMemberKeys?.includes(member)) option.filterMemberKeys = [...(option.filterMemberKeys ?? []), member];
     }
     return [...grouped.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [profiles, remote, cloud, cindyIds]);
+  }, [profiles, remote, cloud, cindyIds, omissions]);
 }
 
 /** Indexed once for the sidebar, so selecting multiple creators does not scan every Bot per row. */

@@ -205,3 +205,27 @@ it('reads a private-chat topic on its own position, only for the teammate\'s own
   await expect(read({ at: 300, threadSessionId: 'bad id' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
   expect(readState.positions['bot-1']).toBe(mainBefore);
 });
+
+// #8733, unit: real provider must distinguish hidden/deleted from a pending or failed
+// restore without exposing profiles. Previous tests only checked visible items/NOT_FOUND.
+it('certifies a complete home roster and protects pending restorations, including missing profiles', async () => {
+  const { companionHomes } = await import('../../../companion-cloud/homes.js');
+  const view = { enabled: true, selfDeviceId: 'home', humanActorId: 'human', demotedBotIds: ['restoring'],
+    actors: [{ id: 'actor', externalId: 'restoring', name: 'Restoring', avatar: null, homeDeviceId: 'home' }] };
+  registerBotRemoteResourceProvider(); db.current = true; activity.snapshots.mockReturnValue([]);
+  db.list.mockResolvedValue([]);
+  const request = { client: { protocolVersion: 1, primitives: [] }, collectionId: 'teammates', limit: 200 };
+  const list = (extra = {}) => remoteResourceRegistry.list({ controllerDeviceId: 'controller' }, { ...request, ...extra });
+  try {
+    companionHomes.update(view);
+    expect(await list()).toMatchObject({ items: [], teammateRecovery: { version: 1, recoveringIds: ['restoring'] } });
+    companionHomes.update({ ...view, demotedBotIds: [] });
+    expect(await list()).toMatchObject({ items: [], teammateRecovery: { version: 1, recoveringIds: [] } });
+    for (const extra of [{ query: 'needle' }, { cursor: 'next' }]) expect(await list(extra)).not.toHaveProperty('teammateRecovery');
+    // A home transition after the read began cannot certify a stable absence.
+    db.list.mockImplementationOnce(async () => { companionHomes.update(view); return []; });
+    expect(await list()).not.toHaveProperty('teammateRecovery');
+    companionHomes.update({ ...view, enabled: false });
+    expect(await list()).not.toHaveProperty('teammateRecovery');
+  } finally { companionHomes.reset(); }
+});

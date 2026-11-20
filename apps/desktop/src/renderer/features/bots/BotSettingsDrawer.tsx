@@ -12,7 +12,7 @@ import { useCompanionCloud } from './companionCloudStore';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { cloudCompanionAt, homeControlOff, cloudRemoteBots } from './companionCloudPresentation';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
-import { useRemoteBots } from './useRemoteBots';
+import { useRemoteBotOmissions, useRemoteBots } from './useRemoteBots';
 import { RemoteTeammateSettings } from './RemoteTeammateSettings';
 
 /** Route-owned compact drawer that keeps the current teammate chat mounted below it. */
@@ -23,9 +23,10 @@ export function BotSettingsDrawer() {
   const [searchParams, setSearchParams] = useSearchParams();
   const bots = useBotProfiles();
   const cloud = useCompanionCloud();
+  const omissions = useRemoteBotOmissions();
   const devices = useDeviceLinkDeviceList();
   // Resolve the same rows as the list, including companions whose home was never discovered.
-  const remoteBots = cloudRemoteBots(cloud, useRemoteBots());
+  const remoteBots = cloudRemoteBots(cloud, useRemoteBots(), omissions);
   const remoteMatch = matchPath('/bots/remote/:deviceId/:botId', location.pathname);
   const remoteBot = remoteBots.find(
     (item) =>

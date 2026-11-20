@@ -33,7 +33,7 @@ vi.mock('../botPronounContext', () => ({
 }));
 const devices = vi.hoisted(() => ({ rows: null as null | Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLinkDeviceList: () => devices.rows }));
-vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [{ id: 'remote-bot', deviceId: 'other-mac', name: 'Remote' }] }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBotOmissions: () => new Set<string>(), useRemoteBots: () => [{ id: 'remote-bot', deviceId: 'other-mac', name: 'Remote' }] }));
 vi.mock('../RemoteTeammateSettings', () => ({ RemoteTeammateSettings: ({ bot, initialPage, controlOff }: { bot: { deviceId: string }; initialPage?: string; controlOff?: boolean }) => <div data-control-off={controlOff} data-testid="remote-settings" data-initial-page={initialPage}>{bot.deviceId}</div> }));
 vi.mock('../botStore', () => ({
   useBotProfiles: () => [

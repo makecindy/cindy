@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TeammateSearchResults, useTeammateSearchMatches } from '../TeammateSearchResults';
 
 const mocks = vi.hoisted(() => ({
-  profiles: [] as unknown[],
+  omissions: new Set<string>(), profiles: [] as unknown[],
   remoteBots: [] as unknown[],
   groups: [] as unknown[],
   navigate: vi.fn(),
@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => mocks.profiles }));
-vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBotOmissions: () => mocks.omissions, useRemoteBots: () => mocks.remoteBots }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud }));
 vi.mock('../botGroupStore', () => ({ useBotGroupList: () => ({ groups: mocks.groups }) }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="avatar" /> }));
@@ -25,6 +25,7 @@ function bot(id: string, name: string, extra: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  mocks.omissions = new Set();
   mocks.cloud = { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] };
   mocks.profiles = [
     bot('steward', 'PR steward', { skills: ['web-research'] }),
@@ -136,4 +137,15 @@ describe('teammates in the sidebar-wide search', () => {
     expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/groups/trip');
     expect(screen.getByText('bots.groupChat.sidebar.title')).toBeTruthy();
   });
+});
+
+// #8733 unit: the actual sidebar search must not reconstruct a cloud-only ghost.
+it('uses the same confirmed absence as the roster while keeping local hidden search', () => {
+  const actor = { id: 'actor', externalId: 'gone', name: 'Needle cloud', avatar: null, homeDeviceId: 'home' };
+  mocks.cloud = { enabled: true, selfDeviceId: 'here', humanActorId: 'human', actors: [actor], demotedBotIds: [] };
+  mocks.remoteBots = []; mocks.groups = []; mocks.profiles = [bot('local', 'Needle local', { hiddenAt: 2 })];
+  mocks.omissions.add(JSON.stringify([actor.id, actor.homeDeviceId, actor.externalId]));
+  expect(names('needle')).toEqual(['Needle local']);
+  mocks.omissions.clear();
+  expect(names('needle')).toEqual(['Needle local', 'Needle cloud']);
 });
