@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
     "MODEL_SELECTION_UNAVAILABLE": "所择模型于此供方下已不可用。请于规制中察连接，或另择可用之模型。",
+    "MODEL_CATALOG_UNCONFIRMED": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未易毕。请察错误详情，俟 Harness 就绪而后再试。",
     "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
     "INVALID_PARAMS": "参数无效，请察之而后再试。",
@@ -15161,6 +15162,7 @@
       "continueFailed_other": "有 {{count}} 件差事未能续，可开差事再试。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
       "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
@@ -15833,6 +15835,7 @@
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 另立 SSH 差事。",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所连者无权用前一模型，故易模型时未能压缩上下文。",
       "MODEL_SELECTION_UNAVAILABLE": "所择模型于此供方下已不可用。请于规制中察其连接，或另择可用之模型。",
+      "MODEL_CATALOG_UNCONFIRMED": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未易毕。请览谬误详情，待 Harness 就绪再试。",
       "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
       "REMOTE_DAEMON_CLOSED": "远程连接中断，或方更新。此轮已终，请再遣。",
