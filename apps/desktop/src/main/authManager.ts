@@ -3578,15 +3578,28 @@ async function runAuthRefreshWithReplacementRetry(
   failureAction?: RefreshFailureAction;
   rejectedTokens: readonly string[];
   expectedVaultRefreshToken?: string | null;
+  expectedActiveVaultAccountKey?: string;
 }> {
   let expectedVaultRefreshToken: string | null | undefined;
+  let expectedActiveVaultAccountKey = opts.expectedActiveVaultAccountKey;
   const run = await runRefreshWithReplacementRetry(initialRefreshToken, {
     doRefresh: async (refreshToken) => {
+      const vault = readAuthAccountVault();
       const vaultTokens = new Map(
-        Object.entries(readAuthAccountVault().resources).map(
+        Object.entries(vault.resources).map(
           ([key, resource]) => [key, resource.refreshToken] as const,
         ),
       );
+      if (!expectedActiveVaultAccountKey && opts.phase === 'cold-start' && refreshToken !== initialRefreshToken) {
+        const key = vault.activeAccountKey;
+        const resource = key ? vault.resources[key] : undefined;
+        if (key && resource?.realm === opts.realm && resource.refreshToken === refreshToken &&
+          typeof vault.signedOutAt !== 'number' && !isLoggedOutVaultAccount(vault, key)) {
+          // Replacement retry discovered the authoritative owner. Carry it
+          // through transient attempts instead of returning to a stale projection.
+          expectedActiveVaultAccountKey = key;
+        }
+      }
       const result = await requestAuthRefresh(refreshToken, opts.realm);
       if (result.ok || result.status === 0 || (result.status >= 200 && result.status < 300)) {
         uncertainResourceRefreshTokens.set(opts.realm, refreshToken);
@@ -3599,10 +3612,10 @@ async function runAuthRefreshWithReplacementRetry(
       return result;
     },
     readLatestStoredTokens: () => {
-      if (!opts.expectedActiveVaultAccountKey) return readStoredRefreshTokenCandidates(opts.realm);
+      if (!expectedActiveVaultAccountKey) return readStoredRefreshTokenCandidates(opts.realm);
       const vault = readAuthAccountVault();
-      const resource = vault.activeAccountKey === opts.expectedActiveVaultAccountKey
-        ? vault.resources[opts.expectedActiveVaultAccountKey] : undefined;
+      const resource = vault.activeAccountKey === expectedActiveVaultAccountKey
+        ? vault.resources[expectedActiveVaultAccountKey] : undefined;
       // The recursive cold-start path has already selected the authoritative
       // owner. Do not chase its rejected compatibility projection again.
       return [resource?.realm === opts.realm ? resource.refreshToken : null];
@@ -3643,7 +3656,7 @@ async function runAuthRefreshWithReplacementRetry(
   ) {
     try {
       const pair = await recoverActiveResourceSession(
-        opts.realm, run.requestedToken, opts.expectedActiveVaultAccountKey,
+        opts.realm, run.requestedToken, expectedActiveVaultAccountKey,
       );
       if (pair)
         return {
@@ -3651,11 +3664,13 @@ async function runAuthRefreshWithReplacementRetry(
           result: { ok: true, status: 200, data: pair },
           failureAction: undefined,
           expectedVaultRefreshToken: run.requestedToken,
+          expectedActiveVaultAccountKey,
         };
     } catch (error) {
       if (!(error instanceof AuthApiError)) throw error;
       return {
         ...run,
+        expectedActiveVaultAccountKey,
         result: {
           ok: false,
           status: error.statusCode,
@@ -3670,7 +3685,7 @@ async function runAuthRefreshWithReplacementRetry(
       };
     }
   }
-  return { ...run, expectedVaultRefreshToken };
+  return { ...run, expectedVaultRefreshToken, expectedActiveVaultAccountKey };
 }
 
 // ── Renderer notification ───────────────────────────────────────────────────
@@ -5071,6 +5086,7 @@ async function runColdStartRefreshFlow(
   const attemptedOwnershipTokens = new Set(ownershipRecovery.attemptedTokens);
   attemptedOwnershipTokens.add(storedToken);
   const epochAtStart = authStateEpoch;
+  let expectedActiveVaultAccountKey = ownershipRecovery.expectedActiveVaultAccountKey;
   /**
    * 本流程当前认可的代际。接受「自己的启动闸超时兜底」后前移到兜底那一代:
    * 提交后的灰度/组织默认同步必须用这个代际,否则本次恢复登录会被自己的兜底
@@ -5106,7 +5122,7 @@ async function runColdStartRefreshFlow(
     let run: Awaited<ReturnType<typeof runAuthRefreshWithReplacementRetry>>;
     for (;;) {
       if (epochChanged('before-recovery-attempt')) return snapshotAuthState();
-      if (!ownershipRecovery.expectedActiveVaultAccountKey) {
+      if (!expectedActiveVaultAccountKey) {
         const latest = readPersistedAuthSession();
         if (!latest || latest.realm !== storedRealm) {
           return finishColdStartSignedOut('cold-start-persisted-session-changed');
@@ -5128,7 +5144,7 @@ async function runColdStartRefreshFlow(
       if (epochChanged('after-recovery-wait')) return snapshotAuthState();
       // Another shared-data instance may have rotated/switched while we waited.
       // Re-enter admission with its current credential instead of sending the old one.
-      if (!ownershipRecovery.expectedActiveVaultAccountKey) {
+      if (!expectedActiveVaultAccountKey) {
         const latest = readPersistedAuthSession();
         if (latest?.realm !== storedRealm || latest.refreshToken !== storedToken) continue;
       }
@@ -5148,11 +5164,12 @@ async function runColdStartRefreshFlow(
         phase: 'cold-start',
         realm: storedRealm,
         withTransientRetry: false,
-        expectedActiveVaultAccountKey: ownershipRecovery.expectedActiveVaultAccountKey,
+        expectedActiveVaultAccountKey,
       });
       // Replacement recovery may have consumed a newer credential. Keep this
       // attempt's deadline and failure history attached to the actual request,
       // including when a paused flow resumes from that credential on disk.
+      expectedActiveVaultAccountKey = run.expectedActiveVaultAccountKey ?? expectedActiveVaultAccountKey;
       storedToken = run.requestedToken;
       retry.refreshToken = storedToken;
       // A successful rotation must become durable even when publication was
@@ -5196,7 +5213,7 @@ async function runColdStartRefreshFlow(
     if (
       latestSession &&
       latestSession.realm !== storedRealm &&
-      !ownershipRecovery.expectedActiveVaultAccountKey
+      !expectedActiveVaultAccountKey
     ) {
       // 共享 userData 的另一个实例已切到其它区域。旧区域请求无论成功失败都不能
       // 覆盖/删除新原子记录；本实例本次以未登录返回，后续 initialize 可加载新清单。

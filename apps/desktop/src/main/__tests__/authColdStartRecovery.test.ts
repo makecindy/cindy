@@ -51,6 +51,7 @@ const names = new Set([
   'clearAuth',
   'finishColdStartSignedOut',
   'recoverActiveResourceSession',
+  'readStoredRefreshTokenCandidates',
   'refreshPassportSessionSingleFlight',
   'replacePassportSessionIfCurrent',
   'assertPassportReplacementStored',
@@ -114,7 +115,7 @@ const coldStartTimeoutFallbacks = new ColdStartAuthFallbackRegistry();
 const snapshotAuthState = () => ({ isAuthenticated: !!accessToken, user: currentUser });
 const snapshotLoggedOutAuthState = snapshotAuthState;
 const readPersistedAuthSession = () => saved.session;
-const readStoredRefreshTokenCandidates = () => [saved.session?.refreshToken];
+let readStoredRefreshTokenCandidates = () => [saved.session?.refreshToken];
 const hasPotentiallyPersistedAuthCredentials = () => !!saved.session;
 const assertLoginFlowCurrent = (epoch) => { if (epoch !== loginFlowEpoch) throw new Error('superseded'); };
 const recoverAccountFreeOwnerAtStartup = async (mode, reason, unavailable, options = {}) => {
@@ -129,12 +130,14 @@ const reconcileDesktopActiveAuthSession = async () => saved.session;
 ${source.statements
   .filter((node) => ts.isFunctionDeclaration(node) && names.has(node.name?.text ?? ''))
   .map((node) => node.getText(source).replace(/^export /, '')
-    .replace('function refreshPassportSessionSingleFlight(', 'function productionRefreshPassportSessionSingleFlight('))
+    .replace('function refreshPassportSessionSingleFlight(', 'function productionRefreshPassportSessionSingleFlight(')
+    .replace('function readStoredRefreshTokenCandidates(', 'function productionReadStoredRefreshTokenCandidates('))
   .join('\n')}
 return {
   fetch: apiFetch, start: initialize, dispatchLoginAction, enterLocalMode, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
+  useProductionCandidates: () => { readStoredRefreshTokenCandidates = productionReadStoredRefreshTokenCandidates; },
   vaultRecovery: () => runColdStartRefreshFlow('test-refresh', 'global', {
     expectedActiveVaultAccountKey: accountVaultKey('global', 'original'),
   }),
@@ -208,6 +211,7 @@ function setup(random = 0) {
     isDefinitiveRefreshError,
     readAuthAccountVault: () => vault,
     readSafe: () => null,
+    readPersistedRefreshToken: (realm: string) => saved.session?.realm === realm ? saved.session.refreshToken : null,
     writePersistedAuthSessionOrThrow: (refreshToken: string, realm: string) => {
       saved.session = { version: 1, realm, refreshToken };
     },
@@ -921,7 +925,8 @@ describe('the saved-account vault after a Host renewal', () => {
       || (ts.isVariableStatement(node) && node.declarationList.declarations
         .some((d) => d.name.getText(source) === 'AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION')))
     .map((node) => node.getText(source).replace(/^export /, '')
-    .replace('function refreshPassportSessionSingleFlight(', 'function productionRefreshPassportSessionSingleFlight('));
+    .replace('function refreshPassportSessionSingleFlight(', 'function productionRefreshPassportSessionSingleFlight(')
+    .replace('function readStoredRefreshTokenCandidates(', 'function productionReadStoredRefreshTokenCandidates('));
   const vaultCompiled = ts.transpileModule(`
 let currentUser = { id: 'member-a' };
 const activeAuthRealm = 'global';
@@ -1167,6 +1172,41 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
       await h.renewPassport(client);
       expect(client.refreshAccount).toHaveBeenLastCalledWith('test-concurrent-newer');
     }
+  });
+
+  it('carries the vault owner discovered by real cold-start replacement retry across a lost response', async () => {
+    const { h } = recoverySetup();
+    const fresh = setup();
+    fresh.vault.resources[ORIGINAL_KEY].metadata = h.vault.resources[ORIGINAL_KEY].metadata;
+    fresh.vault.passports = h.vault.passports;
+    fresh.saved.session.refreshToken = 'test-stale-projection';
+    fresh.useProductionCandidates();
+    let vaultRequests = 0;
+    fresh.request.mockImplementation(async (token: unknown) => {
+      if (token === 'test-refresh' && vaultRequests++ === 0) return { ok: false, status: 0, data: null };
+      return { ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } } };
+    });
+    const startup = fresh.start();
+    await vi.advanceTimersByTimeAsync(62_500);
+    await startup;
+    expect(fresh.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    expect(fresh.request.mock.calls.map(([token]: unknown[]) => token)).toEqual([
+      'test-stale-projection', 'test-refresh', 'test-refresh',
+    ]);
+    expect(fresh.authClient.exchangeAccountMembership).toHaveBeenCalledWith('test-passport-access', 'original');
+    expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
+  });
+
+  it('keeps a valid compatibility rotation instead of preferring an older vault token', async () => {
+    const fresh = setup();
+    fresh.saved.session.refreshToken = 'test-newer-projection';
+    fresh.useProductionCandidates();
+    fresh.request.mockResolvedValue(fresh.ok);
+    await fresh.start();
+    expect(fresh.request).toHaveBeenCalledTimes(1);
+    expect(fresh.request).toHaveBeenCalledWith('test-newer-projection', 'global');
+    expect(fresh.state().isAuthenticated).toBe(true);
+    expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
   });
 
   it.each(['absent', 'stale'] as const)('recovers the authoritative vault account with an %s compatibility projection', async projection => {
