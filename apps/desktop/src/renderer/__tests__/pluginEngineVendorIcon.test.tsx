@@ -41,6 +41,7 @@ import { isSilhouetteIcon, rememberPluginIconSilhouetteForTests } from '@/compon
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { SessionStatusIcon } from '@/features/cc-agent/sidebar/SessionStatusIcon';
 import {
+  DEVICE_PLUGIN_ENGINES_REREAD_MS,
   evictRemotePluginEngines,
   markRemotePluginEnginesStale,
   prefetchRemotePluginEngines,
@@ -226,18 +227,21 @@ describe('remote plugin engine icons in sidebar SessionStatusIcon', () => {
     }
   });
 
-  it('probes an uninstalled remote plugin once without repeating on remount, and clears on eviction', async () => {
+  it('reuses a loaded catalogue across missing providers without re-reading, recovers after transient failure cooldown, and clears on eviction', async () => {
     const before = getDataOwnerGeneration();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
     let resolveInFlight!: (value: PluginEngineView[]) => void;
     const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('[DEVICE_LINK_BACKPRESSURE] busy'))
       .mockResolvedValueOnce([])
       .mockImplementationOnce(() => new Promise<PluginEngineView[]>((resolve) => { resolveInFlight = resolve; }));
     vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
     setDataOwnerGeneration('acct-1');
     try {
-      const first = render(
+      // Transient failure backs off for DEVICE_PLUGIN_ENGINES_REREAD_MS, then allows bounded recovery.
+      const failed = render(
         <SessionStatusIcon
-          session={acpSession({ deviceLinkDeviceId: 'device-a', deviceLinkConnectionStatus: 'connected' })}
+          session={acpSession({ id: 's-fail', deviceLinkDeviceId: 'device-a', deviceLinkConnectionStatus: 'connected' })}
           isRunning={false}
           isAttached={false}
           hasAttentionNotification={false}
@@ -245,12 +249,13 @@ describe('remote plugin engine icons in sidebar SessionStatusIcon', () => {
         />,
       );
       await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
-      first.unmount();
+      failed.unmount();
 
-      // Remounting a row for the same missing provider does not re-invoke the remote computer.
-      const second = render(
+      // Within failure cooldown, mounting another row does not storm the peer.
+      now.mockReturnValue(1_000_000 + DEVICE_PLUGIN_ENGINES_REREAD_MS - 1);
+      const duringCooldown = render(
         <SessionStatusIcon
-          session={acpSession({ id: 's2', deviceLinkDeviceId: 'device-a', deviceLinkConnectionStatus: 'connected' })}
+          session={acpSession({ id: 's-cool', deviceLinkDeviceId: 'device-a', deviceLinkConnectionStatus: 'connected' })}
           isRunning={false}
           isAttached={false}
           hasAttentionNotification={false}
@@ -258,12 +263,44 @@ describe('remote plugin engine icons in sidebar SessionStatusIcon', () => {
         />,
       );
       expect(invoke).toHaveBeenCalledTimes(1);
-      second.unmount();
+      duringCooldown.unmount();
+
+      // After cooldown, a subsequent mount retries and succeeds with an empty catalogue.
+      now.mockReturnValue(1_000_000 + DEVICE_PLUGIN_ENGINES_REREAD_MS + 1);
+      const recovered = render(
+        <SessionStatusIcon
+          session={acpSession({ id: 's1', deviceLinkDeviceId: 'device-a', deviceLinkConnectionStatus: 'connected' })}
+          isRunning={false}
+          isAttached={false}
+          hasAttentionNotification={false}
+          isActive={false}
+        />,
+      );
+      await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+      recovered.unmount();
+
+      // Once the full catalogue is loaded, mounting rows for other uninstalled providers does not re-download it.
+      const otherMissing = render(
+        <SessionStatusIcon
+          session={acpSession({
+            id: 's2',
+            providerId: 'acp-plugin:removed-plugin:other',
+            deviceLinkDeviceId: 'device-a',
+            deviceLinkConnectionStatus: 'connected',
+          })}
+          isRunning={false}
+          isAttached={false}
+          hasAttentionNotification={false}
+          isActive={false}
+        />,
+      );
+      expect(invoke).toHaveBeenCalledTimes(2);
+      otherMissing.unmount();
 
       // Eviction discards an in-flight reply so a revoked device cannot repopulate the cache.
       markRemotePluginEnginesStale('device-a');
       const inflight = prefetchRemotePluginEngines('device-a');
-      await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(invoke).toHaveBeenCalledTimes(3));
       evictRemotePluginEngines('device-a');
       resolveInFlight([remoteEngine('dsh-plugin:dsh', 'DeepSeek Harness', 'data:image/png;base64,late')]);
       await inflight;
@@ -279,6 +316,7 @@ describe('remote plugin engine icons in sidebar SessionStatusIcon', () => {
       );
       expect(third.container.querySelector('img')).toBeNull();
     } finally {
+      now.mockRestore();
       setDataOwnerGeneration(before.dataOwnerId, before.generation);
     }
   });

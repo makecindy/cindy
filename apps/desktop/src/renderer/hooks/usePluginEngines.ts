@@ -21,6 +21,7 @@ import {
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import {
   PLUGIN_ENGINES_INVOKE,
   pluginEngineKeyFromProviderId,
@@ -121,7 +122,7 @@ export function usePluginEngines(enabled = true): readonly PluginEngineView[] {
 
 interface DeviceCatalogue {
   read(): Promise<void>;
-  ensureProvider(providerId: string): void;
+  ensureLoaded(): void;
   prefetch(): Promise<void>;
   markStale(): void;
   evict(): void;
@@ -129,8 +130,6 @@ interface DeviceCatalogue {
   subscribe(listener: () => void): () => void;
   snapshot(): readonly PluginEngineView[] | null;
 }
-
-const MAX_PROBED_PROVIDERS = 64;
 
 let deviceCatalogues = new WeakMap<DataOwnerGeneration, Map<string, DeviceCatalogue>>();
 
@@ -140,6 +139,12 @@ function sameEngineViews(
 ): boolean {
   if (a === null || a.length !== b.length) return false;
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function isUnsupportedRemoteListError(error: unknown): boolean {
+  if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.includes('CHANNEL_NOT_ALLOWED');
 }
 
 function existingDeviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCatalogue | undefined {
@@ -159,7 +164,8 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
   let pending: Promise<void> | undefined;
   let deviceGeneration = 0;
   let lastReadAt = 0;
-  const probedProviders = new Set<string>();
+  let lastFailedAt = 0;
+  let unsupported = false;
   const subscribers = new Set<() => void>();
   const catalogue: DeviceCatalogue = {
     read() {
@@ -176,28 +182,31 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
           }
           const next = sanitize(reply);
           lastReadAt = Date.now();
+          lastFailedAt = 0;
+          unsupported = false;
           retainReportingPluginEngines(owner, deviceId, next);
           if (sameEngineViews(current, next)) return;
           current = next;
           for (const subscriber of subscribers) subscriber();
         })
         // Old or unreachable hosts leave the catalogue unknown or retain their last result.
-        .catch(() => undefined)
+        .catch((error: unknown) => {
+          if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration) return;
+          if (isUnsupportedRemoteListError(error)) unsupported = true;
+          else lastFailedAt = Date.now();
+        })
         .finally(() => {
           if (pending === run) pending = undefined;
         });
       pending = run;
       return run;
     },
-    ensureProvider(providerId) {
+    ensureLoaded() {
       if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return;
-      if (current !== null && findPluginEngine(current, providerId) !== null) return;
-      if (probedProviders.has(providerId)) return;
-      if (probedProviders.size >= MAX_PROBED_PROVIDERS) {
-        const oldest = probedProviders.values().next().value;
-        if (oldest !== undefined) probedProviders.delete(oldest);
-      }
-      probedProviders.add(providerId);
+      // Once the full catalogue for this computer has been read (even if empty or missing an
+      // uninstalled plugin), reuse it instead of re-downloading on scroll or additional rows.
+      if (current !== null || pending || unsupported) return;
+      if (lastFailedAt > 0 && Date.now() - lastFailedAt < DEVICE_PLUGIN_ENGINES_REREAD_MS) return;
       void catalogue.read();
     },
     prefetch() {
@@ -206,18 +215,21 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       if (current !== null && lastReadAt > 0 && Date.now() - lastReadAt < DEVICE_PLUGIN_ENGINES_REREAD_MS) {
         return Promise.resolve();
       }
-      probedProviders.clear();
+      lastFailedAt = 0;
+      unsupported = false;
       return catalogue.read();
     },
     markStale() {
       lastReadAt = 0;
-      probedProviders.clear();
+      lastFailedAt = 0;
+      unsupported = false;
     },
     evict() {
       deviceGeneration += 1;
       pending = undefined;
       lastReadAt = 0;
-      probedProviders.clear();
+      lastFailedAt = 0;
+      unsupported = false;
       retainReportingPluginEngines(owner, deviceId, []);
       if (current !== null) {
         current = null;
@@ -391,9 +403,9 @@ export function usePluginEngineIdentity(
   );
   const readRemote = options?.readRemote !== false;
   useEffect(() => {
-    if (!catalogue || !providerId || !readRemote) return;
-    catalogue.ensureProvider(providerId);
-  }, [catalogue, providerId, readRemote]);
+    if (!catalogue || !readRemote) return;
+    catalogue.ensureLoaded();
+  }, [catalogue, readRemote]);
   const engine = findPluginEngine(deviceId ? remoteEngines ?? NO_ENGINES : localEngines, providerId);
   if (!engine) return { name: t('newChat.pluginEngines.genericName') };
   return { name: engine.name, ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}) };
