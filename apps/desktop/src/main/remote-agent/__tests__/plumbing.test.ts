@@ -706,6 +706,33 @@ describe('exec-server relay gate', () => {
     expect(gate.authorize({ kind: 'read', path: target }).ok).toBe(true);
     expect(gate.authorize({ kind: 'write', path: target }).ok).toBe(false);
   });
+
+  // PR #11698: the controller must show and grant the cwd used by the executor.
+  // Existing grant checks only use the workspace root. One Bash in a different
+  // cwd exposes the mismatch through the real reverse-interaction handler.
+  it('shows the live shell directory and binds the approval to it', async () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const cwd = path.join(root, 'project');
+    const recordApproval = vi.fn();
+    const controller = createRemoteAgentHandle({
+      client: {} as RemoteAgentRunClient,
+      started: { id: 'acp-1', agentKind: 'acp', model: 'm', shadowDir: '', methods: [], state: {} },
+      workspace,
+      getExecutorCwd: () => cwd,
+      recordApproval,
+      newId: () => 'req',
+      dispose: async () => undefined,
+    });
+    const show = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    controller.handle.setInteractionResolver(show);
+    const command = 'rm -rf build';
+    await controller.onRequest({
+      type: 'interaction',
+      request: { kind: 'permission', requestId: 'bash-1', toolName: 'Bash', input: { command } },
+    });
+    expect(show).toHaveBeenCalledWith(expect.objectContaining({ input: { command, cwd } }));
+    expect(recordApproval).toHaveBeenCalledExactlyOnceWith({ kind: 'exec', command, cwd });
+  });
 });
 
 describe('wire payloads', () => {

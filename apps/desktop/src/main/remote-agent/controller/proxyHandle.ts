@@ -158,6 +158,7 @@ export function approvalActionsFor(
   request: InteractionRequest,
   workspace: ExecutorWorkspace,
   pluginEngine = false,
+  cwd = workspace.workingDir,
 ): ExecutorAction[] {
   if (request.kind !== 'permission') return [];
   const input = request.input ?? {};
@@ -169,7 +170,7 @@ export function approvalActionsFor(
       return [{
         kind: 'exec',
         command: workspace.mapCommand(action.preview, resolveExecutorShell().dialect),
-        cwd: workspace.workingDir,
+        cwd,
       }];
     }
     const reads = tool === 'read';
@@ -177,7 +178,7 @@ export function approvalActionsFor(
     const target = tool === 'notebookedit' ? input.notebook_path : input.file_path;
     if (action.kind !== (reads ? 'file-read' : 'file-write') || action.preview !== target) return [];
     try {
-      const path = workspace.resolve(action.preview);
+      const path = workspace.resolve(action.preview, cwd);
       return reads ? [{ kind: 'read', path, exactFileApproval: true }] : [{ kind: 'write', path }];
     } catch {
       return [];
@@ -247,6 +248,7 @@ export function fixedRemoteAgentLink(client: RemoteAgentRunClient): RemoteAgentL
 }
 
 export interface RemoteHandleDeps {
+  getExecutorCwd?(): string;
   /** 缺省时用 `client` 作为固定连接。 */
   link?: RemoteAgentLink;
   client?: RemoteAgentRunClient;
@@ -664,12 +666,28 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
           : { kind: 'permission', behavior: 'deny', reason: 'interaction_unavailable' };
       return { type: 'interaction', result: decision };
     }
-    let decision = await resolver(localPlanReview(request, deps.workspace));
+    const pluginEngine = started.agentKind === 'acp';
+    const pluginApprovals = pluginEngine
+      ? approvalActionsFor(request, deps.workspace, true, deps.getExecutorCwd?.())
+      : [];
+    const action = pluginApprovals[0];
+    const presented = request.kind === 'permission' && action
+      ? {
+          ...request,
+          input: {
+            ...request.input,
+            ...(action.kind === 'exec' ? { command: action.command, cwd: action.cwd }
+              : action.kind === 'fetch' ? {} : { file_path: action.path }),
+          },
+        }
+      : request;
+    let decision = await resolver(localPlanReview(presented, deps.workspace));
     if (decision.kind === 'permission' && decision.behavior === 'allow') {
-      const pluginEngine = started.agentKind === 'acp';
       // ACP selects an option and does not forward edited arguments to the engine.
-      const effective = !pluginEngine && decision.updatedInput ? { ...request, input: decision.updatedInput } : request;
-      for (const action of approvalActionsFor(effective, deps.workspace, pluginEngine)) deps.recordApproval(action);
+      const effective = decision.updatedInput ? { ...request, input: decision.updatedInput } : request;
+      for (const approval of pluginEngine ? pluginApprovals : approvalActionsFor(effective, deps.workspace)) {
+        deps.recordApproval(approval);
+      }
     }
     // 用户改过的计划按本机路径展示，交回 Agent 前换回它那边的写法。
     if (decision.kind === 'plan_review') {

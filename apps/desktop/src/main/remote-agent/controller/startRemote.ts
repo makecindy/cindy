@@ -1205,6 +1205,7 @@ async function prepareAndStartRemoteAgentSession(
         link,
         started,
         workspace,
+        getExecutorCwd: () => executor.getCwd(),
         recordApproval: (action) => executor.recordApproval(action),
         cancelPendingConfirmations: () => executor.cancelPendingConfirmations(),
         onInvalidResumeSession: opts.onInvalidResumeSession,
