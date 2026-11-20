@@ -16,8 +16,6 @@ import {
   type PluginHarness,
 } from '../cindy-brain/pluginHarnesses.js';
 import { getCachedPluginHarnessModels, onPluginHarnessModelsChanged } from '../maker-host/acp-host.js';
-import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
-import { onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   PLUGIN_ENGINES_INVOKE,
@@ -88,6 +86,19 @@ function enginePermissionModes(harness: PluginHarness): Pick<PluginEngineView, '
   };
 }
 
+/**
+ * 「允许被远程调用」of plugin engines (maker-host/pluginEngineRemoteUse.ts). Supplied by the desktop
+ * wiring through registerPluginEnginesIpc instead of imported here: this module is also loaded by
+ * the scheduler and Agent tools for the engine list, and must not pull the account-scoped store
+ * (and Electron) in with it. Until it is supplied, no engine reads as opened.
+ */
+export interface PluginEngineRemoteUseAccess {
+  read(harness: Pick<PluginHarness, 'key' | 'remoteWorkspace'>): NonNullable<PluginEngineView['remoteUse']>;
+  set(key: string, enabled: boolean): Promise<NonNullable<PluginEngineView['remoteUse']>>;
+  onChange(listener: () => void): () => void;
+}
+let remoteUseAccess: PluginEngineRemoteUseAccess | null = null;
+
 function toView(harness: PluginHarness): PluginEngineView {
   return {
     key: harness.key,
@@ -101,7 +112,7 @@ function toView(harness: PluginHarness): PluginEngineView {
     ...(harness.reportsUsage ? { reportsUsage: true } : {}),
     models: engineModels(harness),
     ...enginePermissionModes(harness),
-    remoteUse: pluginEngineRemoteUse(harness),
+    remoteUse: remoteUseAccess?.read(harness) ?? { supported: harness.remoteWorkspace === true, enabled: false },
   };
 }
 
@@ -170,11 +181,14 @@ export interface RegisterPluginEnginesIpcOpts {
    * discovery. They have no sender-dependent side effects.
    */
   isDeviceLinkInvoke?(): boolean;
+  /** The per-engine remote-use switch; absent = engines cannot be opened to other computers here. */
+  remoteUse?: PluginEngineRemoteUseAccess;
 }
 
 /** Returns a disposer for the change subscriptions. */
 export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): () => void {
   const remote = () => opts.isDeviceLinkInvoke?.() === true;
+  remoteUseAccess = opts.remoteUse ?? null;
   opts.handle(PLUGIN_ENGINES_INVOKE.LIST, (event) => {
     if (remote()) return remotePluginEngineViews(listPluginEngineViews());
     opts.assertTrusted(event);
@@ -197,7 +211,8 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     if (typeof value.key !== 'string' || !value.key || value.key.length > 200 || typeof value.enabled !== 'boolean') {
       throw new Error('Invalid plugin engine remote use request');
     }
-    const remoteUse = await setPluginEngineRemoteUse(value.key, value.enabled);
+    if (!remoteUseAccess) throw new Error('Remote use of plugin engines is not available here');
+    const remoteUse = await remoteUseAccess.set(value.key, value.enabled);
     publish();
     return remoteUse;
   });
@@ -211,10 +226,11 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
   };
   const offRegistry = getPluginHarnessRegistry().onChange(publish);
   const offModels = onPluginHarnessModelsChanged(publish);
-  const offRemoteUse = onRemoteProviderAccessChanged(publish);
+  const offRemoteUse = remoteUseAccess?.onChange(publish);
   return () => {
     offRegistry();
     offModels();
-    offRemoteUse();
+    offRemoteUse?.();
+    remoteUseAccess = null;
   };
 }
