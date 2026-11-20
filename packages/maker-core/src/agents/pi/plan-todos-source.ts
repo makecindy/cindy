@@ -54,10 +54,15 @@ function selectPlanText(content) {
     nativeVisible = nativeVisible.slice(0, linesWithoutEmptyHeaders[header].start);
     linesWithoutEmptyHeaders = planLines(nativeVisible);
   }
-  const native = content.filter(block => block.type === 'thinking')
+  let native = content.filter(block => block.type === 'thinking')
     .map(block => block.thinking ?? '').concat(nativeVisible ? [nativeVisible] : []).join('\n');
-  const header = planLines(native).findLast(line => isPlanHeader(line.text));
-  if (header) return native.slice(header.start);
+  while (true) {
+    const nativeLines = planLines(native);
+    const header = nativeLines.findLastIndex(line => isPlanHeader(line.text));
+    if (header < 0) break;
+    if (hasPlanBody(nativeLines.slice(header + 1))) return native.slice(nativeLines[header].start);
+    native = native.slice(0, nativeLines[header].start);
+  }
   // Some native providers emit a numbered plan in thinking without a
   // heading. Keep the complete top-level list, including blank lines and
   // step details, while still dropping unrelated preamble.
@@ -69,7 +74,8 @@ function selectPlanText(content) {
     const roots = numbered.filter(line => indent(line) === minimum);
     // Section headings make a restart a phase boundary, not a new plan.
     // Keep the complete sectioned plan for ambiguous-id whole-plan tracking.
-    const sections = lines.filter(line => /^\s*(?:#{1,6}\s+)?(?:implementation|verification|validation|testing|deployment|phase\s+\w+|实施|实现|验证|测试|交付|阶段\s*\S*)\s*[:：]?\s*$/i.test(line.text));
+    const sections = lines.filter(line => /^(?:#{1,6}\s+\S.*|[^\s\d].*[:：])\s*$/.test(line.text)
+      && !/^(?:#{1,6}\s+)?(?:options|alternatives|considerations|选项|备选|思考)\s*[:：]?$/i.test(line.text));
     if (sections.length) return native.slice(Math.min(sections[0].start, roots[0].start));
     let start = 0;
     for (let i = 1; i < roots.length; i++) {

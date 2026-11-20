@@ -2286,14 +2286,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
-  it.each(['Plan:', 'Here is the plan.', 'Plan:\n```\n1. Example action with long title\n```'])('8933 does not confirm a bodyless response: %s', { timeout: 60_000 }, async plan => {
+  it.each(['Plan:', 'Here is the plan.', 'Plan:\n```\n1. Example action with long title\n```'].flatMap(plan => [{ plan, thinking: false }, { plan, thinking: true }]))('8933 does not confirm a bodyless response: %j', { timeout: 60_000 }, async ({ plan, thinking }) => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-empty-plan-'));
     let handle: AgentSessionHandle | undefined;
     try {
       handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'empty-plan', workingDir, model: 'pi-test-model', planMode: true });
       const resolver = vi.fn(async () => ({ kind: 'ask_user_question', answers: {} }));
       handle.setInteractionResolver!(resolver as never);
-      scriptedResponses.push(anthropicStreamBody(plan));
+      let response = anthropicStreamBody(plan);
+      if (thinking) response = response.replace('"type":"text","text":""', '"type":"thinking","thinking":""')
+        .replace('"type":"text_delta","text":', '"type":"thinking_delta","thinking":');
+      scriptedResponses.push(response);
       const before = seenRequests.length;
       await handle.send({ type: 'user', content: 'Prepare the plan.' });
       await vi.waitFor(() => expect(seenRequests.length).toBe(before + 1), { timeout: 20_000 });
@@ -2328,6 +2331,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['thinking-unsafe-prefix', '0. 保留\n1. 验证\n\n1. 交付\n2. 审查', ['0. 保留\n1. 验证\n\n1. 交付\n2. 审查']],
     ['thinking-empty-prefix', '1. [ ]\n2. 验证\n\n1. 交付\n2. 审查', ['1. [ ]\n2. 验证\n\n1. 交付\n2. 审查']],
     ['thinking-phases', 'Implementation:\n1. 实现\n2. 交付\n\nVerification:\n1. 验证\n2. 审查', ['Implementation:\n1. 实现\n2. 交付\n\nVerification:\n1. 验证\n2. 审查']],
+    ['thinking-markdown-phases', '## Build\n1. 实现\n2. 交付\n\n## Review\n1. 验证\n2. 审查', ['## Build\n1. 实现\n2. 交付\n\n## Review\n1. 验证\n2. 审查']],
     ['thinking-empty-heading', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-heading-intro', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-visible-whole', 'Plan:\n1. Investigate alternatives', ['1. 实现\n1. 验证']],
