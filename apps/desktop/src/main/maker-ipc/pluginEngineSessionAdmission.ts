@@ -12,6 +12,7 @@
  */
 import type { PluginHarness } from '../cindy-brain/pluginHarnesses.js';
 import type { SessionOpenBody } from '../localDb/sessionOpening.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   isPluginEngineEffort,
@@ -35,9 +36,10 @@ export function admitPluginEngineSession(
 ): SessionOpenBody {
   const key = pluginEngineKeyFromProviderId(body.providerId);
   if (!key) throw new Error('插件引擎任务缺少引擎标识。请在新建任务时重新选择插件引擎。');
-  if (body.remoteHostId || body.agentDeviceId) {
-    throw new Error('插件引擎只能在本机运行。请在新建任务时选择本机。');
+  if (body.remoteHostId) {
+    throw new Error('插件引擎不能在 SSH 工作区里运行。请在新建任务时选择本机或你的另一台电脑。');
   }
+  if (typeof body.agentDeviceId === 'string' && body.agentDeviceId.trim()) return admitPluginEngineSessionElsewhere(body);
   const harness = harnesses.find((item) => item.key === key);
   if (!harness) {
     throw new Error('提供这个引擎的插件已停用或卸载。请在新建任务时重新选择模型。');
@@ -51,6 +53,24 @@ export function admitPluginEngineSession(
   const offered = modelsOf(harness).find((item) => item.id === model)?.efforts ?? [];
   const effort = isPluginEngineEffort(requested) && offered.includes(requested) ? requested : '';
   return { ...body, model, effort, fastMode: false };
+}
+
+/**
+ * The engine belongs to another computer of the same account (`body.agentDeviceId`): the plugin
+ * need not be installed here, so this computer cannot check the engine itself. Like a provider of
+ * another computer, whether that computer offers it (plugin supports the mode, engine available,
+ * opened for remote use) is decided there when the task starts; a refusal surfaces as the start
+ * error and never falls back to an engine of this computer. What is decided here is only what can
+ * never work: a shared provider is not a computer of this account and never offers plugin engines.
+ * The model stays the engine's own value; a reasoning level is kept as chosen (the engine keeps its
+ * own when it does not offer that level); Fast does not apply.
+ */
+function admitPluginEngineSessionElsewhere(body: SessionOpenBody): SessionOpenBody {
+  if (isProviderShareAgentDeviceId(body.agentDeviceId)) {
+    throw new Error('别人分享的供应商不提供插件引擎。请选择你自己电脑上的插件引擎。');
+  }
+  const model = typeof body.model === 'string' && body.model.trim() ? body.model : PLUGIN_ENGINE_DEFAULT_MODEL;
+  return { ...body, model, effort: isPluginEngineEffort(body.effort) ? body.effort : '', fastMode: false };
 }
 
 /** What a task switching onto a plugin engine starts with (the engine's own values, see below). */

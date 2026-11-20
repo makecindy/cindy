@@ -233,6 +233,8 @@ export type PreRunHookDecision = 'run' | 'skip' | 'block';
 export interface PreRunHookRunResult {
   /** Explicit successful check, including a healthy no-work skip. Optional for old hooks. */
   checkSucceeded?: true;
+  /** Optional structured PR check output, annotated on the executing host. */
+  prCheckDiagnosis?: unknown;
   status: PreRunHookRunStatus;
   decision: PreRunHookDecision;
   exitCode: number | null;
@@ -366,6 +368,8 @@ export interface Schedule {
   /** 外部事件触发条件；undefined = 未开启。详见 ScheduleWebhookTrigger。 */
   webhookTrigger?: ScheduleWebhookTrigger;
   /** 插件前置检查;undefined = 未配置。详见 PreRunPluginConfig。 */
+  /** Account-scoped assignment for schedules created by a plugin. */
+  primaryHostKey?: string;
   preRunPlugin?: PreRunPluginConfig;
   notify: ScheduleNotifyConfig;
   status: ScheduleStatus;
@@ -521,6 +525,7 @@ export interface CreateScheduleInput {
   /** Webhook 触发条件；null / 缺省 = 不开启。与定时的一次性任务互斥。 */
   webhookTrigger?: ScheduleWebhookTriggerInput | null;
   /** 插件前置检查;update 时 null = 清除,省略 = 保留(旧客户端不认识该字段)。 */
+  primaryHostKey?: string;
   preRunPlugin?: PreRunPluginConfig | null;
   notify: ScheduleNotifyConfig;
   /** null explicitly clears the deadline across JSON transports. */

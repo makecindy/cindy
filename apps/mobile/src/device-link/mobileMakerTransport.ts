@@ -40,7 +40,8 @@ import {
   MOBILE_REMOTE_INVOKE_CHANNELS,
 } from "@cindy/maker-shared/device-link-contract";
 import {
-  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  providerPickerListArgs,
+  type ProviderPickerModel,
   ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_WORKER_ROLES_APPLY,
   ORCA_WORKER_ROLES_GET,
@@ -519,7 +520,8 @@ export interface MobileMakerTransport {
    * 列被控端的供应商(来源)结构,用于 provider-aware 模型下拉(隧道 maker:provider:list)。
    * modelVisibilityOverrides = 被控端「模型显示/隐藏」override 快照(旧被控端不回传)。
    */
-  listProviders(): Promise<{
+  listProviders(retainedModel?: ProviderPickerModel): Promise<{
+    deferredProviderIds?: string[];
     providers: ProviderView[];
     providerOrder?: string[];
     modelVisibilityOverrides?: Record<string, boolean>;
@@ -1267,12 +1269,7 @@ export function createMobileMakerTransport({
     getSessionTree: (sessionId) => call("maker:get-session-tree", [sessionId]),
     navigateSessionTree: (sessionId, entryId, options) =>
       call("maker:navigate-session-tree", [sessionId, entryId, options]),
-    listProviders: () =>
-      call("maker:provider:list", [
-        {
-          capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
-        },
-      ]),
+    listProviders: (retainedModel) => call("maker:provider:list", providerPickerListArgs(retainedModel)),
     getSession: (sessionId) => call("local-db:sessions:get", [sessionId]),
     prewarmSession: (sessionId, createOpts) =>
       call("maker:session:prewarm", [sessionId, createOpts]),

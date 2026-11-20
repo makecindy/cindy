@@ -128,9 +128,13 @@ function normalizeScriptConfig(
 const PLUGIN_ENGINE_PROVIDER_PREFIX = 'acp-plugin:';
 
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'agentKind' | 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId' | 'webhookTrigger' | 'prTrigger' | 'recurring' | 'manual'>,
+  schedule: Pick<Schedule, 'primaryHostKey' | 'agentKind' | 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId' | 'webhookTrigger' | 'prTrigger' | 'recurring' | 'manual'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
+  const modelDeviceId = schedule.modelAgentDeviceId ?? schedule.agentDeviceId;
+  if (schedule.primaryHostKey && (modelDeviceId || (schedule.targetSessionId && !schedule.persistentSession))) {
+    throw new Error('Choose a model on the tidy-up host and run it in its own task.');
+  }
   // 一次事件就会把定时的一次性任务用完。手动任务的 recurring 不参与调度，不受此限。
   if (schedule.prTrigger && schedule.webhookTrigger) throw new Error('Choose a PR trigger or a Webhook trigger');
   if ((schedule.webhookTrigger || schedule.prTrigger) && !schedule.recurring && !schedule.manual) {
@@ -249,7 +253,7 @@ export interface SchedulerOptions {
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
-    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId'>,
+    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId' | 'primaryHostKey'>,
   ) => Promise<void>;
   /**
    * 被动模式:本实例不参与自动触发 —— start() 不装 tick 时钟、不做僵尸 run 清理
@@ -1918,6 +1922,21 @@ export class Scheduler extends EventEmitter {
 
   async create(input: CreateScheduleInput): Promise<Schedule> {
     if ((input as Partial<Schedule>).source === 'bot') throw new Error('invalid schedule source');
+    if (input.primaryHostKey !== undefined && (typeof input.primaryHostKey !== 'string' ||
+        !/^(?:public|local|org\.[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?)\/[a-z0-9][a-z0-9-]{0,31}$/.test(input.primaryHostKey))) {
+      throw new Error('Invalid plugin primary host key');
+    }
+    // Older mobile clients only carry the Contacts draft's name and prompt back to the computer.
+    if (input.primaryHostKey === undefined && (input.executionMode ?? 'agent') === 'agent' &&
+        input.prompt?.startsWith('整理我的通讯录（cindy-contacts 插件）。') &&
+        ['maintenance', 'begin', 'run_id'].every(part => input.prompt.includes(part)) &&
+        !input.prompt.includes('不要传 namespace')) {
+      const namespace = input.prompt.match(/namespace 传「([a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?)」。$/)?.[1];
+      if (namespace || !input.prompt.includes('namespace 传「')) {
+        const channel = !namespace ? 'public' : namespace === 'local' ? 'local' : 'org.' + namespace;
+        input = { ...input, primaryHostKey: channel + '/cindy-contacts' };
+      }
+    }
     input = this.normalizeManagedWorkingDir(input);
     const now = this.clock.now();
     const id = this.generateId();
@@ -2036,6 +2055,9 @@ export class Scheduler extends EventEmitter {
     }
     const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    if (Object.prototype.hasOwnProperty.call(patch, 'primaryHostKey') && patch.primaryHostKey !== existing.primaryHostKey) {
+      throw new Error('The automation binding cannot be changed');
+    }
     if (Object.prototype.hasOwnProperty.call(patch, 'webhookTrigger')) {
       updates.webhookTrigger = normalizeWebhookTrigger(patch.webhookTrigger, existing.webhookTrigger, this.generateId);
     }

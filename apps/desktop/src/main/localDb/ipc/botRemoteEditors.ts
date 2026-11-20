@@ -12,7 +12,7 @@ import type { BotProjectOption } from '../../../shared/botWorkbench.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
 type Capability = { id: string; name: string; description: string; available: boolean; joined: boolean; cindyOfficial?: boolean };
-export interface BotRemoteEditorDeps extends Pick<BotRemoteSettingsDeps, 'owner' | 'assertOwner' | 'read' | 'update' | 'skills'> {
+export interface BotRemoteEditorDeps extends Pick<BotRemoteSettingsDeps, 'owner' | 'assertOwner' | 'read' | 'update' | 'skills' | 'modelGroups' | 'fillModelGroups'> {
   projects?: { list(botId: string): Promise<BotProjectOption[]>; set(botId: string, id: string, linked: boolean): Promise<unknown> };
   /** Learned skills, including turned-off ones (`enabled: false`). */
   skills(botId: string): Promise<Array<{ slug: string; name: string; description: string; updatedAt: string | number; enabled?: boolean }>>;
@@ -131,7 +131,10 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
         { id: 'avatarImageBase64', label: editorCopy.avatar, kind: 'text', required: true },
       ], { name: '', avatarImageBase64: '' });
       // Metadata keeps older generic form renderers from displaying raw model JSON.
-      const block = { ...panel.block, data: { ...panel.block.data, creationModelChain: serializeModelRoutes(modelChain.slice(0, 1)) } };
+      const groups = deps.modelGroups?.();
+      const block = { ...panel.block, data: { ...panel.block.data, creationModelChain: serializeModelRoutes(modelChain.slice(0, 1)),
+        // This computer's model groups for the creation picker (model-groups.md §6.2); older controllers ignore it.
+        ...(groups?.routes.length ? { modelGroups: groups } : {}) } };
       return bind(context, { ref: ref(id), revision: '1', display: { title: editorCopy.create }, links: [], blocks: [block], actions: [panel.action] }, async () => '1', async request => {
         const input = request.input ?? {}; keys(input, ['name', 'avatarImageBase64', 'requestId', 'modelChain']);
         const requestId = string(input.requestId, 80);
@@ -147,7 +150,8 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
           try { value = JSON.parse(string(input.modelChain, 4000)); } catch { fail(); }
           const chain = normalizeBotModelChain(value);
           if (!Array.isArray(value) || value.length !== 1 || chain.length !== 1 || !['claude', 'codex', 'pi'].includes(value[0]?.harness)) fail();
-          capabilities = { modelChainOverride: chain };
+          capabilities = { modelChainOverride: deps.fillModelGroups ? await deps.fillModelGroups(chain) : chain };
+          deps.assertOwner(owner);
         }
         await deps.create({ id: botId, name, avatarImageBase64, locale, ...(capabilities ? { capabilities } : {}) });
         deps.assertOwner(owner);

@@ -31,12 +31,14 @@
 
 | 文档 | 内容 |
 |---|---|
+| [自有电脑验证 Host](owned-machine-verification.md) | 三个平台的任务内工具链、Host 门禁，以及发布前的 macOS 文件监听和桌面测试 |
 | [headless-runtime-plan.md](headless-runtime-plan.md) | 当前架构目标、能力缺口、分批交付与完整无界面验收 |
 | [architecture-and-status.md](architecture-and-status.md) | 原 PR 阶段的模块分析与实验记录；现状以基础网页版和当前计划为准 |
 | [maintenance-plan.md](maintenance-plan.md) | PR #9246 合并后的维护计划与逐批验收边界 |
 | [feature-parity.md](feature-parity.md) | 原 PR 阶段的逐项功能记录与审计，保留历史验证范围 |
 | [personal-migration-release-table.md](personal-migration-release-table.md) | 个人版迁移放行表：每项应保留能力的现状、与桌面的差异和证据（M1 起随检查点更新） |
 | [electron-client-mode.md](electron-client-mode.md) | Electron 以客户端模式运行：通道代理表、安全边界、未迁移清单 |
+| [client-mode-account-switch.md](client-mode-account-switch.md) | 客户端模式下的账号切换与添加账号：定稿方案（Host 执行、窗口只当界面；安全小节、默认行为、改动与测试清单，未实现） |
 | [channel-coverage.md](channel-coverage.md) | 脚本生成：桌面主进程全部 IPC 通道的归属（A 后台／B 窗口／W 窗口设置／S 同步／R 回执／C 待定）、要 Host 做的总数与真实使用排行、客户端模式行为 |
 | [systemd.md](systemd.md) | user unit 安装与运维 |
 | [maker-assembly-extraction-plan.md](maker-assembly-extraction-plan.md) | Runtime 装配抽离计划 |

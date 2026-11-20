@@ -255,7 +255,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
-    getPeerLinks: getDeviceLinkPeerLinks,
+    getPeerLinks: () => getDeviceLinkPeerLinks(true),
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。

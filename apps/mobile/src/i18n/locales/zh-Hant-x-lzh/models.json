@@ -110,6 +110,16 @@
     "quotaAverageHint": "週限額 · 諸名籍等權均值",
     "quotaResetHint": "依今耗速，重置或尚有餘：距 24 小時以內示黃，6 小時以內示紅。"
   },
+  "modelGroups": {
+    "title": "模型組",
+    "sourceCount_other": "{{count}} 源",
+    "strategy": {
+      "expiring": "將廢者先用",
+      "order": "依序",
+      "rotate": "輪值",
+      "cheapest": "最省"
+    }
+  },
   "pluginEngines": {
     "genericName": "法器引擎",
     "defaultModel": "預設模型",

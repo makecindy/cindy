@@ -18,6 +18,8 @@ vi.mock('@/platform/gestureHandler', () => {
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 // Card previews are covered separately; retain this suite's attachment/message rendering assertions.
 vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
+// Model selection has its own card regression; keep native catalogs out of this message test.
+vi.mock('@/plugins/PluginModelPicker', () => ({ PluginModelPicker: () => null }));
 vi.mock('expo-modules-core', () => ({
   requireOptionalNativeModule: () => null,
   requireNativeViewManager: () => () => null,

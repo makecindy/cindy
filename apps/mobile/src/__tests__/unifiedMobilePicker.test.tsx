@@ -84,6 +84,16 @@ it('shows favorites before recommendations, with selected mark only on the model
   expect(test.view.groups[0].rows[0].config).toMatchObject({effort:'high',fast:true});
   expect(test.view.groups[1].rows[0].selected).toBe(true);
 });
+// 依据：伙伴已选模型组时，手机选择器曾同时给组和它挑出的具体模型打勾，并滚到那个模型（模拟器实测）。
+// 缺口：伙伴设置的选择器单测替身了本组件，看不到行的选中态。最小失败输入：带一个 selected 组行打开。tier: unit。
+it('marks only the chosen model group, not the concrete model it picked',async()=>{
+  test.prefs.favorites=[{uid:'fav',providerId:'account',modelId:'codex/model',agent:'codex',effort:'medium',fast:false}];
+  await mount(undefined,{unified:{scope:'user-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect:vi.fn(async()=>true),
+    modelGroups:{rows:[{id:'night',title:'Night',subtitle:'2 sources',selected:true}],onSelect:vi.fn(async()=>true)}}});
+  expect(test.view.modelGroups.rows).toEqual([expect.objectContaining({id:'night',selected:true})]);
+  expect(test.view.groups.map((g:any)=>g.key)).not.toContain('recommended');
+  expect(test.view.groups.flatMap((g:any)=>g.rows).some((row:any)=>row.selected)).toBe(false);
+});
 it('edits a favorite only through explicit editing and save, without changing the current task',async()=>{
   test.prefs.favorites=[{uid:'fav',providerId:'account',modelId:'codex/model',agent:'codex',effort:'high',fast:false}];
   const {onSelect}=await mount();

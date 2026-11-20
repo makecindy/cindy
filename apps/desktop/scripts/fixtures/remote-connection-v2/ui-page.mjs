@@ -15,6 +15,7 @@ export default {
   },
   cases: {
     'rename-self': { about: 'Renaming this computer updates its topology label and openable card, while its reported hostname stays the same', storage: V2_ON },
+    traffic: { about: 'Compare the two local transports over five minutes, one hour and one rolling day', storage: V2_ON },
     'app-nodes': { about: 'Friend, unknown App and offline Friend keep their App label and platform icon; no Cindy remote actions or control-off warning', storage: V2_ON },
     'app-nodes-list': { about: 'My devices labels other Apps without outbound computer actions; legacy Cindy stays unchanged' },
     default: {
@@ -76,6 +77,17 @@ export default {
       await ui.capture('renamed');
       await hub.click();
       await page.getByRole('dialog').getByText('XD-PC', { exact: true }).waitFor();
+      return;
+    }
+    const traffic = page.getByRole('region', { name: await ui.t('settings.remoteControl.v2.traffic.title') });
+    if (ui.case === 'traffic') {
+      const row = traffic.getByRole('row', { name: /Agent-Net/ });
+      await row.getByRole('cell', { name: '640.0 KB', exact: true }).waitFor();
+      for (const [range, total] of [['lastHour', '10.0 MB'], ['lastDay', '128.0 MB']]) {
+        await traffic.getByRole('radio', { name: await ui.t(`settings.remoteControl.v2.traffic.${range}`) }).click();
+        await row.getByRole('cell', { name: total, exact: true }).waitFor();
+      }
+      await ui.capture('day');
       return;
     }
     if (ui.case === 'app-nodes' || ui.case === 'app-nodes-list') {
@@ -188,6 +200,7 @@ export default {
     }
     if (ui.case === 'legacy-off') {
       await page.getByRole('button', { name: new RegExp(`^${await ui.t('settings.remoteControl.sections.myDevices')}`) }).waitFor();
+      assert.equal(await traffic.count(), 0);
       return;
     }
     // 这台电脑名字下面写它实际用的连接方式;读屏名字同样带上(用户要求 2026-11-18)。
@@ -196,6 +209,7 @@ export default {
     const selfProtocol = ui.case === 'self-device-link' ? deviceLink : agentNet;
     const hub = page.getByRole('button', { name: `Studio Mac · ${selfProtocol}`, exact: true });
     await hub.waitFor();
+    const topology = page.locator('div.select-none').filter({ has: hub });
     // 2026-11-18 用户反馈:中转站的字写在圆点下面、朝中间排开,和这台电脑的名字、连接方式挤成一团。
     // 中转站的字要整个落在这台电脑的字与细环之外。
     // 同日用户要求：中转站写出协议，以及经中转的数据走 UDP 还是 WS(Agent-Net 两种都可能,Device Link 只有 WS),
@@ -276,8 +290,7 @@ export default {
     }
     const hubCardStatus = `${await ui.t('settings.devices.linkStatus.online')} · ${relayTransport} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`;
     if (ui.case === 'self-device-link') {
-      // 主连接跑在 Device Link 上:中间与所有对端都写 Device Link,哪里都没有 Agent-Net。
-      assert.equal(await page.getByText(agentNet, { exact: true }).count(), 0);
+      assert.equal(await topology.getByText(agentNet, { exact: true }).count(), 0);
       await hub.click();
       const hubCard = page.getByRole('dialog');
       await hubCard.getByText(deviceLink, { exact: true }).waitFor();
@@ -305,13 +318,41 @@ export default {
       // Fractional RTT samples must render as whole milliseconds alongside each link's actual transport protocol.
       const udp = await ui.t('settings.remoteControl.v2.relayTransport.udp');
       const webrtc = await ui.t('settings.remoteControl.v2.linkTransport.webrtc');
-      await page.getByText(`${webrtc} · ${await ui.t('settings.remoteControl.v2.ms', { value: 3 })}`, { exact: true }).waitFor();
-      await page.getByText(`${udp} · ${await ui.t('settings.remoteControl.v2.ms', { value: 1 })}`, { exact: true }).waitFor();
-      await page.getByText(`${udp} · ${await ui.t('settings.remoteControl.v2.ms', { value: 97 })}`, { exact: true }).waitFor();
+      const labels = await Promise.all([[webrtc, 3], [udp, 1], [udp, 97]].map(async ([transport, value]) => ({
+        transport,
+        latency: await ui.t('settings.remoteControl.v2.ms', { value }),
+      })));
+      for (const { transport, latency } of labels) {
+        const pill = page.getByText(`${transport} · ${latency}`, { exact: true });
+        assert.ok(await pill.evaluate((el) => el.scrollWidth <= el.clientWidth), 'single-line peer label is fully visible');
+      }
       await page.getByText(`${relayTransport} · ${relayRtt}`, { exact: true }).waitFor();
+      // Browser layout regression: the wide and minimum-width fixtures alone miss the
+      // intermediate width where WebRTC and UDP on opposite sides used different line counts.
+      const assertStackedLabels = async () => {
+        for (const { transport, latency } of labels) {
+          const pill = page.getByText(new RegExp(`^${transport}[\\s·]*${latency}$`));
+          const protocolBox = await pill.getByText(transport, { exact: true }).boundingBox({ timeout: 1000 });
+          const latencyBox = await pill.getByText(latency, { exact: true }).boundingBox({ timeout: 1000 });
+          assert.ok(protocolBox && latencyBox && latencyBox.y >= protocolBox.y + protocolBox.height, 'all peer labels stack');
+          assert.ok(await pill.evaluate((el) => [...el.children].every((line) => line.scrollWidth <= line.clientWidth)), 'both peer label lines are fully visible');
+        }
+      };
+      await page.setViewportSize({ ...ui.viewport, width: 860 });
+      await assertStackedLabels();
+      await ui.capture('stacked-links');
+      await page.setViewportSize(ui.viewport);
+      // The maximum UI font setting scales text-11 to 19px. It also needs a shared two-line layout.
+      const previousFontSize = await page.evaluate(() => {
+        const previous = document.body.style.getPropertyValue('--text-11');
+        document.body.style.setProperty('--text-11', '19px');
+        return previous;
+      });
+      await assertStackedLabels();
+      await page.evaluate((previous) => document.body.style.setProperty('--text-11', previous), previousFontSize);
       // Mixed real routes: both protocols share the topology, independently of direct/relay grouping.
-      await page.getByText(await ui.t('settings.remoteControl.v2.protocol.deviceLink'), { exact: true }).waitFor();
-      await page.getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).first().waitFor();
+      await topology.getByText(deviceLink, { exact: true }).first().waitFor();
+      await topology.getByText(agentNet, { exact: true }).first().waitFor();
       // 拓扑卡片只展示连接信息(本机的配置在上方「我的设备」的本机卡片,其它设备不再列出)。
       await page.getByRole('button', { name: /^Work PC/ }).click();
       await page.getByRole('dialog').waitFor();
