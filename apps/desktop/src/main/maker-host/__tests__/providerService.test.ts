@@ -4,6 +4,7 @@ import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, provide
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
+import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
 import { cindyAiAccountName, cindyAiAccountLogoKind } from '../../../shared/cindyAiPresentation.js';
 import { organizationProviderLogoKind } from '../../organizationProviderLogo.js';
 import type { XdOrgIdentity } from '../../../shared/xdOrg.js';
@@ -281,31 +282,45 @@ describe('createProviderService', () => {
 
   // PR #11693, unit: implicit legacy routes can need a model from a cold account pool.
   // The explicit-source picker test starts with model membership already populated.
-  it('restores an implicit model from a cold suspended OpenAI pool before checking its connection', async () => {
+  it.each(['openai', 'team-pool', 'imported-codex'])('restores an implicit model from the cold suspended pool %s', async id => {
     const openai = BUNDLED_CATALOG.providers.find(p => p.id === 'openai')!;
+    const anthropic = BUNDLED_CATALOG.providers.find(p => p.id === 'anthropic')!;
+    const pool = { ...openai, id,
+      ...(id === 'team-pool' ? { subscriptionPool: 'openai' as const } : {}),
+      ...(id === 'imported-codex' ? { auth: { ...openai.auth, native: 'codex' as const } } : {}),
+    };
     const model = { ...openai.models.codex![0], id: 'discovered-only' };
     const unrelated = buildUserProvider({ id: 'other', name: 'Other', runtimes: {
       codex: { baseUrl: 'https://other.invalid/v1', models: [{ id: 'other-model', name: 'Other model' }] },
     } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
-    const catalog = { ...BUNDLED_CATALOG, providers: [openai, unrelated] };
+    const catalog = { ...BUNDLED_CATALOG, providers: [pool, unrelated, anthropic] };
     let discovered = false;
     const refreshes: string[][] = [];
     const otherConnection = vi.fn(() => true);
     const svc = createProviderService({
       getCatalog: () => catalog,
-      getModelAccess: () => ({ disabledProviders: { openai: true, other: true } }),
+      getModelAccess: () => ({ disabledProviders: { [id]: true, other: true, anthropic: true } }),
       refreshPickerPools: async providers => {
         refreshes.push(providers.map(p => p.id));
-        discovered = providers.some(p => p.id === 'openai');
+        discovered = providers.some(p => p.id === id);
       },
-      projectCatalog: base => ({ ...base, providers: base.providers.map(p =>
-        p.id === 'openai' && discovered ? { ...p, models: { codex: [model] } } : p) }),
+      projectCatalog: (base, routing, include) => projectSubscriptionPoolCatalog(base, {
+        readPool: () => ({ strategy: 'order', accounts: [], legacyCodexAccounts: { 'imported-codex': 'account' } }),
+        codexAccountState: () => ({ authenticated: false }), readMergedProviderAccount: () => undefined,
+        accountProviderId: () => 'openai', readProviderBoundAccountIds: () => new Set(),
+        readSubscriptionPoolCodexModels: () => discovered ? [model, { ...model, id: 'sibling' }] : [],
+        getActiveCatalogWithCodexModels: models => ({ ...base, providers: [{ ...openai, models: { codex: [...models] } }] }),
+        readSubscriptionPoolClaudeModels: () => null, getActiveCatalogWithClaudeModels: () => base,
+      }, routing, include),
       connection: { openai: () => discovered, xd: otherConnection, anthropic: otherConnection, xai: otherConnection },
+      subscriptionPoolConnected: () => discovered, codexAccountConnected: () => discovered,
       customApiKeyConnected: otherConnection,
     });
+    expect(await svc.listProviders({ picker: { scope: 'available' } })).toEqual([]);
+    expect(refreshes.splice(0).flat()).toEqual([]);
     const views = await svc.listProviders({ picker: { scope: { agent: 'codex', providerId: null, modelId: model.id } } });
-    expect(views).toMatchObject([{ id: 'openai', connected: true, suspended: true, models: { codex: [{ id: model.id }] } }]);
-    expect(refreshes).toEqual([['openai']]);
+    expect(views).toMatchObject([{ id, connected: true, suspended: true, models: { codex: [{ id: model.id }] } }]);
+    expect(refreshes).toEqual([[id]]);
     expect(otherConnection).not.toHaveBeenCalled();
   });
 

@@ -203,19 +203,14 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
           });
         }
       }
-      // A default subscription pool can discover models absent from its cold catalog.
-      // Keep it eligible for an implicit route, then match the exact model after refresh.
-      const project = () => deps.projectCatalog?.(base, false, include) ?? base;
-      const pools = scope !== 'available' && scope.providerId === null
-        ? project().providers.filter(p => {
-          const defaultPool = p.id === 'openai' || p.id === 'anthropic';
-          return include(p) && ((defaultPool && p.agents.includes(scope.agent))
-            || p.models[scope.agent]?.some(m => m.id === scope.modelId));
-        })
-        : base.providers.filter(include);
+      // Cold built-in, created and legacy account pools can discover the bound model
+      // only after refresh. For an implicit route, narrow by agent before reading membership.
+      const implicitAgent = scope !== 'available' && scope.providerId === null ? scope.agent : undefined;
+      const pools = base.providers.filter(p => include(p) && (!implicitAgent || p.agents.includes(implicitAgent))
+        && (p.id === 'openai' || p.id === 'anthropic' || p.subscriptionPool !== undefined || p.auth.native === 'codex'));
       await deps.refreshPickerPools?.(pools);
       readOpts.pickerPoolsReady = true;
-      const projected = project();
+      const projected = deps.projectCatalog?.(base, false, include) ?? base;
       let providers = projected.providers.filter(include);
       if (scope !== 'available') {
         providers = providers.flatMap(p => {

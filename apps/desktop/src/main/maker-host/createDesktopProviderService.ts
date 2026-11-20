@@ -994,7 +994,6 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     getCatalog: getDesktopSelectableBaseCatalog,
     refreshPickerPools: async providers => {
       await Promise.all(providers.map(async provider => {
-        if (provider.id !== 'openai' && provider.id !== 'anthropic' && !provider.subscriptionPool && provider.auth.native !== 'codex') return;
         const pool = resolveSubscriptionPoolProvider(provider.id);
         if (!pool || !readPool(pool.kind)) return;
         if (provider.id === pool.kind) await refreshSubscriptionPool(provider.id);
