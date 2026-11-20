@@ -221,4 +221,20 @@ describe('switching a plugin-engine task back to a built-in engine', () => {
     expect(selectSameAgentModel).not.toHaveBeenCalled();
     expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
   });
+
+  // 第三期(2026-11-20)：任务可以建在另一台电脑的插件引擎上。在这种任务里再选它自己的引擎(不点名位置)是原地
+  // 选择，不是「换回本机」：旧逻辑会把位置改成本机，本机恰好也装了同一个插件时 Agent 被悄悄挪走，没装时报
+  // 「插件已停用或卸载」。最小失败输入：agentDeviceId=mini 的插件引擎任务，选同一个引擎、不带 agentDeviceId。
+  it('keeps a task on its engine of another computer when that same engine is picked again', async () => {
+    const { deps, pendingSwitches } = makeDeps({ ...pluginRow(), agentDeviceId: 'mini' });
+    const result = await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, applyNow: true,
+    });
+    expect(result).toMatchObject({ switched: false });
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+    // This computer's engines are not consulted, and nothing moves the Agent.
+    expect(deps.admitPluginEngineTarget).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
+  });
 });

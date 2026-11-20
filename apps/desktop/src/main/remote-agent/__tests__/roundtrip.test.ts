@@ -32,7 +32,7 @@ import { ExecServerRelay } from '../controller/execServerRelay';
 import { createDeviceAgentStarter, liveDirectGuestSession } from '../controller/service';
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
-import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
+import { createRemoteAgentHost, type HostedStartInput, type PluginEngineHostedStartInput } from '../host/runHost';
 import { createNativeHistoryTransfer, NATIVE_HISTORY_CHECKPOINT } from '../nativeHistoryTransfer';
 import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
@@ -1792,6 +1792,111 @@ describe('remote agent round trip', () => {
     const host = createHost();
     await expect(startRemoteAgentSession('pi', { sessionId: 's3', workingDir: project, model: 'm' }, makeDeps(host)))
       .rejects.toThrow(/REMOTE_AGENT_UNAVAILABLE/);
+    host.dispose();
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：startRemoteAgentSession('acp') ↔ createRemoteAgentHost 的真实 open/call 往返；
+ *   用户看到的是任务在另一台电脑的插件引擎上跑起来、文件仍读自本机、关掉开关后下一轮被拒。
+ * - 规则依据：docs/plans/acp-plugin-bridge.md「第三期」与 protocol-compatibility/plugin-harnesses.md
+ *   「自己的其他电脑使用插件引擎」：只给同账号、只走引擎自己的入口、绝不回落到内置引擎。
+ * - 现有覆盖缺口：本文件其余用例只开内置引擎(startHosted)；插件引擎此前在这条通道上一律被拒，没有用例。
+ * - 最小失败输入：agentKind 'acp' + providerId 'acp-plugin:…' 的一次 open；对方未开放 / 不支持 / 调用方是受邀者。
+ * - tier：unit(进程内 fake Agent，与本文件其它往返用例同一隔离方式)。
+ */
+describe('a plugin engine of another computer', () => {
+  const ENGINE = 'acp-plugin:dsh-acp:dsh';
+  const ENGINE_CAPABILITIES = { availableModels: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4' }] };
+
+  function createPluginEngineHost(options: { offered?: () => boolean; supported?: boolean; guest?: boolean } = {}) {
+    const started: PluginEngineHostedStartInput[] = [];
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => {
+        hostInputs.push(input);
+        return fakeHostedAgent(input);
+      },
+      ...(options.supported === false ? {} : {
+        pluginEngines: {
+          isOffered: (providerId: string) => providerId === ENGINE && (options.offered?.() ?? true),
+          start: async (input: PluginEngineHostedStartInput) => {
+            started.push(input);
+            return {
+              ...fakeHostedAgent({ ...input, kind: 'pi' }),
+              agentKind: 'acp' as const,
+              negotiatedCapabilities: ENGINE_CAPABILITIES as unknown as AgentSessionHandle['negotiatedCapabilities'],
+            };
+          },
+        },
+      }),
+      ...(options.guest ? { controllerTrust: () => 'guest' as const } : {}),
+      isControllerAuthorized: () => authorized,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    return { host, started };
+  }
+
+  const start = (host: ReturnType<typeof createRemoteAgentHost>) => startRemoteAgentSession('acp', {
+    sessionId: 'plugin-task', workingDir: project, model: 'default', providerId: ENGINE, permissionMode: 'default',
+  }, makeDeps(host));
+
+  it('runs through the engine\'s own entry with files staying here, until the owner closes it', async () => {
+    let offered = true;
+    const { host, started } = createPluginEngineHost({ offered: () => offered });
+    const handle = await start(host);
+
+    expect(handle.agentKind).toBe('acp');
+    expect(started).toHaveLength(1);
+    expect(hostInputs).toHaveLength(0); // never a built-in engine
+    expect(started[0].options).toMatchObject({ model: 'default', providerId: ENGINE });
+    expect(fs.readFileSync(path.join(started[0].shadowDir, 'AGENTS.md'), 'utf8')).toBe('# rules');
+    // The picker's models come from what the engine negotiated on that computer.
+    expect(handle.negotiatedCapabilities).toMatchObject(ENGINE_CAPABILITIES);
+
+    handle.setInteractionResolver(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+    const texts: string[] = [];
+    const reader = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'text') texts.push((event.data as { text: string }).text);
+        if (event.type === 'done') break;
+      }
+    })();
+    await handle.send({ type: 'user', content: [{ type: 'text', text: 'hi' }] }, { messageUuid: 'p1' });
+    await reader;
+    expect(texts[0]).toBe('read:from-controller');
+
+    offered = false;
+    await expect(handle.send({ type: 'user', content: [{ type: 'text', text: 'again' }] }, { messageUuid: 'p2' }))
+      .rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+    await expect(handle.setModel!('deepseek-v4')).rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+
+  it.each([
+    ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
+    ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],
+  ])('starts nothing when %s', async (_name, options, error) => {
+    const { host, started } = createPluginEngineHost(options);
+    await expect(start(host)).rejects.toThrow(error);
+    expect(started).toHaveLength(0);
+    expect(hostInputs).toHaveLength(0);
+    expect(host.runCount()).toBe(0);
+    host.dispose();
+  });
+
+  it('is neither declared nor opened for a shared user', async () => {
+    const { host, started } = createPluginEngineHost({ guest: true });
+    const caps = await host.handle(CONTROLLER, { op: 'caps' }) as { pluginEngines?: boolean };
+    expect(caps.pluginEngines).toBeUndefined();
+    await expect(host.handle(CONTROLLER, { op: 'open', runId: randomUUID(), agentKind: 'acp', payload: { json: {} } }))
+      .rejects.toThrow(/REMOTE_AGENT_UNSUPPORTED/);
+    expect(started).toHaveLength(0);
     host.dispose();
   });
 });

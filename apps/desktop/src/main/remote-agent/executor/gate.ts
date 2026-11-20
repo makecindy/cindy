@@ -35,7 +35,7 @@ import { realPathOrAncestor, type ExecutorWorkspace } from './workspace';
 export type ExecutorGateMode = 'full' | 'plan' | 'normal';
 
 export type ExecutorAction =
-  | { kind: 'read'; path: string; scope?: 'tree' }
+  | { kind: 'read'; path: string; scope?: 'tree'; exactFileApproval?: true }
   | { kind: 'write'; path: string }
   | { kind: 'exec'; command: string; cwd: string }
   | { kind: 'fetch'; url: string };
@@ -57,6 +57,7 @@ interface Approval {
   key: string;
   expiresAt: number;
   credential: boolean;
+  exactFileRead?: true;
 }
 
 export function executorGateModeFor(
@@ -154,6 +155,7 @@ export class ExecutorGate {
       ...approvalOf(action),
       expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS,
       credential: this.isCredentialAction(action),
+      ...(action.kind === 'read' && action.exactFileApproval ? { exactFileRead: true } : {}),
     });
     if (this.approvals.length > MAX_APPROVALS) this.approvals.splice(0, this.approvals.length - MAX_APPROVALS);
   }
@@ -263,6 +265,7 @@ export class ExecutorGate {
     this.prune();
     const { kind, key } = approvalOf(action);
     const index = this.approvals.findIndex((approval) => approval.kind === kind && approval.key === key
+      && (!approval.exactFileRead || (action.kind === 'read' && action.scope !== 'tree'))
       && (!credential || approval.credential));
     if (index < 0) return false;
     if (take && kind !== 'path') this.approvals.splice(index, 1);

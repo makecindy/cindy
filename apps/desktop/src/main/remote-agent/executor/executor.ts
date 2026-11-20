@@ -178,6 +178,10 @@ export class RemoteExecutor {
     this.gate.recordApproval(action);
   }
 
+  getCwd(): string {
+    return this.shell.getCwd();
+  }
+
   /** 权限上限检查(Codex exec-server 中继用；本执行器自己的操作在内部检查)。 */
   check(action: ExecutorAction): ExecutorGateDecision {
     if (this.closed) return { ok: false, reason: 'The task has ended on the computer where it runs.' };
