@@ -722,6 +722,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       assertStartupCurrent: requireCurrent,
       ...(preparedAdmission ? { onStartupOpenRequest: () => { standbyOpenRequested = true; } } : {}),
       nativeHistoryBackup: !shared && !isProviderSharePeer(target) && !opts[LOCAL_AGENT_CLIENT],
+      recoverSharedReconnect: shared && target === input.deviceId,
       reconnectAuthorization: (isCurrent, options) => reconnectAuthorization?.(isCurrent, options) ?? Promise.resolve(),
       onTaskGrantRenewable: (renewable) => { grantRenewable = renewable; },
       readImageDeliveryEpoch: deps.readImageDeliveryEpoch,
