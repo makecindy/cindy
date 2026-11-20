@@ -698,7 +698,7 @@ import {
   followMovedCindyAutoRoutes,
   stagedCindyAutoSwitch,
 } from './cindyAutoRouteFollow.js';
-import { readEffectiveBotModelChain, readEffectiveBotModelSelection } from '../maker-host/bot-model-chain-settings-store.js';
+import { readEffectiveBotModelChain, readEffectiveBotModelSelection, setBotModelGroupPreview } from '../maker-host/bot-model-chain-settings-store.js';
 import {
   isOrcaWorkerPermissionMode,
   type OrcaWorkerPermissionMode,
@@ -1433,7 +1433,7 @@ import {
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
 import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
-import { botModelGroupsSignature, expandBotModelGroups } from '../model-groups/botRoutes.js';
+import { botModelGroupsSignature, expandBotModelGroups, modelGroupCandidateRoute } from '../model-groups/botRoutes.js';
 import { pickModelGroupRoute, readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
 import { modelGroupRouteFor } from '../model-groups/routeFor.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
@@ -17063,6 +17063,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   setBotCapabilityAgentKindResolver(async (sessionId, chain) =>
     (await reconcileBotModelRoute.preview(sessionId, chain))?.agentKind ?? null);
+  // New companion conversations start on the group's current pick (model-groups.md §6.2).
+  setBotModelGroupPreview(async (groupId) => {
+    const pick = await pickModelGroupRoute(groupId, { dryRun: true });
+    return pick && modelGroupCandidateRoute(pick.route, groupId, pick.route.effort);
+  });
 
   const readBotFallbackCandidate = async (
     sessionId: string,

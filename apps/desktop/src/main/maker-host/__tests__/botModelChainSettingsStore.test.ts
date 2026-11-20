@@ -11,6 +11,8 @@ import {
   readBotModelChainSettingsState,
   resetBotModelChainSettings,
   readEffectiveBotModelChain,
+  readEffectiveBotPrimaryRoute,
+  setBotModelGroupPreview,
   writeBotModelChainSettings,
 } from '../bot-model-chain-settings-store';
 
@@ -362,5 +364,30 @@ describe('bot model chain settings store', () => {
         ),
       ).toEqual([route('xd')]);
     });
+  });
+});
+
+// PR #11683 Codex review (model-groups.md §6.2): new companion conversations pass model admission with the
+// route they start on. A group's saved model may have been disconnected while the group has another usable
+// source. Production entry: readEffectiveBotPrimaryRoute (bots.ts creation paths). Minimal input: a chain whose
+// primary is a group; preview returns B / null / throws. tier: unit.
+describe('primary route for a new companion conversation', () => {
+  afterEach(() => setBotModelGroupPreview(null));
+  const saved = { harness: 'codex' as const, model: 'saved-a', providerId: 'xd', effort: '', fastMode: false, modelGroup: 'grp' };
+  const picked = { harness: 'pi' as const, model: 'group-b', providerId: 'xd', effort: 'high', fastMode: false };
+  it.each([
+    { name: 'starts on the group pick', preview: async () => picked, expected: { ...picked, modelGroup: 'grp' } },
+    { name: 'keeps the saved model when the group has nothing usable', preview: async () => null, expected: saved },
+    { name: 'keeps the saved model when the preview fails', preview: async () => { throw new Error('boom'); }, expected: saved },
+  ])('$name', async ({ preview, expected }) => {
+    setBotModelGroupPreview(preview);
+    expect(await readEffectiveBotPrimaryRoute({ modelChainOverride: [saved] }, { providers: [] })).toEqual(expected);
+  });
+  it('does not consult groups for a plain primary', async () => {
+    const preview = vi.fn(async () => picked);
+    setBotModelGroupPreview(preview);
+    const { modelGroup: _group, ...plain } = saved;
+    expect(await readEffectiveBotPrimaryRoute({ modelChainOverride: [plain] }, { providers: [] })).toEqual(plain);
+    expect(preview).not.toHaveBeenCalled();
   });
 });
