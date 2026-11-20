@@ -240,10 +240,12 @@ export async function replayContextRecoveryWithPorts(ports: ReplayContextRecover
         if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
       }
       const recoveryIntent = recovery?.continueFromHistory
-        ? ports.restoreAutoReviewUserIntent(await ports.readAutoReviewHistory(sessionId), {
+        // An empty persisted ID cannot identify a retry. Unlike a fresh steer,
+        // this continuation has no new owner text: recover only authored history.
+        ? ports.restoreAutoReviewUserIntent(await ports.readAutoReviewHistory(sessionId), recovery.sourceUserClientId ? {
             clientId: recovery.sourceUserClientId,
             content: recovery.sourceUserContent,
-          })
+          } : undefined)
         : undefined;
       if (recovery?.continueFromHistory) {
         const current = await ports.readContextRecoverySession(sessionId);
