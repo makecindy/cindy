@@ -16326,6 +16326,14 @@
       "remoteProviderUnsupported": "該供應商不支援 SSH 遠端會話，請更換來源",
       "remoteNativeOauthUnavailable": "遠端任務不能使用 Claude 訂閱，請選擇閘道器或 API Key 模型",
       "claudeSubscriptionWorkspaceOverride": "這個工作目錄的 .claude 設定修改了 Claude 的上游位址或驗證方式，不能在這裡使用 Claude 訂閱。請移除這些設定，或選擇閘道器或 API Key 模型",
+      "savedModel": {
+        "loading": "正在連線至所選模型…",
+        "checkFailed": "無法檢查所選模型",
+        "engine": "所選引擎無法使用，請為本次任務選擇模型",
+        "source": "所選來源無法使用，請為本次任務選擇模型",
+        "model": "所選模型無法使用，請為本次任務選擇模型",
+        "thisTaskOnly": "所選模型僅用於本次任務"
+      },
       "deviceStillLoading": "遠端裝置仍在載入中，請稍候",
       "remoteDefaultsLoadFailed": "無法讀取遠端裝置設定。請檢查連線，Cindy 正在重試。",
       "branchChanged": "專案目前分支已變成 {{branch}}，請確認後再傳送",

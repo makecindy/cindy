@@ -16555,6 +16555,14 @@
       "remoteProviderUnsupported": "Este provedor não é compatível com sessões remotas SSH — escolha outra fonte",
       "remoteNativeOauthUnavailable": "Tarefas remotas não podem usar uma assinatura do Claude — escolha um modelo via gateway ou chave de API",
       "claudeSubscriptionWorkspaceOverride": "As configurações .claude desta pasta alteram para onde o Claude envia solicitações ou como ele faz login, então a assinatura do Claude não pode ser usada aqui. Remova essas configurações ou escolha um modelo com gateway ou chave de API",
+      "savedModel": {
+        "loading": "Conectando ao modelo selecionado…",
+        "checkFailed": "Não foi possível verificar o modelo selecionado",
+        "engine": "O mecanismo selecionado não está disponível. Escolha um modelo para esta tarefa.",
+        "source": "A origem selecionada não está disponível. Escolha um modelo para esta tarefa.",
+        "model": "O modelo selecionado não está disponível. Escolha um modelo para esta tarefa.",
+        "thisTaskOnly": "O modelo selecionado se aplica somente a esta tarefa"
+      },
       "deviceStillLoading": "O dispositivo remoto ainda está carregando. Aguarde",
       "remoteDefaultsLoadFailed": "Não foi possível carregar as configurações do dispositivo remoto. Verifique a conexão; o Cindy está tentando novamente.",
       "branchChanged": "O projeto agora está em {{branch}}. Confira e envie novamente.",
