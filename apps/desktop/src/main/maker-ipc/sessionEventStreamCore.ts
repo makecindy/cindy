@@ -96,6 +96,14 @@ export function persistSessionStreamEventCore(
     if (event.source === 'pi' && td?.isFinal === true && td.isFullText === true) {
       flushAssistantBlock(session.id, eventAgentMeta);
     }
+    // A plugin engine's reply between turns has no done to commit it; its final
+    // segment (closed by maker-core once the agent pauses) is the whole message.
+    if (
+      session.agentKind === 'acp' && event.turnScope === 'background'
+      && td?.isFinal === true && td.isFullText === true
+    ) {
+      flushAssistantBlock(session.id, eventAgentMeta);
+    }
   } else if (event.type === 'tool_use') {
     // tool_use 边界:先 flush 在飞 assistant(保证 assistant 行先于其 tool_use 入队
     // 落库),再落 tool_use 本身,拿回 persistId 盖进 payload。两者都只入队、不阻塞。

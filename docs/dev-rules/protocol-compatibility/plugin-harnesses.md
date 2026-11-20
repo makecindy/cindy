@@ -51,7 +51,7 @@ ACP 工具晚到的输入参数更新原有历史行，控制端通过既有消�
 Renderer 读到的字段相同；图标数据 URL 单个最多 64 KiB、一次列表合计最多 512 KiB，超出预算的图标显示通用标志）与 `maker:refresh-plugin-engines`（请那台的
 插件重新上报模型，插件各自冷却），两者都进后台 invoke 档。变更推送 `maker:plugin-engines-changed` 仍只发本机窗口，控制端打开选择器时
 按需读取。旧被控端没有这两条准入 → `CHANNEL_NOT_ALLOWED`，控制端按「没有插件引擎」隐藏入口；旧控制端不调用。走既有 invoke 帧，
-自建中转无需改动。桌面控制端按账号和任务所属电脑共享目录，打开插件任务或模型选择器时读取，任务列表复用已有结果。
+自建中转无需改动。桌面控制端按账号和引擎所在电脑共享目录：任务列表存在该电脑的插件引擎任务或打开插件任务／模型选择器时共用一次 `maker:list-plugin-engines` 读取，断线保留已缓存图标、重连刷新、撤权或移除时驱逐（见 `usePluginEngines.ts`、`useDeviceLinkRemoteProjects.ts` 与 `pluginEngineVendorIcon.test.tsx`）。
 同引擎模型变更沿用 `maker:set-model`，按稳定设备归属发往被控端并使用该端的任务变更推送回显。引擎提供的模型标识在 256 字符
 以内原样缓存，超限项目不进入目录，展示名称另行限长。
 
@@ -103,15 +103,20 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
   对端未声明 `mcpCapabilities.http` 时以 `[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED]` 拒绝，不建会话。B 自己的 Cindy 工具、
   插件、记忆不进入这个任务。A 的说明文件与个人配置按 Pi 的口径同步到影子目录。
 - **状态**：`started.state` 与后续 `state` 追加可选 `negotiatedCapabilities`(引擎握手得到的模型、思考深度、权限档)，
-  只有插件引擎带。A 不必安装该插件，按它显示可选项；旧 A 忽略未知键。
+  只有插件引擎带。旧 A 忽略未知键。桌面新建任务和普通任务的模型选择器只在 A 已安装并启用对应插件时列出 B
+  开放的插件引擎。报告不可用的引擎只在已选任务中显示状态。已有任务继续按执行电脑恢复其引擎和能力。
 - **任务记录**：A 上 `agent_kind = acp`、`provider_id = acp-plugin:…`、`agent_device_id = B`。新建任务时 A 只拒绝注定
   不成立的位置(SSH、`share:` 分享来源)，B 是否开放由 B 在启动时判定，与内置供应商在另一台电脑的规则一致。
-- **暂未开放**：任务中切换到另一台电脑的插件引擎、协同 Worker、自动任务、手机选择另一台电脑的插件引擎、分叉与回退、
+- **会话内切换**：普通任务通过既有 `maker:switch-session-agent` 的 `agentDeviceId` 指定 B，登记时和下条消息切换前
+  读取 B 的既有引擎目录，按 B 实时开放范围准入。B 拒绝时保留原配置与切换意图，阻止消息发到原引擎。
+  手机回显既有意图里的执行位置，按字段为空或省略的原有语义区分回到任务电脑和保留执行位置。
+  旧版任务所属端仍拒绝指定远程位置的插件引擎切换。
+- **暂未开放**：协同 Worker、自动任务、手机选择另一台电脑的插件引擎、分叉与回退、
   供应商分享与供应商组。这些入口保持原有的明确拒绝。
 
 实现见 `maker-host/pluginEngineRemoteUse.ts`、`remote-agent/host/runHost.ts`(`pluginEngines`)、
 `remote-agent/controller/startRemote.ts`、maker-core `agents/acp/acp-agent.ts`；回归见 `roundtrip.test.ts`
-「a plugin engine of another computer」、`acp-session.test.ts`、`remoteAgent.test.ts`、`pluginHarnesses.test.ts`、
+「a plugin engine of another computer」、`pluginEngineSessionSwitch.test.ts`、`acp-session.test.ts`、`remoteAgent.test.ts`、`pluginHarnesses.test.ts`、
 `nodeRuntimeBroker.test.ts` 与 `pluginEngineSessionAdmission.test.ts`。
 
 ## 引擎账号用量

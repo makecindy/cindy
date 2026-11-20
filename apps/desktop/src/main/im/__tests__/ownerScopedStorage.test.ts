@@ -65,6 +65,8 @@ import { discordChannelAccessStore } from '../discord/channelAccessStore';
 import { addBotImConnectionRecord, setBotImConnectionDiscordChannelAccess, updateBotImConnectionRecord } from '../shared/botImConnectionStore';
 import { WecomGroupNotificationService } from '../../wecomGroupNotification';
 import { DiscordFinalTextOutbox } from '../../../../../../packages/lizi-im/src/discord/finalTextOutbox';
+import { DiscordIM } from '../../../../../../packages/lizi-im/src/discord/index';
+import type { IMHost } from '@cindy/im';
 
 function setSession(mode: TestSession['mode'], ownerId: string | null): void {
   mocks.session = { mode, dataOwnerId: ownerId, generation: mocks.session.generation + 1 };
@@ -78,6 +80,48 @@ function writeLegacySecret(name: string, value: string): string {
 }
 
 describe('IM owner-scoped storage', () => {
+  // #11767 P1, unit: real disk adapter + actual prefixed/unprefixed disconnect.
+  // Map-only channel tests cannot expose a locked atomic backup preserving the
+  // primary token. Existing backup tests exercise only the WeCom webhook.
+  it.each(['', 'bot-im-test-'])('confirms disk-backed Discord revocation for prefix %s', async prefix => {
+    setSession('local', 'local-v1');
+    const key = `${prefix}discord-bot-token`;
+    const connect = vi.fn(async (_token: string) => {});
+    const destroy = vi.fn(async () => {});
+    const host: IMHost = {
+      secrets: ownerScopedImSecrets,
+      ipc: { handle() {}, broadcast() {}, throwIpcError(_code, message): never { throw new Error(message); } },
+      paths: { feishuMediaDir: 'unused' }, httpPostForm: async () => ({status: 200, body: {}}),
+    };
+    const im = new DiscordIM(host, {ipc: false, secretKeyPrefix: prefix,
+      gatewayFactory: () => ({connect, destroy, client: null, appId: '', botTag: ''})});
+    try {
+      for (const locked of ['backup', 'primary'] as const) {
+        expect(ownerScopedImSecrets.write(key, 'invalid-disk-revocation-token')).toBe(true);
+        const target = __testing.scopedSecretPath(key)!;
+        fs.copyFileSync(target, `${target}.bak`);
+        const original = fs.unlinkSync;
+        const blocked = locked === 'backup' ? `${target}.bak` : target;
+        const remove = vi.spyOn(fs, 'unlinkSync').mockImplementation(file => {
+          if (file === blocked) throw Object.assign(new Error('busy'), {code: 'EBUSY'});
+          return original(file);
+        });
+        try {
+          await im.init();
+          const before = destroy.mock.calls.length;
+          expect((await im.disconnect()).status.kind).toBe('error');
+          expect(destroy.mock.calls.length).toBeGreaterThan(before);
+          expect(ownerScopedImSecrets.readResult!(key).kind).toBe('value');
+        } finally { remove.mockRestore(); }
+        expect((await im.disconnect()).status.kind).toBe('idle');
+        expect(ownerScopedImSecrets.readResult!(key).kind).toBe('missing');
+        const before = connect.mock.calls.length;
+        await im.init();
+        expect(connect.mock.calls.length).toBe(before);
+      }
+    } finally { await im.dispose(); }
+  });
+
   // #11600 review: an unchanged legacy encrypted file must keep the exact
   // revision stored by the previous binary. Unit tier: persist with the old
   // metadata stamp, recreate the production outbox, and observe real delivery

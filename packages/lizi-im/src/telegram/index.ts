@@ -787,16 +787,27 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       OWNER_NOTICE_TIMEOUT_MS,
       () => !this.ownerUserId,
     );
-    this.host.secrets.remove(this.secretKey(TOKEN_SECRET_KEY));
-    this.host.secrets.remove(this.secretKey(OWNER_USER_ID_SECRET_KEY));
-    this.groupAdmissionState = undefined;
-    this.host.secrets.remove(this.secretKey(LEGACY_RUNTIME_ACTIVE_SECRET_KEY));
-    this.host.secrets.remove(this.secretKey(UPDATES_OFFSET_SECRET_KEY));
-    // 解绑必须连下线标志一起清: 留着的话重新填 token 会连上、但重启即回
-    // offline, 表现为"填了 token 却不工作"。
-    this.host.secrets.remove(this.secretKey(OFFLINE_SECRET_KEY));
     await this.stopPolling();
-    this.setStatus({ kind: 'idle' });
+    this.groupAdmissionState = undefined;
+    let removed = true;
+    for (const key of [TOKEN_SECRET_KEY, OWNER_USER_ID_SECRET_KEY,
+      LEGACY_RUNTIME_ACTIVE_SECRET_KEY, UPDATES_OFFSET_SECRET_KEY]) {
+      try {
+        this.host.secrets.remove(this.secretKey(key));
+        if (this.host.secrets.readResult?.(this.secretKey(key)).kind !== 'missing') removed = false;
+      } catch { removed = false; }
+    }
+    // Keep a durable offline guard if any credential may survive. Only a
+    // confirmed unbind may clear it, so a successful retry can reconnect later.
+    if (removed) {
+      try {
+        this.host.secrets.remove(this.secretKey(OFFLINE_SECRET_KEY));
+        removed = this.host.secrets.readResult?.(this.secretKey(OFFLINE_SECRET_KEY)).kind === 'missing';
+      } catch { removed = false; }
+    }
+    if (!removed) this.host.secrets.write(this.secretKey(OFFLINE_SECRET_KEY), '1');
+    this.setStatus(removed ? { kind: 'idle' }
+      : { kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
     return { status: this.status };
   }
 

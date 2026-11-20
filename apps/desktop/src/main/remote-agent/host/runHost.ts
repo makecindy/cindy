@@ -3622,7 +3622,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
                 return await generate(request, assertRoute, signal);
               }
               const { invoke } = groupRelay.connect(plan.agentDeviceId);
-              const supportsImage = await RemoteAgentRunClient.caps(invoke).then(caps => caps.sharedImageGeneration, () => false);
+              const supportsImage = await RemoteAgentRunClient.caps(invoke).then(caps =>
+                caps.sharedImageGeneration && (plan.providerId !== 'openai' || caps.sharedBuiltinOpenAiImage), () => false);
               if (!supportsImage) {
                 if (exclude.has(plan.memberKey)) fail('REMOTE_AGENT_UNAVAILABLE', 'no computer can run this image request');
                 exclude.add(plan.memberKey);
@@ -3680,7 +3681,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           ...(deps.forkHosted ? { nativeFork: true } : {}),
           ...(!guest && deps.nativeHistory ? { nativeHistoryTransfer: true, nativeHistoryBackup: true } : {}),
           ...(deps.imageArtifacts ? { imageRecovery: true, imageRecoveryRelay: true } : {}),
-          ...(deps.generateSharedImage ? { sharedImageGeneration: true } : {}),
+          ...(deps.generateSharedImage ? { sharedImageGeneration: true, sharedBuiltinOpenAiImage: true as const } : {}),
           ...(!guest && deps.pluginEngines ? { pluginEngines: true as const } : {}),
           // 能按受邀者隔离运行(供应商级授权与出站边界都已接上)，才接受组所在电脑中转过来的受邀者任务。
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),

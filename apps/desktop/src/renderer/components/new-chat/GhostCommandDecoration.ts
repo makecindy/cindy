@@ -48,7 +48,7 @@ interface GhostCommandPluginState {
   decorations: DecorationSet;
 }
 
-/** 触发符字符集——与 ChatInput 的 GHOST_SIGIL_CHARS / COMMAND_RE 同一套。 */
+/** 触发符字符集——与 composerTrigger 的 GHOST_SIGIL_CHARS / ghostCommand.ts 的 COMMAND_RE 同一套。 */
 const SIGILS = new Set(['$', '＄', '¥', '￥']);
 
 /**

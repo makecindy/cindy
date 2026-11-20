@@ -3898,3 +3898,21 @@ describe('TelegramIM mandatory group admission', () => {
     expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
   });
 });
+
+// #11767 P1, unit: real disconnect after group admission cleared must reject
+// token revocation failure, stop polling, preserve the durable offline latch,
+// and permit retry. Earlier negatives cover admission, not token removal.
+it.each(['retained', 'error', 'throw'] as const)('rejects unconfirmed revocation (%s)', async mode => {
+  await connect();
+  const remove = ctx.host.secrets.remove;
+  const read = ctx.host.secrets.readResult!;
+  ctx.host.secrets.remove = key => {if(key==='telegram-bot-token'){if(mode==='throw')throw new Error('busy');return;} remove(key);};
+  if(mode==='error')ctx.host.secrets.readResult = key => key==='telegram-bot-token' ? {kind:'error'} : read(key);
+  expect((await im.disconnect()).status.kind).toBe('error');
+  expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+  expect(ctx.secrets.has('telegram-bot-token')).toBe(true);
+  ctx.host.secrets.remove=remove;ctx.host.secrets.readResult=read;
+  expect((await im.disconnect()).status.kind).toBe('idle');
+  expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+  expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+});

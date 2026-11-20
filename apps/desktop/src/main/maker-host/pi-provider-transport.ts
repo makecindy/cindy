@@ -63,7 +63,9 @@ export async function readBoundedResponseText(
       size += take.byteLength;
     }
   } finally {
-    await reader.cancel().catch(() => undefined);
+    // A cloned response's cancellation waits for the other branch to settle.
+    // The adapter cannot consume that branch until this diagnostic read returns.
+    void reader.cancel().catch(() => undefined);
   }
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8');
 }

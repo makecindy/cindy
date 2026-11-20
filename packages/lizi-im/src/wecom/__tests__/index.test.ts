@@ -73,6 +73,7 @@ function createHost() {
   const host: IMHost = {
     secrets: {
       read: (name) => secrets.get(name) ?? null,
+      readResult: (name) => secrets.has(name) ? { kind: 'value', value: secrets.get(name)! } : { kind: 'missing' },
       write: (name, value) => {
         secrets.set(name, value);
         return true;
@@ -1485,4 +1486,24 @@ describe("WecomIM routing and ownership", () => {
     expect(im.getStatus()).toEqual({ kind: "idle" });
     expect(broadcasts).toEqual([]);
   });
+});
+
+// #11767 P1, unit: actual clear must stop transport and reject retained/error
+// credentials; existing clear tests only used successful map deletion.
+it.each(['retained','error','unavailable','throw'] as const)('rejects unconfirmed revocation (%s)', async mode => {
+  const {host,secrets} = createHost();
+  const client = new FakeClient(); const im = new WecomIM(host,{clientFactory:()=>client as never});
+  const remove=host.secrets.remove, read=host.secrets.readResult;
+  host.secrets.remove=key=>{if(key==='wecom-bot-id'){if(mode==='throw')throw new Error('busy');return;}remove(key);};
+  if(mode==='error')host.secrets.readResult=()=>({kind:'error'});
+  if(mode==='unavailable')host.secrets.readResult=undefined;
+  try {
+    await im.init();
+    expect((await im.clearCredentials()).status.kind).toBe('error');
+    expect(client.isConnected).toBe(false);
+    expect(secrets.has('wecom-bot-id')).toBe(true);
+    host.secrets.remove=remove;host.secrets.readResult=read;
+    await im.clearCredentials();
+    expect(secrets.has('wecom-bot-id')).toBe(false);
+  } finally {await im.dispose();}
 });

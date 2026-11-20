@@ -449,13 +449,19 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       Math.max(0, noticeDeadline - Date.now()),
       () => this.configVersion === disconnectedNoticeConfigVersion && !this.ownerUserId,
     );
-    this.host.secrets.remove(this.key(TOKEN_SECRET_KEY));
-    this.host.secrets.remove(this.key(OWNER_USER_ID_SECRET_KEY));
-    this.clearRuntimeActiveMarker();
+    // Stop the live gateway even when persisted revocation cannot be confirmed.
+    await this.destroyGateway();
     this.pendingOfflineNotice = false;
     this.runtimeOnlineAnnounced = false;
-    await this.destroyGateway();
-    this.setStatus({ kind: 'idle' });
+    let removed = true;
+    for (const key of [TOKEN_SECRET_KEY, OWNER_USER_ID_SECRET_KEY, RUNTIME_ACTIVE_SECRET_KEY]) {
+      try {
+        this.host.secrets.remove(this.key(key));
+        if (this.host.secrets.readResult?.(this.key(key)).kind !== 'missing') removed = false;
+      } catch { removed = false; }
+    }
+    this.setStatus(removed ? { kind: 'idle' }
+      : { kind: 'error', reason: secretWriteFailedReason() });
     return { status: this.status };
   }
 

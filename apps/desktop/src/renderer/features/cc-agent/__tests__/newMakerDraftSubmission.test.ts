@@ -199,6 +199,7 @@ async function submit(options: {
   titlePreview?: string;
   /** 被控端 create-session 回包里没有会话 id。 */
   remoteCreateEmpty?: boolean;
+  localModelIssueText?: string;
 } = {}) {
   const providers = options.providers ?? [provider()];
   const backend = options.backendProviders ?? providers;
@@ -326,6 +327,8 @@ async function submit(options: {
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     // 这些用例都走内置 Harness；插件引擎的新建路径由 newMakerDraft.test.ts 覆盖。
     activePluginEngine: null,
+    setAlternateModel: vi.fn(),
+    localModelIssueText: options.localModelIssueText ?? null,
     rememberedPluginEngineDeviceId: runInNewContext(pluginEngineSelectionCode, {
       isDeviceLinkDraft: !!options.deviceId,
       effectiveRemoteHostId: options.remoteHostId,
@@ -473,6 +476,29 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  it.each(['send', 'goal'] as const)('keeps the draft when the saved route blocks %s', async (entry) => {
+    const result = await submit({ entry, localModelIssueText: 'Saved engine unavailable' });
+    expect(result.ipcCreate).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    if (entry === 'send') expect(result.toastWarning).toHaveBeenCalledWith('Saved engine unavailable');
+    else expect(result.errors).toMatchObject([{ message: 'Saved engine unavailable' }]);
+  });
+
+  it('distinguishes a loading catalog, missing engine, missing source, and missing model', () => {
+    const source = provider();
+    const input = {
+      agent: 'pi' as const, model: modelId, providerId,
+      engineAvailable: true, enginesLoaded: true, enginesLoading: false,
+      providers: [source], providersLoading: false, providersLoadFailed: false,
+    };
+    expect(draftEffort.savedDraftModelIssue({ ...input, providersLoading: true, providers: [] })).toBe('loading');
+    expect(draftEffort.savedDraftModelIssue({ ...input, engineAvailable: false })).toBe('engine');
+    expect(draftEffort.savedDraftModelIssue({ ...input, providersLoadFailed: true, providers: [] })).toBe('checkFailed');
+    expect(draftEffort.savedDraftModelIssue({ ...input, providers: [{ ...source, id: 'other-source' }] })).toBe('source');
+    expect(draftEffort.savedDraftModelIssue({ ...input, providers: [{ ...source, models: { pi: [] } }] })).toBe('model');
+    expect(draftEffort.savedDraftModelIssue(input)).toBeNull();
+  });
+
   // PR #11698: a restored remote engine is absent from the initial catalogue.
   // Exercise both real submission callbacks in the existing unit fixture. Other
   // catalogue cases use built-in engines and cannot catch this fallback.

@@ -23,7 +23,7 @@ import { configureAppDataDir } from '../../desktop/src/main/userDataPath.ts';
 import { commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
-import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
+import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { publishAgentEvent } from './agent/turn-executor.mjs';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.ts';
@@ -46,7 +46,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   configureAppDataDir(profile);
   configureHostOwner({ userDataDir: profile, ownerId: 'test-headless-owner' });
   const sqlite = new Database(':memory:');
-  for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles]) {
+  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles]) {
     sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
   }
   sqlite.exec(`CREATE TABLE im_bindings (target_session_id TEXT);

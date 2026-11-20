@@ -25,7 +25,8 @@ const plugin: TabKindPlugin<SideChatState> = {
   serializeState: hydrateSideChatState,
   onBeforeClose: async (state, ctx) => {
     if (!state.sessionId || hasTabCloseInterceptor(ctx.tabId)) return true;
-    // Recovered, unmounted tabs must install their confirmation before deletion.
+    // Recovered, unmounted tabs must install the close handler before a task
+    // can be reclaimed.
     await setActiveTab(ctx.sessionId, ctx.tabId);
     return false;
   },
