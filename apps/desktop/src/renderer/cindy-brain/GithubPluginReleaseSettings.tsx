@@ -13,7 +13,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import type { InstalledGhost } from '../../shared/ghost';
 import type { GithubPluginReleaseResult } from '../../shared/githubPluginRelease';
-import { checkGithubRelease, recordGithubReleaseReply } from '@/features/plugin/lib/githubReleaseUpdates';
+import { checkGithubRelease, recordGithubReleaseUpdateReply } from '@/features/plugin/lib/githubReleaseUpdates';
 
 type ReleaseAction = 'check' | 'update' | 'sign-in';
 
@@ -60,7 +60,7 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
         : await window.electronAPI.ghosts.githubRelease(action, instanceId, assetId);
       if (action === 'update') {
         const offered = release?.assetId === assetId ? release : undefined;
-        recordGithubReleaseReply(owner, target, reply, offered);
+        recordGithubReleaseUpdateReply(owner, target, reply, offered);
       }
       if (!isCurrent()) return;
       if (typeof reply !== 'boolean') setResult(reply);

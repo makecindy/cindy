@@ -613,8 +613,6 @@ function LocalGhostPluginPage({
   const showEnterprise = user?.membershipKind === 'org';
   const contributor = mode === 'cloud' && (user?.membershipKind === 'personal' || user?.membershipKind === 'org');
   const ghosts = useInstalledGhosts();
-  // 本地插件声明了 GitHub Release 更新源时，页面可见期间按需检查，结果并入更新横幅。
-  const githubUpdates = useGithubReleaseUpdates(ghosts);
   useMainViewVisibilityRevision();
   const installedGhostMarketKey = useMemo(
     () => installedGhostMarketKeyFor(ghosts),
@@ -696,6 +694,9 @@ function LocalGhostPluginPage({
     requestRestore: requestPluginCatalogScrollRestore,
     clearPendingRestore: clearPluginCatalogScrollRestore,
   } = usePluginListScrollRestoration(pluginCatalogVisible, catalogMemory.scroll);
+  const githubUpdates = useGithubReleaseUpdates(
+    ghosts, active && pluginCatalogVisible, dataOwnerId, dataOwnerGeneration,
+  );
   const [marketBusy, setMarketBusy] = useState<{ pluginId: string; intent: 'detail' | 'install' } | null>(null);
   const marketBusyId = marketBusy?.pluginId ?? null;
   const marketInstallBusyId = marketBusy?.intent === 'install' ? marketBusy.pluginId : null;

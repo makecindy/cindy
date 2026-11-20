@@ -409,17 +409,16 @@ describe('updateAllController', () => {
   // GitHub Release rows (local plugins with `githubRelease`) join the same batch but go through
   // Main's `ghosts:github-release` update, which re-checks the release before downloading. Before
   // this change the banner and batch only knew market rows, so these plugins were never offered.
-  // Branches: Main pointing at a newer asset is followed once; a sign-in answer is a failed row
+  // Branches: Main pointing at a newer asset ends this attempt; a sign-in answer is a failed row
   // with the release row's own words; the market row in the same batch is unaffected.
   it.each([
     {
-      name: 'follows a newer asset once and finishes on the installed version',
+      name: 'leaves a newer asset for the next update attempt',
       replies: [
         { status: 'available', release: { version: '0.1.2', assetId: 8, sha256: 'b', size: 1, prerelease: false } },
-        { status: 'updated', version: '0.1.2' },
       ],
-      assets: [7, 8],
-      row: { status: 'done', toVersion: '0.1.2' },
+      assets: [7],
+      row: { status: 'failed', toVersion: '0.1.1', errorText: 'settings.ghosts.detail.githubRelease.unavailable' },
     },
     {
       name: 'fails the row with the GitHub sign-in prompt',

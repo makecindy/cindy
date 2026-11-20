@@ -112,7 +112,7 @@ function isCheck(reply: GithubPluginReleaseResult | boolean): reply is GithubPlu
 }
 
 /** Record whatever Main answered for this installed version (check or update action). */
-export function recordGithubReleaseReply(
+function recordGithubReleaseReply(
   owner: DataOwnerGeneration,
   target: GithubReleaseTarget,
   reply: GithubPluginReleaseResult | boolean,
@@ -130,6 +130,22 @@ export function recordGithubReleaseReply(
     return;
   }
   setFact(owner, target, { result: isCheck(reply) ? reply : null, checkedAt });
+}
+
+/** A failed install does not invalidate the last offer, so the user can retry. */
+export function recordGithubReleaseUpdateReply(
+  owner: DataOwnerGeneration,
+  target: GithubReleaseTarget,
+  reply: GithubPluginReleaseResult | boolean,
+  installedRelease?: GithubPluginRelease,
+): void {
+  if (typeof reply === 'boolean') return;
+  if (
+    reply.status === 'available' || reply.status === 'current' ||
+    reply.status === 'empty' || reply.status === 'updated'
+  ) {
+    recordGithubReleaseReply(owner, target, reply, installedRelease);
+  }
 }
 
 function isFresh(fact: Fact | undefined, now: number): boolean {
@@ -205,8 +221,8 @@ async function drain(): Promise<void> {
 
 /**
  * Update through Main with progress forwarded to the shared install progress entry `progressKey`
- * (the runner begins and ends it). Main re-checks first; when a newer asset was published since the
- * offer it answers "available" with that asset, and we follow it once.
+ * (the runner begins and ends it). Main re-checks the offered asset. A different asset refreshes
+ * the offer for the next update attempt.
  */
 export async function runGithubReleaseUpdate(input: {
   target: GithubReleaseTarget;
@@ -221,21 +237,18 @@ export async function runGithubReleaseUpdate(input: {
     reportPluginInstallProgress(progressKey, event.progress);
   });
   try {
-    let assetId = input.assetId;
-    for (let attempt = 0; ; attempt += 1) {
-      const offered = facts.get(factKey(owner, target))?.result;
-      const offeredRelease = offered && 'release' in offered ? offered.release : undefined;
-      const reply = await window.electronAPI.ghosts.githubRelease('update', target.instanceId, assetId);
-      if (!isDataOwnerGenerationCurrent(owner) || typeof reply === 'boolean') return { status: 'unavailable' };
-      recordGithubReleaseReply(
-        owner,
-        target,
-        reply,
-        offeredRelease?.assetId === assetId ? offeredRelease : undefined,
-      );
-      if (reply.status !== 'available' || reply.release.assetId === assetId || attempt > 0) return reply;
-      assetId = reply.release.assetId;
-    }
+    const { assetId } = input;
+    const offered = facts.get(factKey(owner, target))?.result;
+    const offeredRelease = offered && 'release' in offered ? offered.release : undefined;
+    const reply = await window.electronAPI.ghosts.githubRelease('update', target.instanceId, assetId);
+    if (!isDataOwnerGenerationCurrent(owner) || typeof reply === 'boolean') return { status: 'unavailable' };
+    recordGithubReleaseUpdateReply(
+      owner,
+      target,
+      reply,
+      offeredRelease?.assetId === assetId ? offeredRelease : undefined,
+    );
+    return reply;
   } finally {
     stop?.();
   }
@@ -256,8 +269,8 @@ function getFacts(): ReadonlyMap<string, Fact> {
 export function githubReleaseUpdatesFor(
   ghosts: readonly GhostLike[],
   current: ReadonlyMap<string, Fact> = facts,
+  owner: DataOwnerGeneration = getDataOwnerGeneration(),
 ): GithubReleaseUpdate[] {
-  const owner = getDataOwnerGeneration();
   return ghosts.flatMap((ghost) => {
     const target = githubReleaseTarget(ghost);
     const result = target ? current.get(factKey(owner, target))?.result : undefined;
@@ -277,7 +290,12 @@ export function githubReleaseUpdatesFor(
  * visible and returns the updates found so far. Re-runs only when the set of targets changes or
  * the window becomes visible again — never on a timer.
  */
-export function useGithubReleaseUpdates(ghosts: readonly InstalledGhost[]): GithubReleaseUpdate[] {
+export function useGithubReleaseUpdates(
+  ghosts: readonly InstalledGhost[],
+  active: boolean,
+  dataOwnerId: string | null,
+  dataOwnerGeneration: number,
+): GithubReleaseUpdate[] {
   const current = useSyncExternalStore(subscribe, getFacts);
   const targets = useMemo(
     () => ghosts.flatMap((ghost) => {
@@ -289,10 +307,12 @@ export function useGithubReleaseUpdates(ghosts: readonly InstalledGhost[]): Gith
   const targetsKey = JSON.stringify(targets);
   useEffect(() => {
     const list = JSON.parse(targetsKey) as GithubReleaseTarget[];
-    if (list.length === 0) return undefined;
+    if (!active || list.length === 0) return undefined;
     let windowHidden = isWindowHidden();
     let mounted = true;
-    const isActive = () => mounted && !windowHidden && document.visibilityState !== 'hidden';
+    const owner = { dataOwnerId, generation: dataOwnerGeneration };
+    const isActive = () => mounted && !windowHidden && document.visibilityState !== 'hidden' &&
+      isDataOwnerGenerationCurrent(owner);
     const checkWhenVisible = () => {
       if (isActive()) ensureGithubReleaseChecks(list, isActive);
     };
@@ -308,8 +328,11 @@ export function useGithubReleaseUpdates(ghosts: readonly InstalledGhost[]): Gith
       document.removeEventListener('visibilitychange', checkWhenVisible);
       unsubscribe?.();
     };
-  }, [targetsKey]);
-  return useMemo(() => githubReleaseUpdatesFor(ghosts, current), [ghosts, current]);
+  }, [active, dataOwnerId, dataOwnerGeneration, targetsKey]);
+  return useMemo(
+    () => githubReleaseUpdatesFor(ghosts, current, { dataOwnerId, generation: dataOwnerGeneration }),
+    [ghosts, current, dataOwnerId, dataOwnerGeneration],
+  );
 }
 
 /** Test only: drop every fact, queued check and in-flight share. */

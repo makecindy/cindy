@@ -23,6 +23,7 @@ import type { InstalledGhost } from '../../../../shared/ghost';
 import {
   __resetGithubReleaseUpdatesForTest,
   GITHUB_RELEASE_CHECK_TTL_MS,
+  checkGithubRelease,
   ensureGithubReleaseChecks,
   githubReleaseTarget,
   githubReleaseUpdatesFor,
@@ -113,7 +114,18 @@ describe('GitHub Release update checks for the Plugin page', () => {
     expect(githubRelease).toHaveBeenCalledTimes(2);
   });
 
-  it('does not follow a replacement release after the account changes', async () => {
+  it('keeps the update offer available for retry after a failed install', async () => {
+    const ghosts = [ghost('zcode')];
+    const [target] = targets(ghosts);
+    githubRelease.mockResolvedValueOnce(available('0.1.1', 7)).mockResolvedValueOnce({ status: 'unavailable' });
+    await checkGithubRelease(target!);
+
+    await expect(runGithubReleaseUpdate({ target: target!, assetId: 7, progressKey: 'zcode' }))
+      .resolves.toEqual({ status: 'unavailable' });
+    expect(githubReleaseUpdatesFor(ghosts)).toMatchObject([{ version: '0.1.1', assetId: 7 }]);
+  });
+
+  it('discards an in-flight update reply when the account changes', async () => {
     const [target] = targets([ghost('zcode')]);
     let finishUpdate!: (value: unknown) => void;
     githubRelease.mockReturnValueOnce(new Promise((resolve) => { finishUpdate = resolve; }));

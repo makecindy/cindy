@@ -152,7 +152,7 @@ export function githubRowOutcome(
 ): { status: 'done'; updated: boolean; version?: string } | { status: 'failed'; errorText: string } {
   if (reply.status === 'updated') return { status: 'done', updated: true, version: reply.version };
   if (reply.status === 'current') return { status: 'done', updated: false };
-  // 'available' here means Main kept pointing at a different asset even after one follow-up.
+  // A changed asset refreshes the offer. This batch did not install the version the user saw.
   const copy = reply.status === 'available' ? 'unavailable' : reply.status;
   return { status: 'failed', errorText: i18n.t(`settings.ghosts.detail.githubRelease.${copy}`) };
 }
