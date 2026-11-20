@@ -47,7 +47,12 @@ const D_LIST_TOOLS =
   '获取工具名后用 call_tool({name, args}) 执行;参数错误会返回完整 JSON Schema 自纠。';
 
 const D_CALL_TOOL =
-  '调用 cindy_memory 中的某个具体工具。先用 list_tools 拿工具名 + 简介, 再用本工具执行。' +
+  // 实测 (2026-11-20, 一个账号一天半的任务记录): 原先写「先用 list_tools 拿工具名」, Codex 任务读一条
+  // 记忆前平均多调 1.6 次 list_tools。最常用的两个读取调用直接写在这里, 不必先查。
+  '调用 cindy_memory 中的某个具体工具。常用的可以直接调, 不必先查: ' +
+  '读一条 = {name:"memory_read", args:{filename:"索引里的文件名"}}; ' +
+  '按关键词找 = {name:"memory_search", args:{query:"关键词"}}。' +
+  '其它工具或参数再用 list_tools 查。' +
   '错误码:' +
   '`MAKER_MEMORY_NOT_READY` = maker memory 未启用 (mode != "maker"), 提示用户切换 settings;' +
   '`NOT_FOUND` = 指定 memory 文件不存在;' +
@@ -110,7 +115,7 @@ function registerCallToolEntry(server: McpServer, registry: MemoryToolRegistry, 
     'call_tool',
     D_CALL_TOOL,
     {
-      name: z.string().describe('工具名, 从 list_tools 获取 (e.g. memory_write / memory_search)'),
+      name: z.string().describe('工具名 (e.g. memory_read / memory_search / memory_write); 其它的从 list_tools 获取'),
       args: jsonObjectArg('工具参数 JSON; 不确定 schema 可先传 {} 触发反馈'),
     },
     async ({ name, args }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async () => registry.call(name, args)),
