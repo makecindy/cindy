@@ -32,6 +32,14 @@ const field = (step: InputHandoffSnapshot) => step.controls.find((control) => co
 describe('InputHandoffSession', () => {
   it('asks only for the fields to type, confirms with the page button and follows the flow across apps', async () => {
     const desktop = fakeDesktop();
+    // Keep the already-open browser's identity while its New Tab becomes the sign-in page.
+    const windows = desktop.driver.windows;
+    desktop.driver.windows = async () => {
+      const list = await windows();
+      return { ...list, apps: list.apps.map((app) => ({
+        ...app, windows: app.windows.map((window) => ({ ...window, windowId: 900 + app.pid })),
+      })) };
+    };
     const { session, finished, latest } = harness(desktop.driver);
     await session.start();
     let step = latest();
@@ -52,19 +60,75 @@ describe('InputHandoffSession', () => {
     await vi.waitFor(() => expect(finished).toHaveLength(1));
     expect(finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 2, finalApp: 'Google Chrome' });
     expect(desktop.stage()).toBe('consent');
+    expect(desktop.acts.map((act) => act.window.windowId)).toEqual([910, 910, 920, 920]);
     expect(latest()).toMatchObject({ phase: 'succeeded', terminal: true });
     expect(JSON.stringify([finished, latest()])).not.toMatch(/owner@example|synthetic-secret/);
   });
 
-  it('stays on a form that still asks when the owner switches to an app they already had open', async () => {
+  // #8640 review regression, unit: explicit submission may legitimately open the next
+  // window with a reused title/index. Unlike the waiting watcher, settling follows it.
+  // Existing cross-app coverage had no native IDs and could not expose a stale binding.
+  it.each([true, false])('updates a submitted flow only when the next reused window is identified (%s)', async (identified) => {
+    const desktop = fakeDesktop();
+    const identity = () => desktop.stage() === 'account' ? 71 : 99;
+    const driver: HandoffDriver = {
+      ...desktop.driver,
+      windows: async () => {
+        const list = await desktop.driver.windows();
+        list.frontmost = 10;
+        list.apps = list.apps.filter((app) => app.pid === 10).map((app) => ({
+          ...app, windows: app.windows.map((window) => ({
+            ...window, ...(identified || desktop.stage() === 'account' ? { windowId: identity() } : {}),
+          })),
+        }));
+        return list;
+      },
+      snapshot: async (pid, window) => {
+        if (pid !== 10 || (window?.windowId !== undefined && window.windowId !== identity())) return { error: 'target_gone' };
+        const raw = await desktop.driver.snapshot(desktop.stage() === 'account' ? 10 : 20);
+        return 'error' in raw ? raw : {
+          ...raw, pid: 10, app: 'Example', bundleId: 'com.example.app',
+          window: { ...raw.window, title: 'Sign in', windowId: identity() },
+        };
+      },
+    };
+    const { session, finished, latest } = harness(driver);
+    try {
+      await session.start();
+      const step = latest();
+      expect(await session.submit({ expectedRevision: step.revision, values: { [field(step).id]: 'owner@example.test' }, action: { kind: 'submit' } })).toBe(true);
+      expect(latest()).toMatchObject({ phase: 'ready', stepNumber: identified ? 2 : 1 });
+      if (identified) expect(field(latest())).toMatchObject({ contentType: 'password' });
+      else expect(latest().controls).toEqual([]);
+      expect(finished).toEqual([]);
+      expect(desktop.acts.map((act) => act.window.windowId)).toEqual([71, 71]);
+    } finally {
+      session.cancel();
+    }
+  });
+
+  it.each([true, false])('stays on a form when the owner switches to an unchanged app (previous identity known: %s)', async (knownBefore) => {
     const desktop = fakeDesktop({ rejects: true });
+    let switched = false;
+    const windows = desktop.driver.windows;
+    desktop.driver.windows = async () => {
+      const list = await windows();
+      return { ...list, apps: list.apps.map((app) => ({
+        ...app, windows: app.windows.map((window) => ({
+          ...window, ...(app.pid === 10 || knownBefore || switched ? { windowId: 900 + app.pid } : {}),
+        })),
+      })) };
+    };
     const { session, finished, latest } = harness(desktop.driver);
     await session.start();
     const step = latest();
     const press = desktop.driver.act;
     desktop.driver.act = async (request) => {
       const result = await press(request);
-      if (request.kind === 'press') desktop.switchToBrowser();
+      if (request.kind === 'press') {
+        switched = true;
+        desktop.switchToBrowser();
+      }
       return result;
     };
     await session.submit({ expectedRevision: step.revision, values: { [field(step).id]: 'owner@example.test' }, action: { kind: 'submit' } });

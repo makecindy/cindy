@@ -163,6 +163,12 @@ const windowRef = (window: NativeWindowList['apps'][number]['windows'][number]):
   ...(window.windowId !== undefined ? { windowId: window.windowId } : {}),
 });
 
+/** Identity when available; legacy helpers can only compare their title/index pair. */
+const sameWindowIdentity = (a: HandoffTarget['window'], b: HandoffTarget['window']): boolean =>
+  a.windowId !== undefined || b.windowId !== undefined
+    ? a.windowId !== undefined && a.windowId === b.windowId
+    : a.index === b.index && a.title === b.title;
+
 /**
  * The window a handoff works on: by pid, else by app name or bundle id, else
  * the frontmost app; never Cindy itself. Shared with the request-time check so
@@ -1486,7 +1492,7 @@ export class InputHandoffSession {
         const follow = this.followTarget(windows, before, asks);
         if (follow === 'ended') return 'ended';
         if (follow && (follow.pid !== this.target?.pid || follow.window.index !== this.target?.window.index ||
-            follow.window.title !== this.target?.window.title)) {
+            follow.window.title !== this.target?.window.title || follow.window.windowId !== this.target?.window.windowId)) {
           await this.useTarget(follow);
           last = null;
           stableReads = 0;
@@ -1515,9 +1521,12 @@ export class InputHandoffSession {
     if (!current) return null;
     const hints = this.options.completeWhen;
     const app = (pid: number) => list.apps.find((entry) => entry.pid === pid);
-    const toTarget = (entry: NativeWindowList['apps'][number], window: NativeWindowList['apps'][number]['windows'][number]): HandoffTarget => ({
-      pid: entry.pid, app: entry.app, bundleId: entry.bundleId, window: windowRef(window),
-    });
+    const toTarget = (entry: NativeWindowList['apps'][number], window: NativeWindowList['apps'][number]['windows'][number]): HandoffTarget | null => {
+      // Submitting may open a next window, but must not turn an uncertain native
+      // association into a title-only target after identity was already established.
+      if (current.window.windowId !== undefined && window.windowId === undefined) return null;
+      return { pid: entry.pid, app: entry.app, bundleId: entry.bundleId, window: windowRef(window) };
+    };
     // Another app came to the front (for example the browser for an authorization page). While the
     // form still asks the owner for something, only a window that just opened or changed counts:
     // someone switching to an app they already had open is not where the sign-in went.
@@ -1529,8 +1538,9 @@ export class InputHandoffSession {
       if (front && window && !(currentAsks && unchanged)) return toTarget(front, window);
     }
     const mine = app(current.pid);
-    const sameWindow = mine?.windows.find((w) => w.index === current.window.index && w.title === current.window.title)
-      ?? mine?.windows.find((w) => w.title === current.window.title);
+    const matches = mine?.windows.filter((w) => sameWindowIdentity(w, current.window)) ?? [];
+    const sameWindow = current.window.windowId !== undefined ? (matches.length === 1 ? matches[0] : undefined)
+      : matches[0] ?? mine?.windows.find((w) => w.title === current.window.title);
     // A new window in the same app took focus (dialogs, popups, sign-in windows).
     const focused = mine?.windows.find((w) => w.focused && !w.minimized);
     if (focused && focused !== sameWindow) {
