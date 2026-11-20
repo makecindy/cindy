@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   MAX_JSONL_BUFFER_CHARS,
   attachJsonlReader,
+  createPrimeAgentStdioTransport,
 } from '../transport.js';
 
 function collect(stream: PassThrough): { lines: string[]; oversized: () => number } {
@@ -150,5 +151,45 @@ describe('createPrimeAgentStdioTransport', () => {
     await expect(transport.writeLine('{"a":1}')).rejects.toThrow(/already closed/);
     // 幂等: 第二次 close 不再抛。
     await expect(transport.close()).resolves.toBeUndefined();
+  });
+
+  it('redacts a credential-looking stderr line before it reaches the log', async () => {
+    const logger = {
+      trace: vi.fn(), debug: vi.fn(), info: vi.fn(),
+      warn: vi.fn(), error: vi.fn(), fatal: vi.fn(),
+      child: () => logger,
+    };
+    // 假 token: 运行时拼装, 源码里不出现连续的 credential 形状(安全门会扫 diff)。
+    const FAKE_TOKEN = 'ghp_' + 'FAKE'.repeat(8);
+    const transport = createPrimeAgentStdioTransport({
+      binaryPath: process.execPath,
+      args: ['-e', `process.stderr.write("provider error: api_key=${FAKE_TOKEN}\\n");`],
+      cwd: process.cwd(),
+      env: { ...process.env },
+      logger,
+      stdinCloseGraceMs: 200,
+    });
+
+    const stderrLine = new Promise<string>((resolve) => {
+      transport.onStderr?.((line) => resolve(line));
+    });
+    const emitted = await Promise.race([
+      stderrLine,
+      new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
+    ]);
+
+    // 同一行 stderr 会被 transport 与 rpc-client 各记一次 —— 两处都必须脱敏,
+    // 只在一处脱敏等于没脱敏(值形状类凭证会原样落盘)。
+    expect(emitted, '应收到子进程的 stderr 行').not.toBe('');
+    expect(emitted).not.toContain(FAKE_TOKEN);
+    expect(emitted).toContain('[REDACTED]');
+
+    const logged = logger.warn.mock.calls.find((call) => call[0] === 'prime-agent stderr');
+    expect(logged, 'stderr 应进日志').toBeDefined();
+    const context = logged?.[1] as { line?: string } | undefined;
+    expect(context?.line).not.toContain(FAKE_TOKEN);
+    expect(context?.line).toContain('[REDACTED]');
+
+    await transport.close();
   });
 });

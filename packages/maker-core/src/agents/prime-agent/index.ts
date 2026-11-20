@@ -64,6 +64,7 @@ import {
   rollbackPrimeAgentHostTurnStart,
   translatePrimeAgentEvent,
   usageSnapshotOf,
+  type PrimeAgentTranslateContext,
 } from './translator.js';
 
 /** Prime Agent RPC 命令的超时。`compact` 会调 LLM 生成摘要, 用事件刷新 idle 计时。 */
@@ -147,6 +148,40 @@ function validatePrimeAgentSessionId(value: string, field: string): string {
   return value;
 }
 
+/**
+ * 进程消失(断连 / 确认退出)时收口在飞轮次。
+ *
+ * 合成一次 `agent_end` 走 translator 既有的收口路径, 并把终态标成 **failed** ——
+ * 被截断的轮次不能上报成「成功完成的空回复」(那会让用户只看到一句空结果, 完全
+ * 不知道连接已经丢了)。translator 的 `turnSettled` 幂等保护保证迟到的真
+ * `agent_end` 不会二次收口。
+ */
+function settleInterruptedTurn(
+  ctx: PrimeAgentTranslateContext,
+  queue: AsyncQueue<AgentEvent>,
+  reason: string,
+): void {
+  if (!ctx.isStreaming) return;
+  ctx.pendingAssistantError = { message: reason, sdkError: reason, reason: 'stream-interrupted' };
+  translatePrimeAgentEvent({ type: 'agent_end' } as PrimeAgentRpcEvent, queue, ctx);
+}
+
+/**
+ * 确认退出所有未收口的启动进程。逐个尝试 —— 一个失败不影响其余; 全部结束后把
+ * 第一个错误抛给调用方(调用方据此保留记录等下次重试)。
+ */
+async function closeStartupProcesses(closers: Array<() => Promise<void>>): Promise<void> {
+  let firstError: unknown = null;
+  for (const close of closers) {
+    try {
+      await close();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError) throw firstError;
+}
+
 /** 从 `get_state.data.model` 取模型 id(`pa_types::ai::Model` 的 `id` 字段)。 */
 function primeAgentModelIdOf(data: PrimeAgentStateData): string {
   const model = data.model;
@@ -205,11 +240,22 @@ export class PrimeAgent extends BaseAgent {
    * 下一次同 session 的 startSession 先重试确认退出, 绝不直接再 spawn 一个。
    */
   private readonly failedStartupCleanups = new Map<string, {
+    /** 所有未确认退出的进程 —— 一次重试要把它们全部确认掉。 */
+    closers: Array<() => Promise<void>>;
     close: () => Promise<void>;
     confirmStopped: () => void;
     /** 未确认退出时抛给宿主的 promise; 确认退出后 resolve。 */
     whenStopped: Promise<void>;
   }>();
+
+  /**
+   * 同 session 的在途启动 —— 并发启动必须串行化: 两个 `--mode rpc` 进程会在同
+   * 一个工作目录里抢写, 这正是「旧进程未确认退出就再 spawn」要防的那件事。
+   */
+  private readonly inFlightStartups = new Map<string, Promise<void>>();
+
+  /** dispose() 之后不再放行新启动(与 pi 的 disposing 栅栏同语义)。 */
+  private disposed = false;
 
   constructor(deps: AgentDeps) {
     super(deps);
@@ -222,6 +268,7 @@ export class PrimeAgent extends BaseAgent {
    * 只把仍未确认退出的失败启动再收一次口。
    */
   override async dispose(): Promise<void> {
+    this.disposed = true;
     const snapshot = [...this.failedStartupCleanups.entries()];
     await Promise.allSettled(snapshot.map(([key]) => this.retryFailedStartupCleanup(key)));
   }
@@ -306,6 +353,36 @@ export class PrimeAgent extends BaseAgent {
 
   override async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
     const startupKey = opts.sessionId ?? '<anonymous>';
+    if (this.disposed) {
+      throw new AgentStartupStoppedError(new Error('prime-agent agent is disposed'));
+    }
+    // 并发栅栏: 同一 session 的两次并发启动只放行一个 —— 两个 `--mode rpc`
+    // 进程会在同一个工作目录里抢写, 这正是「旧进程未确认退出就再 spawn」要防
+    // 的那件事。后到的那次直接失败, 并复用前一次的 whenStopped(宿主据此继续
+    // 持有目录租约, 而不是把「可能仍占用目录」记成「尚未启动」)。
+    const inFlight = this.inFlightStartups.get(startupKey);
+    if (inFlight) {
+      throw new AgentStartupCleanupPendingError(
+        'prime-agent cannot start: another startup for this session is still in flight',
+        { cause: new Error('prime-agent startup already in flight'), whenStopped: inFlight },
+      );
+    }
+    let releaseInFlight!: () => void;
+    const inFlightGate = new Promise<void>((resolve) => { releaseInFlight = resolve; });
+    this.inFlightStartups.set(startupKey, inFlightGate);
+    try {
+      return await this.runStartSession(opts, startupKey);
+    } finally {
+      this.inFlightStartups.delete(startupKey);
+      releaseInFlight();
+    }
+  }
+
+  /** startSession 的实际执行体(并发栅栏之外的部分)。 */
+  private async runStartSession(
+    opts: StartSessionOptions,
+    startupKey: string,
+  ): Promise<AgentSessionHandle> {
     // 上一次同 session 的失败启动若还留着未确认退出的进程, 先重试收口。
     // 未确认退出前**拒绝再次启动**: 旧进程可能还活着, 再 spawn 一个会让两个进程
     // 同时操作同一工作目录。
@@ -377,6 +454,32 @@ export class PrimeAgent extends BaseAgent {
     }
 
     const logger = this.deps.logger;
+    // close() 必须**先于** PrimeAgentRpcProcess 定义: 断连回调在启动握手窗口内就
+    // 可能触发, 那时若 close 还在 TDZ 里(声明在后面), 回调会抛 ReferenceError
+    // 并被 transport 吞掉 —— 既不合成终态也不回收进程, 整段断连恢复失效。
+    // 函数声明会被提升, 这里的 proc 引用只在 close() 被调用时求值(那时 const
+    // proc 已经初始化完毕)。
+    /** 已确认关闭。close() 只有在确认退出后才置位。 */
+    let closed = false;
+    async function close(): Promise<void> {
+      if (closed) return;
+      // transport.close() 先 end(stdin): Prime Agent 的 RPC 模式把 stdin EOF 当
+      // 优雅退出路径(settle 在飞 turn → drain 帧 → exit 0), Windows 上没有 SIGTERM
+      // 可依赖(见 transport.ts 文件头)。
+      try {
+        await proc.close();
+      } catch (error) {
+        // 底层报未确认退出: **不置 closed**, 让调用方能重试确认; 失败必须向上抛,
+        // 否则宿主会把会话标成已关闭并释放目录租约, 而子进程可能还在写文件。
+        // 事件流仍然 end —— Session 在 close 抛错时只清 listener 不改状态, 消费者
+        // 若等不到 end 会永久挂住; 而 onExit 也会 end, 重复 end 是幂等的。
+        queue.end();
+        throw error;
+      }
+      closed = true;
+      queue.end();
+    }
+
     const proc = new PrimeAgentRpcProcess({
       transport,
       logger,
@@ -386,6 +489,14 @@ export class PrimeAgent extends BaseAgent {
       onExit: (info) => {
         // 进程退出: 收口事件流, 让 handle.events() 的消费者能退出循环。
         logger.warn('prime-agent process exited', { code: info.code, signal: info.signal });
+        // 确认退出(崩溃 / 被 kill): 在飞轮次不会再有 agent_end —— 必须合成一次
+        // 终态, 否则宿主的 turn 状态机永远等不到终态帧(queue.end() 只结束事件
+        // 流, 不结束 turn)。
+        settleInterruptedTurn(
+          ctx,
+          queue,
+          `prime-agent process exited (code=${info.code}, signal=${info.signal})`,
+        );
         disposePrimeAgentTranslateContext(ctx);
         queue.end();
       },
@@ -395,9 +506,7 @@ export class PrimeAgent extends BaseAgent {
         // 永远为真, isTurnRunning() 永远 true, 队列也永远不结束(只有 onExit 会
         // end, 而进程还活着)。这里合成一次终态走既有收口路径 ——
         // translateSettledFrame 有 turnSettled 幂等保护, 不会双收口。
-        if (ctx.isStreaming) {
-          translatePrimeAgentEvent({ type: 'agent_end' } as PrimeAgentRpcEvent, queue, ctx);
-        }
+        settleInterruptedTurn(ctx, queue, `prime-agent RPC disconnected: ${reason}`);
         // 断连的管道不可用, 确认终止(close 失败也不阻塞 —— 断连本身已经是失联证据)。
         void close().catch((error) => {
           logger.warn('prime-agent close after disconnect failed', {
@@ -449,7 +558,9 @@ export class PrimeAgent extends BaseAgent {
         throw new Error('prime-agent get_state answered without a sessionId');
       }
       sessionId = validatePrimeAgentSessionId(stateData.sessionId, 'sessionId');
-      sessionFile = typeof stateData.sessionFile === 'string'
+      // sessionFile 是**可选**字段: 空串 = 「还没有会话文件」的合法应答, 不能当
+      // 不安全身份拒掉(否则一个刚建、还没落盘会话的 agent 起不来)。
+      sessionFile = typeof stateData.sessionFile === 'string' && stateData.sessionFile.length > 0
         ? validatePrimeAgentSessionId(stateData.sessionFile, 'sessionFile')
         : undefined;
       model = primeAgentModelIdOf(stateData) || opts.model || '';
@@ -467,28 +578,35 @@ export class PrimeAgent extends BaseAgent {
         closeError = err;
       }
       if (closeError) {
-        let confirmStopped!: () => void;
-        const whenStopped = new Promise<void>((resolve) => { confirmStopped = resolve; });
-        // 不覆盖一个已有的未确认记录: 旧记录的 whenStopped 可能已经被抛给宿主,
-        // 覆盖它会让那个 promise 永远不 resolve。
-        if (!this.failedStartupCleanups.has(startupKey)) {
-          this.failedStartupCleanups.set(startupKey, {
-            close: () => proc.close(),
+        // 复用**已存在**记录的 whenStopped: 新建一个 promise 却不 resolve 它, 宿主
+        // 会永远等不到确认退出, 目录租约一直挂着。同理也不覆盖旧记录 —— 覆盖它
+        // 会让已经抛给宿主的那一个 promise 永远不 resolve。新进程的清理动作追加
+        // 进同一条记录, 下一次重试把它们一起确认掉。
+        let record = this.failedStartupCleanups.get(startupKey);
+        if (!record) {
+          let confirmStopped!: () => void;
+          const whenStopped = new Promise<void>((resolve) => { confirmStopped = resolve; });
+          const closers: Array<() => Promise<void>> = [() => proc.close()];
+          record = {
+            closers,
+            close: () => closeStartupProcesses(closers),
             confirmStopped,
             whenStopped,
-          });
+          };
+          this.failedStartupCleanups.set(startupKey, record);
+        } else {
+          record.closers.push(() => proc.close());
         }
         throw new AgentStartupCleanupPendingError(
           'prime-agent startup failed and process cleanup remains unconfirmed: '
             + `${closeError instanceof Error ? closeError.message : String(closeError)}`,
-          { cause: error, whenStopped },
+          { cause: error, whenStopped: record.whenStopped },
         );
       }
       throw new AgentStartupStoppedError(error);
     }
 
     if (contextWindow > 0) ctx.contextWindow = contextWindow;
-    let closed = false;
     /** 当前模型 id。setModel 成功后更新, handle.model 经 getter 读它。 */
     let currentModel = model;
     /** 在途的宿主独占 RPC(手动压缩)计数 —— 运行时回收必须看得见。 */
@@ -514,25 +632,6 @@ export class PrimeAgent extends BaseAgent {
         });
       }
       return catalogModels;
-    };
-
-    const close = async (): Promise<void> => {
-      if (closed) return;
-      // transport.close() 先 end(stdin): Prime Agent 的 RPC 模式把 stdin EOF 当
-      // 优雅退出路径(settle 在飞 turn → drain 帧 → exit 0), Windows 上没有 SIGTERM
-      // 可依赖(见 transport.ts 文件头)。
-      try {
-        await proc.close();
-      } catch (error) {
-        // 底层报未确认退出: **不置 closed**, 让调用方能重试确认; 失败必须向上抛,
-        // 否则宿主会把会话标成已关闭并释放目录租约, 而子进程可能还在写文件。
-        // 事件流仍然 end —— Session 在 close 抛错时只清 listener 不改状态, 消费者
-        // 若等不到 end 会永久挂住; 而 onExit 也会 end, 重复 end 是幂等的。
-        queue.end();
-        throw error;
-      }
-      closed = true;
-      queue.end();
     };
 
     const handle: AgentSessionHandle = {

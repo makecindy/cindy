@@ -21,7 +21,7 @@
  * 之上的请求/响应关联与事件分发, 不感知字节流来源。
  */
 
-import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { redactPrimeAgentLogText, redactPrimeAgentPayload } from './credential-redaction.js';
 import type { Logger } from '../../interfaces/logger.js';
 
 import type {
@@ -86,31 +86,10 @@ export interface PrimeAgentRpcSpawnOptions {
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const MAX_STARTUP_STDERR_CHARS = 2000;
 
-// key-aware 敏感字段名 —— 值形状正则覆盖不了 64-hex token / 自定义 header 值,
-// 字段名命中即整体替换。Prime Agent 自带 provider 的内联 API 密钥会出现在
-// models.json / 报错文本里, 进日志前必须拦。
-const SENSITIVE_KEY_RE =
-  /(^|[\s,{[])("?)([A-Za-z0-9_-]*)(token|secret|api[_-]?key|authorization|password|credential)([A-Za-z0-9_-]*)(\s*["]?\s*[:=]\s*)([^,\s}\]]+)/gi;
-
-/** stderr / 非 JSON stdout 进日志前的凭证脱敏(值形状 + key-aware 双保险)。 */
-function redactCredentialText(text: string): string {
-  let out = text;
-  try {
-    // 值形状正则: 避免引入额外依赖, 内联轻量实现。
-    out = out.replace(
-      /(?<![A-Za-z0-9])(sk-(?:ant|or|proj|admin|svcacct)-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIza[A-Za-z0-9_-]{20,}|hf_[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9._~+/=-]{16,}|[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})/g,
-      '[REDACTED]',
-    );
-  } catch {
-    /* regex 极端输入不阻断诊断 */
-  }
-  out = out.replace(
-    SENSITIVE_KEY_RE,
-    (_m, pre: string, quote: string, _k1: string, _k2: string, _k3: string, sep: string) =>
-      `${pre}${quote}[REDACTED]${sep}[REDACTED]`,
-  );
-  return out;
-}
+/**
+ * 凭证脱敏统一在 credential-redaction.ts —— transport 与 rpc-client 必须走同
+ * 一入口, 否则同一行 stderr 会有一次未脱敏的落盘。
+ */
 
 /** Error surfaces need the failing module name, not machine paths or stacks. */
 function sanitizeStartupDiagnostic(line: string): string {
@@ -128,6 +107,15 @@ function sanitizeStartupDiagnostic(line: string): string {
       /(?<![\w:/\\])(?:file:\/\/\/|[A-Za-z]:[\\/]|\/|\\\\)[^\r\n"'<>]+?(?=:\s|["'<>\r\n]|$)/g,
       (value) => pathLabel(value),
     );
+}
+
+/** 把任意值转成可脱敏的文本(畸形帧里的非字符串 error)。 */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 /**
@@ -183,7 +171,7 @@ export class PrimeAgentRpcProcess {
     this.transport.onStderr?.((line) => {
       if (line.trim().length === 0) return;
       // stderr 可能含 env 凭证(崩溃 dump / 依赖 debug 输出), 进桌面日志前脱敏。
-      const redacted = redactCredentialText(redactSensitiveText(line));
+      const redacted = redactPrimeAgentLogText(line);
       this.logger.warn('prime-agent stderr', { line: redacted.slice(0, 2000) });
       if (!this.receivedRpcResponse && !this.closed) {
         // Redact the whole line before truncating, so a credential straddling
@@ -323,7 +311,7 @@ export class PrimeAgentRpcProcess {
       // redactSensitiveText(它处理 `Authorization: Basic <base64>` 这类非 Bearer
       // 方案), 再跑本文件的 key-aware 兜底。
       this.logger.warn('prime-agent rpc: non-JSON stdout line dropped', {
-        line: redactCredentialText(redactSensitiveText(line)).slice(0, 500),
+        line: redactPrimeAgentLogText(line).slice(0, 500),
       });
       return;
     }
@@ -340,10 +328,22 @@ export class PrimeAgentRpcProcess {
       // 这类非 Bearer 方案; 本文件的 redactCredentialText 只按 key 名与已知值形状
       // 匹配, 单独用会留下 base64 凭证原文(见本文件 redaction 的注释)。
       const raw = obj as unknown as PrimeAgentRpcResponse;
-      const resp: PrimeAgentRpcResponse =
-        raw.error !== undefined && typeof raw.error === 'string'
-          ? { ...raw, error: redactCredentialText(redactSensitiveText(raw.error)) }
-          : raw;
+      // error 按协议是字符串, 但畸形帧可能给对象/数组 —— 一律先转成文本再脱敏,
+      // 不让未脱敏的结构化内容原样流进日志与异常消息。
+      const rawError = raw.error;
+      const errorText = rawError === undefined
+        ? undefined
+        : redactPrimeAgentLogText(
+          typeof rawError === 'string' ? rawError : safeStringify(rawError),
+        );
+      const resp: PrimeAgentRpcResponse = {
+        ...raw,
+        ...(errorText !== undefined ? { error: errorText } : {}),
+        // 失败响应里的 data 常带 provider 报错上下文, 同样脱敏(结构保持不变)。
+        ...(raw.success === false && raw.data !== undefined
+          ? { data: redactPrimeAgentPayload(raw.data) }
+          : {}),
+      };
       const id = typeof resp.id === 'string' ? resp.id : undefined;
       const entry = id ? this.pending.get(id) : undefined;
       if (id && entry) {

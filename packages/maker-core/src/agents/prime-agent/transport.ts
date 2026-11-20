@@ -31,7 +31,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 
-import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { redactPrimeAgentLogText } from './credential-redaction.js';
 import type { Logger } from '../../interfaces/logger.js';
 
 /** transport 关闭信息: 对端进程退出码 / 信号 + 人类可读原因。 */
@@ -239,8 +239,9 @@ export function createPrimeAgentStdioTransport(
   attachJsonlReader(child.stderr, (line) => {
     if (line.trim().length === 0) return;
     // 本地 stderr 进日志前做凭证脱敏 —— spawnEnv 可能含真值, 子进程崩溃 dump
-    // 可能把它们打到 stderr。
-    const redacted = redactSensitiveText(line);
+    // 可能把它们打到 stderr。必须与 rpc-client 走同一个双层入口: 同一行 stderr
+    // 会被两处记录, 只在一处脱敏就等于没脱敏(值形状类凭证会原样落盘)。
+    const redacted = redactPrimeAgentLogText(line);
     logger.warn('prime-agent stderr', { line: redacted.slice(0, 2000) });
     fireStderr(redacted);
   });

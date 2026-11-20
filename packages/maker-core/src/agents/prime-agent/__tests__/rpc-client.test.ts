@@ -274,6 +274,56 @@ describe('PrimeAgentRpcProcess request/response correlation', () => {
     expect(context?.line).not.toContain('dXNlcjpwYXNz');
   });
 
+  it('redacts a credential inside a non-string error field', async () => {
+    const { transport, emitLine, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const FAKE_KEY = 'sk-' + 'FAKE'.repeat(8);
+
+    const pending = proc.request({ type: 'set_model', provider: 'p', modelId: 'm' });
+    drain();
+    const sent = JSON.parse((transport.writeLine.mock.calls[0]![0]) as string) as { id: string };
+    // 畸形帧: error 不是字符串。旧实现会原样透传 —— 未脱敏的结构化内容直接进
+    // 日志与异常消息。
+    emitLine(JSON.stringify({
+      type: 'response',
+      id: sent.id,
+      command: 'set_model',
+      success: false,
+      error: { detail: 'provider refused: api_key=' + FAKE_KEY },
+    }));
+
+    const resp = await pending;
+    expect(typeof resp.error).toBe('string');
+    expect(resp.error).not.toContain(FAKE_KEY);
+    expect(resp.error).toContain('[REDACTED]');
+  });
+
+  it('redacts credentials inside a failed response payload', async () => {
+    const { transport, emitLine, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const FAKE_KEY = 'sk-' + 'FAKE'.repeat(8);
+
+    const pending = proc.request({ type: 'set_model', provider: 'p', modelId: 'm' });
+    drain();
+    const sent = JSON.parse((transport.writeLine.mock.calls[0]![0]) as string) as { id: string };
+    // 失败响应的 data 常带 provider 报错上下文, 同样要脱敏(结构保持不变)。
+    emitLine(JSON.stringify({
+      type: 'response',
+      id: sent.id,
+      command: 'set_model',
+      success: false,
+      error: 'provider refused',
+      data: { detail: 'api_key=' + FAKE_KEY, nested: { note: 'token=' + FAKE_KEY } },
+    }));
+
+    const resp = await pending;
+    const data = resp.data as { detail?: string; nested?: { note?: string } };
+    expect(data.detail).not.toContain(FAKE_KEY);
+    expect(data.nested?.note).not.toContain(FAKE_KEY);
+  });
+
   it('a parse-error frame without an id does not reject a live pending request', async () => {
     const { transport, emitLine, drain } = makeFakeTransport();
     const { proc, logger } = makeProc({ transport });

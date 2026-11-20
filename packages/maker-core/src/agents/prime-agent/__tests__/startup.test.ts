@@ -523,4 +523,120 @@ describe('PrimeAgent Greptile P1 regressions', () => {
     const handle = await agent.startSession({ workingDir: process.cwd(), model: 'faux-1' });
     expect(handle.id).toBe('sid-ok');
   });
+
+  it('accepts a session whose optional sessionFile is an empty string', async () => {
+    // sessionFile 是可选字段: 空串 = 「还没落盘会话文件」的合法应答, 不能按
+    // 不安全身份拒掉 —— 否则刚建的 agent 起不来。
+    mockState({ sessionId: 'sid-empty-file', sessionFile: '', model: { id: 'faux-1' } });
+
+    const agent = new PrimeAgent(makeDeps());
+    const handle = await agent.startSession({ workingDir: process.cwd(), model: 'faux-1' });
+    expect(handle.id).toBe('sid-empty-file');
+  });
+});
+
+/**
+ * 自身整改的回归测试(2026-11-20)。
+ *
+ * 覆盖独立复审发现的残留缺陷:
+ *   1. 进程确认退出(崩溃)时在飞轮次收不到终态 → 合成终态并判为 failed
+ *   2. 断连时轮次被上报成「成功完成的空回复」 → 判为 failed
+ *   3. 同 session 并发启动会 spawn 两个进程 → 栅栏挡住第二次
+ */
+describe('PrimeAgent self-remediation regressions', () => {
+  function mockState(data: Record<string, unknown>): void {
+    mocks.request.mockImplementation((command: { type: string }) => {
+      if (command.type === 'get_state') {
+        return Promise.resolve({ type: 'response', command, success: true, data });
+      }
+      return Promise.resolve({ type: 'response', command, success: true });
+    });
+  }
+
+  const readyState = { sessionId: 'sid-1', model: { id: 'faux-1' }, messageCount: 0 };
+
+  /** 收集事件直到出现 done(或超时)。 */
+  async function collectUntilDone(
+    handle: { events: () => AsyncIterable<Record<string, unknown>> },
+  ): Promise<Array<Record<string, unknown>>> {
+    const events: Array<Record<string, unknown>> = [];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+      const next = await Promise.race([
+        iterator.next(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 250)),
+      ]);
+      if (!next || next.done) break;
+      const value = next.value as unknown as Record<string, unknown>;
+      events.push(value);
+      if (value.type === 'done') break;
+    }
+    return events;
+  }
+
+  it('settles an in-flight turn as failed when the process exits unexpectedly', async () => {
+    mockState(readyState);
+    const agent = new PrimeAgent(makeDeps());
+    const handle = await agent.startSession({ workingDir: process.cwd(), model: 'faux-1' });
+
+    // 一轮开始: agent_start 让 ctx.isStreaming 为真。
+    mocks.onEvent?.({ type: 'agent_start' });
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    // 进程确认退出(崩溃 / 被 kill): 不会再有 agent_end —— 必须由退出路径合成终态。
+    mocks.onExit?.({ code: 1, signal: null });
+
+    expect(handle.isTurnRunning?.()).toBe(false);
+    const events = await collectUntilDone(handle as never);
+    const done = events.find((event) => event.type === 'done');
+    const doneData = done?.data as { status?: string } | undefined;
+    expect(doneData?.status, '崩溃截断的轮次不能上报成成功').toBe('failed');
+    expect(events.some((event) => event.type === 'error'), '必须有一条 error 事件').toBe(true);
+  });
+
+  it('reports a disconnected turn as failed instead of a silent success', async () => {
+    mockState(readyState);
+    const agent = new PrimeAgent(makeDeps());
+    const handle = await agent.startSession({ workingDir: process.cwd(), model: 'faux-1' });
+
+    mocks.onEvent?.({ type: 'agent_start' });
+    mocks.onDisconnect?.('stdout-ended');
+
+    expect(handle.isTurnRunning?.()).toBe(false);
+    const events = await collectUntilDone(handle as never);
+    const done = events.find((event) => event.type === 'done');
+    const doneData = done?.data as { status?: string } | undefined;
+    // 断连截断的轮次不能上报成「成功完成的空回复」—— 用户必须看见失败。
+    expect(doneData?.status).toBe('failed');
+    expect(events.some((event) => event.type === 'error')).toBe(true);
+  });
+
+  it('refuses a concurrent startSession for the same session id', async () => {
+    let releaseState: (() => void) | undefined;
+    mocks.request.mockImplementation((command: { type: string }) => {
+      if (command.type === 'get_state') {
+        return new Promise((resolve) => {
+          releaseState = () => resolve({ type: 'response', command, success: true, data: readyState });
+        });
+      }
+      return Promise.resolve({ type: 'response', command, success: true });
+    });
+
+    const agent = new PrimeAgent(makeDeps());
+    const sessionId = 'session-concurrent';
+    const first = agent.startSession({ sessionId, workingDir: process.cwd(), model: 'faux-1' });
+    // 让第一次启动进入握手(get_state 未应答)。
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // 第二次并发启动必须被挡住: 两个 `--mode rpc` 进程会在同一个工作目录里抢写。
+    const second = await agent
+      .startSession({ sessionId, workingDir: process.cwd(), model: 'faux-1' })
+      .catch((error: unknown) => error);
+    expect(second).toBeInstanceOf(AgentStartupCleanupPendingError);
+    expect(mocks.spawn.mock.calls.length, '只允许 spawn 一个进程').toBe(1);
+
+    releaseState?.();
+    await first.catch(() => undefined);
+  });
 });
