@@ -39,6 +39,8 @@ export interface CompanionCloudSnapshot {
   actors: CompanionCloudActor[];
   /** Local companions whose home moved to another computer: hidden, never run here. */
   demotedBotIds: string[];
+  /** Explicitly disabled cloud identities; optional for older same-app snapshots. */
+  disabledBotIds?: string[];
 }
 
 export const EMPTY_COMPANION_CLOUD_SNAPSHOT: CompanionCloudSnapshot = Object.freeze({

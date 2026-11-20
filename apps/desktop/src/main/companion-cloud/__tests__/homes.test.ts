@@ -71,6 +71,13 @@ describe('retired actors', () => {
     const snapshot = companionSnapshot({ enabled: true, selfDeviceId: 'me', humanActorId: 'human', actors: [
       { ...bot('actor-a', 'a', null), disabled: true }, bot('actor-b', 'b', 'me')] });
     expect(snapshot.actors.map(actor => actor.externalId)).toEqual(['b']);
+    expect(snapshot.disabledBotIds).toEqual(['a']);
+    // #9760 upgrade, unit: preserve explicit deletion even when an old renderer
+    // saved no cloud actors; a newer active registration of the same ID wins.
+    expect(companionSnapshot({ enabled: true, selfDeviceId: 'me', humanActorId: 'human', actors: [
+      { ...bot('old-a', 'a', null), disabled: true }, bot('new-a', 'a', 'me'),
+      { ...bot('human', 'human', null), kind: 'human', disabled: true },
+    ] }).disabledBotIds).toEqual([]);
     const { api, calls } = fakeApi(() => ({}));
     await registerCompanionHomes({ api, selfDeviceId: 'me', actors: [{ ...bot('actor-a', 'a', null), disabled: true }], botIds: ['a'], isDemoted: () => false });
     expect(calls).toEqual([]);
