@@ -39,7 +39,13 @@ export function useScrollActiveRowIntoView(
   useEffect(() => {
     const mounting = !mounted.current;
     mounted.current = true;
-    if (isActive && !navigationOnly && !(mounting && inboxMode)) scrollIntoNearestView(ref.current);
+    const row = ref.current;
+    if (!row || !isActive || navigationOnly || (mounting && inboxMode)) return;
+    // Opening a pinned task can activate two rows. Keep the sidebar at the copy the user chose.
+    const focusedRow = row.ownerDocument.activeElement?.closest('[data-sidebar-session-row="true"]');
+    if (focusedRow && focusedRow !== row &&
+        focusedRow.getAttribute('data-session-id') === row.getAttribute('data-session-id')) return;
+    scrollIntoNearestView(row);
   // navigationOnly / inboxMode are fixed for a mounted row; only a change of isActive scrolls.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);

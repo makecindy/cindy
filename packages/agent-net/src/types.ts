@@ -95,6 +95,7 @@ export interface TransportOptions {
   identity?: KeyObject;
   module?: WebAssembly.Module;
   tap?(datagram: Uint8Array, via: 'udp' | 'relay'): void;
+  udpTraffic?: BigUint64Array;
 }
 /** Early stream events are bounded by the core's receive credit; do not lose them during admission. */
 export class ChannelEvents {

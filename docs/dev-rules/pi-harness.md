@@ -81,9 +81,10 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   再按具体 server + tool 取完整说明及单个 schema，
   未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。门按会话与
   当前工具 schema 指纹记账：Pi 升级不再作废未变 schema 的披露，schema 真变动时门重新武装。
-  首次未披露的调用在**发起权限询问之前**被拦下——不弹权限框、不触达 MCP，回执指名该查的
-  server／tool 并说明重发即可放行（模型补完 `cindy_mcp_list_tools` 后重发即通过，重发那次
-  正常过一次权限）。上下文压缩成功后，bridge 会在下一次运行开始前注入一条一次性的已披露
+  首次未披露的调用在**发起权限询问之前**被拦下。工具说明和输入 schema 序列化后合计不超过
+  2048 个 UTF-16 代码单元时，回执给出完整定义，模型可以直接修正参数后重发；较大的定义仍按
+  server／tool 定向查询。发出该回执时没有执行工具，重发时正常审批。上下文压缩成功后，
+  bridge 会在下一次运行开始前注入一条一次性的已披露
   工具清单提醒（display:false 常驻上下文，只列仍存在且指纹仍匹配的工具），避免模型因压缩
   失忆而重跑 `cindy_mcp_list_tools`；这是提示卫生，不改变门的任何判定。Host 审批、策略与变更捕获仍使用真实
   `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与

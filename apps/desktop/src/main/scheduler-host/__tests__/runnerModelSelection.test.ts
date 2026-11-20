@@ -278,6 +278,7 @@ function createRunnerHarness(
       typeof MakerScheduleRunner
     >[0]['resolveDefaultModelRoute'];
     getSessionMeta?: () => Promise<typeof meta>;
+    admitPluginEngine?: ConstructorParameters<typeof MakerScheduleRunner>[0]['admitPluginEngine'];
   } = {},
 ): RunnerHarness {
   const createSession = vi.fn(async () => h.session);
@@ -316,6 +317,7 @@ function createRunnerHarness(
     resolveModelSelection: opts.resolveModelSelection,
     resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
+    ...(opts.admitPluginEngine ? { admitPluginEngine: opts.admitPluginEngine } : {}),
   });
   return { runner, createSession, closeSession };
 }
@@ -351,6 +353,53 @@ describe('MakerScheduleRunner model selection', () => {
   // #11134 / unit: project update + persisted row -> actual runner.fire. Existing
   // fresh/heartbeat tests start with correct bindings and miss a retained Codex
   // target after switching a persistent project automation to fresh Claude runs.
+  // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19), unit through runner.fire. A fresh
+  // run on a plugin engine must start that engine with its own model and level, never be checked
+  // against or rerouted through the built-in catalog, and fail plainly when the plugin is turned off.
+  describe('plugin engine schedules', () => {
+    const ENGINE = 'acp-plugin:_ns__local__dsh-acp:dsh';
+    const pluginSchedule = () => baseSchedule({ agentKind: 'acp', modelAgentKind: 'acp', providerId: ENGINE,
+      model: 'deepseek-v4', effort: 'max', fastMode: true });
+
+    it('starts the plugin engine without consulting the built-in catalog', async () => {
+      const h = createSessionHarness();
+      const checkModelRoute = vi.fn(async () => ({ kind: 'pass' as const }));
+      const resolveModelSelection = vi.fn();
+      const resolveDefaultModelRoute = vi.fn(async () => null);
+      const admitPluginEngine = vi.fn((route: { model: string; effort?: string | null }) => ({
+        model: route.model, effort: route.effort === 'max' ? 'max' : '' }));
+      const harness = createRunnerHarness(h, null, { checkModelRoute, resolveModelSelection, resolveDefaultModelRoute, admitPluginEngine });
+      const opts = await fireToCompletion(harness, h, pluginSchedule());
+      expect(opts).toMatchObject({ agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', effort: 'max',
+        permissionMode: 'bypassPermissions' });
+      expect((opts as { fastMode?: unknown }).fastMode).toBeUndefined();
+      expect(checkModelRoute).not.toHaveBeenCalled();
+      expect(resolveModelSelection).not.toHaveBeenCalled();
+      expect(resolveDefaultModelRoute).not.toHaveBeenCalled();
+      // Admitted at fire entry and again right before the prompt is dispatched.
+      expect(admitPluginEngine).toHaveBeenCalledTimes(2);
+    });
+
+    it('fails the run when the plugin was turned off instead of falling back to a built-in model', async () => {
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h, null, {
+        admitPluginEngine: () => { throw new Error('提供这个引擎的插件已停用或卸载。请重新选择模型。'); },
+      });
+      await expect(harness.runner.fire(pluginSchedule(), createFireContext())).rejects.toThrow(
+        'schedule route unavailable: 提供这个引擎的插件已停用或卸载');
+      expect(harness.createSession).not.toHaveBeenCalled();
+      expect(h.send).not.toHaveBeenCalled();
+    });
+
+    it('refuses to save a plugin engine schedule when the engine is not offered', async () => {
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h, null, {
+        admitPluginEngine: () => { throw new Error('DeepSeek Harness 当前不可用。'); },
+      });
+      await expect(harness.runner.validateModelSelection(pluginSchedule())).rejects.toThrow('当前不可用');
+    });
+  });
+
   it('starts a fresh Claude task after a persisted project binding is cleared', async () => {
     const h = createSessionHarness();
     const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-5.5', workDir: '/work' });
@@ -1203,6 +1252,20 @@ describe('MakerScheduleRunner model selection', () => {
       workDir: '/work',
       sdkSessionId: 'sdk-1',
     };
+
+    it('continues a primary persistent task locally and skips it after transfer to another execution host', async () => {
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h, HEARTBEAT_META);
+      const task = baseSchedule({ persistentSession: true, targetSessionId: 'scheduler-session', primaryHostKey: 'public/cindy-contacts' });
+      await fireToCompletion(harness, h, task);
+      const calls = h.send.mock.calls.length;
+      expect(calls).toBe(1);
+      for (const location of [{ agentDeviceId: 'other' }, { remoteHostId: 'ssh' }]) {
+        mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', ...location });
+        expect(await harness.runner.fire(task, createFireContext())).toMatchObject({ skipped: true, sessionId: 'scheduler-session' });
+      }
+      expect(h.send).toHaveBeenCalledTimes(calls);
+    });
 
     it('schedule.model 显式设置时优先于绑定 session 的 meta.model，并同步给运行时 + 落库', async () => {
       const h = createSessionHarness();

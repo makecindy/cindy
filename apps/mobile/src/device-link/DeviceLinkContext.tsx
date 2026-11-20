@@ -25,10 +25,12 @@ import {
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  providerPickerListArgs,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
   CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
   CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
@@ -324,6 +326,8 @@ const CONTROLLER_CAPABILITIES = [
   // 重连后 rebuildSessionSnapshot 重读打开中的任务页;被控端因此把重连前已读且折叠的任务
   // 保持折叠到重读完成,离线积压不留历史详情。
   CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  // 认识「待切到插件引擎」的意图(sessionAgentSwitch 把它单独交给插件引擎的展示)。
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
 ];
 
 // 任意目标端真实应答的独立时序证据。它不等同于 presence verdict,也不参与 IPC/DB
@@ -1470,7 +1474,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         && presenceAvailableByDeviceRef.current.get(deviceId) !== false,
       readProviders: (deviceId) => sendInvokeWithAccessHandling<DeviceProvidersPayload>(
         client, deviceId, 'maker:provider:list',
-        [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
+        providerPickerListArgs(),
       ),
       readCapabilities: (deviceId, agent) => sendInvokeWithAccessHandling<unknown>(
         client, deviceId, 'maker:get-capabilities', [agent],

@@ -11,8 +11,10 @@ import { useWindowWidth } from '@/platform/windowDimension';
  *
  * 视觉对齐新 iOS(26)的滑动操作形态(2026-07-07 产品反馈迭代两轮):
  * 按钮是**悬浮的圆形图标钮**(radius.pill,从圆起步),随露出进度淡入 + 缩放弹入;
- * 继续拖动时主按钮从圆**拉长成胶囊**(宽度跟手、圆角恒为半高),图标钉在行边缘一侧跟手,
- * 全滑阈值后主按钮拉伸盖满整个露出区。非全高色块、非方角浮块。
+ * 继续拖动时主按钮从圆**拉长成胶囊**(宽度跟手、圆角恒为半高,贴到次按钮旁边不留空),图标钉在行边缘一侧跟手,
+ * 全滑阈值后主按钮拉伸盖满整个露出区,并在图标旁淡入动作文字(2026-11-20 用户要求:
+ * 两个方向拉长后的胶囊都要有文字,右滑「标为已读」,左滑「归档 / 取消归档 / 完成」)。
+ * 非全高色块、非方角浮块。
  *
  * 实现要点(RNGH 经典 Swipeable 的测量机制决定的结构约束):
  *  - 面板 snap 宽度由 render*Actions 返回内容的布局宽度决定(库用 marker 元素测量),
@@ -24,16 +26,17 @@ import { useWindowWidth } from '@/platform/windowDimension';
  */
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Animated, Pressable, StyleSheet, View } from 'react-native';
+import { Text } from '@/components/AppText';
 import {
   ClassicSwipeable as Swipeable,
   type ClassicSwipeableMethods,
 } from '@/platform/gestureHandler';
-import { Check, Archive, ArchiveRestore, Ellipsis, Clock, Pin, PinOff } from 'lucide-react-native';
+import { Check, CircleDashed, Archive, ArchiveRestore, Ellipsis, Clock, Pin, PinOff } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { pinToggleAction, statusToggleAction, type SwipeRowRegistry } from '@/session/swipeRowRegistry';
 import type { RemoteSession } from '@/session/types';
 import { useDisclosurePrepare } from '@/session/listDisclosureTransition';
-import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, textStyles, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
 import { usePaneEdgeInset } from './SessionPaneDivider';
 
@@ -49,6 +52,35 @@ const FULL_SWIPE_RATIO = 0.55;
 /** 「归档」按钮越过全滑阈值时扩展盖满右侧面板的过渡时长。 */
 const ARM_ANIMATION_MS = 150;
 const ICON_SIZE = iconSize.swipeAction;
+/** 拉长成胶囊后的文字与图标的间距:文字伸进图标格这么多(图标格 56、图标 23,两侧各空 16.5)。 */
+const LABEL_ICON_OVERLAP = spacing.sm;
+/**
+ * 胶囊文字的定宽:刚越过全滑阈值时胶囊里图标格以外的宽度(再留一段内边距)。文字随图标格一起
+ * 平移(native driver 只能驱动 transform / opacity,不能跟着胶囊改宽度),所以按阈值时的宽度定死,
+ * 保证文字一出现就整段落在胶囊内;放不下的长文案省略。
+ */
+function actionLabelWidth(windowWidth: number): number {
+  return Math.max(
+    0,
+    windowWidth * FULL_SWIPE_RATIO - BUTTON_GAP * 2 - BUTTON_SIZE + LABEL_ICON_OVERLAP - spacing.lg,
+  );
+}
+/**
+ * 文字必须装得进当前胶囊。armedProgress 会用 150ms 淡出，快速回拖时不能单靠它；
+ * 用原生动画图里的实际延伸量同步限制透明度，也覆盖尚未拉长到位的淡入阶段。
+ */
+function actionLabelOpacity(
+  extension: Animated.AnimatedAddition,
+  armedProgress: Animated.Value,
+  labelWidth: number,
+) {
+  const minimumExtension = labelWidth + spacing.lg - LABEL_ICON_OVERLAP;
+  return Animated.multiply(armedProgress, extension.interpolate({
+    extrapolate: 'clamp',
+    inputRange: [minimumExtension, minimumExtension + 1],
+    outputRange: [0, 1],
+  }));
+}
 type SwipeTranslation = Parameters<NonNullable<React.ComponentProps<typeof Swipeable>["renderLeftActions"]>>[1];
 type ReadableSwipeTranslation = SwipeTranslation & { __getValue?(): unknown };
 type ClassicSwipeDirection = 'left' | 'right';
@@ -88,6 +120,12 @@ export interface SwipeableSessionRowProps {
   onSnooze?(session: RemoteSession): void;
   /** Inbox: one-tap Done (archives without the automation reminder). */
   onComplete?(session: RemoteSession): void;
+  /**
+   * Inbox row of a teammate's main conversation: only these actions on a left swipe, and no
+   * pin / read / options. With Done unavailable (it runs, or waits for an answer), Snooze takes
+   * the single button and the full swipe. The caller mounts the row only when one is offered.
+   */
+  only?: { snooze: boolean; complete: boolean };
   testID?: string;
   children: ReactNode;
 }
@@ -102,12 +140,14 @@ function SwipeableSessionRowInner({
   onSnooze,
   onComplete,
   inboxMode = false,
+  only,
   testID,
   children,
 }: SwipeableSessionRowProps) {
   const { t } = useTranslation();
   // Inbox: archive becomes a one-tap Done (button and full swipe alike).
-  const completeAction = inboxMode && session.status !== 'archived' && onComplete !== undefined;
+  const completeAction = inboxMode && session.status !== 'archived' && onComplete !== undefined && only?.complete !== false;
+  const snoozeOnly = !!only && !only.complete;
   const onArchive = completeAction && onComplete !== undefined ? onComplete : onArchiveProp;
   // The same task may appear in its project and in the fixed inbox at once.
   const instanceId = useId();
@@ -216,9 +256,14 @@ function SwipeableSessionRowInner({
       return;
     }
     if (-releaseTranslation < fullSwipeThreshold) return;
+    if (snoozeOnly) {
+      close();
+      onSnooze?.(session);
+      return;
+    }
     // 归档刻意不先关:乐观更新立即把行移出列表(卸载即收行);失败由页面层回滚 + Alert 收口。
     onArchive(session);
-  }, [fullSwipeThreshold, close, onMarkRead, onArchive, readReleaseTranslation, session]);
+  }, [fullSwipeThreshold, close, onMarkRead, onArchive, onSnooze, snoozeOnly, readReleaseTranslation, session]);
 
   const handleReadPress = useCallback(() => {
     close();
@@ -230,7 +275,7 @@ function SwipeableSessionRowInner({
     onTogglePin(session);
   }, [close, onTogglePin, session]);
 
-  const snoozeAction = inboxMode && !session.pinnedAt && session.status !== 'archived' && !!onSnooze;
+  const snoozeAction = inboxMode && !session.pinnedAt && session.status !== 'archived' && !!onSnooze && only?.snooze !== false;
   const secondaryLabel = snoozeAction
     ? t(taskSnoozeUntil(session) > Date.now() ? 'devices.list.menu.inbox.wake' : 'devices.list.menu.inbox.snooze')
     : t('session.row.moreOptions');
@@ -241,8 +286,9 @@ function SwipeableSessionRowInner({
   }, [close, onShowOptions, onSnooze, snoozeAction, session]);
 
   const handleArchivePress = useCallback(() => {
-    onArchive(session);
-  }, [onArchive, session]);
+    if (snoozeOnly) handleOptionsPress();
+    else onArchive(session);
+  }, [handleOptionsPress, onArchive, session, snoozeOnly]);
 
   const pinned = !!pinnedAt;
   const pinLabel = pinToggleAction(pinnedAt).label;
@@ -295,14 +341,15 @@ function SwipeableSessionRowInner({
           {actionsMounted ? (
             <RightActionsContent
               armedProgress={armedProgress}
-              archiveLabel={completeAction ? t('devices.list.menu.inbox.complete') : statusToggle.label}
+              archiveLabel={snoozeOnly ? secondaryLabel : completeAction ? t('devices.list.menu.inbox.complete') : statusToggle.label}
               complete={completeAction}
+              snoozePrimary={snoozeOnly}
               archived={statusToggle.action === 'restore'}
               onArchive={handleArchivePress}
               onOptions={handleOptionsPress}
           secondaryLabel={secondaryLabel}
           snoozeAction={snoozeAction}
-          showSecondary={!inboxMode || session.status !== 'archived'}
+          showSecondary={only ? only.snooze && only.complete : !inboxMode || session.status !== 'archived'}
               onTranslationValue={handleTranslationValue}
               styles={styles}
               testID={testID}
@@ -317,7 +364,7 @@ function SwipeableSessionRowInner({
       armedProgress,
       handleArchivePress,
       handleOptionsPress,
-      secondaryLabel, snoozeAction, inboxMode, session.status, completeAction, t,
+      secondaryLabel, snoozeAction, inboxMode, session.status, completeAction, t, only, snoozeOnly,
       handleTranslationValue,
       actionsMounted,
       statusToggle,
@@ -336,7 +383,7 @@ function SwipeableSessionRowInner({
       onSwipeableClose={handleClose}
       onSwipeableOpenStartDrag={handleOpenStartDrag}
       onSwipeableWillOpen={handleWillOpen}
-      renderLeftActions={renderLeftActions}
+      renderLeftActions={only ? undefined : renderLeftActions}
       renderRightActions={renderRightActions}
       testID={testID}
     >
@@ -410,9 +457,15 @@ function LeftActionsContent({
     inputRange: [readStretchStart, Math.max(readStretchStart + 1, windowWidth)],
     outputRange: [0, Math.max(0, windowWidth - readStretchStart)],
   });
-  const readExtension = Animated.multiply(availableReadExtension, armedProgress);
+  // 拉过面板宽度后跟着「置顶」一起外扩(pinExtension),补满两者之间的空白(2026-11-20 用户要求:
+  // 中间态不留空);armed 时再盖过「置顶」铺满整个露出区。
+  const readExtension = Animated.add(
+    pinExtension,
+    Animated.multiply(Animated.subtract(availableReadExtension, pinExtension), armedProgress),
+  );
   const readScaleX = Animated.add(1, Animated.divide(readExtension, BUTTON_SIZE));
   const halfReadExtension = Animated.divide(readExtension, 2);
+  const labelWidth = actionLabelWidth(windowWidth);
 
   return (
     <>
@@ -445,6 +498,13 @@ function LeftActionsContent({
           ]}
         />
         <Animated.View style={[styles.actionPressableFrame, { transform: [{ translateX: readExtension }] }]}>
+          {/* 文字只在越过全滑阈值(松手即生效)时出现,跟着图标格平移;中间态的胶囊只有图标。 */}
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.leadingActionLabelWrap, { opacity: actionLabelOpacity(readExtension, armedProgress, labelWidth), width: labelWidth }]}
+          >
+            <Text numberOfLines={1} style={styles.leadingActionLabel}>{readLabel}</Text>
+          </Animated.View>
           <Pressable
             accessibilityLabel={readLabel}
             accessibilityRole="button"
@@ -453,7 +513,7 @@ function LeftActionsContent({
             testID={testID ? `${testID}.readAction` : undefined}
           >
             <View style={styles.actionIconWrap}>
-              <Check color={colors.swipeActionText} size={ICON_SIZE} strokeWidth={iconStroke.regular} />
+              <CircleDashed color={colors.swipeActionText} size={ICON_SIZE} strokeWidth={iconStroke.regular} />
             </View>
           </Pressable>
         </Animated.View>
@@ -472,6 +532,7 @@ function RightActionsContent({
   archiveLabel,
   archived,
   complete = false,
+  snoozePrimary = false,
   onArchive,
   onOptions,
   secondaryLabel, snoozeAction, showSecondary,
@@ -485,6 +546,8 @@ function RightActionsContent({
   archiveLabel: string;
   archived: boolean;
   complete?: boolean;
+  /** The single button is Snooze (a teammate row that cannot be marked done). */
+  snoozePrimary?: boolean;
   onArchive(): void;
   onOptions(): void;
   secondaryLabel: string;
@@ -501,7 +564,7 @@ function RightActionsContent({
   // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
   const prepareDisclosure = useDisclosurePrepare();
   const { t } = useTranslation();
-  const StatusIcon = complete ? Check : archived ? ArchiveRestore : Archive;
+  const StatusIcon = snoozePrimary ? Clock : complete ? Check : archived ? ArchiveRestore : Archive;
   const revealed = Animated.multiply(translation, -1);
   const optionsOpacity = Animated.multiply(
     revealed.interpolate({
@@ -537,11 +600,17 @@ function RightActionsContent({
     inputRange: [archiveStretchStart, Math.max(archiveStretchStart + 1, windowWidth)],
     outputRange: [0, Math.max(0, windowWidth - archiveStretchStart)],
   });
-  const archiveExtension = Animated.multiply(availableArchiveExtension, armedProgress);
+  // 拉过面板宽度后跟着「选项」一起外扩(optionsExtension),补满两者之间的空白(2026-11-20 用户要求:
+  // 中间态不留空);armed 时再盖过「选项」铺满整个露出区。
+  const archiveExtension = Animated.add(
+    optionsExtension,
+    Animated.multiply(Animated.subtract(availableArchiveExtension, optionsExtension), armedProgress),
+  );
   const archiveScaleX = Animated.add(1, Animated.divide(archiveExtension, BUTTON_SIZE));
   const negativeOptionsExtension = Animated.multiply(optionsExtension, -1);
   const negativeArchiveExtension = Animated.multiply(archiveExtension, -1);
   const negativeHalfArchiveExtension = Animated.divide(negativeArchiveExtension, 2);
+  const labelWidth = actionLabelWidth(windowWidth);
 
   return (
     <>
@@ -573,11 +642,19 @@ function RightActionsContent({
           ]}
         />
         <Animated.View style={[styles.actionPressableFrame, { transform: [{ translateX: negativeArchiveExtension }] }]}>
+          {/* 文字只在越过全滑阈值(松手即生效)时出现,跟着图标格平移;中间态的胶囊只有图标。 */}
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.trailingActionLabelWrap, { opacity: actionLabelOpacity(archiveExtension, armedProgress, labelWidth), width: labelWidth }]}
+          >
+            <Text numberOfLines={1} style={styles.trailingActionLabel}>{archiveLabel}</Text>
+          </Animated.View>
           <Pressable
             accessibilityLabel={archiveLabel}
             accessibilityRole="button"
             onPress={onArchive}
-            onPressIn={() => prepareDisclosure(true)}
+            // Snooze opens a sheet first; nothing moves until the user picks a time.
+            onPressIn={snoozePrimary ? undefined : () => prepareDisclosure(true)}
             style={styles.actionPressable}
             testID={testID ? `${testID}.archiveAction` : undefined}
           >
@@ -690,6 +767,33 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   actionPressable: {
     flex: 1,
+  },
+  // 胶囊文字:贴着图标格一侧,向胶囊另一端延伸(定宽见 actionLabelWidth)。
+  leadingActionLabelWrap: {
+    bottom: 0,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: BUTTON_SIZE - LABEL_ICON_OVERLAP,
+    top: 0,
+  },
+  trailingActionLabelWrap: {
+    bottom: 0,
+    justifyContent: 'center',
+    left: BUTTON_SIZE - LABEL_ICON_OVERLAP,
+    position: 'absolute',
+    top: 0,
+  },
+  leadingActionLabel: {
+    ...textStyles.body,
+    color: colors.swipeActionText,
+    fontWeight: fontWeight.medium,
+    textAlign: 'right',
+  },
+  trailingActionLabel: {
+    ...textStyles.body,
+    color: colors.swipeActionText,
+    fontWeight: fontWeight.medium,
+    textAlign: 'left',
   },
 });
 

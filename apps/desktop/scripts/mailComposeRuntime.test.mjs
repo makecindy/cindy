@@ -21,6 +21,8 @@ function fixture({
   read,
   remove,
   supportsDelete = true,
+  replyParent,
+  readReplyQuote,
   autoSend = true,
   acceptCard = true,
   richText = false,
@@ -47,6 +49,7 @@ function fixture({
         ? { folder: "草稿箱", uid: 42, uidValidity: "700" }
         : { id: "native-draft" },
     headers: {
+      ...(replyParent ? { "in-reply-to": replyParent } : {}),
       from: "self@example.test",
       to: "David <david@example.test>",
       cc: "",
@@ -124,6 +127,7 @@ function fixture({
   runInContext(source, context);
   const adapter = {
     providerName,
+    ...(readReplyQuote ? { readReplyQuote } : {}),
     draftStorage,
     richText,
     ...(supportsDelete ? { async deleteDraft(request) {
@@ -236,8 +240,8 @@ function fixture({
         else current.editor[name] = value;
       }
     },
-    present: () =>
-      flow.present({ callId: "card-call" }, account, copy(current)),
+    present: extra =>
+      flow.present({ callId: "card-call" }, account, { ...copy(current), ...extra }),
     tool: (operation, extra = {}) =>
       flow.beforeTool({
         operation,
@@ -313,6 +317,100 @@ for (const quote of ['Updated <quote>\nSecond line', '']) test('editing the plai
   assert.equal(sent.quote, quote);
   assert.equal(sent.quoteHtml, quote ? '<div>Updated &lt;quote&gt;<br>Second line</div>' : '');
 });
+// A saved reply can have correct lineage and no quoted MIME content. Both
+// card actions and model sends must operate on the observed saved draft.
+test('an omitted quote is visible and can be restored without sending; an intentional removal stays removed', async () => {
+  const original = { quote: '\n\nSender wrote:\n> Original', quoteHtml: '<blockquote>Original</blockquote>' };
+  const lookups = [];
+  const f = fixture({ richText: true, replyParent: '<parent@example.test>',
+    readReplyQuote: async request => { lookups.push(request); return original; } });
+  await f.present();
+  const card = () => f.cards.findLast(c => c.draft).draft;
+  assert.match(card().fields.find(field => field.name === 'quote').label, /未附原文/);
+  assert.ok(card().addQuoteLabel);
+  assert.equal(lookups.length, 0);
+  await f.card('quote', { ...f.values(), body: 'Edited here', bodyHtml: '<p>Edited here</p>' });
+  await f.tool('get');
+  assert.equal(lookups.length, 1);
+  assert.equal(f.current().editor.quoteHtml, original.quoteHtml);
+  assert.equal(f.current().editor.body, 'Edited here');
+  assert.match(card().fields.find(field => field.name === 'quote').label, /已附原文/);
+  assert.equal(f.writes.some(w => w.send), false);
+  await f.card('change', { ...f.values(), quote: '', quoteHtml: '' });
+  assert.ok((await f.tool('send')).ok);
+  assert.equal(f.writes.filter(w => w.send).length, 1);
+  assert.equal(f.writes.at(-1).fields.quoteHtml, '');
+  assert.equal(lookups.length, 1);
+});
+
+test('an empty or unavailable optional original leaves pending card edits and a later explicit send usable', async () => {
+  for (const lookup of [async () => null, async () => { throw new Error('offline'); }]) {
+    const f = fixture({ richText: true, replyParent: '<parent@example.test>', readReplyQuote: lookup });
+    await f.present();
+    await f.card('quote', { ...f.values(), body: 'Keep my edit', bodyHtml: '<p>Keep my edit</p>' });
+    assert.match(f.cards.at(-1).statusOnly.status, /原邮件/);
+    await f.flush();
+    assert.equal(f.current().editor.body, 'Keep my edit');
+    assert.deepEqual(f.writes.map(w => w.send), [false]);
+    assert.ok((await f.tool('send')).ok);
+    assert.deepEqual(f.writes.map(w => w.send), [false, true]);
+    assert.equal(f.writes.at(-1).fields.quote, '');
+  }
+});
+
+test('a newly requested missing quote is saved and verified before the shared send countdown', async () => {
+  const original = { quote: '\n\nSender wrote:\n> Source', quoteHtml: '<blockquote>Source</blockquote>' };
+  const f = fixture({ richText: true, replyParent: '<parent@example.test>', readReplyQuote: async () => original });
+  await f.present({ replyQuoteExpected: true });
+  assert.ok((await f.tool('send')).ok);
+  assert.deepEqual(f.writes.map(w => w.send), [false, true]);
+  assert.equal(f.writes.at(-1).fields.quote, original.quote);
+  assert.ok(f.cards.some(c => c.statusOnly?.pendingSend));
+});
+
+for (const losesAgain of [false, true]) test('a confirmed save that drops the quote is repaired only once: ' + losesAgain, async () => {
+  const f = fixture({ richText: true, write: (request, number) => {
+    if (request.send || (number > 1 && !losesAgain)) return;
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml, quote: '', quoteHtml: '' });
+    return { ok: true, data: { readBack: f.current() } };
+  } });
+  f.externalEdit({ quote: '\nPrior text', quoteHtml: '<b>Prior text</b>' });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Edited', bodyHtml: '<div>Edited</div>' });
+  const result = await f.tool('send');
+  assert.equal(result.ok, !losesAgain);
+  assert.equal(f.writes.filter(w => !w.send).length, 2);
+  assert.equal(f.writes.filter(w => w.send).length, losesAgain ? 0 : 1);
+  assert.equal(f.cards.some(c => c.statusOnly?.pendingSend), !losesAgain);
+});
+
+test('a provider that keeps reintroducing intentionally removed history cannot send it', async () => {
+  const f = fixture({ richText: true, write: request => {
+    if (!request.send) return { ok: true, data: { readBack: f.current() } };
+  } });
+  f.externalEdit({ quote: 'Prior text', quoteHtml: '<blockquote>Prior text</blockquote>' });
+  await f.present();
+  await f.card('change', { ...f.values(), quote: '', quoteHtml: '' });
+  assert.equal((await f.tool('send')).ok, false);
+  assert.deepEqual(f.writes.map(w => w.send), [false, false]);
+  assert.ok(!f.cards.some(c => c.statusOnly?.pendingSend));
+});
+
+test('an adapter can return a custom quote inside the verified body without duplicating it on send', async () => {
+  const f = fixture({ richText: true, write: request => {
+    if (request.send) return;
+    f.externalEdit({ body: request.fields.body + request.fields.quote, bodyHtml: request.fields.bodyHtml + request.fields.quoteHtml, quote: '', quoteHtml: '' });
+    return { ok: true, data: { readBack: f.current() } };
+  } });
+  f.externalEdit({ quote: 'Custom history', quoteHtml: '<div>Custom history</div>' });
+  await f.present();
+  await f.card('change', { ...f.values(), subject: 'Edited' });
+  assert.ok((await f.tool('send')).ok);
+  assert.deepEqual(f.writes.map(w => w.send), [false, true]);
+  assert.equal(f.writes.at(-1).fields.quote, 'Custom history');
+  assert.equal(f.current().editor.body.split('Custom history').length, 2);
+});
+
 test('editing other fields preserves authored HTML quotes byte for byte', async () => {
   const f = fixture({ richText: true });
   const quoteHtml = '<blockquote style="color:red"><b>Original quote</b></blockquote>';

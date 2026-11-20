@@ -349,6 +349,12 @@ export type UnifiedRailItem =
   | { kind: 'all' }
   /** 用户建的模式与路线(模型组)。只在新任务草稿出现，列表内容由调用方提供，不按目录筛选。 */
   | { kind: 'model-groups' }
+  /**
+   * 一个插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，与供应商格一样每个引擎一格、用插件
+   * 自己的图标。只在新任务草稿出现；列表内容由调用方提供，不按目录筛选。`deviceId` = 引擎在自己的
+   * 另一台电脑上(那台开了「允许被远程调用」)：同一个插件可以装在几台电脑上，引擎标识相同，靠它区分。
+   */
+  | { kind: 'plugin-engine'; providerId: string; deviceId?: string }
   | { kind: 'provider'; providerId: string }
   /**
    * 另一台电脑上的供应商(远程 Agent)。选它 = 列那台电脑这个供应商的模型；选中模型后
@@ -358,6 +364,44 @@ export type UnifiedRailItem =
   | { kind: 'remote-provider'; deviceId: string; providerId: string };
 
 export type UnifiedRailFilter = UnifiedRailItem;
+
+/** 左侧栏一个插件引擎格的展示：引擎名与提供它的插件的图标(没有图标时画通用拼图)。 */
+export interface PluginEngineRailTab {
+  providerId: string;
+  /** 引擎所在的另一台电脑；缺省 = 任务所在电脑。 */
+  deviceId?: string;
+  /** 悬停显示的名字；另一台电脑上的引擎已带上电脑名。 */
+  name: string;
+  iconDataUrl?: string;
+}
+
+/** 这一格所属的另一台电脑(远程供应商格，或另一台电脑上的插件引擎格)；其余格为 null。 */
+export function railItemDeviceId(item: UnifiedRailItem): string | null {
+  if (item.kind === 'remote-provider') return item.deviceId;
+  return item.kind === 'plugin-engine' ? (item.deviceId ?? null) : null;
+}
+
+/**
+ * 把另一台电脑上的插件引擎格放进左侧栏：排在那台电脑的供应商格之后；那台没有供应商格时
+ * 在末尾单独成段。本机的引擎格由面板排在「全部」之后，不经过这里。
+ */
+export function withRemotePluginEngineRailItems(
+  items: readonly UnifiedRailItem[],
+  tabs: readonly Pick<PluginEngineRailTab, 'providerId' | 'deviceId'>[],
+): UnifiedRailItem[] {
+  const out = [...items];
+  for (const tab of tabs) {
+    if (!tab.deviceId) continue;
+    const item: UnifiedRailItem = { kind: 'plugin-engine', providerId: tab.providerId, deviceId: tab.deviceId };
+    let last = -1;
+    for (let index = 0; index < out.length; index += 1) {
+      if (railItemDeviceId(out[index]) === tab.deviceId) last = index;
+    }
+    if (last < 0) out.push(item);
+    else out.splice(last + 1, 0, item);
+  }
+  return out;
+}
 
 /**
  * 远程 Agent 只能用那台电脑开了「允许被远程调用」的供应商。没有该标记(旧数据)按未开放处理；
@@ -376,6 +420,9 @@ export function railItemKey(item: UnifiedRailItem): string {
   if (item.kind === 'provider') return `provider:${item.providerId}`;
   if (item.kind === 'remote-provider') return `remote:${item.deviceId}:${item.providerId}`;
   if (item.kind === 'engine') return `engine:${item.agent}`;
+  if (item.kind === 'plugin-engine') {
+    return item.deviceId ? `plugin-engine:${item.deviceId}:${item.providerId}` : `plugin-engine:${item.providerId}`;
+  }
   return item.kind;
 }
 

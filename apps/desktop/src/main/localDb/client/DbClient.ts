@@ -29,6 +29,8 @@ export interface DbClient {
   tx<R = unknown>(name: string, args: unknown, transferList?: unknown[]): Promise<R>;
   drizzle: BetterSQLite3Database<typeof schema>;
   readonly vecAvailable: boolean;
+  /** Present after this instance has observed reliable SQLite corruption. */
+  readonly corruptionError?: Error | null;
   dispose(): Promise<void>;
 }
 
@@ -44,6 +46,7 @@ export interface CreateDbClientOptions {
   betterSqliteModulePath?: string;
   workerScriptPath?: string;
   useInlineWorker?: boolean;
+  onCorruption?: (error: Error) => void;
 }
 
 export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<DbClient> {
@@ -52,8 +55,9 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
   }
 
   const kind = resolveTransportKind(opts.transport);
-  let transport = createTransport(kind, opts);
-  const boundary = new DbErrorBoundary();
+  const boundary = new DbErrorBoundary({ onCorruption: opts.onCorruption });
+  const transportOptions = { ...opts, onCorruption: (error: Error) => boundary.observeError(error) };
+  let transport = createTransport(kind, transportOptions);
   let disposed = false;
   let unavailableError: Error | null = null;
   const bindTransportEvents = (): void => {
@@ -67,11 +71,12 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
 
   const rebindTerminationHandler = (): void => {
     if (kind === 'utility-process') return;
+    const observedTransport = transport;
     transport.onTerminated((info) => {
-      if (disposed) return;
+      if (disposed || transport !== observedTransport) return;
       const { shouldRestart } = boundary.onWorkerTerminated(info);
       if (shouldRestart && kind === 'worker-thread') {
-        transport = createTransport(kind, opts);
+        transport = createTransport(kind, transportOptions);
         bindTransportEvents();
         rebindTerminationHandler();
       } else {
@@ -93,6 +98,7 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
     tx: (name: string, args: unknown, transferList?: unknown[]) =>
       withTransport('tx', () => transport.send('tx', { name, args }, transferList)),
     drizzle: createDrizzleProxy(() => transport) as BetterSQLite3Database<typeof schema>,
+    get corruptionError() { return boundary.failure; },
     get vecAvailable() {
       return (transport as DbTransport & { isVecAvailable?: boolean }).isVecAvailable ?? false;
     },
@@ -104,6 +110,8 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
   };
 
   async function withTransport<T>(opName: string, fn: () => Promise<T>): Promise<T> {
+    if (disposed) throw new Error('DbClient is disposed');
+    boundary.assertAvailable();
     if (unavailableError) throw unavailableError;
     return boundary.wrap(opName, fn);
   }
@@ -117,7 +125,7 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
  * module's singleton.
  */
 export function createInprocDbClientAfterReady(
-  opts: Pick<CreateDbClientOptions, 'nativeBinding'> = {},
+  opts: Pick<CreateDbClientOptions, 'nativeBinding' | 'onCorruption'> = {},
 ): DbClient {
   return createInprocClient(opts);
 }
@@ -134,7 +142,7 @@ export async function createInprocDbClient(opts: CreateDbClientOptions = {}): Pr
 }
 
 function createInprocClient(
-  opts: Pick<CreateDbClientOptions, 'nativeBinding'>,
+  opts: Pick<CreateDbClientOptions, 'nativeBinding' | 'onCorruption'>,
 ): DbClient {
   // Lazy getters keep the legacy handle resolution (and its readiness error)
   // identical to the previous inline implementation.
@@ -146,6 +154,7 @@ function createInprocClient(
       return getDrizzle();
     },
     nativeBinding: opts.nativeBinding,
+    onCorruption: opts.onCorruption,
   });
 }
 
@@ -172,5 +181,6 @@ function createTransport(kind: DbTransportKind, opts: CreateDbClientOptions): Db
     betterSqliteModulePath: opts.betterSqliteModulePath,
     workerScriptPath: opts.workerScriptPath,
     useInlineWorker: opts.useInlineWorker,
+    onCorruption: opts.onCorruption,
   });
 }

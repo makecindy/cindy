@@ -24,6 +24,8 @@ vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => {} },
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+// The teammate data adapter owns auth/presence. This fixture exercises task mode switching.
+vi.mock('@/features/bots/useTeammateInboxEntries', () => ({ useTeammateInboxEntries: () => [] }));
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children: ReactNode }) => children }));
 const remoteOrder = vi.hoisted(() => ({
   snapshot: { authoritative: true, available: true, projectOrder: 'custom', manualProjectOrder: ['local:/A', 'local:/B', 'local:/C'] },

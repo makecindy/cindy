@@ -84,6 +84,17 @@ describe('orca team shared helpers', () => {
     expect(partial).not.toHaveProperty('executionDevice');
   });
 
+  // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md 第二期「协作」)：手机据此显示引擎，而不是占位的 Claude Code。
+  // 最小失败输入：agentKind=acp 带 providerId；内置 Worker 带 providerId 也不算插件引擎。unit。
+  it('marks a plugin engine Worker by its engine, and only that kind', () => {
+    const [engine, builtIn] = parseOrcaTeamWorkers([
+      { id: 'w-1', sessionId: 's-1', session: { agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', model: 'dsh-pro' } },
+      { id: 'w-2', sessionId: 's-2', session: { agentKind: 'codex', providerId: 'openai' } },
+    ]);
+    expect(engine!.pluginEngineProviderId).toBe('acp-plugin:dsh-acp:dsh');
+    expect(builtIn).not.toHaveProperty('pluginEngineProviderId');
+  });
+
   it('parses worker records defensively and drops rows without identity', () => {
     const workers = parseOrcaTeamWorkers([
       {

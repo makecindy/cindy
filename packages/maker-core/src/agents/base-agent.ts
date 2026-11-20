@@ -30,7 +30,7 @@ import {
   hasSessionPermissionUpdates,
   type SessionPermissionUpdate,
 } from '../types/permissions.js';
-import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
+import type { AgentKind, EngineKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
 import type {
   Capabilities,
   EffortDescriptor,
@@ -1229,6 +1229,13 @@ export interface AgentDeps {
   getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
 
   /**
+   * Probe the selected BYOM endpoint from the SSH execution host, without credentials.
+   * Success permits direct use of the configured URL; it does not authorize a host forward.
+   * Hosts without this capability keep loopback BYOM fail-closed.
+   */
+  probeRemotePiProviderEndpoint?: (remoteHostId: string, baseUrl: string) => Promise<boolean>;
+
+  /**
    * Pi 专用:为远端机器构造一个 pi `--mode rpc` transport。
    *
    * 当 session 标了 remoteHostId, PiAgent 会调这个钩子拿一个连远端 pi 进程的
@@ -2078,6 +2085,18 @@ export interface StartSessionOptions {
    */
   userPrompt?: string;
   /**
+   * Plugin engines only (agentKind 'acp'): host text sent ahead of the first message of a newly
+   * created engine session. Plugin engines get no Cindy system prompt, so role instructions that
+   * the task cannot work without (collaboration Workers) travel this way. Other engines ignore it.
+   */
+  pluginEngineBriefing?: string;
+  /**
+   * Plugin engines only: Cindy cannot tell the engine's own sub-agents from the engine itself.
+   * true = the host trusts the engine as a whole, so its tool calls count as the task's own
+   * (collaboration Workers reporting to their Lead). Default: caller unknown.
+   */
+  pluginEngineTrustedCaller?: boolean;
+  /**
    * Bot Profile runtime context, resolved by the main/DB authority at session
    * start. It is a startup system-prompt segment, not a per-turn user prefix.
    * Harness adapters place it before the user personalization segment.
@@ -2552,7 +2571,13 @@ export interface AgentSessionHandle {
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */
   readonly requestSessionId?: string;
-  readonly agentKind: AgentKind;
+  readonly agentKind: EngineKind;
+  /**
+   * Capabilities this session negotiated with its engine. Set only by engines whose
+   * abilities differ per session (the plugin ACP engine); Maker prefers it over the
+   * agent-level set. Built-in engines leave it undefined.
+   */
+  readonly negotiatedCapabilities?: Capabilities;
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
@@ -2642,7 +2667,10 @@ export interface AgentSessionHandle {
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
   /**
-   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数
+   * Native continuation count: wake claims and bounded completion-to-start
+   * retention for provider-triggered background Bash follow-up. This probe
+   * does not itself claim a product turn or change send/Stop semantics.
+   * 「任务已终态、wake turn 尚未启动或仍在跑」
    * (awaiting + active,cancelled 不计)。listBackgroundTasks 在任务终态后
    * 立即不再包含该任务,空快照不能证明后续没有 wake turn —— renderer 的
    * 唤醒桥接对账以本计数为收口权威依据。不支持的 agent 留空(Session 层
@@ -2871,7 +2899,7 @@ export interface AgentSessionHandle {
 }
 
 export abstract class BaseAgent {
-  abstract readonly kind: AgentKind;
+  abstract readonly kind: EngineKind;
   abstract readonly capabilities: Capabilities;
 
   /**

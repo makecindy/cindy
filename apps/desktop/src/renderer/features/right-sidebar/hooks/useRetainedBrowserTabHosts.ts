@@ -13,14 +13,18 @@ export interface TabBodyHostDescriptor {
   deviceLinkDeviceId?: string | null;
 }
 
+function canHostGuest(tab: TabState): boolean {
+  return tab.kind === 'web-browser' || tab.kind === 'file-browser';
+}
+
 /**
- * Keep the slots of live browser guests connected when their task leaves the
+ * Keep the slots of live browser and file preview guests connected when their task leaves the
  * sidebar. Moving a pooled webview to parking and back recreates its Electron
  * guest, even when the wrapper DOM object itself survives.
  *
  * The pool remains the sole resource budget: retention never acquires or pins
  * a guest. Close, eviction and host handoff remove the corresponding hidden
- * body. Other plugins and unmaterialized browser tabs are not kept across tasks.
+ * body. File listings and other tabs without a live guest are not retained.
  */
 export function useRetainedBrowserTabHosts(
   current: readonly TabBodyHostDescriptor[],
@@ -56,7 +60,7 @@ export function useRetainedBrowserTabHosts(
     // reuse the foreground task's context or revive a tab missing from its bucket.
     const bucket = getBucket(host.sessionId);
     const tab = bucket.hydrated && bucket.tabs.find((candidate) => candidate.id === host.tab.id);
-    if (tab && tab.kind === 'web-browser') hosts.push({ ...host, tab });
+    if (tab && canHostGuest(tab)) hosts.push({ ...host, tab });
   }
   // Stable browser order matters too: React moving an ancestor of a webview
   // within this list disconnects the guest just like reparenting its wrapper.
@@ -65,7 +69,7 @@ export function useRetainedBrowserTabHosts(
   useLayoutEffect(() => {
     // Capture current candidates too: their child effects may materialize the
     // guest later in this commit, before the user can switch tasks.
-    previous.current = hosts.filter(({ tab }) => tab.kind === 'web-browser');
+    previous.current = hosts.filter(({ tab }) => canHostGuest(tab));
   });
 
   return hosts;

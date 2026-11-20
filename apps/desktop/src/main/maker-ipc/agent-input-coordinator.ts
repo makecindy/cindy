@@ -1593,6 +1593,21 @@ export class AgentInputCoordinator {
       item?.clientId, item?.retrySourceClientId, item?.supersedesUserClientId].filter((id): id is string => !!id))];
   }
 
+  /** Live ownership, not the deduplication window or a failed input awaiting manual retry. */
+  isInputLive(sessionId: string, clientId: string): boolean {
+    const state = this.states.get(sessionId);
+    if (!state || !clientId) return false;
+    const matches = (item: AgentInputQueuedMessage) => item.clientId === clientId
+      || item.retrySourceClientId === clientId || item.supersedesUserClientId === clientId;
+    if (this.getActiveInputClientIds(sessionId).includes(clientId)
+      || state.pendingQueue.some(matches)
+      || state.steeringQueueClientIds.includes(clientId)) return true;
+    const recovery = state.recovery;
+    return recovery?.kind === 'active-turn' && matches(recovery.item)
+      && (state.autoResumePending !== null || isProviderGroupSwitchHoldLive(state)
+        || (state.usageLimitWait?.recovery === recovery && state.usageLimitWait.resumeAt !== null));
+  }
+
   getProjection(sessionId: string): AgentInputProjection {
     return this.toProjection(sessionId, this.getState(sessionId));
   }
@@ -3478,8 +3493,21 @@ export class AgentInputCoordinator {
           current.generation !== abortBoundaryGeneration ||
           current.abortBoundaryToken !== abortBoundaryToken
         ) {
-          // clearSession, a newer Stop, or a terminal event has superseded this
-          // abort. Its late promise must not touch the current session state.
+          // A replacement turn may have gone live-idle without a terminal.
+          // Re-enter normal drain gates, never settle it with the old abort.
+          // A null token alone also means Session close: require a dispatched
+          // active turn so a late abort cannot revive deliberately closed work.
+          if (
+            current === state &&
+            current.generation === abortBoundaryGeneration &&
+            current.abortBoundaryToken === null &&
+            current.activeTurn !== null &&
+            isActiveTurnDispatched(current.activeTurn)
+          ) {
+            // The replacement may still be busy now and lose its terminal
+            // later. Keep the existing retry alive until it can prove idle.
+            this.scheduleDrainAfterExternalTurnSettles(sessionId, 'stale-abort-replacement');
+          }
           log.info('ignoring stale abort completion', {
             sessionId,
             abortBoundaryGeneration,

@@ -112,5 +112,24 @@
     "quotaResetIn": "Renova em {{duration}}",
     "quotaAverageHint": "Cota semanal · Peso igual por conta",
     "quotaResetHint": "No ritmo atual, pode restar cota na redefinição: amarelo em até 24 horas, vermelho em até 6 horas."
+  },
+  "modelGroups": {
+    "title": "Grupos de modelos",
+    "sourceCount_one": "{{count}} fonte",
+    "sourceCount_many": "{{count}} fontes",
+    "sourceCount_other": "{{count}} fontes",
+    "strategy": {
+      "expiring": "Primeiro o que expira",
+      "order": "Por ordem",
+      "rotate": "Em rodízio",
+      "cheapest": "O mais barato"
+    }
+  },
+  "pluginEngines": {
+    "genericName": "Mecanismo de plugin",
+    "defaultModel": "Modelo padrão",
+    "unavailable": "{{engine}} está indisponível",
+    "unavailableWithHint": "{{engine}} está indisponível: {{hint}}",
+    "worktreeUnsupported": "Os mecanismos de plugins ainda não conseguem iniciar tarefas em uma Worktree. Desative a Worktree para enviar."
   }
 }

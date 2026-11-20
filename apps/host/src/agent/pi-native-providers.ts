@@ -39,6 +39,8 @@ export function createHostPiNativeProviders(options: {
     grok: { hasGrokOAuthLogin(providerId?: string): boolean };
     codexAccounts: { isOpenAiSubscriptionProviderId(providerId?: string | null): boolean };
   };
+  /** The desktop's first step before a local Pi (release table row 25); no-op when absent. */
+  ensureSharedGlobalSkills?: () => Promise<void>;
 }) {
   const config = options.providerConfig;
   return createPiNativeProviderResolver({
@@ -50,7 +52,7 @@ export function createHostPiNativeProviders(options: {
     hasGrokOAuthLogin: id => config.grok.hasGrokOAuthLogin(id),
     listCustomProvidersWithSecureHeaders: () => config.list(),
     readCustomProviderKey: (...args) => config.readKey(...args),
-    ensureSharedGlobalSkills: async () => {},
+    ensureSharedGlobalSkills: () => options.ensureSharedGlobalSkills?.() ?? Promise.resolve(),
     ensureManagedOllamaReadyForSession: input => hostManagedLocalModelNotReady(input),
     getUserDataDir: () => options.userDataDir,
   });

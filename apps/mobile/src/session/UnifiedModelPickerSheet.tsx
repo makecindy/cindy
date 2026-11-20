@@ -18,6 +18,15 @@ import type { AgentKind } from "@cindy/model-providers/types";
 import { listedSourceFolds, resolveStoredModelEntry, sameRunLocationProvider, type ProviderView, type UnifiedModelEntry } from "@cindy/model-providers";
 import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
+import {
+  buildPluginEngineGroups,
+  type MobilePluginEngine,
+  type MobilePluginEngineSelection,
+  type PluginEngineEffort,
+  type UnifiedMobilePluginEngineGroup,
+  type UnifiedMobilePluginEngineRow,
+} from "./pluginEngines";
+export { buildPluginEngineGroups, type UnifiedMobilePluginEngineGroup, type UnifiedMobilePluginEngineRow };
 import { buildMobileModelSections } from "./providerModelSections";
 import { useMobileModelPreferences } from "./mobileModelPreferences";
 import {
@@ -176,7 +185,41 @@ export interface UnifiedMobilePickerBaseOptions {
     configuration: MobileModelConfiguration,
     source?: { deviceId: string | null },
   ): Promise<boolean>;
+  /**
+   * 被控电脑上插件提供的执行引擎(Desktop docs/plans/acp-plugin-bridge.md)：「全部」里每个引擎
+   * 一段，列在内置模型之前。只给能用插件引擎的入口传(被控电脑本机的普通任务 / 新任务)。
+   */
+  pluginEngines?: UnifiedMobilePluginEngineOptions;
+  /**
+   * 被控电脑上的模型组(model-groups.md §6.2)：「全部」最上方一段。只给能用模型组的入口传(伙伴模型设置)。
+   */
+  modelGroups?: UnifiedMobileModelGroupOptions;
 }
+
+export interface UnifiedMobileModelGroupRow {
+  id: string;
+  title: string;
+  /** 来源数 · 选法 · 推理强度。 */
+  subtitle: string;
+  selected: boolean;
+}
+
+export interface UnifiedMobileModelGroupOptions {
+  rows: readonly UnifiedMobileModelGroupRow[];
+  /** 返回 false = 没有应用(选择器留在原地)。 */
+  onSelect(id: string): Promise<boolean> | boolean;
+}
+
+export interface UnifiedMobilePluginEngineOptions {
+  engines: readonly MobilePluginEngine[];
+  /** 当前选中的引擎与模型(新任务的选择、插件引擎任务自己的引擎、或待切到的引擎)；null = 选的是内置模型。 */
+  active: MobilePluginEngineSelection | null;
+  /** 返回 false = 没有应用(选择器留在原地)。 */
+  onSelect(selection: MobilePluginEngineSelection): Promise<boolean> | boolean;
+  /** 选择器打开时调用：读一次列表，请插件重新上报模型。 */
+  onOpen?(): void;
+}
+
 export interface UnifiedMobileRow {
   key: string;
   entry: UnifiedModelEntry;
@@ -233,6 +276,17 @@ export interface UnifiedMobilePickerViewProps {
     remote?: { deviceId: string; deviceName: string; providerLabel: string };
   }[];
   groups: UnifiedMobileGroup[];
+  /** 模型组(列在插件引擎与 groups 之前)；搜索时只列命中的。 */
+  modelGroups?: {
+    title: string;
+    rows: readonly UnifiedMobileModelGroupRow[];
+    onSelect(id: string): void;
+  };
+  /** 插件引擎分组(列在 groups 之前)；effort 只改思考深度、不关闭选择器。 */
+  pluginEngines?: {
+    groups: UnifiedMobilePluginEngineGroup[];
+    onSelect(row: UnifiedMobilePluginEngineRow, effort?: PluginEngineEffort): void;
+  };
   busy: boolean;
   error: string | null;
   loading: boolean;
@@ -307,6 +361,17 @@ export function UnifiedModelPickerSheet(
   const lock = useRef(false);
   const opening = useRef(0);
   const [error, setError] = useState<string | null>(null);
+  // 选择器打开：读一次插件引擎列表，并请那台电脑的插件重新上报模型(不轮询)。
+  const pluginEngineOptions = p.unified.pluginEngines;
+  const onPluginEnginesOpen = pluginEngineOptions?.onOpen;
+  useEffect(() => {
+    if (p.visible) onPluginEnginesOpen?.();
+  }, [p.visible, onPluginEnginesOpen]);
+  // 选中的是插件引擎时，内置模型行都不显示选中态(也不列「推荐」)。
+  const pluginEngineActive = !!pluginEngineOptions?.active;
+  // 选中的是模型组时同理：只有组那一行打勾，具体模型行不打勾、不列「推荐」，打开时停在顶部(和桌面一致)。
+  const modelGroupActive = !!p.unified.modelGroups?.rows.some((row) => row.selected);
+  const otherChoiceActive = pluginEngineActive || modelGroupActive;
   useEffect(() => {
     if (!p.visible) return;
     if (rememberRemote) void hydrateRemoteAgentModelMemory();
@@ -609,7 +674,7 @@ export function UnifiedModelPickerSheet(
         routing: provider?.routing,
         logoKind: provider?.logoKind,
       },
-      selected: !favorite && selected,
+      selected: !favorite && selected && !otherChoiceActive,
       disabled:
         !caps[config.agent] ||
         budgetRowDisabled(
@@ -736,7 +801,7 @@ export function UnifiedModelPickerSheet(
         logoKind: provider?.logoKind,
       },
       remoteDevice: { deviceId: catalog.deviceId, name: catalog.name },
-      selected,
+      selected: selected && !modelGroupActive,
       disabled: !entry.capabilities[config.agent],
       // 「收藏」一节没有带电脑名的分段标题,电脑名写进说明行,和本机同名模型的收藏区分开。
       subtitle: favorite
@@ -841,7 +906,7 @@ export function UnifiedModelPickerSheet(
       rows: favoriteRows,
     });
   const recommended =
-    all && p.existingSessionRoute
+    all && p.existingSessionRoute && !otherChoiceActive
       ? filtered
           .filter((row) => row.selected || row.config.agent === p.agentKind)
           .sort((a, b) => Number(b.selected) - Number(a.selected))
@@ -883,6 +948,16 @@ export function UnifiedModelPickerSheet(
           rows: group,
         });
     }
+  // 插件引擎(「全部」或搜索命中时)：每个引擎一段，列在内置模型之前(与 Desktop 面板顺序一致)。
+  const pluginEngineGroups = pluginEngineOptions && all
+    ? buildPluginEngineGroups(pluginEngineOptions, query, {
+        defaultModel: t("models.pluginEngines.defaultModel"),
+        effort: (effort) => t(`models.options.effortLevels.${effort}`, { defaultValue: effort }),
+        unavailable: (name, hint) => hint
+          ? t("models.pluginEngines.unavailableWithHint", { engine: name, hint })
+          : t("models.pluginEngines.unavailable", { engine: name }),
+      })
+    : [];
   // Recommended/favorites can contain the only rows for a source. Keep its
   // overview visible there when no provider section already presents it.
   for (const group of groups) {
@@ -1073,6 +1148,31 @@ export function UnifiedModelPickerSheet(
       ];
       if ((await p.unified.onSelect(config, source)) && isCurrent())
         p.onClose();
+    });
+  };
+  // 插件引擎行：选中模型时关闭选择器；只改思考深度时留在原地。
+  const modelGroupOptions = p.unified.modelGroups;
+  const modelGroupRows = (modelGroupOptions?.rows ?? []).filter((row) => {
+    const needle = query.trim().toLowerCase();
+    return !needle || `${row.title} ${row.subtitle}`.toLowerCase().includes(needle);
+  });
+  const selectModelGroup = (id: string) => {
+    if (!modelGroupOptions) return;
+    void transact(async (isCurrent) => {
+      const applied = await modelGroupOptions.onSelect(id);
+      if (applied !== false && isCurrent()) p.onClose();
+    });
+  };
+  const selectPluginEngine = (row: UnifiedMobilePluginEngineRow, effort?: PluginEngineEffort) => {
+    if (row.disabled || !pluginEngineOptions) return;
+    void transact(async (isCurrent) => {
+      const nextEffort = effort ?? row.effort ?? undefined;
+      const applied = await pluginEngineOptions.onSelect({
+        providerId: row.providerId,
+        modelId: row.modelId,
+        ...(nextEffort ? { effort: nextEffort } : {}),
+      });
+      if (applied !== false && effort === undefined && isCurrent()) p.onClose();
     });
   };
   const change = (config: MobileModelConfiguration, reset = false) => {
@@ -1355,6 +1455,12 @@ export function UnifiedModelPickerSheet(
         ...remoteFilters,
       ]}
       groups={groups}
+      {...(modelGroupRows.length
+        ? { modelGroups: { title: t("models.modelGroups.title"), rows: modelGroupRows, onSelect: selectModelGroup } }
+        : {})}
+      {...(pluginEngineGroups.length
+        ? { pluginEngines: { groups: pluginEngineGroups, onSelect: selectPluginEngine } }
+        : {})}
       busy={busy || !!p.disabled || !prefs.ready}
       error={error ?? (selectedDeviceId === null && p.providersReady && modelNeedsReselection(p.modelVisibilityOverrides, p.agentKind, p.activeModelId, p.selectedProviderId)
         ? t('session.common.modelHiddenReselect', { model: p.activeModelId }) : null)}

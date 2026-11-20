@@ -149,6 +149,12 @@ import {
   type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
 import type { PluginModelsPickerProps } from './PluginModelsSection';
+import type {
+  PluginEnginePendingSelection,
+  PluginEngineSessionPickerProps,
+  PluginEnginesPickerProps,
+} from './PluginEnginesSection';
+import { PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES, isSamePluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import {
   enqueueEffortChange,
@@ -423,10 +429,12 @@ import {
 } from '@/state/newMakerDraft';
 import type { MessageDeliveryMode, QueuedMessage } from '@/lib/makerChatStore';
 import {
+  builtinAgentSwitchIntent,
   isRemoteOptimisticComposerTransitionActive,
   isRemoteOptimisticDataOwnerBoundaryError,
   isRemoteOptimisticSessionPurgedError,
   makerChatStore,
+  pluginEngineAgentSwitchIntent,
 } from '@/lib/makerChatStore';
 // 切模型前的上下文容量预检(大窗口 → 小窗口护栏), 纯函数与 main 共用。
 import {
@@ -693,6 +701,8 @@ interface ChatInputProps {
   disabled?: boolean;
   /** Block submissions while a draft-local picker is open, without locking typing. */
   sendBlocked?: boolean;
+  /** Keep the unavailable saved model visible and open the model picker for recovery. */
+  preserveDraftModel?: boolean;
   /** Freeze model/provider/effort/permission controls for audit-only tasks. */
   settingsLocked?: boolean;
   /** When true, shows Stop button instead of Send button. */
@@ -948,6 +958,17 @@ interface ChatInputProps {
   pluginModels?: PluginModelsPickerProps;
   /** 新任务的模型组(只有新任务草稿传)。 */
   modelGroups?: ModelGroupsPickerProps;
+  /**
+   * 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)。只有本机新任务草稿在至少有一个引擎时传。
+   * 选中引擎时：模型 pill 显示引擎与模型，权限只给引擎的两档，计划模式等内置引擎专属入口不出现，
+   * 发送不按内置模型的来源检查拦截(由草稿层走引擎自己的创建路径)。
+   */
+  pluginEngines?: PluginEnginesPickerProps;
+  /**
+   * 运行在插件引擎上的已建任务(sessions.agent_kind = 'acp')。传入时模型 pill 只列该引擎的模型，
+   * 不出现内置引擎切换、深度、Fast、计划模式；发送不做内置来源检查。
+   */
+  pluginEngineSession?: PluginEngineSessionPickerProps;
   /**
    * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。
    *
@@ -1370,6 +1391,7 @@ export function ChatInput({
   onWorkingDirChange,
   disabled: disabledProp,
   sendBlocked = false,
+  preserveDraftModel = false,
   settingsLocked: settingsLockedProp = false,
   isStreaming = false,
   isAgentBusy,
@@ -1430,8 +1452,21 @@ export function ChatInput({
   onUnifiedDraftSelect,
   pluginModels,
   modelGroups,
+  pluginEngines,
+  pluginEngineSession,
   selectedFavoriteUid = null,
 }: ChatInputProps) {
+  // 插件引擎(草稿里选中的，或任务本身运行在插件引擎上)：内置 Harness 的模型来源、深度、Fast、
+  // 计划模式与切换都不适用(docs/plans/acp-plugin-bridge.md)。下面只在这几处分支。
+  const pluginEngineActive = !!pluginEngineSession || (!sessionId && !!pluginEngines?.active);
+  const pluginEnginePermissionModes = useMemo(() => {
+    if (pluginEngineSession) return pluginEngineSession.engine?.permissionModes ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES;
+    const active = !sessionId ? pluginEngines?.active : null;
+    if (!active) return undefined;
+    // 同一个插件可以装在几台电脑上：按「引擎 + 所在电脑」找，不拿本机的同名引擎顶替另一台的。
+    return pluginEngines?.engines.find((engine) => isSamePluginEngineChoice(engine, active))?.permissionModes
+      ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES;
+  }, [pluginEngineSession, pluginEngines, sessionId]);
   // Keep the existing draft/editor mounted during a companion call, but reuse
   // every disabled guard (typing, drop, button and hotkey sends) until it ends.
   const disabled = disabledProp || voiceConversationActive;
@@ -1471,6 +1506,7 @@ export function ChatInput({
    */
   const intentAgentDeviceId =
     sessionId && agentLocationAware && !remoteHostId
+      // 切到插件引擎时 Agent 回到任务所在电脑，意图带 null，同样按它显示。
       ? makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId
       : undefined;
   /** 下一条消息时 Agent 所在的电脑(null = 任务所在电脑)。 */
@@ -1933,8 +1969,25 @@ export function ChatInput({
   // SessionChatState 独立槽位,登记/撤销通过 setState 驱动重渲染,不会改真实
   // agentKind reducer 路由。device-link 远程会话同样适用:意图的权威态在被控端
   // main,控制端 store 里这份是它的镜像(登记时乐观写、重连时读回、push 回流覆盖)。
-  const agentSwitchIntent =
+  const storedAgentSwitchIntent =
     sessionId && !remoteHostId ? makerChatStore.getAgentSwitchIntent(sessionId) : null;
+  // 待切到插件引擎(docs/plans/acp-plugin-bridge.md)的意图由选择器单独呈现；下面内置引擎的展示、
+  // 档位与切换链路只看切到内置引擎的意图，行为与没有插件引擎时一致。
+  const agentSwitchIntent = builtinAgentSwitchIntent(storedAgentSwitchIntent);
+  const pluginEngineSwitchIntent = pluginEngineAgentSwitchIntent(storedAgentSwitchIntent);
+  // 待切到插件引擎时选择器的 trigger 写「下条：引擎 · 模型」；引擎已不在时用通用名称。
+  const pluginEnginePending = useMemo<PluginEnginePendingSelection | undefined>(() => {
+    const providerId = pluginEngineSwitchIntent?.providerId;
+    if (!pluginEngineSwitchIntent || !providerId) return undefined;
+    const engine = pluginEngines?.engines.find((item) => item.providerId === providerId) ?? null;
+    return {
+      providerId,
+      engine,
+      engineName: engine?.name ?? t('newChat.pluginEngines.genericName'),
+      modelId: pluginEngineSwitchIntent.model,
+      effort: pluginEngineSwitchIntent.effort ?? null,
+    };
+  }, [pluginEngineSwitchIntent, pluginEngines, t]);
   const composerSelection = resolveComposerModelSelection({
     current: {
       agentKind: runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey) ?? 'claude-code',
@@ -2091,9 +2144,13 @@ export function ChatInput({
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
+  // 任务所属电脑支持切换时，插件引擎任务也能在同一选择器切回内置引擎。
+  const pluginEngineTaskSwitchable = !!pluginEngineSession && !!sessionId && !!pluginEngines
+    && (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch);
   const sessionAgentSwitchSupported =
-    sessionOrcaRole !== undefined && runtimeAgentKind != null &&
-    (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch);
+    (sessionOrcaRole !== undefined && runtimeAgentKind != null &&
+      (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch)) ||
+    pluginEngineTaskSwitchable;
 
   // 切换写入的串行链与写序号都按 session 存在**模块级**协调层(agentSwitchCoordinator),
   // 不放组件 ref:用户切走再切回时旧组件已卸载但 invoke 仍在飞,新组件若另起空队列 /
@@ -2151,8 +2208,10 @@ export function ChatInput({
   // 与下拉菜单看到的顺序一致。伙伴保留这两个入口；任务设置锁定时一起禁用。
   const permissionCycleOptions = useMemo(
     () =>
-      settingsLocked || sharedGuest ? [] : (activeAgentCapabilities?.permissionModes ?? []),
-    [activeAgentCapabilities, settingsLocked, sharedGuest],
+      settingsLocked || sharedGuest
+        ? []
+        : (pluginEnginePermissionModes ?? activeAgentCapabilities?.permissionModes ?? []),
+    [activeAgentCapabilities, settingsLocked, sharedGuest, pluginEnginePermissionModes],
   );
   const permissionCycleOptionsRef = useRef(permissionCycleOptions);
   permissionCycleOptionsRef.current = permissionCycleOptions;
@@ -2166,7 +2225,8 @@ export function ChatInput({
   );
 
   // 计划模式入口门控:agent capability(device-link 老被控端无此字段 → 隐藏)+ 父组件接线。
-  const planModeSupported = activeAgentCapabilities?.planMode?.supported === true;
+  // 插件引擎没有计划模式。
+  const planModeSupported = !pluginEngineActive && activeAgentCapabilities?.planMode?.supported === true;
   const planModeEntry =
     !sharedGuest && !settingsLocked && planModeSupported && onPlanModeChange
       ? { enabled: planModeEnabled, onToggle: (next: boolean) => void onPlanModeChange(next) }
@@ -2175,6 +2235,9 @@ export function ChatInput({
   // 「有没有已连接来源」。vendorKey 锁定时直接信任;否则按 capabilities 反推
   // (按 availableModels 归类,不靠 id 前缀猜)。
   const currentModelAgentKind: AgentKind | null = useMemo(() => {
+    // 插件引擎的模型不在任何内置目录里：没有内置 Harness，也就不做来源连接 / 断开判定。
+    // 插件引擎任务待切到内置引擎时，按目标引擎判定(与内置引擎之间切换一致)。
+    if (pluginEngineActive && !agentSwitchIntent) return null;
     if (runtimeEffective || composerSelection.pending) return composerSelection.display.agentKind;
     if (agentKind) return agentKind;
     if ((ccCaps.capabilities?.availableModels ?? []).some((m) => m.id === activeModel)) {
@@ -2187,7 +2250,7 @@ export function ChatInput({
       return 'pi';
     }
     return null;
-  }, [activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
+  }, [pluginEngineActive, agentSwitchIntent, activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
   // 供应商连接态。effectiveSourceId / sendProviderId / dispatchSend 预检用它。device-link 远程会话 /
   // 草稿用**被控端**供应商目录(隧道),否则用本机(两 hook 都无条件调用,按 deviceLinkDeviceId 取)。
   // SSH 项目:Codex 只走远端主机的原生连接,模型清单读远端;Claude Code / Pi 仍用本机目录。
@@ -2290,10 +2353,10 @@ export function ChatInput({
   const unifiedAgents = useMemo<readonly AgentKind[] | undefined>(() => {
     if (!runtimeAgentsLoaded) return undefined;
     const kinds = UNIFIED_AGENT_KINDS.filter(
-      (kind) => kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),
+      (kind) => (!preserveDraftModel && kind === agentKind) || runtimeAvailableVendors.has(agentKindToVendor(kind)),
     );
-    return kinds.length > 0 ? kinds : undefined;
-  }, [runtimeAgentsLoaded, runtimeAvailableVendors, agentKind]);
+    return kinds.length > 0 || preserveDraftModel ? kinds : undefined;
+  }, [runtimeAgentsLoaded, runtimeAvailableVendors, agentKind, preserveDraftModel]);
   // 已有 device-link 任务在断链时仍有 pinned deviceId + renderer outbox 可接住发送，
   // 不能因为被控端 provider 目录暂时拉不到就禁用 composer。远程草稿没有既有 session
   // 可以排队，仍与本地任务一样保留来源门禁。
@@ -2306,7 +2369,8 @@ export function ChatInput({
   const enforceConnectedSourceGate = (!sessionId || !catalogDeviceId) && !preserveSshCodexRoute;
   // 新任务选了模型组或「让插件选」：这次用哪个模型、在哪台运行由发送时的选路决定，草稿底层模型的来源
   // 只在选路沿用它时才用得上(由发送回调在选路后检查)。输入框不按底层模型先挡下发送(model-groups.md §5)。
-  const sendRoutesOwnModel = !sessionId && (!!modelGroups?.active || !!pluginModels?.active);
+  // 插件引擎同理：它用自己的模型与登录，内置模型的来源检查不适用。
+  const sendRoutesOwnModel = (!sessionId && (!!modelGroups?.active || !!pluginModels?.active)) || pluginEngineActive;
   const remoteModelListBlocked = !sendRoutesOwnModel && (
     (!!catalogDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready') ||
     (!!sshCodexHostId && sshCodexProviders.status !== 'ready'));
@@ -4768,7 +4832,8 @@ export function ChatInput({
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
   const paletteAgentKind = runtimeAgentKind ?? agentKind ?? 'claude-code';
-  const slashContextReady = !sessionId || runtimeAgentKind != null;
+  // 插件引擎任务没有内置 Harness 身份(runtimeAgentKind 为 null)，它的命令清单只有桌面命令，随时可读。
+  const slashContextReady = !sessionId || runtimeAgentKind != null || !!pluginEngineSession;
   // Existing tasks use one authoritative snapshot. Mirrored composer state
   // catches up in an effect and otherwise scans the previous/global folder first.
   const slashWorkingDir = sessionId ? initialWorkingDir : workingDir;
@@ -4782,6 +4847,8 @@ export function ChatInput({
     isRemoteSession,
     sessionId ?? null,
     deviceLinkDeviceId ?? null,
+    // 插件引擎只列 Cindy 自己的桌面命令(见下方 skipAgentCommands)；内置引擎时数组与之前逐项相同。
+    ...(pluginEngineActive ? ['plugin-engine'] : []),
   ]);
   const [slashCommandLoadState, setSlashCommandLoadState] = useState<SlashCommandRosterState>({
     contextKey: '',
@@ -4829,7 +4896,9 @@ export function ChatInput({
         {
           ...opts,
           contextReady: slashContextReady,
-          skipAgentSkills: isRemoteSession,
+          // 插件引擎自己解释 `/…`：不列内置 Harness 的命令与技能。
+          skipAgentSkills: isRemoteSession || pluginEngineActive,
+          ...(pluginEngineActive ? { skipAgentCommands: true } : {}),
           sessionId,
           allowManagedPiPackagePreview: !isRemoteSession,
           onPiRuntimeStatus: (status) => {
@@ -4863,6 +4932,7 @@ export function ChatInput({
       sessionId,
       deviceLinkDeviceId,
       slashCommandContextKey,
+      pluginEngineActive,
     ],
   );
   useEffect(() => {
@@ -7181,8 +7251,8 @@ export function ChatInput({
       // 切换意图期:Fast 改动是"更新意图"而不是改当前会话实时状态(否则普通
       // SET_FAST 链路会让 main 清意图、renderer 乐观态失配)。经 ref 调用——
       // performAgentSwitch 声明在本回调之后(TDZ)。
-      if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
+      if (sessionId && builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))) {
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))!;
         // await 而非 fire-and-forget:意图重登记是不是真的成功,是这次 Fast 写入的唯一结果。
         return (
           (await performAgentSwitchRef.current(intent.target, intent.model, intent.providerId, {
@@ -8193,7 +8263,7 @@ export function ChatInput({
       if (settingsLocked) return false;
       if (sessionId && sessionAgentSwitchSupported && !remoteHostId && runtimeAgentKind &&
           expectedAgentSwitchRevision === undefined) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId));
         return performAgentSwitch(intent?.target ?? runtimeAgentKind, newModelId,
           intent ? intent.providerId : effectiveSourceId ?? null);
       }
@@ -8223,9 +8293,9 @@ export function ChatInput({
       if (
         sessionId &&
         expectedAgentSwitchRevision === undefined &&
-        makerChatStore.getAgentSwitchIntent(sessionId)
+        builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))
       ) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))!;
         // ★ await 并**透传真实结果**(Chris 2026-08-19):此前是 fire-and-forget + `return`,
         // 返回 undefined 被上游读成「已应用」——意图期内改选模型时,登记失败 / 被超车的
         // 那一路会被当成成功,后续持久化照跑,而会话上的意图其实一个字没变。
@@ -8542,8 +8612,8 @@ export function ChatInput({
     async (newEffort: Effort, options?: EffortChangeOptions): Promise<boolean> => {
       if (settingsLocked) return false;
       // 切换意图期:effort 改动 = 更新意图(重登记),不走普通 setEffort 链路。
-      if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
+      if (sessionId && builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))) {
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))!;
         // await 而非 fire-and-forget:意图重登记成功与否就是这次深度写入的结果。
         return (
           (await performAgentSwitch(intent.target, intent.model, intent.providerId, {
@@ -8804,7 +8874,7 @@ export function ChatInput({
       if (settingsLocked) return false;
       if (sessionId && sessionAgentSwitchSupported && !remoteHostId && runtimeAgentKind &&
           expectedAgentSwitchRevision === undefined) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId));
         return performAgentSwitch(intent?.target ?? runtimeAgentKind,
           reconciledModelId ?? intent?.model ?? activeModel, newProviderId, {
             effort: reconciledEffort,
@@ -8844,9 +8914,9 @@ export function ChatInput({
       if (
         sessionId &&
         expectedAgentSwitchRevision === undefined &&
-        makerChatStore.getAgentSwitchIntent(sessionId)
+        builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))
       ) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))!;
         // 同 performModelChange:await 并透传真实结果,别把「意图重登记失败」当成已应用
         // (Chris 2026-08-19)。
         const nextEffort = resolveIntentReselectEffort(reconciledEffort, intent.effort);
@@ -10131,6 +10201,7 @@ export function ChatInput({
                     permissionMode={activePermissionMode}
                     onPermissionModeChange={handlePermissionModeChange}
                     vendorKey={vendorKey}
+                    {...(pluginEnginePermissionModes ? { pluginEngineModes: pluginEnginePermissionModes } : {})}
                     deviceId={deviceLinkDeviceId ?? undefined}
                     disabled={composerEditorLocked || settingsLocked || sharedGuest}
                     dense={effectiveDenseToolbar}
@@ -10231,7 +10302,7 @@ export function ChatInput({
                       // confirming the preference. A rejected write must leave
                       // the visible switch and its remembered value unchanged.
                       if (sessionId) {
-                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+                        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId));
                         if (intent) {
                           const applied = await performAgentSwitch(intent.target, intent.model, intent.providerId, {
                             ...(intent.effort ? { effort: intent.effort as Effort } : {}),
@@ -10312,6 +10383,12 @@ export function ChatInput({
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     {...(unifiedPanelActive && modelGroups ? { modelGroups } : {})}
+                    // 已建普通任务也能换到 / 换出任务所属电脑的插件引擎。
+                    {...(unifiedPanelActive && pluginEngines && (!sessionId || sessionAgentSwitchSupported)
+                      ? { pluginEngines } : {})}
+                    // 插件引擎任务待切到内置引擎时，trigger 按内置引擎的「下条：」显示。
+                    {...(pluginEngineSession && !agentSwitchIntent ? { pluginEngineSession } : {})}
+                    {...(pluginEnginePending ? { pluginEnginePending } : {})}
                     // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
                     selectedFavoriteUid={effectiveSelectedFavoriteUid}
                     // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在
@@ -10372,6 +10449,7 @@ export function ChatInput({
                     // 无意图才回到会话 runtime 的 selectedProviderId。
                     currentProviderId={activeProviderId}
                     sourceDisconnected={selectedSourceDisconnected}
+                    preserveDraftModel={preserveDraftModel}
                     // 与上面 providers 同一份任务视图：账号被拆出后原来源在这个任务里按账号所在的供应商显示。
                     {...(taskSourceProvider ? { taskSourceProvider } : {})}
                     // 断开来源回落到默认来源后,面板会高亮同模型的回落行;点击该行必须重新
