@@ -193,6 +193,8 @@ describe('RoutedDeviceLinkClient', () => {
     });
     const accepted: string[] = [];
     client.onPeerStreamAccepted((peer, streamId) => accepted.push(`${peer}:${streamId}`));
+    const linkAccepted = vi.fn();
+    client.onPeerLinkAccepted(linkAccepted);
     const secondAccepted = vi.fn();
     const offAccepted = client.onPeerStreamAccepted(secondAccepted);
     client.start(); await vi.advanceTimersByTimeAsync(1);
@@ -219,6 +221,7 @@ describe('RoutedDeviceLinkClient', () => {
     await opened;
     expect(accepted).toEqual([`known-peer:${newer ? 'primary' : 'legacy'}-stream`]);
     expect(secondAccepted).toHaveBeenCalledTimes(1);
+    expect(linkAccepted).toHaveBeenCalledTimes(1);
     offAccepted();
     // Later genuine opens can retain the same stream; do not dedupe by stream
     // identity or keep a per-peer "already notified" flag across recoveries.
@@ -237,6 +240,7 @@ describe('RoutedDeviceLinkClient', () => {
     }
     await later;
     expect(accepted).toEqual(Array(2).fill(`known-peer:${newer ? 'primary' : 'legacy'}-stream`));
+    expect(linkAccepted).toHaveBeenCalledTimes(2);
     expect(secondAccepted).toHaveBeenCalledTimes(1);
     void client.invoke('known-peer', { channel: 'private:business', args: ['secret'] }).catch(() => undefined);
     await vi.advanceTimersByTimeAsync(1);
@@ -255,6 +259,7 @@ describe('RoutedDeviceLinkClient', () => {
     });
     const seen: string[] = [];
     const accepted: string[] = [];
+    const linkAccepted = vi.fn();
     let ownChannel = true;
     const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
       active: () => true, useForPeer: () => false, probeForPeer: () => true, primaryCapability: 'agent-net-node-v2',
@@ -265,6 +270,7 @@ describe('RoutedDeviceLinkClient', () => {
       options: options('ws://v1-relay'),
     });
     client.onPeerStreamAccepted((peer, streamId) => accepted.push(`${peer}:${streamId}`));
+    client.onPeerLinkAccepted(linkAccepted);
     client.start(); await vi.advanceTimersByTimeAsync(1);
     const primary = sockets.find((s) => s.url === 'ws://v2-node')!, legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
     primary.ack(); legacy.ack(); await vi.advanceTimersByTimeAsync(1);
@@ -282,6 +288,7 @@ describe('RoutedDeviceLinkClient', () => {
     // A session supplies its own acceptance through routeSessionPeers; this
     // Device Link probe must not add a second notification using its old stream.
     expect(accepted).toEqual([]);
+    expect(linkAccepted).not.toHaveBeenCalled();
     ownChannel = false;
     const fallback = client.openLink('other-peer', {}); await vi.advanceTimersByTimeAsync(1);
     await probeAccepted('other-peer');
@@ -294,6 +301,7 @@ describe('RoutedDeviceLinkClient', () => {
     await expect(fallback).resolves.toMatchObject({ appVersion: '1' });
     expect(seen).toEqual(['restarting-peer', 'other-peer']);
     expect(accepted).toEqual(['other-peer:primary-stream']);
+    expect(linkAccepted).toHaveBeenCalledTimes(1);
     client.stop();
   });
   // 2026-11-17 audit: presence arriving on the compatibility socket never reached the host, so phones without the newer

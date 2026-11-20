@@ -125,6 +125,8 @@ export interface AgentNetSessionLinksOptions {
 }
 
 interface PeerState {
+  /** Pair only the first reverse open with this exact accepted inbound generation. */
+  lastInboundGeneration?: number;
   /** 这个对端上次建链、接受时的代次，同一连接内每次建链递增（dispatch 用它丢弃过期的离线事件）。 */
   generation: number;
   outbound: 'idle' | 'opening' | 'open';
@@ -186,6 +188,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   private readonly frameHandlers = new Set<FrameHandler>();
   private readonly routeHandlers = new Set<(change: DeviceLinkPeerRouteStateChanged) => void>();
   private readonly acceptedHandlers = new Set<(peer: string, streamId: string) => void>();
+  private readonly linkAcceptedHandlers = new Set<(peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean) => void>();
   private readonly releasedHandlers = new Set<(peer: string) => void>();
   private readonly remoteControlDisabled = new Set<string>();
   private readonly pushDeflateRejected = new Set<string>();
@@ -380,6 +383,8 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
     const session = this.requireSession(dst);
     const peer = this.peer(dst);
+    const inboundGeneration = peer.inbound && !peer.outboundClosed && peer.outbound === 'idle' && peer.generation === peer.lastInboundGeneration
+      ? peer.generation : undefined;
     peer.outboundClosed = false;
     peer.outbound = 'opening';
     const openStartedAt = performance.now();
@@ -392,6 +397,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
         throw new DeviceLinkError('LINK_NOT_OPEN', 'session closed while opening the control link');
       }
       const accept = (isRecord(accepted) ? accepted : {}) as unknown as LinkAcceptPayload;
+      const inboundContinuation = inboundGeneration !== undefined && inboundGeneration === peer.generation;
       peer.outbound = 'open';
       peer.outboundLost = false;
       peer.generation += 1;
@@ -404,6 +410,9 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       this.notifyReopen(dst);
       peer.receivedAt = performance.now();
       const streamId = this.streamIdFor(session);
+      for (const cb of this.linkAcceptedHandlers) {
+        try { cb(dst, accept, inboundContinuation); } catch (error) { this.options.log.error('peer link accepted handler threw', error); }
+      }
       for (const cb of this.acceptedHandlers) {
         try { cb(dst, streamId); } catch (error) { this.options.log.error('peer stream accepted handler threw', error); }
       }
@@ -521,6 +530,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     peer.generation += 1;
     peer.linkOnSession = true;
     peer.inbound = true;
+    peer.lastInboundGeneration = peer.generation;
     peer.offer = null;
     // 推送压缩只认这次 link-open 的声明；对不上（被挤掉、id 不符）时当作不支持，发明文。跨账号和 Device Link 一样不压缩。
     const accepted = offer && !isScopedPeer(dst) && !this.pushDeflateRejected.has(dst) ? acceptedPushDeflateDictionaries(offer.capabilities) : [];
@@ -559,6 +569,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   onFrame(cb: FrameHandler): () => void { this.frameHandlers.add(cb); return () => this.frameHandlers.delete(cb); }
   onPeerRouteStateChanged(cb: (change: DeviceLinkPeerRouteStateChanged) => void): () => void { this.routeHandlers.add(cb); return () => this.routeHandlers.delete(cb); }
   onPeerStreamAccepted(cb: (peer: string, streamId: string) => void): () => void { this.acceptedHandlers.add(cb); return () => this.acceptedHandlers.delete(cb); }
+  onPeerLinkAccepted(cb: (peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean) => void): () => void { this.linkAcceptedHandlers.add(cb); return () => this.linkAcceptedHandlers.delete(cb); }
   onInboundPeerReleased(cb: (peer: string) => void): () => void { this.releasedHandlers.add(cb); return () => this.releasedHandlers.delete(cb); }
 
   /** 和 Device Link 客户端一样，按在线快照记下「对端关了允许被控」，之后的调用立即报 REMOTE_DISABLED。 */

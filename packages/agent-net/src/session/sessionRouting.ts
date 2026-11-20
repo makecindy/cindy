@@ -116,6 +116,8 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
       both(() => target.onPeerRouteStateChanged(cb), () => links.onPeerRouteStateChanged(cb)),
     onPeerStreamAccepted: (cb: (peer: string, streamId: string) => void) =>
       both(() => target.onPeerStreamAccepted(cb), () => links.onPeerStreamAccepted(cb)),
+    onPeerLinkAccepted: (cb) =>
+      both(() => target.onPeerLinkAccepted(cb), () => links.onPeerLinkAccepted(cb)),
     onInboundPeerReleased: (cb: (peer: string) => void) => both(() => target.onInboundPeerReleased(cb), () => links.onInboundPeerReleased(cb)),
     noteRemoteControlDisabled: (deviceId) => { links.noteRemoteControlDisabled(deviceId); target.noteRemoteControlDisabled(deviceId); },
     noteRemoteControlEnabled: (deviceId) => { links.noteRemoteControlEnabled(deviceId); target.noteRemoteControlEnabled(deviceId); },
@@ -158,6 +160,7 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
         onFrame: (cb) => connection.onFrame(cb),
         onPeerRouteStateChanged: (cb) => connection.onPeerRouteStateChanged(cb),
         onPeerStreamAccepted: (cb) => connection.onPeerStreamAccepted(cb),
+        onPeerLinkAccepted: (cb) => connection.onPeerLinkAccepted(cb),
         onInboundPeerReleased: (cb) => connection.onInboundPeerReleased(cb),
         noteRemoteControlDisabled: (deviceId) => connection.noteRemoteControlDisabled(deviceId),
         noteRemoteControlEnabled: (deviceId) => connection.noteRemoteControlEnabled(deviceId),

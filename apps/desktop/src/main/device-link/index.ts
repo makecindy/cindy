@@ -1500,13 +1500,15 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // busy presence:每 5s 探一次本机是否有 turn 在跑,变化才上报(dedupe by value)
   startBusyReporting();
 
-  client.onPeerStreamAccepted((peer, streamId) => {
-    // Ordinary peers can recover without a relay/presence transition. The
-    // timeout loop already projects its own still-current successful recovery,
-    // including legacy Hosts without a stream callback; do not notify twice.
-    if (!isScopedPeer(peer) && !transportTimeoutReopen.isActive(peer)) {
+  client.onPeerLinkAccepted((peer, _accepted, inboundContinuation) => {
+    // An inbound acceptance already projected this confirmation's recovery.
+    // Keep ordinary non-stream Hosts covered without duplicating loop recovery.
+    if (!isScopedPeer(peer) && !inboundContinuation && !transportTimeoutReopen.isActive(peer)) {
       broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
     }
+  });
+
+  client.onPeerStreamAccepted((peer, streamId) => {
     // Shared routes can reconnect independently of the primary relay. Notify
     // views before replay can deliver a tokenless legacy completion snapshot.
     if (parseSharedTaskPeer(peer)?.role === 'host') {

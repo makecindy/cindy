@@ -72,6 +72,7 @@ function idleDeviceLink(calls: string[], deviceLinkGeneration = 0): DeviceLinkCl
   return {
     onPresenceChanged: () => () => {},
     onPeerStreamAccepted: () => () => {},
+    onPeerLinkAccepted: () => () => {},
     onPeerRouteStateChanged: () => () => {},
     getPeerLinkGeneration: () => deviceLinkGeneration,
     isLinkReady: () => false,
@@ -594,6 +595,34 @@ describe('AgentNetSessionLinks', () => {
     expect(streams[1]).toBe(streams[0]);
     expect(streams[2]).not.toBe(streams[0]);
     expect(calls).toEqual([]);
+  });
+
+  it('pairs a Session reverse open with its fresh inbound acceptance, preserving later recovery notifications', async () => {
+    const { links } = pair();
+    answerOnSession(links.host);
+    const routed = routeSessionPeers(idleDeviceLink([]), links.controller);
+    const accepted: boolean[] = [];
+    routed.onPeerLinkAccepted((_peer, _accept, continuation) => accepted.push(continuation === true));
+    let reverse!: Promise<unknown>;
+    links.controller.onFrame(env => {
+      if (env.kind !== 'link-open') return;
+      links.controller.sendLinkAccept(env.src!, env.id!, { appVersion: 'test', allowlistHash: 'test' });
+      // Same call chain as Main's inbound listener → streaming subscription replay.
+      reverse = routed.openLink('a-host', openPayload);
+    });
+    try {
+      await links.host.openLink('b-controller', openPayload);
+      await reverse;
+      expect(accepted).toEqual([true]);
+      await routed.openLink('a-host', openPayload); // a later genuine same-Session open
+      expect(accepted).toEqual([true, false]);
+      links.host.closeLink('b-controller', 'transport-timeout');
+      await Promise.resolve();
+      await routed.openLink('a-host', openPayload);
+      expect(accepted).toEqual([true, false, false]);
+    } finally {
+      links.controller.stop(); links.host.stop();
+    }
   });
 
   // 2026-11-17 review：会话断了、重开落到 Device Link（会话没及时回来）以后，控制方向的状态要改由 Device Link 报。原来会话上那条

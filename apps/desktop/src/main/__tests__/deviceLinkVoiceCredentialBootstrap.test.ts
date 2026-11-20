@@ -18,6 +18,7 @@ import {
   DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+  DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
   DL_SUBSCRIBE_CHANNEL,
   isProviderSharePeer,
   isScopedPeer,
@@ -62,7 +63,7 @@ function findAcceptedRegistration(node: ts.Node): void {
   if (ts.isCallExpression(node)
     && ts.isPropertyAccessExpression(node.expression)
     && node.expression.expression.getText(deviceLinkSource) === 'client'
-    && node.expression.name.text === 'onPeerStreamAccepted') {
+    && ['onPeerStreamAccepted', 'onPeerLinkAccepted'].includes(node.expression.name.text)) {
     acceptedRegistrations.push(node.getText(deviceLinkSource));
   }
   if (ts.isCallExpression(node)
@@ -74,13 +75,13 @@ function findAcceptedRegistration(node: ts.Node): void {
   ts.forEachChild(node, findAcceptedRegistration);
 }
 findAcceptedRegistration(deviceLinkSource);
-if (acceptedRegistrations.length !== 1) {
-  throw new Error(`Expected one peer-accept registration, found ${acceptedRegistrations.length}`);
+if (acceptedRegistrations.length !== 2) {
+  throw new Error(`Expected two peer-accept registrations, found ${acceptedRegistrations.length}`);
 }
 if (inboundAcceptedRegistrations.length !== 1) {
   throw new Error(`Expected one inbound peer-accept registration, found ${inboundAcceptedRegistrations.length}`);
 }
-const acceptedRegistration = new Script(ts.transpileModule(acceptedRegistrations[0], {
+const acceptedRegistration = new Script(ts.transpileModule(acceptedRegistrations.join('\n'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText);
 const inboundAcceptedRegistration = new Script(ts.transpileModule(inboundAcceptedRegistrations[0], {
@@ -122,10 +123,13 @@ function subscriptionRegistryRequire(id: string): unknown {
 
 /** FIFO relay adapter only: production clients perform handshake, ACK and recovery. */
 class RecoveryRelay {
+  holdConfirmations = false;
+  private readonly heldConfirmations: Array<() => void> = [];
+  releaseConfirmations(): void { this.queue.push(...this.heldConfirmations.splice(0)); this.holdConfirmations = false; }
   readonly sockets = new Map<string, RecoverySocket>();
   readonly sent: Array<{ sender: string; envelope: Envelope }> = [];
   private readonly queue: Array<() => void> = [];
-  constructor(private readonly confirm: boolean) {}
+  constructor(private readonly confirm: boolean, private readonly reliable = true) {}
 
   connect(id: string): RecoverySocket {
     const socket = new RecoverySocket(this, id);
@@ -147,14 +151,20 @@ class RecoveryRelay {
     if (!this.confirm && envelope.kind === 'link-open') {
       const payload = envelope.payload as LinkOpenPayload;
       envelope = { ...envelope, payload: { ...payload,
-        capabilities: payload.capabilities?.filter((item) => item !== DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM),
+        capabilities: payload.capabilities?.filter((item) => item !== DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM
+          && (this.reliable || item !== DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)),
       } };
     }
     this.sent.push({ sender, envelope });
     const destination = this.sockets.get(envelope.dst!);
-    if (destination) this.queue.push(() => {
-      if (this.sockets.get(envelope.dst!) === destination) destination.push({ ...envelope, src: sender });
-    });
+    if (destination) {
+      const deliver = () => {
+        if (this.sockets.get(envelope.dst!) === destination) destination.push({ ...envelope, src: sender });
+      };
+      const payload = envelope.payload as { channel?: string; payload?: { linkRequestId?: string } };
+      if (this.holdConfirmations && payload?.payload?.linkRequestId) this.heldConfirmations.push(deliver);
+      else this.queue.push(deliver);
+    }
   }
   async flush(): Promise<void> {
     for (let steps = 0, idle = 0; steps < 1_000; steps += 1) {
@@ -305,12 +315,16 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     // replay 移出排除条件块后仍通过(#6572 review);这里执行实际注册的回调,
     // 验证恢复事件是否交给该 peer 的调度器。不是双机故障恢复的端到端验收。
     const callbacks: Array<(peer: string, streamId: string) => void> = [];
+    let linkAccepted!: (peer: string) => void;
     const replayActiveSubscriptions = vi.fn();
     const broadcast = vi.fn();
     const sharedHostStreams = new Map<string, { streamId: string; epoch: number }>();
     if (sameStream) sharedHostStreams.set(peer, { streamId: 'accepted-stream', epoch: 1 });
     acceptedRegistration.runInNewContext({
-      client: { onPeerStreamAccepted: (callback: typeof callbacks[number]) => callbacks.push(callback) },
+      client: {
+        onPeerLinkAccepted: (callback: typeof linkAccepted) => { linkAccepted = callback; },
+        onPeerStreamAccepted: (callback: typeof callbacks[number]) => callbacks.push((peer, stream) => { linkAccepted(peer); callback(peer, stream); }),
+      },
       isProviderSharePeer,
       isScopedPeer,
       transportTimeoutReopen: { isActive: () => false },
@@ -346,6 +360,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
   it.each([false, true])('projects one ordinary timeout recovery (stream callback=%s)', async reliable => {
     const broadcasts = vi.fn();
     let accepted!: (peer: string, stream: string) => void;
+    let linkAccepted!: (peer: string) => void;
     let resolveOpen!: () => void;
     const opened = new Promise<void>(resolve => { resolveOpen = resolve; });
     const loop = createTransportTimeoutReopenLoop({
@@ -354,7 +369,10 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       shouldAbort: () => false,
     });
     acceptedRegistration.runInNewContext({
-      client: { onPeerStreamAccepted: (callback: typeof accepted) => { accepted = callback; } },
+      client: {
+        onPeerLinkAccepted: (callback: typeof linkAccepted) => { linkAccepted = callback; },
+        onPeerStreamAccepted: (callback: typeof accepted) => { accepted = (peer, stream) => { linkAccepted(peer); callback(peer, stream); }; },
+      },
       isProviderSharePeer, isScopedPeer, parseSharedTaskPeer, shortDeviceRef,
       replayActiveSubscriptions: vi.fn(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
       transportTimeoutReopen: loop, broadcast: broadcasts, DEVICE_LINK_PUSH,
@@ -407,7 +425,29 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     }
   });
 
-  it.each([false, true])('互控设备 B 先反向重连时恢复 A→B 订阅，不扰动健康 C（确认能力=%s）', async (confirm) => {
+  it('invalidates ordinary pre-reliable Host state after a verified accept without a timeout recovery', async () => {
+    vi.useFakeTimers();
+    const relay = new RecoveryRelay(false, false);
+    const a = recoveryDesktop(relay, 'desktop-a'), b = recoveryDesktop(relay, 'desktop-b');
+    const broadcast = vi.fn();
+    Object.assign(a.context, {
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false },
+      replayActiveSubscriptions: vi.fn(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+      broadcast, DEVICE_LINK_PUSH,
+    });
+    acceptedRegistration.runInContext(a.context);
+    try {
+      a.client.start(); b.client.start(); await relay.flush();
+      const opened = a.client.openLink('desktop-b', { controllerName: 'A', protocolVersion: 1, appVersion: 'test' });
+      await relay.flush(); await opened;
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
+    } finally {
+      for (const desktop of [a, b]) { desktop.client.stop(); desktop.registry.clearAll(); }
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([{ confirm: false, restart: false }, { confirm: true, restart: false }, { confirm: true, restart: true }])('互控设备 B 先反向重连时恢复 A→B 订阅，不扰动健康 C（$confirm/$restart）', async ({ confirm, restart }) => {
     // #6572 Codex review: B relay reconnect drops A's active subscriptions; B's
     // inbound handshake can restore A's bidirectional transport without any A
     // outbound-accept event. Exercise real clients, handleLinkOpen, remoteSubscribe,
@@ -416,7 +456,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     vi.useFakeTimers();
     const relay = new RecoveryRelay(confirm);
     const a = recoveryDesktop(relay, 'desktop-a');
-    const b = recoveryDesktop(relay, 'desktop-b');
+    let b = recoveryDesktop(relay, 'desktop-b');
     const c = recoveryDesktop(relay, 'desktop-c');
     const refs = [
       { deviceId: 'desktop-b', topics: ['session:remote-b'] },
@@ -477,14 +517,22 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       relay.sockets.get('desktop-b')!.close();
       expect(b.registry.getControllersForTopic('session:remote-b')).toEqual([]);
       expect(b.registry.getKnownControllersForTopic('session:remote-b')).toEqual(['desktop-a']);
+      if (restart) {
+        b.client.stop(); b.registry.clearAll();
+        b = recoveryDesktop(relay, 'desktop-b');
+        b.client.start();
+      }
       await vi.advanceTimersByTimeAsync(10); await relay.flush();
+      relay.holdConfirmations = confirm;
       const reopened = open(b.client, 'desktop-a'); // B recovers first; A receives no reconnect/presence trigger.
       await relay.flush(); await reopened;
+      relay.releaseConfirmations(); await relay.flush();
 
       expect(a.client.isLinkReady('desktop-b')).toBe(true);
       // Legacy reliable peer proves the missing edge with no outbound callback at A.
       // Confirmation-aware peers may need one existing readiness-driven reciprocal open.
-      expect(outboundAccepted.mock.calls.length).toBeLessThanOrEqual(confirm ? 1 : 0);
+      expect(outboundAccepted.mock.calls.length).toEqual(restart ? 1 : 0);
+      expect(a.context.broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
       expect(relay.sent.slice(recoveryStart).filter(({ sender, envelope }) =>
         sender === 'desktop-a' && envelope.kind === 'link-open')).toHaveLength(outboundAccepted.mock.calls.length);
       expect(b.registry.getControllersForTopic('session:remote-b')).toEqual(['desktop-a']);
@@ -501,6 +549,10 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       }
       await relay.flush();
       expect(a.pushes).toContainEqual({ channel: 'maker:event', payload: { recovered: true } });
+      a.context.broadcast.mockClear();
+      const later = open(a.client, 'desktop-b');
+      await relay.flush(); await later;
+      expect(a.context.broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
       expect(a.diagnostic.error).not.toHaveBeenCalled();
     } finally {
       scheduler.teardown();

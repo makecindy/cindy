@@ -430,6 +430,17 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       }));
   }
 
+  override onPeerLinkAccepted(cb: (peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean) => void): () => void {
+    return this.both(super.onPeerLinkAccepted((peer, accepted, continuation) => {
+      if (this.acceptsScopedEvent(this, peer)) cb(peer, accepted, continuation);
+    }), connection => connection.onPeerLinkAccepted((peer, accepted, continuation) => {
+      if (connection === this.legacy && !isScopedPeer(peer)
+        && (this.legacyOptions?.prefersPrimary?.(accepted)
+          ?? (this.legacyOptions?.primaryCapability && accepted?.capabilities?.includes(this.legacyOptions.primaryCapability)))) return;
+      if (this.acceptsScopedEvent(connection, peer)) cb(peer, accepted, continuation);
+    }));
+  }
+
   override onPeerRouteStateChanged(cb: (change: DeviceLinkPeerRouteStateChanged) => void): () => void {
     return this.both(super.onPeerRouteStateChanged(change => { if (this.acceptsScopedEvent(this, change.deviceId)) cb(change); }),
       connection => connection.onPeerRouteStateChanged(change => { if (this.acceptsScopedEvent(connection, change.deviceId)) cb(change); }));

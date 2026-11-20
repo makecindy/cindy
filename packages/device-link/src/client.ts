@@ -653,6 +653,8 @@ export function classifyConnectionIssue(
 export type InboundFrameHandler = (env: Envelope) => unknown | Promise<unknown>;
 
 interface PendingRequest {
+  /** Local-only evidence: this outbound open continues an inbound confirmation. */
+  inboundContinuation?: { streamId: string; connectionEpoch: number; linkGeneration: number };
   /** Timers may be suspended; retire an overdue request before replaying its payload. */
   expireIfOverdue(): boolean;
   /** First successful socket write starts the response budget; never a delivery receipt. */
@@ -1008,6 +1010,7 @@ export class DeviceLinkClient {
   private presenceHandlers = new Set<(snap: PresenceSnapshot) => void>();
   private frameHandlers = new Set<InboundFrameHandler>();
   private peerStreamAcceptedHandlers = new Set<(peer: string, streamId: string, accepted?: LinkAcceptPayload) => void>();
+  private peerLinkAcceptedHandlers = new Set<(peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean) => void>();
   private inboundPeerReleasedHandlers = new Set<(peer: string) => void>();
   private issueHandlers = new Set<(issue: DeviceLinkConnectionIssue | null) => void>();
   private peerRouteStateHandlers = new Set<
@@ -1501,6 +1504,12 @@ export class DeviceLinkClient {
   onPeerStreamAccepted(cb: (peer: string, streamId: string, accepted?: LinkAcceptPayload) => void): () => void {
     this.peerStreamAcceptedHandlers.add(cb);
     return () => this.peerStreamAcceptedHandlers.delete(cb);
+  }
+
+  /** Verified outbound accept, including Hosts without a reliable stream. */
+  onPeerLinkAccepted(cb: (peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean) => void): () => void {
+    this.peerLinkAcceptedHandlers.add(cb);
+    return () => this.peerLinkAcceptedHandlers.delete(cb);
   }
 
   /** 目标设备是否已完成 link-open / link-accept，可安全进入 streaming tier。 */
@@ -2552,7 +2561,11 @@ export class DeviceLinkClient {
       };
       let timer = setTimeout(expire, sendWaitMs);
 
+      const inboundPeer = env.kind === 'link-open' && env.dst ? this.peerTransport.get(env.dst) : undefined;
       const pendingRequest: PendingRequest = {
+        inboundContinuation: inboundPeer?.pendingLinkConfirmation && inboundPeer.remoteStreamId
+          ? { streamId: inboundPeer.remoteStreamId, connectionEpoch: this.connEpoch,
+              linkGeneration: inboundPeer.linkGeneration } : undefined,
         expireIfOverdue: () => {
           // Some native monotonic clocks pause in deep sleep. Either elapsed
           // clock reaching the budget retires this request: wall time covers
@@ -3493,6 +3506,12 @@ export class DeviceLinkClient {
         if (p && p.expectKind === env.kind) {
           if (env.kind === 'link-accept' && env.src) {
             const accepted = env.payload as LinkAcceptPayload | undefined;
+            const priorPeer = this.getPeerTransport(env.src);
+            const continuation = p.inboundContinuation;
+            const inboundContinuation = !!continuation && priorPeer.receiveReady
+              && continuation.connectionEpoch === this.connEpoch
+              && continuation.linkGeneration === priorPeer.linkGeneration
+              && continuation.streamId === accepted?.transportStreamId;
             this.setPeerCapabilities(
               env.src,
               accepted?.capabilities,
@@ -3515,6 +3534,10 @@ export class DeviceLinkClient {
               acceptedLinkGeneration,
             );
             peer.outboundExplicitlyClosed = false;
+            for (const cb of this.peerLinkAcceptedHandlers) {
+              try { cb(env.src, accepted, inboundContinuation); }
+              catch (error) { this.log.error('peer link accepted handler threw', error); }
+            }
             // 注意:不得在此将 linkAcceptedInbound 改回 false。互控场景下本机可能
             // 既是对端的被控端(入站已 accept)又是其控制端(本帧 accept 出站
             // link),两个方向共享同一份 PeerTransportState——覆盖会让入站方向
