@@ -1,4 +1,4 @@
-import { assembleSystemPromptSections, TASK_SYSTEM_PROMPT, type AgentKind, type Maker } from '@cindy/maker-core';
+import { assembleSystemPromptSections, TASK_SYSTEM_PROMPT, type EngineKind, type Maker } from '@cindy/maker-core';
 import { parseRuntimePluginSettings } from '../../shared/pluginRuntime.js';
 import { RuntimePluginControlError, type createRuntimePluginControl } from '../cindy-brain/runtimeControl.js';
 import { resolveGhostUserHookModel, withGhostUserHookModel } from '../cindy-brain/subscriptionGateway.js';
@@ -23,8 +23,11 @@ export function createRuntimePluginTaskPrompt({ maker, ghostTaskSystemPrompt, re
   readSessionRuntimeProfiles: ReadProfiles;
 }) {
   const appliedTaskPrompts = new WeakMap<Awaited<ReturnType<typeof maker.createSession>>, string>();
-  const readTaskPrompt = (sessionId: string, agentKind: AgentKind, agentDeviceId?: string | null) =>
-    ghostTaskSystemPrompt(sessionId, agentKind === 'claude-code' ? 'cc' : agentKind, !(agentKind === 'pi' && agentDeviceId));
+  // Plugin engines receive no Cindy system prompt (docs/plans/acp-plugin-bridge.md), so no task prompt either.
+  const readTaskPrompt = (sessionId: string, agentKind: EngineKind, agentDeviceId?: string | null) =>
+    agentKind === 'acp'
+      ? ''
+      : ghostTaskSystemPrompt(sessionId, agentKind === 'claude-code' ? 'cc' : agentKind, !(agentKind === 'pi' && agentDeviceId));
   const createSessionWithRuntimePlugins = (o: CreateOpts, signal?: AbortSignal) => {
     if (o.id && maker.getSession(o.id)) return maker.createSession(o, signal);
     const taskPrompt = o.id ? readTaskPrompt(o.id, o.agentKind, o.agentDeviceId) : '';

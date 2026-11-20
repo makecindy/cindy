@@ -119,6 +119,8 @@ import type {
 import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
+import { isPluginEngineKind } from '../../../shared/agentKindConversion';
+import { isPluginEngineTask, PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import { persistUserMessage } from '../messagePersistence';
 import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
@@ -377,13 +379,31 @@ interface QueuedSend {
 
 type DetachDrainOutcome = 'rewire' | 'cancelled';
 
+/**
+ * 插件引擎任务第一期不接 IM 渠道(docs/plans/acp-plugin-bridge.md):接线、换绑与
+ * 读行入口都明确拒绝,不把 'acp' 当成内置引擎跑。
+ */
+const IM_CHANNEL_FEATURE = 'IM channels';
+
+/** A Maker session running on a built-in engine — the only kind an IM channel drives. */
+type BuiltinMakerSession = MakerSession & { agentKind: AgentKind };
+
+/** Refuses only plugin-engine sessions; every other session keeps its existing IM path. */
+function runsOnBuiltinEngine(session: MakerSession): session is BuiltinMakerSession {
+  return !isPluginEngineTask(session);
+}
+
+function refusePluginEngineRow(row: { agentKind: string }): void {
+  if (isPluginEngineKind(row.agentKind)) throw new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE);
+}
+
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
   preserveSessionConfig: boolean;
   /** Both cancel this channel's turn; only runtime disposal retires late replacements. */
   disposalIntent?: 'runtime' | 'observation';
-  /** Maker session (in-process). */
-  makerSession: MakerSession;
+  /** Maker session (in-process), always on a built-in engine (see IM_CHANNEL_FEATURE). */
+  makerSession: BuiltinMakerSession;
   /** 渠道 user id of the bot's owner — kept here so listeners can address replies. */
   userId: string;
   /** 当前 session 的受管工作目录；本地生成图片仅允许从这里物化。 */
@@ -842,6 +862,7 @@ export function createTurnRunner(
     if (!row?.workingDir || row.status === 'deleted' || row.status === 'archived' || row.orcaRole === 'worker') {
       throw new Error('Notification target session is unavailable');
     }
+    refusePluginEngineRow(row);
     return {
       row: { id: row.id, agentKind: toCoreAgentKind(row.agentKind), workingDir: row.workingDir,
         model: row.model, effort: row.effort, permissionMode: row.permissionMode, fastMode: row.fastMode,
@@ -1005,6 +1026,8 @@ export function createTurnRunner(
         .limit(1);
       const row = rows[0];
       if (row?.workingDir) {
+        // 接管到插件引擎任务:明确报错,不按 toCoreAgentKind 落成 Claude 去跑。
+        refusePluginEngineRow(row);
         return {
           row: {
             id: row.id,
@@ -2267,6 +2290,7 @@ export function createTurnRunner(
       if (!row.workingDir) {
         throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} missing after deferred agent switch`);
       }
+      refusePluginEngineRow(row);
       const agentKind = toCoreAgentKind(row.agentKind);
       const startOverride = getSessionRuntimeStartOverride(sessionId, agentKind, row.agentDeviceId);
       hydrateSessionProvider(sessionId, startOverride.providerId === undefined ? row.providerId ?? null : startOverride.providerId);
@@ -2320,6 +2344,8 @@ export function createTurnRunner(
       throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} detached while preparing its runtime`);
     }
     if (current === previous) return;
+    // 延迟切换可能把任务换到了插件引擎:渠道不接,明确失败而不是继续驱动它。
+    if (!runsOnBuiltinEngine(current)) throw new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE);
 
     rebindSessionOutput(state, current, userId);
     wireSessionToIpcExternal(current);
@@ -2379,7 +2405,7 @@ export function createTurnRunner(
   }
 
   /** Rebind observation without discarding accepted or queued IM messages. */
-  function rebindSessionOutput(state: SessionState, current: MakerSession, userId: string): void {
+  function rebindSessionOutput(state: SessionState, current: BuiltinMakerSession, userId: string): void {
     for (const unsubscribe of state.unsubscribers) {
       try {
         unsubscribe();
@@ -2656,6 +2682,8 @@ export function createTurnRunner(
       vendorOptions,
       resumeSessionId: row.sdkSessionId ?? undefined,
     });
+    // createSession 对已活着的同 id 实例直接复用;它若跑在插件引擎上,渠道不接线。
+    if (!runsOnBuiltinEngine(makerSession)) throw new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE);
 
     // 把 desktop 端的 IPC fan-out (broadcastToAllWindows + messagePersistBroadcaster
     // 的 assistant / tool_use / tool_result / thinking 落库 + 默认 interaction
@@ -4953,6 +4981,8 @@ export function createTurnRunner(
 
   return {
     attachSessionOutput: (session, userId, route, source) => {
+      // 插件引擎任务不接 IM 渠道:不把它的输出转播到渠道。
+      if (!runsOnBuiltinEngine(session)) return;
       const existing = sessionStates.get(session.id);
       if (existing) {
         existing.replyRequesterIsOwner = undefined;

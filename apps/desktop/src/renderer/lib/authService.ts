@@ -36,6 +36,8 @@ export interface User {
   orgSlug: string | null;
   /** 企业 logo(auth console 组织设置上传);个人身份或未设置为 null。 */
   orgLogoUrl: string | null;
+  tapdbChargeAlias?: string;
+  tapdbUsageAlias?: string;
   passportId: string;
 }
 

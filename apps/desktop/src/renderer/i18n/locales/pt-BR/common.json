@@ -1443,6 +1443,7 @@
     "UPSTREAM_ERROR": "Erro no servidor upstream (5xx). Tente novamente mais tarde",
     "UPSTREAM_UNREACHABLE": "Não foi possível acessar o endpoint. Verifique sua rede e a URL base",
     "TIMEOUT": "A conexão expirou. Verifique sua rede e a URL base",
+    "CERT_ERROR": "A verificação do certificado falhou. Verifique se o nome do host da URL base corresponde ao certificado, assim como a cadeia de certificados e a configuração de confiança da CA da sua organização.",
     "UNKNOWN": "Erro desconhecido. Consulte os logs para mais detalhes",
     "upstreamToast": "Falha na requisição ao provedor \"{{provider}}\": {{message}}"
   },
@@ -1454,6 +1455,10 @@
     "details": "Detalhes do erro"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Banco de dados local danificado",
+      "description": "Foi detectada uma corrupção no banco de dados. O acesso foi interrompido para proteger seus dados. Você pode tentar reabrir os dados locais. Se falhar, copie os detalhes técnicos e entre em contato com o suporte. Não sobrescreva nem exclua os arquivos do banco de dados."
+    },
     "schemaLease": {
       "title": "Ainda não é possível abrir os dados locais",
       "retry": "Reabrir dados locais",
@@ -2856,9 +2861,7 @@
       "autoUpdateDisabledToast": "Instalação de atualizações durante a inatividade desativada",
       "autoUpdateSaveFailed": "Não foi possível salvar as configurações de atualização automática",
       "analyticsLabel": "Estatísticas de uso",
-      "analyticsDescription": "Ajuda a entender com que frequência Cindy é iniciado e permanece em uso. Envia informações do dispositivo e do ambiente de uso — como modelo do dispositivo, versão do sistema operacional, versão do aplicativo e identificador do dispositivo — além do ID da sua conta após entrar; nunca conversas, arquivos ou prompts. Desativar esta opção interrompe o envio imediatamente.",
-      "productTokenUsage": "Compartilhar uso de modelos",
-      "productTokenUsageHint": "Os novos tokens desta conta neste dispositivo são agrupados por origem e modelo na sua região antes do envio ao TapDB.",
+      "analyticsDescription": "Se você ativar esta opção, usaremos pseudônimos no lugar dos IDs da sua conta e do seu dispositivo. As visitas recorrentes e os totais de uso por modelo nos ajudam a melhorar o produto. Essas estatísticas não incluem suas conversas, arquivos ou prompts.",
       "analyticsEnabledToast": "Estatísticas de uso ativadas",
       "analyticsDisabledToast": "Estatísticas de uso desativadas",
       "analyticsSaveFailed": "Não foi possível salvar as configurações de estatísticas de uso",
@@ -3783,6 +3786,8 @@
           "edit": "Editar",
           "editFailed": "Confira a URL, o protocolo e a chave e tente novamente.",
           "editNote": "Deixe a chave em branco para manter a credencial lida. Alterar a URL ou o protocolo exige uma nova chave.",
+          "useSavedCredential": "Usar credenciais salvas",
+          "confirmDestination": "Usar as credenciais salvas do Claude Code neste endereço?",
           "name": "Nome de exibição",
           "baseUrl": "URL base",
           "protocol": "Protocolo da API",
@@ -4190,6 +4195,25 @@
         "refreshFailed": "Não foi possível atualizar a lista de modelos — tente novamente mais tarde",
         "refreshReconnect": "Não foi possível atualizar a lista de modelos. Reconecte este provedor e tente novamente.",
         "refreshFetchDisabled": "A busca no catálogo remoto de modelos está desativada — atualização ignorada",
+        "withdrawn": {
+          "refreshFound": "Modelos que não são mais oferecidos: {{count}}",
+          "refreshAdded": "Novos modelos: {{added}}. Não oferecidos mais: {{count}}",
+          "refreshSuspicious": "Modelos não retornados desta vez: {{count}}. A lista pode estar incompleta",
+          "refreshAddedSuspicious": "Novos modelos: {{added}}. Não retornados desta vez: {{count}}. A lista pode estar incompleta",
+          "review": "Revisar modelos",
+          "heading": "Modelos que não são mais oferecidos",
+          "intro": "Ao atualizar {{provider}}, o serviço não retornou estes modelos. Selecione os que deseja remover. Os motores que ainda os listam não são afetados.",
+          "suspicious": "Estão faltando muito mais modelos do que o normal. O serviço pode ter retornado uma lista incompleta. Atualize de novo mais tarde para confirmar ou selecione apenas os modelos que você sabe que foram retirados.",
+          "selectAll": "Selecionar todos",
+          "selected": "{{count}} de {{total}} selecionados",
+          "consequence": "Os modelos removidos deixam de aparecer na seleção de modelos e aparecerão como indisponíveis onde forem usados. Se o serviço voltar a oferecê-los, atualize para adicioná-los de novo.",
+          "confirm": "Remover modelos ({{count}})",
+          "cancel": "Manter modelos",
+          "removed": "Modelos removidos: {{count}}",
+          "cleanupIncomplete": "Modelos removidos: {{count}}. Não foi possível limpar algumas configurações de exibição ou desativação",
+          "stale": "A conexão mudou e não há modelos para remover. Atualize de novo para revisar",
+          "removeFailed": "Não foi possível remover os modelos"
+        },
         "disableModel": "Desativar este modelo",
         "paymentRequired": "Pago",
         "paymentUnlock": "Pague para desbloquear",
@@ -4481,6 +4505,7 @@
         "authorizedToast": "Login realizado em {{name}}",
         "authorizeFailed": "Não foi possível entrar em {{name}}. Tente novamente.",
         "nameLabel": "Nome de exibição",
+        "geminiImageKeyNote": "Ao salvar, esta chave será usada nas conversas desta conexão e nas próximas imagens geradas pelo Gemini. Para gerar apenas imagens, desmarque todos os modelos de conversa.",
         "onlyAgentNote": "Este provedor só oferece suporte a {{agent}}",
         "endpointLabel": "URL base de {{agent}}",
         "noAuthNote": "Este proxy não exige chave de cliente; Cindy remove as credenciais de assinatura da CLI antes de encaminhar.",
@@ -8036,6 +8061,7 @@
           "accessDenied": "Esta operação de plugin não é permitida ou foi cancelada.",
           "notConfigured": "O marketplace de plugins não está disponível neste ambiente.",
           "invalidPackage": "Este pacote de plugin é inválido e não pode ser instalado. Entre em contato com o publicador.",
+          "downloadAuthorizationExpired": "A autorização de download do plugin expirou. Verifique a data e a hora do sistema antes de iniciar uma nova instalação.",
           "downloadTimeout": "O tempo limite do download do plugin foi excedido. Tente novamente mais tarde.",
           "downloadFailed": "Falha no download do plugin. Verifique sua conexão e tente novamente.",
           "brokerRedirectPortRequired": "Este plugin declara um intermediário de autorização, mas falta redirectPort na mesma configuração OAuth, por isso ele não pode ser instalado pelo marketplace de plugins. Entre em contato com o publicador para adicionar o campo e publicar uma nova versão.",
@@ -8356,6 +8382,8 @@
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
         "agentModelPreferences": "Ler e editar seus modelos favoritos e ler seus modelos usados recentemente",
         "agentModelPreferencesDetail": "Pode ler os modelos favoritos e os usados recentemente neste computador, incluindo o esforço de raciocínio e Fast, e adicionar, alterar ou remover favoritos. As alterações também aparecem no seletor de modelo do Cindy. Os modelos escolhidos no plugin não são adicionados aos recentes. Não inclui modelos dos seus outros computadores nem compartilhados com você, e nenhuma credencial é compartilhada.",
+        "harnesses": "Fornece mecanismos de execução: {{names}}",
+        "harnessesDetail": "Nas suas tarefas, pode ler e gravar no diretório de trabalho, executar comandos e usar as mesmas ferramentas da Cindy que o Pi integrado.",
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
         "agentErrandDetail": "As tarefas criadas aparecem na lista de tarefas da Cindy, onde você pode acompanhar o progresso e continuar a conversa.",
         "agentSchedule": "Pode pedir que você crie uma automação",
@@ -13180,6 +13208,7 @@
           "overloadRetryingNoCount": "O serviço do modelo está ocupado. Tentando novamente de forma automática…",
           "overloadFailed": "⚠️ O serviço do modelo está ocupado — o serviço de origem está sem capacidade no momento. Reenvie esta mensagem aqui para tentar novamente ou mude para outro modelo no Cindy. (Clicar em “Tentar novamente” no app para desktop também continua a tarefa, mas o resultado não volta para esta mensagem.)"
         },
+        "audioInputUnavailable": "Esta conexão com o modelo não permite processar áudio diretamente. Peça à Cindy que transcreva o áudio antes de continuar.",
         "toolLoop": {
           "generic": "O modelo chamou ferramentas repetidamente vezes demais, então o Cindy interrompeu este turno para evitar um loop infinito. Envie uma nova mensagem para continuar.",
           "consecutive": "O modelo chamou a mesma ferramenta {{n}} vezes seguidas, então o Cindy interrompeu este turno para evitar um loop infinito. Envie uma nova mensagem para continuar.",
@@ -14227,6 +14256,8 @@
         "fastBadge": "Rápido"
       },
       "source": {
+        "lastConfirmed": "Última atualização: {{time}}",
+        "unconfirmed": "Lista de modelos desatualizada",
         "unavailable": "Modelo indisponível",
         "reconnect": "Reconectar",
         "manage": "Gerenciar fonte",
@@ -14335,6 +14366,32 @@
           "bypassPermissions": {
             "label": "Acesso total",
             "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
+          }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmar sempre",
+            "description": "Você confirma quando o Agent pede permissão. O Cindy não consegue bloquear ações para as quais o Agent não pede confirmação."
+          },
+          "default": {
+            "label": "Padrão",
+            "description": "O agente trabalha do jeito padrão dele; você confirma as solicitações de permissão."
+          },
+          "acceptEdits": {
+            "label": "Aceitar edições",
+            "description": "O agente edita arquivos diretamente; você confirma as outras solicitações de permissão."
+          },
+          "auto": {
+            "label": "Automático",
+            "description": "O agente decide o que precisa de confirmação; você confirma as solicitações que ele fizer."
+          },
+          "plan": {
+            "label": "Só planejar",
+            "description": "O agente só analisa e planeja; não edita arquivos."
+          },
+          "bypassPermissions": {
+            "label": "Permitir tudo",
+            "description": "Todas as permissões pedidas pelo Agent são concedidas automaticamente."
           }
         }
       }
@@ -14810,6 +14867,16 @@
       "nowDefault": "Agora é o padrão",
       "switchToSteer": "Orientar por padrão",
       "switchToQueue": "Colocar na fila por padrão"
+    },
+    "pluginEngines": {
+      "group": "Mecanismos de plugins",
+      "genericName": "Mecanismo de plugin",
+      "defaultModel": "Modelo padrão",
+      "defaultModelHint": "Usa o padrão do próprio mecanismo",
+      "unavailable": "Indisponível",
+      "engineMissing": "O plugin que fornece este mecanismo está desativado ou foi desinstalado.",
+      "worktreeUnsupported": "Os mecanismos de plugins ainda não conseguem iniciar tarefas em uma Worktree. Desative a Worktree para enviar.",
+      "modelChangeFailed": "Não foi possível trocar o modelo"
     }
   },
   "onboarding": {
@@ -15108,6 +15175,8 @@
     },
     "runningStatus": {
       "currentRate": "Última velocidade",
+      "lastRequestRate": "Média da última solicitação",
+      "recentTokenRate": "Recente {{rate}} tok/s",
       "waitingSample": "Amostragem",
       "averageRate": "Média do turno",
       "rateHistory": "Histórico de velocidade de geração",
@@ -15264,6 +15333,11 @@
       "actionExpired": "A autorização da sessão para esta ação expirou. Confira a execução mais recente da automação.",
       "actionRecovered": "A autorização para esta ação expirou. A mesma automação foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
+      "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS desse dispositivo. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_timeout": "A conexão com o GitHub expirou em {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_auth": "Entre novamente no GitHub em {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_rate-limit": "O GitHub limitou as solicitações de {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de solicitações.",
       "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
@@ -15977,6 +16051,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent não está disponível no outro computador. Instale-o ou entre na conta dele lá, ou escolha outro Agent.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este computador não consegue restaurar o estado anterior da sessão. Selecione um modelo de outro computador ou provedor para continuar com uma transferência de contexto. As mensagens existentes são mantidas.",
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy nos dois computadores.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "O mecanismo do plug-in não conseguiu restaurar a conversa anterior. Suas mensagens foram preservadas. Escolha outro mecanismo ou inicie uma nova tarefa.",
       "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Crie uma nova sessão pela lista de sessões e copie o conteúdo necessário para continuar. A sessão original e as mensagens na fila são mantidas.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de compartilhamento definido pelo proprietário. Escolha outro modelo disponível para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não liberou para você este provedor ou o modelo selecionado. Se for seu próprio computador, ative “Permitir uso remoto” neste provedor lá. Se alguém compartilhou com você, peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento. Você também pode escolher outro modelo.",
@@ -17172,6 +17247,12 @@
       "unspecifiedDir": "Diretório não especificado"
     },
     "workdirBrowse": {
+      "previewFile": "Pré-visualizar",
+      "filterDirectory": "Filtrar esta pasta…",
+      "projectTree": "Árvore do projeto",
+      "systemPreview": "Prévia do sistema",
+      "listView": "Lista",
+      "gridView": "Miniaturas",
       "backToProjects": "Voltar para Projetos",
       "switchProject": "Trocar projeto",
       "activeSessionCount_one": "{{count}} sessão ativa",
@@ -17541,6 +17622,7 @@
       "promote": {
         "menu": "Promover a automação de projeto",
         "noWorkingDir": "Não é possível promover um agendamento sem diretório de trabalho",
+        "pluginEngine": "Mecanismos de plugin só funcionam neste computador; não é possível promover este agendamento a automação do projeto",
         "success": "Promovido a automação de projeto"
       },
       "editProject": {
@@ -17817,6 +17899,7 @@
         "selectThread": "Selecione uma sessão de destino",
         "selectProject": "Selecione um diretório de projeto",
         "modelUnavailable": "O modelo {{model}} não está mais disponível. Selecione outro modelo.",
+        "pluginEngineUnavailable": "O mecanismo de plugin selecionado não está disponível agora. Selecione outro modelo.",
         "reasoningInvalid": "O raciocínio deve ser um de {{values}}",
         "preRunHookCommandRequired": "Insira o comando de verificação prévia",
         "preRunPluginRequired": "Escolha um plugin para a verificação prévia",
@@ -19555,6 +19638,7 @@
       "permissionLabel": "Modo de permissão",
       "noAvailableModels": "Nenhum modelo {{agent}} disponível. Verifique a conexão e as credenciais do provedor em Configurações.",
       "savedModelUnavailable": "O modelo salvo ou sua origem não está disponível.",
+      "pluginEngineNoWorktree": "Workers com mecanismo de plugin não podem usar um worktree. Desative a opção de worktree para criar este Worker.",
       "reselectModel": "Escolher um modelo",
       "effortLabel": "Esforço de raciocínio",
       "initialTaskLabel": "Tarefa inicial",

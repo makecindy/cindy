@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   binaryPath: '',
   ripgrepPath: '',
   userDataPath: '',
+  remoteByom: false,
 }));
 
 vi.mock('../cli-proxy-bridge.js', () => ({
@@ -69,7 +70,10 @@ vi.mock('../grok-oauth-login.desktop.js', () => ({
 }));
 
 vi.mock('../custom-provider-header-secrets.js', () => ({
-  listCustomProvidersWithSecureHeaders: async () => [],
+  listCustomProvidersWithSecureHeaders: async () => state.remoteByom ? [{
+    id: 'shared-loopback', name: 'Shared loopback', auth: { method: 'none' },
+    runtimes: { pi: { baseUrl: 'http://127.0.0.1:23425/v1', wireProtocol: 'openai-chat', models: [{ id: 'local-model' }] } },
+  }] : [],
 }));
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({
@@ -163,6 +167,7 @@ describe('buildPiAgent roster prompt assembly', () => {
   let workingDir = '';
 
   beforeEach(() => {
+    state.remoteByom = false;
     state.args = [];
     root = mkdtempSync(path.join(tmpdir(), 'pi-roster-assembly-'));
     vi.spyOn(os, 'homedir').mockReturnValue(root);
@@ -191,6 +196,25 @@ describe('buildPiAgent roster prompt assembly', () => {
     vi.restoreAllMocks();
     setXdGatewayModels([]);
     rmSync(root, { recursive: true, force: true });
+  });
+
+  // #9148, unit: real Desktop factory -> native provider resolver -> PiAgent
+  // must carry the SSH probe. Previously only xAI forwarding was wired; absent
+  // hooks would keep reachable BYOM statically blocked. No native RPC/SSH claimed.
+  it('passes the selected remote BYOM to the execution-host reachability probe', async () => {
+    state.remoteByom = true;
+    const probe = vi.fn(async () => false);
+    const transport = vi.fn();
+    const agent = buildPiAgent({ logger, probeRemotePiProviderEndpoint: probe, getRemotePiTransport: transport,
+      capabilityAdditions: { availableModels: [{ id: 'local-model', displayName: 'Local', contextWindow: 200_000,
+        efforts: [], defaultEffort: null }] } });
+    try {
+      await expect(agent!.startSession({ sessionId: 'remote-probe-wiring', workingDir,
+        model: 'local-model', providerId: 'shared-loopback', remoteHostId: 'shared-network-host' }))
+        .rejects.toThrow('[REMOTE_LOCAL_ONLY_PROVIDER]');
+      expect(probe).toHaveBeenCalledExactlyOnceWith('shared-network-host', 'http://127.0.0.1:23425/v1');
+      expect(transport).not.toHaveBeenCalled();
+    } finally { await agent!.dispose(); }
   });
 
   // GUI launch has no shell proxy. The bridge transport tests cover PAC/CONNECT;

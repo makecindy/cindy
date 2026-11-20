@@ -5,10 +5,13 @@ interface RateCounters {
   outputTokens: number;
 }
 
-export interface RateSample extends RateCounters {
+export interface RateSample {
+  /** Available for locally observed points; host trace only carries speed and position. */
+  outputTokens?: number;
   /** Cumulative measured generation time across turns, excluding unmeasured gaps. */
   durationMs: number;
   rate: number;
+  kind?: SpeedReading['kind'];
 }
 
 // Millisecond-scale usage batches are not meaningful throughput measurements.
@@ -33,6 +36,8 @@ export interface RateHistory {
   peak: number;
   latestRate: number | null;
   latestSampleAt?: number;
+  hostMeasuredAt?: number;
+  latestKind?: SpeedReading['kind'];
   /** Host speed mode: chart x-offset of the current turn and its last elapsed time. */
   speedOffsetMs?: number;
   speedElapsedMs?: number;
@@ -150,6 +155,7 @@ export function recordRunningTokenRate(
     ...observed,
     baseline,
     samples,
+    latestKind: undefined,
     peak: Math.max(current.peak, rate),
     latestRate: rate,
     latestSampleAt: input.now ?? Date.now(),
@@ -198,7 +204,20 @@ export function clearRateHistoryCache(): void {
  * maker-core `calibrated-token-speed.ts`). Optional additive status field: old hosts omit it and the
  * counter-based history above stays in charge.
  */
+export interface SpeedReading {
+  kind: 'stream' | 'request';
+  rate: number;
+  /** Generation-time chart position and real measurement time on the host. */
+  atMs: number;
+  measuredAt: number;
+}
+
 export interface TokenSpeedSnapshot {
+  /** A null value explicitly means there is no qualifying measurement yet. */
+  measurement?: { latest: SpeedReading | null; average: number | null; sampleAgeMs?: number };
+  /** Viewer-local projection set at status ingestion. Never read from the wire. */
+  localSampleAt?: number;
+
   /** Sliding-window rate while streaming; final average once the turn ended. */
   rate: number;
   /** Tokens / elapsed generation time (snapped to real output at turn end). */
@@ -246,13 +265,47 @@ export function readTokenSpeedSnapshot(value: unknown): TokenSpeedSnapshot | und
   if (!finite(speed.rate) || !finite(speed.average) || !finite(speed.tokens) ||
     !finite(speed.elapsedMs) || typeof speed.streaming !== 'boolean') return undefined;
   const trace = normalizeGenerationTrace(speed.trace);
+  const measurement = speed.measurement;
+  const latest = measurement?.latest;
+  let reading: SpeedReading | null | undefined;
+  if (latest === null) reading = null;
+  else if (latest && finite(latest.rate) && latest.rate > 0 && finite(latest.atMs) &&
+      finite(latest.measuredAt) && (latest.kind === 'stream' || latest.kind === 'request')) {
+    reading = { kind: latest.kind, rate: latest.rate, atMs: latest.atMs, measuredAt: latest.measuredAt };
+  }
   return { rate: speed.rate, average: speed.average, tokens: speed.tokens,
     ...(trace ? { trace } : {}),
+    ...(measurement && reading !== undefined && (measurement.average === null || finite(measurement.average))
+      ? { measurement: { average: measurement.average, latest: reading,
+        ...(reading && finite(measurement.sampleAgeMs) ? { sampleAgeMs: measurement.sampleAgeMs } : {}) } } : {}),
     elapsedMs: speed.elapsedMs, streaming: speed.streaming,
     ...(finite(speed.totalOutputTokens) && speed.totalOutputTokens >= speed.tokens
       ? { totalOutputTokens: speed.totalOutputTokens } : {}),
     ...(finite(speed.peak) ? { peak: speed.peak } : {}),
     ...(readRequestMark(speed.request) ? { request: readRequestMark(speed.request) } : {}) };
+}
+
+/** Map a host sample into the receiving clock. Older hosts only provide a timestamp. */
+export function tokenSpeedSampleAt(speed: TokenSpeedSnapshot, now: number): number | undefined {
+  const reading = speed.measurement?.latest;
+  if (!reading) return undefined;
+  const age = speed.measurement?.sampleAgeMs;
+  return speed.localSampleAt ?? (age === undefined ? Math.min(now, reading.measuredAt) : now - age);
+}
+
+/** Anchor the sample before storing it so opening a view later cannot restart its lifetime. */
+export function receiveTokenSpeedSnapshot(
+  value: unknown, previous?: TokenSpeedSnapshot, now = Date.now(),
+): TokenSpeedSnapshot | undefined {
+  const speed = readTokenSpeedSnapshot(value);
+  if (!speed) return undefined;
+  const sampleAt = tokenSpeedSampleAt(speed, now);
+  if (sampleAt === undefined) return speed;
+  const sameSample = previous?.measurement?.latest?.measuredAt === speed.measurement?.latest?.measuredAt;
+  return {
+    ...speed,
+    localSampleAt: sameSample ? Math.min(previous?.localSampleAt ?? sampleAt, sampleAt) : sampleAt,
+  };
 }
 
 /** Record a host speed snapshot into the same chart model as counter samples. */
@@ -270,7 +323,7 @@ export function recordTokenSpeed(
   const lastSampleDuration = history.samples.at(-1)?.durationMs;
   const baseOffset = reset ? (lastSampleDuration ?? 0) : (history.speedOffsetMs ?? 0);
   // Keep plotted points monotonic when a mid-turn settle rewinds elapsedMs so sampling does not stall.
-  const offset = !reset &&
+  const offset = !speed.measurement && !reset &&
     lastSampleDuration !== undefined &&
     baseOffset + speed.elapsedMs < lastSampleDuration
     ? lastSampleDuration - speed.elapsedMs
@@ -283,6 +336,14 @@ export function recordTokenSpeed(
   // A share needs both numbers from the same request.
   const shareTokens = newMark && request.thinkingTokens !== undefined && (request.outputTokens ?? 0) > 0
     ? { thinking: request.thinkingTokens, output: request.outputTokens! } : undefined;
+  const reading = speed.measurement?.latest;
+  const measured = speed.measurement === undefined && speed.streaming && speed.rate > 0;
+  const now = input.now ?? Date.now();
+  // Host time identifies a reading; its age and first receipt determine local expiry.
+  const sampleAt = tokenSpeedSampleAt(speed, now);
+  const sampleTime = sampleAt !== undefined && sameTurn && reading?.measuredAt === history.hostMeasuredAt
+    ? Math.min(sampleAt, history.latestSampleAt ?? sampleAt)
+    : sampleAt;
   const next: RateHistory = {
     ...history,
     ...(newMark ? {
@@ -323,19 +384,38 @@ export function recordTokenSpeed(
     speedOffsetMs: offset,
     speedElapsedMs: speed.elapsedMs,
     peak: Math.max(history.startedAt !== startedAt ? 0 : history.peak, speed.peak ?? 0,
-      speed.streaming ? speed.rate : 0),
-    // The final average has its own UI field. It is not a new recent-speed sample.
-    // While a new request warms up (streaming with rate 0), clear any stale previous-request rate.
-    latestRate: speed.streaming
-      ? (speed.rate > 0 ? speed.rate : null)
-      : (reset ? null : history.latestRate),
-    latestSampleAt: speed.streaming
-      ? (speed.rate > 0 ? (input.now ?? Date.now()) : undefined)
-      : (reset ? undefined : history.latestSampleAt),
+      reading?.rate ?? (measured ? speed.rate : 0)),
+    // Neither a pause nor request warm-up is a measurement. Keep the original expiry.
+    hostMeasuredAt: reading?.measuredAt,
+    latestKind: reading?.kind,
+    latestRate: speed.measurement ? reading?.rate ?? null : measured ? speed.rate : reset ? null : history.latestRate,
+    latestSampleAt: speed.measurement ? sampleTime : measured ? now : reset ? undefined : history.latestSampleAt,
   };
+  if (speed.measurement) {
+    // A returning client can reconstruct the host curve even if its first frame is a pause.
+    // Never append the same settled point on every status refresh.
+    const latest = reading && { durationMs: baseOffset + reading.atMs, rate: reading.rate, kind: reading.kind };
+    const chart = speed.trace?.speed;
+    const settledTimes = new Set(speed.trace?.requestRateTimes);
+    const points: RateSample[] = chart?.length
+      ? [
+          ...history.samples.filter(sample => sample.durationMs <= baseOffset),
+          ...chart.map(([atMs, rate]): RateSample => ({
+            durationMs: baseOffset + atMs,
+            rate,
+            kind: settledTimes.has(atMs) ? 'request' : 'stream',
+          })),
+        ]
+      : [...history.samples];
+    if (latest && latest.durationMs >= (points.at(-1)?.durationMs ?? 0)) {
+      if (latest.durationMs === points.at(-1)?.durationMs) points.pop();
+      points.push(latest);
+    }
+    return { ...next, speedOffsetMs: baseOffset, samples: points.slice(-MAX_RATE_SAMPLES) };
+  }
   const at = offset + speed.elapsedMs;
   const lastAt = reset ? offset : (lastSampleDuration ?? offset);
-  if (!speed.streaming || speed.rate <= 0 || at - lastAt < MIN_SAMPLE_DURATION_MS) return next;
+  if (!measured || at - lastAt < MIN_SAMPLE_DURATION_MS) return next;
   const samples = [
     ...history.samples.slice(-(MAX_RATE_SAMPLES - 1)),
     { durationMs: at, outputTokens: speed.tokens, rate: speed.rate },
