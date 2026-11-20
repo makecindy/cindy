@@ -5013,6 +5013,63 @@ describe('Teammate settings with the real model picker', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
+  // PR #11683 review r4641455507, unit, real editor + picker: a backup added on another computer starts without a
+  // model and is only submitted once it has one; choosing a group there must still reach the form (the host replaces
+  // the placeholder source on save). Minimal input: Add backup, then pick a host group.
+  it('submits a backup model group added for a remote companion', async () => {
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: vi.fn(async () => ({ routes: [] })), resolve: vi.fn() } });
+    const hostModelGroups = { routes: [{ id: 'host-grp', name: 'Host group', strategy: 'order' as const, effort: 'low',
+      candidates: [{ agentKind: 'codex' as const, providerId: 'host-openai', model: 'gpt-6', off: true },
+        { agentKind: 'codex' as const, providerId: 'host-xd', model: 'gpt-5.6' }] }] };
+    const change = vi.fn();
+    const view = render(<BotModelChainEditor deviceId="mac-2" hostModelGroups={hostModelGroups} value={[route]} onChange={change} />);
+    const add = screen.getAllByRole('button').find((button) => /添加备用模型|Add fallback|bots\.modelChain\.add/.test(button.textContent ?? ''))!;
+    await act(async () => fireEvent.click(add));
+    const pickers = view.container.querySelectorAll('button[aria-haspopup="listbox"]');
+    fireEvent.click(pickers[pickers.length - 1]!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    await act(async () => fireEvent.click(screen.getByText('Host group')));
+    expect(change).toHaveBeenLastCalledWith([route, expect.objectContaining({
+      harness: 'codex', providerId: 'host-xd', model: 'gpt-5.6', effort: 'low', modelGroup: 'host-grp' })]);
+  });
+
+  // PR #11683 review r4641455511, unit, real editor + picker: switching an entry from one group to another whose
+  // preview finds nothing keeps the group it had, instead of leaving a plain model. Minimal input: G1 entry, G2 unavailable.
+  it('keeps the previous group when another group has nothing usable', async () => {
+    const route = { harness: 'codex' as const, providerId: 'openai', model: 'gpt-5.6', effort: 'low', fastMode: false, modelGroup: 'g1' };
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: {
+      get: vi.fn(async () => ({ routes: [
+        { id: 'g1', name: 'Day group', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' }] },
+        { id: 'g2', name: 'Empty group', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'gone', model: 'x' }] }] })),
+      resolve: vi.fn(async () => ({ outcome: 'none', groupName: 'Empty group', trace: [] })),
+    } });
+    onTestFinished(async () => {
+      vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: async () => ({ routes: [] }) } });
+      await act(async () => { await refreshModelGroups(); });
+    });
+    const saved: unknown[][] = [];
+    function Form() {
+      const [chain, setState] = React.useState<typeof route[]>([route]);
+      return <BotModelChainEditor value={chain} onChange={(next) => { saved.push(next); setState(next as typeof route[]); }} />;
+    }
+    const view = render(<Form />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    await act(async () => fireEvent.click(await screen.findByText('Empty group')));
+    await waitFor(() => expect(saved.at(-1)).toEqual([route]));
+  });
+
   // #10207, unit: existing picker tests only supplied ready catalogs. A missing local
   // snapshot must show loading, then update the open picker without rewriting the
   // saved route. The real BotModelChainEditor -> ModelRouteSelector -> ModelSelector
