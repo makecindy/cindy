@@ -16251,7 +16251,6 @@
       "opened": "Foi aberta uma página de pré-visualização"
     },
     "sideChat": {
-      "openPage": "Abrir página completa da tarefa",
       "returnMain": "Voltar à tarefa principal",
       "new": "Nova conversa paralela",
       "mainWindowDescription": "As conversas paralelas decorrem atualmente na janela principal. A sua conversa está guardada.",
@@ -16259,6 +16258,14 @@
       "commandDescription": "Abrir uma conversa paralela com o contexto desta tarefa. O texto opcional torna-se um rascunho de pergunta.",
       "title": "Conversa paralela",
       "context": "Usa o contexto concluído no momento em que foi aberta. A tarefa principal continua em execução. O histórico mantém-se até fechar este separador.",
+      "viewCollaboration": "Ver colaboração",
+      "openConversation": "Abrir conversa",
+      "openFromTaskList": "Também disponível na lista de tarefas à esquerda.",
+      "returnToSideChat": "Voltar à pergunta lateral",
+      "reopenSideChat": "Reabrir a pergunta lateral",
+      "origin": "Esta conversa começou com uma pergunta lateral.",
+      "originNamed": "Esta conversa começou com uma pergunta lateral de «{{title}}».",
+      "originUnavailable": "Esta conversa começou com uma pergunta lateral. A tarefa original está indisponível.",
       "opening": "A abrir…",
       "notReady": "Aguarde até a tarefa principal concluir a primeira resposta.",
       "unsupported": "O Agent desta tarefa é executado noutro ambiente de execução. A conversa paralela ainda não está disponível aqui.",
@@ -16267,9 +16274,10 @@
       "mainTaskOnly": "Abra uma conversa paralela a partir da tarefa principal.",
       "sharedTaskUnavailable": "As conversas paralelas não estão disponíveis em tarefas partilhadas.",
       "archivedTask": "Desarquive esta tarefa para abrir uma conversa paralela.",
-      "closeTitle": "Fechar conversa paralela?",
-      "closeDescription": "Este seguimento será interrompido e o respetivo histórico será eliminado. A tarefa principal continua em execução.",
-      "closeConfirm": "Fechar e eliminar",
+      "closeTitle": "Fechar e arquivar esta pergunta de seguimento?",
+      "closeDescription": "A tarefa correspondente na barra lateral esquerda também será arquivada.",
+      "closeDescriptionRunning": "A tarefa correspondente na barra lateral esquerda também será arquivada e os seus Workers serão parados.",
+      "closeConfirm": "Fechar e arquivar",
       "closeFailed": "Não foi possível fechar a conversa paralela. Tente novamente."
     },
     "teammateProcess": {

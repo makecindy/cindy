@@ -16064,7 +16064,6 @@
       "opened": "プレビューページを開きました"
     },
     "sideChat": {
-      "openPage": "タスクページを開く",
       "returnMain": "メインタスクに戻る",
       "new": "新しいサイドチャット",
       "mainWindowDescription": "サイドチャットは現在メインウィンドウで利用できます。内容は保存されています。",
@@ -16072,6 +16071,14 @@
       "commandDescription": "メインタスクをもとにサイドチャットを開きます。コマンドの後の質問は下書きになります。",
       "title": "サイドチャット",
       "context": "開いた時点までの完了済みコンテキストを使います。メインタスクは実行を続けます。履歴はこのタブを閉じるまで保持されます。",
+      "viewCollaboration": "協同を表示",
+      "openConversation": "会話を開く",
+      "openFromTaskList": "左側のタスク一覧からも開けます。",
+      "returnToSideChat": "サイドの追加質問に戻る",
+      "reopenSideChat": "サイドの追加質問を開き直す",
+      "origin": "この会話はサイドの追加質問から始まりました。",
+      "originNamed": "この会話は「{{title}}」のサイドの追加質問から始まりました。",
+      "originUnavailable": "この会話はサイドの追加質問から始まりました。元のタスクは開けません。",
       "opening": "開いています…",
       "notReady": "メインタスクの最初の回答が完了するまでお待ちください。",
       "unsupported": "この Agent のリモートタスクはサイドチャットに未対応です。",
@@ -16080,9 +16087,10 @@
       "mainTaskOnly": "メインタスクからサイドチャットを開いてください。",
       "sharedTaskUnavailable": "共有タスクではサイドチャットを利用できません。",
       "archivedTask": "このタスクのアーカイブを解除してから、サイドチャットを開いてください。",
-      "closeTitle": "サイドチャットを閉じますか？",
-      "closeDescription": "このサイドチャットを停止して削除します。メインタスクには影響しません。",
-      "closeConfirm": "閉じて削除",
+      "closeTitle": "この追加質問を閉じてアーカイブしますか？",
+      "closeDescription": "左側のタスクリストにある対応タスクもアーカイブされます。",
+      "closeDescriptionRunning": "左側のタスクリストにある対応タスクもアーカイブされ、Worker は停止します。",
+      "closeConfirm": "閉じてアーカイブ",
       "closeFailed": "サイドチャットを閉じられませんでした。もう一度お試しください。"
     },
     "botStartedTasks": {

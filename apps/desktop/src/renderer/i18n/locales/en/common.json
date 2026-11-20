@@ -16138,7 +16138,6 @@
       "opened": "Opened a preview page"
     },
     "sideChat": {
-      "openPage": "Open full task page",
       "returnMain": "Back to main task",
       "new": "New side chat",
       "mainWindowDescription": "Side chats currently run in the main window. Your conversation is saved.",
@@ -16146,6 +16145,14 @@
       "commandDescription": "Open a side chat with this task's context. Optional text becomes a draft question.",
       "title": "Side chat",
       "context": "Uses completed context from when you opened it. The main task keeps running. History stays until you close this tab.",
+      "viewCollaboration": "View collaboration",
+      "openConversation": "Open conversation",
+      "openFromTaskList": "Also available in the task list on the left.",
+      "returnToSideChat": "Back to side chat",
+      "reopenSideChat": "Reopen side chat",
+      "origin": "This conversation started in a side chat.",
+      "originNamed": "This conversation started in a side chat from “{{title}}”.",
+      "originUnavailable": "This conversation started in a side chat. The original task is unavailable.",
       "opening": "Opening…",
       "notReady": "Wait for the main task to complete its first reply.",
       "unsupported": "This task's agent runs in another execution environment. Side chat is not available here yet.",
@@ -16154,9 +16161,10 @@
       "mainTaskOnly": "Open a side chat from the main task.",
       "sharedTaskUnavailable": "Side chats are not available in shared tasks.",
       "archivedTask": "Unarchive this task to open a side chat.",
-      "closeTitle": "Close side chat?",
-      "closeDescription": "This follow-up will stop and its history will be deleted. The main task keeps running.",
-      "closeConfirm": "Close and delete",
+      "closeTitle": "Close and archive this follow-up?",
+      "closeDescription": "The matching task in the left sidebar will also be archived.",
+      "closeDescriptionRunning": "The matching task in the left sidebar will also be archived, and its workers will stop.",
+      "closeConfirm": "Close and archive",
       "closeFailed": "Could not close the side chat. Try again."
     },
     "botStartedTasks": {

@@ -16251,7 +16251,6 @@
       "opened": "Se abrió una página de vista previa"
     },
     "sideChat": {
-      "openPage": "Abrir página completa de la tarea",
       "returnMain": "Volver a la tarea principal",
       "new": "Nuevo chat secundario",
       "mainWindowDescription": "Los chats secundarios se ejecutan actualmente en la ventana principal. Tu conversación está guardada.",
@@ -16259,6 +16258,14 @@
       "commandDescription": "Abre un chat secundario con el contexto de esta tarea. El texto opcional se convierte en un borrador de pregunta.",
       "title": "Chat secundario",
       "context": "Usa el contexto completado hasta el momento en que lo abriste. La tarea principal sigue ejecutándose. El historial se conserva hasta que cierres esta pestaña.",
+      "viewCollaboration": "Ver colaboración",
+      "openConversation": "Abrir conversación",
+      "openFromTaskList": "También en la lista de tareas de la izquierda.",
+      "returnToSideChat": "Volver a la consulta lateral",
+      "reopenSideChat": "Volver a abrir la consulta lateral",
+      "origin": "Esta conversación comenzó en una consulta lateral.",
+      "originNamed": "Esta conversación comenzó en una consulta lateral de «{{title}}».",
+      "originUnavailable": "Esta conversación comenzó en una consulta lateral. La tarea original no está disponible.",
       "opening": "Abriendo…",
       "notReady": "Espera a que la tarea principal complete su primera respuesta.",
       "unsupported": "El Agent de esta tarea se ejecuta en otro entorno. El chat secundario aún no está disponible aquí.",
@@ -16267,9 +16274,10 @@
       "mainTaskOnly": "Abre un chat secundario desde la tarea principal.",
       "sharedTaskUnavailable": "Los chats secundarios no están disponibles en tareas compartidas.",
       "archivedTask": "Desarchiva esta tarea para abrir un chat secundario.",
-      "closeTitle": "¿Cerrar el chat secundario?",
-      "closeDescription": "Este seguimiento se detendrá y su historial se eliminará. La tarea principal seguirá ejecutándose.",
-      "closeConfirm": "Cerrar y eliminar",
+      "closeTitle": "¿Cerrar y archivar este seguimiento?",
+      "closeDescription": "La tarea correspondiente de la barra lateral izquierda también se archivará.",
+      "closeDescriptionRunning": "La tarea correspondiente de la barra lateral izquierda también se archivará y sus Workers se detendrán.",
+      "closeConfirm": "Cerrar y archivar",
       "closeFailed": "No se pudo cerrar el chat secundario. Inténtalo de nuevo."
     },
     "teammateProcess": {

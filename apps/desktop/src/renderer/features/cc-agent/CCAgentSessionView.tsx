@@ -225,6 +225,7 @@ import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { cleanupRemovedCachedImage, useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { SessionContentHeaderRegistration } from './SessionContentHeader';
+import { LinkedSideChatOrigin } from './LinkedSideChatOrigin';
 import { resolveSessionInterruptCandidate } from './sessionInterruptBannerModel';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
@@ -5876,11 +5877,12 @@ function CCAgentSessionContent({
 
   // MessageStream 提成变量:perf/session-switch 的 <Profiler> 是纯诊断,只在 DEV
   // 包裹(见下方渲染处),生产直接渲染此 el,不引入多余 Profiler fiber。
-  const sideChatMessages = useMemo(() => session?.source === 'side-chat'
-    ? messages.filter(message => new Date(message.createdAt ?? session.createdAt).getTime() >= new Date(session.createdAt).getTime())
+  const sideChatCreatedAt = session?.source === 'side-chat' || session?.sideChatPromoted ? session.createdAt : undefined;
+  const sideChatMessages = useMemo(() => sideChatCreatedAt
+    ? messages.filter(message => new Date(message.createdAt ?? sideChatCreatedAt).getTime() >= new Date(sideChatCreatedAt).getTime())
     : creationPreview && !messages.some(m => m.role === 'user') && pendingQueue.length === 0
       ? [creationPreview.message, ...messages] : messages,
-    [creationPreview, messages, pendingQueue.length, session?.source, session?.createdAt]);
+    [creationPreview, messages, pendingQueue.length, sideChatCreatedAt]);
   const timelineMessages = useMemo(
     () => visibleVoiceCallMessages(sideChatMessages, activeVoiceCallId),
     [sideChatMessages, activeVoiceCallId],
@@ -6135,7 +6137,7 @@ function CCAgentSessionContent({
       messages={timelineMessages}
       activeErrorClientId={bannerErrorClientId}
       activeVoiceCallId={activeVoiceCallId}
-      historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
+      historyVisibleAfter={sideChatCreatedAt ? new Date(sideChatCreatedAt).getTime() : undefined}
       onAskInSideChat={!readOnly && sessionId && !sideChatBlockedKey
         ? (quote) => openSideChatTab(sessionId, { quote }) : undefined}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
@@ -6157,7 +6159,7 @@ function CCAgentSessionContent({
       getContentWidth={getMessageWidth}
       focusMessageClientId={focusedMessageTarget?.clientId ?? null}
       focusMessageRequestId={focusedMessageTarget?.requestId ?? 0}
-      forkOrigin={session?.source === 'side-chat' ? undefined : forkOrigin}
+      forkOrigin={sideChatCreatedAt ? undefined : forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
       isLocalUserSend={isLocalUserSend}
       ownsHardwareScrollActions={ownsHardwareTaskActions}
@@ -6181,6 +6183,8 @@ function CCAgentSessionContent({
   const composerRuntimeVisible =
     !pendingPlanReview &&
     (agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
+  const originDeviceId = rightSidebarDeviceLinkDeviceId ?? null;
+  const originAccessAvailable = !readOnly && !remoteSessionUnavailable && !isSharedTaskPeer(originDeviceId ?? '');
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -6330,6 +6334,16 @@ function CCAgentSessionContent({
           }
         }}
       >
+        {ownsRoute && session?.sideChatPromoted && (
+          <LinkedSideChatOrigin
+            key={JSON.stringify([session.id, session.parentSessionId, originDeviceId, originAccessAvailable])}
+            childId={session.id}
+            parentId={session.parentSessionId ?? null}
+            deviceId={originDeviceId}
+            parentAccessAvailable={originAccessAvailable}
+            archived={session.status !== 'active'}
+          />
+        )}
         {showOrcaLeadIdentityBar && (
           <div className="flex h-8 shrink-0 select-none items-center border-b border-border/40 px-3 text-11 font-medium leading-none text-muted-foreground">
             <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
