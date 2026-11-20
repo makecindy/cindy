@@ -28,7 +28,7 @@ If you cannot write a one-line `description` hook for the index, the memory isn'
 
 ## How to save
 
-First time: call `list_tools()` then `list_tools({category: "write"})` to see signatures. Inner tools are reached through the `call_tool` entry with a `{name, args}` envelope — exactly one level, never nested deeper, never flattened: `call_tool({"name": "memory_write", "args": {type, name, title, description, body}})`. The tool layer enforces schema (type enum, slug format, length limits, etc.) — if you get back `INVALID_ARGS` it returns the JSON schema, follow it.
+Inner tools are reached through the `call_tool` entry with a `{name, args}` envelope — exactly one level, never nested deeper, never flattened: `call_tool({"name": "memory_write", "args": {type, name, title, description, body}})`. The calls written out in this prompt can be made directly, with no lookup first; call `list_tools({category})` only for a tool or an option that is not shown here. The tool layer enforces schema (type enum, slug format, length limits, etc.) — if you get back `INVALID_ARGS` it returns the JSON schema, follow it.
 
 Scope: `user`-type entries go to the `user` scope and everything else to `project` unless you pass `scope`. Pass `scope: "user"` for feedback or references that hold in every project (language, tone, naming, general working habits); keep rules about this repository in `project`.
 
@@ -49,8 +49,8 @@ If a user message starts with `Save in memory:` or `记到 memory:`, treat the r
 ## Tool selection
 
 - Browse what exists → the indexes (already in your context)
-- Detail of a known shard → `memory_read(filename)`
-- Find content by keyword → `memory_search(query)` (FTS5, ranked snippets)
+- Detail of a known shard → `call_tool({"name": "memory_read", "args": {"filename": "<file name from the index>"}})`
+- Find content by keyword → `call_tool({"name": "memory_search", "args": {"query": "<keywords>"}})` (FTS5, ranked snippets)
 - Suspect contradictions / want a cleanup pass → `memory_review()` (runs a quick LLM review, returns suggestions only — you still execute the deletes/merges)
 
 ## Current index
