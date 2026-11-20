@@ -2026,7 +2026,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   }
 
   function bindCompanyUsage(run: Run) {
-    run.turnUsage = run.authorizedUsage && !run.relay && (run.guestRoute || run.ownerRoute) &&
+    run.turnUsage = run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && run.authorizedUsage && !run.relay && (run.guestRoute || run.ownerRoute) &&
       run.providerId && companyExecutionReporting()?.direct(run.providerId, run.kind) ? run.authorizedUsage : undefined;
   }
 
