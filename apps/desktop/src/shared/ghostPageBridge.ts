@@ -115,7 +115,7 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
       throw Object.assign(new Error(result?.error?.message ?? 'Target request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
     },
   ])),
-  observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task']].map(([name, kind]) => [name,
+  observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task'], ['openSession', 'open-session']].map(([name, kind]) => [name,
     async (req: Record<string, unknown> = {}): Promise<unknown> => {
       const result = await ports.send({ ...req, type: 'observe-request', kind });
       if (result?.ok === true) return result.data;
