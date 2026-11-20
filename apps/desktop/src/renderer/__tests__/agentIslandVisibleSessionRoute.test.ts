@@ -147,7 +147,10 @@ describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
     expect(workdirBrowseRouteSource).toContain('window.electronAPI.agentIsland?.setVisibleSession?.(agentIslandVisibleSessionId)');
     expect(orcaWorkerPanelSource).toContain('window.electronAPI.agentIsland?.setVisibleSession?.(visibleSessionIds)');
     expect(orcaWorkerPanelSource).toContain(
-      'workerConversationVisible && workerSessionId && workerSessionId !== leadSessionId',
+      'workerConversationVisible && workerConversationReady && workerSessionId && workerSessionId !== leadSessionId',
+    );
+    expect(orcaWorkerPanelSource).toContain(
+      'const workerConversationReady = !focusWritePending && workerPaneReady && workerOriginReady;',
     );
   });
 

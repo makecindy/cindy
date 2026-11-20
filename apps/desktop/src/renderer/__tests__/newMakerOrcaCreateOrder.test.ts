@@ -138,8 +138,9 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(sessionViewSource).toContain('if (sessionHandoffPreparing) return false;');
     expect(sessionViewSource).not.toContain('if (worktreePreparing) return false;');
     expect(sessionViewSource).toContain(
-      "disabled={readOnly || remoteHandoffPreparing || session?.source === 'review'}",
+      "const composerDisabled = readOnly || remoteHandoffPreparing || session?.source === 'review';",
     );
+    expect(sessionViewSource).toMatch(/<ChatInput\b[\s\S]*?\bdisabled=\{composerDisabled\}/);
   });
 
   it('rebases delayed-create inline metadata after rewriting a Pi skill alias', () => {
