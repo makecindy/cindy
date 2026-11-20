@@ -168,6 +168,10 @@ export default {
     await ready.hover();
     // Inbox shows a one-click Done instead of the two-step archive.
     const archiveLabel = await ui.t('ccAgent.sidebar.inbox.complete');
+    const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
+    const pinned = page.locator('[data-session-id="waiting"]');
+    assert.equal(await pinned.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
+    assert.equal(await pinned.getByRole('button', { name: snoozeLabel, exact: true }).count(), 0);
     const moreLabel = await ui.t('ccAgent.sidebar.sessionMenu.moreActions');
     assert.equal(await ready.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
     assert.equal(await page.getByRole('button', { name: moreLabel, exact: true }).count(), 0);
@@ -176,7 +180,6 @@ export default {
     await ui.capture('row-actions');
     await ready.click({ button: 'right' });
     await page.getByRole('menu').waitFor();
-    const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
     await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).waitFor();
     await ui.capture('context-menu');
     await page.keyboard.press('Escape');

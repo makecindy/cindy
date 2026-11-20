@@ -38,7 +38,7 @@ const sessions = [
   snoozedAt: id === 'later' ? new Date(now).toISOString() : null,
   snoozedUntil: id === 'later' ? new Date(now + 3600000).toISOString() : null,
   agentKind: 'codex',
-  pinnedAt: null,
+  pinnedAt: id === 'waiting' ? new Date(now).toISOString() : null,
   sdkSessionId: null,
   remoteHostId: null,
   deviceLinkDeviceId: null,

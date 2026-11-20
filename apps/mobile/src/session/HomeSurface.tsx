@@ -209,6 +209,7 @@ import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
 import {
   buildMobileHomePresentation,
   excludeOrcaWorkerSessions,
+  mobileHomeSessionItems,
   type MobileHomeDeviceFilterItem,
   type MobileHomeProjectGroup,
 } from '@/session/mobileHome';
@@ -2348,6 +2349,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   );
   const inboxHome = useMemo(
     () => buildMobileHomePresentation({
+      inboxMode: true,
       projectAliases, devices: deviceModels, liveActivityIndex, messagePreviewIndex,
       pendingInteractionIndex, scheduleIndex, searchQuery, selectedDeviceId,
       sessions: homeSessions, statusFilter: 'all', unnamedLabel: t('session.menu.unnamedTitle'),
@@ -2359,6 +2361,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // 会因搜索没命中或当前状态下没有任务而从菜单里消失,用户无法单独取消它。
   const projectFilterUniverse = useMemo(
     () => buildMobileHomePresentation({
+      inboxMode: taskListMode === 'inbox',
       projectAliases,
       devices: deviceModels,
       scheduleIndex,
@@ -2367,7 +2370,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       statusFilter: 'all',
       unnamedLabel: t('session.menu.unnamedTitle'),
     }),
-    [deviceModels, scheduleIndex, selectedDeviceId, homeSessions, t, projectAliases],
+    [deviceModels, scheduleIndex, selectedDeviceId, homeSessions, t, projectAliases, taskListMode],
   );
   const projectMachineIdentities = useMemo(
     () => buildHomeProjectMachineIdentities(home, {
@@ -2386,10 +2389,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }
     return ids;
   }, [homeSessions, homeStatusVersion, liveActivityIndex, scheduleIndex]);
-  const homePriorityItems = useMemo(() => {
-    const source = taskListMode === 'inbox' ? inboxHome : home;
-    return [...source.pinned, ...source.chats, ...source.projects.flatMap(project => project.sessions)];
-  }, [home, inboxHome, taskListMode]);
+  const homePriorityItems = useMemo(
+    () => mobileHomeSessionItems(taskListMode === 'inbox' ? inboxHome : home),
+    [home, inboxHome, taskListMode],
+  );
   const priorityContext = useMemo(
     () => (taskListMode === 'inbox' ? collectInboxHomePriorityContext : collectHomePriorityContext)(
       homePriorityItems, runningSessionIds, homeViewedPriorityHold),
