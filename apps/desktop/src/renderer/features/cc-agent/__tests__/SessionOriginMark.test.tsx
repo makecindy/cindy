@@ -22,6 +22,7 @@ import { SessionOriginChip, SessionOriginLead, SessionOriginMeta, SessionOriginR
  */
 
 const navigate = vi.hoisted(() => vi.fn());
+const openDeepLink = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('react-router-dom', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => navigate,
@@ -31,7 +32,8 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children: React.ReactNode }) => children }));
 // Only the cross-computer branch uses the deep-link opener; same-device sources navigate directly.
-vi.mock('@/components/chat/SessionLinkChip', () => ({ useSessionLinkTarget: () => ({ openTarget: vi.fn() }) }));
+vi.mock('@/components/chat/SessionLinkChip', () => ({ useSessionLinkTarget: () => ({ openTarget: openDeepLink }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => 'this-mac' }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteSessionTitle: () => null,
   remoteProjectsStore: { pinSessionOrigin: vi.fn(), getSessionDeviceId: () => undefined },
@@ -52,7 +54,7 @@ const B = task('task-b', { sessionId: 'task-a', title: 'task-a' });
 const C = task('task-c', { sessionId: 'task-a', title: 'task-a' });
 const D = task('task-d');
 
-beforeEach(() => { navigate.mockReset(); registerLoadedBotProfilesReader(() => profiles); });
+beforeEach(() => { navigate.mockReset(); openDeepLink.mockClear(); registerLoadedBotProfilesReader(() => profiles); });
 afterEach(() => registerLoadedBotProfilesReader(null));
 
 describe('tasks started by another task (#11610 acceptance chain)', () => {
@@ -96,5 +98,26 @@ describe('tasks started by another task (#11610 acceptance chain)', () => {
     expect(open(C)).toBe('/cc-agent/task-a');
     // The teammate's main chat opens as that chat, not as a bare lane page.
     expect(open(task('task-e', { sessionId: 'cindy-chat' }))).toBe('/bots/cindy/session/cindy-chat');
+  });
+
+  // Codex review (#11615): a local topic that opened a task on another computer is stamped
+  // `<this computer>::<topic>`. Viewed from this computer the entry must still return to the topic;
+  // the generic deep link would resolve it to the bare /cc-agent/<topic> page.
+  it('returns a remotely created task to the local teammate topic stamped with this computer', async () => {
+    render(<MemoryRouter><SessionOriginChip session={task('remote-b', { sessionId: 'this-mac::topic-q4', title: 'Q4 复盘' })} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button'));
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith('/bots/cindy/session/cindy-chat?thread=topic-q4'));
+    expect(openDeepLink).not.toHaveBeenCalled();
+  });
+
+  it('keeps the deep link for sources on another computer and for local non-teammate tasks', async () => {
+    for (const sessionId of ['other-mac::topic-q4', 'this-mac::task-a']) {
+      openDeepLink.mockClear();
+      const { unmount } = render(<MemoryRouter><SessionOriginChip session={task('remote-c', { sessionId })} /></MemoryRouter>);
+      fireEvent.click(screen.getByRole('button'));
+      await vi.waitFor(() => expect(openDeepLink).toHaveBeenCalledOnce());
+      unmount();
+    }
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

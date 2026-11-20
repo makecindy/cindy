@@ -8,6 +8,7 @@ import {
   useRemoteSessionTitle,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { botConversationRouteForSession, readLoadedBotProfiles } from '@/features/bots/botSessionOwners';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -39,13 +40,15 @@ function useLiveSessionTitle(sessionId: string | undefined, remote: boolean): st
 
 /**
  * 打开「来源任务」：消息来源标签与任务级「由哪个任务发起」共用。
- * - `deviceId::sessionId`（另一台电脑上的任务发来）走任务深链，按来源设备打开；
+ * - `deviceId::sessionId`（另一台电脑上的任务发来）走任务深链，按来源设备打开；前缀就是本机时
+ *   （本机伙伴话题在另一台电脑上新建任务），伙伴对话按本机来源回到原话题，其余仍走深链；
  * - 其余来源任务与当前任务在同一台设备上：远程任务的来源任务也钉到那台设备再跳转。
  * 没有来源任务 id（共享任务访客收到的已脱敏来源）时 `open` 为 null，只展示不可点击。
  */
 export function useSourceSessionOpener(sourceSessionId: string | undefined, hostSessionId: string | undefined) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const localDeviceId = useOptionalAuthDeviceId();
   const sourceTarget = parseSourceSessionTarget(sourceSessionId);
   const { openTarget: openCrossDeviceTarget } = useSessionLinkTarget(
     sourceTarget?.deviceId ? buildSessionDeepLink(sourceTarget.sessionId, { deviceId: sourceTarget.deviceId }) : '',
@@ -54,9 +57,22 @@ export function useSourceSessionOpener(sourceSessionId: string | undefined, host
   // 否则来源任务会被当成本机任务打开。
   const hostDeviceId = getStickySessionDeviceId(hostSessionId);
   const liveTitle = useLiveSessionTitle(sourceTarget?.deviceId ? undefined : sourceSessionId, Boolean(hostDeviceId));
+  // A teammate's topic or main chat opens as that conversation, not as a bare lane task page.
+  const localConversationRoute = (sessionId: string) => {
+    const profiles = readLoadedBotProfiles();
+    return profiles ? botConversationRouteForSession(profiles, sessionId) : null;
+  };
   const open: (() => void) | null = sourceTarget?.deviceId
     ? () => {
-        void openCrossDeviceTarget(false).catch(() => toast.error(t('chat.markdownRenderer.openLinkFailed')));
+        void (async () => {
+          // A source stamped with this computer's prefix (a local teammate topic that opened a task on
+          // another computer) is a local conversation: return to it like an unprefixed local source.
+          // Only the teammate conversation route is taken here; every other target keeps the deep link.
+          const selfDeviceId = localDeviceId ?? await window.electronAPI.getDeviceId();
+          const local = sourceTarget.deviceId === selfDeviceId ? localConversationRoute(sourceTarget.sessionId) : null;
+          if (local) navigate(local);
+          else await openCrossDeviceTarget(false);
+        })().catch(() => toast.error(t('chat.markdownRenderer.openLinkFailed')));
       }
     : sourceSessionId && sourceTarget
       ? () => {
@@ -65,10 +81,7 @@ export function useSourceSessionOpener(sourceSessionId: string | undefined, host
             navigate(`/cc-agent/${encodeURIComponent(sourceSessionId)}`);
             return;
           }
-          // A teammate's topic or main chat opens as that conversation, not as a bare lane task page.
-          const profiles = readLoadedBotProfiles();
-          navigate((profiles && botConversationRouteForSession(profiles, sourceSessionId))
-            ?? `/cc-agent/${encodeURIComponent(sourceSessionId)}`);
+          navigate(localConversationRoute(sourceSessionId) ?? `/cc-agent/${encodeURIComponent(sourceSessionId)}`);
         }
       : null;
   return { sourceTarget, hostDeviceId, liveTitle, open };
