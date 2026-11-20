@@ -203,6 +203,9 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain('ready, failed, or dropped');
     expect(prompt).toContain('the follow-up is yours');
     expect(prompt).toContain('a closed task is not a running one');
+    // 标记由结构化回报产生，旧会话可能没有：必须有可用的降级判据，不能只看标记。
+    expect(prompt).toContain('A worker that never sent a [Orca Worker report: ...] line');
+    expect(prompt).toContain('fall back to its most recent message');
     // 终态分支不得再给转发指令，否则两条分支互相抵消。
     const closedBranch = prompt.slice(
       prompt.indexOf('- ready, failed, or dropped'),
