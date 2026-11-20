@@ -180,7 +180,7 @@ describe('legacy → v1 refresh token migration window', () => {
   it('读侧:replacement-retry 走双来源读取,不再只认 v1', () => {
     const body = sliceBody(
       'const run = await runRefreshWithReplacementRetry(initialRefreshToken, {',
-      '});',
+      '\n  });',
     );
 
     // Every source remains eligible; only known rejected generations are skipped.

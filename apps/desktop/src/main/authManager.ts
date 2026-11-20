@@ -3503,10 +3503,13 @@ function clearReplacementIntegrationReloadTimers(): void {
   replacementIntegrationReloadTimers = [];
 }
 
-// At most one uncertain Resource generation per realm; no credential is persisted here.
+// At most one admitted active Resource generation per realm; no credential is persisted here.
 // A successful response may also fail to save locally, so retain its consumed generation
 // until a later request advances it. Logout/switch admission is always rechecked in the vault.
-const uncertainResourceRefreshTokens = new Map<AuthRegion, string>();
+const uncertainResourceRefreshTokens = new Map<AuthRegion, {
+  accountKey: string;
+  refreshToken: string;
+}>();
 const pendingResourcePassportRecoveries = new Map<AuthRegion, {
   refreshToken: string;
   accountKey: string;
@@ -3604,6 +3607,7 @@ async function runAuthRefreshWithReplacementRetry(
 }> {
   let expectedVaultRefreshToken: string | null | undefined;
   let expectedActiveVaultAccountKey = opts.expectedActiveVaultAccountKey;
+  const invalidRefreshTokens = new Set<string>();
   let pendingRecovery = pendingResourcePassportRecoveries.get(opts.realm);
   if (pendingRecovery) {
     const vault = readAuthAccountVault();
@@ -3623,6 +3627,7 @@ async function runAuthRefreshWithReplacementRetry(
       // This generation was already rejected. Re-enter replacement discovery
       // without another network request, then resume Passport if none is newer.
       if (pendingRecovery?.refreshToken === refreshToken) {
+        invalidRefreshTokens.add(refreshToken);
         return { ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } } };
       }
       const vault = readAuthAccountVault();
@@ -3643,10 +3648,16 @@ async function runAuthRefreshWithReplacementRetry(
       }
       const result = await requestAuthRefresh(refreshToken, opts.realm);
       if (getRefreshErrorCode(result) === 'INVALID_REFRESH_TOKEN') {
+        invalidRefreshTokens.add(refreshToken);
         opts.rejectedRefreshTokens?.add(refreshToken);
       }
       if (result.ok || result.status === 0 || (result.status >= 200 && result.status < 300)) {
-        uncertainResourceRefreshTokens.set(opts.realm, refreshToken);
+        const key = vault.activeAccountKey;
+        if (key && vault.resources[key]?.realm === opts.realm &&
+          vault.resources[key]?.refreshToken === refreshToken &&
+          typeof vault.signedOutAt !== 'number' && !isLoggedOutVaultAccount(vault, key)) {
+          uncertainResourceRefreshTokens.set(opts.realm, { accountKey: key, refreshToken });
+        }
       }
       if (result.ok) {
         const pair = result.data as RefreshResponse;
@@ -3697,13 +3708,16 @@ async function runAuthRefreshWithReplacementRetry(
     );
   }
 
-  // Pending recovery is already proven for its admitted owner/generation. A
-  // sibling's response may advance the realm's last request without finishing it.
-  const uncertainRefreshToken = pendingRecovery?.refreshToken ?? uncertainResourceRefreshTokens.get(opts.realm);
+  // Candidate errors do not describe the admitted active owner. Recover only
+  // its own uncertain generation that actually received INVALID in this run.
+  const uncertain = uncertainResourceRefreshTokens.get(opts.realm);
+  const uncertainRefreshToken = pendingRecovery?.refreshToken ?? (
+    uncertain && readAuthAccountVault().activeAccountKey === uncertain.accountKey
+      ? uncertain.refreshToken : undefined
+  );
   if (
     run.failureAction?.kind === 'definitive-failure' &&
-    getRefreshErrorCode(run.result) === 'INVALID_REFRESH_TOKEN' &&
-    uncertainRefreshToken && run.rejectedTokens.includes(uncertainRefreshToken)
+    uncertainRefreshToken && invalidRefreshTokens.has(uncertainRefreshToken)
   ) {
     try {
       const pair = await recoverActiveResourceSession(

@@ -1058,6 +1058,72 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
     await vi.advanceTimersByTimeAsync(61_250);
   }
 
+  it.each([['runtime', 'legacy'], ['cold-start', 'legacy'], ['cold-start', 'projection']] as const)('keeps active uncertainty when a candidate also loses its response (%s/%s)', async (phase, target) => {
+    const { h } = recoverySetup();
+    const fresh = phase === 'runtime' ? h : setup();
+    fresh.vault.resources[ORIGINAL_KEY].metadata = h.vault.resources[ORIGINAL_KEY].metadata;
+    fresh.vault.passports = h.vault.passports;
+    fresh.useProductionCandidates();
+    const seen = new Set<unknown>();
+    fresh.request.mockImplementation(async (token: unknown) => {
+      if (!seen.has(token)) {
+        seen.add(token);
+        if (target === 'projection') fresh.saved.session.refreshToken = 'test-other-candidate';
+        else fresh.deps.readSafe.mockReturnValue('test-other-candidate');
+        return { ok: false, status: 0, data: null };
+      }
+      return { ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } } };
+    });
+    if (phase === 'runtime') await fresh.runtimeRefresh();
+    else void fresh.start();
+    // Include the second runtime backoff after C's own transport failure.
+    await vi.advanceTimersByTimeAsync(185_000);
+    expect(fresh.request.mock.calls.map(([token]: unknown[]) => token)).toEqual(target === 'projection'
+      ? ['test-refresh', 'test-other-candidate', 'test-other-candidate', 'test-refresh']
+      : ['test-refresh', 'test-refresh', 'test-other-candidate', 'test-refresh', 'test-other-candidate']);
+    expect(fresh.authClient.exchangeAccountMembership).toHaveBeenCalledWith('test-passport-access', 'original');
+    expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
+    expect(fresh.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+  });
+
+  it.each([
+    ['runtime', 'MEMBERSHIP_DISABLED', 'legacy'], ['cold-start', 'MEMBERSHIP_DISABLED', 'legacy'],
+    ['runtime', 'REFRESH_TOKEN_EXPIRED', 'legacy'], ['cold-start', 'REFRESH_TOKEN_EXPIRED', 'legacy'],
+    ['cold-start', 'MEMBERSHIP_DISABLED', 'projection'], ['cold-start', 'REFRESH_TOKEN_EXPIRED', 'projection'],
+  ] as const)('recovers an INVALID active owner after a candidate returns %s/%s/%s', async (phase, code, target) => {
+    const { h } = recoverySetup();
+    const fresh = phase === 'runtime' ? h : setup();
+    fresh.vault.resources[ORIGINAL_KEY].metadata = h.vault.resources[ORIGINAL_KEY].metadata;
+    fresh.vault.passports = h.vault.passports;
+    fresh.useProductionCandidates();
+    let first = true;
+    fresh.request.mockImplementation(async (token: unknown) => {
+      if (first) { first = false; return { ok: false, status: 0, data: null }; }
+      if (target === 'projection') fresh.saved.session.refreshToken = 'test-other-candidate';
+      else fresh.deps.readSafe.mockReturnValue('test-other-candidate');
+      return { ok: false, status: 401, data: { error: { code: token === 'test-refresh' ? 'INVALID_REFRESH_TOKEN' : code } } };
+    });
+    if (phase === 'runtime') await fresh.runtimeRefresh();
+    else void fresh.start();
+    await vi.advanceTimersByTimeAsync(62_500);
+    expect(fresh.request.mock.calls.map(([token]: unknown[]) => token)).toEqual([
+      'test-refresh', 'test-refresh', 'test-other-candidate',
+    ]);
+    expect(fresh.authClient.exchangeAccountMembership).toHaveBeenCalledWith('test-passport-access', 'original');
+    expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
+    expect(fresh.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+    expect(fresh.clear).not.toHaveBeenCalled();
+  });
+
+  it.each(['MEMBERSHIP_DISABLED', 'REFRESH_TOKEN_EXPIRED'] as const)('does not reinterpret the active owner\'s own %s as INVALID', async code => {
+    const { h } = recoverySetup();
+    await h.runtimeRefresh();
+    h.request.mockResolvedValue({ ok: false, status: 401, data: { error: { code } } });
+    await vi.advanceTimersByTimeAsync(62_500);
+    expect(h.deps.refreshPassportSessionSingleFlight).not.toHaveBeenCalled();
+    expect(h.deps.expireRuntimeAuth).toHaveBeenCalled();
+  });
+
   it('restores and persists the original account instead of expiring a recoverable login', async () => {
     const { h, exchange } = recoverySetup();
     await rejectAfterLoss(h);
