@@ -1,5 +1,5 @@
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
-import { canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { extractPlainText } from './agentHandoff.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
@@ -148,6 +148,12 @@ interface Running {
   /** A server replica refused `executor` (mid-rollout): this turn renews without it. */
   executorRefused?: boolean;
   execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number; durationMs?: number;
+  /** A chat-only queue can own the input before its asynchronous dispatch receipt arrives. */
+  inputObserved?: boolean;
+  /** A short grace lets the already captured terminal drain its persistence queue. */
+  orphanedAt?: number;
+  /** Chat-only dispatch uses a queue receipt while recovery retains this source identity. */
+  sourceClientId?: string;
   /** The conversation this turn answers in (see executionLane); unknown until its source is read. */
   lane?: string;
   laneLookup?: Promise<void>;
@@ -285,8 +291,8 @@ const displayText = (m: Message) => contentText(m, false);
 const attachmentName = (b: Message['content'][number]) => b.caption?.trim() || t('bots.groupChat.files.untitled');
 const mediaNames = (m: Message) => m.deleted ? '' : m.content.flatMap(b => b.type === 'media' ? [attachmentName(b)] : []).join(', ');
 /**
- * docs/product-rules/bot-group-chat.md §4.4 / §7.4: a reply or step may run tools for as long as
- * two hours; time waiting on the user is not counted. A hung lane is ended by its own idle watchdog.
+ * Setup/legacy-host budget only. Accepted inputs with authoritative liveness
+ * renew for as long as their Session owns them; its idle watchdog handles stalls.
  */
 const TURN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 /** How long the computers a request to the group's Cindy was not sent from leave it to the one it was. */
@@ -1994,6 +2000,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const timelineAt = e.created_at ? Date.parse(e.created_at) : NaN;
       const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
+        ...(run?.accepted ? { inputClientId: run.clientId } : {}),
         executionId: e.id, sourceMessageId: e.source_message_id, isSelfRequested: e.requester_id === selfId,
         ...speakerRequesterName(e.bot_id, e.requester_id),
         ...(e.plan_id || source ? { threadRootId: e.plan_id ? null : source!.threadRootId ?? null } : {}),
@@ -3011,7 +3018,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       return;
     }
     if (running.has(execution.id)) return;
-    const run: Running = { execution, sessionId: '', clientId: BOT_GROUP_CLIENT_ID.memberTurn(execution.conversation_id, execution.id, bot.id), accepted: false, started: Date.now(), lane };
+    // A manual retry reuses the server execution ID but advances its epoch.
+    // Give it a distinct input receipt so a late prior terminal cannot settle it.
+    const run: Running = { execution, sessionId: '', clientId: BOT_GROUP_CLIENT_ID.memberTurn(execution.conversation_id, `${execution.id}:${execution.epoch}`, bot.id), accepted: false, started: Date.now(), lane };
     running.set(execution.id, run);
     // Until its conversation is known, this turn holds back the companion's other work.
     resolveLane(run);
@@ -3423,8 +3432,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         assertDispatchCurrent: () => {
           if (!current() || running.get(execution.id) !== run || run.settlement) throw new Error('STALE_EXECUTOR');
         },
-        onQueued: async clientId => { run.clientId = clientId; }, onAccepted: async () => {
-          if (!current() || running.get(execution.id) !== run) { await deps.abortLane(lane.sessionId); throw new Error('STALE_EXECUTOR'); }
+        onQueued: async clientId => { run.sourceClientId ??= run.clientId; run.clientId = clientId; }, onAccepted: async () => {
+          if (!current()) throw new Error('STALE_EXECUTOR');
+          if (running.get(execution.id) !== run || run.settlement) {
+            await deps.abortLane(lane.sessionId, run.sourceClientId ?? run.clientId);
+            throw new Error('STALE_EXECUTOR');
+          }
           if (!run.accepted && lane.name.topic) deps.refineTopicTitle?.(lane.sessionId, lane.created ? lane.name.title : undefined, {
             ...lane.name.topic, text: (!run.plan && titleWords(thread?.root)) || lane.name.topic.text,
           });
@@ -3739,11 +3752,31 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (checking.has(run)) { recheck.add(run); return; }
     checking.add(run);
     try {
+      // A live Desktop is not evidence that this exact input is still executing.
+      // Do not renew an orphan forever after a lost terminal or a newer task turn.
+      // Reuse the existing heartbeat and terminal receipt; never abort the newer input.
+      const inputLive = run.sessionId && deps.isGroupInputLive
+        ? deps.isGroupInputLive(run.sessionId, run.clientId)
+          || (!run.inTask && !!run.sourceClientId && deps.isGroupInputLive(run.sessionId, run.sourceClientId)) : undefined;
+      if (inputLive) run.inputObserved = true;
+      const ownershipKnown = run.accepted || run.inputObserved;
+      if (ownershipKnown && inputLive === false) {
+        run.orphanedAt ??= Date.now();
+        if (Date.now() - run.orphanedAt >= 30_000) {
+          deps.log?.warn('Group execution lost its input owner', { executionId: run.execution.id,
+            epoch: run.execution.epoch, sessionId: run.sessionId });
+          await settleExecution(run, { sessionId: run.sessionId, activeInputClientId: run.clientId,
+            outcome: 'error', resultText: '', failureCode: 'RUNTIME_ERROR' });
+          return;
+        }
+      } else run.orphanedAt = undefined;
       // Ordinary group replies can wait for approval too, just like plan steps.
       const paused = !!deps.hasPendingInteraction?.(run.sessionId);
       if (paused) run.pauseStarted ??= Date.now();
       else if (run.pauseStarted !== undefined) { run.started += Date.now() - run.pauseStarted; run.pauseStarted = undefined; }
-      const timedOut = !paused && Date.now() - run.started > TURN_TIMEOUT_MS;
+      // Confirmed active/queued/recovering inputs may run arbitrarily long. The
+      // Session watchdog owns a stalled provider; this cap only covers setup/legacy hosts.
+      const timedOut = (!ownershipKnown || inputLive === undefined) && !paused && Date.now() - run.started > TURN_TIMEOUT_MS;
       if (timedOut) {
         await settleExecution(run, { sessionId: run.sessionId, activeInputClientId: run.clientId,
           outcome: 'error', resultText: '', failureCode: 'RUNTIME_TIMEOUT' }, true);
@@ -4504,11 +4537,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             if (!member || (isAssistant(member) ? !e.requester_id : !member.ownerActorId)) unknownRequester = true;
             continue;
           }
-          try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }); }
+          const epoch = botGroupStopRunEpoch(e);
+          const query = epoch === undefined ? '' : `?runEpoch=${epoch}`;
+          try { await api(`/conversations/${room}/executions/${e.id}/control${query}`, 'POST', { operationId: randomUUID(), action: 'stop' }); }
           catch (error) { if (refused(error)) { refusedExecutions.set(e.id, error); continue; } throw error; }
           stopped = true;
           const run = running.get(e.id);
-          if (run) await cancelExecution(run);
+          if (run && epoch !== undefined && run.execution.epoch === epoch) await cancelExecution(run);
         }
         // A rejection can race another stop or completion. Require an explicit settled
         // state: absence from a recent list is not proof that the target has ended.
@@ -4543,11 +4578,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     settleLaneTurn: async (terminal: BotGroupLaneTerminal) => {
       // A task card's task also runs its owner's own turns: only this turn's input ends it.
       const run = [...running.values()].find(r => r.sessionId === terminal.sessionId
-        && (!r.inTask || r.clientId === terminal.activeInputClientId));
+        && (terminal.activeInputClientId ? r.clientId === terminal.activeInputClientId
+          || !r.inTask && r.sourceClientId === terminal.activeInputClientId
+          : !deps.isGroupInputLive && !r.inTask));
       void taskCards.noteTurn(terminal, run?.inTask === true)
         .catch(error => deps.log?.warn('Group task card turn could not be noted', chatErrorDiagnostic(error)));
       if (!run) return local.settleLaneTurn(terminal);
-      if (terminal.activeInputClientId ? terminal.activeInputClientId !== run.clientId : !run.accepted) return false;
+      if (!terminal.activeInputClientId && !run.accepted) return false;
       await settleExecution(run, terminal, terminal.undispatched);
       return true;
     },
