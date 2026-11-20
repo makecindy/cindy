@@ -489,12 +489,13 @@ export async function loadAllCommands(
       ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-commands', [
           agentKind,
           ...(
-            opts?.sessionId || opts?.allowManagedPiPackagePreview !== undefined
+            opts?.sessionId || opts?.allowManagedPiPackagePreview !== undefined || opts?.forceReload !== undefined
               ? [{
                   ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
                   ...(opts?.allowManagedPiPackagePreview !== undefined
                     ? { allowManagedPiPackagePreview: opts.allowManagedPiPackagePreview }
                     : {}),
+                  ...(opts?.forceReload !== undefined ? { forceReload: opts.forceReload } : {}),
                 }]
               : []
           ),
@@ -504,6 +505,7 @@ export async function loadAllCommands(
           ...(opts?.allowManagedPiPackagePreview !== undefined
             ? { allowManagedPiPackagePreview: opts.allowManagedPiPackagePreview }
             : {}),
+          ...(opts?.forceReload !== undefined ? { forceReload: opts.forceReload } : {}),
         })
   ).catch(() => ({ success: false }));
   const shouldLoadSkills = !opts?.skipAgentSkills;

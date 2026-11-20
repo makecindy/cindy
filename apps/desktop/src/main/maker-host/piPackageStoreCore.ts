@@ -2971,10 +2971,17 @@ async function resolveManagedPiPackageResources(
   }
 }
 
-async function listManagedPiPromptCommands(): Promise<Array<{ name: string; description: string }>> {
+async function listManagedPiPromptCommands(
+  forceReload = false,
+): Promise<Array<{ name: string; description: string }>> {
   await mutationTail;
   try {
-    const inspected = await inspectAllPackages(undefined, PALETTE_INSPECTION_REUSE_MS);
+    // A forced palette refresh must observe packages installed after the long
+    // reuse window was filled; only the passive open pays the 60s reuse.
+    const inspected = await inspectAllPackages(
+      undefined,
+      forceReload ? 0 : PALETTE_INSPECTION_REUSE_MS,
+    );
     return inspected.flatMap((pkg) => (
       snapshotUnavailableWarningForPackage(pkg) ? [] : pkg.promptCommands
     ));
