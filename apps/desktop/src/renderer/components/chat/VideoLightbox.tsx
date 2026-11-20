@@ -70,7 +70,8 @@ export function VideoLightbox(props: VideoLightboxProps) {
  * currentTime there, so callers that need the position must read it first).
  */
 function releaseMediaElement(el: HTMLMediaElement | null): void {
-  if (!el) return;
+  // Close releases the source before the fade. Cleanup can then run on the same element.
+  if (!el?.hasAttribute('src')) return;
   try {
     el.pause();
   } catch {
