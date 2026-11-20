@@ -228,19 +228,14 @@ export class ExecutorGate {
     return this.evaluate(action, true);
   }
 
-  /** 与 authorize 同一判定，但不用掉一次性的批准：判断要不要在本机补弹确认卡时用。 */
-  wouldAllow(action: ExecutorAction): boolean {
-    return this.evaluate(action, false).ok;
+  /** 预判是否需要弹卡，不消耗批准；刚核实的 Git 豁免可在这里试算，不用先登记。 */
+  wouldAllow(action: ExecutorAction, gitVerified = false): boolean {
+    return this.evaluate(action, false, gitVerified).ok;
   }
 
-  /** 本机核实过的 Git 命令只需普通批准，且仍须在执行时复核豁免。 */
-  requiresCredentialApproval(action: ExecutorAction, take = false): boolean {
-    return this.needsCredentialConsent(action)
+  private evaluate(action: ExecutorAction, take: boolean, gitVerified = false): ExecutorGateDecision {
+    const credential = !gitVerified && this.needsCredentialConsent(action)
       && !(this.consumeCredentialExemption(action, take) && this.credentialGitReads(action) !== null);
-  }
-
-  private evaluate(action: ExecutorAction, take: boolean): ExecutorGateDecision {
-    const credential = this.requiresCredentialApproval(action, take);
     if (this.mode === 'full' && !credential) return { ok: true, elevated: true };
     // 抓取网页：本机用户批准过这个地址就放开内网。公网样式的域名也可能解析到内网(公司内网域名)，
     // 只看地址文本判定为不必问，但抓取时会按 DNS 结果被拦下。

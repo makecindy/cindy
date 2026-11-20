@@ -745,9 +745,10 @@ describe('shared provider credentials', () => {
     confirm?: RemoteExecutorOptions['confirm'],
     gitCredentials?: GitCredentialHistory,
     credentialGrant?: RemoteExecutorOptions['credentialGrant'],
+    now = Date.now,
   ) {
     const workspace = new ExecutorWorkspace({ workingDir: project });
-    const gate = new ExecutorGate(workspace, mode, Date.now, { confirmCredentials: true });
+    const gate = new ExecutorGate(workspace, mode, now, { confirmCredentials: true });
     const executor = new RemoteExecutor({
       workspace,
       gate,
@@ -1377,6 +1378,45 @@ describe('shared provider credentials', () => {
       await executor.close();
     }
   });
+
+  // PR #11758 / unit: confirm + check is the production handoff used by the executor and relay.
+  // Earlier coverage answered immediately. A safe plan-mode Git command approved after the
+  // exemption TTL must run once, use a credential card if it now needs one, or stop on cancellation.
+  it.each(['still safe', 'credential refused', 'credential allowed', 'cancelled'] as const)(
+    'rechecks a Git exemption after a delayed ordinary approval: %s',
+    async (outcome) => {
+      let now = 0;
+      const abort = new AbortController();
+      const provesSafe = vi.fn<GitCredentialHistory['provesSafe']>()
+        .mockResolvedValueOnce(true)
+        .mockImplementationOnce(async () => {
+          if (outcome === 'cancelled') abort.abort();
+          return outcome === 'still safe' || outcome === 'cancelled';
+        });
+      const asked = vi.fn<NonNullable<RemoteExecutorOptions['confirm']>>()
+        .mockImplementationOnce(async () => {
+          now += EXECUTOR_APPROVAL_TTL_MS + 1000;
+          return true;
+        })
+        .mockResolvedValueOnce(outcome === 'credential allowed');
+      const { executor } = sharedExecutor(
+        'plan', asked, { provesSafe } as unknown as GitCredentialHistory, undefined, () => now,
+      );
+      const action: ExecutorAction = { kind: 'exec', command: 'git remote show origin', cwd: project };
+      const allowed = outcome === 'still safe' || outcome === 'credential allowed';
+      try {
+        expect(executor.check(action).ok).toBe(false);
+        expect(await executor.confirm(action, abort.signal)).toBe(allowed);
+        expect(executor.check(action).ok).toBe(allowed);
+        expect(executor.check(action).ok).toBe(false);
+        expect(asked.mock.calls.map(([, , credential]) => credential)).toEqual(
+          outcome.startsWith('credential') ? [false, true] : [false],
+        );
+      } finally {
+        await executor.close();
+      }
+    },
+  );
 
   it('lets a new request ask right away after the permission mode changed under an open card', async () => {
     const answers: Array<(result: ExecutorConfirmation) => void> = [];
