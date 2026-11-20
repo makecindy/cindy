@@ -1,6 +1,6 @@
 import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { MCP_APP_MAX_HEIGHT } from '@cindy/maker-shared/mcp-app-controller';
-import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Keyboard, Pressable, StyleSheet, View, type ViewInstance } from 'react-native';
 import { MessageListRevealContext, MessageListKeepKeyboardContext } from './messageListReveal';
 import { useTranslation } from 'react-i18next';
@@ -9,8 +9,8 @@ import { Text } from '@/components/AppText';
 import { useTheme, textStyles, fontWeight, radius, spacing } from '@/theme';
 import { useMcpAppViews, NativeMcpAppSlot, mcpAppSurfaceAvailable } from './McpAppViews';
 import type { McpAppView, McpAppViewState } from './mcpAppView';
-import { MCP_APP_DEFAULT_HEIGHT, getMcpAppHeight } from './mcpAppView';
-import { getMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { MCP_APP_DEFAULT_HEIGHT } from './mcpAppView';
+import { getMobileHeights, subscribeMobileHeights } from './mcpAppMeasuredHeights';
 
 interface McpAppCardProps {
   plugin?: unknown; customMcp?: unknown;
@@ -39,6 +39,13 @@ export function McpAppCard(props: McpAppCardProps) {
       <Text style={[styles.error, { color: colors.textSecondary }]}>{t('mcpApps.sharedTaskReadOnly')}</Text>
     </View>
   );
+  return <MeasuredMcpAppCard {...props} />;
+}
+
+function MeasuredMcpAppCard(props: McpAppCardProps) {
+  // The cache hydrates asynchronously. Keep the normal 320/declared placeholder
+  // visible while it loads, then reuse the hydrated value on the next open.
+  useSyncExternalStore(subscribeMobileHeights, getMobileHeights);
   return <InteractiveMcpAppCard {...props} />;
 }
 
@@ -48,15 +55,12 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   const { t, i18n } = useTranslation();
   const [attempt, setAttempt] = useState(0);
   const [view, setView] = useState<McpAppView>();
-  // Only the initial state needs the remembered height; avoid re-reading it on every render.
-  const [state, setState] = useState<McpAppViewState>(() => ({ loading: true,
-    height: (deviceId ? getMcpAppHeight(getMobileAuthOwner().generation, deviceId, sessionId, clientId) : undefined)
-      ?? MCP_APP_DEFAULT_HEIGHT }));
+  const [state, setState] = useState<McpAppViewState>({ loading: true, height: MCP_APP_DEFAULT_HEIGHT });
   const foreground = host?.foreground ?? false;
   // Keyboard resizing can temporarily remove the row from the visible set.
   // Its focused document must survive that transition, including unsaved input.
   const surfaceActive = active || !!state.focus;
-  const width = useRef(1);
+  const width = useRef(0);
   const frame = useRef<ViewInstance>(null);
   const reveal = useContext(MessageListRevealContext);
   const keepKeyboard = useContext(MessageListKeepKeyboardContext);
@@ -101,9 +105,12 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   const open = host?.open;
   const hasHost = !!host;
   useEffect(() => {
+    const measuredWidth = frame.current?.getBoundingClientRect?.().width ?? width.current;
+    const remembered = deviceId && getMobileHeights()?.get(JSON.stringify([deviceId, sessionId, clientId]), measuredWidth);
+    const placeholder = remembered || MCP_APP_DEFAULT_HEIGHT;
     setView(undefined);
     if (!surfaceActive || (hasHost && !foreground)) {
-      setState((previous) => ({ height: previous.height, loading: false }));
+      setState((previous) => ({ height: placeholder, loading: false }));
       return;
     }
     if (!mcpAppSurfaceAvailable || !open) {
@@ -114,8 +121,8 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
       setState((previous) => ({ ...previous, loading: false, error: 'mcpApps.loadFailed' }));
       return;
     }
-    const current = open(deviceId, sessionId, clientId, contextRef.current);
-    current.setWidth(width.current);
+    const current = open(deviceId, sessionId, clientId, contextRef.current, placeholder);
+    current.setWidth(measuredWidth);
     setView(current);
     const unsubscribe = current.subscribe(setState);
     return () => {

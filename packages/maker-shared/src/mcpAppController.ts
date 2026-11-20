@@ -352,3 +352,5 @@ export class McpAppHeightGuard {
     return height;
   }
 }
+
+export { McpAppMeasuredHeights, parseMcpAppMeasurements } from './mcpAppMeasuredHeights.js';

@@ -103,7 +103,7 @@ vi.mock('../session/NativeMcpAppSurface', () => ({
 vi.mock('../session/mcpAppNativeDocument', () => ({ prepareMcpAppNativeDocument: state.prepare }));
 vi.mock('react-native', () => ({
   View: ({ children, ref }: any) => {
-    useImperativeHandle(ref, () => ({ measureInWindow: (callback: any) => callback(0, 100, 380, 320) }));
+    useImperativeHandle(ref, () => ({ getBoundingClientRect: () => ({ width: 380 }), measureInWindow: (callback: any) => callback(0, 100, 380, 320) }));
     return createElement('div', null, children);
   },
   Keyboard: { addListener: (name: string, listener: () => void) => {
@@ -328,6 +328,7 @@ it.each(['ios', 'android'])('keeps the %s native viewport fixed while App conten
     key: state.prepare.mock.calls[0][1],
     message: { jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 480 } },
   }) } }));
+  await act(() => vi.advanceTimersByTimeAsync(500));
   expect(state.props.style.height).toBe(480);
   expect(container.querySelector('[data-testid="mcp-webview"]')).toBe(original);
   assertInlineViewport();
@@ -458,6 +459,7 @@ it('reuses a measured height on remount without mixing device, task, or card key
     render(<McpAppCard deviceId={deviceId} sessionId={sessionId} clientId={clientId} title="App" />);
   await act(async () => renderCard('device-a', 'task-a', 'card-a'));
   await size(640);
+  await act(() => vi.advanceTimersByTimeAsync(500));
   expect(state.props.style.height).toBe(640);
   await act(async () => render(null));
   await act(async () => renderCard('device-a', 'task-a', 'card-a'));
@@ -480,6 +482,7 @@ it('evicts the oldest height after the bounded cache fills', async () => {
       message: { jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 400 + index } },
     }) } });
   });
+  await act(() => vi.advanceTimersByTimeAsync(500));
   await act(async () => render(null));
   await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card-0" title="App" />));
   expect(state.props.style.height).toBe(320);

@@ -1,3 +1,5 @@
+import { Keyboard } from 'react-native';
+import { getMobileHeights } from './mcpAppMeasuredHeights';
 import { CryptoDigestAlgorithm, digestStringAsync, getRandomBytes } from 'expo-crypto';
 import { McpAppController, McpAppHeightGuard, mcpAppFailureKey, type AppRpc } from '@cindy/maker-shared/mcp-app-controller';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
@@ -16,26 +18,6 @@ type Invoke = (device: string, channel: string, args: unknown[], options?: { noR
 const sdkCache = new McpAppSdkCache(text => digestStringAsync(CryptoDigestAlgorithm.SHA256, text));
 
 export const MCP_APP_DEFAULT_HEIGHT = 320;
-const MCP_APP_HEIGHT_CACHE_LIMIT = 100;
-const heightCache = new Map<string, number>();
-function heightKey(ownerGeneration: number, deviceId: string, sessionId: string, clientId: string): string {
-  return JSON.stringify([ownerGeneration, deviceId, sessionId, clientId]);
-}
-export function getMcpAppHeight(ownerGeneration: number, deviceId: string, sessionId: string, clientId: string): number | undefined {
-  const key = heightKey(ownerGeneration, deviceId, sessionId, clientId);
-  const value = heightCache.get(key);
-  if (value !== undefined) {
-    heightCache.delete(key);
-    heightCache.set(key, value);
-  }
-  return value;
-}
-function rememberMcpAppHeight(key: string, height: number): void {
-  heightCache.delete(key);
-  heightCache.set(key, height);
-  while (heightCache.size > MCP_APP_HEIGHT_CACHE_LIMIT) heightCache.delete(heightCache.keys().next().value!);
-}
-
 /** Owned by the persistent native host, not by a virtualized message/route. */
 export class McpAppView {
   readonly id = Array.from(getRandomBytes(24), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -43,13 +25,20 @@ export class McpAppView {
   readonly controller: McpAppController;
   document?: McpAppDocument;
   nativeDocument?: McpAppNativeDocument;
-  width = 1;
+  width = 0;
   state: McpAppViewState;
   closing = false;
   disposed = false;
   inject?: (script: string) => void;
   private listeners = new Set<(state: McpAppViewState) => void>();
   private readonly heightCacheKey: string;
+  private readonly heights = getMobileHeights();
+  private hasSize = false;
+  private resultDelivered = false;
+  private handshaking = false;
+  private fallbackTimer?: ReturnType<typeof setTimeout>;
+  private pendingMeasurement?: { height: number; width: number };
+  private readonly placeholder: number;
   private readonly heightGuard = new McpAppHeightGuard(() => console.warn('[mcp-apps] App height feedback loop bounded'));
   private closePromise?: Promise<void>;
 
@@ -57,10 +46,11 @@ export class McpAppView {
     invoke: Invoke, deviceId: string, sessionId: string, clientId: string,
     private readonly changed: () => void,
     private readonly removed: () => void,
-    openLink: (url: string) => Promise<void>, ownerGeneration: number,
+    openLink: (url: string) => Promise<void>, _ownerGeneration: number, placeholder = MCP_APP_DEFAULT_HEIGHT,
   ) {
-    this.heightCacheKey = heightKey(ownerGeneration, deviceId, sessionId, clientId);
-    this.state = { loading: true, height: getMcpAppHeight(ownerGeneration, deviceId, sessionId, clientId) ?? MCP_APP_DEFAULT_HEIGHT };
+    this.heightCacheKey = JSON.stringify([deviceId, sessionId, clientId]);
+    this.placeholder = placeholder;
+    this.state = { loading: true, height: placeholder };
     const sdkOwner = getMobileAuthOwner();
     this.controller = new McpAppController(
       (id, input) => {
@@ -80,15 +70,35 @@ export class McpAppView {
           this.localFilesUnavailable();
           return;
         }
+        if (message.method === 'ui/notifications/tool-result' || message.method === 'ui/notifications/tool-cancelled')
+          {
+            this.resultDelivered = true;
+            if (this.pendingMeasurement && this.fallbackTimer === undefined)
+              this.fallbackTimer = setTimeout(() => this.adoptMeasurement(), 500);
+          }
         const serialized = JSON.stringify(JSON.stringify(message)).replace(/</g, '\\u003c');
         this.inject?.(`window.dispatchEvent(new MessageEvent('message',{data:JSON.parse(${serialized}),source:window}));true;`);
       },
       (message) => {
         if (this.closing) return;
+        if (message.method === 'ui/initialize') {
+          this.handshaking = true;
+          this.resultDelivered = false;
+          this.pendingMeasurement = undefined;
+          clearTimeout(this.fallbackTimer);
+          this.fallbackTimer = undefined;
+        }
         if (message.method === 'ui/notifications/initialized') this.update({ loading: false });
         if (message.method === 'ui/notifications/size-changed' &&
-            typeof message.params?.height === 'number' && Number.isFinite(message.params.height))
-          this.update({ height: this.heightGuard.accept(message.params.height) });
+            typeof message.params?.height === 'number' && Number.isFinite(message.params.height) && message.params.height > 0) {
+          const height = this.heightGuard.accept(message.params.height);
+          // A pre-result or static document only acquires a remembered size after settling.
+          if (this.width > 0 && !Keyboard.isVisible?.()) {
+            this.pendingMeasurement = { height, width: this.width };
+            if (!this.state.loading && this.resultDelivered) this.adoptMeasurement();
+            else if ((!this.handshaking || this.resultDelivered) && this.fallbackTimer === undefined) this.fallbackTimer = setTimeout(() => this.adoptMeasurement(), 500);
+          }
+        }
       },
       (error) => this.fail(error), openLink,
     );
@@ -99,16 +109,26 @@ export class McpAppView {
     listener(this.state);
     return () => { this.listeners.delete(listener); };
   }
+  private adoptMeasurement(): void {
+    clearTimeout(this.fallbackTimer);
+    this.fallbackTimer = undefined;
+    const sample = this.pendingMeasurement;
+    this.pendingMeasurement = undefined;
+    if (!sample || sample.width !== this.width || this.closing || Keyboard.isVisible?.()) return;
+    this.hasSize = true;
+    this.heights?.remember(this.heightCacheKey, sample.width, sample.height);
+    this.update({ height: sample.height });
+  }
   setWidth(width: number): void {
     if (Number.isFinite(width) && width > 0 && width !== this.width && !this.disposed) {
       this.width = width;
       this.heightGuard.resize(width);
-      this.changed();
+      if (!this.hasSize) this.update({ height: this.heights?.get(this.heightCacheKey, width) ?? this.placeholder });
+      else this.changed();
     }
   }
   private update(value: Partial<McpAppViewState>): void {
     if (this.disposed) return;
-    if (value.height !== undefined) rememberMcpAppHeight(this.heightCacheKey, value.height);
     this.state = { ...this.state, ...value };
     this.listeners.forEach((listener) => listener(this.state));
     this.changed();
@@ -161,6 +181,7 @@ export class McpAppView {
   }
   private async closeView(): Promise<void> {
     this.closing = true;
+    clearTimeout(this.fallbackTimer);
     // Keep the same root-owned WebView and its callback alive. No RPC/HTTP
     // teardown completion can extend the native disposal deadline indefinitely.
     let timer: ReturnType<typeof setTimeout> | undefined;
