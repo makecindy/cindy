@@ -306,7 +306,7 @@ export function credentialConfirmation(action: ExecutorAction, description: stri
  * 会话级规则)。Agent 所在电脑没有先问本机用户时(如它的自动审查已放行)，由这张卡补问。
  */
 export function approvalConfirmation(action: ExecutorAction): LocalConfirmation {
-  return confirmationFor(action, {});
+  return confirmationFor(action, { metadata: { permissionScope: 'once' } });
 }
 
 function confirmationFor(

@@ -1189,6 +1189,7 @@ describe('remote agent round trip', () => {
         { kind: 'permission', toolName: 'Read', input: { file_path: production } },
       ]);
       // 普通确认卡：不是分享凭证卡，也不带会话级授权。
+      expect(asked[0]).toHaveProperty('metadata.permissionScope', 'once');
       expect(asked[0]).not.toHaveProperty('metadata.hostOwnedConfirmation');
       expect(asked[0]).not.toHaveProperty('suggestions');
     } finally {
