@@ -110,8 +110,15 @@ public final class CindyAgentNetModule: Module {
     }
   }
   private func waitForWork(_ id: String, _ maxMs: Int) -> Bool {
+    var ready = false
     let pump: Pump? = queue.sync {
       guard !self.destroyed, let handle = self.handles[id] else { return nil }
+      // The engine takes a turn before the wait starts. What JS wrote since its last poll may have left a datagram for its
+      // relay WebSocket, and no packet arriving on the socket would announce that one: the pump thread would hand it over
+      // only at its next timer, up to 250 ms later (PR #11816 review).
+      let state = cindy_agent_net_pump(handle)
+      if state < 0 { return nil }
+      ready = state & 1 == 1
       if let existing = self.pumps[id], !existing.isClosed { return existing }
       guard let waiter = cindy_agent_net_waiter(handle) else { return nil }
       let created = Pump(waiter: waiter)
@@ -130,6 +137,7 @@ public final class CindyAgentNetModule: Module {
       thread.start()
       return created
     }
+    if ready { return true }
     return pump?.nextWork(maxMs) ?? false
   }
   private func input(_ value: String) throws -> Data {

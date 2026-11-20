@@ -66,16 +66,23 @@ class CindyAgentNetModule : Module() {
   /** `wait` blocks for up to its limit: its own threads, so it holds up neither Expo's shared function queue nor `command`. */
   private val waitThreads = Executors.newCachedThreadPool()
   private fun waitForWork(id: String, maxMs: Int): Boolean {
+    var ready = false
     val pump = synchronized(lock) {
       val handle = handles[id]
       if (destroyed || handle == null) return false
+      // The engine takes a turn before the wait starts. What JS wrote since its last poll may have left a datagram for its
+      // relay WebSocket, and no packet arriving on the socket would announce that one: the pump thread would hand it over
+      // only at its next timer, up to 250 ms later (PR #11816 review).
+      val state = nativePump(handle)
+      if (state < 0) failure("AGENT_NET_COMMAND_FAILED")
+      ready = state and 1L == 1L
       pumps[id]?.takeUnless { it.closed } ?: run {
         val waiter = nativeWaiter(handle)
         if (waiter == 0L) failure("AGENT_NET_COMMAND_FAILED")
         Pump(id, waiter).also { pumps[id] = it; it.start() }
       }
     }
-    return pump.await(maxMs)
+    return ready || pump.await(maxMs)
   }
   private fun failure(code: String): Nothing = throw CodedException(code, code, null)
   private fun input(value: String): ByteArray = value.toByteArray(Charsets.UTF_8).also {

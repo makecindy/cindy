@@ -263,10 +263,11 @@ impl NativeEngine {
         Ok(Value::Null)
     }
     pub(crate) fn poison(&mut self) { self.poisoned = true; }
-    /// Everything the application reads: what `pump` already collected, or the state now.
+    /// Everything the application reads: the state now, with what `pump` already collected in front of it.
     fn poll(&mut self) -> Result<Value, &'static str> {
         self.network();
-        let result = match self.stash.take() { Some(result) => result, None => self.collect() };
+        let mut result = self.collect();
+        if let Some(stash) = self.stash.take() { merge(&mut result, stash); }
         self.reported = signature(&result);
         Ok(result)
     }
@@ -421,6 +422,26 @@ impl NativeEngine {
     }
 }
 
+/// Puts what `pump` collected earlier in front of the state read now: its datagrams, accepted connections, stream data and
+/// events are handed over once, in the order they came. Which connections exist and how each is doing is always the state
+/// now: the application takes a connection missing from the list for gone, and one it dialled after `pump` collected was
+/// missing from the earlier list (PR #11816 review). What was collected for a connection that is gone since is dropped,
+/// as the application drops the data of a connection reported dead.
+fn merge(result: &mut Value, mut stash: Value) {
+    let front = |earlier: &mut Value, now: &mut Value| {
+        if let (Some(before), Some(after)) = (earlier.as_array_mut().map(std::mem::take), now.as_array_mut()) {
+            let later = std::mem::replace(after, before);
+            after.extend(later);
+        }
+    };
+    for key in ["packets", "accepted"] { front(&mut stash[key], &mut result[key]); }
+    let earlier = stash["connections"].as_array_mut().map(std::mem::take).unwrap_or_default();
+    let Some(connections) = result["connections"].as_array_mut() else { return; };
+    for mut old in earlier {
+        let Some(current) = connections.iter_mut().find(|current| current["id"] == old["id"]) else { continue; };
+        for key in ["events", "data"] { front(&mut old[key], &mut current[key]); }
+    }
+}
 /// Something the application must read now: a datagram to relay, a new connection, stream data or events.
 fn has_work(result: &Value) -> bool {
     let filled = |value: &Value| value.as_array().is_some_and(|items| !items.is_empty());

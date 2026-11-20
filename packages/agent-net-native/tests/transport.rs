@@ -140,7 +140,48 @@ fn pump_runs_the_transport_without_the_application_and_the_waiter_wakes_on_a_dat
 // Production background opener: an unrelated expired sender must not invalidate
 // a fresh sender. The transport tests do not exercise persisted notification trust.
 #[test]
+fn poll_after_pump_reports_the_connections_there_are_now_and_keeps_what_pump_collected() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    let mut a = engine(21, "native-a");
+    let mut b = engine(23, "native-b");
+    let mut c = engine(25, "native-c");
+    let ia = command(&mut a, json!({"op":"identity"}));
+    let ib = command(&mut b, json!({"op":"identity"}));
+    let ic = command(&mut c, json!({"op":"identity"}));
+    command(&mut a, json!({"op":"admit","peers":[{"key":ib["transportKey"],"link":1}]}));
+    command(&mut b, json!({"op":"admit","peers":[{"key":ia["transportKey"],"link":1},{"key":ic["transportKey"],"link":2}]}));
+    let id = command(&mut a, json!({"op":"connect","key":ib["transportKey"],"address":{"address":"127.0.0.1","port":ib["udpPort"]}}));
+    until(&mut a, &mut b, |pa, pb| pa["connections"][0]["established"] == true && pb["connections"][0]["established"] == true);
+    let stream = command(&mut a, json!({"op":"openStream","id":id}));
+    assert_eq!(command(&mut a, json!({"op":"write","id":id,"stream":stream,"data":URL_SAFE_NO_PAD.encode(b"collected by pump")})), 17);
+    // b's own turn collects the stream data before the application reads anything.
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while !b.pump().unwrap().0 {
+        assert!(Instant::now() < deadline, "native pump deadline");
+        a.pump().unwrap();
+        sleep(Duration::from_millis(1));
+    }
+    // The application dials another peer over its relay WebSocket link after that, and only then polls.
+    let dialled = command(&mut b, json!({"op":"connect","key":ic["transportKey"],"address":{"link":2}}));
+    let poll = command(&mut b, json!({"op":"poll"}));
+    let connections = poll["connections"].as_array().unwrap();
+    assert!(connections.iter().any(|connection| connection["id"] == dialled), "the connection dialled since is listed: {connections:?}");
+    let data: Vec<u8> = connections.iter().flat_map(|connection| connection["data"].as_array().unwrap().iter())
+        .flat_map(|chunk| URL_SAFE_NO_PAD.decode(chunk["data"].as_str().unwrap()).unwrap()).collect();
+    assert_eq!(data, b"collected by pump");
+    assert!(poll["packets"].as_array().unwrap().iter().any(|packet| packet["link"] == 2), "the dial's datagram goes to the relay link");
+    // Handed over once.
+    let again = command(&mut b, json!({"op":"poll"}));
+    assert!(again["connections"].as_array().unwrap().iter().all(|connection| connection["data"].as_array().unwrap().is_empty()));
+    // A datagram for the relay WebSocket that a write left behind is work at the engine's next turn, with nothing arriving:
+    // the application is not left waiting for a packet before it sends this one.
+    let relayed = command(&mut b, json!({"op":"connect","key":ic["transportKey"],"address":{"link":2}}));
+    assert!(relayed.is_u64() && b.pump().unwrap().0);
+}
+
+#[test]
 fn notification_trust_expires_only_the_selected_sender() {
+
     let mut sender = engine(31, "fresh-host");
     let mut old_sender = engine(32, "old-host");
     let mut phone = engine(33, "phone");
