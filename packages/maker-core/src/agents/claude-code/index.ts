@@ -4981,6 +4981,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     const hasPendingBashContinuation = (): boolean =>
       pendingBashContinuationUntil > performance.now();
     let bashContinuationInFlight = false;
+    // Native continuations advance turnState.generation too. Only an explicit
+    // send transfers Bash retention beyond an already pending Stop's authority.
+    let lastExplicitSendGeneration = 0;
     const bashContinuationBoundaries = new Set<AgentEvent>();
     function clearPendingBashContinuations(): void {
       pendingBashContinuationUntil = 0;
@@ -7126,6 +7129,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 兜底重置 currentTurn —— 上一 turn 异常 / abort 时 endTurn 可能没跑,
         // 防止 currentTurn 残留累加到下一 turn (lastApi / contextWindow / cost 跨 turn 保留)
         beginNewTurn(mutableFastMode ? 'priority' : 'standard');
+        lastExplicitSendGeneration = turnState.generation;
         resetToolLoopGuards();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。
@@ -7381,7 +7385,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async abort() {
-        const bashStopGeneration = turnState.generation;
+        const bashStopGeneration = lastExplicitSendGeneration;
         // 只 interrupt 当前 turn, 不能 abortController.abort() ——
         // 那会杀掉整个 SDK Query, 让 streaming-input 流断开 (for await 抛
         // 'aborted by user' → eventQueue.end()), 后续 send 进黑洞 session 卡死。
@@ -7488,7 +7492,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // ACK is the existing hard-Stop boundary even when the SDK never
           // drains a result. Release active/queued retention as well as the
           // startup gap, without clearing a newer user generation's state.
-          if (turnState.generation === bashStopGeneration) clearPendingBashContinuations();
+          if (lastExplicitSendGeneration === bashStopGeneration) clearPendingBashContinuations();
           // interrupt ACK authorizes retiring only wake tasks whose stop RPC
           // also succeeded. Rejected stops remain tracked for provider events,
           // preserving their continuation contract instead of creating an

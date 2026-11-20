@@ -3627,6 +3627,47 @@ describe('completed Bash runtime retention', () => {
     } finally { vi.restoreAllMocks(); stream.end(); await handle.close(); await collected; }
   });
 
+  it.each(['native continuation', 'new user send'] as const)('settles only pre-Stop Bash retention when ACK races %s', async (race) => {
+    const { handle, stream, events, collected, fakeQuery } = await startSessionWithStream();
+    const interrupt = createDeferred<void>();
+    try {
+      await handle.send({ type: 'user', content: 'background work' });
+      stream.emit(taskStarted('bash', 'local_bash'));
+      stream.emit(turnResult('waiting'));
+      await waitFor(() => events.some((event) => event.type === 'done'), 'foreground done');
+      stream.emit(taskNotification('bash', 'completed'));
+      await waitFor(() => handle.listBackgroundTasks?.().length === 0, 'Bash completed');
+      expect(handle.countPendingWakeContinuations?.()).toBeGreaterThan(0);
+
+      fakeQuery.interrupt.mockImplementationOnce(() => interrupt.promise);
+      const stop = handle.abort();
+      await waitFor(() => fakeQuery.interrupt.mock.calls.length === 1, 'Stop interrupt dispatched');
+
+      // Native activity belongs to the pending Stop even though it advances the
+      // turn generation. A newer explicit send instead transfers ownership.
+      if (race === 'new user send') {
+        await handle.send({ type: 'user', content: 'new request before Stop ACK' });
+      }
+      stream.emit(assistantText('late provider activity before Stop ACK'));
+      await waitFor(() => events.some((event) => event.type === 'text' && JSON.stringify(event.data).includes('late provider activity before Stop ACK')), 'provider activity processed during Stop');
+      expect(handle.countPendingWakeContinuations?.()).toBeGreaterThan(0);
+
+      interrupt.resolve(undefined);
+      await stop;
+      if (race === 'native continuation') expect(handle.countPendingWakeContinuations?.()).toBe(0);
+      else expect(handle.countPendingWakeContinuations?.()).toBeGreaterThan(0);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.send({ type: 'user', content: 'new request after raced Stop' });
+      stream.emit(assistantText('fresh answer after raced Stop'));
+      stream.emit(turnResult('done'));
+      await waitFor(() => events.some((event) => event.type === 'text' && JSON.stringify(event.data).includes('fresh answer after raced Stop')), 'next send delivered');
+    } finally {
+      stream.end();
+      await handle.close();
+      await collected;
+    }
+  });
+
   it.each(['no-active-turn', 'interrupt-rejected', 'hard-stop-rejected'] as const)('keeps unconfirmed Bash follow-up when Stop is %s', async (failure) => {
     const { handle, stream, events, collected, fakeQuery } = await startSessionWithStream();
     try {
