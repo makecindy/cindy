@@ -312,6 +312,36 @@ describe('send_to_session tool', () => {
     });
   });
 
+  // model-groups.md §6.3: the mode id reaches the host only on create, an existing task is
+  // refused before any host call (ignoring it would report a mode that was never used), and
+  // the receipt names the chosen mode/source without any host-internal decision handle.
+  it('create: model_group_id 只在新建时交给宿主，回执带选中的模式与来源', async () => {
+    // 宿主内部的选路凭据即使漏进结果，也不能出现在回执里。
+    const hostOnly = { decisionId: 'decision-secret' };
+    const { registry, sendToSession } = setup({
+      result: {
+        ok: true, targetSessionId: 'tgt-mode', agentKind: 'codex', wakeKind: 'created',
+        targetTitle: 'mode task', targetLastUserSendAt: null, model: 'gpt-5.6-sol', effort: 'xhigh',
+        fastMode: false, providerId: 'codex-sub-2',
+        modelGroup: { routeId: 'r-burn', groupName: 'Burn first', why: 'expiring', modelName: 'GPT-5.6 Sol',
+          sourceName: 'Codex 2', agentDeviceId: null, exceptions: [{ type: 'hours', viaRouteName: 'Night' }], ...hostOnly },
+      },
+    });
+    const created = parse(await registry.call('send_to_session', { message: 'go', model_group_id: ' r-burn ', fast: true }));
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ modelGroupId: 'r-burn', fast: true, targetSessionId: undefined }));
+    expect(created).toMatchObject({ ok: true, model: 'gpt-5.6-sol', provider_id: 'codex-sub-2', model_group: {
+      id: 'r-burn', name: 'Burn first', why: 'expiring', model_name: 'GPT-5.6 Sol', source_name: 'Codex 2',
+      provider_device_id: 'local', exceptions: [{ type: 'hours', via_route_name: 'Night' }] } });
+    expect(JSON.stringify(created)).not.toContain('decision-secret');
+
+    sendToSession.mockClear();
+    for (const target of ['tgt-1', 'dev-2::tgt-1']) {
+      const refused = await registry.call('send_to_session', { target_session_id: target, message: 'go', model_group_id: 'r-burn' });
+      expect(parse(refused)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    }
+    expect(sendToSession).not.toHaveBeenCalled();
+  });
+
   it('create: Pi Agent 配置通过 schema 并完整透传', async () => {
     const { registry, sendToSession } = setup();
     const res = await registry.call('send_to_session', {

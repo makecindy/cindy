@@ -7,6 +7,8 @@ import {
   resolveSendToSessionExecutionConfig,
   type SendToSessionRoutingSnapshot,
 } from '../sendToSessionExecutionConfig';
+import { routeSendToSessionByModelGroup, sendToSessionModelGroupConflict } from '../sendToSessionModelGroup';
+import type { ModelGroupResolveRequest, ModelGroupResolveResult } from '../../../shared/modelGroups';
 
 const available = (agent: AgentKind) => (
   agent === 'codex'
@@ -579,5 +581,83 @@ describe('resolveSendToSessionCreateRoute', () => {
       source: fableSource(), sourceAgentDeviceId: 'device-a', sourceIsSsh: false,
       overrides: { effort: 'high' },
     }, deps)).rejects.toThrow('device offline');
+  });
+});
+
+/**
+ * model-groups.md §6.3：send_to_session 按模式新建任务。生产入口是 resolveSendToSessionCreateRoute 的
+ * pinnedProviderId(模式选中的来源)与 sendToSessionModelGroup 的冲突、选路函数；register.ts 的 create
+ * 分支只把它们串起来。最小失败输入：模式选中的模型与来源任务相同、只是供应商连接不同——不固定来源时
+ * 会原样沿用来源任务的连接与推理强度，用户的「快作废的先用」等于没生效。
+ */
+describe('send_to_session model_group_id', () => {
+  const codexSource = { agentKind: 'codex' as const, model: 'gpt-5.6-sol', effort: 'max' as const, fastMode: true, providerId: 'openai' };
+  // 两个连接都提供同一个模型：默认路由落在 openai，模式选的是第二个订阅。
+  const twoCodexAccounts = (): SendToSessionRoutingSnapshot => {
+    const routing = providerRouting();
+    const openai = routing.availability.codex![0]!;
+    return {
+      availableModels: available('codex'),
+      providerRouting: { ...routing, availability: { ...routing.availability, codex: [openai, { ...openai, id: 'codex-sub-2', name: 'Codex 2' }] } },
+      hasCindyAiApiKey: true,
+    };
+  };
+  const deps = () => ({
+    isSelfDeviceId: () => false,
+    readLocalRouting: vi.fn(async () => twoCodexAccounts()),
+    readDeviceRouting: vi.fn(async (): Promise<SendToSessionRoutingSnapshot> => { throw new Error('not used'); }),
+  });
+
+  it.each([
+    { name: '模式不指定推理强度 → 模型默认档，不继承来源任务的 max', effort: undefined, expected: 'xhigh' },
+    { name: '模式的档位模型不支持 → 模型默认档，不报错', effort: 'low' as const, expected: 'xhigh' },
+    { name: '模式的档位模型支持 → 按模式', effort: 'high' as const, expected: 'high' },
+  ])('固定模式选中的来源：$name', async ({ effort, expected }) => {
+    const result = await resolveSendToSessionCreateRoute({
+      source: codexSource, sourceAgentDeviceId: null, sourceIsSsh: false, requestedAgentDeviceId: null,
+      pinnedProviderId: 'codex-sub-2',
+      overrides: { agentKind: 'codex', model: 'gpt-5.6-sol', ...(effort ? { effort } : {}) },
+    }, deps());
+    expect(result).toEqual({ ok: true, agentDeviceId: null,
+      config: { agentKind: 'codex', model: 'gpt-5.6-sol', effort: expected, fastMode: true, providerId: 'codex-sub-2' } });
+  });
+
+  it('选中的连接此刻不提供这个模型 → PROVIDER_ROUTE_UNAVAILABLE，不换成默认连接', async () => {
+    const result = await resolveSendToSessionCreateRoute({
+      source: codexSource, sourceAgentDeviceId: null, sourceIsSsh: false, requestedAgentDeviceId: null,
+      pinnedProviderId: 'codex-removed', overrides: { agentKind: 'codex', model: 'gpt-5.6-sol' },
+    }, deps());
+    expect(result).toMatchObject({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE' });
+  });
+
+  it.each([
+    { name: '已有任务', request: { targetSessionId: 't-1' }, conflict: true },
+    { name: 'agent_kind', request: { execution: { agentKind: 'codex' as const } }, conflict: true },
+    { name: 'model', request: { execution: { model: 'gpt-5.6-sol' } }, conflict: true },
+    { name: 'effort', request: { execution: { effort: 'high' as const } }, conflict: true },
+    { name: 'provider_device_id=local', request: { agentDeviceId: null }, conflict: true },
+    { name: '只传 fast', request: { execution: { fastMode: true } }, conflict: false },
+  ])('与模式同传 $name → 冲突=$conflict', ({ request, conflict }) => {
+    expect(sendToSessionModelGroupConflict(request) !== null).toBe(conflict);
+  });
+
+  const routed: ModelGroupResolveResult = {
+    outcome: 'routed', groupName: 'Burn first', decisionId: 'd-1', modelName: 'GPT-5.6 Sol', sourceName: 'Codex 2',
+    why: 'expiring', quota: null, trace: [],
+    route: { agentKind: 'codex', providerId: 'codex-sub-2', model: 'gpt-5.6-sol', effort: 'high' },
+  };
+  it.each([
+    { name: '选中本机来源', result: routed,
+      expected: { ok: true, route: { agent: 'codex', model: 'gpt-5.6-sol', providerId: 'codex-sub-2', agentDeviceId: null, effort: 'high' } } },
+    { name: '模式已删除', result: { outcome: 'missing', groupName: 'r-x', trace: [] } as ModelGroupResolveResult,
+      expected: { ok: false, errorCode: 'MODEL_GROUP_NOT_FOUND' } },
+    { name: '没有能用的来源', result: { outcome: 'unavailable', groupName: 'Burn first', trace: [] } as ModelGroupResolveResult,
+      expected: { ok: false, errorCode: 'MODEL_GROUP_UNAVAILABLE', message: expect.stringContaining('No task was created') } },
+  ])('按模式选一次：$name', async ({ result, expected }) => {
+    const requests: ModelGroupResolveRequest[] = [];
+    const outcome = await routeSendToSessionByModelGroup('r-burn', async (request) => { requests.push(request); return result; });
+    expect(outcome).toMatchObject(expected);
+    // 本工具不带图片：不带图片上下文，图片例外不生效。
+    expect(requests).toEqual([{ selection: { type: 'route', id: 'r-burn' } }]);
   });
 });

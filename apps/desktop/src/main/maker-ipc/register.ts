@@ -1205,6 +1205,8 @@ import {
 } from './orcaRemoteWorkerHost.js';
 import { createOrcaRemoteWorkers, invokeDeviceValue, type OrcaRemoteWorkers } from './orcaRemoteWorkers.js';
 import { listWorkerAgentLocations, readWorkerAgentLocations } from './workerAgentLocations.js';
+import { routeSendToSessionByModelGroup, sendToSessionModelGroupConflict } from './sendToSessionModelGroup.js';
+import { withoutModelGroupDecision } from './orcaWorkerModelGroup.js';
 import { createControlledModelCatalogReader } from './controlledModelCatalog.js';
 import { CONTROLLED_MODEL_CATALOG_CHANNEL } from '../../shared/controlledModelCatalog.js';
 import {
@@ -1433,7 +1435,7 @@ import {
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
 import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
-import { readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
+import { readModelGroupRecoveryOffer, resolver as modelGroupResolver } from '../model-groups/desktopResolver.js';
 import { modelGroupRouteFor } from '../model-groups/routeFor.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
 import { bindModelGroupSession, readModelGroupBindingForDispatch } from '../model-groups/sessionBindings.js';
@@ -2661,6 +2663,8 @@ type SendToSessionInternalResult =
       effort?: SendToSessionCreateDefaults['effort'] | null;
       fastMode?: boolean | 'ultrafast';
       providerId?: string | null;
+      /** create + model_group_id：模式、选中的模型与来源、原因(model-groups.md §6.3)；不含选路凭据。 */
+      modelGroup?: import('./orcaWorkerModelGroup').WorkerModelGroupResolution & { agentDeviceId: string | null };
     }
   | {
       ok: false;
@@ -2679,6 +2683,9 @@ type SendToSessionInternalResult =
         // create + useWorktree 专用:workingDir 不是 git 仓库 / git 未装 / worktree 创建失败。
         // 显式要隔离却拿不到时硬报,不静默降级成共享工作树(调用方自行决定是否去掉参数重试)。
         | 'WORKTREE_UNAVAILABLE'
+        // create + model_group_id：模式在这台电脑的当前账号下不存在 / 此刻没有能用的来源(不回退到来源任务的模型)。
+        | 'MODEL_GROUP_NOT_FOUND'
+        | 'MODEL_GROUP_UNAVAILABLE'
         | 'INTERNAL';
       message: string;
     };
@@ -2848,6 +2855,8 @@ interface OrcaCollabService {
     execution?: SendToSessionExecutionOverrides;
     /** create 分支可选:新任务的 Agent 所在电脑；null = 本机，省略 = 继承 dispatcher。jump 忽略。 */
     agentDeviceId?: string | null;
+    /** create 分支可选:按模型组的这个模式选来源(model-groups.md §6.3)；jump 传入即 INVALID_ARGS。 */
+    modelGroupId?: string;
     /** Host-owned create defaults for non-session callers such as scheduler script tasks. */
     createDefaults?: SendToSessionCreateDefaults;
   }) => Promise<SendToSessionResult>;
@@ -2875,6 +2884,8 @@ interface OrcaCollabService {
   createWorker: (params: {
     /** Host-only marker set at the MCP adapter; never accepted from its schema. */
     useCreationPrefs?: boolean;
+    /** create_worker 的 model_group_id：按这个模式选来源(model-groups.md §6.2)。 */
+    modelGroupId?: string;
     leadSessionId: string;
     role: string;
     /** 'acp' = 本机插件引擎 Worker(配 providerId)。 */
@@ -2898,6 +2909,7 @@ interface OrcaCollabService {
         worktreeSource?: import('../../shared/orca-worker-project').WorkerWorktreeSourceSelection;
         resolved?: Extract<import('./orcaWorkerCreationService').OrcaWorkerCreationResult, { ok: true }>['resolved'];
         defaults?: import('./orcaWorkerDefaults').WorkerDefaultsResolution;
+        modelGroup?: import('./orcaWorkerModelGroup').WorkerModelGroupResolution;
         executionDeviceId?: string;
         workerId: string;
         workerSessionId: string;
@@ -11948,6 +11960,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     execution?: SendToSessionExecutionOverrides;
     /** create 分支可选:新任务的 Agent 所在电脑；null = 本机，省略 = 继承 dispatcher。jump 忽略。 */
     agentDeviceId?: string | null;
+    /** create 分支可选:按模型组的这个模式选来源(model-groups.md §6.3)；与执行配置、位置或 jump 同传即 INVALID_ARGS。 */
+    modelGroupId?: string;
     onAccepted?: () => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
     onAcceptedCommit?: () => void | Promise<void>;
@@ -11994,7 +12008,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       origin,
       createDefaults,
       inheritSourcePermissionMode,
+      modelGroupId,
     } = params;
+    // 模式决定的参数同传、或对已有任务传模式：什么都不做(不选路、不推进「轮流」)。
+    if (modelGroupId !== undefined) {
+      const conflict = sendToSessionModelGroupConflict({ targetSessionId, execution: executionOverrides,
+        agentDeviceId: requestedAgentDeviceId });
+      if (conflict) return { ok: false, errorCode: 'INVALID_ARGS', message: conflict };
+      if (!dispatcherSessionId) {
+        return { ok: false, errorCode: 'INVALID_ARGS',
+          message: 'model_group_id needs a source task on this computer; it is not available to host-owned task creation.' };
+      }
+    }
     const queuedOrigin = sessionQueueOriginForDispatcher({
       dispatcherSessionId,
       ...(await readSenderIdentity(origin ? undefined : dispatcherSessionId)),
@@ -12101,6 +12126,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 来源任务的 Agent 在另一台电脑运行：新任务继承同一台电脑(它的模型与来源都在那台)；
       // 显式 agentDeviceId 覆盖继承值。
       let inheritedAgentDeviceId: string | undefined;
+      // 经模式选中的来源；只在任务建好、首条消息被接受后提交一次选路。
+      let modelGroupRouted: Extract<Awaited<ReturnType<typeof routeSendToSessionByModelGroup>>, { ok: true }> | null = null;
       try {
         const db = getDbClient().drizzle;
         let inherited: SendToSessionCreateDefaults;
@@ -12144,6 +12171,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .where(eq(sessions.id, dispatcherSessionId))
             .limit(1);
           const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;
+          if (modelGroupId !== undefined) {
+            // 模式里的「这台电脑」属于记录它的电脑；SSH 任务的 Agent 在 SSH 主机上，套过去会选错来源。
+            if (meta.remoteHostId) {
+              return { ok: false, errorCode: 'INVALID_ARGS',
+                message: 'The source task runs its Agent on an SSH host; model_group_id is not supported there. Choose an explicit model.' };
+            }
+            // 共享中的任务由访客驱动：不能用主人的模式(与 list_model_groups 同一边界)。
+            if (isSessionSharedTaskActive(dispatcherSessionId)) {
+              return { ok: false, errorCode: 'MODEL_GROUP_UNAVAILABLE',
+                message: 'Model group modes are not available in a shared task. No task was created; choose an explicit model.' };
+            }
+            const routed = await routeSendToSessionByModelGroup(modelGroupId, async (request) => (
+              // 与新任务、Worker 同一个 resolver：轮流位置与账号范围共用。账号切换未完成时不读任何账号的模式。
+              isAppSessionBoundaryPending()
+                ? { outcome: 'unavailable', groupName: request.selection.id, trace: [] }
+                : modelGroupResolver.resolve(request)
+            ));
+            if (!routed.ok) return routed;
+            modelGroupRouted = routed;
+          }
           const inheritedBase: SendToSessionCreateDefaults = {
             agentKind: requireBuiltinAgentKind(meta.agentKind, 'Creating tasks from a plugin-engine task'),
             workingDir: resolvedWorkDir,
@@ -12172,8 +12219,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             },
             sourceAgentDeviceId,
             sourceIsSsh: Boolean(meta.remoteHostId),
-            ...(requestedAgentDeviceId !== undefined ? { requestedAgentDeviceId } : {}),
-            ...(executionOverrides ? { overrides: executionOverrides } : {}),
+            ...(modelGroupRouted
+              // 模式选中的路线当作固定路线：引擎、模型、供应商连接与 Agent 位置都按它(本机来源显式为 null)，
+              // 推理强度按模式；fast 仍可由调用方传，否则照原有规则继承来源任务。
+              ? {
+                  requestedAgentDeviceId: modelGroupRouted.route.agentDeviceId,
+                  pinnedProviderId: modelGroupRouted.route.providerId,
+                  overrides: {
+                    agentKind: modelGroupRouted.route.agent,
+                    model: modelGroupRouted.route.model,
+                    ...(modelGroupRouted.route.effort ? { effort: modelGroupRouted.route.effort } : {}),
+                    ...(executionOverrides?.fastMode !== undefined ? { fastMode: executionOverrides.fastMode } : {}),
+                  },
+                }
+              : {
+                  ...(requestedAgentDeviceId !== undefined ? { requestedAgentDeviceId } : {}),
+                  ...(executionOverrides ? { overrides: executionOverrides } : {}),
+                }),
           }, {
             isSelfDeviceId: (deviceId) => deviceId === getSelfDeviceId(),
             readLocalRouting: async (agentKind) => ({
@@ -12353,6 +12415,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentKind: session.agentKind,
           worktreePath: handoffWorktree?.meta.path ?? null,
         });
+        // 任务建好、首条消息已被接受：这次选路才算数(推进「轮流」、记「最近的选择」)。之前任何失败都不提交。
+        if (modelGroupRouted?.modelGroup.decisionId) modelGroupResolver.commit(modelGroupRouted.modelGroup.decisionId);
         return {
           ok: true,
           targetSessionId: session.id,
@@ -12368,6 +12432,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           effort: openedRow.effort || null,
           fastMode: openedRow.fastMode,
           providerId: openedRow.providerId ?? null,
+          // 选路凭据只在宿主内部使用，不随结果交给工具。
+          ...(modelGroupRouted ? { modelGroup: { ...withoutModelGroupDecision(modelGroupRouted.modelGroup),
+            agentDeviceId: modelGroupRouted.route.agentDeviceId } } : {}),
         };
       } catch (err) {
         if (createdPreviewStarted && createdPreviewSessionId && createdPreviewClientId) {
@@ -16386,6 +16453,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     getCreationSelection: () => isAppSessionBoundaryPending() ? null : getWorkerCreationSelection(getActiveDataOwnerPushStamp()),
+    // 与新任务同一个 resolver：轮流位置与账号范围共用。账号切换未完成时不读任何账号的模式。
+    resolveModelGroup: async (request) => isAppSessionBoundaryPending()
+      ? { outcome: 'unavailable', groupName: request.selection.id, trace: [] }
+      : modelGroupResolver.resolve(request),
+    isSharedTaskSession: isSessionSharedTaskActive,
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
     resolveWorkerWorkingDir: async (dir, lead) => {
       let resolved: string;
@@ -16539,6 +16611,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         context,
       });
     },
+    commitModelGroupDecision: (decisionId) => modelGroupResolver.commit(decisionId),
     rollbackCreatedWorker: async ({ workerId, workerSessionId }) => {
       if (await orcaRemoteWorkers.rollbackCreatedWorker(workerSessionId)) return;
       const workerSession = maker.getSession(workerSessionId);

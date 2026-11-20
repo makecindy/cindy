@@ -1,4 +1,6 @@
 import { resolveWorkerCreationDefaults, type OrcaWorkerCreateRequest, type WorkerDefaultsResolution } from './orcaWorkerDefaults';
+import { routeWorkerByModelGroup, workerModelGroupConflict, type WorkerModelGroupResolution } from './orcaWorkerModelGroup';
+import type { ModelGroupResolveRequest, ModelGroupResolveResult } from '../../shared/modelGroups';
 import type { WorkerCreationSelection } from '../../shared/workerCreationSelection';
 import type { WorkerWorktreeRequest, WorkerOwnedWorktree, WorkerWorktreeSourceSelection } from '../../shared/orca-worker-project';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
@@ -189,6 +191,10 @@ export type OrcaWorkerCreationErrorCode =
   | 'REMOTE_WORKDIR_NOT_DIRECTORY'
   | 'REMOTE_WORKDIR_INVALID'
   | 'REMOTE_WORKDIR_UNAVAILABLE'
+  /** model_group_id 指向的模式在这台电脑的当前账号下不存在。 */
+  | 'MODEL_GROUP_NOT_FOUND'
+  /** 模式里此刻没有能用的来源；不回退到记忆或默认模型。 */
+  | 'MODEL_GROUP_UNAVAILABLE'
   | 'INTERNAL';
 
 /** worker 创建结果保留首条派活 outcome，让调用方区分 created-but-not-dispatched。 */
@@ -210,6 +216,8 @@ export type OrcaWorkerCreationResult =
       /** 在另一台电脑运行的 Worker 才有；workerSessionId 此时是本机代理任务。 */
       executionDeviceId?: string;
       defaults?: WorkerDefaultsResolution;
+      /** 经模型组选出的 Worker：模式与选中的来源；decisionId 由生命周期在 Worker 落定后提交。 */
+      modelGroup?: WorkerModelGroupResolution;
       resolved: {
         /** 'acp' = 插件引擎 Worker(providerId 指出是哪一个)。 */
         agent: EngineKind;
@@ -314,6 +322,13 @@ export interface OrcaWorkerCreationDeps {
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
   getCreationSelection?(): WorkerCreationSelection | null;
+  /**
+   * 模型组选路(与新任务共用同一个 resolver 实例，轮流位置共享)。只产生待提交的凭据，不推进轮流；
+   * 未注入 = 本机不支持经模式创建 Worker。
+   */
+  resolveModelGroup?(request: ModelGroupResolveRequest): Promise<ModelGroupResolveResult>;
+  /** 共享中的任务由访客驱动：不能用主人的模式(与 list_model_groups 同一边界)。 */
+  isSharedTaskSession?(sessionId: string): boolean;
   getWorkerPermissionMode(): OrcaWorkerPermissionMode;
   /** Validate existence and target project policy before reserving or bootstrapping. */
   resolveWorkerWorkingDir(dir: string, lead: OrcaLeadSessionSnapshot): Promise<string>;
@@ -645,6 +660,11 @@ function resolveWorkerConfig(params: {
   availableModels: OrcaWorkerModelCapabilities[];
   model: string;
   providerId: string | null;
+  /**
+   * true = 档位来自模式(model-groups.md §4 推理强度)：带了就当偏好，模型不支持退到默认档；没带(模式不指定，
+   * 或 resolver 因模型不支持已去掉)就用模型默认档，不继承 Worker 默认档或 Lead 的档位。
+   */
+  effortFromMode?: boolean;
 }): ResolveWorkerConfigResult {
   const { input, lead, defaults, availableModels, model, providerId } = params;
   const modelCapabilities = availableModels.find((candidate) => candidate.id === model);
@@ -656,8 +676,8 @@ function resolveWorkerConfig(params: {
   }
   const normalizedEffort = normalizeResolvedEffort({
     model: modelCapabilities,
-    effort: input.effort ?? defaults.effort ?? lead.effort,
-    explicit: input.effort !== undefined,
+    effort: params.effortFromMode ? input.effort ?? null : input.effort ?? defaults.effort ?? lead.effort,
+    explicit: input.effort !== undefined && !params.effortFromMode,
   });
   return {
     ok: true,
@@ -1091,6 +1111,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
   async function createWorkerInTeam(request: Omit<OrcaWorkerCreateInTeamParams, 'agent'> & OrcaWorkerCreateRequest,
     assertCurrent?: () => Promise<void>, onCreated?: (guard: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
+    if (request.modelGroupId !== undefined) return createModelGroupWorkerInTeam(request, assertCurrent, onCreated);
     // 插件引擎是显式选择：不读也不写创建偏好(偏好会同步到其他设备，插件引擎只在本机)。
     if ((!request.useCreationPrefs || request.agent === 'acp') && request.agent) {
       return createResolvedWorkerInTeam({ ...request, agent: request.agent }, assertCurrent, onCreated);
@@ -1115,9 +1136,54 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       : selection.defaults.fallbackReason ? { ...result, message: `${selection.defaults.fallbackReason} ${result.message}` } : result;
   }
 
+  /**
+   * 经模式创建：先拦冲突与不支持的位置(不选路)，过了名额检查再按模式选一次，选中的引擎、模型、来源与
+   * Agent 位置当作固定路线交给原创建流程，照常走来源、权限与位置校验；校验失败不换下一个来源。
+   */
+  async function createModelGroupWorkerInTeam(request: Omit<OrcaWorkerCreateInTeamParams, 'agent'> & OrcaWorkerCreateRequest,
+    assertCurrent?: () => Promise<void>, onCreated?: (guard: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
+    const routeId = typeof request.modelGroupId === 'string' ? request.modelGroupId.trim() : '';
+    if (!routeId || routeId.length > 64) {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'model_group_id must be a mode id from list_model_groups' };
+    }
+    const conflict = workerModelGroupConflict(request);
+    if (conflict) return { ok: false, errorCode: 'INVALID_PARAMS', message: conflict };
+    const role = normalizeOrcaWorkerRole(request.role);
+    if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
+    const label = normalizeOrcaWorkerLabel(request.label);
+    if (!label.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: label.message };
+    await assertCurrent?.();
+    const admission = await checkWorkerCreationAdmission(request.leadSessionId, label.value, assertCurrent);
+    if (!admission.ok) return admission;
+    const lead = await deps.getLeadSessionRow(request.leadSessionId);
+    if (!lead) return { ok: false, errorCode: 'NOT_FOUND', message: 'Lead session not found' };
+    if (lead.remoteHostId) {
+      return { ok: false, errorCode: 'INVALID_PARAMS',
+        message: 'Workers of an SSH Lead run on the SSH host; model_group_id is not supported there. Choose an explicit model.' };
+    }
+    if (deps.isSharedTaskSession?.(lead.id)) {
+      return { ok: false, errorCode: 'MODEL_GROUP_UNAVAILABLE',
+        message: 'Model group modes are not available in a shared task. No Worker was created; choose an explicit model.' };
+    }
+    // 图片只随非空的首条任务发出(没有首条任务时发的是就绪占位)，图片例外按实际会发出的消息判断。
+    const sendsImages = (request.initialTask?.trim().length ?? 0) > 0 && (request.initialTaskImages?.length ?? 0) > 0;
+    const routed = await routeWorkerByModelGroup(routeId, { hasImages: sendsImages }, deps.resolveModelGroup);
+    if (!routed.ok) return routed;
+    await assertCurrent?.();
+    const { modelGroupId: _modelGroupId, useCreationPrefs: _useCreationPrefs, ...rest } = request;
+    const result = await createResolvedWorkerInTeam({ ...rest, role: role.value, label: label.value, ...routed.route },
+      assertCurrent, onCreated, undefined, { pinnedRoute: true });
+    return result.ok ? { ...result, defaults: { source: 'model-group' }, modelGroup: routed.modelGroup } : result;
+  }
+
   async function createResolvedWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void,
-    rememberedRouting?: OrcaWorkerProviderRoutingContext): Promise<OrcaWorkerCreationResult> {
+    rememberedRouting?: OrcaWorkerProviderRoutingContext,
+    /**
+     * pinnedRoute = 路线已由模式选定：不再改跟 Lead 的供应商组那一项；推理强度按模式(与新任务 §4 推理强度
+     * 一致)：带了的档位只是偏好，模型不支持退到默认档；没带就用模型默认档，不继承 Worker 默认档或 Lead 的档位。
+     */
+    options: { pinnedRoute?: boolean } = {}): Promise<OrcaWorkerCreationResult> {
     const role = normalizeOrcaWorkerRole(params.role);
     if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
     const label = normalizeOrcaWorkerLabel(params.label);
@@ -1215,7 +1281,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         : null;
     // Lead 归在供应商组里：跟 Lead 的 Worker 跟那个组(组按策略给它选电脑、出问题时换电脑，与普通任务选组那一项
     // 一样)。组那一项不提供这个模型或读不到时照旧跟 Lead 所在那台。
-    let groupFollow = rememberedRouting ? null : leadProviderGroupFollowCandidate(params, lead, workerLocation.agentDeviceId, requestedSourceId);
+    let groupFollow = rememberedRouting || options.pinnedRoute ? null : leadProviderGroupFollowCandidate(params, lead, workerLocation.agentDeviceId, requestedSourceId);
     let groupFollowRouting: OrcaWorkerProviderRoutingContext | undefined;
     if (groupFollow) {
       try {
@@ -1426,6 +1492,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       availableModels,
       model: modelResolution.model,
       providerId: inheritedProviderId,
+      effortFromMode: options.pinnedRoute === true,
     });
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
@@ -1499,8 +1566,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           defaultEffort: routeEffortMeta.defaultEffort,
           effortsUnknown: routeEffortMeta.effortsUnknown,
         },
-        effort: params.effort ?? defaults.effort ?? lead.effort,
-        explicit: params.effort !== undefined,
+        effort: options.pinnedRoute ? params.effort ?? null : params.effort ?? defaults.effort ?? lead.effort,
+        explicit: params.effort !== undefined && !options.pinnedRoute,
       });
       if (!renormalized.ok) {
         return { ok: false, errorCode: 'INVALID_PARAMS', message: renormalized.message };

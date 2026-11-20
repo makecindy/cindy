@@ -1,3 +1,4 @@
+import { registerModelGroupsTools, type ModelGroupsCallbacks } from './xdt-helper/model_groups.js';
 import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
 import { registerSessionToolCatalogTools, type SessionToolCatalogCallbacks } from './xdt-helper/session_tool_catalog.js';
@@ -200,7 +201,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   ].join(''),
   settings: [
     '管理 Cindy 的全局设置、默认模型与 API 供应商连接（添加、安全填写密钥、发现型号、测试连接），普通任务和伙伴共用。',
-    '供应商分享成员管理可用 device 指定同账号已授权电脑；其它操作按工具说明作用于运行任务的本机。',
+    '供应商分享成员管理可用 device 指定同账号已授权电脑；其它操作按工具说明作用于运行任务的本机；模型组（模式）可只读查询，供创建 Worker 或新建任务时按模式选来源。',
     '先查询当前值和可选项，再修改或恢复默认。',
     '密钥通过电脑或手机的加密代输入卡交给宿主。',
     'SSH 主机编辑使用 cindy_ssh。',
@@ -562,6 +563,7 @@ export interface XdtHelperMcpDeps {
   botSkills?: BotSkillCallbacks;
   /** The calling teammate's linked projects; the host resolves the teammate from the caller Session. */
   teammateProjects?: TeammateProjectsCallback;
+  modelGroups?: ModelGroupsCallbacks;
   appSettings?: AppSettingsCallbacks;
   themePackages?: ThemePackageCallbacks;
   piRuntime?: PiRuntimeCallbacks;
@@ -860,6 +862,7 @@ export function createXdtHelperMcpServer(
   if (deps.providerReads) registerProviderReadTools(registry, deps.providerReads, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.providerSharing) registerProviderSharingTools(registry, deps.providerSharing, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.modelGroups) registerModelGroupsTools(registry, deps.modelGroups, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.sessionToolCatalog) registerSessionToolCatalogTools(registry, deps.sessionToolCatalog, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.themePackages) registerThemePackageTool(registry, deps.themePackages, () => resolveLiziMcpSessionContext(sessionCtx));
