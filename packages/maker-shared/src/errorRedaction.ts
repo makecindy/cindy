@@ -1,3 +1,5 @@
+export { parseGeminiInputRateLimit } from './geminiInputRateLimit.js';
+
 export const REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON = 'remote-compact-encrypted-content';
 
 /**
@@ -275,6 +277,7 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'SUBSCRIPTION_ACCOUNT_UNAVAILABLE',
   'SSH_HARNESS_SWITCH_UNSUPPORTED',
   'MODEL_SELECTION_UNAVAILABLE',
+  'CONTEXT_COMPACTION_MODEL_UNAVAILABLE',
   'SUBSCRIPTION_ACCOUNTS_FULL',
   'HARNESS_SWITCH_NOT_READY',
   'DEVICE_LINK_BUSY',

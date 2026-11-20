@@ -15293,6 +15293,7 @@
     },
     "backgroundActivity": {
       "status": "Sous-tâches en arrière-plan en cours d'exécution, consommation du modèle toujours en cours…",
+      "pluginEngineStatus": "Poursuit le travail en arrière-plan…",
       "bashWorkStatus_one": "Travail en arrière-plan en cours ({{count}} commande)…",
       "bashServiceStatus_one": "{{count}} service en arrière-plan en cours d'exécution",
       "bashWorkStatus_other": "Travail en arrière-plan en cours ({{count}} commandes)…",
@@ -16005,6 +16006,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Cette tâche SSH ne peut pas changer de Harness. Choisissez un modèle dans son Harness actuel, ou créez une nouvelle tâche SSH avec le Harness dont vous avez besoin.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "La compression du contexte a échoué lors du changement de modèle, car cette connexion ne permet pas d’utiliser le modèle précédent.",
       "MODEL_SELECTION_UNAVAILABLE": "Le modèle sélectionné n'est plus disponible auprès de son fournisseur. Vérifiez la connexion dans les paramètres ou choisissez un autre modèle disponible.",
       "HARNESS_SWITCH_NOT_READY": "Le changement de Harness n'est pas prêt. Consultez les détails de l'erreur et réessayez une fois le Harness prêt.",
       "DEVICE_LINK_BUSY": "L'ordinateur distant est occupé. Veuillez réessayer dans un instant.",
@@ -16315,9 +16317,15 @@
       "toggle": "Afficher ou masquer la réponse de « {{title}} »",
       "openTask": "Ouvrir la tâche"
     },
+    "geminiRateLimit": {
+      "retried": "Nouvelle tentative automatique après le délai indiqué par Gemini",
+      "title": "La limite de saisie par minute de Gemini est atteinte.",
+      "exhausted": "Gemini reste limité après une nouvelle tentative. Vous pouvez réessayer manuellement.",
+      "retryIn": "Nouvelle tentative automatique dans {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
-      "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
+      "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles.",
+      "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles.",
       "loginRequired": "Le compte avec abonnement utilisé par cette tâche nécessite une nouvelle connexion. Reconnectez-vous sur l’ordinateur qui exécute la tâche, puis réessayez.",
       "signingIn": "La connexion au compte avec abonnement utilisé par cette tâche est en cours. Réessayez une fois la connexion terminée.",
       "unavailable": "Le compte avec abonnement affecté à cette tâche ne peut pas être utilisé pour cette demande. Vérifiez le compte dans les paramètres du fournisseur de modèles sur l’ordinateur d’exécution, ou choisissez une autre source de modèles.",
@@ -16555,6 +16563,14 @@
       "remoteProviderUnsupported": "Ce fournisseur n'est pas pris en charge dans les sessions SSH distantes : choisissez une autre source",
       "remoteNativeOauthUnavailable": "Les tâches distantes ne peuvent pas utiliser d'abonnement Claude : choisissez une passerelle ou un modèle avec clé API",
       "claudeSubscriptionWorkspaceOverride": "Les paramètres .claude de ce dossier modifient la destination des requêtes de Claude ou sa méthode de connexion : l'abonnement Claude ne peut donc pas être utilisé ici. Supprimez ces paramètres, ou choisissez une passerelle ou un modèle avec clé API",
+      "savedModel": {
+        "loading": "Connexion au modèle sélectionné…",
+        "checkFailed": "Impossible de vérifier le modèle sélectionné",
+        "engine": "Le moteur sélectionné est indisponible. Choisissez un modèle pour cette tâche.",
+        "source": "La source sélectionnée est indisponible. Choisissez un modèle pour cette tâche.",
+        "model": "Le modèle sélectionné est indisponible. Choisissez un modèle pour cette tâche.",
+        "thisTaskOnly": "Le modèle sélectionné s’applique uniquement à cette tâche"
+      },
       "deviceStillLoading": "L'appareil distant est encore en cours de chargement, veuillez patienter",
       "remoteDefaultsLoadFailed": "Impossible de charger les paramètres de l'appareil distant. Vérifiez la connexion ; Cindy réessaie.",
       "branchChanged": "Le projet est maintenant sur {{branch}}. Vérifiez, puis envoyez à nouveau.",

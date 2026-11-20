@@ -15293,6 +15293,7 @@
     },
     "backgroundActivity": {
       "status": "Hay subtareas en segundo plano que siguen consumiendo uso del modelo…",
+      "pluginEngineStatus": "Sigue trabajando en segundo plano…",
       "bashWorkStatus_one": "Trabajando en segundo plano ({{count}} comando)…",
       "bashServiceStatus_one": "{{count}} servicio en segundo plano en ejecución",
       "bashWorkStatus_other": "Trabajando en segundo plano ({{count}} comandos)…",
@@ -16005,6 +16006,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no puede cambiar de Harness. Elige un modelo en su Harness actual o crea una nueva tarea SSH con el Harness que necesitas.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "No se pudo compactar el contexto al cambiar de modelo porque esta conexión no permite usar el modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
       "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
       "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Vuelve a intentarlo en breve.",
@@ -16315,9 +16317,15 @@
       "toggle": "Mostrar u ocultar la respuesta de «{{title}}»",
       "openTask": "Abrir tarea"
     },
+    "geminiRateLimit": {
+      "retried": "Se reintentó automáticamente tras la espera indicada por Gemini",
+      "title": "Se alcanzó el límite de entrada por minuto de Gemini.",
+      "exhausted": "Gemini sigue limitado tras un reintento. Puedes volver a intentarlo manualmente.",
+      "retryIn": "Reintento automático en {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Espera a que se restablezca o elige otra fuente de modelos. La cuenta no cambia automáticamente.",
-      "limitedUntil": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Restablecimiento previsto: {{resetAt}}. Espera hasta entonces o elige otra fuente de modelos. La cuenta no cambia automáticamente.",
+      "limited": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Espera a que se restablezca o elige otra fuente de modelos.",
+      "limitedUntil": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Restablecimiento previsto: {{resetAt}}. Espera hasta entonces o elige otra fuente de modelos.",
       "loginRequired": "La cuenta de suscripción de esta tarea requiere iniciar sesión de nuevo. Hazlo en el ordenador que ejecuta la tarea y vuelve a intentarlo.",
       "signingIn": "Se está iniciando sesión en la cuenta de suscripción de esta tarea. Vuelve a intentarlo cuando termine.",
       "unavailable": "La cuenta de suscripción asignada a esta tarea no se puede usar para esta solicitud. Revisa la cuenta en los ajustes del proveedor de modelos del ordenador que ejecuta la tarea o elige otra fuente de modelos.",
@@ -16555,6 +16563,14 @@
       "remoteProviderUnsupported": "Este proveedor no es compatible con sesiones remotas SSH; elige otra fuente",
       "remoteNativeOauthUnavailable": "Las tareas remotas no pueden usar una suscripción de Claude: elige una puerta de enlace o un modelo con clave API",
       "claudeSubscriptionWorkspaceOverride": "La configuración de .claude de esta carpeta cambia adónde envía solicitudes Claude o cómo inicia sesión, por lo que no se puede usar la suscripción de Claude aquí. Elimina esa configuración o elige un modelo con puerta de enlace o clave de API",
+      "savedModel": {
+        "loading": "Conectando con el modelo seleccionado…",
+        "checkFailed": "No se pudo comprobar el modelo seleccionado",
+        "engine": "El motor seleccionado no está disponible. Elige un modelo para esta tarea.",
+        "source": "La fuente seleccionada no está disponible. Elige un modelo para esta tarea.",
+        "model": "El modelo seleccionado no está disponible. Elige un modelo para esta tarea.",
+        "thisTaskOnly": "El modelo seleccionado solo se aplica a esta tarea"
+      },
       "deviceStillLoading": "El dispositivo remoto aún se está cargando. Espera",
       "remoteDefaultsLoadFailed": "No se pudo cargar la configuración del dispositivo remoto. Revisa la conexión; Cindy lo está reintentando.",
       "branchChanged": "El proyecto está ahora en {{branch}}. Compruébalo y vuelve a enviar.",
