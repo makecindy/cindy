@@ -248,14 +248,37 @@ describe('local catalog recovery lifecycle', () => {
     }
   });
 
+  // 2026-11-20: an outage outlasting the first minute left the picker stale until the user
+  // refocused. Network-type failures keep a once-a-minute tail, still bounded (5 + 10 retries).
   it('bounds retries of an unreadable pool without failing the whole catalog', async () => {
     mocks.initializeVisibility.mockResolvedValue(true);
     mocks.loadProviders.mockResolvedValue({ ...snapshot, providers: [{ id: 'openai', connected: false, subscriptionReadUnavailable: true } as ProviderView] });
     await refreshLocalCatalogSnapshot();
     await vi.advanceTimersByTimeAsync(300_000);
-    expect(mocks.loadProviders).toHaveBeenCalledTimes(6);
+    expect(mocks.loadProviders).toHaveBeenCalledTimes(9);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(mocks.loadProviders).toHaveBeenCalledTimes(16);
     expect(getLocalCatalogFailure()).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // 2026-11-20: after an outage Main kept failed model sources on a 5-minute failure cooldown.
+  // Recovery evidence (OS online event, or an unreadable account reading again) must reach Main.
+  it('asks Main to retry failed model sources when the network comes back', async () => {
+    const requestRefresh = vi.fn(async () => ({ ok: true }));
+    Object.assign(events, { electronAPI: { maker: { requestProviderModelsAutoRefresh: requestRefresh } } });
+    const unreadable = { ...snapshot, providers: [{ id: 'openai', connected: true, subscriptionReadUnavailable: true } as ProviderView] };
+    const readable = { ...snapshot, providers: [{ id: 'openai', connected: true } as ProviderView] };
+    mocks.initializeVisibility.mockResolvedValue(true);
+    mocks.commitProviders.mockImplementation((_generation: number, next: ProvidersSnapshot) => mocks.cachedProviders.mockReturnValue(next));
+    mocks.loadProviders.mockResolvedValueOnce(unreadable).mockResolvedValue(readable);
+    await refreshLocalCatalogSnapshot();
+    expect(requestRefresh).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(requestRefresh).toHaveBeenCalledExactlyOnceWith('network-restored');
+    events.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requestRefresh).toHaveBeenCalledTimes(2);
   });
 
   it('bounds automatic retries and recovers when the user returns after fixing storage', async () => {

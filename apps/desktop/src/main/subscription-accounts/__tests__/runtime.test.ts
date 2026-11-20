@@ -257,6 +257,7 @@ import {
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   hasConnectedSubscriptionPool,
+  lastConfirmedSubscriptionModelsAt,
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
   pooledCodexResetTarget,
@@ -1281,7 +1282,11 @@ describe('pooled Claude model discovery', () => {
       h.read.mockRejectedValueOnce(new Error('CLI read unavailable'));
       await refreshSubscriptionPool('anthropic', true);
       expect(await refreshSubscriptionPoolClaudeModels()).toBe(false);
-      expect(readSubscriptionPoolClaudeModels()).toEqual([]); // Auth is still required.
+      // 2026-11-20: the picker keeps the last confirmed list with its time while the account is
+      // unreadable; the routing catalog still requires a current sign-in.
+      expect(readSubscriptionPoolClaudeModels()?.map(m => m.id)).toEqual(['claude-owned']);
+      expect(lastConfirmedSubscriptionModelsAt('anthropic')).toEqual(expect.any(Number));
+      expect(readSubscriptionPoolClaudeModels('anthropic', { includeBoundAccounts: true })).toEqual([]);
       await refreshSubscriptionPool('anthropic', true);
       expect(await refreshSubscriptionPoolClaudeModels()).toBe(true);
       expect(probe).toHaveBeenCalledOnce();
@@ -6194,5 +6199,74 @@ describe('unreachable account service', () => {
     } finally {
       off();
     }
+  });
+
+  // 2026-11-20 user report: a short outage emptied the local model picker ("模型列表暂未更新" with
+  // no time) and the provider read as signed out. Cases above check only the account row.
+  // Minimal input: a signed-in account with a model list whose next account read fails.
+  it('keeps the provider connected and its last list with its time, without routing to it', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'gpt-kept' }], nextCursor: null });
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels(true);
+
+    h.read.mockRejectedValue(unreachable());
+    const rpcCalls = h.rpc.mock.calls.length;
+    expect((await refreshSubscriptionPool('openai', true)).accounts[0].status).toBe('unavailable');
+    await refreshSubscriptionPoolCodexModels();
+    expect(h.rpc).toHaveBeenCalledTimes(rpcCalls);
+    expect(hasConnectedSubscriptionPool('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-kept']);
+    expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(hasConnectedSubscriptionPool('openai', { includeBoundAccounts: true })).toBe(false);
+    expect(readSubscriptionPoolCodexModels('openai', { includeBoundAccounts: true })).toEqual([]);
+    await expect(acquireSubscriptionAccount('openai', 'gpt-kept', [])).rejects.toThrow('No subscription account is available');
+
+    // Back online: the account reads again and its list is fetched afresh.
+    h.read.mockResolvedValue({ authenticated: true, identity: 'account' });
+    h.rpc.mockResolvedValue({ data: [{ id: 'gpt-fresh' }], nextCursor: null });
+    expect((await refreshSubscriptionPool('openai', true)).accounts[0].status).toBe('ready');
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-fresh']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+  });
+
+  // Offline at startup: memory is gone, so the list saved for the slot is the evidence. A
+  // confirmed sign-out clears it, so a later offline start does not resurrect the account.
+  it('restores the saved list after an offline restart until a sign-out is confirmed', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'gpt-saved' }], nextCursor: null });
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels(true);
+    const owner = h.owner;
+    const restart = () => { h.owner = 'another-owner'; readSubscriptionPoolCodexModels(); h.owner = owner; };
+
+    restart();
+    h.read.mockRejectedValue(unreachable());
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels();
+    expect(hasConnectedSubscriptionPool('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-saved']);
+    expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
+
+    h.read.mockResolvedValue({ authenticated: false });
+    await refreshSubscriptionPool('openai', true);
+    expect(h.savedModelFiles.size).toBe(0);
+    restart();
+    h.read.mockRejectedValue(unreachable());
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels();
+    expect(hasConnectedSubscriptionPool('openai')).toBe(false);
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+  });
+
+  it('does not invent a sign-in for an account that was never confirmed', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    h.read.mockRejectedValue(unreachable());
+    expect((await refreshSubscriptionPool('openai', true)).accounts[0].status).toBe('unavailable');
+    await refreshSubscriptionPoolCodexModels();
+    expect(hasConnectedSubscriptionPool('openai')).toBe(false);
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
   });
 });
