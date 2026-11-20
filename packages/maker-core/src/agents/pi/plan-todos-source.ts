@@ -36,14 +36,14 @@ function selectPlanText(content) {
   const header = planLines(native).findLast(line => isPlanHeader(line.text));
   if (header) return native.slice(header.start);
   // Some native providers emit a numbered plan in thinking without a
-  // heading. Keep the last top-level numbered run instead of falling back to
-  // the (often empty) visible text, while still dropping unrelated preamble.
+  // heading. Keep the complete top-level list, including blank lines and
+  // step details, while still dropping unrelated preamble.
   const lines = planLines(native);
   const numbered = lines.filter(line => /^\s*\d+[.)、．）]\s*\S/.test(line.text));
-  if (numbered.length && extractTodoItems(native).length) {
-    let start = lines.indexOf(numbered[numbered.length - 1]);
-    while (start > 0 && /^\s*\d+[.)、．）]\s*\S/.test(lines[start - 1].text)) start--;
-    return native.slice(lines[start].start);
+  if (numbered.length) {
+    const indent = line => line.text.match(/^[ \t]*/)[0].replace(/\t/g, '    ').length;
+    const minimum = numbered.reduce((minimum, line) => Math.min(minimum, indent(line)), Infinity);
+    return native.slice(numbered.find(line => indent(line) === minimum).start);
   }
   return visible;
 }

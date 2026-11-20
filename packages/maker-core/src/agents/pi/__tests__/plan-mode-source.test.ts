@@ -27,6 +27,17 @@ describe('Pi plan title extraction', () => {
   });
 
   it.each([
+    '1. 验证\n\nDetails...\n2. 交付',
+    '3. 验证\n   1. 子项\n\n说明\n7. 交付',
+    '1. 验证\n```\n9. 示例\n```\n2. 交付',
+    '1. 验证\n\n1. 交付',
+    '9007199254740992. 验证\n\nDetails...\n2. 交付',
+  ])('keeps complete headerless thinking plans with details: %s', plan => {
+    expect(selectPlan([{ type: 'thinking', thinking: 'Unrelated reasoning.\n' + plan }]))
+      .toBe(plan);
+  });
+
+  it.each([
     ['Plan:\n1. **验证**\n2. **交付**', [1, 2], ['验证', '交付']],
     ['## **计划：**\n2）实现\n5) Verify\n9、`deploy`', [2, 5, 9], ['实现', 'Verify', 'deploy']],
     ['1. Go\n2. QA', [1, 2], ['Go', 'QA']],

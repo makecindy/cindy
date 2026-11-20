@@ -2296,6 +2296,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['duplicate', 'Plan:\n1. 实现\n1. 验证', ['Plan:\n1. 实现\n1. 验证']],
     ['thinking-only', 'Plan:\n1. **验证**\n2. **交付**', ['验证', '交付']],
     ['thinking-visible', 'Plan:\n1. **验证**\n2. **交付**', ['验证', '交付']],
+    ['thinking-headerless', '1. 验证\n2. 交付', ['验证', '交付']],
+    ['thinking-separated', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-duplicate', '1. 验证\n\n1. 交付', ['1. 验证\n\n1. 交付']],
   ])('8933 preserves and confirms the native %s plan', { timeout: 60_000 }, async (_name, plan, titles) => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-short-plan-'));
     let handle: AgentSessionHandle | undefined;
@@ -2344,10 +2347,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     }
   });
 
-  it('8933 preserves sparse ids and full details through execution, progress and resume', { timeout: 60_000 }, async () => {
+  it.each([false, true])('8933 preserves sparse ids and full details through execution, progress and resume (headerless thinking=%s)', { timeout: 60_000 }, async thinking => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-ids-'));
     let handle: AgentSessionHandle | undefined;
-    const plan = 'Plan:\n2. **实现**\n5. **验证**\n9. **交付**\n\nKeep this full acceptance detail exactly.';
+    const plan = (thinking ? '' : 'Plan:\n') + '2. **实现**\n\nImplementation details.\n5. **验证**\n9. **交付**\n\nKeep this full acceptance detail exactly.';
     const latestState = () => readFileSync(handle!.id, 'utf8').trim().split('\n').map(line => JSON.parse(line))
       .filter(entry => entry.type === 'custom' && entry.customType === 'plan-mode').at(-1)?.data;
     try {
@@ -2358,7 +2361,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         kind: 'ask_user_question', answers: { [request.questions[0]!.question]: 'Execute the plan (track progress)' },
       }));
       handle.setInteractionResolver!(resolver as never);
-      scriptedResponses.push(anthropicStreamBody(plan), anthropicStreamBody('Verified. [DONE:5]'));
+      let response = anthropicStreamBody(plan);
+      if (thinking) response = response.replace('"type":"text","text":""', '"type":"thinking","thinking":""')
+        .replace('"type":"text_delta","text":', '"type":"thinking_delta","thinking":');
+      scriptedResponses.push(response, anthropicStreamBody('Verified. [DONE:5]'));
       const before = seenRequests.length;
       await handle.send({ type: 'user', content: 'Prepare the plan.' });
       await vi.waitFor(() => expect(seenRequests.length).toBe(before + 2), { timeout: 20_000 });
