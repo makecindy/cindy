@@ -653,8 +653,8 @@ export function classifyConnectionIssue(
 export type InboundFrameHandler = (env: Envelope) => unknown | Promise<unknown>;
 
 interface PendingRequest {
-  /** Local-only evidence: this outbound open continues an inbound confirmation. */
-  inboundContinuation?: { streamId: string; connectionEpoch: number; linkGeneration: number };
+  /** Local-only evidence: this outbound open continues a freshly accepted inbound link. */
+  inboundContinuation?: { streamId: string | null; connectionEpoch: number; linkGeneration: number };
   /** Timers may be suspended; retire an overdue request before replaying its payload. */
   expireIfOverdue(): boolean;
   /** First successful socket write starts the response budget; never a delivery receipt. */
@@ -779,6 +779,8 @@ interface PeerTransportState {
    * 整连接重连语义(升级前行为),而错误的 true 会违背用户关闭意图。
    */
   linkAcceptedInbound: boolean;
+  /** Exact accepted inbound generation, including peers without reliable confirmation. */
+  lastInboundGeneration?: number;
   supportsGithubRead?: boolean;
   /**
    * 本机是否已显式结束**出站**控制方向(closeLink direction='outbound')。
@@ -2404,6 +2406,7 @@ export class DeviceLinkClient {
         this.commitReliableSendResume(dst, peer, resume);
       }
     }
+    if (matchingOffer) peer.lastInboundGeneration = peer.linkGeneration;
   }
 
   /** 被控端:广播转发 push 帧(fire-and-forget;失败由上层缓冲策略兜底) */
@@ -2562,8 +2565,11 @@ export class DeviceLinkClient {
       let timer = setTimeout(expire, sendWaitMs);
 
       const inboundPeer = env.kind === 'link-open' && env.dst ? this.peerTransport.get(env.dst) : undefined;
+      const continuesInbound = inboundPeer && (inboundPeer.pendingLinkConfirmation && inboundPeer.remoteStreamId
+        || !inboundPeer.reliable && inboundPeer.linkAcceptedInbound
+          && inboundPeer.lastInboundGeneration === inboundPeer.linkGeneration);
       const pendingRequest: PendingRequest = {
-        inboundContinuation: inboundPeer?.pendingLinkConfirmation && inboundPeer.remoteStreamId
+        inboundContinuation: continuesInbound
           ? { streamId: inboundPeer.remoteStreamId, connectionEpoch: this.connEpoch,
               linkGeneration: inboundPeer.linkGeneration } : undefined,
         expireIfOverdue: () => {
@@ -3508,10 +3514,15 @@ export class DeviceLinkClient {
             const accepted = env.payload as LinkAcceptPayload | undefined;
             const priorPeer = this.getPeerTransport(env.src);
             const continuation = p.inboundContinuation;
-            const inboundContinuation = !!continuation && priorPeer.receiveReady
+            const inboundContinuation = !!continuation && priorPeer.linkAcceptedInbound
               && continuation.connectionEpoch === this.connEpoch
               && continuation.linkGeneration === priorPeer.linkGeneration
-              && continuation.streamId === accepted?.transportStreamId;
+              && (continuation.streamId === null
+                ? !priorPeer.reliable && !accepted?.transportStreamId
+                  && !(Array.isArray(accepted?.capabilities)
+                    && accepted.capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT))
+                  && priorPeer.lastInboundGeneration === priorPeer.linkGeneration
+                : priorPeer.receiveReady && continuation.streamId === accepted?.transportStreamId);
             this.setPeerCapabilities(
               env.src,
               accepted?.capabilities,
@@ -5301,6 +5312,7 @@ export class DeviceLinkClient {
     if (peer.outboundLinkConfirmationAck?.timer) {
       clearTimeout(peer.outboundLinkConfirmationAck.timer);
     }
+    peer.lastInboundGeneration = undefined;
     peer.sendPhase = 'down';
     peer.receiveReady = false;
     peer.pendingLinkConfirmation = null;

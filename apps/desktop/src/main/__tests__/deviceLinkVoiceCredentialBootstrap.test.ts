@@ -447,14 +447,20 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     }
   });
 
-  it.each([{ confirm: false, restart: false }, { confirm: true, restart: false }, { confirm: true, restart: true }])('互控设备 B 先反向重连时恢复 A→B 订阅，不扰动健康 C（$confirm/$restart）', async ({ confirm, restart }) => {
+  it.each([
+    { confirm: false, restart: false, reliable: true },
+    { confirm: true, restart: false, reliable: true },
+    { confirm: true, restart: true, reliable: true },
+    { confirm: false, restart: false, reliable: false },
+    { confirm: false, restart: true, reliable: false },
+  ])('互控设备 B 先反向重连时恢复 A→B 订阅，不扰动健康 C（$confirm/$restart/$reliable）', async ({ confirm, restart, reliable }) => {
     // #6572 Codex review: B relay reconnect drops A's active subscriptions; B's
     // inbound handshake can restore A's bidirectional transport without any A
     // outbound-accept event. Exercise real clients, handleLinkOpen, remoteSubscribe,
     // replay scheduler and registry. This guard isolates Electron side effects;
     // its observable result is a topic-gated push reaching A again, not a spy call.
     vi.useFakeTimers();
-    const relay = new RecoveryRelay(confirm);
+    const relay = new RecoveryRelay(confirm, reliable);
     const a = recoveryDesktop(relay, 'desktop-a');
     let b = recoveryDesktop(relay, 'desktop-b');
     const c = recoveryDesktop(relay, 'desktop-c');
@@ -528,18 +534,18 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       await relay.flush(); await reopened;
       relay.releaseConfirmations(); await relay.flush();
 
-      expect(a.client.isLinkReady('desktop-b')).toBe(true);
+      expect(a.client.isLinkReady('desktop-b')).toBe(reliable);
       // Legacy reliable peer proves the missing edge with no outbound callback at A.
-      // Confirmation-aware peers may need one existing readiness-driven reciprocal open.
-      expect(outboundAccepted.mock.calls.length).toEqual(restart ? 1 : 0);
+      // A restarted confirmation peer or any pre-reliable peer needs a reciprocal open.
+      expect(outboundAccepted.mock.calls.length).toEqual(restart && reliable ? 1 : 0);
       expect(a.context.broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
       expect(relay.sent.slice(recoveryStart).filter(({ sender, envelope }) =>
-        sender === 'desktop-a' && envelope.kind === 'link-open')).toHaveLength(outboundAccepted.mock.calls.length);
+        sender === 'desktop-a' && envelope.kind === 'link-open')).toHaveLength(restart || !reliable ? 1 : 0);
       expect(b.registry.getControllersForTopic('session:remote-b')).toEqual(['desktop-a']);
       expect(b.subscribed).toHaveBeenCalledWith('desktop-a', ['session:remote-b']);
       expect(c.subscribed).not.toHaveBeenCalled();
       expect(c.registry.getControllersForTopic('session:healthy-c')).toEqual(['desktop-a']);
-      expect(a.client.isLinkReady('desktop-c')).toBe(true);
+      expect(a.client.isLinkReady('desktop-c')).toBe(reliable);
       expect(relay.sockets.get('desktop-c')).toBe(healthySocket);
       expect(relay.sockets.get('desktop-a')).toBe(aSocket);
       expect(relay.sent.slice(recoveryStart).some(({ envelope }) => envelope.dst === 'desktop-c')).toBe(false);
