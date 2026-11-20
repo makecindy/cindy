@@ -1004,18 +1004,15 @@ export function UnifiedModelList({
           className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--text-secondary)]"
           aria-hidden="true"
         >
-          <CustomProviderIcon svg={provider.customIcon} size={19}>
-            {logoKind || !brand ? (
-              <ProviderLogoMark
-                providerId={provider.id}
-                routing={provider.routing}
-                logoKind={logoKind ?? provider.logoKind}
-                size={19}
-              />
-            ) : (
-              <span className="text-13 font-semibold">{brand.label.slice(0, 1)}</span>
-            )}
-          </CustomProviderIcon>
+          {logoKind ? (
+            <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={logoKind} size={19} />
+          ) : brand ? (
+            <span className="text-13 font-semibold">{brand.label.slice(0, 1)}</span>
+          ) : (
+            <CustomProviderIcon svg={provider.customIcon} size={19}>
+              <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={provider.logoKind} size={19} />
+            </CustomProviderIcon>
+          )}
         </span>
         <span
           className="min-w-0 truncate text-14 font-medium"

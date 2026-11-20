@@ -245,19 +245,12 @@ export interface MobileModelIconMarkProps {
 
 /**
  * 模型行 / composer 药丸的图标 —— 统一规则(与桌面 ModelIconMark 同源,共享
- * resolveModelIconKind 口径):来源的自定义图标优先；缺省或加载失败时，
- * 沿用模型目录的厂牌 `icon` 或来源供应商标。禁止在客户端按 model id 猜厂牌。
+ * resolveModelIconKind 口径):优先使用模型目录的厂牌 `icon`，缺省时回落来源供应商标。
+ * 禁止在客户端按 model id 猜厂牌。
  */
-export function MobileModelIconMark(props: MobileModelIconMarkProps) {
-  return (
-    <MobileCustomProviderIcon svg={props.customIcon} color={props.color} remote={props.remote}>
-      <DefaultModelIconMark {...props} />
-    </MobileCustomProviderIcon>
-  );
-}
-
-function DefaultModelIconMark({
+export function MobileModelIconMark({
   icon,
+  customIcon,
   providerId,
   routing,
   logoKind,
@@ -295,6 +288,7 @@ function DefaultModelIconMark({
       providerId={providerId}
       routing={routing}
       logoKind={logoKind}
+      customIcon={customIcon}
       remote={remote}
     />
   );

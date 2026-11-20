@@ -504,7 +504,7 @@ function DefaultProviderMark({
 
 /**
  * 模型行 / trigger 的图标 —— 统一规则(桌面与手机同源,见 resolveModelIconKind):
- * 来源的自定义图标优先；缺省或加载失败时，沿用模型目录的厂牌 `icon` 或来源供应商标。
+ * 优先使用模型目录的厂牌 `icon`，缺省时回落来源供应商标。
  * 禁止在客户端按 model id 猜厂牌。
  */
 export function ModelIconMark({
@@ -535,11 +535,7 @@ export function ModelIconMark({
     const common = cn(withMargin && 'mr-1.5', 'shrink-0', colorClass);
     const markSize = dense ? 12.3 : 13;
     const Mark = kind === 'claude' ? AnthropicMark : kind === 'codex' ? OpenAIMark : CindyMark;
-    return (
-      <CustomProviderIcon svg={customIcon} size={markSize} className={common}>
-        <Mark size={markSize} className={common} />
-      </CustomProviderIcon>
-    );
+    return <Mark size={markSize} className={common} />;
   }
   return (
     <ProviderMark

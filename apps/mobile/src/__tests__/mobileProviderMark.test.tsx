@@ -81,8 +81,10 @@ it("preserves explicit model brands instead of overriding them with the organiza
       name="Cindy AI"
       logoKind="xd"
       icon="claude"
+      customIcon="<svg/>"
     />,
   );
+  expect(claude).not.toContain("<img");
   expect(firstPath(claude)).toBeTruthy();
   expect(firstPath(claude)).not.toBe(firstPath(xd));
   const cindy = render(
