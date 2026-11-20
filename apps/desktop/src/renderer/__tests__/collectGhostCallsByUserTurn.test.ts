@@ -10,6 +10,9 @@
 import { describe, expect, it } from 'vitest';
 import { buildRenderItems, collectGhostCallsByUserTurn, ghostCallMapsEqual } from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { EMPTY_SESSION_STATE, handleStreamEvent, makerChatStore } from '@/lib/makerChatStore';
+import { projectRemoteUsers } from '@/lib/remoteUserHandoff';
+import { createMessageMetadataProjection } from '../components/chat/streamingMessageProjection';
 
 const user = (clientId: string, extra: Partial<ChatMessage> = {}): ChatMessage =>
   ({ clientId, role: 'user', content: clientId, isStreaming: false, ...extra }) as ChatMessage;
@@ -23,6 +26,97 @@ const ghostCall = (clientId: string, ghostId: string, toolName = 'mcp__cindy__gh
     toolName,
     toolInput: { ghost_id: ghostId, tool: 'gen_image' },
   }) as ChatMessage;
+
+// Regression: collapsed history hands user rows off before their tool details.
+// Exercise the real display projection and persisted/live metadata entry points;
+// an ordered user/call/result mock cannot reproduce the inherited annotation.
+describe('plugin call ownership across history handoff', () => {
+  const call = (owner: string): ChatMessage => ({
+    ...ghostCall('old-call', 'art'), role: 'tool_use', toolUseId: 'old-call', replyToClientId: owner,
+  });
+  const result: ChatMessage = { clientId: 'result', role: 'tool_result', toolUseId: 'old-call', content: '' };
+
+  it.each([false, true])('does not give a reordered old call to a new user (returned=%s)', (returned) => {
+    const raw = [user('old'), call('old'), ...(returned ? [result] : []), user('new')];
+    const displayed = projectRemoteUsers(raw, new Set(['old', 'new']));
+    expect(displayed.map(row => row.clientId)).toEqual(['old', 'new', 'old-call', ...(returned ? ['result'] : [])]);
+    const summary = collectGhostCallsByUserTurn(displayed, true);
+    expect(summary.has('new')).toBe(false);
+    expect(summary.get('old')?.running).toBe(false);
+    expect(summary.get('old')?.pendingGhostIds.size).toBe(returned ? 0 : 1);
+  });
+
+  it('does not guess an owner when the explicit owner is outside the loaded window', () => {
+    expect(collectGhostCallsByUserTurn([user('new'), call('outside'), result], true).size).toBe(0);
+  });
+
+  it.each(['assistant', 'error'] as const)('an old %s terminal cannot seal a newer turn', (role) => {
+    const terminal: ChatMessage = {
+      clientId: 'old-terminal', role, content: 'done', replyToClientId: 'old', turnCompleted: true,
+    };
+    const fresh = { ...call('new'), clientId: 'new-call', toolUseId: 'new-call' };
+    for (const tail of [[terminal, fresh], [fresh, terminal]]) {
+      const summary = collectGhostCallsByUserTurn([user('old'), user('new'), ...tail], true);
+      expect(summary.get('new')?.running).toBe(true);
+    }
+  });
+
+  it('keeps the current owner terminal effective', () => {
+    const terminal: ChatMessage = {
+      clientId: 'terminal', role: 'assistant', content: 'done', replyToClientId: 'new', turnCompleted: true,
+    };
+    expect(collectGhostCallsByUserTurn([user('new'), call('new'), terminal], true).get('new')?.running).toBe(false);
+  });
+
+  it('preserves the explicit owner on live tool events and on history reload', () => {
+    const input = { ghost_id: 'art', tool: 'gen_image' };
+    const live = handleStreamEvent(EMPTY_SESSION_STATE, {
+      sessionId: 'ownership-test', type: 'tool_use', persistId: 'old-call',
+      data: { toolUseId: 'old-call', toolName: 'mcp__cindy__ghost_call', input },
+      agentMeta: { replyToClientId: 'old' },
+    });
+    expect(live.messages.at(-1)?.replyToClientId).toBe('old');
+    const restored = makerChatStore.__mapServerMessagesForTest([
+      { role: 'tool_use', content: { toolUseId: 'old-call', toolName: 'mcp__cindy__ghost_call', input } },
+      { role: 'assistant', content: 'done' },
+      { role: 'error', content: 'failed' },
+      { role: 'error', content: { message: 'failed' } },
+    ].map((row, index) => ({
+      ...row, id: `row-${index}`, clientId: `restored-${index}`, sessionId: 'ownership-test',
+      toolUseId: null, createdAt: `2026-11-20T00:00:0${index}.000Z`,
+      agentMeta: { replyToClientId: 'old', turnCompleted: true },
+    })) as Parameters<typeof makerChatStore.__mapServerMessagesForTest>[0]);
+    expect(restored).toHaveLength(4);
+    expect(restored.map(row => row.replyToClientId)).toEqual(['old', 'old', 'old', 'old']);
+  });
+
+  it('keeps 10,000 historical turns stable across 50 live text updates', () => {
+    const history = Array.from({ length: 10_000 }, (_, index): ChatMessage[] => {
+      const owner = `user-${index}`;
+      const id = `call-${index}`;
+      return [user(owner), { ...call(owner), clientId: id, toolUseId: id },
+        { ...result, clientId: `result-${index}`, toolUseId: id },
+        { clientId: `final-${index}`, role: 'assistant', content: 'done', replyToClientId: owner, turnCompleted: true }];
+    }).flat();
+    const rows: ChatMessage[] = [...history, user('new'),
+      { clientId: 'stream', role: 'assistant', content: 'Working', isStreaming: true, replyToClientId: 'new' }];
+    const project = createMessageMetadataProjection();
+    const metadata = project(rows);
+    const summary = collectGhostCallsByUserTurn(metadata, true);
+    expect(summary.size).toBe(10_000);
+    expect(summary.has('new')).toBe(false);
+    expect(summary.get('user-0')?.pendingGhostIds.size).toBe(0);
+    expect(summary.get('user-9999')?.running).toBe(false);
+    for (let index = 0; index < 50; index++) {
+      const next = [...rows.slice(0, -1), { ...rows.at(-1)!, content: `Working ${index}` }];
+      // MessageStream's useMemo retains both the collector result and context
+      // when this dependency is unchanged, despite the live body changing.
+      expect(project(next)).toBe(metadata);
+    }
+    const reloaded = collectGhostCallsByUserTurn(JSON.parse(JSON.stringify(rows)) as ChatMessage[], true);
+    expect(ghostCallMapsEqual(summary, reloaded)).toBe(true);
+  });
+});
 
 /**
  * 测试价值：生产 collector 必须让气泡在结果到达后停止，而非等待整轮结束（#9235）。

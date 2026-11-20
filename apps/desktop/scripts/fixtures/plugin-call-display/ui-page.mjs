@@ -8,6 +8,9 @@ export default {
   notCovered:
     'Real plugin execution, login, IPC transport and native mobile; history and tool results are fixture data.',
   stubs: {
+    'src/renderer/lib/makerChatStore': {
+      partial: 'export const getRemoteHistoryView = () => window.pluginCallHistoryView;',
+    },
     'src/renderer/components/chat/GhostToolCard':
       'export const GhostToolCard = () => null; export const MailCardEditor = () => null; export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle";',
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";',
@@ -32,8 +35,49 @@ export default {
     'mention-multi': { about: 'Mention A plus actual A/B calls: show both names and wait for both results' },
     selection: { about: 'Uncalled explicit selection stays static and never claims execution' },
     interrupted: { about: 'Interrupted calls stop without a completion tick, including after history reload' },
+    'history-handoff': { about: 'Real collapsed history projection cannot give an old plugin call to a newer user' },
+    'history-legacy': { about: 'Legacy calls without explicit ownership use raw order during collapsed history handoff' },
+    'long-history': { about: '4,005 history rows, virtualized scrolling, 50 text updates and history remount without inherited plugin markers' },
   },
   async check(page, ui) {
+    if (['history-handoff', 'history-legacy', 'long-history'].includes(ui.case)) {
+      const next = page.locator('[data-message-client-id="next"]');
+      await next.waitFor();
+      assert.equal(await next.locator('.summon-seal-arc').count(), 0);
+      const old = page.locator('[data-message-client-id="ask"]');
+      await old.scrollIntoViewIfNeeded();
+      assert.equal(await old.getByText('GitHub', { exact: true }).count(), 1);
+      assert.equal(await old.locator('.lucide-check').count(), 1);
+      await ui.capture('collapsed-history-owner');
+      if (ui.case === 'long-history') {
+        const scroller = page.locator('[data-scroll-container]').first();
+        await scroller.hover();
+        // The product expands its bounded render window one page at a time;
+        // one jump to scrollTop=0 does not mount the first of 1,000 turns.
+        for (let index = 0; index < 3; index++) {
+          const before = Number((await page.locator('[data-message-client-id^="history-"]').first().getAttribute('data-message-client-id')).split('-')[1]);
+          await page.mouse.wheel(0, -1_000_000);
+          await page.waitForFunction(previous => {
+            const id = document.querySelector('[data-message-client-id^="history-"]')?.getAttribute('data-message-client-id');
+            return id && Number(id.split('-')[1]) < previous;
+          }, before);
+        }
+        await ui.capture('scrolled-older-history');
+        await page.mouse.wheel(0, 1_000_000);
+        await next.waitFor();
+      }
+      await page.getByTestId('stream-text').click();
+      await page.getByTestId('stream-count').getByText('50', { exact: true }).waitFor();
+      assert.equal(await next.locator('.summon-seal-arc').count(), 0);
+      assert.equal(await old.getByText('GitHub', { exact: true }).count(), 1);
+      await page.getByTestId('remount').click();
+      await next.waitFor();
+      assert.equal(await next.locator('.summon-seal-arc').count(), 0);
+      assert.equal(await old.getByText('GitHub', { exact: true }).count(), 1);
+      await old.scrollIntoViewIfNeeded();
+      await ui.capture('plain-turn-after-stream-and-reload');
+      return;
+    }
     // Exercise actual MessageStream/UserMessage composition, beyond the pure
     // projection/component unit cases: result -> next ordinary turn -> remount.
     const user = page.locator('[data-message-client-id="ask"]');
