@@ -10,7 +10,7 @@ import { McpAppView } from './mcpAppView';
 
 const Context = createContext<{
   foreground: boolean;
-  open(deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>): McpAppView;
+  open(deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean): McpAppView;
 } | null>(null);
 export const useMcpAppViews = () => useContext(Context);
 export { NativeMcpAppSlot, mcpAppSurfaceAvailable };
@@ -24,14 +24,14 @@ export function McpAppViewsProvider({ children }: { children: ReactNode }) {
   const [, refresh] = useState(0);
   const [foreground, setForeground] = useState(AppState.currentState !== 'background' && AppState.currentState !== 'inactive');
   const changed = useCallback(() => { if (mounted.current) refresh((n) => n + 1); }, []);
-  const open = useCallback((deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>) => {
+  const open = useCallback((deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean) => {
     const view = new McpAppView(invoke, deviceId, sessionId, clientId, changed,
       () => { views.current.delete(view); changed(); }, async (url) => {
         const parsed = new URL(url);
         if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password)
           throw new Error('MCP_APP_INVALID_LINK');
         await Linking.openURL(parsed.href);
-      }, getMobileAuthOwner().generation);
+      }, getMobileAuthOwner().generation, isPlugin);
     views.current.add(view);
     changed();
     void view.open(context);

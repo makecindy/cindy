@@ -9,7 +9,7 @@ export interface McpAppViewState {
   height: number;
   focus?: { top: number; bottom: number };
   filesUnavailable?: boolean;
-  error?: ReturnType<typeof mcpAppFailureKey> | 'mcpApps.mobileUpdateRequired';
+  error?: ReturnType<typeof mcpAppFailureKey> | 'mcpApps.mobileUpdateRequired' | 'mcpApps.pluginRevoked';
 }
 type Invoke = (device: string, channel: string, args: unknown[], options?: { noResultCache?: boolean }) => Promise<unknown>;
 
@@ -58,6 +58,7 @@ export class McpAppView {
     private readonly changed: () => void,
     private readonly removed: () => void,
     openLink: (url: string) => Promise<void>, ownerGeneration: number,
+    private readonly isPlugin = false,
   ) {
     this.heightCacheKey = heightKey(ownerGeneration, deviceId, sessionId, clientId);
     this.state = { loading: true, height: getMcpAppHeight(ownerGeneration, deviceId, sessionId, clientId) ?? MCP_APP_DEFAULT_HEIGHT };
@@ -153,7 +154,8 @@ export class McpAppView {
     if (this.closing) return;
     if (/MCP_APP_FILES_LOCAL_ONLY/.test(String(error))) { this.localFilesUnavailable(); return; }
     this.update({ loading: false, error: /MCP_APP_NATIVE_UPDATE_REQUIRED/.test(String(error))
-      ? 'mcpApps.mobileUpdateRequired' : mcpAppFailureKey(error) });
+      ? 'mcpApps.mobileUpdateRequired' : this.isPlugin && /MCP_PLUGIN_UNAVAILABLE|MCP_APP_SERVER_CHANGED|MCP_APP_VIEW_UNAVAILABLE/.test(String(error))
+        ? 'mcpApps.pluginRevoked' : mcpAppFailureKey(error) });
     void this.close();
   }
   close(): Promise<void> {

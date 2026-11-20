@@ -98,6 +98,7 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   }), [mode, colors, i18n.resolvedLanguage, i18n.language]);
   const contextRef = useRef(context);
   contextRef.current = context;
+  const isPlugin = !!plugin;
   const open = host?.open;
   const hasHost = !!host;
   useEffect(() => {
@@ -114,7 +115,7 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
       setState((previous) => ({ ...previous, loading: false, error: 'mcpApps.loadFailed' }));
       return;
     }
-    const current = open(deviceId, sessionId, clientId, contextRef.current);
+    const current = open(deviceId, sessionId, clientId, contextRef.current, isPlugin);
     current.setWidth(width.current);
     setView(current);
     const unsubscribe = current.subscribe(setState);
@@ -124,7 +125,7 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
       // card/route unmount. Its close() removes that same View only at the bound.
       void current.close();
     };
-  }, [open, hasHost, foreground, deviceId, sessionId, clientId, attempt, surfaceActive]);
+  }, [open, hasHost, foreground, deviceId, sessionId, clientId, attempt, surfaceActive, isPlugin]);
   useEffect(() => { if (!view?.closing) void view?.controller.context(context).catch(() => {}); }, [view, context]);
   const { error, loading, height, filesUnavailable } = state;
   return (

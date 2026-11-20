@@ -736,3 +736,20 @@ it('shows the custom service snapshot and namespace-free organization history', 
   expect(container.textContent).toContain('Planner');
   expect(container.textContent).not.toContain('mcpApps.source.');
 });
+
+// The execution computer sends the existing error code; only a card carrying plugin identity is revoked.
+it.each(['MCP_PLUGIN_UNAVAILABLE', 'MCP_APP_SERVER_CHANGED', 'MCP_APP_VIEW_UNAVAILABLE'])(
+  'shows the plugin-specific failure for %s and keeps the fallback for a custom server',
+  async code => {
+    state.invoke.mockImplementation(async (_device, _channel, [, input]) => {
+      if (input.op === 'open') throw new Error(code);
+      return {};
+    });
+    await act(async () => render(<>
+      <McpAppCard deviceId="device" sessionId="task" clientId="plugin" title="Plugin" plugin={{ name: 'Plugin' }} />
+      <McpAppCard deviceId="device" sessionId="task" clientId="custom" title="Custom" />
+    </>));
+    expect(container.textContent).toContain('PluginmcpApps.retrymcpApps.pluginRevoked');
+    expect(container.textContent).toContain('CustommcpApps.retrymcpApps.loadFailed');
+  },
+);

@@ -1,6 +1,7 @@
 {
   "sharedTaskReadOnly": "Nur der Besitzer der Sitzung kann mit dieser Karte interagieren.",
   "retry": "Neu laden",
+  "pluginRevoked": "Das Plugin wurde deaktiviert oder geändert. Diese Seite ist nicht mehr verfügbar.",
   "loadFailed": "Die App konnte nicht geladen werden. Prüfe die Verbindung und lade sie neu.",
   "updateRequired": "Dieser Computer unterstützt MCP Apps noch nicht. Aktualisiere Cindy auf diesem Computer und versuch es erneut.",
   "appName": "MCP App",
