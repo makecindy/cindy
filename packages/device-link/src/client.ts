@@ -5356,6 +5356,11 @@ export class DeviceLinkClient {
 
   private markPeerLinkDown(peer: PeerTransportState, preserveAcceptance?: { generation: number }): void {
     for (const [id, state] of this.peerTransport) if (state === peer) {
+      // Pending opens survive transient reset, but evidence for the preceding
+      // recovery must not suppress the accept observed after this reset.
+      for (const pending of this.pending.values()) {
+        if (pending.dst === id) delete pending.linkOpenOptions?.inboundAcceptance;
+      }
       this.clearSameAccountDirectGrace(id);
       this.detachDirectPath(id, 'link-closed');
       this.clearProviderShareDirectLease(id);

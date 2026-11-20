@@ -253,6 +253,7 @@ describe('RoutedDeviceLinkClient', () => {
     { probe: true, interrupt: 'reset' }, { probe: true, interrupt: 'new-inbound' },
     { probe: true, interrupt: 'disconnect' },
     { probe: true, interrupt: 'presence-cycle' },
+    { probe: false, interrupt: 'destination-reset' }, { probe: true, interrupt: 'destination-reset' },
     { probe: false, interrupt: 'later-unrelated-open' },
   ])('carries exact inbound recovery across legacy→primary ($probe/$interrupt)', async ({ probe, interrupt }) => {
     const sockets: FakeWs[] = [];
@@ -286,6 +287,7 @@ describe('RoutedDeviceLinkClient', () => {
         : { inboundAcceptance: client.captureInboundAcceptance('peer') }); await vi.advanceTimersByTimeAsync(1);
       if (probe) { accept(legacy, 'legacy-stream'); await vi.advanceTimersByTimeAsync(1); }
       if (interrupt === 'reset') legacy.push({ v: PROTOCOL_VERSION, kind: 'link-close', src: 'peer', payload: { reason: 'transport-timeout' } });
+      if (interrupt === 'destination-reset') primary.push({ v: PROTOCOL_VERSION, kind: 'link-close', src: 'peer', payload: { reason: 'transport-timeout' } });
       if (interrupt === 'new-inbound') incoming('inbound-2', 'replacement-stream');
       if (interrupt === 'disconnect') legacy.close(1006);
       if (interrupt === 'presence-cycle') {

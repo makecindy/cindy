@@ -698,6 +698,8 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   private receiveClose(src: string, reason: string): void | Promise<void> {
     const peer = this.peers.get(src);
     if (peer) {
+      // Transient close keeps an opening request alive, not its pre-reset proof.
+      this.retireInboundAcceptance(peer);
       peer.offer = null;
       if (reason !== 'transport-timeout') {
         // 和 Device Link 收到 link-close 一样，本机还在等的建链马上失败：撤权报 ACCESS_REVOKED，其余报 LINK_NOT_OPEN
@@ -708,7 +710,6 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
         peer.refuseOpen = null;
         peer.outbound = 'idle';
         peer.outboundLost = false;
-        this.retireInboundAcceptance(peer);
         peer.inbound = false;
         peer.requests.clear();
         this.notifyReopen(src);

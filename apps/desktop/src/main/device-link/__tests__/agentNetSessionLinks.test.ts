@@ -616,6 +616,35 @@ describe('AgentNetSessionLinks', () => {
     } finally { links.controller.stop(); links.host.stop(); }
   });
 
+  // P2: a reset observed while the reciprocal Session open waits for acceptance
+  // is a new recovery boundary, even when the underlying Session stays live.
+  it.each([false, true])('fences an inbound Session proof when timeout close overtakes open (reset=%s)', async reset => {
+    const { links, sessions } = pair();
+    const held: Envelope[] = [], accepted: boolean[] = [];
+    let resets = 0;
+    links.host.onFrame(env => { if (env.kind === 'link-open') held.push(env); });
+    links.controller.onFrame(env => {
+      if (env.kind === 'link-open') links.controller.sendLinkAccept(env.src!, env.id!, { appVersion: 'test', allowlistHash: 'test' });
+      if (env.kind === 'link-close') resets += 1;
+    });
+    links.controller.onPeerLinkAccepted((_peer, _accept, continuation) => accepted.push(continuation === true));
+    try {
+      await links.host.openLink('b-controller', openPayload);
+      const proof = links.controller.captureInboundAcceptance('a-host');
+      expect(proof?.current()).toBe(true);
+      const reverse = links.controller.openLink('a-host', openPayload, undefined, { inboundAcceptance: proof });
+      await vi.waitFor(() => expect(held).toHaveLength(1));
+      if (reset) {
+        sessions.host!.close('transport-timeout');
+        await vi.waitFor(() => expect(resets).toBe(1));
+      }
+      links.host.sendLinkAccept('b-controller', held[0].id!, { appVersion: 'test', allowlistHash: 'test' });
+      await reverse;
+      expect(links.controller.isLinkReady('a-host')).toBe(true);
+      expect(accepted).toEqual([!reset]);
+    } finally { links.controller.stop(); links.host.stop(); }
+  });
+
   it('pairs a Session reverse open with its fresh inbound acceptance, preserving later recovery notifications', async () => {
     const { links } = pair();
     answerOnSession(links.host);
