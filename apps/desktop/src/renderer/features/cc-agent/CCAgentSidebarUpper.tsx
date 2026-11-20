@@ -160,6 +160,7 @@ import { useCollapsedProjects } from './hooks/useCollapsedProjects';
 import { useSessionDisplayRunningState } from './hooks/useSessionDisplayRunningState';
 import { useOrcaWorkerAttentionWatcher } from './hooks/useOrcaWorkerAttentionWatcher';
 import { usePublishedAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
+import { readRemoteScheduleIndex } from '../device-link/refreshRemoteSessions';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, useSidebarFilterGc, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
@@ -1035,28 +1036,30 @@ function ExpandedView({
         }
         void refreshPendingAlerts();
       }
-      const unreadRunIds = sessionIds.flatMap(
-        (sessionId) =>
-          (deviceId
-            ? remoteProjectsStore.getSessionScheduleInfo(sessionId)
-            : scheduleSessionIndex.get(sessionId)
-          )?.unreadRunIds ?? [],
-      );
-      if (unreadRunIds.length === 0) return;
-      const { processed, failed, firstError } = await markScheduleRunsReadAndSync(
-        unreadRunIds,
-        deviceId,
-      );
-      if (announce && processed.length > 0) {
+      let index = scheduleSessionIndex;
+      if (deviceId) {
+        try {
+          index = await readRemoteScheduleIndex(deviceId);
+        } catch (error) {
+          toast.error(t('ccAgent.layout.markAllReadFailed', { error: String(error) }));
+          return false;
+        }
+      }
+      const unreadRunIds = sessionIds.flatMap(id => index.get(id)?.unreadRunIds ?? []);
+      if (!deviceId && unreadRunIds.length === 0) return true;
+      // Refresh the remote mirror even on a no-op: another device may already have read the run.
+      const { processed, failed, firstError } = await markScheduleRunsReadAndSync(unreadRunIds, deviceId);
+      if (announce && processed.length > 0 && firstError === undefined) {
         toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
       }
-      if (failed.length > 0) {
+      if (failed.length > 0 || firstError !== undefined) {
         toast.error(
           t('ccAgent.layout.markAllReadFailed', {
             error: firstError ?? String(failed.length),
           }),
         );
       }
+      return failed.length === 0 && firstError === undefined;
     },
     [scheduleSessionIndex, t],
   );
@@ -3247,7 +3250,8 @@ function ExpandedView({
         ]).then((names) => names.get(sessionId) ?? [], () => []);
         if (boundNames.length > 0) {
           if (await blockedByAttachment()) return;
-          await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
+          const read = await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
+          if (!read) return;
           // The inbox owns the reactive placement of this explicit successful action.
           return 'marked-read' as const;
         }
