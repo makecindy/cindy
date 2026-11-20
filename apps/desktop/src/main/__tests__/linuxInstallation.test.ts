@@ -132,6 +132,18 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
       env: { ...process.env, HOME: path.join(root, 'home'), ...overrides.env }, encoding: 'utf8', timeout: 15_000,
     });
   }
+  // Minimal managed prefix for register-desktop.sh. The libarchive installer
+  // fixture is still used when already present; this path lets the desktop-entry
+  // cases run independently of bsdtar.
+  function stageManagedPrefix(target: string) {
+    if (fs.existsSync(path.join(target, '.cindy-user-install')) && fs.existsSync(path.join(target, 'launch'))) {
+      return;
+    }
+    fs.mkdirSync(path.join(target, 'current', 'resources'), { recursive: true });
+    fs.writeFileSync(path.join(target, '.cindy-user-install'), 'cindy-user-install-v1:global\n');
+    fs.writeFileSync(path.join(target, 'current', 'resources', 'icon.png'), 'x');
+    fs.writeFileSync(path.join(target, 'launch'), '#!/bin/sh\nprintf "fixture\\n"\n', { mode: 0o755 });
+  }
   it('installs, rejects corrupt/wrong builds, applies two updates, and retains previous releases', () => {
     const first = run('1.0.0');
     expect(first.stderr).toBe('');
@@ -241,6 +253,7 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
     expect(fs.existsSync(path.join(prefix, 'current', 'Cindy'))).toBe(true);
   });
   it('registers a valid stable desktop entry with no real desktop changes', () => {
+    stageManagedPrefix(prefix);
     const bin = path.join(root, 'fake-bin');
     fs.mkdirSync(bin);
     const mimeLog = path.join(root, 'mime-args');
@@ -267,6 +280,32 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
     expect(fs.readFileSync(mimeLog, 'utf8').trim().split('\n')).toEqual([
       'default', entries[0], ...allDeepLinkSchemes().map((scheme) => 'x-scheme-handler/' + scheme),
     ]);
+  });
+  it('registers an unquoted Exec for ordinary prefixes so xdg-open can resolve cindy:// links', () => {
+    const plainPrefix = path.join(root, 'home', 'plainprefix');
+    stageManagedPrefix(plainPrefix);
+    const bin = path.join(root, 'fake-bin-plain');
+    fs.mkdirSync(bin);
+    const mimeLog = path.join(root, 'mime-args-plain');
+    fs.writeFileSync(path.join(bin, 'xdg-mime'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$CINDY_TEST_MIME_LOG"\n', { mode: 0o755 });
+    const data = path.join(root, 'home', 'data-plain');
+    const result = spawnSync('bash', [
+      path.resolve(__dirname, '../../../resources/linux/register-desktop.sh'), plainPrefix,
+    ], {
+      env: { ...process.env, HOME: path.join(root, 'home'), XDG_DATA_HOME: data,
+        XDG_CONFIG_HOME: path.join(root, 'home', 'config-plain'), PATH: bin + path.delimiter + process.env.PATH,
+        CINDY_TEST_MIME_LOG: mimeLog },
+      encoding: 'utf8', timeout: 15_000,
+    });
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    const entries = fs.readdirSync(path.join(data, 'applications')).filter((name) => name.endsWith('.desktop'));
+    expect(entries).toHaveLength(1);
+    const desktop = fs.readFileSync(path.join(data, 'applications', entries[0]), 'utf8');
+    const launch = path.join(plainPrefix, 'launch');
+    expect(desktop).toContain(`Exec=${launch} %U`);
+    expect(desktop).not.toContain(`Exec="${launch}" %U`);
+    expect(desktop).not.toContain('/releases/');
   });
   it('runs the detached updater and relaunches with the same backend on success and failure', () => {
     const launchLog = path.join(root, 'launch-args');
