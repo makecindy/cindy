@@ -163,4 +163,18 @@ describe('evaluateRelaunchBusyActivity', () => {
     expect(r.busy).toBe(true);
     expect(r.reasons).toEqual(['session-in-turn']);
   });
+
+  it('等待 Pi 查询后仍能看到新任务，查询失败时保留重启保护', async () => {
+    let turnRunning = false;
+    const result = await evaluateRelaunchBusyActivity({
+      ...idle,
+      anySessionInTurn: () => turnRunning,
+      anyPiSubagentRunning: async () => {
+        await Promise.resolve();
+        turnRunning = true;
+        throw new Error('unreadable');
+      },
+    });
+    expect(result).toEqual({ busy: true, reasons: ['session-in-turn', 'pi-subagent-probe-failed'] });
+  });
 });

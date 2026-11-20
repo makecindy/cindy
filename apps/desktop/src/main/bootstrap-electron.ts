@@ -592,7 +592,7 @@ import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import {
   acquirePiSubagentLaunchFence,
   clearStalePiSubagentLaunchFence,
-  hasActivePiSubagentRunsSync,
+  hasActivePiSubagentRuns,
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
 
@@ -3842,7 +3842,7 @@ function readRelaunchActivitySources(): RelaunchBusyActivitySources {
     // dev/packaged/`--passive` instance, and its running Subagents are not
     // a reason to hold up *our* quit.
     anyPiSubagentRunning: () =>
-      hasActivePiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
+      hasActivePiSubagentRuns(path.join(app.getPath('userData'), 'pi-agent-home'), {
         hostPid: process.pid,
       }),
     // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
