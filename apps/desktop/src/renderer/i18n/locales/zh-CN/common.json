@@ -16807,7 +16807,7 @@
         "compactNothing": "暂无可压缩内容",
         "sessionBranches": "任务分支",
         "copySessionLink": "复制任务链接",
-        "deliveryReceipt": "这份交付"
+        "deliveryReceipt": "本次结果"
       },
       "sessionBranches": {
         "title": "任务分支",
@@ -22503,12 +22503,12 @@
     "review": "$t(macControlPermission.selectApp)\n系统若提供「选择 App」，可限定控制范围。整机控制允许访问所有应用和数据。如果同意，请逐项阅读并点「OK」确认，再点窗口底部的允许按钮。"
   },
   "deliveryReceipt": {
-    "title": "这份交付",
-    "loading": "正在读取这次交付…",
-    "loadFailed": "读不到这次交付",
-    "copied": "已复制收据链接",
-    "copyFailed": "复制收据链接失败",
-    "copyLink": "复制收据链接",
+    "title": "本次结果",
+    "loading": "正在读取本次结果…",
+    "loadFailed": "读不到本次结果",
+    "copied": "已复制链接",
+    "copyFailed": "复制链接失败",
+    "copyLink": "复制链接",
     "close": "关闭",
     "status": "状态",
     "workingDir": "工作目录",

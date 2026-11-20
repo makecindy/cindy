@@ -16807,7 +16807,7 @@
         "compactNothing": "無可壓縮者",
         "sessionBranches": "差事分支",
         "copySessionLink": "錄差事連結",
-        "deliveryReceipt": "此交割"
+        "deliveryReceipt": "本次結果"
       },
       "sessionBranches": {
         "title": "差事分支",
@@ -22503,12 +22503,12 @@
     "review": "$t(macControlPermission.selectApp)\n系統若提供「選擇 App」，可限定控制範圍。完整控制可存取所有 App 和資料。若同意，請逐項閱讀並按「OK」確認，再按視窗底部的允許按鈕。"
   },
   "deliveryReceipt": {
-    "title": "此交割",
-    "loading": "正讀此交割…",
-    "loadFailed": "讀此交割不得",
-    "copied": "收據之鏈已錄",
-    "copyFailed": "錄收據之鏈不成",
-    "copyLink": "錄收據之鏈",
+    "title": "本次結果",
+    "loading": "正讀本次結果…",
+    "loadFailed": "讀本次結果不得",
+    "copied": "連結已錄",
+    "copyFailed": "錄連結不成",
+    "copyLink": "錄連結",
     "close": "闔",
     "status": "狀",
     "workingDir": "工作目錄",

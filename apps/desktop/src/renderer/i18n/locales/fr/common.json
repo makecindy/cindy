@@ -17043,7 +17043,7 @@
         "compactNothing": "Rien à compacter pour l'instant",
         "sessionBranches": "Branches de la session",
         "copySessionLink": "Copier le lien de la session",
-        "deliveryReceipt": "Cette livraison"
+        "deliveryReceipt": "Ce résultat"
       },
       "sessionBranches": {
         "title": "Branches de la session",
@@ -22805,12 +22805,12 @@
     "review": "$t(macControlPermission.selectApp)\nSi l’option est proposée, vous pouvez limiter le contrôle aux apps de votre choix. Le contrôle intégral donne accès à toutes les apps et données. Si vous acceptez, lisez et confirmez chaque élément, puis autorisez l’accès en bas de la fenêtre."
   },
   "deliveryReceipt": {
-    "title": "Cette livraison",
-    "loading": "Lecture de cette livraison…",
-    "loadFailed": "Impossible de lire cette livraison",
-    "copied": "Lien du reçu copié",
-    "copyFailed": "Impossible de copier le lien du reçu",
-    "copyLink": "Copier le lien du reçu",
+    "title": "Ce résultat",
+    "loading": "Lecture de ce résultat…",
+    "loadFailed": "Impossible de lire ce résultat",
+    "copied": "Lien copié",
+    "copyFailed": "Impossible de copier le lien",
+    "copyLink": "Copier le lien",
     "close": "Fermer",
     "status": "État",
     "workingDir": "Répertoire de travail",

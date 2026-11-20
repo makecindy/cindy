@@ -16881,7 +16881,7 @@
         "compactNothing": "Noch nichts zu komprimieren",
         "sessionBranches": "Sitzungszweige",
         "copySessionLink": "Sitzungslink kopieren",
-        "deliveryReceipt": "Diese Lieferung"
+        "deliveryReceipt": "Dieses Ergebnis"
       },
       "sessionBranches": {
         "title": "Sitzungszweige",
@@ -22592,12 +22592,12 @@
     "review": "$t(macControlPermission.selectApp)\nFalls angeboten, lässt sich die Kontrolle auf ausgewählte Apps beschränken. Vollständige Kontrolle erlaubt Zugriff auf alle Apps und Daten. Wenn du zustimmst, lies und bestätige jeden Punkt und erlaube den Zugriff unten im Fenster."
   },
   "deliveryReceipt": {
-    "title": "Diese Lieferung",
-    "loading": "Diese Lieferung wird gelesen…",
-    "loadFailed": "Diese Lieferung konnte nicht gelesen werden",
-    "copied": "Beleglink kopiert",
-    "copyFailed": "Beleglink konnte nicht kopiert werden",
-    "copyLink": "Beleglink kopieren",
+    "title": "Dieses Ergebnis",
+    "loading": "Dieses Ergebnis wird gelesen…",
+    "loadFailed": "Dieses Ergebnis konnte nicht gelesen werden",
+    "copied": "Link kopiert",
+    "copyFailed": "Link konnte nicht kopiert werden",
+    "copyLink": "Link kopieren",
     "close": "Schließen",
     "status": "Status",
     "workingDir": "Arbeitsverzeichnis",

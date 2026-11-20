@@ -17043,7 +17043,7 @@
         "compactNothing": "Aún no hay nada que compactar",
         "sessionBranches": "Ramas de la sesión",
         "copySessionLink": "Copiar enlace de la sesión",
-        "deliveryReceipt": "Esta entrega"
+        "deliveryReceipt": "Este resultado"
       },
       "sessionBranches": {
         "title": "Ramas de la sesión",
@@ -22805,12 +22805,12 @@
     "review": "$t(macControlPermission.selectApp)\nSi se ofrece, puedes limitar el control a las apps que elijas. El control total permite acceder a todas las apps y datos. Si estás de acuerdo, lee y confirma cada punto y permite el acceso al final de la ventana."
   },
   "deliveryReceipt": {
-    "title": "Esta entrega",
-    "loading": "Leyendo esta entrega…",
-    "loadFailed": "No se pudo leer esta entrega",
-    "copied": "Enlace del recibo copiado",
-    "copyFailed": "No se pudo copiar el enlace del recibo",
-    "copyLink": "Copiar enlace del recibo",
+    "title": "Este resultado",
+    "loading": "Leyendo este resultado…",
+    "loadFailed": "No se pudo leer este resultado",
+    "copied": "Enlace copiado",
+    "copyFailed": "No se pudo copiar el enlace",
+    "copyLink": "Copiar enlace",
     "close": "Cerrar",
     "status": "Estado",
     "workingDir": "Directorio de trabajo",
