@@ -3790,7 +3790,7 @@ struct CompletedSessionSwipeRow<Content: View>: View {
         let right = offset >= 0
         Button { commit(width: geometry.size.width) } label: {
           VStack(spacing: 5) {
-            Image(systemName: right ? "checkmark" : "archivebox")
+            Image(systemName: right ? "circle.dashed" : "archivebox")
               .font(.system(size: 18, weight: .medium))
             Text(right ? (strings.markRead ?? "Mark as read") : (strings.archive ?? "Archive"))
               .font(.system(size: 11, weight: .medium))
