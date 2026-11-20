@@ -10,7 +10,7 @@ import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt
 import { McpSetupPrompt, useMcpSetupRequest } from '@/components/new-chat/McpSetupPrompt';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { VoiceCallComposerSlot } from '../bots/voice/GlobalVoiceCall';
-import { resolveVoiceConfiguration } from '../bots/voice/voiceConfiguration';
+import { readVoiceCallConfiguration } from '../bots/voice/voiceConfiguration';
 import { sendVoiceCallCommand, useVoiceCallSummary } from '../bots/voice/voiceCallStore';
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
 import { useMessageReadAloud } from '../bots/voice/useMessageReadAloud';
@@ -4870,11 +4870,8 @@ function CCAgentSessionContent({
       if (!current || !isCurrent() || !bot || !target) return;
       const voice = window.electronAPI.voiceConversation;
       // Missing configuration opens settings here, not in a possibly hidden main window.
-      const configured = await Promise.all([voice.models(), voice.preference(bot.id)]).then(
-        ([models, preference]) => {
-          const { selection, protocol } = resolveVoiceConfiguration(models, preference.selection);
-          return Boolean(selection && protocol);
-        },
+      const configured = await readVoiceCallConfiguration(voice, bot.id).then(
+        ({ selection }) => Boolean(selection),
         // The host re-reads these and reports a failed read on the toolbar.
         () => true,
       );

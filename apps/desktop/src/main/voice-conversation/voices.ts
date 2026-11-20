@@ -48,7 +48,7 @@ async function readJson(response: Response, signal: AbortSignal): Promise<Record
  * in particular ElevenLabs high_quality_base_model_ids is not an availability allowlist.
  */
 export async function loadSpeechVoices(
-  connection: SpeechConnection,
+  connection: Pick<SpeechConnection, 'baseUrl' | 'headers'> & { protocol: SpeechConnection['protocol'] | 'qwen-audio-realtime' },
   modelId: string,
   fetcher: typeof fetch,
   assertCurrent: () => void,
@@ -112,8 +112,8 @@ export async function loadSpeechVoices(
         ...(ids.length > 1000 ? { truncated: true } : {}),
       };
     }
-    if (connection.protocol === 'dashscope-tts')
-      return await loadDashscopeVoices(modelId, base, request, assertCurrent);
+    if (connection.protocol === 'dashscope-tts' || connection.protocol === 'qwen-audio-realtime')
+      return await loadDashscopeVoices(modelId, base, request, assertCurrent, connection.protocol);
     if (connection.protocol === 'minimax') {
       // https://platform.minimax.io/docs/api-reference/voice-management-get
       const json = await request(new URL(`${base}/get_voice`), { voice_type: 'all' });

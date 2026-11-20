@@ -33,6 +33,7 @@ import { VoicePreviewController } from './VoicePreviewController';
 import { SpeechVoicePicker } from './SpeechVoicePicker';
 import { resolveVoiceConfiguration } from './voiceConfiguration';
 import { useBotSettingsTarget } from '../useBotSettingsTarget';
+import { RealtimeVoiceSettings } from './RealtimeVoiceSettings';
 
 /** Stands in for the preview service when samples cannot be played from this window. */
 const PREVIEW_UNAVAILABLE = {
@@ -53,8 +54,6 @@ type Props = {
 export function CompanionVoiceSettings(props: Props) {
   const { t } = useTranslation();
   const target = useBotSettingsTarget();
-  const voiceApi = target.voice;
-  const sentencePlaybackId = useId();
   const session = useSyncExternalStore(
     useCallback(
       (notify) =>
@@ -74,6 +73,42 @@ export function CompanionVoiceSettings(props: Props) {
     session.pendingRemoteDesktopConfirmation ||
     session.queuePaused,
   );
+  const preview = useMemo(
+    () =>
+      new VoicePreviewController({
+        api: target.voice.previewApi ?? PREVIEW_UNAVAILABLE,
+        botId: props.botId,
+        sessionId: props.sessionId ?? '',
+        player: () => new PcmSpeechPlayer(() => undefined),
+      }),
+    [props.botId, props.sessionId, target.voice],
+  );
+  const callOpen = useVoiceCallSummary().open;
+  const previewBlocked = blocked || callOpen;
+  const speechControls = (readAloudOnly: boolean, hidden: boolean) => (
+    <SpeechSettings {...props} blocked={blocked} preview={preview} previewBlocked={previewBlocked} readAloudOnly={readAloudOnly} hidden={hidden} />
+  );
+  return (
+    <div className="space-y-4 pt-3">
+      {target.kind === 'local' ? (
+        <RealtimeVoiceSettings key={props.botId} botId={props.botId} disabled={blocked}
+          preview={preview} previewDisabled={previewBlocked || !props.sessionId || !target.voice.previewApi}>
+          {speechControls}
+        </RealtimeVoiceSettings>
+      ) : speechControls(false, false)}
+      <footer className="border-t border-[var(--border-default)] pt-3 text-12 text-[var(--text-tertiary)]">
+        {t('bots.voiceMode.preferenceHint')}
+      </footer>
+    </div>
+  );
+}
+
+function SpeechSettings(props: Props & { blocked: boolean; preview: VoicePreviewController; previewBlocked: boolean; readAloudOnly: boolean; hidden: boolean }) {
+  const { t } = useTranslation();
+  const target = useBotSettingsTarget();
+  const voiceApi = target.voice;
+  const sentencePlaybackId = useId();
+  const { blocked, readAloudOnly, preview } = props;
   const [models, setModels] = useState<VoiceConversationModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [catalogError, setCatalogError] = useState(false);
@@ -110,16 +145,6 @@ export function CompanionVoiceSettings(props: Props) {
   // Keep the saved current value readable, without offering other hidden routes
   // or silently choosing one when there is no saved preference.
   const pickerModels = models.filter((model) => model.pickerVisible !== false || model === selectedModel);
-  const preview = useMemo(
-    () =>
-      new VoicePreviewController({
-        api: voiceApi.previewApi ?? PREVIEW_UNAVAILABLE,
-        botId: props.botId,
-        sessionId: props.sessionId ?? '',
-        player: () => new PcmSpeechPlayer(() => undefined),
-      }),
-    [props.botId, props.sessionId, voiceApi],
-  );
   const refreshVersion = useRef(0);
   const preferenceVersion = useRef(0);
   const refresh = useCallback(async (fetchCatalog = false) => {
@@ -176,11 +201,10 @@ export function CompanionVoiceSettings(props: Props) {
     };
   }, [preview, loadPreference, refresh]);
   // A running call holds the voice lease. Its settings stay editable for the next call.
-  const callOpen = useVoiceCallSummary().open;
-  const previewBlocked = blocked || callOpen;
+  const previewBlocked = props.previewBlocked || props.hidden;
   useEffect(() => {
-    if (previewBlocked) void preview.stop();
-  }, [previewBlocked, preview]);
+    if (props.previewBlocked || props.hidden) void preview.stop();
+  }, [props.previewBlocked, props.hidden, preview]);
   useEffect(() => {
     const initialOwner = getDataOwnerGeneration();
     const owner = `${initialOwner.dataOwnerId}:${initialOwner.generation}`;
@@ -302,7 +326,7 @@ export function CompanionVoiceSettings(props: Props) {
   // catalog request is pending. This only changes presentation, not saved preferences.
   if (pickerModels.length === 0) {
     return (
-      <div className="space-y-4 pt-3">
+      <div className="space-y-4">
         {loading ? (
           <p role="status" className="text-13 text-[var(--text-secondary)]">
             {t('bots.voiceMode.status.loading')}
@@ -349,9 +373,9 @@ export function CompanionVoiceSettings(props: Props) {
   }
 
   return (
-    <div className="space-y-4 pt-3">
+    <div className="space-y-4">
       <p className="text-13 leading-relaxed text-[var(--text-secondary)]">
-        {t('bots.voiceMode.settingsHint')}
+        {readAloudOnly ? t('bots.voiceMode.realtime.readAloudHint') : t('bots.voiceMode.settingsHint')}
       </p>
       {catalogError ? (
         <p className="text-13 text-[var(--text-secondary)]">{t('bots.voiceMode.catalogError')}</p>
@@ -453,6 +477,7 @@ export function CompanionVoiceSettings(props: Props) {
       ) : null}
       {ready && selectedModel ? (
         <SpeechVoicePicker
+          label={readAloudOnly ? t('bots.voiceMode.realtime.readAloudVoice') : t('bots.voiceMode.voice')}
           botId={props.botId}
           route={{
             providerId: selectedModel.providerId,
@@ -545,46 +570,45 @@ export function CompanionVoiceSettings(props: Props) {
           {t('bots.voiceMode.previewNeedsChat')}
         </p>
       ) : null}
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0 space-y-2">
-          <label
-            htmlFor={sentencePlaybackId}
-            className="text-13 font-medium text-[var(--settings-section-title)]"
-          >
-            {t('bots.voiceMode.sentencePlayback')}
-          </label>
-          <p
-            id={`${sentencePlaybackId}-hint`}
-            className="text-12 leading-snug text-[var(--form-field-hint)]"
-          >
-            {t('bots.voiceMode.sentencePlaybackHint')}
-          </p>
+      {!readAloudOnly && (
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 space-y-2">
+            <label
+              htmlFor={sentencePlaybackId}
+              className="text-13 font-medium text-[var(--settings-section-title)]"
+            >
+              {t('bots.voiceMode.sentencePlayback')}
+            </label>
+            <p
+              id={`${sentencePlaybackId}-hint`}
+              className="text-12 leading-snug text-[var(--form-field-hint)]"
+            >
+              {t('bots.voiceMode.sentencePlaybackHint')}
+            </p>
+          </div>
+          <Switch
+            id={sentencePlaybackId}
+            aria-describedby={`${sentencePlaybackId}-hint`}
+            className="shrink-0"
+            checked={sentencePlayback}
+            disabled={!ready || saving}
+            onCheckedChange={(enabled) => void persist(undefined, enabled)}
+          />
         </div>
-        <Switch
-          id={sentencePlaybackId}
-          aria-describedby={`${sentencePlaybackId}-hint`}
-          className="shrink-0"
-          checked={sentencePlayback}
-          disabled={!ready || saving}
-          onCheckedChange={(enabled) => void persist(undefined, enabled)}
-        />
-      </div>
+      )}
       {preferenceError ? (
         <p role="alert" className="text-13 text-[var(--error-fg)]">
           {t('bots.voiceMode.preferenceError')}
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="flex-1 text-12 text-[var(--text-tertiary)]">
-          {t('bots.voiceMode.preferenceHint')}
-        </p>
+      <div className="flex justify-end">
         <Button
           variant="secondary"
           size="sm"
-          disabled={!ready || saving || (!customized && !dirty.current)}
-          onClick={() => void persist(null, null)}
+          disabled={!ready || saving || (!(readAloudOnly ? preference : customized) && !dirty.current)}
+          onClick={() => void persist(null, readAloudOnly ? undefined : null)}
         >
-          {t('bots.voiceMode.resetPreference')}
+          {readAloudOnly ? t('bots.voiceMode.realtime.resetReadAloud') : t('bots.voiceMode.resetPreference')}
         </Button>
       </div>
     </div>

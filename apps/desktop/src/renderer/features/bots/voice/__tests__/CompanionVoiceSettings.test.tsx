@@ -14,12 +14,14 @@ vi.mock('@/components/ui/select', () => ({
     label,
     value,
     options,
+    groups,
     onValueChange,
     disabled,
   }: {
     label: string;
     value: string;
-    options: { value: string; label: string }[];
+    options?: { value: string; label: string }[];
+    groups?: { options: { value: string; label: string }[] }[];
     onValueChange(value: string): void;
     disabled: boolean;
   }) => (
@@ -30,7 +32,7 @@ vi.mock('@/components/ui/select', () => ({
       onChange={(e) => onValueChange(e.target.value)}
     >
       <option value="" />
-      {options.map((option) => (
+      {(options ?? groups?.flatMap(group => group.options) ?? []).map((option) => (
         <option key={option.value} value={option.value}>
           {option.label}
         </option>
@@ -133,18 +135,113 @@ const renderSettings = (botId = 'bot') =>
     <CompanionVoiceSettings botId={botId} sessionId="canonical" onOpenProviders={openProviders} />,
   );
 
-const voicePicker = () =>
-  screen.getByRole('button', { name: 'bots.voiceMode.voice' }) as HTMLButtonElement;
-const openVoices = async () => {
-  await screen.findByRole('button', { name: 'bots.voiceMode.voice' });
-  await waitFor(() => expect(voicePicker().disabled).toBe(false));
-  if (voicePicker().getAttribute('aria-expanded') !== 'true') fireEvent.click(voicePicker());
-  return within(screen.getByRole('dialog', { name: 'bots.voiceMode.voice' }));
+it('saves realtime choices on selection, retries failed choices and rejects stale edits', async () => {
+  const api = window.electronAPI.voiceConversation;
+  const model = { id: 'gpt-realtime-2', name: 'Realtime', providerId: 'openai', providerName: 'OpenAI', agent: 'codex' as const, protocol: 'openai-realtime' as const, protocolLocked: true };
+  api.realtimeModels = vi.fn(async () => [model]);
+  api.setRealtimePreference = vi.fn(async (_bot, selection) => ({ selection: null, customized: false, realtimeSelection: selection ?? undefined }));
+  renderSettings();
+  const select = await screen.findByRole('combobox', { name: 'bots.voiceMode.realtime.callMode' });
+  await waitFor(() => expect((select as HTMLSelectElement).disabled).toBe(false));
+  fireEvent.change(select, { target: { value: voiceModelKey(model) } });
+  await waitFor(() => expect(api.setRealtimePreference).toHaveBeenCalledOnce());
+  expect(api.setRealtimePreference).toHaveBeenLastCalledWith('bot', expect.objectContaining({ mode: 'realtime', modelId: 'gpt-realtime-2', voice: 'marin' }));
+  expect(api.setPreference).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button', { name: 'bots.save' })).toBeNull();
+
+  vi.mocked(api.setRealtimePreference).mockRejectedValueOnce(new Error('write failed'));
+  fireEvent.click((await openVoices(callVoiceLabel)).getByRole('button', { name: 'cedar' }));
+  await screen.findByRole('alert');
+  expect(voicePicker(callVoiceLabel).value).toBe('voice:marin');
+  fireEvent.click((await openVoices(callVoiceLabel)).getByRole('button', { name: 'cedar' }));
+  await waitFor(() => expect(voicePicker(callVoiceLabel).value).toBe('voice:cedar'));
+  expect(screen.queryByRole('alert')).toBeNull();
+
+  fireEvent.click((await openVoices(callVoiceLabel)).getByRole('button', { name: 'bots.voiceMode.manualVoice' }));
+  const input = screen.getByRole('textbox', { name: 'bots.voiceMode.voiceId' });
+  const count = vi.mocked(api.setRealtimePreference).mock.calls.length;
+  fireEvent.change(input, { target: { value: 'new-id' } });
+  expect(api.setRealtimePreference).toHaveBeenCalledTimes(count);
+  fireEvent.blur(input);
+  await waitFor(() => expect(api.setRealtimePreference).toHaveBeenLastCalledWith('bot', expect.objectContaining({ voice: 'new-id' })));
+  await waitFor(() => expect(voicePicker(callVoiceLabel).disabled).toBe(false));
+  setDataOwnerGeneration('owner-b', 2);
+  fireEvent.click((await openVoices(callVoiceLabel)).getByRole('button', { name: 'marin' }));
+  expect(api.setRealtimePreference).toHaveBeenCalledTimes(count + 1);
+});
+
+const callVoiceLabel = 'bots.voiceMode.realtime.callVoice';
+const voicePicker = (label = 'bots.voiceMode.voice') =>
+  screen.getByRole('button', { name: label }) as HTMLButtonElement;
+const openVoices = async (label = 'bots.voiceMode.voice') => {
+  await screen.findByRole('button', { name: label });
+  await waitFor(() => expect(voicePicker(label).disabled).toBe(false));
+  if (voicePicker(label).getAttribute('aria-expanded') !== 'true') fireEvent.click(voicePicker(label));
+  return within(screen.getByRole('dialog', { name: label }));
 };
 const closeVoices = () =>
   fireEvent.keyDown(screen.getByRole('dialog', { name: 'bots.voiceMode.voice' }), {
     key: 'Escape',
   });
+
+it('auditions an unselected realtime private voice and keeps selection, microphone and preferences untouched', async () => {
+  const api = window.electronAPI.voiceConversation;
+  const model = { id: 'qwen-audio-3.1-realtime-flash', name: 'Qwen', providerId: 'bailian', providerName: 'Bailian', agent: 'codex' as const, protocol: 'qwen-audio-realtime' as const, protocolLocked: true, hasCustomVoiceCatalog: true };
+  api.realtimeModels = vi.fn(async () => [model]);
+  api.realtimeCustomVoices = vi.fn(async (): Promise<SpeechVoiceCatalog> => ({ source: 'provider', voices: [{ id: 'my-id', name: 'My voice' }] }));
+  api.setRealtimePreference = vi.fn(async (_bot, selection) => ({ selection: null, customized: false, realtimeSelection: selection ?? undefined }));
+  renderSettings();
+  const select = await screen.findByRole('combobox', { name: 'bots.voiceMode.realtime.callMode' });
+  await waitFor(() => expect((select as HTMLSelectElement).disabled).toBe(false));
+  fireEvent.change(select, { target: { value: voiceModelKey(model) } });
+  const menu = await openVoices(callVoiceLabel);
+  const choice = voicePicker(callVoiceLabel).value;
+  vi.mocked(api.setRealtimePreference).mockClear();
+  fireEvent.click(await menu.findByRole('button', {name: 'bots.voiceMode.previewVoice: My voice'}));
+  await waitFor(() => expect(audio.play).toHaveBeenCalledOnce());
+  expect(api.preview).toHaveBeenCalledWith(expect.objectContaining({
+    mode: 'realtime', modelId: model.id, protocol: model.protocol, providerId: model.providerId, voice: 'my-id',
+  }));
+  expect(voicePicker(callVoiceLabel).value).toBe(choice);
+  expect(menu.getByRole('button', {name: 'My voice'}).getAttribute('aria-pressed')).toBe('false');
+  expect(api.setRealtimePreference).not.toHaveBeenCalled();
+  expect(api.setPreference).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+  expect(audio.start).not.toHaveBeenCalled();
+});
+
+it('loads realtime voices silently and keeps custom choices visible while refreshing', async () => {
+  const api = window.electronAPI.voiceConversation;
+  const realtime = {
+    mode: 'realtime' as const, providerId: 'bailian', agent: 'codex' as const,
+    modelId: 'qwen-audio-3.1-realtime-flash', protocol: 'qwen-audio-realtime' as const, voice: 'my-voice',
+  };
+  api.realtimeModels = vi.fn(async () => [{
+    ...realtime, id: realtime.modelId, name: 'Qwen', providerName: 'Bailian',
+    protocolLocked: true, hasCustomVoiceCatalog: true,
+  }]);
+  api.setRealtimePreference = vi.fn();
+  vi.mocked(api.preference).mockResolvedValue({ selection: null, customized: true, realtimeSelection: realtime });
+  let finish!: (value: SpeechVoiceCatalog) => void;
+  api.realtimeCustomVoices = vi.fn(() => new Promise<SpeechVoiceCatalog>(resolve => { finish = resolve; }));
+  renderSettings();
+  const refresh = await screen.findByRole('button', { name: 'bots.voiceMode.realtime.refreshMyVoices' });
+  const picker = voicePicker(callVoiceLabel);
+  expect(screen.queryByText('bots.voiceMode.voicesLoading')).toBeNull();
+  expect(picker.value).toBe('voice:my-voice');
+  expect(refresh.getAttribute('aria-busy')).toBe('true');
+  await act(async () => finish({ source: 'provider', voices: [{ id: 'my-voice', name: 'Buddy' }] }));
+  expect(picker.textContent).toContain('Buddy');
+  fireEvent.click(refresh);
+  await waitFor(() => expect(api.realtimeCustomVoices).toHaveBeenCalledTimes(2));
+  expect(screen.queryByText('bots.voiceMode.voicesLoading')).toBeNull();
+  expect(picker.textContent).toContain('Buddy');
+  expect((await openVoices(callVoiceLabel)).getByRole('button', { name: 'Buddy' })).toBeTruthy();
+  await act(async () => finish({ source: 'provider', voices: [{ id: 'my-voice', name: 'Updated voice' }] }));
+  expect(picker.textContent).toContain('Updated voice');
+  expect(picker.value).toBe('voice:my-voice');
+  expect(api.setRealtimePreference).not.toHaveBeenCalled();
+});
 
 const listedVoices = () => {
   models = [{ id: 'tts', name: 'Speech', defaultVoice: 'river' }];
@@ -160,6 +257,38 @@ const listedVoices = () => {
     customized: true,
   });
 };
+
+it('resets message read-aloud without resetting sentence playback or the active call model', async () => {
+  const api = window.electronAPI.voiceConversation;
+  const realtime = {
+    mode: 'realtime' as const, providerId: 'openai', agent: 'codex' as const,
+    protocol: 'openai-realtime' as const, modelId: 'gpt-realtime-2', voice: 'cedar',
+  };
+  models = [{ id: 'tts', name: 'Speech', defaultVoice: 'river' }];
+  api.realtimeModels = vi.fn(async () => [{
+    ...realtime, id: realtime.modelId, name: 'Realtime', providerName: 'OpenAI', protocolLocked: true,
+  }]);
+  api.setRealtimePreference = vi.fn();
+  vi.mocked(api.preference).mockResolvedValue({
+    selection: { modelId: 'tts', voice: 'river' }, customized: true,
+    sentencePlayback: false, realtimeSelection: realtime,
+  });
+  renderSettings();
+  const disclosure = await screen.findByRole('button', { name: 'bots.voiceMode.realtime.messageReadAloud' });
+  const panel = document.getElementById(disclosure.getAttribute('aria-controls')!)!;
+  const scope = screen.getByText('bots.voiceMode.preferenceHint');
+  expect(panel.contains(scope)).toBe(false);
+  expect(scope.closest('[hidden]')).toBeNull();
+  expect(screen.getByRole('button', { name: callVoiceLabel })).toBeTruthy();
+  expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByRole('button', { name: 'bots.voiceMode.realtime.readAloudVoice' })).toBeNull();
+  fireEvent.click(disclosure);
+  expect(within(panel).getByRole('button', { name: 'bots.voiceMode.realtime.readAloudVoice' })).toBeTruthy();
+  expect(screen.queryByRole('switch', { name: 'bots.voiceMode.sentencePlayback' })).toBeNull();
+  fireEvent.click(within(panel).getByRole('button', { name: 'bots.voiceMode.realtime.resetReadAloud' }));
+  await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('bot', null));
+  expect(api.setRealtimePreference).not.toHaveBeenCalled();
+});
 
 // Real settings -> menu -> shared preview controller: browsing/previewing must
 // never commit a voice, even while an older synthesis request is unresolved.
@@ -598,7 +727,7 @@ it('shows a useful empty state without requesting a microphone or inventing mode
   expect(openProviders).toHaveBeenCalledOnce();
   expect(screen.queryByRole('button', { name: 'bots.voiceMode.preview' })).toBeNull();
   expect(screen.queryByText('bots.voiceMode.settingsHint')).toBeNull();
-  expect(screen.queryByText('bots.voiceMode.preferenceHint')).toBeNull();
+  expect(screen.getByText('bots.voiceMode.preferenceHint').closest('[hidden]')).toBeNull();
   expect(screen.queryByLabelText('bots.voiceMode.model')).toBeNull();
   expect(screen.queryByRole('switch')).toBeNull();
   expect(screen.getAllByRole('button')).toHaveLength(1);
@@ -1631,9 +1760,9 @@ it.each([
         }),
       ),
     );
-    expect(vi.mocked(window.electronAPI.voiceConversation.preview).mock.calls[0][0].speed).toBe(
-      speed,
-    );
+    const [preview] = vi.mocked(window.electronAPI.voiceConversation.preview).mock.calls[0];
+    if (preview.mode === 'realtime') throw new Error('Expected a speech synthesis preview');
+    expect(preview.speed).toBe(speed);
     expect(audio.start).not.toHaveBeenCalled();
   },
 );

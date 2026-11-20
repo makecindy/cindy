@@ -12483,6 +12483,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "預設聲",
+        "myVoices": "吾聲",
+        "refreshMyVoices": "更新吾聲",
+        "callMode": "通話之法",
+        "messageReadAloud": "誦讀消息",
+        "callVoice": "即時通話之聲",
+        "readAloudVoice": "誦讀之聲",
+        "readAloudHint": "點同伴答文下之揚聲鈕，即以此聲誦之。",
+        "resetReadAloud": "復誦讀預設",
+        "title": "即時聲",
+        "add": "增即時聲模型",
+        "off": "用語音合成"
+      },
       "openConversation": "啟言談",
       "inCallWith": "正與 {{name}} 通話",
       "showDetails": "展通話錄",
@@ -12504,7 +12518,7 @@
       "settingsTitle": "聲",
       "openSettings": "語音規制",
       "startConversation": "始語音言談",
-      "settingsHint": "擇此同伴所用之朗讀模型與音色。設畢，自輸入框始語音言談。",
+      "settingsHint": "以合成語音通話，則通話與誦讀消息同用下列模型及音色。",
       "previewNeedsChat": "與同伴始言談後方可試聽。",
       "voiceId": "音色 ID",
       "manualVoice": "手書音色 ID",

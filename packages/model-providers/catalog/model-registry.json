@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-18T05:57:00.000Z",
+  "updatedAt": "2026-11-18T09:13:34.210Z",
   "models": [
     {
       "id": "openai/gpt-6.2-sol",
@@ -3454,7 +3454,13 @@
       "modelRef": "xai/grok-imagine-video-1.5",
       "mode": "video_generation",
       "status": "active",
-      "routes": [{ "providerId": "xai", "modelId": "xai/grok-imagine-video-1.5", "agents": [] }],
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-imagine-video-1.5",
+          "agents": []
+        }
+      ],
       "nativeApi": "xai-videos"
     },
     {
@@ -9939,12 +9945,22 @@
     },
     {
       "id": "xai/grok-imagine-video-1.5",
-      "aliases": ["grok-imagine-video-1.5"],
+      "aliases": [
+        "grok-imagine-video-1.5"
+      ],
       "defaults": {
         "name": "Grok Imagine Video 1.5",
         "mode": "video_generation",
         "officialDocs": "https://docs.x.ai/developers/model-capabilities/video/reference-to-video",
-        "modalities": { "input": ["text", "image"], "output": ["video"] }
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "video"
+          ]
+        }
       }
     },
     {
@@ -11751,6 +11767,224 @@
           ]
         },
         "officialDocs": "https://ai.google.dev/gemini-api/docs/models/lyria-realtime-exp"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-2.1",
+      "aliases": [
+        "gpt-realtime-2.1"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-2.1",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-2.1"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-2.1-mini",
+      "aliases": [
+        "gpt-realtime-2.1-mini"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-2.1-mini",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-2",
+      "aliases": [
+        "gpt-realtime-2"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-2",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-2"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-1.5",
+      "aliases": [
+        "gpt-realtime-1.5"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-1.5",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-1.5"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime",
+      "aliases": [
+        "gpt-realtime",
+        "gpt-realtime-2025-08-28"
+      ],
+      "defaults": {
+        "name": "gpt-realtime",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-mini",
+      "aliases": [
+        "gpt-realtime-mini",
+        "gpt-realtime-mini-2025-12-15"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-mini",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-mini"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.0-realtime-plus",
+      "aliases": [
+        "qwen-audio-3.0-realtime-plus"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.0-realtime-plus",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.0-realtime-flash",
+      "aliases": [
+        "qwen-audio-3.0-realtime-flash"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.0-realtime-flash",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.1-realtime-plus",
+      "aliases": [
+        "qwen-audio-3.1-realtime-plus"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.1-realtime-plus",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.1-realtime-flash",
+      "aliases": [
+        "qwen-audio-3.1-realtime-flash"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.1-realtime-flash",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
       }
     }
   ],

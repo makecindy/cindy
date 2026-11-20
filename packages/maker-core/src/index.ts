@@ -123,6 +123,6 @@ export { MAKER_MEMORY_RULES } from './memory/system-prompt.js';
 export { loadMemoryContext } from './memory/context.js';
 
 export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';
-export { VoiceCallContext, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
+export { VoiceCallContext, nativeVoiceCallInstructions, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
 
 export { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, isolatedBotProfile } from './agents/base-agent.js';
