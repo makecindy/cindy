@@ -17,6 +17,7 @@ import type {
 export type DeliveryProjection = InputProjection &
   InputDeliveryProjection & { clearBoundaryMs?: number | null };
 export type OutboxSessionPolicy = 'deliver' | 'discard' | 'wait';
+const MAX_UNCONFIRMED_ENQUEUE_ATTEMPTS = 5;
 export interface DurableOutboxDeliveryDeps {
   store: ReturnType<typeof createDurableOutbox>;
   isCurrent(): boolean;
@@ -68,6 +69,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
   let cursor = 0;
   const due = new Map<string, number>();
   const attempts = new Map<string, number>();
+  const unconfirmedEnqueues = new Map<string, number>();
   /** Records currently inside `deliver`; a later run never starts the same record twice. */
   const inFlight = new Set<string>();
   /** A stale known boundary was rejected once; this record must ask the host instead. */
@@ -127,6 +129,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       await deps.store.remove(record);
       due.delete(id(record));
       attempts.delete(id(record));
+      unconfirmedEnqueues.delete(id(record));
       requireProjection.delete(id(record));
     };
     const finishHistory = async () => {
@@ -250,6 +253,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         return;
       }
       if (durableOwnership) {
+        unconfirmedEnqueues.delete(id(record));
         if (record.state !== "host-owned") await deps.accepted?.(record);
         if (!current(record)) return;
         if (await hasHistory(record)) {
@@ -268,6 +272,13 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         return;
       }
       if (!current(record) || record.state === "failed") return;
+      if (state === "unknown" && projection.inputDeliveryVersion === 1
+        && (unconfirmedEnqueues.get(id(record)) ?? 0) >= MAX_UNCONFIRMED_ENQUEUE_ATTEMPTS) {
+        // Keep the original payload and ID for manual retry and host-side cancellation.
+        await update({ state: "failed", error: deps.confirmationMessage });
+        unconfirmedEnqueues.delete(id(record));
+        return;
+      }
       if (state === "pending" || state === "accepted" || record.state === "host-owned") {
         await update({ state: state === "pending" ? "confirming" : "failed", error: deps.confirmationMessage });
         return;
@@ -376,6 +387,10 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           trace("send known boundary rejected", { client: record.item.clientId.slice(-8) });
           return;
         }
+        if (current(record) && record.retrySafe && projection.inputDeliveryVersion === 1) {
+          const key = id(record);
+          unconfirmedEnqueues.set(key, (unconfirmedEnqueues.get(key) ?? 0) + 1);
+        }
         throw error;
       }
       if (!current(record)) return;
@@ -387,6 +402,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         ? { state: "host-owned" }
         : { state: "confirming", error: deps.confirmationMessage });
       attempts.delete(id(record));
+      unconfirmedEnqueues.delete(id(record));
       due.set(id(record), Date.now() + 1_000);
       stage('enqueue');
       trace("send accepted", {

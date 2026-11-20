@@ -985,6 +985,34 @@ describe("app-owned delivery and reconciliation", () => {
     expect(retried?.sendAtMs).toBe(sent?.sendAtMs);
     expect(second.deps.prepare).not.toHaveBeenCalled();
   });
+  it.each(['unknown', 'pending'] as const)('reconciles %s after repeated enqueue failures (#10785)', async (receipt) => {
+    const first = await setup();
+    await first.store.add(message());
+    first.deps.enqueue.mockRejectedValue(Object.assign(new Error('reliable link stalled; pending abandoned'), { code: 'NOT_CONNECTED' }));
+    for (let attempt = 0; attempt < 5; attempt++) {
+      first.runner.wake();
+      await first.runner.run();
+    }
+    expect(first.store.getSnapshot()[0]?.state).toBe('confirming');
+    first.deps.projection.mockResolvedValue(projection('id-1', receipt));
+    first.runner.wake();
+    await first.runner.run();
+    expect(first.deps.enqueue).toHaveBeenCalledTimes(5);
+    if (receipt === 'pending') {
+      expect(first.store.getSnapshot()[0]).toMatchObject({ state: 'host-owned', error: undefined });
+      return;
+    }
+    const restarted = await setup(first.storage);
+    const failed = restarted.store.getSnapshot()[0]!;
+    expect(failed).toMatchObject({ state: 'failed', error: 'check receipt', item: { clientId: 'id-1' } });
+    await restarted.runner.run();
+    expect(restarted.deps.enqueue).not.toHaveBeenCalled();
+    await restarted.store.update(failed, { state: 'confirming', error: undefined });
+    restarted.runner.wake();
+    await restarted.runner.run();
+    expect(restarted.deps.enqueue).toHaveBeenCalledOnce();
+    expect(restarted.deps.enqueue.mock.calls[0]?.[0]).toMatchObject({ prepared: failed.prepared, sendAtMs: failed.sendAtMs });
+  });
   it("holds uncertain writes on legacy hosts, including after restart", async () => {
     const first = await setup();
     await first.store.add(message());
