@@ -12,6 +12,7 @@ let root: Root;
 let frames: Map<number, FrameRequestCallback>;
 let sequence: number;
 let viewportHeight: number;
+let scrollHeightReads: number;
 let headerHeight: number;
 let scrollWrites: number[];
 let viewportRenders: number;
@@ -83,7 +84,7 @@ const scroller = () => host.querySelector<HTMLElement>('[data-scroll]')!;
 const row = (key: number) => host.querySelector<HTMLElement>(`[data-render-item-key="${key}"]`)!;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  frames = new Map(); sequence = 0; viewportHeight = 600; headerHeight = 0; scrollWrites = []; rowMeasurements = 0; bodyRenders = new Map(); bodyCreations = new Map(); parentRenders = 0; viewportRenders = 0;
+  frames = new Map(); sequence = 0; viewportHeight = 600; scrollHeightReads = 0; headerHeight = 0; scrollWrites = []; rowMeasurements = 0; bodyRenders = new Map(); bodyCreations = new Map(); parentRenders = 0; viewportRenders = 0;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++sequence, callback); return sequence; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
   vi.stubGlobal('ResizeObserver', class {
@@ -104,6 +105,7 @@ beforeEach(() => {
   });
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => viewportHeight);
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+    scrollHeightReads++;
     return Array.from(this.querySelectorAll<HTMLElement>('[data-render-item-key]'))
       .reduce((sum, row) => sum + (Number.parseFloat(row.style.height) || 180), headerHeight);
   });
@@ -504,16 +506,17 @@ describe('message viewport content virtualization', () => {
     expect(row(0).style.height).toBe('180px');
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
-  it('commits a programmatic jump in the same frame before paint', async () => {
+  it('reads scroll height once before mounting a jump destination and once after', async () => {
     await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
     await act(async () => {
       scroller().scrollTop = 1800;
+      scrollHeightReads = 0;
       syncViewport();
+      expect(scrollHeightReads).toBe(2);
+      expect(row(10).querySelector('button')).not.toBeNull();
     });
-    // The window commits once, in the pending frame callback before paint;
-    // a scroll event arriving later describes an already mounted destination.
     await flushFrames();
-    expect(row(10).querySelector('button')).not.toBeNull();
     expect(row(10).getBoundingClientRect().top).toBe(0);
   });
   it('coalesces a burst of scroll and resize signals into one window commit', async () => {

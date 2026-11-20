@@ -33,6 +33,16 @@ export function findViewportRange(tops: readonly number[], bottoms: readonly num
   return { start, end: lo };
 }
 
+export function readViewportGeometry(root: HTMLElement, items: HTMLElement) {
+  return {
+    top: root.scrollTop,
+    width: root.clientWidth,
+    height: root.clientHeight,
+    itemsWidth: items.clientWidth,
+    itemsHeight: items.clientHeight,
+  };
+}
+
 export class MessageViewportGeometry {
   rows: HTMLElement[] = [];
   keys: string[] = [];
@@ -75,7 +85,12 @@ export class MessageViewportGeometry {
     }
   }
 
-  refresh(root: HTMLElement, items: HTMLElement, remembered: Map<string, number>) {
+  refresh(
+    root: HTMLElement,
+    items: HTMLElement,
+    remembered: Map<string, number>,
+    { top, width, itemsWidth, itemsHeight }: ReturnType<typeof readViewportGeometry>,
+  ) {
     if (this.structure) {
       const rows = Array.from(items.children) as HTMLElement[];
       const keys = rows.map(row => row.dataset.renderItemKey ?? '');
@@ -85,7 +100,6 @@ export class MessageViewportGeometry {
       for (const row of rows) if (!old.has(row)) { this.dirty.add(row); this.observer?.observe(row); }
       this.rows = rows; this.keys = keys; this.structure = false;
     }
-    const width = root.clientWidth, itemsWidth = items.clientWidth, itemsHeight = items.clientHeight;
     // A container resize without a row notification may be a stylesheet/font
     // change. Keep the full measurement fallback for this uncommon path.
     this.full ||= this.width !== width || this.itemsWidth !== itemsWidth ||
@@ -98,7 +112,7 @@ export class MessageViewportGeometry {
     };
     // A header before items can resize without changing any indexed row or
     // the items box. Refresh the origin independently of cached row sizes.
-    this.origin = this.rows.length ? box(0).top + root.scrollTop - root.getBoundingClientRect().top : 0;
+    this.origin = this.rows.length ? box(0).top + top - root.getBoundingClientRect().top : 0;
     if (!this.full && !this.dirty.size) return;
     const changed: number[] = [];
     for (let i = 0; i < this.rows.length; i++) if (this.full || this.dirty.has(this.rows[i])) changed.push(i);
