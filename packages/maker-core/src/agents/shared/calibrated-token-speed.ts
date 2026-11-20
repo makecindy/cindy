@@ -1,4 +1,4 @@
-import type { GenerationTrace, TokenSpeedRequestMark, TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import type { GenerationTrace, SpeedReading, TokenSpeedRequestMark, TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 
 /**
  * Live tok/s for harnesses that report real output only when a request ends
@@ -228,12 +228,16 @@ export class CalibratedTokenSpeedMeter {
   private lastEventAt: number | null = null;
   private tps = 0;
   private peak = 0;
+  private latestReading: SpeedReading | null = null;
+  private lastWasSummary = false;
+  private measuredTokens = 0;
+  private measuredMs = 0;
   private lastPublishAt = -Infinity;
   /** Requests this turn finished with real usage, and the newest of them. */
   private requests = 0;
   private lastRequest: TokenSpeedRequestMark | undefined;
   /** `[atMs, tps]` readings and `[atMs, thinkingTokens, requests]` marks of this turn; see `trace()`. */
-  private traceSpeed: GenerationTrace['speed'] = [];
+  private traceSpeed: Array<[number, number, SpeedReading['kind']]> = [];
   private traceSampleMs = TRACE_SAMPLE_MS;
   private traceMarks: GenerationTrace['marks'] = [];
   /** Earliest request in each mark's covered time range. */
@@ -275,6 +279,10 @@ export class CalibratedTokenSpeedMeter {
     this.lastEventAt = null;
     this.tps = 0;
     this.peak = 0;
+    this.latestReading = null;
+    this.lastWasSummary = false;
+    this.measuredTokens = 0;
+    this.measuredMs = 0;
     this.lastPublishAt = -Infinity;
     this.provisionalTokens = 0;
     this.provisionalOwnMs = 0;
@@ -454,11 +462,12 @@ export class CalibratedTokenSpeedMeter {
     this.clearLive();
     if (requestTps !== undefined) {
       this.lastRequestTps = requestTps;
+      this.measuredTokens += paced;
+      this.measuredMs += requestMs;
       if (requestMs >= MIN_READING_REQUEST_MS) {
         // The exact speed of the request that just ended is the freshest reading there is.
         this.tps = requestTps;
-        this.peak = Math.max(this.peak, requestTps);
-        this.sampleTrace(requestTps);
+        this.rememberReading(requestTps, 'request', this.pausedAt);
       }
     }
     // A reported zero is a fact (the request answered without thinking); no report is not.
@@ -497,6 +506,17 @@ export class CalibratedTokenSpeedMeter {
     this.bound(this.flowMs);
   }
 
+  /** Keep an unreported request in the displayed total without calibrating the next request against it. */
+  finishUnreportedRequest(now = Date.now()): void {
+    this.pause(now);
+    const snapshot = this.snapshot(now);
+    if (snapshot) {
+      this.settledTokens = snapshot.tokens;
+      this.settledMs = snapshot.elapsedMs;
+    }
+    this.discardRequest(now);
+  }
+
   /** The harness continues the same turn after ending it: keep the totals and measure on. */
   reopen(): void {
     this.stopped = false;
@@ -523,6 +543,11 @@ export class CalibratedTokenSpeedMeter {
     return {
       rate: streaming ? this.tps : average,
       average,
+      measurement: {
+        average: this.measuredMs > 0 ? this.measuredTokens * 1_000 / this.measuredMs : null,
+        latest: this.latestReading,
+        ...(this.latestReading ? { sampleAgeMs: Math.max(0, now - this.latestReading.measuredAt) } : {}),
+      },
       tokens: Math.round(tokens),
       elapsedMs,
       streaming,
@@ -541,7 +566,8 @@ export class CalibratedTokenSpeedMeter {
     return {
       durationMs: Math.round(this.settledMs),
       requests: this.requests,
-      speed: this.traceSpeed.slice(),
+      speed: this.traceSpeed.map(([at, rate]) => [at, rate]),
+      requestRateTimes: this.traceSpeed.filter(point => point[2] === 'request').map(point => point[0]),
       marks: this.traceMarks.slice(),
       reportedOutputTokens: this.reportedOutputTokens,
     };
@@ -583,12 +609,18 @@ export class CalibratedTokenSpeedMeter {
     this.traceMarkEnds.splice(closest, 1);
   }
 
-  /** Keep a speed reading for the trace, at most one per `traceSampleMs` of generation time. */
-  private sampleTrace(rate: number): void {
+  /** Decimate stream samples; always retain a fresh settlement until the bounded trace is thinned. */
+  private rememberReading(rate: number, kind: SpeedReading['kind'], measuredAt: number): void {
     const atMs = Math.round(this.settledMs + this.liveMs);
     const last = this.traceSpeed.at(-1);
-    if (last && atMs - last[0] < this.traceSampleMs) return;
-    this.traceSpeed.push([atMs, Math.round(rate * 10) / 10]);
+    this.latestReading = { kind, rate, atMs, measuredAt };
+    this.peak = Math.max(this.peak, rate);
+    if (last && atMs - last[0] < this.traceSampleMs) {
+      if (kind === 'stream') return;
+      // A provisional clock can be corrected backwards on settlement.
+      while (this.traceSpeed.length && this.traceSpeed.at(-1)![0] >= atMs) this.traceSpeed.pop();
+    }
+    this.traceSpeed.push([atMs, Math.round(rate * 10) / 10, kind]);
     if (this.traceSpeed.length <= TRACE_MAX_POINTS) return;
     // An odd count: every other reading, the newest among them.
     this.traceSpeed = this.traceSpeed.filter((_, index) => index % 2 === 0);
@@ -637,6 +669,8 @@ export class CalibratedTokenSpeedMeter {
     else this.tick(now);
     if (kind !== this.blockKind) this.enterBlock(kind);
     const summary = kind === 'thinking' && !counted && this.summarizedThinking;
+    if (this.lastWasSummary && !summary) this.bound(this.flowMs);
+    this.lastWasSummary = summary;
     const lead = summary ? Math.min(raw, this.summaryLeadLeft) : 0;
     if (kind === 'visible') this.rawVisible += raw;
     else if (counted) this.rawThinkingCount += raw;
@@ -691,8 +725,9 @@ export class CalibratedTokenSpeedMeter {
     const reading = this.windowTps(at, windowMs, summary ? SUMMARY_MIN_SPAN_MS : MIN_SPAN_MS);
     if (reading !== undefined) {
       this.tps = reading;
-      this.peak = Math.max(this.peak, reading);
-      this.sampleTrace(reading);
+      // A summary can compress thousands of reasoning tokens into a few words.
+      // It can advance the provisional count, but its arrival rate is not model throughput.
+      if (!summary) this.rememberReading(reading, 'stream', now);
     }
     return this.publishDue(now);
   }

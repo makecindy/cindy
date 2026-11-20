@@ -1,4 +1,5 @@
 import { createInlineImagePreprocessor } from './inlineImagePreprocessor.js';
+import { withCopilotForwardHeaders } from './copilot-account-url.js';
 
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import { rewriteFastModel } from './model-fast-mode.js';
@@ -11,6 +12,7 @@ import {
 import {
   isCustomRoutedProvider,
   availableModelInterfaces,
+  copilotModelsUrl,
   modelWithInterface,
   resolveModelMetadata,
   BUNDLED_CATALOG,
@@ -22,12 +24,14 @@ import {
   type CatalogModel,
   type Effort,
   type Provider,
+  type RoutingDescriptor,
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { normalizeProviderRequest, normalizeUnsupportedCodexWebSearch, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
+import { isCodexModelUnavailableError, type CodexDownshiftModelRejection } from '@cindy/maker-core';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
 /**
  * Desktop 端 codex-proxy 生命周期管理 ——
@@ -289,6 +293,60 @@ const smartSubagentRoutesByThread = new Map<
   ReadonlyMap<string, CodexSubagentRouteSnapshot>
 >();
 const observedSubagentIdentityByThread = new Map<string, CodexObservedSubagentIdentity>();
+// Only the latest root Responses request can explain this turn's model rejection.
+type DownshiftRequest = { turnId: string; model: string; transport?: CodexDownshiftModelRejection['transport'] };
+const downshiftByThread = new Map<string, DownshiftRequest>();
+const downshiftByRequestHeaders = new WeakMap<RequestTransformCtx['headers'], DownshiftRequest>();
+
+function getRejectedCodexDownshiftModel(sessionId: string, threadId: string, turnId: string): CodexDownshiftModelRejection | undefined {
+  if (sessionToThread.get(sessionId) !== threadId) return;
+  const request = downshiftByThread.get(threadId);
+  if (request?.transport && request.turnId === turnId) return { model: request.model, transport: request.transport };
+}
+
+function observeDownshiftRequest(body: unknown, ctx: RequestTransformCtx): void {
+  if (ctx.method !== 'POST' || !/\/responses(?:\/compact)?\/?$/.test(ctx.url.split('?', 1)[0]!)) return;
+  const threadId = selectedThreadIdFromHeaders(ctx.headers);
+  const sessionId = threadToSession.get(threadId);
+  if (!sessionId || sessionToThread.get(sessionId) !== threadId || headerValue(ctx.headers, 'x-openai-subagent')) return;
+  downshiftByThread.delete(threadId);
+  if (!isPlainObject(body) || typeof body.model !== 'string' || !body.model) return;
+  const header = headerValue(ctx.headers, 'x-codex-turn-metadata');
+  if (!header.includes('"compaction"')) return;
+  try {
+    const meta: unknown = JSON.parse(header);
+    if (!isPlainObject(meta) || meta.thread_id !== threadId || typeof meta.turn_id !== 'string' || !meta.turn_id ||
+      meta.request_kind !== 'compaction' || !isPlainObject(meta.compaction) || meta.compaction.trigger !== 'auto' ||
+      meta.compaction.reason !== 'model_downshift' || meta.compaction.phase !== 'pre_turn') return;
+    const request = { turnId: meta.turn_id, model: body.model };
+    downshiftByThread.set(threadId, request);
+    downshiftByRequestHeaders.set(ctx.headers, request);
+  } catch {
+    return;
+  }
+}
+
+function isDownshiftDenialStatus(status: number): boolean {
+  return status === 400 || status === 403 || status === 404;
+}
+
+function bridgeUpstreamErrorObserver(
+  route: NonNullable<Awaited<ReturnType<typeof resolveSessionRoute>>>,
+  downshift: DownshiftRequest | undefined,
+): ((info: { status: number; body: string }) => void) | undefined {
+  const report = isCustomRoutedProvider({ source: route.providerSource });
+  if (!report && !downshift) return;
+  const providerId = route.providerId;
+  const providerName = report ? getActiveCatalog().providers.find(p => p.id === providerId)?.name ?? providerId : providerId;
+  return ({ status, body }) => {
+    if (downshift) {
+      downshift.transport = isDownshiftDenialStatus(status)
+        && isCodexModelUnavailableError({ message: `HTTP ${status} ${body}` }) ? 'bridge' : undefined;
+    }
+    if (report) reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
+  };
+}
+
 const reviewerModelBySession = new Map<string, string>();
 const httpRecoveryReasonByThread = new Map<string, string>();
 /** WS 已确认、尚未在落回的 HTTP 请求上激活对应 strip 的 recovery 原因（一次性消费）。 */
@@ -1271,12 +1329,23 @@ function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean 
  * Chat bridge 上游只收 host 明确构造的 header。绝不把 Codex/ChatGPT 请求 header
  * 原样透传，防止账号 id、OpenAI OAuth bearer 或内部 session 元数据泄漏给第三方。
  */
+function isCopilotOAuthResponses(model: CatalogModel | undefined, routing: RoutingDescriptor): boolean {
+  return model?.api === 'openai-responses' && model.catalogPresetId === 'github-copilot'
+    && routing.authStrategy === 'oauth-token' && !!copilotModelsUrl(routing.upstream);
+}
+
+function needsNativeBridge(model: CatalogModel | undefined, routing: RoutingDescriptor | null | undefined): boolean {
+  return !!model?.api && (model.api !== 'openai-responses' || !!routing &&
+    requiresNativeProviderAuth(invocationModelRecord(model, routing.upstream)));
+}
+
 function createChatBridgeDecision(
   route: Awaited<ReturnType<typeof resolveSessionRoute>>,
   instructions: string | undefined,
   wireModel: string,
   requestModelOverride?: string,
   reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
+  downshift?: DownshiftRequest,
 ): RoutingDecision | null {
   if (!route) return null;
   const catalogNativeModel = getActiveCatalog().providers.find(p => p.id === route.providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
@@ -1290,7 +1359,6 @@ function createChatBridgeDecision(
   // 让 Chat 桥接会话与透明自定义供应商一样弹结构化 providerError.* 提示。内置来源不广播
   // (与 observer 的 custom-routed 语义一致)。
   const providerId = route.providerId;
-  const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
   const baseCapabilities: ChatBridgeCapabilities = isGoogleGeminiChatUpstream(
     route.routing.upstream,
   )
@@ -1317,11 +1385,7 @@ function createChatBridgeDecision(
   const capabilities = systemMessagePolicy
     ? { ...routedCapabilities, systemMessagePolicy }
     : routedCapabilities;
-  const onUpstreamError = isCustomRoutedProvider({ source: route.providerSource })
-    ? ({ status, body }: { status: number; body: string }): void => {
-        reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
-      }
-    : undefined;
+  const onUpstreamError = bridgeUpstreamErrorObserver(route, downshift);
   const handler = createResponsesChatHandler({
     upstreamBase: route.routing.upstream,
     ...(route.routing.requestPath ? { chatCompletionsPath: route.routing.requestPath } : {}),
@@ -1368,8 +1432,13 @@ function createChatBridgeDecision(
         }) ?? body;
       }
       if (standard && isPlainObject(body)) {
-        const nativeHeaders = overrideHeadersCaseInsensitive(withChatBridgeUserAgent(Object.fromEntries(Object.entries(headers).filter(([name]) =>
-          !['authorization', 'x-api-key'].includes(name.toLowerCase())))), resolveConversationSessionHeaders(ctx?.headers));
+        const copilotOAuth = isCopilotOAuthResponses(selected, route.routing);
+        const providerHeaders = Object.fromEntries(Object.entries(headers).filter(([name]) =>
+          !['authorization', 'x-api-key'].includes(name.toLowerCase())));
+        const nativeHeaders = overrideHeadersCaseInsensitive(
+          copilotOAuth ? providerHeaders : withChatBridgeUserAgent(providerHeaders),
+          resolveConversationSessionHeaders(ctx?.headers),
+        );
         if (standard.execution.pi.api === 'anthropic-messages' && (actualModel.endsWith('[1m]')
           || (isOfficialAnthropicUpstream(standard.upstream) && (standard.contextWindow ?? 0) >= 1_000_000))) {
           appendCommaSeparatedHeaderToken(nativeHeaders, 'anthropic-beta', 'context-1m-2025-08-07');
@@ -1393,11 +1462,18 @@ function createChatBridgeDecision(
         const nativeFetch = createPiProviderFetch({ row: nativeRow, providerId,
           // Keep the catalog adapter while honoring the host assigned to this account.
           upstream,
+          copilotOAuth,
           apiKey: nativeBridgeApiKey(headers),
           headers: nativeHeaders,
           fetchImpl: async (url, init) => {
+            // The native adapter may issue another HTTP request before settling.
+            if (downshift) downshift.transport = undefined;
             const response = await outboundFetch(url, init);
-            if (!response.ok && onUpstreamError) onUpstreamError({ status: response.status, body: await readBoundedResponseText(response.clone()) });
+            if (!response.ok && onUpstreamError
+              && (isDownshiftDenialStatus(response.status) || isCustomRoutedProvider({ source: route.providerSource }))) {
+              const body = await readBoundedResponseText(response.clone());
+              onUpstreamError({ status: response.status, body });
+            }
             return response;
           },
         });
@@ -1561,6 +1637,7 @@ function createAnthropicBridgeDecision(
   wireModel: string,
   requestModelOverride?: string,
   reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
+  downshift?: DownshiftRequest,
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'anthropic-messages') return null;
   const isXdGatewayBridge =
@@ -1630,15 +1707,10 @@ function createAnthropicBridgeDecision(
     return headers;
   };
   const providerId = route.providerId;
-  const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
   const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
   const supportsPromptCaching =
     isXdGatewayBridge || isOfficialAnthropicUpstream(upstreamBase);
-  const onUpstreamError = isCustomRoutedProvider({ source: route.providerSource })
-    ? ({ status, body }: { status: number; body: string }): void => {
-        reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
-      }
-    : undefined;
+  const onUpstreamError = bridgeUpstreamErrorObserver(route, downshift);
   const handler = createResponsesAnthropicHandler({
     upstreamBase,
     ...(route.routing.requestPath ? { requestPath: route.routing.requestPath } : {}),
@@ -1702,19 +1774,22 @@ function createLocalBridgeDecision(
   instructions: string | undefined,
   wireModel: string,
   requestModelOverride: string | undefined,
-  threadId: string,
+  ctx: RequestTransformCtx,
   reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
 ): RoutingDecision | null {
   if (!route) return null;
+  const threadId = selectedThreadIdFromHeaders(ctx.headers);
+  const downshift = downshiftByRequestHeaders.get(ctx.headers);
   const catalogNativeModel = getActiveCatalog().providers.find(p => p.id === route.providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
   const nativeModel = catalogNativeModel && modelWithInterface(catalogNativeModel, route.routing.modelInterface);
-  if (route.routing.wireProtocol === 'openai-chat' || (nativeModel?.api && (nativeModel.api !== 'openai-responses' || requiresNativeProviderAuth(invocationModelRecord(nativeModel, route.routing.upstream))))) {
+  if (route.routing.wireProtocol === 'openai-chat' || needsNativeBridge(nativeModel, route.routing)) {
     const decision = createChatBridgeDecision(
       route,
       instructions,
       wireModel,
       requestModelOverride,
       reasoningEffortOverride,
+      downshift,
     );
     if (decision) {
       recordCodexThreadUpstreamForDiagnostics(threadId, route.routing.upstream);
@@ -1728,6 +1803,7 @@ function createLocalBridgeDecision(
       wireModel,
       requestModelOverride,
       reasoningEffortOverride,
+      downshift,
     );
     if (decision) {
       recordCodexThreadUpstreamForDiagnostics(
@@ -3217,11 +3293,16 @@ function resolveCodexCustomProviderRoutingDecision(
         : null;
     const catalogSelectedModel = getActiveCatalog().providers.find(p => p.id === explicitProviderId)?.models.codex?.find(m => m.id === model);
     const selectedModel = catalogSelectedModel && modelWithInterface(catalogSelectedModel, selectedRouting?.modelInterface);
+    const selectedOAuthResponses = !!model && selectedRouting?.authStrategy === 'oauth-token'
+      && (selectedRouting.wireProtocol ?? 'openai-responses') === 'openai-responses';
+    const withSelectedCopilotHeaders = (decision: RoutingDecision | null) => withCopilotForwardHeaders(
+      decision, selectedOAuthResponses, ctx,
+    );
     const selectedUsesLocalBridge =
       ctx.method === 'POST'
       && Boolean(model)
       && (
-        (selectedModel?.api && (selectedModel.api !== 'openai-responses' || (selectedRouting && requiresNativeProviderAuth(invocationModelRecord(selectedModel, selectedRouting.upstream)))))
+        needsNativeBridge(selectedModel, selectedRouting)
         || selectedRouting?.wireProtocol === 'openai-chat'
         || selectedRouting?.wireProtocol === 'anthropic-messages'
       );
@@ -3276,7 +3357,7 @@ function resolveCodexCustomProviderRoutingDecision(
             subagentRoute.catalogModel !== requestModel
               ? subagentRoute.catalogModel
               : undefined,
-            threadId,
+            ctx,
             subagentRoute.reasoningEffort,
           ) ?? unresolvedCollabSpawnRouteDecision();
         }).catch(() => oauthRefreshFailedDecision());
@@ -3286,7 +3367,7 @@ function resolveCodexCustomProviderRoutingDecision(
         'codex',
         gatewayKey,
         subagentRoute.catalogModel,
-      ).then((resolved) => resolved?.decision ?? unresolvedCollabSpawnRouteDecision());
+      ).then((resolved) => withSelectedCopilotHeaders(resolved?.decision ?? null) ?? unresolvedCollabSpawnRouteDecision());
     }
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。thread-id header → threadToSession 反解 xdt sessionId。
@@ -3307,14 +3388,16 @@ function resolveCodexCustomProviderRoutingDecision(
             threadId ? registry.get(threadId) : undefined,
             model,
             model !== requestModel ? model : undefined,
-            threadId,
+            ctx,
           );
         }).catch(() => oauthRefreshFailedDecision());
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
       const perSession = resolveSessionRouteDecision(sessionId, 'codex', gatewayKey, model || undefined);
-      if (perSession) return perSession;
+      if (perSession) return perSession instanceof Promise
+        ? perSession.then(withSelectedCopilotHeaders)
+        : withSelectedCopilotHeaders(perSession);
       // scope 门放下来的请求在 provider-oauth spawn 下没有可用凭证兜底:子进程只带占位
       // env key,直落默认网关必 401(#890 Codex review 第二轮指出)。换网关 key 给它一条
       // 真正可用的默认路由(与 cc ② 段 oauth-spawn 默认换 key 同语义);没网关 key 时保持
@@ -3339,7 +3422,7 @@ function resolveCodexCustomProviderRoutingDecision(
               threadId ? registry.get(threadId) : undefined,
               model,
               model !== requestModel ? model : undefined,
-              threadId,
+              ctx,
             );
           }
           const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(
@@ -3632,6 +3715,7 @@ async function createCodexProxyHandle(
     : modelRoute;
   const frozenReasoning = createCustomProviderReasoningTransform(frozenCustomProviderRoutes);
   const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
+    observeDownshiftRequest(body, ctx);
     const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
       const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
       const context = providerContextForRequest(ctx.headers, model);
@@ -3753,6 +3837,8 @@ async function createCodexProxyHandle(
     // Accepted WebSockets route exclusively to CODEX_OAUTH_UPSTREAM (see resolver below).
     webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true, (message, signal) => {
       const body: unknown = JSON.parse(message.toString('utf8'));
+      // A subsequent WebSocket sample also supersedes any HTTP compaction denial.
+      downshiftByThread.delete(selectedThreadIdFromHeaders(ctx.headers));
       const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
       const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
       const request = next ? Buffer.from(JSON.stringify(next)) : message;
@@ -3779,6 +3865,10 @@ async function createCodexProxyHandle(
     ),
     responseObserver: composeResponseObservers(
       ctx => {
+        // The request object is shared with the original (pre-alias) route. A late
+        // response can only update its own receipt, even after another request or unregister.
+        const downshift = downshiftByRequestHeaders.get(ctx.requestHeaders);
+        if (downshift) downshift.transport = isDownshiftDenialStatus(ctx.status) ? 'http' : undefined;
         if (ctx.status === 401
           && ctx.upstreamBase.replace(/\/+$/, '') === buildCodexGatewayBaseUrl().replace(/\/+$/, '')) {
           reportCindyGatewayKeyRejected(bearerKeyFromHeaders(ctx.outboundHeaders ?? ctx.requestHeaders));
@@ -4222,6 +4312,7 @@ function clearSessionThreads(sessionId: string): string[] {
         handle.forgetWebSocketStateForThread?.(threadId);
       }
       threadToSession.delete(threadId);
+      downshiftByThread.delete(threadId);
       registry.delete(threadId);
       subagentRouteByParentThread.delete(threadId);
       subagentRouteByThread.delete(threadId);
@@ -4258,6 +4349,7 @@ function clearSessionThreads(sessionId: string): string[] {
   sessionToThread.clear();
   sessionToThreads.clear();
   threadToSession.clear();
+  downshiftByThread.clear();
   subagentRouteByParentThread.clear();
   subagentRouteByThread.clear();
   smartSubagentRoutesByParentThread.clear();
@@ -4322,5 +4414,5 @@ function clearSessionThreads(sessionId: string): string[] {
   }));
   clearCodexTextOnlyPolicies();
 }
-return { setCodexAppliedCustomProviderRoutes, armCodexHttpRecovery, setCodexProxyAuthInjection, clearCodexProxyAuthInjection, getCodexProxyAuthInjectionState, getCodexProxyAuthInjection, setCodexSubagentOAuthReader, setCodexProxyGatewayKeyReader, getObservedCodexSubagentIdentity, chatBridgeSystemMessagePolicyForRoute, chatBridgeCapabilitiesForRoute, resolveXaiCodexCatalogModel, createCrossProviderCompactionCompatTransform, decideCodexRoute, createCodexGuestRoutingGuard, createModelRoutingTransform, getCodexThreadUpstreamOrigin, resetCodexThreadUpstreamForTest, withCodexUpstreamRecording, ensureCodexProxyReady, ensureCodexControlPlaneProxyReady, isCodexControlPlaneProxyHandleReady, getCodexControlPlaneProxyEndpoint, ensureCodexCustomContextProxyReady, isCodexCustomContextProxyHandleReady, getCodexCustomContextProxyEndpoint, releaseCodexCustomContextProxy, getCodexProxyEndpoint, registerComposed, registerReviewerRouteContext, registerChildThread, unregister, isCodexProxyHandleReady, disposeCodexProxy };
+return { setCodexAppliedCustomProviderRoutes, getRejectedCodexDownshiftModel, armCodexHttpRecovery, setCodexProxyAuthInjection, clearCodexProxyAuthInjection, getCodexProxyAuthInjectionState, getCodexProxyAuthInjection, setCodexSubagentOAuthReader, setCodexProxyGatewayKeyReader, getObservedCodexSubagentIdentity, chatBridgeSystemMessagePolicyForRoute, chatBridgeCapabilitiesForRoute, resolveXaiCodexCatalogModel, createCrossProviderCompactionCompatTransform, decideCodexRoute, createCodexGuestRoutingGuard, createModelRoutingTransform, getCodexThreadUpstreamOrigin, resetCodexThreadUpstreamForTest, withCodexUpstreamRecording, ensureCodexProxyReady, ensureCodexControlPlaneProxyReady, isCodexControlPlaneProxyHandleReady, getCodexControlPlaneProxyEndpoint, ensureCodexCustomContextProxyReady, isCodexCustomContextProxyHandleReady, getCodexCustomContextProxyEndpoint, releaseCodexCustomContextProxy, getCodexProxyEndpoint, registerComposed, registerReviewerRouteContext, registerChildThread, unregister, isCodexProxyHandleReady, disposeCodexProxy };
 }

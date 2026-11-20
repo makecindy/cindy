@@ -492,7 +492,7 @@ Device Link 之间的自动换路，Agent-Net 默认按正常处理。
 | 并发与额度 | `InvokeScheduler` 在途 12、后台 4、交互另加 2；被控端每个控制端在途 4 MiB（文件块另有 4 MiB）；会话积压按 Device Link 可靠窗口的含义交给业务 | Device Link 的本地准入 |
 | 业务协议 | 远程任务 64 KiB 逐块上传、每次轮询最多回 1.5 MiB（`host/runHost.ts` 的 `poll`）；文件 `stream-read` 每块 256 KiB、4 块在途，附件 1 MiB base64 块、3 块在途（[文件直传记录](dev-rules/protocol-compatibility/agent-net-file-stream.md)、`packages/device-link/src/peerAttachment.ts`）；结果超限压缩、推送超限丢弃（`dispatch.ts`） | 躲开 Device Link 的 2 MiB 帧与 4 MiB 消息上限 |
 | 核心 | 第 7 节第 1–5 项没做：只有 3 档优先级、最多 64 条流、流不能中途放弃、发送缓冲共用两倍单流上限（`connection.rs` 的 `send_stream`，两条批量流写满时交互流写不进去）、没有进展统计 | — |
-| 手机驱动 | 核心只在 JS 每 8 毫秒一次 `poll` 时收包、回确认、跑计时器（`nativeTransport.ts` 的 `schedule`；原生库没有自己的循环）；每次调用都是 JSON 加 base64；每次 `poll` 最多收 256 个包、发 128 个包、交出 256 KiB（`agent-net-native/src/engine.rs`） | — |
+| 手机驱动 | 核心只在 JS `poll` 时收包、回确认、跑计时器（`nativeTransport.ts` 的 `schedule`；原生库没有自己的循环）：有数据在动（流数据、未确认、握手、拨号）时每 8 毫秒一次，静了 1 秒后每 50 毫秒一次，写数据、拨号、中转转来包、换网时立即一次；每次调用都是 JSON 加 base64；每次 `poll` 最多收 256 个包、发 128 个包、交出 256 KiB（`agent-net-native/src/engine.rs`）。2026-11-20 真机：空闲时 JS 线程占用 51% → 22%（关掉 Agent-Net 约 1%），剩下的要等 v2-4 的原生循环 | — |
 
 另有一处由代码推断、日志里还没见到的卡死：轮询回包按固定上限组包（base64 后约 2 MB），请求总时限 30 秒；线路低于约
 每秒 70 KB、积压又超过上限时，一次回包传不完，超时后按同一游标重拉同样大小，直到 2 分钟后放弃任务。

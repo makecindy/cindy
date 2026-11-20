@@ -213,6 +213,7 @@ export interface ScheduleFormState {
   /** 打开时脚本与插件都已配置(Agent 设的)：界面显示插件，保存时脚本原样保留。 */
   preRunKeepScript?: boolean;
   /** 插件前置检查选定的插件实例 id;空 = 还没选。 */
+  primaryHostKey?: string;
   preRunPluginId: string;
   /** 插件没回应、出错或不可用时的处理。 */
   preRunPluginOnFailure: PreRunPluginFailureAction;
@@ -736,6 +737,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     ...(form.prEnabled === undefined ? {} : { prTrigger: form.prEnabled
       ? { url: form.prUrl?.trim() ?? '', change: form.prChange ?? 'any' } : null }),
     preRunHook: buildPreRunHook(form),
+    ...(form.primaryHostKey ? { primaryHostKey: form.primaryHostKey } : {}),
     preRunPlugin: buildPreRunPlugin(form),
     // 表单带这个字段时恒带 key：关闭时 null 清空触发条件，接收地址和密钥一并作废。
     ...(form.webhookEnabled === undefined ? {} : {

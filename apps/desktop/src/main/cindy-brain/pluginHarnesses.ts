@@ -17,14 +17,34 @@
  * getGhost 同一身份,不会把同名的组织实例与 root 实例混为一谈;实例键不含 `:`,所以
  * `key = ${ghostId}:${harnessId}` 无歧义。
  */
-import { ghostHarnessText, storedGhostHarnessAvailability, type GhostHarnessMode, type GhostHarnessModel } from '@cindy/plugin-protocol';
+import {
+  ghostHarnessText,
+  parseGhostHarnessUsage,
+  storedGhostHarnessAvailability,
+  type GhostHarnessMode,
+  type GhostHarnessModel,
+  type GhostHarnessUsage,
+} from '@cindy/plugin-protocol';
 import { AgentStartupStoppedError } from '@cindy/maker-core';
 
 import { approvedGhostHarnesses, type InstalledGhost } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import type { NodeWorkerProcess } from './nodeRuntimeBroker.js';
 
+/** How one engine process is started. */
+export interface PluginHarnessSpawnOptions {
+  /**
+   * The task's files and commands are on another computer: the entry is started with
+   * GHOST_HARNESS_REMOTE_WORKSPACE_ARG and must leave file and command work to Cindy's tools.
+   * Refused unless the plugin published `remoteWorkspace` for this engine.
+   */
+  remoteWorkspace?: boolean;
+}
+
 export interface PluginHarness {
+  reportsUsage?: true;
+  /** The plugin says this engine can serve a task whose files are on another computer. */
+  remoteWorkspace?: true;
   /** `${ghostId}:${harnessId}`,任务记录里的稳定标识。 */
   key: string;
   ghostId: string;
@@ -49,7 +69,7 @@ export interface PluginHarnessRegistry {
   /** 列表内容变化时通知(内容不变不通知);返回取消订阅函数。 */
   onChange(listener: (list: PluginHarness[]) => void): () => void;
   /** 原样 stdio 启动引擎入口;不在 list 中或已发布不可用时拒绝。 */
-  spawn(key: string): Promise<NodeWorkerProcess>;
+  spawn(key: string, options?: PluginHarnessSpawnOptions): Promise<NodeWorkerProcess>;
 }
 
 export interface PluginHarnessRegistryDeps {
@@ -62,16 +82,19 @@ export interface PluginHarnessRegistryDeps {
   /** 当前界面语言(app-context 的 uiLocale)。 */
   uiLocale(): string;
   /** broker.spawnHarness:fork 前后按安装、批准与 owner 现查守门。 */
-  spawn(ghostId: string, harnessId: string): Promise<NodeWorkerProcess>;
+  spawn(ghostId: string, harnessId: string, options?: PluginHarnessSpawnOptions): Promise<NodeWorkerProcess>;
   /**
    * 请插件重新发布引擎状态(含模型列表):给插件逻辑页发 `{ type: 'harnesses-refresh-requested' }`。
    * 逻辑页不在线时返回 false。缺省 = 不支持刷新。
    */
   requestRefresh?(ghostId: string): boolean;
+  /** Call only the approved plugin's main worker, with a fixed method and harness id. */
+  readUsage?(ghostId: string, harnessId: string): Promise<unknown>;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }
 
 export interface ReconcilablePluginHarnessRegistry extends PluginHarnessRegistry {
+  readUsage(key: string): Promise<GhostHarnessUsage | null>;
   /** 重算列表;内容变化才通知。`ghosts` 缺省时现读 deps.listGhosts()。 */
   reconcile(ghosts?: InstalledGhost[]): void;
   /** 丢弃缓存(不通知);下一次 list 现算。 */
@@ -114,6 +137,8 @@ function projectHarnesses(deps: PluginHarnessRegistryDeps, ghosts: InstalledGhos
           }
           : { state: 'unknown' },
         ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+        ...(status?.reportsUsage && ghost.manifest.node?.protocol === 'json-rpc-stdio' ? { reportsUsage: true } : {}),
+        ...(status?.remoteWorkspace ? { remoteWorkspace: true } : {}),
         ...(status?.models ? { models: status.models.map((model) => ({ ...model, ...(model.efforts ? { efforts: [...model.efforts] } : {}) })) } : {}),
         ...(status?.modes ? { modes: [...status.modes] } : {}),
         ...(status?.defaultMode ? { defaultMode: status.defaultMode } : {}),
@@ -157,7 +182,21 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         listeners.delete(listener);
       };
     },
-    async spawn(key) {
+    async readUsage(key) {
+      const read = deps.readUsage;
+      const separator = key.lastIndexOf(':');
+      if (!read || separator < 1 || key.length > 256) return null;
+      const ghostId = key.slice(0, separator);
+      const find = () => {
+        const ghost = deps.listGhosts().find(item => installedGhostStoragePart(item) === ghostId);
+        return ghost && projectHarnesses(deps, [ghost]).find(item => item.key === key && item.reportsUsage);
+      };
+      const harness = find();
+      if (!harness) return null;
+      const raw = await read(ghostId, harness.harnessId);
+      return find() ? parseGhostHarnessUsage(raw) ?? null : null;
+    },
+    async spawn(key, options) {
       // 现算而不是读缓存:停用、撤权或刚发布的不可用状态都必须在启动这一刻生效。
       let harness: PluginHarness;
       try {
@@ -166,11 +205,17 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         if (current.availability.state === 'unavailable') {
           throw new Error(`Task engine ${current.name} is unavailable${current.availability.message ? `: ${current.availability.message}` : ''}`);
         }
+        // 插件没有声明能把文件与命令交给 Cindy 时,它的工具只会作用在本机:项目不在这里,不能启动。
+        if (options?.remoteWorkspace && !current.remoteWorkspace) {
+          throw new Error(`Task engine ${current.name} cannot run a task whose files are on another computer`);
+        }
         harness = current;
       } catch (error) {
         throw new AgentStartupStoppedError(error);
       }
-      return deps.spawn(harness.ghostId, harness.harnessId);
+      return options?.remoteWorkspace
+        ? deps.spawn(harness.ghostId, harness.harnessId, { remoteWorkspace: true })
+        : deps.spawn(harness.ghostId, harness.harnessId);
     },
     reconcile(ghosts) {
       reconcile(ghosts);
@@ -195,7 +240,8 @@ const registry = createPluginHarnessRegistry({
   isAvailable: (ghostId) => registryDeps.isAvailable(ghostId),
   readAvailability: (ghostId) => registryDeps.readAvailability(ghostId),
   uiLocale: () => registryDeps.uiLocale(),
-  spawn: (ghostId, harnessId) => registryDeps.spawn(ghostId, harnessId),
+  spawn: (ghostId, harnessId, options) => (options ? registryDeps.spawn(ghostId, harnessId, options) : registryDeps.spawn(ghostId, harnessId)),
+  readUsage: async (ghostId, harnessId) => registryDeps.readUsage?.(ghostId, harnessId),
   log: { warn: (message, meta) => registryDeps.log?.warn(message, meta) },
 });
 
@@ -211,6 +257,10 @@ export function configurePluginHarnessRegistry(deps: PluginHarnessRegistryDeps):
 /** 花名册广播、语言切换与可用状态发布后调用;内容不变时不通知。 */
 export function reconcilePluginHarnesses(ghosts?: InstalledGhost[]): void {
   registry.reconcile(ghosts);
+}
+
+export function readPluginHarnessUsage(key: string): Promise<GhostHarnessUsage | null> {
+  return registry.readUsage(key);
 }
 
 export function getPluginHarnessRegistry(): PluginHarnessRegistry {

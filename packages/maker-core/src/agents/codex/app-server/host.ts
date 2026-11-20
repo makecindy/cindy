@@ -320,6 +320,7 @@ export interface AppServerHostOptions {
   /** Cindy Provider codex/* 的内部 OpenAI transport identity。 */
   cindyRemoteCompactionProviderId?: string;
   localCompactionProviderId?: string;
+  contextProviderModels?: readonly string[];
   /** Generic custom Provider identities and capabilities frozen into this process. */
   codexCustomProviderRoutes?: Array<{
     providerId: string;
@@ -562,6 +563,10 @@ export class AppServerHost {
 
   getCindyRemoteCompactionProviderId(): string | null {
     return this.opts.cindyRemoteCompactionProviderId ?? null;
+  }
+
+  getContextProviderModels(): readonly string[] | undefined {
+    return this.opts.contextProviderModels;
   }
 
   getCustomProviderModelProviderId(

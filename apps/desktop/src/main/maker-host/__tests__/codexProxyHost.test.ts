@@ -8,7 +8,9 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { translateResponsesRequest } from '@cindy/responses-chat-bridge';
+import { createResponsesChatHandler, translateResponsesRequest } from '@cindy/responses-chat-bridge';
+import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
+import { createPiProviderFetch, handlePiProviderRequest } from '../pi-provider-transport.js';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -1671,30 +1673,55 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   });
 
   // #10269: Carbon discovery has only an ID, unlike the existing explicit API cases.
-  it.each(['individual', 'business', 'enterprise'].flatMap(account => ['anthropic-messages', 'openai-responses', 'openai-completions'].map(api => ({ account, api }))))('keeps the Copilot adapter for $api on the $account host', async ({ account, api }) => {
+  // #11326, unit: a discovered Responses entry must enter the native bridge with the OAuth defaults enabled.
+  it.each([
+    ...['individual', 'business', 'enterprise'].flatMap(account => ['anthropic-messages', 'openai-responses', 'openai-completions']
+      .map(api => ({ account, api, discovered: false, transparent: false }))),
+    { account: 'business', api: 'openai-responses', discovered: true, transparent: false },
+    { account: 'business', api: 'openai-responses', discovered: true, transparent: true },
+  ])('keeps the Copilot adapter for $api on the $account host (discovered: $discovered, transparent: $transparent)', async ({ account, api, discovered, transparent }) => {
     const host = await freshCodexProxyHost();
     const { setCustomProviders } = await import('../active-catalog.js');
     const { setOAuthTokenReader } = await import('../provider-route.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
-    const { buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG, providerModelAdapterId } = await import('@cindy/model-providers');
+    const { buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG, providerModelAdapterId,
+      parseModelsListResponse, mergeDiscoveredRuntimeModels } = await import('@cindy/model-providers');
     const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(model => api === 'openai-completions'
       ? model.id === 'gemini-4-carbon' : model.execution.pi.api === api)!;
     const token = `fixture-token;proxy-ep=proxy.${account}.githubcopilot.com;`;
+    const modelId = discovered ? 'gpt-6.2-sol' : row.id;
+    const requestPath = '/v1/responses';
+    const upstream = transparent ? 'https://api.business.githubcopilot.com' : row.upstream;
+    const models = discovered ? mergeDiscoveredRuntimeModels([], parseModelsListResponse(
+      { data: [{ id: modelId, supported_endpoints: ['/responses'] }] }, row.upstream + '/models',
+    )!) : [{ id: row.id, name: row.name, ...(api === 'openai-completions' ? {} : { api: api as 'anthropic-messages' | 'openai-responses' }) }];
     setCustomProviders([buildUserProvider({ id: 'copilot-account', name: 'Copilot',
       auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
-      runtimes: { codex: { baseUrl: row.upstream, catalogPresetId: 'github-copilot',
+      runtimes: { codex: { baseUrl: upstream, catalogPresetId: 'github-copilot',
+        ...(transparent ? { requestPath } : {}),
         wireProtocol: api === 'openai-completions' ? 'anthropic-messages' : api as 'anthropic-messages' | 'openai-responses',
-        models: [{ id: row.id, name: row.name, ...(api === 'openai-completions' ? {} : { api: api as 'anthropic-messages' | 'openai-responses' }) }] } },
+        models } },
     })]);
     setOAuthTokenReader(() => token);
     host.registerComposed('session-copilot', 'thread-copilot', 'PRODUCT_PROMPT');
     setSessionProvider('session-copilot', 'copilot-account');
     host.setCodexProxyAuthInjection('env-key');
     try {
-      const body = { model: row.id, input: [{ role: 'user', content: 'hello' }] };
+      const body = { model: modelId, input: [{ role: 'user', content: 'hello' }] };
       const decision = await host.createModelRoutingTransform()(body, {
-        reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-copilot' },
+        reqId: 1, method: 'POST', url: '/responses', headers: {
+          'thread-id': 'thread-copilot',
+          ...(transparent ? { 'editor-version': 'fixture-editor' } : {}),
+        },
       });
+      if (transparent) {
+        expect(decision?.localHandler).toBeUndefined();
+        expect(decision?.pathOverride).toBe(requestPath);
+        const headers = new Headers(decision?.headerOverride);
+        expect(headers.get('editor-version')).toBeNull();
+        expect(headers.get('copilot-integration-id')).toBe('vscode-chat');
+        return;
+      }
       expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
       await (decision as { localHandler: (input: unknown) => Promise<void> }).localHandler({
         rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, res: {},
@@ -1702,7 +1729,8 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       expect(mockState.createPiProviderFetch).toHaveBeenLastCalledWith(expect.objectContaining({
         apiKey: token,
         upstream: `https://api.${account}.githubcopilot.com`,
-        row: expect.objectContaining({ id: row.id, upstream: row.upstream }),
+        copilotOAuth: api === 'openai-responses',
+        row: expect.objectContaining({ id: modelId, upstream: row.upstream }),
       }));
       const nativeOptions = (mockState.createPiProviderFetch.mock.calls as unknown as Array<[{ row: typeof row }]>).at(-1)![0];
       expect(providerModelAdapterId(nativeOptions.row)).toBe('github-copilot');
@@ -9344,6 +9372,144 @@ describe('codex proxy host', () => {
       body: transformedBody,
     });
   });
+
+  // Routing and response observation must identify the same rejected pre-turn request.
+  // A later sample on the root or a manual/child compaction cannot authorize handoff.
+  it('attributes a downshift denial only to the latest rejected root request', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn() });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session', 'root', '');
+    host.registerChildThread('root', 'child');
+    const proxy = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+    const request = async (thread: string, kind = 'compaction', trigger = 'auto') => {
+      const headers = { 'thread-id': thread, 'x-codex-turn-metadata': JSON.stringify({
+        thread_id: thread, turn_id: 'turn', request_kind: kind,
+        compaction: { trigger, reason: 'model_downshift', phase: 'pre_turn' },
+      }) };
+      await proxy.routingTransform({ model: 'old/large' }, { url: '/v1/responses', method: 'POST', reqId: 1, headers });
+      return (status: number) => proxy.responseObserver({ status, reqId: 1, method: 'POST', url: '/v1/responses',
+        requestHeaders: headers, responseHeaders: {}, requestBody: Buffer.from('{"model":"wire-alias"}'), upstreamBase: 'https://example.invalid' });
+    };
+    const observed = () => host.getRejectedCodexDownshiftModel('session', 'root', 'turn');
+    const compact = await request('root');
+    expect(observed()).toBeUndefined();
+    compact(403);
+    expect(observed()).toEqual({ model: 'old/large', transport: 'http' });
+    expect(host.getRejectedCodexDownshiftModel('session', 'root', 'other-turn')).toBeUndefined();
+    expect(host.getRejectedCodexDownshiftModel('other-session', 'root', 'turn')).toBeUndefined();
+    (await request('child'))(403);
+    expect(host.getRejectedCodexDownshiftModel('session', 'child', 'turn')).toBeUndefined();
+    expect(observed()).toEqual({ model: 'old/large', transport: 'http' });
+    (await request('root', 'turn'))(403);
+    compact(403); // a delayed response from the earlier HTTP request
+    expect(observed()).toBeUndefined();
+    (await request('root', 'compaction', 'manual'))(403);
+    expect(observed()).toBeUndefined();
+    for (const status of [200, 401, 407, 503]) {
+      (await request('root'))(status);
+      expect(observed()).toBeUndefined();
+    }
+    const pending = await request('root');
+    host.unregister('session');
+    host.registerComposed('session', 'root', '');
+    pending(403);
+    expect(observed()).toBeUndefined();
+  });
+
+  // Run the loopback proxy through its actual bridge and upstream error response.
+  // The transparent observer alone misses local handlers.
+  it.each(['openai-chat', 'anthropic-messages', 'native-chat'] as const)(
+    'attributes only an explicit model rejection through the %s bridge',
+    async protocol => {
+      const host = await freshCodexProxyHost();
+      const proxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      const chat = await vi.importActual<typeof import('@cindy/responses-chat-bridge')>('@cindy/responses-chat-bridge');
+      const anthropic = await vi.importActual<typeof import('@cindy/responses-anthropic-bridge')>('@cindy/responses-anthropic-bridge');
+      const native = await vi.importActual<typeof import('../pi-provider-transport.js')>('../pi-provider-transport.js');
+      const { buildUserProvider } = await import('@cindy/model-providers');
+      const { setCustomProviders } = await import('../active-catalog.js');
+      const { setCustomProviderKeyReader } = await import('../provider-route.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      const upstreamPaths: string[] = [];
+      const errors = [
+        { code: 'user_model_access_denied', message: 'user not allowed to access model' },
+        { code: 'permission_error', message: 'generic permission failure'.repeat(1_000) },
+      ];
+      const upstream = createServer(async (req, res) => {
+        for await (const chunk of req) void chunk;
+        const error = errors[upstreamPaths.length];
+        upstreamPaths.push(req.url ?? '');
+        res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error }));
+      });
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+      try {
+        const wireProtocol = protocol === 'anthropic-messages' ? protocol : 'openai-chat';
+        const provider = buildUserProvider({
+          id: 'downshift-bridge', name: 'Bridge',
+          runtimes: { codex: {
+            wireProtocol, baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
+            models: [{ id: 'old/large', name: 'Old model' }],
+          } },
+        });
+        if (protocol === 'openai-chat') provider.routing.codex!.requestPath = '/custom-chat';
+        if (protocol === 'native-chat') provider.models.codex![0]!.api = 'openai-completions';
+        setCustomProviders([provider]);
+        setCustomProviderKeyReader(() => 'fixture-key');
+        setSessionProvider('bridge-session', provider.id);
+        host.registerComposed('bridge-session', 'bridge-root', '');
+        host.setCodexProxyAuthInjection('env-key');
+        mockState.createAnthropicCompatProxy.mockImplementationOnce(proxy.createAnthropicCompatProxy);
+        if (protocol === 'anthropic-messages') {
+          vi.mocked(createResponsesAnthropicHandler).mockImplementation(anthropic.createResponsesAnthropicHandler);
+        } else {
+          vi.mocked(createResponsesChatHandler).mockImplementation(chat.createResponsesChatHandler);
+        }
+        if (protocol === 'native-chat') {
+          vi.mocked(createPiProviderFetch).mockImplementation(native.createPiProviderFetch);
+          vi.mocked(handlePiProviderRequest).mockImplementation(native.handlePiProviderRequest);
+        }
+        await host.ensureCodexProxyReady();
+        const send = async (turn: string) => {
+          const response = await fetch(`${host.getCodexProxyEndpoint()}/responses`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json', 'thread-id': 'bridge-root',
+              'x-codex-turn-metadata': JSON.stringify({
+                thread_id: 'bridge-root', turn_id: turn, request_kind: 'compaction',
+                compaction: { trigger: 'auto', reason: 'model_downshift', phase: 'pre_turn' },
+              }),
+            },
+            body: JSON.stringify({ model: 'old/large', input: [{ role: 'user', content: 'continue' }], stream: false }),
+          });
+          return { status: response.status, body: await response.text() };
+        };
+        const first = await send('denied');
+        expect(first.body).toContain(protocol === 'native-chat' ? 'HTTP 403' : 'user_model_access_denied');
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'denied'))
+          .toMatchObject({ model: 'old/large', transport: 'bridge' });
+        const second = await send('generic');
+        expect(second.status).toBe(protocol === 'native-chat' ? 200 : 403);
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'generic')).toBeUndefined();
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'denied')).toBeUndefined();
+        const upstreamPath = {
+          'openai-chat': '/v1/custom-chat', 'anthropic-messages': '/v1/messages', 'native-chat': '/v1/chat/completions',
+        }[protocol];
+        expect(upstreamPaths).toEqual([upstreamPath, upstreamPath]);
+      } finally {
+        vi.mocked(createResponsesChatHandler).mockReset();
+        vi.mocked(createResponsesAnthropicHandler).mockReset();
+        vi.mocked(createPiProviderFetch).mockReset();
+        vi.mocked(handlePiProviderRequest).mockReset();
+        clearSessionProvider('bridge-session');
+        setCustomProviders([]);
+        setCustomProviderKeyReader(() => null);
+        await host.disposeCodexProxy();
+        upstream.closeAllConnections();
+        await new Promise<void>(resolve => upstream.close(() => resolve()));
+      }
+    },
+  );
 
   it('observes non-streaming provider service_tier from upstream responses', async () => {
     const host = await freshCodexProxyHost();

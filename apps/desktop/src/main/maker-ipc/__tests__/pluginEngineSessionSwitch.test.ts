@@ -108,7 +108,6 @@ describe('switching a task onto a plugin engine', () => {
   });
 
   it.each([
-    { name: 'another computer', row: { agentDeviceId: 'mini' }, code: 'PRECONDITION_FAILED' },
     { name: 'an IM task', row: { source: 'feishu' }, code: 'UNSUPPORTED_CAPABILITY' },
     { name: 'a collaboration lead', row: { orcaRole: 'lead' }, code: 'UNSUPPORTED_CAPABILITY' },
   ])('refuses $name before staging anything', async ({ row, code }) => {
@@ -135,6 +134,33 @@ describe('switching a task onto a plugin engine', () => {
     expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
     // The choice stays so the user can pick again; nothing was sent on Claude Code meanwhile.
     expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp' });
+  });
+
+  // 2026-11-19 用户反馈：供应商组按额度把任务的 Agent 挪到另一台电脑后，列表里就选不到插件引擎了。
+  // 插件引擎只在任务所在电脑运行，切过去就是把 Agent 换回这台(与内置引擎之间换电脑同一套交接)；
+  // 点名另一台电脑仍拒绝。最小失败输入：agentDeviceId=mini 的任务切到插件引擎；请求带 agentDeviceId。
+  it('brings the Agent back to this computer when it ran on another one', async () => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ agentDeviceId: 'mini' }));
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE });
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp', targetAgentDeviceId: null });
+
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, applyNow: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', providerId: ENGINE, sdkSessionId: null, agentDeviceId: null,
+    }));
+    expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
+      fromAgentKind: 'cc', toAgentKind: 'acp', fromAgentDeviceId: 'mini', toAgentDeviceId: null,
+    }));
+  });
+
+  it('refuses a plugin engine on another computer', async () => {
+    const { deps, pendingSwitches } = makeDeps(makeRow());
+    await expect(performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE, agentDeviceId: 'mini',
+    })).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(pendingSwitches.get('s1')).toBeUndefined();
   });
 
   it('needs the engine identity', async () => {
@@ -169,6 +195,18 @@ describe('switching a plugin-engine task back to a built-in engine', () => {
     expect(deps.bootstrapSwitchedSession).toHaveBeenCalled();
   });
 
+  // 同一次反馈的另一半：插件引擎任务里选供应商组 / 另一台电脑上的内置模型曾被「插件引擎只在本机」拒绝。
+  // 目标是内置引擎，按内置引擎换电脑裁决。最小失败输入：acp 任务切到 agentDeviceId=mini 的 Claude Code。
+  it('can move to a built-in engine on another computer', async () => {
+    const assertAgentDeviceRouteUsable = vi.fn(async () => 200_000);
+    const { deps, pendingSwitches } = makeDeps(pluginRow(), { assertAgentDeviceRouteUsable });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'claude-code', model: 'claude-fable-5', providerId: 'anthropic', agentDeviceId: 'mini',
+    });
+    expect(assertAgentDeviceRouteUsable).toHaveBeenCalledWith('mini', 'claude-code', 'claude-fable-5', 'anthropic');
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'claude-code', targetAgentDeviceId: 'mini' });
+  });
+
   it('treats picking its own engine as cancelling a staged switch, without a built-in model selection', async () => {
     const selectSameAgentModel = vi.fn(async () => ({ deferred: true }));
     const { deps, pendingSwitches } = makeDeps(pluginRow(), { selectSameAgentModel });
@@ -182,5 +220,21 @@ describe('switching a plugin-engine task back to a built-in engine', () => {
     expect(pendingSwitches.get('s1')).toBeUndefined();
     expect(selectSameAgentModel).not.toHaveBeenCalled();
     expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  });
+
+  // 第三期(2026-11-20)：任务可以建在另一台电脑的插件引擎上。在这种任务里再选它自己的引擎(不点名位置)是原地
+  // 选择，不是「换回本机」：旧逻辑会把位置改成本机，本机恰好也装了同一个插件时 Agent 被悄悄挪走，没装时报
+  // 「插件已停用或卸载」。最小失败输入：agentDeviceId=mini 的插件引擎任务，选同一个引擎、不带 agentDeviceId。
+  it('keeps a task on its engine of another computer when that same engine is picked again', async () => {
+    const { deps, pendingSwitches } = makeDeps({ ...pluginRow(), agentDeviceId: 'mini' });
+    const result = await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, applyNow: true,
+    });
+    expect(result).toMatchObject({ switched: false });
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+    // This computer's engines are not consulted, and nothing moves the Agent.
+    expect(deps.admitPluginEngineTarget).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
   });
 });

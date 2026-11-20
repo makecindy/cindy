@@ -32,6 +32,7 @@ describe('decideProviderGroupFailure — the account on that computer', () => {
     ['usage limit (Claude tag)', { sdkError: 'rate_limit' }, switchTo('usage-limit')],
     ['usage limit (Codex tag)', { codexErrorInfo: 'usageLimitExceeded' }, switchTo('usage-limit')],
     ['billing depleted', { sdkError: 'billing_error' }, switchTo('usage-limit')],
+    ['xAI billing rejection', { errorStatus: 403, message: 'You have run out of credits or need a Grok subscription.' }, switchTo('usage-limit')],
     ['HTTP 429', { errorStatus: 429, message: 'rate limited' }, switchTo('usage-limit')],
     ['signed out (tag)', { sdkError: 'authentication_failed' }, switchTo('auth')],
     ['signed out (401)', { errorStatus: 401 }, switchTo('auth')],

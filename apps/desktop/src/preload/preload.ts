@@ -225,7 +225,7 @@ import type {
 } from '../shared/local-themes';
 import type { LocalThemeImportResult } from '../shared/theme-import/types';
 import type { CindyFileOpenResult } from '../shared/cindyFile';
-import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES, isLocalePreference, type LocalePreference, type SupportedLocale } from '../shared/locale';
 import type { RawReleaseNotes } from '../shared/releaseNotesContent';
 import {
   MODEL_ACCESS_STATUS_CHANNEL,
@@ -619,6 +619,7 @@ function createIpcFanOut(channel: string): FanOut {
 
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
+const fanOutLocalDbRuntimeCorruption = createIpcFanOut('local-db:runtime-corruption');
 const fanOutUpdateStatus = createIpcFanOut('update-status');
 const fanOutHostBotReadStateChanged = createIpcFanOut('local-db:bots:read-state:changed');
 const fanOutSkillhubLocalStateChanged = createIpcFanOut('skillhub:local-state-changed');
@@ -1304,6 +1305,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getArm64Translation: (): Promise<boolean> => ipcRenderer.invoke('app:get-arm64-translation'),
   clientEndpoints: { websiteUrl: clientEndpointsInfo?.websiteUrl ?? '' },
   preferredSystemLocale: readInitialPreferredSystemLocale(),
+  restoreDisplayLanguage: async (legacy: LocalePreference | null): Promise<LocalePreference | null> => {
+    const saved: unknown = await ipcRenderer.invoke('app-locale:preference', 'restore', legacy);
+    return isLocalePreference(saved) ? saved : null;
+  },
+  saveDisplayLanguage: async (preference: LocalePreference, onlyIfUnset?: boolean): Promise<boolean> =>
+    (await ipcRenderer.invoke('app-locale:preference', onlyIfUnset ? 'import' : 'set', preference)) === preference,
   appDisplayVersion: appDisplayVersionInfo.display,
   appDisplayVersionDetail: appDisplayVersionInfo.detail,
   getDeviceId: (): Promise<string> => ipcRenderer.invoke('get-device-id'),
@@ -2589,8 +2596,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 用户动作,不自己落盘。allowed = 已同意隐私政策 && 统计开关开启。
   getAnalyticsSettings: (): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-get'),
-  setProductTokensEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
-    ipcRenderer.invoke('analytics:product-tokens-set', enabled === true),
   setAnalyticsEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-set-enabled', enabled === true),
   /** 恢复默认:删掉开关 override,同意事实保留。 */
@@ -4841,6 +4846,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readImageBytes: (params: { url: string }): Promise<{ base64: string; mimeType: string }> =>
     ipcRenderer.invoke('media:read-image-bytes', params),
 
+  openSystemPreview: (filePath: string): Promise<boolean> => ipcRenderer.invoke('file:system-preview', filePath),
+
   // 附件卡缩略图:本机文件交给系统缩略图服务(macOS QuickLook / Windows Shell)
   // 出一张小预览,顺带回传复核那一刻的当前字节数。整体不可用(路径越界 / 文件不在)
   // 回 null;文件在但出不了图时 dataUrl 为 null,调用方回落自绘文件图标。
@@ -6200,10 +6207,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── chat-data-localization (M-FE2)：本地 SQLite IPC 桥接 ──
   // 所有 db 操作 main 独占；renderer 仅通过这里间接访问。
   localDb: {
+    onRuntimeCorruption: (callback: (stamp: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) =>
+      fanOutLocalDbRuntimeCorruption((data) => {
+        if (isDataOwnerPushStamp(data)) callback(data);
+      }),
     ensureReady: (
       userId: string,
+      recovery?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
     ): Promise<{ ready: true } | { ready: false; error: { code: string; message: string } }> =>
-      ipcRenderer.invoke('local-db:ensure-ready', userId),
+      ipcRenderer.invoke('local-db:ensure-ready', userId, recovery),
     databaseSizeWarning: {
       // Settings and the startup capacity snapshot are local to this device's
       // shared Electron userData profile; they are not synced across devices
@@ -6654,6 +6666,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
    *  - onPin / onUnpin:main → renderer 推 automation pin 状态
    */
   rsbBrowserBridge: {
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbFilePreviewReportPayload): Promise<unknown> =>
+      ipcRenderer.invoke('rsb-browser-bridge:report-file-preview-opener', input),
     report: (input: {
       sessionId: string;
       tabId: string;
@@ -6783,8 +6797,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:list-available-agents'),
     listPluginEngines: (): Promise<import('../shared/pluginEngines.js').PluginEngineView[]> =>
       ipcRenderer.invoke('maker:list-plugin-engines'),
+    /** Private account snapshot for one approved engine on this computer. */
+    getPluginEngineUsage: (key: string): Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null> =>
+      ipcRenderer.invoke('maker:get-plugin-engine-usage', key),
     /** Asks engine plugins to republish their models (cooldown in main); results arrive as a change push. */
     refreshPluginEngines: (): Promise<void> => ipcRenderer.invoke('maker:refresh-plugin-engines'),
+    /** Opens or closes one engine of this computer for the owner's other computers. */
+    setPluginEngineRemoteUse: (key: string, enabled: boolean): Promise<{ supported: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('maker:set-plugin-engine-remote-use', { key, enabled }),
     onPluginEnginesChanged: fanOutPluginEnginesChanged,
     onAgentsChanged: fanOutMakerAgentsChanged,
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
@@ -7069,6 +7089,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{
       ok: boolean;
       models?: import('@cindy/model-providers').DiscoveredModel[];
+      /** true only when every catalog page was read; absent = unknown. */
+      complete?: boolean;
+      /** Saved-provider fetches only: receipt to pass back as `listingReceipts` when saving. */
+      listingReceipt?: string;
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;

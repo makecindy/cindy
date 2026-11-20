@@ -11,8 +11,14 @@ export const PLUGIN_ENGINE_DEFAULT_MODEL = 'default';
 
 export const PLUGIN_ENGINES_INVOKE = {
   LIST: 'maker:list-plugin-engines',
+  USAGE: 'maker:get-plugin-engine-usage',
   /** Ask engine plugins to republish their models (per-plugin cooldown in main). */
   REFRESH: 'maker:refresh-plugin-engines',
+  /**
+   * Opens or closes one engine of this computer for the owner's other computers. Local window
+   * only: it is not on the device-link allowlist, another computer cannot flip it.
+   */
+  SET_REMOTE_USE: 'maker:set-plugin-engine-remote-use',
 } as const;
 
 export const PLUGIN_ENGINES_PUSH = {
@@ -56,6 +62,7 @@ export interface PluginEnginePermissionMode {
 }
 
 export interface PluginEngineView {
+  reportsUsage?: true;
   /** `<pluginInstance>:<harnessId>`. */
   key: string;
   /** Task `providerId` for this engine: `acp-plugin:<key>`. */
@@ -79,6 +86,55 @@ export interface PluginEngineView {
   permissionModes: PluginEnginePermissionMode[];
   /** The mode a new task starts in (the agent's own default mode, else 'ask'). */
   defaultPermissionMode: PluginEnginePermissionModeId;
+  /**
+   * Use from the owner's other computers (the agent runs on the computer that has the plugin,
+   * files and commands stay on the task's computer). `supported`: the plugin offers that mode for
+   * this engine; `enabled`: the user opened it on that computer. Absent on a computer running a
+   * Cindy version from before this existed; read it as not offered.
+   */
+  remoteUse?: { supported: boolean; enabled: boolean };
+}
+
+/** The engine can run a task of another computer of the same account right now. */
+export function isPluginEngineOfferedRemotely(view: Pick<PluginEngineView, 'availability' | 'remoteUse'>): boolean {
+  return view.remoteUse?.supported === true && view.remoteUse.enabled === true && view.availability.state !== 'unavailable';
+}
+
+/**
+ * Engines another computer offers to this one, from its `maker:list-plugin-engines` reply.
+ * Entries that are malformed or not opened for remote use are dropped; nothing is filled in.
+ */
+export function parseOfferedPluginEngines(raw: unknown): PluginEngineView[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item): PluginEngineView[] => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const view = item as Partial<PluginEngineView>;
+    const key = typeof view.key === 'string' ? view.key : '';
+    if (!key || view.providerId !== pluginEngineProviderId(key) || !pluginEngineKeyFromProviderId(view.providerId)) return [];
+    if (typeof view.name !== 'string' || !view.name || !Array.isArray(view.models)) return [];
+    const availability = view.availability;
+    if (!availability || typeof availability !== 'object' || typeof availability.state !== 'string') return [];
+    const remoteUse = view.remoteUse;
+    if (!remoteUse || typeof remoteUse !== 'object') return [];
+    const models = view.models.filter((model): model is PluginEngineModel =>
+      !!model && typeof model === 'object' && typeof model.id === 'string' && !!model.id && typeof model.displayName === 'string')
+      .map((model) => ({
+        ...model,
+        ...(Array.isArray(model.efforts) ? { efforts: model.efforts.filter(isPluginEngineEffort) } : {}),
+      }));
+    const permissionModes = Array.isArray(view.permissionModes)
+      ? view.permissionModes.filter((mode): mode is PluginEnginePermissionMode =>
+        !!mode && typeof mode === 'object' && isPluginEnginePermissionModeId(mode.id) && typeof mode.displayName === 'string')
+      : [];
+    const offered: PluginEngineView = {
+      ...(view as PluginEngineView),
+      models,
+      permissionModes,
+      defaultPermissionMode: isPluginEnginePermissionModeId(view.defaultPermissionMode) ? view.defaultPermissionMode : 'ask',
+      remoteUse: { supported: remoteUse.supported === true, enabled: remoteUse.enabled === true },
+    };
+    return isPluginEngineOfferedRemotely(offered) ? [offered] : [];
+  });
 }
 
 export function pluginEngineProviderId(key: string): string {

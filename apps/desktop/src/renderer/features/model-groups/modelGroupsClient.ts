@@ -51,7 +51,9 @@ function publish(owner: string | null, next: ModelGroupsConfig): void {
 export function refreshModelGroups(): Promise<void> {
   const owner = ownerNow();
   if (loading?.owner === owner) return loading.promise;
-  const promise = window.electronAPI.modelGroups.get()
+  // 读不到(含桥接还没有这个接口)只记日志：选择器照常显示其余内容，不让挂载它的页面报错。
+  const promise = Promise.resolve()
+    .then(() => window.electronAPI.modelGroups.get())
     .then((next) => publish(owner, next))
     .catch((err: unknown) => log.warn('model groups unavailable', err))
     .finally(() => { if (loading?.promise === promise) loading = null; });
@@ -97,6 +99,16 @@ export async function resolveModelGroup(
     return await window.electronAPI.modelGroups.resolve({ selection, ...(context ? { context } : {}), ...(location ? { location } : {}) });
   } catch (err) {
     log.warn('model group resolve failed', err);
+    return null;
+  }
+}
+
+/** 只看此刻会选谁：不推进「轮流」，也没有选路凭据(伙伴等保存设置时用，实际选路在主进程)。 */
+export async function previewModelGroup(selection: ModelGroupSelection): Promise<ModelGroupResolveResult | null> {
+  try {
+    return await window.electronAPI.modelGroups.resolve({ selection, dryRun: true });
+  } catch (err) {
+    log.warn('model group preview failed', err);
     return null;
   }
 }

@@ -23,6 +23,7 @@ import {
 
 import { sanitizeModelGroupSelection, type ModelGroupSelection } from '../../shared/modelGroups';
 import { isPluginEngineEffort, isPluginEnginePermissionModeId, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 import type { PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
@@ -545,18 +546,25 @@ function sanitize(raw: unknown): NewMakerDraft {
   };
 }
 
-/** 只认 `acp-plugin:<插件>:<引擎>` 形态的来源；模型值是引擎给的不透明字符串。 */
+/**
+ * 只认 `acp-plugin:<插件>:<引擎>` 形态的来源；模型值是引擎给的不透明字符串。`deviceId` 是引擎所在的
+ * 另一台自己的电脑(设备 id 形态)：别人分享的来源不提供插件引擎，读到就整项作废，不悄悄改成本机的同名引擎。
+ */
 function sanitizePluginEngine(value: unknown): NewMakerDraft['pluginEngine'] {
   if (!value || typeof value !== 'object') return null;
-  const { providerId, modelId, permissionMode, effort } = value as {
-    providerId?: unknown; modelId?: unknown; permissionMode?: unknown; effort?: unknown;
+  const { providerId, modelId, permissionMode, effort, deviceId } = value as {
+    providerId?: unknown; modelId?: unknown; permissionMode?: unknown; effort?: unknown; deviceId?: unknown;
   };
+  if (deviceId !== undefined && (
+    typeof deviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId) || isProviderShareAgentDeviceId(deviceId)
+  )) return null;
   if (
     typeof providerId !== 'string' || providerId.length > 512 || !pluginEngineKeyFromProviderId(providerId)
     || typeof modelId !== 'string' || !modelId.trim() || modelId.length > 256
   ) return null;
   return {
     providerId,
+    ...(typeof deviceId === 'string' ? { deviceId } : {}),
     modelId,
     ...(isPluginEnginePermissionModeId(permissionMode) ? { permissionMode } : {}),
     ...(isPluginEngineEffort(effort) ? { effort } : {}),
@@ -1104,10 +1112,14 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
  *
  * 必须在调用瞬间读取模块级 currentDraft:产品默认 effect 可能刚把 cc 改成 Pi,若这里继续
  * 使用 React 上一轮 closure 的 cc/currentPrefs,会把 xAI→Pi 又覆盖成 Codex。系统回退不标记
- * defaultTupleCustomized,因为它不是用户选择。
+ * defaultTupleCustomized,因为它不是用户选择。本机手动选定的引擎在可用列表短暂缺失时继续保留。
  */
-export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVendor>): boolean {
+export function fallbackUnavailableVendor(
+  availableVendors: ReadonlySet<MakerVendor>,
+  options?: { differentCatalog?: boolean },
+): boolean {
   rebaseStoredDefaultTuplePreference();
+  if (currentDraft.defaultTupleSelectionCustomized && !options?.differentCatalog) return false;
   const currentVendor = currentDraft.vendor;
   if (availableVendors.has(currentVendor)) return false;
   const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) =>

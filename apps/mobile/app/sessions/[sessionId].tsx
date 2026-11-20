@@ -23,8 +23,7 @@ import { incomingShareDestination } from '@/session/incomingShare';
 import { ModelSpeedIcon } from '@/session/ModelSpeedIcon';
 import { useSessionHistorySearch } from '@/session/useSessionHistorySearch';
 import { useContentRecoveryDiagnostics } from '@/debug/useContentRecoveryDiagnostics';
-import { modelNeedsReselection } from '@/session/modelReselection';
-import { getCachedDeviceProviders } from '@/device-link/deviceProvidersCache';
+import { blockedSessionModelAtSend, taskModelCatalogRoutes } from '@/session/sessionModelAtSend';
 import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionProcessItems } from '@/session/companionConversationPresentation';
@@ -448,12 +447,13 @@ import {
   pluginEngineSessionCapabilities,
   resolvePluginEngineEffort,
   usePluginEngines,
+  usePluginEngineUsageSupport,
   PLUGIN_ENGINE_DEFAULT_MODEL,
   type MobilePluginEngineSelection,
 } from '@/session/pluginEngines';
 import { PluginEngineMark } from '@/session/PluginEngineMark';
 import { formatProviderAccountLabel, resolveSessionUsageAccount } from '@/session/sessionUsageAccount';
-import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
+import { useRemoteAgentCatalogs, useRemoteAgentCatalogsWithStatus } from '@/session/useRemoteAgentCatalogs';
 import { isProviderShareAgentDeviceId } from '@/session/providerShareAgentDevice';
 import { useSessionProviderGroup } from '@/session/useSessionProviderGroup';
 import {
@@ -1911,7 +1911,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const pluginEngineSwitchIntent = currentSession?.pluginEngineSwitchIntent ?? null;
   // 换到 / 换出插件引擎只限被控电脑本机的普通任务，与 Desktop 的切换准入一致。
   const pluginEngineSwitchEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
-    && !currentSession.remoteHostId && !sessionAgentRunsOnOtherComputer(currentSession)
+    // Agent 在另一台电脑的任务照样可以：选插件引擎时 Agent 回到被控电脑(被控端负责换位置)。
+    && !currentSession.remoteHostId
     && !currentSession.orcaRole && !currentSession.orcaRemoteLead
     && (currentSession.source == null || currentSession.source === 'desktop')
     && currentSession.status !== 'archived';
@@ -2325,9 +2326,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 远程供应商：被控电脑声明支持时，Worker 可以像任务一样选其他电脑 / 分享的供应商。
     workerAgentLocationSelectable: capabilities?.supportsOrcaWorkerAgentDevice === true,
   });
+  const { running: runningModel, pending: pendingModel } = taskModelCatalogRoutes(currentSession, deviceId);
   const composerDeviceProviders = useDeviceProviders(
     deviceId || undefined,
     modelSheetOpen,
+    runningModel?.deviceId === deviceId ? runningModel.route : undefined,
+    pendingModel?.deviceId === deviceId ? pendingModel.route : undefined,
   );
   const collabWorkerDeviceId = collab.workerForm.form.executionDeviceId ?? deviceId;
   const collabDeviceProviders = useDeviceProviders(collabWorkerDeviceId || undefined, collab.workerForm.modelPicker.open);
@@ -2866,7 +2870,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => [...new Set([currentAgentDeviceId, nextAgentDeviceId].filter((id): id is string => !!id))],
     [currentAgentDeviceId, nextAgentDeviceId],
   );
-  const remoteAgentCatalogs = useRemoteAgentCatalogs({
+  const { catalogs: remoteAgentCatalogs, retainedCatalog: remoteRetainedCatalog, pendingCatalog: remotePendingCatalog } = useRemoteAgentCatalogsWithStatus({
     // 选择器打开时才读其他电脑;Agent 已在另一台电脑时还要按那台的目录显示模型药丸。
     // 共享任务访客读到的是自己账号的设备,与任务无关,不读。
     enabled: !!deviceId && !isSharedTaskPeer(deviceId) && (
@@ -2874,6 +2878,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ),
     controlledDeviceId: deviceId,
     keepDeviceIds: remoteAgentKeepDeviceIds,
+    retainedModel: runningModel?.deviceId !== deviceId ? runningModel : undefined,
+    pendingModel: pendingModel?.deviceId !== deviceId ? pendingModel : undefined,
     keepOnly: !(agentLocationMovable && modelSheetOpen),
   });
   const modelSheetRemoteCatalogs = useMemo(
@@ -2954,12 +2960,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sharedTaskGuest: isSharedTaskPeer(deviceId),
     remoteHostId: currentSession?.remoteHostId,
   });
-  const agentAccountMaker = useMobileMakerTransport(
-    usageAccount.kind === 'device' ? usageAccount.deviceId : deviceId,
-  );
-  const menuAccountReader = usageAccount.kind === 'host'
-    ? maker
-    : usageAccount.kind === 'device' ? agentAccountMaker : null;
+  const usageDeviceId = usageAccount.kind === 'device' ? usageAccount.deviceId : deviceId;
+  const agentAccountMaker = useMobileMakerTransport(usageDeviceId);
+  const pluginReportsUsage = usePluginEngineUsageSupport(usageDeviceId, pluginEngineTask ? currentSession?.providerId : null);
+  const menuAccountReader = usageAccount.kind === 'unreadable' || pluginReportsUsage === false
+    ? null : usageAccount.kind === 'device' ? agentAccountMaker : maker;
   /** 菜单上的来源与登录身份:Agent 在另一台电脑时按那台的目录,不借被控电脑的同名来源。 */
   const menuAccountProvider = usageAccount.kind !== 'host'
     ? currentAgentCatalog.loading
@@ -6834,19 +6839,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
     // A known hidden model requires an explicit choice before consuming the draft or enqueueing.
     const sessionAtSend = readSessionRowNow() ?? currentSession;
-    const intentAtSend = sessionAtSend.agentSwitchIntent;
-    // Cross-agent picks take effect on the next message; validate that chosen target.
-    const selectionAtSend = intentAtSend
-      ? { agentKind: intentAtSend.targetAgentKind, model: intentAtSend.model, providerId: intentAtSend.providerId }
-      : { agentKind: resolveSessionAgentKind(sessionAtSend), model: sessionAtSend.model, providerId: sessionAtSend.providerId };
-    if (!earlyLocalCommand && !earlyDesktopCommand && modelNeedsReselection(
-      getCachedDeviceProviders(deviceId)?.modelVisibilityOverrides,
-      selectionAtSend.agentKind, selectionAtSend.model, selectionAtSend.providerId,
-    )) {
-      setError(t('session.common.modelHiddenReselect', { model: selectionAtSend.model }));
+    const blockedModel = !earlyLocalCommand && !earlyDesktopCommand
+      && blockedSessionModelAtSend(sessionAtSend, deviceId, composerDeviceProviders.retainedCatalog, composerDeviceProviders.pendingCatalog,
+        remoteRetainedCatalog, remotePendingCatalog);
+    if (blockedModel) {
+      setError(blockedModel.reason === 'hidden'
+        ? t('session.common.modelHiddenReselect', { model: blockedModel.modelId }) : t('models.picker.loadingDefault'));
       // 与手动打开入口一致：面板按「待切换目标 / 当前任务引擎」浏览，才能把已关闭的
       // 原选模型认作当前选择并显示重选提示（#5580）。
-      setModelSheetAgentKind(selectionAtSend.agentKind);
+      setModelSheetAgentKind(blockedModel.agent);
       setModelSheetOpen(true);
       sendInFlightRef.current = false;
       setSending(false);
@@ -13871,16 +13872,19 @@ function ComposerActivityStatus({
   const tokenText = t('session.screen.tokenCount', { tokens: tokenCount });
   const tokenA11yText = t('session.screen.tokenCountFull', { tokens: tokenCount });
   const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt);
-  const rateValue = formatComposerActivityRateValue(showElapsedOnly ? null : rateHistory.latestRate);
+  const showLiveRate = !showElapsedOnly && (tokenSpeed?.measurement || !tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0));
+  const rateValue = formatComposerActivityRateValue(showLiveRate ? rateHistory.latestRate : null);
   const canShowRateDetails = !showElapsedOnly
     && generationReliable
     && outputTokens > 0
     && Number.isFinite(outputTokens)
     && Number.isFinite(generationDurationMs)
     && generationDurationMs > 0;
-  const rateText = rateValue
-    ? t('session.screen.tokenRate', { rate: rateValue })
-    : null;
+  const rateText = !rateValue
+    ? null
+    : tokenSpeed?.measurement
+      ? t('session.screen.recentTokenRate', { rate: rateValue })
+      : t('session.screen.tokenRate', { rate: rateValue });
   const showUsageMeta = !showElapsedOnly && (Boolean(rateText) || tokenUsage > 0);
   const usageMeta = (
     <View style={[pillStyles.composerActivityPill, styles.composerActivityMeta]}>
@@ -13947,6 +13951,7 @@ function ComposerActivityStatus({
         history={rateHistory}
         outputTokens={outputTokens}
         totalOutputTokens={tokenSpeed?.totalOutputTokens}
+        measuredAverage={tokenSpeed?.measurement?.average}
         generationDurationMs={generationDurationMs}
         generationReliable={generationReliable && !showElapsedOnly}
         label={showUsageMeta ? `${elapsedText} · ${rateText ?? tokenA11yText}` : elapsedText}

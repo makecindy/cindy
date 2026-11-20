@@ -1508,6 +1508,11 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
 - **可用状态**：插件页 `PUT /harnesses` 只发布元数据（`available`、slug `reason`、≤200 `message`、≤64 `version`），整体
   覆盖、内容不变无副作用，未声明 403、格式错 400 不改原状态；按 owner 单独落盘（`ghost-published-harnesses`），不进插件
   `/kv`，停用保留、卸载删除，读取时按当前清单重新校验。注册表只读这份记录，不调用插件；从未发布为 `unknown`。
+- **替自己的其他电脑运行（2026-11-20）**：任务的文件在同账号另一台电脑时，`spawnHarness` 给入口唯一一个由宿主
+  固定的参数 `--cindy-remote-workspace`，插件没有参数面；只有插件在 `PUT /harnesses` 上报 `remoteWorkspace` 的引擎
+  才能这样启动。「允许被远程调用」逐引擎、默认关、只在本机窗口可改(`maker:set-plugin-engine-remote-use` 不进
+  device-link allowlist)，与供应商的同名开关同一份按账号的存储。受邀者、供应商组与本机应用不提供插件引擎：
+  自带工具是否关掉只能靠插件保证，不得据此把本机开放给其他账号。
 - **注册表**：`cindy-brain/pluginHarnesses.ts` 只列已启用、已批准、已声明、receipt 已批准且协议已支持的引擎，名称按
   界面语言选取；花名册广播、语言切换与状态发布后重算，内容不变不通知。`spawn` 现算列表，不在列表或已发布不可用即拒绝。
 

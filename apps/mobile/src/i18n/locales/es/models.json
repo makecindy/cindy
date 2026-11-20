@@ -113,6 +113,18 @@
     "quotaAverageHint": "Cuota semanal · Mismo peso por cuenta",
     "quotaResetHint": "Al ritmo actual, puede quedar cuota al restablecerse: amarillo si faltan hasta 24 horas y rojo si faltan hasta 6 horas."
   },
+  "modelGroups": {
+    "title": "Grupos de modelos",
+    "sourceCount_one": "{{count}} fuente",
+    "sourceCount_many": "{{count}} fuentes",
+    "sourceCount_other": "{{count}} fuentes",
+    "strategy": {
+      "expiring": "Primero lo que caduca",
+      "order": "En orden",
+      "rotate": "Por turnos",
+      "cheapest": "Lo más barato"
+    }
+  },
   "pluginEngines": {
     "genericName": "Motor de complemento",
     "defaultModel": "Modelo predeterminado",

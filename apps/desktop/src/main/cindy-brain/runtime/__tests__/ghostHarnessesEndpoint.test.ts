@@ -48,6 +48,16 @@ describe('handleGhostHarnessesRequest', () => {
     expect(onChanged).toHaveBeenCalledTimes(3);
   });
 
+  // Runtime discovery may persist the capability; private balances must never enter the roster.
+  it('stores only the usage capability, and removes it on an older report', async () => {
+    const { call, store } = setup(declared);
+    const enabled = { ...available, reportsUsage: true };
+    await call('PUT', JSON.stringify({ harnesses: [{ ...enabled, usage: { balances: [{ amount: '123' }] } }] }));
+    expect(store.read()).toEqual({ harnesses: [enabled] });
+    await call('PUT', JSON.stringify({ harnesses: [available] }));
+    expect((await call('GET')).body).toEqual({ harnesses: [available] });
+  });
+
   // 插件自己列出引擎的模型(2026-11-18 用户决定：模型由插件提供，获取与展示同普通供应商)。
   it('keeps the model list a plugin publishes, dropping fields other than id, name, description and group', async () => {
     const { call, store } = setup(declared);

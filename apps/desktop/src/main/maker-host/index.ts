@@ -166,8 +166,7 @@ import { tryGetSharedTaskHost } from '../device-link/sharedTaskRuntime.js';
 import { runWithSharedTaskCallerGuard } from '../device-link/sharedTaskApi.js';
 import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } from '../device-link/providerShareCrossRegion.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
-import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
-import { isProviderShareCredentialConsentSkipped } from '../device-link/providerShareGuestPrefs.js';
+import { parseProviderShareAgentDeviceId, skipsReceivedShareCredentialConsent } from '../device-link/providerShareGuest.js';
 import { t } from '../i18n.desktop.js';
 import { MACHINE_STATUS_CHANNEL } from '@cindy/device-link';
 import { invokeDeviceValue } from '../maker-ipc/orcaRemoteWorkers.js';
@@ -209,7 +208,10 @@ import {
   resolveRemotePiBinaryPath,
 } from './pi-remote-transport.js';
 import { ensurePiManagerInstalled } from './pi-manager-client.js';
-import { createPiRemoteProviderForwardLease } from './pi-remote-provider-forward.js';
+import {
+  createPiRemoteProviderForwardLease,
+  probePiRemoteProviderEndpoint,
+} from './pi-remote-provider-forward.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { routeInjectedRemoteMcpApprovalsThroughCindy } from './remote-claude-permission-mode.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
@@ -283,6 +285,7 @@ import { ensureCurrentAccountProviderReadiness } from './account-provider-readin
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
 import {
+  getRejectedCodexDownshiftModel,
   armCodexHttpRecovery,
   clearCodexProxyAuthInjection,
   ensureCodexControlPlaneProxyReady,
@@ -1285,7 +1288,7 @@ export function getMaker(): Maker {
       },
       orcaTeamStore: orcaTeamStoreAdapter,
       forwardRemoteWorkerTool: (ctx, tool, args) => remoteWorkerBridge?.forwardTool(ctx, tool, args) ?? Promise.resolve(null),
-      readLeadHistory: async ({ leadSessionId, fromMs, limit, cursor }) => {
+      readLeadHistory: async ({ leadSessionId, fromMs, limit, cursor, order }) => {
         const page = await getMessagesForHistory({
           sessionIds: [leadSessionId],
           workdir: null,
@@ -1296,7 +1299,7 @@ export function getMaker(): Maker {
           includeRewound: false,
           limit,
           cursor,
-          order: 'asc',
+          order,
         });
         return {
           items: page.items.map((item) => ({
@@ -1949,6 +1952,7 @@ export function getMaker(): Maker {
         }),
       getCodexSubagentIdentity: ({ childThreadId }) =>
         getObservedCodexSubagentIdentity(childThreadId),
+      getRejectedCodexDownshiftModel,
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);
@@ -2251,6 +2255,11 @@ export function getMaker(): Maker {
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
       // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
       // 远端机器没在 pool / 未连接 → 抛错, PiAgent 把它当 startSession 失败传上去。
+      probeRemotePiProviderEndpoint: async (remoteHostId, baseUrl) => {
+        const host = getRemoteSshPool().get(remoteHostId);
+        if (!host || host.getStatus() !== 'ready') return false;
+        return probePiRemoteProviderEndpoint(host, baseUrl);
+      },
       getRemotePiTransport: async (
         remoteHostId,
         {
@@ -2555,10 +2564,7 @@ export function getMaker(): Maker {
         // 受邀者任务读写凭证类文件时，本机确认卡上的说明(provider-sharing.md §9 第 7 条)。
         sharedProviderCredentialNotice: () => t('newChat.sharedProviderCredential.description'),
         // 受邀者在「分享给我的供应商」里对这个分享打开了「信任 {分享者}」：不弹卡，与本机任务一致。
-        skipSharedProviderCredentialConsent: (deviceId) => {
-          const shareId = parseProviderShareAgentDeviceId(deviceId);
-          return shareId !== null && isProviderShareCredentialConsentSkipped(shareId);
-        },
+        skipSharedProviderCredentialConsent: skipsReceivedShareCredentialConsent,
         logger: desktopMakerLogger,
       }),
       makerMemory: makerMemoryManager,

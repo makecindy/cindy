@@ -6,6 +6,11 @@
  * host resolves that id to a freshly started endpoint process. The agent owns
  * its own model, login and tools; Cindy adds its MCP tools through the same
  * bridge Pi uses (same tool scope as Pi, see docs/plans/acp-plugin-bridge.md).
+ *
+ * A task whose files and commands are on another computer of the same account
+ * (`StartSessionOptions.deviceHosted`) starts the endpoint in remote-workspace
+ * mode: the plugin switches the agent's own file and command tools off for that
+ * process, and every tool reaches the task's computer through the task tunnel.
  */
 
 import { NotSupportedError, type Capabilities } from '../../types/capabilities.js';
@@ -21,6 +26,12 @@ import {
 import { buildAcpCapabilities } from './capabilities.js';
 import type { AcpLineTransport } from './line-transport.js';
 import type { AcpMcpServer } from './protocol.js';
+import {
+  DEVICE_HOSTED_EXEC_MCP_SERVER,
+  deviceHostedMcpUrl,
+  deviceHostedPluginEngineMcpServers,
+  deviceHostedPluginEngineNote,
+} from '../shared/device-hosted.js';
 import { openAcpSession, type AcpClientInfo, type AcpSession } from './session.js';
 
 export const ACP_PLUGIN_PROVIDER_PREFIX = 'acp-plugin:';
@@ -40,10 +51,19 @@ export function acpProviderIdForHarness(key: string): string {
   return `${ACP_PLUGIN_PROVIDER_PREFIX}${key}`;
 }
 
+export interface AcpEndpointConnectOptions {
+  /**
+   * The task's files and commands are on another computer. The host starts the entry in the
+   * mode where the agent's own file and command tools are off, and refuses an engine whose
+   * plugin does not offer that mode.
+   */
+  remoteWorkspace?: boolean;
+}
+
 /** Host side: starts the endpoint process for one task and adapts it to a line transport. */
 export interface AcpEndpointLauncher {
   /** Known failures carry startup exit proof or the failed process's cleanup receipt. */
-  connect(harnessKey: string): Promise<AcpLineTransport>;
+  connect(harnessKey: string, options?: AcpEndpointConnectOptions): Promise<AcpLineTransport>;
 }
 
 export interface AcpAgentDeps extends AgentDeps {
@@ -105,6 +125,16 @@ function trackClose(transport: AcpLineTransport): {
   };
 }
 
+/** A task hosted for another computer: every MCP server is that computer's, reached through the task tunnel. */
+export function acpMcpServersForHostedTask(hosted: NonNullable<StartSessionOptions['deviceHosted']>): AcpMcpServer[] {
+  return deviceHostedPluginEngineMcpServers(hosted).map((name) => ({
+    type: 'http',
+    name,
+    url: deviceHostedMcpUrl(hosted, name),
+    headers: [{ name: 'Authorization', value: `Bearer ${hosted.tunnelToken}` }],
+  }));
+}
+
 /** Shares the task-scoped Cindy bridge through ACP. External MCP credentials stay in the host. */
 export function acpMcpServersFromBridge(extra: PiExtraSpawnConfig | null): AcpMcpServer[] {
   const bridge = extra?.mcpBridge;
@@ -131,14 +161,19 @@ export class AcpAgent extends BaseAgent {
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
-    // Maker already refuses plugin engines on another computer; SSH and hosted guests are refused here.
-    if (opts.remoteHostId || opts.deviceHosted) {
+    // SSH workspaces are not offered. A task of another account must not run here either: the
+    // agent runs as this computer's user with its own login and history, and Cindy can neither
+    // isolate it per guest nor prove that its own tools are off.
+    if (opts.remoteHostId || opts.deviceHosted?.guest) {
       throw new AgentStartupStoppedError(new NotSupportedError('remoteSession', {
         supported: false,
         reason: 'not-implemented',
-        message: 'Plugin engines run on this computer only',
+        message: opts.remoteHostId
+          ? 'Plugin engines do not run in SSH workspaces'
+          : 'Plugin engines are not available to shared users',
       }));
     }
+    const hosted = opts.deviceHosted;
     if (opts.reviewMode) {
       throw new AgentStartupStoppedError(new NotSupportedError('reviewMode', { supported: false, reason: 'not-implemented' }));
     }
@@ -149,7 +184,9 @@ export class AcpAgent extends BaseAgent {
 
     const logger = this.deps.logger.child(`acp:${harnessKey}`);
     let extra: PiExtraSpawnConfig | null = null;
-    if (this.deps.preparePiExtraSpawnConfig) {
+    // Hosted for another computer: Cindy tools are that computer's and arrive through the tunnel,
+    // so this computer's own tool bridge (and its installed plugins, memory, sessions) stays out.
+    if (!hosted && this.deps.preparePiExtraSpawnConfig) {
       try {
         extra = await this.deps.preparePiExtraSpawnConfig(this.deps.mcpProviders ?? [], {
           // Same Cindy tool scope as the built-in Pi engine (product decision 2026-11-18).
@@ -160,9 +197,10 @@ export class AcpAgent extends BaseAgent {
           ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           memoryEnabled: opts.makerMemoryEnabled === true,
           ...(opts.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
-          // The external agent's own sub-agents may call tools; Cindy cannot attest who called.
-          mcpCallerKind: 'unknown',
-          mcpCallerAttested: false,
+          // The external agent's own sub-agents may call tools; Cindy cannot attest who called. A host
+          // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
+          mcpCallerKind: opts.pluginEngineTrustedCaller === true ? 'root' : 'unknown',
+          mcpCallerAttested: opts.pluginEngineTrustedCaller === true,
         });
       } catch (error) {
         logger.error('acp: Cindy tool bridge unavailable; starting without Cindy tools', {
@@ -178,18 +216,28 @@ export class AcpAgent extends BaseAgent {
       }
     };
 
+    // The workspace note comes first: without it the agent has no way to know where the project is.
+    const briefing = [
+      hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
+      opts.pluginEngineBriefing ?? '',
+    ].filter((part) => part.trim()).join('\n\n');
     const open = async (): Promise<AcpSession> => {
-      const tracked = trackClose(await this.acpDeps.endpoints.connect(harnessKey));
+      const tracked = trackClose(hosted
+        ? await this.acpDeps.endpoints.connect(harnessKey, { remoteWorkspace: true })
+        : await this.acpDeps.endpoints.connect(harnessKey));
       try {
         return await openAcpSession({
           transport: tracked.transport,
           cwd: opts.workingDir,
           clientInfo: this.acpDeps.clientInfo,
-          mcpServers: acpMcpServersFromBridge(extra),
+          mcpServers: hosted ? acpMcpServersForHostedTask(hosted) : acpMcpServersFromBridge(extra),
+          // Without the replacement file and command tools the agent could do nothing on the project.
+          ...(hosted ? { requiredMcpServers: [DEVICE_HOSTED_EXEC_MCP_SERVER] } : {}),
           ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
           ...(opts.model ? { model: opts.model } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+          ...(briefing ? { briefing } : {}),
           logger,
           onEnded: disposeBridge,
         });

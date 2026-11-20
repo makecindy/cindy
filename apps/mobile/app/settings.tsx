@@ -598,8 +598,7 @@ export default function SettingsScreen() {
   const resumeAnalyticsReporting = useCallback(async () => {
     const status = await initMobileTapdb();
     if (!status.ok) return;
-    const userId = auth.user?.id;
-    if (userId) await setTapdbUser(userId);
+    await setTapdbUser(auth.user?.tapdbChargeAlias, auth.user?.tapdbUsageAlias);
   }, [auth.user?.id]);
 
   const toggleAnalytics = useCallback(async () => {

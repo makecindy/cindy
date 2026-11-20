@@ -56,10 +56,15 @@ import { SessionRouteOriginGate } from './SessionRouteOriginGate';
 import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
-import { isPluginEngineEffort, isPluginEngineKind } from '../../../shared/pluginEngines';
+import { isPluginEngineEffort, isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { findPluginEngine, usePluginEngines, useRemotePluginEngines } from '@/hooks/usePluginEngines';
-import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
-import type { PluginEngineSessionPickerProps, PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineChoice, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import {
+  usePluginEngineChoiceLabel,
+  type PluginEngineSessionPickerProps,
+  type PluginEnginesPickerProps,
+} from '@/components/new-chat/PluginEnginesSection';
 import { useTranslation } from 'react-i18next';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import {
@@ -193,6 +198,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { RunningTokenCount } from './RunningTokenCount';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
+import { PluginEngineUsageChip } from '@/components/status/PluginEngineUsageChip';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
 import { ContextCapacityRing, formatTokenCount, getModelContextWindow } from '@/components/status/ContextCapacityRing';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
@@ -2255,9 +2261,10 @@ function CCAgentSessionContent({
   // Claude Code，所以凡是按内置 Harness 取能力、做登录检查、改模型或压缩的地方都先看这一位。
   const pluginEngineTask = isPluginEngineKind(session?.agentKind);
   const pluginEngineDeviceId = rightSidebarDeviceLinkDeviceId ?? undefined;
-  // Agent 在任务所属电脑上运行。Device Link 控制端使用该电脑的目录与现有的切换通道。
+  // 插件引擎在任务所属电脑上运行。Device Link 控制端使用该电脑的目录与现有的切换通道。
+  // Agent 被挪到另一台电脑(例如供应商组按额度挪过去)的任务照样可以选：选插件引擎时 Agent 回到任务所属电脑。
   const pluginEngineOnTaskComputer = !!session && !isSharedTaskPeer(pluginEngineDeviceId)
-    && !session.remoteHostId && !session.agentDeviceId;
+    && !session.remoteHostId;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
     && (session.source ?? 'desktop') === 'desktop' && session.status !== 'archived';
@@ -2269,7 +2276,7 @@ function CCAgentSessionContent({
   );
   const readPluginEngineCatalogue = pluginEngineDeviceId ? remotePluginCatalogue.read : undefined;
   const pluginEngines = remotePluginCatalogue.engines ?? localPluginEngines;
-  const pluginEngine = pluginEngineTask ? findPluginEngine(pluginEngines, session?.providerId) : null;
+  // 任务自己的引擎(pluginEngine)在下面 selectableDevices 之后解析：引擎可能在自己的另一台电脑上。
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
   // 其余 agent 声明 manualCompact.supported(Pi / Codex)→ maker:compact-session;其余无入口。
   // 能力取**真实 agent**(displayAgentKind 在 pending switch 期间可能乐观指向目标 agent,
@@ -2307,7 +2314,7 @@ function CCAgentSessionContent({
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
   const { providers: localProviders, loading: localProvidersLoading, error: localProvidersError } = useProviders();
-  const { mode: authMode, user: authUser, dataOwnerId, deviceId: selfDeviceId } = useAuth();
+  const { mode: authMode, user: authUser, dataOwnerId, dataOwnerGeneration, deviceId: selfDeviceId } = useAuth();
   const {
     begin: beginHistoryRecovery,
     invalidate: invalidateHistoryRecoveryNavigation,
@@ -2341,7 +2348,37 @@ function CCAgentSessionContent({
   // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
   // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
   const { devices: selectableDevices } = useSelectableDevices();
-  const pendingAgentDeviceId = agentSwitchIntent?.agentDeviceId;
+  // 插件引擎在自己的另一台电脑上运行的任务(任务、文件与命令留在任务所在电脑，Agent 在那台)：引擎的名称、
+  // 图标、模型、思考深度与权限档都读那台的列表，任务所在电脑没装这个插件也不会显示成「插件已停用或卸载」。
+  // 别人分享的来源不提供插件引擎。Agent 恰好就在正在看的这台电脑上(从另一台建的任务)时读本机的列表。
+  const pluginEngineAgentDeviceId = pluginEngineTask && session?.agentDeviceId
+    && !isProviderShareAgentDeviceId(session.agentDeviceId) ? session.agentDeviceId : undefined;
+  const pluginEngineAgentIsThisComputer = !!pluginEngineAgentDeviceId && pluginEngineAgentDeviceId === selfDeviceId;
+  const thisComputerPluginEngines = usePluginEngines(pluginEngineAgentIsThisComputer);
+  const agentPluginCatalogue = useRemotePluginEngines(
+    pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !readOnly && !remoteSessionUnavailable && !awaitingCreation
+      ? pluginEngineAgentDeviceId : undefined,
+    pluginEngineTask && viewVisible,
+  );
+  /** 那台电脑的引擎列表；undefined = 引擎就在任务所在电脑，null = 那台还没答复(或暂时连不上)。 */
+  const agentDevicePluginEngines = pluginEngineAgentDeviceId
+    ? (pluginEngineAgentIsThisComputer ? thisComputerPluginEngines : agentPluginCatalogue.engines)
+    : undefined;
+  const pluginEngineAgentDeviceName = pluginEngineAgentDeviceId
+    ? selectableDevices.find((device) => device.deviceId === pluginEngineAgentDeviceId)?.name
+    : undefined;
+  const pluginEngine = useMemo<PluginEngineChoice | null>(() => {
+    if (!pluginEngineTask) return null;
+    if (!pluginEngineAgentDeviceId) return findPluginEngine(pluginEngines, session?.providerId);
+    // 只认那台电脑的引擎：任务所在电脑装着同一个插件时，也不拿它的名称与模型顶替。
+    const engine = findPluginEngine(agentDevicePluginEngines ?? [], session?.providerId);
+    return engine
+      ? { ...engine, deviceId: pluginEngineAgentDeviceId, deviceName: deviceDisplayName(pluginEngineAgentDeviceId, pluginEngineAgentDeviceName) }
+      : null;
+  }, [pluginEngineTask, pluginEngineAgentDeviceId, pluginEngineAgentDeviceName, pluginEngines, agentDevicePluginEngines, session?.providerId]);
+  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
+  // 切到插件引擎的意图同样带位置(Agent 回到任务所在电脑时为 null)。
+  const pendingAgentDeviceId = storedAgentSwitchIntent?.agentDeviceId;
   const controlledModelRoute = useModelRouteDevices({
     controlledDeviceId: remoteDeviceId,
     leadAgentDeviceId: session?.agentDeviceId,
@@ -2439,9 +2476,11 @@ function CCAgentSessionContent({
     : null;
   // 底部用量 chip 按意图显示下一轮的模型与来源;余量同样读下一轮 Agent 所在那台的账号
   // (远程 Agent,本机任务或远程控制的任务都一样),不读任务所在电脑的同名账号。
+  const pluginUsageKey = pluginEngineKeyFromProviderId(pluginEngineSwitchIntent?.providerId ??
+    (pluginEngineTask && !agentSwitchIntent ? session?.providerId : null));
   const usageChipProviderId = agentSwitchIntent
     ? agentSwitchIntent.providerId
-    : (session?.providerId ?? null);
+    : (pluginEngineSwitchIntent?.providerId ?? session?.providerId ?? null);
   const usageAccount = useMemo(
     () =>
       resolveUsageAccountLocation({
@@ -2470,6 +2509,12 @@ function CCAgentSessionContent({
       : usageAccount.kind === 'task'
         ? (remoteDeviceId ?? null)
         : null;
+  const usageCatalogue = taskAccountDeviceId
+    ? (taskAccountDeviceId === pluginEngineAgentDeviceId && agentDevicePluginEngines !== undefined
+      ? agentDevicePluginEngines
+      : taskAccountDeviceId === pluginEngineDeviceId ? remotePluginCatalogue.engines : null)
+    : localPluginEngines;
+  const usageEngine = pluginUsageKey ? usageCatalogue?.find(engine => engine.key === pluginUsageKey) : undefined;
   const catalogDeviceId = modelCatalogKey(
     controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId, controlledModelRoute.catalogHostDeviceId,
   );
@@ -3678,16 +3723,23 @@ function CCAgentSessionContent({
         ? {
             providerId: session.providerId ?? '',
             engine: pluginEngine,
-            engineName: pluginEngine?.name ?? t('newChat.pluginEngines.genericName'),
+            // 引擎在另一台电脑上时名字带着电脑名(与模型面板里那台电脑的来源同一写法)。
+            engineName: pluginEngine ? pluginEngineChoiceLabel(pluginEngine) : t('newChat.pluginEngines.genericName'),
             modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
             effort: session.effort,
             onSelectModel: handlePluginEngineModelSelect,
-            readCatalogue: readPluginEngineCatalogue,
-            catalogueUnknown: !!pluginEngineDeviceId && remotePluginCatalogue.engines === null,
+            // 引擎在另一台电脑上：打开模型菜单时重读那台的列表；就在这台时沿用本机的刷新。
+            readCatalogue: pluginEngineAgentDeviceId
+              ? (pluginEngineAgentIsThisComputer ? undefined : agentPluginCatalogue.read)
+              : readPluginEngineCatalogue,
+            catalogueUnknown: pluginEngineAgentDeviceId
+              ? agentDevicePluginEngines === null
+              : !!pluginEngineDeviceId && remotePluginCatalogue.engines === null,
           }
         : undefined,
-    [pluginEngineTask, session, pluginEngine, handlePluginEngineModelSelect, readPluginEngineCatalogue,
-      pluginEngineDeviceId, remotePluginCatalogue.engines, t],
+    [pluginEngineTask, session, pluginEngine, pluginEngineChoiceLabel, handlePluginEngineModelSelect, readPluginEngineCatalogue,
+      pluginEngineDeviceId, remotePluginCatalogue.engines, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
+      agentPluginCatalogue.read, agentDevicePluginEngines, t],
   );
 
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
@@ -3701,7 +3753,8 @@ function CCAgentSessionContent({
     const switchTo = () => api.switchSessionAgent(
       sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false);
     try {
-      if (pluginEngineTask && selection.providerId === session.providerId) {
+      if (pluginEngineTask && selection.providerId === session.providerId
+        && (selection.deviceId ?? null) === (pluginEngineAgentDeviceId ?? null)) {
         // 选回当前引擎 = 撤销已登记的切换(主进程按同引擎处理，只清意图)，再按普通换模型处理。
         let revision: number | undefined;
         if (makerChatStore.getAgentSwitchIntent(sessionId)) {
@@ -3732,7 +3785,13 @@ function CCAgentSessionContent({
       finishSwitch();
     }
   }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
-    pluginEngineTask, pluginEngines, handlePluginEngineModelSelect, t]);
+    pluginEngineTask, pluginEngineAgentDeviceId, pluginEngines, handlePluginEngineModelSelect, t]);
+  // 任务自己的引擎在另一台电脑上：打开选择器时任务所在电脑与那台电脑的列表各读一次。引用必须稳定——
+  // 选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。
+  const readTaskAndAgentPluginEngines = useCallback(() => {
+    readPluginEngineCatalogue?.();
+    agentPluginCatalogue.read();
+  }, [readPluginEngineCatalogue, agentPluginCatalogue.read]);
   // 普通任务的选择器列出任务所属电脑的引擎：当前选中的是待切到的引擎，或任务自己的引擎；
   // 插件引擎任务待切到内置引擎时不选中任何引擎(内置那一行显示为下一条消息的选择)。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {
@@ -3747,18 +3806,31 @@ function CCAgentSessionContent({
       : pluginEngineTask && !agentSwitchIntent && session.providerId
         ? {
             providerId: session.providerId,
+            ...(pluginEngineAgentDeviceId ? { deviceId: pluginEngineAgentDeviceId } : {}),
             modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
             ...(isPluginEngineEffort(session.effort) ? { effort: session.effort } : {}),
           }
         : null;
+    // 任务自己的引擎在另一台电脑上：把它列在任务所在电脑的引擎之后，同一引擎内照常换模型。任务所在电脑
+    // 装着同一个插件时那一项先不列：主进程按引擎标识把它当成当前引擎，点它并不会把 Agent 换回这台。
+    // 别的电脑上的其他引擎不在任务里列出(任务中换到另一台电脑的插件引擎还不支持)。
+    const engines: readonly PluginEngineChoice[] = pluginEngineAgentDeviceId
+      ? [
+          ...pluginEngines.filter((engine) => engine.providerId !== session.providerId),
+          ...(pluginEngine ? [pluginEngine] : []),
+        ]
+      : pluginEngines;
     return {
-      engines: pluginEngines,
+      engines,
       active,
       onSelect: (selection) => { void handlePluginEngineSwitchSelect(selection); },
-      readCatalogue: readPluginEngineCatalogue,
+      readCatalogue: pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer
+        ? readTaskAndAgentPluginEngines
+        : readPluginEngineCatalogue,
     };
   }, [pluginEngineSwitchEligible, pluginEngineDeviceId, pluginEngines, session, pluginEngineSwitchIntent,
-    pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect, readPluginEngineCatalogue]);
+    pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect, readPluginEngineCatalogue,
+    pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer, pluginEngine, readTaskAndAgentPluginEngines]);
 
   // effort 已在 ChatInput 中落库成功；直接 merge 确切值回 SSoT，避免额外 GET
   // 读取到旧快照后把菜单选中态反向覆盖。ChatInput 不维护第二条 local state。
@@ -6896,8 +6968,13 @@ function CCAgentSessionContent({
                         />
                       </Tip>
                     )}
-                    {/* 插件引擎用自己的账号与计费：Cindy 的额度 / 订阅用量对它不成立，不显示。 */}
-                    {!pluginEngineTask && (
+                    {pluginUsageKey && viewVisible && !session?.remoteHostId && !isSharedTaskPeer(remoteDeviceId ?? '')
+                      && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
+                      <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey])}
+                        engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
+                        running={agentStatus.isRunning} />
+                    )}
+                    {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (
                       <TodaySpendChip
                         vendorKey={normalizeDbAgentKind(displayAgentKind)}
                         modelId={agentSwitchIntent?.model ?? session?.model ?? null}
@@ -6912,6 +6989,7 @@ function CCAgentSessionContent({
                       />
                     )}
                     <ContextCapacityRing
+                      reportedOnly={pluginEngineTask}
                       isRunning={agentStatus.isRunning}
                       sessionId={sessionId}
                       providerId={agentSwitchIntent ? agentSwitchIntent.providerId : session?.providerId}
@@ -6943,7 +7021,7 @@ function CCAgentSessionContent({
                         // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
                         // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
                         !readOnly &&
-                        compactChannel !== null &&
+                        !pluginEngineTask && compactChannel !== null &&
                         !(compactChannel === 'compact-session' && !!session?.remoteHostId) &&
                         session != null &&
                         agentStatus.contextTokens > 0 &&
@@ -6969,9 +7047,6 @@ function CCAgentSessionContent({
         <TopRightChipStack>
           {!isMac &&
             (ownsRoute || showRsbToggle) &&
-            (rightSidebarCollapsed ||
-              (rightSidebarDeviceLinkDeviceId &&
-                !isSharedTaskPeer(rightSidebarDeviceLinkDeviceId))) &&
             rightSidebarSide === 'right' && <div aria-hidden className="h-7 w-7 shrink-0" />}
         </TopRightChipStack>
       </section>
@@ -7038,6 +7113,8 @@ function CCAgentSessionContent({
         leadAgentDeviceId={agentDeviceId ?? controlledAgentDeviceId ?? null}
         remoteAgentDevices={remoteAgentDevices}
         catalogHostDeviceId={controlledModelRoute.catalogHostDeviceId}
+        // 本机 Lead 的第一个 Worker 也可以放在插件引擎上(docs/plans/acp-plugin-bridge.md)。
+        pluginEnginesEnabled={!remoteDeviceId && !session?.remoteHostId}
       />
 
       {/* 来自 Automations 的入口浮动返回按钮：固定在聊天区左上角，
@@ -7367,13 +7444,13 @@ export function RunningStatusBar({
     latestRate,
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
-  // 工具执行期间(host 已 pause)不显示流速:那不是生成速度,残留读数只会误导。
-  const rateText =
-    !isHidden && !reconnecting && usageMeta.kind === 'rate' && !(tokenSpeed && !tokenSpeed.streaming)
-      ? latestRateText !== null
-        ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
-        : null
-      : null;
+  const showRate = tokenSpeed?.measurement || !tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0);
+  const rateText = !isHidden && !reconnecting && usageMeta.kind === 'rate' && showRate && latestRateText !== null
+    ? t(tokenSpeed?.measurement ? 'chat.runningStatus.recentTokenRate' : 'chat.runningStatus.tokenRate', { rate: latestRateText })
+    : null;
+  const averageRate = tokenSpeed?.measurement
+    ? tokenSpeed.measurement.average === null ? null : formatRecentOutputTokenRate(tokenSpeed.measurement.average)
+    : usageMeta.kind === 'rate' ? usageMeta.rate : null;
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个
@@ -7472,15 +7549,12 @@ export function RunningStatusBar({
             {!preparing && showRatePanel && (
               <RunningTokenRatePopover
                 elapsedText={elapsedText}
-                // 工具执行期间(host 已 pause)没有"当前"速度:latestRate 缓存着生成
-                // 结束前的读数(60s 内仍新),打开浮窗会显示成仍在跑。平均速度与峰值
-                // 仍然保留,它们描述的是已经发生的生成。
-                rate={tokenSpeed && !tokenSpeed.streaming ? null : latestRateText}
+                rate={latestRateText}
                 rateText={
                   workflowWaiting ||
                   sideTaskRunning ||
                   backgroundTasksRunning ||
-                  (elapsedText !== null && tokenSpeed && !tokenSpeed.streaming)
+                  (elapsedText !== null && tokenSpeed && !tokenSpeed.streaming && !tokenSpeed.measurement)
                     ? null
                     : (elapsedText === null ? null : rateText) ?? (displayTokens > 0 ? tokenCountText : null)
                 }
@@ -7489,7 +7563,7 @@ export function RunningStatusBar({
                   (usageMeta.kind === 'rate' && (rateText === null || elapsedText === null) && displayTokens > 0)
                 }
                 tokenUsage={displayTokens}
-                averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
+                averageRate={averageRate}
                 outputTokens={tokenSpeed?.totalOutputTokens ?? rateOutputTokens}
                 history={rateHistory}
                 onPinnedChange={setRatePanelPinned}

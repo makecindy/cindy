@@ -61,6 +61,7 @@ import {
   TurnDispatchRejectedError,
   type AgentSessionHandle,
   type AgentDeps,
+  type CodexDownshiftModelRejection,
   type CodexExtraSpawnConfig,
   type StartSessionOptions,
   type OneShotOptions,
@@ -209,8 +210,6 @@ import {
   newCodexRuntimeState,
   isAuthRelatedErrorMessage,
   isCodexAccessRejectedError,
-  CODEX_MODEL_UNAVAILABLE_REASON,
-  CODEX_ACCOUNT_ACCESS_DENIED_REASON,
   classifyCodexError,
   translateErrorNotification,
   translateItemNotification,
@@ -3122,6 +3121,7 @@ assertRouteCurrent();
     let cindyRemoteCompactionProviderId: string | undefined;
     let localCompactionProviderId: string | undefined;
     let defaultModelProviderId: string | undefined;
+    let contextProviderModels: readonly string[] | undefined;
     let codexCustomProviderRoutes: CodexExtraSpawnConfig['codexCustomProviderRoutes'];
     let resolveCustomProviderModelProviderId: CodexExtraSpawnConfig['resolveCustomProviderModelProviderId'];
     let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
@@ -3164,6 +3164,7 @@ assertRouteCurrent();
       cindyRemoteCompactionProviderId = undefined;
       localCompactionProviderId = undefined;
       defaultModelProviderId = undefined;
+      contextProviderModels = undefined;
       codexCustomProviderRoutes = undefined;
       resolveCustomProviderModelProviderId = undefined;
       buildSessionMcpConfig = undefined;
@@ -3258,6 +3259,7 @@ assertRouteCurrent();
             cindyRemoteCompactionProviderId = cfg.codexCindyRemoteCompactionProviderId;
             localCompactionProviderId = cfg.codexLocalCompactionProviderId;
           }
+          contextProviderModels = cfg.contextProviderModels;
           if (codexProxyActive && cfg.codexCustomProviderRoutes?.length) {
             codexCustomProviderRoutes = cfg.codexCustomProviderRoutes;
             resolveCustomProviderModelProviderId = cfg.resolveCustomProviderModelProviderId;
@@ -3411,6 +3413,7 @@ assertRouteCurrent();
       remoteCompactionProviderId,
       cindyRemoteCompactionProviderId,
       localCompactionProviderId,
+      contextProviderModels,
       codexCustomProviderRoutes,
       resolveCustomProviderModelProviderId,
       buildSessionMcpConfig,
@@ -3904,6 +3907,7 @@ assertRouteCurrent();
      * 归属的仍是它那一 turn 的模型。
      */
     let activeTurnModel: string | undefined = opts.model;
+    let activeTurnWireModel: string | undefined = opts.model;
     let activeTurnContextLimit = this.deps.resolveModelContextLimit?.(opts.providerId, opts.model) ?? null;
     let activeTurnCompactionPct = this.deps.resolveModelCompactionPct?.(opts.providerId, opts.model) ?? 90;
     /**
@@ -4786,6 +4790,14 @@ assertRouteCurrent();
       /** Service tier accepted for this turn; usage segments must read this, not mutable session state. */
       serviceTier?: ServiceTier | null;
     }>();
+
+    const previousCompactionModelRejection = (errorThread: string, turnId: string): CodexDownshiftModelRejection | undefined => {
+      if (opts.remoteHostId || errorThread !== threadId || !turnId) return;
+      const rejection = this.deps.getRejectedCodexDownshiftModel?.(sid, errorThread, turnId);
+      const target = turnOriginByTurnId.get(turnId)?.model;
+      if (rejection && target && target === activeTurnModel && rejection.model !== target
+        && rejection.model !== activeTurnWireModel && rejection.model !== mutableModel) return rejection;
+    };
 
     const hasOtherInFlightStart = (seq: number): boolean => {
       for (const other of inFlightStarts.keys()) if (other !== seq) return true;
@@ -6854,7 +6866,7 @@ assertRouteCurrent();
       return criticalThreadRpcOptions();
     }
 
-    function currentThreadWorkspaceConfig(contextLimit = currentContextLimit()): Pick<
+    function currentThreadWorkspaceConfig(contextLimit = currentContextLimit(), useTargetBudget = false): Pick<
       ThreadStartParams,
       | 'approvalPolicy'
       | 'approvalsReviewer'
@@ -6946,11 +6958,11 @@ assertRouteCurrent();
         // Local custom-context hosts carry per-model budgets in their catalog.
         // Global overrides hide the previous model's larger window from native
         // downshift compaction. SSH and the separate host-tools-only catalog
-        // still need thread-scoped config. A changed
+        // still need thread-scoped config, as does a resume without an eligible previous model. A changed
         // explicit limit on this same live model uses the existing cold-resume
         // refresh; switching models reloads the catalog and drops that override.
         ...(typeof threadContextWindow === 'number' && threadContextWindow > 0
-          && (!usesCustomContextHost || localToolCatalog || threadContextWindow !== initialCustomContextWindow)
+          && (useTargetBudget || !usesCustomContextHost || localToolCatalog || threadContextWindow !== initialCustomContextWindow)
           ? {
               model_context_window: Math.floor(threadContextWindow),
               model_auto_compact_token_limit: Math.max(
@@ -7172,15 +7184,16 @@ assertRouteCurrent();
     // history. Metadata survives a missing file, so check the original native
     // index before permitting the existing unused-thread fallback.
     const indexedRolloutMissing = !!sessionStorage?.rolloutPath && !preparedResumePath;
+    type StoredThread = { id: string; model?: string | null; modelProvider?: string };
+    let storedThread: Promise<{ thread: StoredThread }> | undefined;
+    const readStoredThread = (id: string) => storedThread ??= host.request<{ thread: StoredThread }>(
+      'thread/read', { threadId: id, includeTurns: false }, { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+    );
     let indexedThreadAbsent = false;
     let indexedModelProvider: string | undefined;
     if (indexedRolloutMissing && opts.resumeSessionId) {
       try {
-        const { thread } = await host.request<{ thread: { id: string; path?: string; modelProvider?: string } }>(
-          'thread/read', { threadId: opts.resumeSessionId, includeTurns: false }, {
-            timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
-          },
-        );
+        const { thread } = await readStoredThread(opts.resumeSessionId);
         if (thread.id !== opts.resumeSessionId) {
           throw new CodexResumePreparationBlockedError('Codex native metadata does not match indexed history');
         }
@@ -7201,10 +7214,7 @@ assertRouteCurrent();
           ? indexedModelProvider
           : preparedResumePath
           ? await readCodexRolloutModelProvider(preparedResumePath, opts.resumeSessionId)
-          : (await host.request<{ thread: { modelProvider?: string } }>(
-          'thread/read', { threadId: opts.resumeSessionId, includeTurns: false },
-          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
-        )).thread.modelProvider;
+          : (await readStoredThread(opts.resumeSessionId)).thread.modelProvider;
         if (savedProvider === localSummaryProvider && serverCompactionPreference !== true) {
           threadModelProvider = localSummaryProvider;
         }
@@ -7571,12 +7581,28 @@ assertRouteCurrent();
         !!developerInstructions
         && !useProxyChannel
         && (!!opts.botRuntimeProfile || threadUsesWebSocket || opts.codexHistoryHasProductPrompt !== true);
+      // The native catalog also describes subscription and smart-child models. Only a
+      // previous root model offered by this connection may use its own larger budget.
+      const providerModels = host.getContextProviderModels?.();
+      let useTargetBudget = false;
+      if (providerModels) {
+        let previousModel: string | null | undefined;
+        try {
+          const { thread } = await readStoredThread(opts.resumeSessionId);
+          if (thread.id === opts.resumeSessionId) previousModel = thread.model;
+        } catch {
+          // Old or unused threads can lack metadata. Resume handles the actual history error.
+        }
+        // A failed first resume may already have persisted the target in the native
+        // index while the last successful turn in the rollout still used another model.
+        useTargetBudget = !previousModel || previousModel === mutableCatalogModel || !providerModels.includes(previousModel);
+      }
       const params: ThreadResumeParams = {
         threadId: opts.resumeSessionId,
         ...(preparedResumePath ? { path: preparedResumePath } : {}),
         ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
         cwd: opts.workingDir,
-        ...currentThreadWorkspaceConfig(),
+        ...currentThreadWorkspaceConfig(currentContextLimit(), useTargetBudget),
         ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
         ...(serviceTierState.value !== undefined ? { serviceTier: serviceTierState.value } : {}),
@@ -9490,8 +9516,7 @@ assertRouteCurrent();
         upstreamIdleLastEventAt > 0 ? Date.now() - upstreamIdleLastEventAt : null;
       const turnId = currentTurnId ?? pendingTurnId;
       const timeoutReason = opts?.reason ?? 'upstream_response_idle_timeout';
-      const isModelRejection = timeoutReason === CODEX_MODEL_UNAVAILABLE_REASON
-        || timeoutReason === CODEX_ACCOUNT_ACCESS_DENIED_REASON;
+      const isModelRejection = opts?.modelRejectionError !== undefined;
       const deferTurnCleanupUntilInterrupt =
         isModelRejection || timeoutReason === 'codex_reconnect_stalled' ||
         timeoutReason === 'upstream_response_idle_timeout';
@@ -11530,8 +11555,9 @@ assertRouteCurrent();
     const recordAutomaticRecoveryIntent = (
       deadTurnId: string,
       error: { message?: string; additionalDetails?: unknown; codexErrorInfo?: CodexErrorInfo | null } | null | undefined,
+      downshiftRejection?: CodexDownshiftModelRejection,
     ): boolean => {
-      if (isCodexAccessRejectedError(error)) return false;
+      if (isCodexAccessRejectedError(error, downshiftRejection)) return false;
       const state = overloadRetry;
       const summaryRecovery = canRecoverRemoteCompaction(deadTurnId, error);
       if (
@@ -11617,6 +11643,7 @@ assertRouteCurrent();
       const finalAssistantText = assistantReply?.finalText ?? assistantReply?.lastText ?? '';
       turnInterruptOrigins.delete(turn.id);
       if (reconnectStallTurnId === turn.id) clearReconnectStall();
+      const downshiftRejection = previousCompactionModelRejection(params.threadId, turn.id);
       let recoveryState = overloadRetry;
       let pendingRecovery =
         recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
@@ -11625,7 +11652,7 @@ assertRouteCurrent();
       const rejectedSummaryRecovery = pendingRecovery?.reason === SUMMARY_RECOVERY
         && !!turn.error && !canRecoverRemoteCompaction(turn.id, turn.error);
       if (recoveryState && pendingRecovery
-        && (isCodexAccessRejectedError(turn.error) || rejectedSummaryRecovery)) {
+        && (isCodexAccessRejectedError(turn.error, downshiftRejection) || rejectedSummaryRecovery)) {
         // The authoritative error can refine a preliminary rejection into an
         // exhausted account or another failure that must not trigger a summary.
         recoveryState.pendingAutomaticRecovery = null;
@@ -11635,7 +11662,7 @@ assertRouteCurrent();
         turn.status === 'failed'
         && (!terminalErroredTurnIds.has(turn.id) || pendingRecovery)
       ) {
-        if (!pendingRecovery && !rejectedSummaryRecovery && turn.error && recordAutomaticRecoveryIntent(turn.id, turn.error)) {
+        if (!pendingRecovery && !rejectedSummaryRecovery && turn.error && recordAutomaticRecoveryIntent(turn.id, turn.error, downshiftRejection)) {
           recoveryState = overloadRetry;
           pendingRecovery =
             recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
@@ -11891,7 +11918,7 @@ assertRouteCurrent();
         planCycleActive = false;
         currentTurnPlanModeActive = false;
         if (turn.error?.message) {
-          const classified = classifyCodexError(turn.error);
+          const classified = classifyCodexError(turn.error, downshiftRejection);
           eventQueue.push({
             type: 'error',
             data: {
@@ -13086,6 +13113,7 @@ assertRouteCurrent();
             reasoningTokens: last.reasoningOutputTokens ?? 0,
             model: (typeof observed === 'object' ? observed.model : undefined)
               ?? turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
+            modelConfirmed: typeof observed === 'object' && Boolean(observed.model?.trim()),
             priceVariant: (typeof observed === 'object' ? observed.priceVariant : observed) ?? ((turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value) === 'ultrafast'
               ? 'ultrafast'
               : fastModeFromServiceTier(turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value)
@@ -13667,20 +13695,22 @@ assertRouteCurrent();
           || targetsIdLessPendingStart;
         // Interrupt only an identified active turn. Generic reconnect notices
         // and errors without a turn ID do not prove this turn's model was rejected.
+        const downshiftRejection = isTransportError ? undefined
+          : previousCompactionModelRejection(params.threadId, params.turnId);
         if (
           !isTerminalError && !isTransportError && isTurnInFlight &&
           params.threadId === threadId && params.turnId && params.turnId === currentTurnId &&
-          isCodexAccessRejectedError(params.error)
+          isCodexAccessRejectedError(params.error, downshiftRejection)
         ) {
           if (reconnectStallCleanupTurnId === params.turnId || skipIfStaleHost('turn/interrupt')) return;
           if (overloadRetry?.pendingAutomaticRecovery?.deadTurnId === params.turnId) {
             overloadRetry.pendingAutomaticRecovery = null;
           }
-          const rejection = classifyCodexError(params.error);
+          const rejection = classifyCodexError(params.error, downshiftRejection);
           interruptTurnForProviderFailure({
             reason: rejection.reason,
             message: rejection.message,
-            logLabel: 'Codex rejected the selected model — interrupting current turn',
+            logLabel: 'Codex provider rejected model access — interrupting current turn',
             ignorePendingTools: true,
             modelRejectionError: params.error,
           });
@@ -13800,7 +13830,7 @@ assertRouteCurrent();
           const recoveryTurnId = effectiveParams.turnId || currentTurnId || '';
           // error notification 只登记恢复意图并保持 logical turn 运行；
           // 权威 turn/completed 才负责收口旧 turn 与发起一次 HTTP 重投。
-          if (recordAutomaticRecoveryIntent(recoveryTurnId, effectiveParams.error)) return;
+          if (recordAutomaticRecoveryIntent(recoveryTurnId, effectiveParams.error, downshiftRejection)) return;
         }
         // 服务过载(模型容量不足)时接管重投：translator 命中 capacity 才回调，
         // 拿到进度就把错误透成非终止状态，本函数随后跳过 Done 收口。
@@ -13808,6 +13838,7 @@ assertRouteCurrent();
         translateErrorNotification(effectiveParams, eventQueue, {
           rt: translatorRt,
           log,
+          previousCompactionModelRejection: downshiftRejection,
           onSamplingAttemptFailed: () => assistantReplyByTurn.delete(effectiveParams.turnId),
           tryTakeOverOverload: () => {
             // 只接管 app-server 本来就不重试的容量拒绝(原始 willRetry !== true)。
@@ -13821,7 +13852,7 @@ assertRouteCurrent();
           tryTakeOverTerminalRateLimit: () => {
             // willRetry=true 仍归 daemon 自己退避，绝不叠第二层。这里只接它已经明确
             // 耗尽内部 retry budget 的终态 429；usageLimitExceeded 由判定器排除。
-            if (params.willRetry === true || isCodexAccessRejectedError(effectiveParams.error)) return null;
+            if (params.willRetry === true || isCodexAccessRejectedError(effectiveParams.error, downshiftRejection)) return null;
             const rawMessage = effectiveParams.error?.message ?? '';
             const signals = extractNonSecretErrorSignals(rawMessage);
             if (
@@ -14216,6 +14247,7 @@ assertRouteCurrent();
         // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
         // 立即改这两个值也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
         activeTurnModel = mutableCatalogModel;
+        activeTurnWireModel = turnParams.model;
         activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
         activeTurnCompactionPct = currentCompactionPct() ?? 90;
         activeTurnProviderId = mutableProviderId;
@@ -14650,6 +14682,7 @@ assertRouteCurrent();
               // 恢复路径可能把 'gpt-5' 哨兵解析成具体路由模型 —— 重投的 turn 用的是新值,
               // 窗口归属必须跟着改写走, 否则查不到目录条目、沿用 app-server 的基础模型窗口。
               activeTurnModel = mutableCatalogModel;
+              activeTurnWireModel = turnParams.model;
               activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
               activeTurnCompactionPct = currentCompactionPct() ?? 90;
               activeTurnProviderId = mutableProviderId;

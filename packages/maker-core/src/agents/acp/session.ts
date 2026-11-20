@@ -83,6 +83,12 @@ export interface OpenAcpSessionOptions {
   cwd: string;
   clientInfo: AcpClientInfo;
   mcpServers?: readonly AcpMcpServer[];
+  /**
+   * Names in `mcpServers` the task cannot run without (for a task whose files are on another
+   * computer, the server that replaces the agent's own file and command tools). An agent that
+   * cannot connect to one of them is refused before any session is created.
+   */
+  requiredMcpServers?: readonly string[];
   /** ACP session id persisted for this task; resumes instead of creating a session. */
   resumeSessionId?: string;
   model?: string;
@@ -93,6 +99,12 @@ export interface OpenAcpSessionOptions {
   /** How long a cancelled prompt may take to settle before Cindy ends the turn itself. */
   cancelGraceMs?: number;
   readFile?: (path: string) => Promise<Uint8Array>;
+  /**
+   * Host text sent ahead of the first message of a newly created agent session (for example
+   * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
+   * loaded session already has it in its own history, so it is not repeated.
+   */
+  briefing?: string;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
 }
@@ -110,6 +122,14 @@ export class AcpAuthRequiredError extends Error {
   constructor(readonly authMethods: readonly AcpAuthMethod[]) {
     super('The agent needs you to sign in before it can start a session');
     this.name = 'AcpAuthRequiredError';
+  }
+}
+
+/** The agent cannot connect to an MCP server this task depends on. */
+export class AcpRequiredMcpUnavailableError extends Error {
+  constructor(readonly servers: readonly string[]) {
+    super('[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED] This plugin engine cannot use the tools of the computer the task is on, so it cannot run this task from another computer.');
+    this.name = 'AcpRequiredMcpUnavailableError';
   }
 }
 
@@ -145,6 +165,7 @@ function authAware(error: unknown, init: AcpInitializeResult): unknown {
 class AcpRouter {
   private target: AcpSession | null = null;
   private buffered: AcpRecord[] = [];
+  private replayCutoff = 0;
 
   notification(method: string, params: AcpRecord): void {
     if (this.target) {
@@ -160,13 +181,22 @@ class AcpRouter {
     throw methodNotFound(method);
   }
 
+  /** Marks where the session-open response arrived on the wire; later buffered updates are newer than it. */
+  markSessionOpened(): void {
+    this.replayCutoff = this.buffered.length;
+  }
+
   attach(session: AcpSession, dropConfigUpdates: boolean): void {
     this.target = session;
     const buffered = this.buffered;
+    const cutoff = this.replayCutoff;
     this.buffered = [];
-    for (const params of buffered) {
-      // The handshake response carries the newest configuration; earlier updates are stale.
-      if (dropConfigUpdates && asRecord(params.update).sessionUpdate === 'config_option_update') continue;
+    this.replayCutoff = 0;
+    for (let i = 0; i < buffered.length; i += 1) {
+      const params = buffered[i]!;
+      // The handshake response carries the newest configuration up to cutoff; only earlier updates are stale replay.
+      const kind = asRecord(params.update).sessionUpdate;
+      if (dropConfigUpdates && i < cutoff && (kind === 'config_option_update' || kind === 'current_mode_update')) continue;
       session.handleNotification('session/update', params);
     }
   }
@@ -190,16 +220,23 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
 
     const { accepted, dropped } = filterMcpServers(opts.mcpServers ?? [], init.agentCapabilities.mcpCapabilities);
+    const missing = (opts.requiredMcpServers ?? []).filter((name) => !accepted.some((server) => server.name === name));
+    if (missing.length > 0) throw new AcpRequiredMcpUnavailableError(missing);
     let sessionId: string;
     let outcome: AcpResumeOutcome;
     let result: AcpRecord;
+    const onSessionOpened = (): void => router.markSessionOpened();
     if (opts.resumeSessionId) {
       const method = init.agentCapabilities.sessionCapabilities.resume
         ? 'session/resume'
         : init.agentCapabilities.loadSession ? 'session/load' : null;
       if (!method) throw new AcpResumeUnavailableError(opts.resumeSessionId, 'unsupported');
       try {
-        result = await connection.request(method, { sessionId: opts.resumeSessionId, cwd: opts.cwd, mcpServers: accepted });
+        result = await connection.request(
+          method,
+          { sessionId: opts.resumeSessionId, cwd: opts.cwd, mcpServers: accepted },
+          { onResult: onSessionOpened },
+        );
       } catch (error) {
         const mapped = authAware(error, init);
         if (mapped instanceof AcpAuthRequiredError || error instanceof AcpConnectionClosedError) throw mapped;
@@ -209,7 +246,11 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       outcome = method === 'session/resume' ? 'resumed' : 'loaded';
     } else {
       try {
-        result = await connection.request('session/new', { cwd: opts.cwd, mcpServers: accepted });
+        result = await connection.request(
+          'session/new',
+          { cwd: opts.cwd, mcpServers: accepted },
+          { onResult: onSessionOpened },
+        );
       } catch (error) {
         throw authAware(error, init);
       }
@@ -296,6 +337,8 @@ export class AcpSession {
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
   private readonly pendingPrompts: AcpContentBlock[][] = [];
+  /** Sent once, ahead of the first prompt of a new session. */
+  private pendingBriefing: string | null;
   private sendChain: Promise<void> = Promise.resolve();
   private stopGeneration = 0;
   private readonly permissionControllers = new Set<AbortController>();
@@ -325,6 +368,7 @@ export class AcpSession {
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onEnded = init.options.onEnded;
+    this.pendingBriefing = init.resumeOutcome === 'new' && init.options.briefing?.trim() ? init.options.briefing : null;
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
@@ -391,6 +435,10 @@ export class AcpSession {
       if (this.ended || this.closing) throw new Error('ACP session is closed');
       // Stop also discards messages that were still being prepared, like queued ones.
       if (generation !== this.stopGeneration) return;
+      if (this.pendingBriefing) {
+        prompt.unshift({ type: 'text', text: this.pendingBriefing });
+        this.pendingBriefing = null;
+      }
       this.pendingPrompts.push(prompt);
       this.pump();
     });
@@ -498,6 +546,11 @@ export class AcpSession {
       case 'session_info_update': {
         const title = asNonEmptyString(update.title);
         if (title) this.title = title;
+        return;
+      }
+      case 'current_mode_update': {
+        const modeId = asNonEmptyString(update.currentModeId);
+        if (modeId) this.applyCurrentModeUpdate(modeId);
         return;
       }
       default:
@@ -636,19 +689,33 @@ export class AcpSession {
   }
 
   private async setConfigValue(configId: string, value: string): Promise<void> {
-    const result = await this.connection.request('session/set_config_option', { sessionId: this.id, configId, value });
-    if (Array.isArray(result.configOptions)) {
-      this.replaceConfigOptions(result.configOptions);
-      return;
-    }
-    // Agents that omit the response state still applied the change.
-    this.configOptions = this.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option);
-    this.refreshCapabilities();
+    await this.connection.request(
+      'session/set_config_option',
+      { sessionId: this.id, configId, value },
+      {
+        onResult: (result) => {
+          if (Array.isArray(result.configOptions)) {
+            this.replaceConfigOptions(result.configOptions);
+            return;
+          }
+          // Agents that omit the response state still applied the change.
+          this.configOptions = this.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option);
+          this.refreshCapabilities();
+        },
+      },
+    );
   }
 
   private replaceConfigOptions(raw: unknown[]): void {
     this.configOptions = normalizeConfigOptions(raw);
     this.refreshCapabilities();
+  }
+
+  private applyCurrentModeUpdate(modeId: string): void {
+    const option = findModeOption(this.configOptions);
+    if (!option || option.currentValue === modeId) return;
+    if (!option.options.some((entry) => entry.value === modeId)) return;
+    this.configOptions = this.configOptions.map((entry) => entry.id === option.id ? { ...entry, currentValue: modeId } : entry);
   }
 
   private refreshCapabilities(): void {

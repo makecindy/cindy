@@ -1073,6 +1073,7 @@ function translatePiEventInternal(
         // calibration overwrite it.
         ctx.turnMainOutputUsageComplete = false;
         ctx.unreportedEstimatedOutput += messageEstimate;
+        ctx.tokenSpeed.finishUnreportedRequest();
         ctx.lastCalibratedTokens = meterTokens;
       }
       pushStatus(queue, ctx, 'Working…', true);
