@@ -23,6 +23,7 @@
 
 import { stripTrailingPathSeparators, stripWindowsDriveUriSlash } from '../../shared/pathText';
 import { isWindowsPathLike } from '../../shared/workingDir';
+import { isSshRewritableMediaUrl, type RemoteMediaOrigin } from '../../shared/remoteMediaUrl';
 
 /** Image extension whitelist. Case-insensitive. Allows `?v=2`-style suffix. */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?.*)?$/i;
@@ -834,10 +835,35 @@ export function normalizeMarkdownImageSrc(
   src: string | undefined,
   workingDir: string,
   allowPrivilegedLinks: boolean,
+  // null = session ownership is pending; undefined = confirmed local/non-session.
+  origin?: RemoteMediaOrigin | null,
 ): string | undefined {
   if (!src) return src;
   if (!allowPrivilegedLinks) {
     return /^https?:\/\//i.test(src) ? src : undefined;
+  }
+  // Direct audio uses its own local-file reader, but has the same source
+  // ownership boundary as bridged images. Preserve its encoded query verbatim.
+  if (src.startsWith('xdt-audio://')) {
+    if (origin === null) return undefined;
+    if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(src, origin.workdir)) return undefined;
+    return src;
+  }
+  // Both legacy path-shaped schemes use the local-file bridge. Their raw
+  // Markdown destinations must retain the same source-ownership checks.
+  const hostlessImage = src.startsWith('xdt-image:///');
+  if (hostlessImage || src.startsWith('xdt-file:///')) {
+    // A missing remote identity is not proof that this path belongs locally.
+    if (origin === null) return undefined;
+    const normalized = normalizeXdtFileUrlForRenderer(src.replace(/^xdt-image:/, 'xdt-file:'));
+    const localPath = new URL(normalized).searchParams.get('path') ?? '';
+    // Decode before checking: encoded slashes must not turn this compatibility
+    // bridge into a Windows SMB/WebDAV or device-namespace read.
+    if (hostlessImage && /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(localPath)) return undefined;
+    // Neither compatibility bridge may grant SSH messages access to controller-local files
+    // when file-service refuses a path outside the remote task workdir.
+    if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(normalized, origin.workdir)) return undefined;
+    return normalized;
   }
   if (
     src.startsWith('data:') ||

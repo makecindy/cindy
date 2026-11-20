@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { configureSharedImageAccess, listSharedImageModels } from '../sharedImageCatalog.js';
+import { BUILTIN_PROVIDERS } from '@cindy/model-providers';
 import type { ProviderShareReceived } from '@cindy/device-link';
 
 const mocks = vi.hoisted(() => ({
@@ -20,10 +21,13 @@ describe('shared OpenAI media catalog', () => {
     expect(await listSharedImageModels('share:another')).toEqual([]);
     expect(mocks.catalog).not.toHaveBeenCalled();
     expect(mocks.invoke).not.toHaveBeenCalled();
+    // #11678: the real built-in subscription has OAuth without a native adapter tag.
+    const openai = BUILTIN_PROVIDERS.find(provider => provider.id === 'openai')!;
     mocks.catalog.mockResolvedValue({
-      views: [{ id: 'openai', auth: { native: 'codex' }, connected: true, imageModels: [
+      views: [{ ...openai, connected: true, imageModels: [
         { id: 'openai/gpt-image-2', name: 'GPT Image 2' },
-        { id: 'openai/disabled', name: 'Disabled', disabled: true },
+        { id: 'openai/gpt-image-2.5-sunburst', name: 'Platform API model' },
+        { id: 'openai/gpt-image-2', name: 'Disabled', disabled: true },
       ] }],
       stale: false,
     });
@@ -31,6 +35,8 @@ describe('shared OpenAI media catalog', () => {
     mocks.invoke.mockResolvedValueOnce({ ok: true, result: caps });
     expect(await listSharedImageModels()).toEqual([]);
     mocks.invoke.mockResolvedValueOnce({ ok: true, result: { ...caps, sharedImageGeneration: true } });
+    expect(await listSharedImageModels()).toEqual([]); // 0.1.143 supports native accounts only.
+    mocks.invoke.mockResolvedValueOnce({ ok: true, result: { ...caps, sharedImageGeneration: true, sharedBuiltinOpenAiImage: true } });
     expect(await listSharedImageModels()).toEqual([{
       id: 'openai/gpt-image-2', name: 'GPT Image 2 · Test', providerId: 'share:s1',
       mode: 'image_generation', imageProtocol: 'openai', modalities: { input: ['text'], output: ['image'] },

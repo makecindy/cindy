@@ -774,6 +774,8 @@ describe('OrcaLifecycleService', () => {
     expect(dispatchedMessage).toContain('Lead session id: "lead-1"');
     expect(dispatchedMessage).toContain('orca_worker_bridge.read_lead_history');
     expect(dispatchedMessage).toContain('If the task is self-contained, proceed directly');
+    expect(dispatchedMessage).toContain('order="desc", limit=8');
+    expect(dispatchedMessage).toContain('only while the context you need is missing');
     expect(dispatchedMessage).toContain(
       "do not assume the process cwd is the Lead's active worktree",
     );

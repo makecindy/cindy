@@ -8625,6 +8625,13 @@
         "openInSidebar": "Abrir en la barra lateral",
         "panelPageHosted": "Se abre desde la página del complemento · se cierra al salir",
         "panelNone": "Este complemento no tiene panel",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: permitir uso remoto",
+          "description": "Cuando está activado, tus otras computadoras pueden ejecutar tareas con este motor. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea.",
+          "unsupported": "Este complemento todavía no permite usar su motor desde otras computadoras.",
+          "remoteControlOff": "Esta computadora aún no permite el control remoto, por lo que otras computadoras no pueden usar este motor.",
+          "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}"
+        },
         "githubRelease": {
           "title": "Actualizaciones del complemento",
           "installed": "Instalada {{version}}",
@@ -16048,6 +16055,8 @@
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent no está disponible en la otra computadora. Instálalo o inicia sesión allí, o elige otro Agent.",
       "REMOTE_AGENT_INVALID": "Se produjo un error al comunicarse con la computadora que ejecuta el Agent. Vuelve a intentarlo; si sigue ocurriendo, actualiza Cindy en ambas computadoras.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "El motor del complemento no ha podido restaurar la conversación anterior. Tus mensajes se conservan. Elige otro motor o inicia una tarea nueva.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "Este motor de complemento no puede usar las herramientas de la computadora donde está la tarea, así que por ahora no puede ejecutarla desde otra computadora. Elige otro motor o modelo.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "Este motor de complemento solo puede ejecutar tareas de esta computadora. Otras computadoras todavía no pueden usarlo.",
       "REMOTE_AGENT_RESUME_REJECTED": "El ordenador que ejecuta el modelo no puede reanudar esta sesión. Crea una nueva sesión desde la lista de sesiones y copia el contenido que necesites para continuar. La sesión original y los mensajes en cola se conservan.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo ha alcanzado el límite de participación de modelo establecido por su propietario. Elige otro modelo disponible para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no te ha dado acceso a este proveedor o al modelo seleccionado. Si es tu propia computadora, activa «Permitir uso remoto» en ese proveedor. Si alguien te lo compartió, pídele que ajuste el acceso en Remoto y compartido. También puedes elegir otro modelo.",
@@ -16554,6 +16563,14 @@
       "remoteProviderUnsupported": "Este proveedor no es compatible con sesiones remotas SSH; elige otra fuente",
       "remoteNativeOauthUnavailable": "Las tareas remotas no pueden usar una suscripción de Claude: elige una puerta de enlace o un modelo con clave API",
       "claudeSubscriptionWorkspaceOverride": "La configuración de .claude de esta carpeta cambia adónde envía solicitudes Claude o cómo inicia sesión, por lo que no se puede usar la suscripción de Claude aquí. Elimina esa configuración o elige un modelo con puerta de enlace o clave de API",
+      "savedModel": {
+        "loading": "Conectando con el modelo seleccionado…",
+        "checkFailed": "No se pudo comprobar el modelo seleccionado",
+        "engine": "El motor seleccionado no está disponible. Elige un modelo para esta tarea.",
+        "source": "La fuente seleccionada no está disponible. Elige un modelo para esta tarea.",
+        "model": "El modelo seleccionado no está disponible. Elige un modelo para esta tarea.",
+        "thisTaskOnly": "El modelo seleccionado solo se aplica a esta tarea"
+      },
       "deviceStillLoading": "El dispositivo remoto aún se está cargando. Espera",
       "remoteDefaultsLoadFailed": "No se pudo cargar la configuración del dispositivo remoto. Revisa la conexión; Cindy lo está reintentando.",
       "branchChanged": "El proyecto está ahora en {{branch}}. Compruébalo y vuelve a enviar.",
@@ -22401,7 +22418,8 @@
       "empty": "Aún no hay grupos de modelos. Combina varias fuentes en un modo en Ajustes para elegirlo aquí.",
       "manage": "Gestionar grupos de modelos",
       "switched": "«{{name}}» cambió esta tarea a {{model}}",
-      "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo."
+      "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo.",
+      "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó."
     },
     "why": {
       "expiringQuota": "Le queda un {{left}}% de cuota y se restablece el {{reset}}, así que va primero",

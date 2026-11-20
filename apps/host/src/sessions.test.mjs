@@ -13,7 +13,7 @@ import { createInteractionBroker } from './agent/interactions.mjs';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
-import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles, mediaRefs, sessionPrRefs, migrationMeta } from '../../desktop/src/main/localDb/schema.ts';
+import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, mediaRefs, sessionPrRefs, migrationMeta } from '../../desktop/src/main/localDb/schema.ts';
 
 const row = (id, extra = {}) => ({ id, title: id, agentKind: 'claude-code', model: 'm', workDir: `/w/${id}`, updatedAt: 1, ...extra });
 
@@ -51,7 +51,7 @@ test('restores runtime state using session identities and the negotiated snapsho
 function sessionListDb(t) {
   const sqlite = new Database(':memory:');
   t.after(() => { if (sqlite.open) sqlite.close(); });
-  for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles]) {
+  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles]) {
     sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
       .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
   }

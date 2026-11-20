@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { parseGoalCommand } from '@cindy/maker-shared/goal-command';
 import { executeMobileGoalCommand, parseMobileDesktopCommand } from '@/session/desktopSlashCommands';
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
+import { evictDeviceProviders, fetchDeviceProviders, retainedProviderModelKey, type RetainedProviderCatalog } from '@/device-link/deviceProvidersCache';
+import { blockedSessionModelAtSend } from '@/session/sessionModelAtSend';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { composerDocumentProjectedText, emptyComposerDocument, normalizeComposerDocument, reconcileComposerProjectedText, serializeComposerDocument, textComposerDocument } from '@/session/composerDocument';
 import { captureNewSessionOwner } from '@/session/newSessionForm';
@@ -106,7 +108,9 @@ function existingHarness(args = 'target') {
     outboxRef: { current: [] }, remoteSessionRunning: false, currentTurnStreaming: false,
     offerMobileSessionRebalance: vi.fn(async () => {}), askMobileSessionRebalance: vi.fn(), invoke: vi.fn(),
     parseMobileLocalSystemCommand: () => null, parseMobileDesktopCommand, pendingSkillSelectionRef: { current: null },
-    resolveSessionAgentKind: () => 'pi', modelNeedsReselection: () => false, getCachedDeviceProviders: () => undefined,
+    blockedSessionModelAtSend, remoteRetainedCatalog: undefined, remotePendingCatalog: undefined as RetainedProviderCatalog | undefined,
+    composerDeviceProviders: { retainedCatalog: undefined as RetainedProviderCatalog | undefined },
+    setModelSheetAgentKind: vi.fn(), setModelSheetOpen: vi.fn(),
     commandNeedsRemoteSession: () => false, extractMobileSessionReferences: () => [], outboxDispatchBlockedNow: () => false,
     runtimeOptions: { planModeSupported: true }, permissionModeOrAsk: (mode: string) => mode,
     dismissPromptRecommendation: noop, hydrateComposerMessageReferenceBodies: async (doc: unknown) => doc,
@@ -166,6 +170,52 @@ describe('new task /goal page callback', () => {
 });
 
 describe('existing task /goal send boundary', () => {
+  // #11693: the local command can finish, but a hidden model must not consume the next ordinary draft.
+  it('preserves the follow-up and opens reselection when only the retained catalog marks the model hidden', async () => {
+    const h = existingHarness();
+    const base = await fetchDeviceProviders('host', async () => ({ providers: [], deferredProviderIds: ['off'] }));
+    try {
+      h.bindings.composerDeviceProviders.retainedCatalog = {
+        base, key: retainedProviderModelKey({ agent: 'pi', modelId: 'test-model', providerId: null }),
+        payload: { providers: [], modelVisibilityOverrides: { 'pi:off:test-model': false } },
+      };
+      await h.run();
+      expect(h.bindings.maker.goal.set).toHaveBeenCalledOnce();
+      const draft = textComposerDocument('ordinary follow-up');
+      h.bindings.composerDocumentRef.current = draft;
+      await h.run();
+      expect(h.bindings.setModelSheetAgentKind).toHaveBeenCalledWith('pi');
+      expect(h.bindings.setModelSheetOpen).toHaveBeenCalledWith(true);
+      expect(h.bindings.composerDocumentRef.current).toEqual(draft);
+      expect(h.bindings.mobileDurableOutbox.add).not.toHaveBeenCalled();
+    } finally {
+      evictDeviceProviders('host');
+    }
+  });
+
+  it.each([false, true])('preserves a normal draft while checking a pending hidden model (connection blocked: %s)', async blocked => {
+    const h = existingHarness();
+    h.bindings.outboxConnectionBlockedNow = () => blocked;
+    const intent = { targetAgentKind: 'codex', model: 'next', providerId: 'off', agentDeviceId: 'executor' };
+    Object.assign(h.bindings.currentSession, { agentSwitchIntent: intent });
+    const draft = textComposerDocument('next message');
+    h.bindings.composerDocumentRef.current = draft;
+    const base = await fetchDeviceProviders('executor', async () => ({ providers: [], deferredProviderIds: ['off'] }));
+    try {
+      await h.run();
+      expect(h.bindings.setError).toHaveBeenCalledWith('models.picker.loadingDefault');
+      h.bindings.remotePendingCatalog = { base, key: retainedProviderModelKey({ agent: 'codex', modelId: 'next', providerId: 'off' }),
+        payload: { providers: [], modelVisibilityOverrides: { 'codex:off:next': false } } };
+      await h.run();
+      expect(h.bindings.setError).toHaveBeenCalledWith('session.common.modelHiddenReselect');
+      expect(h.bindings.setModelSheetAgentKind).toHaveBeenCalledWith('codex');
+      expect(h.bindings.composerDocumentRef.current).toEqual(draft);
+      expect(h.bindings.mobileDurableOutbox.add).not.toHaveBeenCalled();
+    } finally {
+      evictDeviceProviders('executor');
+    }
+  });
+
   it('sets the associated task Goal and projects its real status', async () => {
     const h = existingHarness(); await h.run();
     expect(h.bindings.maker.goal.set).toHaveBeenCalledExactlyOnceWith({ sessionId: 'existing-task', objective: 'target' });

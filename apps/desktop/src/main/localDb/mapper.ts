@@ -134,6 +134,7 @@ export function projectSessionRuntimeFields(session: SessionRuntimeFields): Part
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  orcaLeadSessionId?: string | null;
   companion?: Session['companion'];
   tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
@@ -307,6 +308,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     agentKind: row.agentKind as AgentKind,
     source: row.source === 'side-chat' && row.sideChatPromoted ? 'desktop' : normalizeSessionSource(row.source),
     ...(row.source === 'side-chat' && row.sideChatPromoted && { sideChatPromoted: true as const }),
+    ...(row.orcaLeadSessionId ? { orcaLeadSessionId: row.orcaLeadSessionId } : {}),
     orcaRole: row.orcaRole as OrcaRole | null,
     parentSessionId: row.parentSessionId,
     forkedAtMessageId: row.forkedAtMessageId,

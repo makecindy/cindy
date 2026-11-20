@@ -5810,6 +5810,11 @@ interface ElectronAPI {
      * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
      */
     refreshPluginEngines?: () => Promise<void>;
+    /**
+     * Opens or closes one engine of this computer for the owner's other computers
+     * (PluginEngineView.remoteUse). The new state also arrives through onPluginEnginesChanged.
+     */
+    setPluginEngineRemoteUse?: (key: string, enabled: boolean) => Promise<{ supported: boolean; enabled: boolean }>;
     /** Pushes the complete engine list whenever engines, availability or last-seen models change. */
     onPluginEnginesChanged: (
       cb: (engines: import('../shared/pluginEngines').PluginEngineView[]) => void,

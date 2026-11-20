@@ -672,6 +672,60 @@ describe('AcpAgent (the acp engine)', () => {
     expect(contexts[0]).toMatchObject({ mcpCallerKind: kind, mcpCallerAttested: attested });
   });
 
+  // 第三期(2026-11-20，docs/plans/acp-plugin-bridge.md)：任务的文件与命令在同账号另一台电脑上。插件引擎自带的
+  // 文件与命令工具只会作用在 Agent 所在的这台电脑，所以：入口以远程工作区方式启动(插件关掉自带工具)，
+  // 工具全部来自任务所在电脑的隧道，没有 cindy_exec 就拒绝；受邀者一律拒绝。此前这类会话在这里一律被拒，没有覆盖。
+  // 最小失败输入：带 deviceHosted 的启动；对端不支持 HTTP MCP；deviceHosted.guest。
+  const hosted = {
+    workingDir: '/shadow/p', extraDirs: [], writableDirs: [], platform: 'win32' as const, shell: 'bash', isGitRepo: true,
+    tunnelUrl: 'http://127.0.0.1:4711/', tunnelToken: 'tunnel-token', mcpServers: ['cindy', 'cindy_memory'],
+  };
+
+  it('runs a task of another computer with its own tools off and every tool coming through the task tunnel', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const connected: unknown[] = [];
+    const prepared = vi.fn(async () => ({ mcpBridge: { token: 'local', servers: [{ name: 'local_tools', url: 'http://127.0.0.1:1/mcp/local_tools' }] } }));
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger, clientInfo: { name: 'cindy', version: 'test' },
+      preparePiExtraSpawnConfig: prepared,
+      endpoints: { connect: async (_key, options) => { connected.push(options); return agent.transport; } },
+    });
+    const handle = await engine.startSession({
+      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh', deviceHosted: hosted, pluginEngineBriefing: 'You are a Worker.',
+    });
+    expect(connected).toEqual([{ remoteWorkspace: true }]);
+    // This computer's own Cindy tools, plugins and memory stay out of a task that lives elsewhere.
+    expect(prepared).not.toHaveBeenCalled();
+    const bearer = [{ name: 'Authorization', value: 'Bearer tunnel-token' }];
+    expect((agent.sent.find((message) => message.method === 'session/new')!.params as AcpRecord).mcpServers).toEqual([
+      { type: 'http', name: 'cindy_exec', url: 'http://127.0.0.1:4711/mcp/cindy_exec', headers: bearer },
+      { type: 'http', name: 'cindy', url: 'http://127.0.0.1:4711/mcp/cindy', headers: bearer },
+      { type: 'http', name: 'cindy_memory', url: 'http://127.0.0.1:4711/mcp/cindy_memory', headers: bearer },
+    ]);
+    await handle.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const [note, message, more] = agent.prompts[0]!.params.prompt as Array<{ text: string }>;
+    // The agent gets no Cindy system prompt: the first message tells it where the project is and which tools reach it.
+    expect(note!.text).toContain('/shadow/p');
+    expect(note!.text).toContain('cindy_exec');
+    expect(note!.text).toContain('You are a Worker.');
+    expect(message).toEqual({ type: 'text', text: 'hi' });
+    expect(more).toBeUndefined();
+  });
+
+  it.each([
+    ['the agent cannot connect to the tools of the task\'s computer', { agentCapabilities: {} }, {}, 'PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED'],
+    ['the task belongs to a shared user', { agentCapabilities: { mcpCapabilities: { http: true } } }, { guest: true }, "'remoteSession' not supported"],
+  ])('refuses a task of another computer when %s', async (_name, agentOptions, extra, message) => {
+    const agent = createFakeAgent(agentOptions);
+    await expect(createAcpAgent(() => agent.transport).startSession({
+      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh', deviceHosted: { ...hosted, ...extra },
+    })).rejects.toThrow(message);
+    // Refused before any session exists on the agent's side.
+    expect(agent.methods()).not.toContain('session/new');
+  });
+
   // Unit regressions for PR #11549. Simulate a failed resume with and without
   // an exit receipt at AcpAgent.startSession, which Maker uses for cleanup.
   it('preserves the old conversation and surfaces an actionable resume error', async () => {
