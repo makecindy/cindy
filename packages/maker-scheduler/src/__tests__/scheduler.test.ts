@@ -800,6 +800,76 @@ describe('Scheduler', () => {
     expect(changed).toContain(schedule.id);
   });
 
+  // Codex P2 on #11577:存储挂死时过期写入永不 settle,而过期扫描每轮 tick 都跑一次。
+  // 不登记在途写入,每秒就为同一条任务多发一条 UPDATE,未完成的请求无界增长 ——
+  // 恰好在存储故障期间进一步压制其它任务。一条 schedule 同时只保留一次在途过期
+  // 写入,settle 前不再重发。
+  it('keeps one in-flight expiry write per schedule when storage never settles', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 20 });
+    const expireAt = local.clock.now() + 60_000;
+    await local.scheduler.create({ ...baseInput, expireAt });
+    const realUpdate = local.storage.update.bind(local.storage);
+    let expiryWrites = 0;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) => {
+      if (patch.status === 'expired') {
+        expiryWrites += 1;
+        return new Promise<Schedule | null>(() => {});
+      }
+      return realUpdate(id, patch, expected);
+    });
+    local.clock.setTo(expireAt + 1);
+    for (const _round of [1, 2]) {
+      const settled = await Promise.race([
+        local.scheduler.tick().then(() => 'tick' as const),
+        // real-wait: 挂死哨兵 —— 必须显著大于修复路径的 20ms storage 上限,让旧代码的无界 await 稳定判 hung 而非偶发竞态
+        new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
+      ]);
+      expect(settled).toBe('tick');
+    }
+    expect(expiryWrites).toBe(1);
+    expect(local.fireCalls).toHaveLength(0);
+  });
+
+  // Codex P2 on #11577:过期写入已提交但回包晚于上限时,用户可能在回包前延长了截止
+  // 时间 —— update() 把重新 active 的新行放回缓存,而迟到的仍是早先那次 UPDATE
+  // 返回的 expired 快照。无条件应用它会把刚恢复的任务又从缓存里抹掉,下一次 30 秒
+  // DB sync 之前 tick() 看不到它,临近的 cron 触发被延后。
+  it('keeps a schedule that was extended while its expiry reply was still late', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 30 });
+    const createdAt = local.clock.now();
+    const expireAt = createdAt + 60_000;
+    const schedule = await local.scheduler.create({ ...baseInput, intervalMs: 15_000, expireAt });
+    const realUpdate = local.storage.update.bind(local.storage);
+    let releaseExpire!: (value: Schedule | null) => void;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) =>
+      patch.status === 'expired'
+        ? new Promise<Schedule | null>((resolve) => { releaseExpire = resolve; })
+        : realUpdate(id, patch, expected),
+    );
+    local.clock.setTo(expireAt + 1);
+    const settled = await Promise.race([
+      local.scheduler.tick().then(() => 'tick' as const),
+      // real-wait: 挂死哨兵 —— 修复路径 30ms 内完成,旧代码的无界 await 稳定判 hung
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
+    ]);
+    expect(settled).toBe('tick');
+    expect(local.fireCalls).toHaveLength(0);
+
+    // 用户在迟到回包到达前延长了截止时间:任务重新 active,缓存换成新的一行。
+    const extended = await local.scheduler.update(schedule.id, { expireAt: expireAt + 3_600_000 });
+    expect(extended.status).toBe('active');
+
+    // 迟到的过期快照这时才回来 —— 它已经过期,不能盖掉刚恢复的那一版。
+    releaseExpire({ ...schedule, status: 'expired', nextFireAt: undefined, updatedAt: expireAt + 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // 任务仍在缓存里:下一轮 tick(还在 30 秒 DB sync 之前)照常派发。
+    local.clock.setTo(expireAt + 2_000);
+    await local.scheduler.tick();
+    expect(local.fireCalls).toHaveLength(1);
+    expect(local.fireCalls[0]!.schedule.id).toBe(schedule.id);
+  });
+
 
   it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
     const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';

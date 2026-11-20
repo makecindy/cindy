@@ -518,6 +518,15 @@ export class Scheduler extends EventEmitter {
   private readonly generateId: () => string;
 
   private readonly activeSchedules = new Map<string, Schedule>();
+  /**
+   * 在途的过期写入:scheduleId → 那次 storage.update 的 promise。
+   *
+   * 存储挂死时(事故 #11490 的形态)过期写入永不 settle,而过期扫描每轮 tick 都会
+   * 再跑一次:不登记在途写入,每秒就为同一条任务多发一条 UPDATE,未完成的请求无界
+   * 增长,恰好在存储故障期间进一步压制其它任务(Codex P2 on #11577)。
+   * 一条 schedule 同时只保留一次在途过期写入,settle 前不再重发,也不派发。
+   */
+  private readonly pendingExpireWrites = new Map<string, Promise<Schedule | null>>();
   // 同一 schedule 的用户态 CRUD 必须把“持久化写入 + activeSchedules 同步”视作一个
   // 临界区。否则 update 恢复 expired 的 await 返回后，pause 可能先删缓存，旧 update
   // 再把 active 快照加回来。不同 schedule 仍可并发，避免全局锁拖慢无关任务。
@@ -1041,6 +1050,11 @@ export class Scheduler extends EventEmitter {
     preGateDeadline?: number,
   ): Promise<boolean> {
     if (!hasExpired(schedule, now)) return false;
+    // 同一条任务的过期写入还在途(上一轮的 storage.update 没 settle):这一轮不再
+    // 重发 UPDATE —— 存储挂死时每秒一轮 tick 会把在途请求堆成无界的量,把存储
+    // 故障放大成整台调度器的停摆(Codex P2 on #11577)。等待在途写入 settle,
+    // 由迟到收口对齐缓存;期间本轮不派发。
+    if (this.pendingExpireWrites.has(schedule.id)) return true;
     if (preGateDeadline !== undefined && preGateRemaining(preGateDeadline) <= 0) {
       this.logPreGateTimeout('expireSchedule');
       return true;
@@ -1053,6 +1067,7 @@ export class Scheduler extends EventEmitter {
       updatePromise = this.storage.update(schedule.id, {
         status: 'expired', nextFireAt: undefined,
       }, schedule);
+      this.trackPendingExpireWrite(schedule.id, updatePromise);
       const updated = await withStorageTimeout(updatePromise, budget, 'expireSchedule');
       const current = updated ?? await withStorageTimeout(
         this.storage.get(schedule.id),
@@ -1087,6 +1102,12 @@ export class Scheduler extends EventEmitter {
     void update.then(
       (late) => {
         if (late) {
+          // 迟到快照可能已经被更新的一版取代:过期写入已提交但回包晚于上限时,
+          // 用户可能在回包前延长了截止时间 —— update() 把重新 active 的新行放回
+          // 缓存,而 late 仍是早先那次 UPDATE 返回的 expired 快照。无条件应用它
+          // 会把刚恢复的任务又从缓存里抹掉,下一次 30 秒 DB sync 之前 tick() 看不到
+          // 它,临近的 cron 触发被延后(Codex P2 on #11577)。
+          if (this.isStaleExpireResult(late)) return;
           this.refreshAutomaticDispatchSchedules(late);
           if (late.status === 'active') this.activeSchedules.set(late.id, late);
           else this.activeSchedules.delete(late.id);
@@ -1105,6 +1126,33 @@ export class Scheduler extends EventEmitter {
       },
       () => undefined,
     );
+  }
+
+  /**
+   * 迟到的过期快照是不是已经被更新的一版取代。
+   *
+   * 两条判据都指向「这条任务在我们写过期之后被人动过」:缓存里有一份更新的行
+   * (updatedAt 更晚),或者截止时间被改过(延长后任务重新 active)。两条都不成立
+   * 时,迟到快照就是当前最新版本,照常应用。
+   */
+  private isStaleExpireResult(late: Schedule): boolean {
+    const cached = this.activeSchedules.get(late.id);
+    if (!cached) return false;
+    if (cached.updatedAt > late.updatedAt) return true;
+    return cached.expireAt !== late.expireAt;
+  }
+
+  /**
+   * 登记在途的过期写入。settle 之后清位(成功、失败都一样),settle 之前不再为
+   * 同一条任务重发过期写入。
+   */
+  private trackPendingExpireWrite(scheduleId: string, update: Promise<Schedule | null>): void {
+    this.pendingExpireWrites.set(scheduleId, update);
+    const clear = () => {
+      if (this.pendingExpireWrites.get(scheduleId) === update) this.pendingExpireWrites.delete(scheduleId);
+    };
+    // 两个分支都传 clear:rejected 的 promise 不能变成未处理的 rejection。
+    void update.then(clear, clear);
   }
 
   private refreshAutomaticDispatchSchedules(schedule: Schedule): void {
