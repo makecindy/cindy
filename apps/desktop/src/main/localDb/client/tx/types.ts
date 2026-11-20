@@ -375,6 +375,9 @@ export interface SessionsSetTerminalStatusArgs {
   projectGuard?: ProjectArchiveGuard;
   sessionId: string;
   status: 'archived' | 'deleted';
+  deleteTarget?: 'side-chat' | 'task';
+  /** Trusted host request only, recorded in the same transaction as the archive. */
+  sideChatCloseParentId?: string;
   /** Internal automatic housekeeping only; never accepted as renderer metadata. */
   idleArchiveCutoff?: number;
   unusedOnly?: boolean;

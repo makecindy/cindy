@@ -79,6 +79,7 @@ const policy: BillingGiftCardPurchasePolicy = {
   maxFaceValue: '1000',
   emailCooldownSeconds: 60,
   faces: ['cindy', 'cat', 'bell', 'leap'],
+  faceCatalog: [],
   maxSenderNameLength: 40,
   maxMessageLength: 120,
 };
@@ -271,6 +272,34 @@ describe('giftCardCheckoutLine', () => {
     }
     fireEvent.click(pay);
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ faceCode: submitted }), '100');
+  });
+
+  // 新服务端加了本版本没有的卡面：按服务端的顺序与名称列出，选中后用服务端底图预览并以它下单，
+  // 客户端不用发版。没有服务端卡面详情的卡面仍按内置卡面列出。
+  it('offers a card face the server added after this build was released', async () => {
+    const snow = {
+      code: 'snow',
+      names: { en: 'Snow · Night', 'zh-CN': '雪 · 夜色' },
+      imageUrl: 'https://model-access.example.com/api/public/gift-cards/faces/snow.webp?v=0123456789ab',
+      amount: { x: 80, baseline: 676, size: 228, maxWidth: 480, color: '#F3EDE2' },
+    };
+    api.getGiftCardPurchasePolicy.mockResolvedValue({ ...policy, faces: ['snow', 'cindy'], faceCatalog: [snow] });
+    const { onSubmit } = open();
+    await screen.findByText(/billing\.giftCardPurchase\.quantityHint/);
+    const sender = screen.getByPlaceholderText('billing.giftCardPurchase.fields.senderPlaceholder') as HTMLInputElement;
+    await waitFor(() => expect(sender.value).toBe('小鱼'));
+
+    const choices = screen.getByRole('group', { name: 'billing.giftCardPurchase.fields.face' });
+    expect([...choices.querySelectorAll('button')].map((item) => item.getAttribute('aria-label'))).toEqual([
+      'Snow · Night',
+      'billing.giftCardPurchase.faces.cindy:{"defaultValue":"cindy"}',
+    ]);
+    expect(button('Snow · Night').getAttribute('aria-pressed')).toBe('true');
+    // 预览大卡与缩略图都取服务端底图。
+    expect(document.querySelectorAll(`img[src="${snow.imageUrl}"]`).length).toBeGreaterThanOrEqual(2);
+
+    fireEvent.click(button('billing.giftCardPurchase.pay'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ faceCode: 'snow' }), '100');
   });
 
   it('states the refund rule before payment', async () => {

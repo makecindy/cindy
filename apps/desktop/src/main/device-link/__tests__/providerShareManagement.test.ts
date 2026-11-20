@@ -156,7 +156,7 @@ vi.mock('../providerShareHost.js', () => ({
 }));
 const guest = vi.hoisted(() => ({ revision: 0, share: null as unknown }));
 vi.mock('../providerShareGuest.js', () => ({ startProviderShareGuest: vi.fn(), stopProviderShareGuest: vi.fn(), findReceivedShare: () => guest.share, providerShareAccessEpoch: () => guest.revision,
-  getReceivedSharesSnapshot: () => ({ received: received.shares }), isReceivedSharesReady: () => received.ready }));
+  getReceivedShares: () => received.shares, isReceivedSharesReady: () => received.ready }));
 vi.mock('../providerShareGuestPrefs.js', () => ({ configureProviderShareGuestPrefs: vi.fn(), invalidateProviderShareGuestPrefsCache: vi.fn() }));
 vi.mock('../providerShareGuestPrefsIpc.js', () => ({ setProviderShareCredentialConsentFromIpc: vi.fn() }));
 

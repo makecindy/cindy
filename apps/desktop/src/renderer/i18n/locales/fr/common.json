@@ -1380,6 +1380,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Cette tâche SSH ne peut pas changer de Harness. Choisissez un modèle dans son Harness actuel, ou créez une nouvelle tâche SSH avec le Harness souhaité.",
     "MODEL_SELECTION_UNAVAILABLE": "Le modèle sélectionné n'est plus disponible auprès de son fournisseur. Vérifiez la connexion dans les Paramètres ou choisissez un autre modèle disponible.",
+    "MODEL_CATALOG_UNCONFIRMED": "Impossible de confirmer la liste des modèles. Votre modèle sélectionné a été conservé. Actualisez la liste des modèles et réessayez.",
     "HARNESS_SWITCH_NOT_READY": "Le changement de Harness n'est pas prêt. Consultez le détail de l'erreur et réessayez une fois le Harness prêt.",
     "DEVICE_LINK_BUSY": "L'ordinateur distant est occupé. Réessayez dans un instant.",
     "INVALID_PARAMS": "Saisie invalide. Vérifiez et réessayez.",
@@ -1443,6 +1444,7 @@
     "UPSTREAM_ERROR": "Erreur du serveur en amont (5xx). Réessayez plus tard",
     "UPSTREAM_UNREACHABLE": "Impossible de joindre l'endpoint. Vérifiez votre réseau et l'URL de base",
     "TIMEOUT": "Délai de connexion dépassé. Vérifiez votre réseau et l'URL de base",
+    "CERT_ERROR": "La vérification du certificat a échoué. Vérifiez que le nom d’hôte de l’URL de base correspond au certificat, ainsi que la chaîne de certificats et la configuration de confiance de l’autorité de certification de votre organisation.",
     "UNKNOWN": "Erreur inconnue. Consultez les journaux pour plus de détails",
     "upstreamToast": "Échec de la requête au fournisseur « {{provider}} » : {{message}}"
   },
@@ -1454,6 +1456,10 @@
     "details": "Détails de l'erreur"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Base de données locale endommagée",
+      "description": "Une corruption de la base de données a été détectée. L’accès a été interrompu pour protéger vos données. Vous pouvez essayer de rouvrir les données locales. En cas d’échec, copiez les détails techniques et contactez l’assistance. N’écrasez et ne supprimez pas les fichiers de la base de données."
+    },
     "schemaLease": {
       "title": "Impossible d'ouvrir les données locales pour le moment",
       "retry": "Rouvrir les données locales",
@@ -2839,9 +2845,7 @@
       "autoUpdateDisabledToast": "Installation des mises à jour en période d'inactivité désactivée",
       "autoUpdateSaveFailed": "Impossible d'enregistrer les paramètres de mise à jour automatique",
       "analyticsLabel": "Statistiques d'utilisation",
-      "analyticsDescription": "Nous aide à comprendre à quelle fréquence Cindy est lancée et utilisée dans la durée. Transmet des informations sur l'appareil et l'environnement d'utilisation (modèle de l'appareil, version du système, version de l'application et identifiant de l'appareil), ainsi que, une fois connecté, votre ID de compte ; jamais les conversations, fichiers ou prompts. La désactivation arrête immédiatement la transmission.",
-      "productTokenUsage": "Partager la consommation des modèles",
-      "productTokenUsageHint": "Les nouveaux tokens de ce compte sur cet appareil sont agrégés par source et modèle dans votre région avant leur envoi à TapDB.",
+      "analyticsDescription": "Si vous activez cette option, nous remplaçons les identifiants de votre compte et de votre appareil par des pseudonymes. Les visites récurrentes et les totaux d’utilisation par modèle nous aident à améliorer le produit. Ces statistiques ne contiennent ni vos conversations, ni vos fichiers, ni vos instructions.",
       "analyticsEnabledToast": "Statistiques d'utilisation activées",
       "analyticsDisabledToast": "Statistiques d'utilisation désactivées",
       "analyticsSaveFailed": "Impossible d'enregistrer les paramètres des statistiques d'utilisation",
@@ -3766,6 +3770,8 @@
           "edit": "Modifier",
           "editFailed": "Vérifiez l’URL, le protocole et la clé, puis réessayez.",
           "editNote": "Laissez la clé vide pour conserver les identifiants lus. Une nouvelle URL ou un nouveau protocole exige une nouvelle clé.",
+          "useSavedCredential": "Utiliser les identifiants enregistrés",
+          "confirmDestination": "Utiliser les identifiants Claude Code enregistrés à cette adresse ?",
           "name": "Nom affiché",
           "baseUrl": "URL de base",
           "protocol": "Protocole API",
@@ -4483,6 +4489,7 @@
         "authorizedToast": "Connecté à {{name}}",
         "authorizeFailed": "Impossible de se connecter à {{name}}. Réessayez.",
         "nameLabel": "Nom affiché",
+        "geminiImageKeyNote": "Après enregistrement, cette clé servira aux discussions de cette connexion et aux prochaines générations d’images Gemini. Pour les images seules, décochez tous les modèles de discussion.",
         "onlyAgentNote": "Ce fournisseur prend uniquement en charge {{agent}}",
         "endpointLabel": "URL de base {{agent}}",
         "noAuthNote": "Ce proxy ne nécessite aucune clé client ; Cindy retire les identifiants d'abonnement de la CLI avant de transmettre les requêtes.",
@@ -6894,6 +6901,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "Trafic sur cet ordinateur",
+          "range": "Période",
+          "last5m": "5 dernières min",
+          "lastHour": "Dernière heure",
+          "lastDay": "Dernières 24 h",
+          "sent": "Envoyé",
+          "received": "Reçu",
+          "total": "Total",
+          "scope": "Estimation du trafic des connexions directes et relayées, transferts directs de fichiers compris. Les annonces de découverte des appareils, les flux audio et vidéo séparés et les transferts HTTP indépendants sont exclus."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8371,7 +8389,7 @@
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
         "agentErrandDetail": "Les tâches créées apparaissent dans la liste des tâches de Cindy, où vous pouvez suivre leur progression et poursuivre la conversation.",
         "agentSchedule": "Peut vous demander de créer une automatisation",
-        "agentScheduleDetail": "Il peut seulement ouvrir le panneau de nouvelle automatisation avec les champs préremplis ; c'est vous qui décidez de la créer : choisissez un modèle et enregistrez-la vous-même. Une fois créée, Cindy l'exécute selon la planification que vous avez définie. Des frais de modèle peuvent s'appliquer.",
+        "agentScheduleDetail": "Il peut seulement ouvrir le panneau de nouvelle automatisation avec les champs préremplis ; c'est vous qui décidez de la créer : choisissez un modèle et enregistrez-la vous-même. Une fois créée, Cindy l'exécute selon la planification que vous avez définie. Des frais de modèle peuvent s'appliquer. Pour les extensions compatibles avec la synchronisation, vous pouvez aussi confirmer quel ordinateur exécutera l’automatisation.",
         "nodeRuntime": "Peut exécuter un programme Node fourni sur cet ordinateur",
         "nodeMcp": "Peut exécuter un MCP stdio fourni sur cet ordinateur",
         "nodeRuntimeDetail": "Risque élevé : il dispose des mêmes accès locaux que votre compte utilisateur, y compris les fichiers, le réseau et le lancement d'autres programmes. Cindy ne peut pas le confiner dans le bac à sable du navigateur.",
@@ -8615,6 +8633,13 @@
         "openInSidebar": "Ouvrir dans la barre latérale",
         "panelPageHosted": "S'ouvre depuis la page Plugins · se ferme lorsque vous la quittez",
         "panelNone": "Ce plugin n'a pas de panneau",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}} : autoriser l’utilisation à distance",
+          "description": "Lorsque cette option est activée, vos autres ordinateurs peuvent exécuter des tâches avec ce moteur. L’Agent s’exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur. Les fichiers et les commandes restent sur l’ordinateur où se trouve la tâche.",
+          "unsupported": "Ce plugin ne permet pas encore d’utiliser son moteur depuis d’autres ordinateurs.",
+          "remoteControlOff": "Cet ordinateur n’autorise pas encore le contrôle à distance : les autres ordinateurs ne peuvent donc pas utiliser ce moteur.",
+          "ariaLabel": "Autoriser vos autres ordinateurs à utiliser {{engine}}"
+        },
         "githubRelease": {
           "title": "Mises à jour du plugin",
           "installed": "Version installée {{version}}",
@@ -8683,6 +8708,8 @@
         "browserUse": "Utiliser cette extension de navigateur",
         "browserActivated": "Extension de navigateur sélectionnée",
         "browserActivationFailed": "Impossible de sélectionner l'extension. Vérifiez qu'elle est activée et approuvez le changement de connexion, le cas échéant.",
+        "automationHostSelect": "Utiliser cet ordinateur pour les tâches automatiques de {{name}} ?",
+        "automationHostClear": "Retirer cet ordinateur comme hôte des tâches automatiques de {{name}} ?",
         "browserSwitchTitle": "Changer la connexion de l’extension ?",
         "browserSwitchMessage": "Utiliser « {{name}} » pour cette connexion ?",
         "browserSwitchDetail": "Instance : {{instance}}\nEnregistrement : {{host}}\nRemplace l’enregistrement actuel. L’extension se connectera à ce plugin.",
@@ -13192,6 +13219,7 @@
           "overloadRetryingNoCount": "Le service du modèle est occupé. Nouvelle tentative automatique en cours…",
           "overloadFailed": "⚠️ Le service du modèle est occupé : le service en amont n'a pas de capacité disponible pour le moment. Renvoyez ce message ici pour réessayer, ou passez à un autre modèle dans Cindy. (Cliquer sur « Réessayer » dans l'application de bureau poursuit aussi la tâche, mais le résultat ne reviendra pas dans ce message.)"
         },
+        "audioInputUnavailable": "Cette connexion au modèle ne permet pas de traiter directement l’audio. Demandez à Cindy de le transcrire avant de poursuivre.",
         "toolLoop": {
           "generic": "Le modèle a appelé des outils de façon répétée trop de fois : Cindy a arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
           "consecutive": "Le modèle a appelé le même outil {{n}} fois d'affilée : Cindy a arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
@@ -14239,6 +14267,8 @@
         "fastBadge": "Rapide"
       },
       "source": {
+        "lastConfirmed": "Dernière actualisation : {{time}}",
+        "unconfirmed": "Liste des modèles non actualisée",
         "unavailable": "Modèle indisponible",
         "reconnect": "Se reconnecter",
         "manage": "Gérer la source",
@@ -15156,6 +15186,8 @@
     },
     "runningStatus": {
       "currentRate": "Vitesse récente",
+      "lastRequestRate": "Moyenne de la dernière requête",
+      "recentTokenRate": "Dernière mesure {{rate}} tok/s",
       "waitingSample": "Échantillonnage",
       "averageRate": "Moyenne du tour",
       "rateHistory": "Historique de la vitesse de génération",
@@ -15198,6 +15230,9 @@
       "usageLimitAutoContinueTitle": "Si vous n'avez rien fait au moment de la réinitialisation de la limite d'utilisation, cette tâche reprendra automatiquement",
       "usageLimitAutoContinueCancel": "Annuler",
       "usageLimitAutoContinueCancelTitle": "Annuler la reprise automatique. L'erreur et Réessayer restent disponibles.",
+      "usageLimitReached": "Le compte du modèle a atteint sa limite d'utilisation",
+      "usageLimitReachedWithReset": "Le compte du modèle a atteint sa limite d'utilisation. La réinitialisation est prévue à {{resetAt}}.",
+      "usageLimitReachedNoReset": "Le compte du modèle a atteint sa limite d'utilisation. Attendez la réinitialisation de la limite ou passez à un autre modèle avant de réessayer.",
       "codexOrganizationUsageLimitWithReset": "Le compte Codex connecté est géré par votre organisation et a atteint sa limite d'utilisation. La réinitialisation est prévue à {{resetAt}}.",
       "codexOrganizationUsageLimit": "Le compte Codex connecté est géré par votre organisation et a atteint sa limite d'utilisation. Attendez la réinitialisation de la limite ou passez à un autre compte disponible avant de réessayer.",
       "codexUsageLimitWithReset": "Le compte Codex connecté a atteint sa limite d'utilisation. La réinitialisation est prévue à {{resetAt}}.",
@@ -15216,7 +15251,7 @@
       "switchClaudeSubscriptionTitle": "Basculer cette session sur l'abonnement Claude.ai et réessayer",
       "switchingClaudeSubscription": "Passage à Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Impossible de passer à Claude.ai ou de réessayer cette session : {{msg}}",
-      "codexAppServerRetired": "Le service Codex a été redémarré ou remplacé. La requête en cours a été interrompue ; relancez-la.",
+      "codexAppServerRetired": "La connexion à Codex a été perdue et la requête en cours a été interrompue. Vous pouvez continuer dans cette session.",
       "codexAuthMissing": "Codex distant n'est pas encore connecté (401 Unauthorized). Cliquez sur « Synchroniser l'authentification » pour envoyer vos identifiants Codex locaux vers le répertoire Codex de Cindy distant, puis réessayez.",
       "codexAuthMissingLocal": "La connexion « {{provider}} » sur cet ordinateur n’a pas pu être authentifiée. Vérifiez son état de connexion dans les paramètres, puis revenez à cette session après l’avoir rétablie.",
       "codexSessionExpired": "La connexion OpenAI doit être mise à jour. Reconnectez ChatGPT pour continuer ; {{appName}} ne déconnectera pas la CLI Codex de votre système et ne vous demandera pas de reconnecter d'autres sources de modèles.",
@@ -15269,6 +15304,7 @@
     },
     "backgroundActivity": {
       "status": "Sous-tâches en arrière-plan en cours d'exécution, consommation du modèle toujours en cours…",
+      "pluginEngineStatus": "Poursuit le travail en arrière-plan…",
       "bashWorkStatus_one": "Travail en arrière-plan en cours ({{count}} commande)…",
       "bashServiceStatus_one": "{{count}} service en arrière-plan en cours d'exécution",
       "bashWorkStatus_other": "Travail en arrière-plan en cours ({{count}} commandes)…",
@@ -15308,10 +15344,16 @@
       "continueFailed_many": "{{count}} sessions n'ont pas pu reprendre. Ouvrez-les pour réessayer."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "Impossible de confirmer la liste des modèles. Votre modèle sélectionné a été conservé. Actualisez la liste des modèles et réessayez.",
       "actionScheduled": "L’autorisation pour cette action a expiré. La prochaine exécution reste programmée.",
       "actionExpired": "L’autorisation de la session pour cette action a expiré. Consultez la dernière exécution de l’automatisation.",
       "actionRecovered": "L’autorisation pour cette action a expiré. La même automatisation a ensuite réussi.",
       "text": "Une exécution automatique a échoué.",
+      "prCheck_dns": "{{device}} ne peut pas résoudre {{host}}. Si le problème persiste, vérifiez le réseau ou le DNS sur cet appareil. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
+      "prCheck_timeout": "La connexion à GitHub a expiré sur {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
+      "prCheck_auth": "Reconnectez-vous à GitHub sur {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
+      "prCheck_rate-limit": "GitHub limite les requêtes de {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
+      "prCheck_unknown": "La vérification de la PR a échoué sur {{device}}. Consultez les détails de l’exécution. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
       "precheck": "Les vérifications automatiques sont temporairement bloquées.",
       "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
       "pluginMissing": "Les vérifications automatiques sont bloquées : le plugin {{name}} n'est pas installé. Elles reprendront une fois le plugin installé.",
@@ -15976,7 +16018,9 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Cette tâche SSH ne peut pas changer de Harness. Choisissez un modèle dans son Harness actuel, ou créez une nouvelle tâche SSH avec le Harness dont vous avez besoin.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "La compression du contexte a échoué lors du changement de modèle, car cette connexion ne permet pas d’utiliser le modèle précédent.",
       "MODEL_SELECTION_UNAVAILABLE": "Le modèle sélectionné n'est plus disponible auprès de son fournisseur. Vérifiez la connexion dans les paramètres ou choisissez un autre modèle disponible.",
+      "MODEL_CATALOG_UNCONFIRMED": "Impossible de confirmer la liste des modèles. Votre modèle sélectionné a été conservé. Actualisez la liste des modèles et réessayez.",
       "HARNESS_SWITCH_NOT_READY": "Le changement de Harness n'est pas prêt. Consultez les détails de l'erreur et réessayez une fois le Harness prêt.",
       "DEVICE_LINK_BUSY": "L'ordinateur distant est occupé. Veuillez réessayer dans un instant.",
       "REMOTE_DAEMON_CLOSED": "La connexion distante a été coupée, peut-être pendant une mise à jour. Ce tour est terminé. Renvoyez le message.",
@@ -16026,6 +16070,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Cet ordinateur ne peut pas restaurer l’état précédent de la session. Choisissez un modèle d’un autre ordinateur ou fournisseur pour continuer avec un transfert de contexte. Les messages existants sont conservés.",
       "REMOTE_AGENT_INVALID": "Un problème est survenu lors de la communication avec l'ordinateur qui exécute l'Agent. Réessayez ; si le problème persiste, mettez à jour Cindy sur les deux ordinateurs.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "Le moteur du plugin n’a pas pu restaurer la conversation précédente. Vos messages sont conservés. Choisissez un autre moteur ou démarrez une nouvelle tâche.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "Ce moteur de plugin ne peut pas utiliser les outils de l’ordinateur où se trouve la tâche : il ne peut donc pas encore l’exécuter depuis un autre ordinateur. Choisissez un autre moteur ou un autre modèle.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "Ce moteur de plugin ne peut exécuter que les tâches de cet ordinateur. Les autres ordinateurs ne peuvent pas encore l’utiliser.",
       "REMOTE_AGENT_RESUME_REJECTED": "L’ordinateur qui exécute le modèle ne peut pas reprendre cette session. Créez une nouvelle session depuis la liste des sessions et copiez le contenu nécessaire pour continuer. La session d’origine et les messages en attente sont conservés.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Ce modèle a atteint la limite de partage de modèle définie par son propriétaire. Choisissez un autre modèle disponible pour continuer.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur ne vous a pas ouvert ce fournisseur ou le modèle sélectionné. S’il s’agit de votre propre ordinateur, activez « Autoriser l'utilisation à distance » pour ce fournisseur sur cet ordinateur. S’il vous a été partagé, demandez à son propriétaire d’ajuster l’accès dans Accès distant et partage. Vous pouvez aussi choisir un autre modèle.",
@@ -16212,7 +16258,6 @@
       "opened": "Page d'aperçu ouverte"
     },
     "sideChat": {
-      "openPage": "Ouvrir la page complète de la tâche",
       "returnMain": "Retour à la tâche principale",
       "new": "Nouvelle conversation annexe",
       "mainWindowDescription": "Les conversations annexes s'exécutent actuellement dans la fenêtre principale. Votre conversation est enregistrée.",
@@ -16220,6 +16265,14 @@
       "commandDescription": "Ouvrir une conversation annexe avec le contexte de cette tâche. Le texte facultatif devient une question en brouillon.",
       "title": "Conversation annexe",
       "context": "Utilise le contexte des réponses déjà terminées au moment de l'ouverture. La tâche principale continue de s'exécuter. L'historique est conservé jusqu'à la fermeture de cet onglet.",
+      "viewCollaboration": "Voir la collaboration",
+      "openConversation": "Ouvrir la conversation",
+      "openFromTaskList": "Aussi accessible dans la liste des tâches à gauche.",
+      "returnToSideChat": "Revenir à la question latérale",
+      "reopenSideChat": "Rouvrir la question latérale",
+      "origin": "Cette conversation a commencé par une question latérale.",
+      "originNamed": "Cette conversation a commencé par une question latérale depuis « {{title}} ».",
+      "originUnavailable": "Cette conversation a commencé par une question latérale. La tâche d’origine est indisponible.",
       "opening": "Ouverture…",
       "notReady": "Attendez que la tâche principale ait terminé sa première réponse.",
       "unsupported": "L'Agent de cette tâche s'exécute dans un autre environnement d'exécution. La conversation annexe n'est pas encore disponible ici.",
@@ -16228,9 +16281,10 @@
       "mainTaskOnly": "Ouvrez une conversation annexe depuis la tâche principale.",
       "sharedTaskUnavailable": "Les conversations annexes ne sont pas disponibles dans les tâches partagées.",
       "archivedTask": "Désarchivez cette tâche pour ouvrir une conversation annexe.",
-      "closeTitle": "Fermer la conversation annexe ?",
-      "closeDescription": "Cette conversation annexe va s'arrêter et son historique sera supprimé. La tâche principale continue de s'exécuter.",
-      "closeConfirm": "Fermer et supprimer",
+      "closeTitle": "Fermer et archiver cette question de suivi ?",
+      "closeDescription": "La tâche correspondante dans la barre latérale gauche sera également archivée.",
+      "closeDescriptionRunning": "La tâche correspondante dans la barre latérale gauche sera également archivée et ses Workers seront arrêtés.",
+      "closeConfirm": "Fermer et archiver",
       "closeFailed": "Impossible de fermer la conversation annexe. Veuillez réessayer."
     },
     "teammateProcess": {
@@ -16284,9 +16338,15 @@
       "toggle": "Afficher ou masquer la réponse de « {{title}} »",
       "openTask": "Ouvrir la tâche"
     },
+    "geminiRateLimit": {
+      "retried": "Nouvelle tentative automatique après le délai indiqué par Gemini",
+      "title": "La limite de saisie par minute de Gemini est atteinte.",
+      "exhausted": "Gemini reste limité après une nouvelle tentative. Vous pouvez réessayer manuellement.",
+      "retryIn": "Nouvelle tentative automatique dans {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
-      "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
+      "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles.",
+      "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles.",
       "loginRequired": "Le compte avec abonnement utilisé par cette tâche nécessite une nouvelle connexion. Reconnectez-vous sur l’ordinateur qui exécute la tâche, puis réessayez.",
       "signingIn": "La connexion au compte avec abonnement utilisé par cette tâche est en cours. Réessayez une fois la connexion terminée.",
       "unavailable": "Le compte avec abonnement affecté à cette tâche ne peut pas être utilisé pour cette demande. Vérifiez le compte dans les paramètres du fournisseur de modèles sur l’ordinateur d’exécution, ou choisissez une autre source de modèles.",
@@ -16524,6 +16584,14 @@
       "remoteProviderUnsupported": "Ce fournisseur n'est pas pris en charge dans les sessions SSH distantes : choisissez une autre source",
       "remoteNativeOauthUnavailable": "Les tâches distantes ne peuvent pas utiliser d'abonnement Claude : choisissez une passerelle ou un modèle avec clé API",
       "claudeSubscriptionWorkspaceOverride": "Les paramètres .claude de ce dossier modifient la destination des requêtes de Claude ou sa méthode de connexion : l'abonnement Claude ne peut donc pas être utilisé ici. Supprimez ces paramètres, ou choisissez une passerelle ou un modèle avec clé API",
+      "savedModel": {
+        "loading": "Connexion au modèle sélectionné…",
+        "checkFailed": "Impossible de vérifier le modèle sélectionné",
+        "engine": "Le moteur sélectionné est indisponible. Choisissez un modèle pour cette tâche.",
+        "source": "La source sélectionnée est indisponible. Choisissez un modèle pour cette tâche.",
+        "model": "Le modèle sélectionné est indisponible. Choisissez un modèle pour cette tâche.",
+        "thisTaskOnly": "Le modèle sélectionné s’applique uniquement à cette tâche"
+      },
       "deviceStillLoading": "L'appareil distant est encore en cours de chargement, veuillez patienter",
       "remoteDefaultsLoadFailed": "Impossible de charger les paramètres de l'appareil distant. Vérifiez la connexion ; Cindy réessaie.",
       "branchChanged": "Le projet est maintenant sur {{branch}}. Vérifiez, puis envoyez à nouveau.",
@@ -17221,6 +17289,12 @@
       "unspecifiedDir": "Répertoire non spécifié"
     },
     "workdirBrowse": {
+      "previewFile": "Aperçu",
+      "filterDirectory": "Filtrer ce dossier…",
+      "projectTree": "Arborescence du projet",
+      "systemPreview": "Aperçu système",
+      "listView": "Liste",
+      "gridView": "Miniatures",
       "backToProjects": "Retour aux projets",
       "switchProject": "Changer de projet",
       "activeSessionCount_one": "{{count}} session active",
@@ -19606,6 +19680,7 @@
       "permissionLabel": "Mode d'autorisation",
       "noAvailableModels": "Aucun modèle {{agent}} disponible. Vérifiez la connexion au fournisseur et les identifiants dans les Paramètres.",
       "savedModelUnavailable": "Le modèle enregistré ou sa source est indisponible.",
+      "pluginEngineNoWorktree": "Les Workers avec un moteur de plugin ne peuvent pas utiliser de worktree. Désactivez l'option worktree pour créer ce Worker.",
       "reselectModel": "Choisir un modèle",
       "effortLabel": "Effort de raisonnement",
       "initialTaskLabel": "Tâche initiale",
@@ -22364,7 +22439,8 @@
       "empty": "Aucun groupe de modèles pour l'instant. Regroupez plusieurs sources en un mode dans les Réglages pour le choisir ici.",
       "manage": "Gérer les groupes de modèles",
       "switched": "« {{name}} » a basculé cette tâche sur {{model}}",
-      "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé."
+      "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé.",
+      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi."
     },
     "why": {
       "expiringQuota": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} : elle passe en premier",

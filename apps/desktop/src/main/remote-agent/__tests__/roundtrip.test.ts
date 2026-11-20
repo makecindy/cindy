@@ -32,7 +32,7 @@ import { ExecServerRelay } from '../controller/execServerRelay';
 import { createDeviceAgentStarter, liveDirectGuestSession } from '../controller/service';
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
-import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
+import { createRemoteAgentHost, type HostedStartInput, type PluginEngineHostedStartInput } from '../host/runHost';
 import { createNativeHistoryTransfer, NATIVE_HISTORY_CHECKPOINT } from '../nativeHistoryTransfer';
 import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
@@ -1737,6 +1737,111 @@ describe('remote agent round trip', () => {
   });
 });
 
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：startRemoteAgentSession('acp') ↔ createRemoteAgentHost 的真实 open/call 往返；
+ *   用户看到的是任务在另一台电脑的插件引擎上跑起来、文件仍读自本机、关掉开关后下一轮被拒。
+ * - 规则依据：docs/plans/acp-plugin-bridge.md「第三期」与 protocol-compatibility/plugin-harnesses.md
+ *   「自己的其他电脑使用插件引擎」：只给同账号、只走引擎自己的入口、绝不回落到内置引擎。
+ * - 现有覆盖缺口：本文件其余用例只开内置引擎(startHosted)；插件引擎此前在这条通道上一律被拒，没有用例。
+ * - 最小失败输入：agentKind 'acp' + providerId 'acp-plugin:…' 的一次 open；对方未开放 / 不支持 / 调用方是受邀者。
+ * - tier：unit(进程内 fake Agent，与本文件其它往返用例同一隔离方式)。
+ */
+describe('a plugin engine of another computer', () => {
+  const ENGINE = 'acp-plugin:dsh-acp:dsh';
+  const ENGINE_CAPABILITIES = { availableModels: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4' }] };
+
+  function createPluginEngineHost(options: { offered?: () => boolean; supported?: boolean; guest?: boolean } = {}) {
+    const started: PluginEngineHostedStartInput[] = [];
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => {
+        hostInputs.push(input);
+        return fakeHostedAgent(input);
+      },
+      ...(options.supported === false ? {} : {
+        pluginEngines: {
+          isOffered: (providerId: string) => providerId === ENGINE && (options.offered?.() ?? true),
+          start: async (input: PluginEngineHostedStartInput) => {
+            started.push(input);
+            return {
+              ...fakeHostedAgent({ ...input, kind: 'pi' }),
+              agentKind: 'acp' as const,
+              negotiatedCapabilities: ENGINE_CAPABILITIES as unknown as AgentSessionHandle['negotiatedCapabilities'],
+            };
+          },
+        },
+      }),
+      ...(options.guest ? { controllerTrust: () => 'guest' as const } : {}),
+      isControllerAuthorized: () => authorized,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    return { host, started };
+  }
+
+  const start = (host: ReturnType<typeof createRemoteAgentHost>) => startRemoteAgentSession('acp', {
+    sessionId: 'plugin-task', workingDir: project, model: 'default', providerId: ENGINE, permissionMode: 'default',
+  }, makeDeps(host));
+
+  it('runs through the engine\'s own entry with files staying here, until the owner closes it', async () => {
+    let offered = true;
+    const { host, started } = createPluginEngineHost({ offered: () => offered });
+    const handle = await start(host);
+
+    expect(handle.agentKind).toBe('acp');
+    expect(started).toHaveLength(1);
+    expect(hostInputs).toHaveLength(0); // never a built-in engine
+    expect(started[0].options).toMatchObject({ model: 'default', providerId: ENGINE });
+    expect(fs.readFileSync(path.join(started[0].shadowDir, 'AGENTS.md'), 'utf8')).toBe('# rules');
+    // The picker's models come from what the engine negotiated on that computer.
+    expect(handle.negotiatedCapabilities).toMatchObject(ENGINE_CAPABILITIES);
+
+    handle.setInteractionResolver(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+    const texts: string[] = [];
+    const reader = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'text') texts.push((event.data as { text: string }).text);
+        if (event.type === 'done') break;
+      }
+    })();
+    await handle.send({ type: 'user', content: [{ type: 'text', text: 'hi' }] }, { messageUuid: 'p1' });
+    await reader;
+    expect(texts[0]).toBe('read:from-controller');
+
+    offered = false;
+    await expect(handle.send({ type: 'user', content: [{ type: 'text', text: 'again' }] }, { messageUuid: 'p2' }))
+      .rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+    await expect(handle.setModel!('deepseek-v4')).rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+
+  it.each([
+    ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
+    ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],
+  ])('starts nothing when %s', async (_name, options, error) => {
+    const { host, started } = createPluginEngineHost(options);
+    await expect(start(host)).rejects.toThrow(error);
+    expect(started).toHaveLength(0);
+    expect(hostInputs).toHaveLength(0);
+    expect(host.runCount()).toBe(0);
+    host.dispose();
+  });
+
+  it('is neither declared nor opened for a shared user', async () => {
+    const { host, started } = createPluginEngineHost({ guest: true });
+    const caps = await host.handle(CONTROLLER, { op: 'caps' }) as { pluginEngines?: boolean };
+    expect(caps.pluginEngines).toBeUndefined();
+    await expect(host.handle(CONTROLLER, { op: 'open', runId: randomUUID(), agentKind: 'acp', payload: { json: {} } }))
+      .rejects.toThrow(/REMOTE_AGENT_UNSUPPORTED/);
+    expect(started).toHaveLength(0);
+    host.dispose();
+  });
+});
+
 // Unit: provider-sharing direct-execution lease boundary (runtime review F1/F2).
 // Existing roundtrips cover already-started handles. These inputs stop at MCP/started,
 // or spend the entire 2s allocation in caps, through the real service/startRemote/runClient.
@@ -2440,6 +2545,53 @@ describe('shared startup lease budget', () => {
       .rejects.toThrow(`[SHARED_TASK_RECOVERY_denied] [SHARED_TASK_STAGE_capability] [SHARED_TASK_CODE_${code}]`);
     expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
     expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+  });
+
+  // Unit regression through the real starter and authorization path. A restarted
+  // M can remain circuit-open through a 120s cooldown and a 30s probe RPC;
+  // the old 4s probe window stranded the input.
+  // Reconnect must reuse one grant, native history and target, never replay open/send.
+  it('resumes the original native history after its executor reconnects during backoff', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 300_000;
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    let online = false;
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === f.target && !online) throw Object.assign(new Error('restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const opening = f.open('historical', f.owner, 'm', 'native-only-on-m')
+      .then(handle => ({ handle }), error => ({ error }));
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'call')).toBe(false);
+    online = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const outcome = await opening;
+    expect(outcome).toHaveProperty('handle');
+    if (!('handle' in outcome)) return;
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.filter(call => call.op === 'open')).toEqual([expect.objectContaining({
+      device: f.target, payload: { json: expect.objectContaining({ options: expect.objectContaining({ resumeSessionId: 'native-only-on-m' }) }) },
+    })]);
+    expect(f.calls.some(call => call.op === 'call')).toBe(false);
+    await outcome.handle.close({ reason: 'navigation' });
+  });
+
+  it.each(['cancel', 'permission', 'link-generation', 'lease-expiry'] as const)('stops a delayed executor recovery after %s', async boundary => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
+    if (boundary === 'lease-expiry') f.state.duration = 2_000;
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === f.target) throw Object.assign(new Error('restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const opening = f.open('historical', f.owner, 'm', 'native-only-on-m').catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    if (boundary === 'cancel') cancelPendingRemoteStart('historical');
+    if (boundary === 'permission') guestPermission.epoch++;
+    if (boundary === 'link-generation') historyCloseEpoch.mockReturnValue(1);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(await opening).toBeInstanceOf(Error);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'call')).toBe(false);
   });
 
   it('re-arms renewal after an online model change on a reused history route', async () => {

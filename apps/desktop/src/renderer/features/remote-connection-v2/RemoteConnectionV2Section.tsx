@@ -11,7 +11,7 @@
  * 数据:设备目录与开关来自 useDeviceLinkSettings(与「我的设备」同一份);本机已建链对端的路径 / 往返 /
  * 最近业务收发来自 usePeerLinks(新 IPC);中转名来自 useSelfHostedRelayState;无响应熔断来自
  * unresponsiveDevicesStore。拓扑只画真实存在的数据:消息流动只在这台电脑与那台设备之间真有业务消息时出现,
- * 没有的(流量大小、第三方之间的链路)不画。
+ * 本机连接流量来自同一份快照。第三方之间的链路不画。
  */
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -32,6 +32,7 @@ import { createLogger } from '@/lib/logger';
 
 import { remoteSwitchStore, startRemoteSwitch, type RemoteSwitchTarget } from './agentNetRemoteSwitch';
 import { RemoteConnectionTopology } from './RemoteConnectionTopology';
+import { ConnectionTraffic } from './ConnectionTraffic';
 import { RemoteSwitchBatch } from './RemoteSwitchBatch';
 import { buildTopology, type TopologyModel, type TopologyNode } from './topologyModel';
 import { relativeTime } from './topologyPresentation';
@@ -222,6 +223,7 @@ export function RemoteConnectionV2Section({
               </button>
             </div>
           ) : null}
+          <ConnectionTraffic traffic={peerLinks.traffic} />
         </SettingsCard>
       </section>
       {dialog}

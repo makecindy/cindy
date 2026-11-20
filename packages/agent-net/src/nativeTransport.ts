@@ -34,6 +34,18 @@ const LANE_BY_KIND = new Map<number, SessionLaneName>(Object.entries(SESSION_LAN
 /** Per poll and outgoing stream, at most this many native writes of `WRITE_CHUNK` bytes. */
 const WRITES_PER_STREAM = 8;
 const WRITE_CHUNK = 65_536;
+/**
+ * The engine is polled every FAST_POLL_MS while anything moves (stream data or events, bytes waiting here, in the core or
+ * unacknowledged, a handshake or a dial) and every IDLE_POLL_MS once nothing has for ACTIVE_WINDOW_MS; writing, a dial, a
+ * relayed datagram or a network change polls at once. A poll is a bridge round trip with every connection's state as
+ * JSON on the phone's JS thread: with nothing to move, polls every 8 ms still took a quarter of it, 7–18% every 50 ms,
+ * 0–4% without polls (2026-11-20 A/B on a phone, with the admission lookups of `AgentNetSocket.keys`).
+ */
+const FAST_POLL_MS = 8;
+const IDLE_POLL_MS = 50;
+const ACTIVE_WINDOW_MS = 1_000;
+/** The admitted peers are worked out again at least this often, also when the socket reports no change (see `poll`). */
+const ADMISSION_RECHECK_MS = 1_000;
 const now = () => performance.now();
 
 /**
@@ -52,6 +64,19 @@ export class NativeTransport implements Transport {
   readonly dial: { udp?: Address };
   private closed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** The delay the pending poll was scheduled with. */
+  private timerDelay = 0;
+  /** Poll fast until then (a new transport starts out connecting). */
+  private activeUntil = now() + ACTIVE_WINDOW_MS;
+  /** A poll is running; `again`: something happened meanwhile, so one more follows it. */
+  private polling = false;
+  private again = false;
+  private polledAt = 0;
+  /** When a wake last polled at once (see `wake`). */
+  private wokeAt = Number.NEGATIVE_INFINITY;
+  /** The socket's admission revision the engine last got, and when the admitted peers were last worked out. */
+  private mirroredVersion: number | undefined;
+  private admissionAt = Number.NEGATIVE_INFINITY;
   private channels = new Map<number, NativeChannel>();
   private waiting = new Map<number, Waiting>();
   private links = new Map<string, number>();
@@ -87,6 +112,7 @@ export class NativeTransport implements Transport {
       const link = this.links.get(deviceId);
       if (!link) return;
       void this.call({ op: 'datagram', from: { link }, data: toBase64Url(bytes) }).catch(() => undefined);
+      this.wake();
     });
   }
   static async create(engine: NativeEnginePort, options: TransportOptions, addresses: NativeAddresses = [], enhanced = true): Promise<NativeTransport> {
@@ -162,6 +188,7 @@ export class NativeTransport implements Transport {
     return link;
   }
   private async synchronizeAdmission(): Promise<void> {
+    const version = this.options.admissionVersion?.();
     const entries = this.options.admittedPeers!().map(peer => {
       if (!/^[a-f0-9]{64}$/.test(peer.id) || !this.options.admit(peer.id)) throw new Error('INVALID_NATIVE_PEER');
       const key = Uint8Array.from(peer.id.match(/../g)!, part => parseInt(part, 16));
@@ -169,9 +196,12 @@ export class NativeTransport implements Transport {
       return { key: toBase64Url(key), link: this.linkFor(peer.relayId), ...(this.enhanced ? { relayId: peer.relayId } : {}) };
     }).sort((a, b) => a.link - b.link);
     const serialized = JSON.stringify(entries);
-    if (serialized === this.lastAdmission) return;
-    await this.call({ op: 'admit', peers: entries });
-    this.lastAdmission = serialized;
+    if (serialized !== this.lastAdmission) {
+      await this.call({ op: 'admit', peers: entries });
+      this.lastAdmission = serialized;
+    }
+    this.admissionAt = now();
+    this.mirroredVersion = version;
   }
   async connect(entry: RosterEntry): Promise<PeerChannel> {
     if (!this.options.admit(entry.id)) throw new Error('UNAUTHORIZED_PEER');
@@ -185,6 +215,7 @@ export class NativeTransport implements Transport {
     return new Promise((resolve, reject) => {
       if (this.closed) { reject(new Error('NATIVE_TRANSPORT_CLOSED')); return; }
       this.waiting.set(id, { resolve, reject, deadline: now() + 3_000 });
+      this.wake();
     });
   }
   /**
@@ -194,6 +225,8 @@ export class NativeTransport implements Transport {
   networkChanged(): void {
     if (this.closed || !this.enhanced) return;
     void this.call({ op: 'migrate' }).catch(() => undefined);
+    // Everything in flight goes again from the new address: poll for it now.
+    this.wake();
     if (!this.readAddresses || this.refreshingAddresses) return;
     this.refreshingAddresses = true;
     void this.readAddresses().then(addresses => {
@@ -207,14 +240,54 @@ export class NativeTransport implements Transport {
     this.pendingBytes += bytes;
   }
   release(bytes: number): void { this.pendingBytes = Math.max(0, this.pendingBytes - bytes); }
-  private schedule(): void {
-    if (!this.closed && !this.timer) this.timer = setTimeout(() => {
-      this.timer = null;
-      void this.poll().then(() => this.schedule(), () => this.close());
-    }, 8);
+  private schedule(delay = now() < this.activeUntil ? FAST_POLL_MS : IDLE_POLL_MS): void {
+    if (this.closed || this.timer || this.polling) return;
+    this.timerDelay = delay;
+    this.timer = setTimeout(() => { this.timer = null; this.drive(); }, delay);
+  }
+  /**
+   * Something to move: poll now. React Native runs timers on the display's frames, so a zero timer was up to a frame late
+   * (7–20 ms measured, 2026-11-21) and a request sat in JS that long before the engine saw it. A wake within FAST_POLL_MS
+   * of the previous one keeps that rhythm instead, so a run of writes does not poll per write.
+   */
+  wake(): void {
+    this.activeUntil = now() + ACTIVE_WINDOW_MS;
+    if (this.closed) return;
+    if (!this.polling && now() - this.wokeAt < FAST_POLL_MS) {
+      if (this.timer && this.timerDelay > FAST_POLL_MS) { clearTimeout(this.timer); this.timer = null; }
+      this.schedule(FAST_POLL_MS);
+      return;
+    }
+    this.wokeAt = now();
+    this.drive();
+  }
+  /** The roster or the peer rule changed: mirror it into the engine now rather than at the next poll. */
+  admissionChanged(): void { this.wake(); }
+  /** Poll now. During a poll a wake is noted and one more poll follows it; then the next poll is scheduled. */
+  private drive(): void {
+    if (this.closed) return;
+    if (this.polling) { this.again = true; return; }
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    this.polling = true;
+    void (async () => {
+      try {
+        await this.poll();
+        if (this.again && !this.closed) { this.again = false; await this.poll(); }
+      } catch { this.polling = false; await this.close(); return; }
+      this.polling = false;
+      this.again = false;
+      this.schedule();
+    })();
   }
   private async poll(): Promise<void> {
-    await this.synchronizeAdmission();
+    this.polledAt = now();
+    // The admitted peers are worked out again when the socket says its roster or rule changed, and once per
+    // ADMISSION_RECHECK_MS for what lapses with time (a certificate, a grant). Working them out on every poll took about
+    // 8 ms of the phone's JS thread with 28 devices in the account (2026-11-21), more than the poll itself.
+    const version = this.options.admissionVersion?.();
+    if (version === undefined || version !== this.mirroredVersion || this.polledAt - this.admissionAt >= ADMISSION_RECHECK_MS) {
+      await this.synchronizeAdmission();
+    }
     await this.synchronizeRelayUdp();
     // Native commands can complete while this poll is awaiting bridge I/O or
     // initializing/flushing another channel. Its snapshot cannot establish that
@@ -268,6 +341,10 @@ export class NativeTransport implements Transport {
       this.waiting.delete(id); waiting.reject(new Error('NATIVE_CONNECT_TIMEOUT'));
       void this.call({ op: 'close', id }).catch(() => undefined);
     }
+    // Keepalives and acknowledgements of nothing do not count: they need no fast reply.
+    if (this.waiting.size > 0 || [...this.channels.values()].some(channel => channel.moving)
+      || result.connections.some(state => !state.established || state.unacked || state.data.length > 0 || state.events.length > 0
+        || state.buffered?.some(([, bytes]) => bytes > 0))) this.activeUntil = now() + ACTIVE_WINDOW_MS;
   }
   detach(id: number): void {
     this.channels.delete(id);
@@ -340,13 +417,20 @@ class NativeChannel implements PeerChannel {
   announceCandidates(): void {
     if (this.events.closed || !this.owner.candidates().length) return;
     this.control.push(utf8(JSON.stringify({ candidates: this.owner.candidates() }) + '\n'));
+    this.owner.wake();
   }
   send(bytes: Uint8Array): void {
     if (this.events.closed) throw new Error('NATIVE_CONNECTION_CLOSED');
     this.owner.reserve(bytes.length);
     this.data.push(bytes.slice());
+    this.owner.wake();
   }
   get bufferedAmount(): number { return this.data.queued + this.control.queued; }
+  /** Bytes still waiting here for the engine, or a close still draining: the transport keeps polling fast. */
+  get moving(): boolean {
+    return !this.disposed && (this.closeDeadline > 0 || this.data.queued > 0 || this.control.queued > 0
+      || (this.lanes !== null && (this.lanes.control.queued > 0 || this.lanes.normal.queued > 0 || this.lanes.background.queued > 0)));
+  }
   onDrain(handler: () => void): void { this.drainHandlers.push(handler); }
 
   /** See CoreChannel.declareSessions (transport.ts): once per connection, on the control stream older nodes read only for candidates. */
@@ -354,6 +438,7 @@ class NativeChannel implements PeerChannel {
     if (!this.owner.enhanced || this.sessionsDeclared || this.events.closed) return;
     this.sessionsDeclared = true;
     this.control.push(utf8(`${JSON.stringify({ session: [AGENT_NET_SESSION_V1, ...features] })}\n`));
+    this.owner.wake();
   }
   sessionFeatures(): readonly string[] { return this.peerSessionFeatures; }
   onSessionCapable(handler: () => void): void { if (this.sessionCapable) handler(); else this.sessionCapableHandlers.push(handler); }
@@ -369,7 +454,7 @@ class NativeChannel implements PeerChannel {
     }
     const lanes = this.lanes;
     return {
-      write: (lane, bytes) => { if (!this.events.closed) lanes[lane].push(bytes); },
+      write: (lane, bytes) => { if (!this.events.closed) { lanes[lane].push(bytes); this.owner.wake(); } },
       // As the Desktop (transport.ts): control and normal lanes count what the core still buffers, so a slow line pushes
       // back before a megabyte of pushes queues ahead of interactive replies; the background lane (file blocks) counts
       // only what waits here, so a download does not hold back task text.
@@ -492,7 +577,7 @@ class NativeChannel implements PeerChannel {
   close(options?: { drain?: boolean }): void {
     if (this.disposed) return;
     this.events.close();
-    if (options?.drain !== false) { this.closeDeadline ||= now() + 2_000; return; }
+    if (options?.drain !== false) { this.closeDeadline ||= now() + 2_000; this.owner.wake(); return; }
     this.dispose();
   }
   private dispose(): void {

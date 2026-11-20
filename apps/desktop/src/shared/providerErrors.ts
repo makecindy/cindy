@@ -41,6 +41,8 @@ export type ProviderErrorCode =
   | 'UPSTREAM_UNREACHABLE'
   /** 请求超时（探测 10s / 观察侧不产生此码）。 */
   | 'TIMEOUT'
+  /** HTTPS 证书验证失败；检查证书链/信任配置，原样重试无效。 */
+  | 'CERT_ERROR'
   /** 无法归类。 */
   | 'UNKNOWN';
 
@@ -75,6 +77,65 @@ const UNREACHABLE_CODES = new Set([
 
 /** 超时类错误码（AbortSignal.timeout 抛 TimeoutError / AbortError）。 */
 const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ABORT_ERR', 'TimeoutError', 'AbortError']);
+
+/** Node TLS certificate validation codes (https://nodejs.org/api/tls.html).
+ * Exclude protocol/cipher errors and OUT_OF_MEM, which is a resource failure. */
+const CERTIFICATE_CODES = new Set([
+  'CERT_HAS_EXPIRED',
+  'CERT_NOT_YET_VALID',
+  'CERT_REJECTED',
+  'CERT_REVOKED',
+  'CERT_CHAIN_TOO_LONG',
+  'CERT_SIGNATURE_FAILURE',
+  'CRL_HAS_EXPIRED',
+  'CRL_NOT_YET_VALID',
+  'CRL_SIGNATURE_FAILURE',
+  'ERROR_IN_CERT_NOT_AFTER_FIELD',
+  'ERROR_IN_CERT_NOT_BEFORE_FIELD',
+  'ERROR_IN_CRL_LAST_UPDATE_FIELD',
+  'ERROR_IN_CRL_NEXT_UPDATE_FIELD',
+  'HOSTNAME_MISMATCH',
+  'INVALID_CA',
+  'INVALID_PURPOSE',
+  'PATH_LENGTH_EXCEEDED',
+  'UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY',
+  'UNABLE_TO_DECRYPT_CERT_SIGNATURE',
+  'UNABLE_TO_DECRYPT_CRL_SIGNATURE',
+  'UNABLE_TO_GET_CRL',
+  'CERT_UNTRUSTED',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+]);
+
+/** Preserve transport codes through fetch/SDK causes and AggregateError without
+ * exposing messages, URLs or certificate contents. Bound both cycles and breadth.
+ */
+export function providerNetworkErrorCode(error: unknown): string {
+  if (error instanceof Error && TIMEOUT_CODES.has(error.name)) return error.name;
+  const queue: unknown[] = [error];
+  const seen = new Set<object>();
+  let fallback: string | undefined;
+  for (let i = 0; i < queue.length && i < 32; i += 1) {
+    const item = queue[i];
+    if (!item || typeof item !== 'object' || seen.has(item)) continue;
+    seen.add(item);
+    const { code, cause, errors } = item as { code?: unknown; cause?: unknown; errors?: unknown };
+    if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(code)) {
+      if (CERTIFICATE_CODES.has(code) || TIMEOUT_CODES.has(code) || UNREACHABLE_CODES.has(code)) return code;
+      fallback ??= code;
+    }
+    if (cause && queue.length < 32) queue.push(cause);
+    if (Array.isArray(errors)) {
+      for (let j = 0; j < errors.length && queue.length < 32; j += 1) queue.push(errors[j]);
+    }
+  }
+  return fallback ?? (error instanceof Error && ['Error', 'TypeError', 'RangeError', 'AggregateError'].includes(error.name)
+    ? error.name : 'UNKNOWN_NETWORK_ERROR');
+}
 
 // ── 错误体 pattern（大小写不敏感；只在对应 status 分支内使用，避免误伤）───────────
 /** 模型不存在 / 无权使用：Anthropic "model: xxx not found"、OpenAI "The model `x` does not exist"、
@@ -128,6 +189,9 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   const detail = body ? redactSensitiveText(body.slice(0, 500)) : undefined;
 
   if (networkErrorCode) {
+    if (CERTIFICATE_CODES.has(networkErrorCode)) {
+      return { code: 'CERT_ERROR', retryable: false, detail: networkErrorCode };
+    }
     if (TIMEOUT_CODES.has(networkErrorCode)) return { code: 'TIMEOUT', retryable: true, detail: networkErrorCode };
     if (UNREACHABLE_CODES.has(networkErrorCode)) {
       return { code: 'UPSTREAM_UNREACHABLE', retryable: true, detail: networkErrorCode };

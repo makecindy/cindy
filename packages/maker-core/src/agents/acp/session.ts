@@ -52,6 +52,24 @@ import { acpToolDisplayName, AcpUpdateTranslator, type AcpTurnOutcome } from './
 
 const DEFAULT_CANCEL_GRACE_MS = 15_000;
 const SESSION_CLOSE_TIMEOUT_MS = 5_000;
+/**
+ * Work an agent does after answering a prompt (between turns) counts as live for
+ * this long after its last update, so the runtime is not reclaimed mid-task.
+ */
+export const ACP_BACKGROUND_QUIET_MS = 30_000;
+/**
+ * Tool calls still open between turns are settled after the agent has sent
+ * nothing for this long. Agents that wait on purpose (for example a scheduled
+ * check minutes later) keep a call open meanwhile; this bound only stops a lost
+ * final status from leaving a call running forever.
+ */
+export const ACP_OPEN_TOOL_QUIET_CAP_MS = 30 * 60_000;
+/**
+ * A reply the agent writes between turns has no end-of-turn to close it. It is
+ * closed once the agent pauses this long, so it is saved and shown like any reply
+ * instead of streaming forever and being lost on reload.
+ */
+export const ACP_BACKGROUND_SEGMENT_IDLE_MS = 2_000;
 
 const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   '.png': 'image/png',
@@ -83,6 +101,12 @@ export interface OpenAcpSessionOptions {
   cwd: string;
   clientInfo: AcpClientInfo;
   mcpServers?: readonly AcpMcpServer[];
+  /**
+   * Names in `mcpServers` the task cannot run without (for a task whose files are on another
+   * computer, the server that replaces the agent's own file and command tools). An agent that
+   * cannot connect to one of them is refused before any session is created.
+   */
+  requiredMcpServers?: readonly string[];
   /** ACP session id persisted for this task; resumes instead of creating a session. */
   resumeSessionId?: string;
   model?: string;
@@ -93,8 +117,17 @@ export interface OpenAcpSessionOptions {
   /** How long a cancelled prompt may take to settle before Cindy ends the turn itself. */
   cancelGraceMs?: number;
   readFile?: (path: string) => Promise<Uint8Array>;
+  /**
+   * Host text sent ahead of the first message of a newly created agent session (for example
+   * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
+   * loaded session already has it in its own history, so it is not repeated.
+   */
+  briefing?: string;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
+  /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
+  openToolQuietCapMs?: number;
+  now?: () => number;
 }
 
 export type AcpResumeOutcome = 'new' | 'resumed' | 'loaded';
@@ -110,6 +143,14 @@ export class AcpAuthRequiredError extends Error {
   constructor(readonly authMethods: readonly AcpAuthMethod[]) {
     super('The agent needs you to sign in before it can start a session');
     this.name = 'AcpAuthRequiredError';
+  }
+}
+
+/** The agent cannot connect to an MCP server this task depends on. */
+export class AcpRequiredMcpUnavailableError extends Error {
+  constructor(readonly servers: readonly string[]) {
+    super('[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED] This plugin engine cannot use the tools of the computer the task is on, so it cannot run this task from another computer.');
+    this.name = 'AcpRequiredMcpUnavailableError';
   }
 }
 
@@ -145,6 +186,7 @@ function authAware(error: unknown, init: AcpInitializeResult): unknown {
 class AcpRouter {
   private target: AcpSession | null = null;
   private buffered: AcpRecord[] = [];
+  private replayCutoff = 0;
 
   notification(method: string, params: AcpRecord): void {
     if (this.target) {
@@ -160,13 +202,22 @@ class AcpRouter {
     throw methodNotFound(method);
   }
 
+  /** Marks where the session-open response arrived on the wire; later buffered updates are newer than it. */
+  markSessionOpened(): void {
+    this.replayCutoff = this.buffered.length;
+  }
+
   attach(session: AcpSession, dropConfigUpdates: boolean): void {
     this.target = session;
     const buffered = this.buffered;
+    const cutoff = this.replayCutoff;
     this.buffered = [];
-    for (const params of buffered) {
-      // The handshake response carries the newest configuration; earlier updates are stale.
-      if (dropConfigUpdates && asRecord(params.update).sessionUpdate === 'config_option_update') continue;
+    this.replayCutoff = 0;
+    for (let i = 0; i < buffered.length; i += 1) {
+      const params = buffered[i]!;
+      // The handshake response carries the newest configuration up to cutoff; only earlier updates are stale replay.
+      const kind = asRecord(params.update).sessionUpdate;
+      if (dropConfigUpdates && i < cutoff && (kind === 'config_option_update' || kind === 'current_mode_update')) continue;
       session.handleNotification('session/update', params);
     }
   }
@@ -190,16 +241,23 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
 
     const { accepted, dropped } = filterMcpServers(opts.mcpServers ?? [], init.agentCapabilities.mcpCapabilities);
+    const missing = (opts.requiredMcpServers ?? []).filter((name) => !accepted.some((server) => server.name === name));
+    if (missing.length > 0) throw new AcpRequiredMcpUnavailableError(missing);
     let sessionId: string;
     let outcome: AcpResumeOutcome;
     let result: AcpRecord;
+    const onSessionOpened = (): void => router.markSessionOpened();
     if (opts.resumeSessionId) {
       const method = init.agentCapabilities.sessionCapabilities.resume
         ? 'session/resume'
         : init.agentCapabilities.loadSession ? 'session/load' : null;
       if (!method) throw new AcpResumeUnavailableError(opts.resumeSessionId, 'unsupported');
       try {
-        result = await connection.request(method, { sessionId: opts.resumeSessionId, cwd: opts.cwd, mcpServers: accepted });
+        result = await connection.request(
+          method,
+          { sessionId: opts.resumeSessionId, cwd: opts.cwd, mcpServers: accepted },
+          { onResult: onSessionOpened },
+        );
       } catch (error) {
         const mapped = authAware(error, init);
         if (mapped instanceof AcpAuthRequiredError || error instanceof AcpConnectionClosedError) throw mapped;
@@ -209,7 +267,11 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       outcome = method === 'session/resume' ? 'resumed' : 'loaded';
     } else {
       try {
-        result = await connection.request('session/new', { cwd: opts.cwd, mcpServers: accepted });
+        result = await connection.request(
+          'session/new',
+          { cwd: opts.cwd, mcpServers: accepted },
+          { onResult: onSessionOpened },
+        );
       } catch (error) {
         throw authAware(error, init);
       }
@@ -296,6 +358,8 @@ export class AcpSession {
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
   private readonly pendingPrompts: AcpContentBlock[][] = [];
+  /** Sent once, ahead of the first prompt of a new session. */
+  private pendingBriefing: string | null;
   private sendChain: Promise<void> = Promise.resolve();
   private stopGeneration = 0;
   private readonly permissionControllers = new Set<AbortController>();
@@ -312,6 +376,12 @@ export class AcpSession {
   private closing: Promise<void> | null = null;
   private ended = false;
   private detachTransportClose?: () => void;
+  private readonly now: () => number;
+  private readonly openToolQuietCapMs: number;
+  /** Last time the agent produced conversation output while no turn was running. */
+  private lastBackgroundAt = 0;
+  private openToolCapTimer: ReturnType<typeof setTimeout> | null = null;
+  private backgroundSegmentTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(init: AcpSessionInit) {
     this.connection = init.connection;
@@ -325,6 +395,9 @@ export class AcpSession {
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onEnded = init.options.onEnded;
+    this.now = init.options.now ?? Date.now;
+    this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
+    this.pendingBriefing = init.resumeOutcome === 'new' && init.options.briefing?.trim() ? init.options.briefing : null;
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
@@ -376,6 +449,21 @@ export class AcpSession {
     return this.turn !== null;
   }
 
+  /**
+   * AgentSessionHandle: the agent is still working after answering its last
+   * prompt — a tool call it has not finished, or output within the last
+   * ACP_BACKGROUND_QUIET_MS. Runtime reclamation keeps the process meanwhile.
+   */
+  async hasLiveBackgroundWork(): Promise<boolean> {
+    return this.hasBackgroundWork();
+  }
+
+  private hasBackgroundWork(): boolean {
+    if (this.ended || this.turn) return false;
+    if (this.translator.openToolCount() > 0) return true;
+    return this.lastBackgroundAt > 0 && this.now() - this.lastBackgroundAt <= ACP_BACKGROUND_QUIET_MS;
+  }
+
   setInteractionResolver(resolver: InteractionResolver): void {
     this.resolver = resolver;
   }
@@ -391,6 +479,10 @@ export class AcpSession {
       if (this.ended || this.closing) throw new Error('ACP session is closed');
       // Stop also discards messages that were still being prepared, like queued ones.
       if (generation !== this.stopGeneration) return;
+      if (this.pendingBriefing) {
+        prompt.unshift({ type: 'text', text: this.pendingBriefing });
+        this.pendingBriefing = null;
+      }
       this.pendingPrompts.push(prompt);
       this.pump();
     });
@@ -407,7 +499,13 @@ export class AcpSession {
     this.stopGeneration += 1;
     this.pendingPrompts.length = 0;
     const turn = this.turn;
-    if (!turn || turn.settled || turn.cancelTimer) return;
+    if (!turn) {
+      // Agents that keep working after a prompt (DSH documents it) stop that work on cancel;
+      // others ignore a cancel with no prompt in flight.
+      if (this.hasBackgroundWork() && !this.connection.closed) this.connection.notify('session/cancel', { sessionId: this.id });
+      return;
+    }
+    if (turn.settled || turn.cancelTimer) return;
     turn.cancelTimer = setTimeout(() => {
       this.logger?.warn('acp: agent did not settle a cancelled prompt in time', { graceMs: this.cancelGraceMs });
       // Mark the handle as closing before emitting done so no queued or later prompt
@@ -500,10 +598,37 @@ export class AcpSession {
         if (title) this.title = title;
         return;
       }
+      case 'current_mode_update': {
+        const modeId = asNonEmptyString(update.currentModeId);
+        if (modeId) this.applyCurrentModeUpdate(modeId);
+        return;
+      }
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;
         this.emit(this.translator.handleUpdate(update));
+        if (this.turn) return;
+        // Progress on a running call may change nothing on screen, yet it proves the agent
+        // is still working: it keeps the runtime busy and restarts the open-call quiet bound.
+        this.lastBackgroundAt = this.now();
+        this.armOpenToolCap();
+        this.armBackgroundSegmentClose();
     }
+  }
+
+  /** Closes the agent's text / thinking between turns once it pauses (see ACP_BACKGROUND_SEGMENT_IDLE_MS). */
+  private armBackgroundSegmentClose(): void {
+    this.clearBackgroundSegmentClose();
+    this.backgroundSegmentTimer = setTimeout(() => {
+      this.backgroundSegmentTimer = null;
+      if (!this.ended && !this.turn) this.emit(this.translator.flushPending());
+    }, ACP_BACKGROUND_SEGMENT_IDLE_MS);
+    this.backgroundSegmentTimer.unref?.();
+  }
+
+  private clearBackgroundSegmentClose(): void {
+    if (!this.backgroundSegmentTimer) return;
+    clearTimeout(this.backgroundSegmentTimer);
+    this.backgroundSegmentTimer = null;
   }
 
   /** @internal Called by the connection router. */
@@ -521,6 +646,8 @@ export class AcpSession {
     if (!prompt) return;
     // Output produced between turns (autonomous agent work) is closed off as background.
     this.emit(this.translator.flushPending());
+    this.clearBackgroundSegmentClose();
+    this.clearOpenToolCap();
     const turn: ActiveTurn = { token: ++this.turnSeq, settled: false, cancelTimer: null };
     this.turn = turn;
     this.usage = { ...this.usage, tokenUsage: 0 };
@@ -541,6 +668,30 @@ export class AcpSession {
     // Turn-closing events belong to the turn that just ended, so they are not tagged background.
     for (const event of this.translator.finish(outcome)) this.queue.push(event);
     this.pump();
+    // Calls the agent left running continue as background work.
+    if (!this.turn) this.armOpenToolCap();
+  }
+
+  /** (Re)starts the quiet bound for tool calls left open between turns. */
+  private armOpenToolCap(): void {
+    this.clearOpenToolCap();
+    if (this.ended || this.turn || this.translator.openToolCount() === 0) return;
+    this.openToolCapTimer = setTimeout(() => {
+      this.openToolCapTimer = null;
+      if (this.ended || this.turn || this.translator.openToolCount() === 0) return;
+      this.logger?.warn('acp: agent sent nothing for open tool calls between turns; settling them', {
+        open: this.translator.openToolCount(),
+        quietMs: this.openToolQuietCapMs,
+      });
+      this.emit(this.translator.settleOpenTools('done'));
+    }, this.openToolQuietCapMs);
+    this.openToolCapTimer.unref?.();
+  }
+
+  private clearOpenToolCap(): void {
+    if (!this.openToolCapTimer) return;
+    clearTimeout(this.openToolCapTimer);
+    this.openToolCapTimer = null;
   }
 
   private errorOutcome(error: unknown): AcpTurnOutcome {
@@ -554,8 +705,12 @@ export class AcpSession {
   }
 
   private emit(events: readonly AgentEvent[]): void {
+    if (events.length === 0) return;
     const background = this.turn === null;
     for (const event of events) this.queue.push(background ? { ...event, turnScope: 'background' } : event);
+    if (!background) return;
+    this.lastBackgroundAt = this.now();
+    this.armOpenToolCap();
   }
 
   private applyUsage(update: AcpRecord): void {
@@ -636,19 +791,33 @@ export class AcpSession {
   }
 
   private async setConfigValue(configId: string, value: string): Promise<void> {
-    const result = await this.connection.request('session/set_config_option', { sessionId: this.id, configId, value });
-    if (Array.isArray(result.configOptions)) {
-      this.replaceConfigOptions(result.configOptions);
-      return;
-    }
-    // Agents that omit the response state still applied the change.
-    this.configOptions = this.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option);
-    this.refreshCapabilities();
+    await this.connection.request(
+      'session/set_config_option',
+      { sessionId: this.id, configId, value },
+      {
+        onResult: (result) => {
+          if (Array.isArray(result.configOptions)) {
+            this.replaceConfigOptions(result.configOptions);
+            return;
+          }
+          // Agents that omit the response state still applied the change.
+          this.configOptions = this.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option);
+          this.refreshCapabilities();
+        },
+      },
+    );
   }
 
   private replaceConfigOptions(raw: unknown[]): void {
     this.configOptions = normalizeConfigOptions(raw);
     this.refreshCapabilities();
+  }
+
+  private applyCurrentModeUpdate(modeId: string): void {
+    const option = findModeOption(this.configOptions);
+    if (!option || option.currentValue === modeId) return;
+    if (!option.options.some((entry) => entry.value === modeId)) return;
+    this.configOptions = this.configOptions.map((entry) => entry.id === option.id ? { ...entry, currentValue: modeId } : entry);
   }
 
   private refreshCapabilities(): void {
@@ -701,7 +870,14 @@ export class AcpSession {
       this.finishTurn(turn.token, info.reason === 'closed-by-client'
         ? { stopReason: 'cancelled' }
         : { error: 'The agent process ended unexpectedly.', reason: 'acp-agent-exited' });
+    } else {
+      // Work between turns ends with the connection: keep what the agent already wrote,
+      // and mark calls it left running as interrupted.
+      this.emit(this.translator.flushPending());
+      this.emit(this.translator.settleOpenTools('interrupted'));
     }
+    this.clearBackgroundSegmentClose();
+    this.clearOpenToolCap();
     if (info.reason === 'protocol-error') this.retireEndpoint();
   }
 
@@ -740,6 +916,8 @@ export class AcpSession {
   private endEvents(): void {
     if (this.ended) return;
     this.ended = true;
+    this.clearBackgroundSegmentClose();
+    this.clearOpenToolCap();
     this.detachTransportClose?.();
     this.queue.end();
     try {

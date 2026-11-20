@@ -56,6 +56,8 @@ export interface MobilePluginEngineSwitchIntent {
   providerId: string;
   model: string;
   effort?: string;
+  /** Null selects the task computer. Omission keeps the current execution computer. */
+  agentDeviceId?: string | null;
 }
 
 /** 选择器里选中的插件引擎行。 */
@@ -287,11 +289,22 @@ export function normalizePluginEngineSwitchIntent(value: unknown): MobilePluginE
   if (item.targetAgentKind !== PLUGIN_ENGINE_AGENT_KIND) return null;
   if (!isPluginEngineProviderId(item.providerId)) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
+  const agentDeviceId = item.agentDeviceId;
+  if (agentDeviceId != null && (typeof agentDeviceId !== 'string' || agentDeviceId.length === 0)) return null;
   return {
     providerId: item.providerId,
     model: item.model,
     ...(typeof item.effort === 'string' && item.effort ? { effort: item.effort } : {}),
+    ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
   };
+}
+
+/** The pending target has priority over the saved execution location, including an explicit return home. */
+export function pluginEngineExecutionDeviceId(
+  currentDeviceId: string | null | undefined,
+  intent: MobilePluginEngineSwitchIntent | null,
+): string | null {
+  return intent?.agentDeviceId === undefined ? currentDeviceId ?? null : intent.agentDeviceId;
 }
 
 // —— 模型选择器里的插件引擎分组 ——
@@ -334,6 +347,8 @@ export function buildPluginEngineGroups(
   for (const engine of options.engines) {
     const selectable = isPluginEngineSelectable(engine);
     const active = options.active?.providerId === engine.providerId ? options.active : null;
+    // 只装了插件但未登录 / 未就绪的引擎不在模型选择器里占位；仅当前任务已选该引擎时保留以便识别状态。
+    if (!selectable && !active) continue;
     const engineMatches = !needle || engine.name.toLowerCase().includes(needle);
     const rows = pluginEngineModelRows(engine, active?.modelId)
       .filter((model) => engineMatches

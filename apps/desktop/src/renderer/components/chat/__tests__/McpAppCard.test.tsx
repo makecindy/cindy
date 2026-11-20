@@ -458,6 +458,16 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
       controller.close.mockReturnValue(closed);
       const receive = added.mock.calls.find(([type]) => type === 'message')![1];
       const frame = container.querySelector('iframe')!;
+      if (scenario === 'unmount') {
+        await act(async () => {
+          controller.message({ method: 'ui/notifications/initialized' });
+          controller.message({ method: 'ui/notifications/sandbox-result-delivered' });
+          controller.message({ method: 'ui/notifications/size-changed', params: { height: 294 } });
+        });
+        expect(frame.style.opacity).toBe('1');
+        // jsdom has no layout. Supply the visible card's box before deleting its message tree.
+        vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue(new DOMRect(32, 64, 640, 294));
+      }
       // The ancestor sandbox must also allow the inner App's submit event (G5).
       expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-forms');
       if (scenario === 'disconnected') frame.remove();
@@ -479,6 +489,13 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
       if (scenario === 'unmount' || scenario === 'failure-retry') {
         expect(frame.parentElement).toBe(document.body);
         expect(frame.isConnected).toBe(true);
+      }
+      if (scenario === 'unmount') {
+        // While teardown is pending, keep the outgoing surface at its last size and hide it from input and paint.
+        const style = getComputedStyle(frame);
+        expect([style.width, style.height]).toEqual(['640px', '294px']);
+        expect(style.opacity).toBe('0');
+        expect(frame.inert).toBe(true);
       }
       if (scenario === 'disconnected') expect(move).not.toHaveBeenCalled();
       await act(async () => { finish(); await closed; });

@@ -26,6 +26,8 @@ export interface BlueBubblesMessage {
   threadOriginatorGuid?: string;
   associatedMessageGuid?: string;
   associatedMessageType?: number;
+  replyToGuid?: string | null;
+  attributedBody?: unknown;
 }
 
 const WITH_MESSAGE = 'chats,chats.participants,attachments,attributed-body';
@@ -52,7 +54,7 @@ export class BlueBubblesApi {
     if (!password) throw new BlueBubblesApiError('BLUEBUBBLES_PASSWORD_REQUIRED');
   }
 
-  async request<T>(method: string, path: string, body?: unknown, binary = false): Promise<T> {
+  async request<T>(method: string, path: string, body?: unknown, binary = false, timeoutMs = 30_000): Promise<T> {
     if (!path.startsWith('/api/v1/') || path.includes('#')) throw new BlueBubblesApiError('BLUEBUBBLES_INVALID_ROUTE');
     const url = new URL(path, this.origin);
     url.searchParams.set('password', this.password);
@@ -60,7 +62,7 @@ export class BlueBubblesApi {
       const response = await this.fetcher(url, {
         method,
         redirect: 'error',
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(timeoutMs),
         ...(body instanceof FormData ? { body } : body === undefined ? {} : {
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         }),
@@ -92,10 +94,13 @@ export class BlueBubblesApi {
     }
   }
 
-  async info(): Promise<{ server_version?: string }> {
+  async info(): Promise<{ server_version?: string; private_api?: boolean; helper_connected?: boolean }> {
     const info = await this.request<{server_version?: string; private_api?: boolean; helper_connected?: boolean}>('GET', '/api/v1/server/info');
     this.groupSendMethod = info.private_api === true && info.helper_connected === true ? 'private-api' : 'apple-script';
     return info;
+  }
+  iMessageAccount(): Promise<{ vetted_aliases?: unknown } | null> {
+    return this.request('GET', '/api/v1/icloud/account', undefined, false, 2_000);
   }
   message(guid: string): Promise<BlueBubblesMessage> {
     return this.request('GET', `/api/v1/message/${encodeURIComponent(guid)}?with=${WITH_MESSAGE}`);

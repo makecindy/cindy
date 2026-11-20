@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { channel } from 'node:diagnostics_channel';
 import { withAuxiliaryUsage } from '../usage/auxiliaryUsage.js';
 import { parseAuxiliaryResponse, type AuxiliaryUsageRecorder } from '../../shared/auxiliaryUsage.js';
 /**
@@ -20,6 +22,7 @@ import {
   appendProviderRequestPath,
   providerModelRecord,
   providerPresetModelRecord,
+  providerEndpointBindings,
   providerWireProtocolForApi,
   type PiModelApi,
   type ProviderModelRecord,
@@ -32,6 +35,7 @@ import { joinAnthropicMessagesUrl } from '@cindy/responses-anthropic-bridge';
 
 import {
   classifyProviderError,
+  providerNetworkErrorCode,
   type ProviderErrorClassification,
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
@@ -46,6 +50,65 @@ import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress, 
 
 import type { ProviderConnectionTestInput, ProviderConnectionTestResult } from '../../shared/providerConnectionTest.js';
 import { probeProviderProtocols } from './provider-protocol-probe.js';
+
+const nativeProbeContext = new AsyncLocalStorage<symbol>();
+// DNS suffixes from the bundled AWS SDK partition endpoint rules, including
+// dualstack. Only the Bedrock runtime service host qualifies, never STS/metadata.
+const bedrockRuntimeDnsSuffixes = new Set([
+  'amazonaws.com', 'api.aws', 'amazonaws.com.cn', 'api.amazonwebservices.com.cn',
+  'amazonaws.eu', 'api.amazonwebservices.eu', 'c2s.ic.gov', 'api.aws.ic.gov',
+  'sc2s.sgov.gov', 'api.aws.scloud', 'cloud.adc-e.uk', 'api.cloud-aws.adc-e.uk',
+  'csp.hci.ic.gov', 'api.aws.hci.ic.gov',
+]);
+
+/** SDK-owned transports cannot inject fetch. Observe their existing Node errors
+ * before SDK string conversion, scoped to requests created by this probe. No
+ * transport replacement, trust changes, extra requests or raw error retention.
+ */
+async function withNativeProbeNetworkErrors<T>(baseUrl: string, api: string, run: () => Promise<T>, record: (code: string) => void): Promise<T> {
+  const context = Symbol();
+  const requests = new WeakSet<object>();
+  const destination = new URL(baseUrl).origin;
+  // Bedrock may select its runtime region from IAM profile/env or a model ARN
+  // rather than the catalog default. Token/metadata/STS hosts are not runtimes.
+  const bedrockRuntime = (origin: string) => bedrockRuntimeDnsSuffixes.has(
+    /^https:\/\/bedrock-runtime(?:-fips)?\.[a-z0-9-]+\.([a-z0-9.-]+)$/.exec(origin)?.[1] ?? '');
+  const starts = [channel('undici:request:create'), channel('http.client.request.start'), channel('http2.client.stream.created')];
+  const errors = [channel('undici:request:error'), channel('http.client.request.error'), channel('http2.client.stream.error')];
+  const onStart = (message: unknown) => {
+    try {
+      const { request: httpRequest, stream, headers } = message as {
+        request?: object; stream?: object; headers?: Record<string, string>;
+      };
+      const request = httpRequest ?? stream;
+      if (!request || typeof request !== 'object' || nativeProbeContext.getStore() !== context) return;
+      const transport = request as { origin?: string; protocol?: string; getHeader?: (name: string) => unknown };
+      const origin = new URL(stream ? `${headers?.[':scheme']}://${headers?.[':authority']}`
+        : transport.origin ?? `${transport.protocol}//${transport.getHeader?.('host')}`).origin;
+      if (providerEndpointBindings(destination, origin) !== null
+        || (api === 'bedrock-converse-stream' && bedrockRuntime(destination) && bedrockRuntime(origin))) {
+        requests.add(request);
+      }
+    } catch { /* diagnostics must not change request creation */ }
+  };
+  const onError = (message: unknown) => {
+    // diagnostics_channel subscribers must never throw into the SDK/Node caller.
+    try {
+      const { request: httpRequest, stream, error } = message as { request?: object; stream?: object; error?: unknown };
+      const request = httpRequest ?? stream;
+      if (!request || !requests.has(request)) return;
+      const code = providerNetworkErrorCode(error);
+      if (classifyProviderError({ networkErrorCode: code }).code !== 'UNKNOWN') record(code);
+    } catch { /* diagnostics must not change the request result */ }
+  };
+  for (const event of starts) event.subscribe(onStart);
+  for (const event of errors) event.subscribe(onError);
+  try { return await nativeProbeContext.run(context, run); }
+  finally {
+    for (const event of starts) event.unsubscribe(onStart);
+    for (const event of errors) event.unsubscribe(onError);
+  }
+}
 
 const log = createMakerLogger('provider-probe');
 
@@ -291,16 +354,6 @@ function classifyStreamedError(error: Record<string, unknown>): ProviderErrorCla
   return classifyProviderError({ status: inferredStatus, bodyText });
 }
 
-/** 从 Error（fetch 抛出）提取网络层错误码。 */
-function networkErrorCode(err: unknown): string {
-  if (err instanceof Error) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') return err.name;
-    const cause = (err as { cause?: { code?: unknown } }).cause;
-    if (cause && typeof cause.code === 'string') return cause.code;
-    return err.name || 'UNKNOWN_NETWORK_ERROR';
-  }
-  return 'UNKNOWN_NETWORK_ERROR';
-}
 
 /** 上游 origin(协议 + host + 端口),不带路径 / query / 凭证——只用于日志定位。 */
 function probeUpstreamOrigin(baseUrl: string): string {
@@ -390,14 +443,26 @@ async function runProviderProbeUnlogged(
     'bedrock-converse-stream', 'mistral-conversations'].includes(api) || requiresNativeProviderAuth(row))) {
     const model = row ?? invocationModelRecord({ id: spec.modelId, name: spec.modelId,
       group: 'custom', contextWindow: 4096, maxOutput: 16, efforts: [], defaultEffort: null, api: api as PiModelApi }, spec.baseUrl)!;
+    // Native SDKs may resolve a transport error as an assistant message and
+    // discard its cause. Preserve only the safe code before that conversion.
+    let networkCode: string | undefined;
+    const diagnosticFetch: typeof fetch = async (input, init) => {
+      try { return await fetchImpl(input, init); }
+      catch (error) {
+        networkCode = providerNetworkErrorCode(error);
+        throw error;
+      }
+    };
     try {
-      const result = await probePiProvider({ row: model, providerId: spec.catalogPresetId ?? 'custom-probe',
+      const run = () => probePiProvider({ row: model, providerId: spec.catalogPresetId ?? 'custom-probe',
         upstream: spec.baseUrl, apiKey: spec.authMethod === 'none' ? '' : spec.apiKey
           ?? new Headers(spec.headers).get('authorization')?.replace(/^Bearer /i, '')
           ?? new Headers(spec.headers).get('x-goog-api-key')
           ?? new Headers(spec.headers).get('x-api-key') ?? '',
-        headers: spec.apiKey || spec.authMethod === 'none' ? withoutCredentialHeaders(spec.headers) : spec.headers, fetchImpl,
+        headers: spec.apiKey || spec.authMethod === 'none' ? withoutCredentialHeaders(spec.headers) : spec.headers, fetchImpl: diagnosticFetch,
       }, AbortSignal.timeout(PROBE_TIMEOUT_MS));
+      const result = await (['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(api)
+        ? withNativeProbeNetworkErrors(spec.baseUrl, api, run, code => { networkCode = code; }) : run());
       if (result.usage && [result.usage.input, result.usage.output, result.usage.cacheRead, result.usage.cacheWrite].some(n => n > 0)) {
         await record({ inputTokens: result.usage.input, outputTokens: result.usage.output,
           cacheReadTokens: result.usage.cacheRead, cacheCreateTokens: result.usage.cacheWrite },
@@ -408,10 +473,10 @@ async function runProviderProbeUnlogged(
       const statusMatch = detail.match(/(?:status|code)["\s:]+(4\d\d|5\d\d)\b|^(4\d\d|5\d\d)(?:\s|:)/);
       const status = statusMatch ? Number(statusMatch[1] ?? statusMatch[2]) : undefined;
       const cls = classifyProviderError({ status, bodyText: detail,
-        ...(result.stopReason === 'aborted' ? { networkErrorCode: 'AbortError' } : {}) });
+        networkErrorCode: result.stopReason === 'aborted' ? 'AbortError' : networkCode });
       return { ok: false, code: cls.code, status, latencyMs: Date.now() - start, detail: cls.detail };
     } catch (err) {
-      const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+      const cls = classifyProviderError({ networkErrorCode: networkCode ?? providerNetworkErrorCode(err) });
       return { ok: false, code: cls.code, latencyMs: Date.now() - start, detail: cls.detail };
     }
   }
@@ -420,7 +485,7 @@ async function runProviderProbeUnlogged(
   try {
     res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
   } catch (err) {
-    const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+    const cls = classifyProviderError({ networkErrorCode: providerNetworkErrorCode(err) });
     return { ok: false, code: cls.code, latencyMs: Date.now() - start, detail: cls.detail };
   }
   const latencyMs = Date.now() - start;
