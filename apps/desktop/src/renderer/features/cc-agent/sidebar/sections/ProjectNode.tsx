@@ -1,4 +1,3 @@
-import { deviceDisplayName } from '@/lib/deviceName';
 /**
  * ProjectNode — 单个 Project 节点（Header + 受控折叠的子 sessions）
  * ---------------------------------------------------------------------------
@@ -23,7 +22,6 @@ import {
   ChevronDown,
   ChevronRight,
   EllipsisVertical,
-  Folder,
   FolderOpen,
   Link2,
   PanelLeft,
@@ -60,7 +58,6 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import type { FilterStatus } from '../../hooks/useSidebarFilter';
 import { MENU_ITEM_CLASS } from '../menuStyles';
-import { RemoteProjectIcon } from '../RemoteProjectIcon';
 import { SidebarRightStatusIndicator } from '../SidebarRightStatusIndicator';
 import { isDeviceLinkWriteBlocked } from '../../lib/remoteSessionWriteGuard';
 import { projectBulkArchiveActionForStatus } from '../../lib/projectBulkArchiveAction';
@@ -263,14 +260,7 @@ const ProjectHeader = memo(function ProjectHeader({
   onBrowseFiles,
   onArchiveAll,
 }: ProjectHeaderProps) {
-  const FolderIcon = isCollapsed ? Folder : FolderOpen;
   const { t } = useTranslation();
-  // remote 项目复用本地专属入口（在文件管理器打开 / 复制深链 / 同步 Codex）会按本机
-  // 路径误操作或丢失 host 身份，故这些入口对 remote 一律隐藏；host-aware 版本后续单独迭代。
-  const isRemote = project.scope === 'remote';
-  // device-link 远程项目(被控设备的项目):与 SSH remote 一样隐藏本机 FS 入口,
-  // 但徽标用设备 icon 而非 SSH 的 Globe,tooltip 显示设备名。
-  const isDeviceLink = project.deviceLinkDeviceId != null;
   const remoteIdentity = getRemoteProjectMachineIdentity(project);
   const projectWritesBlocked = isDeviceLinkWriteBlocked(project);
   const Chevron = isCollapsed ? ChevronRight : ChevronDown;
@@ -381,17 +371,8 @@ const ProjectHeader = memo(function ProjectHeader({
           !isEditingName && 'hover:bg-sidebar-item-hover',
         )}
       >
-        {/* 仅收起时汇总运行态,避免与展开的子任务同时呼吸(动画挂 wrapper)。 */}
-        <span
-          className={cn(
-            'inline-flex shrink-0',
-            isCollapsed && lamp?.running
-              ? 'text-[var(--status-bar-accent)] session-status-breathing'
-              : 'text-[var(--sidebar-list-muted)]',
-          )}
-        >
-          <FolderIcon size={15} strokeWidth={1.8} aria-hidden="true" />
-        </span>
+        {/* 项目行只有文字(2026-11-19 用户裁决):不画文件夹 / 远程电脑图标;收起时运行中
+            显示行尾灰色转圈，需要你看的(出错 / 等你回复 / 完成未读)项目名加粗。 */}
         {/* 名字 + remote identity 同组占据 flex-1。远程项目常态展示机器身份,
             避免相同 workingDir 的项目只能靠 hover 才能区分。 */}
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -424,26 +405,8 @@ const ProjectHeader = memo(function ProjectHeader({
           ) : (
             // shrink 而非 flex-1:让远程图标紧跟项目名,不被推到行尾
             // (2026-08-12 用户裁决,与会话行的标题 + 远程图标同款)。
-            <span className="min-w-0 max-w-full shrink truncate">{project.displayName}</span>
+            <span className={cn('min-w-0 max-w-full shrink truncate', isCollapsed && collapsedStatusTone && 'font-semibold text-foreground')}>{project.displayName}</span>
           )}
-          {!isEditingName && isDeviceLink ? (
-            <Tip
-              text={
-                remoteIdentity?.displayLabel ??
-                deviceDisplayName(project.deviceLinkDeviceId ?? '', project.deviceLinkDeviceName)
-              }
-            >
-              <RemoteProjectIcon
-                kind="device-link"
-                connectionStatus={project.deviceLinkConnectionStatus}
-                className="text-[var(--folder-item-icon)]"
-              />
-            </Tip>
-          ) : !isEditingName && isRemote ? (
-            <Tip text={remoteIdentity?.displayLabel ?? project.remoteHostId ?? ''}>
-              <RemoteProjectIcon kind="ssh" className="text-[var(--folder-item-icon)]" />
-            </Tip>
-          ) : null}
           {/* 远程机器标注:按设备分组时段头已写明归属,行内不再重复(hideRemoteMachineLabel)。 */}
           {!isEditingName && remoteIdentity && !hideRemoteMachineLabel ? (
             <span
@@ -470,7 +433,7 @@ const ProjectHeader = memo(function ProjectHeader({
         {!isEditingName && (
           <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
             <div className="grid h-6 grid-cols-[max-content] items-center justify-items-end">
-              {isCollapsed && collapsedStatusTone ? (
+              {isCollapsed && lamp?.running ? (
                 <div
                   className={cn(
                     'col-start-1 row-start-1 flex items-center gap-1',
@@ -479,7 +442,7 @@ const ProjectHeader = memo(function ProjectHeader({
                     menuPos !== null && 'opacity-0',
                   )}
                 >
-                  <SidebarRightStatusIndicator kind={collapsedStatusTone} isActive={false} />
+                  <SidebarRightStatusIndicator kind="running" isActive={false} />
                 </div>
               ) : null}
               <div

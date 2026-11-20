@@ -182,15 +182,18 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
       return <button key={row.key} type="button"
         aria-current={item.sessionId === activeSessionId ? 'page' : undefined} disabled={!!opening} aria-busy={opening === item.sharedTaskId || undefined}
         onClick={() => void openOwned(item)} aria-label={item.title + ', ' + t('sharedTask.roleHost')} title={item.title}
-        className={cn('flex w-full items-center gap-2.5 text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-          mode === 'list' ? 'min-h-14 rounded-lg px-2.5 py-2' : 'h-8 rounded-full pl-3 pr-2',
+        className={cn('flex w-full items-center gap-2.5 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+          mode === 'list' ? 'min-h-14 rounded-lg px-2.5 py-2 font-medium' : 'h-8 rounded-full pl-3 pr-2 font-normal',
           item.sessionId === activeSessionId ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-foreground hover:bg-sidebar-item-hover')}>
-        <span className="flex w-[15px] shrink-0 items-center justify-center">
-          <FileText size={12} aria-hidden />
-        </span>
-        <span className="flex w-3 shrink-0 items-center justify-center" data-testid={`shared-task-role-slot-owned-${item.sessionId}`}>
-          <Crown size={12} strokeWidth={1.8} className="text-[var(--warning-fg)]" aria-label={t('sharedTask.roleHost')} />
-        </span>
+        {/* 紧凑文字行与普通任务行一致:只有标题(2026-11-19 用户裁决);列表模式保留图标与皇冠。 */}
+        {mode === 'list' ? <>
+          <span className="flex w-[15px] shrink-0 items-center justify-center">
+            <FileText size={12} aria-hidden />
+          </span>
+          <span className="flex w-3 shrink-0 items-center justify-center" data-testid={`shared-task-role-slot-owned-${item.sessionId}`}>
+            <Crown size={12} strokeWidth={1.8} className="text-[var(--warning-fg)]" aria-label={t('sharedTask.roleHost')} />
+          </span>
+        </> : null}
         <span className="truncate">{item.title}</span>
       </button>;
     })}

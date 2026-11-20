@@ -330,6 +330,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       tone: collapsedAttention.tone,
     });
     const showRightStatus = groupRightStatusKind !== 'time';
+    // 紧凑文字模式(2026-11-19 用户裁决):组头不再画 Agent 图标、计时器和彩色状态点;
+    // 运行中是行尾灰色转圈，出错 / 等你回复 / 完成未读改为标题加粗。列表 / 卡片模式不变。
+    const minimalText = sessionVariant !== 'list';
+    const groupNeedsAttention = showRightStatus && groupRightStatusKind !== 'running';
     const actionButtonToneClassName = hasActiveHidden
       ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
       : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground';
@@ -527,10 +531,11 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
               );
             }}
             className={cn(
-              // 组头和运行记录沿用当前模式的会话行边距。
+              // 组头和运行记录沿用当前模式的会话行边距;text 模式不缩进(2026-11-19)。
               'group relative flex h-8 w-full items-center gap-1.5 rounded-full',
               sessionVariant === 'list' ? 'px-2.5' : 'pl-3 pr-2',
-              'text-left text-sm font-medium',
+              'text-left text-sm',
+              !minimalText ? 'font-medium' : groupNeedsAttention ? 'font-semibold' : 'font-normal',
               hasActiveHidden
                 ? 'bg-sidebar-item-active text-[var(--sidebar-item-active-foreground)]'
                 : 'text-foreground hover:bg-sidebar-item-hover',
@@ -542,6 +547,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 这样首图标和标题都能落在各自模式的普通任务列上。分组 agentKind 取
                 最新一条 run(同一 schedule 所有 run 走同一 agent),缺失时退化为
                 'cc'。isRunning 只看最新那条,与其子行一致。 */}
+              {minimalText ? null : (<>
               <span
                 className={cn(
                   'flex shrink-0 items-center justify-center',
@@ -605,6 +611,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 </button>
               </Tip>
               )}
+              </>)}
               <button
                 type="button"
                 onClick={(event) => {
@@ -617,7 +624,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 <span className="min-w-0 truncate">{group.title}</span>
               </button>
               {/* 例行任务分组：标题后显示所属伙伴头像，与组内各行的伙伴标记同源。 */}
-              {teammateRoutine && latestSession && (
+              {!minimalText && teammateRoutine && latestSession && (
                 <TeammateRoutineOwnerMark session={latestSession} />
               )}
             </span>
@@ -679,7 +686,9 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                     menuOpen && 'opacity-0',
                   )}
                 >
-                  {showRightStatus ? (
+                  {showRightStatus && minimalText && groupRightStatusKind !== 'running' ? (
+                    <span className="min-w-0 truncate text-right">{meta}</span>
+                  ) : showRightStatus ? (
                     groupRightStatusKind === 'error' ? (
                       <span
                         role="img"

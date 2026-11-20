@@ -17050,6 +17050,11 @@
         "inbox": "Boîte de réception",
         "enterInbox": "Passer en mode boîte de réception",
         "leaveInbox": "Passer en mode liste des tâches"
+      },
+      "mainTabs": {
+        "label": "Sections de la barre latérale",
+        "options": "Options de la barre latérale",
+        "computers": "Ordinateurs"
       }
     },
     "rename": {

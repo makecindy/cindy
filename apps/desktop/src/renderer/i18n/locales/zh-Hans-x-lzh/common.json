@@ -16813,6 +16813,11 @@
         "inbox": "收件箱",
         "enterInbox": "转至收件箱之式",
         "leaveInbox": "转至任务列之式"
+      },
+      "mainTabs": {
+        "label": "侧栏分门",
+        "options": "侧栏诸项",
+        "computers": "机"
       }
     },
     "rename": {

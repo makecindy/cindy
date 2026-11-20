@@ -16813,6 +16813,11 @@
         "inbox": "받은 편지함",
         "enterInbox": "받은 편지함 모드로 전환",
         "leaveInbox": "작업 목록 모드로 전환"
+      },
+      "mainTabs": {
+        "label": "사이드바 분류",
+        "options": "사이드바 옵션",
+        "computers": "컴퓨터"
       }
     },
     "rename": {

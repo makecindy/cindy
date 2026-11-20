@@ -16813,6 +16813,11 @@
         "inbox": "收件匣",
         "enterInbox": "切換到收件匣模式",
         "leaveInbox": "切換到任務列表模式"
+      },
+      "mainTabs": {
+        "label": "側欄分類",
+        "options": "側欄選項",
+        "computers": "電腦"
       }
     },
     "rename": {
