@@ -425,7 +425,7 @@ import {
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { hasTurnResponse, localizeAgentStatus, remoteResponsePendingStatus, statusAgentLocation } from './lib/localizeAgentStatus';
-import { isWaitingForQueuedInput, shouldShowComposerRuntimeStatus } from './lib/queuedInputStatus';
+import { hasUnpausedQueuedInput, shouldShowComposerRuntimeStatus } from './lib/queuedInputStatus';
 import { getStartingInputClientId, hasStartingTerminal, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
@@ -2758,11 +2758,11 @@ function CCAgentSessionContent({
   // 底部状态栏不能按空闲收起,否则「气泡说排队、会话说空闲」两边矛盾。
   // 用户 Stop 暂停的队列是有意搁置,不算等待;已经在跑 / 在准备 / 有后台任务 /
   // 有 workflow 时各有各的状态文案,排队提示让位。
-  const queuedWaiting = isWaitingForQueuedInput({
+  const queuedWaiting = hasUnpausedQueuedInput({
     queuedCount: pendingQueue.length,
     queuePaused,
-    isRunning: agentStatus.isRunning,
-  }) && !waitingRemoteStart && !backgroundTasksActive && runningWorkflow === null;
+    queueInteractionLocks,
+  }) && !agentStatus.isRunning && !waitingRemoteStart && !backgroundTasksActive && runningWorkflow === null;
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)

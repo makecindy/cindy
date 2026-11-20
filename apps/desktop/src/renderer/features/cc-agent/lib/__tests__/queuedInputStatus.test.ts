@@ -14,16 +14,18 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  isWaitingForQueuedInput,
+  hasUnpausedQueuedInput,
   shouldShowComposerRuntimeStatus,
 } from '@/features/cc-agent/lib/queuedInputStatus';
 
-describe('isWaitingForQueuedInput', () => {
-  it('is true only for an undispatched, unpaused queue while no turn is running', () => {
-    expect(isWaitingForQueuedInput({ queuedCount: 2, queuePaused: false, isRunning: false })).toBe(true);
-    expect(isWaitingForQueuedInput({ queuedCount: 0, queuePaused: false, isRunning: false })).toBe(false);
-    expect(isWaitingForQueuedInput({ queuedCount: 1, queuePaused: true, isRunning: false })).toBe(false);
-    expect(isWaitingForQueuedInput({ queuedCount: 1, queuePaused: false, isRunning: true })).toBe(false);
+describe('hasUnpausedQueuedInput', () => {
+  it('treats an execution pause like a paused queue and ignores temporary interaction locks', () => {
+    const queued = { queuedCount: 1, queuePaused: false, queueInteractionLocks: [] };
+    expect(hasUnpausedQueuedInput(queued)).toBe(true);
+    expect(hasUnpausedQueuedInput({ ...queued, queuedCount: 0 })).toBe(false);
+    expect(hasUnpausedQueuedInput({ ...queued, queuePaused: true })).toBe(false);
+    expect(hasUnpausedQueuedInput({ ...queued, queueInteractionLocks: ['execution-pause'] })).toBe(false);
+    expect(hasUnpausedQueuedInput({ ...queued, queueInteractionLocks: ['drag'] })).toBe(true);
   });
 });
 

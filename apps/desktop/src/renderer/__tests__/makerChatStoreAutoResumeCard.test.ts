@@ -392,6 +392,12 @@ describe('applyInputProjection 自愈进行中提示', () => {
     // 用户 Stop 暂停的队列是有意搁置,不算「还在等」。
     inputProjectionCb!(projection({ pendingQueue: [{ clientId: 'queued-1' }], queuePaused: true }));
     expect(makerChatStore.hasQueuedInput(SID)).toBe(false);
+
+    // PR #11813 review: control_session pause is projected as an interaction lock (unit).
+    inputProjectionCb!(projection({ pendingQueue: [{ clientId: 'queued-1' }], queueInteractionLocks: ['execution-pause'] }));
+    expect(makerChatStore.hasQueuedInput(SID)).toBe(false);
+    inputProjectionCb!(projection({ pendingQueue: [{ clientId: 'queued-1' }] }));
+    expect(makerChatStore.hasQueuedInput(SID)).toBe(true);
   });
 
   it('进度更新时同一张卡的 systemCardData 必须跟着变(1/5 → 2/5)', () => {

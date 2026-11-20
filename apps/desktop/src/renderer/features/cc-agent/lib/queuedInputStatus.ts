@@ -9,19 +9,18 @@
  * 三条输入各自的含义：
  * - `queuedCount` 队列里还没派发的条数。
  * - `queuePaused` 用户按过 Stop、队列被暂停 —— 那是有意搁置，不是「还在等」。
- * - `isRunning` 供应商回合正在跑 —— 队列会在这轮结束后自动接续，这时会话有别的
  *   状态可以解释，不需要额外的等待提示。
  */
 
-/** 会话是否在等队列里的消息被派发。 */
-export function isWaitingForQueuedInput(input: {
+/** 队列中是否有输入，且队列和任务执行均未暂停。 */
+export function hasUnpausedQueuedInput(input: {
   queuedCount: number;
   queuePaused: boolean;
-  isRunning: boolean;
+  queueInteractionLocks?: readonly string[];
 }): boolean {
-  if (input.queuedCount <= 0) return false;
-  if (input.queuePaused) return false;
-  return !input.isRunning;
+  return input.queuedCount > 0
+    && !input.queuePaused
+    && !input.queueInteractionLocks?.includes('execution-pause');
 }
 
 /**

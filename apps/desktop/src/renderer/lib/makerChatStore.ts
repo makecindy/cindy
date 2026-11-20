@@ -2,6 +2,7 @@ import { recordGithubStarPromptSend, recordGithubStarPromptCompletion } from './
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
+import { hasUnpausedQueuedInput } from '@/features/cc-agent/lib/queuedInputStatus';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
 import { chatRemoteErrorGuidanceKey } from './autoReviewUnavailableGuidance';
@@ -10652,11 +10653,11 @@ function hasPausedQueue(sessionId: string): boolean {
 }
 
 /**
- * 会话级「还在等」的事实：队列里还有没派发的输入，且没有被用户 Stop 暂停。
+ * 会话级「还在等」的事实：队列里还有没派发的输入，且队列或执行未被暂停。
  *
  * 与气泡上的「排队中」标签同一份数据（都读这里的 pendingQueue）：会话不能显示
  * 成空闲，否则「排队中」这条消息会不会被执行只能靠猜(#11299)。侧栏行与底部状态栏
- * 都读这一个入口，避免两处各算一遍。
+ * 共用队列判定。
  *
  * 与 `hasPausedQueue` 一样是 NON-creating read（sessions.get，不 getOrCreateState），
  * 侧栏对每个列出的会话都会查一次。
@@ -10664,7 +10665,11 @@ function hasPausedQueue(sessionId: string): boolean {
 function hasQueuedInput(sessionId: string): boolean {
   const state = sessions.get(sessionId);
   if (!state) return false;
-  return state.pendingQueue.length > 0 && !state.queuePaused;
+  return hasUnpausedQueuedInput({
+    queuedCount: state.pendingQueue.length,
+    queuePaused: state.queuePaused,
+    queueInteractionLocks: state.queueInteractionLocks,
+  });
 }
 
 /**
