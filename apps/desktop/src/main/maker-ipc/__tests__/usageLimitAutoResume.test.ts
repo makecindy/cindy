@@ -491,6 +491,19 @@ describe('Gemini paid input tokens per minute (#11719)', () => {
     details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '56s' }] };
   const message = JSON.stringify({ error: { message: JSON.stringify({ error }) } });
 
+  // Unit: tasks sharing Google's retry boundary must not all spend their only retry together.
+  it('staggers minute-limit waits and preserves future deadlines across restart', async () => {
+    const random = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(0.5).mockReturnValue(0.25);
+    const h = harness({ random });
+    await Promise.all(['first', 'second'].map(id => h.guard.onTurnError(id, { message })));
+    expect(h.timers.map(timer => timer.delayMs)).toEqual([56_599, 71_599]);
+    expect(h.deps.arm).toHaveBeenCalledWith('second', 2, NOW + 71_599);
+    h.guard.suspend();
+    expect(h.guard.restore('second', 3, NOW + 71_599, 0, false, true)).toBe(true);
+    expect(h.guard.restore('first', 4, NOW - 1, 0, false, true)).toBe(true);
+    expect(h.timers.slice(-2).map(timer => timer.delayMs)).toEqual([71_599, 7_500]);
+  });
+
   it('uses the later Google hint, bypasses subscription checks and retries once', async () => {
     const h = harness();
     expect(await h.guard.onTurnError('api', { message })).toBe(true);

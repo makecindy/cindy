@@ -146,11 +146,11 @@ export class UsageLimitAutoResume {
       return false;
     }
     // 已过点（错误到达时额度刚好重置）也按最短缓冲继续。
-    const resumeAt = retryAt ?? (switchAccount || resetAt === null
+    const resumeAt = switchAccount || resetAt === null
       ? now + USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS
       : Math.max(resetAt, now) +
-        USAGE_LIMIT_RESUME_BUFFER_MS +
-        Math.floor(this.deps.random() * USAGE_LIMIT_RESUME_JITTER_MS));
+        (retryAt === null ? USAGE_LIMIT_RESUME_BUFFER_MS : 0) +
+        this.retryJitterMs();
     if (!this.deps.arm(sessionId, token, resumeAt)) return false;
     if (this.deps.saveWait && !await this.deps.saveWait(sessionId, token, resumeAt, this.consecutive.get(sessionId) ?? 0, signals.providerGroupUsageLimit !== undefined)) return false;
     if (this.disposed || this.generations.get(sessionId) !== generation || !this.deps.isCurrent(sessionId, token)) return false;
@@ -226,10 +226,16 @@ export class UsageLimitAutoResume {
     this.deps.log('usage-limit auto-resume fired', { sessionId, outcome, attempt });
   }
 
-  /** Keep the original deadline across restart; overdue waits get a short startup buffer. */
+  private retryJitterMs(): number {
+    return Math.floor(this.deps.random() * USAGE_LIMIT_RESUME_JITTER_MS);
+  }
+
+  /** Keep future minute-limit deadlines. Spread overdue retries across the startup window. */
   restore(sessionId: string, token: number, resumeAt: number, attempts: number, groupQuota = false, minuteLimit = false): boolean {
     if (this.disposed || attempts >= (minuteLimit ? 1 : USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES)) return false;
-    const due = minuteLimit ? Math.max(resumeAt, this.deps.now()) : Math.max(resumeAt, this.deps.now() + USAGE_LIMIT_RESUME_BUFFER_MS);
+    const now = this.deps.now();
+    let due = Math.max(resumeAt, now + USAGE_LIMIT_RESUME_BUFFER_MS);
+    if (minuteLimit) due = resumeAt > now ? resumeAt : now + this.retryJitterMs();
     if (!this.deps.arm(sessionId, token, due)) return false;
     this.bumpGeneration(sessionId);
     this.clear(sessionId);
