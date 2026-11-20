@@ -146,14 +146,22 @@ npm 的 `.cmd` 启动器，从可信的安装目录定位该包声明的 JavaScr
   **不要改写用户的全局配置**：用户自己在终端里用这个 Agent 时，它的工具必须照旧可用。
 - **做不到就不要启动**。Agent 的版本不支持关闭工具、关不干净或无法确认时，向 stderr 写明原因并以非零
   状态退出，不要带着自带工具继续运行，否则它会在错误的电脑上读写文件。新版本 Agent 可能新增工具，
-  建议启动前读回它的实际配置，只放行确认无害的工具。
+  建议启动前读回它的实际配置，只放行确认无害的工具。Agent 没有办法读回配置时，入口改为在任务进行中检查它
+  报告的工具调用，出现自带的文件或命令工具就结束任务。
 - **让 Agent 在一个空目录里启动**，不要用用户的主目录或项目目录作为它的工作目录。
 
 Cindy 在 `session/new` 的 `mcpServers` 里交给 Agent 的全部是任务所在电脑的工具(HTTP 传输，
 带 `Authorization` 头)。其中 `cindy_exec` 提供 `Bash`、`BashOutput`、`KillShell`、`Read`、`Write`、`Edit`、
-`NotebookEdit`，在任务所在电脑上执行。Agent 握手时没有声明 `mcpCapabilities.http` 的，这类任务会被拒绝。
+`NotebookEdit`，在任务所在电脑上执行。Agent 握手时没有声明 `mcpCapabilities.http` 的，这类任务会被拒绝；
+Agent 实际能连 HTTP 的 MCP 服务却没有声明时，由入口在转发 `initialize` 的回包时补上。
 `session/new` 的 `cwd` 是一个只含项目说明文件的目录，路径仅用于对话，不代表项目在这台电脑上。
 Agent 收不到 Cindy 的系统提示，Cindy 会在新会话的第一条消息前附一段说明，告诉它项目在哪、该用哪些工具。
+
+Cindy 按工具调用里的名称和参数显示卡片，并在用户同意后核对随后执行的操作。Agent 把这些工具报告成别的样子时
+(例如套一层通用的 MCP 调用器，真正的参数嵌在里面)，入口在转发 `session/request_permission` 与
+`tool_call` / `tool_call_update` 时把 `title` 和 `rawInput` 还原成被调用的工具和它的参数：`cindy_exec` 的工具
+用原名(`Bash`、`Read`、`Write` 等)，`command`、`file_path` 等保持在 `rawInput` 顶层。不还原时，用户确认过的
+命令与实际执行的对不上，需要确认的高风险操作会一直被任务所在电脑拒绝。
 
 只有同一账号的电脑可以这样使用。用户把供应商分享给别人或放进供应商组时，不包含插件引擎。
 
