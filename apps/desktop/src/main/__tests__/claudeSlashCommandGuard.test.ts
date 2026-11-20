@@ -112,6 +112,24 @@ describe('resolveClaudeUserInvocableCommandNames', () => {
     expect(names.size).toBe(0);
   });
 
+  it('软链工作目录按真实项目发现命令,不读软链外的无关目录', async () => {
+    const realRepo = path.join(fixtureRoot, 'real-repo');
+    const nested = path.join(realRepo, 'packages', 'app');
+    const outer = path.join(fixtureRoot, 'outer');
+    fs.mkdirSync(path.join(realRepo, '.git'), { recursive: true });
+    fs.mkdirSync(nested, { recursive: true });
+    workDir = realRepo;
+    writeSkill('linked-command', '');
+    writeSkill('wrong-command', '', path.join(outer, '.claude'));
+    const link = path.join(outer, 'link');
+    fs.symlinkSync(nested, link, 'dir');
+
+    const names = await resolveClaudeUserInvocableCommandNames(link, '/linked-command');
+
+    expect(names.has('linked-command')).toBe(true);
+    expect(names.has('wrong-command')).toBe(false);
+  });
+
   // Unit / #11777 review: an explicit CLI config root is a replacement, not another
   // source to union with ~/.claude. Otherwise another profile can authorize a bare command.
   it('CLAUDE_CONFIG_DIR 是独立配置根,不合并默认 ~/.claude', async () => {

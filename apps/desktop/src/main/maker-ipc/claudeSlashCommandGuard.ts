@@ -201,7 +201,14 @@ export async function resolveClaudeUserInvocableCommandNames(
   if (!workingDir || !path.isAbsolute(workingDir)) return EMPTY_NAMES;
   if (!messageText || !extractSlashCommandName(messageText)) return EMPTY_NAMES;
 
-  const resolvedWorkingDir = path.resolve(workingDir);
+  // 与引擎的发现入口一致：先解引用，再从真实子目录向上找 Git 根。
+  // 词法 path.resolve 会误读软链外侧的 .claude，并漏掉真实仓库里的命令。
+  let resolvedWorkingDir: string;
+  try {
+    resolvedWorkingDir = await fsp.realpath(path.resolve(workingDir));
+  } catch {
+    return EMPTY_NAMES;
+  }
   const resolvedConfigDir = resolveGlobalConfigDir(configDir);
   // §8.4：同一项目在不同 Claude 账号下是不同命令集合，配置目录必须进入缓存键。
   const key = `${resolvedWorkingDir}\0${resolvedConfigDir}`;
