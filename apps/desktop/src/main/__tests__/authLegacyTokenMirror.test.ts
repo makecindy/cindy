@@ -183,7 +183,10 @@ describe('legacy → v1 refresh token migration window', () => {
       '});',
     );
 
-    expect(body).toContain('readLatestStoredTokens: () => readStoredRefreshTokenCandidates(');
+    // Normal refresh still reads every compatibility source; only the explicit
+    // vault-owned cold-start branch ignores its rejected compatibility record.
+    expect(body).toContain('if (!opts.expectedActiveVaultAccountKey) return readStoredRefreshTokenCandidates(opts.realm);');
+    expect(body).toContain('vault.activeAccountKey === opts.expectedActiveVaultAccountKey');
     // 直接把 readPersistedRefreshToken 当唯一来源用就是本次事故的成因。
     expect(body).not.toContain('readLatestStoredToken: () => readPersistedRefreshToken(');
   });

@@ -135,6 +135,10 @@ return {
   fetch: apiFetch, start: initialize, dispatchLoginAction, enterLocalMode, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
+  vaultRecovery: () => runColdStartRefreshFlow('test-refresh', 'global', {
+    expectedActiveVaultAccountKey: accountVaultKey('global', 'original'),
+  }),
+  strictResourceRecovery: () => recoverActiveResourceSession('global', 'test-refresh'),
   clearRuntimeAuth: () => clearAuth({ preservePersistedRefreshToken: true }),
   renewPassport: (client) => productionRefreshPassportSessionSingleFlight(client, 'global', 'passport-original'),
   hostAuth: (reader) => { authRefreshOverride = reader; },
@@ -1163,6 +1167,33 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
       await h.renewPassport(client);
       expect(client.refreshAccount).toHaveBeenLastCalledWith('test-concurrent-newer');
     }
+  });
+
+  it.each(['absent', 'stale'] as const)('recovers the authoritative vault account with an %s compatibility projection', async projection => {
+    const { h } = recoverySetup();
+    const fresh = setup();
+    fresh.vault.resources[ORIGINAL_KEY].metadata = h.vault.resources[ORIGINAL_KEY].metadata;
+    fresh.vault.passports = h.vault.passports;
+    fresh.saved.session = projection === 'absent' ? null : {
+      version: 1, realm: 'global', refreshToken: 'test-stale-projection',
+    };
+    const pending = fresh.vaultRecovery();
+    await vi.advanceTimersByTimeAsync(1);
+    fresh.request.mockResolvedValue({
+      ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } },
+    });
+    await vi.advanceTimersByTimeAsync(61_250);
+    expect(fresh.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    await pending;
+    expect(fresh.authClient.exchangeAccountMembership).toHaveBeenCalledWith('test-passport-access', 'original');
+    expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
+  });
+
+  it('still rejects recovery without a projection outside the explicit vault-owned path', async () => {
+    const { h } = recoverySetup();
+    h.saved.session = null;
+    await expect(h.strictResourceRecovery()).rejects.toMatchObject({ code: 'AUTH_FLOW_SUPERSEDED' });
+    expect(h.deps.refreshPassportSessionSingleFlight).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('preserves cold-start write-failure evidence unless explicitly cleared (clear=%s)', async explicitClear => {

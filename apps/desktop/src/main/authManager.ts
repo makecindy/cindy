@@ -3497,6 +3497,7 @@ const uncertainResourceRefreshTokens = new Map<AuthRegion, string>();
 async function recoverActiveResourceSession(
   realm: AuthRegion,
   rejectedRefreshToken: string,
+  expectedActiveVaultAccountKey?: string,
 ): Promise<AuthTokenPair | null> {
   if (isPassiveSharedUserDataInstance()) return null;
   const vault = readAuthAccountVault();
@@ -3504,6 +3505,7 @@ async function recoverActiveResourceSession(
   const resource = key ? vault.resources[key] : undefined;
   if (
     !key ||
+    (expectedActiveVaultAccountKey !== undefined && key !== expectedActiveVaultAccountKey) ||
     !resource?.metadata ||
     resource.realm !== realm ||
     resource.refreshToken !== rejectedRefreshToken ||
@@ -3513,6 +3515,9 @@ async function recoverActiveResourceSession(
     return null;
   const metadata = resource.metadata;
   if (!vault.passports[passportVaultKey(realm, metadata.passportId)]) return null;
+  // Only the explicit vault-owned cold-start path may repair a missing or
+  // stale compatibility projection. Runtime refresh still requires both.
+  const vaultOwnsRecovery = expectedActiveVaultAccountKey === key;
   const epoch = authStateEpoch;
   const loginEpoch = loginFlowEpoch;
   const assertCurrent = (retryAt?: number): void => {
@@ -3525,8 +3530,8 @@ async function recoverActiveResourceSession(
       typeof latest.signedOutAt === 'number' ||
       isLoggedOutVaultAccount(latest, key) ||
       latest.resources[key]?.refreshToken !== rejectedRefreshToken ||
-      session?.realm !== realm ||
-      session.refreshToken !== rejectedRefreshToken
+      (!vaultOwnsRecovery &&
+        (session?.realm !== realm || session.refreshToken !== rejectedRefreshToken))
     ) {
       // Cancellation is not evidence that the Resource is irrecoverable.
       throw new AuthApiError('AUTH_FLOW_SUPERSEDED', 409, 'Saved session recovery was superseded', retryAt);
@@ -3560,6 +3565,7 @@ async function runAuthRefreshWithReplacementRetry(
     phase: 'cold-start' | 'runtime';
     realm: AuthRegion;
     withTransientRetry: boolean;
+    expectedActiveVaultAccountKey?: string;
     rateLimitDelayMs?: number;
     onFailure?: (info: RefreshFailureInfo) => void;
   },
@@ -3592,7 +3598,15 @@ async function runAuthRefreshWithReplacementRetry(
       }
       return result;
     },
-    readLatestStoredTokens: () => readStoredRefreshTokenCandidates(opts.realm),
+    readLatestStoredTokens: () => {
+      if (!opts.expectedActiveVaultAccountKey) return readStoredRefreshTokenCandidates(opts.realm);
+      const vault = readAuthAccountVault();
+      const resource = vault.activeAccountKey === opts.expectedActiveVaultAccountKey
+        ? vault.resources[opts.expectedActiveVaultAccountKey] : undefined;
+      // The recursive cold-start path has already selected the authoritative
+      // owner. Do not chase its rejected compatibility projection again.
+      return [resource?.realm === opts.realm ? resource.refreshToken : null];
+    },
     transientRetry: opts.withTransientRetry
       ? {
           rateLimitDelayMs: opts.rateLimitDelayMs,
@@ -3628,7 +3642,9 @@ async function runAuthRefreshWithReplacementRetry(
     uncertainResourceRefreshTokens.get(opts.realm) === run.requestedToken
   ) {
     try {
-      const pair = await recoverActiveResourceSession(opts.realm, run.requestedToken);
+      const pair = await recoverActiveResourceSession(
+        opts.realm, run.requestedToken, opts.expectedActiveVaultAccountKey,
+      );
       if (pair)
         return {
           ...run,
@@ -5132,6 +5148,7 @@ async function runColdStartRefreshFlow(
         phase: 'cold-start',
         realm: storedRealm,
         withTransientRetry: false,
+        expectedActiveVaultAccountKey: ownershipRecovery.expectedActiveVaultAccountKey,
       });
       // Replacement recovery may have consumed a newer credential. Keep this
       // attempt's deadline and failure history attached to the actual request,
