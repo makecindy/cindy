@@ -21,7 +21,7 @@ import { getByokPricing } from '../model-access/byokPricing.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   accountReferencePriceQuote as providerReferencePriceQuote,
-  providerHasRegistryReferenceTariff,
+  providerRegistryTariffEndedAt,
   providerSnapshotReferencePriceQuote,
 } from './accountReferencePrice.js';
 import {
@@ -123,7 +123,7 @@ export function getReferenceModelPricing(
             (pricing[provider.id] ??= {})[modelPricingKey(model.id, agentKind)] = registryQuote;
             continue;
           }
-          if (providerHasRegistryReferenceTariff(provider, provider.id, model.id, registry, agentKind)) {
+          if (providerRegistryTariffEndedAt(provider, provider.id, model.id, registry, at, agentKind)) {
             continue;
           }
           const localQuote = modelCostQuote(provider.id, model);

@@ -281,20 +281,18 @@ it('keeps a failing window or account read inside the deferred follow-up', async
 // deprecation cutoffs must not fall back to static costs, and non-Registry providers
 // (such as OpenRouter) keep imported `model.cost` including tiered long-context bands.
 describe('API-key preset reference prices and static cost precedence', () => {
-  const geminiPreset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
   const geminiAccount = buildUserProvider({
     id: 'gemini-work',
     name: 'Gemini Work',
     runtimes: {
       pi: {
-        baseUrl: geminiPreset.runtimes.pi!.baseUrl,
-        wireProtocol: 'openai-chat',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
         catalogPresetId: 'google-gemini-api',
         models: [
-          { id: 'gemini-4-neon', name: 'Gemini 4 Neon' },
-          { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon' },
-          { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' },
-          { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+          { id: 'gemini-4-neon', name: 'Gemini 4 Neon', api: 'google-generative-ai' },
+          { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', api: 'google-generative-ai' },
+          { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview', api: 'google-generative-ai' },
+          { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', api: 'google-generative-ai' },
         ],
       },
     },
@@ -332,12 +330,27 @@ describe('API-key preset reference prices and static cost precedence', () => {
       },
     },
   });
+  const constructorIdAccount = buildUserProvider({
+    id: 'constructor',
+    name: 'Constructor',
+    runtimes: {
+      pi: {
+        baseUrl: 'https://openrouter.ai/api/v1',
+        wireProtocol: 'openai-chat',
+        models: [{ id: 'new/model', name: 'New', discoveredCost: { input: 0.4, output: 1.6 } }],
+      },
+    },
+  });
 
   it('prefers dated, tiered Registry tariffs over static model.cost on custom API-key accounts', () => {
-    const providers = [geminiAccount, openaiApiAccount, xaiApiAccount, openrouterGemini];
+    // Confirm the native Gemini connection actually carries imported model.cost from provider-models.json,
+    // so the assertions below genuinely exercise Registry precedence, pre-adoption fallback and cutoff gating.
+    expect(geminiAccount.models.pi?.find(m => m.id === 'gemini-4-carbon')?.cost).toMatchObject({ input: 2, output: 10 });
+    expect(geminiAccount.models.pi?.find(m => m.id === 'gemini-2.5-pro')?.cost).toMatchObject({ input: 1.25, output: 10 });
+    const providers = [geminiAccount, openaiApiAccount, xaiApiAccount, openrouterGemini, constructorIdAccount];
+    const nov19 = getReferenceModelPricing({ at: '2026-11-19', providers });
     const nov20 = getReferenceModelPricing({ at: '2026-11-20', providers });
     const dec01 = getReferenceModelPricing({ at: '2026-12-01', providers });
-    const preXai = getReferenceModelPricing({ at: '2026-09-20', providers });
 
     // Custom multi-account google-gemini-api resolves Registry tariffs including Priority.
     expect(getModelPriceQuote(nov20, 'gemini-work', 'gemini-4-neon', 'pi')).toMatchObject({
@@ -363,7 +376,12 @@ describe('API-key preset reference prices and static cost precedence', () => {
       expect.objectContaining({ minInputTokens: 200001, inputPerMtok: 4, outputPerMtok: 18 }),
     ]);
 
-    // Deprecated gemini-2.5-pro stops pricing on 2026-12-01 and does NOT resurrect static model.cost.
+    // Deprecated gemini-2.5-pro preserves model.cost fallback on pre-adoption historical days
+    // (2026-11-19), uses Registry on 2026-11-20, and stops pricing on 2026-12-01 without
+    // resurrecting static model.cost after its deprecation cutoff.
+    expect(getModelPriceQuote(nov19, 'gemini-work', 'gemini-2.5-pro', 'pi')).toMatchObject({
+      inputPerMtok: 1.25, outputPerMtok: 10,
+    });
     expect(getModelPriceQuote(nov20, 'gemini-work', 'gemini-2.5-pro', 'pi')).toMatchObject({
       inputPerMtok: 1.25, outputPerMtok: 10,
     });
@@ -378,7 +396,7 @@ describe('API-key preset reference prices and static cost precedence', () => {
     });
 
     // Official direct preset xai-api with bare model ID resolves xai/grok-4.7 Registry
-    // tariffs (including Fast/priority and effectiveFrom date gating) while keeping bare ID.
+    // tariffs (including Fast/priority) while keeping the connection's original bare ID.
     expect(getModelPriceQuote(nov20, 'xai-api-work', 'grok-4.7', 'pi')).toMatchObject({
       providerId: 'xai-api-work',
       modelId: 'grok-4.7',
@@ -388,7 +406,14 @@ describe('API-key preset reference prices and static cost precedence', () => {
       cacheReadPerMtok: 0.5,
       priority: { inputPerMtok: 4, outputPerMtok: 12, cacheReadPerMtok: 1 },
     });
-    expect(getModelPriceQuote(preXai, 'xai-api-work', 'grok-4.7', 'pi')).toBeUndefined();
+
+    // Provider IDs matching Object.prototype keys (e.g. "constructor") never throw or break catalog build.
+    expect(getModelPriceQuote(nov20, 'constructor', 'new/model', 'pi')).toMatchObject({
+      providerId: 'constructor',
+      modelId: 'new/model',
+      inputPerMtok: 0.4,
+      outputPerMtok: 1.6,
+    });
 
     // Non-Registry providers (OpenRouter) keep imported model.cost and project cost.tiers.
     expect(getModelPriceQuote(nov20, 'openrouter-work', 'google/gemini-3.1-pro-preview', 'pi')).toMatchObject({

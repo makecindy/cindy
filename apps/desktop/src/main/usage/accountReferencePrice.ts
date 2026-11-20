@@ -10,11 +10,19 @@ import { providerReferencePriceQuote } from '../../shared/modelPriceQuote.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 
 /** Official direct-API preset IDs whose Registry routes live under the canonical vendor ID. */
-const DIRECT_API_PRESET_REGISTRY_IDS: Readonly<Record<string, string>> = {
-  'openai-api': 'openai',
-  'anthropic-api': 'anthropic',
-  'xai-api': 'xai',
-};
+const DIRECT_API_PRESET_REGISTRY_IDS: ReadonlyMap<string, string> = new Map([
+  ['openai-api', 'openai'],
+  ['anthropic-api', 'anthropic'],
+  ['xai-api', 'xai'],
+]);
+
+function calendarDate(value: string | Date | undefined): string {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10);
+  }
+  return new Date().toISOString().slice(0, 10);
+}
 
 function candidateRegistryModelIds(catalogId: string, modelId: string): string[] {
   if (catalogId === 'xai' && !modelId.startsWith('xai/')) {
@@ -49,36 +57,45 @@ function candidateCatalogIds(
     if (presetIds.size === 1) {
       const presetId = [...presetIds][0]!;
       add(presetId);
-      add(DIRECT_API_PRESET_REGISTRY_IDS[presetId]);
+      add(DIRECT_API_PRESET_REGISTRY_IDS.get(presetId));
     }
   }
   add(baseCatalogId);
-  add(DIRECT_API_PRESET_REGISTRY_IDS[baseCatalogId]);
+  add(DIRECT_API_PRESET_REGISTRY_IDS.get(baseCatalogId));
   return ids;
 }
 
-/** Whether the Model Registry authoritatively declares a tariff table for this connection/model. */
-export function providerHasRegistryReferenceTariff(
+/**
+ * Whether the Model Registry has already ended a standard tariff for this connection/model
+ * on or before `at` (e.g. a deprecation cutoff such as `effectiveUntil: "2026-12-01"`).
+ * Pre-adoption historical dates strictly before `effectiveFrom` return `false` so existing
+ * connections keep their `model.cost` fallback for historical usage estimation.
+ */
+export function providerRegistryTariffEndedAt(
   provider: Provider | undefined,
   providerId: string,
   modelId: string,
   registry: ModelRegistry | null | undefined,
+  at?: string | Date,
   agent?: AgentKind,
 ): boolean {
   if (!registry) return false;
+  const day = calendarDate(at);
   const registryAgent = agent === 'pi' ? undefined : agent;
   for (const catalogId of candidateCatalogIds(provider, providerId, modelId, agent)) {
     for (const candidateModelId of candidateRegistryModelIds(catalogId, modelId)) {
       const matched = findModelRegistryRoute(registry, catalogId, candidateModelId, registryAgent);
       if (!matched) continue;
-      if ((matched.route.referencePrices?.length ?? 0) > 0) return true;
-      if (matched.route.referencePriceGroup && matched.entry.modelRef) {
-        const base = findBaseModel(registry, matched.entry.modelRef);
-        if (base?.referencePriceGroups?.some(
-          group => group.id === matched.route.referencePriceGroup && group.prices.length > 0,
-        )) {
-          return true;
-        }
+      const prices = matched.route.referencePrices
+        ?? (matched.route.referencePriceGroup && matched.entry.modelRef
+          ? findBaseModel(registry, matched.entry.modelRef)?.referencePriceGroups?.find(
+            group => group.id === matched.route.referencePriceGroup,
+          )?.prices
+          : undefined);
+      if (prices?.some(
+        price => price.variant === 'standard' && price.effectiveUntil !== undefined && day >= price.effectiveUntil,
+      )) {
+        return true;
       }
     }
   }
