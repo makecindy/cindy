@@ -148,8 +148,15 @@ export function giftCardAmountLabel(amount: string, currency: string): string | 
 }
 
 /**
+ * 金额在卡面上的最小字号（卡面坐标）。缩到比这还小就看不清（卡面按 420px 宽显示时约 8px），
+ * 也防止服务端误配极小的字号或可占宽度把金额缩没了却仍算「已印在卡上」。
+ */
+const MIN_PRINTED_SIZE = 24;
+
+/**
  * 按给定的印法排金额。按字形的实际宽度计算：超过卡面留给金额的宽度时整体缩小，
- * 所以位数再多也不会压到形象。含有没有轮廓的字符时返回 null，调用方改用普通文字显示金额。
+ * 所以位数再多也不会压到形象。含有没有轮廓的字符、或要缩到看不清时返回 null，
+ * 调用方改用普通文字显示金额。
  */
 export function giftCardAmountArtForLayout(
   layout: GiftCardAmountLayout,
@@ -167,6 +174,7 @@ export function giftCardAmountArtForLayout(
   }
   const natural = (x * layout.size) / UNITS_PER_EM;
   const size = natural > layout.maxWidth ? Math.floor((layout.size * layout.maxWidth) / natural) : layout.size;
+  if (size < MIN_PRINTED_SIZE) return null;
   const scale = Number((size / UNITS_PER_EM).toFixed(5));
   return {
     fill: layout.color,

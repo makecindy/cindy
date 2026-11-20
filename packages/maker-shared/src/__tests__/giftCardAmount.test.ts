@@ -66,6 +66,15 @@ describe('gift card amount on the face', () => {
     }
   });
 
+  // 评审发现（PR #11688）：服务端误配极小的字号或可占宽度时，缩放取整成 0，金额画成看不见的路径，
+  // 界面却以为已印在卡上、不再用文字写出金额。缩到看不清就不印，交给文字。
+  it('declines to print an amount it would have to shrink out of sight', () => {
+    const layout = { x: 80, baseline: 676, size: 228, maxWidth: 480, color: '#F3EDE2' };
+    expect(giftCardAmountArtForLayout({ ...layout, size: 0.001 }, '$20')).toBeNull();
+    expect(giftCardAmountArtForLayout({ ...layout, maxWidth: 1 }, '$20')).toBeNull();
+    expect(giftCardAmountArtForLayout(layout, '$20')).not.toBeNull();
+  });
+
   it('declines faces and characters it cannot draw', () => {
     expect(giftCardAmountArt('unknown', '$20')).toBeNull();
     expect(giftCardAmountArt('cindy', 'USD 20')).toBeNull();
