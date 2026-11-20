@@ -35,6 +35,8 @@ describe('shared OpenAI media catalog', () => {
     mocks.invoke.mockResolvedValueOnce({ ok: true, result: caps });
     expect(await listSharedImageModels()).toEqual([]);
     mocks.invoke.mockResolvedValueOnce({ ok: true, result: { ...caps, sharedImageGeneration: true } });
+    expect(await listSharedImageModels()).toEqual([]); // 0.1.143 supports native accounts only.
+    mocks.invoke.mockResolvedValueOnce({ ok: true, result: { ...caps, sharedImageGeneration: true, sharedBuiltinOpenAiImage: true } });
     expect(await listSharedImageModels()).toEqual([{
       id: 'openai/gpt-image-2', name: 'GPT Image 2 · Test', providerId: 'share:s1',
       mode: 'image_generation', imageProtocol: 'openai', modalities: { input: ['text'], output: ['image'] },

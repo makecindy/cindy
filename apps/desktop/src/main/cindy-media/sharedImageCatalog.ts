@@ -45,10 +45,12 @@ export async function listSharedImageModels(sourceId?: string): Promise<Provider
       ]);
       if (!result) return [];
       const [catalog, capabilities] = result;
-      if (catalog.stale || !capabilities.ok || !parseRemoteAgentCaps(capabilities.result).sharedImageGeneration
-        || ports.findReceivedShare(share.shareId)?.status !== 'active') return [];
+      if (catalog.stale || !capabilities.ok || ports.findReceivedShare(share.shareId)?.status !== 'active') return [];
+      const caps = parseRemoteAgentCaps(capabilities.result);
+      if (!caps.sharedImageGeneration) return [];
       const provider = catalog.views.find(view => view.id === share.providerId);
-      if (!provider?.connected || provider.suspended) return [];
+      if (!provider?.connected || provider.suspended
+        || (provider.auth?.native !== 'codex' && !caps.sharedBuiltinOpenAiImage)) return [];
       const group = readProviderShareGroupSize(provider) !== null;
       return (provider.imageModels ?? []).flatMap((model): ProviderMediaRuntimeModel[] =>
         !canShareSubscriptionImage(provider, model.id) || model.disabled || model.availability === 'requires_payment'
