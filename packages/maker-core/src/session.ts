@@ -381,6 +381,8 @@ export interface SessionSendOptions extends SendOptions {
 }
 
 export interface SessionTurnLifecycleObserver {
+  /** A reservation precedes async preparation; it may never reach provider dispatch. */
+  onTurnReserved?(generation: number): ((dispatched: boolean) => void) | void;
   /** Last synchronous authorization check; no asynchronous work may follow before handle.send. */
   onDispatching?(): void;
   /** Awaited after option validation and before any provider-owned start hook or send. */
@@ -1038,7 +1040,13 @@ export class Session {
     this.sendReservation = reservation;
     this.unacceptedSendGeneration = reservedTurnGeneration;
     this.terminalObservedDuringReservation = null;
-    onTurnReserved?.(reservedTurnGeneration);
+    const releaseReservation = this.turnLifecycleObserver?.onTurnReserved?.(reservedTurnGeneration);
+    try {
+      onTurnReserved?.(reservedTurnGeneration);
+    } catch (error) {
+      releaseReservation?.(false);
+      throw error;
+    }
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
@@ -1281,6 +1289,7 @@ export class Session {
       } else {
         this.terminalObservedDuringReservation = null;
       }
+      releaseReservation?.(turnDispatched);
       if (turnLifecyclePrepared && !turnDispatched) {
         try {
           await turnLifecycleObserver?.onUndispatched(reservedTurnGeneration);
