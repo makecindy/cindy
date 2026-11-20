@@ -7,6 +7,7 @@
  */
 
 import type { BotProfile } from './botStore';
+import { BOT_DM_THREAD_PARAM } from './botDmThreadRoute';
 import type { RemoteBot } from './remoteBotRoster';
 
 /** The durable registry has exactly one canonical link; kind is only presentation. */
@@ -53,6 +54,26 @@ export function botRouteForOwnedSession(
   // Keep the original id even if the cached link becomes history before the click lands.
   if (canonicalSessionId === sessionId) return { route: `${botRoute}/session/${encodeURIComponent(sessionId)}`, consumesAlert: false };
   return { route: `/cc-agent/${encodeURIComponent(sessionId)}`, consumesAlert: false };
+}
+
+/**
+ * The teammate conversation a task was started from (#11610 「返回发起对话」): a private-chat topic
+ * opens in the teammate's chat with that topic's panel, the main chat opens as itself. Other lanes
+ * and ordinary tasks return null so callers keep their ordinary task route. Teammate identity alone
+ * cannot tell topics apart, so the route names the exact topic Session.
+ */
+export function botConversationRouteForSession(
+  profiles: readonly BotProfile[],
+  sessionId: string,
+): string | null {
+  const bot = findBotProfileForSession(profiles, sessionId);
+  if (!bot) return null;
+  const chat = `/bots/${encodeURIComponent(bot.id)}/session/`;
+  const session = bot.sessions.find((candidate) => candidate.id === sessionId);
+  if (session?.role === 'thread' && session.threadRoot) {
+    return `${chat}${encodeURIComponent(session.threadRoot.rootSessionId)}?${BOT_DM_THREAD_PARAM}=${encodeURIComponent(sessionId)}`;
+  }
+  return canonicalBotSession(bot)?.id === sessionId ? `${chat}${encodeURIComponent(sessionId)}` : null;
 }
 
 /**

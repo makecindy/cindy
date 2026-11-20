@@ -17056,6 +17056,13 @@
       "orcaRemoteLeadUnknownDevice": "otra computadora",
       "orcaRemoteLeadTip": "Un Worker de «{{lead}}» en {{device}}. Su tarea, carpeta y comandos se ejecutan en esta computadora. Los mensajes que envíes aquí no se comunican al Lead."
     },
+    "sessionOrigin": {
+      "startedBy": "Iniciada por otra sesión",
+      "startedByNamed": "Iniciada por \"{{name}}\"",
+      "from": "De otra sesión",
+      "fromNamed": "De \"{{name}}\"",
+      "openSource": "Ir a la sesión de origen"
+    },
     "gitContext": {
       "detached": "HEAD separado",
       "branchAria": "Rama actual {{branch}}",

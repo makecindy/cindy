@@ -561,6 +561,40 @@ describe('sendToSession ordering', () => {
     expect(countOccurrences(sendCall, 'broadcastSessionCreated(session.id);')).toBe(1);
   });
 
+  // #11610 / message-source.md「由另一个任务新建的任务」：侧栏「由哪个任务发起」标记读任务行的
+  // origin_session，不查消息。create 分支只是 register.ts 里的闭包、没有可单独调用的生产入口，
+  // 来源推导由 sessionOrigin.test.ts 按行为覆盖，这里守写入时机。失效后果：写在 created 广播
+  // 之后会让侧栏首帧没有标记、直到下一次刷新；来源与首条消息不同源会让标记和消息标签说法不一。
+  it('records the origin task on the new row before the created broadcast', () => {
+    const block = extractSendToSessionSource();
+    const createBranch = extractBetween(
+      block,
+      'if (!targetSessionId) {',
+      'const prev = sendToSessionLocks.get(targetSessionId);',
+    );
+    const record = extractBetween(
+      createBranch,
+      'const originSession = sessionOriginFromInputMeta(inputAgentMeta);',
+      'const clientId = createId();',
+    );
+    expect(record).toContain('.set({ originSession: serializeSessionOrigin(originSession) })');
+    expect(record).toContain('.where(eq(sessions.id, session.id));');
+    expect(record).toContain('broadcastSessionPatched(session.id, { originSession });');
+    // The row exists (openSession) before the write; both delivery paths that emit
+    // broadcastSessionCreated start after it.
+    expectOrder(createBranch, 'await openSession({', 'const originSession = sessionOriginFromInputMeta(inputAgentMeta);');
+    expectOrder(createBranch, 'broadcastSessionPatched(session.id, { originSession });', 'await enqueueSendToSessionMessage({');
+    expectOrder(createBranch, 'broadcastSessionPatched(session.id, { originSession });', 'const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
+    // Same host-stamped metadata as the first user message, so the row mark and the
+    // message source label cannot disagree.
+    expect(createBranch).toContain('...(inputAgentMeta ? { agentMeta: inputAgentMeta } : {}),');
+    expect(countOccurrences(createBranch, 'sessionOriginFromInputMeta(')).toBe(1);
+    // Only a host-confirmed creation records a source: delivering to or waking an existing
+    // task (the acceptance chain's D) must never write one.
+    expect(countOccurrences(block, 'sessionOriginFromInputMeta(')).toBe(1);
+    expect(countOccurrences(block, 'originSession: serializeSessionOrigin(')).toBe(1);
+  });
+
   it('routes ANY_SESSION_IN_TURN through maker active session state', () => {
     expect(source).toContain('hasAnySessionInTurn(');
     const anySessionInTurnBlock = extractBetween(

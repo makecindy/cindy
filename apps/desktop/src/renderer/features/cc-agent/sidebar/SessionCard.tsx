@@ -45,6 +45,7 @@ import { cn } from '@/lib/utils';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
 import { AutomationSessionButton } from './AutomationSessionButton';
+import { SessionOriginLead, SessionOriginMeta } from '../SessionOriginMark';
 import { SessionOrdinalBadgeKbd, useSessionOrdinalBadge } from './sessionOrdinalBadges';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -916,6 +917,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             )}
             style={{ height: '1.45em' }}
           >
+            {/* 由另一个任务发起：第二行开头「↳ 来源短名 · 」，标题里不再放标记(#11610 方案 D)。 */}
+            <SessionOriginLead session={session} activeForeground={isActive} />
             {listPreview}
           </p>
           {rightStatusKind !== 'time' && (
@@ -1135,6 +1138,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 }
               />
             )}
+            {/* 由另一个任务发起：「↳ 来源」占图标簇与时间之间的空位，摘要不动(#11610 方案 D)。 */}
+            <SessionOriginMeta session={session} activeForeground={isActive} />
             {/* 任务信息复选:卡片版右下角与 list/text 同源;默认仅 time 与旧渲染等价。 */}
             <SessionInfoMeta
               pieces={cardInfoPieces}

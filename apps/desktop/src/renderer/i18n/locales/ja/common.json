@@ -16819,6 +16819,13 @@
       "orcaRemoteLeadUnknownDevice": "別のパソコン",
       "orcaRemoteLeadTip": "{{device}} の「{{lead}}」の Worker です。タスク、フォルダー、コマンドはこのパソコンで実行されます。ここで送ったメッセージは Lead に報告されません。"
     },
+    "sessionOrigin": {
+      "startedBy": "別のセッションから開始",
+      "startedByNamed": "「{{name}}」から開始",
+      "from": "別のセッションから",
+      "fromNamed": "「{{name}}」から",
+      "openSource": "送信元のセッションへ"
+    },
     "gitContext": {
       "detached": "Detached HEAD",
       "branchAria": "現在のブランチ {{branch}}",

@@ -16819,6 +16819,13 @@
       "orcaRemoteLeadUnknownDevice": "다른 컴퓨터",
       "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다."
     },
+    "sessionOrigin": {
+      "startedBy": "다른 세션에서 시작됨",
+      "startedByNamed": "\"{{name}}\"에서 시작됨",
+      "from": "다른 세션에서",
+      "fromNamed": "\"{{name}}\"에서",
+      "openSource": "시작한 세션으로 이동"
+    },
     "gitContext": {
       "detached": "Detached HEAD",
       "branchAria": "현재 브랜치 {{branch}}",

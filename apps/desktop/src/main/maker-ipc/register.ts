@@ -1237,6 +1237,7 @@ import {
   serializeOrcaRemoteLead,
   type OrcaRemoteLead,
 } from '../../shared/orcaRemoteWorker.js';
+import { serializeSessionOrigin, sessionOriginFromInputMeta } from '../../shared/sessionOrigin.js';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
@@ -12285,6 +12286,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               .where(eq(sessions.id, session.id));
           } catch (err) {
             log.warn('sendToSession create: sync worktree_path to DB failed (non-fatal)', {
+              sessionId: session.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        // 任务这一行记下来源任务，侧栏与标题区据此标出「由哪个任务发起」，不逐行查首条消息。
+        // 与首条消息的 agentMeta.origin 同源；须在 created 广播(首条消息 accepted)之前落库。
+        // 失败非致命：只少一个展示标记，消息上的来源标签照常。
+        const originSession = sessionOriginFromInputMeta(inputAgentMeta);
+        if (originSession) {
+          try {
+            await db
+              .update(sessions)
+              .set({ originSession: serializeSessionOrigin(originSession) })
+              .where(eq(sessions.id, session.id));
+            broadcastSessionPatched(session.id, { originSession });
+          } catch (err) {
+            log.warn('sendToSession create: record origin session failed (non-fatal)', {
               sessionId: session.id,
               error: err instanceof Error ? err.message : String(err),
             });

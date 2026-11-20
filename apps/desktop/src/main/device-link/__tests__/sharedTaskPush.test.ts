@@ -360,6 +360,27 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(results.get('r2').result[0].agentMeta.origin).toEqual(privateOrigin);
     expect(results.get('r3').result.pendingQueue[0].origin).toEqual({ kind: 'session', senderSessionId: '', displayText: 'please review' });
   });
+
+  // message-source.md「共享任务访客」：任务行上的「由哪个任务发起」与消息来源同口径脱敏。
+  // 失效后果：访客读到房主另一个任务的 id 与标题。
+  it('drops the task-level origin from task reads and patches answered to the guest only', async () => {
+    const originSession = { sessionId: 'owner-private-task', title: 'Owner private plan' };
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    const row = { id: 'task-a', title: 'Shared work', originSession };
+    __testing.sendInvokeResultSafe(transport as never, guestA, 'g1', { ok: true, result: row }, 'local-db:sessions:get', ['task-a']);
+    __testing.sendInvokeResultSafe(transport as never, 'own-task', 'o1', { ok: true, result: row }, 'local-db:sessions:get', ['task-a']);
+    subscriptions.subscribe(guestA, ['session:task-a']);
+    subscriptions.subscribe('own-list', ['sessions']);
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 'task-a', patch: { title: 'Shared work', originSession } });
+    await vi.advanceTimersByTimeAsync(300);
+    const results = new Map(transport.sendInvokeResult.mock.calls.map((call) => [call[1], call[2]]));
+    expect(results.get('g1').result).toEqual({ id: 'task-a', title: 'Shared work' });
+    expect(results.get('o1').result.originSession).toEqual(originSession);
+    const sent = new Map(transport.sendPush.mock.calls.map((call) => [call[0], call[2]]));
+    expect(sent.get(guestA)).toEqual({ sessionId: 'task-a', patch: { title: 'Shared work' } });
+    expect(sent.get('own-list').patch.originSession).toEqual(originSession);
+  });
 });
 
 describe('shared task MCP App data stays at the owner boundary', () => {

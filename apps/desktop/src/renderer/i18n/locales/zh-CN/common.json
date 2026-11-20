@@ -16819,6 +16819,13 @@
       "orcaRemoteLeadUnknownDevice": "另一台电脑",
       "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任务、目录和命令都在这台电脑运行；你在这里发的消息不会回报给 Lead。"
     },
+    "sessionOrigin": {
+      "startedBy": "由其他任务发起",
+      "startedByNamed": "由「{{name}}」发起",
+      "from": "来自其他任务",
+      "fromNamed": "来自「{{name}}」",
+      "openSource": "回到来源任务"
+    },
     "gitContext": {
       "detached": "分离 HEAD",
       "branchAria": "当前分支 {{branch}}",

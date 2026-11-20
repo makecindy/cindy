@@ -22,6 +22,7 @@ import {
   serializeOrcaRemoteLead,
   type OrcaRemoteLead,
 } from '../../shared/orcaRemoteWorker.js';
+import { parseSessionOrigin } from '../../shared/sessionOrigin.js';
 
 import type {
   sessions,
@@ -316,6 +317,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     remoteHostId: row.remoteHostId ?? null,
     agentDeviceId: row.agentDeviceId ?? null,
     orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead ?? null),
+    originSession: parseSessionOrigin(row.originSession ?? null),
     // interrupted-turn-resume:「疑似中断」判定的两个时间戳(unix ms 原样透出,
     // renderer 打开会话时比较 startedAt > endedAt,见 sessionActiveTurn.ts)。
     activeTurnStartedAt: row.activeTurnStartedAt ?? null,

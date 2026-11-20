@@ -16819,6 +16819,13 @@
       "orcaRemoteLeadUnknownDevice": "他机",
       "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」之 Worker。差事、目录与命令皆于此机行之；君于此所遣之讯不回报 Lead。"
     },
+    "sessionOrigin": {
+      "startedBy": "他差事所起",
+      "startedByNamed": "「{{name}}」所起",
+      "from": "出自他差事",
+      "fromNamed": "出自「{{name}}」",
+      "openSource": "归来源差事"
+    },
     "gitContext": {
       "detached": "分离 HEAD",
       "branchAria": "今之分支 {{branch}}",
