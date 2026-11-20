@@ -56,6 +56,7 @@ import type { DurableOutboxRecord } from "./durableOutbox";
 import {
   canConnectOutboxPeer,
   createOutboxMessageLeases,
+  enqueueMobileOutboxRecord,
   createOutboxSessionAccess,
   outboxNeedsReconciliation,
   outboxSessionKey,
@@ -358,16 +359,7 @@ export function MobileOutboxBridge() {
         }
       },
       enqueue: async (r) => {
-        const projection = await maker(r).input.enqueue(
-          r.item.sessionId,
-          r.prepared!,
-          {
-            sendAtMs: r.sendAtMs,
-            ...(r.clearBoundaryMs !== undefined
-              ? { expectedClearBoundaryMs: r.clearBoundaryMs }
-              : {}),
-          },
-        );
+        const projection = await enqueueMobileOutboxRecord(r, invokeOwned(r));
         unarchiveAfterSend(r);
         return projection;
       },
