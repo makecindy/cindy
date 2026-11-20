@@ -685,6 +685,7 @@ export function createInputQueue(deps) {
       settleAndWake, retryTurnSettlement,
       canSettleTurnControls: () => !ownerStopping && !closing && profileHold === null,
       async dispose(canRetryPersistence) {
+        // Report the initial drain failure before retrying history on a later clear scan.
         const retry = closing ? canRetryPersistence : undefined;
         closing = true;
         // No runtime is released while this owner's runtime drains and stops.
