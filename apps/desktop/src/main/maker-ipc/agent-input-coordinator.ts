@@ -82,6 +82,8 @@ import type {
 } from '../../shared/agentInputQueue.js';
 import {
   HOST_ONLY_AGENT_PREFIX,
+  HOST_ONLY_RECOVERY_REQUIRES_IMAGES,
+  recoveryRequiresImageInput,
   appendNoteToMakerUserMessage,
   buildMakerUserMessage,
   getAgentInputAttachmentBlockType,
@@ -3833,6 +3835,7 @@ export class AgentInputCoordinator {
           // Ordinary retries keep files in their native history. Hidden group inputs
           // may be absent after handoff, so retain their files with the request.
           files: groupRecovery ? recovery.item.files : undefined,
+          [HOST_ONLY_RECOVERY_REQUIRES_IMAGES]: recoveryRequiresImageInput(recovery.item) ? true : undefined,
           mentions: undefined,
           // retry-supersede 只属于零产出克隆重发。续跑分支的原消息是真实历史,
           // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行
@@ -5177,6 +5180,7 @@ export class AgentInputCoordinator {
     Reflect.deleteProperty(projected, TASK_ACTION_INPUT_GUARD);
     Reflect.deleteProperty(projected, TELEGRAM_QUESTION_ORIGIN);
     delete projected[HOST_ONLY_AGENT_PREFIX];
+    delete projected[HOST_ONLY_RECOVERY_REQUIRES_IMAGES];
     delete projected.hostAcceptedAtMs;
     delete projected.orcaReportDelivery;
     delete projected.orcaReportDeliveryFence;

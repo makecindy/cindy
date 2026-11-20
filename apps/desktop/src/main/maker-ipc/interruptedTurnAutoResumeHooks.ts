@@ -1,5 +1,5 @@
 import type { AgentInputCoordinatorDeps } from './agent-input-coordinator.js';
-import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { recoveryRequiresImageInput, type AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { canRecoverUndeliveredOrcaReport } from '../../shared/sharedTaskRecovery.js';
 import type { AutoResumeBookkeeping, SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
 import {
@@ -123,7 +123,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       const modelGroupInput = modelGroupInputs?.has(item.createOpts) === true;
       const configuredInput = modelGroupInput || botFallbackInputs.has(item.createOpts);
       const requireRouteChange = configuredInput && isBotCandidateUnavailable(signals);
-      const hasImages = item.files?.some(file => file.category === 'image') === true;
+      const hasImages = recoveryRequiresImageInput(item);
       const groupRecovery = modelGroupInput
         ? { accountUnavailable: isModelGroupConnectionOutOfCredit(signals), hasImages }
         : undefined;
