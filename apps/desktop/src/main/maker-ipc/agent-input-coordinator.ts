@@ -241,6 +241,8 @@ export interface AgentInputSendOpts {
   readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
   /** Main-owned identity of the zero-output user turn being replaced. */
   retryUserClientId?: string;
+  /** Accepted source input for retained-history recovery, never a replacement. */
+  continueUserClientId?: string;
   toolsDisabled?: boolean;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: string;
   readonly [AUTO_REVIEW_USER_INTENT]?: string;
@@ -5854,7 +5856,8 @@ export class AgentInputCoordinator {
             throw error;
           }
         } } : {}),
-        ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
+        ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId }
+          : head.retrySourceClientId ? { continueUserClientId: head.retrySourceClientId } : {}),
         [TELEGRAM_QUESTION_ORIGIN]: telegramQuestionAnswerOrigin(head),
         [ASYNC_QUESTION_ANSWER]: head.clientId.startsWith('question-reply:') ? true : undefined,
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),

@@ -265,11 +265,16 @@ Claude Code、Codex 共用同一模型比例，各自适配原生参数。env:`C
 导航只回退消息，保留当前模型和推理档位；重新打开任务时仍由 Cindy 已保存的选择恢复设置。
 回归见 `session-tree.test.ts` 与 `pi-provider-routing.test.ts`。旧失败分支完整保留，
 不按文本去重，也不重放已有工具结果。若该轮明确遇到请求体超限拒收（HTTP 413，或网关以 400
-`BadRequest.TooLarge` / `Exceeded limit on max bytes to request body` 拒收），用户这次重试在重发前
+`BadRequest.TooLarge` / `Exceeded limit on max bytes to request body` 拒收），或明确图片数量拒收
+（`too many images in request` / `maximum number of images is <数字>`），用户这次重试在重发前
 调用一次原生 compact；压缩失败（包括 RPC 超时、普通错误或无法压缩）时，沿用原请求的
-字节超限证据，本机锁存下一次发送前换窗，并在持久错误中记录专用恢复失败标记，关闭运行时后
+请求体／图片数量超限证据，本机锁存下一次发送前换窗，并在持久错误中记录专用恢复失败标记，关闭运行时后
 仍能恢复。用户取消不触发换窗，SSH 保留错误。
-这一恢复由用户重试触发，不改变正常轮次由 Pi 自己管理自动压缩的约定。
+已有工具成果的续跑单独携带原生输入身份，核对当前分支最新失败为明确图片数量拒收后，
+只调用一次原生 compact，再发续跑消息；不导航回原输入，不重放已经完成的工具。
+低 token 历史可能无法原生压缩，沿用上述失败恢复，不保证一次压缩就能消除供应商限制。
+裸 `invalid_media`、损坏或不支持的图片不触发这项恢复，也不为正常多图任务设置全局数量上限。
+这一恢复由重试触发，不改变正常轮次由 Pi 自己管理自动压缩的约定。
 
 Pi 同样消费 `AgentRuntimeConfig.behaviorFlags`（静态对象或按来源、凭证形态、执行位置求值）。
 Desktop 复用既有工具链并行度设置，向本机 Pi 注入 `VITEST_MAX_FORKS`、`VITEST_MAX_THREADS`、

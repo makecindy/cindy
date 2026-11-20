@@ -1463,6 +1463,26 @@ describe('maker SEND transaction', () => {
     expect(vi.mocked(session.send).mock.lastCall?.[1]?.retryTranscriptUserEntryId).toBe('pi-user-entry');
   });
 
+  // #8724: resolve retained-history identity separately from zero-output replacement.
+  it.each(['pi', 'claude-code'] as const)('maps a continuation only for %s without relinking its source row', async agentKind => {
+    const { deps, session } = createDeps();
+    session.agentKind = agentKind;
+    deps.readPiUserEntry = vi.fn(async () => 'original-pi-entry');
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'Continue' }, undefined, {
+      continueUserClientId: 'original-client',
+      persistUserMessage: { clientId: 'continuation-client', content: 'Continue' },
+    });
+    const options = vi.mocked(session.send).mock.lastCall?.[1];
+    expect(options?.retryTranscriptUserEntryId).toBeUndefined();
+    expect(options?.continueTranscriptUserEntryId).toBe(agentKind === 'pi' ? 'original-pi-entry' : undefined);
+    expect(deps.readPiUserEntry).toHaveBeenCalledTimes(agentKind === 'pi' ? 1 : 0);
+    if (agentKind === 'pi') {
+      expect(deps.readPiUserEntry).toHaveBeenCalledWith('session-1', 'original-client');
+      expect(deps.linkPiUserEntry).toHaveBeenCalledExactlyOnceWith('session-1', 'continuation-client', 'pi-user-entry');
+    }
+  });
+
   it('relinks the existing user row when cache recovery accepts a replacement native entry', async () => {
     const { deps, session } = createDeps();
     session.agentKind = 'pi';

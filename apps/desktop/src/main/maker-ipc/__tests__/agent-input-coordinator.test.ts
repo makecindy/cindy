@@ -5517,6 +5517,24 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(hasTelegramQuestionRoute(h.sendToAgent.mock.calls[1][3][TELEGRAM_QUESTION_ORIGIN])).toBe(true);
   });
 
+  // #8724: the retained-history retry must carry identity without requesting a rewind.
+  it('retains the original input identity on retries after completed tool progress', async () => {
+    const h = createHarness();
+    const sid = 'image-quota-progress-retry';
+    h.setHasAssistantProgressAfter(async () => true);
+    h.coordinator.enqueue(sid, makeItem('image-task', 'take screenshots and act'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', '400 too many images in request');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1][3]).toMatchObject({ continueUserClientId: 'image-task' });
+    expect(h.sendToAgent.mock.calls[1][3].retryUserClientId).toBeUndefined();
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
+  });
+
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
     // retry-supersede:零产出克隆重发会在历史里留下两条一模一样的 user 行
     // (旧行 + 克隆行)。克隆行落库并派发成功后必须软删旧行,且锚定的是

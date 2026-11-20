@@ -7342,7 +7342,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it.each(['413', 'gateway-400', 'settings-changed', 'other-error', 'compaction-413', 'compaction-timeout', 'compaction-error', 'compaction-cancelled', 'cancelled-after-compaction', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output', 'oversized-after-tree'])(
+  it.each(['413', 'gateway-400', 'image-quota', 'invalid-media', 'settings-changed', 'other-error', 'compaction-413', 'compaction-timeout', 'compaction-error', 'compaction-cancelled', 'cancelled-after-compaction', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output', 'oversized-after-tree'])(
     'prepares an identity-bound Pi retry without duplicating accepted input: %s', async mode => {
       let navigated = false;
       const controller = new AbortController();
@@ -7361,6 +7361,8 @@ describe("Pi provider-aware model routing", () => {
                 role: 'assistant', stopReason: 'error',
                 content: mode === 'output' ? [{ type: 'toolCall', name: 'bash' }] : [],
                 errorMessage: mode === 'other-error' ? 'network error'
+                : mode === 'image-quota' ? '400 too many images in request'
+                : mode === 'invalid-media' ? '400 invalid_media: image decoding failed'
                 : mode === 'gateway-400' ? '400 {"error":{"message":"Exceeded limit on max bytes to request body : 16777216","type":"BadRequest.TooLarge"}}'
                 : '413 length limit exceeded',
               } }, children: mode === 'settings-changed' ? [{
@@ -7411,7 +7413,7 @@ describe("Pi provider-aware model routing", () => {
       else await promise;
       expect(captured.requests.filter(r => r.type === 'prompt' && r.message === 'same input')).toHaveLength(blocked ? 0 : 1);
       expect(captured.requests.filter(r => r.type === 'compact')).toHaveLength(
-        needsRollover || cancelled || ['413', 'gateway-400', 'settings-changed'].includes(mode) ? 1 : 0,
+        needsRollover || cancelled || ['413', 'gateway-400', 'image-quota', 'settings-changed'].includes(mode) ? 1 : 0,
       );
       expect(handle.getUsageSnapshot?.().needsRollover === true).toBe(
         needsRollover,
@@ -7420,6 +7422,56 @@ describe("Pi provider-aware model routing", () => {
       // model/effort that was selected when the failed input was first sent.
       expect(captured.requests.slice(retryStart).filter(r =>
         r.type === 'set_model' || r.type === 'set_thinking_level')).toEqual([]);
+      await handle.close();
+    },
+  );
+
+  // #8724 unit: exercise PiAgent.send after actual tool history, not just error classification.
+  it.each(['quota', 'generic-media', 'new-window', 'later-success', 'noop', 'failed', 'cancelled'])(
+    'preserves completed tools during continuation image recovery: %s', async mode => {
+      const controller = new AbortController();
+      const entries = [
+        { id: 'accepted', parentId: null, type: 'message', message: { role: 'user', content: 'perform task' } },
+        { id: 'tool-call', parentId: 'accepted', type: 'message', message: { role: 'assistant', stopReason: 'toolUse',
+          content: [{ type: 'toolCall', id: 'write-once', name: 'bash', arguments: { command: 'side effect' } }] } },
+        { id: 'result', parentId: 'tool-call', type: 'message', message: { role: 'toolResult', toolCallId: 'write-once',
+          content: [{ type: 'text', text: 'already completed' }] } },
+        { id: 'failure', parentId: 'result', type: 'message', message: { role: 'assistant', content: [],
+          stopReason: mode === 'later-success' ? 'stop' : 'error',
+          errorMessage: mode === 'generic-media' ? 'invalid_media: corrupt image' : '400 too many images in request' } },
+      ];
+      const nodes = entries.map(entry => ({ entry, children: [] as unknown[] }));
+      nodes.forEach((node, i) => { if (i) nodes[i - 1].children.push(node); });
+      const tree = { tree: [nodes[0]], leafId: mode === 'new-window' ? 'missing' : 'failure' };
+      const original = structuredClone(tree);
+      captured.requestHandler = async command => {
+        if (command.type === 'get_state') return { success: true, data: { sessionFile: '/mock/s.jsonl' } };
+        if (command.type === 'get_tree') return { success: true, data: tree };
+        if (command.type === 'compact') {
+          if (mode === 'noop') return { success: false, error: 'Nothing to compact' };
+          if (mode === 'failed') return { success: false, error: 'upstream failed' };
+          if (mode === 'cancelled') { controller.abort(); throw new Error('Compaction aborted'); }
+        }
+        return { success: true, data: {} };
+      };
+      const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+      const handle = await agent.startSession({ sessionId: 'continue-quota', workingDir: cwd, model: 'local-model' });
+      const start = captured.requests.length;
+      const promise = handle.send({ type: 'user', content: 'Continue preserving completed operations' }, {
+        continueTranscriptUserEntryId: 'accepted', signal: controller.signal,
+      });
+      const blocked = ['noop', 'failed', 'cancelled'].includes(mode);
+      if (blocked) await expect(promise).rejects.toThrow();
+      else await promise;
+      const requests = captured.requests.slice(start);
+      expect(requests.filter(r => r.type === 'compact')).toHaveLength(
+        ['generic-media', 'new-window', 'later-success'].includes(mode) ? 0 : 1,
+      );
+      expect(requests.filter(r => r.type === 'prompt')).toEqual(blocked ? [] : [
+        expect.objectContaining({ message: 'Continue preserving completed operations' }),
+      ]);
+      expect(tree).toEqual(original);
+      expect(handle.getUsageSnapshot?.().needsRollover === true).toBe(['noop', 'failed'].includes(mode));
       await handle.close();
     },
   );

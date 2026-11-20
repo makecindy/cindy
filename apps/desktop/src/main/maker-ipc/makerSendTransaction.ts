@@ -152,6 +152,7 @@ type MakerSendOptions = {
   readonly [MCP_APP_MESSAGE_GUARD]?: McpAppMessageGuard;
   readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
   retryUserClientId?: string;
+  continueUserClientId?: string;
   toolsDisabled?: boolean;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   /** Main-only continuation: a restored intent is not an authored user turn. */
@@ -1883,6 +1884,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         const retryTranscriptUserEntryId = sess.agentKind === 'pi' && so.retryUserClientId
           ? await deps.readPiUserEntry?.(sessionId, so.retryUserClientId)
           : undefined;
+        const continueTranscriptUserEntryId = sess.agentKind === 'pi' && so.continueUserClientId && !so.retryUserClientId
+          ? await deps.readPiUserEntry?.(sessionId, so.continueUserClientId)
+          : undefined;
         // Automatic cache replay replaces the native user entry without adding
         // another Cindy row. Keep later manual Retry attached to the active entry.
         const transcriptUserClientId = persistUserMessage?.clientId
@@ -1904,6 +1908,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ), () => withTelegramQuestionPolicy(so[TELEGRAM_QUESTION_ORIGIN], sess, questionOptions => sess.send(outgoing as never, {
           ...questionOptions,
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
+          ...(continueTranscriptUserEntryId ? { continueTranscriptUserEntryId } : {}),
           ...(beforeProviderStart ? { beforeProviderStart } : {}),
           ...(assertAppCurrent || deps.assertQuotaContinuation
             ? {

@@ -282,6 +282,7 @@ import {
   findPiTreeEntry,
   normalizePiSessionTree,
   piRetryBranch,
+  piContinuationImageQuotaRejected,
   piContextTokensFromTree,
   userDraftTextFromPiEntry,
 } from './session-tree.js';
@@ -8215,7 +8216,7 @@ export class PiAgent extends BaseAgent {
           if (images.length > 0) command.images = images;
           // send 语义 = 排队开新 turn;pi streaming 中裸 prompt 会被拒,补 followUp。
           if (ctx.isStreaming) command.streamingBehavior = 'followUp';
-          if (sendOpts?.retryTranscriptUserEntryId && !ctx.isStreaming) {
+          if ((sendOpts?.retryTranscriptUserEntryId || sendOpts?.continueTranscriptUserEntryId) && !ctx.isStreaming) {
             await runExclusivePiRpc(async () => {
               const before = await proc.request({ type: 'get_tree' });
               if (!before.success) {
@@ -8225,42 +8226,45 @@ export class PiAgent extends BaseAgent {
                     : 'Pi retry history unavailable',
                 );
               }
-              const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId!);
-              if (!branch) {
-                if (expectedCompat) throw new TurnDispatchRejectedError('Pi cache recovery branch is not replayable');
-                return;
+              let requestTooLarge = false;
+              if (sendOpts.retryTranscriptUserEntryId) {
+                const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId);
+                if (!branch) {
+                  if (expectedCompat) throw new TurnDispatchRejectedError('Pi cache recovery branch is not replayable');
+                  return;
+                }
+                rejectIfCancelled(sendOpts, 'send');
+                // Only zero-output retry replaces input. Continuations never navigate:
+                // their active history includes tools that may already have side effects.
+                const payload = encodeURIComponent(JSON.stringify({ entryId: sendOpts.retryTranscriptUserEntryId }));
+                const switched = await proc.request({ type: 'prompt', message: `/cindy-branch-switch ${payload}` });
+                const after = await proc.request({ type: 'get_tree' });
+                if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
+                  throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
+                }
+                if (!switched.success || !after.success || normalizePiSessionTree(after.data).leafId !== branch.parentId) {
+                  throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');
+                }
+                requestTooLarge = branch.requestTooLarge;
+              } else {
+                requestTooLarge = piContinuationImageQuotaRejected(before.data, sendOpts.continueTranscriptUserEntryId!);
               }
               rejectIfCancelled(sendOpts, 'send');
-              // Native navigation preserves the old failed branch in the append-only
-              // transcript. Only the active model context is replaced by this retry.
-              const payload = encodeURIComponent(JSON.stringify({ entryId: sendOpts.retryTranscriptUserEntryId }));
-              const switched = await proc.request({ type: 'prompt', message: `/cindy-branch-switch ${payload}` });
-              const after = await proc.request({ type: 'get_tree' });
-              if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
-                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
-              }
-              if (!switched.success || !after.success || normalizePiSessionTree(after.data).leafId !== branch.parentId) {
-                throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');
-              }
-              rejectIfCancelled(sendOpts, 'send');
-              if (branch.requestTooLarge) {
-                // A user-requested retry after a byte-limit rejection gets one native
-                // compaction attempt. Never invent a provider byte/token threshold.
+              if (requestTooLarge) {
+                // One native compaction for this explicit retry, independent of tokens.
+                // Never infer a global image cap or treat corrupt media as a quota.
                 try {
                   const result = await requestPiCompact();
                   rejectIfCancelled(sendOpts, 'send');
                   if (result.noop) {
-                    throw new Error('Pi cannot compact the request rejected with a body size limit');
+                    throw new Error('Pi cannot compact the request rejected with a body size or image count limit');
                   }
                 } catch (error) {
                   rejectIfCancelled(sendOpts, 'send');
-                  // The original failed response already proved a byte-limit
-                  // rejection. Any non-cancelled compaction failure leaves that
-                  // recovery incomplete, even if its own error is a timeout.
+                  // Keep the existing local rollover escape for failed/no-op compact,
+                  // including low-token image history. SSH retains the actual error.
                   if (!opts.remoteHostId) {
                     nativeAutoCompactNeedsRollover = true;
-                    // A rejected send can close this runtime. Preserve the specific
-                    // recovery evidence in the durable error, not just this handle.
                     throw new Error(`${PI_REQUEST_BODY_RECOVERY_EXHAUSTED}: ${String(error)}`);
                   }
                   throw error;

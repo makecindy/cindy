@@ -140,6 +140,30 @@ export function normalizePiSessionTree(data: unknown): SessionTreeSnapshot {
   return { roots, leafId, activePathIds: reversed.reverse() };
 }
 
+/** Explicit provider image-count evidence; invalid_media alone also covers corrupt files. */
+function isPiImageQuotaRejection(error: unknown): boolean {
+  return typeof error === 'string' && /(?:too many images in request|maximum number of images is \d+)/i.test(error);
+}
+
+/** Inspect the current failed tail without navigating away from completed tool work. */
+export function piContinuationImageQuotaRejected(data: unknown, entryId: string): boolean {
+  const tree = normalizePiSessionTree(data);
+  const index = tree.activePathIds.indexOf(entryId);
+  if (index < 0) return false; // A rollover/fork already replaced this native window.
+  const entries = rawNodeMap(data);
+  const entry = entries.get(entryId);
+  if (entry?.type !== 'message' || recordOf(entry.message)?.role !== 'user') return false;
+  for (const id of tree.activePathIds.slice(index + 1).reverse()) {
+    const item = entries.get(id);
+    if (item?.type === 'model_change' || item?.type === 'thinking_level_change' ||
+        (item?.type === 'context_edit' && item.replacement === null)) continue;
+    const message = recordOf(item?.message);
+    return item?.type === 'message' && message?.role === 'assistant' &&
+      message.stopReason === 'error' && isPiImageQuotaRejection(message.errorMessage);
+  }
+  return false;
+}
+
 /** Retry empty failures, allowing model/effort changes and omission-only context edits that do not produce output. */
 export function piRetryBranch(data: unknown, entryId: string): {
   parentId: string | null; requestTooLarge: boolean;
@@ -170,7 +194,7 @@ export function piRetryBranch(data: unknown, entryId: string): {
       throw new Error('Pi retry would discard output or session state');
     }
     hasFailedResponse = true;
-    requestTooLarge ||= /(?:\b413\b|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(
+    requestTooLarge ||= isPiImageQuotaRejection(message.errorMessage) || /(?:\b413\b|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(
       typeof message.errorMessage === 'string' ? message.errorMessage : '',
     );
   }
