@@ -117,6 +117,8 @@ export type SessionShareExportOutcome =
       fidelity: XdtshareFidelity;
       /** 导出端没找到转录的 sdkSessionId 列表(cc fork 链部分缺失时非空)。 */
       missingTranscripts: string[];
+      omittedCodexChildThreads?: string[];
+      codexChildThreadCount?: number;
       /** 引用了但文件已不存在的媒体数。 */
       mediaMissing: number;
       /** 其中源机器上仍存在、只是没能打进包的媒体数(迁移据此判定会丢内容)。 */
@@ -797,6 +799,22 @@ export async function exportSessionShare(
 
   // ── 保真度判定(按实际读入结果;协同包聚合 lead + 全部 Worker 的转录) ──
   const allRefs = allB.flatMap((b) => b.refs);
+  const missingTranscripts = allRefs.filter((t) => t.path === null).map((t) => t.sdkSessionId);
+  // Each Codex restore plan accepts one rollout. Report direct children from
+  // the already-authorized state dump without searching other history homes.
+  const knownChildren = new Set<string>();
+  const bundled = new Set(allB.flatMap((b, index) => allA[index].session.agentKind === 'codex'
+    ? b.refs.filter(ref => ref.path !== null).map(ref => ref.sdkSessionId) : []));
+  for (const source of allA) {
+    for (const edge of source.codexState?.threadSpawnEdges ?? []) {
+      const child = edge.child_thread_id;
+      if (edge.parent_thread_id === source.activeSdkSessionId && typeof child === 'string' &&
+          /^[a-zA-Z0-9_-]{1,128}$/.test(child) && child !== source.activeSdkSessionId) {
+        knownChildren.add(child);
+      }
+    }
+  }
+  const omittedCodexChildThreads = [...knownChildren].filter(child => !bundled.has(child));
   const foundCount = allRefs.filter((t) => t.path !== null).length;
   let fidelity: XdtshareFidelity;
   if (allRefs.length === 0 || foundCount === 0) fidelity = 'db-only';
@@ -934,7 +952,6 @@ export async function exportSessionShare(
     throw err;
   }
 
-  const missingTranscripts = allRefs.filter((t) => t.path === null).map((t) => t.sdkSessionId);
   const mediaMissing = mediaMap.filter((m) => m.zipPath === null).length;
   log.info('session share exported', {
     sessionId: opts.sessionId,
@@ -959,6 +976,8 @@ export async function exportSessionShare(
     ...(external ? { externalTranscripts: external.staged } : {}),
     fidelity,
     missingTranscripts,
+    omittedCodexChildThreads,
+    codexChildThreadCount: knownChildren.size,
     mediaMissing,
     mediaDropped,
     orcaWorkers: workerSources.length,

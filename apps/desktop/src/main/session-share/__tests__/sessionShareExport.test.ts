@@ -65,7 +65,7 @@ vi.mock('../../maker-host/claude-transcript-relocation.js', () => ({
 const dumpCodexThreadStateRowsMock = vi.fn(async (_threadId: string, _storage?: unknown) => ({
   threads: [{ id: 'thread-1', cwd: '/old/cwd' }],
   threadDynamicTools: [],
-  threadSpawnEdges: [],
+  threadSpawnEdges: [] as Array<{parent_thread_id: string; child_thread_id: string}>,
   rolloutPath: path.join(tmpRoot, 'rollout-1-thread-1.jsonl'),
 }));
 vi.mock('../../maker-host/codex-local-sessions.js', () => ({
@@ -289,6 +289,27 @@ describe('exportSessionShare', () => {
     expect(zip.file('transcripts/codex/rollout-1-thread-1.jsonl')).toBeTruthy();
     const state = JSON.parse(await zip.file('codex-state/thread.json')!.async('string'));
     expect(state.threads[0].id).toBe('thread-1');
+  });
+
+  // Unit regression for #11699: a readable child rollout and two identical spawn
+  // edges previously yielded a full archive with zero missing transcripts.
+  it('reports known unbundled native children once without resolving unrelated history', async () => {
+    const edge = { parent_thread_id: 'thread-1', child_thread_id: 'child-1' };
+    const dump = await dumpCodexThreadStateRowsMock('thread-1');
+    dumpCodexThreadStateRowsMock.mockResolvedValueOnce({ ...dump, threadSpawnEdges: [
+      edge, edge, { ...edge, child_thread_id: 'missing-child' },
+      { parent_thread_id: 'old-thread', child_thread_id: 'hidden-child' },
+    ] });
+    sessionRowRef.row = { ...baseSession(), agentKind: 'codex', sdkSessionId: 'thread-1' };
+    await fsp.writeFile(path.join(tmpRoot, 'rollout-child-1.jsonl'), '{"tool":"example"}');
+    const target = path.join(tmpRoot, 'native-child.cshare');
+    const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
+    expect(outcome).toMatchObject({ status: 'ok', fidelity: 'full', orcaWorkers: 0,
+      codexChildThreadCount: 2, omittedCodexChildThreads: ['child-1', 'missing-child'],
+      missingTranscripts: [] });
+    const zip = await unzipOf(target);
+    expect(Object.keys(zip.files).filter(name => name.endsWith('.jsonl') && name.includes('transcripts/')))
+      .toEqual(['transcripts/codex/rollout-1-thread-1.jsonl']);
   });
 
   it('codex export reads multi-account history from the thread location index', async () => {
