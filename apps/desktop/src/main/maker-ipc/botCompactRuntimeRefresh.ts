@@ -3,6 +3,7 @@ export interface BotCompactRuntimeSession {
   readonly instanceId: string;
   isTurnRunning(): boolean;
   listBackgroundTasks(): ReadonlyArray<unknown>;
+  countPendingWakeContinuations?(): number;
 }
 
 export interface BotCompactBoundary {
@@ -53,12 +54,16 @@ export interface BotCompactRuntimeRefreshDeps {
 export async function replaceBotRuntimeAfterPreflight<T>(deps: {
   preflight(): Promise<void>;
   isCurrentOwner(): boolean;
+  isIdle?(): boolean;
   close(): Promise<void>;
   bootstrap(): Promise<T>;
 }): Promise<T> {
   await deps.preflight();
   if (!deps.isCurrentOwner()) {
     throw new Error('Bot runtime owner changed before compact refresh');
+  }
+  if (deps.isIdle && !deps.isIdle()) {
+    throw new Error('Bot runtime became busy before compact refresh');
   }
   await deps.close();
   return deps.bootstrap();
@@ -116,6 +121,7 @@ export function createBotCompactRuntimeRefreshCoordinator(
     if (
       session.isTurnRunning()
       || session.listBackgroundTasks().length > 0
+      || (session.countPendingWakeContinuations?.() ?? 0) > 0
       || deps.hasPendingInteraction(session.id)
     ) {
       return 'deferred';
@@ -149,7 +155,8 @@ export function createBotCompactRuntimeRefreshCoordinator(
     return !session.isTurnRunning()
       && !deps.hasPendingInteraction(session.id)
       && !inFlight.has(session.id)
-      && session.listBackgroundTasks().length > 0;
+      && (session.listBackgroundTasks().length > 0
+        || (session.countPendingWakeContinuations?.() ?? 0) > 0);
   }
 
   function clearForClosedSession(session: BotCompactRuntimeSession): void {

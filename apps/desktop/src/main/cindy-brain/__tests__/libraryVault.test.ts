@@ -344,9 +344,26 @@ describe('LibraryVault', () => {
     it('custom 用户父目录消失: open 报 disk-missing 且不重建空库; keep 仍在 rename 走的目录', async () => {
       const parent = path.join(tmpRoot, 'picked');
       const custom = path.join(parent, 'mivo-canvas');
-      await fs.promises.mkdir(custom, { recursive: true });
+      // Keep this parent-disappearance contract independent of the Windows
+      // native helper's cold-start probe. Adjacent custom-tree cases retain
+      // real helper coverage; this case only needs an existing valid tree
+      // before the parent is moved away.
+      const seed = makeVault({ rootDir: () => custom });
+      expect(await seed.open()).toMatchObject({ ok: true, state: 'ready' });
       await fs.promises.writeFile(path.join(custom, 'keep.txt'), 'keep-me');
-      const first = makeVault({ rootDir: () => custom, locationKind: 'custom' });
+      const metaFile = path.join(custom, '.cindy-library', 'meta.json');
+      const openExistingCustom = vi.fn(async () => ({
+        ok: true as const,
+        meta: JSON.parse(await fs.promises.readFile(metaFile, 'utf8')),
+        usage: null,
+      }));
+      const initCustomTree = vi.fn(async () => ({ ok: false as const, code: 'IO' as const }));
+      const first = makeVault({
+        rootDir: () => custom,
+        locationKind: 'custom',
+        openExistingCustom,
+        initCustomTree,
+      });
       const opened = await first.open();
       expect(opened).toMatchObject({ ok: true, state: 'ready' });
       await fs.promises.rename(parent, `${parent}.parked`);
@@ -356,6 +373,8 @@ describe('LibraryVault', () => {
       expect(fs.existsSync(parent)).toBe(false);
       expect(fs.existsSync(custom)).toBe(false);
       expect(fs.existsSync(path.join(`${parent}.parked`, 'mivo-canvas', 'keep.txt'))).toBe(true);
+      expect(openExistingCustom).toHaveBeenCalledOnce();
+      expect(initCustomTree).not.toHaveBeenCalled();
     });
 
     it('custom 最后一次 inspect 后、骨架 mkdir 前父目录被移走:不得 recursive 重建空库', async () => {
