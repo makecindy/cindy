@@ -15197,6 +15197,7 @@
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
+      "pluginEngineStatus": "Still working in the background…",
       "bashWorkStatus_one": "Working in the background ({{count}} command)…",
       "bashServiceStatus_one": "{{count}} background service running",
       "bashWorkStatus_other": "Working in the background ({{count}} commands)…",

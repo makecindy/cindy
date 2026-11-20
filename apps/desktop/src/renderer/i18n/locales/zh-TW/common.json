@@ -15131,6 +15131,7 @@
     },
     "backgroundActivity": {
       "status": "背景子任務執行中，模型用量仍在消耗…",
+      "pluginEngineStatus": "正在背景繼續工作…",
       "bashWorkStatus_one": "正在背景工作（{{count}} 個命令）…",
       "bashServiceStatus_one": "背景服務執行中（{{count}} 個）",
       "bashWorkStatus_other": "正在背景工作（{{count}} 個命令）…",

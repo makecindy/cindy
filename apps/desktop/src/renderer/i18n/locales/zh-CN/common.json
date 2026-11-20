@@ -15132,6 +15132,7 @@
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
+      "pluginEngineStatus": "正在后台继续工作…",
       "bashWorkStatus_one": "正在后台工作（{{count}} 个命令）…",
       "bashServiceStatus_one": "后台服务运行中（{{count}} 个）",
       "bashWorkStatus_other": "正在后台工作（{{count}} 个命令）…",

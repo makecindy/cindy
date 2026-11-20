@@ -368,6 +368,109 @@ describe('AcpSession turns', () => {
       ['tool_use', 'background'], ['tool_result_full', 'background'], ['tool_result', 'background'],
     ]);
   });
+
+  // Regression (Antigravity, 2026-11-20): the agent answered the prompt while its `git commit`
+  // was still running and reported the result 21 s later. The call used to be marked done at
+  // the end of the answer, and the real result arrived as a second card nobody saw as running.
+  it('keeps a call the agent is still running open past its answer and settles it with the later result', async () => {
+    let now = 1_000;
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent, { now: () => now });
+    await session.send({ type: 'user', content: 'commit and open a PR' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'commit', title: 'git commit', status: 'in_progress' });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Committing, then pushing.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect(events.some((event) => event.type === 'tool_result')).toBe(false);
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(true);
+
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'commit',
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: '[fix 79a580a] fix' } }],
+    });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('tool_result'));
+    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+    expect(events.slice(-2).map((event) => [event.type, event.turnScope, (event.data as AcpRecord).summary]))
+      .toEqual([['tool_result_full', 'background', undefined], ['tool_result', 'background', 'done']]);
+    // Background output keeps the runtime busy for the quiet window, then it is idle.
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(true);
+    now += 30_001;
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(false);
+  });
+
+  // Live check against Antigravity (2026-11-20): after its command finished it wrote
+  // "The content of done.txt is: finished" between turns. Nothing ever closed that text, so it
+  // streamed forever and was never saved (no between-turn reply of the agent was in local history).
+  it('closes a reply the agent writes between turns once it pauses, so it is kept like any reply', async () => {
+    vi.useFakeTimers();
+    const agent = createFakeAgent();
+    const { events } = await open(agent);
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'The content is: ' } });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '`finished`' } });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(events.map((event) => [event.type, (event.data as AcpRecord).isFinal])).toEqual([['text', false], ['text', false]]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(events.at(-1)).toMatchObject({
+      type: 'text',
+      turnScope: 'background',
+      data: { text: 'The content is: `finished`', isFinal: true, isFullText: true },
+    });
+  });
+
+  // PR #11776 review: progress on a running call changes nothing on screen, so it produced no
+  // event, never restarted the quiet bound, and a command still reporting progress was marked done.
+  it('treats progress on a call left running as activity, so the quiet bound restarts', async () => {
+    vi.useFakeTimers();
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent, { openToolQuietCapMs: 60_000 });
+    await session.send({ type: 'user', content: 'build it' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'build', title: 'Build', status: 'in_progress' });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    for (let i = 0; i < 3; i += 1) {
+      await vi.advanceTimersByTimeAsync(40_000);
+      agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'build', status: 'in_progress' });
+    }
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(events.some((event) => event.type === 'tool_result')).toBe(false);
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(true);
+  });
+
+  it('bounds calls left open between turns: settled after the quiet cap, interrupted when the agent exits', async () => {
+    vi.useFakeTimers();
+    const quiet = createFakeAgent();
+    const capped = await open(quiet, { openToolQuietCapMs: 60_000 });
+    await capped.session.send({ type: 'user', content: 'wait for CI' });
+    await vi.waitFor(() => expect(quiet.prompts).toHaveLength(1));
+    quiet.update({ sessionUpdate: 'tool_call', toolCallId: 'wait', title: 'Run schedule', status: 'in_progress' });
+    quiet.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(capped.events.at(-1)?.type).toBe('done'));
+    // Stopping while the agent works between turns cancels that work (agents without a prompt in flight ignore it).
+    await capped.session.abort();
+    expect(quiet.methods()).toContain('session/cancel');
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(capped.events.at(-1)?.type).toBe('done');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(capped.events.at(-1)).toMatchObject({ type: 'tool_result', turnScope: 'background', data: { summary: 'done' } });
+
+    const exiting = createFakeAgent();
+    const live = await open(exiting);
+    await live.session.send({ type: 'user', content: 'deploy' });
+    await vi.waitFor(() => expect(exiting.prompts).toHaveLength(1));
+    exiting.update({ sessionUpdate: 'tool_call', toolCallId: 'deploy', title: 'Deploy', status: 'in_progress' });
+    exiting.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(live.events.at(-1)?.type).toBe('done'));
+    exiting.exit();
+    await live.ended;
+    expect(live.events.slice(-2)).toMatchObject([
+      { type: 'tool_result_full', turnScope: 'background', data: { isError: true } },
+      { type: 'tool_result', turnScope: 'background', data: { summary: 'failed' } },
+    ]);
+  });
 });
 
 describe('AcpSession permissions', () => {

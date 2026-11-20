@@ -15132,6 +15132,7 @@
     },
     "backgroundActivity": {
       "status": "백그라운드 하위 작업 실행 중, 모델 사용량을 소비하고 있습니다…",
+      "pluginEngineStatus": "백그라운드에서 계속 작업 중…",
       "bashWorkStatus_one": "백그라운드에서 작업 중(명령 {{count}}개)…",
       "bashServiceStatus_one": "백그라운드 서비스 실행 중({{count}}개)",
       "bashWorkStatus_other": "백그라운드에서 작업 중(명령 {{count}}개)…",

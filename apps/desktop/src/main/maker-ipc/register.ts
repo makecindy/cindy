@@ -1479,6 +1479,7 @@ import {
   noteClaudeSessionTurnState,
   setClaudeBackgroundActivityBroadcaster,
   setClaudeBackgroundCommandWorkBroadcaster,
+  setPluginEngineBackgroundWorkListener,
 } from '../maker-host/claude-session-background-activity.js';
 
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
@@ -5399,6 +5400,26 @@ function isAgentIslandCompletionTail(event: AgentEvent): boolean {
   return isProductTurnCompletionTailEvent(event);
 }
 
+/** A plugin engine started or stopped working after its turn: island, other devices, phone. */
+function notifyAgentIslandPluginEngineBackgroundWork(
+  sessionId: string,
+  active: boolean,
+  options: { turnStarting: boolean },
+): void {
+  if (!shouldNotifyAgentIslandForSession(sessionId)) return;
+  try {
+    const wired = sessionBindings.getSession(sessionId);
+    const meta = wired ? sessionMetaForIsland(wired) : { sessionId };
+    getAgentIslandService()?.setSessionBackgroundWork(meta, active, options);
+  } catch (error) {
+    log.warn('Agent Island plugin engine background work update failed', {
+      sessionId,
+      active,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 function surfaceSuppressedAutoResumeErrorInAgentIsland(
   sessionId: string,
   detail: SuppressedTurnError,
@@ -7871,6 +7892,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setClaudeBackgroundCommandWorkBroadcaster((payload) =>
     broadcastToAllWindows(MAKER_PUSH.SESSION_BACKGROUND_WORK_CHANGED, payload),
   );
+  // 插件引擎回合外仍在工作 → Agent Island(本机岛面、其他设备与手机的任务列表显示运行中)。
+  setPluginEngineBackgroundWorkListener(notifyAgentIslandPluginEngineBackgroundWork);
 
   // per-session 供应商路由:把 cc loopback proxy 看到的 x-claude-code-session-id(= sdkSessionId)
   // 反解成 xdt sessionId,供其统一路由器查该会话显式选定的供应商。sdkSessionId 唯一,直接匹配活跃会话。

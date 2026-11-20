@@ -15293,6 +15293,7 @@
     },
     "backgroundActivity": {
       "status": "Sous-tâches en arrière-plan en cours d'exécution, consommation du modèle toujours en cours…",
+      "pluginEngineStatus": "Poursuit le travail en arrière-plan…",
       "bashWorkStatus_one": "Travail en arrière-plan en cours ({{count}} commande)…",
       "bashServiceStatus_one": "{{count}} service en arrière-plan en cours d'exécution",
       "bashWorkStatus_other": "Travail en arrière-plan en cours ({{count}} commandes)…",

@@ -15293,6 +15293,7 @@
     },
     "backgroundActivity": {
       "status": "Subtarefas em segundo plano em execução, ainda consumindo uso do modelo…",
+      "pluginEngineStatus": "Continuando o trabalho em segundo plano…",
       "bashWorkStatus_one": "Trabalhando em segundo plano ({{count}} comando)…",
       "bashServiceStatus_one": "{{count}} serviço em segundo plano em execução",
       "bashWorkStatus_other": "Trabalhando em segundo plano ({{count}} comandos)…",
