@@ -25,6 +25,7 @@ import {
   type ProviderView,
   type Provider,
   isCustomRoutedProvider,
+  providerCatalogId,
   type AgentKind,
 } from '@cindy/model-providers';
 
@@ -52,6 +53,8 @@ export interface ConnectionReadOptions {
 }
 
 export interface ProviderListOptions extends ConnectionReadOptions {
+  /** Host catalog identity of the native source to discover; other sources stay snapshot-only. */
+  discoverySourceId?: string;
   /** Routing callers may need discovery without unrelated account display reads. */
   includeAccountPresentation?: boolean;
   /**
@@ -169,6 +172,8 @@ export async function readProvidersForSessionModelRecovery(
   // Do not infer readiness from pool-management or merged-alias display metadata.
   return service.listProviders({
     allowSideEffects: false, includeAccountPresentation: false, waitForDiscovery: true, getCatalog,
+    discoverySourceId: providerCatalogId(provider ?? getCatalog().providers.find(candidate => candidate.id === providerId)
+      ?? { id: providerId, auth: { method: 'none' } }),
   });
 }
 
@@ -184,11 +189,17 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       waitForDiscovery: opts?.waitForDiscovery === true,
       ...(opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : {}),
     };
+    // Scoped recovery must not join another native source's quota/model probe.
+    // Global provider lists omit this scope and retain their existing behavior.
+    const optionsFor = (sourceId: keyof ProviderConnectionReaders): ConnectionReadOptions =>
+      opts?.discoverySourceId !== undefined && opts.discoverySourceId !== sourceId
+        ? { ...readOpts, allowSideEffects: false, snapshotOnly: true, waitForDiscovery: false }
+        : readOpts;
     const [xd, anthropic, openai, xai] = await Promise.all([
-      Promise.resolve(deps.connection.xd(readOpts)),
-      Promise.resolve(deps.connection.anthropic(readOpts)),
-      Promise.resolve(deps.connection.openai(readOpts)),
-      Promise.resolve(deps.connection.xai(readOpts)),
+      Promise.resolve(deps.connection.xd(optionsFor('xd'))),
+      Promise.resolve(deps.connection.anthropic(optionsFor('anthropic'))),
+      Promise.resolve(deps.connection.openai(optionsFor('openai'))),
+      Promise.resolve(deps.connection.xai(optionsFor('xai'))),
     ]);
     const sourceCatalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
     const catalog = deps.projectCatalog?.(sourceCatalog, !!(opts?.getCatalog || opts?.catalog)) ?? sourceCatalog;
