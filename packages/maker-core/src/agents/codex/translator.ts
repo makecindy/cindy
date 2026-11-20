@@ -461,6 +461,7 @@ export interface CodexTranslateContext {
   background?: boolean;
   /** Host denial paired by thread, turn and item; never inferred from empty output. */
   approvalDenialReason?: string;
+  previousCompactionModelRejected?: boolean;
   /** A failed sample cannot remain the adapter's successful final-text fallback. */
   onSamplingAttemptFailed?: () => void;
   /**
@@ -774,6 +775,7 @@ type CodexErrorInput = {
   codexErrorInfo?: CodexErrorInfo | null;
 };
 
+export const CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON = 'codex_compaction_model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_REASON = 'model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_MESSAGE =
   '[MODEL_SELECTION_UNAVAILABLE] The selected model is unavailable for this connection. Choose another available model and retry.';
@@ -872,7 +874,7 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
  * 默认只消费 Codex wire schema 的 message + codexErrorInfo；stderr 不参与判定。
  * 模型拒绝和远端 compact 密文 400 也识别 additionalDetails 中明确的错误信号。
  */
-export function classifyCodexError(error: CodexErrorInput | null | undefined): ClassifiedCodexError {
+export function classifyCodexError(error: CodexErrorInput | null | undefined, previousCompactionModelRejected = false): ClassifiedCodexError {
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
   const accountDenial = codexAccountAccessDenial(error);
   if (accountDenial) {
@@ -885,15 +887,19 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined): C
     };
   }
   if (isCodexModelUnavailableError(error)) {
+    const reason = previousCompactionModelRejected ? CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON : CODEX_MODEL_UNAVAILABLE_REASON;
+    const message = previousCompactionModelRejected
+      ? '[CONTEXT_COMPACTION_MODEL_UNAVAILABLE] Context compaction failed during the switch because this connection cannot use the previous model.'
+      : CODEX_MODEL_UNAVAILABLE_MESSAGE;
     return {
-      message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+      message,
       ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
       usageLimit: false,
       isCapacityError: false,
-      reason: CODEX_MODEL_UNAVAILABLE_REASON,
+      reason,
       data: {
-        message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
-        reason: CODEX_MODEL_UNAVAILABLE_REASON,
+        message,
+        reason,
         ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
       },
     };
@@ -962,7 +968,7 @@ export function translateErrorNotification(
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
-  const classified = classifyCodexError(params.error);
+  const classified = classifyCodexError(params.error, ctx.previousCompactionModelRejected);
   const safeMessage = classified.message;
   const errorStatus = classified.errorStatus;
   const isCapacityError = classified.isCapacityError;

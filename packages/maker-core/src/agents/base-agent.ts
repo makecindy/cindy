@@ -379,6 +379,8 @@ export interface CodexSessionMcpConfigInput {
 }
 
 export interface CodexExtraSpawnConfig {
+  /** Exact root-connection model IDs frozen with the custom context catalog. */
+  contextProviderModels?: readonly string[];
   extraArgs: string[];
   extraEnv: Record<string, string>;
   /** Host 路由要求更强的 Codex 进程凭证时，冷启动以该模式重建 app-server。 */
@@ -1404,6 +1406,9 @@ export interface AgentDeps {
      */
     reasoningEffort?: Effort | '';
   }) => void;
+
+  /** Original model of the local root's rejected native pre-turn downshift request, if observed. */
+  getRejectedCodexDownshiftModel?: (sessionId: string, threadId: string, turnId: string) => string | undefined;
 
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
   getCodexSubagentIdentity?: (args: { childThreadId: string }) => {

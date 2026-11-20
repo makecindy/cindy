@@ -690,6 +690,7 @@
     "REMOTE_AGENT_GROUP_FULL": "Todas las cuentas o computadoras que pueden ejecutar esta tarea alcanzaron su límite de tareas simultáneas. Espera a que termine una tarea en curso o aumenta el límite en la configuración del proveedor.",
     "SUBSCRIPTION_ACCOUNTS_FULL": "Todas las cuentas o computadoras que pueden ejecutar esta tarea alcanzaron su límite de tareas simultáneas. Espera a que termine una tarea en curso o aumenta el límite en la configuración del proveedor.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no puede cambiar de Harness. Elige un modelo de su Harness actual o crea una nueva tarea SSH con el Harness que necesites.",
+    "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "No se pudo compactar el contexto al cambiar de modelo porque esta conexión no permite usar el modelo anterior.",
     "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Configuración o elige otro modelo disponible.",
     "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Las cuentas disponibles para este modelo alcanzaron su límite de uso. Cambia de modelo o continúa cuando se restablezca la cuota.",

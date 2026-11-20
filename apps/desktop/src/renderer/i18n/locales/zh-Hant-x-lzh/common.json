@@ -15820,6 +15820,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暫不支援易 Harness。請擇今 Harness 下之模型，或以所需 Harness 另立 SSH 差事。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所連者無權用前一模型，故易模型時未能壓縮上下文。",
       "MODEL_SELECTION_UNAVAILABLE": "所擇模型於此供方下已不可用。請於規制中察其連線，或另擇可用之模型。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未易畢。請覽謬誤詳情，待 Harness 就緒再試。",
       "DEVICE_LINK_BUSY": "遠端方忙，請稍後再試。",

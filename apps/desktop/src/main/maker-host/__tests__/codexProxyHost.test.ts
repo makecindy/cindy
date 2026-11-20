@@ -8750,6 +8750,50 @@ describe('codex proxy host', () => {
     });
   });
 
+  // Routing and response observation must identify the same rejected pre-turn request.
+  // A later sample on the root or a manual/child compaction cannot authorize handoff.
+  it('attributes a downshift denial only to the latest rejected root request', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn() });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session', 'root', '');
+    host.registerChildThread('root', 'child');
+    const proxy = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+    const request = async (thread: string, kind = 'compaction', trigger = 'auto') => {
+      const headers = { 'thread-id': thread, 'x-codex-turn-metadata': JSON.stringify({
+        thread_id: thread, turn_id: 'turn', request_kind: kind,
+        compaction: { trigger, reason: 'model_downshift', phase: 'pre_turn' },
+      }) };
+      await proxy.routingTransform({ model: 'old/large' }, { url: '/v1/responses', method: 'POST', reqId: 1, headers });
+      return (status: number) => proxy.responseObserver({ status, reqId: 1, method: 'POST', url: '/v1/responses',
+        requestHeaders: headers, responseHeaders: {}, requestBody: Buffer.from('{"model":"wire-alias"}'), upstreamBase: 'https://example.invalid' });
+    };
+    const observed = () => host.getRejectedCodexDownshiftModel('session', 'root', 'turn');
+    const compact = await request('root');
+    expect(observed()).toBeUndefined();
+    compact(403);
+    expect(observed()).toBe('old/large');
+    expect(host.getRejectedCodexDownshiftModel('session', 'root', 'other-turn')).toBeUndefined();
+    expect(host.getRejectedCodexDownshiftModel('other-session', 'root', 'turn')).toBeUndefined();
+    (await request('child'))(403);
+    expect(host.getRejectedCodexDownshiftModel('session', 'child', 'turn')).toBeUndefined();
+    expect(observed()).toBe('old/large');
+    (await request('root', 'turn'))(403);
+    compact(403); // a delayed response from the earlier HTTP request
+    expect(observed()).toBeUndefined();
+    (await request('root', 'compaction', 'manual'))(403);
+    expect(observed()).toBeUndefined();
+    for (const status of [200, 401, 407, 503]) {
+      (await request('root'))(status);
+      expect(observed()).toBeUndefined();
+    }
+    const pending = await request('root');
+    host.unregister('session');
+    host.registerComposed('session', 'root', '');
+    pending(403);
+    expect(observed()).toBeUndefined();
+  });
+
   it('observes non-streaming provider service_tier from upstream responses', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({

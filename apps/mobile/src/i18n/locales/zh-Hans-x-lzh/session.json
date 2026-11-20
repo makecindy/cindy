@@ -687,6 +687,7 @@
     "REMOTE_AGENT_GROUP_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
     "SUBSCRIPTION_ACCOUNTS_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持切换 Harness。请择当前 Harness 下之模型，或以所需 Harness 另立新 SSH 差事。",
+    "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所连者无权用前一模型，故易模型时未能压缩上下文。",
     "MODEL_SELECTION_UNAVAILABLE": "所选模型于该供方下已不可用。请于规制中察连接，或另择可用之模型。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未切换毕。请察谬误详情，待 Harness 就绪后再试。",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型可用之名籍已达耗用上限。可改用他模型，或待限额重置后再续。",

@@ -27654,6 +27654,38 @@ describe('CodexAgent turn lifecycle', () => {
     }
   });
 
+  // Native can report the denial with a retry, with a terminal notification, or only on completion.
+  it.each([
+    ['retry', 'old', 'codex_compaction_model_unavailable'],
+    ['terminal', 'old', 'codex_compaction_model_unavailable'],
+    ['completed', 'old', 'codex_compaction_model_unavailable'],
+    ['retry', 'selected', 'model_unavailable'],
+  ])('attributes a %s denial of %s to the correct model', async (notification, rejected, reason) => {
+    const agent = new CodexAgent(createDeps({}, {
+      getRejectedCodexDownshiftModel: (session, thread, turn) =>
+        session === 'downshift' && thread === 'start-thread-id' && turn === 'turn-1' ? rejected : undefined,
+    }));
+    const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? {} : undefined);
+    const handle = await agent.startSession({ sessionId: 'downshift', model: 'selected', workingDir: '/repo' });
+    try {
+      const handlers = host.getThreadHandlers()!;
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      const threadId = 'start-thread-id';
+      const turnId = 'turn-1';
+      const error = { message: 'unexpected status 403: {"error":{"code":"user_model_access_denied"}}' };
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      if (notification === 'completed') {
+        handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'failed', error } });
+      } else {
+        handlers.error?.({ threadId, turnId, willRetry: notification === 'retry', error });
+      }
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { reason, isTerminal: true } });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(notification === 'retry' ? 1 : 0);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it.each([true, false].flatMap(willRetry => [
     { willRetry, code: 'model_not_found', status: 400 },
     { willRetry, code: 'user_model_access_denied', status: 403 },

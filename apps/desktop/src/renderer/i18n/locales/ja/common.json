@@ -15829,6 +15829,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "この接続では以前のモデルを使用できないため、モデル切り替え時にコンテキストを圧縮できませんでした。",
       "MODEL_SELECTION_UNAVAILABLE": "選択したモデルはプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
       "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
       "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
