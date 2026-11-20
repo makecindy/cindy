@@ -3061,6 +3061,40 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  // #8706 unit: real Response streams through the production HTTP entry. Existing HTTP
+  // failures cover status only, not quota classification, bounded reads or body privacy.
+  it.each([
+    [429, '{"type":"budget_exceeded","message":"ExceededBudget: PRIVATE_ECHO"}', true],
+    [429, '{"message":"Too Many Requests; rate limit exceeded"}', false],
+    [402, 'Payment Required', true],
+    [500, 'budget_exceeded', false],
+  ])('classifies HTTP %s body %s safely', async (status, body, quota) => {
+    readKey.mockReturnValue('synthetic-key');
+    fetchMock.mockResolvedValueOnce(new Response(body, { status }) as never);
+    const result = await requestDedicatedAutoReviewCandidateText('classify', DEDICATED_AUTO_REVIEW_CANDIDATES[0], { timeoutMs: 8000 });
+    expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({
+      reason: 'http_error', httpStatus: status, ...(quota ? { quotaExhausted: true } : {}),
+    })] });
+    if (!result.ok && !quota) expect(result.attempts[0]).not.toHaveProperty('quotaExhausted');
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE_ECHO|Payment Required|Too Many Requests/);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])('bounds and cancels an unfinished error stream (early quota=%s)', async (earlyQuota) => {
+    readKey.mockReturnValue('synthetic-key');
+    const cancel = vi.fn();
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      controller.enqueue(new TextEncoder().encode(earlyQuota ? 'budget_exceeded PRIVATE_ECHO' : 'x'.repeat(8192)));
+    });
+    fetchMock.mockResolvedValueOnce(new Response(new ReadableStream({ pull, cancel }), { status: 429 }) as never);
+    const result = await requestDedicatedAutoReviewCandidateText('classify', DEDICATED_AUTO_REVIEW_CANDIDATES[0], { timeoutMs: 8000 });
+    expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({ reason: 'http_error', httpStatus: 429 })] });
+    if (!result.ok) expect(result.attempts[0]).toMatchObject(earlyQuota ? { quotaExhausted: true } : { reason: 'http_error' });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pull.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_ECHO');
+  });
+
   it('keeps Auto-review policy on the system channel and evidence on the user channel', async () => {
     readKey.mockReturnValue('xd-key');
     activeCatalog.mockReturnValue({ providers: [] } as never);

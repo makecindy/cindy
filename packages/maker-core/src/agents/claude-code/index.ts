@@ -2762,9 +2762,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (autoDecision.unavailable) {
             autoReviewUnavailableNotice.notify(autoDecision);
             unavailableHandoff = true;
-          } else {
-            autoReviewAskReason = autoDecision.reason;
           }
+          autoReviewAskReason = autoDecision.reason;
           forcePrompt = true;
         }
       } else {
@@ -4262,9 +4261,8 @@ export class ClaudeCodeAgent extends BaseAgent {
               if (autoDecision.unavailable) {
                 autoReviewUnavailableNotice.notify(autoDecision);
                 remoteUnavailableHandoff = true;
-              } else {
-                remoteAutoReviewAskReason = autoDecision.reason;
               }
+              remoteAutoReviewAskReason = autoDecision.reason;
               remoteForcePrompt = true;
             } else {
               remoteForcePrompt = remoteForcePrompt || remoteMcpPolicy === 'prompt-each-time';
