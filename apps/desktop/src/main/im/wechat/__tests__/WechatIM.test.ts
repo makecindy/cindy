@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -103,6 +104,51 @@ describe('WechatIM host boundary', () => {
     } finally {
       await im.dispose();
       vi.useRealTimers();
+    }
+  });
+
+  // Unit regression: completed empty polls and idle waits leaked listeners on
+  // the connection signal. The reconnect test only checks status and polling.
+  it('keeps connection waits bounded and releases them on dispose without another poll', async () => {
+    vi.useFakeTimers();
+    const { im, transport, db } = restoredConnection(() => 0);
+    const poll = vi.mocked(transport.poll).mockResolvedValue({ cursor: 'next', messages: [] });
+    vi.mocked(db.tx).mockImplementation((async (name: string) =>
+      name === 'wechatCommitPollBatch' ? {
+        committed: true, insertedTaskIds: [], duplicateTaskIds: [], rejectedTaskIds: [],
+      } : null) as DbClient['tx']);
+    try {
+      await im.init();
+      await vi.advanceTimersByTimeAsync(0);
+      const [, signal] = poll.mock.calls[0];
+      const listenerCounts = [getEventListeners(signal, 'abort').length];
+      await im.init();
+      for (let tick = 0; tick < 5; tick++) {
+        await vi.advanceTimersByTimeAsync(200);
+        listenerCounts.push(getEventListeners(signal, 'abort').length);
+      }
+      expect(listenerCounts).toEqual([3, 3, 3, 3, 3, 3]);
+      expect(transport.notifyStart).toHaveBeenCalledTimes(1);
+      expect(poll).toHaveBeenCalledTimes(11);
+      expect(poll.mock.calls.every(([, pollSignal]) => pollSignal === signal)).toBe(true);
+
+      const stopped = im.dispose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(transport.notifyStop).toHaveBeenCalledTimes(1);
+      await stopped;
+      expect(signal.aborted).toBe(true);
+      expect(getEventListeners(signal, 'abort')).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(poll).toHaveBeenCalledTimes(11);
+    } finally {
+      const stopped = im.dispose();
+      try {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await stopped;
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
