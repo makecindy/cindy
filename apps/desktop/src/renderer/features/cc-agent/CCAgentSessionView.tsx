@@ -7384,13 +7384,13 @@ export function RunningStatusBar({
     latestRate,
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
-  // 工具执行期间(host 已 pause)不显示流速:那不是生成速度,残留读数只会误导。
-  const rateText =
-    !isHidden && !reconnecting && usageMeta.kind === 'rate' && (!tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0))
-      ? latestRateText !== null
-        ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
-        : null
-      : null;
+  const showRate = tokenSpeed?.measurement || !tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0);
+  const rateText = !isHidden && !reconnecting && usageMeta.kind === 'rate' && showRate && latestRateText !== null
+    ? t(tokenSpeed?.measurement ? 'chat.runningStatus.recentTokenRate' : 'chat.runningStatus.tokenRate', { rate: latestRateText })
+    : null;
+  const averageRate = tokenSpeed?.measurement
+    ? tokenSpeed.measurement.average === null ? null : formatRecentOutputTokenRate(tokenSpeed.measurement.average)
+    : usageMeta.kind === 'rate' ? usageMeta.rate : null;
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个
@@ -7494,7 +7494,7 @@ export function RunningStatusBar({
                   workflowWaiting ||
                   sideTaskRunning ||
                   backgroundTasksRunning ||
-                  (elapsedText !== null && tokenSpeed && !tokenSpeed.streaming)
+                  (elapsedText !== null && tokenSpeed && !tokenSpeed.streaming && !tokenSpeed.measurement)
                     ? null
                     : (elapsedText === null ? null : rateText) ?? (displayTokens > 0 ? tokenCountText : null)
                 }
@@ -7503,7 +7503,7 @@ export function RunningStatusBar({
                   (usageMeta.kind === 'rate' && (rateText === null || elapsedText === null) && displayTokens > 0)
                 }
                 tokenUsage={displayTokens}
-                averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
+                averageRate={averageRate}
                 outputTokens={tokenSpeed?.totalOutputTokens ?? rateOutputTokens}
                 history={rateHistory}
                 onPinnedChange={setRatePanelPinned}

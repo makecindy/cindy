@@ -15156,6 +15156,8 @@
     },
     "runningStatus": {
       "currentRate": "Última velocidad",
+      "lastRequestRate": "Media de la última solicitud",
+      "recentTokenRate": "Reciente {{rate}} tok/s",
       "waitingSample": "Muestreando",
       "averageRate": "Promedio por turno",
       "rateHistory": "Historial de velocidad de generación",

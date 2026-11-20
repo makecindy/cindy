@@ -14997,6 +14997,8 @@
     },
     "runningStatus": {
       "currentRate": "最近速度",
+      "lastRequestRate": "上次请求均速",
+      "recentTokenRate": "最近 {{rate}} tok/s",
       "waitingSample": "采样中",
       "averageRate": "本轮平均",
       "rateHistory": "生成速度历史",

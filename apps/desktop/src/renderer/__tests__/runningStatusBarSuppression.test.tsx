@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import ts from 'typescript';
+import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { afterEach, expect, it, vi } from 'vitest';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { RunningTokenCount } from '@/features/cc-agent/RunningTokenCount';
@@ -86,15 +87,7 @@ const RunningStatusBar = new Function(
   outputTokens: number;
   generationDurationMs: number;
   generationReliable?: boolean;
-  tokenSpeed?: {
-    rate: number;
-    average: number;
-    tokens: number;
-    elapsedMs: number;
-    streaming: boolean;
-    peak?: number;
-    totalOutputTokens?: number;
-  };
+  tokenSpeed?: TokenSpeedSnapshot;
 }>;
 
 afterEach(cleanup);
@@ -220,6 +213,13 @@ it('shows the last measurement in the panel during tool execution and request wa
 
   rerender(<RunningStatusBar {...props} tokenSpeed={{ ...speed, rate: 100 }} />);
   expect(currentRate()?.textContent).toContain('100');
+  // A new host settles during a tool pause. Both surfaces get the same timestamped reading.
+  const latest = { rate: 41.4, atMs: 5_000, kind: 'request' as const, measuredAt: Date.now() };
+  rerender(<RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false,
+    measurement: { average: 37, latest } }} />);
+  expect(trigger()?.textContent).toContain('chat.runningStatus.recentTokenRate');
+  expect(screen.getByText('chat.runningStatus.lastRequestRate', { selector: 'div' }).nextElementSibling?.textContent).toContain('41.4');
+  expect(value('chat.runningStatus.averageRate')?.textContent).toContain('37');
 });
 
 it.each([true, false])(
