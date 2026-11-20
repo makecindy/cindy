@@ -97,12 +97,7 @@ import {
   isDeepLinkProtocol,
   isDeepLinkUrl,
 } from '../../../shared/deepLinkSchemes';
-import {
-  isRewritableMediaUrl,
-  isSshRewritableMediaUrl,
-  rewriteToRemoteMediaOrigin,
-  type RemoteMediaOrigin,
-} from '../../../shared/remoteMediaUrl';
+import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { toast } from '@/lib/toast';
@@ -897,23 +892,6 @@ function markdownMediaOrigin(
   workingDir: string,
 ): RemoteMediaOrigin | undefined {
   return src && isFileUrlHostHref(src, workingDir) ? undefined : origin;
-}
-
-function rewriteMarkdownMediaForOrigin(
-  url: string,
-  origin: RemoteMediaOrigin | undefined,
-): string | undefined {
-  if (
-    origin?.kind === 'ssh' &&
-    isRewritableMediaUrl(url) &&
-    !isSshRewritableMediaUrl(url, origin.workdir)
-  ) {
-    // SSH file-service intentionally exposes only workdir paths. Do not let
-    // an unsupported hostless media URL fall back to the controller's local
-    // file protocol and read a same-path local file.
-    return undefined;
-  }
-  return rewriteToRemoteMediaOrigin(url, origin);
 }
 
 /**
@@ -1960,16 +1938,14 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             streaming={embeddedMediaStreaming}
           >
             {(localSrc) => {
-              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks);
               const mediaOrigin = markdownMediaOrigin(localSrc, remoteMediaOrigin, workingDir);
+              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks, mediaOrigin);
               if (isManagedMarkdownVideoUrl(normalized)) {
                 // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
                 // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
-                const rewritten = rewriteMarkdownMediaForOrigin(normalized, mediaOrigin);
-                if (!rewritten) return null;
                 return (
                   <ChatVideoView
-                    src={rewritten}
+                    src={rewriteToRemoteMediaOrigin(normalized, mediaOrigin)}
                     filename={markdownMediaFilename(normalized, alt)}
                     variant="tool-output"
                     sessionId={currentSessionId}
@@ -1979,7 +1955,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
               return (
                 <LightboxImage
                   streaming={isStreaming}
-                  src={normalized ? rewriteMarkdownMediaForOrigin(normalized, mediaOrigin) : normalized}
+                  src={normalized ? rewriteToRemoteMediaOrigin(normalized, mediaOrigin) : normalized}
                   alt={alt}
                   onZoom={setLightboxSrc}
                   {...imageProps}
@@ -2203,13 +2179,13 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     return (
       <WorkspaceMediaSrc src={raw} workingDir={props.workingDir} enabled={resolveInWorkspace} streaming={props.isStreaming ?? false}>
         {(localSrc = raw) => {
-          const normalized = localSrc.startsWith('xdt-audio://') && allowPrivilegedLinks ? localSrc : normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks);
+          const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined, props.workingDir);
+          const normalized = localSrc.startsWith('xdt-audio://') && allowPrivilegedLinks ? localSrc : normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks, mediaOrigin);
           if (!normalized) return null;
           // Local audio has its own extension-checked protocol; xdt-file serves
           // images/documents/video and rejects MP3. Preserve the encoded path and
           // select the handler before wrapping the URL for a remote source device.
           const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
-          const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined, props.workingDir);
           const src = rewriteToRemoteMediaOrigin(playable, mediaOrigin);
           // ChatVideoView 会按 sessionId 再改写一次;不改写的来源(file://host)不能让它补上。
           return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={mediaOrigin ? props.currentSessionId : undefined} />;

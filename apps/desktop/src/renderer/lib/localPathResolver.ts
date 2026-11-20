@@ -23,6 +23,7 @@
 
 import { stripTrailingPathSeparators, stripWindowsDriveUriSlash } from '../../shared/pathText';
 import { isWindowsPathLike } from '../../shared/workingDir';
+import { isSshRewritableMediaUrl, type RemoteMediaOrigin } from '../../shared/remoteMediaUrl';
 
 /** Image extension whitelist. Case-insensitive. Allows `?v=2`-style suffix. */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?.*)?$/i;
@@ -834,6 +835,7 @@ export function normalizeMarkdownImageSrc(
   src: string | undefined,
   workingDir: string,
   allowPrivilegedLinks: boolean,
+  origin?: RemoteMediaOrigin,
 ): string | undefined {
   if (!src) return src;
   if (!allowPrivilegedLinks) {
@@ -847,6 +849,9 @@ export function normalizeMarkdownImageSrc(
     // Decode before checking: encoded slashes must not turn this compatibility
     // bridge into a Windows SMB/WebDAV or device-namespace read.
     if (/^[\\/]{2}|^[\\/]\?\?[\\/]/.test(localPath)) return undefined;
+    // This bridge must not grant SSH messages access to controller-local files
+    // when file-service refuses a path outside the remote task workdir.
+    if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(normalized, origin.workdir)) return undefined;
     return normalized;
   }
   if (
