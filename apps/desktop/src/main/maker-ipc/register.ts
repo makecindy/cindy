@@ -313,6 +313,7 @@ import {
   createRecoverRenamedSessionModelOnSend,
   createSelectSameAgentModel,
 } from './sessionRuntimeSelectionLanding.js';
+import { captureModelChoice } from '../product-token-usage/reporting.js';
 import { createTurnModelAttribution } from './turnModelAttribution.js';
 import { createUserMessageDurableWrite } from './userMessageDurableWrite.js';
 import { createInterruptedTurnAutoResumeHooks } from './interruptedTurnAutoResumeHooks.js';
@@ -17971,6 +17972,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ),
     beforeDispatchDirectUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
     onModelDispatched: recordDispatchedModelHolder = createTurnModelAttribution({
+      captureModelChoice,
       maker: { getSession: (sessionId) => builtinLiveSession(sessionId) }, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
       enqueueDurableWrite, patchMessageAgentMeta, createDbMessage, log,
     }),

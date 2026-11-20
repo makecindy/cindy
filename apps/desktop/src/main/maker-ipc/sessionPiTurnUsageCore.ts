@@ -211,7 +211,11 @@ export function recordSessionPiTurnUsage(
         const billing = turnBillingSource(turnContext, billingRoute);
         if (billing.billingSource === 'subscription' && !billing.providerId && effectiveProvider) billing.providerId = effectiveProvider;
         const attributionFor = (model: string) => session.remoteHostId || session.agentDeviceId ? undefined
-          : tokenAttribution(piModelBilling(turnContext, model).billing, turnContext);
+          : {
+            ...tokenAttribution(piModelBilling(turnContext, model).billing, turnContext),
+            ...(!piSegmentsReliable || !groupedSegments.get(model)?.segments.every(s => s.model)
+              ? { modelUnconfirmed: true } : {}),
+          };
         const perModelTokens = piSegmentsReliable
           ? [...groupedSegments].map(([model, group]) => ({ model, ...group.tokens, ...piModelBilling(turnContext, model).billing }))
           : undefined;

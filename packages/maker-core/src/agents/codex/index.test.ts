@@ -7405,7 +7405,8 @@ describe('CodexAgent fast mode service tier', () => {
     });
     expect(resolveUsagePriceVariant).toHaveBeenCalledWith({ threadId: 'start-thread-id', inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 });
     expect((events.find(e => e.type === 'done')?.data as { usage: { segments: unknown[] } }).usage.segments)
-      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant, model: reportedModel ?? 'xai/grok-4.7' })]);
+      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant,
+        model: reportedModel ?? 'xai/grok-4.7', modelConfirmed: Boolean(reportedModel) })]);
     expect(handle.getFastMode?.()).toBe(true);
     await handle.close();
   });
