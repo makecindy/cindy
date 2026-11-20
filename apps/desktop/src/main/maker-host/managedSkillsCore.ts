@@ -112,7 +112,7 @@ export function createManagedSkills(ports: ManagedSkillsPorts) {
         } catch { /* Missing source. */ }
       }
       return { ...skill, cindyOfficial,
-        ...(!remoteHostId && skill.path && disabled.has(skillActivationKey(skill.path)) ? { enabled: false } : {}),
+        ...(!remoteHostId && disabled.size > 0 && skill.path && disabled.has(skillActivationKey(skill.path)) ? { enabled: false } : {}),
       };
     });
   }

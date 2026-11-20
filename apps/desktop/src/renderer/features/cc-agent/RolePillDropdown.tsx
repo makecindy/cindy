@@ -706,7 +706,7 @@ function WorkerLayoutMenu({
               {/* Worker rows */}
               <div className="flex flex-col">
                 {workers.map((w) => {
-                  const isFocused = w.workerId === selectedWorkerId || w.focused;
+                  const isFocused = selectedWorkerId === null ? w.focused : w.workerId === selectedWorkerId;
                   const attentionKind = resolveWorkerListAttention(
                     w,
                     taskAttention.get(w.sessionId),
@@ -1480,7 +1480,7 @@ export function RolePillDropdown({
           {/* Worker rows */}
           <div className="flex flex-col">
             {workers.map((w) => {
-              const isFocused = w.workerId === selectedWorkerId || w.focused;
+                  const isFocused = selectedWorkerId === null ? w.focused : w.workerId === selectedWorkerId;
               // error 行整体描红(优先于 focused 高亮), 软红底 + 红左边, 与 tabs 布局一致。
               const attentionKind = resolveWorkerListAttention(
                 w,

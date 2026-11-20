@@ -2,15 +2,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redact } from '../log-upload/redact';
 import type { PerformanceTraceEvent } from '../../shared/performanceTrace';
-import { TRACE_MAX_EVENTS } from '../../shared/performanceTrace';
+import { TRACE_MAX_EVENTS, TRACE_UI_OPERATIONS } from '../../shared/performanceTrace';
 import { TRACE_OPERATIONS } from './measure';
 
 const LABELS: Record<PerformanceTraceEvent['kind'], ReadonlySet<string>> = {
   'long-task': new Set(['main-thread']),
-  input: new Set(['click', 'pointerdown', 'keydown']),
+  input: new Set(['click', 'pointerdown', 'keydown', 'sidebar-wheel-to-frame', 'sidebar-pointermove-to-frame']),
   composition: new Set(['start', 'end']),
   visibility: new Set(['visible', 'hidden', 'focused', 'blurred', 'minimized', 'restored']),
   ipc: TRACE_OPERATIONS,
+  operation: new Set(TRACE_UI_OPERATIONS),
 };
 export function projectTraceEvent(
   value: unknown,

@@ -810,10 +810,10 @@ describe('built-in Skills', () => {
     }
   });
 
-  // Unit P02 regression: one discovery serialized four independent bundle reads.
-  // Existing integrity tests cover bytes/races, not bounded scheduling. Block the
-  // first directory stat (no sleeps) and require all four verification lanes.
-  it('verifies independent built-in Skills in bounded parallel lanes without changing catalog order', async () => {
+  // Unit: task switches can overlap discovery of the same bundle. Existing
+  // integrity tests do not bound duplicate I/O. Gate directory reads to require
+  // one four-lane verification, then check that completed trust is never reused.
+  it('shares in-flight bundle verification without caching trust or mutable results', async () => {
     const input = fixture();
     await prepareBuiltInSkills(input);
     const expected = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
@@ -829,13 +829,47 @@ describe('built-in Skills', () => {
       }
       return lstat(...args);
     });
-    const pending = builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir);
+    const pending = Promise.all(Array.from({ length: 7 }, () =>
+      builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)));
     try {
       expect(started).toBe(4);
     } finally {
       release();
-      await expect(pending).resolves.toEqual(expected);
+      await pending;
     }
+    const results = await pending;
+    for (const result of results) expect(result).toEqual(expected);
+    results[0]![0]!.name = 'caller mutation';
+    results[0]!.pop();
+    expect(results[1]).toEqual(expected);
+
+    const file = path.join(expected[0]!.absolutePath, 'SKILL.md');
+    const original = fs.readFileSync(file);
+    fs.writeFileSync(file, '# Tampered\n');
+    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toEqual([]);
+    expect(started).toBe(8);
+    fs.writeFileSync(file, original);
+    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toEqual(expected);
+    expect(started).toBe(12);
+  });
+
+  // Unit: descriptors contain both the shared source and the profile projection.
+  // Simultaneous callers must never receive another profile or app-data catalog.
+  it.each(['profile', 'application'] as const)('keeps concurrent %s roots separate', async scope => {
+    const first = fixture();
+    const second = fixture();
+    await prepareBuiltInSkills(first);
+    await prepareBuiltInSkills(second);
+    const secondUser = scope === 'profile' ? second.userDataDir : first.userDataDir;
+    const secondApp = scope === 'application' ? second.appDataDir : first.appDataDir;
+    const expectedFirst = builtInSkillDescriptors(first.userDataDir, first.appDataDir);
+    const expectedSecond = builtInSkillDescriptors(secondUser, secondApp);
+    const results = await Promise.all([
+      builtInSkillDescriptorsAsync(first.userDataDir, first.appDataDir),
+      builtInSkillDescriptorsAsync(secondUser, secondApp),
+    ]);
+    expect(results).toEqual([expectedFirst, expectedSecond]);
+    expect(results[0]).not.toEqual(results[1]);
   });
 
   // Unit: yielding identity verification must reject a publication that changes
@@ -845,10 +879,14 @@ describe('built-in Skills', () => {
     await prepareBuiltInSkills(input);
     const manifestPath = path.join(input.appDataDir, 'Cindy', 'shared-system-skills', '.cindy-system-skills.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    const pending = builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir);
+    const pending = Promise.all([
+      builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir),
+      builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir),
+    ]);
     fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, bundleVersion: manifest.bundleVersion + 1 }));
-    await expect(pending).resolves.toEqual([]);
-    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(4);
+    const afterPublication = builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir);
+    await expect(pending).resolves.toEqual([[], []]);
+    await expect(afterPublication).resolves.toHaveLength(4);
   });
 
   // Unit, PR #8493: changes to an already-hashed Skill must be rejected even
@@ -890,7 +928,10 @@ describe('built-in Skills', () => {
         }
         return result;
       });
-      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toEqual([]);
+      await expect(Promise.all([
+        builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir),
+        builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir),
+      ])).resolves.toEqual([[], []]);
       expect(changed).toBe(true);
     },
   );

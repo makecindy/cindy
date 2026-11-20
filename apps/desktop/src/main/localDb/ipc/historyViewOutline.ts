@@ -2,8 +2,8 @@ import { sql, type SQL } from 'drizzle-orm';
 import { describeToolUse, createdPathsFromDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { HistoryMessageSource } from '@cindy/maker-shared/message-window';
-import { extractCommandOutputPathCandidates } from '../../../shared/commandOutputPaths';
 import { messages } from '../schema';
+import { inferHistoryCommandArtifacts, type HistoryCommand } from './historyCommandArtifacts';
 
 /** Read-model headers only. Full content is read by ID after visible items are selected.
  * Candidate artifact results are conservative: the shared parser remains authoritative.
@@ -66,50 +66,6 @@ export function historyOutlineContent(): SQL<string> {
 
 
 /**
- * Command artifact inference is CPU work on the main thread, repeated for every
- * outline page of the same immutable tool_use row (切换伙伴即重算, #5503). Cache the
- * inferred paths per row; the key carries the command length and a content hash so
- * a re-used id with different text never serves stale paths.
- */
-const COMMAND_ARTIFACT_CACHE_LIMIT = 2048;
-const commandArtifactCache = new Map<string, readonly string[]>();
-
-function commandArtifactCacheKey(id: string, command: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < command.length; index += 1) {
-    hash ^= command.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `${id}\u0000${command.length}\u0000${hash >>> 0}`;
-}
-
-function cachedCommandArtifacts(id: string, command: string): readonly string[] {
-  const key = commandArtifactCacheKey(id, command);
-  const hit = commandArtifactCache.get(key);
-  if (hit) {
-    // Refresh recency so hot sessions stay cached while old pages age out.
-    commandArtifactCache.delete(key);
-    commandArtifactCache.set(key, hit);
-    return hit;
-  }
-  const paths = extractCommandOutputPathCandidates(command);
-  if (commandArtifactCache.size >= COMMAND_ARTIFACT_CACHE_LIMIT) {
-    const oldest = commandArtifactCache.keys().next().value;
-    if (oldest !== undefined) commandArtifactCache.delete(oldest);
-  }
-  commandArtifactCache.set(key, paths);
-  return paths;
-}
-
-/** Test seam: cache occupancy, and a reset so individual tests start cold. */
-export function commandArtifactCacheSize(): number {
-  return commandArtifactCache.size;
-}
-export function resetCommandArtifactCache(): void {
-  commandArtifactCache.clear();
-}
-
-/**
  * An approximate fact that changes when a hidden body is rewritten in place (a later full
  * tool result, a background completion). The outline already reads every body, so length
  * and tail add CPU but no IO; grouping revisions hash it, and it never reaches the wire.
@@ -130,8 +86,14 @@ export function historyOutlineContentStamp(): SQL<string> {
     END`;
 }
 
-/** File content/patches never cross the outline query; commands yield only paths on the wire. */
-export function withHistoryArtifacts<T extends HistoryMessageSource>(row: T): T & Pick<HistoryMessageSource, 'historyArtifacts'> {
+type OutlinedRow<T> = T & Pick<HistoryMessageSource, 'historyArtifacts'>;
+
+interface PendingCommand {
+  input: HistoryCommand;
+  setPaths(paths: readonly string[]): void;
+}
+
+function prepareHistoryArtifactRow<T extends HistoryMessageSource>(row: T, commands: PendingCommand[]): OutlinedRow<T> {
   // SDK routing/usage bookkeeping is repeated on thousands of hidden child rows.
   // It has no grouping meaning, but used to exhaust the scan's byte budget before
   // reaching their Agent header. Full bodies and metadata still come from hydrate.
@@ -142,25 +104,47 @@ export function withHistoryArtifacts<T extends HistoryMessageSource>(row: T): T 
   }
   if (row.role !== 'tool_use') return row;
   const tool = parseMessageToolUse(row);
+  const artifacts = (paths: readonly string[], source: 'command' | 'tool') => paths.map((path) => ({
+    path, source, createdAt: row.createdAt, toolUseId: tool.toolUseId,
+  }));
+  if (tool.toolName === 'Bash' || tool.toolName === 'bash' || tool.toolName === 'exec') {
+    const input = tool.input as Record<string, unknown> | null;
+    const { command, displayCommand } = input ?? {};
+    // Send the full command for inference; only the compact copy enters the
+    // scan budget. Full details are hydrated independently from the source.
+    const outlined: OutlinedRow<T> = { ...row, content: {
+      ...row.content as object,
+      input: Object.fromEntries(Object.entries(input ?? {}).map(([key, value]) =>
+        [key, (key === 'command' || key === 'displayCommand') && typeof value === 'string'
+          ? value.slice(0, 256) : value])),
+    } };
+    commands.push({
+      input: { id: String(row.id), toolName: tool.toolName, input: {
+        command: typeof command === 'string' ? command : undefined,
+        displayCommand: tool.toolName === 'exec' && typeof displayCommand === 'string' ? displayCommand : undefined,
+      } },
+      setPaths: (paths) => { if (paths.length) outlined.historyArtifacts = artifacts(paths, 'command'); },
+    });
+    return outlined;
+  }
   const descriptor = describeToolUse(tool.toolName, tool.input);
-  const paths = descriptor.kind === 'command'
-    ? [...cachedCommandArtifacts(String(row.id), descriptor.command)] : createdPathsFromDescriptor(descriptor);
+  const paths = createdPathsFromDescriptor(descriptor);
   const exclusions = descriptor.kind === 'file' && descriptor.action === 'edit'
     ? [{ path: descriptor.filePath, exclude: 'command' as const }]
     : descriptor.kind === 'fileChange' ? descriptor.changes.filter((change) => change.action !== 'add')
       .map((change) => ({ path: change.path, exclude: change.action === 'delete' || change.action === 'move' ? 'all' as const : 'command' as const })) : [];
-  // Extract from the complete command first: output paths may occur after a
-  // long script/heredoc. Only the bounded outline enters the scan budget/cache;
-  // visible messages and expanded details are hydrated from the original row.
-  const outlined = descriptor.kind === 'command' ? { ...row, content: {
-    ...row.content as object,
-    input: Object.fromEntries(Object.entries((tool.input ?? {}) as Record<string, unknown>).map(([key, value]) =>
-      [key, (key === 'command' || key === 'displayCommand') && typeof value === 'string'
-        ? value.slice(0, 256) : value])),
-  } } : row;
-  if (!paths.length && !exclusions.length) return outlined;
-  return { ...outlined, historyArtifacts: [...paths.map((path) => ({ path,
-    source: descriptor.kind === 'command' ? 'command' : 'tool',
-    createdAt: row.createdAt, toolUseId: tool.toolUseId,
-  } as const)), ...exclusions.map((file) => ({ ...file, source: 'tool' as const, createdAt: row.createdAt, toolUseId: tool.toolUseId }))] };
+  if (!paths.length && !exclusions.length) return row;
+  return { ...row, historyArtifacts: [...artifacts(paths, 'tool'),
+    ...exclusions.map((file) => ({ ...file, source: 'tool' as const, createdAt: row.createdAt, toolUseId: tool.toolUseId }))] };
+}
+
+/** File content/patches never cross the outline query; commands yield only paths on the wire. */
+export async function withHistoryArtifacts<T extends HistoryMessageSource>(rows: readonly T[]): Promise<OutlinedRow<T>[]> {
+  const commands: PendingCommand[] = [];
+  const outlined = rows.map((row) => prepareHistoryArtifactRow(row, commands));
+  if (commands.length) {
+    const paths = await inferHistoryCommandArtifacts(commands.map(({ input }) => input));
+    commands.forEach(({ setPaths }, index) => setPaths(paths[index]));
+  }
+  return outlined;
 }

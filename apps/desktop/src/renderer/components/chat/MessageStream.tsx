@@ -1953,6 +1953,8 @@ export function buildRenderItems(
   };
 
   let turnStartIdx = 0;
+  // Adjacent turns inspect the same artifact list with different boundaries.
+  const artifactTimes = new Map<string, number>();
   const flushTurnEnd = (lo: number, hi: number): void => {
     flushTurnChanges(lo, hi);
     for (const gc of pendingTurnEndGhostCards) items.push(gc);
@@ -2047,7 +2049,11 @@ export function buildRenderItems(
       const start = Date.parse(messages[lo]?.createdAt ?? '');
       const end = Date.parse(messages[hi]?.createdAt ?? '');
       const artifacts = (opts?.historyArtifacts ?? []).filter((artifact) => {
-        const time = Date.parse(artifact.createdAt);
+        let time = artifactTimes.get(artifact.createdAt);
+        if (time === undefined) {
+          time = Date.parse(artifact.createdAt);
+          artifactTimes.set(artifact.createdAt, time);
+        }
         return !((Number.isFinite(start) && time < start) || (Number.isFinite(end) && time >= end));
       });
       const editedPaths = new Set(artifacts.filter((file) => file.exclude && file.ready)
@@ -2073,6 +2079,7 @@ export function buildRenderItems(
       // Delivery tools stay as visible source rows. Preserve their existing
       // intermediate-file suppression for paths produced by deferred tools too.
       for (const message of slice) {
+        if (!generatedByPath.size) break;
         if (message.role !== 'tool_use') continue;
         const descriptor = describeToolUse(message.toolName ?? '', message.toolInput);
         for (const path of sourcePathCandidatesFromDescriptor(descriptor)) {
@@ -6774,6 +6781,7 @@ export function MessageStream({
                         style={{ height: messageViewport.placeholderHeight(item.key), flexShrink: 0 }} />
                                 );
                     }
+                    return messageViewport.renderBody(item.key, () => {
                     if (item.type === 'fork_origin') {
                       return (
                         <ForkOriginMarker
@@ -7078,6 +7086,7 @@ export function MessageStream({
                         {messageNode}
                       </div>
                     );
+                    });
                   })()}
                           </ImageGalleryContext.Provider>
                         </AttachmentCollectionContext.Provider>

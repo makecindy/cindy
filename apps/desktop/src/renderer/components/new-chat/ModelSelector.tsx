@@ -1,3 +1,4 @@
+import { beginTraceOperation } from '@/lib/performanceTraceProbe';
 import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
 import { listedSourceFolds } from '@cindy/model-providers';
 import { deviceDisplayName } from '@/lib/deviceName';
@@ -4473,6 +4474,22 @@ export function ModelSelector({
   // 只列该插件引擎模型的面板(任务不能换引擎时)；能换引擎时与内置任务同一个面板。
   const pluginEngineSessionActive = !!pluginEngineSession && !pluginEngines;
   const [keepOpenForAgentSwitch, setKeepOpenForAgentSwitch] = useState(false);
+  const pendingListTrace = useRef<{
+    open: boolean;
+    mark: NonNullable<ReturnType<typeof beginTraceOperation>>;
+  } | null>(null);
+  const recordOpenRequest = useCallback((next: boolean) => {
+    if (openRef.current === next) return;
+    const mark = beginTraceOperation(next ? 'model-list-open' : 'model-list-close');
+    pendingListTrace.current = mark ? { open: next, mark } : null;
+  }, []);
+  const listVisible = open || keepOpenForAgentSwitch;
+  useLayoutEffect(() => {
+    const pending = pendingListTrace.current;
+    if (pending?.open !== listVisible) return;
+    pending.mark(listVisible ? 'model-list-open-commit' : 'model-list-close-commit');
+    pendingListTrace.current = null;
+  }, [listVisible]);
   const composerResizeGenerationRef = useRef(0);
   useProviderShareQuotaViewing(open || keepOpenForAgentSwitch);
   // 打开触发的那次模型发现是否仍在途(并发语义与理由见 useModelDiscoveryPending)。
@@ -4507,6 +4524,7 @@ export function ModelSelector({
   }, [discovery.pending, resetDiscoveryPresentation]);
   const setOpenWithoutAutoRefresh = useCallback(
     (next: boolean): void => {
+      recordOpenRequest(next);
       openRef.current = next;
       if (!next) {
         discovery.reset();
@@ -4514,12 +4532,13 @@ export function ModelSelector({
       }
       setOpen(next);
     },
-    [discovery, resetDiscoveryPresentation],
+    [discovery, recordOpenRequest, resetDiscoveryPresentation],
   );
   const handleOpenChange = useCallback(
     (next: boolean): void => {
       const nextOpen = disabled ? false : next;
       const wasOpen = openRef.current;
+      recordOpenRequest(nextOpen);
       openRef.current = nextOpen;
       if (nextOpen && !wasOpen && providersOverrideState) {
         providersOverrideState.refresh();
@@ -4537,7 +4556,7 @@ export function ModelSelector({
       }
       setOpen(nextOpen);
     },
-    [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh,
+    [deviceId, disabled, discovery, recordOpenRequest, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh,
       pluginEngineSessionActive],
   );
 

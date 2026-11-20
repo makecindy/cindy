@@ -2228,6 +2228,11 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/localDb/ipc/historyCommandArtifactWorker.ts',
+          config: 'vite.node-worker.config.ts',
+          target: 'preload',
+        },
+        {
           entry: 'src/main/localDb/dbSlimmingMaintenanceProcess.ts',
           config: 'vite.db-slimming-worker.config.ts',
           // DELETE / VACUUM can run for minutes on a large database. An OS-killable

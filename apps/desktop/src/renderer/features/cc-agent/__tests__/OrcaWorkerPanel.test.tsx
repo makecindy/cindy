@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { installPerformanceTraceProbe } from '@/lib/performanceTraceProbe';
+import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
+import type { PerformanceTraceEvent } from '../../../../shared/performanceTrace';
 import { OrcaWorkerPanel } from '../OrcaWorkerPanel';
 import { requestNewWorkerFromShortcut } from '../lib/newWorkerShortcut';
+import type { WorkerInfo } from '../hooks/useWorkers';
 import { OrcaWorkersTabBody } from '../../right-sidebar/plugins/orca-workers/OrcaWorkersTabBody';
 
 const mocks = vi.hoisted(() => ({
@@ -17,6 +22,10 @@ const mocks = vi.hoisted(() => ({
   sessionViewProps: null as Record<string, unknown> | null,
   remotePaneProps: null as Record<string, unknown> | null,
   selection: {} as Record<string, unknown>,
+  focusWorkers: null as WorkerInfo[] | null,
+  switchFocus: vi.fn<(input: { leadSessionId: string; workerIdOrLabel: string }) => Promise<void>>(),
+  refreshFocus: vi.fn(),
+  resolveInteraction: vi.fn(),
   selectionInput: null as Record<string, unknown> | null,
   sessions: [] as Array<{ id: string; agentDeviceId?: string | null; orcaRole?: 'lead' }>,
   sessionsLoading: false,
@@ -89,10 +98,30 @@ vi.mock('../../right-sidebar/lib/mergeSidebarWindowBack', () => ({
   mergeSidebarWindowBack: vi.fn(),
 }));
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toastError } }));
+vi.mock('@/lib/makerTransport', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/makerTransport')>(),
+  orcaWorkflowsFor: () => ({ switchFocus: mocks.switchFocus }),
+}));
+vi.mock('../hooks/useWorkers', () => ({
+  useWorkers: () => ({
+    workers: mocks.focusWorkers ?? [],
+    focusedWorker: mocks.focusWorkers?.find((worker) => worker.focused) ?? null,
+    refresh: mocks.refreshFocus,
+  }),
+}));
+
+function renderWorkerApproval(sessionId: unknown) {
+  if (!mocks.focusWorkers || (sessionId !== 'session-b' && sessionId !== 'remote-b')) return null;
+  return <PermissionPrompt
+    permission={{ requestId: 'request-b', toolName: 'Write', input: { file_path: 'pending.txt' } }}
+    onRespond={(decision) => mocks.resolveInteraction(sessionId, 'request-b', decision)}
+  />;
+}
+
 vi.mock('../CCAgentSessionView', () => ({
   CCAgentSessionView: (props: Record<string, unknown>) => {
     mocks.sessionViewProps = { ...props, originAtMount: origins.map.get(props.sessionIdProp as string) ?? null };
-    return null;
+    return renderWorkerApproval(props.sessionIdProp);
   },
 }));
 vi.mock('../hooks/useWorkerAgentDevices', () => ({
@@ -110,18 +139,24 @@ vi.mock('../CreateWorkerPopover', () => ({
 vi.mock('../RemoteWorkerSessionPane', () => ({
   RemoteWorkerSessionPane: (props: Record<string, unknown>) => {
     mocks.remotePaneProps = props;
-    return null;
+    return renderWorkerApproval((props.device as WorkerInfo['executionDevice'])?.remoteSessionId);
   },
 }));
 vi.mock('../RolePillDropdown', () => ({
   WorkerListToolbar: (props: Record<string, unknown>) => {
     mocks.toolbarProps = props;
-    return null;
+    return mocks.focusWorkers ? (
+      <button type="button" onClick={() => (props.onSwitchFocus as (id: string) => void)('worker-b')}>
+        Worker B
+      </button>
+    ) : null;
   },
 }));
-vi.mock('../hooks/useOrcaWorkerSelection', () => ({
-  useOrcaWorkerSelection: (input: Record<string, unknown>) => {
-    mocks.selectionInput = input;
+vi.mock('../hooks/useOrcaWorkerSelection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../hooks/useOrcaWorkerSelection')>();
+  return { useOrcaWorkerSelection: (input: Parameters<typeof actual.useOrcaWorkerSelection>[0]) => {
+    if (mocks.focusWorkers) return actual.useOrcaWorkerSelection(input);
+    mocks.selectionInput = { ...input };
     return {
     workers: [],
     focusedWorker: null,
@@ -145,8 +180,8 @@ vi.mock('../hooks/useOrcaWorkerSelection', () => ({
     workerPermissionMode: 'auto',
     ...mocks.selection,
     };
-  },
-}));
+  } };
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -155,6 +190,64 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+describe('OrcaWorkerPanel pending focus', () => {
+  afterEach(() => { cleanup(); mocks.focusWorkers = null; });
+
+  // The real selection and approval paths previously let a deferred focus expose
+  // Worker's pending approval before switchFocus could succeed or fail.
+  it.each(['local', 'remote'] as const)('gates %s Worker approval until focus succeeds', async (kind) => {
+    mocks.resolveInteraction.mockClear();
+    mocks.toastError.mockClear();
+    mocks.switchFocus.mockReset();
+    const worker: WorkerInfo = {
+      workerId: 'worker-a', sessionId: 'session-a', role: 'developer', agent: 'codex',
+      model: 'gpt-5.4', effort: null, label: null, status: 'running', focused: true, idleSince: null,
+    };
+    const target: WorkerInfo = {
+      ...worker, workerId: 'worker-b', sessionId: 'session-b', focused: false,
+      ...(kind === 'remote' ? {
+        executionDevice: {
+          deviceId: 'pc-b', remoteSessionId: 'remote-b', deviceName: 'PC B', reachable: true, workingDir: null,
+        },
+      } : {}),
+    };
+    mocks.focusWorkers = [worker, target];
+    mocks.refreshFocus.mockImplementation(async () => {
+      mocks.focusWorkers = [{ ...worker, focused: false }, { ...target, focused: true }];
+      return { status: 'applied', workers: mocks.focusWorkers };
+    });
+    let rejectFocus!: (error: Error) => void;
+    const permittedFocus = deferred<void>();
+    mocks.switchFocus
+      .mockImplementationOnce(() => new Promise<void>((_, reject) => { rejectFocus = reject; }))
+      .mockReturnValueOnce(permittedFocus.promise);
+    render(<MemoryRouter><OrcaWorkerPanel leadSessionId="lead-approval" deviceId={null} viewVisible /></MemoryRouter>);
+
+    const attemptApproval = () => {
+      const allow = screen.queryByRole('button', { name: /allowOnce/ });
+      if (allow) fireEvent.click(allow);
+      fireEvent.keyDown(window, { key: 'Enter' });
+      expect(mocks.resolveInteraction).not.toHaveBeenCalled();
+      expect(allow).toBeNull();
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'Worker B' }));
+    expect(mocks.toolbarProps.selectedWorkerId).toBe('worker-b');
+    attemptApproval();
+    await act(async () => rejectFocus(new Error('focus request denied')));
+    expect(mocks.toolbarProps.selectedWorkerId).toBe('worker-a');
+    expect(mocks.toastError).toHaveBeenCalledWith('focus request denied');
+    attemptApproval();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Worker B' }));
+    attemptApproval();
+    await act(async () => permittedFocus.resolve(undefined));
+    fireEvent.click(await screen.findByRole('button', { name: /allowOnce/ }));
+    expect(mocks.resolveInteraction).toHaveBeenCalledExactlyOnceWith(
+      kind === 'remote' ? 'remote-b' : 'session-b', 'request-b', { behavior: 'allow' },
+    );
+  });
+});
 
 describe('OrcaWorkerPanel New Maker shortcut', () => {
   beforeEach(() => {
@@ -276,6 +369,69 @@ describe('OrcaWorkerPanel worker on another computer', () => {
       workingDir: '/Users/demo/Interviews',
     },
   };
+
+  it('only records commits for the latest switch, including a remote worker history', () => {
+    const events: PerformanceTraceEvent[] = [];
+    const stop = installPerformanceTraceProbe(batch => events.push(...batch));
+    const showWorker = (workerId: string) => {
+      const row = { ...remoteWorker, workerId, sessionId: workerId };
+      mocks.selection = { workers: [row], selectedWorkerRecord: row, selectedWorkerId: workerId, workerSessionId: workerId };
+    };
+    try {
+      showWorker('old');
+      const panel = render(<OrcaWorkerPanel leadSessionId="lead" deviceId={null} viewVisible />);
+      const select = mocks.toolbarProps.onSwitchFocus as (target: string) => void;
+      select('superseded');
+      select('latest');
+      showWorker('superseded');
+      panel.rerender(<OrcaWorkerPanel leadSessionId="lead" deviceId={null} viewVisible />);
+      expect(mocks.remotePaneProps!.onHistoryCommit).toBeUndefined();
+      showWorker('latest');
+      panel.rerender(<OrcaWorkerPanel leadSessionId="lead" deviceId={null} viewVisible />);
+      const ready = mocks.remotePaneProps!.onHistoryCommit as (stage: string) => void;
+      ready('history');
+      ready('history');
+      ready('input');
+      ready('fresh-history');
+    } finally {
+      stop();
+    }
+    const ops = events.filter(e => e.kind === 'operation');
+    expect(ops.map(e => e.label)).toEqual([
+      'worker-switch', 'worker-switch-cancelled', 'worker-switch', 'worker-selection-commit',
+      'worker-history-commit', 'worker-input-ready', 'worker-history-fresh-commit',
+    ]);
+    expect(ops.slice(3).map(e => e.at)).toEqual(Array(4).fill(ops[2].at));
+  });
+
+  it('rejects a history callback captured before returning to the same Worker', () => {
+    const events: PerformanceTraceEvent[] = [];
+    const stop = installPerformanceTraceProbe((batch) => events.push(...batch));
+    const show = (workerId: string) => {
+      const row = { ...remoteWorker, workerId, sessionId: workerId };
+      mocks.selection = { workers: [row], selectedWorkerRecord: row, selectedWorkerId: workerId, workerSessionId: workerId };
+      return <OrcaWorkerPanel leadSessionId="lead" deviceId={null} viewVisible />;
+    };
+    try {
+      const panel = render(show('start'));
+      const select = (id: string) => (mocks.toolbarProps.onSwitchFocus as (target: string) => void)(id);
+      select('a');
+      panel.rerender(show('a'));
+      const obsolete = mocks.remotePaneProps!.onHistoryCommit as (stage: string) => void;
+      select('b');
+      panel.rerender(show('b'));
+      select('a');
+      panel.rerender(show('a'));
+      obsolete('history');
+      const current = mocks.remotePaneProps!.onHistoryCommit as (stage: string) => void;
+      current('input');
+      current('history');
+    } finally {
+      stop();
+    }
+    expect(events.filter(({ label }) => label === 'worker-history-commit' || label === 'worker-input-ready')
+      .map(({ label }) => label)).toEqual(['worker-input-ready', 'worker-history-commit']);
+  });
 
   it('shows the task on the execution device instead of the local proxy task', () => {
     mocks.selection = {

@@ -4,7 +4,7 @@ import { observeProgrammaticScroll } from './observeProgrammaticScroll';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { collectTabbables } from '@/lib/focusTraversal';
 import { isPageTextAccessActive, subscribePageTextAccess } from '@/lib/pageTextAccess';
-import { MessageViewportGeometry } from './messageViewportGeometry';
+import { MessageViewportGeometry, readViewportGeometry } from './messageViewportGeometry';
 
 type Entry = { key: string; retain: boolean };
 type Options = {
@@ -72,12 +72,13 @@ export function useMessageViewport(options: Options) {
     if (records?.length) geometry.mutations(records, items);
     if (geometry.invalid) measurement.current = null;
     const previousOrigin = geometry.origin;
-    geometry.refresh(root, items, heights.current);
+    const snapshot = readViewportGeometry(root, items);
+    geometry.refresh(root, items, heights.current, snapshot);
     if (geometry.origin !== previousOrigin) measurement.current = null;
-    return geometry.range(root.scrollTop, root.clientHeight, 0).anchorElement;
+    return geometry.range(snapshot.top, snapshot.height, 0).anchorElement;
   }, [geometry]);
   const needsReconcileRef = useRef<() => boolean>(() => true);
-  const reconcileRef = useRef<() => void>(() => {});
+  const reconcileRef = useRef<(synchronous?: boolean) => void>(() => {});
   const frame = useRef(0);
   const reconcileViewport = useCallback(() => reconcileRef.current(), []);
   // Scroll events, programmatic writes, resize deliveries and external sync
@@ -89,7 +90,7 @@ export function useMessageViewport(options: Options) {
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
-      flushSync(() => reconcileRef.current());
+      reconcileRef.current(true);
     });
   }, []);
   // Callers move the viewport first and may run inside a rendering callback
@@ -97,7 +98,7 @@ export function useMessageViewport(options: Options) {
   // commits before the current frame paints and same-paint corrections can
   // read the mounted heights.
   const syncViewport = useCallback(() => {
-    if (needsReconcileRef.current()) flushSync(() => reconcileRef.current());
+    reconcileRef.current(true);
   }, []);
   useEffect(() => () => {
     if (frame.current) cancelAnimationFrame(frame.current);
@@ -170,7 +171,7 @@ export function useMessageViewport(options: Options) {
         if (Math.abs(delta) > 1) root.scrollTop += delta;
       }
     }
-    const needsReconcile = () => {
+    const readChangedViewport = () => {
       // Drain mutations already represented by this commit before trusting the
       // cached interval. Nested message updates can run without a parent render.
       const records = mutations.current?.takeRecords();
@@ -178,40 +179,50 @@ export function useMessageViewport(options: Options) {
         geometry.mutations(records, items);
         if (geometry.invalid) measurement.current = null;
       }
+      const snapshot = {
+        ...readViewportGeometry(root, items),
+        scrollHeight: root.scrollHeight,
+        entries: latest.current.entries,
+      };
       const cached = measurement.current;
-      const position = root.scrollTop;
-      return !cached || geometry.invalid || cached.entries !== latest.current.entries ||
-        cached.width !== root.clientWidth || cached.height !== root.clientHeight ||
-        cached.itemsWidth !== items.clientWidth || cached.itemsHeight !== items.clientHeight ||
-        cached.scrollHeight !== root.scrollHeight ||
-        !(position === cached.top || (position > cached.lower && position < cached.upper));
+      if (!cached || geometry.invalid || cached.entries !== snapshot.entries ||
+        cached.width !== snapshot.width || cached.height !== snapshot.height ||
+        cached.itemsWidth !== snapshot.itemsWidth || cached.itemsHeight !== snapshot.itemsHeight ||
+        cached.scrollHeight !== snapshot.scrollHeight ||
+        !(snapshot.top === cached.top || (snapshot.top > cached.lower && snapshot.top < cached.upper))) return snapshot;
+      return null;
     };
-    needsReconcileRef.current = needsReconcile;
-    const reconcile = (preserveAnchor = true) => {
-      if (!needsReconcile()) return;
+    // The resize callback can schedule known invalid geometry without a DOM
+    // read. The frame takes its own snapshot after any intervening changes.
+    needsReconcileRef.current = () => {
+      const cached = measurement.current;
+      return !cached || geometry.invalid || cached.entries !== latest.current.entries || readChangedViewport() !== null;
+    };
+    const reconcile = (synchronous = false, preserveAnchor = true) => {
+      // Reuse the DOM reads within this reconciliation. A resulting commit may
+      // replace placeholders, so its layout effect takes a fresh snapshot.
+      const snapshot = readChangedViewport();
+      if (!snapshot) return;
       const current = latest.current;
-      const position = root.scrollTop;
-      geometry.refresh(root, items, heights.current);
-      const { keys, lower, upper, anchor: viewportAnchor } = geometry.range(position, root.clientHeight, OVERSCAN);
+      geometry.refresh(root, items, heights.current, snapshot);
+      const { keys, lower, upper, anchor: viewportAnchor } = geometry.range(snapshot.top, snapshot.height, OVERSCAN);
       const next = new Set(keys);
       for (const entry of current.entries) {
         if (entry.retain || retained.current.has(entry.key)) next.add(entry.key);
       }
-      measurement.current = { entries: current.entries, top: position,
-        width: root.clientWidth, height: root.clientHeight, scrollHeight: root.scrollHeight,
-        itemsWidth: items.clientWidth, itemsHeight: items.clientHeight,
-        lower, upper };
+      measurement.current = { ...snapshot, lower, upper };
       if (next.size === mountedRef.current.size && [...next].every(key => mountedRef.current.has(key))) return;
       if (preserveAnchor && viewportAnchor) pendingAnchor.current = {
         ...viewportAnchor,
         wasFollowing: current.followRef.current,
-        atBottom: Math.abs(root.scrollHeight - root.scrollTop - root.clientHeight) <= 1,
+        atBottom: Math.abs(snapshot.scrollHeight - snapshot.top - snapshot.height) <= 1,
       };
       mountedRef.current = next;
-      setMounted(next);
+      if (synchronous) flushSync(() => setMounted(next));
+      else setMounted(next);
     };
     reconcileRef.current = reconcile;
-    reconcile(!initial);
+    reconcile(false, !initial);
   };
   useLayoutEffect(connectViewport);
 
@@ -227,7 +238,7 @@ export function useMessageViewport(options: Options) {
       // DOM replacement triggers its height/MutationObserver compensation.
       // Its state updates batch normally; only the reconcile commits now.
       latest.current.onProgrammaticScroll?.();
-      if (needsReconcileRef.current()) flushSync(() => reconcileRef.current());
+      syncViewport();
     });
     const schedule = scheduleViewportReconcile;
     const onScroll = () => scheduleViewportReconcile();
@@ -359,7 +370,7 @@ export function useMessageViewport(options: Options) {
       document.removeEventListener('focusout', settleTextAccess);
       document.removeEventListener('selectionchange', updateTextAccess);
     };
-  }, [options.scrollRef, options.itemsRef, options.connection, preserveTextAccessAnchor, scheduleViewportReconcile, geometry]);
+  }, [options.scrollRef, options.itemsRef, options.connection, preserveTextAccessAnchor, scheduleViewportReconcile, syncViewport, geometry]);
 
   return {
     getViewportTopRow,

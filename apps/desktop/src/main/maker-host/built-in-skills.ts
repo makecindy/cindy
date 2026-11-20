@@ -148,14 +148,38 @@ export function builtInSkillDescriptors(
   }
 }
 
-/** List discovery yields during full content verification, without caching trust. */
+const pendingBuiltInSkillVerifications = new Map<string, Promise<BuiltInSkillDescriptor[]>>();
+
+/** Overlapping discovery shares verification, never completed trust or mutable results. */
 export async function builtInSkillDescriptorsAsync(
   userDataDir: string,
   appDataDir?: string,
 ): Promise<BuiltInSkillDescriptor[]> {
+  const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+  if (!snapshot) return [];
+  // A read after publication must not join verification of the previous bundle.
+  const key = JSON.stringify([
+    userDataDir, appDataDir ?? null, snapshot.raw, snapshot.target, snapshot.realTarget,
+    snapshot.targetStat.dev, snapshot.targetStat.ino,
+  ]);
+  let pending = pendingBuiltInSkillVerifications.get(key);
+  if (!pending) {
+    pending = verifyBuiltInSkillDescriptors(snapshot, userDataDir, appDataDir).finally(() => {
+      if (pendingBuiltInSkillVerifications.get(key) === pending) {
+        pendingBuiltInSkillVerifications.delete(key);
+      }
+    });
+    pendingBuiltInSkillVerifications.set(key, pending);
+  }
+  return (await pending).map(descriptor => ({ ...descriptor }));
+}
+
+async function verifyBuiltInSkillDescriptors(
+  snapshot: NonNullable<ReturnType<typeof readBuiltInSkillSnapshot>>,
+  userDataDir: string,
+  appDataDir?: string,
+): Promise<BuiltInSkillDescriptor[]> {
   try {
-    const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
-    if (!snapshot) return [];
     const entries = new Map<string, fs.BigIntStats>();
     // Independent Skills can yield together; keep file hashing within each
     // directory ordered and cap I/O at four lanes. No verified result is cached.

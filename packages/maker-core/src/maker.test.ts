@@ -188,6 +188,38 @@ function createAgent(
 }
 
 describe('Maker Pi managed-package skill boundary', () => {
+  it('resolves each Skill path once per palette read while preserving disabled identities', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'cindy-skill-filter-'));
+    const disabled = path.join(directory, 'disabled');
+    const otherDisabled = path.join(directory, 'other-disabled');
+    const enabled = path.join(directory, 'enabled');
+    for (const source of [disabled, otherDisabled, enabled]) mkdirSync(source);
+    const disabledEntry = path.join(disabled, 'SKILL.md');
+    writeFileSync(disabledEntry, 'fixture');
+    const agent = createAgent(async () => { throw new Error('not used'); });
+    agent.listAgentSkills = async () => ({ skills: [
+      { kind: 'agent-skill', source: 'skill', name: 'disabled', path: disabledEntry },
+      { kind: 'agent-skill', source: 'skill', name: 'enabled', path: enabled },
+      { kind: 'agent-skill', source: 'skill', name: 'alias', path: enabled },
+      { kind: 'agent-skill', source: 'skill', name: 'pathless' },
+    ] });
+    agent.filterActiveSkillCommands = (result, remote, snapshot, current) => BaseAgent.prototype.filterActiveSkillCommands.call(
+      { deps: {} } as unknown as BaseAgent, result, remote, snapshot, current,
+    );
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger() });
+    const reads = vi.spyOn(realpathSync, 'native');
+    try {
+      const result = await maker.listAgentSkills('codex', { workingDir: directory }, async () => [disabled, otherDisabled, disabled]);
+      expect(result.skills.map(skill => skill.name)).toEqual(['enabled', 'alias', 'pathless']);
+      // A palette read must not multiply synchronous disk work by the exclusion count.
+      expect(reads).toHaveBeenCalledTimes(4);
+    } finally {
+      reads.mockRestore();
+      await maker.shutdown();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   // PB97, unit: preview listings must consume the Host's async verified paths
   // without calling the synchronous fallback; active tasks retain their snapshot.
   it('uses async activation facts for previews, but preserves live and SSH filtering', async () => {

@@ -817,10 +817,12 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
     for (const row of rowsOf(list(), LOCAL)) expectSupplier(row);
   });
 
-  it('定宽测量保留模型与本机供应商文字，省去来源详情与交互节点', async () => {
+  it('定宽测量保留一个代表模型及供应商文字，省去来源详情与交互节点', async () => {
     renderPanel({ devices: xdDevices });
     await clickRail('favorites');
-    const sizer = expectWidthProbe(SHARED, REMOTE, LOCAL);
+    const sizer = expectWidthProbe();
+    const modelLabels = [SHARED, REMOTE, LOCAL].flatMap(name => within(sizer).queryAllByText(name));
+    expect(modelLabels).toHaveLength(1);
     expect(within(sizer).getAllByTitle('Cindy AI').length).toBeGreaterThan(0);
   });
 

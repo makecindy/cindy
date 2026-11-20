@@ -421,21 +421,25 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(workerPanelSource).toContain("import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';");
     expect(workerPanelSource).toContain('if (!isAgentIslandSupported()) return;');
     expect(workerPanelSource).toContain(
-      'workerConversationVisible && workerSessionId && workerSessionId !== leadSessionId',
+      'workerConversationVisible && workerConversationReady && workerSessionId && workerSessionId !== leadSessionId',
+    );
+    expect(workerPanelSource).toContain(
+      'const workerConversationReady = !focusWritePending && workerPaneReady && workerOriginReady;',
     );
     expect(workerPanelSource).toContain('[leadSessionId, workerSessionId]');
     // 分离窗只显示占位,不能把 Worker 上报为可见。
-    expect(workerPanelSource).toContain('const workerConversationVisible = viewVisible && !isSidebarWindow();');
+    expect(workerPanelSource).toContain('const separateWindow = isSidebarWindow();');
+    expect(workerPanelSource).toContain('const workerConversationVisible = viewVisible && !separateWindow;');
     expect(workerPanelSource).toContain('window.electronAPI.agentIsland?.setVisibleSession?.(visibleSessionIds)');
   });
 
   it('does not navigate the detached sidebar window to settings from the worker toolbar', () => {
     // 硬上限时 + 按钮跳转到协同设置（codex P1 逃生口），但分离侧栏窗口与 device-link 受控面板
     // 不能整壳替换成设置路由（前者固定 /sidebar-window 壳路由，后者上限走 device-link 远程路径）。
-    // 实现用 onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings} 在调用处守卫：
     // 两类面板下传 undefined，+ 按钮回退为 disabled（不再呈现点了没反应的「设置 · 协同」按钮）。
     expect(workerPanelSource).toContain("import { isSidebarWindow } from '@/lib/sidebarWindow';");
-    expect(workerPanelSource).toContain('onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings}');
+    expect(workerPanelSource).toContain('const separateWindow = isSidebarWindow();');
+    expect(workerPanelSource).toContain('onOpenSettings={separateWindow || deviceId !== null ? undefined : handleOpenSettings}');
     expect(workerPanelSource).toContain("navigate('/settings?section=collaboration')");
     expect(workerPanelSource).not.toContain('settingsEnabled');
     expect(workersTabBodySource).toContain("import { isSidebarWindow } from '@/lib/sidebarWindow';");

@@ -6,17 +6,20 @@
  * 双栏布局与独立 resize/maximize。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
+import { beginTraceOperation } from '@/lib/performanceTraceProbe';
 import { toast } from '@/lib/toast';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import { CCAgentSessionView } from './CCAgentSessionView';
+import { CCAgentSessionView, type WorkerViewCommit } from './CCAgentSessionView';
 import { CreateWorkerPopover } from './CreateWorkerPopover';
 import { EditWorkerPopover } from './EditWorkerPopover';
 import { RemoteWorkerSessionPane } from './RemoteWorkerSessionPane';
@@ -25,6 +28,7 @@ import { useOrcaWorkerSelection } from './hooks/useOrcaWorkerSelection';
 import { useWorkerAgentDevices } from './hooks/useWorkerAgentDevices';
 import { subscribeNewWorkerShortcut } from './lib/newWorkerShortcut';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
+import type { TraceUiOperation } from '../../../shared/performanceTrace';
 import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
 
 export interface OrcaWorkerPanelProps {
@@ -90,8 +94,16 @@ function useLeadDeviceWorkerOrigins(
     remoteProjectsStore.subscribe,
     () => (selectedSessionId ? remoteProjectsStore.getSessionDeviceId(selectedSessionId) : undefined),
   );
-  return !leadDeviceId || !selectedSessionId || selectedOrigin !== undefined;
+  return !leadDeviceId || !selectedSessionId || selectedOrigin === leadDeviceId;
 }
+
+const workerCommitLabels: Record<WorkerViewCommit | 'selected', TraceUiOperation> = {
+  selected: 'worker-selection-commit',
+  history: 'worker-history-commit',
+  'fresh-history': 'worker-history-fresh-commit',
+  input: 'worker-input-ready',
+  'history-failed': 'worker-history-failed',
+};
 
 function sameVisibleSessionPayload(
   a: string | string[] | null,
@@ -121,7 +133,8 @@ export function OrcaWorkerPanel({
   const navigate = useNavigate();
   // 分离窗只显示占位、不显示 Worker 对话：不能当作用户在看这个 Worker，
   // 否则「已完成」会被自动确认、提醒也会被清掉。
-  const workerConversationVisible = viewVisible && !isSidebarWindow();
+  const separateWindow = isSidebarWindow();
+  const workerConversationVisible = viewVisible && !separateWindow;
   // Worker 可以放 Agent 的其他电脑与分享；Lead 的 Agent 位置未解析时不提供，Worker 跟 Lead。
   const workerAgentDevices = useWorkerAgentDevices({
     controlledDeviceId: agentDeviceId === undefined ? undefined : deviceId,
@@ -137,6 +150,7 @@ export function OrcaWorkerPanel({
     refreshCreationState,
     selectedWorkerRecord,
     selectedWorkerId,
+    focusWritePending,
     workerSessionId,
     createOpen,
     setCreateOpen,
@@ -157,6 +171,53 @@ export function OrcaWorkerPanel({
     onFocusWorkerSessionIdConsumed,
     onSelectionIntentCleared,
   });
+  const deferredWorkerSessionId = useDeferredValue(workerSessionId);
+  const workerPaneReady = deferredWorkerSessionId === workerSessionId;
+  const switchTrace = useRef<{
+    lead: string;
+    deviceId: string | null | undefined;
+    owner: ReturnType<typeof getDataOwnerGeneration>;
+    target: string;
+    mark: NonNullable<ReturnType<typeof beginTraceOperation>>;
+    stages: Set<WorkerViewCommit | 'selected'>;
+  } | null>(null);
+  const cancelSwitchTrace = useCallback(() => {
+    switchTrace.current?.mark('worker-switch-cancelled');
+    switchTrace.current = null;
+  }, []);
+  const switchWorker = useCallback((target: string) => {
+    const measure = workerConversationVisible && (target !== selectedWorkerId || switchTrace.current !== null);
+    cancelSwitchTrace();
+    const mark = measure ? beginTraceOperation('worker-switch') : undefined;
+    const pending = mark ? {
+      lead: leadSessionId, deviceId, owner: getDataOwnerGeneration(), target, mark,
+      stages: new Set<WorkerViewCommit | 'selected'>(),
+    } : null;
+    switchTrace.current = pending;
+    handleSwitchFocus(target, pending ? () => {
+      if (switchTrace.current !== pending) return;
+      pending.mark('worker-switch-failed');
+      switchTrace.current = null;
+    } : undefined);
+  }, [cancelSwitchTrace, deviceId, handleSwitchFocus, leadSessionId, selectedWorkerId, workerConversationVisible]);
+  const pendingTrace = switchTrace.current;
+  const markWorkerCommit = useCallback((stage: WorkerViewCommit | 'selected') => {
+    if (!pendingTrace || switchTrace.current !== pendingTrace || pendingTrace.lead !== leadSessionId ||
+        pendingTrace.deviceId !== deviceId || !isDataOwnerGenerationCurrent(pendingTrace.owner) ||
+        pendingTrace.target !== selectedWorkerId || !workerConversationVisible || pendingTrace.stages.has(stage)) return;
+    pendingTrace.stages.add(stage);
+    pendingTrace.mark(workerCommitLabels[stage]);
+    if (pendingTrace.stages.has('selected') && pendingTrace.stages.has('history') &&
+        pendingTrace.stages.has('fresh-history') && pendingTrace.stages.has('input')) switchTrace.current = null;
+  }, [deviceId, leadSessionId, pendingTrace, selectedWorkerId, workerConversationVisible]);
+  useLayoutEffect(() => {
+    if (workerConversationVisible) markWorkerCommit('selected');
+    else cancelSwitchTrace();
+  }, [workerConversationVisible, markWorkerCommit, cancelSwitchTrace]);
+  useLayoutEffect(() => cancelSwitchTrace, [cancelSwitchTrace, deviceId, leadSessionId]);
+  const onWorkerHistoryCommit = pendingTrace?.target === selectedWorkerId && workerConversationVisible
+    ? markWorkerCommit : undefined;
+
   const lastAgentIslandPayloadRef = useRef<string | string[] | null>(null);
   const shownWorker = selectedWorkerRecord ?? focusedWorker;
   // 在另一台电脑运行的 Worker：本机代理任务不跑 Agent，展示运行设备上的真实任务。
@@ -169,6 +230,8 @@ export function OrcaWorkerPanel({
     workers.filter((worker) => !worker.executionDevice && worker.sessionId).map((worker) => worker.sessionId),
     workerSessionId && !remoteDevice ? workerSessionId : null,
   );
+  // The task view owns interaction buttons and global shortcuts as soon as it mounts.
+  const workerConversationReady = !focusWritePending && workerPaneReady && workerOriginReady;
 
   // 改名入口的远程兼容门:归属已确认本机时始终可编辑；device-link 被控端必须显式
   // 声明支持 maker:worker:update(旧被控端 allowlist 不认该 channel)。
@@ -239,14 +302,14 @@ export function OrcaWorkerPanel({
     // 隐藏、切 tab 或折叠 RSB 时回落为 lead,避免和主 Lead 视图靠 effect 时序抢归属。
     // 分离窗只显示占位,Worker 对话不可见,同样回落为 lead。
     const visibleSessionIds =
-      workerConversationVisible && workerSessionId && workerSessionId !== leadSessionId
+      workerConversationVisible && workerConversationReady && workerSessionId && workerSessionId !== leadSessionId
         ? [leadSessionId, workerSessionId]
         : leadSessionId;
     if (!sameVisibleSessionPayload(lastAgentIslandPayloadRef.current, visibleSessionIds)) {
       lastAgentIslandPayloadRef.current = visibleSessionIds;
       void window.electronAPI.agentIsland?.setVisibleSession?.(visibleSessionIds);
     }
-  }, [leadSessionId, workerConversationVisible, workerSessionId]);
+  }, [leadSessionId, workerConversationVisible, workerConversationReady, workerSessionId]);
 
   useEffect(() => {
     return () => {
@@ -269,17 +332,21 @@ export function OrcaWorkerPanel({
           activeWorkerCount={activeWorkerCount}
           softLimit={softLimit}
           hardLimit={hardLimit}
-          onSwitchFocus={handleSwitchFocus}
+          onSwitchFocus={switchWorker}
           onOpenCreate={() => void handleOpenCreate()}
-          onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings}
+          onOpenSettings={separateWindow || deviceId !== null ? undefined : handleOpenSettings}
           pluginEngineDeviceId={typeof deviceId === 'string' ? deviceId : undefined}
           onArchiveWorker={handleArchiveWorker}
           onEditWorker={canEditWorker ? handleOpenEditWorker : undefined}
-          clearAttentionWhenVisible={workerConversationVisible}
+          clearAttentionWhenVisible={workerConversationVisible && workerConversationReady}
         />
       </div>
       <div className="chat-rail-compact min-h-0 flex-1">
-        {workerSessionId && isSidebarWindow() ? (
+        {workerSessionId && (focusWritePending || (!separateWindow && !workerConversationReady)) ? (
+          <div aria-busy="true" className="flex h-full items-center justify-center">
+            <Spinner size={16} />
+          </div>
+        ) : workerSessionId && separateWindow ? (
           <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
             <p className="text-sm text-muted-foreground">
               {t('orca.split.workerHiddenInSeparateWindow')}
@@ -299,13 +366,15 @@ export function OrcaWorkerPanel({
             key={workerSessionId}
             leadSessionId={leadSessionId}
             device={remoteDevice}
+            onHistoryCommit={onWorkerHistoryCommit}
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
           />
-        ) : workerSessionId && !workerOriginReady ? null : workerSessionId ? (
+        ) : workerSessionId ? (
           <CCAgentSessionView
             key={workerSessionId}
             sessionIdProp={workerSessionId}
+            onHistoryCommit={onWorkerHistoryCommit}
             compact
             orcaMode
             compactToolbar

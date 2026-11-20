@@ -3713,6 +3713,7 @@ function ExpandedView({
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={sidebarScrollRef}
+          data-trace-sidebar-list=""
           className="flex flex-col gap-2 pt-0 pb-4 overflow-y-auto flex-1"
           // 空白处右键 = 打开整理菜单(2026-08-12 用户裁决)。任务行 / 项目行 /
           // 对话组头各自处理菜单，由各自的 stopPropagation 阻止这里接管。

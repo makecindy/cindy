@@ -663,11 +663,16 @@ describe('report boundary', () => {
     expect(f.deps.upload).not.toHaveBeenCalled();
     expect(f.deps.reveal).not.toHaveBeenCalled();
   });
-  it('projects only fixed event labels and bounded numeric timings', () => {
+  it('projects fixed UI milestones without accepting worker identifiers or DOM data', () => {
+    const event = { at: 1100, kind: 'operation', label: 'worker-history-commit', durationMs: 75 };
+    expect(projectTraceEvent({ ...event, sessionId: 'private' }, 1000, 2000)).toEqual(event);
+    expect(projectTraceEvent({ ...event, label: 'private' }, 1000, 2000)).toBeNull();
+  });
+  it.each(['keydown', 'sidebar-wheel-to-frame', 'sidebar-pointermove-to-frame'])('projects only fixed event labels and bounded numeric timings (%s)', label => {
     const input = {
       at: 1200,
       kind: 'input',
-      label: 'keydown',
+      label,
       durationMs: 80,
       inputDelayMs: 50,
       processingMs: 10,
@@ -677,7 +682,7 @@ describe('report boundary', () => {
     expect(projectTraceEvent(input, 1000, 2000)).toEqual({
       at: 1200,
       kind: 'input',
-      label: 'keydown',
+      label,
       durationMs: 80,
       inputDelayMs: 50,
       processingMs: 10,
@@ -922,12 +927,17 @@ describe('report boundary', () => {
     ).rejects.toBe(error);
     // Skill subphases distinguish preparation from scan time without recording
     // workdirs, skill contents or results in the diagnostic report.
-    await expect(measureTraceOperation('maker:list-agent-skills:identity',
-      () => Promise.resolve('private-skill-result'))).resolves.toBe('private-skill-result');
+    for (const label of ['maker:list-agent-skills:identity', 'maker:list-agent-skills:official-mark']) {
+      await expect(measureTraceOperation(label,
+        () => Promise.resolve('private-skill-result'))).resolves.toBe('private-skill-result');
+    }
     measureTraceOperation('private-channel-name', () => 0);
-    expect(events).toHaveLength(3);
+    expect(events).toHaveLength(4);
     expect(projectTraceEvent(events[2], 0, Date.now())).toMatchObject({
       label: 'maker:list-agent-skills:identity', kind: 'ipc',
+    });
+    expect(projectTraceEvent(events[3], 0, Date.now())).toMatchObject({
+      label: 'maker:list-agent-skills:official-mark', kind: 'ipc',
     });
     expect(JSON.stringify(events)).not.toMatch(/original|private-channel|private-skill-result/);
   });

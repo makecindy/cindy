@@ -7,7 +7,7 @@
  * 在本机查看另一台电脑上的 Lead 时，运行设备可能就是本机：那条任务是本机任务，直接按本机打开。
  */
 import { Folder, Monitor, WifiOff } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -19,8 +19,9 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
+import { makerChatStore } from '@/lib/makerChatStore';
 
-import { CCAgentSessionView } from './CCAgentSessionView';
+import { CCAgentSessionView, type WorkerViewCommit } from './CCAgentSessionView';
 import type { WorkerExecutionDevice } from './hooks/workerProjectionStore';
 import { workerDeviceName } from './RolePillDropdown';
 
@@ -29,76 +30,138 @@ export interface RemoteWorkerSessionPaneProps {
   device: WorkerExecutionDevice;
   viewVisible: boolean;
   chatRealtime: boolean;
+  readOnly?: boolean;
+  onHistoryCommit?: (stage: WorkerViewCommit) => void;
 }
 
 type LoadState = 'loading' | 'ready' | 'failed';
+
+type SessionRead = {
+  promise: Promise<Session>;
+  isCurrent: ReturnType<typeof remoteProjectsStore.captureSessionRead>;
+};
+
+const pendingSessionReads = new Map<string, SessionRead>();
+
+function readWorkerSession(key: string, deviceId: string, sessionId: string): SessionRead {
+  const pending = pendingSessionReads.get(key);
+  if (pending?.isCurrent()) return pending;
+  const isCurrent = remoteProjectsStore.captureSessionRead(deviceId, sessionId);
+  const deviceEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
+  const promise = window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [sessionId])
+    .then((value) => {
+      const session = value as Session | null;
+      if (session?.id !== sessionId) throw new Error('Remote worker task not found');
+      if (remoteProjectsStore.getSessionDeviceId(sessionId) !== deviceId ||
+          remoteProjectsStore.getDeviceLifecycleEpoch(deviceId) !== deviceEpoch) {
+        throw new Error('Remote worker route changed during the read');
+      }
+      if (!isCurrent()) {
+        const newer = remoteProjectsStore.getDeviceSessions(deviceId).find((row) => row.id === sessionId);
+        if (!newer) throw new Error('Remote worker task changed during the read');
+        return newer;
+      }
+      return session;
+    });
+  const read = { promise, isCurrent };
+  pendingSessionReads.set(key, read);
+  const release = () => {
+    if (pendingSessionReads.get(key) === read) pendingSessionReads.delete(key);
+  };
+  void promise.then(release, release);
+  return read;
+}
 
 export function RemoteWorkerSessionPane({
   leadSessionId,
   device,
   viewVisible,
   chatRealtime,
+  readOnly = false,
+  onHistoryCommit,
 }: RemoteWorkerSessionPaneProps) {
   const { t } = useTranslation();
   const [state, setState] = useState<LoadState>('loading');
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const verifiedSessionKey = useRef<string | null>(null);
+  const onCommit = useRef(onHistoryCommit);
+  useEffect(() => { onCommit.current = onHistoryCommit; }, [onHistoryCommit]);
   const localDeviceId = useOptionalAuthDeviceId();
   const { deviceId, remoteSessionId, reachable } = device;
+  const sessionOrigin = useSyncExternalStore(
+    remoteProjectsStore.subscribe,
+    () => remoteProjectsStore.getSessionDeviceId(remoteSessionId),
+  );
   // 本机任务不能登记成「本机这台设备上的远程任务」：侧栏会多出一条同 id 的远程行，
   // 归档等写入也会按这条归属绕隧道写回本机。
   const runsHere = localDeviceId !== null && deviceId === localDeviceId;
   // 本机设备 id 未就绪时还不知道任务在不在本机，先不提示连不上。
   const showUnreachable = localDeviceId !== null && !runsHere && reachable === false;
-  const sessionKey = `${deviceId}:${remoteSessionId}`;
+  const owner = getDataOwnerGeneration();
+  const sessionKey = JSON.stringify([owner.dataOwnerId, owner.generation, deviceId, remoteSessionId]);
   const name = workerDeviceName(t, device);
 
   useEffect(() => {
     // 本机设备 id 未就绪时无法判断任务在不在本机，先不登记归属。
-    if (localDeviceId === null || runsHere) return;
+    if (reachable === false) verifiedSessionKey.current = null;
+    if (localDeviceId === null || runsHere || !viewVisible || verifiedSessionKey.current === sessionKey) return;
     let disposed = false;
-    const owner = getDataOwnerGeneration();
+    let releaseHistory: (() => void) | undefined;
+    const isMounted = () => !disposed && isDataOwnerGenerationCurrent(owner);
+    const reportFailure = onCommit.current;
     setState('loading');
-    void (async () => {
+    void Promise.resolve().then(async () => {
+      if (!isMounted()) return;
       const existingOrigin = remoteProjectsStore.getSessionDeviceId(remoteSessionId);
       if (existingOrigin && existingOrigin !== deviceId)
         throw new Error('Conflicting session owner');
       // 归属必须先于任何读写登记，任务视图才会把请求发到运行设备。
       remoteProjectsStore.pinSessionOrigin(deviceId, remoteSessionId);
+      const ownsRoute = () => remoteProjectsStore.getSessionDeviceId(remoteSessionId) === deviceId;
+      if (!ownsRoute()) throw new Error('Conflicting session owner');
       const cached = remoteProjectsStore
         .getDeviceSessions(deviceId)
         .some((row) => row.id === remoteSessionId);
       if (cached) setLoadedKey(sessionKey);
       if (reachable === false) {
         setState('failed');
+        if (!cached) reportFailure?.('history-failed');
         return;
       }
-      const isReadCurrent = remoteProjectsStore.captureSessionRead(deviceId, remoteSessionId);
-      const value = (await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [
-        remoteSessionId,
-      ])) as Session | null;
-      if (disposed || !isDataOwnerGenerationCurrent(owner)) return;
-      if (!value || value.id !== remoteSessionId) throw new Error('Remote worker task not found');
-      if (isReadCurrent()) {
+      const { promise, isCurrent } = readWorkerSession(sessionKey, deviceId, remoteSessionId);
+      // The chat view joins the same history load when its metadata arrives.
+      releaseHistory = makerChatStore.enterView(remoteSessionId);
+      makerChatStore.ensureInitialMessages(remoteSessionId, promise);
+      const value = await promise;
+      if (!isMounted()) return;
+      if (!ownsRoute()) throw new Error('Conflicting session owner');
+      if (isCurrent()) {
         const mirror = remoteProjectsStore
           .getDeviceSessions(deviceId)
           .find((row) => row.id === remoteSessionId);
         remoteProjectsStore.mergeDeviceSessions(
           deviceId,
           mirror?.deviceLinkDeviceName ?? remoteProjectsStore.getDeviceName(deviceId) ?? name,
-          [isReadCurrent.mergeActivity(value)],
+          [isCurrent.mergeActivity(value)],
         );
       }
       setState('ready');
       setLoadedKey(sessionKey);
-    })().catch(() => {
-      if (!disposed && isDataOwnerGenerationCurrent(owner)) setState('failed');
+      verifiedSessionKey.current = sessionKey;
+    }).catch(() => {
+      if (!isMounted()) return;
+      releaseHistory?.();
+      releaseHistory = undefined;
+      setState('failed');
+      reportFailure?.('history-failed');
     });
     return () => {
       disposed = true;
+      releaseHistory?.();
     };
     // name 只用于镜像分片缺名时的兜底，不触发重读。
-  }, [deviceId, remoteSessionId, reachable, retry, sessionKey, localDeviceId, runsHere]);
+  }, [deviceId, remoteSessionId, reachable, retry, sessionKey, localDeviceId, runsHere, owner, viewVisible]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -135,15 +198,16 @@ export function RemoteWorkerSessionPane({
         ) : null}
       </div>
       <div className="min-h-0 flex-1">
-        {runsHere || loadedKey === sessionKey ? (
+        {(runsHere && !sessionOrigin) || (loadedKey === sessionKey && sessionOrigin === deviceId) ? (
           <CCAgentSessionView
-            key={`${deviceId}:${remoteSessionId}`}
+            key={sessionKey}
             sessionIdProp={remoteSessionId}
+            onHistoryCommit={onHistoryCommit}
             compact
             compactToolbar
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
-            readOnly={!runsHere && (reachable === false || state !== 'ready')}
+            readOnly={readOnly || (!runsHere && (reachable === false || state !== 'ready'))}
             navigationMode="sidebar-embedded"
             sidebarTargetSessionId={leadSessionId}
           />

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { toast } from '@/lib/toast';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
-import { orcaWorkflowsFor } from '@/lib/makerTransport';
+import { orcaWorkflowsFor, orcaWorkflowsForDevice } from '@/lib/makerTransport';
 import { extractIpcError } from '@/utils/ipcError';
 import {
   parseConversationSearchJump,
@@ -18,10 +19,20 @@ import {
   workerAgentDeviceErrorMessage,
 } from '../collaborationErrors';
 import { createWorkerLabel } from '../workerLabel';
-import { useWorkers } from './useWorkers';
+import { useWorkers, type WorkerInfo } from './useWorkers';
 import { clearWorkerAttention } from '../lib/workerAttentionStore';
 
 const log = createLogger('OrcaWorkerSelection');
+
+interface BrowseIntent {
+  scope: string;
+  workerId: string;
+  hintRevision: number;
+}
+
+// A dispatched focus write must settle before another write can change the same lead.
+// Queued clicks only need to apply the latest intent.
+const focusWrites = new Map<string, { latest: BrowseIntent; tail?: Promise<boolean> }>();
 
 function parseSearchJump(state: unknown): ConversationSearchJump | null {
   if (!state || typeof state !== 'object') return null;
@@ -90,6 +101,37 @@ export function useOrcaWorkerSelection({
   const searchJumpSessionId = searchJump?.sessionId ?? null;
   const normalizedFocusWorkerHintRevision =
     focusWorkerHintRevision ?? (focusWorkerSessionId ? 1 : 0);
+  const owner = getDataOwnerGeneration();
+  const browseScope = JSON.stringify([owner.dataOwnerId, owner.generation, deviceId, leadSessionId]);
+  const visibleScope = useRef<string | null>(null);
+  const visibleRef = useRef(viewVisible);
+  const currentHintRevision = useRef(normalizedFocusWorkerHintRevision);
+  const latestBrowseIntent = useRef<BrowseIntent | null>(null);
+  const [browse, setBrowse] = useState<{
+    intent: BrowseIntent;
+    confirmed: boolean;
+    awaitingProjection?: WorkerInfo[];
+  } | null>(null);
+  useLayoutEffect(() => {
+    visibleScope.current = browseScope;
+    setBrowse((current) => current?.intent.scope === browseScope ? current : null);
+    return () => {
+      latestBrowseIntent.current = null;
+      visibleScope.current = null;
+    };
+  }, [browseScope]);
+  useLayoutEffect(() => {
+    visibleRef.current = viewVisible;
+    currentHintRevision.current = normalizedFocusWorkerHintRevision;
+  }, [viewVisible, normalizedFocusWorkerHintRevision]);
+  const activeBrowse = browse?.intent.scope === browseScope &&
+    browse.intent.hintRevision === normalizedFocusWorkerHintRevision ? browse : null;
+  const browseWorker = activeBrowse && workers.find((worker) => worker.workerId === activeBrowse.intent.workerId);
+  useLayoutEffect(() => {
+    if (activeBrowse?.awaitingProjection && activeBrowse.awaitingProjection !== workers) {
+      setBrowse((current) => current === activeBrowse ? null : current);
+    }
+  }, [activeBrowse, workers]);
 
   useEffect(() => {
     selectionIntentGenerationRef.current += 1;
@@ -220,6 +262,7 @@ export function useOrcaWorkerSelection({
   }, [pendingFocusWorkerSessionId, workers]);
 
   const selectedWorkerRecord = useMemo(() => {
+    if (browseWorker) return browseWorker;
     if (effectiveSearchJumpWorkerSessionId) {
       const searchJumpWorkerRecord = workers.find(
         (w) => w.sessionId === effectiveSearchJumpWorkerSessionId,
@@ -240,6 +283,7 @@ export function useOrcaWorkerSelection({
     }
     return workers[0] ?? null;
   }, [
+    browseWorker,
     effectiveSearchJumpWorkerSessionId,
     focusWorkerHintSessionId,
     focusedWorker,
@@ -289,7 +333,7 @@ export function useOrcaWorkerSelection({
   );
 
   const visibleDoneWorkerId =
-    viewVisible && selectedWorkerRecord?.status === 'done' ? selectedWorkerRecord.workerId : null;
+    !activeBrowse && viewVisible && selectedWorkerRecord?.status === 'done' ? selectedWorkerRecord.workerId : null;
 
   useEffect(() => {
     if (!visibleDoneWorkerId) return;
@@ -366,38 +410,65 @@ export function useOrcaWorkerSelection({
   );
 
   const handleSwitchFocus = useCallback(
-    (workerId: string) => {
+    (workerId: string, onFailure?: () => void) => {
       clearSelectionHints();
-      const worker = workersRef.current.find((item) => item.workerId === workerId);
-      const isDone = worker?.status === 'done';
-      // 只有对话真的可见才算看过结果；看不到对话(如分离窗只显示占位)时选中不确认、
-      // 不清提醒，等对话可见后由 visibleDoneWorkerId 的 effect 确认。
-      const acknowledgeDone = isDone && viewVisible;
+      const intent = { scope: browseScope, workerId, hintRevision: normalizedFocusWorkerHintRevision };
+      latestBrowseIntent.current = intent;
+      setBrowse({ intent, confirmed: false });
+      const queue = focusWrites.get(browseScope) ?? { latest: intent };
+      const previous = queue.tail;
+      queue.latest = intent;
+      const isLatest = (): boolean => queue.latest === intent && isDataOwnerGenerationCurrent(owner);
+      const isVisibleIntent = () => isLatest() && visibleScope.current === browseScope &&
+        latestBrowseIntent.current === intent && currentHintRevision.current === intent.hintRevision;
+      const settle = () => setBrowse((current) => current?.intent === intent ? null : current);
+      const applyFocus = async () => {
+        if (!isLatest()) return false;
+        const workflows = deviceId ? orcaWorkflowsForDevice(deviceId) : orcaWorkflowsFor(leadSessionId);
+        await workflows.switchFocus({ leadSessionId, workerIdOrLabel: workerId });
+        return true;
+      };
+      const write = previous ? previous.catch(() => undefined).then(applyFocus) : applyFocus();
+      queue.tail = write;
+      focusWrites.set(browseScope, queue);
       void (async () => {
+        let focusApplied = false;
+        let waitingForProjection = false;
         try {
-          const workflows = orcaWorkflowsFor(leadSessionId);
-          await workflows.switchFocus({
-            leadSessionId,
-            workerIdOrLabel: workerId,
-          });
-          let acknowledged = false;
-          if (acknowledgeDone) {
+          if (!(await write) || !isVisibleIntent()) return;
+          focusApplied = true;
+          setBrowse((current) => current?.intent === intent ? { intent, confirmed: true } : current);
+          const status = workersRef.current.find((worker) => worker.workerId === workerId)?.status;
+          if (visibleRef.current && status === 'done') {
             try {
-              acknowledged = await acknowledgeDoneWorker(workerId);
+              await acknowledgeDoneWorker(workerId);
             } catch (err: unknown) {
-              const msg = err instanceof Error ? err.message : String(err);
-              toast.error(msg);
+              if (isVisibleIntent()) toast.error(err instanceof Error ? err.message : String(err));
             }
+          } else if (status !== 'done') {
+            clearWorkerAttention(workerId);
           }
-          if (!isDone || acknowledged) clearWorkerAttention(workerId);
-          await refresh();
+          if (isVisibleIntent()) waitingForProjection = (await refresh())?.status !== 'applied';
         } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          toast.error(msg);
+          if (isVisibleIntent()) {
+            if (focusApplied) waitingForProjection = true;
+            else onFailure?.();
+            toast.error(err instanceof Error ? err.message : String(err));
+          }
+        } finally {
+          if (focusWrites.get(browseScope)?.tail === write) focusWrites.delete(browseScope);
+          if (visibleScope.current === browseScope && latestBrowseIntent.current === intent &&
+              isDataOwnerGenerationCurrent(owner)) {
+            if (waitingForProjection) {
+              const awaitingProjection = workersRef.current;
+              setBrowse((current) => current?.intent === intent ? { ...current, awaitingProjection } : current);
+            } else settle();
+          }
         }
       })();
     },
-    [acknowledgeDoneWorker, clearSelectionHints, leadSessionId, refresh, viewVisible],
+    [acknowledgeDoneWorker, browseScope, clearSelectionHints, deviceId, leadSessionId,
+      normalizedFocusWorkerHintRevision, owner, refresh],
   );
 
   const handleArchiveWorker = useCallback(
@@ -469,6 +540,7 @@ export function useOrcaWorkerSelection({
     refreshCreationState,
     selectedWorkerRecord,
     selectedWorkerId,
+    focusWritePending: Boolean(browseWorker && !activeBrowse?.confirmed),
     workerSessionId,
     createOpen,
     setCreateOpen,

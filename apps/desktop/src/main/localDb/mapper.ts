@@ -149,8 +149,10 @@ const PREVIEW_MAX_CHARS = 140;
 const PREVIEW_CONTENT_BOUND_CHARS = 4096;
 // Cache only this pure projection, never a session row. Exact text/role keys
 // keep edits visible; both entry count and input size bound retained memory.
-const PREVIEW_CACHE_ENTRIES = 1024;
+const PREVIEW_CACHE_ENTRIES = 8192;
+const PREVIEW_CACHE_CHARS = 4 * 1024 * 1024;
 const plainPreviewCache = new Map<string, string | null>();
+let retainedPreviewChars = 0;
 
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
@@ -176,8 +178,11 @@ export function finalizePlainPreview(
   const preview = computePlainPreview(text, role);
   if (key !== null) {
     plainPreviewCache.set(key, preview);
-    if (plainPreviewCache.size > PREVIEW_CACHE_ENTRIES) {
-      plainPreviewCache.delete(plainPreviewCache.keys().next().value!);
+    retainedPreviewChars += key.length + (preview?.length ?? 0);
+    while (plainPreviewCache.size > PREVIEW_CACHE_ENTRIES || retainedPreviewChars > PREVIEW_CACHE_CHARS) {
+      const oldest = plainPreviewCache.entries().next().value!;
+      retainedPreviewChars -= oldest[0].length + (oldest[1]?.length ?? 0);
+      plainPreviewCache.delete(oldest[0]);
     }
   }
   return preview;
