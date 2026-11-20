@@ -406,8 +406,8 @@ import {
   type DeferredUiAssignment,
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
-import { hasTurnResponse, localizeAgentStatus, remoteResponsePendingStatus, remoteWaitingScope, statusAgentLocation } from './lib/localizeAgentStatus';
-import { getStartingInputClientId, hasStartingTerminal, useStartingSessionIds } from '@/lib/sessionStartingStore';
+import { localizeAgentStatus, statusAgentLocation } from './lib/localizeAgentStatus';
+import { useRemoteStartFeedback } from './lib/useRemoteStartFeedback';
 import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
 import { hasInlineOverloadRetry } from './lib/inlineRetryError';
@@ -2653,35 +2653,25 @@ function CCAgentSessionContent({
   const taskLocation = statusAgentLocation(session?.agentDeviceId, pendingAgentDeviceId, false);
   // A pending switch belongs to the next send, never to an already running turn.
   const statusAgentDeviceId = statusAgentLocation(session?.agentDeviceId, pendingAgentDeviceId, agentStatus.isRunning);
-  // SSH 远端会话没有 agentDeviceId(agent 跑在远端机上),但同样要等远端回音:
-  // 主机侧每轮发消息前都要先跑一次预检,这几秒里状态栏不能空着(#11720)。
-  const remoteWaiting = remoteWaitingScope(statusAgentDeviceId, session?.remoteHostId);
-  const startingInputClientId = sessionId ? getStartingInputClientId(sessionId) : undefined;
-  const receivedRemoteResponse = useMemo(
-    () => hasTurnResponse(messages, startingInputClientId), [messages, startingInputClientId],
-  );
-  const receivedTerminalStatus = Boolean(sessionId && hasStartingTerminal(sessionId));
-  // A retained error belongs to the previous turn until running clears it.
-  // Only a newly received terminal event may settle this send's preparation.
-  const settledStartingSessions = useMemo(() => new Set(
-    remoteWaiting && sessionId && (agentStatus.isRunning || receivedRemoteResponse || receivedTerminalStatus
-      || queuePaused || credentialSwitchWait
-      || pendingPermission || pendingAskUser || pendingPluginSetup || pendingPlanReview)
-      ? [sessionId] : [],
-  ), [remoteWaiting, sessionId, agentStatus.isRunning, receivedRemoteResponse, receivedTerminalStatus,
-    queuePaused, credentialSwitchWait,
-    pendingPermission, pendingAskUser, pendingPluginSetup, pendingPlanReview]);
-  const startingSessions = useStartingSessionIds(settledStartingSessions);
-  const waitingRemoteStart = Boolean(remoteWaiting && sessionId
-    && startingSessions.has(sessionId) && !settledStartingSessions.has(sessionId));
+  const { waitingRemoteStart, status: remoteStartStatus } = useRemoteStartFeedback({
+    sessionId,
+    agentDeviceId: statusAgentDeviceId,
+    remoteHostId: session?.remoteHostId,
+    status: agentStatus.status,
+    isRunning: agentStatus.isRunning,
+    messages,
+    queuePaused,
+    credentialSwitchWait,
+    pendingPermission,
+    pendingAskUser,
+    pendingPluginSetup,
+    pendingPlanReview,
+  });
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
       : t('ccAgent.agentStatus.waitingWorkflow')
-    : waitingRemoteStart ? 'Waiting for remote response' : remoteResponsePendingStatus(
-        agentStatus.status, statusAgentDeviceId, agentStatus.isRunning,
-        messages,
-      );
+    : remoteStartStatus;
 
   // error-tail-banner:会话尾部停在未忽略的 role='error' 行 → 输入框上方显示
   // 可操作红条(与 live ErrorBanner 同风格;2026-07-05 产品决策统一——所有尾部
