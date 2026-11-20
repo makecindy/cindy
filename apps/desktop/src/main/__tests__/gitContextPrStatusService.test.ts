@@ -12,11 +12,13 @@ import {
   PrStatusService,
   filterPrStatusQueriesForRefs,
   mapRemoteToStatus,
+  withoutPrMetadata,
   type PrRemoteState,
 } from '../git-context/prStatusService';
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
 import { fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
 import { PrFollowWatch, prStatusSignature } from '../git-context/prFollowWatch';
+import { admitTaskAction, assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization';
 import { followedGithubPrs } from '../scheduler-host/webhook/github';
 import { cachedGithubPrHeads, refreshGithubPrEvents } from '../git-context/githubPrEvents';
 import type { GithubClient } from '@cindy/github-client';
@@ -256,6 +258,22 @@ describe('PrStatusService', () => {
     });
     const [r] = await svc.getStatuses([Q]);
     expect(r).toMatchObject({ ok: true, status: 'merged', prNumber: 85 });
+  });
+
+  // Protocol (git-context:pr-status / mr-status answer): status chips never read `metadata`
+  // (PR body, author/reviewer objects). Logs showed ~11 KB per answer over device-link, the
+  // second-largest result stream. The channel answer drops it; the service result keeps it for
+  // the main-process GitHub read tools (get_pr_changes).
+  it('keeps metadata for GitHub read tools but drops it from status channel answers', async () => {
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: async () => remote({ metadata: { body: 'x'.repeat(8_000), author: { login: 'a' } } }),
+    });
+    const [full] = await svc.getStatuses([Q]);
+    expect(full).toMatchObject({ ok: true, metadata: { author: { login: 'a' } } });
+    const answer = withoutPrMetadata(full);
+    expect(answer).not.toHaveProperty('metadata');
+    expect(answer).toMatchObject({ ok: true, status: 'open', prNumber: 85, title: full.ok ? full.title : '' });
   });
 
   it('PR 源分支(head.ref)透传到结果', async () => {
@@ -814,7 +832,7 @@ describe('PR follow watch', () => {
     await look(20);
     expect(runNow).not.toHaveBeenCalled();
     await look(30, 'b2');
-    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }]]);
+    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }, expect.objectContaining({ id: 'follow-85' })]]);
     await look(40, 'c3');
     expect(runNow).toHaveBeenCalledTimes(1);
     inflight.mockReturnValue(1);
@@ -823,6 +841,31 @@ describe('PR follow watch', () => {
     inflight.mockReturnValue(0);
     await look(80_000, 'e5');
     expect(runNow).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit regression: a PR event delivered from an expired tool context used to pass
+  // its pre-check but fail the session send. Ordinary tests run without a caller.
+  it('dispatches the scheduled turn independently of the expired action that observed the PR', async () => {
+    const { watch, runNow } = setup();
+    runNow.mockImplementation(async () => {
+      await assertTaskActionCurrent();
+      return { runId: 'scheduled-turn' };
+    });
+    let current = true;
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'caller', tool: 'manage_session_prs', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {
+        if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await decision.run(async () => {
+      current = false;
+      await watch.notify('https://github.com/makecindy/cindy/pull/85');
+      await expect(assertTaskActionCurrent()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    });
+    expect(runNow).toHaveBeenCalledOnce();
+    await expect(runNow.mock.results[0]!.value).resolves.toEqual({ runId: 'scheduled-turn' });
   });
 
   // Review (Greptile P1 on #9022): run-now skips the scheduler's concurrency cap, so a burst of PR
@@ -839,6 +882,66 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(1);
     await look(300_000);
     expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the selected merge condition for event-only automations, independent of an incidental hook URL', async () => {
+    const target = 'https://github.com/makecindy/cindy/pull/85';
+    const other = 'https://github.com/makecindy/cindy/pull/8';
+    const tasks = [schedule('merged', other, { manual: true, prTrigger: { url: target, change: 'merged' } }),
+      schedule('disabled', target, { prTrigger: null })];
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true });
+    expect(followedGithubPrs(tasks)).toEqual([target]);
+    await watch.notify(other);
+    await watch.notify(target);
+    watch.observe(Q, { ok: true, status: 'open' } as never);
+    watch.observe(Q, { ok: true, status: 'closed' } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).not.toHaveBeenCalled();
+    watch.observe(Q, { ok: true, status: 'merged' } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(runNow).toHaveBeenCalledWith('merged', expect.objectContaining({ detail: target }), tasks[0]);
+  });
+
+  // #11309: a failed timed check can advance lastFiredAt without handling the merge.
+  it('recovers an unseen merge after a failed check, and skips a previously processed merge after restart', async () => {
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    const task = schedule('merge', url, { createdAt: 1, lastFiredAt: 30, prTrigger: { url, change: 'merged' } });
+    const runNow = vi.fn(async () => null);
+    const hasSuccessfulPrRunSince = vi.fn(async () => false);
+    const watch = new PrFollowWatch({ listActive: async () => [task], inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true, hasSuccessfulPrRunSince, runNow });
+    const merged = { ok: true, status: 'merged', metadata: { merged_at: new Date(20).toISOString() } } as never;
+    watch.observe(Q, { ok: false, reason: 'fetch-failed' } as never);
+    watch.observe(Q, merged);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(hasSuccessfulPrRunSince).toHaveBeenCalledWith('merge', 20);
+    watch.reset();
+    hasSuccessfulPrRunSince.mockResolvedValue(true);
+    watch.observe(Q, merged);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('filters CI, review and recovery wakeups for ordinary tasks with no gate', async () => {
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    const tasks = (['ci', 'review', 'merged', 'any'] as const).map(change =>
+      schedule(change, url, { manual: true, preRunHook: undefined, prTrigger: { url, change } }));
+    const runNow = vi.fn(async (_id: string) => null);
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true });
+    await watch.notifyChange(url, 'reconcile', () => true);
+    expect(runNow).not.toHaveBeenCalled();
+    const open = { ok: true, status: 'open', checks: { total: 1, pending: 1 } };
+    watch.observe(Q, open as never);
+    watch.observe(Q, { ...open, checks: { total: 1, passed: 1 } } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow.mock.calls.map(([id]) => id)).toEqual(['ci', 'any']);
+    await watch.notifyChange(url, 'review', () => true);
+    expect(runNow.mock.calls.map(([id]) => id)).toEqual(['ci', 'any', 'review']);
   });
 
   // Review (Codex P2 on #9022): a passive instance shares data with another one that owns automatic runs.
@@ -890,6 +993,29 @@ describe('PR follow watch', () => {
       expect(runNow.mock.calls.map(call => call[0])).toEqual(['first', 'busy']);
       await vi.advanceTimersByTimeAsync(120_000);
       expect(runNow).toHaveBeenCalledTimes(2);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  // PR 11309, unit: the bound runner can discover a busy session after admission.
+  // A successful status sample with the same signature would never wake the task again.
+  it.each([true, false])('retains a runner-deferred merge only while the trigger applies (active=%s)', async (active) => {
+    vi.useFakeTimers();
+    try {
+      const url = 'https://github.com/makecindy/cindy/pull/85';
+      let task = schedule('merge', url, { preRunHook: undefined, prTrigger: { url, change: 'merged' } });
+      const runNow = vi.fn(async () => ({ runId: 'merge-run', deferred: false }));
+      runNow.mockResolvedValueOnce({ runId: 'deferred-run', deferred: true });
+      const watch = new PrFollowWatch({
+        listActive: async () => [task], inflight: () => 0, hasCapacity: () => true, autoRunAllowed: () => true, runNow,
+      });
+      await watch.notifyChange(url, 'merged', () => true);
+      expect(runNow).toHaveBeenCalledOnce();
+      if (!active) task = schedule('merge', url, { preRunHook: undefined, prTrigger: null });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).toHaveBeenCalledTimes(active ? 2 : 1);
+      if (active) expect(runNow).toHaveBeenLastCalledWith('merge', { kind: 'watch', source: 'pr-status', detail: url }, task);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).toHaveBeenCalledTimes(active ? 2 : 1);
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 

@@ -4,6 +4,30 @@ import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
 import { errorPayload, okPayload } from "./_payload.js";
 
 export interface ProjectManagementCallbacks {
+  readInfo?(params: {
+    callerSessionId: string;
+    device?: string;
+    projectKey: string;
+  }): Promise<ControlResult<{ project: unknown }, string>>;
+  inspectIcon?(params: {
+    callerSessionId: string;
+    device?: string;
+    projectKey: string;
+  }): Promise<ControlResult<{ icon: unknown }, string>>;
+  updateInfo?(params: {
+    callerSessionId: string;
+    device?: string;
+    projectKey: string;
+    field: "name" | "icon" | "profile";
+    value:
+      | string
+      | null
+      | {
+          name?: string;
+          icon?: string | null;
+          directories?: Array<{ path: string; access: "read" | "write" }>;
+        };
+  }): Promise<ControlResult<{ saved: boolean }, string>>;
   list(params: {
     callerSessionId: string;
     device?: string;
@@ -82,9 +106,17 @@ export function registerProjectManagementTools(
     name: "list_projects",
     category: "control",
     description:
-      "List registered projects on the selected Cindy computer (device; omitted means local), including empty projects. Use the returned project_path to select an existing visible project when creating a task with send_to_session. working_dir is the same project directory for rename/remove operations. Returns directory_name, display alias, hidden state and whether the directory exists. Identify projects by path, not display name. Hidden projects are included by default; restore explicitly with create_project before selecting one. Also returns projects_root: where new project folders go on this computer (source=setting is the user's choice; inferred/default are suggestions, so confirm the location with the user before creating a folder there; exists=false means it has not been created yet). Use next_offset for pagination. Unlike list_workdirs, this is the project catalog, not task execution directory history. Unavailable from SSH tasks.",
+      "List registered projects on the selected Cindy computer (device; omitted means local), including empty projects. Use the returned project_path to select an existing visible project when creating a task with send_to_session. working_dir is the same project directory for rename/remove operations. Returns directory_name, display alias, hidden state and whether the directory exists. Identify projects by path, not display name. Hidden projects are included by default; restore explicitly with create_project before selecting one. Also returns projects_root: where new project folders go on this computer (source=setting is the user's choice; inferred/default are the automatic location used by create_project when working_dir is omitted; exists=false means it has not been created yet). Use next_offset for pagination. Unlike list_workdirs, this is the project catalog, not task execution directory history. Unavailable from SSH tasks.",
     inputShape: {
-      device: z.string().trim().min(1).max(128).optional().describe('查询哪台电脑的项目；取 list_machines 的 machines.computers[].deviceId，省略或 local 为本机。返回的项目路径只用于同一电脑。'),
+      device: z
+        .string()
+        .trim()
+        .min(1)
+        .max(128)
+        .optional()
+        .describe(
+          "查询哪台电脑的项目；取 list_machines 的 machines.computers[].deviceId，省略或 local 为本机。返回的项目路径只用于同一电脑。",
+        ),
       include_hidden: z.boolean().default(true),
       offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(500).default(100),
@@ -145,6 +177,92 @@ export function registerProjectManagementTools(
         }),
       ),
   });
+  if (deps.callbacks.readInfo)
+    registry.register({
+      name: "get_project_info",
+      category: "control",
+      description:
+        "Read a Cindy project's saved name, icon, main_directory and additional directories with their stored access on its owning computer (device; omitted means local). project_key comes from create_project or local:<project_path> from list_projects on that same computer. settings_version reports the target capability. Use before update_project_info. Project directories apply on the next task turn; legacy task-only grants remain separate.",
+      inputShape: {
+        device: z.string().optional(),
+        project_key: z.string().min(1).max(4096),
+      },
+      handler: ({ device, project_key }) =>
+        call(
+          (callerSessionId) =>
+            deps.callbacks.readInfo!({
+              callerSessionId,
+              device,
+              projectKey: project_key,
+            }),
+          (data) => ({ project: data.project }),
+        ),
+    });
+  if (deps.callbacks.inspectIcon)
+    registry.register({
+      name: "get_project_icon",
+      category: "control",
+      description:
+        "Find the project's automatic icon and source on its owning computer. Returns a cached PNG data URI and whether it is only a GitHub account-avatar candidate. Does not change a manual icon. To restore automatic defaults use update_project_info with field=icon and value=null; adopting a candidate requires explicitly setting its image data URI.",
+      inputShape: {
+        device: z.string().optional(),
+        project_key: z.string().min(1).max(4096),
+      },
+      handler: ({ device, project_key }) =>
+        call(
+          (callerSessionId) =>
+            deps.callbacks.inspectIcon!({
+              callerSessionId,
+              device,
+              projectKey: project_key,
+            }),
+          (data) => data,
+        ),
+    });
+  if (deps.callbacks.updateInfo)
+    registry.register({
+      name: "update_project_info",
+      category: "control",
+      description:
+        "Set a project's display name or icon on this computer or another connected computer (device). project_key is local:<full directory> or remote:<URL-encoded SSH host id>:<full directory> on that target. Does not move files. For name use a string up to 80 characters, empty restores default. For icon use one emoji, symbol:<Lucide name> (e.g. Rocket, Code, Folder), optionally symbol:<Lucide name>:<color> with the tag palette red/orange/yellow/green/blue/purple/gray/pink/coral/teal/indigo/white (requires target settingsVersion >= 3; omit color for theme default), text:<1-2 letters/numbers> with optional :<color> from the same palette (letter colors require target settingsVersion >= 5), or PNG/JPEG/WebP data URI (at most 300000 characters). null restores automatic project artwork (falling back to a theme-adaptive letter tile derived from the project name). To save together use field=profile and value={name,icon,directories}. directories replaces the additional roots (excluding the fixed main directory) with an array of {path,access} on the target computer; omit it to preserve the list. Read get_project_info first and send the whole desired list to add/remove/reorder entries; use access=write for newly added directories and preserve the stored access of existing entries (settingsVersion >= 6), applied to project tasks from their next turn; [] removes project-level directories and preserves task-specific choices. Directory changes use the task's existing per-call permissions; name/icon-only edits retain their normal flow. Uploaded images are cropped square and stored on the target computer.",
+      inputShape: {
+        device: z.string().optional(),
+        project_key: z.string().min(1).max(4096),
+        field: z.enum(["name", "icon", "profile"]),
+        value: z.union([
+          z.string().max(300_000).nullable(),
+          z
+            .object({
+              directories: z
+                .array(
+                  z
+                    .object({
+                      path: z.string().min(1).max(4096),
+                      access: z.enum(["read", "write"]),
+                    })
+                    .strict(),
+                )
+                .max(10)
+                .optional(),
+              name: z.string().max(80).optional(),
+              icon: z.string().max(300_000).nullable().optional(),
+            })
+            .strict(),
+        ]),
+      },
+      handler: ({ device, project_key, field, value }) =>
+        call(
+          (callerSessionId) =>
+            deps.callbacks.updateInfo!({
+              callerSessionId,
+              device,
+              projectKey: project_key,
+              field,
+              value,
+            }),
+          (data) => data,
+        ),
+    });
   registry.register({
     name: "remove_project",
     category: "control",

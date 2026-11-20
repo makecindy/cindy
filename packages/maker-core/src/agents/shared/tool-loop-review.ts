@@ -91,7 +91,7 @@ export class ToolLoopMonitor {
 
   onToolResult(
     toolUseId: string,
-    output: string,
+    output: string | null,
     isError = false,
     toolResultBatchId?: string,
   ): ToolLoopGuardVerdict {

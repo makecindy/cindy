@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>插件市场反馈 · Cindy 网页预览</title>
+<style>
+/* Standalone token values from themes/builtin/cindy-{light,dark}.ts and themes/colors.ts. */
+:root {
+ color-scheme: light dark;
+ --background: hsl(60 16.1% 93.9%);
+ --surface-elevated: #FDFDF8;
+ --surface-chip: rgba(0, 0, 0, 0.05);
+ --text-primary: rgba(0, 0, 0, 0.88);
+ --text-secondary: rgba(0, 0, 0, 0.56);
+ --border-default: rgba(0, 0, 0, 0.08);
+ --segmented-track: rgba(0, 0, 0, 0.06);
+ --segmented-selected-bg: #FDFDF8;
+ --segmented-selected-border: #F0F0EB;
+ --confirm-btn-primary-bg: #3C3F43;
+ --confirm-btn-primary-text: #FCFCFC;
+ --confirm-btn-primary-hover: oklch(from var(--confirm-btn-primary-bg) calc(l - 0.045) c h);
+ --confirm-btn-primary-pressed: oklch(from var(--confirm-btn-primary-bg) calc(l - 0.085) c h);
+ --confirm-btn-secondary-hover: rgba(0, 0, 0, 0.06);
+ --focus-ring: #417CDD;
+ --focus-ring-soft: rgba(65, 124, 221, 0.5);
+ --overlay-modal: rgba(0, 0, 0, 0.5);
+ --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.15);
+ --error-fg: #DC2626;
+}
+@media (prefers-color-scheme: dark) {
+ :root {
+  --background: hsl(0 0% 9.4%);
+  --surface-elevated: #1F1F1F;
+  --surface-chip: rgba(255, 255, 255, 0.06);
+  --text-primary: rgba(255, 255, 255, 0.82);
+  --text-secondary: rgba(255, 255, 255, 0.55);
+  --border-default: rgba(255, 255, 255, 0.10);
+  --segmented-track: rgba(0, 0, 0, 0.25);
+  --segmented-selected-bg: #353535;
+  --segmented-selected-border: #3B3B3B;
+  --confirm-btn-primary-bg: #EEEEEE;
+  --confirm-btn-primary-text: #151515;
+  --confirm-btn-secondary-hover: rgba(255, 255, 255, 0.08);
+  --overlay-modal: rgba(0, 0, 0, 0.7);
+  --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --error-fg: #F87171;
+ }
+}* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin:0; background:var(--background); color:var(--text-primary); font:15px/1.55 Inter, "Microsoft YaHei", system-ui, sans-serif; }
+button, textarea { font: inherit; color:inherit; }
+button { font-size:13px; font-weight:500; border:1px solid var(--border-default); background:var(--surface-elevated); border-radius:100px; padding:0 15px; cursor:pointer; min-height:32px; }
+.catalog-toolbar button, .intro button { min-height:36px; }
+button:hover { background:var(--surface-chip); }
+button:focus-visible { outline:none; box-shadow:0 0 0 2px var(--focus-ring); }
+.primary { background:var(--confirm-btn-primary-bg); color:var(--confirm-btn-primary-text); border-color:transparent; font-weight:500; }
+.primary:hover { background:var(--confirm-btn-primary-hover); }
+.primary:active { background:var(--confirm-btn-primary-pressed); }
+#cancel-form { background:transparent; }
+#cancel-form:hover, #cancel-form:active { background:var(--confirm-btn-secondary-hover); }
+.shell { max-width:880px; margin:0 auto; padding:0 28px; }
+.catalog-toolbar { display:flex; align-items:center; gap:8px; padding-top:18px; flex-wrap:wrap; }
+.catalog-toolbar .search { margin-left:auto; }
+.search { width: min(260px, 100%); min-height:38px; border:1px solid var(--border-default); border-radius:100px; background:var(--surface-elevated); color:var(--text-primary); padding:7px 13px; font:inherit; }
+.search:focus-visible, textarea:focus-visible { outline:none; box-shadow:0 0 0 2px var(--focus-ring-soft); }
+button:disabled { color:var(--text-secondary); cursor:default; }
+.small, .muted { color:var(--text-secondary); }
+.small { font-size:13px; }
+main { min-width:0; padding-block:42px 48px; }
+.pill { display:inline-flex; gap:2px; border-radius:100px; padding:3px; background:var(--segmented-track); }
+.pill button { background:transparent; border:1px solid transparent; min-height:28px; padding:0 15px; white-space:nowrap; }
+.pill button[aria-selected="true"] { background:var(--segmented-selected-bg); border-color:var(--segmented-selected-border); }
+.catalog-title { margin-bottom:32px; }
+.catalog-title p { margin-top:10px; }
+.catalog-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.recommended { grid-template-columns:repeat(3,minmax(0,1fr)); margin-top:15px; }
+.recommended .card { min-height:126px; }
+.card-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+.card-head .tile { width:36px; height:36px; font-size:14px; border-radius:8px; }
+.catalog-tabs { margin-block:30px 18px; padding-bottom:13px; border-bottom:1px solid var(--border-default); }
+.catalog-list .card { min-height:105px; }
+.link-card { border-radius:12px; padding:16px; text-align:left; }
+.link-card .card-head { margin-bottom:8px; }
+.link-card strong { display:block; }
+.go-back { margin-bottom:18px; }
+#feedback-detail { margin-top:14px; }
+.card { background:var(--surface-elevated); border:1px solid var(--border-default); border-radius:12px; padding:19px; }
+.hero { display:flex; gap:15px; align-items:center; margin-bottom:24px; }
+.tile { flex:none; width:53px; height:53px; display:grid; place-items:center; border-radius:12px; background:var(--surface-chip); color:var(--text-primary); font-weight:500; font-size:20px; }
+h1,h2,p { margin:0; }
+h1, h2, strong { font-weight:500; }
+h1 { font-size:28px; line-height:1.25; margin-bottom:5px; }
+#author-title { font-size:24px; line-height:1.3; }
+h2 { font-size:16px; line-height:1.2; }
+#recommendations h2 { font-size:20px; line-height:1.3; }
+#market h2, #form-title { font-size:18px; line-height:1.3; }
+.card-head strong { font-size:15px; }
+.intro { margin:0 0 23px; }
+.actions { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+.hero .actions { margin-left:auto; }
+.stack { display:grid; gap:14px; }
+.spread { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.row { display:block; width:100%; text-align:left; border-radius:8px; padding:13px 14px; }
+.row[aria-expanded=true] { background:var(--surface-chip); }
+.row-title { display:block; font-weight:500; overflow-wrap:anywhere; }
+.dot { display:inline-block; width:7px; height:7px; background:var(--text-primary); border-radius:50%; margin-right:8px; vertical-align:2px; }
+.result { margin:0 0 20px; color:var(--text-primary); }
+.result:empty { display:none; }
+.body-copy { overflow-wrap:anywhere; white-space:pre-wrap; }
+dialog { width:min(460px, calc(100% - 32px)); max-height:calc(100% - 32px); border:1px solid var(--border-default); border-radius:12px; background:var(--surface-elevated); color:var(--text-primary); padding:20px; box-shadow:var(--shadow-menu); }
+dialog::backdrop { background:var(--overlay-modal); -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+[data-platform="win32"] dialog::backdrop { -webkit-backdrop-filter:none; backdrop-filter:none; }
+label { display:block; font-size:13px; font-weight:500; }
+textarea { display:block; font-size:14px; font-weight:400; width:100%; min-height:128px; resize:vertical; background:var(--background); border:1px solid var(--border-default); border-radius:8px; padding:10px; margin-top:7px; }
+.error { color:var(--error-fg); }
+@media (max-width:640px) {
+ .shell { padding:0 14px; }
+ .catalog-toolbar .search { order:1; width:100%; margin-left:0; }
+ main { padding-block:26px 30px; }
+ .catalog-grid { grid-template-columns:1fr; }
+ .recommended .card { min-height:0; }
+ .hero { flex-wrap:wrap; }
+ .hero .actions { width:100%; justify-content:flex-start; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header id="catalog-toolbar" class="catalog-toolbar">
+    <strong>插件</strong>
+    <input id="plugin-search" class="search" type="search" aria-label="搜索插件" placeholder="搜索插件">
+    <button type="button" id="my-plugins">我的插件</button>
+    <button type="button" disabled title="预览未接入安装">＋ 添加插件</button>
+  </header>
+  <main>
+    <section id="catalog" aria-labelledby="catalog-title">
+      <div class="catalog-title">
+        <div class="spread"><h1 id="catalog-title" tabindex="-1">插件</h1><span class="small">当前电脑 / 全局</span></div>
+        <p class="muted">扩展 Cindy 能力的工具与集成。</p>
+      </div>
+      <div id="recommendations">
+        <h2>今日推荐</h2>
+        <div class="catalog-grid recommended">
+          <article class="card"><div class="card-head"><div class="tile" aria-hidden="true">G</div><strong>Google Drive</strong></div><p class="small">快速搜索和管理云端文件。</p></article>
+          <article class="card"><div class="card-head"><div class="tile" aria-hidden="true">M</div><strong>Gmail</strong></div><p class="small">查找邮件、整理收件箱和起草回复。</p></article>
+          <article class="card"><div class="card-head"><div class="tile" aria-hidden="true">▣</div><strong>设备模拟器</strong></div><p class="small">查看并操作运行中的设备模拟器。</p></article>
+        </div>
+      </div>
+      <nav class="catalog-tabs">
+        <div class="pill" role="tablist" aria-label="插件列表">
+          <button type="button" id="tab-installed" data-catalog="installed" role="tab" aria-controls="installed" aria-selected="true" tabindex="0">已安装</button>
+          <button type="button" id="tab-store" data-catalog="store" role="tab" aria-controls="store" aria-selected="false" tabindex="-1">插件市场</button>
+        </div>
+      </nav>
+      <div id="installed" class="catalog-grid catalog-list" role="tabpanel" aria-labelledby="tab-installed" tabindex="0">
+        <article class="card" data-plugin="Art"><div class="card-head"><div class="tile" aria-hidden="true">A</div><strong>Art</strong></div><p class="small">生成和编辑图片。</p></article>
+        <article class="card" data-plugin="GitHub"><div class="card-head"><div class="tile" aria-hidden="true">GH</div><strong>GitHub</strong></div><p class="small">管理 GitHub 仓库、Issues 和 PR。</p></article>
+        <article class="card" data-plugin="Mermaid"><div class="card-head"><div class="tile" aria-hidden="true">M</div><strong>Mermaid</strong></div><p class="small">绘制流程图和时序图。</p></article>
+        <article class="card" data-plugin="Web Search"><div class="card-head"><div class="tile" aria-hidden="true">W</div><strong>Web Search</strong></div><p class="small">搜索公开网页和资料。</p></article>
+      </div>
+      <div id="store" class="catalog-grid catalog-list" role="tabpanel" aria-labelledby="tab-store" tabindex="0" hidden>
+        <button type="button" id="open-plugin" class="link-card" data-plugin="桌面伙伴">
+          <span class="card-head"><span class="tile" aria-hidden="true">桌</span><span><strong>桌面伙伴</strong><small class="small">社区插件 · v1.3.11</small></span></span>
+          <span class="small">桌面上的像素伙伴，随时向 Cindy 提问。</span>
+        </button>
+      </div>
+      <p id="catalog-empty" class="muted" hidden>没有找到匹配的插件。</p>
+    </section>
+    <section id="market" aria-labelledby="market-title" hidden>
+      <button type="button" class="go-back" data-back="open-plugin">← 插件</button>
+      <header class="hero">
+        <div class="tile" aria-hidden="true">桌</div>
+        <div><h1 id="market-title" tabindex="-1">桌面伙伴</h1><p class="small">社区插件 · v1.3.11</p></div>
+        <div class="actions"><button type="button" id="open-form">反馈问题</button></div>
+      </header>
+      <p class="result" id="send-result" role="status"></p>
+      <div class="card stack">
+        <h2>关于插件</h2>
+        <p class="muted">桌面上的像素伙伴。可以快速向 Cindy 提问、语音输入，以及回到最近的任务。</p>
+      </div>
+    </section>
+    <section id="author" aria-labelledby="author-title" hidden>
+      <button type="button" class="go-back" data-back="my-plugins">← 插件</button>
+      <div class="spread intro">
+        <h1 id="author-title" tabindex="-1">我的插件</h1>
+        <button type="button" disabled title="预览未接入发布">发布插件</button>
+      </div>
+      <nav class="catalog-tabs">
+        <div class="pill" role="tablist" aria-label="作者管理">
+          <button type="button" id="tab-published" data-author="published" role="tab" aria-controls="published" aria-selected="true" tabindex="0">已发布</button>
+          <button type="button" id="tab-inbox" data-author="inbox" role="tab" aria-controls="inbox" aria-selected="false" tabindex="-1">收到的反馈</button>
+        </div>
+      </nav>
+      <div id="published" class="card spread" role="tabpanel" aria-labelledby="tab-published" tabindex="0">
+        <div class="card-head"><div class="tile" aria-hidden="true">桌</div><div><h2>桌面伙伴</h2><p class="small">v1.3.11 · 公开市场</p></div></div>
+        <span class="small">已发布</span>
+      </div>
+      <div id="inbox" role="tabpanel" aria-labelledby="tab-inbox" tabindex="0" hidden>
+        <div class="card stack">
+          <div class="spread"><h2>桌面伙伴</h2><span class="small" id="inbox-summary"></span></div>
+          <div class="stack" id="feedback-list"></div>
+          <p class="muted" id="inbox-empty">暂无反馈。可以从插件市场提交一条示例。</p>
+        </div>
+        <article id="feedback-detail" class="card stack" hidden>
+          <div class="spread"><h2>反馈详情</h2><button type="button" id="mark-read">标为已读</button></div>
+          <p class="small" id="feedback-meta"></p>
+          <p class="body-copy" id="feedback-body"></p>
+        </article>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="form-dialog" aria-labelledby="form-title">
+  <form class="stack" id="feedback-form">
+    <h2 id="form-title">反馈问题</h2>
+    <p class="small">桌面伙伴 · v1.3.11 · 发送给插件作者</p>
+    <label for="message">问题描述
+      <textarea id="message" required maxlength="2000" rows="5" autofocus placeholder="例如，切换显示器后，桌面伙伴停在了屏幕外。"></textarea>
+    </label>
+    <div class="spread"><span class="small">请勿填写密码或个人资料。</span><span id="characters" class="small">0 / 2000</span></div>
+    <p class="error" id="form-error" role="alert" hidden>请填写问题描述。</p>
+    <div class="actions"><button type="button" id="cancel-form">取消</button><button type="submit" class="primary">提交反馈</button></div>
+  </form>
+</dialog>
+
+<template id="feedback-row">
+  <button type="button" class="row" aria-controls="feedback-detail"><span class="row-title"><span class="dot" aria-hidden="true"></span><span class="snippet"></span></span><span class="small row-meta"></span></button>
+</template>
+
+<script>
+'use strict';
+if (navigator.userAgentData?.platform === 'Windows' || /^Win/.test(navigator.platform)) {
+  document.documentElement.dataset.platform = 'win32';
+}
+const byId = id => document.getElementById(id);
+const feedback = [];
+const date = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' });
+let selectedId = null;
+const dialog = byId('form-dialog');
+const message = byId('message');
+const formError = byId('form-error');
+
+const pageIds = ['catalog', 'market', 'author'];
+const catalogButtons = [...document.querySelectorAll('[data-catalog]')];
+const authorButtons = [...document.querySelectorAll('[data-author]')];
+const search = byId('plugin-search');
+let activeCatalog = 'installed';
+
+function showPage(page, focusId = page + '-title') {
+  for (const id of pageIds) byId(id).hidden = id !== page;
+  byId('catalog-toolbar').hidden = page === 'author';
+  const target = byId(focusId);
+  target?.focus();
+  if (document.activeElement !== target) byId(page + '-title').focus();
+}
+
+function selectPanel(buttons, attribute, panel) {
+  for (const button of buttons) {
+    const id = button.dataset[attribute];
+    const active = id === panel;
+    button.setAttribute('aria-selected', active);
+    button.tabIndex = active ? 0 : -1;
+    byId(id).hidden = !active;
+  }
+}
+
+function addTabKeyboardNavigation(buttons) {
+  const tablist = buttons[0].parentElement;
+  tablist.addEventListener('keydown', event => {
+    if (!buttons.includes(event.target)) return;
+    const enabled = buttons.filter(button => !button.disabled);
+    const index = enabled.indexOf(event.target);
+    if (index === -1) return;
+    const direction = getComputedStyle(tablist).direction === 'rtl' ? -1 : 1;
+    let next;
+    switch (event.key) {
+      case 'ArrowLeft': next = (index - direction + enabled.length) % enabled.length; break;
+      case 'ArrowRight': next = (index + direction + enabled.length) % enabled.length; break;
+      case 'Home': next = 0; break;
+      case 'End': next = enabled.length - 1; break;
+      default: return;
+    }
+    event.preventDefault();
+    enabled[next].click();
+    enabled[next].focus();
+  });
+}
+
+addTabKeyboardNavigation(catalogButtons);
+addTabKeyboardNavigation(authorButtons);
+
+function filterCatalog() {
+  const query = search.value.trim().toLowerCase();
+  const items = [...byId(activeCatalog).querySelectorAll('[data-plugin]')];
+  for (const item of items) item.hidden = !item.dataset.plugin.toLowerCase().includes(query);
+  byId('recommendations').hidden = query.length > 0;
+  byId('catalog-empty').hidden = items.some(item => !item.hidden);
+}
+
+for (const button of catalogButtons) button.addEventListener('click', () => {
+  activeCatalog = button.dataset.catalog;
+  selectPanel(catalogButtons, 'catalog', activeCatalog);
+  filterCatalog();
+});
+for (const button of authorButtons) button.addEventListener('click', () => {
+  selectPanel(authorButtons, 'author', button.dataset.author);
+});
+for (const button of document.querySelectorAll('[data-back]')) {
+  button.addEventListener('click', () => showPage('catalog', button.dataset.back));
+}
+search.addEventListener('input', filterCatalog);
+byId('open-plugin').addEventListener('click', () => showPage('market'));
+byId('my-plugins').addEventListener('click', () => {
+  selectPanel(authorButtons, 'author', 'published');
+  showPage('author');
+});
+
+function renderFeedback() {
+  const unread = feedback.filter(item => !item.read).length;
+  byId('inbox-summary').textContent = feedback.length + ' 条反馈 · ' + unread + ' 条未读';
+  byId('inbox-empty').hidden = feedback.length > 0;
+  const list = byId('feedback-list');
+  list.replaceChildren();
+  for (const item of feedback) {
+    const row = byId('feedback-row').content.firstElementChild.cloneNode(true);
+    row.dataset.id = item.id;
+    row.setAttribute('aria-expanded', item.id === selectedId);
+    row.querySelector('.dot').hidden = item.read;
+    row.querySelector('.snippet').textContent = item.body.slice(0, 55) + (item.body.length > 55 ? '…' : '');
+    row.querySelector('.row-meta').textContent = (item.read ? '已读' : '未读') + ' · ' + date.format(item.createdAt);
+    row.addEventListener('click', () => {
+      selectedId = item.id === selectedId ? null : item.id;
+      renderFeedback();
+      list.querySelector('[data-id="' + item.id + '"]').focus();
+    });
+    list.append(row);
+  }
+  const selected = feedback.find(item => item.id === selectedId);
+  byId('feedback-detail').hidden = !selected;
+  if (selected) {
+    byId('mark-read').hidden = selected.read;
+    byId('feedback-meta').textContent = '桌面伙伴 · v1.3.11 · ' + date.format(selected.createdAt);
+    byId('feedback-body').textContent = selected.body;
+  }
+}
+
+byId('open-form').addEventListener('click', () => dialog.showModal());
+byId('cancel-form').addEventListener('click', () => dialog.close());
+message.addEventListener('input', () => {
+  byId('characters').textContent = message.value.length + ' / 2000';
+  formError.hidden = true;
+  message.removeAttribute('aria-invalid');
+});
+byId('feedback-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const body = message.value.trim();
+  if (!body) {
+    formError.hidden = false;
+    message.setAttribute('aria-invalid', 'true');
+    message.focus();
+    return;
+  }
+  feedback.unshift({ id: feedback.length + 1, body, createdAt: new Date(), read: false });
+  message.value = '';
+  byId('characters').textContent = '0 / 2000';
+  dialog.close();
+  byId('send-result').textContent = '反馈已提交。你可以切换到「我的插件」查看作者收到的反馈。';
+  renderFeedback();
+});
+byId('mark-read').addEventListener('click', () => {
+  const selected = feedback.find(item => item.id === selectedId);
+  if (selected) {
+    selected.read = true;
+    renderFeedback();
+    byId('feedback-list').querySelector('[data-id="' + selected.id + '"]').focus();
+  }
+});
+renderFeedback();
+</script>
+</body>
+</html>

@@ -21,6 +21,22 @@ function reader(source: HistoryMessageSource[]) {
   return { list, api: createHistoryViewReader({ list, anchor, running: () => false }) };
 }
 describe('host history view', () => {
+  // Unit: page sealing used two full anchor reads although the production
+  // reader already supports bounded ID validation. Reject invalidated history
+  // through that same validator, without loading endpoint bodies again.
+  it('batch-validates page endpoints and rejects invalidated history before publishing', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const anchor = vi.fn(async (_sid: string, id: string) => source.find(r => r.id === id)!);
+    const validate = vi.fn(async (_sid: string, _ids: string[]) => {});
+    const api = createHistoryViewReader({ list: base.list, anchor, validate, running: () => false });
+    expect((await api.page('s')).items.length).toBeGreaterThan(0);
+    expect(validate).toHaveBeenCalledExactlyOnceWith('s', ['0', '1']);
+    expect(anchor).not.toHaveBeenCalled();
+    validate.mockRejectedValueOnce(new Error('History range changed'));
+    await expect(api.page('s')).rejects.toThrow('History range changed');
+  });
+
   // Unit performance regression: concurrent closed-history pages duplicated DB
   // scans/projection. Existing pagination tests never overlapped requests.
   // Two identical in-flight reads must share work, but later reads remain fresh.
@@ -372,6 +388,62 @@ describe('history scan budget', () => {
     expect(list).toHaveBeenCalledTimes(1);
     await expect(api.page('s', page.nextCursor!)).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
   });
+  // Unit regression: the outlined page used to scan up to a hundred read
+  // batches, so opening a tool-heavy session blocked on a multi-second scan.
+  // A page must stop at the row budget and continue from its cursor.
+  it('cuts an outlined page at the row budget and continues from its cursor', async () => {
+    let n = 0;
+    const source = [row(n++, 'user')];
+    // Subagent rows hide behind one card, so a page must read thousands of rows
+    // before twenty visible items exist.
+    for (let turn = 0; turn < 12; turn++) {
+      source.push({ ...row(n++, 'tool_use'), toolUseId: `turn-${turn}`,
+        content: { toolName: 'Agent', input: { description: `Turn ${turn}` } } });
+      for (let step = 0; step < 1998; step++) source.push({ ...row(n++), content: 'x', agentMeta: { parentUuid: `turn-${turn}` } });
+      source.push({ ...row(n++, 'assistant'), content: '# Report\nDelivered', agentMeta: { turnCompleted: true } });
+    }
+    const base = reader(source);
+    const api = createHistoryViewReader({ list: base.list, outline: base.list,
+      hydrate: async (_sid, ids) => source.filter((r) => ids.includes(r.id)),
+      anchor: async (_sid, id) => source.find((r) => r.id === id)!, running: () => false });
+    const page = await api.page('s', undefined, true);
+    expect(base.list).toHaveBeenCalledTimes(12);
+    expect(page.items.length).toBeGreaterThan(0);
+    expect(page.items.length).toBeLessThan(20);
+    expect(page.hasMore).toBe(true);
+    const ids = (items: typeof page.items) => items.flatMap((item) => item.type === 'work'
+      ? [item.summary.firstMessageId, item.summary.lastMessageId]
+      : item.messages.map((message) => message.id));
+    const everything = ids(projectHistoryView(source, false, true));
+    expect(ids(page.items)).toEqual(everything.slice(everything.length - ids(page.items).length));
+    const received = [...page.items];
+    let before = page.nextCursor ?? undefined;
+    let pages = 1;
+    while (before) {
+      const older = await api.page('s', before, true);
+      received.unshift(...older.items);
+      before = older.nextCursor ?? undefined;
+      expect(++pages).toBeLessThan(20);
+    }
+    expect(ids(received)).toEqual(everything);
+  });
+  // Tier: behavior. Greptile #11190: an empty read is the only signal that the
+  // window starts at history, which moves project()'s cut to row 0. Without a
+  // rebuild the withheld oldest work group never becomes reachable again.
+  it('releases the oldest work group once a page reaches the start of history', async () => {
+    const source = Array.from({ length: 999 }, (_, index) => row(index));
+    source.push({ ...row(999, 'assistant'), content: '# Report\nDelivered', agentMeta: { turnCompleted: true } });
+    const base = reader(source);
+    const api = createHistoryViewReader({ list: base.list, outline: base.list,
+      hydrate: async (_sid, ids) => source.filter((r) => ids.includes(r.id)),
+      anchor: async (_sid, id) => source.find((r) => r.id === id)!, running: () => false });
+    const page = await api.page('s', undefined, true);
+    expect(base.list).toHaveBeenCalledTimes(2);
+    expect(page.items[0]).toMatchObject({ type: 'work', summary: { firstMessageId: '0', lastMessageId: '998' } });
+    expect(page.items.at(-1)).toMatchObject({ type: 'messages', messages: [{ id: '999' }] });
+    expect(page.hasMore).toBe(false);
+  });
+
   it('stops a boundary-free history before a twenty-first query without returning partial groups', async () => {
     const { api, list } = reader(Array.from({ length: 2500 }, (_, i) => row(i)));
     await expect(api.page('s')).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });

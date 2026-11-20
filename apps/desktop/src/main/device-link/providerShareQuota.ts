@@ -171,8 +171,8 @@ export async function readProviderShareQuotaAccount(
 }
 
 /**
- * A subscription account pool lists each assignable signed-in account. The CLI default account
- * keeps the provider's existing reader; added accounts use their own pool quota snapshots.
+ * A subscription account pool lists each assignable signed-in account's own quota snapshot.
+ * Only hosts without a pool use the provider's compatibility reader.
  */
 export async function readProviderShareQuotaAccounts(
   providerId: string,
@@ -180,7 +180,7 @@ export async function readProviderShareQuotaAccounts(
   const assertCurrent = captureProviderManagementScope();
   const pooled = await readSubscriptionPoolAccountUsages(providerId);
   assertCurrent();
-  if (pooled === undefined || (pooled.length === 1 && pooled[0].isDefault))
+  if (pooled === undefined)
     return [await readProviderShareQuotaAccount(providerId)];
   const provider = (
     await getDesktopProviderService().listProviders({ allowSideEffects: false })
@@ -191,22 +191,12 @@ export async function readProviderShareQuotaAccounts(
   if (pooled.length === 0) return provider.subscriptionPoolAlias
     ? [await readProviderShareQuotaAccount(providerId)] : [empty('unavailable')];
   const now = Date.now();
-  return Promise.all(
-    pooled.map(async ({ isDefault, usage }) =>
-      isDefault
-        ? readProviderShareQuotaAccount(providerId)
-        : windowsAccount(
-            providerWeeklyQuotaSource(provider) === 'claude'
-              ? claudeSource(provider, usage?.claudeUsage ?? null, now)
-              : // Pool buckets omit windows without a percentage; codexSource skips those.
-                codexSource(
-                  provider,
-                  (usage?.codexUsage ?? null) as unknown as CodexAccountUsagePayload | null,
-                  now,
-                ),
-          ),
-    ),
-  );
+  return pooled.map(({ usage }) => windowsAccount(
+    providerWeeklyQuotaSource(provider) === 'claude'
+      ? claudeSource(provider, usage?.claudeUsage ?? null, now)
+      : // Pool buckets omit windows without a percentage; codexSource skips those.
+        codexSource(provider, (usage?.codexUsage ?? null) as unknown as CodexAccountUsagePayload | null, now),
+  ));
 }
 
 async function readGroupQuota(providerId: string) {

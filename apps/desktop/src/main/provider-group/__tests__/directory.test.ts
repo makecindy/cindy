@@ -7,9 +7,16 @@ import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
-import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
+import { normalizeProviderGroupConfig, type ProviderGroupConfig, type ProviderGroupMember } from '../../../shared/providerGroup';
 import { createProviderGroupDirectory, type ProviderGroupDirectoryDeps } from '../directory';
 import { providerGroupCodexUsageSnapshot } from '../usage';
+import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog';
+import { createProviderGroupRouter } from '../router';
+
+// Isolate the catalog reader's local preference port; never read the test runner's owner profile.
+vi.mock('../../maker-host/model-disable-store.js', () => ({
+  readModelDisableOverrides: () => ({ disabledProviders: {}, disabledModels: {} }),
+}));
 
 const view = (id: string, name: string, patch: Partial<ProviderView> = {}): ProviderView => ({
   id,
@@ -71,6 +78,96 @@ function deps(overrides: Partial<ProviderGroupDirectoryDeps> = {}): ProviderGrou
 }
 
 describe('listCandidates', () => {
+  // Unit regression for provider-groups.md §3: use the real authorized catalog reader,
+  // directory, config serializer and router. Existing native:claude fixtures hid the bug.
+  // Minimum failure: two openai-sub connections on one host, with no auth.native field.
+  it.each(['device', 'share'] as const)('adds and routes two independent subscriptions from one %s host', async (kind) => {
+    const subscription = (id: string, name: string): ProviderView => view(id, name, {
+      auth: { method: 'oauth' }, subscriptionAccountPool: 'openai', remoteInvocationEnabled: true,
+      agents: ['codex'], models: { codex: [{ id: 'gpt-5.4', name: 'GPT', contextWindow: 128_000, efforts: [], defaultEffort: null }] },
+      routing: { codex: { upstream: 'https://example.com/codex', authStrategy: 'oauth-passthrough' } },
+    });
+    const accounts = [subscription('openai-sub-12345678', 'Codex A'), subscription('openai-sub-abcdef01', 'Codex B')];
+    const received = accounts.map((account, i) => share(`s${i}`, {
+      providerId: account.id, providerLabel: account.name, hostDeviceId: 'one-host',
+    }));
+    const readDeviceProviders = (id: string) => readDeviceProviderViews(async () => ({ ok: true, result: {
+      providers: kind === 'device' ? [...accounts,
+        { ...subscription('private', 'Private'), remoteInvocationEnabled: false },
+        { ...subscription('disabled', 'Disabled'), suspended: true },
+        { ...subscription('disconnected', 'Disconnected'), connected: false },
+        view('anthropic', 'OpenAI'),
+      ] : accounts.filter((account) => received.some((s) => `share:${s.shareId}` === id && s.providerId === account.id)),
+    } }), id);
+    expect((await readDeviceProviders(kind === 'device' ? 'one-host' : 'share:s0')).map((provider) => provider.id))
+      .toEqual(kind === 'device' ? [...accounts.map((account) => account.id), 'disabled', 'disconnected'] : [accounts[0].id]);
+    const directory = createProviderGroupDirectory(deps({
+      listLocalProviders: async () => [subscription('openai', 'OpenAI')],
+      listDevices: async () => kind === 'device' ? [device('one-host')] : [],
+      listReceivedShares: () => kind === 'share' ? received : [],
+      readDeviceProviders,
+    }));
+    const candidates = await directory.listCandidates('openai', null);
+    expect(candidates.map((c) => [c.agentDeviceId, c.providerId, c.providerName])).toEqual(accounts.map((account, i) => [
+      kind === 'device' ? 'one-host' : `share:s${i}`, account.id, account.name,
+    ]));
+    // Same normalization runs when saving and reading group settings; JSON is the persisted shape.
+    const config = normalizeProviderGroupConfig(JSON.parse(JSON.stringify({ strategy: 'round',
+      members: candidates.map((candidate) => ({ ...candidate, limit: 4, weight: 1, paused: false })),
+    })), 'openai')!;
+    expect(config.members.map((m) => m.key)).toEqual(candidates.map((c) => c.key));
+    expect(new Set(config.members.map((m) => m.key)).size).toBe(2);
+    expect((await directory.listCandidates('openai', { ...config, members: config.members.slice(0, 1) }))
+      .map((c) => c.blocked ?? null)).toEqual(['member', null]);
+    const router = createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 0, random: () => 0 });
+    const input = { providerId: 'openai', agentKind: 'codex' as const, model: 'gpt-5.4', localTask: true as const };
+    const first = await router.pick(input);
+    const second = await router.pick(input);
+    expect(first).toMatchObject({ kind: 'member', member: { key: candidates[0].key, providerId: accounts[0].id } });
+    expect(second).toMatchObject({ kind: 'member', member: { key: candidates[1].key, providerId: accounts[1].id } });
+    router.markCooling('openai', candidates[0].key, 60_000);
+    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { providerId: accounts[1].id } });
+    expect(router.coolingUntil('openai', candidates[1].key)).toBeNull();
+    accounts[1].name = 'Renamed Codex B';
+    directory.invalidate();
+    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { providerId: accounts[1].id } });
+    if (kind === 'share') received[1].status = 'paused';
+    else accounts[1].remoteInvocationEnabled = false;
+    directory.invalidate();
+    expect(await router.pick(input)).toMatchObject({ kind: 'unavailable' });
+    expect((await directory.listCandidates('openai', null)).map((c) => c.providerId)).toEqual([accounts[0].id]);
+  });
+
+  // 2026-11-17 field report, unit: a computer whose quick directory read was interrupted (fenced at
+  // the 2s snapshot fallback while its 3–7s read was in flight) was left out of the add-computer list
+  // on every attempt, with no trace. Real directory; one computer per row. Review findings: only an
+  // interrupted read is asked again, never a refusal, and never over a link the user just closed.
+  it.each([
+    ['asks an interrupted read again live', new Error('Metadata scope changed'), true, ['mini'], [false, true]],
+    ['treats a refusal as final', new Error('[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] not offered'), true, [], [false]],
+    ['does not reopen a link closed meanwhile', new Error('Metadata scope changed'), false, [], [false]],
+  ] as const)('%s before leaving a computer out of the add-computer list', async (_name, quickError, linkStaysOpen, listed, expectedReads) => {
+    const reads: boolean[] = [];
+    let closeEpoch = 0;
+    const failed = vi.fn();
+    const directory = createProviderGroupDirectory(deps({
+      listDevices: async () => [device('mini')],
+      listReceivedShares: () => [],
+      readDeviceProviders: async (_id, options) => {
+        reads.push(options?.live === true);
+        if (options?.live) return [view('anthropic-1a2b3c4d', 'Claude')];
+        if (!linkStaysOpen) closeEpoch += 1;
+        throw quickError;
+      },
+      captureLinkCloseEpoch: () => { const seen = closeEpoch; return () => closeEpoch === seen; },
+      onCandidateReadFailed: failed,
+    }));
+    expect((await directory.listCandidates('anthropic', null)).map((c) => c.agentDeviceId)).toEqual(listed);
+    expect(reads).toEqual(expectedReads);
+    expect(failed).toHaveBeenCalledTimes(listed.length ? 0 : 1);
+  });
+
   it('lists same-account computers and received shares offering the same provider', async () => {
     const directory = createProviderGroupDirectory(deps());
     const candidates = await directory.listCandidates('anthropic', null);

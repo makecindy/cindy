@@ -14,6 +14,7 @@ import { initTapdb } from './analytics/tapdbClient';
 import { createAuthService } from './lib/authService';
 import { createLogger } from './lib/logger';
 import { installScrollbarAutoHide } from './lib/scrollbarAutoHide';
+import { installIpcErrorToastText } from './lib/ipcErrorToastText';
 import { bootstrapMemorySettingsFromMain } from './lib/memorySettingsStore';
 import {
   getVoiceInputSettings,
@@ -51,6 +52,7 @@ import './styles/sortable.css';
 
 const disposeEarlyKeyDownCapture = installEarlyKeyDownCapture();
 installScrollbarAutoHide();
+installIpcErrorToastText();
 const disposeForegroundRecoveryDiagnostics = installForegroundRecoveryDiagnostics();
 // 睡醒白屏取证:主线程阻塞漂移 + 可见无帧探针,只记日志(见模块头注释)。
 const disposeRenderLoopWatchdog = installRenderLoopWatchdog();

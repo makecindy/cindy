@@ -1,3 +1,4 @@
+import { listEvaluationModels } from '../cindy-evaluate/models.js';
 import { createXaiProviderTokenReader } from './xaiProviderToken.js';
 import { createCatalogCache } from './catalogCache.js';
 import { isModelContextLimitCustomized, readModelContextLimits } from './model-context-limit-store.js';
@@ -29,17 +30,20 @@ import { app, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool,
+import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, lastConfirmedSubscriptionModelsAt, refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
+  refreshSubscriptionPoolClaudeModels, readSubscriptionPoolClaudeModels,
   resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
 import { readPool, readProviderBoundAccountIds } from '../subscription-accounts/store.js';
 import {
   accountProviderId,
   readCreatedSubscriptionProviders,
+  readCreatedSubscriptionProvidersIfReadable,
   readMergedProviderAccount,
   restoreAutoMergedLegacyCodexAccounts,
   resolveSubscriptionPoolProvider,
 } from '../subscription-accounts/placement.js';
+import { setMergedProviderPoolResolver } from './mergedProviderPool.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -59,8 +63,12 @@ import {
 } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
-import { codexAccountState } from './codex-account-auth.desktop.js';
+import { codexAccountState, codexAccountHome } from './codex-account-auth.desktop.js';
+import { codexAccountDisplayKey } from './codex-auth-identity.js';
+import { readNativeCodexTokens } from '../subscription-accounts/nativeCli.js';
+import { getCodexHome } from './codex-home-path.js';
 import { projectSubscriptionPoolCatalog as projectSubscriptionPoolCatalogWith, publishSubscriptionPoolProviders as publishSubscriptionPoolProvidersWith } from './subscriptionPoolCatalog.js';
+import { setGuestProviderModelCatalogReader } from './guest-provider-route-store.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { speechModels } from '../voice-conversation/models.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -77,6 +85,7 @@ import {
   clearDiscoveredProviderModels,
   getActiveCatalog,
   getActiveCatalogWithCodexModels,
+  getActiveCatalogWithClaudeModels,
   getXdGatewayModels,
   getModelPlaneWarnings,
   setActiveCatalog,
@@ -162,7 +171,7 @@ import {
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
-import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { broadcastReferenceModelPricing, setReferencePricingDisplayProviders } from '../usage/referenceModelPricing.js';
 
 const log = createLogger('provider-service');
 
@@ -651,6 +660,12 @@ export async function refreshDiscoveredCodexModels(
 // the in-memory routing catalog until the next full app restart.
 let customProviderCatalogRefreshGeneration = 0;
 
+let upgradeSplitRepair: (() => Promise<void>) | null = null;
+/** Installed by subscription-accounts/upgradeSplitRepair.desktop.ts (window process only; Host never writes). */
+export function setUpgradeSplitRepair(repair: (() => Promise<void>) | null): void {
+  upgradeSplitRepair = repair;
+}
+
 export async function refreshCustomProvidersIntoCatalog(
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
@@ -722,8 +737,13 @@ export async function refreshCustomProvidersIntoCatalog(
       );
     } catch {
       // The merged view stays as it was; the next refresh retries.
-      log.warn('restoring merged legacy Codex connections did not complete');
+      log.warn('restoring pooled subscription accounts did not complete');
     }
+    // Old pooled accounts stay in their built-in provider (2026-11-18, subscription-account-pools.md
+    // 升级不再自动拆分). Where the 0.1.137–0.1.139 split left the built-in provider without a usable
+    // account, the desktop wiring merges the untouched split provider back. Not awaited: a merge
+    // reads account snapshots, which must not hold up provider readiness; it never rejects.
+    if (isCurrent()) void upgradeSplitRepair?.();
     if (!isCurrent()) return;
     publishSubscriptionPoolProviders();
     requestCodexApiModelProbe();
@@ -875,7 +895,7 @@ function getDesktopSelectableBaseCatalog(): Catalog {
  * stay in the catalog so old tasks keep resolving; the provider view marks them as merged.
  */
 export function publishSubscriptionPoolProviders(): void {
-  publishSubscriptionPoolProvidersWith({ readCreatedSubscriptionProviders, setSubscriptionPoolProviders, log });
+  publishSubscriptionPoolProvidersWith({ readCreatedSubscriptionProvidersIfReadable, setSubscriptionPoolProviders, log });
 }
 
 /**
@@ -889,7 +909,7 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
     created = Object.entries(readCreatedSubscriptionProviders())
       .filter(([, entry]) => entry.kind === kind).map(([id]) => id);
   } catch {
-    // An unreadable placement file leaves created providers as they were; the next read retries.
+    // Unreadable files return an empty list; thrown reads also skip created providers this round.
   }
   await refreshSubscriptionPool(kind);
   const legacy = kind === 'openai' ? Object.keys(readPool(kind)?.legacyCodexAccounts ?? {}) : [];
@@ -897,13 +917,29 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
 }
 
 /** Apply account membership to both selectable and full routing snapshots. */
-function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false): Catalog {
+function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false, include?: (p: Catalog['providers'][number]) => boolean): Catalog {
   return projectSubscriptionPoolCatalogWith(catalog, { readPool, codexAccountState, readSubscriptionPoolCodexModels,
-    getActiveCatalogWithCodexModels, readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog);
+    getActiveCatalogWithCodexModels, readSubscriptionPoolClaudeModels, getActiveCatalogWithClaudeModels,
+    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog, include);
 }
+
+function getDesktopProviderModelAccessCatalog(): Catalog {
+  return projectSubscriptionPoolCatalog(getActiveCatalog(), true);
+}
+
+// Reference prices shown beside models follow the same account-aware membership as the lists.
+setReferencePricingDisplayProviders(() => getDesktopProviderModelAccessCatalog().providers);
+
+// A connection merged into an account pool follows the pool's 「允许被远程调用」 (it has no switch on screen).
+setMergedProviderPoolResolver((providerId) => {
+  const merged = readMergedProviderAccount(providerId);
+  const ref = merged ? resolveSubscriptionPoolProvider(providerId) : null;
+  return ref && merged ? accountProviderId(ref.kind, merged) : undefined;
+});
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {
+  setGuestProviderModelCatalogReader(getDesktopProviderModelAccessCatalog);
   const authState = getAuthState();
   const ownerId = getActiveAppSession().dataOwnerId;
   if (
@@ -925,7 +961,10 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
   singleton = createProviderService({
     getModelContextLimits: readModelContextLimits,
     projectProvider: provider => {
-      const projected = projectSubscriptionFastPolicy(provider);
+      const accountKeys = subscriptionProviderAccountKeys(provider.id)
+        ?? (provider.connected && provider.openAiAccount?.accountKey ? [provider.openAiAccount.accountKey] : undefined);
+      const projected = { ...projectSubscriptionFastPolicy(provider),
+        ...(accountKeys ? { subscriptionAccountKeys: accountKeys } : {}) };
       // Only a provider whose own account belongs to another provider (and that has no accounts
       // left) is hidden behind it: a merged legacy connection or a merged created provider.
       const mergedAccount = readMergedProviderAccount(provider.id);
@@ -953,17 +992,34 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       };
     },
     getCatalog: getDesktopSelectableBaseCatalog,
-    projectCatalog: (catalog, routingCatalog) => {
-      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog);
+    refreshPickerPools: async providers => {
+      await Promise.all(providers.map(async provider => {
+        const pool = resolveSubscriptionPoolProvider(provider.id);
+        if (!pool || !readPool(pool.kind)) return;
+        if (provider.id === pool.kind) await refreshSubscriptionPool(provider.id);
+        else await refreshSubscriptionPool(provider.id).catch(() => undefined);
+        if (pool.kind === 'openai') await refreshSubscriptionPoolCodexModels(false, provider.id);
+        else void refreshSubscriptionPoolClaudeModels(false, provider.id).catch(() => log.warn('Background Claude model discovery unavailable'));
+      }));
+    },
+    projectCatalog: (catalog, routingCatalog, include) => {
+      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog, include);
       return routingCatalog ? projected : filterLegacyGptContextProfiles(projected);
     },
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
-      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts }) => {
+      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts, pickerPoolsReady }) => {
         if (readPool('anthropic')) {
-          if (!snapshotOnly) await refreshSubscriptionPoolsOfKind('anthropic');
+          if (!snapshotOnly && !pickerPoolsReady) {
+            await refreshSubscriptionPoolsOfKind('anthropic');
+            const discovery = refreshSubscriptionPoolClaudeModels();
+            // Ordinary provider reads also serve Codex/API/remote tasks. Do not make
+            // them wait for Claude's SDK subprocess; explicit discovery may wait.
+            if (waitForDiscovery) await discovery;
+            else void discovery.catch(() => log.warn('Background Claude model discovery unavailable'));
+          }
           return hasConnectedSubscriptionPool('anthropic', { includeBoundAccounts });
         }
         if (snapshotOnly) return hasClaudeNativeLogin();
@@ -997,9 +1053,9 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
       // 凭证硬链进 codex-home 并为首个 owner 补写绑定 —— 判据不是「有没有发上游请求」,而是
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
-      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts }) => {
+      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts, pickerPoolsReady }) => {
         if (readPool('openai')) {
-          if (!snapshotOnly) {
+          if (!snapshotOnly && !pickerPoolsReady) {
             // Created providers of the kind are read with it (their connection state comes from it).
             await refreshSubscriptionPoolsOfKind('openai');
             await refreshSubscriptionPoolCodexModels();
@@ -1019,6 +1075,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       ? hasConnectedSubscriptionPool(providerId, options) : codexAccountState(providerId).authenticated,
     subscriptionPoolConnected: (providerId, options) => hasConnectedSubscriptionPool(providerId, options),
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
+    subscriptionModelsConfirmedAt: lastConfirmedSubscriptionModelsAt,
     subscriptionReadUnavailable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
       && hasUnavailableSubscriptionPoolAccount(providerId),
     subscriptionAccountInfo: async (providerId) => {
@@ -1041,10 +1098,20 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     },
     openAiAccountInfo: async (providerId) => {
       const state = providerId === 'openai' ? await desktopCodexAuthAdapter.readAccountPresentationState() : codexAccountState(providerId);
+      let accountKey: string | undefined;
+      // Native logins can predate account pools. Read their existing authorized profile;
+      // do not create a pool or adopt a CLI login just to simplify its display.
+      if (state.authenticated && state.identity && (!readPool('openai') || !resolveSubscriptionPoolProvider(providerId))) {
+        try {
+          const native = await readNativeCodexTokens(providerId === 'openai' ? getCodexHome() : codexAccountHome(providerId));
+          if (native.canDispatch()) accountKey = codexAccountDisplayKey(state.identity, native.chatgptAccountId);
+        } catch { /* Unknown workspace identity keeps the sources separate. */ }
+      }
       return {
         source: providerId !== 'openai' ? 'oauth' : state.credentialScope === 'system-shared'
           ? 'local' : state.credentialScope === 'instance-isolated' ? 'oauth' : 'unknown',
         ...(state.identity ? { identity: state.identity } : {}),
+        ...(accountKey ? { accountKey } : {}),
         reconnectRequired: !state.authenticated && !!state.errorReason,
       };
     },
@@ -1054,6 +1121,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     customApiKeyConnected: (provider) =>
       hasCustomProviderCredential(provider, readCustomProviderKey),
     getAvailableMediaModels: () => [
+      // Settings must keep hidden models ready so their switch can turn them back on.
+      ...[...listEvaluationModels('decisions', { includeHidden: true }), ...listEvaluationModels('rerank', { includeHidden: true })].map(model => ({ providerId: model.provider_id, id: model.id })),
       ...listReadyProviderMediaModels(),
       // Keep hidden, admitted TTS routes manageable. This is the same catalog/key
       // policy as companion voice; list visibility never grants execution access.

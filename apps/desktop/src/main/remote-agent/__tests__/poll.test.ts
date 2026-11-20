@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { REMOTE_AGENT_MAX_POLL_RUNS, REMOTE_AGENT_READ_MAX_BYTES, REMOTE_AGENT_READ_WAIT_MS, type RemoteAgentErrorInfo } from '@cindy/device-link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { RemoteAgentPoller, type PolledRun } from '../controller/poller';
+import { isRetryableLinkError, remoteAgentErrorFrom, RemoteAgentPoller, type PolledRun } from '../controller/poller';
 import { remoteAgentInvoker } from '../controller/runClient';
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker';
 import { EventLog } from '../eventLog';
@@ -523,9 +523,94 @@ describe('multiplexed poll', () => {
     await vi.advanceTimersByTimeAsync(1_100);
     expect(polls).toBeLessThanOrEqual(burst + 4);
   });
+
+  // Unit regression (2026-11-19): on a slow return path a full 1.5MB reply misses the 30s
+  // deadline and was re-read at the same size from the same cursor. Exercise the production
+  // poller: timeouts halve the requested size, measured delivery sets the next one.
+  it('asks for smaller polls after timeouts and sizes them from the measured return speed', async () => {
+    vi.useFakeTimers();
+    let clock = 0;
+    const asked: number[] = [];
+    const replies: Array<{ cursor: number; resolve(raw: unknown): void }> = [];
+    const runId = randomUUID();
+    const sink = collector(runId);
+    let timeouts = 7;
+    new RemoteAgentPoller(async (args) => {
+      const request = args[0] as { maxBytes?: number; runs: Array<{ cursor: number }> };
+      asked.push(request.maxBytes ?? -1);
+      if (timeouts > 0) {
+        timeouts -= 1;
+        throw Object.assign(new Error('INVOKE_TIMEOUT: no reply'), { code: 'INVOKE_TIMEOUT' });
+      }
+      return new Promise((resolve) => replies.push({ cursor: request.runs[0].cursor, resolve }));
+    }, undefined, () => clock).register(sink.run);
+    for (let i = 0; i < 20 && replies.length === 0; i++) await vi.advanceTimersByTimeAsync(5_000);
+    const full = 1536 * 1024, min = 64 * 1024;
+    expect(asked.slice(0, 8)).toEqual([full, full / 2, full / 4, full / 8, full / 16, min, min, min]);
+    const data = Buffer.alloc(256 * 1024, 'a');
+    const reply = () => {
+      const { cursor, resolve } = replies.shift()!;
+      resolve({ runs: [{ runId, from: cursor, cursor: cursor + data.length, data: data.toString('base64') }] });
+    };
+    // 256 KiB in 10s → 25.6 KiB/s → the next poll asks for what 10s carries, 256 KiB.
+    clock += 10_000;
+    reply();
+    for (let i = 0; i < 5 && asked.at(-1) !== 256 * 1024; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(asked.at(-1)).toBe(256 * 1024);
+    // A fast reply restores the full size.
+    clock += 100;
+    reply();
+    for (let i = 0; i < 5 && asked.at(-1) !== full; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(asked.at(-1)).toBe(full);
+    expect(sink.lost).toBeNull();
+  });
 });
 
 describe('link errors', () => {
+  // #10796, unit: exercise production invocation and final poll delivery. Existing
+  // tests covered retry timing but not the cause that reaches live/history banners.
+  it.each([
+    ['INVOKE_TIMEOUT', 'no invoke-result within 30000ms after first socket write', 'REMOTE_AGENT_TIMEOUT', true],
+    ['TIMEOUT', 'request timed out', 'REMOTE_AGENT_TIMEOUT', true],
+    ['BACKPRESSURE', 'request expired before socket write within 10000ms', 'REMOTE_AGENT_LINK_BUSY', true],
+    ['DEVICE_UNRESPONSIVE', 'target device host is unresponsive (circuit open)', 'REMOTE_AGENT_UNRESPONSIVE', true],
+    ['DEVICE_OFFLINE', 'target device is offline', 'REMOTE_AGENT_OFFLINE', true],
+    ['ACCESS_REVOKED', 'access revoked', 'REMOTE_AGENT_ACCESS_DENIED', false],
+    ['REMOTE_DISABLED', 'remote control disabled', 'REMOTE_AGENT_ACCESS_DENIED', false],
+  ] as const)('preserves %s through invocation and terminal polling', async (code, detail, displayCode, retryable) => {
+    vi.useFakeTimers();
+    const transport = vi.fn(async () => ({ ok: false, error: { code, message: detail } }));
+    const invoke = remoteAgentInvoker('host', transport);
+    const error = await invoke([{ op: 'caps' }]).catch((e: unknown) => e);
+    expect(transport).toHaveBeenCalledOnce(); // A failed invocation is not replayed.
+    expect(error).toMatchObject({ code, message: expect.stringContaining(`[${displayCode}]`) });
+    expect((error as Error).message).toContain(detail);
+    expect((error as Error).message).toContain(`[${code}]`);
+    expect(isRetryableLinkError(error)).toBe(retryable);
+    expect(remoteAgentErrorFrom(error).code).toBe(displayCode);
+    const sink = collector(randomUUID());
+    const poller = new RemoteAgentPoller(invoke);
+    poller.register(sink.run);
+    await vi.advanceTimersByTimeAsync(60_000);
+    if (retryable) {
+      expect(sink.lost).toBeNull();
+      await vi.advanceTimersByTimeAsync(70_000);
+    }
+    expect(sink.lost).toMatchObject({
+      reason: retryable ? 'unreachable' : 'read-failed',
+      error: { code: displayCode, message: expect.stringContaining(detail) },
+    });
+  });
+
+  it('classifies a thrown serialized timeout without inventing a transport code', async () => {
+    const invoke = remoteAgentInvoker('host', async () => {
+      throw new Error('[DEVICE_LINK_TIMEOUT] no invoke-result within 30000ms after first socket write');
+    });
+    const error = await invoke([{ op: 'caps' }]).catch((e: unknown) => e);
+    expect(error).toMatchObject({ message: expect.stringMatching(/^\[REMOTE_AGENT_TIMEOUT\] \[DEVICE_LINK_TIMEOUT\]/) });
+    expect((error as { code?: string }).code).toBeUndefined();
+  });
+
   it('names an outdated other computer and keeps link codes for retry decisions', async () => {
     const { remoteAgentInvoker } = await import('../controller/runClient');
     const { isRetryableLinkError } = await import('../controller/poller');

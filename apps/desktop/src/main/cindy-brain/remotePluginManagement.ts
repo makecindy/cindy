@@ -119,6 +119,7 @@ export function projectManagedGhost(g: InstalledGhost): InstalledGhost {
     enabled: g.enabled,
     approval: g.approval,
     trust: g.trust,
+    installationSource: g.installationSource,
     iconDataUrl: g.iconDataUrl,
     builtin: g.builtin,
     retirement: g.retirement,

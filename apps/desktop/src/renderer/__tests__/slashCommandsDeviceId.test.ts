@@ -58,6 +58,27 @@ function stubElectron() {
 }
 
 describe('loadAllCommands deviceId', () => {
+  // Unit regression: a mounted task has an ID before its engine/folder hydrate.
+  // Existing tests start with resolved context and missed speculative global scans.
+  it('does not read commands until task context is ready, then loads the real scope', async () => {
+    const s = stubElectron();
+    expect(await loadAllCommands('claude-code', null, {
+      sessionId: 'hydrating', contextReady: false,
+    })).toEqual([]);
+    expect(s.listDesktopCommands).not.toHaveBeenCalled();
+    expect(s.listAgentCommands).not.toHaveBeenCalled();
+    expect(s.listAgentSkills).not.toHaveBeenCalled();
+    expect(s.invoke).not.toHaveBeenCalled();
+    const commands = await loadAllCommands('codex', '/real-project', {
+      sessionId: 'hydrating', contextReady: true,
+    });
+    expect(commands.some(command => command.name === 'localskill')).toBe(true);
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(1);
+    expect(s.listAgentSkills).toHaveBeenCalledWith('codex', {
+      workingDir: '/real-project', sessionId: 'hydrating',
+    });
+  });
+
   // Unit: task view and composer can ask for the same roster before either
   // request finishes. Existing routing tests only make sequential calls.
   // A refresh must still return a fresh roster, and a later read must see edits.

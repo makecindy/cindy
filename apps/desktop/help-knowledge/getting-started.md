@@ -21,7 +21,7 @@ Cindy is a desktop app that runs AI agents (Claude Code, Codex, and Pi) for you.
 
 - A session is a persistent chat thread: ask, review the result, then ask the next thing.
 - While the agent is working, the composer shows a separate **Stop** button; click it to stop the current run.
-- You can keep typing while the agent is busy: the send button becomes **Queue message**, and queued messages go out in order after the current turn. With the default Enter-to-send setting, press ⌘↵ (Ctrl+Enter on Windows/Linux) instead to steer the running turn without stopping it (see the Sessions and the chat thread topic).
+- You can keep typing while the agent is busy: the send button becomes **Queue message**, and queued messages go out in order after the current turn. With the default Enter-to-send setting, press ⌘↵ (Ctrl+Enter on Windows/Linux) instead to steer the running turn without stopping it, or rest the pointer on the send button to choose between the two (see the Sessions and the chat thread topic).
 - Type `/` in the composer to open the slash-command palette (see the Commands topic).
 
 **Organizing:**

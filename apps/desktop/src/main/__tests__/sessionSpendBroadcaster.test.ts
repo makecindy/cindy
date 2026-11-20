@@ -7,8 +7,9 @@ import Database from 'better-sqlite3';
 import { createDrizzleProxy } from '../localDb/client/drizzleProxy';
 import type { DbTransport } from '../localDb/client/DbTransport';
 
+const electronWindows = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock('electron', () => ({
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: { getAllWindows: () => electronWindows.list },
 }));
 
 vi.mock('../logger.js', () => ({
@@ -37,7 +38,7 @@ vi.mock('../localDb/client/current', () => ({
   }),
 }));
 
-import { recordSessionContextSnapshot } from '../sessionSpendBroadcaster.js';
+import { broadcastSessionTokens, recordSessionContextSnapshot } from '../sessionSpendBroadcaster.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -102,5 +103,19 @@ describe('recordSessionContextSnapshot', () => {
     expect(setMock).toHaveBeenCalledWith({ contextTokens: 0, contextWindow: 200000, contextWindowRuntime: 200000 });
     expect(runMock).toHaveBeenCalledTimes(1);
     expect(getMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 3b (2026-11-18): the broadcast code moved into sessionSpendBroadcasterCore.ts and reaches Electron's
+// windows only through the ports the desktop wrapper (sessionSpendBroadcaster.ts) binds first.
+// Gap: the other cases here run with no windows, so a wrapper that binds nothing passed them.
+// Minimal input: one open window. Tier: unit, no Electron.
+describe('the desktop sessionSpendBroadcaster', () => {
+  it('broadcasts to the open Electron windows', () => {
+    const send = vi.fn();
+    electronWindows.list = [{ isDestroyed: () => false, webContents: { send } }];
+    broadcastSessionTokens({ sessionId: 'task', totalTokens: 3 });
+    electronWindows.list = [];
+    expect(send).toHaveBeenCalledWith('usage:session-tokens-changed', { sessionId: 'task', totalTokens: 3 });
   });
 });

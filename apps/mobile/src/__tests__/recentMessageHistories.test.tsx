@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 const state = vi.hoisted(() => ({ focused: true, onTask: true, width: 390, height: 844, native: false, upgrade: false,
   sheetParams: {} as Record<string, string> }));
+const appLifecycle = vi.hoisted(() => ({ currentState: 'active', listeners: new Set<(state: string) => void>() }));
 const companionQueries = vi.hoisted(() => ({ pending: [] as Array<() => void>, push: vi.fn(), invoke: vi.fn() }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ connectionEpoch: 1, invoke: companionQueries.invoke }) }));
@@ -69,6 +70,13 @@ vi.mock('react-native-reanimated', () => ({
   },
 }));
 vi.mock('react-native', () => ({
+  AppState: {
+    get currentState() { return appLifecycle.currentState; },
+    addEventListener: (_event: string, listener: (state: string) => void) => {
+      appLifecycle.listeners.add(listener);
+      return { remove: () => appLifecycle.listeners.delete(listener) };
+    },
+  },
   Platform: { OS: 'android', select: (values: Record<string, unknown>) => values.android ?? values.default },
   StyleSheet: { create: (styles: unknown) => styles },
   View: ({ children, pointerEvents, accessibilityElementsHidden, ref, style, onLayout }: {
@@ -155,6 +163,7 @@ describe('resident five-task message lists outside route lifetimes', () => {
     setMobileAuthOwner(null); setMobileAuthOwner('one'); state.focused = true; state.onTask = true;
     state.width = 390; state.height = 844;
     state.native = false; state.upgrade = false;
+    appLifecycle.currentState = 'active';
     state.sheetParams = {};
     mounts.clear(); unmounts.length = 0;
     companionQueries.pending = []; companionQueries.invoke.mockReset();
@@ -206,6 +215,36 @@ describe('resident five-task message lists outside route lifetimes', () => {
     expect(gateOf('b')).toBe('false');
     await show('a');
     expect(gateOf('a')).toBe('true');
+  });
+  it.each([false, true])('suspends retained positioning in background without remounting (native=%s)', async (native) => {
+    state.native = native;
+    await show('a');
+    const original = container.querySelector<HTMLButtonElement>('[data-task="a"]')!;
+    await act(async () => original.click());
+    await act(async () => {
+      appLifecycle.currentState = 'background';
+      appLifecycle.listeners.forEach(listener => listener('background'));
+    });
+    expect(original.dataset.positioning).toBe('false');
+    expect(original.dataset.active).toBe('true');
+    if (!native) {
+      const clip = original.closest<HTMLElement>('[data-layout*="opacity"]')!;
+      expect(JSON.parse(clip.dataset.layout!).at(-1).opacity).toBe(1);
+    }
+    await act(async () => {
+      appLifecycle.currentState = 'active';
+      appLifecycle.listeners.forEach(listener => listener('active'));
+    });
+    expect(original.dataset.positioning).toBe('true');
+    expect(original.textContent).toBe('a:420');
+    expect(mounts.get('a')).toBe(1);
+  });
+  it('also pauses positioning in the legacy inline fallback when the route blurs', async () => {
+    state.upgrade = true;
+    await show('a');
+    state.focused = false;
+    await show('a');
+    expect(container.querySelector<HTMLButtonElement>('[data-task="a"]')!.dataset.positioning).toBe('false');
   });
   it('resizes the same list on rotation without changing its state', async () => {
     await show('a');

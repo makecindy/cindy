@@ -70,6 +70,7 @@ export function createPluginAppTransport(options: {
           mimeType: RESOURCE_MIME_TYPE,
           text,
           _meta: {
+            ...(resource.hostFullscreenButton !== undefined ? { 'cindy/host-fullscreen-button': resource.hostFullscreenButton } : {}),
             ui: {
               ...(resource.csp !== undefined ? { csp: resource.csp } : {}),
               ...(resource.prefersBorder !== undefined ? { prefersBorder: resource.prefersBorder } : {}),

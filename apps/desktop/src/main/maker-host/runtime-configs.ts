@@ -47,8 +47,8 @@ export function ensureBundledRipgrepReady(): void {
 }
 
 /** Claude runtime config; `endpointFn` is read on every spawn (see runtimeConfigsCore.ts). */
-export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): AgentRuntimeConfig {
-  return desktopRuntimeConfigs.buildClaudeRuntimeConfig(endpointFn);
+export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string, resolveLocalEndpoint?: () => Promise<string>): AgentRuntimeConfig {
+  return desktopRuntimeConfigs.buildClaudeRuntimeConfig(endpointFn, resolveLocalEndpoint);
 }
 
 /** Codex runtime config, built once at module load as before. */

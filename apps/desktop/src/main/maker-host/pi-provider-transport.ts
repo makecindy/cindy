@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
+import { withCopilotResponsesHeaders } from './copilot-account-url.js';
 import { once } from 'node:events';
 import type { ServerResponse } from 'node:http';
 import { ChatSseTranslator, translateResponsesRequestWithContext, isUnsupportedResponsesFeatureError, unsupportedFeatureErrorBody, type ResponsesRequest } from '@cindy/responses-chat-bridge';
@@ -92,6 +93,12 @@ function validHistoryContent(value: unknown): value is AssistantMessage['content
     (block.type === 'toolCall' && typeof block.id === 'string' && typeof block.name === 'string' && block.arguments && typeof block.arguments === 'object'
       && !Array.isArray(block.arguments) && (block.thoughtSignature === undefined || typeof block.thoughtSignature === 'string'))));
 }
+
+/** Remove only provider-invalid remnants from a failed assistant attempt. */
+export function sanitizePiAssistantContent(content: AssistantMessage['content']): AssistantMessage['content'] {
+  return content.filter(block => !(block.type === 'thinking' && block.thinkingSignature === ''));
+}
+
 function nativeHistory(request: ResponsesRequest, identity: string): Map<string, AssistantMessage['content'][]> {
   const saved = new Map<string, AssistantMessage['content'][]>();
   for (const item of Array.isArray(request.input) ? request.input : []) {
@@ -100,8 +107,10 @@ function nativeHistory(request: ResponsesRequest, identity: string): Map<string,
     try {
       const value = JSON.parse(Buffer.from(encrypted.slice(HISTORY_PREFIX.length), 'base64').toString());
       if (value.identity !== identity || !validHistoryContent(value.content)) continue;
-      const key = visibleHistoryKey(value.content);
-      saved.set(key, [...(saved.get(key) ?? []), value.content]);
+      const content = sanitizePiAssistantContent(value.content);
+      if (content.length === 0) continue;
+      const key = visibleHistoryKey(content);
+      saved.set(key, [...(saved.get(key) ?? []), content]);
     } catch { /* Foreign or incomplete opaque history never becomes native content. */ }
   }
   return saved;
@@ -115,6 +124,7 @@ export interface PiProviderTransportOptions {
   catalogPresetId?: string;
   /** Account-specific destination; the catalog row still identifies its adapter. */
   upstream?: string;
+  copilotOAuth?: boolean;
   apiKey: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
@@ -206,6 +216,7 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
   const row = options.row;
   const destination = options.upstream ?? row.upstream;
   assertHostCredentialEndpoint(row.execution.pi.api, destination, options.apiKey);
+  const headers = withProviderAppAttribution(destination, options.headers, row.execution.pi.headers);
   const model: Model<Api> = { id: modelId, name: row.name, provider: providerModelAdapterId(row) ?? options.providerId,
     api: row.execution.pi.api, baseUrl: destination, contextWindow: row.contextWindow ?? 200_000,
     maxTokens: row.maxOutput ?? Math.min(4096, row.contextWindow ?? 200_000), reasoning: row.reasoning ?? (row.efforts?.length ?? 0) > 0,
@@ -216,7 +227,9 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
       [level, row.efforts?.includes(level) ? row.execution.pi.thinkingLevelMap?.[level] ?? level : null])) },
     compat: row.execution.pi.compat,
     samplingParams: row.execution.pi.samplingParams,
-    headers: withProviderAppAttribution(destination, options.headers, row.execution.pi.headers),
+    headers: options.copilotOAuth && row.execution.pi.api === 'openai-responses'
+      ? withCopilotResponsesHeaders(destination, headers)
+      : headers,
   };
   return model;
 }
@@ -272,8 +285,10 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
           toolNames.set(tool.id, tool.function.name);
           content.push({ type: 'toolCall', id: tool.id, name: tool.function.name, arguments: JSON.parse(tool.function.arguments) });
         }
+        const sanitized = sanitizePiAssistantContent(content);
+        if (sanitized.length === 0) continue;
         context.messages.push({ role: 'assistant', api: model.api, provider: model.provider,
-          model: model.id, content: savedHistory.get(visibleHistoryKey(content))?.shift() ?? content, usage: zeroUsage(), stopReason: message.tool_calls?.length ? 'toolUse' : 'stop', timestamp: 0 });
+          model: model.id, content: savedHistory.get(visibleHistoryKey(sanitized))?.shift() ?? sanitized, usage: zeroUsage(), stopReason: message.tool_calls?.length ? 'toolUse' : 'stop', timestamp: 0 });
       } else if (message.role === 'tool') {
         context.messages.push({ role: 'toolResult', toolCallId: message.tool_call_id,
           toolName: toolNames.get(message.tool_call_id) ?? '', content: [{ type: 'text', text: message.content }], isError: false, timestamp: 0 });

@@ -7,6 +7,7 @@ import {
   isAutomationGeneratedSession,
 } from './scheduledSessionGrouping';
 import { normalizeWorkingDir } from './projectGrouping';
+import { sessionRowKey } from '../sidebar/sessionRowKey';
 import { isTeammateTaskSession } from '../../../../shared/sessionSource';
 import { sessionActivityMs } from './dateSessionGrouping';
 import {
@@ -201,14 +202,15 @@ export function groupAutomationSidebarEntries(
         attentionSessionIds: options.notifications.has(session.id) ? [session.id] : [],
       });
     }
-    sessionGroupKey.set(session.id, groupInfo.key);
+    // 不同电脑上可能有同 id 的运行(恢复 / 复制的数据库),按设备 + id 记,与 sessionRowKey 同口径。
+    sessionGroupKey.set(sessionRowKey(session), groupInfo.key);
   }
 
   const emittedGroups = new Set<string>();
   const entries: SidebarSessionEntry[] = [];
 
   for (const session of sessions) {
-    const groupKey = sessionGroupKey.get(session.id);
+    const groupKey = sessionGroupKey.get(sessionRowKey(session));
     const group = groupKey ? groups.get(groupKey) : undefined;
     if (!group || group.sessions.length <= 1) {
       entries.push({ kind: 'session', session });

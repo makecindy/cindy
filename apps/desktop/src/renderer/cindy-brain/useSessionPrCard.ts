@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useTranslation } from 'react-i18next';
 import { readGhostCardSupersededBy } from '@cindy/maker-shared/ghost-card-form';
 import {
   ensureSessionCards,
@@ -12,7 +13,7 @@ import { findInstalledGhostByInstanceId } from '../../shared/pluginIdentity';
 
 /** Only cards belonging to this task may operate its follow-up. Never borrow another task's card. */
 export function findSessionPrCard(snapshot: GhostCardSnapshot, sessionId: string, prKey: string) {
-  let match: { callId: string; ghostId: string; html: string } | null = null;
+  let match: { callId: string; ghostId: string; html: string; remote: boolean } | null = null;
   for (const [callId, entry] of snapshot.byCallId) {
     if (
       entry.status !== 'ready' ||
@@ -21,15 +22,14 @@ export function findSessionPrCard(snapshot: GhostCardSnapshot, sessionId: string
       readGhostCardSupersededBy(entry.html)
     )
       continue;
-    match = { callId, ghostId: entry.ghostId, html: entry.html };
+    match = { callId, ghostId: entry.ghostId, html: entry.html, remote: !!entry.remote };
   }
-  if (!match) return null;
-  return { ...match, ...projectPrCard(match.html) };
+  return match;
 }
 
 /** Present existing plugin controls without nesting its complete chat card. The
  * original action attributes and call identity remain owned by the card bridge. */
-export function projectPrCard(html: string) {
+export function projectPrCard(html: string, followingLabel: string) {
   const container = document.createElement('div');
   container.innerHTML = html;
   const styles = [...container.querySelectorAll('style')].map((el) => el.outerHTML).join('');
@@ -54,7 +54,16 @@ export function projectPrCard(html: string) {
     actions.style.minHeight = '32px';
     actions.style.justifyContent = 'space-between';
     const live = actions.querySelector('[data-ghost-live-label]');
-    if (live) actions.prepend(live);
+    if (live) {
+      // The plugin stores its own locale in the snapshot. Preserve the live dot
+      // and localize the adjacent text when projecting the active follow controls.
+      const label = live.lastChild;
+      if (actions.querySelector('[data-ghost-action="pr:stop"]') && label?.nodeType === Node.TEXT_NODE) {
+        label.textContent = followingLabel;
+        live.setAttribute('data-ghost-live-label', followingLabel);
+      }
+      actions.prepend(live);
+    }
     // Keep the stop control in the tab order and reserve its space while hidden.
     // The original chat card's selectors target its outer wrapper, absent here.
     summaryHtml =
@@ -113,6 +122,7 @@ export function projectPrCard(html: string) {
 }
 
 export function useSessionPrCard(sessionId: string, prKey: string, enabled: boolean) {
+  const { t } = useTranslation();
   const snapshot = useSyncExternalStore(subscribeGhostCards, getGhostCardSnapshot);
   useEffect(() => {
     if (enabled) ensureSessionCards(sessionId);
@@ -121,8 +131,13 @@ export function useSessionPrCard(sessionId: string, prKey: string, enabled: bool
   return useMemo(() => {
     if (!enabled) return null;
     const card = findSessionPrCard(snapshot, sessionId, prKey);
-    if (!card?.summaryHtml) return null;
-    const ghost = findInstalledGhostByInstanceId(ghosts, card.ghostId);
-    return ghost?.enabled && ghost.approval.state === 'approved' ? card : null;
-  }, [snapshot, sessionId, prKey, enabled, ghosts]);
+    if (!card) return null;
+    // A remote task's card belongs to the plugin on that computer, which checks every click itself.
+    if (!card.remote) {
+      const ghost = findInstalledGhostByInstanceId(ghosts, card.ghostId);
+      if (!ghost?.enabled || ghost.approval.state !== 'approved') return null;
+    }
+    const projection = projectPrCard(card.html, t('ccAgent.gitContext.pr.following'));
+    return projection.summaryHtml ? { ...card, ...projection } : null;
+  }, [snapshot, sessionId, prKey, enabled, ghosts, t]);
 }

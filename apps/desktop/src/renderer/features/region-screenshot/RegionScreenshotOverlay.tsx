@@ -247,6 +247,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const elementsRef = useRef<{
     inFlight: boolean;
     pending: RegionPoint | null;
+    selectAfterHit?: (point: RegionPoint, hit: RegionScreenshotHit | null) => void;
     cache: { point: RegionPoint; hit: RegionScreenshotHit } | null;
     defaults: Map<number, RegionRect[]>;
   }>({ inFlight: false, pending: null, cache: null, defaults: new Map() });
@@ -543,8 +544,11 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       tracker.inFlight = true;
       void bridge
         .elementsAt(current.token, window.id, point.x, point.y)
+        .catch(() => null)
         .then((hit) => {
-          if (state.current.session?.token !== current.token || elementsRef.current !== tracker || !hit) return;
+          if (state.current.session?.token !== current.token || elementsRef.current !== tracker) return;
+          tracker.selectAfterHit?.(point, hit);
+          if (!hit) return;
           const latest = state.current.pointer;
           if (latest && latest.x === point.x && latest.y === point.y && !state.current.selection && !state.current.drag) {
             // Some browsers have no content HWND. Learn their document regions
@@ -692,6 +696,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     const s = state.current;
     if (!s.session || busyRef.current) return;
     if (event.button !== 0) return;
+    elementsRef.current.selectAfterHit = undefined;
     const point = localPoint(event);
     if (s.aiMenuOpen) {
       setAiMenuOpen(false);
@@ -755,7 +760,8 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     state.current.pointer = point;
     const current = s.drag;
     if (!current) {
-      if (!s.selection) {
+      // Keep the keypress point in the native query queue until its result arrives.
+      if (!s.selection && !elementsRef.current.selectAfterHit) {
         refreshHover(point);
         requestElements(point);
       }
@@ -964,9 +970,29 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       }
       const rect = s.selection;
       if (!rect) {
-        if (key === ' ') {
+        if (key === ' ' && !s.drag && !(event.target instanceof HTMLElement && event.target.closest('button, input, select, textarea'))) {
           event.preventDefault();
-          selectRegion({ x: 0, y: 0, ...s.session.viewport });
+          const screenRect = { x: 0, y: 0, ...s.session.viewport };
+          const point = s.pointer;
+          const tracker = elementsRef.current;
+          if (tracker.selectAfterHit) return;
+          const cache = tracker.cache;
+          if (!point || !topWindowAt(s.session.windows, point)) {
+            selectRegion(screenRect);
+          } else if (!tracker.inFlight && cache?.point.x === point.x && cache.point.y === point.y) {
+            selectRegion(cache.hit.window?.rect ?? screenRect);
+          } else {
+            // Reuse the native query for this pointer position, including a queued query.
+            tracker.selectAfterHit = (queried, hit) => {
+              if (queried.x !== point.x || queried.y !== point.y) return;
+              tracker.selectAfterHit = undefined;
+              const latest = state.current;
+              if (!latest.drag && !latest.selection) {
+                selectRegion(hit?.window?.rect ?? screenRect);
+              }
+            };
+            if (!tracker.inFlight) requestElements(point);
+          }
         } else if (key.toLowerCase() === 'r' && !mod && s.session.lastRegion) {
           event.preventDefault();
           selectRegion(s.session.lastRegion);
@@ -1044,7 +1070,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [bridge, cancel, colorAt, commitAnnotations, commitEditing, isMac, redo, runAction, selectRegion, undo]);
+  }, [bridge, cancel, colorAt, commitAnnotations, commitEditing, isMac, redo, requestElements, runAction, selectRegion, undo]);
 
   // 编辑文字时把焦点交给输入框。
   useEffect(() => {

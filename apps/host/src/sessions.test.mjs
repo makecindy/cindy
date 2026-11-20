@@ -8,6 +8,7 @@ import { listActiveSessions, listRunningSessions } from './sessions.mjs';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { createHostMessageStore, createHostMessageRecovery } from './message-store.ts';
 import { createHostEventPersistence } from './agent/event-persistence.ts';
+import { createHostHistoryReader } from './agent/history.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
@@ -101,7 +102,13 @@ test('Host detail preserves the task-list projection and rejects missing/deleted
   const [listed] = await readHostSessionList(db);
   const detail = await readHostSession(db, 'task');
   assert.deepEqual(detail._count, { messages: 2 });
-  assert.deepEqual(detail, listed);
+  assert.deepEqual(detail, { ...listed, turnElapsedMs: null });
+  const start = Date.now() - 252_000;
+  sqlite.prepare('UPDATE sessions SET active_turn_started_at=? WHERE id=?').run(start, 'task');
+  const running = await readHostSession(db, 'task');
+  assert.ok(running.turnElapsedMs >= 252_000 && running.turnElapsedMs <= Date.now() - start);
+  sqlite.prepare('UPDATE sessions SET last_turn_ended_at=? WHERE id=?').run(start + 252_731, 'task');
+  assert.equal((await readHostSession(db, 'task')).turnElapsedMs, 252_731);
   await assert.rejects(readHostSession(db, 'missing'), /session not found/);
   sqlite.exec("UPDATE sessions SET status='deleted' WHERE id='task'");
   await assert.rejects(readHostSession(db, 'task'), /session not found/);
@@ -324,4 +331,226 @@ test('Host Pi recovery preserves message metadata and excludes cleared or rewoun
   sqlite.exec("UPDATE sessions SET cleared_at=NULL WHERE id='task'; UPDATE messages SET rewind_at=200 WHERE id='row'");
   assert.equal(await recovery.readPiUserEntry('task', 'input'), undefined);
   assert.equal(await recovery.linkPiUserEntry('task', 'missing', 'pi-entry'), false);
+});
+
+// The Host history view as main.ts binds it (agent/history.ts createHostHistoryReader, the desktop's
+// localHistoryViewReader.ts) over a real in-memory owner database.
+function hostHistoryFixture(t, rows) {
+  const { sqlite, db } = sessionListDb(t);
+  sqlite.exec(rows);
+  const client = createDbClientForHandle({ db: sqlite, drizzle: db });
+  setCurrentDbClient(client, 'isolated');
+  t.after(() => clearCurrentDbClient(client));
+  return { sqlite };
+}
+
+// Contract of the shared reader (historyViewReader.ts:55): `anchor` must reject anchors in cleared
+// or rewound history. The Host's own anchor once took a message from before the clear line: as a
+// work-details range it handed back the cleared body (the /api/messages/work-details route, main.ts
+// workDetails), as a page cursor it was taken instead of refused. The Host now uses the desktop's
+// anchor (localHistoryViewReader.ts), which answers NOT_FOUND. Minimal failing input: one message
+// before the task's clear line, one rewound message, each used as the anchor. Tier: unit, real
+// in-memory SQL through the reader main.ts binds.
+test('Host history refuses a message from before the clear line, or rewound, as an anchor', async t => {
+  hostHistoryFixture(t, `INSERT INTO sessions(id,source,status,created_at,updated_at,cleared_at)
+    VALUES ('task','desktop','active',0,300,200);
+    INSERT INTO messages(id,client_id,session_id,role,content,created_at,rewind_at)
+    VALUES ('old','c-old','task','assistant','"cleared reply"',100,NULL),('new','c-new','task','user','"after the clear"',300,NULL),
+      ('undone','c-undone','task','assistant','"rewound reply"',400,500);`);
+  const reader = createHostHistoryReader({ running: () => false, live: () => [] });
+  const range = id => ({ key: 'work', firstMessageId: id, lastMessageId: id });
+  assert.deepEqual((await reader.details('task', range('new'))).messages.map(row => row.id), ['new']);
+  for (const id of ['old', 'undone']) {
+    await assert.rejects(reader.details('task', range(id)), { code: 'NOT_FOUND' });
+    await assert.rejects(reader.page('task', id, true), { code: 'NOT_FOUND' });
+  }
+});
+
+// A clear while the page is being read: the reader re-checks the page's endpoints after the scan
+// (historyViewReader.ts, "A clear/rewind during the scan invalidates the whole snapshot") and refuses
+// the page. The Host's own anchor once ignored the clear line, so the page went out with the rows
+// just cleared. Minimal failing input: the clear lands between the read and the projection (the
+// reader asks for the in-flight rows in between). Tier: unit, as above.
+test('Host history refuses a page whose rows were cleared while it was read', async t => {
+  const { sqlite } = hostHistoryFixture(t, `INSERT INTO sessions(id,source,status,created_at,updated_at)
+    VALUES ('task','desktop','active',0,300);
+    INSERT INTO messages(id,client_id,session_id,role,content,created_at)
+    VALUES ('m1','c-1','task','user','"question"',100),('m2','c-2','task','assistant','"answer"',200);`);
+  const reader = createHostHistoryReader({ running: () => false, live: () => {
+    sqlite.exec("UPDATE sessions SET cleared_at=250 WHERE id='task'");
+    return [];
+  } });
+  await assert.rejects(reader.page('task', undefined, true), { code: 'NOT_FOUND' });
+});
+
+// Release table section 6, Host history reader ②: the Host's reader had no outline and hydrate, so
+// a page scanned at most 2000 full rows (historyViewReader.ts MAX_HISTORY_SCAN_ROWS) and one long
+// turn answered UNSUPPORTED_CAPABILITY. The desktop reads bodies-free outlines (budget 100000) and
+// loads bodies on demand. Minimal failing input: one turn of 2100 thinking rows after its user row.
+// Tier: unit, real in-memory SQL through the reader main.ts binds.
+test('Host history reads a task longer than the full-row scan budget', async t => {
+  const { sqlite } = hostHistoryFixture(t, `INSERT INTO sessions(id,source,status,created_at,updated_at)
+    VALUES ('task','desktop','active',0,3000);
+    INSERT INTO messages(id,client_id,session_id,role,content,created_at) VALUES ('u','c-u','task','user','"go"',1);`);
+  const insert = sqlite.prepare("INSERT INTO messages(id,client_id,session_id,role,content,created_at) VALUES (?,?,'task','thinking',?,?)");
+  sqlite.transaction(() => { for (let n = 0; n < 2100; n++) insert.run(`t${n}`, `c-t${n}`, JSON.stringify(`step ${n}`), 10 + n); })();
+  const reader = createHostHistoryReader({ running: () => false, live: () => [] });
+  const page = await reader.page('task', undefined, true);
+  assert.deepEqual(page.items.map(item => item.type === 'work'
+    ? [item.summary.firstMessageId, item.summary.lastMessageId, item.summary.messageCount] : item.messages.map(row => row.id)),
+  [['u'], ['t0', 't2099', 2100]]);
+  const work = page.items[1].summary;
+  const details = await reader.details('task', work);
+  assert.equal(details.messages[0].id, 't0');
+  assert.equal(details.messages[0].content, 'step 0', 'the body is read when the work is opened');
+});
+
+/*
+ * Task PR references (release table 甲, section 二 item 任务的 PR 关联).
+ * Test value
+ * - Production entries and observable results: createHostMessageStore (the Host's message write) and
+ *   createHostEventPersistence's updateDbMessageContent / discardPersistedAssistantMessage, observed in the
+ *   session_pr_refs rows of a real in-memory database.
+ * - Rule, and which side is right: the desktop's message paths (localDb/ipc/messages.ts createMessage,
+ *   updateMessageContent, discardPersistedAssistantMessage) record and recompute these rows through
+ *   localDb/messagePrRefs.ts; the Host must keep the same rows for the same history.
+ * - Coverage gap: the Host wrote messages without recording PR references and recomputed them only after a
+ *   clear recovery, so a PR a Host task mentioned never reached session_pr_refs.
+ * - Minimal failing input: one user message naming https://github.com/o/r/pull/7 gives no row; an
+ *   assistant reply updated to name pull/9 gives none; a retracted reply keeps its PR.
+ * - Tier: unit (node:test, in-memory SQL, the desktop PR store; no account, network or engine).
+ * The comparison uses the two calls the desktop createMessage makes for PR references (writeMessageRow, then
+ * trackMessagePrRefs): localDb/ipc/messages.ts itself imports Electron and does not load under Node.
+ */
+function prRefsDb(t) {
+  const database = sessionListDb(t);
+  for (const table of [sessionPrRefs, migrationMeta]) {
+    database.sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
+      .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  }
+  database.sqlite.exec(`CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,provider,host,owner,repo,pr_number);
+    CREATE UNIQUE INDEX message_delivery ON messages(session_id,client_id);
+    INSERT INTO sessions(id,source,status,created_at,updated_at) VALUES ('task','desktop','active',0,1)`);
+  const client = createDbClientForHandle({ db: database.sqlite, drizzle: database.db });
+  const refs = () => database.sqlite.prepare(`SELECT provider,host,owner,repo,pr_number AS pr,url,association_source AS source
+    FROM session_pr_refs WHERE removed_at IS NULL ORDER BY provider,pr_number`).all();
+  return { ...database, client, refs };
+}
+// The record is fire-and-forget, as on the desktop; better-sqlite3 settles it within a few turns.
+const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); };
+const prText = 'see https://github.com/o/r/pull/7 and https://gitlab.com/g/p/-/merge_requests/3, again https://github.com/o/r/pull/7';
+
+test('Host message writes record task PR references as the desktop does, only into the writing owner', async t => {
+  const host = prRefsDb(t);
+  setCurrentDbClient(host.client, 'isolated');
+  t.after(() => clearCurrentDbClient(host.client));
+  const write = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: () => {} });
+  await write('task', { clientId: 'u1', role: 'user', content: prText, createdAt: 1000 }, { shouldBroadcast: () => false });
+  await write('task', { clientId: 't1', role: 'tool_result', content: 'https://github.com/o/r/pull/99', createdAt: 1001 });
+  await settle();
+  const hostRows = host.refs();
+  assert.deepEqual(hostRows.map(row => `${row.provider}:${row.owner}/${row.repo}#${row.pr}`), ['github:o/r#7', 'gitlab:g/p#3']);
+
+  // The desktop createMessage's PR steps on the same input, in another database.
+  const desktop = prRefsDb(t);
+  const { writeMessageRow } = await import('../../desktop/src/main/localDb/messageWrite.ts');
+  const { messageToCamel } = await import('../../desktop/src/main/localDb/mapper.ts');
+  const { trackMessagePrRefs } = await import('../../desktop/src/main/localDb/messagePrRefs.ts');
+  clearCurrentDbClient(host.client);
+  setCurrentDbClient(desktop.client, 'isolated');
+  t.after(() => clearCurrentDbClient(desktop.client));
+  for (const input of [{ clientId: 'u1', role: 'user', content: prText, createdAt: 1000 },
+    { clientId: 't1', role: 'tool_result', content: 'https://github.com/o/r/pull/99', createdAt: 1001 }]) {
+    const { row } = await writeMessageRow(desktop.client, 'task', input);
+    trackMessagePrRefs(desktop.client, messageToCamel(row));
+  }
+  await settle();
+  assert.deepEqual(hostRows, desktop.refs());
+
+  // A switch right after the write: the record stays with the owner that wrote, never the next one.
+  const next = prRefsDb(t);
+  clearCurrentDbClient(desktop.client);
+  setCurrentDbClient(host.client, 'isolated');
+  await write('task', { clientId: 'u2', role: 'user', content: 'https://github.com/o/r/pull/8', createdAt: 1002 });
+  clearCurrentDbClient(host.client);
+  setCurrentDbClient(next.client, 'next');
+  t.after(() => clearCurrentDbClient(next.client));
+  await settle();
+  assert.deepEqual(next.refs(), []);
+});
+
+test('Host reply corrections and retractions recompute task PR references as the desktop does', async t => {
+  const db = prRefsDb(t);
+  setCurrentDbClient(db.client, 'isolated');
+  t.after(() => clearCurrentDbClient(db.client));
+  const owner = getCurrentDbClientSnapshot();
+  const publish = () => {};
+  const history = createHostEventPersistence({ getOwner: getCurrentDbClientSnapshot,
+    isCurrent: () => getCurrentDbClientSnapshot() === owner,
+    persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish }),
+    publish, onPersistenceError: error => { throw error; } });
+  history.noteSessionAgentKind('task', 'cc');
+  history.noteTurnStarted('task');
+  const session = { id: 'task', workDir: '/tmp', remoteHostId: null };
+  const emit = (type, data) => history.event(session, { type, data });
+  const numbers = () => db.refs().map(row => row.pr);
+
+  // The streamed draft names no PR (a tool call stores it); the final full text does: a correction of
+  // the original row.
+  emit('text', { text: 'working on it', agentMessageId: 'reply-1' });
+  emit('tool_use', { toolUseId: 'read-1', toolName: 'Read', input: { path: 'file.txt' } });
+  emit('tool_result', { toolUseIds: ['read-1'], summary: 'https://github.com/o/r/pull/99' });
+  await history.drain();
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM messages WHERE role='assistant'").get().n, 1);
+  await settle();
+  assert.deepEqual(numbers(), []);
+  emit('text', { text: 'opened https://github.com/o/r/pull/9', isFinal: true, isFullText: true, agentMessageId: 'reply-1' });
+  await history.drain();
+  assert.deepEqual(numbers(), [9]);
+
+  // An empty authoritative final retracts the reply, and with it the PR only it mentioned.
+  emit('text', { text: '', isFinal: true, isFullText: true, agentMessageId: 'reply-1' });
+  await history.drain();
+  assert.equal(history.hasFailedWrites(), false);
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM messages WHERE role='assistant'").get().n, 0);
+  assert.deepEqual(numbers(), []);
+});
+
+// Release table 甲 (the PR reference gap's family): the desktop updateMessageContent releases, on a final
+// correction, the images of the original content that no live message uses any more
+// (reconcileAssistantDerivedState → reconcileAssistantMediaRefs). The Host only committed the new content's
+// references, so a picture the correction removed stayed on the task until it was deleted. Same unit tier
+// and entry as above (the event stream); the image is a ledger row only, no blob is read.
+test('a Host reply correction releases the images it no longer shows, as the desktop does', async t => {
+  const db = prRefsDb(t);
+  db.sqlite.exec(`CREATE TABLE "${getTableName(mediaRefs)}" (${Object.values(getTableColumns(mediaRefs))
+    .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  setCurrentDbClient(db.client, 'isolated');
+  t.after(() => clearCurrentDbClient(db.client));
+  const owner = getCurrentDbClientSnapshot();
+  const publish = () => {};
+  const history = createHostEventPersistence({ getOwner: getCurrentDbClientSnapshot,
+    isCurrent: () => getCurrentDbClientSnapshot() === owner,
+    persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish }),
+    publish, onPersistenceError: error => { throw error; } });
+  history.noteSessionAgentKind('task', 'cc');
+  history.noteTurnStarted('task');
+  const session = { id: 'task', workDir: '/tmp', remoteHostId: null };
+  const emit = (type, data) => history.event(session, { type, data });
+  const kept = 'b'.repeat(64), dropped = 'c'.repeat(64);
+  const attached = () => db.sqlite.prepare("SELECT hash FROM media_refs WHERE ref_kind='session-attachment' AND ref_id='task' ORDER BY hash").all()
+    .map(row => row.hash);
+
+  emit('text', { text: `![a](cindy-media://blobs/${kept}.png) ![b](cindy-media://blobs/${dropped}.png)`, agentMessageId: 'reply-1' });
+  emit('tool_use', { toolUseId: 'read-1', toolName: 'Read', input: { path: 'file.txt' } });
+  emit('tool_result', { toolUseIds: ['read-1'], summary: 'done' });
+  await history.drain();
+  const ref = db.sqlite.prepare("INSERT INTO media_refs(id,hash,ref_kind,ref_id) VALUES (?,?,'session-attachment','task')");
+  for (const hash of [kept, dropped]) if (!attached().includes(hash)) ref.run(`ref-${hash[0]}`, hash);
+  assert.deepEqual(attached(), [kept, dropped]);
+
+  emit('text', { text: `![a](cindy-media://blobs/${kept}.png) only`, isFinal: true, isFullText: true, agentMessageId: 'reply-1' });
+  await history.drain();
+  assert.equal(history.hasFailedWrites(), false);
+  assert.deepEqual(attached(), [kept]);
 });

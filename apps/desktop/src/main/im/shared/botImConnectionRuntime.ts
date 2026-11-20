@@ -627,9 +627,14 @@ export async function updateBotIMessageConfig(id: string, input: unknown): Promi
       if (await readBotProfileStatus(record.botId) !== 'active') throwIpcError('PRECONDITION_FAILED', 'BOT_INACTIVE');
       const previous = getBotIMessageConfig(id);
       const p = (input ?? {}) as Record<string, unknown>;
-      let config;
+      let config: ReturnType<typeof parseBlueBubblesConfig>;
       try {
         config = parseBlueBubblesConfig({ ...p, groupAliases: previous.groupAliases });
+        if (p.selfAccountAddresses === undefined && previous.selfAccountAddresses &&
+          config.serverUrl === previous.serverUrl && config.ownerAddress === previous.ownerAddress) {
+          config.selfAccountAddresses = Object.fromEntries(Object.entries(previous.selfAccountAddresses)
+            .filter(([chat]) => config.chatGuids.includes(chat)));
+        }
         if (p.password !== undefined && (typeof p.password !== 'string' || p.password.length > 4096)) throw new Error();
       } catch { throwIpcError('INVALID_PARAMS', 'BLUEBUBBLES_INVALID_CONFIG'); }
       const duplicate = findBotImConnectionByIdentity('imessage', config.serverUrl);

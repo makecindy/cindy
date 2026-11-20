@@ -2,17 +2,26 @@ import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
+import { hostCoordinatorDeps } from './coordinator-deps.ts';
+import { createHostAutoResume } from './auto-resume.ts';
+import { createHostProductTurn } from './product-turn.ts';
+import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
+import { createHostIdleRelease } from './idle-release.ts';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { randomUUID } from 'node:crypto';
 import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
-import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
 import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
+import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/sessionErrorSuppression.ts';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
+import { createIpcError } from '../../../desktop/src/shared/ipc-errors.ts';
 
+const settlementLog = createLogger('host-turn-settlement');
 const attachmentLog = createLogger('host-attachments');
+const log = createLogger('host-auto-resume');
 
 /** Create options for every start from a stored task row (send, restore, resume). */
 export function storedSessionOptions(stored) {
@@ -24,6 +33,20 @@ export function storedSessionOptions(stored) {
 }
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
+
+/** The interaction lock a profile hold puts on every task (coexistence plan A, profile-coexistence.ts). */
+export const PROFILE_HOLD_LOCK = 'profile-coexistence';
+
+/**
+ * Hold one task while a desktop that opens this profile's database runs: nothing queued starts
+ * (any interaction lock stops the coordinator's dispatch) and the execution pause stops the
+ * automatic continuations that read it (interrupted-turn auto-resume when the error arrives and
+ * when its wait ends; a saved usage-limit recovery). Both survive Stop.
+ */
+export function holdTaskForProfile(coordinator, id) {
+  coordinator.setInteractionLock(id, PROFILE_HOLD_LOCK, true, { preserveOnStop: true });
+  coordinator.setExecutionPaused(id, true);
+}
 const errorText = error => error instanceof Error ? error.message : String(error);
 
 /** Only composition fields cross the browser trust boundary. Host receipts,
@@ -32,8 +55,9 @@ function composeInput(item, stored) {
   if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
   const text = typeof item.text === 'string' ? item.text : item.content;
   if (typeof text !== 'string' || !text.trim()) throw new Error('message text is required');
-  // Picker changes already persist through /sessions/update. Input fields are
-  // snapshots for presentation, not another authority over task settings.
+  // Picker changes already persist through their own entries (set-model, set-effort,
+  // set-permission-mode and the like). Input fields are snapshots for presentation,
+  // not another authority over task settings.
   const agentKind = makerKind(stored.agentKind);
   if (!['claude-code', 'codex', 'pi'].includes(agentKind)) throw new Error('invalid agent kind');
   const model = stored.model || '';
@@ -83,9 +107,16 @@ function composeInput(item, stored) {
 /** Node assembly of the desktop input transaction. There is one queue state
  * machine for both launchers; this module owns only IO and runtime lifetime. */
 export function createInputQueue(deps) {
+  // Coexistence plan A: null, or the refusal a new send gets while a desktop uses this profile.
+  let profileHold = null;
+  let ownerStopping = false;
   let runtime = createRuntime();
 
   function createRuntime() {
+    // A blocked route probe must hit Maker's native metadata fence even if its
+    // adapter is still starting. This signal never aborts an admitted turn.
+    const routeStartup = new AbortController();
+    if (profileHold) routeStartup.abort(createIpcError('PRECONDITION_FAILED', profileHold.message));
     const states = new Map();
     const schedulePreparations = new Map();
     const scheduleDiscardWatchers = new Map();
@@ -126,6 +157,35 @@ export function createInputQueue(deps) {
       });
       return { item: materialized.item, ownerId };
     }
+    async function settleAndWake(id, terminal = false) {
+      if (closing) return;
+      // The rebuilt queue has not served a send yet. Bind its history writer to
+      // the current owner before delivering a cancellation from the old hold.
+      assertCurrent();
+      let settled = false;
+      try {
+        settled = (await deps.onSessionSettled?.(id)) !== false;
+      } finally {
+        if ((terminal || settled) && !closing && !profileHold && isCurrent()) {
+          try { deps.afterTurnSettled?.(id); }
+          finally { coordinator.onExternalTurnSettled(id); }
+        }
+      }
+    }
+    function retryTurnSettlement(id, terminal = false) {
+      void settleAndWake(id, terminal).catch(error => settlementLog.warn('turn settlement failed', { id, error: errorText(error) }));
+    }
+    /** A new send while the profile is held: refused, typed, before anything is written. */
+    function refuseWhileHeld() {
+      if (profileHold) throwIpcError('PRECONDITION_FAILED', profileHold.message);
+    }
+    function holdIfHeld(id) {
+      if (profileHold) holdTaskForProfile(coordinator, id);
+    }
+    /** The execution pause this module lifts after a write stays while the profile is held. */
+    function unpause(id) {
+      if (!profileHold) coordinator.setExecutionPaused(id, false);
+    }
     function stateFor(id) {
       if (!states.has(id)) states.set(id, { commands: Promise.resolve(), writing: Promise.resolve(),
         admission: 0, closed: false, snapshot: [], persistenceError: null });
@@ -145,6 +205,9 @@ export function createInputQueue(deps) {
     }
     function persist(id, snapshot) {
       const state = stateFor(id);
+      // A held runtime being replaced must not publish its old queue over the
+      // desktop's snapshot. Writes already in flight still have to settle.
+      if (closing && profileHold && !ownerStopping) return state.writing;
       state.snapshot = snapshot;
       const writing = state.writing.catch(() => {}).then(() => { assertCurrent(); return deps.persistQueueSnapshot?.(id, snapshot); });
       state.writing = writing;
@@ -156,8 +219,80 @@ export function createInputQueue(deps) {
       let writing;
       do { writing = state.writing; await writing; } while (writing !== state.writing);
     }
-    const executor = createTurnExecutor({ ...deps,
+    // Context recovery (context-recovery-assembly.ts): one rollover per runtime, so its memory of
+    // continued inputs lasts as long as this owner's runtime; a new owner's runtime gets a new one.
+    let rollover = null;
+    // The desktop's product-turn failure gate, finalizer and task list activity (product-turn.ts), one per
+    // owner runtime: the executor ends a turn's activity (held while a resume or recovery owns it), the
+    // auto-resume and the context recovery settle a held one when they give up.
+    const productTurn = createHostProductTurn({ getBoundSession: id => executor.boundSession(id),
+      touchActivity: deps.touchSessionActivity, log });
+    // The desktop's auto-resume (auto-resume.ts), one per owner runtime with its coordinator.
+    const autoResume = createHostAutoResume({
+      productTurn: () => productTurn,
+      userDataDir: deps.userDataDir ?? getUserDataDir,
+      coordinator: () => coordinator,
+      history: id => executor.autoResumeHistory(id),
+      getSession: id => deps.getMaker()?.getSession(id),
+      createDbMessage: (id, input, options) => deps.persistMessage?.(id, input, options),
+      onTakeoverReleased: id => releaseResumeOrigin(id),
+      maybeApplySessionRuntimeFallback: deps.maybeApplySessionRuntimeFallback,
+      pendingSessionRuntimeFallbackRebuilds: deps.pendingSessionRuntimeFallbackRebuilds,
+      isProfileHeld: () => profileHold !== null,
+      log,
+    });
+    // The input whose stream an automatic resume continues, per task (Host-only: /api/chat follows
+    // the resume's turns, which carry their own client ids). Set when the coordinator takes a terminal
+    // error over; the resume's turns carry it; it ends with the first receipt of an abandoned resume.
+    const resumeOrigins = new Map();
+    // A resume that gives up writes the held error row (once) or drops the takeover: the input it
+    // continued stopped there, so its stream gets the interrupted receipt once that row is stored.
+    function releaseResumeOrigin(id) {
+      const origin = resumeOrigins.get(id);
+      if (origin === undefined) return;
+      resumeOrigins.delete(id);
+      const history = executor.autoResumeHistory(id);
+      void history.drain().then(() => {
+        if (history.hasFailedWrites() || !isCurrent()) return;
+        deps.hub?.publish({ type: 'input_receipt', sessionId: id, inputClientId: origin, clientId: origin, status: 'interrupted' });
+      });
+    }
+    const executor = createTurnExecutor({ ...deps, storedSessionOptions,
+      // The owner this runtime's turns started under (assertCurrent): usage is written to that account only.
+      runtimeOwner: () => owner ?? null,
+      getAutoResume: () => autoResume,
+      productTurn,
+      // A terminal ends its activity held while the coordinator's automatic resume owns it (sessionEventTerminal.ts).
+      isAutoResumeHeld: id => coordinator.isAutoResumePending(id) || coordinator.isAutoResumeDeferred(id),
+      // The desktop's silent-stop continuation (silent-stop.ts) reads the queue and rebinds the coordinator's
+      // turn to the continuation's generation (silentStopTurnEnd.ts); while the profile is held it sends none.
+      silentStopCoordinator: {
+        hasPendingQueuedWork: id => coordinator.hasPendingQueuedWork(id),
+        noteHostTurnContinuation: (id, generation) => coordinator.noteHostTurnContinuation(id, generation),
+        noteHostTurnContinuationFailed: (id, generation) => coordinator.noteHostTurnContinuationFailed(id, generation),
+      },
+      isProfileHeld: () => profileHold !== null,
+      resumeOriginOf: id => resumeOrigins.get(id),
+      resumeAnswered: (id, origin) => { if (resumeOrigins.get(id) === origin) resumeOrigins.delete(id); },
+      autoResumePendingOf: (id, origin) => {
+        const pending = coordinator.getProjection(id).autoResumePending;
+        if (!pending) { resumeOrigins.delete(id); return undefined; }
+        resumeOrigins.set(id, origin);
+        return pending;
+      },
+      // The terminal error an automatic resume holds (sessionEventTerminal.ts): kept in its attempt,
+      // with the coordinator's attempt and deferred owner, and written once if the resume gives up.
+      holdSuppressedError: (id, data) => autoResume.autoResumeBookkeeping.stashSuppressedError(id, data,
+        coordinator.getAutoResumeAttemptToken(id), coordinator.getAutoResumeDeferredOwner(id)),
       assertCurrent, isCurrent,
+      prepareUnhealthySession: deps.createContextRecoveryRollover ? async id => {
+        assertCurrent();
+        const rebuilt = await rollover.prepareUnhealthySession(id);
+        // A healthy result also crosses an await before the transaction reads the live session.
+        assertCurrent();
+        return rebuilt;
+      } : undefined,
+      getRecoveryRollover: deps.createContextRecoveryRollover ? () => rollover : deps.getRecoveryRollover,
       prepareUserMessage: attachments?.prepareUserMessage,
       isClearBoundaryCurrent: (id, boundary, generation) => coordinator.getClearBoundaryMs(id) === boundary
         && (generation === undefined || coordinator.isGenerationCurrent(id, generation)),
@@ -166,78 +301,36 @@ export function createInputQueue(deps) {
       isStoppingRuntime: () => closing,
       persistMessage: deps.persistMessage ?? (async () => {}),
       onPersistenceError: persistenceFailed,
-      onTerminal: (id, type, error, meta, direct) => {
-        if (direct) coordinator.wakeSession(id, 'host-turn-settled');
+      // When a terminal arrives (turn-executor.mjs handTerminalToCoordinator), as on the desktop.
+      handTerminal: (id, type, error, signals, meta) => coordinator.onTurnEvent(id, type, error, signals, meta),
+      isSessionErrorSuppressed: (id, event) => isSessionErrorSuppressed(coordinator, id, event),
+      // Once the turn's rows settle: the coordinator already has the terminal when it arrived as an
+      // event, so it is only woken; a turn that ended without one (a stop that only went idle, a
+      // closed or replaced runtime, a silent-stop done) hands it here, once.
+      onTerminal: (id, type, error, meta, direct, handedOver) => {
+        if (direct || handedOver) coordinator.wakeSession(id, 'host-turn-settled');
         else coordinator.onTurnEvent(id, type, error, undefined, meta);
-        deps.onSessionSettled?.(id);
+        retryTurnSettlement(id, true);
       },
     });
-    const coordinator = new AgentInputCoordinator({
-      sendToAgent: async (id, message, createOpts, sendOpts) => {
-        const clientId = sendOpts.persistUserMessage?.clientId;
-        try {
-          await runSchedulerQueuedPreparation(clientId, schedulePreparations,
-            () => { scheduleDiscardWatchers.delete(clientId); acceptedCallbacks.discard(clientId); });
-          assertCurrent();
-          const result = await executor.send(id, message, createOpts, sendOpts);
-          await acceptedCallbacks.settle(id, sendOpts, result);
-          return result;
-        } catch (error) {
-          await acceptedCallbacks.rollback(id, clientId);
-          throw error;
-        }
-      },
-      steerToAgent: executor.steer,
-      abortSession: id => {
-        const promise = executor.abort(id);
-        stateFor(id).aborting = promise;
-        return promise;
-      },
-      isTurnRunning: executor.isRunning,
-      isLiveTurnRunning: id => deps.getMaker()?.getSession(id)?.isTurnRunning?.(),
-      isLiveSessionPresent: id => !!deps.getMaker()?.getSession(id),
-      getTurnGeneration: id => deps.getMaker()?.getSession(id)?.getTurnGeneration?.() ?? null,
-      getTurnSessionIdentity: id => deps.getMaker()?.getSession(id) ?? null,
-      getObservedCurrentTurnTerminal: id => deps.getMaker()?.getSession(id)?.getObservedCurrentTurnTerminal?.(),
-      reconcileTurnIdle: executor.reconcileIdle,
-      getAgentKind: id => makerKind(deps.getMaker()?.getSession(id)?.agentKind) ?? null,
-      getSdkSessionId: async id => (await deps.readSession(id)).sdkSessionId || undefined,
-      hasAssistantProgressAfter: deps.hasAssistantProgressAfter,
-      getRecoveryContextSnapshot: deps.getRecoveryContextSnapshot,
+    // The coordinator's ports (coordinator-deps.ts, every optional port written out).
+    const coordinator = new AgentInputCoordinator(hostCoordinatorDeps({
+      deps, executor, coordinator: () => coordinator, scheduleBridge: () => scheduleBridge, assertCurrent,
+      noteAborting: (id, aborting) => { stateFor(id).aborting = aborting; },
+      publish, persist, flushed, afterSnapshot, attachmentOwnership, acceptedCallbacks,
+      schedulePreparations, scheduleDiscardWatchers, autoResume, rollover: () => rollover,
+    }));
+    // The desktop's idle-runtime release (idle-release.ts), one set of watchers per owner runtime.
+    const idleRelease = deps.readClaudeIdleMinutes ? createHostIdleRelease({
+      coordinator,
+      getMaker: () => { try { return deps.getMaker(); } catch { return null; } },
+      isTurnPendingCompletion: executor.isRunning,
       hasPendingInteraction: id => (deps.interactions?.pending(id)?.length ?? 0) > 0,
-      hasPendingCredentialSwitch: deps.hasPendingCredentialSwitch,
-      rewindPersistedUserMessageAfterClear: deps.rewindPersistedUserMessageAfterClear,
-      createUserMessage: (id, input, options) => deps.persistMessage?.(id, input, options),
-      touchUserSend: deps.touchUserSend ?? (async () => {}),
-      emitProjection: publish,
-      persistQueueSnapshot: persist,
-      loadQueueSnapshot: deps.loadQueueSnapshot,
-      loadClearBoundary: deps.loadClearBoundary,
-      getPersistedClientIds: deps.getPersistedClientIds,
-      onUserMessagePersisting: (id, item) => attachmentOwnership.markPersistenceStarted(id, item.clientId),
-      onUserMessagePersisted: (id, item) => { void attachmentOwnership.settleDurable(id, item.clientId); },
-      onUserMessagePersistenceFailed: (id, item, options) => {
-        afterSnapshot(id, () => attachmentOwnership.markPersistenceFailed(id, item.clientId, options));
-      },
-      // Desktop register.ts (AgentInputCoordinator hooks): after the user row is durable
-      // and before vendor dispatch, open the turn change record, then the Git baseline.
-      beforeDispatchUserTurn: executor.beforeDispatchUserTurn,
-      // A durable turn that never reached the vendor: drop the record, then the baseline.
-      onUndispatchedUserTurn: executor.onUndispatchedUserTurn,
-      onAcceptedQueuedMessage: async (id, item) => {
-        schedulePreparations.delete(item.clientId);
-        scheduleDiscardWatchers.delete(item.clientId);
-        await acceptedCallbacks.run(id, item);
-      },
-      onDiscardedQueuedMessage: (id, item) => {
-        afterSnapshot(id, () => attachmentOwnership.discardClient(id, item.clientId));
-        acceptedCallbacks.discard(item.clientId);
-        schedulePreparations.delete(item.clientId);
-        const discarded = scheduleDiscardWatchers.get(item.clientId);
-        scheduleDiscardWatchers.delete(item.clientId);
-        discarded?.();
-      },
-    });
+      // As register.ts: a credential switch waiting for this task's turn keeps its runtime.
+      hasPendingCredentialSwitch: id => deps.hasPendingCredentialSwitchEntry?.(id) === true,
+      readClaudeMinutes: deps.readClaudeIdleMinutes,
+      ...(deps.idleReleaseClock ? { clock: deps.idleReleaseClock } : {}),
+    }) : null;
     const scheduleBridge = createSchedulerQueueBridge({
       coordinator,
       isSessionBusy: id => coordinator.shouldQueueNewTurn(id) ||
@@ -247,6 +340,7 @@ export function createInputQueue(deps) {
       createId: randomUUID,
       preparations: schedulePreparations,
       discardWatchers: scheduleDiscardWatchers,
+      discardAcceptedCallback: acceptedCallbacks.discard,
       enqueue: async req => {
         const id = req.targetSessionId;
         const state = stateFor(id);
@@ -276,7 +370,7 @@ export function createInputQueue(deps) {
           acceptedCallbacks.discard(req.clientId);
           throw error;
         } finally {
-          if (!stateFor(id).persistenceError) coordinator.setExecutionPaused(id, false);
+          if (!stateFor(id).persistenceError) unpause(id);
         }
       },
     });
@@ -284,10 +378,12 @@ export function createInputQueue(deps) {
       const state = stateFor(id);
       const admission = state.admission;
       const result = state.commands.catch(() => {}).then(async () => {
+        if (closing && !ownerStopping) refuseWhileHeld();
         if (closing || state.closed) throw new Error('session is closed');
         assertCurrent();
         await coordinator.ensureQueueRestored(id);
         assertCurrent();
+        holdIfHeld(id);
         if (state.admission !== admission) throw new Error('input cancelled before acceptance');
         return fn(state, admission);
       });
@@ -296,10 +392,12 @@ export function createInputQueue(deps) {
     }
     async function mutate(id, fn) {
       return command(id, async state => {
+        // Editing, removing or moving a queued input writes the queue the desktop may be using.
+        refuseWhileHeld();
         coordinator.setExecutionPaused(id, true);
         const result = fn();
         await flushed(id);
-        if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+        if (!state.persistenceError) unpause(id);
         return project(result);
       });
     }
@@ -307,6 +405,7 @@ export function createInputQueue(deps) {
       const state = stateFor(id);
       state.admission += 1;
       await coordinator.ensureQueueRestored(id);
+      holdIfHeld(id);
       // Abort is urgent. A pending steer/send command may itself need this
       // cancellation to settle, so never serialize Stop behind that promise.
       coordinator.stop(id, options);
@@ -315,6 +414,27 @@ export function createInputQueue(deps) {
       await flushed(id);
       return project(coordinator.getProjection(id));
     }
+    if (deps.createContextRecoveryRollover) {
+      rollover = deps.createContextRecoveryRollover({
+        assertCurrent,
+        replay: (...args) => executor.replay(...args),
+        drainHistories: () => executor.drainHistories(),
+        resetWireNotes: id => executor.resetWireNotes(id),
+        readAutoReviewHistory: id => executor.readAutoReviewHistory(id),
+        noteRebuilt: id => executor.noteRecoveryRebuilt(id),
+        coordinator: {
+          hasPendingQueuedWork: id => coordinator.hasPendingQueuedWork(id),
+          getInputAbortSignal: id => coordinator.getInputAbortSignal(id),
+          // As the desktop (contextRecoveryRebuilt): the coordinator's clear, synchronously. A
+          // context overflow's error is not in the queue snapshot, so the clear writes nothing.
+          // Nothing changes once the runtime is closing, the task is closed or the owner changed.
+          clearError(id) {
+            if (closing || stateFor(id).closed || !isCurrent()) return;
+            coordinator.clearError(id);
+          },
+        },
+      });
+    }
     const api = {
       wireHostSession: session => { assertCurrent(); executor.wireHostSession(session); },
       beginHostTurn: id => command(id, () => executor.beginHostTurn(id)),
@@ -322,7 +442,12 @@ export function createInputQueue(deps) {
       schedulerQueue: () => ({ ...scheduleBridge,
         ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
         isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },
+        hasPendingInput: id => {
+          if (closing) throw new Error('session is closed');
+          assertCurrent(); return scheduleBridge.hasPendingInput(id);
+        },
         enqueuePrompt: req => command(req.sessionId, async (_state, admission) => {
+          refuseWhileHeld();
           // The bridge reads metadata and the stored row before enqueue. Keep
           // the original command generation across every one of those reads.
           scheduleAdmissions.set(req.sessionId, admission);
@@ -336,7 +461,57 @@ export function createInputQueue(deps) {
         getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
       }),
       isTurnRunning: executor.isRunning,
+      /** Closes a task's idle runtime with the executor letting go of it first (turn-executor.mjs). */
+      closeRuntime: id => { assertCurrent(); return executor.closeRuntime(id); },
+      /** This runtime's context recovery rollover (null when recovery is not assembled). */
+      contextRecoveryRollover: () => rollover,
+      /** The engine of a task as its message persistence knows it. */
+      sessionDbAgentKind: id => executor.sessionDbAgentKind(id),
+      recordRuntimeControlError: (id, data) => executor.recordRuntimeControlError(id, data),
+      /** Forgets a task's working-directory recovery at its archive or delete (turn-executor.mjs). */
+      discardWorkingDirectoryRecovery: id => executor.discardWorkingDirectoryRecovery(id),
+      /** Rows of a task's turn not in the database yet (turn-executor.mjs liveHistory). */
+      liveHistory: id => executor.liveHistory(id),
+      /** Starting a task's runtime outside a turn, as a send starts it (turn-executor.mjs startPorts). */
+      startPorts: () => executor.startPorts,
+      cancelUsageLimitWait: id => coordinator.cancelUsageLimitWait(id),
+      refreshQueuedRoute: (id, route) => coordinator.refreshQueuedRoute(id, route),
+      /** A context recovery's replay was accepted (the recovery factory's onRebuilt). */
+      noteContextRecoveryRebuilt: id => executor.noteRecoveryRebuilt(id),
       wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
+      profileRouteStartupSignal: () => routeStartup.signal,
+      capturePiSkillPreparation(id) {
+        refuseWhileHeld();
+        assertCurrent();
+        const state = stateFor(id);
+        const admission = state.admission;
+        return () => {
+          refuseWhileHeld();
+          assertCurrent();
+          if (closing || state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
+        };
+      },
+      preparePiSkillRuntime: (id, dir, options = {}) => command(id, async (state, admission) => {
+        const check = () => {
+          refuseWhileHeld();
+          options.assertPreparationCurrent?.();
+          assertCurrent();
+          if (state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
+        };
+        check();
+        if (options.applyPendingOwnerSelection) {
+          // A bad task must be rejected before the pending selection can write.
+          await executor.assertPiSkillPreparationReady(id, dir, check, true);
+          await deps.applyPendingAgentSwitch?.(id, {
+            nextInputChars: options.nextInputChars,
+            expectedPiModel: options.expectedPiModel,
+            assertPreparationCurrent: check,
+          });
+          check();
+        }
+        await executor.preparePiSkillRuntime(id, dir, check);
+        check();
+      }),
       restoreSession: (id, check) => command(id, async () => {
         await check(); assertCurrent();
         const session = await executor.restoreSession(id, storedSessionOptions(await deps.readSession(id)), check);
@@ -344,11 +519,24 @@ export function createInputQueue(deps) {
       }),
       enqueueDurableWrite: (id, label, fn) => command(id, () => executor.enqueueDurableWrite(id, label, fn)),
       projection: id => project(coordinator.getProjection(id)),
-      getProjection: id => command(id, () => api.projection(id)),
+      async getProjection(id) {
+        // The held runtime can still show the write failure after disposal has started.
+        if (closing && profileHold && !ownerStopping && states.has(id)) {
+          assertCurrent();
+          return api.projection(id);
+        }
+        return command(id, () => api.projection(id));
+      },
       inputStatus: (id, clientId) => command(id, async () => {
         const projection = api.projection(id);
-        if (executor.isInputRunning(id, clientId)) return 'running';
-        if (projection.recovery?.clientId === clientId) return 'interrupted';
+        // Before the recovery point below: during context recovery the claimed input is the recovery
+        // point too, but it is still being answered.
+        if (executor.isInputRunning(id, clientId) || executor.isInputRecovering(id, clientId)) return 'running';
+        // An automatic resume continues this input (waiting for its backoff, or its resumed turn running).
+        if (resumeOrigins.get(id) === clientId) return 'running';
+        // A recovery point names its input as clientId (before dispatch) or as item (a stored turn
+        // whose dispatch failed): either way the input stopped there.
+        if ((projection.recovery?.clientId ?? projection.recovery?.item?.clientId) === clientId) return 'interrupted';
         if (projection.pendingQueue.some(item => item.clientId === clientId)) return 'queued';
         const known = await deps.getPersistedClientIds?.(id, [clientId]);
         assertCurrent();
@@ -363,6 +551,7 @@ export function createInputQueue(deps) {
           }
           const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
           if (known?.has(item?.clientId)) return api.projection(id);
+          refuseWhileHeld();
           const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
           let accepted = false;
           try {
@@ -373,7 +562,7 @@ export function createInputQueue(deps) {
             if (prepared.ownerId) attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId);
             await flushed(id);
             await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
-            if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+            if (!state.persistenceError) unpause(id);
             return api.projection(id);
           } finally {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
@@ -384,6 +573,7 @@ export function createInputQueue(deps) {
       async resume(id) {
         if (stateFor(id).closed) return api.projection(id);
         return command(id, async (state, admission) => {
+          refuseWhileHeld();
           await state.aborting?.catch(error => { if (executor.isRunning(id)) throw error; });
           await executor.retryPersistence(id);
           if (state.persistenceError) await persist(id, state.snapshot);
@@ -391,14 +581,15 @@ export function createInputQueue(deps) {
           if (state.admission !== admission) throw new Error('input cancelled before acceptance');
           state.persistenceError = null;
           coordinator.resume(id);
-          coordinator.setExecutionPaused(id, false);
+          unpause(id);
           return api.projection(id);
         });
       },
-      retryLastError: id => command(id, () => coordinator.retryLastError(id)),
+      retryLastError: id => command(id, () => { refuseWhileHeld(); return coordinator.retryLastError(id); }),
       clearError: id => command(id, () => coordinator.clearError(id)),
       steer(id, item) {
         return command(id, async (state, admission) => {
+          refuseWhileHeld();
           const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
           const previous = prepared.ownerId
             ? attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId) : null;
@@ -422,6 +613,7 @@ export function createInputQueue(deps) {
       updateText: (id, clientId, text) => mutate(id, () => coordinator.updateText(id, clientId, text)),
       updateContent(id, clientId, item) {
         return command(id, async (state, admission) => {
+          refuseWhileHeld();
           const old = coordinator.getProjection(id).pendingQueue.find(row => row.clientId === clientId);
           if (!old) return api.projection(id);
           const composed = composeInput({ ...old, ...item, clientId,
@@ -441,7 +633,7 @@ export function createInputQueue(deps) {
             }
             await flushed(id);
             await attachmentOwnership.markDurable(id, clientId);
-            if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+            if (!state.persistenceError) unpause(id);
             return api.projection(id);
           } finally {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, clientId, prepared.ownerId);
@@ -466,9 +658,45 @@ export function createInputQueue(deps) {
         await attachments?.closeSession(id);
         await flushed(id);
       },
-      async dispose() {
+      /** Starts releasing idle runtimes once this owner's agent runtime is ready (main.ts). */
+      startIdleRelease: () => { if (!closing) idleRelease?.start(); },
+      /** Hold every task this runtime knows (the profile hold started; later tasks are held as they are read). */
+      holdKnownTasks() {
+        routeStartup.abort(createIpcError('PRECONDITION_FAILED', profileHold.message));
+        for (const id of states.keys()) holdTaskForProfile(coordinator, id);
+        deps.holdTurnSettlements?.(states.keys());
+      },
+      /**
+       * Whether a turn of this runtime is still running, a context recovery included (its replay is
+       * part of the turn that overflowed): the hold is not released before they end.
+       */
+      hasRunningTurns: () => [...states.keys()].some(id => executor.isRunning(id) || executor.isRecovering(id)),
+      /** One scan of every idle-release watcher, for tests. */
+      scanIdleRelease: async () => { await idleRelease?.scanNow(); },
+      /**
+       * The owner boundary began (agent/owner-boundary.ts): the runtime is stopping before dispose()
+       * runs. No new input is accepted, and a turn that ends from now on is an interruption (the
+       * executor writes no turn end for it). Cancel only prospective route starts here.
+       */
+      beginStop() {
         closing = true;
-        const settled = await Promise.allSettled([...states.keys()].map(async id => {
+        routeStartup.abort(createIpcError('PRECONDITION_FAILED', 'Host account changed; runtime selection was not changed'));
+      },
+      settleAndWake, retryTurnSettlement,
+      canSettleTurnControls: () => !ownerStopping && !closing && profileHold === null,
+      async dispose(canRetryPersistence) {
+        // Report the initial drain failure before retrying history on a later clear scan.
+        const retry = closing ? canRetryPersistence : undefined;
+        closing = true;
+        // No runtime is released while this owner's runtime drains and stops.
+        idleRelease?.stop();
+        // Recoveries in flight end as failures and write their error rows first (bounded),
+        // before their tasks are stopped; a stop would read as the user's and drop the error.
+        await executor.drainRecoveriesForShutdown();
+        const settled = await Promise.allSettled([...states].map(async ([id, state]) => {
+          // A failed snapshot was already reported. Wait for it, but do not replay the
+          // old queue over the desktop's durable snapshot when rebuilding after a hold.
+          if (retry) state.writing = state.writing.catch(() => {});
           try { await stop(id); }
           finally {
             coordinator.onSessionClosed(id);
@@ -476,7 +704,7 @@ export function createInputQueue(deps) {
             // runtime. Keep its temporary inputs until a confirmed close or
             // the next process's orphan sweep; a finally cleanup could delete
             // files still held by that runtime.
-            try { await executor.close(id); await attachments?.closeSession(id); }
+            try { await executor.close(id, retry); await attachments?.closeSession(id); }
             finally { await flushed(id); }
           }
         }));
@@ -497,6 +725,73 @@ export function createInputQueue(deps) {
     return api;
   }
   const api = Object.fromEntries(Object.keys(runtime).map(name => [name, (...args) => runtime[name](...args)]));
-  api.dispose = async () => { try { await runtime.dispose(); } finally { runtime = createRuntime(); } };
+  // The owner's runtime ends: a hold belonged to it (the next owner's start scans the profile again).
+  api.beginStop = () => { ownerStopping = true; runtime.beginStop(); };
+  api.dispose = async () => {
+    api.beginStop();
+    try {
+      if (releasing) await releasing;
+      await runtime.dispose();
+    } finally {
+      deps.disposeTurnSettlements?.();
+      profileHold = null;
+      runtime = createRuntime();
+      ownerStopping = false;
+    }
+  };
+  /**
+   * Coexistence plan A: a desktop that opens this profile's database is running. New sends are
+   * refused with `[PRECONDITION_FAILED] <message>`; nothing queued starts and no automatic
+   * continuation runs (holdTaskForProfile). A running turn finishes, and a context recovery's replay
+   * belongs to it. Repeating it only updates the message.
+   */
+  let profileHoldGeneration = 0;
+  api.holdForDesktop = message => {
+    const first = profileHold === null;
+    profileHold = { message };
+    if (first) {
+      profileHoldGeneration++;
+      runtime.holdKnownTasks();
+    }
+  };
+  api.isHeldForDesktop = () => profileHold !== null;
+  api.profileHoldMessage = () => profileHold?.message ?? null;
+  api.profileHoldGeneration = () => profileHoldGeneration;
+  /**
+   * The desktop is gone: open again only once no turn runs (false: still held, ask again later). The
+   * desktop may have answered or removed queued inputs meanwhile, so this runtime's queues are not
+   * trusted: the runtime is rebuilt (dispose writes no queue whose items did not change) and every
+   * task restores its queue from the database when next read, before the hold is lifted.
+   */
+  let releasing = null;
+  async function release() {
+    if (ownerStopping || runtime.hasRunningTurns()) return false;
+    // Keep the old executor and its failed history writes until the next clean scan can drain them.
+    const released = profileHold;
+    const sameHold = () => !ownerStopping && profileHold === released;
+    try {
+      await runtime.dispose(sameHold);
+    } catch (error) {
+      if (sameHold()) released.message = errorText(error instanceof AggregateError ? error.errors[0] ?? error : error);
+      throw error;
+    }
+    // A desktop that came back meanwhile replaced the hold: that one stays.
+    if (sameHold()) profileHold = null;
+    runtime = createRuntime();
+    if (ownerStopping) runtime.beginStop();
+    if (profileHold === null) {
+      runtime.startIdleRelease();
+      for (const id of deps.deferredTurnSettlements?.() ?? []) {
+        try { await runtime.settleAndWake(id); }
+        catch (error) { settlementLog.warn('task settlement failed after profile release', { id, error: errorText(error) }); }
+      }
+    }
+    return profileHold === null;
+  }
+  api.releaseDesktopHold = () => {
+    if (profileHold === null) return Promise.resolve(true);
+    if (!releasing) releasing = release().finally(() => { releasing = null; });
+    return releasing;
+  };
   return api;
 }

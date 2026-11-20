@@ -36,6 +36,13 @@ import {
 
 const log = createLogger('analytics-settings');
 
+interface ProductTokens {
+  prepare(): void;
+  interrupt(): void;
+  revokeAll(): void;
+  report(): Promise<void>;
+}
+let productTokens: ProductTokens | undefined;
 let ipcRegistered = false;
 /** 存量迁移只评估一次;评估过就不再看任何后续登录。 */
 let migrationEvaluated = false;
@@ -92,6 +99,7 @@ export function analyticsSettingsPayload(): AnalyticsSettingsPayload {
 }
 
 function broadcastSettingsChange(): void {
+  productTokens?.prepare();
   const payload = analyticsSettingsPayload();
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
@@ -233,12 +241,19 @@ export function noteAuthColdStartState(
   closeMigrationWindowOrLog();
 }
 
-export function initAnalyticsSettingsService(): void {
+export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
   if (ipcRegistered) {
     log.warn('initAnalyticsSettingsService called twice, ignoring');
     return;
   }
   ipcRegistered = true;
+  productTokens = reporter;
+  reporter?.prepare();
+  // Jitter separates release/restart waves. Idle accounts send no requests.
+  const interval = reporter && setInterval(() => void reporter.report(), (45 + Math.random()*30)*60_000);
+  interval?.unref();
+  const first = reporter && setTimeout(() => void reporter.report(), (1 + Math.random()*4)*60_000);
+  first?.unref();
 
   // 进出本地模式要**即时**改变上报结论(见 isReportingAllowedNow):renderer 的
   // tapdbClient 只在收到广播或首次读取时更新,已经 init 过的 SDK 不会自己 opt-out。
@@ -246,6 +261,7 @@ export function initAnalyticsSettingsService(): void {
   // 同值早返回,不会造成无用功);notifyAuthListeners 只在登录 / 登出 / 身份或 realm
   // 切换时触发,周期性 refresh 不触发,无广播风暴。
   unsubscribeAuthState = authManager.onAuthStateChange(() => {
+    productTokens?.interrupt();
     // 进入本地模式 = 用户主动点了「跳过登录」,这一刻**毫无歧义**:本机不是「改版前
     // 就已登录的存量账号」。所以在这里直接封窗,不走冷启动那条路径的凭证探测闸——
     // 那道闸在密钥链暂不可用时会保守地拒绝关窗,而此处的确定性不依赖任何探测。
@@ -263,6 +279,7 @@ export function initAnalyticsSettingsService(): void {
     assertTrustedAppRendererEvent(event);
     // payload 只信运行时校验过的布尔;非布尔一律当关闭处理(fail closed)。
     const enabled = rawEnabled === true;
+    if (!enabled) writeOrThrowIpcError(() => productTokens?.revokeAll(), 'clear token reporting grants failed');
     writeOrThrowIpcError(() => setAnalyticsEnabled(enabled), 'write analytics setting failed');
     broadcastSettingsChange();
     return analyticsSettingsPayload();
@@ -288,6 +305,10 @@ export function initAnalyticsSettingsService(): void {
   });
 
   onQuit('analytics-settings', () => {
+    productTokens?.interrupt();
+    if (interval) clearInterval(interval);
+    if (first) clearTimeout(first);
+    productTokens = undefined;
     ipcRegistered = false;
     unsubscribeAuthState?.();
     unsubscribeAuthState = null;

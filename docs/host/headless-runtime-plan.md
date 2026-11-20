@@ -791,7 +791,10 @@ provider 尚未确认 idle、持久写入尚在进行时，以及旧账号或关
 Host 的队列端口现调用同一个 `createMakerSteerTransaction`，删除原先自行恢复授权后
 直接 `Session.steer` 的分支。授权历史、引用说明、来源说明、App 上下文与提问分类
 由共用事务处理；消息 UUID、用户名称及宿主专用上下文按协调器原有合同透传。
-发送与插话使用同一份 `wireNoteMemory`，已送达的设备/语言说明不重复，压缩后重新附带。
+发送与插话使用同一份 `wireNoteMemory`，已送达的设备说明不重复，压缩后重新附带。
+2026-11-15 文风调整取代此前语言说明去重行为：普通作答不带语言／文风说明，特殊文风仅文言模式
+启用、逐轮附加且本轮结束即失效，不再由 `wireNoteMemory` 去重；详见
+[作答文风与默认提示词](../dev-rules/configuration-and-overrides.md#作答文风与默认提示词)。
 说明只进入模型输入，不改变落库原文。
 
 Host 装配保留准入、当前账号、清空边界、输入代次、Session 身份/回合代次及取消检查；
@@ -1361,7 +1364,7 @@ Host 构造三个 agent 时一个都没传，也没有启动钩子，只有 Code
 | 技能：`getDisabledSkillPaths`、`getManagedSkills`、`scanLocalCustomizations`、`prepareCodexSkills`、`resolveLocalMcpDuplicateChoices`；启动前共享项目 Skill 链接（`prepareStartOptions`、`onBeforeStart`） | 三个 | 行为不同 | 用户禁用的 Skill 仍会被加载；Cindy 内置与插件带的 Skill 不注入 |
 | 插件花名册与能力裁决：`getGhostRosterPrompt`、`capabilityRouting`、`resolveCapabilityRouting`、`capabilityAdditions` | 三个 | 行为不同 | 系统提示里没有插件花名册；与原生插件重叠的能力不做裁决 |
 | 复核：`reviewAutoPermissionAction`、`toolLoopReviewer`（agent 与 Maker 各一处） | 三个 | 行为不同 | Auto 模式在没有原生审查的路由上少一道复核；工具循环疑似时缺省放行，只保留最终上限 |
-| `visionBridge`（Maker）、`resolvePiVisionBridgeEnv` | Maker、Pi | 行为不同 | 没有视觉能力的模型配了视觉后端时，在 Host 上看不了图 |
+| 视觉桥（已退役） | Desktop、Host | 同轮移除 | 不再提供额外代读，模型原生图片输入保留 |
 | 启动钩子：订阅快速模式策略（`fastModePolicy`）、Pi 思考开关记忆、用量价格档（`resolveUsagePriceVariant`、`getPriceVariant`） | 钩子 | 行为不同 | 快速模式与思考开关按默认值；用量不区分 Fast 价格档 |
 | 回合改动记录 `turnChangeCapture` | Claude、Pi | 行为不同 | 任务里“本轮改了哪些文件”的记录缺失 |
 | Codex 历史产品提示：`getCodexHistoryHasProductPrompt`、`onCodexProductPromptDelivery` | 钩子 | 行为不同 | 恢复时按“未知”处理，倾向重新注入产品提示 |

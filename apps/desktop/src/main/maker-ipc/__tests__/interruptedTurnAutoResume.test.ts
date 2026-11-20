@@ -29,6 +29,12 @@ describe('runtime fallback rebuild ownership', () => {
 // 判定单测的核心是**白名单收紧**:自动重试一个确定性失败(认证过期、协议错)会反复
 // 烧额度并反复报错,所以只有识别得了的"上游把 turn 打断了"才允许自愈。
 describe('isInterruptedTurnError', () => {
+  // #11484 unit: a definitive account denial must not replay the same input even
+  // if the preserved upstream explanation also contains transport vocabulary.
+  it('does not retry an explicitly denied upstream account', () => {
+    expect(isInterruptedTurnError({ reason: 'account_access_denied', message: 'connection failed',
+      codexErrorInfo: 'httpConnectionFailed' })).toBe(false);
+  });
   const availabilityError = "Error Code null: Service temporarily unavailable. The model's availability is currently degraded.";
 
   it('recovers code-less service availability errors and opaque HTTP 503 errors', () => {
@@ -538,6 +544,25 @@ function runInterruptedTurn(g: ReturnType<typeof createGuard>): number {
 // 额度模型的核心不变量:连续 N 次零产出会停；即使每次都有一点产出，同一次真人介入
 // 之后也受 episode 硬上限保护，绝不无限自动循环。
 describe('InterruptedTurnAutoResumeGuard', () => {
+  it('shares the same consecutive and episode budget with external recovery paths', () => {
+    const g = createGuard();
+    for (let i = 1; i <= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS; i += 1) {
+      expect(g.guard.claimExternalAutomaticRecovery(SID)).toMatchObject({
+        action: 'allow', attempt: i,
+        maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      });
+    }
+    expect(g.guard.claimExternalAutomaticRecovery(SID)).toEqual({
+      action: 'exhausted', reason: 'consecutive',
+      consecutiveAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      episodeAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+    });
+    expect(g.guard.isBudgetExhausted(SID)).toBe(true);
+    g.guard.noteUserSend(SID);
+    expect(g.guard.isBudgetExhausted(SID)).toBe(false);
+    expect(g.guard.claimExternalAutomaticRecovery(SID)).toMatchObject({ action: 'allow', attempt: 1 });
+  });
+
   it('grants up to MAX consecutive attempts, then stops and waits for the user', () => {
     const g = createGuard();
     for (let i = 1; i <= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS; i++) {

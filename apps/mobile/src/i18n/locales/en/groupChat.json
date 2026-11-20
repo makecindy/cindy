@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · for {{person}}"
+  },
   "progress": {
     "stop": "Stop",
     "stopMine": "Stop Mine",
@@ -124,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} could not reply: the current model does not support images.",
         "advice": "Choose an image-capable model.",
-        "details": "Choose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again."
+        "details": "Choose an image-capable model."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} could not reply: no model is available.",
@@ -288,7 +291,7 @@
     "organizerSaveFailed": "Couldn’t change the organizer. Try again.",
     "projectDir": "Project Folder",
     "projectDirNone": "None selected",
-    "projectDirNote": "Buddies work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
+    "projectDirNote": "Choose an existing project on this computer. Otherwise, work uses the matching repository project or the executing buddy’s project. Git work splits use a worktree.",
     "add": "Add buddy",
     "projectDirOnComputer": "Choose or change it on your computer",
     "memberActions": "Actions for {{name}}",
@@ -306,6 +309,8 @@
       "loading": "Loading settings…",
       "unavailable": "Couldn’t load group settings. Try again."
     },
+    "allowMemberInvites": "Let all members invite friends",
+    "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
     "allowMentionAllBots": "Allow @all buddies",
     "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
   },
@@ -542,7 +547,7 @@
     "replyModeMentionedNote": "Buddies stay quiet unless someone @mentions them.",
     "work": "Work splits",
     "organizerHint": "Decides who does each step. Defaults to the first buddy.",
-    "ownFolder": "Group's own folder",
+    "ownFolder": "Automatic",
     "archive": "Archive Group",
     "unarchive": "Unarchive group",
     "archiveHint": "Archiving disables this group for all members, stopping new messages and buddy runs. History is kept. Search for the group to view its history or unarchive it.",
@@ -578,6 +583,11 @@
     "transferHint": "They will become the owner and you will become an admin.",
     "removeTitle": "Remove {{name}} from this group?",
     "removeHint": "They will lose access to messages. Their companions will also leave.",
+    "removeOwn": "Remove from group",
+    "removeOwnScope": "This only affects this group. Your companion stays in your account.",
+    "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
+    "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
+    "stopAndRemove": "Stop and remove",
     "confirm": "Confirm",
     "inviteTitle": "Invite to group",
     "reusableLink": "No expiration · Reusable by multiple people",

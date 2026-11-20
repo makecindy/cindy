@@ -296,9 +296,6 @@ export const MAKER_INVOKE = {
   /** 本机供应商是否允许同账号另一台电脑的远程 Agent 调用；仅本机可信 renderer 可写。 */
   PROVIDER_REMOTE_ACCESS_SET: 'maker:provider:remote-access:set',
   PROVIDER_RUN_LOCATION_SET: 'maker:provider:run-location:set',
-  /** 「远程连接」里的「让我的其他电脑用本机模型」。设置类：仅本机主页面可调，不进 device-link allowlist。 */
-  OWN_COMPUTER_MODEL_USE_GET: 'maker:own-computer-model-use:get',
-  OWN_COMPUTER_MODEL_USE_SET: 'maker:own-computer-model-use:set',
   /**
    * Owner-scoped provider display-order override.
    * Input = { dataOwnerId: string | null; ownerGeneration: number; providerIds: string[] }.
@@ -442,10 +439,6 @@ export const MAKER_INVOKE = {
   /** Global exact-model choices for short host-generated text tasks. */
   AUXILIARY_MODEL_SETTINGS_GET: 'maker:auxiliary-model-settings:get',
   AUXILIARY_MODEL_SETTINGS_SET: 'maker:auxiliary-model-settings:set',
-  /** 视觉桥设置（两个清单：目标模型 + 视觉后端）。 */
-  VISION_BRIDGE_SETTINGS_GET: 'maker:vision-bridge-settings:get',
-  VISION_BRIDGE_SETTINGS_SET: 'maker:vision-bridge-settings:set',
-  VISION_BRIDGE_SETTINGS_RESET: 'maker:vision-bridge-settings:reset',
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',
@@ -460,6 +453,9 @@ export const MAKER_INVOKE = {
   COMPACTION_GET_STATE: 'maker:compaction:get-state',
   COMPACTION_SET_PCT: 'maker:compaction:set-pct',
   COMPACTION_RESET_PCT: 'maker:compaction:reset-pct',
+  // Codex 原生压缩方式（本机 owner 设置）。
+  CODEX_COMPACTION_GET: 'maker:codex-compaction:get',
+  CODEX_COMPACTION_SET: 'maker:codex-compaction:set',
   /** Pi 原生自动上下文压缩触发阈值。下次 startSession / 恢复任务时读取。 */
   PI_COMPACTION_GET_PCT: 'maker:pi-compaction:get-pct',
   PI_COMPACTION_GET_STATE: 'maker:pi-compaction:get-state',

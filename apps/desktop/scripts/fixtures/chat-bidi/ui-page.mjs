@@ -42,7 +42,7 @@ export default {
   notCovered: 'Live model sending, OS clipboard/input methods and remote synchronization. Clipboard events exercise the real editor serializer; OS clipboard is checked in the full mock app. Host/model/voice data use the existing composer fixture stubs.',
   stubs: {
     ...composer.stubs,
-    'src/renderer/contexts/AuthContext': { partial: 'export const useAuth = () => ({ user: { id: "bidi-fixture" } });' },
+    'src/renderer/contexts/AuthContext': { partial: 'export const useAuth = () => ({ user: { id: "bidi-fixture" } }); export const useOptionalDataOwnerGeneration = () => 0;' },
   },
   cases: {
     default: { about: '#10114: independent RTL/LTR paragraphs, code, stream and editable text' },

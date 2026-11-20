@@ -24,7 +24,7 @@ vi.mock('../../binding', () => ({ bindingStore: { findByTarget: mocks.binding } 
 vi.mock('../../../maker-ipc/register', () => ({
   acquirePendingAgentSwitchForDirectSend: vi.fn(),
   acquirePendingAgentSwitchForImSend: vi.fn(),
-  registerSwitchedSessionVendorOptionsResolver: vi.fn(),
+  registerSwitchedSessionVendorOptionsResolver: vi.fn(() => () => {}),
 }));
 vi.mock('../channelDefaultRouteSync', () => ({ createImChannelDefaultRouteSync: () => ({}) }));
 vi.mock('../sessionRepo', () => ({ createImSessionRepo: () => ({}) }));
@@ -70,6 +70,28 @@ beforeEach(() => {
 });
 
 describe('background output route recovery', () => {
+  // Tier 1: an iMessage group schedule was reported successful after restart but no
+  // transport received it until the next human message. The canonical buddy has no single destination.
+  it('restores a dedicated companion output before the first incoming chat message', async () => {
+    const output = createImOrchestrator({
+      channel: 'imessage', im: { getStatus: mocks.status }, sessions: { source: 'imessage' },
+      output: { kind: 'chunked-text' },
+      connectedChatForLane: (bot: string, key: string) =>
+        bot === 'family' && key === 'saved-group' ? 'group-guid' : undefined,
+    } as unknown as ImChannelAdapter);
+    try {
+      mocks.limit.mockResolvedValueOnce([{ source: 'bot' }])
+        .mockResolvedValueOnce([{ botId: 'family', routeKey: 'saved-group' }]);
+      await publishChannelTurn(session, 'starting');
+      expect(mocks.attach).toHaveBeenCalledExactlyOnceWith(session, 'group-guid',
+        { attached: false, companionChannel: true }, undefined);
+      mocks.attach.mockClear();
+      mocks.limit.mockResolvedValueOnce([{ source: 'bot' }]).mockResolvedValueOnce([]);
+      await publishChannelTurn(session, 'starting');
+      expect(mocks.attach).not.toHaveBeenCalled();
+    } finally { output.unregister(); }
+  });
+
   it.each(['desktop', 'feishu'])('prefers takeover identity over %s source', async (source) => {
     mocks.limit.mockResolvedValue([{ ...nativeRow, source }]);
     mocks.binding.mockReturnValue(binding);
@@ -167,4 +189,11 @@ describe('background output route recovery', () => {
     await restoring;
     expect(mocks.attach).not.toHaveBeenCalled();
   });
+});
+
+// Unit: a rejected provider dispatch must revoke any reply-media lease before another tool call.
+it('clears background reply authority when provider dispatch is rejected', async () => {
+  await publishChannelTurn(session, 'undispatched');
+  expect(mocks.note).toHaveBeenCalledWith(session, undefined);
+  expect(mocks.attach).not.toHaveBeenCalled();
 });

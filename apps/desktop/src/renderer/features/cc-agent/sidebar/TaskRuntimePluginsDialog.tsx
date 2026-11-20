@@ -57,13 +57,15 @@ export function TaskRuntimePluginsDialog({ session, onDismiss }: { session: Sess
               list.push({ pluginId: target.pluginId, name: t('scheduler.editor.preRunPlugin.unavailable') });
             }
             if (!list.length) return null;
-            const unsupported = point === 'will-model-request' && (session.agentKind !== 'pi' || !!session.remoteHostId || !!session.agentDeviceId)
+            const nativeToolHook = point === 'will-tool-call' || point === 'did-tool-result';
+            const unsupported = nativeToolHook && (session.agentKind === 'codex' || !!session.remoteHostId || !!session.agentDeviceId)
+              || point === 'will-model-request' && (session.agentKind !== 'pi' || !!session.remoteHostId || !!session.agentDeviceId)
               || point === 'system-prompt' && session.agentKind === 'pi' && !!session.agentDeviceId;
             const spec = GHOST_CONTROL_POINTS[point];
             return <fieldset key={point} disabled={busy || !loaded} className="flex flex-col gap-2">
               <legend className="mb-2 text-14 font-medium text-[var(--text-primary)]">{t(`settings.ghosts.perm.${spec.labelKey}`)}</legend>
-              {(point === 'will-compose-context' || point === 'will-search-memory') && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t(`settings.ghosts.perm.${spec.detailKey}`)}</p>}
-              {unsupported && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t(point === 'system-prompt' ? 'runtimePlugins.promptUnsupported' : 'runtimePlugins.unsupported')}</p>}
+              {(point === 'will-compose-context' || point === 'will-search-memory' || nativeToolHook) && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t(`settings.ghosts.perm.${spec.detailKey}`)}</p>}
+              {unsupported && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t(nativeToolHook ? 'runtimePlugins.nativeHooksUnsupported' : point === 'system-prompt' ? 'runtimePlugins.promptUnsupported' : 'runtimePlugins.unsupported')}</p>}
               {list.map(plugin => {
                 const target = selected.find(item => item.pluginId === plugin.pluginId);
                 return <div key={plugin.pluginId} className="flex flex-wrap items-center justify-between gap-2">

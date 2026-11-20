@@ -28,10 +28,18 @@ export interface MarkdownAutosaveHandle {
   schedule(): void;
   /** 取消未触发的计时(切文件 / 卸载)。幂等。 */
   cancel(): void;
+  /** Suspend pending edits until the visible file has been checked. */
+  setPaused(paused: boolean): void;
 }
 
 export function createMarkdownAutosave(opts: MarkdownAutosaveOptions): MarkdownAutosaveHandle {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let paused = false;
+  let pending = false;
+  const clearTimer = (): void => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+  };
 
   const fire = (): void => {
     timer = null;
@@ -40,19 +48,25 @@ export function createMarkdownAutosave(opts: MarkdownAutosaveOptions): MarkdownA
       timer = setTimeout(fire, opts.delayMs);
       return;
     }
+    pending = false;
     opts.save();
   };
 
   return {
     schedule() {
-      if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(fire, opts.delayMs);
+      pending = true;
+      clearTimer();
+      if (!paused) timer = setTimeout(fire, opts.delayMs);
     },
     cancel() {
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
-      }
+      pending = false;
+      clearTimer();
+    },
+    setPaused(next) {
+      if (paused === next) return;
+      paused = next;
+      clearTimer();
+      if (pending && !paused) timer = setTimeout(fire, opts.delayMs);
     },
   };
 }

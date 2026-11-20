@@ -49,8 +49,12 @@ export interface ClaudeSubscriptionUsageSnapshot {
   sevenDay?: ClaudeUsageWindow | null;
   /** 分模型周窗口(仅 oauth-endpoint 源有)。 */
   scoped?: ClaudeScopedUsageWindow[];
-  /** 订阅套餐(凭证 blob 的 subscriptionType: pro / max 等,记录时由 main 一并写入)。 */
+  /** Subscription family reported by the official CLI, not a credential read. */
   subscriptionType?: string | null;
+  /** Official CLI tier, when available. Older clients may omit it. */
+  planTier?: string | null;
+  /** Official CLI display name; presentation only. Null clears a previous name. */
+  planDisplayName?: string | null;
   /** headers 源的整体状态:allowed / allowed_warning / rejected。 */
   rateLimitStatus?: string | null;
   /** headers 源:当前代表性(最紧)窗口名,如 'five_hour' / 'seven_day'。 */
@@ -189,3 +193,4 @@ export function isXaiWeeklyUsageCurrent(
   }
   return true;
 }
+export { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from './subscriptionPlanLabel.js';

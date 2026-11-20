@@ -207,9 +207,11 @@ describe('delivery-path wiring (source contract)', () => {
       'dispatch: async (pluginId, taskId, clientId, text',
       'inspect: async taskId =>',
     );
+    // The optional relay (message-source.md, 2026-11-16) is appended only after Host sanitization.
     expect(pluginDispatch).toContain(
-      'sourcePlugin: { pluginId, ...(pluginName ? { name: pluginName } : {}) }',
+      'sourcePlugin: { pluginId, ...(pluginName ? { name: pluginName } : {}), ...(sourceRelay ? { relay: sourceRelay } : {}) }',
     );
+    expect(pluginDispatch).toContain('const sourceRelay = readMessageSourcePluginRelay(relay);');
     expect(pluginDispatch).toContain('sanitizeSourceName(getInstalledGhostName(pluginId))');
     expect(pluginDispatch).not.toContain('origin:');
   });

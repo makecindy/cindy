@@ -45,4 +45,26 @@ describe('BotDeleteDialog', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(onDeleted).toHaveBeenCalledWith('bot-1');
   });
+
+  // Shared ConfirmDialog closes on its confirm action; a failed delete must keep
+  // the dialog open with the error instead of silently dismissing it.
+  it('stays open and reports a failed delete', async () => {
+    mocks.runBotLifecycleAction.mockRejectedValueOnce(new Error('boom'));
+    const onOpenChange = vi.fn();
+    const onDeleted = vi.fn();
+    render(
+      <BotDeleteDialog
+        bot={{ id: 'bot-1', name: 'Filo' } as never}
+        onOpenChange={onOpenChange}
+        onDeleted={onDeleted}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.delete' }));
+
+    expect((await screen.findByRole('alert')).textContent).toBe('bots.lifecycle.deleteFailed');
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+  });
 });

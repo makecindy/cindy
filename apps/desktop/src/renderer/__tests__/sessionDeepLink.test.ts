@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { deviceLinkProjectKey, projectKeyForDeepLink, projectIdentityKey } from '../../shared/projectKeys';
 
 import {
   buildProjectDeepLink,
@@ -11,6 +12,20 @@ import {
 } from '../lib/deepLink';
 
 describe('buildProjectDeepLink(严格编码,review P2)', () => {
+  it('keeps same-path projects on different hosts distinct after copying and pasting', () => {
+    const dir = "/repos/Cindy (test)";
+    const local = projectIdentityKey('local', dir, null);
+    const studio = deviceLinkProjectKey('studio', dir);
+    const ssh = projectIdentityKey('remote', dir, 'host:22');
+    for (const key of [studio, ssh]) {
+      const href = buildProjectDeepLink(key);
+      expect(href.match(new RegExp(PROJECT_DEEP_LINK_RE_SOURCE))?.[0]).toBe(href);
+      const target = parseProjectDeepLinkHref(href)!.workingDir;
+      expect(projectKeyForDeepLink(target, 'laptop')).toBe(key);
+      expect(projectKeyForDeepLink(target, 'studio')).toBe(key === studio ? local : ssh);
+    }
+  });
+
   it('escapes !\'()* so generated links never contain bare matcher delimiters', () => {
     const workingDir = "/Users/alice/Projects/my(app)'s dir!*";
     const href = buildProjectDeepLink(workingDir);
