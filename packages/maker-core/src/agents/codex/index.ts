@@ -7287,6 +7287,11 @@ assertRouteCurrent();
         model: mutableModel,
         native: approvalsReviewerRouteSupported,
       });
+      this.deps.registerCodexReviewerRouteContext?.({
+        sessionId: sid,
+        threadId: targetThreadId,
+        model: mutableModel,
+      });
     };
 
     // ── thread/start 或 thread/resume ────────────────────────────────────────
