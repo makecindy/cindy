@@ -1,1 +1,0 @@
-ALTER TABLE `sessions` ADD `origin_session` text;

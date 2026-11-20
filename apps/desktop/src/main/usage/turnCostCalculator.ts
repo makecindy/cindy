@@ -35,6 +35,7 @@ export interface TurnTokenDeltas {
 export interface TurnUsageSegment extends TurnTokenDeltas {
   id?: string;
   model?: string;
+  modelConfirmed?: boolean;
   priceVariant?: PriceVariant;
   costUsd?: number;
   complete?: boolean;
@@ -67,6 +68,7 @@ export function normalizeTurnUsageSegments(value: unknown): TurnUsageSegment[] {
       continue;
     if (typeof raw.id === 'string' && raw.id) segment.id = raw.id;
     if (typeof raw.model === 'string' && raw.model.trim()) segment.model = raw.model.trim();
+    if (typeof raw.modelConfirmed === 'boolean') segment.modelConfirmed = raw.modelConfirmed;
     if (
       raw.priceVariant === 'standard' ||
       raw.priceVariant === 'priority' ||
