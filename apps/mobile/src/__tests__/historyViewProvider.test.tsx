@@ -3,6 +3,8 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   SHARED_TASK_CAPABILITY,
@@ -1020,10 +1022,12 @@ describe('Provider pre-send link recovery', () => {
     });
     expect(await home).toBeUndefined();
     expect(await page).toBeUndefined();
-    const subscribed = sentOn(client, 'device-link:subscribe')
-      .map(([, payload]) => (payload.args[0] as { topics: string[] }).topics);
-    expect(subscribed).toContainEqual(['sessions']);
-    expect(subscribed.flat()).not.toContain('session:abc');
+    const subscriptions = sentOn(client, 'device-link:subscribe')
+      .map(([, payload]) => payload.args[0] as { topics: string[]; capabilities: string[] });
+    expect(subscriptions).toContainEqual(expect.objectContaining({
+      topics: ['sessions'], capabilities: expect.arrayContaining([CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2]),
+    }));
+    expect(subscriptions.flatMap(s => s.topics)).not.toContain('session:abc');
   });
 
   it('does not send the recovery handshake once no waiting request still needs it', async () => {
@@ -1165,7 +1169,11 @@ describe('pending catalog recovery', () => {
         } else unresponsiveDevicesStore.clearUnresponsive('host');
         await vi.advanceTimersByTimeAsync(50);
       });
-      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:provider:list' }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
+      // A refresh must request the same filtered catalog and full provider logos as the picker.
+      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({
+        channel: 'maker:provider:list',
+        args: [{ capabilities: expect.arrayContaining([CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1]) }],
+      }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
       expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:get-capabilities' }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
     } finally { unresponsiveDevicesStore.clearAll(); vi.useRealTimers(); }
   });

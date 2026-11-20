@@ -699,7 +699,7 @@ import {
   followMovedCindyAutoRoutes,
   stagedCindyAutoSwitch,
 } from './cindyAutoRouteFollow.js';
-import { readEffectiveBotModelChain, readEffectiveBotModelSelection } from '../maker-host/bot-model-chain-settings-store.js';
+import { readEffectiveBotModelChain, readEffectiveBotModelSelection, setBotModelGroupPreview } from '../maker-host/bot-model-chain-settings-store.js';
 import {
   isOrcaWorkerPermissionMode,
   type OrcaWorkerPermissionMode,
@@ -1438,7 +1438,8 @@ import {
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
 import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
-import { readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
+import { botModelGroupsSignature, expandBotModelGroups, modelGroupCandidateRoute } from '../model-groups/botRoutes.js';
+import { pickModelGroupRoute, readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
 import { modelGroupRouteFor } from '../model-groups/routeFor.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
 import { bindModelGroupSession, readModelGroupBindingForDispatch } from '../model-groups/sessionBindings.js';
@@ -7340,14 +7341,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   configureModelSettingsActions(registerProviderHandlers(createElectronIpcHandlerRegistry(), {
-    listProviders: (opts) => getDesktopProviderService().listProviders(opts),
+    listProviders: (opts) => getDesktopProviderService(opts?.picker ? { allowSideEffects: false } : undefined).listProviders(opts),
     isOrganizationManagedProviderId: (providerId) =>
       getActiveCatalog().providers.some(
         (provider) => provider.id === providerId && isOrganizationManagedProvider(provider),
       ),
-    getModelVisibilityOverrides: async (providers, trusted) => {
+    getModelVisibilityOverrides: async (providers, trusted, pickerScope) => {
       if (!trusted) await waitForModelVisibilityMirror();
-      return getModelVisibilityMirrorSnapshot(providers, trusted);
+      return getModelVisibilityMirrorSnapshot(providers, trusted, pickerScope);
     },
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
     codexCustomProviderConfigSignature,
@@ -8912,7 +8913,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertAccess?.();
     await applyPersistedReviewMode(o);
     assertAccess?.();
-    const didInjectOrcaInstructions = o.reviewMode === true ? false : applyOrcaInstructions(o);
+    const didInjectOrcaInstructions = o.reviewMode === true ? false : await applyOrcaInstructions(o);
     // Plugin engines get no Cindy system prompt (docs/plans/acp-plugin-bridge.md). A collaboration
     // Worker cannot work without its role instructions, so they travel ahead of its first message,
     // and the engine is trusted as a whole to report to its Lead (user decision 2026-11-19).
@@ -16899,6 +16900,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     applied: createBotRouteAppliedStore(() => ownerScopedUserDataPath()),
     onSelectionAccepted: (sessionId, expectedBaseline) => updateScheduledPreference(sessionId, null, expectedBaseline),
     withSessionLock: withSendToSessionLock,
+    pickModelGroup: async (groupId, _saved, options) => {
+      const pick = await pickModelGroupRoute(groupId, options);
+      return pick && {
+        route: {
+          agentKind: dbToMakerAgentKind(pick.route.agentKind),
+          model: pick.route.model,
+          providerId: pick.route.providerId,
+          effort: pick.route.effort ?? null,
+          fastMode: false,
+          ...(pick.route.agentDeviceId ? { agentDeviceId: pick.route.agentDeviceId } : {}),
+        },
+        commit: pick.commit,
+      };
+    },
     read: async (sessionId, purpose) => {
       const [row] = await getDbClient().drizzle.select({
         capabilitiesJson: botProfileVersions.capabilitiesJson,
@@ -16935,8 +16950,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const control = getSessionRuntimeControlSnapshot(sessionId);
       const intent = agentSwitchPending.get(sessionId);
       const live = maker.getSession(sessionId);
+      const modelGroupsSignature = botModelGroupsSignature(selection.chain, readModelGroupsConfig());
       return {
+        // The saved chain: a model group's own rule picks its source (pickModelGroup), and the
+        // saved model stays the fallback. Editing a group it uses re-picks (model-groups.md §6.2).
         chain: selection.chain,
+        ...(modelGroupsSignature !== undefined ? { modelGroupsSignature } : {}),
         scheduledModelBaseline: row.scheduledModelBaseline,
         followsCindyDefault: selection.followsCindyDefault,
         current: {
@@ -17059,6 +17078,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   setBotCapabilityAgentKindResolver(async (sessionId, chain) =>
     (await reconcileBotModelRoute.preview(sessionId, chain))?.agentKind ?? null);
+  // New companion conversations start on the group's current pick (model-groups.md §6.2).
+  setBotModelGroupPreview(async (groupId) => {
+    const pick = await pickModelGroupRoute(groupId, { dryRun: true });
+    return pick && modelGroupCandidateRoute(pick.route, groupId, pick.route.effort);
+  });
 
   const readBotFallbackCandidate = async (
     sessionId: string,
@@ -17097,7 +17121,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     } catch {
       return { isBot: true, candidate: null };
     }
-    const chain = await readEffectiveBotModelChain(config);
+    // A model group continues through its other sources before the next saved route.
+    const chain = expandBotModelGroups(await readEffectiveBotModelChain(config), readModelGroupsConfig(), Date.now());
     const toAgentKind = (harness: string): AgentKind =>
       harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
     const currentHarness = current.agentKind === 'codex'

@@ -193,7 +193,9 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
   `worker_id + worker session` 归属反查唯一 Lead，调用方不能指定任意 session；只返回
   `user/assistant`、排除 rewound、限制单页数量并保持 `(createdAt,rowid)` 游标分页。它不
   create/resume Lead，也不发送消息，所以本机与 SSH Worker 都能在不唤醒 Lead 的前提下读取
-  同一份上下文。Worker 只有在任务依赖「当前工作／继续／这个 PR」等相对范围时才查询；
+  同一份上下文。界面派单只有在「当前工作／继续／这个 PR」等信息缺失时才引导查询。
+  已有任务从最近 8 条开始；有快照的首条派单从快照时间起读 8 条。查到所需信息即可停，
+  需要更多才按同一方向使用游标。工具省略 `order` 时沿用时间正序，旧调用的分页行为不变。
   自包含任务直接执行。没有显式 Worker 任务时不会用 Lead 输入擅自起任务；该 handoff 也不
   改写 MCP `create_worker` / `create_workers` 已由 Lead 组织好的 `initial_task`。
 - device-link 只有在被控端 capability 与本次 `enableOrca` 成功响应都证明支持 deferred
@@ -391,7 +393,7 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 
 1. **Orca Worker 派单不得由原生 subagent 冒充（状态：不变量）**<br>
    用户把任务指派给已有 Worker 的 role／label、要求 Lead 向 Worker 派单，或在 active team
-   内按多个角色并行派单时，Lead 必须先读 workspace，再按场景通过
+   内按多个角色并行派单时，Lead 直接使用已知且匹配的 Worker 会话 ID；目标未知、有歧义或原映射已失效时才通过 `get_workspace_info` 核实。随后按场景通过
    `send_to_worker`（复用既有 Worker）／`create_worker`（显式新建一个 Worker）／`create_workers`（显式新建多个 Worker）进入 Orca 状态机；如果请求的 role／label 当前没有匹配的既有 Worker，Lead 必须先如实说明没有匹配项并征求是否创建，不能静默改派别的 Worker，也不能退回 native subagent。
    如果用户只泛称“Worker”且当前没有任何 Worker，Lead 同样必须先说明并询问是否创建；
    任务指派本身不等于创建授权。多角色请求必须在派发任何任务前解析全部 role／label；
@@ -403,6 +405,10 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `spawn_agent` 或 Claude Code Agent/Task 的完成结果不能当成 Orca
    Worker 的完成。只有用户明确要求一次性 subagent／子代理且没有把任务指派给 Orca
    Worker，或明确要求不使用 Orca Worker 时，才走原生 subagent。
+
+   Lead 启动时可从本队的活跃成员恢复唯一 Worker 的会话地址。多个候选时只使用仍匹配的既有 ID，
+   启动提示只记录地址。角色和标签可在协同面板修改；按角色或标签选人时，本次派单尚未核实匹配项才查当前名单。按明确的 Worker 地址派单可直接发送。只读审阅直接回传发现和必要证据；实施任务按实际改动验证。
+   独立复核按任务要求执行。验证证据可以直接写进回报，用户要求日志或失败排查需要时再保存文件。
 
 2. **实际执行通道必须披露并按同一通道验收（状态：不变量）**<br>
    Lead 汇总前必须按执行该任务的同一通道确认真实终态，并逐项标明

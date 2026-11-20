@@ -22109,7 +22109,8 @@
       "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
       "manage": "管理模型组",
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
-      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。"
+      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
+      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"
     },
     "why": {
       "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",

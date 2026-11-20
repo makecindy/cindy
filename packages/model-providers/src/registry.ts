@@ -340,7 +340,7 @@ export function chatEligibleSourcesForModel(
  *   cc + 其余 → 优先 xd,兜底 rail 首项。
  * rail 为空(零已连接来源)→ null。
  */
-export function nativeDefaultSourceId(rail: ProviderView[], agent: AgentKind | null): string | null {
+export function nativeDefaultSourceId(rail: readonly Pick<ProviderView, 'id'>[], agent: AgentKind | null): string | null {
   if (rail.length === 0) return null;
   const has = (id: string) => rail.some((p) => p.id === id);
   if (agent === 'codex') return has('openai') ? 'openai' : has('xd') ? 'xd' : rail[0].id;

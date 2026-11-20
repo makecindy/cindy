@@ -44,7 +44,8 @@ import {
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
-import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
+import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
 import * as providerPresentation from '../../maker-host/provider-presentation-store.js';
 import * as llamaCppService from '../../local-model-runtime/llamaCppService.js';
@@ -556,6 +557,29 @@ describe('provider:list IPC handler', () => {
     expect(listProviders).toHaveBeenCalledWith({
       allowSideEffects: false,
     });
+  });
+
+  // #11693: a missing discovered model can still have an explicit hidden preference.
+  // Exercise the actual provider:list handler and visibility mirror with an empty service result.
+  it('returns the hidden preference for a removed model without publishing sibling preferences', async () => {
+    const harness = new IpcHarness();
+    const route = { agent: 'codex' as const, providerId: 'off', modelId: 'gone' };
+    setModelVisibilityMirror({ 'codex:off:gone': false, 'codex:off:sibling': false, 'codex:on:gone': true });
+    try {
+      registerProviderHandlers(harness, makeDeps({
+        listProviders: async opts => {
+          opts?.picker?.describe?.([], ['off']);
+          return [];
+        },
+        getModelVisibilityOverrides: getModelVisibilityMirrorSnapshot,
+      }));
+      const result = await runDeviceLinkInvokeContext({ controllerDeviceId: 'mobile', channel: MAKER_INVOKE.PROVIDER_LIST, providerPicker: route },
+        () => harness.invoke(MAKER_INVOKE.PROVIDER_LIST));
+      expect(result).toMatchObject({ providers: [] });
+      expect(result).toHaveProperty('modelVisibilityOverrides', { 'codex:off:gone': false });
+    } finally {
+      clearModelVisibilityMirror();
+    }
   });
 
   it('encodes a real visibility timeout at the IPC boundary for message-only remote transport', async () => {

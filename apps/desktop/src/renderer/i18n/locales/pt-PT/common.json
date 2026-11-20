@@ -22411,7 +22411,8 @@
       "empty": "Ainda não há grupos de modelos. Combine várias fontes num modo nas Definições para o escolher aqui.",
       "manage": "Gerir grupos de modelos",
       "switched": "«{{name}}» mudou esta tarefa para {{model}}",
-      "switchUnavailable": "«{{name}}» não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado."
+      "switchUnavailable": "«{{name}}» não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
+      "chooseUnavailable": "«{{name}}» não tem agora nenhuma fonte utilizável, por isso não foi selecionado."
     },
     "why": {
       "expiringQuota": "Restam {{left}}% da quota, reposta a {{reset}}, por isso vai primeiro",

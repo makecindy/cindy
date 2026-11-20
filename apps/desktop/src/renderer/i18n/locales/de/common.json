@@ -22198,7 +22198,8 @@
       "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einem Modus zusammen, um ihn hier auszuwählen.",
       "manage": "Modellgruppen verwalten",
       "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
-      "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert."
+      "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
+      "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt."
     },
     "why": {
       "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
