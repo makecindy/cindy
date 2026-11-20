@@ -61,6 +61,7 @@ export const PORTS_ONLY_PI_READS = {
   mutatePiManagedPackage: undefined,
   onPiManagedPackageMutationSettled: undefined,
   preparePiExtraSpawnConfig: undefined,
+  probeRemotePiProviderEndpoint: undefined,
   registerPiProxySession: undefined,
   remotePiSkipMcpBridge: undefined,
   resolvePiAgentHome: undefined,

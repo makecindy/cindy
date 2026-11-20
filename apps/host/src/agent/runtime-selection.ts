@@ -374,6 +374,9 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     resolveProviderGroupTarget: undefined,
     assertAgentDeviceRouteUsable: undefined,
     describeAgentDevice: undefined,
+    // Plugin engines are only assembled on the desktop. The switch handler rejects ACP without admission.
+    admitPluginEngineTarget: undefined,
+    describePluginEngine: undefined,
     resolveHandoffWindow: async ({ sessionId, agent, model, providerId, agentDeviceId }) => {
       if (agentDeviceId) return null;
       const budget = await deps.readStoredSessionContextWindowBudget(sessionId);

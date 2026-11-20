@@ -945,6 +945,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         getRemotePiAgentProxyEnv: undefined,
         getRemotePiFileOps: undefined,
         getRemotePiTransport: undefined,
+        probeRemotePiProviderEndpoint: undefined,
         remotePiSkipMcpBridge: undefined,
         resolveRemotePiBinaryPath: undefined,
         // Not bound on the desktop either (pi-host.ts takes it as an option, maker-host/index.ts passes none):
