@@ -52,6 +52,7 @@ describe('Pi plan title extraction', () => {
     '3. 验证\n   1. 子项\n\n说明\n7. 交付',
     '1. 验证\n```\n9. 示例\n```\n2. 交付',
     '1. 验证\n\n1. 交付',
+    '1. 实现\n\n1. 验证\n\n1. 交付\n\n1. 审查',
     '9007199254740992. 验证\n\nDetails...\n2. 交付',
   ])('keeps complete headerless thinking plans with details: %s', plan => {
     expect(selectPlan([{ type: 'thinking', thinking: 'Unrelated reasoning.\n' + plan }]))
