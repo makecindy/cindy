@@ -179,6 +179,47 @@ function clearHostAppliedFingerprint(hostId: string): void {
   writePortPrefs(next);
 }
 
+/**
+ * appliedFingerprint 的失效占位:与任何真实指纹都不相等 (→ ensure / live-send
+ * 判定为漂移, 强制带 token 重 bootstrap), 但仍为非空 (→ token 不可用时依旧
+ * 被视为「曾注入过」, 走清理路径剥受管段, 不丢清理证据)。
+ */
+const DAEMON_ENV_INVALIDATED = 'daemon-env-invalidated';
+
+/** per-host daemon 重启代次:进行中的 ensure 若跨越一次外部重启, 不得写回旧指纹。 */
+const daemonEnvGenerations = new Map<string, number>();
+
+function daemonEnvGeneration(hostId: string): number {
+  return daemonEnvGenerations.get(hostId) ?? 0;
+}
+
+/**
+ * 远端 daemon 在 MCP bootstrap 之外被停掉 (auth 同步 / agent-proxy 对账 /
+ * 安装前停 daemon)。接手重启的 transport startDaemon 不带 LIZI_MCP_TOKEN,
+ * 已生效指纹不再描述 daemon env:换成失效占位, 下次 session start / live
+ * send 识别漂移并带 token 重 bootstrap (#8781)。代次递增让并发中的 ensure
+ * 不会在之后写回旧指纹。杀 daemon 前后各调用一次:杀进程期间新开始的
+ * ensure 可能已 bootstrap 并落指纹, 随后被同一次 kill 杀掉。不抛错。
+ */
+export function invalidateRemoteCodexMcpDaemonEnv(hostId: string): void {
+  daemonEnvGenerations.set(hostId, daemonEnvGeneration(hostId) + 1);
+  const prefs = readPortPrefs();
+  const current = prefs[hostId];
+  if (!current?.appliedFingerprint || current.appliedFingerprint === DAEMON_ENV_INVALIDATED) return;
+  const next = { ...prefs, [hostId]: { ...current, appliedFingerprint: DAEMON_ENV_INVALIDATED } };
+  // 先改进程内缓存 (drift 判定 / ensure 都读它):落盘失败时本进程仍按
+  // 已失效处理, 不会信任被杀 daemon 的指纹;下次成功写 prefs 时一并落盘。
+  portPrefsCache = next;
+  try {
+    writePortPrefs(next);
+  } catch (err) {
+    log.warn('failed to persist remote codex MCP daemon env invalidation', {
+      host: hostId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /** host 被删时清理端口记录 (registerRemoteSshIpc 的 remove 路径调用)。 */
 export function removeRemoteMcpForwardPref(hostId: string): void {
   const current = readPortPrefs();
@@ -1018,6 +1059,7 @@ async function doEnsureRemoteCodexMcpBridge(
       return { ok: true, daemonRebootstrapped: false };
     }
     if (!daemonRunning || needApply) {
+      const generation = daemonEnvGeneration(host.id);
       await bootstrapDaemon(host, effectiveToken);
       daemonRebootstrapped = true;
       // 防御:bootstrap 若覆盖了 config.toml (managed_install 行为未文档化),
@@ -1033,7 +1075,13 @@ async function doEnsureRemoteCodexMcpBridge(
       }
       // bootstrap 确认完成才落已生效指纹;失败/中断不落 → 下次 ensure
       // driftUnapplied 仍成立, 强制重试 (跨 app 重启同样成立)。
-      if (desiredFingerprint) writeHostAppliedFingerprint(host.id, desiredFingerprint);
+      // 期间 daemon 若被外部杀掉重启 (代次变化), 存活 daemon 不持 token —
+      // 保留失效占位, 不写回指纹 (#8781)。
+      if (generation !== daemonEnvGeneration(host.id)) {
+        log.warn('remote codex daemon restarted during MCP bootstrap — keeping env invalidated', {
+          host: host.id,
+        });
+      } else if (desiredFingerprint) writeHostAppliedFingerprint(host.id, desiredFingerprint);
       else clearHostAppliedFingerprint(host.id);
       if (serverNames.length === 0) {
         // 清理真正生效 (daemon 已持空 env 重启) 才拆 MCP forward — 见

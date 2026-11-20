@@ -4,7 +4,7 @@
  * 追加语义(漂移检测是"内容一致则不重写、不重启 daemon"的前提)。
  */
 
-import { describe, expect, it, vi, beforeAll } from 'vitest';
+import { describe, expect, it, vi, afterAll } from 'vitest';
 import { parse as parseToml } from 'smol-toml';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,6 +21,7 @@ import {
   hasPendingRemoteMcpDrift,
   invalidateRemoteCodexMcpEndpointState,
 } from '../codex-remote-mcp.js';
+import { killRemoteCodexDaemon } from '../agent-proxy.js';
 
 // safeStorage 在测试 stub 里 isEncryptionAvailable=false → token 真源恒 null;
 // 走完整 ensure 流程的用例需要固定 token。
@@ -34,11 +35,21 @@ import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY } from '../../mcp-integrations/cod
 
 const SERVERS = ['cindy_orca', 'orca_worker_bridge'];
 
-// remote-mcp-forwards.json 在真实 userData stub 目录跨 vitest 运行残留
-// (appliedFingerprint 持久化后会影响 driftUnapplied 判定) — 每次运行起始
-// 清掉;模块级 portPrefsCache 是懒加载, 此刻必然未读, 首读即空文件。
-beforeAll(() => {
-  fs.rmSync(path.join(app.getPath('userData'), 'remote-mcp-forwards.json'), { force: true });
+// Keep this file's real prefs writes out of the shared Electron stub directory.
+// The mock registry survives the app-restart test's resetModules, so both module
+// generations observe one private profile instead of crossing worktree runs.
+const testProfile = vi.hoisted(() => ({ root: null as string | null }));
+vi.mock('electron', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('electron')>();
+  const [fs, os, path] = await Promise.all([
+    import('node:fs'), import('node:os'), import('node:path'),
+  ]);
+  const root = testProfile.root ?? fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-remote-mcp-'));
+  testProfile.root = root;
+  return { ...actual, app: { ...actual.app, getPath: (name: string) => path.join(root, name) } };
+});
+afterAll(() => {
+  if (testProfile.root) fs.rmSync(testProfile.root, { recursive: true, force: true });
 });
 
 /** 走完整 ensure 流程的 fake host:读 config 返回给定内容, 其余命令一律成功。 */
@@ -1009,6 +1020,215 @@ describe('ensureRemoteCodexMcpBridge drift self-heal (appliedFingerprint)', () =
     expect(second.ok).toBe(true);
     expect(execCmds2.join('\n')).not.toContain('bootstrap');
   });
+});
+
+describe('daemon restarted outside MCP bootstrap', () => {
+  // Remote auth sync / agent-proxy reconcile stop the daemon via
+  // killRemoteCodexDaemon; the transport restarts it without LIZI_MCP_TOKEN.
+  // The next ensure must re-bootstrap with the token instead of trusting the
+  // applied fingerprint of the killed daemon (cindy_helper "token is not set").
+  it('re-bootstraps with the MCP token after killRemoteCodexDaemon', async () => {
+    let configContent = '';
+    const execCmds: string[] = [];
+    const inputs: string[] = [];
+    const host = {
+      id: 'host-killed-daemon',
+      exec: async (cmd: string, opts?: { input?: string }) => {
+        execCmds.push(cmd);
+        if (opts?.input) inputs.push(opts.input);
+        if (cmd.includes('cat "$CODEX_HOME/config.toml"')) {
+          return { exitCode: 0, stdout: configContent, stderr: '' };
+        }
+        if (cmd.includes('base64 -d')) {
+          const written = decodeWrittenConfig(opts?.input ? [opts.input] : []);
+          if (written !== null) configContent = written;
+        }
+        // daemon version probe always succeeds: the transport already restarted it.
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+      ensureRemoteForward: async (spec: { localHost: string; localPort: number; preferredRemotePort?: number }) => ({
+        remotePort: spec.preferredRemotePort ?? 47926,
+        close: async () => {},
+      }),
+    } as unknown as RemoteHost;
+    const deps = {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
+      hasLiveTurnOnHost: () => false,
+    };
+
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).daemonRebootstrapped).toBe(true);
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).daemonRebootstrapped).toBe(false);
+
+    expect(await killRemoteCodexDaemon(host)).toEqual({ ok: true });
+    const driftOpts = { collabEnabled: true, makerMemoryEnabled: false, bridgeInstanceId: 'bridge-1' };
+    expect(hasPendingRemoteMcpDrift('host-killed-daemon', { ...driftOpts, token: 'test-persistent-token' })).toBe(true);
+    // Token lost later (locked keychain): cleanup evidence must survive the kill.
+    expect(hasPendingRemoteMcpDrift('host-killed-daemon', { ...driftOpts, token: null })).toBe(true);
+
+    inputs.length = 0;
+    const healed = await ensureRemoteCodexMcpBridge(host, deps);
+    expect(healed.daemonRebootstrapped).toBe(true);
+    expect(inputs.some((input) => input.includes('LIZI_MCP_TOKEN=test-persistent-token'))).toBe(true);
+    expect(prefsOf('host-killed-daemon')?.appliedFingerprint).toBeTruthy();
+  });
+
+  it('does not write back the fingerprint when the daemon is killed during bootstrap', async () => {
+    let killedDuringBootstrap = false;
+    const host = {
+      id: 'host-kill-race',
+      exec: async (cmd: string) => {
+        if (cmd.includes('bootstrap') && !killedDuringBootstrap) {
+          killedDuringBootstrap = true;
+          // Auth sync kills the daemon while this ensure awaits its bootstrap.
+          await killRemoteCodexDaemon(host);
+        }
+        return { exitCode: 0, stdout: cmd.includes('config.toml') ? '' : 'ok', stderr: '' };
+      },
+      ensureRemoteForward: async (spec: { localHost: string; localPort: number; preferredRemotePort?: number }) => ({
+        remotePort: spec.preferredRemotePort ?? 47927,
+        close: async () => {},
+      }),
+    } as unknown as RemoteHost;
+    const result = await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
+      hasLiveTurnOnHost: () => false,
+    });
+    expect(result.ok).toBe(true);
+    expect(killedDuringBootstrap).toBe(true);
+    expect(hasPendingRemoteMcpDrift('host-kill-race', {
+      collabEnabled: true,
+      makerMemoryEnabled: false,
+      token: 'test-persistent-token',
+      bridgeInstanceId: 'bridge-1',
+    })).toBe(true);
+  });
+
+  it('invalidates an ensure that completes while the kill script is still running', async () => {
+    let killing = false;
+    let ensureDuringKill: Promise<unknown> | null = null;
+    const deps = {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
+      hasLiveTurnOnHost: () => false,
+    };
+    const host = {
+      id: 'host-kill-overlap',
+      exec: async (cmd: string) => {
+        if (cmd.includes('pkill') && !killing) {
+          killing = true;
+          // A session start runs a full ensure (bootstrap + fingerprint) before pkill lands.
+          ensureDuringKill = ensureRemoteCodexMcpBridge(host, deps);
+          await ensureDuringKill;
+        }
+        return { exitCode: 0, stdout: cmd.includes('config.toml') ? '' : 'ok', stderr: '' };
+      },
+      ensureRemoteForward: async (spec: { localHost: string; localPort: number; preferredRemotePort?: number }) => ({
+        remotePort: spec.preferredRemotePort ?? 47928,
+        close: async () => {},
+      }),
+    } as unknown as RemoteHost;
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).ok).toBe(true);
+    expect(await killRemoteCodexDaemon(host)).toEqual({ ok: true });
+    expect(ensureDuringKill).not.toBeNull();
+    expect(hasPendingRemoteMcpDrift('host-kill-overlap', {
+      collabEnabled: true,
+      makerMemoryEnabled: false,
+      token: 'test-persistent-token',
+      bridgeInstanceId: 'bridge-1',
+    })).toBe(true);
+  });
+});
+
+describe('daemon kill recovery failure and lifecycle boundaries (#8781)', () => {
+  // #8781: these unit cases use the real ensure/kill paths and an in-memory
+  // RemoteHost. Existing drift cases never stop a successfully injected daemon.
+  // No SSH, account credentials or native processes are used.
+  function lifecycleHost(id: string) {
+    const state = { config: 'model = "gpt-5.5"\n', tokenPresent: false, bootstraps: 0 };
+    const host = {
+      id,
+      exec: async (_cmd: string, opts?: { label?: string; input?: string }) => {
+        if (opts?.label === 'read codex config.toml') return { exitCode: 0, stdout: state.config, stderr: '' };
+        if (opts?.label === 'write codex config.toml') state.config = Buffer.from(opts.input!.trim(), 'base64').toString('utf8');
+        if (opts?.label === 'codex-daemon-bootstrap') {
+          state.bootstraps++;
+          state.tokenPresent = Boolean(opts.input?.includes('LIZI_MCP_TOKEN=test-persistent-token'));
+        }
+        if (opts?.label === 'kill-codex-daemon') state.tokenPresent = false;
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+      ensureRemoteForward: async (spec: { preferredRemotePort?: number }) => ({
+        remotePort: spec.preferredRemotePort ?? 47921,
+        close: async () => {},
+      }),
+    } as unknown as RemoteHost;
+    const deps = {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
+      hasLiveTurnOnHost: () => false,
+    };
+    return { host, state, deps };
+  }
+
+  it('defers recovery during a live turn and restores the token when idle', async () => {
+    const { host, state, deps } = lifecycleHost('host-kill-live-turn');
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).ok).toBe(true);
+    expect(state.tokenPresent).toBe(true);
+    const before = state.bootstraps;
+    await killRemoteCodexDaemon(host);
+    const deferred = await ensureRemoteCodexMcpBridge(host, { ...deps, hasLiveTurnOnHost: () => true });
+    expect(deferred).toEqual({ ok: true, daemonRebootstrapped: false });
+    expect(state.bootstraps).toBe(before);
+    expect(state.tokenPresent).toBe(false);
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).daemonRebootstrapped).toBe(true);
+    expect(state.tokenPresent).toBe(true);
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).daemonRebootstrapped).toBe(false);
+  });
+
+  it('retains cleanup evidence after kill when the token becomes unavailable', async () => {
+    const { host, state, deps } = lifecycleHost('host-kill-token-lost');
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).ok).toBe(true);
+    await killRemoteCodexDaemon(host);
+    vi.mocked(getRemoteMcpBridgeToken).mockReturnValue(null);
+    try {
+      expect(hasPendingRemoteMcpDrift(host.id, { collabEnabled: true, makerMemoryEnabled: false, token: null, bridgeInstanceId: 'bridge-1' })).toBe(true);
+      expect((await ensureRemoteCodexMcpBridge(host, deps)).daemonRebootstrapped).toBe(true);
+      expect(state.config).not.toContain('cindy-remote-mcp');
+      expect(state.config).toContain('model = "gpt-5.5"');
+      expect(state.tokenPresent).toBe(false);
+      expect(prefsOf(host.id)?.appliedFingerprint).toBeUndefined();
+    } finally {
+      vi.mocked(getRemoteMcpBridgeToken).mockReturnValue('test-persistent-token');
+    }
+  });
+
+  it.each(['success', 'exit-error', 'exec-error'] as const)(
+    'preserves in-memory drift and the kill result if persistence fails (%s)', async (outcome) => {
+      const { host, state, deps } = lifecycleHost(`host-kill-io-${outcome}`);
+      expect((await ensureRemoteCodexMcpBridge(host, deps)).ok).toBe(true);
+      const fingerprint = prefsOf(host.id)?.appliedFingerprint;
+      const exec = host.exec.bind(host);
+      host.exec = async (cmd, opts) => {
+        if (opts?.label === 'kill-codex-daemon' && outcome !== 'success') {
+          if (outcome === 'exec-error') throw new Error('synthetic exec failure');
+          return { exitCode: 2, signal: null, stdout: '', stderr: 'synthetic kill failure' };
+        }
+        return exec(cmd, opts);
+      };
+      const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw new Error('synthetic EACCES'); });
+      try {
+        const result = await killRemoteCodexDaemon(host);
+        expect(result).toEqual(outcome === 'success'
+          ? { ok: true }
+          : { ok: false, reason: 'pkill_failed', detail: outcome === 'exec-error' ? 'synthetic exec failure' : 'synthetic kill failure' });
+        expect(prefsOf(host.id)?.appliedFingerprint).toBe(fingerprint); // disk still describes the old daemon
+        expect(hasPendingRemoteMcpDrift(host.id, { collabEnabled: true, makerMemoryEnabled: false, token: 'test-persistent-token', bridgeInstanceId: 'bridge-1' })).toBe(true);
+      } finally {
+        rename.mockRestore();
+      }
+      expect((await ensureRemoteCodexMcpBridge(host, deps)).daemonRebootstrapped).toBe(true);
+      expect(state.tokenPresent).toBe(true);
+      expect((await ensureRemoteCodexMcpBridge(host, deps)).daemonRebootstrapped).toBe(false);
+    },
+  );
 });
 
 describe('daemon bootstrap env parity (codex-connector R18 P1)', () => {
