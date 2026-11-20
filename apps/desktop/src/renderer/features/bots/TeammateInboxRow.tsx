@@ -70,7 +70,7 @@ export function TeammateInboxRow({ entry, section }: { entry: TeammateInboxEntry
       className={cn(
         'group relative flex h-8 w-full cursor-pointer select-none items-center gap-2.5 rounded-full pl-3 pr-2 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
         isActive
-          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
+          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground border border-[var(--sidebar-item-active-border)]'
           : cn('text-foreground hover:bg-sidebar-item-hover', snoozeOpen && 'bg-sidebar-item-hover'),
       )}
     >
@@ -90,7 +90,7 @@ export function TeammateInboxRow({ entry, section }: { entry: TeammateInboxEntry
       </span>
       <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
         <div className="grid h-6 grid-cols-[max-content] items-center justify-items-end">
-          <div className={cn('col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
+          <div className={cn('col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[var(--motion-fast)]',
             hasActions && 'group-hover:w-0 group-hover:overflow-hidden group-hover:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden group-focus-within/slot:opacity-0',
             hasActions && snoozeOpen && 'w-0 overflow-hidden opacity-0')}>
             {statusKind ? <SidebarRightStatusIndicator kind={statusKind} isActive={isActive} /> : null}

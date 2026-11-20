@@ -15,9 +15,11 @@
 
 写入不新增通道或动作：控制端对伙伴行 `conversation` 链接指向的任务调用既有的
 `local-db:sessions:patch-meta`，参数 `{ snoozedUntil: <ISO> | null }`，与任务的稍后处理相同（时间校验、
-`snoozedAt` 由宿主写入）。宿主在任务的延期变化后，对它所属的伙伴发出既有的远程资源变更推送，各端重读名册；
+`snoozedAt` 由宿主写入）。宿主在任务的延期变化或轮次结束时间落库后，对它所属的伙伴发出既有的远程资源变更推送，各端重读名册；
 本机窗口经既有的 `local-db:sessions:patched` 刷新伙伴资料。消息落库时已有的名册失效随之带出新的
-`userSendAt`，控制端按与任务相同的规则（输入晚于 `snoozedAt`）提前唤回。
+`userSendAt`，控制端按与任务相同的规则（输入晚于 `snoozedAt`）提前唤回。流式回复保留文本块开始时间，
+因此当最新可见消息属于最近一轮的助手回复时，也把该轮 `lastTurnEndedAt` 计入投影，覆盖先开始回复、
+再延期、最后回复完成的时序。
 
 兼容：
 
@@ -25,7 +27,7 @@
 - 新控制端连旧宿主：没有 `inboxSnooze`，该行不提供稍后处理，也不按延期归类；其余分区照常。旧宿主本就接受
   对任意任务的 `patch-meta` 延期，但不投影结果，控制端不得在读不回来的情况下写入。
 - 控制端写入后以回包的 `snoozedUntil` 为准，未返回所写的值即显示失败，不把它当成已延期。
-- 「完成」沿用[伙伴已读跨设备同步](teammate-read-state-cross-device-sync.md)的 `read` 动作与本地读位，不新增协议。
+- 「完成」沿用[伙伴已读跨设备同步](teammate-read-state-cross-device-sync.md)的 `read` 动作与本地读位，不新增协议。手机在宿主确认后再推进本地读位；请求失败保留未读并提示，可重试。
 
 字段位于 Remote Resource 的业务 payload 内，不改握手、签名、顶层帧、relay 路由或重连逻辑；官方与自建中转
 都按通用加密转发透传，无需中转升级。不增加 IPC channel、allowlist 项、权限、数据库字段或迁移。Node Host

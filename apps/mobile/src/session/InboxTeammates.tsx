@@ -190,13 +190,21 @@ export function useInboxTeammates({ context, cloud, enabled, query, push: hostPu
     const at = display?.lastReplyAt;
     if (!found || !display || typeof at !== 'number' || at <= 0) return;
     const { row } = found;
-    // The same read position the chat advances: local first, then the computer's shared one.
-    void markRemoteResourceRead(latest.current.userId, row.host.deviceId, row.item.ref.id, at);
-    if (typeof display.lastReadAt === 'number' && at > display.lastReadAt) {
-      void invokeRemoteResourceAction(invoke, row.host, { collectionId: row.item.ref.collectionId, actionId: 'read',
-        resourceRef: row.item.ref, input: { at: Math.floor(at) } }, latest.current.language).catch(noop);
-    }
-  }, [find, invoke, registry]);
+    const { userId: readOwner, language } = latest.current;
+    // Keep the unread row until the owning computer accepts the shared read position.
+    // A failed/offline write remains retryable from the same row.
+    void (async () => {
+      try {
+        if (typeof display.lastReadAt === 'number' && at > display.lastReadAt) {
+          await invokeRemoteResourceAction(invoke, row.host, { collectionId: row.item.ref.collectionId, actionId: 'read',
+            resourceRef: row.item.ref, input: { at: Math.floor(at) } }, language);
+        }
+        await markRemoteResourceRead(readOwner, row.host.deviceId, row.item.ref.id, at);
+      } catch {
+        Alert.alert(t('devices.list.alert.actionFailed'));
+      }
+    })();
+  }, [find, invoke, registry, t]);
 
   const openTeammate = navigation.openTeammate;
   const open = useCallback((row: HostedRemoteCollectionItem) => {

@@ -489,7 +489,7 @@ export function setSessionStatusPatchedListener(next: ((sessionId: string) => vo
 
 let sessionSnoozePatchedListener: ((sessionId: string) => void) | null = null;
 
-/** Snooze observer: a teammate's main conversation shows its snooze on the roster row. */
+/** Inbox observer: snooze edits and durable turn endings change the teammate's snooze projection. */
 export function setSessionSnoozePatchedListener(next: ((sessionId: string) => void) | null): void {
   sessionSnoozePatchedListener = next;
 }
@@ -542,7 +542,7 @@ export function broadcastSessionPatched(
       // Teammate roster refresh never blocks the task patch itself.
     }
   }
-  if ('snoozedUntil' in patch && !isProvisionalSession(sessionId)) {
+  if (('snoozedUntil' in patch || 'lastTurnEndedAt' in patch) && !isProvisionalSession(sessionId)) {
     try {
       sessionSnoozePatchedListener?.(sessionId);
     } catch {
