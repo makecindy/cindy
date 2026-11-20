@@ -2286,6 +2286,30 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  it.each(['Plan:', 'Here is the plan.', 'Plan:\n```\n1. Example action with long title\n```'])('8933 does not confirm a bodyless response: %s', { timeout: 60_000 }, async plan => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-empty-plan-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'empty-plan', workingDir, model: 'pi-test-model', planMode: true });
+      const resolver = vi.fn(async () => ({ kind: 'ask_user_question', answers: {} }));
+      handle.setInteractionResolver!(resolver as never);
+      scriptedResponses.push(anthropicStreamBody(plan));
+      const before = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Prepare the plan.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBe(before + 1), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      expect(resolver).not.toHaveBeenCalled();
+      const state = readFileSync(handle.id, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+        .filter(entry => entry.type === 'custom' && entry.customType === 'plan-mode').at(-1)?.data;
+      expect(state).toMatchObject({ enabled: true, todos: [] });
+      expect(JSON.parse(seenRequests[before]!.body).tools.some((tool: { name: string }) => tool.name === 'write')).toBe(false);
+    } finally {
+      scriptedResponses.length = 0;
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['mixed', 'Plan:\n1. **读取项目文件**\n2. **实现交互**\n3. **验证**\n4. **交付**\n5. **检查移动端布局**',
       ['读取项目文件', '实现交互', '验证', '交付', '检查移动端布局']],
@@ -2303,6 +2327,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['thinking-repeated-ones', '1. 实现\n\n1. 验证\n\n1. 交付\n\n1. 审查', ['1. 实现\n\n1. 验证\n\n1. 交付\n\n1. 审查']],
     ['thinking-unsafe-prefix', '0. 保留\n1. 验证\n\n1. 交付\n2. 审查', ['0. 保留\n1. 验证\n\n1. 交付\n2. 审查']],
     ['thinking-empty-prefix', '1. [ ]\n2. 验证\n\n1. 交付\n2. 审查', ['1. [ ]\n2. 验证\n\n1. 交付\n2. 审查']],
+    ['thinking-phases', 'Implementation:\n1. 实现\n2. 交付\n\nVerification:\n1. 验证\n2. 审查', ['Implementation:\n1. 实现\n2. 交付\n\nVerification:\n1. 验证\n2. 审查']],
     ['thinking-empty-heading', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-heading-intro', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-visible-whole', 'Plan:\n1. Investigate alternatives', ['1. 实现\n1. 验证']],

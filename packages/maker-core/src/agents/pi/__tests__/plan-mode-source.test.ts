@@ -12,6 +12,14 @@ const selectPlan = runInNewContext(PI_PLAN_TODOS_SOURCE + '; selectPlanText') as
   (content: Array<{ type: string; text?: string; thinking?: string }>) => string;
 
 describe('Pi plan title extraction', () => {
+  it.each(['Plan:', 'Here is the plan.', 'Plan:\n```\n1. Example action with long title\n```'])('does not select a bodyless visible response: %s', text => {
+    expect(selectPlan([{ type: 'text', text }])).toBe('');
+  });
+
+  it('retains every numbered phase as a whole plan', () => {
+    const plan = 'Implementation:\n1. 实现\n2. 交付\n\nVerification:\n1. 验证\n2. 审查';
+    expect(selectPlan([{ type: 'thinking', thinking: plan }])).toBe(plan);
+  });
   it('retains the native thinking plan but not its unrelated preamble, and prefers a visible plan', () => {
     const thought = { type: 'thinking', thinking: 'Private reasoning.\n```\nPlan:\n1. Example\n```\nPlan:\n3. 验证\n7. 交付' };
     expect(selectPlan([thought])).toBe('Plan:\n3. 验证\n7. 交付');

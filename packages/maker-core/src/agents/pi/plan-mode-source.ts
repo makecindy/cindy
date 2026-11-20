@@ -85,6 +85,12 @@ export default function cindyPlanMode(pi) {
         return target.on(eventName, async (event, ctx) => {
           const assistant = [...event.messages].reverse().find(message => message.role === 'assistant');
           const plan = Array.isArray(assistant?.content) ? selectPlanText(assistant.content) : '';
+          // The native parser can treat a fenced example as executable work.
+          // Keep plan mode active until the response contains an actual plan.
+          if (state?.enabled && !state.executing && !plan.trim()) {
+            pi.appendEntry('plan-mode', { ...state });
+            return;
+          }
           if (state?.enabled && !state.executing && ctx.hasUI && plan.trim()
             && assistant?.stopReason !== 'error' && assistant?.stopReason !== 'aborted'
             && Array.isArray(state.todos)) {
