@@ -3,12 +3,15 @@
 //!   一条流卡住不影响别的流，优先级、流量额度和流的生命周期符合约定，坏包不能撑大内存。
 //! - Bug／规则依据：`docs/agent-net-plan.md` 第 2 步通过标准。流头写错或额度算错时不会报错，只会把数据交给错的流，
 //!   或者让流永远卡住。2026-11-17 起另有一端窗口 8192、一端是窗口 128 的旧版的互通用例（`sim/results/2026-11-17-window-interop`）：
-//!   越过旧版窗口的分片被丢掉、旧版发送端等额度，都只会变慢、不会报错。
+//!   越过旧版窗口的分片被丢掉、旧版发送端等额度，都只会变慢、不会报错。2026-11-19 起另有发送缓冲按优先级让、三档调度的用例
+//!   （`sim/results/2026-11-19-priority-buffer`）：Desktop 驱动的配置下大流把交互流挡在发送缓冲外、三档都有数据时交互流被饿住，
+//!   都只表现为消息迟迟发不出去，不报错。
 //! - 现有覆盖缺口：`reliability.rs` 只用默认流，碰不到流头、调度、额度和流的结束；别的用例两端配置都一样。
+//!   2026-11-19 以前的用例发送缓冲固定 1 MiB、最多两档同时有数据，碰不到窗口缩小后超出上限和三档调度。
 //! - 最小失败输入：每条失败都打印种子，用 `AGENT_NET_REPLAY=<种子>` 重放；固定场景的输入写在各用例里。
 //! - tier：Rust integration，虚拟时间，无真实网络；独立通过 Cargo 运行，未接入 pnpm unit runner。
 //!   用 `--profile sim` 打开溢出检查，默认 200 个种子；`AGENT_NET_SEEDS=10000` 跑扩展矩阵。
-//! - 实测耗时：2026-11-02，本机默认 200 个种子 2.2 秒；10000 个种子空闲时约 160 秒，`sim/results/2026-11-02-streams/tests.txt` 里的 527 秒是和注入 bug 同时跑的。
+//! - 实测耗时：2026-11-19，本机默认 200 个种子 2.4 秒（2026-11-02 是 2.2 秒）；10000 个种子空闲时约 160 秒，`sim/results/2026-11-02-streams/tests.txt` 里的 527 秒是和注入 bug 同时跑的。
 //!   含 300 Mbit/s 路径的吞吐验证和恶意包压力验证，不作为 5 秒内轻量单测。
 //! - 测试本身的有效性由 `sim/mutants.py` 验证：注入已知 bug，这里必须变红。
 
@@ -319,22 +322,31 @@ fn an_unread_stream_only_stalls_itself() {
 
 /// 满载传文件时交互消息的延迟（升序）和文件速度。
 fn messages_beside_a_file(link: &LinkProfile, seed: u64) -> (Vec<u64>, u64) {
+    messages_beside_files(&wide_config(), link, seed, &[Priority::Background])
+}
+
+/// 满载传几条大流（各自的优先级）时交互消息的延迟（升序）和大流的总速度。每条消息都必须一写就整条收下。
+fn messages_beside_files(config: &Config, link: &LinkProfile, seed: u64, bulk: &[Priority]) -> (Vec<u64>, u64) {
     const DURATION_US: u64 = 6_000_000;
-    let mut pair = Pair::new(&wide_config(), link.clone(), link.clone(), seed);
+    let mut pair = Pair::new(config, link.clone(), link.clone(), seed);
     let chat = pair.a.open_stream(Priority::Interactive).unwrap();
-    let file = pair.a.open_stream(Priority::Background).unwrap();
+    let files: Vec<u32> = bulk.iter().map(|&priority| pair.a.open_stream(priority).unwrap()).collect();
     let (message, chunk) = ([7u8; 200], [9u8; 4096]);
     let mut sent_at = Vec::new();
     let mut delays = Vec::new();
     let (mut chat_read, mut file_read) = (0, 0);
     while pair.now < DURATION_US {
         if pair.now >= sent_at.len() as u64 * 20_000 {
-            assert_eq!(pair.a.send_stream(pair.now, chat, &message), message.len());
+            assert_eq!(pair.a.send_stream(pair.now, chat, &message), message.len(), "消息写不进发送缓冲，at {}us", pair.now);
             sent_at.push(pair.now);
         }
-        while pair.a.send_stream(pair.now, file, &chunk) == chunk.len() {}
+        for &file in &files {
+            while pair.a.send_stream(pair.now, file, &chunk) == chunk.len() {}
+        }
         chat_read += drain(&mut pair.b, pair.now, chat);
-        file_read += drain(&mut pair.b, pair.now, file);
+        for &file in &files {
+            file_read += drain(&mut pair.b, pair.now, file);
+        }
         while (delays.len() + 1) * message.len() <= chat_read {
             delays.push(pair.now - sent_at[delays.len()]);
         }
@@ -372,6 +384,60 @@ fn interactive_messages_stay_fast_beside_a_full_file() {
         assert!(p50 <= p50_limit && p95 <= p95_limit && p99 <= p99_limit, "{name}: p50 {p50} p95 {p95} p99 {p99}");
         assert!(rate >= rate_floor, "{name}: 文件只有 {rate} bit/s");
     }
+}
+
+/// 普通和后台各一条大流一起写满时（会话层的普通通道传大结果、后台通道传文件），交互消息照样一写就收下，延迟和大流速度都接近
+/// 只有一条文件时。配置同 Desktop 的驱动。2026-11-19 修之前两处会坏：两条大流写满共用的发送缓冲，交互消息一个字节都写不进去；
+/// 写得进以后，三档都有数据时调度器一直让给普通档，慢线一行的 p95 从 0.19 秒涨到 2.6 秒。
+#[test]
+fn interactive_messages_stay_fast_beside_two_full_streams() {
+    let config = upgraded(Config::for_policy(RecoveryPolicy::Auto));
+    let lossy = |bits_per_second, delay_us, jitter_us, loss, queue_us| LinkProfile { bits_per_second, delay_us, jitter_us, loss, queue_us, ..LinkProfile::default() };
+    let rows = [
+        ("手机", lossy(10_000_000, 50_000, 30_000, 0.03, 150_000)),
+        ("跨境", lossy(4_000_000, 35_000, 5_000, 0.05, 200_000)),
+        ("慢线", lossy(1_000_000, 60_000, 4_000, 0.01, 300_000)),
+    ];
+    for (name, link) in rows {
+        let (mut one, mut two, mut one_rate, mut two_rate) = (Vec::new(), Vec::new(), 0, 0);
+        for seed in 1..=3 {
+            let (delays, rate) = messages_beside_files(&config, &link, seed, &[Priority::Background]);
+            one.extend(delays);
+            one_rate += rate / 3;
+            let (delays, rate) = messages_beside_files(&config, &link, seed, &[Priority::Normal, Priority::Background]);
+            two.extend(delays);
+            two_rate += rate / 3;
+        }
+        one.sort_unstable();
+        two.sort_unstable();
+        let at = |delays: &Vec<u64>, percent: usize| delays[delays.len() * percent / 100];
+        let (one_p, two_p) = ([50, 95, 99].map(|percent| at(&one, percent)), [50, 95, 99].map(|percent| at(&two, percent)));
+        let close = one_p.iter().zip(two_p).all(|(&one, two)| two <= one + one / 5 + 10_000);
+        assert!(close && two_rate >= one_rate - one_rate / 20,
+            "{name}：一条文件 p50/p95/p99 {one_p:?} {one_rate} bit/s，两条大流 {two_p:?} {two_rate} bit/s");
+    }
+}
+
+/// 三档都一直写满时每一档都在前进，最高档占大头（2026-11-19：防饿死只记一个数时，让给中间档清不了零，之后一直让给中间档；
+/// 高档的流一直写满共用发送缓冲时，最低档连一个分片都写不进去，调度器给它留的那一份没东西可发）。
+#[test]
+fn every_priority_makes_progress_when_all_are_busy() {
+    let config = wide_config();
+    let mut pair = Pair::new(&config, path(20_000_000, 10_000), path(20_000_000, 10_000), 1);
+    let streams = [Priority::Interactive, Priority::Normal, Priority::Background].map(|priority| pair.a.open_stream(priority).unwrap());
+    let chunk = [3u8; 4096];
+    let mut read = [0usize; 3];
+    while pair.now < 3_000_000 {
+        for &stream in &streams {
+            while pair.a.send_stream(pair.now, stream, &chunk) == chunk.len() {}
+        }
+        for (index, &stream) in streams.iter().enumerate() {
+            read[index] += drain(&mut pair.b, pair.now, stream);
+        }
+        pair.advance();
+    }
+    let total: usize = read.iter().sum();
+    assert!(read[1] > 0 && read[2] > 0 && read[0] * 5 >= total * 4, "交互 / 普通 / 后台：{read:?}");
 }
 
 /// 不打乱先后的抖动线路（Wi-Fi 聚合、经 TCP 中转、VPN）上交互消息和文件一起发时，低排队模式的窗口只按最小往返算，
@@ -639,6 +705,49 @@ fn a_full_window_keeps_room_for_interactive_messages() {
     while sender.poll_transmit(0, &mut buffer).is_some() {}
     sender.send_stream(0, chat, &[7; 100]);
     assert!(sender.poll_transmit(0, &mut buffer).is_some());
+}
+
+/// 两条大流写满所有流共用的发送缓冲时，更急的流照样写得进去（2026-11-19：普通和后台各一条大流就能把交互流挡在缓冲外，
+/// 交互消息要等大流被确认才写得进，慢线路上是好几秒）。低档和同档的流不能借高档的份额，只能写进一个分片好让它也在前进；
+/// 多占的内存有上限。
+#[test]
+fn full_bulk_streams_leave_room_for_more_urgent_ones() {
+    let config = Config::default();
+    let per_stream = config.send_buffer_bytes;
+    let big = vec![3u8; per_stream];
+    // 共用缓冲满了以后，这条流只写得进一个分片。
+    let one_segment_only = |sender: &mut Connection, stream: u32| {
+        let first = sender.send_stream(0, stream, &big);
+        first > 0 && first <= config.max_packet_size && sender.send_stream(0, stream, &[1; 100]) == 0
+    };
+    // 后台加普通写满共用缓冲：交互流还能写，另一条后台流不能。
+    let mut sender = Connection::new(config.clone(), 0);
+    let (background, normal) = (sender.open_stream(Priority::Background).unwrap(), sender.open_stream(Priority::Normal).unwrap());
+    let (late_background, chat) = (sender.open_stream(Priority::Background).unwrap(), sender.open_stream(Priority::Interactive).unwrap());
+    assert_eq!(sender.send_stream(0, background, &big), per_stream);
+    assert_eq!(sender.send_stream(0, normal, &big), per_stream);
+    assert!(one_segment_only(&mut sender, late_background), "后台流借了高档的份额");
+    assert_eq!(sender.send_stream(0, chat, &[7; 200]), 200, "交互流被大流挡在缓冲外");
+    sender.check_invariants();
+    // 两条后台流写满：普通流还能写，普通流写满它的份额以后交互流仍能写。
+    let mut sender = Connection::new(config.clone(), 0);
+    let (one, two) = (sender.open_stream(Priority::Background).unwrap(), sender.open_stream(Priority::Background).unwrap());
+    let (normal, late_normal, chat) = (sender.open_stream(Priority::Normal).unwrap(), sender.open_stream(Priority::Normal).unwrap(),
+        sender.open_stream(Priority::Interactive).unwrap());
+    assert_eq!(sender.send_stream(0, one, &big) + sender.send_stream(0, two, &big), 2 * per_stream);
+    let normal_room = sender.send_stream(0, normal, &big);
+    assert!(normal_room > config.max_packet_size, "普通流被后台流挡在缓冲外");
+    assert!(one_segment_only(&mut sender, late_normal), "同档的流多占了份额");
+    assert_eq!(sender.send_stream(0, chat, &[7; 200]), 200, "交互流被大流挡在缓冲外");
+    while sender.send_stream(0, chat, &[7; 4096]) > 0 {}
+    sender.check_invariants();
+    let bound = 3 * per_stream + 5 * config.max_packet_size;
+    assert!(sender.buffered_bytes() <= bound, "多占的超出一条流的上限：{}", sender.buffered_bytes());
+    // 只有同一档的流时不多给份额：两条写满就满，第三条只写得进一个分片。
+    let mut sender = Connection::new(config.clone(), 0);
+    let streams: Vec<u32> = (0..3).map(|_| sender.open_stream(Priority::Normal).unwrap()).collect();
+    assert_eq!(sender.send_stream(0, streams[0], &big) + sender.send_stream(0, streams[1], &big), 2 * per_stream);
+    assert!(one_segment_only(&mut sender, streams[2]));
 }
 
 /// 交互消息要排在待重传的大量数据前面：丢掉的先补，新写的也不等。成片丢包时重传队列很长，排在后面要等很久。

@@ -66,6 +66,7 @@ import {
   BOT_GROUP_ASSISTANT_AVATAR, BOT_GROUP_ASSISTANT_NAME, botGroupAssistantClientId, botGroupCardTaskClientId, readBotGroupAssistantNotice,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments } from './botGroupChatService.js';
+import { groupTaskName } from './groupTaskNaming.js';
 import { readPersistedInputSenderTask, readPersistedReplyText } from './botGroupChatService.js';
 import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
 import { chatGroupMemberName, chatGroupOwnerName, botGroupExecutionFailureBatches, latestBotGroupMessage } from '@cindy/maker-shared/botGroupPresentation';
@@ -280,6 +281,8 @@ const contentText = (m: Message, forModel: boolean) => m.deleted ? '（消息已
 /** What a Bot reads: each attachment stays a `[附件: …]` line beside the text. */
 // A share's fallback is an old-client display only, never authoritative model context.
 const bodyText = (m: Message) => readBotGroupThreadShareCard(m) ? '' : contentText(m, true);
+const titleWords = (m?: Message) => m && !m.deleted && m.origin !== 'system'
+  ? m.content.filter(block => block.type === 'text').map(block => block.text).join(' ').trim() : '';
 /** What people read: attachments render from the media blocks (`messageViews`), not as text. */
 const displayText = (m: Message) => contentText(m, false);
 // The server makes a caption optional; an unnamed attachment still needs a visible name.
@@ -2871,6 +2874,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const first = delivered === undefined;
     return {
       // Keep the root, then the newest visible messages, when the shared attachment budget fills up.
+      rootTitleText: titleWords(root),
       attachmentSources: [...rootContext.included, ...replies.included.reverse()].filter(m => m.id !== quote?.messageId),
       heading: t(`bots.groupChat.assistant.${threadRootId ? first ? 'threadRecent' : 'threadNew' : first ? 'groupRecent' : 'groupNew'}`),
       background: [
@@ -2928,12 +2932,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Words in the Thread of a task card it posted go into that task.
       if (source.threadRootId && await runInCardTask(run, s, Promise.resolve(source))) return;
       const task = await assistantTasks.forRequest(s.room, () => running.get(execution.id) === run && !run.settlement, source.threadRootId ?? undefined,
-        source.authorId === selfId && !source.maskAttribution ? requestRepository(bodyText(source)) : null);
+        source.authorId === selfId && !source.maskAttribution ? requestRepository(bodyText(source)) : null, titleWords(source));
       if (!live()) throw new Error('STALE_EXECUTOR');
       const sessionId = task.sessionId;
       const threadRootId = source.threadRootId ?? undefined;
       const scope = threadRootId ?? 'main';
-      const { heading, background, attachmentSources } = await assistantRequestBackground(s, source, sessionId, task.delivered[scope]);
+      const { heading, background, attachmentSources, rootTitleText } = await assistantRequestBackground(s, source, sessionId, task.delivered[scope]);
       // Read only the directly quoted original through the room's authorized endpoint. Never
       // take media IDs from the quote snapshot, scan history or follow another quote from it.
       const quote = readBotGroupQuote(source.content);
@@ -2978,6 +2982,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         },
         onAccepted: async () => {
           if (!live()) throw new Error('STALE_EXECUTOR');
+          if (task.topicName && !run.accepted) deps.refineTopicTitle?.(sessionId, task.topicName.initialTitle, {
+            ...task.topicName.topic, text: rootTitleText || task.topicName.topic.text,
+          });
           run.accepted = true;
         } });
       if (!dispatched.ok) throw new Error(botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }));
@@ -3097,7 +3104,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           }
         }
         const threadRootId = run.plan || digest ? undefined : source?.threadRootId ?? undefined;
-        const lane = await deps.ensureLane({ botId: bot.id, groupId: s.room.id, title: s.room.name,
+        const participant = s.members.find(member => member.id === execution.bot_id)?.name || bot.displayName;
+        const subject = run.plan
+          ? run.plan.steps.find(step => step.position === execution.plan_step && step.botId === execution.bot_id)?.task || run.plan.request_text
+          : threadRootId ? titleWords(source) : undefined;
+        const purpose = digest ? t('bots.groupChat.mask.digestLabel')
+          : execution.mask_kind === 'reply' ? t('bots.groupChat.mask.title') : undefined;
+        const roomTitle = purpose ? `${purpose} · ${s.room.name}` : s.room.name;
+        const name = groupTaskName(roomTitle, participant, subject);
+        const lane = await deps.ensureLane({ botId: bot.id, groupId: s.room.id, ...name,
           ...(projectDir ? { projectDir } : {}),
           ...(folder.continueConversation && !run.plan ? { continueConversation: true } : {}),
           chatAccess: { mode: execution.access_mode, revision: execution.access_revision, maskOwnerId: execution.mask_owner_id },
@@ -3125,7 +3140,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           workspaces().save(s.room.id, settings);
         }
         await deps.syncLanePermission?.(lane.sessionId, bot.id);
-        return lane;
+        return { ...lane, name };
       })();
       const contextRead = (async () => {
         const history = await historyRead;
@@ -3417,6 +3432,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         },
         onQueued: async clientId => { run.sourceClientId ??= run.clientId; run.clientId = clientId; }, onAccepted: async () => {
           if (!current() || running.get(execution.id) !== run) { await deps.abortLane(lane.sessionId); throw new Error('STALE_EXECUTOR'); }
+          if (!run.accepted && lane.name.topic) deps.refineTopicTitle?.(lane.sessionId, lane.created ? lane.name.title : undefined, {
+            ...lane.name.topic, text: (!run.plan && titleWords(thread?.root)) || lane.name.topic.text,
+          });
           run.accepted = true;
         } });
       if (!dispatched.ok) throw new Error(botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }));

@@ -447,7 +447,8 @@ describe('bounded reconciliation read', () => {
     const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
     const get = h.handlers.get('local-db:sessions:get')!;
     const batch = h.handlers.get('local-db:sessions:get-many')!;
-    const expected = await get({}, 'target');
+    const { turnElapsedMs, ...expected } = await get({}, 'target') as Record<string, unknown>;
+    expect(turnElapsedMs).toBeNull();
     const result = await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:sessions:get-many' },
       () => batch({}, ['target', 'missing', 'target']));
     expect(result).toEqual([expected]);

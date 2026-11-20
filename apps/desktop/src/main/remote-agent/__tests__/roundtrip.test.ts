@@ -2442,6 +2442,53 @@ describe('shared startup lease budget', () => {
     expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
   });
 
+  // Unit regression through the real starter and authorization path. A restarted
+  // M can remain circuit-open through a 120s cooldown and a 30s probe RPC;
+  // the old 4s probe window stranded the input.
+  // Reconnect must reuse one grant, native history and target, never replay open/send.
+  it('resumes the original native history after its executor reconnects during backoff', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 300_000;
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    let online = false;
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === f.target && !online) throw Object.assign(new Error('restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const opening = f.open('historical', f.owner, 'm', 'native-only-on-m')
+      .then(handle => ({ handle }), error => ({ error }));
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'call')).toBe(false);
+    online = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const outcome = await opening;
+    expect(outcome).toHaveProperty('handle');
+    if (!('handle' in outcome)) return;
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.filter(call => call.op === 'open')).toEqual([expect.objectContaining({
+      device: f.target, payload: { json: expect.objectContaining({ options: expect.objectContaining({ resumeSessionId: 'native-only-on-m' }) }) },
+    })]);
+    expect(f.calls.some(call => call.op === 'call')).toBe(false);
+    await outcome.handle.close({ reason: 'navigation' });
+  });
+
+  it.each(['cancel', 'permission', 'link-generation', 'lease-expiry'] as const)('stops a delayed executor recovery after %s', async boundary => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
+    if (boundary === 'lease-expiry') f.state.duration = 2_000;
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === f.target) throw Object.assign(new Error('restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const opening = f.open('historical', f.owner, 'm', 'native-only-on-m').catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    if (boundary === 'cancel') cancelPendingRemoteStart('historical');
+    if (boundary === 'permission') guestPermission.epoch++;
+    if (boundary === 'link-generation') historyCloseEpoch.mockReturnValue(1);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(await opening).toBeInstanceOf(Error);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'call')).toBe(false);
+  });
+
   it('re-arms renewal after an online model change on a reused history route', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
     const first = await f.open('history-renew-model'); await first.close({ reason: 'navigation' });
@@ -3125,14 +3172,19 @@ describe('shared startup lease budget upload cancellation', () => {
   beforeEach(() => { payloadCompression.enabled = true; payloadCompression.paused = false; payloadCompression.calls = 0; payloadCompression.finish = undefined; });
   afterEach(() => { payloadCompression.enabled = false; payloadCompression.finish = undefined; });
 
-  it('allows the in-flight first chunk to return but sends no later upload or open after cancellation', async () => {
+  // Chunks overlap on the wire (pipelined upload): the opening window may already be in flight.
+  it('allows the in-flight chunks to return but sends no later upload or open after cancellation', async () => {
     const f = fixture(); f.hold();
     const starting = f.client.open('codex', f.payload); void starting.catch(() => undefined);
-    await flush(); expect(f.requests.map(request => request.op)).toEqual(['upload']);
+    await flush();
+    const inFlight = f.requests.length;
+    expect(inFlight).toBeGreaterThanOrEqual(1);
+    expect(inFlight).toBeLessThanOrEqual(2);
+    expect(f.requests.every(request => request.op === 'upload')).toBe(true);
     f.client.abandon('start-cancelled'); f.reply();
     await expect(starting).rejects.toThrow('REMOTE_AGENT_EXPIRED');
-    expect(f.requests.map(request => request.op)).toEqual(['upload']);
-    expect(f.requests[0]?.index).toBe(0);
+    expect(f.requests.map(request => request.op)).toEqual(Array(inFlight).fill('upload'));
+    expect(f.requests.map(request => request.index)).toEqual(Array.from({ length: inFlight }, (_, index) => index));
   });
 
   it('sends no first chunk if cancellation happens while gzip is pending', async () => {
@@ -3169,11 +3221,13 @@ describe('shared startup lease budget upload cancellation', () => {
     const rejected = expect(starting).rejects.toThrow('[LINK_NOT_OPEN]');
     await flush();
     expect(payloadCompression.calls).toBe(1);
+    const inFlight = f.requests.length;
     current = false;
     if (stage === 'gzip') payloadCompression.finish!();
     else f.reply();
     await rejected;
-    expect(f.requests.map(request => request.op)).toEqual(stage === 'gzip' ? [] : ['upload']);
+    expect(f.requests.map(request => request.op)).toEqual(stage === 'gzip' ? [] : Array(inFlight).fill('upload'));
+    if (stage === 'upload') expect(inFlight).toBeGreaterThanOrEqual(1);
     f.client.abandon('start-cancelled');
   });
 });

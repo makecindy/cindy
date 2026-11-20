@@ -51,6 +51,8 @@ vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null })
 vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
 // Card previews have their own regression suite; this suite preserves the message/source-label assertions.
 vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
+// Model selection has its own card regression; keep native catalogs out of this source-label test.
+vi.mock('@/plugins/PluginModelPicker', () => ({ PluginModelPicker: () => null }));
 
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));
@@ -344,6 +346,7 @@ vi.mock("@/session/messageActions", async (original) => ({
 
 import { i18n } from "@/i18n";
 import { MessageRenderer } from "@/session/MessageRenderer";
+import { writeClipboardText } from "@/session/messageActions";
 import { buildMobileMessageRenderItems } from "@/session/messageRenderModel";
 import { remoteSessionStore } from "@/session/remoteSessionStore";
 import type { RemoteMessage } from "@/session/types";
@@ -979,6 +982,28 @@ describe("table-heavy assistant replies", () => {
   const table = (rows: number) => ["| a | b | c |", "| --- | --- | --- |",
     ...Array.from({ length: rows }, (_, i) => `| ${i === 0 ? '甲春风乙' : `r${i}`} | x | y |`)].join("\n");
   const rich = "```cindy-ui\n" + JSON.stringify({ version: 1, seq: 1, op: "create", id: "h", kind: "heading", props: { text: "Mid" } }) + "\n```";
+
+  // Batfree feedback: native ranges stop at each table cell. The real message
+  // must expose an independent whole-table copy action; existing tests only
+  // exercised a cell's quote menu. Unit: prose + a 2x3 table + trailing prose,
+  // with formatted/empty cells, must copy all cells as TSV without surrounding prose.
+  it("copies every table cell while retaining local selection", async () => {
+    vi.mocked(writeClipboardText).mockResolvedValue(undefined);
+    const markdown = ["Before the table", "", "| Name | Value | Note |", "| --- | --- | --- |",
+      "| **甲春风乙** | `42` | |", "| [Beta](https://example.com) | 7 | Final |", "", "After the table"].join("\n");
+    const h = mount([{ ...msg("copy-table", markdown, { turnCompleted: true }), role: "assistant" }]);
+    try {
+      const copy = h.host.querySelector<HTMLElement>('[data-testid="message.markdownTableCopyButton"]');
+      expect(copy).not.toBeNull();
+      await act(async () => copy!.click());
+      expect(writeClipboardText).toHaveBeenLastCalledWith("Name\tValue\tNote\n甲春风乙\t42\t\nBeta\t7\tFinal");
+      expect(copy!.getAttribute('aria-label')).toBe(i18n.t('message.renderer.copyStateCopied'));
+      const cell = [...h.host.querySelectorAll<HTMLElement>(
+        '[data-testid="message.markdownTable"] [data-selectable="true"]',
+      )].find(node => node.textContent === '甲春风乙');
+      expect(cell).toBeDefined();
+    } finally { h.unmount(); }
+  });
 
   // PR #7723's >120-cell fallback removed partial selection and native menu actions.
   // Existing selectionQuote tests cover menu dispatch in isolation, not whether a large

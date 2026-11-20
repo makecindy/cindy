@@ -16,7 +16,6 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
-import WebSocket from 'ws';
 
 import {
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
@@ -38,7 +37,7 @@ import {
 import { getActiveAuthRealm, getAuthState, getCurrentUserId, getDeviceId } from '../authManager.js';
 import { getClientEndpointForRealm, loadClientEndpointsForRealm } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { deviceName } from './deviceName.js';
@@ -429,10 +428,7 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
       remoteControlEnabled: false,
       busy: false,
     }),
-    createWebSocket: async (url, headers) => new WebSocket(url, {
-      headers,
-      agent: await createOutboundHttpAgent(url),
-    } as WebSocket.ClientOptions),
+    createWebSocket: (url, headers) => openLinkWebSocket('device-link', url, { headers }),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),

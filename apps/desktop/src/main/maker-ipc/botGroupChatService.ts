@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { groupTaskName, type GroupTaskTopic } from './groupTaskNaming.js';
 import { messageSourceSenderFromMeta, parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import path from 'node:path';
 
@@ -93,7 +94,7 @@ type DispatchResult =
   | { ok: true; targetSessionId: string; wakeKind: string }
   | { ok: false; errorCode: string; message: string };
 
-type LaneResult = { ok: true; sessionId: string; replacedSessionId?: string } | { ok: false; errorCode: string; message: string };
+type LaneResult = { ok: true; sessionId: string; created?: boolean; replacedSessionId?: string } | { ok: false; errorCode: string; message: string };
 
 interface TurnExecution {
   instanceId: string;
@@ -136,6 +137,7 @@ export interface BotGroupChatServiceDeps {
     botId: string;
     groupId: string;
     title: string;
+    topic?: GroupTaskTopic;
     chatAccess?: import('../../shared/botGroupChat.js').ChatLaneAccess;
     plan?: { planId: string; workDir: string; sessionId?: string };
     threadRootId?: string;
@@ -145,6 +147,7 @@ export interface BotGroupChatServiceDeps {
     projectDir?: string;
     continueConversation?: boolean;
   }) => Promise<LaneResult>;
+  refineTopicTitle?: (sessionId: string, initialTitle: string | undefined, topic: GroupTaskTopic) => void;
   /** Live native context identity; absent/unknown means background must be restored. */
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
@@ -1035,7 +1038,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     mentioned: 'you' | 'everyone' | null,
     scope: DataOwnerBroadcastScope | undefined,
   ): Promise<TurnOutcome> => {
-    const lane = await deps.ensureLane({ botId: member.botId, groupId: group.id, title: group.name });
+    const lane = await deps.ensureLane({ botId: member.botId, groupId: group.id, ...groupTaskName(group.name, member.name) });
     if (round.cancelled || !scopeIsCurrent(scope)) return { kind: 'cancelled' };
     if (!lane.ok) return unavailableLaneOutcome(lane.errorCode, lane.message);
     // A lane must never act on a stale, looser permission profile than its Bot now has.
@@ -1613,7 +1616,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       const lane = await deps.ensureLane({
         botId: step.botId,
         groupId,
-        title: group.name,
+        ...groupTaskName(group.name, member.name, step.task),
         plan: { planId, workDir, sessionId: ownerSessionId },
       });
       if (!live()) return;

@@ -30,7 +30,7 @@ import { app, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool,
+import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, lastConfirmedSubscriptionModelsAt, refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
   refreshSubscriptionPoolClaudeModels, readSubscriptionPoolClaudeModels,
   resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
@@ -1065,6 +1065,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       ? hasConnectedSubscriptionPool(providerId, options) : codexAccountState(providerId).authenticated,
     subscriptionPoolConnected: (providerId, options) => hasConnectedSubscriptionPool(providerId, options),
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
+    subscriptionModelsConfirmedAt: lastConfirmedSubscriptionModelsAt,
     subscriptionReadUnavailable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
       && hasUnavailableSubscriptionPoolAccount(providerId),
     subscriptionAccountInfo: async (providerId) => {

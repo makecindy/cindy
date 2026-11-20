@@ -37,6 +37,8 @@ export interface UsageSegment {
   id?: string;
   /** Actual model for this request when the provider exposes it. */
   model?: string;
+  /** True only when the model was observed in a uniquely matched response. */
+  modelConfirmed?: boolean;
   /** Request price variant. Fast maps to the gateway priority tariff. */
   priceVariant?: 'standard' | 'priority' | 'fast' | 'batch' | 'ultrafast';
   /** 输入 token (不含 cache) */

@@ -440,6 +440,7 @@
       "filterEmptyCopy": "可于显示规制之「筛」中调之或重设。",
       "filterTeammatesHeading": "同伴",
       "filterAnySource": "全",
+      "filterHideAutomations": "隐自动之务",
       "filterHideAllTeammates": "皆不示",
       "filterSelectedTeammates": "已择 {{count}} 位",
       "inbox": {

@@ -235,8 +235,16 @@ export function createHostIpcProxy(deps: HostIpcProxyDeps): HostIpcProxy {
       case HOST_IPC_REJECTION.channelUnknown:
       case HOST_IPC_REJECTION.channelUnsupported:
         throw unsupported(entry);
-      case 'owner_runtime_unavailable':
+      case 'owner_runtime_unavailable': {
+        // A Host that can say why (its start was refused because a Cindy desktop app running on its
+        // own uses this data) adds a reason and a sentence; older Hosts send only `error`.
+        const why = reply.body as { reason?: unknown; message?: unknown } | null;
+        if (why?.reason === 'HOST_PROFILE_IN_USE_BY_DESKTOP') {
+          const detail = typeof why.message === 'string' && why.message.trim() ? why.message.trim() : 'a Cindy desktop app uses this data';
+          throw createIpcError('PRECONDITION_FAILED', `HOST_PROFILE_IN_USE_BY_DESKTOP_AT_START: ${detail}`);
+        }
         throw createIpcError('PRECONDITION_FAILED', 'The Host account is not ready');
+      }
       case 'unauthorized':
       case HOST_IPC_REJECTION.audienceDenied:
         throw createIpcError('PERMISSION_DENIED', 'The Host refused this window');

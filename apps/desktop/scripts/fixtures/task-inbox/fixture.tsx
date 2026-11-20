@@ -4,10 +4,12 @@ import { WorktreeProvider } from '../../../src/renderer/contexts/WorktreeContext
 import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import { ProjectsSection } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectsSection';
 import { useSidebarFilter } from '../../../src/renderer/features/cc-agent/hooks/useSidebarFilter';
+import { filterSidebarTasks } from '../../../src/renderer/features/cc-agent/lib/sidebarTaskFilters';
 import { groupSessions } from '../../../src/renderer/features/cc-agent/lib/projectGrouping';
 import { TaskInbox } from '../../../src/renderer/features/cc-agent/sidebar/TaskInbox';
 import { TaskListModeToggle } from '../../../src/renderer/components/sidebar/TaskListModeToggle';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
+import type { TeammateInboxEntry } from '../../../src/renderer/features/bots/teammateInbox';
 setDataOwnerGeneration('fixture', 1);
 const noop = () => {};
 const hidden = new Set<string>();
@@ -37,7 +39,7 @@ const sessions = [
   snoozedAt: id === 'later' ? new Date(now).toISOString() : null,
   snoozedUntil: id === 'later' ? new Date(now + 3600000).toISOString() : null,
   agentKind: 'codex',
-  pinnedAt: null,
+  pinnedAt: id === 'waiting' ? new Date(now).toISOString() : null,
   sdkSessionId: null,
   remoteHostId: null,
   deviceLinkDeviceId: null,
@@ -58,6 +60,21 @@ declare global {
 const replySessions = ctx.case === 'reply'
   ? [...sessions, ...[1, 2, 3, 4, 5].map((n) => ({ ...sessions[0], id: `note-${n}`, title: `待看的结果 ${n}` }))]
   : sessions;
+// One teammate conversation per inbox state; the idle one must not be listed.
+const noSnooze = { snoozedUntil: null, snoozedAt: null, userSendAt: null };
+const teammate = (id: string, name: string, status: TeammateInboxEntry['status'], extra: Partial<TeammateInboxEntry> = {}) => ({
+  key: `teammate:local:${id}`, name, status, snooze: noSnooze, sessionId: `chat-${id}`, activityAt: now, route: `/bots/${id}`,
+  bot: { id, name, avatar: '', avatarColor: 'teal', lastMessageAt: now },
+  ...extra,
+}) as TeammateInboxEntry;
+const teammates = ctx.case === 'teammates' ? [
+  teammate('pm', '小满', 'awaiting'),
+  teammate('qa', '阿澈', 'unread', { deviceLabel: '书房的电脑' }),
+  teammate('momo', '默默', 'running'),
+  teammate('older', '旧电脑上的伙伴', 'unread', { snooze: null, deviceLabel: 'Studio' }),
+  teammate('lulu', '露露', 'done', { snooze: { snoozedUntil: new Date(now + 7200000).toISOString(), snoozedAt: new Date(now).toISOString(), userSendAt: null } }),
+  teammate('idle', '闲着的伙伴', 'idle'),
+] : undefined;
 function Specimen() {
   const [items, setItems] = useState(replySessions);
   const [selected, setSelected] = useState<string>();
@@ -77,6 +94,7 @@ function Specimen() {
       <TaskInbox
         sessionVariant={ctx.case === 'list' ? 'list' : 'text'}
         sessions={items}
+        teammates={teammates}
         priorityContext={context}
         runningSessionIds={running}
         attachedSessionIds={new Set()}
@@ -115,7 +133,13 @@ function StructureSpecimen() {
     workingDir: '/workspace/Cindy',
     workspaceKind: 'project' as const,
   };
-  const projects = groupSessions([task]).projects;
+  const report: Session = { ...task, id: 'report', title: '每日自动巡检', source: 'scheduler' };
+  const teammate: Session = { ...task, id: 'teammate', title: '伙伴的例行整理', source: 'bot',
+    companion: { id: 'demo', role: 'routine', taskProjectDir: task.workingDir } };
+  const source = [task, report, teammate];
+  const allProjects = groupSessions(source).projects;
+  const projects = groupSessions(filterSidebarTasks(source, filter, new Map())).projects;
+  const [projectCollapsed, setProjectCollapsed] = useState(true);
   return (
     <div className="min-h-screen w-[320px] bg-sidebar text-foreground p-2">
       {/* Same placement as the sidebar's top chrome row (back / forward), right end. */}
@@ -126,12 +150,12 @@ function StructureSpecimen() {
         unclassified={[]}
         projects={projects}
         dialogues={[]}
-        inboxSessions={[task, ...sessions.slice(1)]}
-        allKnownProjects={projects}
+        inboxSessions={filterSidebarTasks([task, ...sessions.slice(1), report], filter, new Map())}
+        allKnownProjects={allProjects}
         allProjectKeysForOrder={projects.map((p) => p.projectKey)}
         filter={{ ...filter, groupBy: 'project', groupDevice: true, groupDialogue: true }}
-        collapsed={new Set(projects.map((p) => p.projectKey))}
-        isAllCollapsed
+        collapsed={new Set(projectCollapsed ? projects.map((p) => p.projectKey) : [])}
+        isAllCollapsed={projectCollapsed}
         priorityContext={priorityContext}
         runningSessionIds={runningSessionIds}
         attachedSessionIds={new Set()}
@@ -142,7 +166,7 @@ function StructureSpecimen() {
         onRename={noop}
         onTogglePin={noop}
         onScheduleAction={noop}
-        onToggleProject={noop}
+        onToggleProject={() => setProjectCollapsed(closed => !closed)}
         onToggleProjectPin={noop}
         onRenameProject={async () => {}}
         onRemoveFromSidebar={noop}
@@ -204,6 +228,7 @@ void mountPage({
         get: async (id: string) => sessions.find((s) => s.id === id),
         update: async (id: string, patch: Partial<Session>) => {
           document.documentElement.dataset.snoozedUntil = patch.snoozedUntil ?? '';
+          document.documentElement.dataset.snoozedSession = id;
           return { ...sessions.find((s) => s.id === id), ...patch };
         },
       },

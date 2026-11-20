@@ -1,28 +1,15 @@
 /**
  * CCAgentFeatureLayout
  * ---------------------------------------------------------------------------
- * CC Agent 系统（原 ChatSystem）主功能的 Feature Layout。
- *
- * 职责：
- *   1. 向 Shell 的 Sidebar 上半槽位注入 CC Agent 功能自己的内容
- *      （CCAgentSidebarUpper）
- *   2. 通过 <Outlet /> 包装本功能内的所有 View 路由
- *
- * 路由结构（二层路由的"功能内路由"层）：
- *   index            → CCAgentIndexRedirect  （默认 session 解析占位）
- *   :sessionId       → CCAgentSessionView    （具体 CCS 会话视图）
- *
- * 注意：这一层自身不消费 Shell 的宽度/折叠/底部用户信息区（那些都在
- * MainLayout + Sidebar Shell 里），但作为二级路由 layout 必须把 MainLayout
- * 下发的 Outlet context 原样透传给子路由（见下方 Outlet）——React Router 的
- * useOutletContext 只穿透最近一层 Outlet，不透传会让子路由（CCAgentSessionView
- * 等）断链拿不到右栏折叠态。
+ * 普通任务、伙伴私聊与群聊共用任务侧栏和分屏树。切换活动分栏时
+ * 保持其余聊天挂载，并把 MainLayout 的工具栏上下文透传给当前视图。
  */
 
 import { useEffect } from 'react';
 import { Outlet, useLocation, matchPath, useOutletContext } from 'react-router-dom';
 
 import { resolveAgentIslandVisibleSessionIdFromPath } from '@/lib/agentIslandVisibleSessionRoute';
+import { companionChatTarget } from '../bots/companionChatTarget';
 import { SplitGroup } from './SplitGroup';
 import { useRegisterCCAgentSidebar } from './useRegisterCCAgentSidebar';
 import { saveLastChatView, saveLastDocView } from './lib/lastViewStore';
@@ -64,7 +51,7 @@ export function CCAgentFeatureLayout() {
   } | null>();
   return (
     <SplitGroup
-      activeSessionId={resolveAgentIslandVisibleSessionIdFromPath(location.pathname) ?? undefined}
+      activeSessionId={resolveAgentIslandVisibleSessionIdFromPath(location.pathname) ?? companionChatTarget(location.pathname, location.search) ?? undefined}
     >
       <Outlet context={shellContext} />
     </SplitGroup>

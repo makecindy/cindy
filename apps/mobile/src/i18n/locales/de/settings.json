@@ -263,7 +263,7 @@
     "openUserAgreement": "Nutzungsvereinbarung öffnen",
     "appFilingNumber": "App-Registrierungsnummer",
     "analytics": "Nutzungsstatistiken",
-    "analyticsHint": "Hilft uns, App-Starts und die Nutzerbindung zu verstehen. Übermittelt Geräteinfos wie Modell, Betriebssystem und App-Version sowie eine Gerätekennung und nach der Anmeldung deine Konto-ID; niemals Unterhaltungen, Dateien oder Prompts.",
+    "analyticsHint": "Wenn du diese Option aktivierst, erfassen wir App-Starts und wiederkehrende Besuche mit einem Kontopseudonym und einer Gerätekennung. Das hilft uns, das Produkt zu verbessern. Für Zahlungen verwenden wir ein eigenes Pseudonym. Deine Chats, Dateien und Prompts sind in diesen Statistiken nicht enthalten.\nÄltere Daten enthalten die ursprünglichen Konto-IDs. Wer diese Daten einsehen kann, kann ein neues Pseudonym möglicherweise über dieselbe Gerätekennung einem Konto zuordnen.",
     "analyticsSaveFailed": "Diese Einstellung konnte nicht gespeichert werden und wird nach einem Neustart möglicherweise zurückgesetzt.",
     "analyticsReset": "Auf Standard zurücksetzen",
     "analyticsResetAction": "Zurücksetzen"

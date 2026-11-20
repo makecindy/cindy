@@ -2468,7 +2468,7 @@ describe('Chat Server result delivery and refresh', () => {
       await ask(5, '@Cindy please fix it');
       expect(fixture.requests.some(r => r.url.endsWith('/v1/executions/claim') && r.actor === cindyId)).toBe(true);
       expect(fixture.urls.some(url => url.includes('/mask/'))).toBe(false);
-      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Room', projectDir: null });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Group chat·Cindy · Room', projectDir: null });
       const [input] = dispatched();
       expect(input).toMatchObject({ targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
         message: `@Cindy please fix it\n\n${t('bots.groupChat.assistant.groupRecent')}\nAnn：The build is red again`,
@@ -2517,6 +2517,7 @@ describe('Chat Server result delivery and refresh', () => {
     // every Thread into the main task. Two roots + main are the minimal isolation matrix; restart
     // must retain the same bindings and watermarks rather than replay old mixed context.
     it('isolates main and Thread inputs and reuses each binding after restart', async () => {
+      deps.refineTopicTitle = vi.fn();
       const rootA = message(1, peerId, 'Topic A');
       const rootB = message(2, peerId, 'Topic B');
       history.push(rootA, rootB, message(3, peerId, 'A background', { threadRootId: rootA.id }),
@@ -2536,6 +2537,10 @@ describe('Chat Server result delivery and refresh', () => {
       const b = await send(6, 'Work B', rootB.id);
       const main = await send(7, 'Work main', null);
       expect(new Set([a.targetSessionId, b.targetSessionId, main.targetSessionId]).size).toBe(3);
+      expect(deps.refineTopicTitle).toHaveBeenCalledWith(a.targetSessionId, 'Group chat·Cindy · Work A',
+        { channel: 'Group chat', participant: 'Cindy', text: 'Topic A' });
+      expect(deps.refineTopicTitle).toHaveBeenCalledWith(b.targetSessionId, 'Group chat·Cindy · Work B',
+        { channel: 'Group chat', participant: 'Cindy', text: 'Topic B' });
       expect(main.targetSessionId).toBe('legacy-main');
       expect(a.message).toContain('A background');
       expect(a.message).not.toContain('Topic B');
@@ -2590,18 +2595,18 @@ describe('Chat Server result delivery and refresh', () => {
       deps.validateProjectDir = vi.fn(async (dir: string) => ({ ok: true as const, dir }));
       history.push(message(2, peerId, 'Old news'));
       await ask(3, 'first');
-      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: '/projects/cindy' });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Group chat·Cindy · Room', projectDir: '/projects/cindy' });
       await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Done' });
       history.push(message(4, cindyId, 'Done', { content: [{ type: 'text', text: 'Done' }, { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1, fallback: '',
         data: { groupId: roomId, executionId: request(3).id, sessionId: 'group-task-1', clientId: dispatched()[0]!.clientId } }] }));
       history.push(message(6, peerId, 'New news'));
       await ask(7, 'second');
-      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ sessionId: 'group-task-1', title: 'Room', projectDir: '/projects/cindy' });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ sessionId: 'group-task-1', title: 'Group chat·Cindy · Room', projectDir: '/projects/cindy' });
       expect(dispatched()[1]).toMatchObject({ targetSessionId: 'group-task-1', message: `second\n\n${t('bots.groupChat.assistant.groupNew')}\nAnn：New news` });
       await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[1]!.clientId, resultText: 'Done' });
       workspaceSettings.set(roomId, { projectDir: '/projects/chosen', plans: {} });
       await ask(8, 'third');
-      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: '/projects/chosen' });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Group chat·Cindy · Room', projectDir: '/projects/chosen' });
       expect(dispatched()[2]).toMatchObject({ targetSessionId: 'group-task-2' });
       expect(assistantStore.value[roomId]).toMatchObject({ sessionId: 'group-task-2', projectDir: '/projects/chosen', deliveredSeq: { main: '8' } });
     });
@@ -2611,7 +2616,7 @@ describe('Chat Server result delivery and refresh', () => {
       deps.findProjectDirsForRepo = vi.fn(async () => []);
       deps.executorProject = vi.fn(async () => '/buddy/cindy');
       await ask(5, 'Where are the docs?');
-      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: '/buddy/cindy' });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Group chat·Cindy · Room', projectDir: '/buddy/cindy' });
       expect(deps.executorProject).toHaveBeenCalledWith('cindy-default');
     });
 

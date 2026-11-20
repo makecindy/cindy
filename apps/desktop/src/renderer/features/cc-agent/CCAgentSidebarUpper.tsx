@@ -160,7 +160,7 @@ import { useOrcaWorkerAttentionWatcher } from './hooks/useOrcaWorkerAttentionWat
 import { usePublishedAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
-import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
+import { useSidebarFilter, useSidebarFilterGc, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
 import { useHiddenProjects, type UseHiddenProjectsReturn } from './hooks/useHiddenProjects';
 import {
   deviceLinkProjectKey,
@@ -179,7 +179,7 @@ import {
 import { projectDisplayLabelWithMachine } from './lib/remoteProjectIdentity';
 import { useSessionGroupArchive } from './hooks/useSessionGroupArchive';
 import { useBulkSessionArchive } from './hooks/useBulkSessionArchive';
-import { sessionActivityMs } from './lib/dateSessionGrouping';
+import { cutoffForLastActivity, filterSidebarTasks } from './lib/sidebarTaskFilters';
 import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
 import { observeSidebarTaskChanges } from './lib/sidebarTaskObserver';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
@@ -356,18 +356,6 @@ function basenameOfPath(p: string): string {
   return slash < 0 ? norm : norm.slice(slash + 1);
 }
 
-const LAST_ACTIVITY_DAY_COUNTS: Record<
-  Exclude<UseSidebarFilterReturn['lastActivity'], 'all'>,
-  number
-> = {
-  '1d': 1,
-  '3d': 3,
-  '7d': 7,
-  '30d': 30,
-};
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 type BulkSessionAction = 'archive' | 'delete';
 
 function RemoteSidebarLoadNotice({
@@ -437,13 +425,6 @@ function sameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean 
     if (!b.has(value)) return false;
   }
   return true;
-}
-
-function cutoffForLastActivity(
-  lastActivity: UseSidebarFilterReturn['lastActivity'],
-): number | null {
-  if (lastActivity === 'all') return null;
-  return Date.now() - LAST_ACTIVITY_DAY_COUNTS[lastActivity] * DAY_MS;
 }
 
 /* ============================== Root ============================== */
@@ -1640,12 +1621,14 @@ function ExpandedView({
   );
 
   const taskCreatorIndex = useTaskCreatorIndex();
-  const activityFilteredSessions = useMemo(() => {
-    const cutoff = cutoffForLastActivity(filter.lastActivity);
-    if (cutoff === null && filter.creators === 'all') return sidebarSessions;
-    return sidebarSessions.filter((s) => (cutoff === null || sessionActivityMs(s) >= cutoff)
-      && matchesTaskCreators(s, filter.creators, taskCreatorIndex));
-  }, [sidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
+  const { hideAutomations, creators, lastActivity } = filter;
+  const filterTaskSessions = useCallback(
+    (source: Session[]) => filterSidebarTasks(source, { hideAutomations, creators, lastActivity }, taskCreatorIndex),
+    [hideAutomations, creators, lastActivity, taskCreatorIndex],
+  );
+  const activityFilteredSessions = useMemo(
+    () => filterTaskSessions(sidebarSessions), [filterTaskSessions, sidebarSessions],
+  );
   const statusIndependentSidebarSessions = useMemo(() => {
     const scoped = selectVisibleSessions(allSessionsForAttention, remoteProjectSessions, selectedMachineId)
       .filter(session => !isOrcaWorkerSession(session)
@@ -1653,17 +1636,16 @@ function ExpandedView({
         && (!session.deviceLinkDeviceId || !isSharedTaskPeer(session.deviceLinkDeviceId)));
     return sidebarSessionsWithHiddenProjectsAsDialogues(scoped, hiddenProjectKeys, localPlatform);
   }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys, localPlatform]);
-  const inboxSourceSessions = useMemo(() => {
-    const cutoff = cutoffForLastActivity(filter.lastActivity);
-    return statusIndependentSidebarSessions.filter(session => (cutoff === null || sessionActivityMs(session) >= cutoff)
-      && matchesTaskCreators(session, filter.creators, taskCreatorIndex));
-  }, [statusIndependentSidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
+  const inboxSourceSessions = useMemo(
+    () => filterTaskSessions(statusIndependentSidebarSessions), [filterTaskSessions, statusIndependentSidebarSessions],
+  );
   // The inbox counts a task as a teammate's by the same test as the teammate filter.
   const isInboxTeammateTask = useCallback(
     (session: Session) => !matchesTaskCreators(session, 'none', taskCreatorIndex),
     [taskCreatorIndex],
   );
-  const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, false,
+  // Pins are shortcuts. Classify the task through its own project or dialogue in the inbox.
+  const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, true,
     undefined, localPlatform, undefined, projectAliasMembers);
 
   const activityFilteredPersistentLocalProjects = useMemo(
@@ -1740,8 +1722,10 @@ function ExpandedView({
   // 并非不存在;codex)。collapse 仍用机器过滤后的 activeWorkingDirs(collapseAll / isAllCollapsed
   // 针对当前可见项目),渲染也仍走机器过滤后的 allGroups / groups。
   const unfilteredProjectSessions = useMemo(
-    () => [...sessions, ...remoteProjectSessions].filter(passesOrcaAndStatus),
-    [sessions, remoteProjectSessions, passesOrcaAndStatus],
+    () => taskListMode === 'inbox'
+      ? projectAliasMembers.filter(s => !isOrcaWorkerSession(s) && s.status !== 'deleted')
+      : [...sessions, ...remoteProjectSessions].filter(passesOrcaAndStatus),
+    [taskListMode, projectAliasMembers, sessions, remoteProjectSessions, passesOrcaAndStatus],
   );
   const projectUniverse = useProjectGroups(
     unfilteredProjectSessions,
@@ -1852,20 +1836,9 @@ function ExpandedView({
     [collapse],
   );
 
-  /* ---- F-PJ-10: filter GC ----
-   * 等"至少 1 个 project 出现"再触发一次 filter.gc(activeWorkingDirs) 即可 ——
-   * 这一条件天然蕴含"sessions 已加载"。ref guard 保证只跑一次
-   * （ADR-6：避免循环依赖，GC 由编排层显式触发）。
-   */
-  const gcDoneRef = useRef(false);
-  useEffect(() => {
-    if (gcDoneRef.current) return;
-    if (projectUniverse.projects.length === 0) return;
-    // 用**全量**项目键 GC,不用机器过滤后的 activeWorkingDirs —— 否则某机器作用域下会把其它机器的
-    // 项目从已保存的项目过滤里误删(它们只是被隐藏、并非不存在)。
-    filter.gc(gcProjectKeys);
-    gcDoneRef.current = true;
-  }, [projectUniverse.projects.length, gcProjectKeys, filter]);
+  // GC uses the complete project catalogue for the current list mode, before
+  // machine/content filters, so temporarily hidden projects remain selected.
+  useSidebarFilterGc(taskListMode, gcProjectKeys, filter.gc);
 
   /* ---- F-PJ-10: 在 render 阶段把 filter.projects 应用到 ProjectNode 列表 ---- */
   // A teammate handed to another computer: its project here is hidden until it comes back.
@@ -2045,6 +2018,7 @@ function ExpandedView({
   // Group actions include pinned and content-filtered members;
   // allProjectGroups still respects device scope and task status.
   const dialogueActionSessions = allProjectGroups.dialogues;
+  const dialogueFilterCount = taskListMode === 'inbox' ? dialogueActionSessions.length : allGroups.dialogues.length;
 
   // 对话段排序状态提升到此处:DialogueSection(展开态)受控消费,rail 对话
   // 面板按同一排序渲染——否则折叠后面板的前 N 条/折叠溢出与展开态刚排好的
@@ -2189,20 +2163,19 @@ function ExpandedView({
   ]);
 
   const inboxSessions = useMemo(() => {
-    const pinnedRowIds = new Set(visiblePinnedProjects.flatMap(({ displaySessions }) =>
-      displaySessions.map(session => session.id)));
     const projects = visibleSidebarProjects(
       withoutTeammateProjectsElsewhere(inboxGroups.projects, teammatesElsewhere),
       hiddenProjectKeys, localPlatform,
     ).filter(project =>
       (filter.projectsAsSet === null || isTeammateProjectPath(project.workingDir)
         || projectFilterIncludes(filter.projectsAsSet, project.projectKey, localPlatform)));
-    return [
+    const scoped = [
       ...projects.flatMap(project => project.sessions),
       ...(filter.projectsAsSet === null || filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? inboxGroups.dialogues : []),
       ...(filter.projects === 'all' ? inboxGroups.unclassified : []),
-    ].filter(session => !pinnedRowIds.has(session.id) && (!vendorPredicate || vendorPredicate(session)));
-  }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform, visiblePinnedProjects,
+    ];
+    return vendorPredicate ? scoped.filter(vendorPredicate) : scoped;
+  }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform,
     filter.projectsAsSet, filter.projects, vendorPredicate]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
@@ -2283,7 +2256,7 @@ function ExpandedView({
       (device) => device.deviceId,
     ),
   );
-  const hasVisibleSidebarContent =
+  const hasTaskListContent =
     (deviceGroupingAvailable &&
       filter.groupDevice &&
       hasSettledOnlineDeviceSection(
@@ -2291,10 +2264,11 @@ function ExpandedView({
         selectedMachineId,
         unsettledRemoteDeviceIds,
       )) ||
-    visiblePinnedEntries.length > 0 ||
     visibleUnclassified.length > 0 ||
     visibleProjectsWithVendor.length > 0 ||
     visibleDialogues.length > 0;
+  const hasVisibleSidebarContent = visiblePinnedEntries.length > 0
+    || (taskListMode === 'inbox' ? inboxSessions.length > 0 : hasTaskListContent);
 
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorSessionId, setSelectionAnchorSessionId] = useState<string | null>(null);
@@ -3752,7 +3726,7 @@ function ExpandedView({
                 <MainListScopeHeader
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
+                  dialogueCount={dialogueFilterCount}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <RemoteSidebarLoadNotice
@@ -3767,7 +3741,7 @@ function ExpandedView({
                 <MainListScopeHeader
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
+                  dialogueCount={dialogueFilterCount}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
@@ -3777,7 +3751,7 @@ function ExpandedView({
                 <MainListScopeHeader
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
+                  dialogueCount={dialogueFilterCount}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <RemoteSidebarLoadNotice
@@ -3794,7 +3768,7 @@ function ExpandedView({
                 <MainListScopeHeader
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
+                  dialogueCount={dialogueFilterCount}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
@@ -3891,7 +3865,7 @@ function ExpandedView({
                   dialogues={visibleDialogues}
                   dialogueActionSessions={dialogueActionSessions}
                   allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
+                  dialogueCount={dialogueFilterCount}
                   allProjectKeysForOrder={gcProjectKeys}
                   filter={filter}
                   collapsed={collapse.collapsed}
@@ -3940,7 +3914,7 @@ function ExpandedView({
       <SidebarFilterPopover
         filter={filter}
         allKnownProjects={visibleProjectUniverse}
-        dialogueCount={allGroups.dialogues.length}
+        dialogueCount={dialogueFilterCount}
         // 与段头实例同一门控(详见 ProjectsSection.deviceGroupingAvailable)。
         hasRemoteDevices={deviceGroupingAvailable}
         contextMenuPos={organizeMenuPos}

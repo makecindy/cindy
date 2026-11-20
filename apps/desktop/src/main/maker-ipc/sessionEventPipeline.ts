@@ -55,6 +55,9 @@ export function handleSessionEvent(
   }
   observeBotLearningEvent(session, prepared.attributedEvent);
   const stream = persistSessionStreamEvent(deps, session, prepared);
+  // The existing durable row push carries ACP input patches to all clients. Broadcasting a
+  // second tool_use on the live stream would add a second card on older controllers.
+  if (stream.persistedOnly) return;
   const delivery = deliverSessionEvent(deps, session, prepared, stream);
   const terminal = finishSessionTerminalEvent(deps, session, prepared, delivery);
   recordSessionEventSnapshots(session, prepared);

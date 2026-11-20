@@ -3,7 +3,7 @@ import { TurnDispatchRejectedError, SUPERSEDE_ASYNC_QUESTIONS } from './agents/b
 import { Session } from './session.js';
 import type { AgentSessionHandle } from './agents/base-agent.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
-import type { AgentEvent, InteractionDecision, InteractionRequest, AskUserQuestionItem } from './types/events.js';
+import type { AgentEvent, InteractionDecision, InteractionRequest, AskUserQuestionItem, SendOrigin } from './types/events.js';
 import type { Logger } from './interfaces/logger.js';
 
 const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
@@ -11,7 +11,7 @@ const questions = [{ question: 'Which scope?', options: [{ label: 'Personal' }, 
 const answer: InteractionDecision = { kind: 'ask_user_question', answers: { 'Which scope?': 'Both' } };
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-async function setup(agentKind: 'claude-code' | 'pi' | 'codex') {
+async function setup(agentKind: 'claude-code' | 'pi' | 'codex', origin?: SendOrigin) {
   const queue = createAsyncQueue<AgentEvent>();
   let running = false;
   let nativeId = 0;
@@ -34,7 +34,7 @@ async function setup(agentKind: 'claude-code' | 'pi' | 'codex') {
   });
   const events: AgentEvent[] = [];
   session.onEvent((event) => events.push(event));
-  await session.send('Start independent work');
+  await session.send('Start independent work', { origin });
   return { session, handle, requests, resolvers, events,
     ask(items: AskUserQuestionItem[] = questions) {
       if (agentKind !== 'codex') return session.askUserQuestionAsync(items).request_id;
@@ -79,6 +79,22 @@ describe.each(['claude-code', 'pi', 'codex'] as const)('%s terminal-aligned asyn
       expect(s.session.manageAsyncUserQuestions({ action: 'list' }).questions).toHaveLength(1);
       s.resolvers[1]({ kind: 'ask_user_question', answers: { 'Still useful?': 'yes' } });
       await vi.waitFor(() => expect(s.handle.send).toHaveBeenCalledTimes(2));
+    } finally { await s.session.close(); }
+  });
+
+  // Unit regression: the session may have moved on by the time an App answers the card.
+  it('delivers a late answer with the originating turn identity', async () => {
+    const origin = { kind: 'user', surface: 'im' } as const;
+    const s = await setup(agentKind, origin);
+    const dispatch = vi.fn(async () => {});
+    s.session.setAsyncQuestionAnswerDispatcher(dispatch);
+    try {
+      const id = s.ask();
+      s.end();
+      await flush();
+      await s.session.send('another turn');
+      await s.session.submitAsyncQuestionAnswer(id, answer);
+      expect(dispatch).toHaveBeenCalledWith(expect.any(String), expect.any(AbortSignal), id, expect.any(String), origin);
     } finally { await s.session.close(); }
   });
 

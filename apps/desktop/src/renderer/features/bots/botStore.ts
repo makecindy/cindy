@@ -17,6 +17,7 @@ import {
   NEW_BOT_DEFAULT_HARNESS,
 } from '../../../shared/botDefaults';
 import { getBotLastReadAtMap, seedMissingBotReadState } from './botReadState';
+import { parseTeammateInboxSnooze, type TeammateInboxSnooze } from './remoteBotRoster';
 import { registerLoadedBotProfilesReader } from './botSessionOwners';
 import { canonicalBotSession } from './botSessionOwners';
 export { canonicalBotSession } from './botSessionOwners';
@@ -220,6 +221,8 @@ export interface BotProfile {
   lastMessageAt?: number | null;
   /** Who sent that message — lets the list read like a chat list, not a log. */
   lastMessageRole?: 'user' | 'assistant' | null;
+  /** Inbox snooze of the main conversation's Session; absent while there is no conversation. */
+  inboxSnooze?: TeammateInboxSnooze;
   createdAt: number;
   sessions: BotSessionProjection[];
 }
@@ -712,6 +715,7 @@ export function normalizeDbProfile(value: unknown): BotProfile | null {
       item.lastMessageRole === 'user' || item.lastMessageRole === 'assistant'
         ? item.lastMessageRole
         : null,
+    ...(parseTeammateInboxSnooze(item.inboxSnooze) ? { inboxSnooze: parseTeammateInboxSnooze(item.inboxSnooze) } : {}),
     createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
     sessions: Array.isArray(item.sessions)
       ? item.sessions.filter((s): s is BotSessionProjection => !!s && typeof s.id === 'string')
@@ -944,7 +948,7 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
         }),
   };
   const bot: BotProfile = {
-    id: `bot_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    id: `bot_${now}_${crypto.randomUUID()}`,
     templateId: input.templateId,
     name: input.name.trim() || 'New Bot',
     description: input.description.trim(),

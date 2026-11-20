@@ -1,8 +1,13 @@
+import { refineCreatedTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
+import { captureChannelAccount } from './openChannelSession';
+import { beginTemporaryImPermission } from './temporaryTurnPermission';
 import { imText } from './imText';
+import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
 import { getSessionRuntimeStartOverride } from '../../maker-ipc/sessionRuntimeControl';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import {
   createLocalImSource,
+  imChannelDisplayName,
   type ImContextSnapshot,
   type ImMessageOrigin,
 } from '../../../shared/imMessageSource';
@@ -114,6 +119,8 @@ import type {
 import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
+import { isPluginEngineKind } from '../../../shared/agentKindConversion';
+import { isPluginEngineTask, PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import { persistUserMessage } from '../messagePersistence';
 import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
@@ -139,6 +146,8 @@ import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../..
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
 import { peekGoalInactiveNote } from '../../goal-host/inactiveNote';
 import { isSilencedSchedulerTurn } from '../../scheduler-host/silent-output';
+import { captureImAccountGeneration, isImAccountGenerationCurrent } from '../accountBoundary';
+import { telegramQuestionOrigin } from '../../maker-ipc/telegramQuestionReply.js';
 import { isRelayedChannelTurnSource, type ChannelTurnSource } from '../../maker-ipc/channelTurnSignal';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
@@ -164,8 +173,7 @@ import {
   FBOT_DRAFT_TITLE,
   FBOT_TITLE_PREFIX,
   generateAndPersistFbotTitle,
-  generateImSessionTitleText,
-  persistGeneratedSessionTitle,
+  persistChannelSourceTitle,
 } from './fbotTitle';
 import { localTaskImagePath, rewriteTaskImageReferences, taskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import { materializeLocalMarkdownImageRefs, materializeLocalMarkdownImages } from './localMarkdownImages';
@@ -371,13 +379,31 @@ interface QueuedSend {
 
 type DetachDrainOutcome = 'rewire' | 'cancelled';
 
+/**
+ * 插件引擎任务第一期不接 IM 渠道(docs/plans/acp-plugin-bridge.md):接线、换绑与
+ * 读行入口都明确拒绝,不把 'acp' 当成内置引擎跑。
+ */
+const IM_CHANNEL_FEATURE = 'IM channels';
+
+/** A Maker session running on a built-in engine — the only kind an IM channel drives. */
+type BuiltinMakerSession = MakerSession & { agentKind: AgentKind };
+
+/** Refuses only plugin-engine sessions; every other session keeps its existing IM path. */
+function runsOnBuiltinEngine(session: MakerSession): session is BuiltinMakerSession {
+  return !isPluginEngineTask(session);
+}
+
+function refusePluginEngineRow(row: { agentKind: string }): void {
+  if (isPluginEngineKind(row.agentKind)) throw new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE);
+}
+
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
   preserveSessionConfig: boolean;
   /** Both cancel this channel's turn; only runtime disposal retires late replacements. */
   disposalIntent?: 'runtime' | 'observation';
-  /** Maker session (in-process). */
-  makerSession: MakerSession;
+  /** Maker session (in-process), always on a built-in engine (see IM_CHANNEL_FEATURE). */
+  makerSession: BuiltinMakerSession;
   /** 渠道 user id of the bot's owner — kept here so listeners can address replies. */
   userId: string;
   /** 当前 session 的受管工作目录；本地生成图片仅允许从这里物化。 */
@@ -432,6 +458,7 @@ interface SessionState {
    * 桌面输入等其它来源不回传；在该轮终态清除，避免沿用到下一轮。
    */
   relayedTurn: boolean;
+  replyRequesterIsOwner?: boolean;
   replyMediaRelease?: () => void;
 }
 
@@ -488,6 +515,8 @@ type DefaultRouteTargetResolution =
   | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: AgentKind; model: string } };
 
 export interface ImRunAgentTurnArgs {
+  /** Revalidate the ingress lease immediately before provider start, including internally queued sends. */
+  beforeProviderStart?: () => Promise<void>;
   sourceDescription?: string;
   /**
    * 本条消息的渠道来源事实。turnRunner 按 adapter 的展示渠道（飞书 / Lark …）
@@ -833,6 +862,7 @@ export function createTurnRunner(
     if (!row?.workingDir || row.status === 'deleted' || row.status === 'archived' || row.orcaRole === 'worker') {
       throw new Error('Notification target session is unavailable');
     }
+    refusePluginEngineRow(row);
     return {
       row: { id: row.id, agentKind: toCoreAgentKind(row.agentKind), workingDir: row.workingDir,
         model: row.model, effort: row.effort, permissionMode: row.permissionMode, fastMode: row.fastMode,
@@ -996,6 +1026,8 @@ export function createTurnRunner(
         .limit(1);
       const row = rows[0];
       if (row?.workingDir) {
+        // 接管到插件引擎任务:明确报错,不按 toCoreAgentKind 落成 Claude 去跑。
+        refusePluginEngineRow(row);
         return {
           row: {
             id: row.id,
@@ -1417,7 +1449,27 @@ export function createTurnRunner(
     // 是同一条边界被绕过, 而且主 turn 最终没被 provider 接受时照样会留下。
     // 宁可停在草稿标题。
     const titleFromText = args.protectedContent !== true;
-    if (titleFromText && target.attached && text.trim().length > 0) {
+    if (target.botOwned?.lane === 'channel' && (target.created || row.sdkSessionId == null) && titleFromText) {
+      const initial = adapter.sessions.defaultTitle(userId);
+      const label = imChannelDisplayName(adapter.messageSourceIm?.() ?? channel) ?? channel;
+      const lane = adapter.companionLane?.(userId);
+      const stableName = lane?.kind === 'group' && !lane.threadId ? args.channelNoteSource?.chatName : undefined;
+      if (stableName || adapter.sessions.skipOneshotTitleFor?.(userId)) {
+        startBackgroundTask(async () => {
+          try {
+            const owner = captureChannelAccount();
+            const title = stableName ? formatTaskTopicTitle(stableName, label)
+              : await adapter.sessions.resolveSessionTitle?.(userId, target.scopeKey);
+            owner();
+            if (title) await persistChannelSourceTitle(row.id, title, initial);
+          } catch (error) {
+            log.warn('Companion channel name unavailable', { errorName: error instanceof Error ? error.name : 'unknown' });
+          }
+        });
+      } else {
+        startBackgroundTask(async () => { await composeOrGenerateTitle(row.id, userId, target.scopeKey, text, label + ' · ', initial); });
+      }
+    } else if (titleFromText && target.attached && text.trim().length > 0) {
       startBackgroundTask(() =>
         maybeGenerateFbotTitleOnFirstMessage(row.id, text, {
           botContextId,
@@ -1430,7 +1482,6 @@ export function createTurnRunner(
       !target.notificationReply &&
       !target.botOwned &&
       titleFromText &&
-      text.trim().length > 0 &&
       (adapter.threadScoped
         ? target.created
         : adapter.sessions.skipOneshotTitleFor?.(userId) !== true &&
@@ -1440,11 +1491,14 @@ export function createTurnRunner(
       // threadScoped 新 thread 会话: 用首条消息生成正式标题(渠道前缀),
       // 完成后把 thread 名片卡升级为「{正式标题}」。
       // 非 threadScoped 渠道(feishu/discord, 一 (bot,user) 一行长期复用):
-      // 每条"新对话"的首条消息重新起名 —— sdkSessionId == null 即新上下文
-      // (首次建行 / /new 重置后), 标题跟随当前话题而不是永远停在第一次。
+      // 新上下文只允许替换本渠道的草稿标题；继续使用已有正式标题的任务保留原名。
       startBackgroundTask(() =>
-        maybeGenerateImSessionTitle(row.id, userId, target.scopeKey, text, threadHeaderCardId),
+        maybeGenerateImSessionTitle(row.id, userId, target.scopeKey, text, threadHeaderCardId,
+          row.initialTitle ?? adapter.sessions.defaultTitle(userId)),
       );
+    } else if (titleFromText && text.trim() && !target.notificationReply && !target.attached
+        && target.botOwned?.lane !== 'canonical') {
+      startBackgroundTask(async () => { await refineCreatedTaskTitle(row.id, text); });
     }
 
     // 入站非媒体文件此刻才确定归哪个任务(授权等早退都已过): 暂存的移入该任务的
@@ -1858,7 +1912,8 @@ export function createTurnRunner(
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.
-        origin: { kind: 'user', surface: 'im' },
+        origin: channel === 'telegram' && ownsChannelOutput(state) && !item.turn.notificationReply
+          ? telegramOriginForTurn(state, userId, item.turn.scopeKey, item.requesterIsOwner === true, effectiveTurnPolicy) : { kind: 'user', surface: 'im' },
         // The channel adapter and routing state live in Main. A symbol-keyed
         // context survives the in-process Session → Agent handoff but cannot be
         // fabricated by Renderer/device-link structured-clone input.
@@ -1870,35 +1925,11 @@ export function createTurnRunner(
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
         afterTurnReserved: async () => {
           if (!effectiveTurnPolicy) return;
-          const session = state.makerSession;
-          const previous = session.stablePermissionModeState;
-          // A retained policy is mandatory, regardless of channel or whether its
-          // requester is known. Explicit channel/companion exemptions were resolved
-          // above; never remove a mandatory policy just to admit Full access.
-          if (previous?.mode !== 'bypassPermissions') return;
-          if (!session.capabilities.setPermissionModeMidSession?.supported
-              || !session.capabilities.permissionModes?.some((mode) => mode.id === 'auto')
-              || !session.capabilities.turnPermissionPolicy?.supported?.supported
-              || session.capabilities.turnPermissionPolicy.unsupportedPermissionModes?.includes('auto')) return;
-
-          // Reservation prevents stealing another turn's runtime. Keep the existing
-          // host lease through background continuation AND asynchronous restoration.
-          // CAS protects user changes; the persisted task preference is never changed.
-          const release = session.acquireTurnLease();
-          const switching = session.setPermissionModeIfUnchanged(previous, 'auto');
-          const originalMode = previous.mode;
-          item.turn.hostTurnLeaseRelease = () => {
-            void switching.then(async (changed) => {
-              if (changed) {
-                await session.setPermissionModeIfUnchanged(
-                  { mode: 'auto', generation: previous.generation + 1 }, originalMode,
-                );
-              }
-            }).catch((err) => {
-              log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
-            }).finally(release);
-          };
-          await switching;
+          await beginTemporaryImPermission(state.makerSession, cleanup => {
+            item.turn.hostTurnLeaseRelease = cleanup;
+          }, err => {
+            log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
         },
         beforeProviderStart: async () => {
           const noticeSession = state.makerSession;
@@ -2259,6 +2290,7 @@ export function createTurnRunner(
       if (!row.workingDir) {
         throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} missing after deferred agent switch`);
       }
+      refusePluginEngineRow(row);
       const agentKind = toCoreAgentKind(row.agentKind);
       const startOverride = getSessionRuntimeStartOverride(sessionId, agentKind, row.agentDeviceId);
       hydrateSessionProvider(sessionId, startOverride.providerId === undefined ? row.providerId ?? null : startOverride.providerId);
@@ -2312,6 +2344,8 @@ export function createTurnRunner(
       throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} detached while preparing its runtime`);
     }
     if (current === previous) return;
+    // 延迟切换可能把任务换到了插件引擎:渠道不接,明确失败而不是继续驱动它。
+    if (!runsOnBuiltinEngine(current)) throw new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE);
 
     rebindSessionOutput(state, current, userId);
     wireSessionToIpcExternal(current);
@@ -2326,6 +2360,22 @@ export function createTurnRunner(
       throw cause instanceof SessionCreationCleanupPendingError
         ? cause : new SessionCreationCleanupPendingError({ cause });
     }
+  }
+
+  function telegramOriginForTurn(state: SessionState, userId: string, scopeKey: string | undefined, requesterIsOwner: boolean, policy?: TurnPermissionPolicy) {
+    const session = state.makerSession;
+    const account = captureImAccountGeneration();
+    const connected = im.getStatus?.();
+    return telegramQuestionOrigin((answerSession) => {
+      const status = im.getStatus();
+      if (account === null || !isImAccountGenerationCurrent(account) ||
+          answerSession !== session || state.makerSession !== session || sessionStates.get(session.id) !== state ||
+          !ownsChannelOutput(state) || state.userId !== userId || state.scopeKey !== scopeKey ||
+          connected?.kind !== 'connected' || status.kind !== 'connected' || status.appId !== connected.appId) return;
+      state.replyRequesterIsOwner = requesterIsOwner;
+      state.relayedTurn = true;
+      updateReplyMediaScope(state);
+    }, policy ? { session, policy } : undefined);
   }
 
   /**
@@ -2347,7 +2397,7 @@ export function createTurnRunner(
     state.replyMediaRelease = beginTelegramReplyMediaScope({
       sessionId: session.id,
       sessionInstanceId: session.instanceId,
-      scope,
+      scope: { ...scope, requesterIsOwner: state.replyRequesterIsOwner },
       isActive: () => sessionStates.get(session.id) === state &&
         state.makerSession === session && state.relayedTurn && state.queue.length === 0 &&
         im.getStatus().kind === 'connected' && scope.im.getBotId() === botId,
@@ -2355,7 +2405,7 @@ export function createTurnRunner(
   }
 
   /** Rebind observation without discarding accepted or queued IM messages. */
-  function rebindSessionOutput(state: SessionState, current: MakerSession, userId: string): void {
+  function rebindSessionOutput(state: SessionState, current: BuiltinMakerSession, userId: string): void {
     for (const unsubscribe of state.unsubscribers) {
       try {
         unsubscribe();
@@ -2632,6 +2682,8 @@ export function createTurnRunner(
       vendorOptions,
       resumeSessionId: row.sdkSessionId ?? undefined,
     });
+    // createSession 对已活着的同 id 实例直接复用;它若跑在插件引擎上,渠道不接线。
+    if (!runsOnBuiltinEngine(makerSession)) throw new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE);
 
     // 把 desktop 端的 IPC fan-out (broadcastToAllWindows + messagePersistBroadcaster
     // 的 assistant / tool_use / tool_result / thinking 落库 + 默认 interaction
@@ -2875,30 +2927,18 @@ export function createTurnRunner(
     }
   }
 
-  /**
-   * 标题拼装的公共路径: 渠道自定义拼装优先(飞书话题 lane → [飞书·{群名}·
-   * {话题简介}] {threadId}), 拼装不适用(飞书 DM)回落 fallbackPrefix +
-   * oneshot 简介。没有渠道拼装的渠道直接走 fallbackPrefix。
-   */
+  /** Add the channel and optional context to a single shared model completion. */
   async function composeOrGenerateTitle(
     sessionId: string,
     userId: string,
     scopeKey: string | undefined,
     text: string,
     fallbackPrefix: string,
+    initialTitle = FBOT_DRAFT_TITLE,
   ): Promise<string | null> {
     const composeTitle = adapter.sessions.composeGeneratedTitle;
-    if (!composeTitle) {
-      return generateAndPersistFbotTitle(sessionId, text, fallbackPrefix);
-    }
-    const generated = await generateImSessionTitleText(sessionId, text);
-    if (!generated) return null;
-    const title = await composeTitle(userId, scopeKey, generated, sessionId);
-    if (title) {
-      await persistGeneratedSessionTitle(sessionId, title);
-      return title;
-    }
-    return generateAndPersistFbotTitle(sessionId, text, fallbackPrefix);
+    return generateAndPersistFbotTitle(sessionId, text, fallbackPrefix, initialTitle,
+      composeTitle ? topic => composeTitle(userId, scopeKey, topic, sessionId) : undefined);
   }
 
   /**
@@ -2907,7 +2947,7 @@ export function createTurnRunner(
    *
    * 命名与渠道默认会话对齐: 有 composeGeneratedTitle 的渠道(feishu)走同一条
    * 拼装路径(话题 lane 与普通话题会话同名族), compose 不适用(DM)回落渠道
-   * generatedTitlePrefix([飞书·DM] {简介}); 其它渠道保持 'FBot · {简介}'。
+   * generatedTitlePrefix(飞书 · 主题); 其它渠道保持 'FBot · {简介}'。
    *
    * 用 drizzle 查 title 而不是从 row 里带 — row 来自 resolveRouteTarget 早一步,
    * 几十毫秒内 title 不会变, 但显式查一次更稳 (避免读到已被并发更新的旧值, 虽然
@@ -2978,7 +3018,7 @@ export function createTurnRunner(
 
   /**
    * 渠道默认(非接管)会话的标题生成 — 用首条消息 oneshot 起名(渠道前缀,
-   * 如 'Slack · ' / '[飞书·DM] ')。
+   * 如 'Slack · ' / '飞书 · ')。
    *   - threadScoped(slack): 新 thread 会话触发, 落库后把 thread 名片卡升级
    *     为正式标题;
    *   - 非 threadScoped(feishu/discord): 新上下文(建行 / /new 后)的首条
@@ -2991,6 +3031,7 @@ export function createTurnRunner(
     scopeKey: string | undefined,
     text: string,
     headerCardId: string | null,
+    initialTitle: string,
   ): Promise<void> {
     const threadUiPack = adapter.ui.thread;
     const configuredPrefix = adapter.sessions.generatedTitlePrefix;
@@ -3003,15 +3044,14 @@ export function createTurnRunner(
       return;
     const prefix = typeof configuredPrefix === 'function' ? configuredPrefix() : configuredPrefix;
     try {
-      // 渠道自定义拼装(feishu 话题 lane → [飞书·{群名}·{简介}] {threadId 后 6 位}):
-      // oneshot 只负责出「话题简介」文本, 完整标题由渠道按 lane 拼; compose
-      // 不适用(feishu DM)回落渠道前缀。无 compose 的渠道直接前缀 + 简介。
+      // The same completion supplies the subject for both the task and its IM card.
       const title = await composeOrGenerateTitle(
         sessionId,
         userId,
         scopeKey,
         text,
         prefix ?? FBOT_TITLE_PREFIX,
+        initialTitle,
       );
       if (!richIm || !title || !headerCardId || !threadUiPack) return;
       await richIm.updateInteractiveCard(headerCardId, {
@@ -4164,7 +4204,18 @@ export function createTurnRunner(
       await ensureStreamingHandle(turn);
     }
     const finalView = composeStreamingView(turn);
-    if (turn.streamingHandle) {
+    if (turn.streamingOutputInvalidated) {
+      // The original identity rejected this output; do not persist it under the current identity.
+    } else if (output.kind === 'rich-card' && output.commitFinal && turn.userMessageId) {
+      turn.streamingHandle?.close();
+      try {
+        await output.commitFinal({ userId, text: finalView, terminal: turn.terminalKind,
+          inputMessageId: turn.userMessageId, progressMessageId: turn.streamingHandle?.messageId,
+          mediaAbsPaths: turn.mediaAbsPaths, allowedFileRoots: turn.allowedFileRoots, threadTs: turn.scopeKey });
+      } catch (error) {
+        log.warn(`[${channel}/turn] durable final output failed: ${error instanceof Error ? error.message : 'unknown'}`);
+      }
+    } else if (turn.streamingHandle) {
       // 正常完成: 正文保持干净, 过程区不再丢弃 —— 交给渠道收成折叠的过程记录
       // (卡片渠道支持折叠; 不支持的 handle 忽略它)。空回复没有可挂记录的正文。
       const process =
@@ -4172,8 +4223,6 @@ export function createTurnRunner(
           ? buildActivityRecord(turn.presenter.activity, Date.now())
           : null;
       await finalizeTurnStream(turn, finalView.trim() ? finalView : '', process ?? undefined);
-    } else if (turn.streamingOutputInvalidated) {
-      // 原出站身份已失效：只完成收口，不能使用当前身份重发正文或附件。
     } else if (!finalView.trim() && turn.mediaAbsPaths.length === 0) {
       try {
         if (output.kind === 'chunked-text') {
@@ -4290,12 +4339,26 @@ export function createTurnRunner(
         supportsModelCommand: richIm !== null,
       } : undefined,
     );
-    if (turn?.streamingHandle) {
+    if (turn.streamingOutputInvalidated) {
+      // Error finals have the same identity boundary as successful finals.
+    } else if (output.kind === 'rich-card' && output.commitFinal && turn.userMessageId) {
+      const view = composeStreamingView(turn, true);
+      const errorLine = imText('imBot.text.shared.turn.error', { message: msg });
+      const text = view ? `${view}\n\n${errorLine}` : errorLine;
+      turn.streamingHandle?.close();
+      try {
+        await output.commitFinal({ userId, text, terminal: 'error', errorCode: turn.terminalErrorCode ?? 'agent_turn_error',
+          inputMessageId: turn.userMessageId, progressMessageId: turn.streamingHandle?.messageId,
+          mediaAbsPaths: turn.mediaAbsPaths, allowedFileRoots: turn.allowedFileRoots, threadTs: turn.scopeKey });
+      } catch (error) {
+        log.warn(`[${channel}/turn] durable final output failed: ${error instanceof Error ? error.message : 'unknown'}`);
+      }
+    } else if (turn?.streamingHandle) {
       const view = composeStreamingView(turn, true);
       const errorLine = imText('imBot.text.shared.turn.error', { message: msg });
       const body = view ? `${view}\n\n${errorLine}` : errorLine;
       await finalizeTurnStream(turn, body);
-    } else if (!turn.streamingOutputInvalidated) {
+    } else {
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
@@ -4918,8 +4981,11 @@ export function createTurnRunner(
 
   return {
     attachSessionOutput: (session, userId, route, source) => {
+      // 插件引擎任务不接 IM 渠道:不把它的输出转播到渠道。
+      if (!runsOnBuiltinEngine(session)) return;
       const existing = sessionStates.get(session.id);
       if (existing) {
+        existing.replyRequesterIsOwner = undefined;
         existing.relayedTurn = isRelayedChannelTurnSource(source);
         const userChanged = existing.userId !== userId;
         if (route?.companionChannel) {
@@ -4964,6 +5030,7 @@ export function createTurnRunner(
       const state = sessionStates.get(session.id);
       // An IM turn still in the queue owns whatever runs now; it is delivered once, as itself.
       if (state?.makerSession !== session || state.queue.length > 0) return;
+      if (source !== 'provider-wake') state.replyRequesterIsOwner = undefined;
       state.relayedTurn = isRelayedChannelTurnSource(source);
       updateReplyMediaScope(state);
     },
