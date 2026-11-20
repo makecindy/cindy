@@ -130,7 +130,7 @@ describe('native package Host tools', () => {
   it('discards an export if the caller is revoked while packing', async () => {
     const f = fixture(); f.ports.exportShare.mockImplementationOnce(async options => {
       await fs.writeFile(options.targetPath, 'package'); current = false;
-      return { status: 'ok', unpackedBytes: 7, filePath: options.targetPath, fidelity: 'full', missingTranscripts: [], mediaMissing: 0, mediaDropped: 0, orcaWorkers: 0 };
+      return { status: 'ok', unpackedBytes: 7, filePath: options.targetPath, fidelity: 'full', missingTranscripts: [], omittedCodexChildThreads: [], codexChildThreadCount: 0, mediaMissing: 0, mediaDropped: 0, orcaWorkers: 0 };
     });
     expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, plugin))
       .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
