@@ -178,7 +178,7 @@ export function createReadMessagesList(ports: LocalHistoryReadPorts) {
     const listed = await hydrateLegacyUserTurnCosts(restored.map(messageToCamelWithRowid));
     if (!outline) return listed;
     const stamps = new Map(orderedRows.map((row) => [row.id, (row as { historyContentStamp?: string }).historyContentStamp]));
-    return listed.map((row) => withHistoryArtifacts({ ...row, historyContentStamp: stamps.get(row.id) ?? undefined }));
+    return withHistoryArtifacts(listed.map((row) => ({ ...row, historyContentStamp: stamps.get(row.id) ?? undefined })));
   };
 }
 
@@ -257,7 +257,9 @@ export function createLocalHistoryViewReader(ports: LocalHistoryViewReaderPorts)
       if (!row) throwIpcError('NOT_FOUND', 'History range changed');
       const [restored] = ports.restoreTaskImages ? await ports.restoreTaskImages(imageDbClient, [row]) : [row];
       const message = messageToCamelWithRowid(restored);
-      return outline ? withHistoryArtifacts(message) : message;
+      if (!outline) return message;
+      const [outlined] = await withHistoryArtifacts([message]);
+      return outlined;
     },
   });
 }

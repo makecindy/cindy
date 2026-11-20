@@ -12,6 +12,19 @@ import type { DbClient } from '../../client/DbClient';
 import { captureMediaUserTurn, refreshMediaUserTurnCost } from '../../../usage/mediaTurnCost';
 import { readSessionCostDetails } from '../../../usage/sessionCostDetails';
 
+vi.mock('node:worker_threads', async (importOriginal) =>
+  (await import('./fixtures/historyCommandWorker')).mockHistoryCommandWorker(await importOriginal<typeof import('node:worker_threads')>()));
+vi.mock('../../../../shared/commandOutputPaths', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../shared/commandOutputPaths')>();
+  return {
+    ...actual,
+    extractCommandOutputPathCandidates(command: string) {
+      if (command.length > 8 * 1024 * 1024) throw new Error('Large history command scanned on the caller thread');
+      return actual.extractCommandOutputPathCandidates(command);
+    },
+  };
+});
+
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
   sqlite: null as Database.Database | null,
@@ -273,7 +286,9 @@ describe('local-db:messages:list cursor', () => {
     expect(await invoke('local-db:messages:view', { lazyDetails: true, workLines: true })).not.toEqual(page);
     expect(shapes.at(-1)?.fingerprints).not.toEqual(shapes.at(-2)?.fingerprints);
   });
-  it('keeps a command larger than the scan budget folded without losing its trailing artifact or full details', async () => {
+  // Unit IPC regression: the old outline found the tail of a 9 MiB command by
+  // blocking the caller thread. Exercise the same remote view and detail reads.
+  it('folds a command larger than the scan budget off-thread and keeps its artifact and full details', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
     const command = `echo '${'x'.repeat(9 * 1024 * 1024)}' > /work/trailing-report.txt`;

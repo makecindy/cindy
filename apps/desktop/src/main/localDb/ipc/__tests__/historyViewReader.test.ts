@@ -73,12 +73,14 @@ describe('host history view', () => {
       ...row(i + 1), content: 'thinking', agentMeta: { uuid: `sdk-${i}`, usage: { details: 'x'.repeat(9000) } },
     })), { ...row(1101, 'assistant'), agentMeta: { turnCompleted: true } }];
     const base = reader(source);
-    const outlined = reader(source.map(withHistoryArtifacts));
+    const outlined = reader(await withHistoryArtifacts(source));
     const api = createHistoryViewReader({ list: base.list, outline: outlined.list,
       hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
       anchor: async (_sid, id, outline) => {
         const found = source.find(r => r.id === id)!;
-        return outline ? withHistoryArtifacts(found) : found;
+        if (!outline) return found;
+        const [projected] = await withHistoryArtifacts([found]);
+        return projected;
       }, running: () => false });
     const page = await api.page('s', undefined, true);
     expect(page.hasMore).toBe(false);
