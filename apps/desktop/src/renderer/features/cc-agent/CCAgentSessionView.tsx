@@ -126,7 +126,11 @@ import {
   sessionSubscriptionPoolProvider,
 } from '@/components/new-chat/SessionSubscriptionAccount';
 import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, resolveModelGroup, useModelGroups, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
-import { beginAgentSwitchOperation, hasPendingAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
+import {
+  beginAgentSwitchOperation,
+  hasPendingAgentSendDispatch,
+  hasPendingAgentSwitchOperation,
+} from '@/lib/agentSwitchCoordinator';
 import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
@@ -2397,7 +2401,7 @@ function CCAgentSessionContent({
         ? (session?.agentDeviceId ?? undefined)
         : (pluginEngineSwitchIntent.agentDeviceId ?? undefined))
     : undefined;
-  const canBrowseRemotePluginEngines = pluginEngineSwitchEligible && !pluginEngineDeviceId
+  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId
     && (localPluginEngines.length > 0 || !!pendingPluginEngineDeviceId);
   const switchPluginEngineDevicesKey = canBrowseRemotePluginEngines
     ? JSON.stringify(selectableDevices
@@ -3817,9 +3821,9 @@ function CCAgentSessionContent({
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
   // set-model)；换到另一个引擎——从内置引擎或别的插件引擎——与内置引擎之间的切换一样登记意图，
   // 下一条消息发送时带着对话交接过去。和在选择器里点一行同一个顺序保证：已经点了发送就不再换。
-  const handlePluginEngineSwitchSelect = useCallback(async (selection: PluginEngineSelection) => {
-    if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return;
-    if (hasPendingAgentSendDispatch(sessionId)) return;
+  const handlePluginEngineSwitchSelect = useCallback(async (selection: PluginEngineSelection): Promise<boolean> => {
+    if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return false;
+    if (hasPendingAgentSendDispatch(sessionId) || hasPendingAgentSwitchOperation(sessionId)) return false;
     const finishSwitch = beginAgentSwitchOperation(sessionId);
     const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
     const switchTo = () => api.switchSessionAgent(
@@ -3833,12 +3837,11 @@ function CCAgentSessionContent({
         let revision: number | undefined;
         if (makerChatStore.getAgentSwitchIntent(sessionId)) {
           const result = await switchTo();
-          if (result.sameEngineSuperseded) return;
+          if (result.sameEngineSuperseded) return false;
           revision = result.sameEngineRevision;
           if (!pluginEngineDeviceId) makerChatStore.clearAgentSwitchIntent(sessionId);
         }
-        await handlePluginEngineModelSelect(selection.modelId, selection.effort, revision);
-        return;
+        return await handlePluginEngineModelSelect(selection.modelId, selection.effort, revision);
       }
       // 主进程先广播意图(sessions:patched)再回包，选择器随广播显示「下条：」。
       await switchTo();
@@ -3850,11 +3853,13 @@ function CCAgentSessionContent({
             ?? t('newChat.pluginEngines.defaultModel'),
         }), { duration: 4000 });
       }
+      return true;
     } catch (err) {
       // 插件停用、卸载或不可用时主进程给出的说明直接展示；带错误码的按既有文案。
       toast.error(extractIpcError(err)
         ? t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.agentSwitch.failed' }))
         : err instanceof Error && err.message ? err.message : t('newChat.chatInput.agentSwitch.failed'));
+      return false;
     } finally {
       finishSwitch();
     }
@@ -3906,7 +3911,7 @@ function CCAgentSessionContent({
     return {
       engines: switchablePluginEngines,
       active,
-      onSelect: (selection) => { void handlePluginEngineSwitchSelect(selection); },
+      onSelect: handlePluginEngineSwitchSelect,
       readCatalogue: readSessionPluginEngines,
     };
   }, [pluginEngineSwitchEligible, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,

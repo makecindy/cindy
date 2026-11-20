@@ -99,6 +99,10 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 vi.mock('@/state/deviceLinkModelMirror', () => ({ useDeviceLinkModelMirrorVersion: () => 0 }));
+vi.mock('@/hooks/useDevicesProviders', () => {
+  const directories = new Map();
+  return { useDevicesProviders: () => directories };
+});
 
 import { ModelSelector, ModelSelectorContent } from '../ModelSelector';
 import { PermissionSelector } from '../PermissionSelector';
@@ -111,7 +115,13 @@ import {
 } from '@/lib/pluginEngineSelection';
 import { engineIconKindOf } from '@/components/sidebar/VendorIcon';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { findPluginEngine, resetPluginEnginesStoreForTests, useRemotePluginEngines } from '@/hooks/usePluginEngines';
+import {
+  findPluginEngine,
+  hasRemotePluginEngineSubscribers,
+  resetPluginEnginesStoreForTests,
+  useDevicesPluginEngines,
+  useRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
 import { PLUGIN_ENGINES_INVOKE, type PluginEngineView } from '../../../../shared/pluginEngines';
 
 const modes: PluginEngineView['permissionModes'] = [
@@ -352,6 +362,92 @@ describe('plugin engines in the new-task picker', () => {
     });
     expect(await screen.findByRole('listbox', { name: 'Models' })).toBeTruthy();
     expect(readCatalogue).toHaveBeenCalledTimes(1);
+  });
+
+  // Unified selector §1.2: clicking an offered remote engine waits for host admission before
+  // closing. A slower failure leaves the same list available for a retry (jsdom unit).
+  it('keeps the picker open while a remote choice is pending or fails, then closes on success', async () => {
+    let finish!: (accepted: boolean) => void;
+    const onSelect = vi.fn()
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }))
+      .mockResolvedValueOnce(true);
+    const remote = { ...dsh, deviceId: 'studio', deviceName: 'Studio' };
+    render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-5',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: 'anthropic',
+        onProviderChange: vi.fn(),
+        onUnifiedSelect: vi.fn(),
+        vendorKey: 'cc',
+        remoteAgent: undefined,
+        triggerVariant: 'settings',
+        unifiedPanel: true,
+        pluginEngines: { engines: [remote], active: null, onSelect, readCatalogue: vi.fn() },
+      }),
+    );
+    await act(async () => { fireEvent.click(screen.getByRole('button')); });
+    const group = () => screen.getByRole('group', { name: 'DeepSeek Harness · Studio' });
+    const row = () => within(group()).getByRole('option', { name: /Default model/ });
+    fireEvent.click(row());
+    fireEvent.click(row());
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(onSelect).toHaveBeenCalledWith({ providerId: remote.providerId, modelId: 'default', deviceId: 'studio' });
+    await act(async () => { finish(false); });
+    expect(group()).toBeTruthy();
+    await act(async () => { fireEvent.click(row()); });
+    expect(screen.queryByRole('group', { name: 'DeepSeek Harness · Studio' })).toBeNull();
+  });
+
+  // The reconnect hook uses hasRemotePluginEngineSubscribers to decide whether a device needs an
+  // automatic list. A mounted picker candidate reads only when opened (engineering §8.3, unit).
+  it('loads remote picker candidates on demand without registering them for reconnect prefetch', async () => {
+    const deviceId = 'picker-candidate';
+    const invoke = vi.fn(async () => [dsh]);
+    vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+    try {
+      const picker = renderHook(() => useDevicesPluginEngines([deviceId]));
+      expect(hasRemotePluginEngineSubscribers(deviceId)).toBe(false);
+      expect(invoke).not.toHaveBeenCalled();
+      await act(async () => { picker.result.current.read(); });
+      expect(picker.result.current.catalogues.get(deviceId)).toEqual([dsh]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Browsing the task computer from a remote plugin engine must explicitly relocate when a
+  // local built-in model is selected, even when the panel starts by showing the task computer.
+  it('returns to the task computer when selecting a local model from an active remote engine', async () => {
+    const onRelocate = vi.fn(async () => true);
+    const remote = { ...dsh, deviceId: 'studio', deviceName: 'Studio' };
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'default',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: remote.providerId,
+        onProviderChange: vi.fn(),
+        vendorKey: 'cc',
+        actualRoute: true,
+        sessionEngineFilter: { currentAgent: 'claude-code', onCrossEngineSelect: vi.fn() },
+        remoteAgent: { devices: [{ deviceId: 'studio', name: 'Studio' }], selectedDeviceId: 'studio', onRelocate },
+        pluginEngines: {
+          engines: [remote],
+          active: { providerId: remote.providerId, modelId: 'default', deviceId: 'studio' },
+          onSelect: vi.fn(),
+        },
+      }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('option', { name: /Opus 5/ }));
+    });
+    expect(onRelocate).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'anthropic', modelId: 'claude-opus-5', agentDevice: null,
+    }));
   });
 
   // 生产入口与可观察结果：remotePluginEngineChoices + ModelSelectorContent；本机未装该插件时不展示远端共享插件引擎；

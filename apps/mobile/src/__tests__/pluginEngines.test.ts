@@ -26,6 +26,7 @@ import {
   getCachedPluginEngines,
   loadPluginEngines,
   normalizePluginEngines,
+  pluginEngineExecutionDeviceId,
   pluginEngineSessionCapabilities,
   setCachedPluginEngines,
   type MobilePluginEngine,
@@ -194,6 +195,20 @@ describe('the pending engine switch the computer projects', () => {
     // Without the engine identity an 'acp' intent is not an intent at all.
     expect(sessionAgentSwitchIntentPatch({ targetAgentKind: 'acp', model: 'default', providerId: 'openai' }))
       .toEqual({ agentSwitchIntent: null, pluginEngineSwitchIntent: null });
+  });
+
+  // The store receives a scoped ACP intent over the existing task patch. The picker must
+  // distinguish another computer from an explicit return home or a legacy omitted device.
+  it.each([
+    [{ agentDeviceId: 'studio' }, 'studio'],
+    [{ agentDeviceId: null }, null],
+    [{}, 'original'],
+  ] as const)('keeps the execution computer for %j', (location, expectedDeviceId) => {
+    const { pluginEngineSwitchIntent } = sessionAgentSwitchIntentPatch({
+      targetAgentKind: 'acp', model: 'deepseek-v4', providerId: DSH, ...location,
+    });
+    expect(pluginEngineSwitchIntent).toEqual({ providerId: DSH, model: 'deepseek-v4', ...location });
+    expect(pluginEngineExecutionDeviceId('original', pluginEngineSwitchIntent)).toBe(expectedDeviceId);
   });
 });
 
