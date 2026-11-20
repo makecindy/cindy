@@ -460,6 +460,24 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     return result;
   };
 
+  function captureCompanionMemoryAccess(context: LiziMcpSessionContext) {
+    const id = context.sessionId;
+    const live = id && getTaskActionSession(id);
+    const author = live && live.projectCompanion;
+    if (!id || !author || context.hostCaller || context.remoteHostId
+      || context.mcpCallerAttested !== true || context.mcpCallerKind !== 'root'
+      || !context.sessionInstanceId || live.instanceId !== context.sessionInstanceId) return null;
+    const input = getSessionInputProvenance(id).input;
+    if (!input || !isLocalProjectCompanionInput(id)) return null;
+    const assertCurrent = async () => {
+      const profile = await verifyProjectCompanion(id, author);
+      if (!profile.memory || getTaskActionSession(id) !== live || !isLocalProjectCompanionInput(id)
+        || input.clientId !== getSessionInputProvenance(id).input?.clientId)
+        throw new Error('Companion memory unavailable for this input');
+    };
+    return { id, live, author, input, assertCurrent };
+  }
+
   const providers = createLiziMcpProviders({
     // 先传完整内置列表；按会话启停由下面的 isEnabled 包装处理。
     enabled: BUILTIN_LIZI_MCP_IDS,
@@ -777,27 +795,25 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      canUseProjectCompanionMemory: async context => {
+        const access = captureCompanionMemoryAccess(context);
+        if (!access) return false;
+        await access.assertCurrent();
+        return true;
+      },
       projectCompanionMemory: (context, request) => withAccountDataAccess(context.sessionId, async assertAccount => {
-        const id = context.sessionId;
-        const live = id && getTaskActionSession(id);
-        const author = live && live.projectCompanion;
-        if (!id || !author || context.hostCaller || context.remoteHostId
-          || context.mcpCallerAttested !== true || context.mcpCallerKind !== 'root'
-          || !context.sessionInstanceId || live.instanceId !== context.sessionInstanceId)
-          throw new Error('No active project conversation partner');
-        const input = getSessionInputProvenance(id).input;
+        const access = captureCompanionMemoryAccess(context);
+        if (!access) throw new Error('No active project conversation partner');
+        const { id, live, author, input } = access;
         const assertAccess = async () => {
           await assertAccount();
-          const profile = await verifyProjectCompanion(id, author);
-          if (!profile.memory || getTaskActionSession(id) !== live || !isLocalProjectCompanionInput(id)
-            || !input || input.clientId !== getSessionInputProvenance(id).input?.clientId)
-            throw new Error('Companion memory unavailable for this input');
+          await access.assertCurrent();
         };
         await assertAccess();
         const service = getBotMemoryService();
         let result: unknown;
         if (request.action === 'remember') {
-          if (!isActiveInputOwnerAuthored(id) || !input?.authoredText?.includes(request.ownerRequest) || live.stablePlanModeState?.enabled)
+          if (!isActiveInputOwnerAuthored(id) || !input.authoredText?.includes(request.ownerRequest) || live.stablePlanModeState?.enabled)
             throw new Error('An explicit owner request to remember this across projects is required');
           result = await service.rememberPreference(author.botId, request, assertAccess);
         } else if (request.action === 'read') {

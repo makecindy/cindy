@@ -1,6 +1,6 @@
 import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
-import { registerProjectCompanionMemory, type ProjectCompanionMemoryCallback } from './xdt-helper/project_companion_memory.js';
+import { PROJECT_COMPANION_MEMORY_TOOL, registerProjectCompanionMemory, type ProjectCompanionMemoryCallback } from './xdt-helper/project_companion_memory.js';
 import { registerSessionToolCatalogTools, type SessionToolCatalogCallbacks } from './xdt-helper/session_tool_catalog.js';
 import { registerTerminalTools, type TerminalToolCallbacks } from './xdt-helper/terminal.js';
 import { registerFileTools, type FileToolCallbacks } from './xdt-helper/files.js';
@@ -294,6 +294,7 @@ function toolAllowed(
   allow: HelperSurfaceAllow,
   tool: { name: string; category: string },
 ): boolean {
+  if (tool.name === PROJECT_COMPANION_MEMORY_TOOL) return allow.tools?.has(tool.name) === true;
   if (!allow.categories) return true;
   return allow.categories.has(tool.category) || allow.tools?.has(tool.name) === true;
 }
@@ -301,7 +302,7 @@ function toolAllowed(
 function registerListToolsEntry(
   server: McpServer,
   registry: XdtHelperToolRegistry,
-  allowedSurface: () => Promise<HelperSurfaceAllow>,
+  allowedSurface: (toolName?: string) => Promise<HelperSurfaceAllow>,
   sessionCtx: XdtHelperMcpSessionCtx,
   sendToSessionScope: string,
 ): void {
@@ -310,7 +311,7 @@ function registerListToolsEntry(
     D_LIST_TOOLS,
     LIST_TOOLS_INPUT,
     async ({ category, query, key, name }) => {
-      const allowed = await allowedSurface();
+      const allowed = await allowedSurface(name);
       if ([query, key, name, category].filter(value => value !== undefined).length > 1)
         return errorPayload('INVALID_ARGS', 'query、key、name、category 只能选一种查询。');
       if (query || key) {
@@ -389,10 +390,10 @@ function registerCallToolEntry(
     getHostCaller: () => import('./types.js').LiziMcpSessionContext['hostCaller'];
     authorizeCall?: ToolCallAuthorizer;
   },
-  allowedSurface: () => Promise<HelperSurfaceAllow>,
+  allowedSurface: (toolName?: string) => Promise<HelperSurfaceAllow>,
 ): HostToolRuntime['call'] {
   const call: HostToolRuntime['call'] = async (name, args, signal) => {
-    const allowed = await allowedSurface();
+    const allowed = await allowedSurface(name);
     const definition = registry.get(name);
     if (definition && !toolAllowed(allowed, definition)) {
       return errorPayload(
@@ -529,6 +530,7 @@ export interface XdtHelperMcpDeps {
   sessionControl?: Omit<SessionControlDeps, 'getSessionContext'>;
   sessionToolCatalog?: SessionToolCatalogCallbacks;
   projectCompanionMemory?: ProjectCompanionMemoryCallback;
+  canUseProjectCompanionMemory?: (context: import('./types.js').LiziMcpSessionContext) => Promise<boolean>;
   /**
    * Session handoff 回调。host 注入后, send_to_session 工具注册到 handoff 类目(走
    * call_tool);不注入则工具不出现。此工具是 skill(如 maker-github-issue)做跨会话
@@ -636,7 +638,7 @@ export function createXdtHelperMcpServer(
 
   const registry = new XdtHelperToolRegistry();
   const none: HelperSurfaceAllow = { categories: new Set() };
-  const allowedSurface = async (): Promise<HelperSurfaceAllow> => {
+  const allowedSurface = async (toolName?: string): Promise<HelperSurfaceAllow> => {
     const context = resolveLiziMcpSessionContext(sessionCtx);
     const sessionId = context.sessionId;
     const remoteBotOnly = !!context.remoteHostId && context.agentKind !== 'pi';
@@ -661,6 +663,11 @@ export function createXdtHelperMcpServer(
       return allow(new Set([...categories, 'bots']));
     }
     if (surface === 'restricted') return none;
+    if (surface === 'default' && !context.remoteHostId && !context.hostCaller && deps.projectCompanionMemory
+      && (!toolName || toolName === PROJECT_COMPANION_MEMORY_TOOL)
+      && await deps.canUseProjectCompanionMemory?.(context).catch(() => false)) {
+      return { categories: defaultCategories, tools: new Set(['list_agents', PROJECT_COMPANION_MEMORY_TOOL]) };
+    }
     return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
   };
 
