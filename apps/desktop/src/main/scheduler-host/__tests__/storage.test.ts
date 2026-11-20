@@ -148,7 +148,7 @@ describe('scheduleToCamel', () => {
 describe('scheduleCreateToRow', () => {
   // Unit: preserve the three location states across storage and partial edits.
   it.each([undefined, '', 'shared:owner'])('round-trips Agent location %j without changing prior fields', (modelAgentDeviceId) => {
-    const original = baseSchedule({ modelAgentDeviceId, modelAgentKind: 'codex', model: 'remote-model', providerId: 'remote-provider' });
+    const original = baseSchedule({ inheritedProjectDir: '/repo', workingDir: '/checkout', modelAgentDeviceId, modelAgentKind: 'codex', model: 'remote-model', providerId: 'remote-provider' });
     const row = scheduleCreateToRow(original);
     const renamed = scheduleToCamel({ ...row, ...schedulePatchToRow({ name: 'renamed' }) } as ScheduleRowLike);
     expect(renamed).toMatchObject({ ...original, name: 'renamed' });

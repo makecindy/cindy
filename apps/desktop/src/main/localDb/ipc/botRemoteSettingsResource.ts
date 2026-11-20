@@ -1,5 +1,6 @@
 import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
-import { normalizeBotModelChain } from '../../../shared/botModelChain.js';
+import { normalizeBotModelChain, type BotModelRoute } from '../../../shared/botModelChain.js';
+import type { ModelGroupsConfig } from '../../../shared/modelGroups.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { RemoteActionDescriptor, RemoteActionInvokeRequest, RemoteActionInvokeResponse, RemoteLocalizedText, RemoteResource } from '@cindy/device-link';
 import type { getBotRemoteSettingsSource } from './bots.js';
@@ -20,6 +21,10 @@ export interface BotRemoteSettingsDeps {
   lifecycle(botId: string, operation: 'restart' | 'delete' | 'resume', confirmName: string | undefined, guard: () => Promise<void>): Promise<{ warnings?: string[] }>;
   skills(botId: string): Promise<Array<{ slug: string; name: string; description: string; updatedAt: string | number }>>;
   directHistory?(botId: string): Promise<string>;
+  /** This computer's model groups, offered in the model picker of the controller (model-groups.md §6.2). */
+  modelGroups?(): ModelGroupsConfig;
+  /** Fill a chosen group's saved model with its current pick before saving. */
+  fillModelGroups?(chain: BotModelRoute[]): Promise<BotModelRoute[]>;
   now?: () => number;
 }
 const text = (fallback: string, cn: string, tw: string, ja: string, ko: string, additionalTranslations: Record<string, string> = {}): RemoteLocalizedText =>
@@ -112,6 +117,11 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
     const resource = botRemoteResourceFromSource(source);
     resource.revision = settingsRevision(settings);
     const actions: RemoteActionDescriptor[] = [];
+    // Older controllers ignore the extra field and keep showing the saved model of a group entry.
+    const modelGroupsData = () => {
+      const groups = deps.modelGroups?.();
+      return groups?.routes.length ? { modelGroups: groups } : {};
+    };
     const form = (operation: Operation, fields: RemoteActionDescriptor['fields'], values: Record<string, unknown>) => {
       // A file-imported personality can exceed the portable editor's limit. Never expose a
       // truncated draft as editable: retaining the original is more important than a save button.
@@ -124,7 +134,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
       actions.push({ id, label: copy[operation], fields,
         ...(operation === 'profile' && preparing ? { disabled: true } : {}),
         ...(operation === 'permissions' ? { confirmation: { title: copy.permissions, body: copy.permissionWarning, confirmLabel: copy.save } } : {}) });
-      return { id: operation, primitive: 'form', title: copy[operation], fallbackMarkdown: operation === 'models' ? settings.modelChain.map(route => [route.model, route.providerId, route.harness, route.effort, `Fast: ${route.fastMode}`].filter(Boolean).join(' · ')).join('\n') : copy[operation].fallback, data: { actionId: id, values, ...(operation === 'models' ? { acceptsModelSelection: true } : {}) } };
+      return { id: operation, primitive: 'form', title: copy[operation], fallbackMarkdown: operation === 'models' ? settings.modelChain.map(route => [route.model, route.providerId, route.harness, route.effort, `Fast: ${route.fastMode}`].filter(Boolean).join(' · ')).join('\n') : copy[operation].fallback, data: { actionId: id, values, ...(operation === 'models' ? { acceptsModelSelection: true, ...modelGroupsData() } : {}) } };
     };
     resource.blocks = [
       form('profile', [{ id: 'name', kind: 'text', label: copy.name, required: true }, { id: 'description', kind: 'multiline', label: copy.description }, { id: 'identity', kind: 'multiline', label: copy.identity }], { name: source.name, description: source.description, identity: settings.identity }),
@@ -227,6 +237,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         try { value = JSON.parse(string('modelChain')); } catch { throwIpcError('INVALID_PARAMS', 'Invalid model chain'); }
         chain = normalizeBotModelChain(value);
         if (!Array.isArray(value) || !chain.length || chain.length !== value.length || value.some(route => !['claude', 'codex', 'pi'].includes(route?.harness))) throwIpcError('INVALID_PARAMS', 'Invalid model chain');
+        if (deps.fillModelGroups) { chain = await deps.fillModelGroups(chain); deps.assertOwner(grant.owner); }
       }
       // The retired task model fields (`taskFollowsPrimary`, `taskModel`) of an older controller are
       // accepted and ignored; sent alone they change nothing and are refused as an empty change.

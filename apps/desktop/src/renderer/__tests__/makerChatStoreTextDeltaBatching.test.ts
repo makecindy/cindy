@@ -556,6 +556,16 @@ describe('makerChatStore text delta batching', () => {
     } finally { unsubscribe(); }
   });
 
+  it('preserves provider guidance when a terminal event has the generic turn-failed reason', () => {
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, vi.fn());
+    try {
+      const message = JSON.stringify({ error: 'future_code', message: 'Choose a smaller file.' });
+      onEvent?.({ sessionId: SESSION_ID, event: { type: 'error', source: 'claude-code',
+        data: { isTerminal: true, message, reason: 'turn-failed' } } });
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).error).toBe(message);
+    } finally { unsubscribe(); }
+  });
+
   // #8147 follow-up: a recreated renderer gets history + projection, not the old
   // terminal event. The exact row ID must reach light subscribers (unit).
   it('restores the active error row ID from a snapshot without replaying its terminal event', () => {

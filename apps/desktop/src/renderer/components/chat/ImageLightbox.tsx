@@ -42,6 +42,7 @@ import { usePreviewFocusReturn } from './PreviewChrome';
  *   `data-gallery-active` 定位，细节见 `collectGallery` / `resolveStartIndexInFull`。
  */
 
+import { saveImageAs } from './DownloadImageMenuItem';
 import { useImageClipboard } from './useImageClipboard';
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -1239,17 +1240,8 @@ function ImageLightboxContent({
       if (strokesRef.current.length > 0) {
         const { blob } = await materializeAnnotatedImage();
         saveUrl = await blobToDataUrl(blob);
-      } else if (
-        /^data:image\//i.test(currentSrc) &&
-        !/^data:image\/[a-z0-9+.-]+;base64,/i.test(currentSrc)
-      ) {
-        // main 的 save-as 只认无参数的 `data:image/...;base64,` 形式:URL-encoded
-        // 或带 MIME 参数(`;charset=utf-8` 等)的 data: 先经字节层归一化(字节层
-        // 保证输出无参数 mime),否则按钮可见却必抛 INVALID_PARAMS(review P2)。
-        const { base64, mimeType } = await loadImageSourceBase64(currentSrc);
-        saveUrl = `data:${mimeType};base64,${base64}`;
       }
-      const res = await window.electronAPI.saveMediaAs({ url: saveUrl });
+      const res = await saveImageAs(saveUrl);
       // 用户在系统对话框里取消不是错误,也不需要 toast。
       if (!res.canceled) toast.success(t('chat.media.imageSaved'));
     } catch (err) {

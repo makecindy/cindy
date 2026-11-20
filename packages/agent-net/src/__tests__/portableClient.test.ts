@@ -39,12 +39,15 @@ it('sends the App label in portable presence and accepts additive directory meta
     expect(uplink.devices[0].app).toBe('cindy');
   } finally { uplink.close(); }
 });
-function fixture(complete = false, kind: 'portable' | 'node' = 'portable', requestFetch?: typeof fetch, assertCurrent = () => {}) {
+function fixture(complete = false, kind: 'portable' | 'node' = 'portable', requestFetch?: typeof fetch, assertCurrent = () => {}, direct = false) {
   const identity = generateIdentity('media-controller'), { bootstrap } = createPrivateNetwork('Media cancellation', identity);
   let upstream!: AbortSignal, source!: ReadableStreamDefaultController<Uint8Array>;
   let noteRead!: () => void;
   const reading = new Promise<void>(resolve => { noteRead = resolve; });
   const fetchResponse: typeof fetch = async (_url, init) => {
+      if (direct && String(_url).startsWith('https://relay.example.test')) return Response.json({ request: {
+        method: 'GET', url: 'https://storage.example.test/object', headers: {}, expiresAt: Date.now() + 600_000,
+      } }, { headers: { 'x-agent-net-media-transfer': 'direct-v1' } });
       upstream = init!.signal as AbortSignal;
       return new Response(new ReadableStream<Uint8Array>({ start(controller) {
         source = controller;
@@ -63,7 +66,7 @@ function fixture(complete = false, kind: 'portable' | 'node' = 'portable', reque
   const command = vi.fn(async <T = unknown>(value: unknown): Promise<T> => ((value as { op: string }).op === 'mediaOpen'
     ? { id: 1, size: 0, encryptedSize: HEADER, header: '', headerSha256: '0'.repeat(64) } : true) as T);
   const engine = { command: command as NativeEnginePort['command'], destroy: async () => undefined };
-  return { api, engine, reading, signal: () => upstream, stop() { try { source.error(new Error('fixture cleanup')); } catch {} } };
+  return { api, engine, reading, signal: () => upstream, push(bytes: Uint8Array) { source.enqueue(bytes); }, finish() { source.close(); }, stop() { try { source.error(new Error('fixture cleanup')); } catch {} } };
 }
 
 it.each(['portable', 'node'] as const)('cancels a %s native range read after Fetch has already returned its headers', async kind => {
@@ -88,6 +91,45 @@ it.each(['portable', 'node'] as const)('keeps the %s media deadline armed while 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(value.signal().aborted).toBe(true);
     expect(await outcome).toBeInstanceOf(Error);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { value.stop(); await outcome; }
+});
+
+// #10142 review: real native range consumer on both client transports. Unit tier,
+// fake clock + Web Streams: existing stalled-body tests missed steady slow bytes
+// and direct storage. Three header chunks over 80 seconds are the smallest input.
+const mediaRoutes = (['portable', 'node'] as const).flatMap(kind => [false, true].map(direct => ({ kind, direct })));
+it.each(mediaRoutes)('keeps $kind media alive on slow bytes (direct=$direct)', async ({ kind, direct }) => {
+  vi.useFakeTimers();
+  const value = fixture(false, kind, undefined, undefined, direct);
+  const outcome = readNativeMedia(value.api, value.engine, 'unit-object', '0'.repeat(64), async () => undefined).catch(error => error);
+  try {
+    await value.reading;
+    value.push(new Uint8Array(1));
+    await vi.advanceTimersByTimeAsync(40_000);
+    value.push(new Uint8Array(1));
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(value.signal().aborted).toBe(false);
+    value.push(new Uint8Array(HEADER - 2)); value.finish();
+    expect(await outcome).toMatchObject({ size: 0 });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { value.stop(); await outcome; }
+});
+
+it.each(mediaRoutes)('expires $kind media after no new bytes (direct=$direct)', async ({ kind, direct }) => {
+  vi.useFakeTimers();
+  const value = fixture(false, kind, undefined, undefined, direct);
+  const outcome = readNativeMedia(value.api, value.engine, 'unit-object', '0'.repeat(64), async () => undefined).catch(error => error);
+  try {
+    await value.reading;
+    await vi.advanceTimersByTimeAsync(40_000); value.push(new Uint8Array(1));
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(value.signal().aborted).toBe(false);
+    value.push(new Uint8Array(0));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(value.signal().aborted).toBe(true);
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(value.engine.command).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   } finally { value.stop(); await outcome; }
 });

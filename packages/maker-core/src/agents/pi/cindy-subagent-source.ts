@@ -1127,6 +1127,18 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
     try { chmodSync(permissionFile, 0o600); } catch (err) { /* best effort on Windows */ }
     mkdirSync(childConfigHome, { recursive: true, mode: 0o700 });
     copyFileSync(join(configHome, 'models.json'), join(childConfigHome, 'models.json'));
+    // Keep the parent's native shell choices, never its managed/plugin settings.
+    const shellSettings = {};
+    try {
+      const settings = JSON.parse(readFileSync(join(configHome, 'settings.json'), 'utf8'));
+      for (const key of ['shellPath', 'shellCommandPrefix']) {
+        const value = settings && settings[key];
+        if (typeof value === 'string' && value.trim()) shellSettings[key] = value;
+      }
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+    writePrivateJson(join(childConfigHome, 'settings.json'), shellSettings);
     // Freeze the same learned rules as models.json for durable children.
     const childCacheRules = join(childConfigHome, 'pi-cache-compatibility.json');
     try {

@@ -1346,7 +1346,7 @@
       },
       "checkCase": false,
       "forbidden": {},
-      "note": "Directory 用「目录」（现状 96:4），Folder 用「文件夹」（37:20），两个英文词在中文里也分开。**本条刻意不设 forbidden**：英文侧自己就在一句话里混用二者（\"not a folder. Choose a project directory.\"、\"re-select the working directory and wait for the folder badge\"），而条件禁用是句子级匹配，区分不了句内哪个中文词对应哪个英文词——实测 4 处命中全是假阳性，那 4 条中文其实译得完全正确。要真正管住这对词，得先清理英文侧的 path / folder / directory 混用。此条目保留为文档指引，供人查阅。",
+      "note": "Directory 用「目录」（现状 96:4），Folder 用「文件夹」（37:20），两个英文词在中文里也分开。**本条刻意不设 forbidden**：英文侧自己就在一句话里混用二者（\"not a folder. Choose a project directory.\"、\"re-select the working directory and wait for the folder badge\"），而条件禁用是句子级匹配，区分不了句内哪个中文词对应哪个英文词——实测 4 处命中全是假阳性，那 4 条中文其实译得完全正确。要真正管住这对词，得先清理英文侧的 path / folder / directory 混用。此条目保留为文档指引，供人查阅。德语：面向用户的文件夹操作用 Ordner（主流），技术路径与复合词（Arbeits-/Projekt-/Datenverzeichnis）用 Verzeichnis；同一句指同一对象时不要混用（2026-11-20 复核，改 4 条）。",
       "alsoAllowed": {
         "es": [
           {
@@ -3579,7 +3579,6 @@
         "desktop:login.errors.INVALID_BIND_TICKET",
         "desktop:login.errors.INVALID_LOGIN_TICKET",
         "desktop:newChat.atMention.typeToSearchFiles",
-        "desktop:newChat.chatInput.agentSwitch.confirmation.description",
         "desktop:newChat.collaboration.archiveWorkerConfirmDesc",
         "desktop:newChat.collaboration.stopConfirmDesc",
         "desktop:settings.about.debugLogDescription",
@@ -4022,6 +4021,25 @@
       "note": "任务列表底部已归档任务分区的名称，沿用归档生命周期。"
     },
     {
+      "id": "task-snooze-indefinite",
+      "status": "proposed",
+      "en": "Indefinitely",
+      "translations": {
+        "zh-CN": "无限期",
+        "zh-TW": "無限期",
+        "ja": "無期限",
+        "ko": "무기한",
+        "fr": "Indéfiniment",
+        "es": "Indefinidamente",
+        "de": "Unbefristet",
+        "pt-PT": "Indefinidamente",
+        "pt-BR": "Indefinidamente",
+        "zh-Hant-x-lzh": "無期",
+        "zh-Hans-x-lzh": "无期"
+      },
+      "note": "稍后处理的无限期选项。没有到期时间，手动取回或新输入（含自动化触发）提前唤回。"
+    },
+    {
       "id": "task-snoozed",
       "status": "proposed",
       "en": "Snoozed",
@@ -4427,17 +4445,6 @@
         "ko": "내 브라우저 로그인 사용"
       },
       "note": "设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。"
-    },
-    {
-      "id": "vision-bridge",
-      "status": "proposed",
-      "en": "Vision Bridge",
-      "translations": {
-        "zh-CN": "视觉桥",
-        "ja": "ビジョンブリッジ",
-        "ko": "비전 브리지"
-      },
-      "note": "让纯文本模型获得看图能力的能力名:把图片交给外部多模态后端转成文字描述,再喂给文本模型。zh-CN 取「视觉桥」而非「视觉桥梁/图像转文字」——「桥」强调其桥接定位,且与英文 Vision Bridge 一一对应。设置页 visionBridge 分节、docs/vision-bridge-design.md、日志 note 使用。先登记为 proposed,待产品术语评审后固化。"
     },
     {
       "id": "voice-dictionary",

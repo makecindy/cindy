@@ -2,6 +2,7 @@ const standby = vi.hoisted(() => ({ publish: vi.fn(), refresh: vi.fn(), flush: v
 vi.mock('../providerShareAvailability.js', () => ({ publishShareAvailability: standby.publish, refreshStandbyGuests: standby.refresh }));
 vi.mock('../providerShareAvailabilityUsage.js', () => ({ flushStandbyUsage: standby.flush, importStandbyUsage: standby.usage }));
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -14,7 +15,15 @@ import type { ProviderShareManagementCommand } from '../../../shared/providerMan
 import type { ProviderUsageHistoryView } from '../../../shared/providerShare';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
+const fileRename = vi.hoisted(() => vi.fn<typeof import('node:fs/promises').rename>());
+vi.mock('node:fs/promises', async importOriginal => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
+  rename: fileRename,
+}));
+const nativeReplace = vi.hoisted(() => vi.fn<(source: string, destination: string) => Promise<void>>());
+vi.mock('../../windowsAtomicRename.js', () => ({ atomicReplaceWindowsDirectoryEntry: nativeReplace }));
 const state = vi.hoisted(() => ({ owner: 'owner-a', boundaryPending: false }));
+const saveDialog = vi.hoisted(() => vi.fn());
 const windowRouting = vi.hoisted(() => ({
   windows: [] as BrowserWindow[], focusMain: vi.fn(), notifications: [] as EventEmitter[],
 }));
@@ -24,26 +33,26 @@ const received = vi.hoisted(() => ({ shares: [] as ProviderShareReceived[], read
 vi.mock('electron', () => ({
   app: { getPath: () => 'test-provider-share-user-data' },
   ipcMain: { handle: vi.fn() },
-  BrowserWindow: { getAllWindows: () => windowRouting.windows },
+  dialog: { showSaveDialog: saveDialog },
+  BrowserWindow: { getAllWindows: () => windowRouting.windows, fromWebContents: () => ({}) },
   Notification: class extends EventEmitter {
     static isSupported() { return true; }
     constructor() { super(); windowRouting.notifications.push(this); }
     show() { this.emit('show'); }
   },
 }));
-const api = vi.hoisted(() => ({ createLink: vi.fn(), approve: vi.fn(), reject: vi.fn(), setMember: vi.fn() }));
+const api = vi.hoisted(() => ({ createLink: vi.fn(), approve: vi.fn(), reject: vi.fn(), setMember: vi.fn(), listOwned: vi.fn() }));
 const host = vi.hoisted(() => ({
   refresh: vi.fn(), snapshot: vi.fn(), quiet: vi.fn(), active: vi.fn(), decision: vi.fn(), member: vi.fn(),
   complete: vi.fn(), changed: vi.fn(),
 }));
-const accessMigration = vi.hoisted(() => ({ ids: vi.fn(), keep: vi.fn() }));
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
 const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberQuery: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
   enqueueDirectCleanup: vi.fn(), listPendingDirectCleanup: vi.fn(), acknowledgeDirectCleanup: vi.fn(),
   actual: null as ReturnType<typeof import('../providerShareUsageStore').createProviderShareUsageStore> | null }));
-const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
+const memberNotes = vi.hoisted(() => ({ read: vi.fn(), readStrict: vi.fn(), set: vi.fn() }));
 const reshareList = vi.hoisted(() => vi.fn());
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
@@ -62,15 +71,14 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => state.boundaryPending,
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: state.owner, ownerGeneration: 1 }),
 }));
-vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
+vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device', getAuthState: () => ({ isAuthenticated: true }) }));
 vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
 }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true,
-  onRemoteProviderAccessChanged: () => () => undefined,
-  sharedProviderIdsForRevert: accessMigration.ids, keepSharedProvidersOpen: accessMigration.keep }));
+  onRemoteProviderAccessChanged: () => () => undefined }));
 vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: remember }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
@@ -94,13 +102,29 @@ vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
   providerUsageLocalDay: () => '2026-10-17',
 }));
 vi.mock('../settings-store.desktop.js', () => ({ onDeviceLinkSettingChanged: () => () => undefined, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
-vi.mock('../providerShareApi.js', () => ({
-  providerShareApi: api,
-  fetchIdentityCard: identityCard,
-  sha256Hex: (value: string) => value,
-  providerShareLinkFor: () => 'https://cindy.app/s#test-link',
-  providerShareOwnerKey: () => state.owner,
+vi.mock('../agentNetRuntime.js', () => ({
+  agentNetSelectionKey: () => 'test-legacy', isAgentNetActive: () => false, agentNetAllowsLegacy: () => true,
 }));
+vi.mock('../agentNetSharing.js', () => ({ selectedAgentNetSharingRoute: () => null }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://share.example.test' }));
+vi.mock('../../serverApiClient.desktop.js', () => ({
+  serverApiFetch(resource: string, options: { baseUrl(): string; body: unknown }) {
+    options.baseUrl();
+    if (resource === '/api/me/identity-card') return identityCard();
+    if (resource === '/api/device-link/provider-shares/links') return api.createLink(options.body);
+    throw new Error('Unexpected provider share request: ' + resource);
+  },
+}));
+vi.mock('../providerShareApi.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../providerShareApi.js')>();
+  return {
+    ...actual,
+    // Keep creation and its permission checks real. Only substitute the HTTP boundary.
+    providerShareApi: { ...api, createLink: actual.providerShareApi.createLink },
+    providerShareLinkFor: () => 'https://cindy.app/s#test-link',
+    providerShareOwnerKey: () => state.owner,
+  };
+});
 vi.mock('../dispatch.desktop.js', () => ({
   notifyProviderShareCatalogChanged: fastPolicy.publish,
   getControllerDisplayName: vi.fn(), providerShareActiveControllers: vi.fn(),
@@ -146,11 +170,14 @@ import {
   trimProviderUsageHistory,
 } from '../providerShareRuntime';
 import { markAppContentWindow } from '../../windowFocusClassifier';
+import { runDeviceLinkInvokeContext } from '../invoke-context';
 import { startProviderShareHost } from '../providerShareHost';
 import { startProviderShareGuest } from '../providerShareGuest';
 import { setBroadcastTapListener } from '../broadcast-tap';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
 import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
+import { throwIpcError } from '../../utils/ipcValidate';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
 import { providerShareActiveControllers, revalidateRemoteModelAccess, revokeProviderShareControllers } from '../dispatch.desktop';
 import {
@@ -161,6 +188,7 @@ import {
 
 const createLink: ProviderShareManagementCommand = { action: 'create-link', providerId: 'anthropic' };
 const LINK_ID = 'a'.repeat(64);
+const issuedLink = { invitation: 'Q'.repeat(43), shareId: 'share-id', expiresAt: '2026-11-18T10:00:00Z' };
 const mutations: ProviderShareManagementCommand[] = [
   { action: 'approve', requestId: 'r1' },
   { action: 'reject', requestId: 'r1' },
@@ -182,6 +210,7 @@ function saveMemberNote(entry: 'local' | 'same-account'): Promise<unknown> {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  fileRename.mockImplementation(fsp.rename);
   windowRouting.windows = [];
   windowRouting.notifications = [];
   windowRouting.focusMain.mockReturnValue(true);
@@ -193,7 +222,7 @@ beforeEach(() => {
   received.ready = true;
   clearAllProviderShareCatalogs();
   identityCard.mockResolvedValue({ card: 'test-identity-card' });
-  api.createLink.mockResolvedValue({ invitation: 'test-invitation', linkId: LINK_ID });
+  api.createLink.mockResolvedValue({ ...issuedLink, linkId: LINK_ID });
   api.approve.mockResolvedValue({ ok: true });
   api.reject.mockResolvedValue({ ok: true });
   api.setMember.mockResolvedValue({ status: 'removed' });
@@ -226,37 +255,283 @@ beforeEach(() => {
 
 afterEach(() => { setBroadcastTapListener(null); stopProviderShareRuntime(); });
 
-// #10398 review / unit: content deduplication must not strand the one-time access
-// migration. Existing startup tests always had an incomplete snapshot. Exercise
-// the actual runtime subscription across unavailable local input and a failed write.
-it('retries unfinished access migration on unchanged refreshes and stops after success', async () => {
-  stopProviderShareRuntime();
-  const refreshed = new Set<() => void>();
-  host.changed.mockImplementation((listener, options) => {
-    if (options?.refreshed) refreshed.add(listener);
-    return () => refreshed.delete(listener);
+// PR #11287: cover the actual local IPC and the bytes committed after native confirmation.
+describe('local roster export', () => {
+  const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+  const event = { sender: {} } as Electron.IpcMainInvokeEvent;
+  const capturedAt = '2026-10-16T08:00:00.000Z';
+  const member = { memberId: 'fixture-member-full-id', displayName: '=guest', status: 'active', joinedAt: '2026-10-01T00:00:00Z' };
+  const share = { providerId: 'anthropic', hostDeviceId: 'host-device', shareId: 'share-1', members: [member] };
+  let dir: string;
+  let destination: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-roster-test-'));
+    destination = path.join(dir, 'members.csv');
+    api.listOwned.mockResolvedValue([share, { ...share, providerId: 'other' }, { ...share, hostDeviceId: 'other' }]);
+    memberNotes.readStrict.mockResolvedValue({ [member.memberId]: 'A,"B"\nC' });
+    nativeReplace.mockRejectedValue(new Error('synthetic native replacement failure'));
+    registerProviderShareIpc();
   });
-  const refresh = () => { for (const listener of refreshed) listener(); };
-  startProviderShareRuntime(vi.fn());
-  expect(accessMigration.keep).not.toHaveBeenCalled();
-  host.complete.mockReturnValue([{ providerId: 'openai' }]);
-  accessMigration.ids.mockReturnValue(null); // Legacy account pool cannot be read yet.
-  refresh();
-  expect(accessMigration.keep).not.toHaveBeenCalled();
-  const ids = new Set(['openai', 'legacy-account']);
-  accessMigration.ids.mockReturnValue(ids);
-  accessMigration.keep.mockRejectedValueOnce(new Error('synthetic unavailable'));
-  refresh(); refresh();
-  expect(accessMigration.keep).toHaveBeenCalledExactlyOnceWith(ids);
-  await new Promise<void>(resolve => setImmediate(resolve));
-  accessMigration.keep.mockResolvedValue(undefined);
-  refresh();
-  await new Promise<void>(resolve => setImmediate(resolve));
-  refresh(); refresh();
-  expect(accessMigration.keep).toHaveBeenCalledTimes(2);
-  expect(accessMigration.ids).toHaveBeenCalledTimes(3);
-  stopProviderShareRuntime();
-  expect(refreshed.size).toBe(0);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function save(expectedOwner = stamp, providerId = 'anthropic') {
+    const calls = vi.mocked(ipcMain.handle).mock.calls;
+    const handler = calls.find(([channel]) => channel === PROVIDER_SHARE_IPC.EXPORT_ROSTER)![1];
+    return handler(event, providerId, expectedOwner);
+  }
+
+  // Electron security §8 / unit: the registered handler must reject before any
+  // save side effect and recheck its sender after awaited reads/dialogs. Existing
+  // owner-change cases cannot catch removal or late placement of this guard.
+  it.each(['entry', 'notes', 'dialog', 'publish'] as const)('preserves the destination when sender trust fails at %s', async phase => {
+    fs.writeFileSync(destination, 'original');
+    let trusted = phase !== 'entry';
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => {
+      if (!trusted) throwIpcError('PERMISSION_DENIED', 'Synthetic untrusted renderer');
+    });
+    if (phase === 'notes') {
+      memberNotes.readStrict.mockImplementationOnce(async () => {
+        trusted = false;
+        return {};
+      });
+    }
+    saveDialog.mockImplementationOnce(async () => {
+      if (phase === 'dialog') trusted = false;
+      if (phase === 'publish') {
+        memberNotes.readStrict.mockImplementationOnce(async () => {
+          trusted = false;
+          return {};
+        });
+      }
+      return { canceled: false, filePath: destination };
+    });
+
+    await expect(save()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledWith(event);
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+    expect(nativeReplace).not.toHaveBeenCalled();
+    if (phase === 'entry' || phase === 'notes') expect(saveDialog).not.toHaveBeenCalled();
+    if (phase === 'entry') {
+      expect(memberNotes.readStrict).not.toHaveBeenCalled();
+      expect(api.listOwned).not.toHaveBeenCalled();
+    }
+  });
+
+  // PR #11287 / unit: REST membership can change before the host poll notices.
+  // Keep its cached rows stale and exercise the registered export handler with
+  // fresh, incomplete and rejected authority reads, including late owner/frame
+  // changes. The prior cache-only fences could publish departed members.
+  it('uses the authoritative roster while the host cache still contains a departed member', async () => {
+    host.complete.mockReturnValue([share]);
+    const freshMember = { ...member, memberId: 'fresh-member-id' };
+    api.listOwned.mockResolvedValue([{ ...share, members: [freshMember] }]);
+    saveDialog.mockResolvedValueOnce({ canceled: false, filePath: destination });
+    await save();
+    const csv = fs.readFileSync(destination, 'utf8');
+    expect(csv).toContain('"fresh-member-id"');
+    expect(csv).not.toContain('"fixture-member-full-id"');
+    expect(api.listOwned).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves the destination when an authoritative member departure occurs in the dialog', async () => {
+    fs.writeFileSync(destination, 'original');
+    saveDialog.mockImplementationOnce(async () => {
+      api.listOwned.mockResolvedValue([]);
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+    expect(api.listOwned).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['prepare', 'rejected'], ['prepare', 'partial'], ['prepare', 'unavailable'],
+    ['publish', 'rejected'], ['publish', 'partial'], ['publish', 'unavailable'],
+  ] as const)('preserves the destination when the authoritative read is %s/%s', async (phase, failure) => {
+    fs.writeFileSync(destination, 'original');
+    const failRead = () => {
+      if (failure === 'rejected') api.listOwned.mockRejectedValueOnce(new Error('synthetic private service error'));
+      else api.listOwned.mockResolvedValueOnce(Object.assign([share], failure === 'partial'
+        ? { authorityIncomplete: true } : { unavailableShareIds: [share.shareId] }));
+    };
+    if (phase === 'prepare') failRead();
+    saveDialog.mockImplementationOnce(async () => {
+      if (phase === 'publish') failRead();
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] The current member roster is unavailable',
+    });
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+    if (phase === 'prepare') expect(saveDialog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['prepare', 'owner'], ['prepare', 'sender'], ['publish', 'owner'], ['publish', 'sender'],
+  ] as const)('rejects the authoritative read after %s/%s changes', async (phase, boundary) => {
+    fs.writeFileSync(destination, 'original');
+    const lateRead = () => api.listOwned.mockImplementationOnce(async () => {
+      if (boundary === 'owner') state.owner = 'owner-b';
+      else vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => {
+        throwIpcError('PERMISSION_DENIED', 'Synthetic untrusted renderer');
+      });
+      return [share];
+    });
+    if (phase === 'prepare') lateRead();
+    saveDialog.mockImplementationOnce(async () => {
+      if (phase === 'publish') lateRead();
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toMatchObject({ code: boundary === 'owner' ? 'PRECONDITION_FAILED' : 'PERMISSION_DENIED' });
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+    if (phase === 'prepare') expect(saveDialog).not.toHaveBeenCalled();
+  });
+
+  it.each(['new', 'existing', 'EPERM', 'EEXIST'])('saves the authorized snapshot at the chosen location (%s)', async mode => {
+    if (mode !== 'new') fs.writeFileSync(destination, 'original');
+    if (mode === 'EPERM' || mode === 'EEXIST') {
+      vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+      fileRename.mockImplementation(async (source, target) => {
+        if (target === destination) throw Object.assign(new Error('cannot overwrite'), { code: mode });
+        return fsp.rename(source, target);
+      });
+      nativeReplace.mockImplementationOnce(async (source, target) => {
+        await fsp.copyFile(source, target);
+        await fsp.unlink(source);
+      });
+    }
+    vi.setSystemTime(new Date(capturedAt));
+    saveDialog.mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date('2026-10-16T08:01:00Z'));
+      return { canceled: false, filePath: destination };
+    });
+    await save();
+    const expected = '\uFEFFshare_id,member_id,display_name,note,status,captured_at\r\n'
+      + `"share-1","fixture-member-full-id","'=guest","A,""B""\nC","active","${capturedAt}"\r\n`;
+    expect(fs.readFileSync(destination)).toEqual(Buffer.from(expected));
+    if (mode === 'EPERM' || mode === 'EEXIST') expect(nativeReplace).toHaveBeenCalledOnce();
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+  });
+
+  it('exports the legacy custom:xai provider through the same save boundary', async () => {
+    api.listOwned.mockResolvedValue([{ ...share, providerId: 'custom:xai' }]);
+    saveDialog.mockResolvedValueOnce({ canceled: false, filePath: destination });
+    await save(stamp, 'custom:xai');
+    expect(fs.readFileSync(destination, 'utf8')).toContain('"fixture-member-full-id"');
+  });
+
+  it.each(['prepare', 'confirm'] as const)('preserves an existing export when notes cannot be read at %s', async phase => {
+    fs.writeFileSync(destination, 'original');
+    if (phase === 'prepare') {
+      memberNotes.readStrict.mockImplementationOnce(() => { throw new Error('synthetic unreadable notes'); });
+    }
+    saveDialog.mockImplementationOnce(async () => {
+      memberNotes.readStrict.mockImplementationOnce(() => { throw new Error('synthetic unreadable notes'); });
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toThrow();
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    if (phase === 'prepare') expect(saveDialog).not.toHaveBeenCalled();
+  });
+
+  it('leaves the destination alone when the owner cancels', async () => {
+    saveDialog.mockResolvedValueOnce({ canceled: true, filePath: destination });
+    await save();
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(api.listOwned).toHaveBeenCalledOnce();
+  });
+
+  it('preserves an existing file when the owner changes in the dialog', async () => {
+    fs.writeFileSync(destination, 'original');
+    saveDialog.mockImplementationOnce(async () => {
+      state.owner = 'owner-b';
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toThrow();
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+  });
+
+  it('rejects a late note read after the owner changes', async () => {
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    let finish!: (notes: Record<string, string>) => void;
+    memberNotes.readStrict.mockImplementationOnce(() => {
+      started();
+      return new Promise(resolve => { finish = resolve; });
+    });
+    const pending = save();
+    await reading;
+    state.owner = 'owner-b';
+    finish({ [member.memberId]: 'Team A' });
+    await expect(pending).rejects.toThrow();
+    expect(saveDialog).not.toHaveBeenCalled();
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  // PR #11287 / unit: the CSV omits membership generations, and a note can be
+  // edited while the authority request is pending. Earlier fences compared only
+  // CSV bytes read before that request, missing both publication changes.
+  it('preserves the destination when a note changes during the final roster request', async () => {
+    fs.writeFileSync(destination, 'original');
+    saveDialog.mockImplementationOnce(async () => {
+      api.listOwned.mockImplementationOnce(async () => {
+        memberNotes.readStrict.mockResolvedValue({ [member.memberId]: 'Updated note' });
+        return [share];
+      });
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+  });
+
+  it('preserves the destination when a member is reapproved with a new membership generation', async () => {
+    fs.writeFileSync(destination, 'original');
+    saveDialog.mockImplementationOnce(async () => {
+      api.listOwned.mockResolvedValue([{ ...share, members: [{ ...member, joinedAt: '2026-10-16T08:01:00Z' }] }]);
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+  });
+
+  it('rejects device-link callers before opening a local dialog', async () => {
+    await expect(runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'other', channel: PROVIDER_SHARE_IPC.EXPORT_ROSTER }, () => save(),
+    )).rejects.toThrow('local only');
+    expect(saveDialog).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale page before opening the dialog', async () => {
+    await expect(save({ ...stamp, ownerGeneration: 0 })).rejects.toThrow();
+    expect(saveDialog).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed replacement without exposing the selected path or leaving a partial file', async () => {
+    fs.mkdirSync(destination);
+    saveDialog.mockResolvedValueOnce({ canceled: false, filePath: destination });
+    await expect(save()).rejects.toThrow('Could not save the member roster');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fs.statSync(destination).isDirectory()).toBe(true);
+  });
 });
 
 // #9437 / unit: real share entry points must not show the first hidden data host.
@@ -896,8 +1171,11 @@ describe('same-account share management during account transitions', () => {
 
   it.each(['provider lookup', 'identity card', 'link response'])('stops link creation when teardown begins during %s', async (stage) => {
     if (stage === 'provider lookup') listProviders.mockImplementationOnce(async () => { state.boundaryPending = true; return []; });
-    if (stage === 'identity card') identityCard.mockImplementationOnce(async () => { state.boundaryPending = true; return {}; });
-    if (stage === 'link response') api.createLink.mockImplementationOnce(async () => { state.boundaryPending = true; return {}; });
+    if (stage === 'identity card') identityCard.mockImplementationOnce(async () => { state.boundaryPending = true; return { card: 'test-identity-card' }; });
+    if (stage === 'link response') api.createLink.mockImplementationOnce(async () => {
+      state.boundaryPending = true;
+      return { ...issuedLink, linkId: LINK_ID };
+    });
     await expect(executeProviderShareManagementCommand(createLink)).rejects.toThrow(/PRECONDITION_FAILED/);
     expect(identityCard).toHaveBeenCalledTimes(stage === 'provider lookup' ? 0 : 1);
     expect(api.createLink).toHaveBeenCalledTimes(stage === 'link response' ? 1 : 0);
@@ -919,7 +1197,10 @@ describe('same-account share management during account transitions', () => {
   });
 
   it('also discards a link response after a committed account switch', async () => {
-    api.createLink.mockImplementationOnce(async () => { state.owner = 'owner-b'; return {}; });
+    api.createLink.mockImplementationOnce(async () => {
+      state.owner = 'owner-b';
+      return { ...issuedLink, linkId: LINK_ID };
+    });
     await expect(executeProviderShareManagementCommand(createLink)).rejects.toThrow(/PRECONDITION_FAILED/);
     expect(host.quiet).not.toHaveBeenCalled();
     expect(remember).not.toHaveBeenCalled();
@@ -949,12 +1230,12 @@ describe('same-account share management during account transitions', () => {
     listProviders.mockResolvedValue([{ id: 'xd', name: 'Cindy AI · Example Studio', connected: true, agents: ['codex'] }]);
     await executeProviderShareManagementCommand({ action: 'create-link', providerId: 'xd' });
     expect(api.createLink).toHaveBeenCalledExactlyOnceWith({
-      providerId: 'xd', providerLabel: 'Cindy AI', deviceName: 'Cindy', identityCard: { card: 'test-identity-card' },
+      providerId: 'xd', providerLabel: 'Cindy AI', deviceName: 'Cindy', identityCard: 'test-identity-card',
     });
   });
 
   it('rejects an old server before exposing or registering a remote link', async () => {
-    api.createLink.mockResolvedValueOnce({ invitation: 'test-invitation' });
+    api.createLink.mockResolvedValueOnce(issuedLink);
     await expect(executeProviderShareManagementCommand(createLink)).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
     expect(host.quiet).not.toHaveBeenCalled();
     expect(host.active).not.toHaveBeenCalled();
@@ -962,7 +1243,7 @@ describe('same-account share management during account transitions', () => {
   });
 
   it('still creates local share links with an old server', async () => {
-    api.createLink.mockResolvedValueOnce({ invitation: 'test-invitation' });
+    api.createLink.mockResolvedValueOnce(issuedLink);
     const handle = vi.spyOn(ipcMain, 'handle');
     try {
       registerProviderShareIpc();
@@ -1026,6 +1307,16 @@ describe('remote model access management', () => {
       { id: 'image', name: 'Image' }, { id: 'video', name: 'Video' },
       { id: 'audio', name: 'Audio' }, { id: 'embedding', name: 'embedding' },
     ] });
+  });
+  // PR #11312 review (Codex P2): a merged connection reads its pool's provider-wide range, so a range saved on
+  // the old id would report success with no effect. Refuse it; member grants on the old share stay editable.
+  it('refuses a provider-wide range on a merged connection but keeps member grants', async () => {
+    listProviders.mockResolvedValue([{ id: 'anthropic', subscriptionPoolAlias: true, models: { 'claude-code': [{ id: 'small', name: 'Small' }] } }]);
+    await expect(executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', models: [] }))
+      .rejects.toThrow('PRECONDITION_FAILED');
+    expect(modelAccess.set).not.toHaveBeenCalled();
+    await executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', memberId: 'm1', models: ['small'] });
+    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], 'm1', expect.any(Function), undefined, expect.any(Function));
   });
   it('refuses to modify a person who belongs to a different provider', async () => {
     host.snapshot.mockReturnValue([{ providerId: 'other', members: [{ memberId: 'm1' }] }]);

@@ -123,3 +123,11 @@
 （跨账号：会话键、单向、`delegatedOnly`、撤销后两端会话作废）；`packages/agent-net/src/__tests__/portableSocket.test.ts`
 「keeps presence on the session with a new peer and still sends the frame to an older one」（在线状态只在会话上、连接上没有 Device Link 帧，
 老版本对端等过以后收到帧，自报的设备号不算数）。端到端对比用 `packages/agent-net/bench/session-latency.ts --modes v1,session`。
+
+### 自建中继上的新分享
+
+自建中继在 `/info` 广告 `private-sharing-v1` 后，新版桌面端创建的分享使用版本 3 的邀请。新邀请需要支持该版本的客户端。版本 2 的邀请继续使用原身份服务；官方网络及历史成员记录沿用原有权限。
+
+`/private-sharing/` 使用独立的资源和权限记录。创建者提交本网络签发的成员证书和请求签名；访客用设备保存的密钥签名，请求绑定中继根公钥、网络、路径、正文、时间和一次性随机数。供应商分享仍需主人批准；获得业务成员身份后，连接还需要对应资源的委托签名。附件继续经原有端到端加密传输。旧附件按原引用读取，只存于官方服务器的历史附件需要该服务器可达。
+
+桌面和手机分别保存版本 2 与版本 3 的分享路由，回退客户端后版本 2 的路由仍可读取。同一私有网络的已配对设备以主人身份读取自有任务，远程取消共享仍由原房主设备执行。自建中继移除租户时，随网络撤销该租户的分享与邀请。

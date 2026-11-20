@@ -179,6 +179,10 @@ export interface ImChannelAdapter {
   getBotDisplayName?(): string;
   /** Terminal output strategy; existing channels use rich-card. */
   output: ImOutputDriver;
+  /** Resolve a persisted dedicated lane against this connection's current chat allowlist. */
+  connectedChatForLane?(botId: string, routeKey: string): string | undefined;
+  /** Legacy scheduler envelope on text transports. Undefined keeps normal formatting, null suppresses the publication. */
+  scheduledNotificationText?(text: string): string | null | undefined;
   config: ImOrchestratorConfig;
   ui: ImUiTextPack;
   sessions: ImSessionNamespace;

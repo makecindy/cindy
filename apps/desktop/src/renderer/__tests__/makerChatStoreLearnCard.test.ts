@@ -178,6 +178,7 @@ describe('agent switch 历史投影', () => {
   it.each(['restored', 'fallback'] as const)('重新打开任务保留换电脑信息与 %s 状态', async (nativeHistory) => {
     const id = sid(`agent-relocation-${nativeHistory}`);
     const relocation = {
+      ...(nativeHistory === 'fallback' ? { handoffCoverage: 'complete' } : {}),
       nativeHistory, resumed: nativeHistory === 'restored',
       toAgentDeviceId: 'test-macbook', toAgentDeviceName: 'Test MacBook',
       switchReason: 'quota-rebalance',
@@ -238,6 +239,7 @@ describe('context rebuild 历史投影', () => {
           contextRebuild: {
             reason: 'pi-prompt-timeout',
             handoff: 'stopped responding to prompts',
+            handoffCoverage: 'condensed',
           },
         },
         createdAt: Date.now(),
@@ -255,6 +257,7 @@ describe('context rebuild 历史投影', () => {
     expect(card?.systemCardData).toMatchObject({
       reason: 'pi-prompt-timeout',
       handoff: 'stopped responding to prompts',
+      handoffCoverage: 'condensed',
     });
   });
 });

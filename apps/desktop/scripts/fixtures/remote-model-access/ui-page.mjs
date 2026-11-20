@@ -19,11 +19,21 @@ export default {
     'budget-unsupported': { about: 'Provider group cannot add a percentage policy' },
     default: { about: 'Provider-wide model selection' },
     member: { about: 'Per-person model selection within the provider ceiling' },
+    'merged-pool': { about: 'A connection merged into an account pool shows the pool range read-only and says where to change it' },
   },
   async ready(page) {
     await page.getByRole('button', { name: /.+/ }).first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'merged-pool') {
+      const section = page.getByTestId('remote-model-access');
+      await section.getByText(await ui.t('providerShare.modelAccess.followsPool', { pool: 'OpenAI' }), { exact: true }).waitFor();
+      const choose = section.getByRole('button', { name: await ui.t('providerShare.modelAccess.choose'), exact: true });
+      await choose.waitFor();
+      assert.equal(await choose.isDisabled(), true, 'the pool range is changed on the pool');
+      await ui.capture('merged');
+      return;
+    }
     if (ui.case.startsWith('alias-')) {
       const sol = page.getByRole('checkbox', { name: 'GPT-6.1-Sol', exact: true });
       await sol.waitFor();

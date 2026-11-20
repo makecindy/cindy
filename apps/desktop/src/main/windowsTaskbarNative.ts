@@ -18,6 +18,7 @@ export interface WindowsTaskbarNative extends WindowsDeepLinkNative {
   taskbarButtonCreatedMessage(): number;
   windowDragOffset(handle: Buffer): { x: number; y: number };
   moveWindowAtCursor(handle: Buffer, offsetX: number, offsetY: number): boolean;
+  excludePrivacyMaskFromCapture(handle: Buffer): boolean;
   setWindowDarkMode(handle: Buffer, dark: boolean): boolean;
 }
 

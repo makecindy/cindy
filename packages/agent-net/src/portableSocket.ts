@@ -9,7 +9,7 @@ import {
 import type { WsLike } from '@cindy/device-link';
 import { CERT_LIFETIME_MS, delegationEndpointCertificate, delegationVisibleTo, type Delegation, type DeviceView } from '@cindy/agent-net-protocol';
 import { frameMatchesDelegation, scopedFrame, delegatedPeerKey, delegatedPeerTarget, type ScopedPeerTarget } from './scopedRoutes.js';
-import { DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RosterEntry, type SessionWire, type Transport } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
 import { SessionPeer, type SessionConfig, type SessionRole } from './session/peer.js';
 export type { SessionHandlers } from './session/peer.js';
 
@@ -326,8 +326,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       return target && this.authorized(target.relayId) ? target : null;
     }
     for (const [id, delegation] of this.delegations) {
-      const target = this.authorized(id) && delegatedPeerTarget(delegation, peer, 'host');
-      if (target) return target;
+      const target = delegatedPeerTarget(delegation, peer, 'host');
+      if (target && this.authorized(id)) return target;
     }
     return null;
   }
@@ -478,6 +478,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   }
   /** See Transport.networkChanged (the Desktop's network watcher, through the worker). */
   networkChanged(): void { if (!this.closed) this.transport?.networkChanged?.(); }
+  /** See Transport.relayRoute (the worker reports it to the Desktop with each status snapshot). */
+  relayRoute(): RelayRoute | null { return this.closed ? null : this.transport?.relayRoute?.() ?? null; }
   /**
    * Which members of this account's directory to accept although their certificates are valid: the host's own membership
    * rule on top of the relay's (the Desktop accepts only devices in the account's Device Link device list, so a device

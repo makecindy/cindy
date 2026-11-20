@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createPrivateKey, randomUUID } from 'node:crypto';
 import { app } from 'electron';
-import WebSocket from 'ws';
-import { AgentNetWorkerSocket, type AgentNetAppSocket, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
+import { currentLinkTraffic } from './linkTraffic.desktop.js';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
+import { AgentNetWorkerSocket, type AgentNetAppSocket, type RelayRoute, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
 import { isScopedPeer } from '@cindy/device-link';
 import { approveJoin, identityFromSeed, issueCertificate, publicBytes, signTenantJoinRequest, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate, type TenantJoinRequest } from '@cindy/agent-net-relay';
 import { AgentNetClient, createDelegationApprover, createTransportModeProof } from '@cindy/agent-net-relay/client';
 import { CERT_LIFETIME_MS, agentNetStunServer, type DeviceView } from '@cindy/agent-net-protocol';
-import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { activeSelfHostedRelay, isAgentNetOnlyRelay } from './selfHostedRelayRouting.js';
@@ -32,6 +33,8 @@ let current: AgentNetWorkerSocket | null = null;
  */
 let previousSocket: AgentNetAppSocket | null = null;
 let sessionConfig: SessionConfig | null = null;
+const privateSharingRoots = new Map<string, string>();
+export function supportsPrivateAgentNetSharing(base: string, root: string): boolean { return privateSharingRoots.get(base) === root; }
 /**
  * 每个 Agent-Net 服务上次取到的 UDP 地址（STUN 与经 UDP 的中转）。刚唤醒、刚换网时取中转信息常常失败，原来这条连接就一直没有
  * STUN 和 UDP 中转、只走 443 上的中转，直到下次重建（2026-11-17 审查）；失败时沿用上次的。服务明确说没有 UDP 时清掉。
@@ -102,8 +105,11 @@ function pathChanged(): void {
     try { listener(); } catch (error) { agentNetLog.error('agent-net path listener threw', error); }
   }
 }
-/** Agent-Net 主连接最近一次到中转的往返毫秒数；不是 Agent-Net 主连接、还没测到时为 null。 */
-export function agentNetRelayRttMs(): number | null { return current?.relayRttMs?.() ?? null; }
+/**
+ * Agent-Net 主连接经中转的数据报现在怎么走：中转的 UDP 端口还是 WebSocket，以及这条路最近一次的往返毫秒数
+ * （UDP 是登记到确认，WebSocket 是心跳）。没连着中转、不是 Agent-Net 主连接时为 null。远程连接页写在中转点上。
+ */
+export function agentNetRelayRoute(): RelayRoute | null { return current?.relayRoute() ?? null; }
 /**
  * Agent-Net 主连接现在有没有连着中转；不是 Agent-Net 主连接（关着、还没连上）时为 null。连接本身还在、直连的对端照常，
  * 只是不直连的设备和手机推送暂时不通（Desktop 在连接状态里说明，index.ts）。
@@ -111,7 +117,7 @@ export function agentNetRelayRttMs(): number | null { return current?.relayRttMs
 export function agentNetRelayConnected(): boolean | null {
   return current?.relayConnected ? current.relayConnected() : null;
 }
-/** 上面的结论可能变了（中转连上、断开，主连接换了或关了）。 */
+/** 上面的结论可能变了（中转连上、断开，经中转的数据报改走 UDP 或 WebSocket，主连接换了或关了）。 */
 export function onAgentNetRelayChange(listener: () => void): () => void {
   relayListeners.add(listener);
   return () => { relayListeners.delete(listener); };
@@ -434,7 +440,7 @@ export function outgoingAgentNetClientForRelay(relayId: string, baseUrl: string)
     || stored.certificate.networkId !== 'private:' + relayId) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
   return new AgentNetClient(baseUrl, decodeIdentity(secrets), stored.certificate, stored.rootPublicKey, undefined, {
     ownerPinnedHttp: true, fetch: outboundFetch,
-    createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createOutboundHttpAgent(url) }),
+    createWebSocket: (url, options) => openLinkWebSocket('agent-net', url, options),
   });
 }
 export function currentAgentNetClient(): AgentNetClient | null {
@@ -487,6 +493,7 @@ export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCur
   const connectedAt = new Map<string, number>();
   try {
     const socket = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module, log: agentNetLog,
+      observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
       userId: authManager.getCurrentUserId() ?? '', scoped: true,
       onDelegationRequests: requests => approver?.update(requests),
       onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); } });
@@ -538,6 +545,11 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
     // UDP may be published on its own host (e.g. NLB beside an HTTPS ALB); relays without one keep the API host.
     const server = response.ok ? agentNetStunServer(api.base, info) : null;
     answered = response.ok;
+    if (relay && answered) {
+      if (Array.isArray((info as { features?: unknown })?.features) && (info as { features: unknown[] }).features.includes('private-sharing-v1'))
+        privateSharingRoots.set(api.base, api.rootPublicKey);
+      else privateSharingRoots.delete(api.base);
+    }
     // The relay forwards datagrams on the same UDP port as its STUN when it hands out UDP credentials;
     // an older relay never does, and the session stays on its WebSocket.
     if (server) { stunServers.push(server); relayUdpServer = server; lastUdpServer.set(api.base, server); }
@@ -556,6 +568,7 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   const notifyCovered = new Set<string>();
   let socket: AgentNetWorkerSocket;
   try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers, relayUdpServer,
+    observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
     ...(members ? { peerRule: members.rule() } : {}),
     scoped: true, onDelegationRequests: requests => approver.update(requests),
     onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); },
@@ -578,6 +591,8 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   notifyCoverage.set(socket, notifyCovered);
   const previous = current; current = socket; previous?.close();
   socket.on('relay', () => { if (current === socket) relayChanged(); });
+  // 经中转的数据报在 UDP 与 WebSocket 之间切换：远程连接页马上刷新中转点上写的走法（不等 5 秒轮询）。
+  socket.on('relay-route', () => { if (current === socket) relayChanged(); });
   socket.on('peer-routes-changed', () => { if (current === socket) pathChanged(); });
   relayChanged();
   // 打开期间结论可能又变了（列表读完、本机刚删了设备）：以现在的为准。

@@ -81,9 +81,10 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   再按具体 server + tool 取完整说明及单个 schema，
   未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。门按会话与
   当前工具 schema 指纹记账：Pi 升级不再作废未变 schema 的披露，schema 真变动时门重新武装。
-  首次未披露的调用在**发起权限询问之前**被拦下——不弹权限框、不触达 MCP，回执指名该查的
-  server／tool 并说明重发即可放行（模型补完 `cindy_mcp_list_tools` 后重发即通过，重发那次
-  正常过一次权限）。上下文压缩成功后，bridge 会在下一次运行开始前注入一条一次性的已披露
+  首次未披露的调用在**发起权限询问之前**被拦下。工具说明和输入 schema 序列化后合计不超过
+  2048 个 UTF-16 代码单元时，回执给出完整定义，模型可以直接修正参数后重发；较大的定义仍按
+  server／tool 定向查询。发出该回执时没有执行工具，重发时正常审批。上下文压缩成功后，
+  bridge 会在下一次运行开始前注入一条一次性的已披露
   工具清单提醒（display:false 常驻上下文，只列仍存在且指纹仍匹配的工具），避免模型因压缩
   失忆而重跑 `cindy_mcp_list_tools`；这是提示卫生，不改变门的任何判定。Host 审批、策略与变更捕获仍使用真实
   `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
@@ -112,6 +113,24 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   读回后沿用原生档位并按正常接受边界消耗一次性计划意图，不默认关闭计划模式。
 
 > Cindy 自有子代理的委派、控制、结果收口与测试边界见 [Pi 子代理设计](../research/pi-subagent-delegation.md)。与 Orca 协作模式分别维护。
+
+### Chat 网关工具 ID 与子代理兼容配置
+
+Chat Completions 网关在 Gemini 工具 ID 中携带签名时，切到受限后端可能超过
+下游的 64 字符限制。仅在目标模型配置显式声明 `compat.maxToolCallIdLength: 64` 时，
+bridge 才在 `openai-completions` 请求投影中缩短超长 ID，调用与结果使用同一映射，
+并避开已有短 ID；不写回会话历史。这是 Cindy bridge 消费的兼容选项，经过原生
+`models.json` 的模型 `compat` 传递，不作为 HTTP 请求字段发送；生产投影为官方
+OpenAI Chat 端点默认声明此约束。自定义网关通过持久 `perAgent.pi.maxToolCallIdLength`
+覆盖声明（见 [配置规则](configuration-and-overrides.md#pi-chat-工具-id-上限)），不编辑临时
+`models.json`。只给已确认允许重写
+ID 且要求 64 字符上限的目标线路配置，不给依赖签名 ID 的 Gemini 线路配置。
+未声明该选项的线路保留原 ID，包括 `production-flash`、`gemini` 等部署别名；
+不依据用户可自定义的模型名推断能力。自定义 GPT 网关也须显式声明，不能自动猜测。
+Responses 沿用 Pi 原生归一化。子代理自带 bridge，
+并在启动与恢复时继承父模型配置中的 `compat`（含 `supportsStore: false`），无需
+为此转发用户扩展或放开 `--no-extensions`。真实 Pi 回归见
+`pi-agent.integration.test.ts` 的 Gemini 切模与 Chat 子代理恢复用例。
 
 ### 原生请求 Fast 偏好
 
@@ -236,6 +255,11 @@ Claude Code、Codex 共用同一模型比例，各自适配原生参数。env:`C
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
+
+桌面本机启动的 Pi（含在该电脑上托管的分享任务）保留显式代理环境。未设置代理变量时，
+其 HTTPS 连接使用桌面回环 CONNECT 桥，按每个目标主机和端口查询执行电脑的系统代理或 PAC。
+切换模型或系统代理后，新连接沿用桌面解析器的短时缓存；已建立的连接继续使用原路径。
+本机地址沿用 Pi 的 `NO_PROXY`，SSH 会话独立使用已配置的远端转发。
 
 用户重试已被 Pi 接受但零产出的失败输入时，用持久化的原生 user entry id 精确定位当前
 分支；确认后续只有空的错误响应及模型／推理档位变更记录，再通过原生树导航回到输入之前重发。

@@ -8,6 +8,8 @@ import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { cn } from '@/lib/utils';
 import {
   scheduleFailureMessageKey,
+  scheduleFailureMessageParams,
+  scheduleFailureDetails,
   type ScheduleMissingPlugin,
 } from '@cindy/maker-shared/schedule-model';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
@@ -50,7 +52,7 @@ function FailedScheduleNotice({
   className,
   style,
 }: BannerProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   // 关闭是本机 UI 偏好，不修改运行记录或已读回执。
   const prefix = dataOwnerId ? failedScheduleDismissalPrefix(dataOwnerId, sessionId) : null;
   const [dismissedRun, setDismissedRun] = useState(() =>
@@ -91,9 +93,8 @@ function FailedScheduleNotice({
   };
 
   const missingPlugin = latestFailedRun.failureKind === 'precheck' ? latestFailedRun.missingPlugin : undefined;
-  const message = t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`, {
-    name: missingPlugin?.name,
-  });
+  const message = t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`,
+    scheduleFailureMessageParams(latestFailedRun, i18n?.resolvedLanguage));
 
   return (
     <ErrorNotice
@@ -106,7 +107,7 @@ function FailedScheduleNotice({
       details={latestFailedRun.errorMsg}
       onDiagnose={onDiagnose && latestFailedRun.errorMsg ? () => onDiagnose({
         message,
-        details: latestFailedRun.errorMsg!,
+        details: scheduleFailureDetails(latestFailedRun),
       }) : undefined}
       onDismiss={dismiss}
       dismissLabel={t('chat.unreadFailedScheduleBanner.dismissTitle')}

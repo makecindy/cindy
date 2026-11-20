@@ -331,6 +331,13 @@ it('mail sends need the current host-owned view and complete fields, without a g
   expect(f.sendToGhost.mock.calls[0][1].spawnCallId).toBe('call');
   expect((await f.dispatcher.dispatch('call', `mail:send:${mail.key}`)).ok).toBe(false);
   expect((await f.dispatcher.dispatch('call', `mail:now:${mail.key}`)).ok).toBe(false);
+  const addQuote = () => f.dispatcher.dispatch('call', `mail:quote:${mail.key}`, undefined, undefined, values);
+  expect((await addQuote()).ok).toBe(false);
+  html = renderMailCard({ ...mail, addQuoteLabel: 'Add quote' });
+  expect((await addQuote()).ok).toBe(true);
+  expect(f.sendToGhost.mock.calls.at(-1)?.[1].actionId).toBe(`mail:quote:${mail.key}`);
+  html = renderMailCard({ ...mail, addQuoteLabel: 'Add quote', state: 'sent', continueLabel: 'Continue' });
+  expect((await addQuote()).ok).toBe(false);
   html = renderMailCard({ ...mail, state: 'sending', pendingSend: { deadline: Date.now() + 10000, label: '{seconds}s', cancelLabel: 'Undo', sendNowLabel: 'Send now' } });
   expect((await send()).ok).toBe(false);
   expect((await f.dispatcher.dispatch('call', `mail:cancel:${mail.key}`)).ok).toBe(true);
@@ -343,7 +350,7 @@ it('mail sends need the current host-owned view and complete fields, without a g
   expect(await send()).toEqual({ ok: false, reason: 'mail-view-readonly' });
   html = '<p>Legacy card</p>';
   expect(await send()).toEqual({ ok: false, reason: 'mail-view-expired' });
-  expect(f.sendToGhost).toHaveBeenCalledTimes(3);
+  expect(f.sendToGhost).toHaveBeenCalledTimes(4);
 });
 
 it('deletion requires an active host draft with provider support and rejects all terminal edits', async () => {

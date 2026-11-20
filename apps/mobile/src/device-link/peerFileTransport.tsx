@@ -701,7 +701,7 @@ export function PeerFileTransport() {
     };
     const queueRead = createFileReadQueue();
     const unregister = installPeerFileDownload(
-      (device, url, signal, readTrace, metadata, onProgress, range) => {
+      (device, url, signal, readTrace, metadata, onProgress, range, onStart) => {
         const active = captureDevice(device);
         return queueRead(
           "connection",
@@ -714,7 +714,8 @@ export function PeerFileTransport() {
             };
             check();
             if (range) {
-              const result = await transfer(device, url, signal, readTrace, undefined, range);
+              onStart?.();
+              const result = await transfer(device, url, signal, readTrace, onProgress, range);
               check(result);
               return result;
             }

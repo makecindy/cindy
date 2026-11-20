@@ -71,7 +71,7 @@ import {
   type WorkerQueuedMessageEntry,
   type WorkerSummary,
 } from '../xdt-helper/index.js';
-import type { ControlResult, ControlWorkerAgent } from '../types.js';
+import type { ControlResult, ControlWorkerAgent, ControlWorkerEngine } from '../types.js';
 import { resolveLiziMcpSessionContext } from '../session-context.js';
 import { errorPayload, okPayload } from '../xdt-helper/_payload.js';
 
@@ -105,7 +105,7 @@ export interface OrcaMcpDeps {
   createWorker: (params: {
     leadSessionId: string;
     role: string;
-    agent?: ControlWorkerAgent;
+    agent?: ControlWorkerEngine;
     model?: string;
     providerId?: string;
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -147,7 +147,7 @@ export interface OrcaMcpDeps {
   }) => Promise<
     ControlResult<
       {
-        agentKind: ControlWorkerAgent;
+        agentKind: ControlWorkerEngine;
         wakeKind: 'resumed' | 'already-active' | 'queued' | 'steered';
         targetTitle: string | null;
         targetLastUserSendAt: string | null;
@@ -167,7 +167,7 @@ export interface OrcaMcpDeps {
     message: string;
   }) => Promise<
     ControlResult<{
-      agentKind: ControlWorkerAgent;
+      agentKind: ControlWorkerEngine;
       queuedMessageId: string;
       stopOutcome:
         | 'requested'
@@ -336,7 +336,7 @@ export interface OrcaWorkspaceInfo {
     queue_paused: boolean;
     label: string | null;
     role: string;
-    agent_kind: ControlWorkerAgent;
+    agent_kind: ControlWorkerEngine;
     model: string;
     effort: string | null;
     focused: boolean;

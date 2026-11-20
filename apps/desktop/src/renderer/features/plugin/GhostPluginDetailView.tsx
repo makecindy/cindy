@@ -48,6 +48,7 @@ import { GhostHandoffFilesSection } from './GhostHandoffFilesSection';
 import { GhostAccountReuseSection } from './GhostAccountReuseSection';
 import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
 import { PluginControlPointsSection } from './PluginControlPointsSection';
+import { PluginEngineRemoteUseCards, usePluginRemoteUseEngines } from './PluginEngineRemoteUse';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -89,6 +90,8 @@ import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
 import { permissionItemIcon } from './lib/permissionItemIcon';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
+import { PluginInstallRing } from './PluginInstallRing';
+import { usePluginInstallProgress } from './lib/pluginInstallProgress';
 import './plugin-motion.css';
 
 interface GhostPluginDetailViewProps {
@@ -180,6 +183,13 @@ export function GhostPluginDetailView({
   const { t, i18n } = useTranslation();
   const uiLanguage = i18n.resolvedLanguage ?? i18n.language;
   const { scrolled, onScroll } = usePluginDetailScrolled();
+  // 只有本窗口发起的更新才有进度;远程设备上的插件仍按回执显示。
+  const updateProgress = usePluginInstallProgress(remote ? null : marketItem?.pluginId);
+  const updateFailed = updateProgress?.download.phase === 'failed';
+  const updateLabel =
+    !updateVersion || updateVersion === detail.version
+      ? t('settings.ghosts.market.update')
+      : t('settings.ghosts.market.updateTo', { version: updateVersion });
   const enableSwitchId = useId();
   const publicationBlocked = publishingPreview?.preflight?.actions.canSubmit === false;
   const [githubConnectionVersion, setGithubConnectionVersion] = useState(0);
@@ -197,12 +207,16 @@ export function GhostPluginDetailView({
   const hasGithubConnection =
     !remote && !needsReapproval &&
     ghost?.manifest.network?.secrets?.some(secret => secret.source === 'gh-cli') === true;
+  // 这个插件在本机提供的执行引擎：每个引擎一张「允许被远程调用」的卡片(远程查看别的电脑的插件时不显示，
+  // 开关只能在装着插件的那台电脑上改)。
+  const remoteUseEngines = usePluginRemoteUseEngines(!remote && ghost ? detail.id : null);
   const hasConfiguration =
     hasGithubConnection ||
     Boolean(ghost?.manifest.browserExtension) ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
-    detail.hasTaskPreferences;
+    detail.hasTaskPreferences ||
+    remoteUseEngines.length > 0;
   const summary = hasGithubConnection
     ? t('ccAgent.gitContext.pr.setup.account.summary')
     : ghostPluginSummary(detail.description, detail.ghostId);
@@ -258,30 +272,42 @@ export function GhostPluginDetailView({
                 >
                   {t('settings.ghosts.reapproval.action')}
                 </Button>
-              ) : updateVersion ? (
-                // 更新提级(设计定稿):有新版本时黑色主 CTA 直达市场更新确认流。
-                <Button
-                  variant="cta"
-                  size="lg"
-                  loading={updateBusy}
-                  type="button"
-                  onClick={onUpdate}
-                  disabled={updateBusy}
-                  aria-label={
-                    updateVersion === detail.version
-                      ? t('settings.ghosts.market.update')
-                      : t('settings.ghosts.market.updateTo', { version: updateVersion })
-                  }
-                  aria-busy={updateBusy || undefined}
-                >
-                  <>
-                    <ArrowUp size={14} aria-hidden="true" />
-                    {updateVersion === detail.version
-                      ? t('settings.ghosts.market.update')
-                      : t('settings.ghosts.market.updateTo', { version: updateVersion })}
-                  </>
-                </Button>
-              ) : null}
+              ) : (
+                <>
+                  {/* 更新进行中:圆环原位替换更新按钮;失败时圆环停在原处,按钮回来供重试。 */}
+                  {updateProgress && (!updateFailed || updateVersion) ? (
+                    <PluginInstallRing
+                      label={updateLabel}
+                      progress={updateProgress}
+                      size={24}
+                      explainRetry
+                      className="max-w-[260px] px-1 text-13 font-medium"
+                    />
+                  ) : null}
+                  {updateVersion && (!updateProgress || updateFailed) ? (
+                    // 更新提级(设计定稿):有新版本时黑色主 CTA 直达市场更新确认流。
+                    <Button
+                      variant="cta"
+                      size="lg"
+                      loading={updateBusy}
+                      type="button"
+                      onClick={onUpdate}
+                      disabled={updateBusy}
+                      aria-label={updateLabel}
+                      aria-busy={updateBusy || undefined}
+                    >
+                      {updateFailed ? (
+                        t('commonUi.retry')
+                      ) : (
+                        <>
+                          <ArrowUp size={14} aria-hidden="true" />
+                          {updateLabel}
+                        </>
+                      )}
+                    </Button>
+                  ) : null}
+                </>
+              )}
               {!remote && primaryAction !== 'manage' ? (
                 <Button
                   variant={updateVersion ? 'secondary' : 'cta'}
@@ -522,6 +548,7 @@ export function GhostPluginDetailView({
                   </div>
                 )
               ) : null}
+              <PluginEngineRemoteUseCards engines={remoteUseEngines} surfaceClassName={DETAIL_SURFACE_CLASS} />
               {ghost?.manifest.routineEvents ? (
                 <p className="text-13 text-[var(--text-secondary)]">
                   {t('routines.pluginCapability')}

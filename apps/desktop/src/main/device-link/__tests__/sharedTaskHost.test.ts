@@ -7,6 +7,10 @@ import { SharedTaskHost, type SharedTaskHostOptions } from '../sharedTaskHost.js
 import { captureSharedTaskAgentCommand, executeSharedTaskAccountCommand, executeSharedTaskHostCommand } from '../sharedTaskCommands.js';
 import { createIpcError } from '../../../shared/ipc-errors.js';
 import { createSharedTaskTools, type SharedTaskCaller } from '../../mcp-integrations/sharedTaskTools.js';
+import { createSharedTaskProgressReader } from '../../mcp-integrations/sharedTaskProgress.js';
+import { assertSharedTaskInvoke } from '../sharedTaskDispatch.js';
+import { buildSessionDeepLink } from '../../../renderer/lib/deepLink.js';
+import { reconcileSessionRefsForText } from '../../../shared/agentInputQueue.js';
 
 const detail = (revision = 1): SharedTaskDetail => ({
   sharedTaskId: 'sharedTask', sessionId: 'session', ownerAccountId: 'owner', hostDeviceId: 'desktop',
@@ -54,6 +58,52 @@ beforeEach(() => {
   };
   host = new SharedTaskHost(options);
 });
+// Unit, shared-task-mode.md: copying used to be hidden; ordinary history cannot
+// read a guest peer. Follow the same copied link across a new reply and removal.
+it('follows a copied guest link through the scoped host and stops on membership loss', async () => {
+  await host.open('session');
+  const peer = sharedTaskHostPeer('sharedTask', 'desktop');
+  const link = buildSessionDeepLink('session', { deviceId: peer });
+  expect(reconcileSessionRefsForText(link + ' cindy://session/mine', undefined)).toEqual([{ sessionId: 'mine' }]);
+  let running = true;
+  let answer = 'Tests are running';
+  const earlierQuestion = 'Which platform needs the build?';
+  const invoke = vi.fn(async (target: string, channel: string, args: unknown[]) => {
+    expect(target).toBe(peer);
+    const capture = host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'));
+    if (!capture) return { ok: false as const, error: { code: 'ACCESS_REVOKED' as const, message: 'removed' } };
+    assertSharedTaskInvoke(capture, { channel, args });
+    if (channel === 'local-db:sessions:get') return { ok: true as const, result: { id: 'session', title: 'Tests' } };
+    if (channel === 'maker:session-in-turn') return { ok: true as const, result: running };
+    expect(channel).toBe('local-db:messages:list');
+    const history = [
+      { sessionId: 'session', id: 'latest', role: 'assistant', content: answer },
+      ...Array.from({ length: 19 }, (_, n) => ({ sessionId: 'session', id: `resume-${n}`, role: 'user', content: '[UI_ACTION_TRIGGER] continue' })),
+      { sessionId: 'session', id: 'question', role: 'ask_user', content: { questions: [{ question: earlierQuestion }] } },
+    ];
+    const { before, limit } = args[1] as { before?: string; limit: number };
+    const start = before ? history.findIndex(row => row.id === before) + 1 : 0;
+    return { ok: true as const, result: history.slice(start, start + limit) };
+  });
+  const reader = createSharedTaskProgressReader({ invoke, captureGroupAccess: async () => null,
+    caller: () => ({ key: 'caller', current: true, accountScoped: true, planMode: true }) });
+  const context = { agentKind: 'codex', workingDir: '/fixture', sessionId: 'mine', sessionInstanceId: 'instance' };
+  expect(await reader({ task_link: buildSessionDeepLink('session', { deviceId: 'desktop' }) }, context)).toMatchObject({ ok: false });
+  expect(invoke).not.toHaveBeenCalled();
+  const read = (before?: string) => reader({ task_link: link, before }, context);
+  const first = await read();
+  expect(first).toMatchObject({ ok: true, inTurn: true, nextBefore: 'resume-18', events: [{ role: 'assistant', text: answer }] });
+  if (!first.ok || !first.nextBefore) throw new Error('Expected a page cursor');
+  expect(await read(first.nextBefore)).toMatchObject({ ok: true, nextBefore: null, events: [{ role: 'ask_user', text: earlierQuestion }] });
+  running = false;
+  answer = 'Tests passed';
+  expect(await read()).toMatchObject({ ok: true, inTurn: false, events: [{ role: 'assistant', text: answer }] });
+  serverDetail = { ...detail(2), guests: [] };
+  await host.refresh('sharedTask');
+  expect(await read()).toMatchObject({ ok: false, errorCode: 'REMOTE_ACCESS_REVOKED' });
+  expect(api.invite).not.toHaveBeenCalled();
+});
+
 // Unit: the public helper uses the real native host/command path. A lost create
 // receipt and changes during invitation were not covered by the UI lifecycle tests.
 // shared-task-mode.md: one original task, owner-only, read before uncertain retry.

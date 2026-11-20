@@ -1,5 +1,8 @@
 import { formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { describe, expect, it, vi } from 'vitest';
+import { createXdtHelperMcpServer } from '@cindy/mcps';
+import { handlePluginHostToolRequest } from '../../cindy-brain/hostToolSlot.js';
+import { authorizePluginHostToolCall, getPluginHostToolCaller } from '../../mcp-integrations/hostToolCaller.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -9,6 +12,7 @@ import {
   createSessionControlService,
   rebuildSessionQueueItem,
   sessionQueueOriginForDispatcher,
+  type SessionControlServiceDeps,
   type SessionSteerTurnIdentity,
 } from '../sessionControlService.js';
 
@@ -95,6 +99,8 @@ function setup(opts?: {
       displayText: 'before',
     });
   const deps = {
+    getPluginCaller: vi.fn<() => { source: { pluginId: string }; assertCurrent(): void } | undefined>(() => undefined),
+    runSessionAction: vi.fn<NonNullable<SessionControlServiceDeps['runSessionAction']>>(async () => ({ ok: true, result: { executionPaused: true } })),
     sessionExists: vi.fn(async () => opts?.exists ?? true),
     getLiveSession,
     getSessionActivitySnapshot: vi.fn(async () => activity),
@@ -151,8 +157,10 @@ function setup(opts?: {
     steerQueuedMessage: vi.fn(async (
       _sessionId: string, _item: AgentInputQueuedMessage, _turn: SessionSteerTurnIdentity,
     ) => opts?.steerAccepted ?? true),
-    getQueueSnapshot: vi.fn(async () => ({ pendingQueue: [queueItem], consumingClientIds: [] })),
-    replaceQueuedMessage: vi.fn(() => true),
+    getQueueSnapshot: vi.fn(async (): Promise<{ pendingQueue: AgentInputQueuedMessage[]; consumingClientIds: string[] }> => ({ pendingQueue: [queueItem], consumingClientIds: [] })),
+    replaceQueuedMessage: vi.fn((_sessionId: string, _clientId: string, _next: AgentInputQueuedMessage, _expected?: AgentInputQueuedMessage) => true),
+    updateQueuedMessageText: vi.fn((_sessionId: string, _expected: AgentInputQueuedMessage, _text: string,
+      _finalize: (updated: AgentInputQueuedMessage) => AgentInputQueuedMessage) => true),
     removeQueuedMessage: vi.fn(() => true),
     steerStoredQueuedMessage: vi.fn(async () => ({ kind: 'steered' as const })),
     moveQueuedMessage: vi.fn(() => 0),
@@ -164,6 +172,148 @@ function setup(opts?: {
 }
 
 describe('session control domain service', () => {
+  // Unit / #11043: a queued retry/compact callback can outlive the action scope.
+  // Existing revocation tests stayed inside admission.run; retain the actual grant.
+  it('retains control admission authority after the action scope has ended', async () => {
+    const { deps, service } = setup();
+    let current = true, delayed: (() => Promise<void>) | undefined;
+    deps.runSessionAction.mockImplementationOnce(async params => { delayed = params.beforeMutation; return { ok: true as const, result: { executionPaused: true } }; });
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'caller', tool: 'control_session', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {
+        if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await decision.run(() => service.controlSession({ targetSessionId: 'target', action: 'retry' }));
+    current = false;
+    await expect(delayed!()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  });
+
+  // Unit / A1: the previous patch used the weaker delivery grant before commit.
+  it.each(['target-read', 'action-commit'] as const)('rechecks full admission at %s before accepting control', async boundary => {
+    const { deps, service } = setup({ live: false });
+    let current = true;
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'caller', tool: 'control_session', args: {} },
+      { key: 'input', ownerInput: true, delegated: false,
+        assertCurrent: async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); },
+        assertDeliveryCurrent: async () => {}, },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    if (boundary === 'target-read') deps.sessionExists.mockImplementationOnce(async () => { current = false; return true; });
+    else deps.runSessionAction.mockImplementationOnce(async params => {
+      current = false; await params.beforeMutation(); return { ok: true as const, result: { executionPaused: true } };
+    });
+    await expect(decision.run(() => service.controlSession({ targetSessionId: 'target', action: 'pause' })))
+      .rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  });
+
+  it('returns the native unsupported compact error rather than an internal failure', async () => {
+    const { deps, service } = setup();
+    deps.runSessionAction.mockRejectedValue(Object.assign(new Error('Native compact is unavailable'), { code: 'UNSUPPORTED_CAPABILITY' }));
+    expect(await service.controlSession({ targetSessionId: 'target', action: 'compact' }))
+      .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Native compact is unavailable' });
+  });
+
+  // Unit / #11043 compact contract: exercise the plugin gateway and real
+  // helper registry. Service-only tests did not cover the MCP result shape.
+  it.each([
+    ['compacted', { status: 'requested', tokensBefore: 200, estimatedTokensAfter: 100 }],
+    ['noop', { status: 'requested', noop: true }],
+    ['failed', null],
+  ] as const)('returns %s compact result to an approved plugin', async (outcome, result) => {
+    const { service, deps } = setup();
+    deps.getPluginCaller.mockImplementation(() => {
+      const caller = getPluginHostToolCaller();
+      return caller && { source: { pluginId: caller.caller.pluginId }, assertCurrent: caller.assertCurrent };
+    });
+    deps.runSessionAction.mockImplementationOnce(async ({ beforeMutation }) => {
+      await beforeMutation();
+      if (outcome === 'failed') {
+        throw Object.assign(new Error('Pi native context compaction failed'), { code: 'COMPACT_FAILED' });
+      }
+      return { ok: true, result };
+    });
+    const data = await handlePluginHostToolRequest('plugin', {
+      type: 'host-tool-request', server: 'cindy_helper', tool: 'control_session',
+      args: { session_id: 'pi-task', action: 'compact', instructions: 'Keep decisions' },
+    }, () => true, {
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      getGhost: () => ({
+        enabled: true, dir: '/plugin', approval: { state: 'approved', revision: 'r1' },
+        manifest: { schemaVersion: 3, id: 'plugin', name: 'Plugin', version: '1.0.0',
+          kind: 'chip', entry: 'main.js', agent: { hostTools: ['control'] } },
+      }),
+      createRuntime: (_server, caller) => {
+        const server = createXdtHelperMcpServer({ sessionControl: service, authorizeCall: authorizePluginHostToolCall },
+          { agentKind: 'pi', workingDir: '', hostCaller: caller });
+        return { ...server.hostTools, close: () => server.close() };
+      },
+    });
+    expect(data.isError ?? false).toBe(outcome === 'failed');
+    const payload = data.content[0];
+    expect(JSON.parse(payload.type === 'text' ? payload.text : '{}')).toMatchObject(outcome === 'failed'
+      ? { ok: false, errorCode: 'COMPACT_FAILED' }
+      : { ok: true, action: 'compact', session_id: 'pi-task', result });
+    expect(deps.runSessionAction).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'pi-task', action: 'compact', instructions: 'Keep decisions',
+    }));
+  });
+
+  // UI parity: machine-generated rows are not editable, even with plugin control.
+  it.each([
+    { kind: 'session' as const, senderSessionId: 'other', displayText: 'before' },
+    { kind: 'orca' as const, senderLabel: 'worker', displayText: 'before' },
+    { kind: 'scheduler' as const, scheduleId: 'schedule', scheduleName: 'automation', runId: 'run' },
+  ])('rejects plugin edits of UI-ineligible rows (%j)', async origin => {
+    const { deps, service } = setup({ queueItem: item(origin) });
+    deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent: () => {} });
+    const params = { targetSessionId: 'target', queuedMessageId: 'queued-1', message: 'edited' };
+    expect(await service.updateQueuedMessage(params)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.replaceQueuedMessage).not.toHaveBeenCalled();
+    expect(deps.updateQueuedMessageText).not.toHaveBeenCalled();
+    expect(await service.moveQueuedMessage({ ...params, position: 0 })).toMatchObject({ ok: true });
+    expect(await service.steerQueuedMessage(params)).toMatchObject({ ok: true });
+    expect(await service.cancelQueuedMessage(params)).toMatchObject({ ok: true });
+  });
+
+  it('uses the native text edit and replaces the original authorization with plugin attribution', async () => {
+    const original = item();
+    original.autoReviewUserText = 'original owner request';
+    const { deps, service } = setup({ queueItem: original });
+    deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent: () => {} });
+    expect(await service.updateQueuedMessage({ targetSessionId: 'target', queuedMessageId: 'queued-1', message: 'edited' }))
+      .toMatchObject({ ok: true });
+    expect(deps.replaceQueuedMessage).not.toHaveBeenCalled();
+    const [session, expected, text, finalize] = deps.updateQueuedMessageText.mock.calls[0]!;
+    expect([session, expected, text]).toEqual(['target', original, 'edited']);
+    expect(finalize({ ...original, text })).toMatchObject({
+      sourcePlugin: { pluginId: 'editor' },
+      autoReviewUserText: { kind: 'agent-request' },
+    });
+  });
+
+  it.each(['cancelQueuedMessage', 'steerQueuedMessage', 'moveQueuedMessage'] as const)(
+    'allows plugin %s on a user row and still rejects a consuming row', async operation => {
+      const { deps, service } = setup({ queueItem: item() });
+      deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent: () => {} });
+      const params = { targetSessionId: 'target', queuedMessageId: 'queued-1', position: 0 };
+      expect(await service[operation](params)).toMatchObject({ ok: true });
+      deps.getQueueSnapshot.mockResolvedValue({ pendingQueue: [item()], consumingClientIds: ['queued-1'] });
+      expect(await service[operation](params)).toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
+    },
+  );
+
+  it('rechecks plugin installation after the queue read and before mutation', async () => {
+    const { deps, service } = setup({ queueItem: item() });
+    const assertCurrent = vi.fn(() => { throw new Error('plugin revoked'); });
+    deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent });
+    await expect(service.cancelQueuedMessage({ targetSessionId: 'target', queuedMessageId: 'queued-1' }))
+      .rejects.toThrow('plugin revoked');
+    expect(deps.removeQueuedMessage).not.toHaveBeenCalled();
+  });
+
   it('marks ordinary send_to_session queue rows with the dispatcher identity', () => {
     expect(
       sessionQueueOriginForDispatcher({

@@ -5,6 +5,16 @@ import { bindDetectedProvider } from '../providerDetection.js';
 import { BUNDLED_CATALOG, parseCatalog } from '../catalog.js';
 
 describe('documented supplier interfaces', () => {
+  it('retains the public Magpie preset only while its actual runtime endpoint matches', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'magpie')!;
+    const runtime = { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [] };
+    const route = (baseUrl: string) => buildUserProvider({
+      id: 'local-connection', name: 'Private connection label', runtimes: { pi: { ...runtime, baseUrl } },
+    }, { presets: [preset] }).routing.pi!;
+    expect(route(runtime.baseUrl).usagePresetId).toBe('magpie');
+    expect(route('https://my-proxy.example/v1').usagePresetId).toBeUndefined();
+  });
+
   // #8164: the same key can have Coding Plan quota but no pay-as-you-go balance.
   // Exercise both saved connections and the URL-first connection setup path.
   describe('Zhipu Pi automatic endpoint selection', () => {

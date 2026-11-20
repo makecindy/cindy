@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry, type XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
 import {
+  registerControlSessionTool,
   registerCancelSessionQueuedMessageTool,
   registerGetSessionRuntimeTool,
   registerMoveSessionQueuedMessageTool,
@@ -95,10 +96,41 @@ function setup(opts?: { sessionId?: string | undefined }) {
   registerStopSessionTurnTool(registry, deps);
   registerGetSessionRuntimeTool(registry, deps);
   registerSetSessionRuntimeTool(registry, deps);
+  registerControlSessionTool(registry, deps);
   return { deps, registry };
 }
 
 describe('cindy_helper session control tools', () => {
+  it('exposes shared execution actions only when the Host provides them', async () => {
+    const { deps, registry } = setup();
+    expect(parse(await registry.call('control_session', { session_id: 'target', action: 'pause' }))).toMatchObject({ ok: false });
+    deps.controlSession = vi.fn(async () => ({ ok: true as const, result: { executionPaused: true } }));
+    registerControlSessionTool(registry, deps);
+    expect(parse(await registry.call('control_session', { session_id: 'target', action: 'pause' })))
+      .toMatchObject({ ok: true, action: 'pause', result: { executionPaused: true } });
+    expect(parse(await registry.call('control_session', { session_id: 'target', action: 'pause', instructions: 'summary' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
+  // Unit / queue capability contract: an attested plugin has no task identity.
+  // The old entry rejected every mutation with NO_SESSION_CONTEXT before reaching the queue owner.
+  it.each(['update', 'cancel', 'steer', 'move'] as const)('allows plugin %s through the existing queue tool', async action => {
+    const { deps, registry } = setup({ sessionId: undefined });
+    deps.getSessionContext = () => ({ agentKind: 'codex', workingDir: '', hostCaller: {
+      kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1,
+    } });
+    const result = await registry.call(`${action}_session_queued_message`, {
+      session_id: 'target', queued_message_id: 'queued-1',
+      ...(action === 'update' ? { message: 'edited' } : {}),
+      ...(action === 'move' ? { position: 0 } : {}),
+    });
+    expect(parse(result)).toMatchObject({ ok: true, queued_message_id: 'queued-1' });
+    const mutation = { update: deps.updateQueuedMessage, cancel: deps.cancelQueuedMessage,
+      steer: deps.steerQueuedMessage, move: deps.moveQueuedMessage }[action]!;
+    expect(mutation).toHaveBeenCalledWith(expect.objectContaining({
+      callerSessionId: undefined, targetSessionId: 'target', queuedMessageId: 'queued-1',
+    }));
+  });
+
   // Unit #9801/uKm_: the production tool must retain partial-application facts
   // in its existing error payload; prior tests only covered successful runtime results.
   it('returns an error with the applied runtime and original permission failure', async () => {

@@ -16,7 +16,6 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
-import WebSocket from 'ws';
 
 import {
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
@@ -38,7 +37,7 @@ import {
 import { getActiveAuthRealm, getAuthState, getCurrentUserId, getDeviceId } from '../authManager.js';
 import { getClientEndpointForRealm, loadClientEndpointsForRealm } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { deviceName } from './deviceName.js';
@@ -429,10 +428,7 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
       remoteControlEnabled: false,
       busy: false,
     }),
-    createWebSocket: async (url, headers) => new WebSocket(url, {
-      headers,
-      agent: await createOutboundHttpAgent(url),
-    } as WebSocket.ClientOptions),
+    createWebSocket: (url, headers) => openLinkWebSocket('device-link', url, { headers }),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),
@@ -752,7 +748,7 @@ function crossRegionClientStopped(client: DeviceLinkClient | null): boolean {
 }
 
 export async function crossRegionInvoke(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
-  options?: { preSend?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
+  options?: { preSend?: () => void; beforeDispatch?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
   const rt = runtime;
   const peer = parseProviderSharePeer(peerKey);
   const state = peer ? stateForShare(peer.shareId) : null;
@@ -766,14 +762,15 @@ export async function crossRegionInvoke(peerKey: string, channel: string, args: 
     }
   };
   const preSend = () => { assertActive(); options?.preSend?.(); };
-  if (options?.liveProviderMetadata) return crossRegionInvokeLive(peerKey, channel, args, timeoutMs, { preSend });
+  const sendOptions = { preSend, beforeDispatch: options?.beforeDispatch };
+  if (options?.liveProviderMetadata) return crossRegionInvokeLive(peerKey, channel, args, timeoutMs, sendOptions);
   return invokeProviderMetadataContinuity(peerKey, channel, args,
-    () => crossRegionInvokeLive(peerKey, channel, args, timeoutMs, { preSend }),
+    () => crossRegionInvokeLive(peerKey, channel, args, timeoutMs, sendOptions),
     () => { try { preSend(); return true; } catch { return false; } });
 }
 
 async function crossRegionInvokeLive(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
-  options?: { preSend?: () => void }): Promise<InvokeResultPayload> {
+  options?: { preSend?: () => void; beforeDispatch?: () => void }): Promise<InvokeResultPayload> {
   const rt = runtime;
   const peer = parseProviderSharePeer(peerKey);
   const state = peer ? stateForShare(peer.shareId) : null;
@@ -800,11 +797,11 @@ async function crossRegionInvokeLive(peerKey: string, channel: string, args: unk
     if (!client.isLinkReady(peerKey)) await open();
     let response: InvokeResultPayload;
     try {
-      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend });
+      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend, beforeDispatch: options?.beforeDispatch });
     } catch (error) {
       if (!(error instanceof DeviceLinkError) || error.code !== 'LINK_NOT_OPEN') throw error;
       await open();
-      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend });
+      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend, beforeDispatch: options?.beforeDispatch });
     }
     if (response.ok) noteOnline(true);
     else if (response.error.code === 'DEVICE_OFFLINE') noteOnline(false);

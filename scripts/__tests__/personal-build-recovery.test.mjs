@@ -1,3 +1,5 @@
+import {preflightPersonalLauncher} from '../personal-build/startup-preflight.mjs';
+import {fileURLToPath} from 'node:url';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -247,6 +249,31 @@ test('first health bootstrap preserves the observed baseline and rejects data, r
 // Regression: an external handover quit the old app before discovering a live supervisor lock.
 // Existing journal tests start after shutdown and cannot catch this ordering/race. Script integration:
 // use real filesystem locks/receipts, injected process operations, no live Cindy profile or waits.
+test('shared upgrade rejects legacy or unsafe candidate launchers before stopping the old app', {
+  skip: process.platform !== 'darwin',
+}, async t => {
+  const f = fixture(t);
+  const scripts = path.join(f.dir, 'candidate', 'scripts');
+  fs.mkdirSync(scripts, {recursive:true});
+  const file = path.join(scripts, 'restart-desktop-remote.mjs');
+  const probe = directory => preflightPersonalLauncher(process.execPath, directory, '/fixture/Cindy Personal.app');
+  const dir = path.dirname(scripts);
+  let stopped = false;
+  for (const source of [
+    'export const legacy = true;',
+    'export const resolveDesktopLaunchPolicy = () => ({reuseTerminal:true,coldBuildTimeoutMs:600000});',
+    'export const resolveDesktopLaunchPolicy = () => ({reuseTerminal:false,coldBuildTimeoutMs:180000});',
+  ]) {
+    fs.writeFileSync(file, source);
+    await assert.rejects(restartWithSupervisorLock(path.join(f.dir, 'supervisor.lock'), 42, {
+      prepare: () => probe(dir), observe: () => ({pid:42, ready:true}), stop: () => { stopped = true; },
+      record: () => {},
+    }), /cold-start support|cold-build interval/);
+    assert.equal(stopped, false);
+  }
+  assert.equal(probe(fileURLToPath(new URL('../../', import.meta.url))).reuseTerminal, false);
+});
+
 test('manual restart keeps the old app alive on lock contention and failed preflight', async t => {
   const f = fixture(t), lock = path.join(f.dir, 'supervisor.lock');
   const phases = [], calls = [];

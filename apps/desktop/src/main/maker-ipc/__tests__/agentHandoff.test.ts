@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildForkOriginHandoff,
   composeForkOriginHandoff,
+  buildHandoff,
   buildHandoffText,
   createAgentHandoffPendingRegistry,
   describeHandoffUserSource,
+  estimateHandoffTokens,
   extractAgentIslandPromptText,
   extractPlainText,
   prependHandoffToUserMessage,
@@ -141,20 +143,22 @@ describe('buildHandoffText', () => {
     expect(text.length).toBeLessThanOrEqual(16_000);
   });
 
-  // PR #9976 review, unit: reply hints can be dropped while user text still fits.
-  // The previous early-history fixtures never put a completed action at this boundary.
-  it.each([13_900, 14_500])('marks missing completion outcomes when early replies are dropped (length=%i)', (length) => {
-    const request = `Send the report once. ${'x'.repeat(length)}`;
-    const messages = [msg('user', request), msg('assistant', `Report sent successfully. ${'done '.repeat(30)}`)];
-    for (let i = 0; i < 4; i++) messages.push(msg('user', `Progress ${i}`), msg('assistant', `Checking ${i}`));
-    const text = buildHandoffText(messages, { ...opts, sessionId: 's-reply' });
-    expect(text).toContain('Send the report once.');
-    expect(text).not.toContain('Report sent successfully.');
-    expect(text).toContain('Earlier assistant replies omitted');
-    expect(text).toContain('verify completion in allowed history before repeating actions');
-    if (length === 13_900) expect(text).toContain(request);
-    else expect(text).toContain('Earlier user text omitted or abbreviated');
-    expect(text.length).toBeLessThanOrEqual(16_000);
+  // #9976, unit: a long early request must not crowd out newer completion
+  // outcomes. The omission marker signals that older context is incomplete.
+  it('condenses the oldest request before dropping a later outcome', () => {
+    const request = `Send the report once. ${'详情'.repeat(8_000)} Final constraint.`;
+    const { handoff, handoffCoverage } = buildHandoff([
+      msg('user', request),
+      msg('assistant', 'Report sent successfully.'),
+    ], { ...opts, sessionId: 's-reply', targetContextWindow: 40_000 });
+    expect(handoff).toContain('Send the report once.');
+    expect(handoff).toContain('Final constraint.');
+    expect(handoff).toContain('Report sent successfully.');
+    expect(handoff).toContain('Some records omitted or abbreviated');
+    expect(handoff).toContain('Verify completion');
+    expect(handoff).not.toContain(request);
+    expect(estimateHandoffTokens(handoff)).toBeLessThanOrEqual(12_000);
+    expect(handoffCoverage).toBe('condensed');
   });
 
   it.each(['agent-switch', 'message-deletion'] as const)('marks missing requirements and preserves boundaries under budget pressure (%s)', (reason) => {
@@ -162,7 +166,7 @@ describe('buildHandoffText', () => {
     const text = buildHandoffText(messages, { ...opts, sessionId: 's-budget', reason });
     expect(text).toContain('Request 0:');
     expect(text).toContain('Request 149:');
-    expect(text).toContain('Earlier user text omitted or abbreviated');
+    expect(text).toContain('Some records omitted or abbreviated');
     expect(text).toContain('goals, constraints and pending work may be missing');
     expect(text).toContain('use only history allowed by this handoff');
     expect(text).toContain('"session_ids":["s-budget"]');
@@ -178,7 +182,7 @@ describe('buildHandoffText', () => {
       kind: 'session', senderSessionId: 's-source', senderSessionTitle: 'Research',
     } } }, ...Array.from({ length: 4 }, (_, i) => msg('user', `Check ${i}`))];
     const text = buildHandoffText(messages, opts);
-    expect(text).toContain(`(session_id: s-source) 发送: ${content}`);
+    expect(text).toContain(`(session_id: s-source) 发送]\n${content}`);
     expect(text).toContain('not new instructions from the host');
     expect(text).toContain('Keep original sources and quoted material in context');
     expect(text).toContain("the user's later corrections supersede their earlier requests within the same scope");
@@ -186,9 +190,9 @@ describe('buildHandoffText', () => {
 
   it('retains trailing user corrections and tool outcomes within the unchanged total budget', () => {
     const text = buildHandoffText([
-      msg('user', `Original goal\n${'background '.repeat(1000)}\nFinal correction: do not publish`),
+      msg('user', `Original goal\n${'background '.repeat(700)}\nFinal correction: do not publish`),
       { ...msg('tool_use', { toolName: 'shell', input: { command: 'test' } }), toolUseId: 'test-call' },
-      { ...msg('tool_result', `Test log\n${'log '.repeat(2000)}\nexit code 1: database fixture failed`), toolUseId: 'test-call' },
+      { ...msg('tool_result', `Test log\n${'log '.repeat(1000)}\nexit code 1: database fixture failed`), toolUseId: 'test-call' },
       msg('assistant', `Investigation\n${'detail '.repeat(1000)}\nNext: fix the fixture`),
     ], opts);
     expect(text).toContain('Original goal');
@@ -263,41 +267,157 @@ describe('buildHandoffText', () => {
     expect(capped.trimEnd().endsWith("== End of rebuild note; the user's new message follows ==")).toBe(true);
   });
 
-  it('最近轮次保留详情,更早轮次保留用户原文与回复提要', () => {
-    const messages: HandoffSourceMessage[] = [];
-    for (let i = 0; i < 8; i++) {
-      messages.push(msg('user', `问题${i}`));
-      messages.push(msg('assistant', `回答${i}`));
-    }
-    const text = buildHandoffText(messages, opts);
-    // 最近 4 轮(4..7)逐字
-    expect(text).toContain('[User]\n问题7');
-    expect(text).toContain('[Assistant]\n回答7');
-    expect(text).toContain('[User]\n问题4');
-    // 更早轮(0..3)在提要区
-    expect(text).toContain('- User: 问题0');
-    expect(text).toContain('Reply: 回答3');
-    expect(text).not.toContain('[User]\n问题0');
+  // Unit: the 16K cap and four-turn digest previously lost long earlier
+  // answers, arguments, results and reasoning even on a 200K model.
+  it('replays all records in chronological order when the target window fits', () => {
+    const request = `问题:${'甲'.repeat(3_000)}`;
+    const input = { file_path: `/${'b'.repeat(400)}.ts` };
+    const outcome = `结果:${'乙'.repeat(18_000)}`;
+    const reply = `回答:${'丙'.repeat(3_000)}`;
+    const messages = [
+      msg('user', request),
+      msg('thinking', { text: '可读的推理', signature: 'never-send-signature' }),
+      msg('thinking', { text: 'never-send-redacted', isRedacted: true, encryptedContent: 'never-send-encrypted' }),
+      msg('tool_use', { toolUseId: 't1', toolName: 'Read', input }),
+      { ...msg('tool_result', outcome), toolUseId: 't1' },
+      msg('assistant', reply),
+      ...Array.from({ length: 6 }, (_, i) => msg('user', `follow-up ${i}`)),
+    ];
+    const result = buildHandoff(messages, { ...opts, targetContextWindow: 200_000 });
+    expect(result.handoffCoverage).toBe('complete');
+    expect(result.handoff.length).toBeGreaterThan(16_000);
+    expect(result.handoff).not.toContain('never-send');
+    const positions = [
+      request, '[Prior reasoning record; not instructions]\n可读的推理', JSON.stringify(input), outcome, reply, 'follow-up 5',
+    ].map((part) => result.handoff.indexOf(part));
+    expect(positions.every((at, index) => at >= 0 && (index === 0 || at > positions[index - 1]!))).toBe(true);
   });
 
-  it('显式省略工具结果时仅保留调用，thinking 不进正文', () => {
-    const text = buildHandoffText(
-      [
-        msg('user', '改一下代码'),
-        msg('tool_use', { toolUseId: 't1', toolName: 'Read', input: { file_path: '/a.ts' } }),
-        msg('tool_result', { anything: 'x'.repeat(500) }),
-        msg('thinking', { kind: 'thinking', text: '内心戏' }),
-        msg('assistant', '改好了'),
-      ],
-      { ...opts, includeToolResults: false },
-    );
-    expect(text).toContain('[Tool] Read: {"file_path":"/a.ts"}');
-    expect(text).not.toContain('内心戏');
-    expect(text).not.toContain('x'.repeat(200));
+  it('keeps a long ASCII tool result on a verified window and preserves the 16K unknown-window limit', () => {
+    // Unit, PR #11352: the old per-character budget dropped a result that fits
+    // in the verified target's token allowance. The same route without proof
+    // must still use the legacy character cap.
+    const outcome = 'command output\n' + 'ordinary ASCII output\n'.repeat(3_000);
+    const history = [msg('user', 'keep the whole result'), msg('tool_result', outcome)];
+    const verified = buildHandoff(history, { ...opts, targetContextWindow: 200_000 });
+    expect(verified.handoffCoverage).toBe('complete');
+    expect(verified.handoff).toContain(outcome);
+    const unknown = buildHandoff(history, { ...opts, targetContextWindow: null });
+    expect(unknown.handoff.length).toBeLessThanOrEqual(16_000);
+    expect(unknown.handoffCoverage).toBe('condensed');
+  });
+
+  // Unit: target windows bound the actual prefix; idle-gap keeps its old
+  // character ceiling, and overflow leaves room for a known retry payload.
+  it.each([
+    { targetContextWindow: 500_000, cap: 100_000, reason: 'agent-switch' as const },
+    { targetContextWindow: 500_000, cap: 16_000, reason: 'idle-gap' as const },
+    { targetContextWindow: 8_000, cap: 2_400, reason: 'model-window-switch' as const },
+    { targetContextWindow: 20_000, nextInputChars: 9_000, cap: 4_000, reason: 'context-overflow' as const },
+  ])('enforces the replay budget for $reason', ({ cap, ...options }) => {
+    const result = buildHandoff([
+      msg('assistant', `Long retained record ${'甲'.repeat(110_000)} Final check.`),
+    ], { ...opts, ...options });
+    expect(estimateHandoffTokens(result.handoff)).toBeLessThanOrEqual(cap);
+    if (options.reason === 'idle-gap') expect(result.handoff.length).toBe(cap);
+    expect(result.handoff).toContain('Final check.');
+    expect(result.handoffCoverage).toBe('condensed');
+    expect(result.handoff).toMatch(/== End of (handoff|rebuild) note; the user's new message follows ==$/);
+  });
+
+  // Unit, PR #11352: user text is denser than the full history once a large
+  // ASCII tool log is reduced. The first estimate cannot set the final limit.
+  it('rechecks token usage after prioritizing non-ASCII user text over ASCII logs', () => {
+    const history = [
+      msg('user', `起始约束 ${'中文🧭'.repeat(21_000)} 最终纠正`),
+      msg('tool_result', 'mostly plain English tool data\n'.repeat(20_000)),
+      msg('user', '近期要求'),
+    ];
+    const result = buildHandoff(history, { ...opts, targetContextWindow: 200_000 });
+    expect(result.handoffCoverage).toBe('condensed');
+    expect(result.handoff).toContain('起始约束');
+    expect(result.handoff).toContain('近期要求');
+    const asciiUnits = result.handoff.replace(/[^\x00-\x7f]/g, '').length;
+    expect(asciiUnits * 0.4 + (result.handoff.length - asciiUnits)).toBeLessThanOrEqual(60_000);
+    expect(result.handoff).toMatch(/== End of handoff note; the user's new message follows ==$/);
+  });
+
+  // 2026-11-11 handoff regression (7e35c9ff94 / d950013706), unit.
+  // A few large tool logs exceeded the original 16K handoff and consumed
+  // all history before the next request. Every request in this fixture fits.
+  it.each([undefined, 200_000])('keeps every user request and the newest tool result when logs fill the window (%s)', (targetContextWindow) => {
+    const messages: HandoffSourceMessage[] = [];
+    const users = Array.from({ length: 10 }, (_, index) =>
+      `Request ${index}: keep this exact condition. ${'需求 detail '.repeat(16)} Correction ${index}.`);
+    const latestResult = `Recent execution finished. ${'结果 details '.repeat(190)} All checks passed.`;
+    for (const [index, user] of users.entries()) {
+      const id = `read-${index}`;
+      messages.push(
+        msg('user', user),
+        { ...msg('tool_use', { toolName: 'Read', input: { file_path: `/f-${index}` } }), toolUseId: id },
+        { ...msg('tool_result', index === 9 ? latestResult
+          : { fullText: 'earlier output '.repeat(2500), exitCode: 1 }), toolUseId: id },
+        msg('assistant', `Reply ${index}: finished reviewing this file.`),
+      );
+    }
+    const { handoff, handoffCoverage } = buildHandoff(messages, {
+      ...opts, sessionId: 'history', targetContextWindow,
+    });
+    expect(handoffCoverage).toBe('condensed');
+    let last = -1;
+    for (const user of users) {
+      const index = handoff.indexOf(`[User]\n${user}`);
+      expect(index).toBeGreaterThan(last);
+      last = index;
+    }
+    expect(handoff).toContain(latestResult);
+    expect(handoff).toContain('exit 1; 37500 chars; result omitted');
+    expect(handoff).toContain('Some records omitted or abbreviated');
+    if (targetContextWindow) expect(estimateHandoffTokens(handoff)).toBeLessThanOrEqual(60_000);
+    else expect(handoff.length).toBeLessThanOrEqual(16_000);
+  });
+
+  // Unit: entering condensation must cap an individual recent tool result
+  // and reasoning block even when there is spare space for their full heads.
+  it('caps one huge result and one huge reasoning record without crowding out other history', () => {
+    const { handoff, handoffCoverage } = buildHandoff([
+      msg('user', 'Initial scope: stay read-only.'),
+      msg('assistant', 'I will verify first.'),
+      msg('user', 'Follow up with the exact status.'),
+      { ...msg('tool_result', `Huge start ${'x'.repeat(75_000)} huge end`), toolUseId: 'huge' },
+      msg('thinking', { text: `Thought start ${'y'.repeat(75_000)} thought end` }),
+      { ...msg('tool_result', 'Small but important outcome.'), toolUseId: 'small' },
+      msg('assistant', 'Final status: verified.'),
+    ], { ...opts, sessionId: 'history' });
+    expect(handoffCoverage).toBe('condensed');
+    for (const text of [
+      'Initial scope: stay read-only.', 'I will verify first.', 'Follow up with the exact status.',
+      'Huge start', 'huge end', 'Thought start', 'thought end',
+      'Small but important outcome.', 'Final status: verified.',
+    ]) expect(handoff).toContain(text);
+    const resultAt = handoff.indexOf('[Tool result id=huge;');
+    const thinkingAt = handoff.indexOf('[Prior reasoning record;');
+    const smallAt = handoff.indexOf('[Tool result id=small;');
+    expect(thinkingAt - resultAt - 1).toBeLessThanOrEqual(4000);
+    expect(smallAt - thinkingAt - 1).toBeLessThanOrEqual(4000);
+    expect(handoff.match(/…\(middle omitted\)…/g)).toHaveLength(2);
+  });
+
+  it('explicitly omitted tool outcomes are marked, while readable thinking is carried over', () => {
+    const result = buildHandoff([
+      msg('tool_use', { toolUseId: 't1', toolName: 'Read', input: { file_path: '/a.ts' } }),
+      msg('tool_result', 'verified result'),
+      msg('thinking', { kind: 'thinking', text: 'check the actual files' }),
+    ], { ...opts, includeToolResults: false });
+    expect(result.handoff).toContain('[Tool] Read: {"file_path":"/a.ts"}');
+    expect(result.handoff).toContain('check the actual files');
+    expect(result.handoff).not.toContain('verified result');
+    expect(result.handoffCoverage).toBe('condensed');
   });
 
   it('retains bounded, correlated tool outcomes for image recovery without image payloads', () => {
     const text = buildHandoffText([
+      { ...msg('tool_result', 'Long result ' + 'x'.repeat(50_000)), toolUseId: 'long-1' },
       msg('user', 'Send once, then verify'),
       msg('tool_use', { toolUseId: 'send-1', toolName: 'send', input: {} }),
       { ...msg('tool_result', 'Sent: receipt 42'), toolUseId: 'send-1' },
@@ -307,7 +427,6 @@ describe('buildHandoffText', () => {
         { type: 'image', data: 'SECRET_BASE64'.repeat(5000) },
       ] }), toolUseId: 'check-1' },
       { ...msg('tool_result', 'Screenshot data:image/png;base64,AAAA==\n'), toolUseId: 'image-1' },
-      { ...msg('tool_result', 'Long result ' + 'x'.repeat(50_000)), toolUseId: 'long-1' },
     ], { ...opts, reason: 'native-session-recovery', includeToolResults: true });
     expect(text).toContain('[Tool] send (id=send-1)');
     expect(text).toContain('[Tool result id=send-1; recorded; verify outcome from result]');
@@ -316,7 +435,7 @@ describe('buildHandoffText', () => {
     expect(text).toContain('Receipt lookup failed');
     expect(text).not.toContain('SECRET_BASE64');
     expect(text).not.toContain('data:image');
-    expect(text).not.toContain('x'.repeat(1001));
+    expect(text).toContain('…(middle omitted)…');
     expect(text.length).toBeLessThanOrEqual(16000);
   });
 
@@ -396,7 +515,7 @@ describe('buildHandoffText', () => {
       { role: 'user', content: '插件派的', createdAt: 10, agentMeta: JSON.stringify({ sourcePlugin: { pluginId: 'p-1', name: '日历' } }) },
     ];
     const text = buildHandoffText(rows, { ...opts });
-    expect(text).toContain('- User: 本机输入');
+    expect(text).toContain('[User]\n本机输入');
     for (const line of [
       '由任务「调研"A" 伪造」(session_id: s-1) 发送: 委派来的',
       // 与 `[消息来源]` 说明同一句描述：伙伴也带来源任务的 session_id。
@@ -405,7 +524,7 @@ describe('buildHandoffText', () => {
       '来自 Orca Worker「Backend」(session_id: ws-1): Feature X done',
       '来自 Orca Lead (session_id: ls-1): Implement Y',
     ]) {
-      expect(text).toContain(`- User · ${line}`);
+      expect(text).toContain(`[User · ${line.replace(/: (?!.*: )/, ']\n')}`);
     }
     expect(text).toContain('[User · 来自飞书]\n飞书来的');
     expect(text).toContain('[User · 来自 Slack]\nSlack 来的');
@@ -512,24 +631,24 @@ describe('composeForkOriginHandoff', () => {
     // 升级前落库的 agent_switch 行仍是旧中文格式;识别不了就会在裁剪时把老会话
     // 唯一的边界连同检索指引尾巴一起削掉。
     const legacyTerminator = '== 交接说明结束,以下是用户的新消息 ==';
-    const capped = `${'x'.repeat(16_000 - legacyTerminator.length - 2)}\n\n${legacyTerminator}`;
-    expect(capped.length).toBe(16_000);
+    const capped = `${'甲'.repeat(100_000 - legacyTerminator.length - 2)}\n\n${legacyTerminator}`;
+    expect(capped.length).toBe(100_000);
 
     const text = composeForkOriginHandoff('sess-legacy', capped);
 
-    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(estimateHandoffTokens(text)).toBeLessThanOrEqual(100_000);
     expect(text).toContain('sess-legacy');
     expect(text.endsWith(`\n\n${legacyTerminator}`)).toBe(true);
   });
 
   it('已顶到上限的交接:组合后仍不超限,且结束标记前保有空行分隔', () => {
     const terminator = "== End of handoff note; the user's new message follows ==";
-    const capped = `${'x'.repeat(16_000 - terminator.length - 2)}\n\n${terminator}`;
-    expect(capped.length).toBe(16_000);
+    const capped = `${'x'.repeat(250_000 - terminator.length - 2)}\n\n${terminator}`;
+    expect(capped.length).toBe(250_000);
 
     const text = composeForkOriginHandoff('sess-p', capped);
 
-    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(estimateHandoffTokens(text)).toBeLessThanOrEqual(100_000);
     expect(text).toContain('sess-p');
     expect(text.trimEnd().endsWith(terminator)).toBe(true);
     // 正文被从中部裁开后,结束标记不能直接贴在半句话后面
@@ -543,10 +662,10 @@ describe('composeForkOriginHandoff', () => {
     { companion: true },
     { reason: 'message-deletion' as const },
   ])('preserves the full retrieval tail when forking a near-cap handoff (%j)', (options) => {
-    const messages = [msg('user', 'background '.repeat(1_500))];
+    const messages = [msg('user', '背景 '.repeat(49_300))];
     for (let i = 0; i < 4; i++) messages.push(msg('user', `Progress ${i}`), msg('assistant', `Latest outcome ${i}`));
     const pending = buildHandoffText(messages, {
-      fromLabel: 'Claude Code', toLabel: 'Codex', sessionId: 'sess-parent', ...options,
+      fromLabel: 'Claude Code', toLabel: 'Codex', sessionId: 'sess-parent', targetContextWindow: 500_000, ...options,
     });
     const tailAt = pending.indexOf('== Recalling earlier history') >= 0
       ? pending.indexOf('== Recalling earlier history')
@@ -557,7 +676,7 @@ describe('composeForkOriginHandoff', () => {
     expect(text).toContain('forked by the user');
     expect(text).toContain('Progress 3');
     expect(text).toContain('Latest outcome 3');
-    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(estimateHandoffTokens(text)).toBeLessThanOrEqual(100_000);
   });
 
   it('在引擎切换边界上 fork:来源标记并入 re-armed 交接,不替换它', () => {
@@ -904,7 +1023,7 @@ describe('buildHandoffText 工作状态区(社区 handoff packet 口径)', () =>
     expect(text).not.toContain('== Work ledger');
   });
 
-  it('把命令与 tool_result 成败收进 ledger，同时保留有界结果与末尾退出码', () => {
+  it('把命令与 tool_result 成败收进 ledger，同时重放完整结果与末尾退出码', () => {
     const text = buildHandoffText(
       [
         msg('user', '跑测试'),
@@ -928,7 +1047,7 @@ describe('buildHandoffText 工作状态区(社区 handoff packet 口径)', () =>
     expect(text).toContain('src/foo.test.ts');
     expect(text).toContain('[Tool result id=t1;');
     expect(text).toContain('exit code 1');
-    expect(text).not.toContain('FAIL src/foo.test.ts\n'.repeat(100));
+    expect(text).toContain('FAIL src/foo.test.ts\n'.repeat(400));
   });
 
   it('framing 包含「先核对工作区、以工作区为准」纪律', () => {
@@ -1031,12 +1150,8 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
     expect(text.trimEnd().endsWith("== End of handoff note; the user's new message follows ==")).toBe(true);
   });
 
-  /**
-   * 工具密集 + 工作状态区 + 检索指引三者叠满时,逐字区收缩到 1 轮仍会超过硬上限,
-   * 真正走到兜底截断分支(实测该构造正好顶到 16000)。英文 framing 比原中文长,
-   * 触达上限更容易;裸 slice 会把结束标记连同检索指引的尾巴一并削掉,用户的新消息
-   * 就失去了与内部历史的唯一显式分隔。
-   */
+  // The newest tool calls can fill the window before older dialogue fits.
+  // The scoped retrieval instructions and the end marker must survive.
   function capOverflowHistory(): HandoffSourceMessage[] {
     const out: HandoffSourceMessage[] = [];
     for (let i = 0; i < 25; i++) {
@@ -1063,15 +1178,16 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
     return out;
   }
 
-  it('逐字区收缩到底仍超限时,兜底截断也必须留住结束标记(不裸 slice 削尾)', () => {
+  it('用户原文超预算时优先保留首末请求和检索指引', () => {
     const text = buildHandoffText(capOverflowHistory(), {
       fromLabel: 'Claude Code',
       toLabel: 'Codex',
       sessionId: 'sess-cap',
     });
     expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain('[User]\nQ0');
     expect(text).toContain('[User]\nQ24');
-    expect(text).toContain('[Assistant]\nA24');
+    expect(text).toContain('Some records omitted or abbreviated');
     expect(text).toContain('"session_ids":["sess-cap"]');
     expect(text).toContain('"limit":10');
     expect(text).toContain('"limit":20');
@@ -1079,7 +1195,7 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
       .toBe(true);
   });
 
-  it('message-deletion 兜底截断留住的是重建版结束标记', () => {
+  it('message-deletion 超预算时保留重建版结束标记', () => {
     const text = buildHandoffText(capOverflowHistory(), {
       fromLabel: 'Codex',
       toLabel: 'Codex',
@@ -1087,8 +1203,9 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
       reason: 'message-deletion',
     });
     expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain('[User]\nQ0');
     expect(text).toContain('[User]\nQ24');
-    expect(text).toContain('[Assistant]\nA24');
+    expect(text).toContain('Some records omitted or abbreviated');
     expect(text.trimEnd().endsWith("== End of rebuild note; the user's new message follows =="))
       .toBe(true);
   });
@@ -1124,7 +1241,7 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
     );
   });
 
-  it('单轮 100 条 tool_use 折叠中部,且硬上限/检索段/结束标记全部存活', () => {
+  it('单轮工具密集时保留最近工具与原文检索指引', () => {
     const messages: HandoffSourceMessage[] = [msg('user', '执行大量工具')];
     for (let i = 0; i < 100; i++) {
       messages.push(msg('tool_use', {
@@ -1139,7 +1256,9 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
       sessionId: 'sess-tools',
     });
     expect(text.length).toBeLessThanOrEqual(16_000);
-    expect(text).toContain('(60 tool calls omitted)');
+    expect(text).toContain('Some records omitted or abbreviated');
+    expect(text).toContain('(id=tool-99)');
+    expect(text).not.toContain('(id=tool-0)');
     expect(text).toContain('== Retrieving earlier verbatim history (use when needed) ==');
     expect(text).toContain('"session_ids":["sess-tools"]');
     expect(text.trimEnd().endsWith("== End of handoff note; the user's new message follows ==")).toBe(true);

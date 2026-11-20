@@ -163,6 +163,12 @@ export function attachMenuHighlight(
     if (!target) {
       layer.style.transition = FADE_OUT;
       layer.style.opacity = '0';
+      // A detached row's invisible highlight must not keep the old list's scroll extent.
+      if (active && !panel.contains(active)) {
+        layer.style.transform = '';
+        layer.style.height = '0px';
+        lastPlacement = null;
+      }
       delete layer.dataset.row;
       delete layer.dataset.visible;
       active = null;
@@ -270,6 +276,11 @@ export function attachMenuHighlight(
   };
   const observer = new MutationObserver((records) => {
     if (records.some((r) => r.type === 'childList')) {
+      if (!active || !panel.contains(active)) {
+        layer.style.transform = '';
+        layer.style.height = '0px';
+        lastPlacement = null;
+      }
       rowCache = null;
       clipCache = new WeakMap();
       layoutTargetsDirty = true;

@@ -99,7 +99,15 @@ Desktop 群告警：隔离沙箱 `ui-mock/group-alert.json` 写入 `{"status":"w
 主界面可分别检查另一执行失败和待决定状态；不发送消息、不运行模型。该场景只替换合成群的
 服务输入，没有原执行 Session，真实服务器停止动作由生产服务入口回归测试覆盖。
 
+同一文件加 `"composer":true` 可验收群聊发送快捷键：真实输入框、发送队列与话题面板照常运行，
+该合成群的文字发送和话题回复由内存服务响应，不访问服务器或运行模型。消息只保留到本次
+测试进程结束；不用于验证真实投递、附件或伙伴执行。
+
 ## Mobile 模拟器
+
+自动化模拟记录包含发送前保存点超时和原始额度错误，分别打开任务
+`ui-mock-rich-answer` / `visual-automation-unread`，在历史失败提示中展开错误详情，
+检查原因传递后的文本与 Light / Dark 可读性；均为合成数据，不运行模型。
 
 ```bash
 pnpm mobile:sim:start -- --mock
@@ -116,6 +124,7 @@ pnpm mobile:sim:whoami -- --mock --json
 - 模拟电脑支持协同：任务或新建任务的「+」面板 →「协同模式」可以直接打开开启协同的表单，角色清单
   （含添加、长按移除）读写的是模拟电脑上的那一份，只在本次进程内生效。
 - 生效条件是开发构建（`__DEV__`）；正式包不包含这条路径。
+- 复古皮肤：`cindy://retro-skin-preview`，可加 `?skin=thinkpad` 等已有外观标识以直接比较各款键盘；在折叠屏竖向半折叠姿态下，使用正式的外壳、键盘及窗口几何显示原生预览；按键事件仅显示在屏幕内，不连接远程电脑。用于检查屏幕边界、素材拼接及真实触摸反馈，不代表远程连接已验证。
 - 设备画面连接页：`cindy://devices/desktop/cindy-visual-mock-mac?liveScreen=cindy-simulator%7Cpreview`。
   mock provider 保持远程桌面请求等待，真实页面展示连接中、等待较久及原有超时状态，供返回按钮与明暗主题截图；不连接真实电脑。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，

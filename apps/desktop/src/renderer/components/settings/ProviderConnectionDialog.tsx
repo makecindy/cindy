@@ -1896,6 +1896,8 @@ export function ProviderConnectionDialog({
         discoverySnapshotId: m.discoverySnapshotId,
         opaqueModelId: m.opaqueModelId || latest?.opaqueModelId,
         nameExplicit: latest?.nameExplicit ?? m.nameExplicit,
+        // Keep the Settings-refresh listing marker (#11298); a picker save is not a new listing.
+        ...(latest?.listedUpstream ? { listedUpstream: true as const } : {}),
         ...(interfaceId ? { interfaceId } : {}),
         ...(api ? { api } : {}),
         ...(picker.agent === 'pi' && piApi ? { piApi } : {}),
@@ -1927,6 +1929,7 @@ export function ProviderConnectionDialog({
           discoveredSource: m.discoveredSource,
           discoverySnapshotId: m.discoverySnapshotId,
           opaqueModelId: m.opaqueModelId,
+          ...(m.listedUpstream ? { listedUpstream: true as const } : {}),
           nameExplicit: m.nameExplicit,
           ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
@@ -2052,6 +2055,7 @@ export function ProviderConnectionDialog({
           discoverySnapshotId: m.discoverySnapshotId,
           opaqueModelId: m.opaqueModelId,
           nameExplicit: m.nameExplicit,
+          ...(m.listedUpstream ? { listedUpstream: true as const } : {}),
           ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
           ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
@@ -3494,8 +3498,8 @@ export function ProviderConnectionDialog({
                 >
                   {t('settings.providers.custom.imageGenerationReload.cancel')}
                 </Button>
-                <Button
-                  variant="secondary"
+                <Button data-settings-search-action="Interrupt running image generation and save this provider"
+                  variant="primary"
                   size="lg"
                   tone="danger-solid"
                   loading={saving}

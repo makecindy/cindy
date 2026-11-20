@@ -52,6 +52,7 @@ const source = ts.createSourceFile('NewMakerDraftRoute.tsx', readFileSync(
 const callbacks: Record<string, ts.Expression> = {};
 const routeDeclarations: string[] = [];
 const worktreeDeclarations: string[] = [];
+const pluginEngineDeclarations: string[] = [];
 function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
     && ['wtEffectiveSourceBranch', 'wtSourceReady'].includes(node.name.text)) {
@@ -64,6 +65,10 @@ function visit(node: ts.Node) {
     && ['controlledModelRoute', 'deviceLinkRemoteAgentSupported', 'effectiveAgentDeviceId', 'remoteAgentDevices', 'catalogDeviceId'].includes(node.name.text)) {
     routeDeclarations.push(`const ${node.getText(source)};`);
   }
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+    && ['pluginEnginesAllowed', 'rememberedPluginEngineDeviceId'].includes(node.name.text)) {
+    pluginEngineDeclarations.push(`const ${node.getText(source)};`);
+  }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
     const name = ts.isIdentifier(node.name) ? node.name.text : '';
     if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
@@ -74,6 +79,9 @@ function visit(node: ts.Node) {
 }
 visit(source);
 const worktreeSnapshotCode = ts.transpileModule(worktreeDeclarations.join('\n') + '\nwtRef.current;', {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
+const pluginEngineSelectionCode = ts.transpileModule(pluginEngineDeclarations.join('\n') + '\nrememberedPluginEngineDeviceId;', {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
@@ -148,6 +156,7 @@ async function submit(options: {
   modelGroupRoute?: ModelGroupResolveResult;
   /** 草稿那台电脑的模型目录读到哪一步；默认 ready。 */
   remoteModelListStatus?: 'ready' | 'loading' | 'error';
+  rememberedPluginEngineDeviceId?: string;
   effort?: Effort;
   submittedEffort?: Effort;
   model?: string;
@@ -313,8 +322,17 @@ async function submit(options: {
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
     activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
     resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
-    bindModelGroupSession: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
+    bindModelGroupSession: vi.fn(), commitModelGroupDecision: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
+    // 这些用例都走内置 Harness；插件引擎的新建路径由 newMakerDraft.test.ts 覆盖。
+    activePluginEngine: null,
+    rememberedPluginEngineDeviceId: runInNewContext(pluginEngineSelectionCode, {
+      isDeviceLinkDraft: !!options.deviceId,
+      effectiveRemoteHostId: options.remoteHostId,
+      draft: { vendor: agentKind, pluginEngine: options.rememberedPluginEngineDeviceId
+        ? { deviceId: options.rememberedPluginEngineDeviceId }
+        : null },
+    }),
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
@@ -360,7 +378,7 @@ async function submit(options: {
     localDraftSessionIdRef: { current: 'draft-id' },
     optimisticFirstMessageTitle: () => options.titlePreview ?? null, autoTitleLabels: {},
     remoteProjectsStore,
-    createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
+    createSession, rememberCreatedWorkspace: vi.fn(), toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
     makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
     markSessionStarting: noop, clearSessionStarting: noop,
     rehomeDraftAttachments: options.copyAttachments ?? (async () => []), getComposerDraft: () => options.builtInSkillIntent
@@ -455,6 +473,24 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // PR #11698: a restored remote engine is absent from the initial catalogue.
+  // Exercise both real submission callbacks in the existing unit fixture. Other
+  // catalogue cases use built-in engines and cannot catch this fallback.
+  it.each(['send', 'goal'] as const)('preserves %s while the selected remote plugin engine is unresolved', async (entry) => {
+    const result = await submit({ entry, rememberedPluginEngineDeviceId: 'engine-computer' });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.setGoal).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    if (entry === 'send') expect(result.toastWarning).toHaveBeenCalledWith('newChat.pluginEngines.unavailable');
+    else expect(result.errors[0]).toMatchObject({ message: 'newChat.pluginEngines.unavailable' });
+  });
+  // After moving the draft to another task computer, plugin engines are outside
+  // that composer's scope. A formerly selected one must not block its route.
+  it.each(['send', 'goal'] as const)('allows %s after switching the task computer with a remembered plugin engine', async (entry) => {
+    const result = await submit({ entry, deviceId: 'task-computer', rememberedPluginEngineDeviceId: 'engine-computer' });
+    expect(result.invokeRemote).toHaveBeenCalledWith('task-computer', 'maker:create-session', [expect.objectContaining({ agentKind: 'pi' })]);
+  });
   // Unit regression: hold both real submission boundaries open. The previous
   // route only opened after both resolved and navigated even after the user left.
   it('opens one task while create and attachments are pending, then sends the displayed message into it', async () => {
@@ -481,6 +517,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
         firstMessageIdentity: { clientId: bubble.clientId, createdAt: bubble.createdAt },
       })]]);
     expect(navigate).toHaveBeenCalledTimes(1);
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
   });
 
   it('sends once to the confirmed host task after losing the create acknowledgement', async () => {
@@ -504,6 +541,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
     });
     expect(navigate).toHaveBeenCalledTimes(1);
     expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.environment.rememberCreatedWorkspace).not.toHaveBeenCalled();
     const [failure] = result.environment.remoteProjectsStore.setCreationPreview.mock.calls.at(-1)!;
     await failure.editAfterFailure();
     expect(result.environment.rememberRecoverableHandoff).not.toHaveBeenCalled();
@@ -887,6 +925,19 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'share:fixture', providerId });
   });
+  // Unit: an immediate 402 must see the binding on the very first new-task dispatch.
+  it('binds a local model group before dispatch and commits its decision after acceptance', async () => {
+    const route = { agentKind: 'pi' as const, model: modelId, providerId };
+    const result = await submit({ entry: 'send', modelGroupRoute: {
+      outcome: 'routed', groupName: 'Fixture', modelName: modelId, sourceName: 'Local',
+      route, why: 'order', quota: null, trace: [], decisionId: 'decision',
+    } });
+    const { bindModelGroupSession, commitModelGroupDecision } = result.environment;
+    expect(bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, route);
+    expect(bindModelGroupSession.mock.invocationCallOrder[0]).toBeLessThan(result.sendMessage.mock.invocationCallOrder[0]);
+    expect(commitModelGroupDecision.mock.invocationCallOrder[0]).toBeGreaterThan(result.sendMessage.mock.invocationCallOrder[0]);
+  });
+
   // 模型组选到另一台电脑上的来源：两条新建路径都要把运行位置带进任务，登录检查读那台的目录，
   // 撞配额用的记录也带上位置。之前只有插件选路覆盖了这条路径。Tier: unit。
   it.each(['send', 'goal'] as const)('creates %s on the computer a model group picked', async (entry) => {

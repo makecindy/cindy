@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
   FILE_INLINE_MAX_BYTES,
   REMOTE_INVOKE_ALLOWLIST,
   sharedTaskHostPeer,
@@ -783,11 +784,18 @@ describe("mobile maker transport", () => {
         channel: "maker:provider:list",
         args: [
           {
-            capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+            capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1],
           },
         ],
       },
     ]);
+  });
+
+  it("sends the current model only for a task that needs its suspended source", async () => {
+    const { calls, maker } = harness();
+    const retainedModel = { agent: 'codex' as const, providerId: 'old', modelId: 'model-1' };
+    await maker.listProviders(retainedModel);
+    expect(calls[0]).toMatchObject({ channel: 'maker:provider:list', args: [{ retainedModel }] });
   });
 
   it("carries providerId into create-session only when a source is explicitly chosen", async () => {

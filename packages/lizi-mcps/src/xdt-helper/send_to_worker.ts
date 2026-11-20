@@ -40,7 +40,7 @@ export interface SendToWorkerDeps {
   }) => Promise<
     ControlResult<
       {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
         wakeKind: 'resumed' | 'already-active' | 'queued' | 'steered';
         targetTitle: string | null;
         targetLastUserSendAt: string | null;
@@ -61,7 +61,7 @@ export interface SendToWorkerDeps {
   }) => Promise<
     ControlResult<
       {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
         queuedMessageId: string;
         stopOutcome:
           | 'requested'
