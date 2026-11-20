@@ -31,16 +31,22 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useChromeActionsOverlap } from '@/components/layout/useChromeActionsOverlap';
 import { createLogger } from '@/lib/logger';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { usePaneAtWindowLeft, usePaneAtWindowTop } from '@/layout/panePlacement';
+import { useTabGroupHost } from './tabGroupHost';
 import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
-import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
+import {
+  CHROME_ACTIONS_GEOMETRY,
+  chromeActionsHitHoleWidth,
+} from '@/components/layout/chromeActionsGeometry';
 import { TabBar, TabStrip, TabTitleLabel, type PopoutWindowOption } from './TabBar';
 import { EmptyState } from './EmptyState';
 import { getTabKind, hydrateTabState } from './registry';
@@ -229,23 +235,47 @@ export function RightSidebarShell({
   const soloMode = hostedTabIds !== undefined;
   /** 右侧组是页签系统的"主组":任务级的激活位对账、快捷键、浏览器桥的活跃会话上报只由它做。 */
   const isPrimaryGroup = groupId === DEFAULT_TAB_GROUP && !soloMode;
-  const { isFullscreen } = useMacFullscreen();
+  const {
+    isFullscreen,
+    trafficLightInset = CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft,
+  } = useMacFullscreen();
   const chromeActionsLeft =
     isMac && !isFullscreen
-      ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
+      ? trafficLightInset
       : CHROME_ACTIONS_GEOMETRY.defaultLeft;
   // unifiedTopbar 本身有 px-2(8px) 左内边距。加上 chromeActionsLeft 后，
   // spacer 的布局起点正好落在 ChromeActions 簇之前，并在簇后保留 8px 呼吸间距。
-  const leftChromeActionsSpacerWidth =
+  const fallbackLeftChromeActionsSpacerWidth =
     unifiedTopbar && reserveLeftChromeActions
       ? chromeActionsLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth
       : 0;
-  // rail 邻位时浮动 ChromeActions 从工具面板左缘开始。命中洞保持 absolute
-  // 对齐窗口坐标；另加正常流中的 spacer，把 TabStrip 推到按钮簇之后。
-  const railChromeActionsSpacerWidth =
-    unifiedTopbar && !isFullscreen && railChromeActionsHitHole
-      ? CHROME_ACTIONS_GEOMETRY.clusterWidth
+  // 首个顶部面板既可能是 right-tabs，也可能是其它边页签组。统一使用布局树
+  // 给出的角落归属和宿主侧栏宽度，不再只按 rail/完全收起两个特例判断溢出。
+  const host = useTabGroupHost();
+  const atWindowLeft = usePaneAtWindowLeft();
+  const atWindowTop = usePaneAtWindowTop();
+  const expandedSidebarEdge =
+    isMac &&
+    atWindowLeft &&
+    atWindowTop &&
+    host &&
+    !host.sidebarCollapsed &&
+    !host.hasRailChromeActions
+      ? host.sidebarWidth
+      : undefined;
+  const paneLeftEdge =
+    expandedSidebarEdge ??
+    (railChromeActionsHitHole ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft : undefined);
+  const fallbackOverflowChromeActionsSpacerWidth =
+    unifiedTopbar && !isFullscreen && paneLeftEdge !== undefined
+      ? chromeActionsHitHoleWidth(paneLeftEdge, trafficLightInset)
       : 0;
+  const overlap = useChromeActionsOverlap<HTMLDivElement>(
+    isMac && unifiedTopbar && !!host,
+    chromeActionsLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth,
+  );
+  const overflowChromeActionsSpacerWidth = overlap.width ?? fallbackOverflowChromeActionsSpacerWidth;
+  const leftChromeActionsSpacerWidth = overlap.width === null ? fallbackLeftChromeActionsSpacerWidth : 0;
   const { t } = useTranslation();
   const installedGhosts = useInstalledGhosts();
   // 已弹出到独立窗口的页签:数据留在桶里,但本 Shell 不投影、不挂 body。
@@ -876,35 +906,43 @@ export function RightSidebarShell({
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       {unifiedTopbar ? (
         <div
+          ref={overlap.ref}
           data-testid="right-sidebar-unified-topbar"
           // bg 走 --panel-bg 与下方 TabBar / Body 同源(2026-07-21 用户裁决:CINDY 下
           // globals.css 会把 .bg-[var(--panel-bg)] 统一映射到玻璃底,原 bg-content-area
           // 是不透明灰,导致顶栏与面板体两种底色打架;其他 family 两 token 同为 surface,零变化)。
-          className="relative flex h-[46px] shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2"
+          className={`relative flex shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2 ${
+            // 空间不足时换行，保留原生安全区和所有面板操作。
+            overflowChromeActionsSpacerWidth > 0 || leftChromeActionsSpacerWidth > 0
+              ? 'min-h-[46px] flex-wrap'
+              : 'h-[46px]'
+          }`}
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           {topbarLeading}
-          {!isFullscreen && railChromeActionsHitHole && (
+          {overflowChromeActionsSpacerWidth > 0 && (
             <div
               aria-hidden
               data-testid="right-sidebar-rail-chrome-actions-hit-hole"
-              className="absolute left-0 top-0 h-full"
+              // The floating chrome occupies only the first row. A full-height
+              // absolute hole would intercept controls wrapped onto later rows.
+              className="absolute left-0 top-0 h-[46px]"
               style={
                 {
-                  width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+                  width: overflowChromeActionsSpacerWidth,
                   WebkitAppRegion: 'no-drag',
                 } as React.CSSProperties
               }
             />
           )}
-          {railChromeActionsSpacerWidth > 0 && (
+          {overflowChromeActionsSpacerWidth > 0 && (
             <div
               aria-hidden
               data-testid="right-sidebar-rail-chrome-actions-spacer"
-              className="h-full shrink-0"
+              className="h-[46px] shrink-0"
               style={
                 {
-                  width: railChromeActionsSpacerWidth,
+                  width: overflowChromeActionsSpacerWidth,
                   WebkitAppRegion: 'no-drag',
                 } as React.CSSProperties
               }
@@ -914,7 +952,7 @@ export function RightSidebarShell({
             <div
               aria-hidden
               data-testid="right-sidebar-left-chrome-actions-spacer"
-              className="h-full shrink-0"
+              className="h-[46px] shrink-0"
               style={
                 {
                   width: leftChromeActionsSpacerWidth,
@@ -946,12 +984,13 @@ export function RightSidebarShell({
             onMoveTab={soloMode ? undefined : handleMoveTab}
             onGlobalTabSelected={soloMode ? handleGlobalTabSelected : undefined}
             pillVariant="chip"
+            className="h-[46px] min-w-7"
             addButtonWrapperClassName="h-[30px]"
           />
           {/* 面板自属控件：分离 → 最大化 → 关闭；显示入口留在聊天区。 */}
           <div
             data-testid="right-sidebar-topbar-actions"
-            className="flex h-full shrink-0 items-center gap-0.5"
+            className="ml-auto flex h-[46px] shrink-0 items-center gap-0.5"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             {handleDetachActiveTab && (
