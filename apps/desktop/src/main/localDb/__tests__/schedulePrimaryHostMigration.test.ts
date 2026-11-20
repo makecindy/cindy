@@ -14,11 +14,14 @@ it('adds execution ownership to old Contacts automation without changing its sta
     put.run('Other', 'cindy-contacts maintenance begin run_id', 'active', 'agent');
     put.run('整理通讯录', prompt + 'namespace 传「local」。', 'active', 'agent');
     put.run('整理通讯录', prompt, 'paused', 'script');
+    put.run('整理通讯录', prompt + '调用这个插件时只传 ghost_id「cindy-contacts」，不要传 namespace。', 'paused', 'agent');
+    put.run('整理通讯录', prompt + '调用这个插件时使用 ghost_id「cindy-contacts」，namespace 传 null。', 'active', 'agent');
     const migration = readFileSync(new URL('../../../../drizzle/0156_schedule_primary_host.sql', import.meta.url), 'utf8');
     db.exec(migration);
     expect(db.prepare('SELECT status, primary_host_key FROM schedules ORDER BY rowid').all()
       .map(r => [r.status, r.primary_host_key])).toEqual([
       ['paused', 'public/cindy-contacts'], ['active', 'public/cindy-contacts'], ['active', null], ['active', null], ['paused', null],
+      ['paused', null], ['active', 'public/cindy-contacts'],
     ]);
   } finally { db.close(); }
 });

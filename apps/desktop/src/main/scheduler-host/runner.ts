@@ -1,4 +1,4 @@
-import { primaryHostTargetIsRemote } from './pluginAutomationHostGuard.js';
+import { primaryHostTargetIsRemote, skipPrimaryHostRun } from './pluginAutomationHostGuard.js';
 import { projectForScheduledTask, type ScheduleProjectLookup } from './scheduleProject.js';
 import { throwIpcError } from '../utils/ipcValidate';
 import { beginQuietScheduledOutput, hidesScheduledTranscript, hasVisibleScheduledOutput, isQuietScheduledOutput } from './silent-output.js';
@@ -1084,7 +1084,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // and service-owned Bot lifecycle separate.
     if (schedule.source !== 'bot' && schedule.targetSessionId) {
       const target = await this.runtime.getSessionRowSnapshot(schedule.targetSessionId);
-      if (primaryHostTargetIsRemote(schedule, target)) return { sessionId: schedule.targetSessionId, skipped: true };
+      if (primaryHostTargetIsRemote(schedule, target)) return skipPrimaryHostRun(ctx, 'The persistent task moved off the automation host.', schedule.targetSessionId);
       if (target && !schedule.persistentSession && (target.status === 'deleted'
         || (target.status === 'archived' && this.runtime.isManagedScheduledTarget(target)))) {
         return this.retireHeartbeat(schedule, ctx, target.status);
@@ -1288,7 +1288,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         this.runtime.getSessionRowSnapshot(sessionId),
       ]);
       if (primaryHostTargetIsRemote(schedule, row) || primaryHostTargetIsRemote(schedule, resolvedSelection)) {
-        return { sessionId, skipped: true };
+        return skipPrimaryHostRun(ctx, 'The persistent task moved off the automation host.', sessionId);
       }
       const archived = !row || row.status === 'archived' || row.status === 'deleted';
       if (archived) {

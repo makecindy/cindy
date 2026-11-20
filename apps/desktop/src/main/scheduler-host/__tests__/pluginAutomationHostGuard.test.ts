@@ -21,6 +21,17 @@ it('skips a follower, an offline host and remote execution before the first Agen
   expect(fire).toHaveBeenCalledTimes(1);
 });
 
+it('keeps an interrupted continuation reclaimable when its host is offline or has changed', async () => {
+  const fire = vi.fn(async () => ({ sessionId: 'original-task' }));
+  const account = vi.fn().mockResolvedValueOnce({ granted: false }).mockRejectedValueOnce(new Error('offline'));
+  const guard = withPluginAutomationHost({ fire }, () => ({ run: account }));
+  const ctx = { ...context(), resumeSessionId: 'original-task' };
+  await expect(guard.fire(schedule, ctx)).rejects.toThrow('selected primary computer');
+  await expect(guard.fire(schedule, ctx)).rejects.toThrow('could not be confirmed');
+  expect(fire).not.toHaveBeenCalled();
+  expect(account).toHaveBeenCalledTimes(2);
+});
+
 it('renews the original claim and cancels the running Agent if the account loses it', async () => {
   vi.useFakeTimers();
   const grants = vi.fn().mockResolvedValueOnce({ granted: true, validForMs: 120_000 })

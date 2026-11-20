@@ -392,7 +392,7 @@ it.each(['none', 'read-rejected', 'schedule-missing', 'pre-enqueue-rejected', 'f
   const schedule = await h.scheduler.create(baseInput);
   const oldRun: ScheduleRun = { id: 'old-run', scheduleId: schedule.id,
     sessionId: 'original-task', firedAt: clock.now() - 5000,
-    status: 'interrupted', errorMsg: 'app restarted' };
+    status: 'interrupted', errorMsg: 'app restarted', costAttribution: 'exact' };
   await storage.insertRun(oldRun);
   storage.claimInterruptedRun = vi.fn(async () => {
     if (storage.runs.get(oldRun.id)?.status !== 'interrupted') return null;
@@ -411,7 +411,7 @@ it.each(['none', 'read-rejected', 'schedule-missing', 'pre-enqueue-rejected', 'f
       failure === 'read-rejected' ? 'storage unavailable'
         : failure === 'schedule-missing' ? 'Schedule not found' : 'continuation enqueue unavailable',
     );
-    expect(storage.runs.get(oldRun.id)?.status).toBe('interrupted');
+    expect(storage.runs.get(oldRun.id)).toMatchObject({ status: 'interrupted', sessionId: oldRun.sessionId, costAttribution: 'exact' });
     expect(h.fireCalls).toHaveLength(failure === 'pre-enqueue-rejected' ? 1 : 0);
     expect(h.scheduler.resolveInflightRunForSession('original-task')).toBeUndefined();
   }

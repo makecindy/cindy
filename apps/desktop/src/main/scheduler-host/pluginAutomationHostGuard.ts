@@ -10,10 +10,17 @@ export function primaryHostTargetIsRemote(schedule: Pick<Schedule, 'primaryHostK
   return !!schedule.primaryHostKey && !!(target?.agentDeviceId || target?.remoteHostId);
 }
 
+export function skipPrimaryHostRun(ctx: FireContext, resultText: string, sessionId = '') {
+  // An interrupted run already owns its session and cost history. Reject before enqueue
+  // so the scheduler restores that same interrupted record for a later Continue.
+  if (ctx.resumeSessionId) throw new Error(resultText);
+  return { skipped: true, sessionId, resultText };
+}
+
 export function withPluginAutomationHost(runner: ScheduleRunner, accountFor?: (key: string) => Account): ScheduleRunner {
   return { async fire(schedule, ctx) {
     if (!schedule.primaryHostKey) return runner.fire(schedule, ctx);
-    if (!accountFor || schedule.agentDeviceId || schedule.modelAgentDeviceId || (schedule.targetSessionId && !schedule.persistentSession)) return { skipped: true, sessionId: '', resultText: 'This automation needs its selected execution computer.' };
+    if (!accountFor || schedule.agentDeviceId || schedule.modelAgentDeviceId || (schedule.targetSessionId && !schedule.persistentSession)) return skipPrimaryHostRun(ctx, 'This automation needs its selected execution computer.');
     return runOnPrimary(runner, schedule, ctx, accountFor(schedule.primaryHostKey));
   } };
 }
@@ -47,19 +54,20 @@ async function runOnPrimary(runner: ScheduleRunner, schedule: Schedule, ctx: Fir
     }, Math.max(1, Math.floor(remaining() / 3)));
     return true;
   }
-  const skip = (resultText: string) => ({ skipped: true, sessionId: '', resultText });
   ctx.signal.throwIfAborted();
   ctx.assertFireContext?.();
+  let granted: boolean;
   try {
-    if (!await extend('acquire')) return skip('Only the selected primary computer can start this automation.');
+    granted = await extend('acquire');
   } catch {
     ctx.signal.throwIfAborted();
-    return skip('The primary computer could not be confirmed. This run was skipped.');
+    return skipPrimaryHostRun(ctx, 'The primary computer could not be confirmed. This run was skipped.');
   }
+  if (!granted) return skipPrimaryHostRun(ctx, 'Only the selected primary computer can start this automation.');
   const valid = () => !signal.aborted && remaining() > 0;
   try {
     ctx.assertFireContext?.();
-    if (!valid() || ctx.canDispatch?.() === false) return skip('The execution context has changed.');
+    if (!valid() || ctx.canDispatch?.() === false) return skipPrimaryHostRun(ctx, 'The execution context has changed.');
     return await runner.fire(schedule, { ...ctx, signal, canDispatch: () => valid() && (ctx.canDispatch?.() ?? true),
       assertFireContext() {
         ctx.assertFireContext?.();
