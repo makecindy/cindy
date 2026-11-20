@@ -212,8 +212,8 @@ export function useInboxTeammates({ context, cloud, enabled, query, push: hostPu
     if (actor) { Keyboard.dismiss(); hostPush(cloudCompanionRoute(row, actor.id, i18n.language)); }
     else void openTeammate(row);
   }, [cloud.actors, cloud.supported, hostPush, i18n.language, openTeammate]);
-  const quietPresence = useCallback((row: HostedRemoteCollectionItem) => cloud.supported && !!cloudActorForRow(cloud.actors, row),
-    [cloud.actors, cloud.supported]);
+  // Inbox classification and rendering both keep offline companions quiet.
+  const quietPresence = useCallback(() => true, []);
 
   // The roster hands out fresh presence readers on every render: rows read them through stable
   // wrappers and redraw only when a listed computer's presence actually changes.
