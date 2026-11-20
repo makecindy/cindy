@@ -840,6 +840,7 @@ interface CCAgentPermissionRequestPayload {
   description?: string;
   suggestions?: unknown[];
   autoReviewUnavailable?: boolean;
+  autoReviewQuotaExhausted?: boolean;
   /** Auto-review's reason for asking; shown as the card's "why". */
   autoReviewReason?: string;
 }

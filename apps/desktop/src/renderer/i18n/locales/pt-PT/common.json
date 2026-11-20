@@ -13203,6 +13203,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "A quota de um modelo de revisão automática esgotou-se. Verifica a utilização ou a faturação, ou personaliza os modelos auxiliares nas definições do computador que executa o Agent. As ações que precisam de revisão continuam a exigir a tua confirmação.",
           "autoReviewNoAvailableModel": "Não há modelos disponíveis para revisão automática. No computador que executa o Agente, ative e ligue um fornecedor de revisão em Fornecedores de modelos ou personalize os modelos auxiliares nas definições. As ações que precisam de revisão continuam a exigir a sua confirmação.",
           "autoReviewUnavailable": "A revisão automática não conseguiu chegar a uma decisão, pelo que as ações que exigem revisão precisam agora da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta um risco mais elevado.",
           "autoReviewUnavailableWechat": "A revisão automática não conseguiu chegar a uma decisão, pelo que as ações que exigem revisão precisam agora da sua confirmação. O WeChat pessoal não pode utilizar Acesso total. Confirme esta ação diretamente.",
@@ -16018,6 +16019,7 @@
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente dentro de instantes.",
       "REMOTE_DAEMON_CLOSED": "A ligação remota caiu, possivelmente durante uma atualização. Este turno terminou. Envie a mensagem novamente.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Os anexos de ficheiros/imagens locais não estão acessíveis em sessões remotas. Cole o conteúdo diretamente.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "A quota de um modelo de revisão automática esgotou-se. Verifica a utilização ou a faturação, ou personaliza os modelos auxiliares nas definições do computador que executa o Agent. As ações que precisam de revisão continuam a exigir a tua confirmação.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Não há modelos disponíveis para revisão automática. No computador que executa o Agente, ative e ligue um fornecedor de revisão em Fornecedores de modelos ou personalize os modelos auxiliares nas definições. As ações que precisam de revisão continuam a exigir a sua confirmação.",
       "AUTO_REVIEW_UNAVAILABLE": "A revisão automática não conseguiu chegar a uma decisão, pelo que as ações que exigem revisão precisam agora da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta um risco mais elevado.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "A revisão automática não conseguiu chegar a uma decisão, pelo que as ações que exigem revisão precisam agora da sua confirmação. O WeChat pessoal não pode utilizar Acesso total. Confirme esta ação diretamente.",
