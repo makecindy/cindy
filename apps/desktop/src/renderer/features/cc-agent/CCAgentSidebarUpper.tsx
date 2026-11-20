@@ -224,6 +224,7 @@ import {
 import { advanceViewedPriorityHold, partitionCindyMakeSessions, sortSessionsForMainList } from './lib/mainListModel';
 import { toStoredSessionTitle } from './lib/sessionDisplayTitle';
 import {
+  getVisibleInboxTargets,
   getVisibleSidebarSessionIds,
   isSessionRemovalRouteCurrent,
   pickSessionIdAfterRemoval,
@@ -3247,17 +3248,21 @@ function ExpandedView({
       const inbox = action === 'complete' && viewedSessionIdRef.current === sessionId
         ? sidebarScrollRef.current?.querySelector('[data-task-inbox-section="inbox"]')
         : null;
-      const order = inbox ? getVisibleSidebarSessionIds(inbox) : [];
+      const anchor = `session:${sessionId}`;
+      const order = inbox ? [...getVisibleInboxTargets(inbox).keys()] : [];
       const advanceInbox = () => {
         if (!inbox?.isConnected || !isSessionRemovalRouteCurrent(sessionId)) return;
-        const remaining = getVisibleSidebarSessionIds(inbox).filter(id => id !== sessionId);
-        const available = new Set(remaining);
+        const available = getVisibleInboxTargets(inbox);
+        available.delete(anchor);
+        const remaining = [...available.keys()];
         const removed = new Set(order.filter(id => !available.has(id)));
         // Removing the last of the first 20 rows can reveal another task below it.
         const original = new Set(order);
         const queue = [...order, ...remaining.filter(id => !original.has(id))];
-        const next = pickSessionIdAfterRemoval(queue, removed, sessionId) ?? remaining[0];
-        if (next) void handleSessionClick(next);
+        const key = pickSessionIdAfterRemoval(queue, removed, anchor) ?? remaining[0];
+        const next = key ? available.get(key) : undefined;
+        if (next && 'route' in next) navigate(next.route);
+        else if (next) void handleSessionClick(next.sessionId);
         else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
       };
       // 收件箱「完成」遇到绑着启用中自动化的任务，只把这轮结果标为已读、任务回到进行中，
