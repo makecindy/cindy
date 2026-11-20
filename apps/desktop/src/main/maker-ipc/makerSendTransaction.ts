@@ -270,6 +270,7 @@ export interface MakerSendTransactionSession {
   agentKind: EngineKind;
   workDir: string;
   remoteHostId: string | null;
+  getDisabledClaudeSkillNames?: Session['getDisabledClaudeSkillNames'];
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
   retryFailedRuntimeCapabilityCapture?(): void;
   getStatus?(): 'active' | 'aborting' | 'closed' | 'error';

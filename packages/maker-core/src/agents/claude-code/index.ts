@@ -6809,8 +6809,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         source: 'claude-code',
       });
     };
+    const disabledClaudeSkillNames = new Set(
+      Object.entries(buildSettings().skillOverrides ?? {})
+        .filter(([, state]) => state === 'off')
+        .map(([name]) => name),
+    );
     const handle: AgentSessionHandle = {
       disabledSkillPaths: disabledSkillSnapshot,
+      disabledClaudeSkillNames,
       // IM turn policies carry requester authority the native classifier cannot see.
       getAutoReviewOwner: () => usesNativeClaudeAutoReview() && !activeTurnPermissionPolicy ? 'native' : 'cindy',
       reviewAutoPermissionAction: async (action) => {

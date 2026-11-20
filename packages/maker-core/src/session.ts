@@ -1911,6 +1911,10 @@ export class Session {
     return this.handle.disabledSkillPaths;
   }
 
+  getDisabledClaudeSkillNames(): ReadonlySet<string> | undefined {
+    return this.handle.disabledClaudeSkillNames;
+  }
+
   /** Subscribe to replacement of the current per-session Pi runtime catalog. */
   onRuntimeCapabilitiesChange(
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,

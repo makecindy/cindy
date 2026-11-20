@@ -2558,6 +2558,8 @@ export interface AgentMcpServerToolsReport {
 export interface AgentSessionHandle {
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
+  /** Native Claude Skill names explicitly turned off by the session's launch settings. */
+  readonly disabledClaudeSkillNames?: ReadonlySet<string>;
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
   /**
    * Read-only: ask the engine which tools it holds for one MCP server in this

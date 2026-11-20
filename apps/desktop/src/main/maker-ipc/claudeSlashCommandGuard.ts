@@ -49,7 +49,8 @@ const CACHE_TTL_MS = 30_000;
 const CACHE_MAX_ENTRIES = 16;
 /** frontmatter 只在文件头，读够解析出 name 就停，不整篇读进内存。 */
 const FRONTMATTER_HEAD_BYTES = 2048;
-type CacheEntry = { at: number; names: Set<string> };
+type CommandRoster = { commands: Set<string>; skills: Map<string, Set<string>> };
+type CacheEntry = { at: number; roster: CommandRoster };
 const cache = new Map<string, CacheEntry>();
 
 function readCache(key: string): CacheEntry | undefined {
@@ -62,7 +63,7 @@ function readCache(key: string): CacheEntry | undefined {
   return entry;
 }
 
-function writeCache(key: string, names: Set<string>): void {
+function writeCache(key: string, roster: CommandRoster): void {
   // 插入前先清掉过期条目，再按容量淘汰最旧的一条。
   for (const [existingKey, existing] of cache) {
     if (Date.now() - existing.at >= CACHE_TTL_MS) cache.delete(existingKey);
@@ -72,7 +73,7 @@ function writeCache(key: string, names: Set<string>): void {
     if (oldest.done) break;
     cache.delete(oldest.value);
   }
-  cache.set(key, { at: Date.now(), names });
+  cache.set(key, { at: Date.now(), roster });
 }
 
 async function readEntries(dir: string): Promise<Dirent[]> {
@@ -120,7 +121,7 @@ function frontmatterName(head: string): string | null {
   return match ? match[1].trim() : null;
 }
 
-async function addSkillNames(skillsRoot: string, depth: number, out: Set<string>): Promise<void> {
+async function addSkillNames(skillsRoot: string, depth: number, out: CommandRoster['skills']): Promise<void> {
   for (const entry of await readEntries(skillsRoot)) {
     if (entry.name.startsWith('.') || /\.bak\.\d+$/.test(entry.name)) continue;
     const full = path.join(skillsRoot, entry.name);
@@ -132,9 +133,13 @@ async function addSkillNames(skillsRoot: string, depth: number, out: Set<string>
       }
     }
     if (skillFile) {
-      out.add(entry.name.toLowerCase());
       const declared = frontmatterName(await readHead(skillFile));
-      if (declared) out.add(declared.toLowerCase());
+      for (const alias of [entry.name.toLowerCase(), declared?.toLowerCase()]) {
+        if (!alias) continue;
+        const directories = out.get(alias) ?? new Set<string>();
+        directories.add(entry.name);
+        out.set(alias, directories);
+      }
       continue;
     }
     // Direct linked Skills are supported. Descend only into real namespace directories.
@@ -173,16 +178,16 @@ async function resolveProjectDirs(workingDir: string): Promise<string[]> {
   return dirs;
 }
 
-async function scanCommandNames(workingDir: string, configDir: string): Promise<Set<string>> {
-  const names = new Set<string>();
-  await addSkillNames(path.join(configDir, 'skills'), 1, names);
-  await addCommandNames(path.join(configDir, 'commands'), names);
+async function scanCommandNames(workingDir: string, configDir: string): Promise<CommandRoster> {
+  const roster: CommandRoster = { commands: new Set(), skills: new Map() };
+  await addSkillNames(path.join(configDir, 'skills'), 1, roster.skills);
+  await addCommandNames(path.join(configDir, 'commands'), roster.commands);
   for (const projectDir of await resolveProjectDirs(workingDir)) {
     const claudeDir = path.join(projectDir, '.claude');
-    await addSkillNames(path.join(claudeDir, 'skills'), 1, names);
-    await addCommandNames(path.join(claudeDir, 'commands'), names);
+    await addSkillNames(path.join(claudeDir, 'skills'), 1, roster.skills);
+    await addCommandNames(path.join(claudeDir, 'commands'), roster.commands);
   }
-  return names;
+  return roster;
 }
 
 /**
@@ -192,13 +197,13 @@ async function scanCommandNames(workingDir: string, configDir: string): Promise<
  * 扫不动（目录不存在 / 读失败）同样按"没有可调用命令"处理 —— 保持旧行为，而不是
  * 猜一个名字放行。
  */
-export async function resolveClaudeUserInvocableCommandNames(
+async function readClaudeCommandRoster(
   workingDir: string | undefined,
   messageText: string | null,
   configDir?: string,
-): Promise<ReadonlySet<string>> {
-  if (!workingDir || !path.isAbsolute(workingDir)) return EMPTY_NAMES;
-  if (!messageText || !extractSlashCommandName(messageText)) return EMPTY_NAMES;
+): Promise<CommandRoster | undefined> {
+  if (!workingDir || !path.isAbsolute(workingDir)) return undefined;
+  if (!messageText || !extractSlashCommandName(messageText)) return undefined;
 
   // 与引擎的发现入口一致：先解引用，再从真实子目录向上找 Git 根。
   // 词法 path.resolve 会误读软链外侧的 .claude，并漏掉真实仓库里的命令。
@@ -206,23 +211,28 @@ export async function resolveClaudeUserInvocableCommandNames(
   try {
     resolvedWorkingDir = await fsp.realpath(path.resolve(workingDir));
   } catch {
-    return EMPTY_NAMES;
+    return undefined;
   }
   const resolvedConfigDir = resolveGlobalConfigDir(configDir);
   // §8.4：同一项目在不同 Claude 账号下是不同命令集合，配置目录必须进入缓存键。
   const key = `${resolvedWorkingDir}\0${resolvedConfigDir}`;
-  const cached = readCache(key);
-  if (cached) return cached.names;
-
-  let names: Set<string>;
-  try {
-    names = await scanCommandNames(resolvedWorkingDir, resolvedConfigDir);
-  } catch {
-    // 目录不存在或读不动：按"没有可调用命令"处理，保持旧行为。
-    names = new Set<string>();
+  let roster = readCache(key)?.roster;
+  if (!roster) {
+    roster = await scanCommandNames(resolvedWorkingDir, resolvedConfigDir).catch(() => ({
+      commands: new Set<string>(), skills: new Map<string, Set<string>>(),
+    }));
+    writeCache(key, roster);
   }
-  writeCache(key, names);
-  return names;
+  return roster;
+}
+
+export async function resolveClaudeUserInvocableCommandNames(
+  workingDir: string | undefined,
+  messageText: string | null,
+  configDir?: string,
+): Promise<ReadonlySet<string>> {
+  const roster = await readClaudeCommandRoster(workingDir, messageText, configDir);
+  return roster ? new Set([...roster.commands, ...roster.skills.keys()]) : EMPTY_NAMES;
 }
 
 export function resetClaudeUserInvocableCommandCache(): void {
@@ -239,15 +249,24 @@ export function resetClaudeUserInvocableCommandCache(): void {
  */
 export async function isUserInvocableClaudeCommand(
   message: unknown,
-  session: { id?: string | null; agentKind?: string | null; workDir?: string | null; remoteHostId?: string | null },
+  session: { id?: string | null; agentKind?: string | null; workDir?: string | null; remoteHostId?: string | null;
+    getDisabledClaudeSkillNames?(): ReadonlySet<string> | undefined },
 ): Promise<boolean> {
   if (session.agentKind !== 'claude-code') return false;
   if (session.remoteHostId) return false;
   const text = singleTextContent(message);
-  if (!text) return false;
+  const name = text && extractSlashCommandName(text);
+  if (!name) return false;
   const configDir = getSessionSubscriptionAccount(session.id)?.configDir;
-  const names = await resolveClaudeUserInvocableCommandNames(session.workDir ?? undefined, text, configDir);
-  if (names.size === 0) return false;
-  const name = extractSlashCommandName(text);
-  return name !== null && names.has(name);
+  const roster = await readClaudeCommandRoster(session.workDir ?? undefined, text, configDir);
+  if (!roster) return false;
+  const disabledSkills = session.getDisabledClaudeSkillNames?.();
+  // Claude also applies an off override to a legacy command with the same name.
+  if (disabledSkills?.has(name)) return false;
+  if (roster.commands.has(name)) return true;
+  // Launch settings use directory names. Keep per-session state out of the discovery cache.
+  for (const directory of roster.skills.get(name) ?? []) {
+    if (!disabledSkills?.has(directory)) return true;
+  }
+  return false;
 }

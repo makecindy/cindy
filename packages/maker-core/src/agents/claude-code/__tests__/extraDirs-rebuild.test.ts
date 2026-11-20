@@ -231,6 +231,33 @@ describe('Claude extraDirs mid-session rebuild', () => {
     }
   });
 
+  // Unit / #11777: compare the host's read-only Skill snapshot to the settings
+  // actually passed to the SDK, including after the caller changes preferences.
+  it('exposes the disabled native Skill names from Claude launch settings', async () => {
+    const configDir = await makeTempDir();
+    const workingDir = await makeTempDir();
+    const skillDir = path.join(workingDir, '.claude', 'skills', 'disabled-directory');
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.mkdir(path.join(workingDir, '.git'));
+    await fs.writeFile(path.join(skillDir, 'SKILL.md'), '---\nname: disabled-alias\n---\n');
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const deps = createDeps();
+    deps.getDisabledSkillPaths = () => [skillDir];
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'session-disabled-native-skill', model: 'claude-opus-4-6', workingDir,
+    });
+    try {
+      expect(sdkMock.query.mock.calls[0]?.[0].options.settings.skillOverrides).toEqual({
+        'disabled-directory': 'off',
+      });
+      deps.getDisabledSkillPaths = () => [];
+      expect(handle.disabledClaudeSkillNames).toEqual(new Set(['disabled-directory']));
+    } finally {
+      await handle.close();
+    }
+  });
+
   it.each(['none', 'remove', 'disable', 'enable'] as const)('setExtraDirs rebuild preserves conversation and launch skill preferences: %s', async (change) => {
     const configDir = await makeTempDir();
     const workingDir = await makeTempDir();

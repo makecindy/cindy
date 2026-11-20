@@ -3873,6 +3873,35 @@ describe('mobile client prompt note', () => {
     }
   });
 
+  // Unit / #11777: the Skill stays on disk while Claude's launch settings turn
+  // it off. A warm discovery cache must still respect each runtime's settings.
+  it('keeps mobile context for a Claude Skill disabled in the current runtime', async () => {
+    const workDir = path.join(isolatedClaudeHome, 'project');
+    const skillDir = path.join(workDir, '.claude', 'skills', 'skill-directory');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: skill-alias\ndisable-model-invocation: true\n---\n');
+    const commandsDir = path.join(workDir, '.claude', 'commands');
+    mkdirSync(commandsDir);
+    writeFileSync(path.join(commandsDir, 'skill-directory.md'), 'Same-name legacy command');
+    const enabled = createSession({ agentKind: 'claude-code', workDir });
+    const disabled = Object.assign(createSession({ agentKind: 'claude-code', workDir }), {
+      getDisabledClaudeSkillNames: () => new Set(['skill-directory']),
+    });
+    let session = enabled;
+    const { deps } = createDeps({ getSession: () => session });
+    const transaction = createMakerSendTransaction(deps);
+    const command = '/skill-alias ping';
+    await transaction.sendToAgentAccepted('session-1', command, undefined, { fromMobileClient: true });
+    expect(enabled.send).toHaveBeenLastCalledWith(command, expect.anything());
+
+    session = disabled;
+    await transaction.sendToAgentAccepted('session-1', command, undefined, { fromMobileClient: true });
+    expect(disabled.send).toHaveBeenLastCalledWith(buildMobileClientPromptNote() + '\n\n' + command, expect.anything());
+    const legacyCommand = '/skill-directory ping';
+    await transaction.sendToAgentAccepted('session-1', legacyCommand, undefined, { fromMobileClient: true });
+    expect(disabled.send).toHaveBeenLastCalledWith(buildMobileClientPromptNote() + '\n\n' + legacyCommand, expect.anything());
+  });
+
   // Unit / #11637: empty queue range metadata leaves a hand-typed Skill looking
   // like an ordinary turn. A pending sealed plan note belongs on the next ordinary send.
   it('defers plan reconciliation across a hand-typed Claude Code Skill', async () => {
