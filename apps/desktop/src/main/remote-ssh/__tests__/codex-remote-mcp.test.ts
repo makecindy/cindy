@@ -20,6 +20,7 @@ import {
   stripRemoteCodexMcpConfig,
   hasPendingRemoteMcpDrift,
   invalidateRemoteCodexMcpEndpointState,
+  removeRemoteMcpForwardPref,
 } from '../codex-remote-mcp.js';
 import { killRemoteCodexDaemon } from '../agent-proxy.js';
 
@@ -892,7 +893,7 @@ describe('ensureRemoteCodexMcpBridge drift self-heal (appliedFingerprint)', () =
       bridgeLocalPort: 38080,
     });
 
-    invalidateRemoteCodexMcpEndpointState('host-endpoint-change');
+    await invalidateRemoteCodexMcpEndpointState('host-endpoint-change');
 
     expect(prefsOf('host-endpoint-change')).toEqual({ remotePort: 47921 });
   });
@@ -1200,6 +1201,72 @@ describe('daemon kill recovery failure and lifecycle boundaries (#8781)', () => 
     }
   });
 
+  // §8.5 / #8781 P1: existing kill regressions cover failures but not Main
+  // responsiveness. Unit: after one applied fingerprint, kill must persist its
+  // invalidation without entering any synchronous filesystem API.
+  it.each(['warm', 'cold'] as const)('persists daemon invalidation without synchronous Main I/O (%s)', async (cache) => {
+    const { host, deps } = lifecycleHost(`host-kill-async-io-${cache}`);
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).ok).toBe(true);
+    let kill = killRemoteCodexDaemon;
+    if (cache === 'cold') {
+      // reset-modules: cold app restart must invalidate persisted state without synchronous reads.
+      vi.resetModules();
+      kill = (await import('../agent-proxy.js')).killRemoteCodexDaemon;
+    }
+    const syncIo = ['existsSync', 'readFileSync', 'mkdirSync', 'writeFileSync', 'renameSync'] as const;
+    const spies = syncIo.map((name) => vi.spyOn(fs, name).mockImplementation(() => {
+      throw new Error('synchronous Main I/O forbidden');
+    }));
+    try {
+      expect(await kill(host)).toEqual({ ok: true });
+      expect(spies.flatMap((spy) => spy.mock.calls)).toEqual([]);
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
+    expect(prefsOf(host.id)?.appliedFingerprint).toBe('daemon-env-invalidated');
+  });
+
+  // The async write introduces a yield: another host's deletion must stay
+  // last on disk, while the in-memory invalidation is visible immediately.
+  it('keeps invalidation immediate and serializes a slow write before host removal', async () => {
+    const { host, state, deps } = lifecycleHost('host-kill-slow-write');
+    const other = lifecycleHost('host-remove-during-write');
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).ok).toBe(true);
+    expect((await ensureRemoteCodexMcpBridge(other.host, other.deps)).ok).toBe(true);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const writeFile = fs.promises.writeFile.bind(fs.promises);
+    const slowWrite = vi.spyOn(fs.promises, 'writeFile').mockImplementationOnce(async (...args) => {
+      entered();
+      await gate;
+      return writeFile(...args);
+    });
+    let kill: Promise<unknown> | undefined;
+    let removal: Promise<void> | undefined;
+    try {
+      kill = killRemoteCodexDaemon(host);
+      // This assertion happens before any file operation can finish.
+      expect(hasPendingRemoteMcpDrift(host.id, { collabEnabled: true, makerMemoryEnabled: false, token: 'test-persistent-token', bridgeInstanceId: 'bridge-1' })).toBe(true);
+      await started;
+      // Main can run this unrelated action while the first file write is held.
+      removal = removeRemoteMcpForwardPref(other.host.id);
+      expect(state.tokenPresent).toBe(true); // kill waits for invalidation persistence
+      release();
+      expect(await kill).toEqual({ ok: true });
+      await removal;
+      expect(prefsOf(other.host.id)).toBeNull();
+      expect(prefsOf(host.id)?.appliedFingerprint).toBe('daemon-env-invalidated');
+      expect(state.tokenPresent).toBe(false);
+    } finally {
+      release();
+      await Promise.allSettled([kill, removal]);
+      slowWrite.mockRestore();
+    }
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).daemonRebootstrapped).toBe(true);
+  });
+
   it.each(['success', 'exit-error', 'exec-error'] as const)(
     'preserves in-memory drift and the kill result if persistence fails (%s)', async (outcome) => {
       const { host, state, deps } = lifecycleHost(`host-kill-io-${outcome}`);
@@ -1213,7 +1280,7 @@ describe('daemon kill recovery failure and lifecycle boundaries (#8781)', () => 
         }
         return exec(cmd, opts);
       };
-      const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw new Error('synthetic EACCES'); });
+      const rename = vi.spyOn(fs.promises, 'rename').mockRejectedValue(new Error('synthetic EACCES'));
       try {
         const result = await killRemoteCodexDaemon(host);
         expect(result).toEqual(outcome === 'success'

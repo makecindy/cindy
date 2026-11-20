@@ -349,7 +349,7 @@ exit 3
   // 失效, 下次 session start / live send 带 token 重 bootstrap (#8781)。
   // 杀后再失效一次: kill 脚本运行期间开始的 ensure 可能已落新指纹, 而
   // 它刚 bootstrap 的 daemon 随即被同一次 kill 杀掉。
-  invalidateRemoteCodexMcpDaemonEnv(host.id);
+  await invalidateRemoteCodexMcpDaemonEnv(host.id);
   try {
     const result = await host.exec(`bash -c ${shellQuote(killScript)}`, {
       // 脚本最坏路径: TERM 轮询 5s + KILL 轮询 2s + ssh/exec 开销 — 给 15s。
@@ -367,7 +367,7 @@ exit 3
     log.warn('failed to kill remote codex daemon (exec error)', { hostId: host.id, error: detail });
     return { ok: false, reason: 'pkill_failed', detail };
   } finally {
-    invalidateRemoteCodexMcpDaemonEnv(host.id);
+    await invalidateRemoteCodexMcpDaemonEnv(host.id);
   }
 }
 
