@@ -69,6 +69,33 @@ describe('MarkdownRenderer rich local media', () => {
     version: 1, seq: 1, op: 'create', id: 'media', kind, props: { src },
   }) + '\n```';
 
+  it('publishes late rich media and its Markdown tail on one stream timer, then flushes the final text', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const reply = (content: string, isStreaming = true) => (
+        <MarkdownRenderer workingDir="/workspace" content={content} isStreaming={isStreaming} renderRichAnswers />
+      );
+      const intro = 'Opening paragraph.\n\n';
+      const video = richMedia('video', 'https://example.com/clip.mp4');
+      const view = render(reply(intro));
+      act(() => { vi.advanceTimersByTime(10); });
+      view.rerender(reply(intro + video + '\n\nFirst tail.'));
+      expect(vi.getTimerCount()).toBe(1);
+      expect(screen.queryByTestId('markdown-video')).toBeNull();
+
+      act(() => { vi.advanceTimersByTime(90); });
+      expect(screen.getByTestId('markdown-video')).toBeTruthy();
+      expect(view.container.textContent).toContain('First tail.');
+      view.rerender(reply(intro + video + '\n\nFinal tail.'));
+      expect(view.container.textContent).toContain('First tail.');
+      view.rerender(reply(intro + video + '\n\nFinal tail.', false));
+      expect(view.container.textContent).toContain('Final tail.');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ['试听 100%20.mp3', 'C:/workspace/试听 100%20.mp3'],
     ['C:\\音乐\\主城 A.mp3', 'C:\\音乐\\主城 A.mp3'],

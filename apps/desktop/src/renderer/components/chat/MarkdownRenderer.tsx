@@ -4,7 +4,7 @@ import { SettingsLinkChip } from './SettingsLinkChip';
 import '@/styles/chatContentDirection.css';
 import { VideoSitePreview } from './VideoSitePreview';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
-import { splitRichAnswer, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
+import { RICH_ANSWER_LANGUAGE, splitRichAnswer, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
 import { RichAnswer } from './RichAnswer';
 import { WorkspaceMediaSrc } from './useWorkspaceMediaPath';
 /**
@@ -1824,7 +1824,7 @@ function InlineCodeWithTarget({
 
 const MarkdownRendererBase = memo(function MarkdownRendererBase({
   workingDir,
-  content,
+  content: throttledContent,
   isStreaming = false,
   mediaStreaming,
   streamFadeKey,
@@ -1836,10 +1836,6 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   emitSourceLines = false,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
-  // Cap markdown re-parse + syntax highlight cost during streaming.
-  // Static callers (TextLightbox) leave isStreaming undefined → false,
-  // so the throttle is fully bypassed — same behavior as before.
-  const throttledContent = useStreamingThrottle(content, isStreaming);
   // 流式逐词淡入（DESIGN.md §14.4）：消息级 state 跨 parse / remount 保留，
   // 各稳定 Markdown 分片只维护自己的内容匹配状态，但共享同一条连续时间线。
   // isStreaming 翻 false 时整段回落到普通 Markdown，终版没有流式 span 包装。
@@ -2167,6 +2163,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
 export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRendererProps) {
   const instanceKey = useId();
   const sessionFileCtx = useChatSessionFile();
+  // Decode rich envelopes and render their Markdown from the same publication.
   const source = useStreamingThrottle(props.content, props.isStreaming ?? false);
   const renderMedia = (node: RichNode) => {
     if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} />;
@@ -2193,8 +2190,11 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
       </WorkspaceMediaSrc>
     );
   };
-  const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
-  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} />;
+  const parts = useMemo(
+    () => props.renderRichAnswers && source.includes(RICH_ANSWER_LANGUAGE) ? splitRichAnswer(source) : [],
+    [source, props.renderRichAnswers],
+  );
+  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} content={source} />;
   return <div className="rich-answer-body">{parts.map(part => part.kind === 'rich'
     ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
         stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}
