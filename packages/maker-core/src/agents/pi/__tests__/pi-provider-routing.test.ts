@@ -7426,8 +7426,56 @@ describe("Pi provider-aware model routing", () => {
     },
   );
 
+  // #8724/P1 unit: actual send must survive a full history larger than the RPC frame.
+  // Existing oversize coverage only exercises destructive zero-output branch replacement.
+  // Text-only fixture stands in for a large tool payload; no media or external process.
+  it.each(['network', 'quota'])(
+    'continues oversized retained history without replaying tools: %s', async mode => {
+      const entries = [
+        { id: 'accepted', parentId: null, type: 'message', message: { role: 'user', content: 'perform task' } },
+        { id: 'result', parentId: 'accepted', type: 'message', message: { role: 'toolResult',
+          toolCallId: 'write-once', content: [{ type: 'text', text: 'x'.repeat(16 * 1024 * 1024) }] } },
+        { id: 'failure', parentId: 'result', type: 'message', message: { role: 'assistant', content: [],
+          stopReason: 'error', errorMessage: mode === 'quota' ? 'Too many images' : 'network error' } },
+      ];
+      const nodes = entries.map(entry => ({ entry, children: [] as unknown[] }));
+      nodes.forEach((node, i) => { if (i) nodes[i - 1].children.push(node); });
+      const tree = { tree: [nodes[0]], leafId: 'failure' };
+      expect(JSON.stringify(tree).length).toBeGreaterThan(16 * 1024 * 1024);
+      let compacted = false;
+      captured.requestHandler = async command => {
+        if (command.type === 'get_state') return { success: true, data: { sessionFile: '/mock/s.jsonl' } };
+        if (command.type === 'get_tree') return { success: false,
+          error: 'RPC response exceeded 16 MiB and was discarded.' };
+        if (command.type === 'prompt' && String(command.message).startsWith('/cindy-continuation-status ')) {
+          const payload = JSON.parse(decodeURIComponent(String(command.message).split(' ')[1]));
+          captured.onEvent?.({ type: 'extension_ui_request', method: 'notify',
+            message: 'cindy:continuation-status:' + JSON.stringify({ nonce: payload.nonce, imageQuotaRejected: mode === 'quota' }) });
+        }
+        if (command.type === 'compact') compacted = true;
+        if (command.type === 'prompt' && command.message === 'Continue preserving completed operations') {
+          expect(compacted).toBe(mode === 'quota');
+          expect(entries[1].message.toolCallId).toBe('write-once');
+          expect(tree.leafId).toBe('failure');
+        }
+        return { success: true, data: {} };
+      };
+      const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+      const handle = await agent.startSession({ sessionId: 'large-continuation', workingDir: cwd, model: 'local-model' });
+      const start = captured.requests.length;
+      await handle.send({ type: 'user', content: 'Continue preserving completed operations' }, {
+        continueTranscriptUserEntryId: 'accepted',
+      });
+      const requests = captured.requests.slice(start);
+      expect(requests.filter(r => r.type === 'compact')).toHaveLength(mode === 'quota' ? 1 : 0);
+      expect(requests.filter(r => r.type === 'prompt' && r.message === 'Continue preserving completed operations')).toHaveLength(1);
+      expect(requests.some(r => String(r.message).startsWith('/cindy-branch-switch '))).toBe(false);
+      await handle.close();
+    },
+  );
+
   // #8724 unit: exercise PiAgent.send after actual tool history, not just error classification.
-  it.each(['quota', 'generic-media', 'new-window', 'later-success', 'noop', 'failed', 'cancelled'])(
+  it.each(['quota', 'quota-parenthesized', 'generic-media', 'network', 'new-window', 'later-success', 'noop', 'failed', 'cancelled', 'lookup-failed', 'lookup-missing', 'lookup-forged', 'lookup-malformed'])(
     'preserves completed tools during continuation image recovery: %s', async mode => {
       const controller = new AbortController();
       const entries = [
@@ -7438,7 +7486,8 @@ describe("Pi provider-aware model routing", () => {
           content: [{ type: 'text', text: 'already completed' }] } },
         { id: 'failure', parentId: 'result', type: 'message', message: { role: 'assistant', content: [],
           stopReason: mode === 'later-success' ? 'stop' : 'error',
-          errorMessage: mode === 'generic-media' ? 'invalid_media: corrupt image' : '400 too many images in request' } },
+          errorMessage: mode === 'generic-media' ? 'invalid_media: corrupt image' : mode === 'network' ? 'network error'
+            : mode === 'quota-parenthesized' ? 'Exceeded maximum number of images (50) allowed' : '400 too many images in request' } },
       ];
       const nodes = entries.map(entry => ({ entry, children: [] as unknown[] }));
       nodes.forEach((node, i) => { if (i) nodes[i - 1].children.push(node); });
@@ -7447,6 +7496,17 @@ describe("Pi provider-aware model routing", () => {
       captured.requestHandler = async command => {
         if (command.type === 'get_state') return { success: true, data: { sessionFile: '/mock/s.jsonl' } };
         if (command.type === 'get_tree') return { success: true, data: tree };
+        if (command.type === 'prompt' && String(command.message).startsWith('/cindy-continuation-status ')) {
+          if (mode === 'lookup-failed') throw new Error('read-only query failed');
+          if (mode === 'lookup-missing') return { success: true, data: {} };
+          const payload = JSON.parse(decodeURIComponent(String(command.message).split(' ')[1]));
+          captured.onEvent?.({ type: 'extension_ui_request', method: 'notify',
+            message: 'cindy:continuation-status:' + (mode === 'lookup-malformed' ? 'not-json' : JSON.stringify({
+              nonce: mode === 'lookup-forged' ? 'wrong-nonce' : payload.nonce,
+              imageQuotaRejected: !['generic-media', 'network', 'new-window', 'later-success'].includes(mode),
+            })) });
+        }
+
         if (command.type === 'compact') {
           if (mode === 'noop') return { success: false, error: 'Nothing to compact' };
           if (mode === 'failed') return { success: false, error: 'upstream failed' };
@@ -7465,9 +7525,9 @@ describe("Pi provider-aware model routing", () => {
       else await promise;
       const requests = captured.requests.slice(start);
       expect(requests.filter(r => r.type === 'compact')).toHaveLength(
-        ['generic-media', 'new-window', 'later-success'].includes(mode) ? 0 : 1,
+        ['generic-media', 'network', 'new-window', 'later-success', 'lookup-failed', 'lookup-missing', 'lookup-forged', 'lookup-malformed'].includes(mode) ? 0 : 1,
       );
-      expect(requests.filter(r => r.type === 'prompt')).toEqual(blocked ? [] : [
+      expect(requests.filter(r => r.type === 'prompt' && !String(r.message).startsWith('/cindy-continuation-status '))).toEqual(blocked ? [] : [
         expect.objectContaining({ message: 'Continue preserving completed operations' }),
       ]);
       expect(tree).toEqual(original);

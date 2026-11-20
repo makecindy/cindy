@@ -1,3 +1,4 @@
+import { isPiImageQuotaRejection, piBranchImageQuotaRejected } from './session-tree.js';
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
 import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
@@ -61,6 +62,7 @@ export const CINDY_PI_TEXT_ONLY_INPUT_PREFIX = '[CINDY_TEXT_ONLY_INPUT]:';
 export const CINDY_PI_MODEL_REQUEST_INPUT_PREFIX = '[CINDY_MODEL_REQUEST]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
+export const CINDY_PI_CONTINUATION_STATUS_PREFIX = 'cindy:continuation-status:';
 export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
 
 /** Shared with the generated bridge: only bounded counts and known effort names may enter logs. */
@@ -5187,6 +5189,24 @@ export default async function cindyBridge(piApi: any) {
   // ── 原生会话树桥 ──────────────────────────────────────────────────────────
   // RPC 没有 navigate_tree command；ExtensionCommandContext 才暴露 navigateTree。
   // 参数用 percent-encoded JSON，避免 prompt 命令的空格/斜杠解析污染 payload。
+  // Read-only, bounded receipt: never serialize historical tool results or images.
+  pi.registerCommand('cindy-continuation-status', {
+    description: 'Cindy internal continuation status',
+    handler: async (args: string, ctx: any) => {
+      if (args.length > 1024) return;
+      let payload;
+      try { payload = JSON.parse(decodeURIComponent(args.trim())); } catch { return; }
+      if (!payload || typeof payload.entryId !== 'string' || !payload.entryId.length || payload.entryId.length > 128 ||
+          typeof payload.nonce !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(payload.nonce)) return;
+      const isPiImageQuotaRejection = ${isPiImageQuotaRejection.toString()};
+      const piBranchImageQuotaRejected = ${piBranchImageQuotaRejected.toString()};
+      const imageQuotaRejected = ctx.isIdle() && piBranchImageQuotaRejected(ctx.sessionManager.getBranch(), payload.entryId);
+      ctx.ui.notify(${JSON.stringify(CINDY_PI_CONTINUATION_STATUS_PREFIX)} + JSON.stringify({
+        nonce: payload.nonce, imageQuotaRejected,
+      }), 'info');
+    },
+  });
+
   pi.registerCommand('cindy-branch-switch', {
     description: 'Cindy internal session branch navigation',
     handler: async (args: string, ctx: any) => {

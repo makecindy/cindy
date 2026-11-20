@@ -1,15 +1,17 @@
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-const helperFault = vi.hoisted(() => ({ scriptPrefix: '' }));
+const helperFault = vi.hoisted(() => ({ scriptPrefix: '', child: null as ChildProcessWithoutNullStreams | null }));
 vi.mock('node:child_process', async () => {
   const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
   return {
     ...actual,
     spawn: (command: string, args: readonly string[], options: import('node:child_process').SpawnOptions) =>
-      actual.spawn(
+      helperFault.child ?? actual.spawn(
         command,
         helperFault.scriptPrefix
           ? [...args.slice(0, -1), `${helperFault.scriptPrefix}\n${args.at(-1)}`]
@@ -29,6 +31,7 @@ describe('windowsPackagedInstanceBarrier', () => {
     expect(__testing.parseBarrierStatus('{"status":"started"}')).toEqual({
       status: 'started',
     });
+    expect(__testing.parseBarrierStatus('{"status":"waiting"}')).toEqual({ status: 'waiting' });
     expect(__testing.parseBarrierStatus('{"status":"locked"}')).toEqual({
       status: 'locked',
     });
@@ -43,6 +46,69 @@ describe('windowsPackagedInstanceBarrier', () => {
     expect(() => __testing.parseBarrierStatus('{"status":"occupied","pid":0}')).toThrow(
       'invalid status',
     );
+  });
+
+  // #11778 CI regression, unit: production acquire API, no process or real wait.
+  // Existing native cases lack deterministic slow-Mutex initialization. Keep
+  // all original time budgets; 2100ms before contention must not consume it.
+  it('keeps Mutex initialization outside the contention budget', async () => {
+    vi.useFakeTimers();
+    const child = new EventEmitter() as ChildProcessWithoutNullStreams;
+    Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(),
+      exitCode: null, signalCode: null, kill: vi.fn(() => {
+        Object.assign(child, { exitCode: 1 }); child.emit('exit', 1, null); return true;
+      }) });
+    child.stdin.on('finish', () => { Object.assign(child, { exitCode: 0 }); child.emit('exit', 0, null); });
+    helperFault.child = child;
+    try {
+      const pending = acquireWindowsPackagedInstanceBarrier({
+        userDataDir: '/fixture', programName: 'CindyFixture', timeoutMs: 1_000,
+      }).catch(error => error as Error);
+      child.stdout.emit('data', '{"status":"started"}\n');
+      await vi.advanceTimersByTimeAsync(2_100);
+      expect(child.kill).not.toHaveBeenCalled();
+      child.stdout.emit('data', '{"status":"waiting"}\n{"status":"locked"}\n{"status":"acquired"}\n');
+      const lease = await pending;
+      expect(lease).not.toBeInstanceOf(Error);
+      if (lease instanceof Error) throw lease;
+      expect(lease.isHeld()).toBe(true);
+      await lease.release();
+      expect(lease.isHeld()).toBe(false);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      helperFault.child = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { status: 'started', deadline: 15_000, stage: 'starting' },
+    { status: 'waiting', deadline: 2_000, stage: 'waiting for' },
+    { status: 'locked', deadline: 15_000, stage: 'probing' },
+  ])('preserves the existing $stage deadline and fails closed', async ({ status, deadline, stage }) => {
+    vi.useFakeTimers();
+    const child = new EventEmitter() as ChildProcessWithoutNullStreams;
+    Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(),
+      exitCode: null, signalCode: null, kill: vi.fn(() => {
+        Object.assign(child, { exitCode: 1 }); child.emit('exit', 1, null); return true;
+      }) });
+    helperFault.child = child;
+    try {
+      const pending = acquireWindowsPackagedInstanceBarrier({
+        userDataDir: '/fixture', programName: 'CindyFixture', timeoutMs: 1_000,
+      }).catch(error => error as Error);
+      child.stdout.emit('data', JSON.stringify({ status }) + '\n');
+      await vi.advanceTimersByTimeAsync(deadline - 1);
+      expect(child.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual(expect.objectContaining({
+        message: `timed out ${stage} Windows packaged-instance barrier`,
+      }));
+      expect(child.kill).toHaveBeenCalled();
+    } finally {
+      helperFault.child = null;
+      vi.useRealTimers();
+    }
   });
 
   it('uses Electron ProcessSingleton names and a message-only-window probe', () => {

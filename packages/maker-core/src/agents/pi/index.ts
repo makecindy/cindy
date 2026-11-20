@@ -114,6 +114,7 @@ import {
   CINDY_PI_TEXT_ONLY_READY_PREFIX,
   CINDY_PI_TEXT_ONLY_CLOSED_PREFIX,
   CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX,
+  CINDY_PI_CONTINUATION_STATUS_PREFIX,
   projectPiRequestDiagnostics,
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
@@ -282,7 +283,6 @@ import {
   findPiTreeEntry,
   normalizePiSessionTree,
   piRetryBranch,
-  piContinuationImageQuotaRejected,
   piContextTokensFromTree,
   userDraftTextFromPiEntry,
 } from './session-tree.js';
@@ -3643,6 +3643,7 @@ export class PiAgent extends BaseAgent {
     let activeModelRequestControl: ModelRequestControl | undefined;
     let textOnlyPolicyReady = false;
     let providerRequestSequence = 0;
+    let continuationStatus: { nonce: string; imageQuotaRejected?: boolean } | undefined;
     let providerRequestObservedAt: number | undefined;
     let providerTurnObservedAt: number | undefined;
     let providerFirstOutputLogged = false;
@@ -6001,6 +6002,18 @@ export class PiAgent extends BaseAgent {
             providerTurnObservedAt = undefined;
             providerFirstOutputLogged = false;
           }
+          if (event.type === 'extension_ui_request' && event.method === 'notify' &&
+              typeof event.message === 'string' && event.message.startsWith(CINDY_PI_CONTINUATION_STATUS_PREFIX)) {
+            if (continuationStatus && event.message.length <= 512 && !closed && !piProcessExited) {
+              try {
+                const receipt = JSON.parse(event.message.slice(CINDY_PI_CONTINUATION_STATUS_PREFIX.length));
+                if (receipt.nonce === continuationStatus.nonce && typeof receipt.imageQuotaRejected === 'boolean') {
+                  continuationStatus.imageQuotaRejected = receipt.imageQuotaRejected;
+                }
+              } catch { /* Missing/malformed status cannot authorize compaction. */ }
+            }
+            return;
+          }
           if (!remote && event.type === 'extension_ui_request' && event.method === 'notify' &&
               typeof event.message === 'string' && event.message.startsWith(CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX)) {
             const prefix = `${CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX}${runtimeInstanceId}:`;
@@ -8218,16 +8231,16 @@ export class PiAgent extends BaseAgent {
           if (ctx.isStreaming) command.streamingBehavior = 'followUp';
           if ((sendOpts?.retryTranscriptUserEntryId || sendOpts?.continueTranscriptUserEntryId) && !ctx.isStreaming) {
             await runExclusivePiRpc(async () => {
-              const before = await proc.request({ type: 'get_tree' });
-              if (!before.success) {
-                throw new TurnDispatchRejectedError(
-                  before.error === PI_RPC_OVERSIZED_FRAME_ERROR
-                    ? `Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`
-                    : 'Pi retry history unavailable',
-                );
-              }
               let requestTooLarge = false;
               if (sendOpts.retryTranscriptUserEntryId) {
+                const before = await proc.request({ type: 'get_tree' });
+                if (!before.success) {
+                  throw new TurnDispatchRejectedError(
+                    before.error === PI_RPC_OVERSIZED_FRAME_ERROR
+                      ? `Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`
+                      : 'Pi retry history unavailable',
+                  );
+                }
                 const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId);
                 if (!branch) {
                   if (expectedCompat) throw new TurnDispatchRejectedError('Pi cache recovery branch is not replayable');
@@ -8247,7 +8260,18 @@ export class PiAgent extends BaseAgent {
                 }
                 requestTooLarge = branch.requestTooLarge;
               } else {
-                requestTooLarge = piContinuationImageQuotaRejected(before.data, sendOpts.continueTranscriptUserEntryId!);
+                // Continuation retains the branch, so an unavailable inspection must
+                // not block the original prompt. Query only a nonce-bound boolean
+                // inside Pi; full get_tree/get_entries can exceed the frame limit.
+                const status = { nonce: randomBytes(24).toString('hex'), imageQuotaRejected: false };
+                continuationStatus = status;
+                try {
+                  const payload = encodeURIComponent(JSON.stringify({ nonce: status.nonce,
+                    entryId: sendOpts.continueTranscriptUserEntryId }));
+                  const response = await proc.request({ type: 'prompt', message: `/cindy-continuation-status ${payload}` });
+                  requestTooLarge = response.success && status.imageQuotaRejected;
+                } catch { /* Preserve ordinary continuation if the read-only query fails. */ }
+                finally { continuationStatus = undefined; }
               }
               rejectIfCancelled(sendOpts, 'send');
               if (requestTooLarge) {

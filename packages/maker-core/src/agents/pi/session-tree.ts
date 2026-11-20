@@ -141,25 +141,20 @@ export function normalizePiSessionTree(data: unknown): SessionTreeSnapshot {
 }
 
 /** Explicit provider image-count evidence; invalid_media alone also covers corrupt files. */
-function isPiImageQuotaRejection(error: unknown): boolean {
-  return typeof error === 'string' && /(?:too many images in request|maximum number of images is \d+)/i.test(error);
+export function isPiImageQuotaRejection(error: unknown): boolean {
+  return typeof error === 'string' && /\b(?:too many images|maximum number of images)\b/i.test(error);
 }
 
-/** Inspect the current failed tail without navigating away from completed tool work. */
-export function piContinuationImageQuotaRejected(data: unknown, entryId: string): boolean {
-  const tree = normalizePiSessionTree(data);
-  const index = tree.activePathIds.indexOf(entryId);
-  if (index < 0) return false; // A rollover/fork already replaced this native window.
-  const entries = rawNodeMap(data);
-  const entry = entries.get(entryId);
-  if (entry?.type !== 'message' || recordOf(entry.message)?.role !== 'user') return false;
-  for (const id of tree.activePathIds.slice(index + 1).reverse()) {
-    const item = entries.get(id);
-    if (item?.type === 'model_change' || item?.type === 'thinking_level_change' ||
-        (item?.type === 'context_edit' && item.replacement === null)) continue;
-    const message = recordOf(item?.message);
-    return item?.type === 'message' && message?.role === 'assistant' &&
-      message.stopReason === 'error' && isPiImageQuotaRejection(message.errorMessage);
+/** Shared with the generated native bridge; inspect metadata without copying tool/media content. */
+export function piBranchImageQuotaRejected(branch: readonly { id?: string; type?: string; replacement?: unknown; message?: { role?: string; stopReason?: string; errorMessage?: unknown } }[], entryId: string): boolean {
+  const index = branch.findIndex(entry => entry.id === entryId);
+  if (index < 0 || branch[index]?.type !== 'message' || branch[index]?.message?.role !== 'user') return false;
+  for (let i = branch.length - 1; i > index; i--) {
+    const entry = branch[i];
+    if (entry.type === 'model_change' || entry.type === 'thinking_level_change' ||
+        (entry.type === 'context_edit' && entry.replacement === null)) continue;
+    return entry.type === 'message' && entry.message?.role === 'assistant' &&
+      entry.message.stopReason === 'error' && isPiImageQuotaRejection(entry.message.errorMessage);
   }
   return false;
 }
