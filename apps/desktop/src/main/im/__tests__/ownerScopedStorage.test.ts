@@ -160,6 +160,27 @@ describe('IM owner-scoped storage', () => {
     expect(() => storage.write('late')).toThrow('DISCORD_ACCOUNT_CHANGED');
     expect(discordFinalTextStorage('personal', true).read()).toBeNull();
   });
+
+  it('recovers atomic credential backups and removes stale backups with the credential', () => {
+    setSession('local', 'local-v1');
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-backup-token')).toBe(true);
+    const target = __testing.scopedSecretPath('discord-bot-token');
+    expect(target).not.toBeNull();
+    fs.copyFileSync(target!, `${target}.bak`);
+    fs.unlinkSync(target!);
+
+    expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('invalid-backup-token');
+    expect(ownerScopedImSecretRevision('discord-bot-token')).toMatch(/^sha256:/);
+    expect(fs.existsSync(target!)).toBe(true);
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-replacement-after-backup')).toBe(true);
+    expect(fs.existsSync(`${target}.bak`)).toBe(false);
+
+    fs.copyFileSync(target!, `${target}.bak`);
+    ownerScopedImSecrets.remove('discord-bot-token');
+    expect(fs.existsSync(target!)).toBe(false);
+    expect(fs.existsSync(`${target}.bak`)).toBe(false);
+    expect(ownerScopedImSecrets.read('discord-bot-token')).toBeNull();
+  });
   beforeEach(() => {
     mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-im-owner-scope-'));
     mocks.ownerScopeKey = 'owner-1';

@@ -20,7 +20,7 @@ import {
 } from '../appSessionState.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 import { createLogger } from '../logger.js';
-import { atomicWriteFileSync } from '../utils/atomicWriteFile';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
 
 const log = createLogger('im/owner-scoped-storage');
 const LEGACY_OWNER_MARKER = 'im-legacy-owner.json';
@@ -175,7 +175,8 @@ export function ownerScopedImSecretRevision(name: string): string {
   const target = scopedSecretPath(name);
   if (!target) throw new Error('IM_ACCOUNT_SCOPE_UNAVAILABLE');
   try {
-    const encrypted = fs.readFileSync(target);
+    const encrypted = readAtomicFileSync(target);
+    if (encrypted === null) return 'missing';
     return `sha256:${crypto.createHash('sha256').update(encrypted).digest('hex')}`;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
@@ -196,7 +197,8 @@ function readSecretResult(name: string): IMSecretReadResult {
     if (!safeStorage.isEncryptionAvailable()) return { kind: 'error' };
     const target = prepareSecretPath(name);
     if (!target) return { kind: 'error' };
-    const encrypted = fs.readFileSync(target, 'utf-8');
+    const encrypted = readAtomicFileSync(target);
+    if (encrypted === null) return { kind: 'missing' };
     return {
       kind: 'value',
       value: decodeSecretPayload(safeStorage.decryptString(Buffer.from(encrypted, 'base64'))),
@@ -230,7 +232,12 @@ export const ownerScopedImSecrets: ImSecrets = {
   remove(name) {
     try {
       const target = prepareSecretPath(name);
-      if (target) fs.unlinkSync(target);
+      if (target) {
+        try { fs.unlinkSync(`${target}.bak`); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        fs.unlinkSync(target);
+      }
     } catch {
       // Missing credentials are already removed.
     }
