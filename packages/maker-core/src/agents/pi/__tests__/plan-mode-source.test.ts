@@ -22,7 +22,7 @@ describe('Pi plan title extraction', () => {
     expect(selectPlan([{ type: 'thinking', thinking: plan }])).toBe(plan);
   });
 
-  it.each(['Implementation phase:\n1. 实现\n2. 交付\n\nVerification phase:\n1. 验证\n2. 审查', '## Build\n1. 实现\n2. 交付\n\n## Review\n1. 验证\n2. 审查'])('preserves structural phase headings: %s', plan => {
+  it.each(['Implementation phase:\n1. 实现\n2. 交付\n\nVerification phase:\n1. 验证\n2. 审查', '## Build\n1. 实现\n2. 交付\n\n## Review\n1. 验证\n2. 审查', '  ## Build\n1. 实现\n2. 交付\n\n  ## Review\n1. 验证\n2. 审查'])('preserves structural phase headings: %s', plan => {
     expect(selectPlan([{ type: 'thinking', thinking: plan }])).toBe(plan);
   });
   it('retains the native thinking plan but not its unrelated preamble, and prefers a visible plan', () => {
