@@ -40,6 +40,8 @@ export interface HistoryPageOptions {
   workLines?: boolean;
   /** Receives the latest page's shape; never serialized. */
   onShape?: (shape: HistoryPageShape) => void;
+  /** Receives the live-source rows the projection merged into the page. */
+  onLiveRows?: (ids: readonly string[]) => void;
 }
 
 function isRunningLeafWork<T extends HistoryMessageSource>(item: HistoryViewItem<T>): item is Extract<HistoryViewItem<T>, { type: 'work' }> {
@@ -232,6 +234,7 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       const projectAll = () => {
         raw = chunks.slice().reverse().flat();
         live = liveRows(raw);
+        options.onLiveRows?.(live.map((row) => row.id));
         items = project(live);
         stale = false;
       };
@@ -579,10 +582,13 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         let shape: HistoryPageShape | undefined;
         // Live rows belong to the run that produced them: a cancelled run drops
         // them without a DB write, so a page holding one must never outlive it.
-        const liveIdsAtRead = new Set((deps.live?.(sessionId) ?? []).map((row) => row.id));
+        // The reader reports the rows it merged, so the wrapper never asks the
+        // live source on its own: that read has its own timing meaning.
+        let liveIds: readonly string[] = [];
         const promise = reader.page(sessionId, before, lazyDetails, {
           workLines: options.workLines,
           ...(options.onShape ? { onShape: (value: HistoryPageShape) => { shape = value; } } : {}),
+          onLiveRows: (ids) => { liveIds = ids; },
         }, revision).then(async (page) => {
           // A live-projected row is volatile wherever it hides: as an unfolded row
           // in `messages`, or as a folded ID kept in a work summary (`liveMessageIds`).
@@ -591,9 +597,12 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
           // A group projected while the session ran keeps a streaming summary, and
           // a run that started during the read is live again by now: both mean the
           // page is not settled, whatever the revision says.
-          const liveIds = new Set([...liveIdsAtRead, ...(deps.live?.(sessionId) ?? []).map((row) => row.id)]);
-          const volatile = hasVolatileItem(page.items, deps.isVolatileItemId, liveIds);
-          if (!volatile && !deps.running(sessionId) && await deps.revision!() === revision) {
+          const liveIdSet = new Set(liveIds);
+          const volatile = hasVolatileItem(page.items, deps.isVolatileItemId, liveIdSet);
+          // The key carries the revision read before the page, so a write during
+          // the read only makes this entry unreachable — it is never served, and
+          // re-reading the revision here would add a query per read.
+          if (!volatile && !deps.running(sessionId)) {
             const bytes = Buffer.byteLength(JSON.stringify(page), 'utf8');
             if (bytes <= SETTLED_PAGE_MAX_BYTES) {
               settledPages.set(key, { page, shape, bytes, cachedAt: Date.now() });
