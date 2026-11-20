@@ -701,6 +701,8 @@ interface ChatInputProps {
   disabled?: boolean;
   /** Block submissions while a draft-local picker is open, without locking typing. */
   sendBlocked?: boolean;
+  /** Keep the unavailable saved model visible and open the model picker for recovery. */
+  preserveDraftModel?: boolean;
   /** Freeze model/provider/effort/permission controls for audit-only tasks. */
   settingsLocked?: boolean;
   /** When true, shows Stop button instead of Send button. */
@@ -1389,6 +1391,7 @@ export function ChatInput({
   onWorkingDirChange,
   disabled: disabledProp,
   sendBlocked = false,
+  preserveDraftModel = false,
   settingsLocked: settingsLockedProp = false,
   isStreaming = false,
   isAgentBusy,
@@ -2350,10 +2353,10 @@ export function ChatInput({
   const unifiedAgents = useMemo<readonly AgentKind[] | undefined>(() => {
     if (!runtimeAgentsLoaded) return undefined;
     const kinds = UNIFIED_AGENT_KINDS.filter(
-      (kind) => kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),
+      (kind) => (!preserveDraftModel && kind === agentKind) || runtimeAvailableVendors.has(agentKindToVendor(kind)),
     );
-    return kinds.length > 0 ? kinds : undefined;
-  }, [runtimeAgentsLoaded, runtimeAvailableVendors, agentKind]);
+    return kinds.length > 0 || preserveDraftModel ? kinds : undefined;
+  }, [runtimeAgentsLoaded, runtimeAvailableVendors, agentKind, preserveDraftModel]);
   // 已有 device-link 任务在断链时仍有 pinned deviceId + renderer outbox 可接住发送，
   // 不能因为被控端 provider 目录暂时拉不到就禁用 composer。远程草稿没有既有 session
   // 可以排队，仍与本地任务一样保留来源门禁。
@@ -10446,6 +10449,7 @@ export function ChatInput({
                     // 无意图才回到会话 runtime 的 selectedProviderId。
                     currentProviderId={activeProviderId}
                     sourceDisconnected={selectedSourceDisconnected}
+                    preserveDraftModel={preserveDraftModel}
                     // 与上面 providers 同一份任务视图：账号被拆出后原来源在这个任务里按账号所在的供应商显示。
                     {...(taskSourceProvider ? { taskSourceProvider } : {})}
                     // 断开来源回落到默认来源后,面板会高亮同模型的回落行;点击该行必须重新

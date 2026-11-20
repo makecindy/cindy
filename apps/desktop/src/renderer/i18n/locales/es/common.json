@@ -16558,6 +16558,14 @@
       "remoteProviderUnsupported": "Este proveedor no es compatible con sesiones remotas SSH; elige otra fuente",
       "remoteNativeOauthUnavailable": "Las tareas remotas no pueden usar una suscripción de Claude: elige una puerta de enlace o un modelo con clave API",
       "claudeSubscriptionWorkspaceOverride": "La configuración de .claude de esta carpeta cambia adónde envía solicitudes Claude o cómo inicia sesión, por lo que no se puede usar la suscripción de Claude aquí. Elimina esa configuración o elige un modelo con puerta de enlace o clave de API",
+      "savedModel": {
+        "loading": "Conectando con el modelo seleccionado…",
+        "checkFailed": "No se pudo comprobar el modelo seleccionado",
+        "engine": "El motor seleccionado no está disponible. Elige un modelo para esta tarea.",
+        "source": "La fuente seleccionada no está disponible. Elige un modelo para esta tarea.",
+        "model": "El modelo seleccionado no está disponible. Elige un modelo para esta tarea.",
+        "thisTaskOnly": "El modelo seleccionado solo se aplica a esta tarea"
+      },
       "deviceStillLoading": "El dispositivo remoto aún se está cargando. Espera",
       "remoteDefaultsLoadFailed": "No se pudo cargar la configuración del dispositivo remoto. Revisa la conexión; Cindy lo está reintentando.",
       "branchChanged": "El proyecto está ahora en {{branch}}. Compruébalo y vuelve a enviar.",
