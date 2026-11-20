@@ -821,8 +821,9 @@ describe("durable mobile outbox ownership", () => {
 
 describe("app-owned delivery and reconciliation", () => {
   // Unit: a lost steer ACK must not become a second delivery after app restart.
-  it.each(['accepted', 'declined', 'lost acknowledgement'] as const)('settles a first steer with %s', async (outcome) => {
+  it.each(['accepted', 'declined', 'lost acknowledgement', 'older host'] as const)('settles a first steer with %s', async (outcome) => {
     const { store, deps, storage } = await setup();
+    if (outcome !== 'older host') deps.projection.mockResolvedValue({ ...projection(), automaticSteer: true });
     await store.add({ ...message(), steerTurnStartedAt: 1 });
     const steer = vi.fn(async () => {
       if (outcome === 'lost acknowledgement') throw new Error('connection lost');
@@ -831,11 +832,12 @@ describe("app-owned delivery and reconciliation", () => {
     const delivery = createDurableOutboxDelivery({ ...deps, steer });
     await delivery.run();
     delivery.stop();
-    expect(steer).toHaveBeenCalledWith(expect.objectContaining({
+    if (outcome === 'older host') expect(steer).not.toHaveBeenCalled();
+    else expect(steer).toHaveBeenCalledWith(expect.objectContaining({
       enqueueStarted: true, retrySafe: false,
       item: expect.objectContaining({ clientId: 'id-1' }),
     }));
-    expect(deps.enqueue).toHaveBeenCalledTimes(outcome === 'declined' ? 1 : 0);
+    expect(deps.enqueue).toHaveBeenCalledTimes(outcome === 'declined' || outcome === 'older host' ? 1 : 0);
     expect(store.getSnapshot()[0].state).toBe(outcome === 'lost acknowledgement' ? 'confirming' : 'host-owned');
 
     if (outcome === 'lost acknowledgement') {

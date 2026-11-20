@@ -882,6 +882,7 @@ export interface MobileMakerTransport {
       opts?: {
         removeFromQueue?: boolean;
         touchUserSend?: boolean;
+        automaticSteer?: true;
         expectedClearBoundaryMs?: number | null;
       },
     ): Promise<boolean>;

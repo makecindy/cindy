@@ -138,6 +138,7 @@ export function MobileOutboxBridge() {
     // Learned from this host's own projection / enqueue replies. A first send in
     // a task whose boundary is known needs no projection round trip.
     const durableHosts = new Map<string, number>();
+    const automaticSteerHosts = new Map<string, number>();
     const knownClearBoundaries = new Map<string, { epoch: number; value: number | null }>();
     // What a host answered belongs to the connection it answered on: a host that
     // restarted or was replaced by an older build must be asked again.
@@ -146,7 +147,7 @@ export function MobileOutboxBridge() {
     const learnProjection = (r: DurableOutboxRecord, projection: unknown) => {
       if (!projection || typeof projection !== 'object') return;
       const epoch = connectionEpochFor(r.deviceId);
-      const value = projection as { inputDeliveryVersion?: unknown; clearBoundaryMs?: unknown };
+      const value = projection as Partial<DeliveryProjection>;
       if (value.inputDeliveryVersion === 1) durableHosts.set(r.deviceId, epoch);
       if (value.clearBoundaryMs === null
         || (typeof value.clearBoundaryMs === 'number' && Number.isFinite(value.clearBoundaryMs))) {
@@ -190,7 +191,8 @@ export function MobileOutboxBridge() {
       sessionPolicy,
       projection: async (r) => {
         captureProjectionEpoch(r);
-        return invoke<DeliveryProjection>(
+        const epoch = connectionEpochFor(r.deviceId);
+        const projection = await invoke<DeliveryProjection>(
           r.deviceId,
           "maker:input:get-projection",
           [
@@ -200,6 +202,12 @@ export function MobileOutboxBridge() {
             },
           ],
         );
+        if (projection.automaticSteer !== true) return projection;
+        if (connectionEpochFor(r.deviceId) !== epoch) {
+          return { ...projection, automaticSteer: undefined };
+        }
+        automaticSteerHosts.set(r.deviceId, epoch);
+        return projection;
       },
       knownProjection: (r) => {
         const epoch = connectionEpochFor(r.deviceId);
@@ -212,6 +220,7 @@ export function MobileOutboxBridge() {
           ...EMPTY_INPUT_PROJECTION,
           sessionId: r.item.sessionId,
           inputDeliveryVersion: 1,
+          ...(automaticSteerHosts.get(r.deviceId) === epoch ? { automaticSteer: true } : {}),
           clearBoundaryMs: boundary.value,
         };
       },
@@ -328,6 +337,7 @@ export function MobileOutboxBridge() {
           const status = remoteSessionStore.getSessionRunStatus(sessionId);
           const projection = remoteSessionStore.getInputProjection(sessionId);
           if (!status.isRunning || status.startedAt !== r.steerTurnStartedAt
+            || automaticSteerHosts.get(r.deviceId) !== connectionEpochFor(r.deviceId)
             || projection.queuePaused || projection.queueAbortPending || projection.queueInteractionLocks.length) {
             throw turnEnded;
           }
@@ -336,6 +346,7 @@ export function MobileOutboxBridge() {
           checkTurn();
           const transport = createMobileMakerTransport({ deviceId: r.deviceId, invoke: invokeOwned(r, checkTurn) });
           const accepted = await transport.input.steer(sessionId, r.prepared!, {
+            automaticSteer: true,
             touchUserSend: true,
             ...(r.clearBoundaryMs !== undefined ? { expectedClearBoundaryMs: r.clearBoundaryMs } : {}),
           });

@@ -355,7 +355,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       await deps.beforeEnqueue?.(record);
       if (!current(record) || !deps.canRun(record)) return;
       const steer = deps.steer && record.steerTurnStartedAt !== undefined
-        && projection.inputDeliveryVersion === 1 && isDurableOutboxUnsent(record) ? deps.steer : undefined;
+        && projection.inputDeliveryVersion === 1 && projection.automaticSteer === true
+        && isDurableOutboxUnsent(record) ? deps.steer : undefined;
       // On an uncertain steer, reconcile by clientId before allowing any resend.
       await update({ state: "sending", enqueueStarted: true, error: undefined, ...(steer ? { retrySafe: false } : {}) });
       let result: InputProjection | undefined;

@@ -1129,6 +1129,8 @@ interface SteerOptions {
   beforeMutation?: () => Promise<void>;
   removeFromQueue?: boolean;
   touchUserSend?: boolean;
+  /** Composer preference: steer only while running and preserve the host's queue pause. */
+  automaticSteer?: boolean;
   /** 控制面插话不允许在 turn 结束竞态下退化成下一轮普通输入。 */
   fallbackToTurn?: boolean;
   /** 控制面初检捕获的 live Session 对象，防 session id 被新实例复用。 */
@@ -2791,6 +2793,7 @@ export class AgentInputCoordinator {
     // screening/dispatch work begins.
     if (!itemAlreadyOwnedByHost) item = stampHostAcceptedAt(item, steerClearBoundaryMs);
     if (
+      (opts?.automaticSteer && state.queuePaused) ||
       state.steeringQueueClientIds.length > 0 ||
       state.queueAbortPending ||
       state.queueInteractionLocks.length > 0
@@ -2806,6 +2809,8 @@ export class AgentInputCoordinator {
       });
       return false;
     }
+
+    if (opts?.automaticSteer && !this.isTurnSteerable(sessionId, state)) return false;
 
     if (!isSchedulerOriginItem(item)) {
       this.cancelPreparedAutoResume(sessionId, state);
@@ -2840,9 +2845,8 @@ export class AgentInputCoordinator {
     const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
     const steerVendorTurnGeneration = this.deps.getTurnGeneration?.(sessionId) ?? null;
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
-    // UI steer doubles as "resume"; an agent-chosen steer only runs when the queue is
-    // not paused and must never release a pause the user owns.
-    if (!opts?.controlInput) state.queuePaused = false;
+    // Only explicit steering can also resume a paused queue.
+    if (!opts?.controlInput && !opts?.automaticSteer) state.queuePaused = false;
     if (!state.steeringQueueClientIds.includes(item.clientId)) {
       state.steeringQueueClientIds.push(item.clientId);
     }
@@ -2965,6 +2969,7 @@ export class AgentInputCoordinator {
       const current = this.getState(sessionId);
       if (!matchesExpectedTurn() || current.queueInteractionLocks.length > 0
         || current.queueAbortPending || inputBoundarySignal.aborted || steerAbort.signal.aborted
+        || (opts?.automaticSteer && (current.queuePaused || !this.isTurnSteerable(sessionId, current)))
         || !this.isCurrentSteerRequest(current, item.clientId, steerGeneration, steerRequestToken)
         || (opts?.controlInput !== undefined && this.isControlSteerBlocked(
           sessionId, current, item, { fromQueue: opts.controlInput.fromQueue, ownSteer: true },
@@ -3108,7 +3113,7 @@ export class AgentInputCoordinator {
           sessionId,
           clientId: item.clientId,
         });
-        if (opts?.fallbackToTurn === false) {
+        if (opts?.fallbackToTurn === false || opts?.automaticSteer) {
           this.clearDirectSteeringItem(latest, item.clientId);
           this.emit(sessionId);
           return finishSteerRequest(false);
@@ -3137,8 +3142,10 @@ export class AgentInputCoordinator {
           this.movePreparedItemToQueueFront(latest, item, true);
           this.movePendingCompactWaitClientIdToFront(latest, item.clientId);
           latest.recovery = { kind: 'queue-head', clientId: item.clientId };
-          latest.queuePaused = false;
-          latest.queuePausedByRestore = false;
+          if (!opts?.automaticSteer) {
+            latest.queuePaused = false;
+            latest.queuePausedByRestore = false;
+          }
         }
         // 投递结果不确定(ack 超时 / post-send abort,见 isSteerDeliveryUncertainError):
         // 把该消息物化到队首(composer 入口的插话不在队列里,不物化则"结果不确定"

@@ -6,6 +6,8 @@ export interface InputDeliveryReceipt {
 }
 export interface InputDeliveryProjection {
   inputDeliveryVersion?: 1;
+  /** The host checks the pause state for automatic, same-turn steering. */
+  automaticSteer?: true;
   deliveryReceipts?: InputDeliveryReceipt[];
 }
 
