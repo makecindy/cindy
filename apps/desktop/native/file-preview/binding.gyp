@@ -4,6 +4,9 @@
     'type': 'executable',
     'sources': ['preview.cpp'],
     'libraries': ['shell32.lib', 'shlwapi.lib', 'ole32.lib', 'uuid.lib', 'user32.lib'],
-    'msvs_settings': { 'VCLinkerTool': { 'SubSystem': '2' } }
+    # node-gyp selects Console for executables in a late target condition.
+    'msvs_settings': { 'VCLinkerTool': { 'target_conditions': [
+      ['_type=="executable"', { 'SubSystem': 2 }]
+    ] } }
   }]
 }
