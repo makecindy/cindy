@@ -18,6 +18,7 @@ import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { readProvidersForSessionModelRecovery } from '../maker-host/provider-service.js';
 import { getSessionEffort, getSessionFastMode } from '../maker-host/session-effort-store.js';
 import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import type { Logger } from '../logger.js';
@@ -157,10 +158,9 @@ export function createRecoverRenamedSessionModelOnSend(ports: {
     }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     if (!row || row.status !== 'active' || !row.providerId ||
         row.remoteHostId || row.agentDeviceId) return;
-    const providers = await getDesktopProviderService().listProviders({
-      allowSideEffects: false,
-      catalog: getActiveCatalog(),
-    });
+    const providers = await readProvidersForSessionModelRecovery(
+      getDesktopProviderService(), getActiveCatalog, row.providerId, dbToMakerAgentKind(row.agentKind),
+    );
     const profiles = await readSessionRuntimeProfiles(sessionId);
     await recoverRenamedSessionModelBeforeSend({
       route: { ...row, agentKind: dbToMakerAgentKind(row.agentKind) },

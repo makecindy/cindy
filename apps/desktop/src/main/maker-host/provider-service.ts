@@ -25,6 +25,7 @@ import {
   type ProviderView,
   type Provider,
   isCustomRoutedProvider,
+  providerCatalogId,
   type AgentKind,
 } from '@cindy/model-providers';
 
@@ -52,6 +53,10 @@ export interface ConnectionReadOptions {
 }
 
 export interface ProviderListOptions extends ConnectionReadOptions {
+  /** Host catalog identity of the native source to discover; other sources stay snapshot-only. */
+  discoverySourceId?: string;
+  /** Routing callers may need discovery without unrelated account display reads. */
+  includeAccountPresentation?: boolean;
   /**
    * Internal catalog override for policy consumers that need the routing truth
    * rather than the user-selectable projection. Never sourced from IPC input.
@@ -151,6 +156,27 @@ export interface ProviderService {
   listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]>;
 }
 
+/** Existing-route reads share readiness rules regardless of provider/pool presentation. */
+export async function readProvidersForSessionModelRecovery(
+  service: ProviderService,
+  getCatalog: () => Catalog,
+  providerId: string,
+  agent: AgentKind,
+): Promise<ProviderView[]> {
+  const providers = await service.listProviders({ allowSideEffects: false, snapshotOnly: true, getCatalog });
+  const provider = providers.find(candidate => candidate.id === providerId);
+  if (provider?.suspended === true || (provider?.models[agent]?.length && !provider.subscriptionReadUnavailable))
+    return providers;
+  // Missing/empty/failed views cannot rule out a rename. Native readers own their
+  // TTL and in-flight work; wait for discovery before materializing the new view.
+  // Do not infer readiness from pool-management or merged-alias display metadata.
+  return service.listProviders({
+    allowSideEffects: false, includeAccountPresentation: false, waitForDiscovery: true, getCatalog,
+    discoverySourceId: providerCatalogId(provider ?? getCatalog().providers.find(candidate => candidate.id === providerId)
+      ?? { id: providerId, auth: { method: 'none' } }),
+  });
+}
+
 /**
  * 创建供应商服务。目录每次从 `getCatalog()` 现读（active-catalog 已持有进程级单例，零额外 IO）；
  * 连接状态每次实时读（凭证变化要立即反映）。
@@ -163,11 +189,17 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       waitForDiscovery: opts?.waitForDiscovery === true,
       ...(opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : {}),
     };
+    // Scoped recovery must not join another native source's quota/model probe.
+    // Global provider lists omit this scope and retain their existing behavior.
+    const optionsFor = (sourceId: keyof ProviderConnectionReaders): ConnectionReadOptions =>
+      opts?.discoverySourceId !== undefined && opts.discoverySourceId !== sourceId
+        ? { ...readOpts, allowSideEffects: false, snapshotOnly: true, waitForDiscovery: false }
+        : readOpts;
     const [xd, anthropic, openai, xai] = await Promise.all([
-      Promise.resolve(deps.connection.xd(readOpts)),
-      Promise.resolve(deps.connection.anthropic(readOpts)),
-      Promise.resolve(deps.connection.openai(readOpts)),
-      Promise.resolve(deps.connection.xai(readOpts)),
+      Promise.resolve(deps.connection.xd(optionsFor('xd'))),
+      Promise.resolve(deps.connection.anthropic(optionsFor('anthropic'))),
+      Promise.resolve(deps.connection.openai(optionsFor('openai'))),
+      Promise.resolve(deps.connection.xai(optionsFor('xai'))),
     ]);
     const sourceCatalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
     const catalog = deps.projectCatalog?.(sourceCatalog, !!(opts?.getCatalog || opts?.catalog)) ?? sourceCatalog;
@@ -223,13 +255,13 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       );
     }
     const accountInfo = new Map<string, ProviderView['openAiAccount']>();
-    if (!readOpts.snapshotOnly && deps.openAiAccountInfo) {
+    if (!readOpts.snapshotOnly && opts?.includeAccountPresentation !== false && deps.openAiAccountInfo) {
       await Promise.all(catalog.providers.filter((p) => p.id === 'openai' || p.auth.native === 'codex').map(async (p) => {
         accountInfo.set(p.id, await deps.openAiAccountInfo!(p.id));
       }));
     }
     const subscriptionInfo = new Map<string, ProviderView['subscriptionAccount']>();
-    if (!readOpts.snapshotOnly && deps.subscriptionAccountInfo) await Promise.all(catalog.providers
+    if (!readOpts.snapshotOnly && opts?.includeAccountPresentation !== false && deps.subscriptionAccountInfo) await Promise.all(catalog.providers
       .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
     const contextLimits = deps.getModelContextLimits?.() ?? {};
