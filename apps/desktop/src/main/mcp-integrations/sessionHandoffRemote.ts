@@ -1,3 +1,4 @@
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { creationOperation, remoteSessionCreationSchema, type RemoteSessionCreation, type RemoteSessionCreated } from '../../shared/remoteSessionCreation.js';
 import type { CapturedAgentRequest } from '../maker-ipc/forwardedRequest.js';
 import type { ForwardedRequestSource } from '../../shared/forwardedRequest.js';
@@ -191,7 +192,10 @@ export function createRemoteSessionHandoff(deps: {
       const support = await deps.invoke(target.deviceId, DL_SESSION_HANDOFF_CHANNEL,
         [{ action: 'task-action-capability', sessionId: target.sessionId }], { preSend: assertCurrent });
       if (!support.ok) return capabilityProbeFailure(support.error.code, support.error.message);
-      const capability = support.result as { taskActionVersion?: unknown; plainRequestBody?: unknown; ordinaryCreateVersion?: unknown; pluginCaller?: unknown } | null;
+      const capability = support.result as {
+        taskActionVersion?: unknown; plainRequestBody?: unknown; ordinaryCreateVersion?: unknown;
+        ordinaryCreateAutoTitle?: unknown; pluginCaller?: unknown;
+      } | null;
       if (capability?.taskActionVersion !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer must support task-action authorization before a message can be sent.' };
       if (creation && capability.ordinaryCreateVersion !== 1)
@@ -203,6 +207,10 @@ export function createRemoteSessionHandoff(deps: {
       const delivered = capability.plainRequestBody === 1 || !captured?.legacy ? captured : { ...captured, ...captured.legacy };
       const body = delivered?.message ?? request.message;
       const source = delivered?.autoReviewUserText.request;
+      // Bind the fallback to the same receipt as the create that older hosts will persist.
+      if (creation && !creation.title?.trim() && 'sessionId' in sender && capability.ordinaryCreateAutoTitle !== 1) {
+        creation = { ...creation, title: normalizeAutoTitle(request.message) };
+      }
       taskActionReceipt = issueRemoteTaskActionReceipt({ ...target, ...('pluginId' in sender
         ? { senderPluginId: sender.pluginId } : { senderSessionId: sender.sessionId }), message: body,
         ...(creation ? { operation: creationOperation(creation) } : {}) }, assertCurrent);

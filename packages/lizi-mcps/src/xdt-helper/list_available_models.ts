@@ -68,6 +68,21 @@ function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefin
   }));
 }
 
+/**
+ * A plugin-provided task engine on the task computer (docs/plans/acp-plugin-bridge.md). Hosts list
+ * them only for that computer itself (never for another computer or a shared provider); old hosts
+ * omit the field. A task or Worker uses one with agent `acp`, the engine's `providerId`
+ * (`acp-plugin:<plugin>:<harness>`) and one of its model ids (`default` = the engine chooses).
+ */
+export interface PluginEngineDescriptor {
+  providerId: string;
+  name: string;
+  /** false = the plugin reports it cannot run now (e.g. its CLI is missing); see `message`. */
+  available: boolean;
+  message?: string;
+  models: Array<{ id: string; label: string; efforts?: string[] }>;
+}
+
 export interface ListAvailableModelsDeps {
   /** 调用方任务(可选)：它的 Agent 在另一台电脑运行时，按那台的模型目录列出。 */
   getSessionContext?: () => { sessionId?: string };
@@ -85,6 +100,8 @@ export interface ListAvailableModelsDeps {
     codex?: ModelDescriptor[];
     claude_code?: ModelDescriptor[];
     pi?: ModelDescriptor[];
+    /** Plugin engines on the task computer; listed only when no `agent` filter is given. */
+    pluginEngines?: PluginEngineDescriptor[];
   }, string>>;
 }
 
@@ -108,6 +125,7 @@ const DESCRIPTION = [
   '- codex: Codex agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- pi: Pi agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
+  '- plugin_engines: 仅在任务电脑本机、且不传 agent 时出现：插件提供的执行引擎 [{provider_id, name, available, message?, models:[{id, label, efforts?}]}]。available=false 的引擎当前不能用(message 是插件给的原因)。用它创建 Worker 时 agent 传 acp、provider_id 传该项 provider_id、model 传 models[].id(default = 由引擎自己选)。插件引擎只在本机运行，不能配 execution_device_id / agent_device_id。',
   '- providers: 当前已连接且实际提供该模型的来源 [{provider_id, provider_name}]。普通任务按精确 model 使用宿主默认来源，不传 provider_id；显式创建 Worker 时可把选定的 provider_id 传给 create_worker/create_workers。',
   '- default_provider_id: 未显式选择来源时 host 当前解析出的默认来源；providers 只有一项时直接使用该项。',
   '',
@@ -185,6 +203,17 @@ export function registerListAvailableModelsTool(
         codex: tagTier(result.codex),
         claude_code: tagTier(result.claude_code),
         pi: tagTier(result.pi),
+        ...(result.pluginEngines?.length
+          ? {
+              plugin_engines: result.pluginEngines.map((engine) => ({
+                provider_id: engine.providerId,
+                name: engine.name,
+                available: engine.available,
+                ...(engine.message ? { message: engine.message } : {}),
+                models: engine.models,
+              })),
+            }
+          : {}),
       });
     },
   });

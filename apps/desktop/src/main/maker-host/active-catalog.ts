@@ -2,6 +2,7 @@ import { antigravityProvider } from './antigravity-state.js';
 import type { ModelImageInputCatalogModel } from '../../shared/modelImageInputOverride.js';
 import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
 import { projectCurrentModelSources } from './model-source-snapshots.js';
+import { subscriptionImageModelId } from '../cindy-media/sharedSubscriptionImage.js';
 import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
   projectProviderMediaModels, projectSelectionAliases,
@@ -1885,7 +1886,7 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
     if (!isOpenAiSubscriptionProvider(provider) ||
         (provider.id === 'openai' && openAiImagesApiKeyConfigured) ||
         provider.imageModels?.length === 0) return provider;
-    const id = `${provider.id}/gpt-image-2`;
+    const id = subscriptionImageModelId(provider.id);
     const previous = provider.imageModels?.find((model) => model.id === id);
     const defaults: ProviderMediaModel = {
       id,

@@ -6,6 +6,77 @@ import { AgentNetSocket } from '../portableSocket.js';
 import { NativeTransport, type NativeEnginePort } from '../nativeTransport.js';
 import type { PeerChannel } from '../types.js';
 
+// Unit at the production NativeTransport IO boundary: a poll is still initializing
+// an existing peer when another peer starts dialing. The old snapshot cannot
+// declare that newer connection missing. The handover tests below never dial
+// while a native command is suspended, so they cannot cover this ordering.
+// Expiry remains independent of that snapshot, including a late established
+// reply or initialization completing beyond the existing three-second deadline.
+it.each(['ready', 'old-poll-timeout', 'late-established', 'slow-initialize'] as const)(
+  'keeps newer native dials snapshot-safe and deadline-bounded: %s', async mode => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  let release!: () => void, entered!: () => void, connected!: () => void;
+  const initializing = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const dialCreated = new Promise<void>(resolve => { connected = resolve; });
+  const closed: number[] = [], received: number[] = [];
+  let nextStream = 0, first = true, dialed = false, delayed = false;
+  const state = (id: number) => ({ id, established: true, dead: false, closedByPeer: false,
+    unacked: false, remoteKey: remote.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 });
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      let value: unknown;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null };
+      if (command.op === 'poll') {
+        if (dialed && mode === 'late-established' && !delayed) { delayed = true; vi.advanceTimersByTime(3001); }
+        value = { packets: [], connections: [state(1), ...(dialed ? [state(2)] : [])].filter(s => !closed.includes(s.id)) };
+      }
+      if (command.op === 'connect') { dialed = true; value = 2; connected(); }
+      if (command.op === 'openStream') {
+        if (first) { first = false; entered(); await blocked; }
+        if (command.id === 2 && mode === 'slow-initialize' && !delayed) { delayed = true; vi.advanceTimersByTime(3001); }
+        value = ++nextStream;
+      }
+      if (command.op === 'write') value = Buffer.from(command.data as string, 'base64url').length;
+      if (command.op === 'close') closed.push(command.id as number);
+      return value as T;
+    }, async destroy() {},
+  };
+  let transport: NativeTransport | undefined;
+  try {
+    transport = await NativeTransport.create(engine, { admit: () => true,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }], relayIdOf: () => remote.deviceId,
+      onIncoming: () => { received.push(1); } });
+    const poll = vi.advanceTimersByTimeAsync(8);
+    await initializing;
+    let outcome: { channel: PeerChannel } | { error: unknown } | undefined;
+    const result = transport.connect({ id: key, dial: { relayId: remote.deviceId } })
+      .then(channel => ({ channel }), error => ({ error })).then(value => { outcome = value; return value; });
+    await dialCreated;
+    await vi.advanceTimersByTimeAsync(0); // Register the waiter after the bridge command returned.
+    if (mode === 'old-poll-timeout') vi.advanceTimersByTime(3001);
+    release(); await poll;
+    await vi.advanceTimersByTimeAsync(0); // Finish this poll without starting the next eight-ms poll.
+    if (mode === 'old-poll-timeout') {
+      expect(outcome).toMatchObject({ error: new Error('NATIVE_CONNECT_TIMEOUT') });
+      expect(closed).toContain(2);
+      expect(received).toEqual([1]);
+      return;
+    }
+    await vi.advanceTimersByTimeAsync(8);
+    if (mode === 'ready') {
+      expect(await result).toHaveProperty('channel');
+      expect(closed).not.toContain(2);
+    } else {
+      expect(await result).toMatchObject({ error: new Error('NATIVE_CONNECT_TIMEOUT') });
+      expect(closed).toContain(2);
+    }
+    expect(received).toEqual([1]);
+  } finally { release?.(); await transport?.close(); vi.useRealTimers(); }
+});
+
 // Unit at the native engine IO boundary: real NativeTransport/NativeChannel and
 // PortableSocket admission, framing and replies; no fake PeerChannel.close.
 it.each(['late-frame', 'late-response', 'revoked', 'rotated', 'abort', 'deadline'] as const)(
@@ -85,3 +156,53 @@ it.each(['late-frame', 'late-response', 'revoked', 'rotated', 'abort', 'deadline
       if (mode === 'deadline' || mode === 'abort') expect(closed.has(1)).toBe(true);
     } finally { socket?.close(); await Promise.resolve(); vi.useRealTimers(); }
   });
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机的 NativeTransport 向原生引擎发 poll 的频率。连接空闲时每 50 毫秒一次，不再每 8 毫秒一次；
+ *   空闲时要发数据，写进引擎不等下一次空闲轮询；数据在动时回到每 8 毫秒一次。
+ * - Bug 依据：2026-11-20 真机，开着 Agent-Net 什么都不做时 JS 线程占 51%（关掉 1%）；没有东西要收发时，每 8 毫秒轮询
+ *   一次仍占 22–33%，每 50 毫秒一次 7–18%，不轮询 0–4%。
+ * - 现有覆盖缺口：上面的测试都在数据流动时推进 8 毫秒，没有覆盖空闲时的频率和空闲后第一次发送。
+ * - 最小失败输入：一条已建立、没有数据的连接，空闲两秒，再发一次数据。tier：unit，真实 NativeTransport/NativeChannel，引擎用替身。
+ */
+it('polls the engine slowly while idle and at once when there is something to send', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  const ops: string[] = [];
+  let nextStream = 0, unacked = false, sending = false;
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      ops.push(command.op as string);
+      let value: unknown;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null };
+      if (command.op === 'poll') value = { packets: [], connections: [{ id: 1, established: true, dead: false, closedByPeer: false,
+        unacked, remoteKey: remote.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 }] };
+      if (command.op === 'openStream') value = ++nextStream;
+      if (command.op === 'write') { value = Buffer.from(command.data as string, 'base64url').length; unacked = sending; }
+      return value as T;
+    }, async destroy() {},
+  };
+  const channels: PeerChannel[] = [];
+  let transport: NativeTransport | undefined;
+  const polls = () => ops.filter(op => op === 'poll').length;
+  try {
+    transport = await NativeTransport.create(engine, { admit: () => true,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }], relayIdOf: () => remote.deviceId,
+      onIncoming: channel => { channels.push(channel); } });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(channels).toHaveLength(1);
+    const idleStart = polls();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(polls() - idleStart).toBeLessThanOrEqual(21);
+    const writes = ops.filter(op => op === 'write').length;
+    sending = true;
+    channels[0].send(Uint8Array.of(1, 2, 3));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ops.filter(op => op === 'write').length).toBe(writes + 1);
+    // Unacknowledged data: fast again.
+    const busyStart = polls();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(polls() - busyStart).toBeGreaterThanOrEqual(10);
+  } finally { await transport?.close(); vi.useRealTimers(); }
+});

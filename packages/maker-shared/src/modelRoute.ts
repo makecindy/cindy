@@ -9,6 +9,20 @@ export interface ModelRoute {
   effort: string;
   fastMode: boolean | 'ultrafast';
   agentDeviceId?: string | null;
+  /**
+   * A model group (route id in model-groups.json on the computer that runs this route)
+   * picks the concrete source at run time. The other fields stay a usable route: older
+   * peers drop this field and run them, as does a computer without that group.
+   */
+  modelGroup?: string;
+}
+
+const MODEL_GROUP_ID_MAX = 64;
+
+function modelGroupId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const id = value.trim();
+  return id && id.length <= MODEL_GROUP_ID_MAX ? id : null;
 }
 
 export function normalizeModelRoute(value: unknown): ModelRoute | null {
@@ -27,6 +41,7 @@ export function normalizeModelRoute(value: unknown): ModelRoute | null {
   if (record.agentDeviceId != null && (typeof record.agentDeviceId !== 'string'
     || !/^[A-Za-z0-9_.:-]{1,128}$/.test(record.agentDeviceId))) return null;
   if (record.harness === 'antigravity' && (record.providerId !== 'google-antigravity-subscription' || record.agentDeviceId)) return null;
+  const modelGroup = modelGroupId(record.modelGroup);
   return {
     harness: record.harness === 'codex' || record.harness === 'pi' || record.harness === 'antigravity' ? record.harness : 'claude',
     model: record.model.trim(),
@@ -34,6 +49,7 @@ export function normalizeModelRoute(value: unknown): ModelRoute | null {
     effort: typeof record.effort === 'string' ? record.effort : '',
     fastMode: (record.fastMode === 'ultrafast' ? 'ultrafast' : record.fastMode === true),
     ...(typeof record.agentDeviceId === 'string' ? { agentDeviceId: record.agentDeviceId.trim() } : {}),
+    ...(modelGroup ? { modelGroup } : {}),
   };
 }
 

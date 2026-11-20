@@ -14,7 +14,7 @@ import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helpe
 import { registerThemePackageTool, type ThemePackageCallbacks } from './xdt-helper/theme_packages.js';
 import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/github.js';
 import { registerMcpSetupTool, type McpSetupCallback } from './xdt-helper/mcp_setup.js';
-import { registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
+import { registerSharedTaskProgressTool, registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
 import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/session_tags.js';
 /**
  * lizi_xdtHelperMcpServer.ts
@@ -53,6 +53,7 @@ import { registerReadSessionAttachmentTool } from './xdt-helper/read_session_att
 import { registerDeleteSessionTool, type DeleteSessionCallback } from './xdt-helper/delete_session.js';
 import { registerSessionHistoryTools, type SessionHistoryCallback } from './xdt-helper/session_history_control.js';
 import { registerSessionShareTools, type SessionShareCallbacks } from './xdt-helper/session_share.js';
+import { sessionDeliveryScope } from './xdt-helper/send_to_session.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -154,6 +155,7 @@ export type {
   ControlErrResult,
   ControlResult,
   ControlWorkerAgent,
+  ControlWorkerEngine,
 } from './types.js';
 
 // ── Entry-tool descriptions ─────────────────────────────────────────────────
@@ -226,6 +228,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     'list_teammates 枚举伙伴及已保存的任务关系（含隐藏与暂停），list_sessions 包含隐藏任务并返回 hiddenAt。',
     '查询任务、工作目录、聊天记录、任务摘要与输入队列；',
     '任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。',
+    '分析或跟进同事共享给你的任务，用 get_shared_task_progress 传入复制的完整任务链接，每次查询最新进展。',
     '伙伴目录、任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
     '任务附件（read_session_attachment）仅支持已有宿主授权的本机媒体和交接引用，历史文件路径与跨电脑附件返回 UNSUPPORTED_CAPABILITY，只返回分块字节和引用，不返回宿主路径。',
     '原生任务包导出（export_session）仅本机；插件按安装授权调用，Agent 运行时遵循自身权限流程；Agent 导出由用户在原生保存对话框中选择位置，再返回最终路径，不接受 output_path。插件只收到本实例 attachment_ref。',
@@ -239,12 +242,10 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   usage: '只读查询订阅额度、任务额度、已记录供应商用量与供应组状态。get_subscription_usage 查询本机订阅；get_session_quota 按任务读取实际执行来源的额度，包含已授权的同账号电脑和供应商分享。供应商历史与组状态可用 device 指定同账号已授权电脑，缺省本机。插件需声明 usage 组。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: [
-    '给已有任务发消息或新建任务。',
+    '新建普通任务默认在本机；宿主支持跨电脑新建时，可用 device 指定任务和文件所在电脑。',
     '新建可指定 title；',
     '本机省略 project_path 继承来源归属（来源不绑项目时按执行目录所在的已登记可见项目归属），传已有项目路径切换项目，传 null 创建不绑项目的任务。',
     '执行目录不隐式创建项目。',
-    '发给已有任务可跨电脑（deviceId::sessionId）；',
-    '新建用 device 指定任务和文件所在电脑，省略为本机；',
     'provider_device_id 单独选择模型供应商位置（兼容 agent_device_id）；',
     '项目和模型先用同一 device 查询。',
   ].join(''),
@@ -301,6 +302,7 @@ function registerListToolsEntry(
   registry: XdtHelperToolRegistry,
   allowedSurface: () => Promise<HelperSurfaceAllow>,
   sessionCtx: XdtHelperMcpSessionCtx,
+  sendToSessionScope: string,
 ): void {
   server.tool(
     'list_tools',
@@ -366,7 +368,7 @@ function registerListToolsEntry(
               categories: registry.listCategories().filter((c) => (counts[c] ?? 0) > 0).map((c) => ({
                 name: c,
                 tool_count: counts[c] ?? 0,
-                description: HELPER_CATEGORY_DESCRIPTIONS[c as (typeof CATEGORY_ENUM)[number]],
+                description: (c === 'handoff' ? `给已有任务发消息（含伙伴主对话，${sendToSessionScope}）。` : '') + HELPER_CATEGORY_DESCRIPTIONS[c],
               })),
               hint: '用 list_tools({category}) 查看某类目下的工具列表',
             }),
@@ -774,6 +776,7 @@ export function createXdtHelperMcpServer(
       ...(deps.sessionQueue ? { sessionQueue: deps.sessionQueue } : {}),
     });
     registerGetChatHistoryTool(registry, historyDeps);
+    registerSharedTaskProgressTool(registry, historyDeps);
     registerSearchChatHistoryTool(registry, historyDeps);
     registerGetTaskDigestTool(registry, historyDeps);
   }
@@ -879,7 +882,9 @@ export function createXdtHelperMcpServer(
       callbacks: deps.botProfiles,
     });
   }
-  registerListToolsEntry(server, registry, allowedSurface, sessionCtx);
+  const sendToSessionScope = sessionDeliveryScope(!!deps.sendToRemoteSession);
+  const sendToSession = registry.get('send_to_session');
+  registerListToolsEntry(server, registry, allowedSurface, sessionCtx, sendToSessionScope);
   const call = registerCallToolEntry(server, registry, {
     logger: deps.logger,
     // per-call 解析:codex HTTP bridge 的 server factory 阶段 ctx 是空的,
@@ -985,8 +990,12 @@ export function createXdtHelperMcpServer(
 
   // Pi already provides direct Bot tools through its native bridge. CC and Codex
   // consume MCP tools/list instead; expose the same registered definitions there.
+  // Pi keeps the SDK entry definition stable for saved tool disclosures.
   // Resolve identity per request: Codex's HTTP server is shared across sessions.
   if (sessionCtx.agentKind !== 'pi') {
+    const listToolsWithSendDiscovery = `发消息给另一个任务会话（含伙伴主对话，${sendToSessionScope}）时，` +
+      '先用 list_tools({name:"send_to_session"}) 查参数，再用 call_tool 传 target_session_id 和 message。' +
+      D_LIST_TOOLS;
     const directTools = registry.list('bots').map((summary) => registry.get(summary.name)!);
     for (const definition of directTools) {
       server.registerTool(definition.name, {
@@ -1022,8 +1031,11 @@ export function createXdtHelperMcpServer(
     // the request-time session, not the empty factory ctx.
     server.server.setRequestHandler(ListToolsRequestSchema, async () => {
       const allowed = await allowedSurface();
+      const entries = sendToSession && toolAllowed(allowed, sendToSession)
+        ? [{ ...entryTools[0], description: listToolsWithSendDiscovery }, entryTools[1]]
+        : entryTools;
       return { tools: [
-        ...entryTools,
+        ...entries,
         ...(await asyncQuestionListing()),
         ...(await handoffListing()),
         ...(await machineListing()),

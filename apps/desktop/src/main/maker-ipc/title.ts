@@ -156,7 +156,8 @@ async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind 
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
-  if (!row || row.status === 'deleted') return null;
+  // Plugin-engine tasks have no built-in engine to generate titles with.
+  if (!row || row.status === 'deleted' || row.agentKind === 'acp') return null;
   return dbToMakerAgentKind(row.agentKind);
 }
 
@@ -472,6 +473,8 @@ async function predictPromptForCompletedRevision(
     sessionRow.remoteHostId ||
     sessionRow.source === 'review' ||
     sessionRow.status === 'deleted' ||
+    // Plugin engine tasks: the prediction would run their conversation through Claude.
+    sessionRow.agentKind === 'acp' ||
     sessionRow.lastTurnEndedAt !== completionRevision ||
     (sessionRow.activeTurnStartedAt != null &&
       sessionRow.activeTurnStartedAt >= completionRevision) ||

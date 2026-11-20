@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import type { Logger } from '../logger.js';
 import type { createWorkingDirectoryRecovery } from './workingDirectoryRecovery.js';
 import { workdirDiagnosticContext, workdirDiagnosticErrorCode, workdirDiagnosticId } from '../workdirDiagnostics.js';
@@ -17,7 +17,7 @@ export interface WorkingDirectoryPreflightDeps {
   getManagedWorktreeReadinessForSession(sessionId: string, dir: string): Promise<'ready' | 'gone' | 'retry'>;
   findSimilarDirOnDisk(dir: string): Promise<string | null>;
   listActiveSessions(): { id: string; workDir: string; remoteHostId?: string | null }[];
-  emitWorkDirMissingError(sessionId: string, dir: string, source: AgentKind, reason: 'not-exist' | 'not-dir', similar?: string | null): void;
+  emitWorkDirMissingError(sessionId: string, dir: string, source: AgentKind | undefined, reason: 'not-exist' | 'not-dir', similar?: string | null): void;
   workdirLog: Pick<Logger, 'debug' | 'warn'>;
   log: Pick<Logger, 'debug' | 'warn'>;
 }
@@ -33,7 +33,7 @@ export function createWorkingDirectoryPreflight(deps: WorkingDirectoryPreflightD
   return async function checkWorkDirExists(
     sessionId: string,
     requestedWorkingDir: string | undefined | null,
-    agentKind: AgentKind | undefined,
+    agentKind: EngineKind | undefined,
     remoteHostId?: string | null,
     opts?: { suppressMissingBroadcast?: boolean },
   ): Promise<boolean> {
@@ -46,7 +46,10 @@ export function createWorkingDirectoryPreflight(deps: WorkingDirectoryPreflightD
     const cindyMakeWorkspace = isCindyMakeWorktreePath(getUserDataPath(), requestedWorkingDir);
     if (cindyMakeWorkspace) workingDirectoryRecovery.discard(sessionId);
     let workingDir = workingDirectoryRecovery.resolve(sessionId, requestedWorkingDir);
-    const source: AgentKind = agentKind === 'codex' || agentKind === 'pi' || agentKind === 'antigravity' ? agentKind : 'claude-code';
+    // Event source names built-in engines only; plugin-engine tasks carry none.
+    const source: AgentKind | undefined = agentKind === 'acp'
+      ? undefined
+      : agentKind === 'codex' || agentKind === 'pi' || agentKind === 'antigravity' ? agentKind : 'claude-code';
     // suppressMissingBroadcast: 调用方(SEND 事务)手里还有 DB 权威值可兜底时,
     // 首检失败只记日志不广播错误横幅——兜底成功的话用户不该看到假错误。
     const suppress = opts?.suppressMissingBroadcast === true;

@@ -1,6 +1,6 @@
 import type { TaskInboxSection } from '@cindy/maker-shared/live-task-priority';
 
-/** Section → row keys, as shown when the pointer entered the inbox list. */
+/** Section → row keys, as shown when the pointer entered a Done button. */
 export type FrozenInboxLayout = ReadonlyMap<TaskInboxSection, readonly string[]>;
 
 export function snapshotInboxLayout<T>(
@@ -14,12 +14,12 @@ const NO_EXPLICIT_MOVES: ReadonlySet<string> = new Set();
 const SETTLED: ReadonlySet<TaskInboxSection> = new Set(['snoozed', 'archived']);
 
 /**
- * While the pointer is over the inbox (2026-11-18 user request), rows keep the order and section
+ * While the pointer is over a Done button, rows keep the order and section
  * they had, so a one-click Done never lands on a row that just moved. Status inside a row still
  * updates in place. Explicit moves into or out of snoozed / archived (Done, snooze, wake,
  * restore — here or on another device) take effect at once: the row leaves its frozen slot, the
  * rows below close the gap, and it is appended to the end of its new section. Other moves and
- * newly arriving tasks wait until the pointer leaves. A successful explicit Done on a bound
+ * newly arriving tasks wait until the pointer leaves the button. A successful explicit Done on a bound
  * task also moves inbox → working immediately; its marker is consumed after layout commit.
  */
 export function freezeInboxLayout<T>(

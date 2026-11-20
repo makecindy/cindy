@@ -83,12 +83,21 @@ export interface RemoteSession {
    * 任务与文件仍留在被控电脑;null / 缺省 = Agent 就在被控电脑运行(含旧被控端)。
    */
   agentDeviceId?: string | null;
-  /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
+  /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。只含切到内置引擎的意图。 */
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
+  /**
+   * 下一条消息切到插件引擎的意图(desktop 投影 targetAgentKind = 'acp')；与 agentSwitchIntent 互斥。
+   * 内置引擎的展示与切换链路只读 agentSwitchIntent，插件引擎由模型选择器单独呈现。
+   */
+  pluginEngineSwitchIntent?: import('./pluginEngines').MobilePluginEngineSwitchIntent | null;
   /** 任务来源；null = 已确认是普通任务，缺省 = 来源未知（任务入口须先向电脑核对）。 */
   source?: string | null;
   companion?: import("./teammateTaskSource").TaskCompanion;
   taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
+  /** Owning Lead on this device, when the active team is known. */
+  orcaLeadSessionId?: string;
+  /** Live Worker question state, independent of Agent Island visibility. */
+  orcaHasPendingQuestion?: boolean;
   orcaRole?: 'lead' | 'worker' | string | null;
   /** 运行设备上的远端 Worker 身份；团队在 Lead 电脑上，不作为本机 orcaRole 使用。旧端缺省。 */
   orcaRemoteLead?: {
@@ -140,6 +149,9 @@ export interface RemoteSessionRuntimePending {
   profile: RemoteSessionRuntimeProfile;
 }
 
+export type MobileHandoffCoverage = 'complete' | 'condensed';
+export type MobileSystemCardData = Record<string, unknown> & { handoffCoverage?: MobileHandoffCoverage };
+
 export interface RemoteMessage {
   /** Local durable-push order, retained by the display cache. */
   cacheReceipt?: import('@cindy/maker-shared/message-window').HistoryCacheReceipt;
@@ -155,7 +167,7 @@ export interface RemoteMessage {
   createdAt: string;
   /** Large settled tool input released from the transcript mirror and recoverable by message id. */
   mobileToolInputProjection?: MobileToolInputProjection;
-  systemCardData?: Record<string, unknown>;
+  systemCardData?: MobileSystemCardData;
   systemCardType?:
     | 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'context-rebuild' | 'auto-resume' | 'learn' | 'agent-switch'
     /** 代输入结束留痕(由隐藏续接行派生,无输入值)。 */

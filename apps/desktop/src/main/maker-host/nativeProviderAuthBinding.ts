@@ -146,6 +146,10 @@ function readBindingsOrFail(): BindingRead {
     // EACCES / EIO / 无法恢复原子备份都说明归属不明，不能当成空。
     return { ok: false, reason: 'unreadable' };
   }
+  return parseBindings(raw);
+}
+
+function parseBindings(raw: string): BindingRead {
   try {
     const value = JSON.parse(raw) as unknown;
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -710,6 +714,26 @@ export function isNativeProviderAuthSharedSystemCredential(provider: NativeProvi
   return Boolean(
     owner && sharedSystemCredentialOwners(read.bindings)[provider]?.trim() === owner,
   );
+}
+
+/** Read current shared-login authorization on async request paths without mutating the binding file. */
+export async function isNativeProviderAuthBoundToSharedSystemCredential(provider: NativeProviderId): Promise<boolean> {
+  const owner = activeDataOwnerId();
+  if (!owner || isOwnerBoundaryPending()) return false;
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(bindingPath(), 'utf8');
+  } catch {
+    // A missing live file during backup exchange cannot prove current authorization.
+    return false;
+  }
+  if (activeDataOwnerId() !== owner || isOwnerBoundaryPending()) return false;
+  const read = parseBindings(raw);
+  if (!read.ok) return false;
+  const { bindings } = read;
+  return !(bindings.revoked && provider in bindings.revoked)
+    && bindings[provider] === owner
+    && sharedSystemCredentialOwners(bindings)[provider]?.trim() === owner;
 }
 
 /** 返回当前 owner 绑定的授权来源；归属不明或旧文件未记录时返回 null。 */

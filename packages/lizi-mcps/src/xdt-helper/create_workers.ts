@@ -59,7 +59,7 @@ const DESCRIPTION = [
 interface CreatedWorkerResult {
   label: string;
   role: string;
-  agent: import('../types.js').ControlWorkerAgent | undefined;
+  agent: import('../types.js').ControlWorkerEngine | undefined;
   status: 'created';
   worker_id: string;
   worker_session_id: string;
@@ -77,7 +77,7 @@ interface CreatedWorkerResult {
 interface FailedWorkerResult {
   label: string;
   role: string;
-  agent: import('../types.js').ControlWorkerAgent | undefined;
+  agent: import('../types.js').ControlWorkerEngine | undefined;
   status: 'failed' | 'skipped';
   error_code: string;
   hint: string;

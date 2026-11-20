@@ -95,6 +95,7 @@ export interface SessionListRow {
   messageCount: number;
   latestMessageExtract: string | null;
   latestMessageRole: string | null;
+  orcaLeadSessionId?: string | null;
   tagsJson?: string;
   companionJson?: string | null;
 }
@@ -115,6 +116,7 @@ function sessionReadSelection() {
 
 export function flattenSessionReadRow(row: SessionListRow): SessionRowWithCount {
   return { ...row.session,
+    ...(row.orcaLeadSessionId ? { orcaLeadSessionId: row.orcaLeadSessionId } : {}),
     companion: parseHistoryCompanion(row.companionJson),
     tags: normalizeTaskTags(JSON.parse(row.tagsJson ?? '[]')), messageCount: row.messageCount,
     latestMessageExtract: row.latestMessageExtract, latestMessageRole: row.latestMessageRole };
@@ -125,6 +127,19 @@ export function projectSessionReadResult(
   resolve?: (session: ContextWindowSession) => number | null,
 ) {
   return sessionToCamel(projectSessionContextWindow(row, resolve));
+}
+
+/** Single-session reads sample the execution device's clock at response time. */
+export function projectSessionDetail(
+  row: SessionRowWithCount,
+  resolve?: (session: ContextWindowSession) => number | null,
+) {
+  const start = row.activeTurnStartedAt;
+  const end = row.lastTurnEndedAt;
+  const turnElapsedMs = start != null && start > (row.clearedAt ?? 0)
+    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - start)
+    : null;
+  return { ...projectSessionReadResult(row, resolve), turnElapsedMs };
 }
 
 /** No settled cache: every read observes the database and uses the same projection. */
@@ -216,7 +231,13 @@ export function selectSessionListRows(
     );
   return db
     .with(picked)
-    .select(sessionReadSelection())
+    .select({
+      ...sessionReadSelection(),
+      orcaLeadSessionId: sql<string | null>`CASE WHEN sessions.orca_role = 'worker' THEN (
+        SELECT t.lead_session_id FROM orca_workers w JOIN orca_teams t ON t.id = w.team_id
+        WHERE w.session_id = ${OUTER_SESSION_ID_SQL} AND t.status = 'active'
+      ) END`.as('orca_lead_session_id'),
+    })
     .from(sessions)
     .innerJoin(picked, eq(picked.id, sessions.id))
     .where(where)

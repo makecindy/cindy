@@ -1,3 +1,4 @@
+import { GEMINI_API_PRESET_ID } from '../../../shared/geminiApiConnection';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import { PROVIDER_MEDIA_FIELDS, presetDisplayName, providerPresetOAuth, isMimoTokenPlanPreset, type ProviderPreset, type ProviderView } from '@cindy/model-providers';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
@@ -50,6 +51,7 @@ export function presetChoiceMeta(preset: ProviderPreset): Pick<ProviderSearchRes
 export function providerSearchChoices(providers: ProviderView[], presets: ProviderPreset[], locale: string, ollamaName: string, llamaCppName = 'llama.cpp', officialApiPresets: Readonly<Record<string, ProviderPreset>> = {}): ProviderSearchResult[] {
   const results: ProviderSearchResult[] = [];
   for (const p of providers) {
+    if (p.id === 'gemini' && presets.some(preset => preset.id === GEMINI_API_PRESET_ID)) continue;
     if (!isWizardOAuthChoice(p) && !isWizardApiKeyChoice(p)) continue;
     results.push({ key: `builtin:${p.id}`, id: p.id, name: p.name, names: [p.name],
       metaKey: builtinChoiceMeta(p, !!officialApiPresets[p.id]), target: { kind: 'builtin', providerId: p.id } });

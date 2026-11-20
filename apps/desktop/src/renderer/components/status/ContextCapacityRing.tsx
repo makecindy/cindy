@@ -41,6 +41,7 @@ export function ContextCapacityRing({
   model,
   vendorKey,
   sdkContextWindow,
+  reportedOnly = false,
   verifiedContextWindow,
   deviceId,
   onCompact,
@@ -55,6 +56,8 @@ export function ContextCapacityRing({
   vendorKey: 'cc' | 'codex' | 'pi' | 'antigravity';
   /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
   sdkContextWindow: number;
+  /** ACP has no built-in model budget. Only the agent knows its actual window. */
+  reportedOnly?: boolean;
   verifiedContextWindow?: number | null;
   /** device-link 远程会话所属被控端 id;按被控端能力查 contextWindow(本机会话 undefined,行为不变)。 */
   deviceId?: string;
@@ -66,14 +69,14 @@ export function ContextCapacityRing({
   const { t } = useTranslation();
   const [contextInspection, setContextInspection] = useState(0);
   const codexContext = useCodexContextWindow({
-    enabled: vendorKey === 'codex' && !deviceId && Boolean(sessionId),
+    enabled: !reportedOnly && vendorKey === 'codex' && !deviceId && Boolean(sessionId),
     providerId,
     modelId: model,
     sessionId,
     reportedWindow: sdkContextWindow,
     refreshKey: `${isRunning}:${contextInspection}`,
   });
-  const contextWindow = resolveDisplayContextWindow({
+  const contextWindow = reportedOnly ? sdkContextWindow : resolveDisplayContextWindow({
     sdkContextWindow,
     verifiedContextWindow,
     runtimeWindowAuthoritative: vendorKey === 'codex' || vendorKey === 'antigravity',
@@ -233,7 +236,7 @@ export function ContextCapacityRing({
     </div>
   );
 
-  if (sessionId) {
+  if (sessionId && !reportedOnly) {
     return (
       <ContextWindowBudgetChip
         sessionId={sessionId}
@@ -268,7 +271,7 @@ export function ContextCapacityRing({
         <div
           className="flex shrink-0 items-center gap-1"
           onMouseEnter={() => {
-            if (vendorKey === 'codex') setContextInspection((n) => n + 1);
+            if (!reportedOnly && vendorKey === 'codex') setContextInspection((n) => n + 1);
           }}
         >
           {ringContent}

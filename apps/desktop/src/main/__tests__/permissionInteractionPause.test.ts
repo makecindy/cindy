@@ -10,7 +10,7 @@ import { assertSharedTaskInteractionResolveCurrent, assertSharedTaskInvoke, setS
 const source = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('register.ts', source, ts.ScriptTarget.ES2022, true);
 const names = new Set([
-  'installDesktopInteractionListener', 'clearPendingInteraction',
+  'installDesktopInteractionListener', 'clearPendingInteraction', 'publishWorkerQuestionState', 'hasPendingWorkerQuestion',
   'schedulePendingPermissionTimeout',
   'resolvePendingInteraction', 'cancelPendingInteraction', 'defaultDecisionForPending',
   'cleanupPendingAgentInteractionsForSession', 'takePendingInteractionsForSession',
@@ -18,6 +18,11 @@ const names = new Set([
 ]);
 const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node)
   && node.name && names.has(node.name.text)).map(node => node.getText(ast).replace(/^export /, ''));
+// defaultDecisionForPending moved from register.ts into the preparation steps the Node Host shares.
+const stepsSource = readFileSync(new URL('../maker-ipc/sessionEventPreparationSteps.ts', import.meta.url), 'utf8');
+const stepsAst = ts.createSourceFile('sessionEventPreparationSteps.ts', stepsSource, ts.ScriptTarget.ES2022, true);
+functions.push(...stepsAst.statements.filter((node) => ts.isFunctionDeclaration(node)
+  && node.name && names.has(node.name.text)).map(node => node.getText(stepsAst).replace(/^export /, '')));
 let resolveHandlerSource = '';
 let interactionReaderSource = '';
 function visit(node: ts.Node): void {
@@ -63,6 +68,8 @@ function harness() {
     assertResolveInteractionOrigin: vi.fn(), isPendingDesktopOnlyConfirmation: () => false,
     issueConfirmBridge: { pendingSnapshots: () => [] },
     pendingInteractionResolvers: entries,
+    isKnownOrcaWorkerSession: (id: string) => id === 'worker',
+    broadcastSessionPatched: vi.fn(),
     agentInputCoordinatorHolder: coordinator, inputCoordinator: coordinator,
     PERMISSION_INTERACTION_TIMEOUT_MS: 10 * MINUTE,
     installDesktopInteractionHandler,
@@ -96,11 +103,24 @@ function harness() {
     void promise.then(settled);
     return { promise, settled, lease };
   };
-  return { ...runtime, request, entries, dismiss, setSharedTask: (peer?: SharedTaskPeerCapture) => { sharedTask = peer; } };
+  return { ...runtime, request, entries, dismiss, patch: deps.broadcastSessionPatched, setSharedTask: (peer?: SharedTaskPeerCapture) => { sharedTask = peer; } };
 }
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); });
 afterEach(() => { setSharedTaskInteractionReader(null); vi.clearAllTimers(); vi.useRealTimers(); });
+
+it('publishes the Worker list badge with Island disabled until its last question is answered', async () => {
+  const h = harness();
+  const a = h.request('a', 'worker', 'ask_user_question');
+  const b = h.request('b', 'worker', 'ask_user_question');
+  expect(h.patch).toHaveBeenLastCalledWith('worker', { orcaHasPendingQuestion: true });
+  const answer = { kind: 'ask_user_question', answers: { choice: 'yes' } } as const;
+  h.answer('a', answer);
+  expect(h.patch).toHaveBeenLastCalledWith('worker', { orcaHasPendingQuestion: true });
+  h.answer('b', answer);
+  expect(h.patch).toHaveBeenLastCalledWith('worker', { orcaHasPendingQuestion: false });
+  await Promise.all([a.promise, b.promise]);
+});
 
 it('does not consume the pending decision when membership is revoked after dispatch admission', async () => {
   const h = harness();

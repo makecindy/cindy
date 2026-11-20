@@ -1,3 +1,4 @@
+import type { TaskListMode } from '@/hooks/useTaskListMode';
 import { createLogger } from '@/lib/logger';
 import {
   clearClaimedLegacySidebarStorage,
@@ -123,6 +124,10 @@ export function loadStatus(): FilterStatus {
   return 'active';
 }
 
+function contentFilterKey(key: string, mode: TaskListMode): string {
+  return mode === 'tasks' ? key : key + '.inbox';
+}
+
 /**
  * 读 localStorage 中的 projects；任何异常 / 非法值 → 'all'。
  *
@@ -130,8 +135,8 @@ export function loadStatus(): FilterStatus {
  *   - JSON.parse 后 === 'all' 字符串
  *   - JSON.parse 后是非空字符串数组（每项均为非空 string）；空数组 → 'all'
  */
-export function loadProjects(ownerId: string | null): FilterProjects {
-  const raw = readSidebarOwnerStorage(PROJECTS_KEY, ownerId);
+export function loadProjects(ownerId: string | null, mode: TaskListMode = 'tasks'): FilterProjects {
+  const raw = readSidebarOwnerStorage(contentFilterKey(PROJECTS_KEY, mode), ownerId);
   if (raw == null) return 'all';
   let parsed: unknown;
   try {
@@ -150,8 +155,8 @@ export function loadProjects(ownerId: string | null): FilterProjects {
 }
 
 /** Creator keys contain both the computer and Bot identity, and are scoped to the signed-in owner. */
-export function loadCreators(ownerId: string | null): FilterCreators {
-  const raw = readSidebarOwnerStorage(CREATORS_KEY, ownerId);
+export function loadCreators(ownerId: string | null, mode: TaskListMode = 'tasks'): FilterCreators {
+  const raw = readSidebarOwnerStorage(contentFilterKey(CREATORS_KEY, mode), ownerId);
   if (!raw) return 'all';
   try {
     const value: unknown = JSON.parse(raw);
@@ -162,8 +167,8 @@ export function loadCreators(ownerId: string | null): FilterCreators {
   } catch { return 'all'; }
 }
 
-export function persistCreators(value: FilterCreators, ownerId: string | null): void {
-  writeSidebarOwnerStorage(CREATORS_KEY, ownerId, JSON.stringify(value));
+export function persistCreators(value: FilterCreators, ownerId: string | null, mode: TaskListMode = 'tasks'): void {
+  writeSidebarOwnerStorage(contentFilterKey(CREATORS_KEY, mode), ownerId, JSON.stringify(value));
 }
 
 /** Canonicalize both per-device and older cloud-companion selections after discovery. */
@@ -196,8 +201,8 @@ export function persistStatus(s: FilterStatus): void {
   }
 }
 
-export function persistProjects(p: FilterProjects, ownerId: string | null): void {
-  if (!writeSidebarOwnerStorage(PROJECTS_KEY, ownerId, JSON.stringify(p))) {
+export function persistProjects(p: FilterProjects, ownerId: string | null, mode: TaskListMode = 'tasks'): void {
+  if (!writeSidebarOwnerStorage(contentFilterKey(PROJECTS_KEY, mode), ownerId, JSON.stringify(p))) {
     log.warn('[useSidebarFilter] failed to persist projects');
   }
 }
@@ -312,12 +317,12 @@ export function removeProjectsFromFilter(
 
 const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex', 'pi']);
 
-export function loadVendor(): FilterVendor {
+export function loadVendor(mode: TaskListMode = 'tasks'): FilterVendor {
   const storage = safeStorage();
   if (!storage) return 'all';
   let raw: string | null = null;
   try {
-    raw = storage.getItem(VENDOR_KEY);
+    raw = storage.getItem(contentFilterKey(VENDOR_KEY, mode));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to read vendor:', err);
     return 'all';
@@ -326,11 +331,11 @@ export function loadVendor(): FilterVendor {
   return 'all';
 }
 
-export function persistVendor(v: FilterVendor): void {
+export function persistVendor(v: FilterVendor, mode: TaskListMode = 'tasks'): void {
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(VENDOR_KEY, v);
+    storage.setItem(contentFilterKey(VENDOR_KEY, mode), v);
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist vendor:', err);
   }
@@ -424,6 +429,35 @@ export function persistGroupAutomation(groupAutomation: boolean): void {
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist groupAutomation:', err);
   }
+}
+
+const HIDE_AUTOMATIONS_KEYS: Record<TaskListMode, string> = {
+  tasks: 'cc-agent.sidebar.filter.hideAutomations',
+  inbox: 'cc-agent.sidebar.filter.inbox.hideAutomations',
+};
+
+export function loadHideAutomations(mode: TaskListMode): boolean {
+  try { return safeStorage()?.getItem(HIDE_AUTOMATIONS_KEYS[mode]) === 'true'; } catch { return false; }
+}
+
+export function persistHideAutomations(hide: boolean, mode: TaskListMode): void {
+  try {
+    if (hide) safeStorage()?.setItem(HIDE_AUTOMATIONS_KEYS[mode], 'true');
+    else safeStorage()?.removeItem(HIDE_AUTOMATIONS_KEYS[mode]);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist inbox automation filter:', err);
+  }
+}
+
+export function sidebarContentFilterCount(filter: {
+  projects: FilterProjects;
+  vendor: FilterVendor;
+  lastActivity: FilterLastActivity;
+  creators: FilterCreators;
+  hideAutomations: boolean;
+}): number {
+  return Number(filter.projects !== 'all') + Number(filter.vendor !== 'all')
+    + Number(filter.lastActivity !== 'all') + Number(filter.creators !== 'all') + (filter.hideAutomations ? 1 : 0);
 }
 
 /* ============================== groupDevice load/persist ============================== */
@@ -553,12 +587,12 @@ const LAST_ACTIVITY_VALUES: ReadonlySet<string> = new Set<FilterLastActivity>([
   '30d',
 ]);
 
-export function loadLastActivity(): FilterLastActivity {
+export function loadLastActivity(mode: TaskListMode = 'tasks'): FilterLastActivity {
   const storage = safeStorage();
   if (!storage) return 'all';
   let raw: string | null = null;
   try {
-    raw = storage.getItem(LAST_ACTIVITY_KEY);
+    raw = storage.getItem(contentFilterKey(LAST_ACTIVITY_KEY, mode));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to read lastActivity:', err);
     return 'all';
@@ -567,11 +601,11 @@ export function loadLastActivity(): FilterLastActivity {
   return 'all';
 }
 
-export function persistLastActivity(lastActivity: FilterLastActivity): void {
+export function persistLastActivity(lastActivity: FilterLastActivity, mode: TaskListMode = 'tasks'): void {
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(LAST_ACTIVITY_KEY, lastActivity);
+    storage.setItem(contentFilterKey(LAST_ACTIVITY_KEY, mode), lastActivity);
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist lastActivity:', err);
   }

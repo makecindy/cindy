@@ -14,7 +14,7 @@
  *   - snake↔camel 全部走 `localDb/mapper.ts`，本文件不写字段转换代码。
  */
 
-import { eq, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
@@ -29,7 +29,7 @@ import {
   scheduleSessionLatestRuns,
   sessions,
 } from '../localDb/schema';
-import { scheduleRunMissingPlugin, type ScheduleMissingPlugin } from '@cindy/maker-shared/schedule-model';
+import { readPrCheckDiagnosis, scheduleRunMissingPlugin, type PrCheckDiagnosis, type ScheduleMissingPlugin } from '@cindy/maker-shared/schedule-model';
 import {
   scheduleToCamel,
   scheduleCreateToRow,
@@ -110,6 +110,7 @@ export interface ScheduleSidebarIndexRun {
   errorMsg?: string;
   failureRecovered?: boolean;
   missingPlugin?: ScheduleMissingPlugin;
+  prCheckDiagnosis?: PrCheckDiagnosis;
 }
 
 export interface ScheduleCostSummary {
@@ -672,6 +673,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return rows.length > 0;
   }
 
+  async hasSuccessfulPrRunSince(scheduleId: string, since: number): Promise<boolean> {
+    const rows = await this.getDb().select({ id: scheduleRuns.id }).from(scheduleRuns).where(and(
+      eq(scheduleRuns.scheduleId, scheduleId), gte(scheduleRuns.firedAt, since),
+      eq(scheduleRuns.triggerSource, 'pr-status'), eq(scheduleRuns.status, 'success'),
+    )).limit(1);
+    return rows.length > 0;
+  }
+
   async listRuns(scheduleId: string, limit?: number): Promise<ScheduleRun[]> {
     const db = this.getDb();
     const cap = typeof limit === 'number' && limit > 0 ? Math.floor(limit) : 50;
@@ -830,6 +839,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
+      prCheckDiagnosis: sql<string | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
+        THEN CASE WHEN json_type(schedule_runs.pre_run_hook_result, '$.prCheckDiagnosis') = 'object'
+        THEN json_extract(schedule_runs.pre_run_hook_result, '$.prCheckDiagnosis') END END`,
       missingPlugin: sql<string | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
         THEN json_extract(schedule_runs.pre_run_hook_result, '$.missingPlugin') END`,
     };
@@ -912,6 +924,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
         errorMsg: row.errorMsg ?? undefined,
+        prCheckDiagnosis: row.prCheckDiagnosis ? readPrCheckDiagnosis(JSON.parse(row.prCheckDiagnosis)) : undefined,
         ...missingPluginField(row.missingPlugin),
       } : {}),
     }));

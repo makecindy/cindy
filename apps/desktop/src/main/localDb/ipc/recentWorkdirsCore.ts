@@ -1,21 +1,4 @@
-/**
- * 最近工作目录 IPC + 内部 upsert helper。
- *
- * 设计:
- *  - 列表读取走 IPC `local-db:recent-workdirs:list`,renderer 给 NewMakerDraft
- *    的"项目"下拉用。返回 path + lastUsedAt(ms) + exists(目录是否仍在磁盘上,
- *    项目迁移/删除后 UI 据此置灰引导用户手动移除),displayName 由 renderer 端
- *    用 projectGrouping.extractDisplayName 实时算(相对当前全集做同名消歧)。
- *  - 删除走 IPC `local-db:recent-workdirs:remove` —— 唯一的 renderer 写入口,
- *    语义是"从最近列表移除"(列表卫生),不动 sessions/磁盘。目录下再次创建
- *    session 会经 upsertRecentWorkdir 重新入列,已迁移的死路径则一去不返。
- *    recent 只影响项目列表展示,不再充当 device-link remote-workdir-guard
- *    的放行依据；远程入口始终实时探测目录当前是否可访问。
- *  - upsert 不暴露 IPC —— 由 main 内部在 session 创建、项目归属变更和发送消息时调用,
- *    避免 renderer 私自污染该表。生命周期与 session 解耦:归档 / 删除既不移除目录，
- *    也不刷新最后活动时间；未启用任务时间筛选时仍保留空项目。
- *  - upsert 失败仅日志,不抛 —— 这是"用户体验增强"数据,不该挡住 session 创建主流程。
- */
+/** Explicit project operations register directories. Sessions only update usage of an existing entry. */
 
 import { stat } from 'node:fs/promises';
 
@@ -71,6 +54,26 @@ export function normalizeRecentWorkdirPath(
 
 function isCaseInsensitiveWindowsPath(path: string, localPlatform: NodeJS.Platform): boolean {
   return localPlatform === 'win32' && (/^[A-Za-z]:\//.test(path) || path.startsWith('//'));
+}
+
+// A task may update recency only for an existing catalog entry. UPDATE also
+// prevents a concurrent project removal from being undone by a pending touch.
+export async function touchRecentWorkdir(raw: string | null | undefined, at = Date.now(),
+  platform: NodeJS.Platform = process.platform, client: DbClient = getDbClient()): Promise<boolean> {
+  const dir = normalizeRecentWorkdirPath(raw, platform);
+  if (!dir) return false;
+  try {
+    const rows = await client.drizzle.update(recentWorkdirs)
+      .set({ lastUsedAt: sql`MAX(${recentWorkdirs.lastUsedAt}, ${at})` })
+      .where(isCaseInsensitiveWindowsPath(dir, platform)
+        ? sql`lower(${recentWorkdirs.path}) = lower(${dir})` : eq(recentWorkdirs.path, dir))
+      .returning({ path: recentWorkdirs.path });
+    if (rows.length) emitProjectCatalogChanged();
+    return rows.length > 0;
+  } catch (error) {
+    log.warn('Could not update project usage', { error: String(error) });
+    return false;
+  }
 }
 
 /**

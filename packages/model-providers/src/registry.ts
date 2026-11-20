@@ -99,6 +99,8 @@ export interface ProviderView extends Provider {
   subscriptionAccountKeys?: string[];
   /** Host observed a transient native-account read failure. Optional on older hosts; no credential data. */
   subscriptionReadUnavailable?: true;
+  /** Time of the last verified account model list retained during a failed refresh. */
+  subscriptionModelsConfirmedAt?: number;
   /** Host-owned subscription speed policy; absence means an unrelated provider or older host. */
   subscriptionFastPolicy?: { allowFast: boolean; groupAllowsFast: boolean };
   /** 本机是否允许同账号另一台电脑调用该供应商；缺省等同关闭。 */
@@ -126,6 +128,8 @@ export interface ProviderView extends Provider {
   connected: boolean;
   /** Ready media execution channels, independent of chat authorization. Absent on older hosts. */
   availableMediaModelIds?: string[];
+  /** Local Desktop settings only. On the Gemini image row, identifies the connection managing its key. */
+  geminiImageSettingsConnectionId?: string;
   /** Non-secret presentation metadata resolved before routing details cross device-link. */
   logoKind?: ProviderLogoKind;
   /** 动态清单发现的最近一次失败（已剥掉 detail）；成功或从未失败时缺席。 */
@@ -328,7 +332,7 @@ export function chatEligibleSourcesForModel(
  *   cc + 其余 → 优先 xd,兜底 rail 首项。
  * rail 为空(零已连接来源)→ null。
  */
-export function nativeDefaultSourceId(rail: ProviderView[], agent: AgentKind | null): string | null {
+export function nativeDefaultSourceId(rail: readonly Pick<ProviderView, 'id'>[], agent: AgentKind | null): string | null {
   if (rail.length === 0) return null;
   const has = (id: string) => rail.some((p) => p.id === id);
   if (agent === 'codex') return has('openai') ? 'openai' : has('xd') ? 'xd' : rail[0].id;

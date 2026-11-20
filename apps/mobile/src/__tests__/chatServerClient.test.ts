@@ -846,7 +846,7 @@ describe('group lifecycle contract', () => {
 it('stops only my companions even when they work for another member', async () => {
   const ownBot = { ...snapshot().members[0], id: id(12), kind: 'bot', ownerActorId: id(11) };
   const planId = id(40);
-  const execution = (n: number, bot: number, requester: number, plan_id: string | null = null) => ({ id: id(n), bot_id: id(bot), requester_id: id(requester), status: 'running', plan_id });
+  const execution = (n: number, bot: number, requester: number, plan_id: string | null = null) => ({ id: id(n), bot_id: id(bot), requester_id: id(requester), status: 'running', epoch: 3, plan_id });
   const request = vi.fn(async (path: string, method?: string) => {
     if (method === 'POST') return {};
     if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
@@ -859,7 +859,7 @@ it('stops only my companions even when they work for another member', async () =
   const writes = request.mock.calls.filter(([, method]) => method === 'POST');
   expect(writes).toEqual([
     [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }, undefined],
-    [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, undefined],
+    [`/conversations/${id(1)}/executions/${id(30)}/control?runEpoch=3`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, undefined],
   ]);
 });
 

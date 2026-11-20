@@ -1285,7 +1285,14 @@ describe('官方渠道预设契约', () => {
       modelsUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/models',
     }));
     expect(gemini?.runtimes.codex?.models.map((model) => model.id))
-      .toContain('gemini-3.6-flash');
+      .toEqual(expect.arrayContaining([
+        'gemini-4-neon',
+        'gemini-4-carbon',
+        'gemini-4-argon',
+        'gemini-4-hydrogen',
+        'gemini-3.8-flash',
+        'gemini-3.6-flash',
+      ]));
     expect(gemini?.runtimes.pi).toEqual(expect.objectContaining({
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       wireProtocol: 'openai-chat',

@@ -42,7 +42,11 @@ function Fixture({ kind }: { kind: string }) {
         <SubagentErrorNotice rawError={error} onDiagnose={onDiagnose} />
       ) : (
         <UnreadFailedScheduleBanner dataOwnerId="fixture-owner" sessionId="fixture-task"
-          latestFailedRun={{ runId: 'fixture-run', firedAt: 1, errorMsg: error }}
+          latestFailedRun={{ runId: 'fixture-run', firedAt: 1, errorMsg: kind === 'pr-dns' ? 'lookup api.github.com: no such host' : error,
+            ...(kind === 'pr-dns' && { failureKind: 'precheck', prCheckDiagnosis: {
+              kind: 'dns', host: 'api.github.com', device: 'Build Mac', failures: 3, retryAt: Date.UTC(2026, 10, 19, 14, 4),
+            } }),
+          }}
           onDiagnose={onDiagnose} />
       )}
     </div>

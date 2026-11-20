@@ -322,6 +322,8 @@ export interface ProviderGroupService {
   claimGuestStartSwitch(sessionId: string): boolean;
   /** Startup counterpart of guestFailover, fenced through the history handoff. */
   prepareGuestStartSwitch(sessionId: string): Promise<{ isCurrent(): boolean; dispose(): void } | null>;
+  /** Keep an in-flight send and its replacement open cancellable by task Stop. */
+  trackGuestStartRecovery(sessionId: string): { signal: AbortSignal; isCurrent(): boolean; dispose(): void };
   /** 用户亲自接手：这一轮重新从头试。 */
   noteUserAction(sessionId: string): void;
   /**
@@ -526,6 +528,7 @@ type ReturnOutcome = 'reachable' | 'back' | 'gone' | 'stopped';
 
 interface SwitchRun {
   superseded: boolean;
+  onSuperseded?: () => void;
   isCurrent?(): boolean;
   onRelocationMutationStart?(): void;
 }
@@ -533,7 +536,7 @@ interface SwitchRun {
 export function createProviderGroupService(deps: ProviderGroupServiceDeps): ProviderGroupService {
   const { router } = deps;
   /** 进行中的自动换电脑：用户亲自接手(发消息、重试、换模型)时标记作废。只在换电脑期间登记。 */
-  const runningSwitches = new Map<string, Set<{ superseded: boolean }>>();
+  const runningSwitches = new Map<string, Set<SwitchRun>>();
   /**
    * 这一轮等过每台电脑几次(原电脑与要换过去的那台各算)：运行中失败与发送前共用一份，那台反复掉线也不会无休止地
    * 等下去。用户接手即重新计；距上一次重试超过一轮的时限(30 分钟)也重新计。
@@ -853,7 +856,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     async rebalanceTarget(providerId, config, memberKey, model, agentKind, exclude) {
       const resolved = await withTimeout(deps.directory.resolveMembers(providerId, config), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
       const current = resolved?.find((r) => r.member.key === memberKey);
-      if (!resolved || current?.state !== 'ok' || current.providerContinuity?.stale
+      if (!resolved || current?.state !== 'ok' || current.member.kind === 'share' || current.providerContinuity?.stale
         || router.coolingUntil(providerId, memberKey, model) !== null) return null;
       const now = deps.now();
       const state = providerGroupMemberUsageState(current, model, now, agentKind);
@@ -2388,6 +2391,13 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       return claimed;
     },
 
+    trackGuestStartRecovery(sessionId) {
+      const { run, done } = trackRun(sessionId);
+      const abort = new AbortController();
+      run.onSuperseded = () => abort.abort(new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
+      return { signal: abort.signal, isCurrent: () => !run.superseded, dispose: done };
+    },
+
     async prepareGuestStartSwitch(sessionId) {
       const recovery = deps.directGuestSession?.(sessionId)?.captureRecovery?.();
       const { run, done } = trackRun(sessionId);
@@ -2412,7 +2422,10 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     },
 
     noteUserAction(sessionId) {
-      for (const run of runningSwitches.get(sessionId) ?? []) run.superseded = true;
+      for (const run of runningSwitches.get(sessionId) ?? []) {
+        run.superseded = true;
+        run.onSuperseded?.();
+      }
       resetRound(sessionId);
       deps.guestSwitch?.drop(sessionId);
     },

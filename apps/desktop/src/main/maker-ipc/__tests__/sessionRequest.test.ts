@@ -188,6 +188,30 @@ describe('session IPC request parsing', () => {
     expect(allocateDialogueWorkspace).not.toHaveBeenCalled();
   });
 
+  // Plugin ACP engines (docs/plans/acp-plugin-bridge.md): a task names its harness. It runs here or,
+  // since the third phase (2026-11-20), on another computer of the same account; never in an SSH
+  // workspace and never on a provider someone shared (plugin engines are not shared).
+  it.each([
+    { name: 'without a harness id', body: {}, error: 'providerId acp-plugin' },
+    { name: 'with a catalog provider', body: { providerId: 'anthropic' }, error: 'providerId acp-plugin' },
+    { name: 'on an SSH host', body: { providerId: 'acp-plugin:dsh-acp:dsh', remoteHostId: 'box' }, error: 'SSH workspaces' },
+    { name: 'on a shared provider', body: { providerId: 'acp-plugin:dsh-acp:dsh', agentDeviceId: 'share:6f1c' }, error: 'your own computers' },
+  ])('rejects a plugin engine task $name', ({ body, error }) => {
+    expect(() => readCreateSessionOpts({ agentKind: 'acp', model: 'default', workingDir: '/workspace', ...body })).toThrow(error);
+  });
+
+  it('accepts a plugin engine task whose agent runs on another computer of the same account', () => {
+    expect(readCreateSessionOpts({
+      agentKind: 'acp', model: 'default', workingDir: '/workspace', providerId: 'acp-plugin:dsh-acp:dsh', agentDeviceId: 'device-1',
+    })).toMatchObject({ agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', agentDeviceId: 'device-1' });
+  });
+
+  it('accepts a local plugin engine task that names its harness', () => {
+    expect(readCreateSessionOpts({
+      agentKind: 'acp', model: 'deepseek-v4-pro', workingDir: '/workspace', providerId: 'acp-plugin:dsh-acp:dsh',
+    })).toMatchObject({ agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', model: 'deepseek-v4-pro' });
+  });
+
   it('adds a default stderr logger without replacing caller-provided hook', () => {
     const warn = vi.fn();
     const opts = withCreateSessionStderr(

@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
+  INDEFINITE_SNOOZE_UNTIL,
   taskInboxSection,
   taskInboxSignalsFromRank,
   taskSnoozeUntil,
+  teammateInboxSection,
   type TaskInboxSection,
 } from '@cindy/maker-shared/live-task-priority';
 import {
@@ -13,6 +15,8 @@ import {
 } from '@/features/device-link/remoteSessionActivityStore';
 import { useActiveFollowUpSessions } from '@/features/scheduler/lib/scheduleSessionBinding';
 import type { Session } from '@/lib/ccAgent.types';
+import { TeammateInboxRow } from '@/features/bots/TeammateInboxRow';
+import type { TeammateInboxEntry } from '@/features/bots/teammateInbox';
 import { SessionEntryRows, type SessionEntryRowsProps } from './SessionEntryList';
 import { SectionCollapse } from './SectionCollapse';
 import { sessionRowKey } from './sessionRowKey';
@@ -25,16 +29,30 @@ import {
 } from '../lib/mainListModel';
 import { sidebarPriorityContext } from '../lib/sidebarPriorityContext';
 
-type Props = Omit<SessionEntryRowsProps, 'entries'> & {
+export type TaskInboxProps = Omit<SessionEntryRowsProps, 'entries'> & {
   sessions: readonly Session[];
+  now?: number;
+  contentFiltered?: boolean;
   priorityContext: MainListPriorityContext;
   /** A teammate's task is listed only while it needs the user or runs. */
   isTeammateTask?: (session: Session) => boolean;
+  /** Each teammate's main conversation, one row while it needs the user, runs or is snoozed. */
+  teammates?: readonly TeammateInboxEntry[];
 };
 const SECTIONS: TaskInboxSection[] = ['inbox', 'working', 'snoozed', 'archived'];
 
+/** A task, or a teammate's main conversation: the inbox sorts both by whose turn it is. */
+type InboxItem = { kind: 'session'; session: Session } | { kind: 'teammate'; entry: TeammateInboxEntry };
+const itemKey = (item: InboxItem) => (item.kind === 'session' ? sessionRowKey(item.session) : item.entry.key);
+const itemSnoozeUntil = (item: InboxItem) =>
+  taskSnoozeUntil(item.kind === 'session' ? item.session : item.entry.snooze ?? {});
+const itemSnoozedUntil = (item: InboxItem) =>
+  (item.kind === 'session' ? item.session.snoozedUntil : item.entry.snooze?.snoozedUntil);
+
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
-export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }: Props) {
+const NO_TEAMMATES: readonly TeammateInboxEntry[] = [];
+
+export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorityContext, isTeammateTask, teammates = NO_TEAMMATES, ...rows }: TaskInboxProps) {
   const { t, i18n } = useTranslation();
   const followingSessions = useActiveFollowUpSessions(sessions);
   // The inbox spans more tasks than the regular list (e.g. outside its status filter), so remote
@@ -58,7 +76,7 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
   const [explicitMoves, setExplicitMoves] = useState<ReadonlySet<string>>(EMPTY_KEYS);
   const actionInputs = useRef({ sessions, onAction: rows.onAction, viewedId: rows.activeSessionId });
   actionInputs.current = { sessions, onAction: rows.onAction, viewedId: rows.activeSessionId };
-  const handleAction = useCallback(async (id: string, action: Parameters<Props['onAction']>[1]) => {
+  const handleAction = useCallback(async (id: string, action: Parameters<TaskInboxProps['onAction']>[1]) => {
     const input = actionInputs.current;
     const session = input.sessions.find(session => session.id === id);
     const result = await input.onAction(id, action);
@@ -74,26 +92,18 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
     }
     return result;
   }, []);
-  const [now, setNow] = useState(Date.now);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
     () => new Set(['working', 'snoozed', 'archived']),
   );
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  // Only the nearest expiry needs a timer; a focus reconciles time after sleep.
-  useEffect(() => {
-    const refresh = () => setNow(Date.now());
-    const next = Math.min(...sessions.map(taskSnoozeUntil).filter((at) => at > now));
-    const timer = Number.isFinite(next)
-      ? setTimeout(refresh, Math.min(2_147_483_647, Math.max(1, next - Date.now())))
-      : undefined;
-    window.addEventListener('focus', refresh);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener('focus', refresh);
-    };
-  }, [sessions, now]);
   const groups = useMemo(() => {
-    const result = new Map<TaskInboxSection, Session[]>(SECTIONS.map((key) => [key, []]));
+    const result = new Map<TaskInboxSection, InboxItem[]>(SECTIONS.map((key) => [key, []]));
+    // Teammates lead their section, latest activity first (the order they arrive in).
+    for (const entry of teammates) {
+      const section = teammateInboxSection(entry.status, entry.snooze, now);
+      // An idle, read teammate stays in the teammate section, outside the inbox.
+      if (section) result.get(section)!.push({ kind: 'teammate', entry });
+    }
     for (const session of sortSessionsForMainList([...sessions], 'priority', inboxContext)) {
       if (session.status === 'deleted') continue;
       const section = taskInboxSection(
@@ -111,30 +121,26 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
         now,
       );
       // An idle teammate task stays with the teammate, outside the inbox.
-      if (section) result.get(section)!.push(session);
+      if (section) result.get(section)!.push({ kind: 'session', session });
     }
-    result.get('snoozed')!.sort((a, b) => taskSnoozeUntil(a) - taskSnoozeUntil(b));
+    result.get('snoozed')!.sort((a, b) => itemSnoozeUntil(a) - itemSnoozeUntil(b));
     // The open task moves like any other (a reply sends it to Working at once); its row does not
     // scroll the sidebar after it (useScrollActiveRowIntoView).
     return result;
-  }, [sessions, inboxContext, now, followingSessions, isTeammateTask, settledWhileOpen]);
-  // While the pointer is over the list (or a row menu / snooze popover it opened is still open),
-  // rows keep their arrangement so a one-click Done never lands on a row that just moved.
+  }, [sessions, teammates, inboxContext, now, followingSessions, isTeammateTask, settledWhileOpen]);
   const rootRef = useRef<HTMLDivElement>(null);
-  const pointerInside = useRef(false);
+  const hoveredDone = useRef<Element | null>(null);
   const [frozen, setFrozen] = useState<FrozenInboxLayout | null>(null);
   const shown = useMemo(
-    () => (frozen ? freezeInboxLayout(groups, sessionRowKey, frozen, explicitMoves) : groups),
+    () => (frozen ? freezeInboxLayout(groups, itemKey, frozen, explicitMoves) : groups),
     [groups, frozen, explicitMoves],
   );
-  const shownRef = useRef(shown);
-  shownRef.current = shown;
   useEffect(() => {
     if (!frozen) {
       if (explicitMoves.size) setExplicitMoves(EMPTY_KEYS);
       return;
     }
-    const next = snapshotInboxLayout(shown, sessionRowKey);
+    const next = snapshotInboxLayout(shown, itemKey);
     if (JSON.stringify([...next]) !== JSON.stringify([...frozen])) setFrozen(next);
     // Consume once it has moved (or disappeared), never turn a past completion
     // into permission for future background reordering during the same hover.
@@ -143,31 +149,42 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
       if (pending.size !== explicitMoves.size) setExplicitMoves(pending);
     }
   }, [shown, frozen, explicitMoves]);
+  // Removing the hovered button (e.g. completing or archiving its task) can skip mouseout.
   useEffect(() => {
+    const button = hoveredDone.current;
     const root = rootRef.current;
-    if (!frozen || !root) return;
-    const release = () => {
-      if (!pointerInside.current && !root.querySelector('[data-state="open"]')) setFrozen(null);
+    if (!frozen || !button || !root) return;
+    const releaseIfRemoved = () => {
+      if (hoveredDone.current === button && !button.isConnected) {
+        hoveredDone.current = null;
+        setFrozen(null);
+      }
     };
-    const observer = new MutationObserver(release);
-    observer.observe(root, { subtree: true, attributes: true, attributeFilter: ['data-state'] });
+    releaseIfRemoved();
+    const observer = new MutationObserver(releaseIfRemoved);
+    observer.observe(root, { subtree: true, childList: true });
     return () => observer.disconnect();
   }, [frozen]);
   return (
     <div
       ref={rootRef}
       className="flex flex-col gap-2 pt-1 pl-3"
-      onPointerEnter={() => {
-        pointerInside.current = true;
-        setFrozen((current) => current ?? snapshotInboxLayout(shownRef.current, sessionRowKey));
+      onMouseOver={(event) => {
+        const button = event.target instanceof Element && event.target.closest('button[data-inbox-complete]');
+        if (button && button !== hoveredDone.current) {
+          hoveredDone.current = button;
+          setFrozen(snapshotInboxLayout(shown, itemKey));
+        }
       }}
-      onPointerLeave={() => {
-        pointerInside.current = false;
-        if (!rootRef.current?.querySelector('[data-state="open"]')) setFrozen(null);
+      onMouseOut={(event) => {
+        if (hoveredDone.current && !(event.relatedTarget instanceof Node && hoveredDone.current.contains(event.relatedTarget))) {
+          hoveredDone.current = null;
+          setFrozen(null);
+        }
       }}
     >
       {SECTIONS.map((section) => {
-        // Counts stay live; only the rows hold still while the pointer is over the list.
+        // Counts stay live; only the rows hold still while hovering Done.
         const count = groups.get(section)!.length;
         const items = shown.get(section)!;
         const closed = collapsed.has(section);
@@ -194,22 +211,28 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
             <SectionCollapse collapsed={closed}>
               {section === 'inbox' && items.length === 0 && (
                 <p className="px-3 py-3 text-xs text-[var(--sidebar-list-muted)]">
-                  {t('ccAgent.sidebar.inbox.empty')}
+                  {t(contentFiltered ? 'ccAgent.search.noResults' : 'ccAgent.sidebar.inbox.empty')}
                 </p>
               )}
-              {visible.map((session) => (
-                <div key={sessionRowKey(session)} className="w-full">
+              {visible.map((item) => (
+                <div key={itemKey(item)} className="w-full">
                   <div className="min-w-0 flex-1">
-                    <SessionEntryRows
-                      {...rows}
-                      onAction={handleAction}
-                      inboxMode
-                      entries={[{ kind: 'session', session }]}
-                      showFirstDivider={false}
-                    />
+                    {item.kind === 'teammate' ? (
+                      <TeammateInboxRow entry={item.entry} section={section} />
+                    ) : (
+                      <SessionEntryRows
+                        {...rows}
+                        onAction={handleAction}
+                        inboxMode
+                        entries={[item]}
+                        showFirstDivider={false}
+                      />
+                    )}
                     {section === 'snoozed' && (
                       <div className="px-3 pb-1 text-11 text-[var(--sidebar-list-muted)]">
-                        {new Date(taskSnoozeUntil(session)).toLocaleString(i18n.language)}
+                        {itemSnoozedUntil(item) === INDEFINITE_SNOOZE_UNTIL
+                          ? t('ccAgent.sidebar.inbox.indefinite')
+                          : new Date(itemSnoozeUntil(item)).toLocaleString(i18n.language)}
                       </div>
                     )}
                   </div>

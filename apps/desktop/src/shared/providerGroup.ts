@@ -806,7 +806,7 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
     const usageLimit = member.kind !== 'share' && state === 'cooling' && limit
       && (reset === null || (typeof reset === 'number' && Number.isSafeInteger(reset) && reset > 0))
       ? { resetAtMs: reset } as ProviderGroupUsageLimit : undefined;
-    // 分享来的电脑不读配额(provider-groups.md §5「分享边界」)：回包里有也不收。
+    // 分享来的电脑的额度只在组所在电脑内部排先后，不随组状态外传(provider-groups.md §5「分享边界」)：回包里有也不收。
     const quota = member.kind === 'share' ? undefined : readProviderGroupMemberQuota(item.quota);
     const fiveHourTight = quota !== undefined && item.fiveHourTight === true;
     return [{

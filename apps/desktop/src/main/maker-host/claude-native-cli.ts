@@ -4,7 +4,7 @@ import { cleanProcessEnv } from '@cindy/maker-core';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
 
 import { createLogger } from '../logger.js';
-import { ensureClaudeCliProxyBridge } from './claude-cli-proxy-bridge.js';
+import { ensureCliProxyBridge } from './cli-proxy-bridge.js';
 import {
   isClaudeCliLoginStatusFresh,
   peekClaudeCliLoginStatus,
@@ -59,7 +59,7 @@ const LOOPBACK_NO_PROXY = 'localhost,127.0.0.1,::1';
  *   - Anthropic 直连 / 解析失败:不下发,CLI 进程树的环境保持原样;
  *   - 代理 env 给的 HTTP 代理:不动(子进程继承,保留用户自己的 NO_PROXY 语义);
  *   - 系统代理,或代理 env 给的 SOCKS5:HTTPS_PROXY 指向本机 CONNECT 桥
- *     (claude-cli-proxy-bridge)。环境变量对整棵进程树生效(含 Bash 工具里的 git / npm),
+ *     (cli-proxy-bridge)。环境变量对整棵进程树生效(含 Bash 工具里的 git / npm),
  *     所以桥对每个目标重新按系统代理 / PAC 决定直连还是走代理,内网例外照旧直连;
  *     明文 HTTP 不下发代理,保持直连。
  * 用户在 ~/.claude/settings.json 的 env 里配的代理由 CLI 自己应用,优先于这里。
@@ -81,7 +81,7 @@ async function claudeCliNetworkEnv(): Promise<Record<string, string>> {
   if (fromEnv && target.kind === 'http') return {};
   let bridge: string;
   try {
-    bridge = await ensureClaudeCliProxyBridge(ports.resolveOutboundProxy);
+    bridge = await ensureCliProxyBridge(ports.resolveOutboundProxy);
   } catch {
     return {};
   }

@@ -1752,7 +1752,7 @@ describe('provider group "switch to another computer" for shared users', () => {
   // once, with a fresh isolated native session. Empty exclusions are a valid
   // token, not a missing token; it must still retire the old durable direct pin.
   it('accepts an account-handoff token with no excluded machines once per round', async () => {
-    const switched = vi.fn(async () => {});
+    const switched = vi.fn(async () => true).mockResolvedValueOnce(false);
     const env = setup({ owner: { directGuestExecution: { switched, ownerScope: () => 'owner',
       sessionAllowed: () => true, sessionDelegated: () => false } as never } });
     const guest = providerShareGuestPeer('share', 'member', 'laptop');
@@ -1760,7 +1760,15 @@ describe('provider group "switch to another computer" for shared users', () => {
     const token = env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded, true);
     expect(token).toBeTruthy();
     expect(env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded, true)).toBeNull();
-    const opened = await openAsGuest(env, guest, openPayload(SESSION, { acceptsGroupSwitch: true, groupSwitchToken: token }));
+    const payload = (groupSwitchToken: string) => openPayload(SESSION, {
+      acceptsGroupSwitch: true, groupSwitchToken, requireGroupSwitchToken: true,
+    });
+    await expect(openAsGuest(env, guest, payload('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')))
+      .rejects.toThrow('standby task handoff has expired or is no longer authorized');
+    expect(switched).not.toHaveBeenCalled();
+    await expect(openAsGuest(env, guest, payload(token!))).rejects.toThrow('standby task handoff could not be confirmed');
+    expect(env.relay.plan).not.toHaveBeenCalled();
+    const opened = await openAsGuest(env, guest, payload(token!));
     try {
       expect(switched).toHaveBeenCalledWith(guest, SESSION, token);
       expect(env.relay.plan).toHaveBeenCalledWith(expect.objectContaining({ exclude: new Set() }));

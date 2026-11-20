@@ -28,7 +28,7 @@ it.each(['GH_TOKEN', 'GITHUB_TOKEN', 'gh_token'])(
     mocks.execFile.mockImplementation((_binary, args, options, callback) => {
       checkEnv(options.env);
       callback(
-        args[0] === 'api' && !loggedIn ? new Error('not logged in') : null,
+        args[0] === 'api' && !loggedIn ? Object.assign(new Error('not logged in'), { code: 4 }) : null,
         args[0] === 'auth' ? 'saved-test-token' : '',
         '',
       );
@@ -90,4 +90,14 @@ it('connects with a valid active account even when a secondary account has expir
     expect.any(Object),
     expect.any(Function),
   );
+});
+
+it('leaves device authorization closed when GitHub cannot verify the active account', async () => {
+  mocks.execFile.mockImplementation((_binary, args, _options, callback) => {
+    callback(args[0] === 'api' ? new Error('timed out') : null, '', '');
+  });
+  const setup = createGithubSetup('unused', vi.fn());
+  setup.start();
+  await vi.waitFor(() => expect(setup.snapshot()).toMatchObject({ phase: 'error', error: 'network' }));
+  expect(mocks.spawn).not.toHaveBeenCalled();
 });

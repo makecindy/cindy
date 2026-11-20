@@ -371,6 +371,7 @@ export function WorkspacePrefsEditor({
           effort={eff.effort.id ?? ''}
           vendorKey={vendorKey}
           triggerVariant="field"
+          fieldPanelWidth="readable"
           popoverSide="bottom"
           maxVisibleModelRows={maxVisibleModelRows}
           dense

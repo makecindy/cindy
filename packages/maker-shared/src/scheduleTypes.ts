@@ -152,7 +152,8 @@ export interface RemoteScheduleRun {
   failureRecovered?: boolean;
   /** Lightweight host projection of preRunHookResult.missingPlugin. */
   missingPlugin?: unknown;
-  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string; missingPlugin?: unknown };
+  prCheckDiagnosis?: unknown;
+  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string; prCheckDiagnosis?: unknown; missingPlugin?: unknown };
   resultText?: string;
   costUsd?: number;
   estimatedValueUsd?: number;

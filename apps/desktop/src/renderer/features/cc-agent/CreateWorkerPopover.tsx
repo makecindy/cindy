@@ -20,6 +20,9 @@ import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Select } from '@/components/ui/select';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { resolveActivePluginEngine, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import type { PluginEngineEffort } from '../../../shared/pluginEngines';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -105,9 +108,11 @@ const LOCAL_WORKER_MODEL_MEMORY = {
 
 export interface CreateWorkerForm {
   role: string;
-  agent: 'claude-code' | 'codex' | 'pi';
+  /** 'acp' = 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：providerId 指出是哪一个引擎。 */
+  agent: 'claude-code' | 'codex' | 'pi' | 'acp';
   model: string;
-  effort?: Effort;
+  /** 插件引擎 Worker 用引擎自己列出的档位。 */
+  effort?: Effort | PluginEngineEffort;
   fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;null = 未显式,由 main 侧按默认路由解析。 */
   providerId: string | null;
@@ -196,6 +201,11 @@ export interface CreateWorkerPopoverProps {
    */
   remoteAgentDevices?: readonly { deviceId: string; name: string }[];
   catalogHostDeviceId?: string;
+  /**
+   * 模型面板同时列出本机插件引擎(docs/plans/acp-plugin-bridge.md)。只在本机 Lead、Worker 也在这台
+   * 电脑运行时生效(远程控制、SSH、另一台工作电脑都不列)；缺省 = 不列，面板与今天一致。
+   */
+  pluginEnginesEnabled?: boolean;
 }
 
 export function CreateWorkerPopover({
@@ -214,6 +224,7 @@ export function CreateWorkerPopover({
   leadAgentDeviceId,
   remoteAgentDevices,
   catalogHostDeviceId,
+  pluginEnginesEnabled = false,
 }: CreateWorkerPopoverProps) {
   const { t } = useTranslation();
   const { confirm: confirmDialog } = useConfirmDialog();
@@ -274,6 +285,41 @@ export function CreateWorkerPopover({
   const localProjectEnabled =
     !!leadSessionId && !leadDeviceId && !sshRemote && !executionDeviceId && !isSidebarWindow();
   const project = useWorkerProjectSelection(open, leadSessionId, localProjectEnabled);
+  // 选中的插件引擎；null = 用内置模型。引擎只在本机启动，也不用 worktree。被停用、卸载或报告
+  // 不可用时按没选处理，回到下面的内置模型。
+  const [pluginEngine, setPluginEngine] = useState<PluginEngineSelection | null>(null);
+  useEffect(() => { if (!open) setPluginEngine(null); }, [open]);
+  const pluginEnginesAllowed = pluginEnginesEnabled && !leadDeviceId && !sshRemote && !executionDeviceId;
+  // 面板常驻挂载：只在打开期间订阅引擎列表，关闭即停止。
+  const pluginEngineList = usePluginEngines(open && pluginEnginesAllowed);
+  const activePluginEngine = useMemo(
+    () => (pluginEnginesAllowed ? resolveActivePluginEngine(pluginEngineList, pluginEngine) : null),
+    [pluginEnginesAllowed, pluginEngineList, pluginEngine],
+  );
+  const pluginEngineWorktree = !!activePluginEngine && !!project.fields.worktree;
+  const pluginEnginePicker = useMemo(
+    () => pluginEnginesAllowed && pluginEngineList.length
+      ? {
+          engines: pluginEngineList,
+          active: activePluginEngine
+            ? {
+                providerId: activePluginEngine.engine.providerId,
+                modelId: activePluginEngine.modelId,
+                ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
+              }
+            : null,
+          onSelect: (selection: PluginEngineSelection) => {
+            // 插件引擎只在这台电脑运行：Worker 的 Agent 位置一并收回本机。
+            setAgentDeviceId(null);
+            setPluginEngine((previous) => {
+              const effort = selection.effort ?? previous?.effort;
+              return { providerId: selection.providerId, modelId: selection.modelId, ...(effort ? { effort } : {}) };
+            });
+          },
+        }
+      : undefined,
+    [pluginEnginesAllowed, pluginEngineList, activePluginEngine],
+  );
   const trimmedRemoteDir = remoteDir.trim();
   const remoteDirInvalid =
     !!executionDevice && remoteDirMode === 'path' && !isAbsoluteRemoteDir(trimmedRemoteDir);
@@ -889,6 +935,8 @@ export function CreateWorkerPopover({
       if (selection) {
         modelSelectionChosenRef.current = true;
         restoredModelSelectionRef.current = true;
+        // 角色记住的是内置模型：带回它就不再停在之前选的插件引擎上。
+        setPluginEngine(null);
         setAgent(selection.agent);
         setModel(selection.model);
         setEffort(selection.effort);
@@ -1017,12 +1065,12 @@ export function CreateWorkerPopover({
     !isSubmitting &&
     activeRole.length >= 1 &&
     activeRole.length <= 32 &&
-    !remoteModelListBlocked &&
     !remoteDirInvalid &&
-    !agentLocationUnsendable &&
-    !rememberedSourceUnavailable &&
     (!requireWorkerPermissionModeSupport || !remoteWorkerPermissionModeUnsupported) &&
-    !!currentModel;
+    // 插件引擎不读内置模型目录与来源：只需不选 worktree。
+    (activePluginEngine
+      ? !pluginEngineWorktree
+      : !remoteModelListBlocked && !agentLocationUnsendable && !rememberedSourceUnavailable && !!currentModel);
   const resolvedTitle = title ?? t('orca.createWorker.title');
   const resolvedSubmitLabel = submitLabel ?? t('orca.createWorker.submit');
 
@@ -1037,6 +1085,28 @@ export function CreateWorkerPopover({
     if (!canCreate || submittingRef.current) return;
     submittingRef.current = true;
     setIsSubmitting(true);
+    if (activePluginEngine) {
+      // 插件引擎 Worker：在这台电脑运行，不用内置模型目录、来源与 Fast；内置模型的记忆不改。
+      try {
+        await onCreate({
+          ...(localProjectEnabled ? project.fields : {}),
+          role: activeRole,
+          agent: 'acp',
+          model: activePluginEngine.modelId,
+          ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
+          providerId: activePluginEngine.engine.providerId,
+          initialTask,
+          ...(supportsWorkerPermissionModeSelection
+            ? { workerPermissionMode: selectedWorkerPermissionMode }
+            : {}),
+          ...(agentLocationSelectable ? { agentDeviceId: null } : {}),
+        });
+      } finally {
+        submittingRef.current = false;
+        setIsSubmitting(false);
+      }
+      return;
+    }
     // 提交前对 (来源, 模型) 再收窄一次:收敛 effect 与提交之间目录可能已变化。
     const submitProviderId = narrowProviderSource(providerSource, model);
     // 弹窗打开期间，手机或另一台电脑可能已改了这台电脑的记忆(角色清单、上次选择，App 直接写进存储)。
@@ -1166,6 +1236,7 @@ export function CreateWorkerPopover({
       setIsSubmitting(false);
     }
   }, [
+    activePluginEngine,
     localProjectEnabled,
     project.fields,
     canCreate,
@@ -1417,18 +1488,19 @@ export function CreateWorkerPopover({
               {deviceId && remoteProviders.unsupported && currentModelSupportsFast && (
                 <FastModeToggle enabled={!!fast} onToggle={() => setFast((v) => !v)} />
               )}
-              {savedModelUnavailable ? (
+              {savedModelUnavailable && !activePluginEngine ? (
                 <CircleAlert size={14} className="shrink-0 text-[var(--error-fg)]" aria-hidden />
               ) : null}
               <ModelSelector
                 openRequest={modelPickerOpenRequest}
                 onOpenRequestConsumed={(request) => setModelPickerOpenRequest((pending) => pending === request ? 0 : pending)}
-                ariaContext={savedModelUnavailable ? t('orca.createWorker.savedModelUnavailable') : undefined}
+                ariaContext={savedModelUnavailable && !activePluginEngine ? t('orca.createWorker.savedModelUnavailable') : undefined}
                 fastModeConfigurable={['codex', 'pi']}
                 unifiedAgents={pickerAgents}
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
                   if (selection.engine === 'antigravity') return;
                   if (selection.agentDevice !== undefined && executionDeviceId && !agentLocationSelectable) return;
+                  setPluginEngine(null);
                   modelSelectionChosenRef.current = true;
                   restoredModelSelectionRef.current = false;
                   const nextAgent = selection.engine === 'cc' ? 'claude-code' : selection.engine;
@@ -1444,10 +1516,14 @@ export function CreateWorkerPopover({
                 }}
                 modelId={model}
                 effort={effort}
-                onModelChange={updateModel}
+                onModelChange={(...args: Parameters<typeof updateModel>) => {
+                  setPluginEngine(null);
+                  updateModel(...args);
+                }}
                 onEffortChange={updateEffort}
                 vendorKey={vendorKey}
                 deviceId={catalogDeviceId}
+                {...(pluginEnginePicker ? { pluginEngines: pluginEnginePicker } : {})}
                 remoteAgent={remoteAgentOptions && !(deviceId && remoteProviders.unsupported)
                   ? remoteAgentOptions
                   : undefined}
@@ -1462,7 +1538,10 @@ export function CreateWorkerPopover({
                 currentProviderId={
                   sshRemote === true ? narrowProviderSource(providerSource, model) : providerSource
                 }
-                onProviderChange={deviceId && remoteProviders.unsupported ? undefined : handleProviderChange}
+                onProviderChange={deviceId && remoteProviders.unsupported ? undefined : (...args: Parameters<typeof handleProviderChange>) => {
+                  setPluginEngine(null);
+                  handleProviderChange(...args);
+                }}
                 // providerSource=null 时面板高亮的是**解析出来的生效默认来源**,点它的
                 // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则
                 // 用户点了没反应,之后默认路由一变创建就静默换来源。显式同值幂等无害。
@@ -1492,7 +1571,11 @@ export function CreateWorkerPopover({
             </div>
           </div>
         </div>
-        {noAvailableLocalModels ? (
+        {pluginEngineWorktree ? (
+          <p className="-mt-2 mb-4 text-12 leading-snug text-[var(--error-fg)]" role="status">
+            {t('orca.createWorker.pluginEngineNoWorktree')}
+          </p>
+        ) : activePluginEngine ? null : noAvailableLocalModels ? (
           <p className="-mt-2 mb-4 text-12 leading-snug text-[var(--error-fg)]" role="status">
             {t('orca.createWorker.noAvailableModels', {
               agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',

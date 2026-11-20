@@ -13,6 +13,7 @@ import { ANTIGRAVITY_PROVIDER_ID, antigravityConnected } from './antigravity-sta
  * active-catalog 统一持有；连接状态每次实时读（凭证变化要立即反映）。
  */
 
+import type { ProviderPickerModel } from '@cindy/device-link';
 import { createLogger } from '../logger.js';
 import { mediaErrorForLog } from '../cindy-media/mediaRequestLog.js';
 
@@ -26,6 +27,9 @@ import {
   type ProviderView,
   type Provider,
   isCustomRoutedProvider,
+  isProviderDisabled,
+  isCindyDistributedProvider,
+  isCindyAutoModelId,
   type AgentKind,
 } from '@cindy/model-providers';
 
@@ -50,9 +54,16 @@ export interface ConnectionReadOptions {
    * intentionally keep the low-latency/LKG behavior even when side effects are allowed.
    */
   waitForDiscovery?: boolean;
+  /** This picker already refreshed its own subscription pools. */
+  pickerPoolsReady?: boolean;
 }
 
 export interface ProviderListOptions extends ConnectionReadOptions {
+  /** Same-account remote picker. Full management and routing callers leave this unset. */
+  picker?: {
+    scope: 'available' | ProviderPickerModel;
+    describe?: (providerOrder: string[], deferredProviderIds: string[]) => void;
+  };
   /**
    * Internal catalog override for policy consumers that need the routing truth
    * rather than the user-selectable projection. Never sourced from IPC input.
@@ -90,7 +101,8 @@ export interface ProviderServiceDeps {
   /** 返回当前生效目录（同步）。桌面端注入 active-catalog 的 getActiveCatalog。 */
   getCatalog: () => Catalog;
   /** Live membership precedes access overrides. Explicit/lazy routing reads retain history-only models. */
-  projectCatalog?: (catalog: Catalog, routingCatalog: boolean) => Catalog;
+  projectCatalog?: (catalog: Catalog, routingCatalog: boolean, include?: (provider: Provider) => boolean) => Catalog;
+  refreshPickerPools?: (providers: readonly Provider[]) => Promise<void>;
   /** 连接状态判定器。 */
   connection: ProviderConnectionReaders;
   /**
@@ -103,6 +115,7 @@ export interface ProviderServiceDeps {
   subscriptionPoolConnected?: (providerId: string, options?: { includeBoundAccounts?: boolean }) => boolean;
   subscriptionAccountConnected?: (providerId: string) => boolean;
   subscriptionReadUnavailable?: (providerId: string) => boolean;
+  subscriptionModelsConfirmedAt?: (providerId: string) => number | undefined;
   subscriptionAccountInfo?: (providerId: string) => Promise<ProviderView['subscriptionAccount']>;
   openAiAccountInfo?: (providerId: string) => Promise<ProviderView['openAiAccount']>;
   /**
@@ -163,14 +176,60 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       waitForDiscovery: opts?.waitForDiscovery === true,
       ...(opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : {}),
     };
+    const picker = opts?.picker;
+    const access = picker ? deps.getModelAccess?.() : undefined;
+    let pickerCatalog: Catalog | undefined;
+    const autoSourceIdentities: ProviderView[] = [];
+    if (picker) {
+      const base = deps.getCatalog();
+      const scope = picker.scope;
+      const include = (p: Provider) => scope === 'available'
+        ? !isProviderDisabled(access, p.id)
+        : isProviderDisabled(access, p.id) && (scope.providerId === null || scope.providerId === p.id);
+      const deferred = scope === 'available' ? base.providers.filter(p => !include(p)) : base.providers.filter(include);
+      picker.describe?.(scope === 'available' ? base.providers.map(p => p.id) : [], deferred.map(p => p.id));
+      if (scope === 'available') {
+        for (const p of deferred) {
+          // Saved Auto choices can move between Cindy-distributed sources. Preserve just
+          // their membership for relocation, without reading credentials or publishing routes.
+          if (isCindyDistributedProvider(p)) autoSourceIdentities.push({
+            id: p.id, name: p.name, source: p.source, agents: p.agents, auth: { method: p.auth.method },
+            routing: {}, connected: false, suspended: true,
+            models: Object.fromEntries(p.agents.map(agent => [agent,
+              p.models[agent]?.filter(m => isCindyAutoModelId(m.id)).map(m => ({
+                id: m.id, name: m.name, efforts: m.efforts, defaultEffort: m.defaultEffort, contextWindow: m.contextWindow,
+                defaultEnabled: m.defaultEnabled, availability: m.availability,
+              })) ?? [],
+            ])),
+          });
+        }
+      }
+      // Cold built-in, created and legacy account pools can discover the bound model
+      // only after refresh. For an implicit route, narrow by agent before reading membership.
+      const implicitAgent = scope !== 'available' && scope.providerId === null ? scope.agent : undefined;
+      const pools = base.providers.filter(p => include(p) && (!implicitAgent || p.agents.includes(implicitAgent))
+        && (p.id === 'openai' || p.id === 'anthropic' || p.subscriptionPool !== undefined || p.auth.native === 'codex'));
+      await deps.refreshPickerPools?.(pools);
+      readOpts.pickerPoolsReady = true;
+      const projected = deps.projectCatalog?.(base, false, include) ?? base;
+      let providers = projected.providers.filter(include);
+      if (scope !== 'available') {
+        providers = providers.flatMap(p => {
+          const model = p.models[scope.agent]?.find(m => m.id === scope.modelId);
+          return model ? [{ ...p, models: { [scope.agent]: [model] }, imageModels: undefined, videoModels: undefined,
+            audioModels: undefined, evaluationModels: undefined, embeddingModels: undefined }] : [];
+        });
+      }
+      pickerCatalog = { ...projected, providers };
+    }
+    const readConnection = (id: keyof ProviderConnectionReaders) =>
+      !pickerCatalog || pickerCatalog.providers.some(p => p.id === id) ? deps.connection[id](readOpts) : false;
     const [xd, anthropic, openai, xai] = await Promise.all([
-      Promise.resolve(deps.connection.xd(readOpts)),
-      Promise.resolve(deps.connection.anthropic(readOpts)),
-      Promise.resolve(deps.connection.openai(readOpts)),
-      Promise.resolve(deps.connection.xai(readOpts)),
+      readConnection('xd'), readConnection('anthropic'), readConnection('openai'), readConnection('xai'),
     ]);
-    const sourceCatalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
-    const catalog = deps.projectCatalog?.(sourceCatalog, !!(opts?.getCatalog || opts?.catalog)) ?? sourceCatalog;
+    // Full routing reads must materialize their catalog after all connection claims settle.
+    const sourceCatalog = pickerCatalog ?? opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
+    const catalog = pickerCatalog ?? deps.projectCatalog?.(sourceCatalog, !!(opts?.getCatalog || opts?.catalog)) ?? sourceCatalog;
     const connected: ConnectionState = { xd, anthropic, openai, xai, [ANTIGRAVITY_PROVIDER_ID]: antigravityConnected() };
     for (const p of catalog.providers) {
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
@@ -213,7 +272,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     }
     let media: readonly { providerId: string; id: string }[] | undefined;
     try {
-      media = deps.getAvailableMediaModels?.();
+      if (!picker) media = deps.getAvailableMediaModels?.();
     } catch (error) {
       // Media is optional enrichment; configuration and chat providers remain usable.
       media = [];
@@ -233,7 +292,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
     const contextLimits = deps.getModelContextLimits?.() ?? {};
-    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({
+    return buildRegistry(catalog, connected, discoveryFailures, picker ? access : deps.getModelAccess?.()).map((provider) => ({
       ...provider,
       models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
         agent, models?.map((model) => {
@@ -264,7 +323,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       // restoring display preferences failed after authentication was committed.
       ...(provider.connected ? { removed: false } : {}),
       ...(deps.subscriptionReadUnavailable?.(provider.id)
-        ? { subscriptionReadUnavailable: true as const } : {}),
+        ? { subscriptionReadUnavailable: true as const, subscriptionModelsConfirmedAt: deps.subscriptionModelsConfirmedAt?.(provider.id) } : {}),
     })).map(
       (provider) =>
         media === undefined
@@ -281,7 +340,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
                     ),
                   ],
             },
-    ).map(provider => deps.projectProvider?.(provider) ?? provider);
+    ).map(provider => deps.projectProvider?.(provider) ?? provider).concat(autoSourceIdentities);
   }
 
   return { listProviders };

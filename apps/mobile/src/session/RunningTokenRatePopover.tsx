@@ -42,6 +42,7 @@ export function RunningTokenRatePopover({
   startedAt,
   outputTokens,
   totalOutputTokens = outputTokens,
+  measuredAverage,
   generationDurationMs,
   generationReliable,
   children,
@@ -54,6 +55,7 @@ export function RunningTokenRatePopover({
   startedAt: number | null;
   outputTokens: number;
   totalOutputTokens?: number;
+  measuredAverage?: number | null;
   generationDurationMs: number;
   generationReliable: boolean;
   children: ReactNode;
@@ -232,7 +234,7 @@ export function RunningTokenRatePopover({
     Math.max(now, Date.now()) - history.latestSampleAt < RATE_SAMPLE_FRESH_MS
       ? history.latestRate
       : null;
-  const average =
+  const average = measuredAverage !== undefined ? measuredAverage :
     generationReliable && generationDurationMs > 0 && outputTokens > 0
       ? (outputTokens * 1000) / generationDurationMs
       : null;
@@ -291,7 +293,7 @@ export function RunningTokenRatePopover({
         <View style={styles.top}>
           <View style={styles.metric}>
             <Text ref={cardFocusTarget} style={styles.label}>
-              {t("session.screen.currentRate")}
+              {t(history.latestKind === "request" && recent !== null ? "session.screen.lastRequestRate" : "session.screen.currentRate")}
             </Text>
             <Text style={styles.value}>
               {formatTokenRate(recent)}{" "}
@@ -323,6 +325,9 @@ export function RunningTokenRatePopover({
                 />
               </>
             )}
+            {points.map((point, index) => samples[index].kind === "request" && (
+              <Circle key={index} cx={point.x} cy={point.y} r={2} fill={colors.textPrimary} />
+            ))}
             {last && (
               <Circle
                 cx={last.x}

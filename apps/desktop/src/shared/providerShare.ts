@@ -16,12 +16,19 @@ import type {
 import type { DataOwnerPushStamp } from './dataOwnerPush';
 import type { ProviderShareInsights, ProviderShareQuotaAccountResult, ProviderShareVisibility } from './providerShareInsights';
 
-/** 本机收藏清理依据。未加载、断线和账号切换的空列表不能用于撤权清理。 */
+/** Explicit proxy scope refusal. The legacy unmarked sentence also meant a missing member model. */
+export const SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE =
+  '[SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.';
+
+/** 本机目录及偏好清理依据。目录不可用可以立即停用，删除偏好需要单独的证据。 */
 export interface ProviderShareReceivedSnapshot {
   ownerStamp: DataOwnerPushStamp;
-  /** 仅这些区域的名单完整，可据此清理已撤权收藏；其它区域不受影响。 */
+  /** 本次目录可以替换这些区域的显示结果。 */
   confirmedRegions: readonly ProviderShareReceived['owner']['region'][];
   received: readonly ProviderShareReceived[];
+  /** 当前账号在本机已成功退出、仍待收藏写入确认的成员。 */
+  leftMemberIds?: readonly string[];
+  leftMemberRevision?: number;
   /** false = 分享运行时已停止/账号边界；empty + false 是权威清空，不是暂时投影。 */
   active?: boolean;
   /** Per-region remaining display budget measured by Main's wall and monotonic clocks. */
@@ -48,11 +55,15 @@ export interface ProviderShareRegionBudget {
 export interface ProviderShareFavoriteRecovery {
   ownerStamp: DataOwnerPushStamp;
   regions: readonly ProviderShareReceived['owner']['region'][];
+  /** 本机收藏已按这一版退出回执清理。 */
+  cleanedLeftMemberRevision?: number;
 }
 
 export const PROVIDER_SHARE_IPC = {
-  /** Renderer → Main：全部操作走同一个命令通道。 */
+  /** Renderer → Main：管理命令通道。 */
   COMMAND: 'provider-share:command',
+  /** 仅本机应用窗口可请求原生另存为；不进入远程管理通道。 */
+  EXPORT_ROSTER: 'provider-share:export-roster',
   /** 分享者：分享快照变化(管理页按当前时间段重新读取)。 */
   OWNED_CHANGED: 'provider-share:owned-changed',
   /** 受邀者：已收到的分享变化(模型列表)。payload: ProviderShareReceived[] */

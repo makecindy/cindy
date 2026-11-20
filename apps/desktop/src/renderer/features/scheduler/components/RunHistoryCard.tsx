@@ -23,7 +23,7 @@ import { toast } from '@/lib/toast';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { isScheduleActionExpired, scheduleFailureDetails } from '@cindy/maker-shared/schedule-model';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
-import type { AgentKind, RunStatus, ScheduleRun } from '@cindy/maker-scheduler';
+import type { RunStatus, ScheduleAgentKind, ScheduleRun } from '@cindy/maker-scheduler';
 import type { SessionReference } from '../../../../shared/sessionReference';
 import {
   DropdownMenu,
@@ -129,7 +129,7 @@ function PreRunHookResultDetails({ result }: { result: NonNullable<ScheduleRun['
 
 interface Props {
   run: ScheduleRun;
-  agentKind: AgentKind;
+  agentKind: ScheduleAgentKind;
   /** 删除单条历史 run 的回调；省略则不渲染删除按钮（向后兼容）。 */
   onDelete?: (run: ScheduleRun) => void | Promise<void>;
   /**
@@ -270,6 +270,8 @@ export function RunHistoryCard({
           </span>
           <span className="truncate text-14 font-medium text-[var(--msg-assistant-text)]">
             {formatRunTimestamp(run.firedAt, Date.now(), t)}
+            {run.triggerSource === 'pr-status' && <> · {t('scheduler.prTrigger.any')}</>}
+            {run.triggerSource === 'pr-check' && <> · {t('scheduler.editor.trigger.timed')}</>}
           </span>
         </div>
         <StatusChip status={run.status} />

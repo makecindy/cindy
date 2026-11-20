@@ -301,6 +301,7 @@ export interface SlackHookMcpDeps {
  * @cindy/maker-scheduler still has zero runtime deps per Phase 1).
  */
 export interface SchedulerMcpDeps {
+  getSessionProject?: (sessionId: string) => Promise<{ projectDir: string | null; remoteHostId: string | null }>;
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   /** Live per-call check (Bot main tasks may change automations only on their owner's own turn). */
   authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;
@@ -642,6 +643,11 @@ export type ControlResult<T extends object = object, E extends string = never> =
  * LLM tool calls to fail zod enum validation.
  */
 export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi' | 'antigravity';
+/**
+ * Orca Worker 的执行引擎：内置引擎，或 'acp' = 本机插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，
+ * 配 provider_id = acp-plugin:<插件>:<引擎>。只用于创建 / 读取 Worker，普通任务仍只认内置引擎。
+ */
+export type ControlWorkerEngine = ControlWorkerAgent | 'acp';
 
 export interface ResolvedBrowserScreenshot {
   buffer: Buffer;

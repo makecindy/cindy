@@ -1,3 +1,4 @@
+import type { UsageAttribution } from './worker/opHandlers/modelUsageTx.js';
 import { sql } from 'drizzle-orm';
 
 import {
@@ -16,6 +17,7 @@ import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 const log = createLogger('localDb/dailyModelUsage');
 
 export interface DailyModelUsageDelta {
+  attribution?: UsageAttribution;
   agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   model: string;
   money?: RegionalMoney | null;
@@ -76,40 +78,12 @@ export async function incrementDailyModelUsage(
 
   const day = localDayKey(ts);
   const model = delta.model || 'unknown';
-  const db = getDbClient().drizzle;
-  await db
-    .insert(dailyModelUsage)
-    .values({
-      day,
-      agentKind: delta.agentKind,
-      model,
-      costAmount: money?.amount ?? 0,
-      costCurrency: rowCurrency,
-      costIsApproximate: money?.approximate ?? false,
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      cacheCreateTokens,
-      updatedAt: ts,
-    })
-    .onConflictDoUpdate({
-      target: [
-        dailyModelUsage.day,
-        dailyModelUsage.agentKind,
-        dailyModelUsage.model,
-        dailyModelUsage.costCurrency,
-      ],
-      set: {
-        costAmount: sql`${dailyModelUsage.costAmount} + ${money?.amount ?? 0}`,
-        costIsApproximate: sql`(${dailyModelUsage.costIsApproximate} OR ${money?.approximate ? 1 : 0})`,
-        inputTokens: sql`${dailyModelUsage.inputTokens} + ${inputTokens}`,
-        outputTokens: sql`${dailyModelUsage.outputTokens} + ${outputTokens}`,
-        cacheReadTokens: sql`${dailyModelUsage.cacheReadTokens} + ${cacheReadTokens}`,
-        cacheCreateTokens: sql`${dailyModelUsage.cacheCreateTokens} + ${cacheCreateTokens}`,
-        updatedAt: ts,
-      },
-    })
-    .run();
+  await getDbClient().tx('usage.recordModelUsage', {
+    day, agentKind: delta.agentKind, model, currency: rowCurrency,
+    amount: money?.amount ?? 0, approximate: money?.approximate ?? false,
+    inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens,
+    recordedAt: ts, attribution: delta.attribution,
+  });
 }
 
 export async function getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]> {

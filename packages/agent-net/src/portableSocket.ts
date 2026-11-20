@@ -9,7 +9,7 @@ import {
 import type { WsLike } from '@cindy/device-link';
 import { CERT_LIFETIME_MS, delegationEndpointCertificate, delegationVisibleTo, type Delegation, type DeviceView } from '@cindy/agent-net-protocol';
 import { frameMatchesDelegation, scopedFrame, delegatedPeerKey, delegatedPeerTarget, type ScopedPeerTarget } from './scopedRoutes.js';
-import { DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RosterEntry, type SessionWire, type Transport } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
 import { SessionPeer, type SessionConfig, type SessionRole } from './session/peer.js';
 export type { SessionHandlers } from './session/peer.js';
 
@@ -146,7 +146,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         admissionVersion: () => socket.directoryRevision,
         relayIdOf: (key) => socket.deviceForKey(key),
         admittedPeers: () => socket.peerIds().filter(id => socket.authorized(id))
-          .map(id => ({ id: keyHex(socket.transportKey(id)!), relayId: id })),
+          .map(id => ({ id: socket.transportKeyHex(id)!, relayId: id })),
         onIncoming: (channel) => socket.adopt(channel, false),
       });
       socket.uplink?.onDatagram((id, data) => socket.receiveDatagram?.(id, data));
@@ -326,8 +326,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       return target && this.authorized(target.relayId) ? target : null;
     }
     for (const [id, delegation] of this.delegations) {
-      const target = this.authorized(id) && delegatedPeerTarget(delegation, peer, 'host');
-      if (target) return target;
+      const target = delegatedPeerTarget(delegation, peer, 'host');
+      if (target && this.authorized(id)) return target;
     }
     return null;
   }
@@ -407,10 +407,34 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     return this.verifiedUntil(d, () => !!this.options.bindings.verifyDelegation?.(this.options.client.rootPublicKey, d),
       () => Math.min(d.expiresAt, d.issuerCertificate.expiresAt));
   }
+  /**
+   * Transport key (hex) → the ids carrying it, in `peerIds` order, and each id's key. The phone's engine asks for every
+   * connection on every poll and once per admitted peer: going through the directory and converting every key each time
+   * was O(N²) per poll, most of a poll's cost with a few dozen devices (2026-11-20 on a phone, polls every 8 ms took
+   * 55–60% of the JS thread before, 22–33% after). Rebuilt whenever the directory changes; who is authorized is still
+   * checked on every lookup.
+   */
+  private keyIndex: { roster: Map<string, DeviceView>; delegations: number; byKey: Map<string, string[]>; byId: Map<string, string> } | null = null;
+  private keys(): NonNullable<AgentNetSocket['keyIndex']> {
+    const cached = this.keyIndex;
+    if (cached && cached.roster === this.roster && cached.delegations === this.delegations.size) return cached;
+    const byKey = new Map<string, string[]>(), byId = new Map<string, string>();
+    for (const id of this.peerIds()) {
+      const key = this.transportKey(id);
+      if (!key) continue;
+      const hex = keyHex(key);
+      byId.set(id, hex);
+      const ids = byKey.get(hex);
+      if (ids) ids.push(id); else byKey.set(hex, [id]);
+    }
+    return this.keyIndex = { roster: this.roster, delegations: this.delegations.size, byKey, byId };
+  }
   private deviceForKey(hex: string): string | undefined {
-    for (const id of this.peerIds()) if (this.authorized(id) && keyHex(this.transportKey(id)!) === hex) return id;
+    for (const id of this.keys().byKey.get(hex) ?? []) if (this.authorized(id)) return id;
     return undefined;
   }
+  /** This peer's transport key in hex (see `keys`). */
+  private transportKeyHex(id: string): string | undefined { return this.keys().byId.get(id); }
   private peerIds(): string[] { return [...this.roster.keys(), ...this.delegations.keys()]; }
   private transportKey(id: string): string | undefined {
     return this.delegations.get(id)?.guestTransportKey ?? this.roster.get(id)?.certificate.transportKey;
@@ -428,6 +452,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       this.knownV2.add(c.deviceId);
     }
     this.roster = next;
+    this.keyIndex = null;
     if (grants) {
       this.delegations.clear();
       if (this.options.client.delegation) this.ownDelegation = grants.find(d => d.scope
@@ -443,6 +468,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       const keys = new Map<string, string[]>();
       for (const id of this.peerIds()) { const k = this.transportKey(id)!; keys.set(k, [...(keys.get(k) ?? []), id]); }
       for (const ids of keys.values()) if (ids.length > 1) for (const id of ids) this.delegations.delete(id);
+      this.keyIndex = null;
       this.options.onDelegations?.(this.options.client.delegation ? this.ownDelegation ? [this.ownDelegation] : [] : [...this.delegations.values()]);
     }
     for (const [id, peer] of this.peers) if (peer.info && next.has(id)) {
@@ -476,8 +502,45 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private memberAccepted(deviceId: string): boolean {
     return !this.peerRule.refused.has(deviceId) && (this.peerRule.allowed === null || this.peerRule.allowed.has(deviceId));
   }
-  /** See Transport.networkChanged (the Desktop's network watcher, through the worker). */
-  networkChanged(): void { if (!this.closed) this.transport?.networkChanged?.(); }
+  /**
+   * See Transport.networkChanged (the Desktop's network watcher, through the worker; the phone's network events). Without a
+   * relay connection, the reconnect may be waiting out a backoff that grew while the old network went away (0.5 s doubling
+   * to 15 s): it starts now, as Device Link's client does on a network hint, and an attempt already in flight is kept.
+   * Once the relay is back the transport is told again, so what it sent while the relay was down goes out at once.
+   */
+  networkChanged(): void {
+    if (this.closed) return;
+    this.transport?.networkChanged?.();
+    if (!this.uplink) this.reconnectRelayNow(false);
+  }
+  /**
+   * This device's own route changed (the phone: Wi-Fi ↔ cellular, lost and back). Besides `networkChanged`, the relay
+   * connection is replaced: it may sit half-open on the old route without ever erroring (React Native's WebSocket cannot
+   * ping, and this socket answers Device Link's pings itself), while the encrypted connections and their sessions move by
+   * themselves and stay. Device Link replaces its own connections on the same evidence. An attempt in flight is kept.
+   */
+  replaceRelayConnection(): void {
+    if (this.closed) return;
+    this.transport?.networkChanged?.();
+    const old = this.uplink;
+    if (old) {
+      this.uplink = null; old.close();
+      if (this.ready) this.acknowledgeHello();
+    }
+    this.reconnectRelayNow(!!old);
+  }
+  private resendWhenRelayBack = false;
+  /** Connects the relay now instead of after the backoff; without `force` an attempt already in flight is kept. */
+  private reconnectRelayNow(force: boolean): void {
+    this.resendWhenRelayBack = true;
+    if (!force && !this.reconnect) return;
+    if (this.reconnect) { clearTimeout(this.reconnect); this.reconnect = null; }
+    const attempt = this.connectRelay(), generation = this.generation;
+    // A newer attempt (another network change) takes over from this one, failures included.
+    void attempt.catch(() => { if (generation === this.generation && !this.uplink) this.scheduleReconnect(); });
+  }
+  /** See Transport.relayRoute (the worker reports it to the Desktop with each status snapshot). */
+  relayRoute(): RelayRoute | null { return this.closed ? null : this.transport?.relayRoute?.() ?? null; }
   /**
    * Which members of this account's directory to accept although their certificates are valid: the host's own membership
    * rule on top of the relay's (the Desktop accepts only devices in the account's Device Link device list, so a device
@@ -507,6 +570,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
     if (this.closed || generation !== this.generation) { uplink.close(); return; }
     this.uplink = uplink; this.retryMs = 500;
+    if (this.resendWhenRelayBack) { this.resendWhenRelayBack = false; this.transport?.networkChanged?.(); }
     this.updateDirectory(uplink.devices, true, uplink.delegations ?? []);
     this.options.onDelegationRequests?.(uplink.delegationRequests ?? []);
     uplink.onDatagram((id, data) => this.receiveDatagram?.(id, data));
@@ -537,9 +601,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     } });
   }
   private scheduleReconnect(): void {
-    if (this.closed || this.reconnect) return;
+    if (this.closed || this.reconnect || this.uplink) return;
     this.reconnect = setTimeout(() => {
       this.reconnect = null;
+      // Another attempt (a network change) may have connected meanwhile.
+      if (this.uplink) return;
       void this.connectRelay().catch(() => this.scheduleReconnect());
     }, this.retryMs);
     unrefTimer(this.reconnect); this.retryMs = Math.min(15_000, this.retryMs * 2);

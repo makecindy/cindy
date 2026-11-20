@@ -598,7 +598,8 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
       return {
         session: {
           id: opts.id ?? WORKER_SESSION_ID,
-          agentKind: opts.agentKind,
+          // Orca workers are created on built-in engines only.
+          agentKind: opts.agentKind as AgentKind,
         },
         didInjectOrcaInstructions: true,
         didInjectProjectContext: false,
@@ -651,6 +652,68 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     service: createOrcaWorkerCreationService(deps),
   };
 }
+
+/**
+ * 插件引擎 Worker（docs/plans/acp-plugin-bridge.md 第二期「协作」）：经真实 createWorker 入口建出 agentKind=acp 的
+ * Worker 任务，按插件自己的准入定模型与权限，不读内置模型目录；只在本机、不用 worktree。
+ * 缺口：此前没有任何用例覆盖 acp 分支，接线错了会静默建成 Claude Code Worker 或带上 worktree 才报错。
+ * 最小失败输入：agent=acp + provider_id；再分别带 worktree / execution_device_id / SSH Lead / 已停用的引擎。tier：unit。
+ */
+describe('plugin engine Worker', () => {
+  const PROVIDER = 'acp-plugin:dsh-acp:dsh';
+  const admitted = () => vi.fn(() => ({ model: 'dsh-pro', effort: '', permissionMode: 'bypassPermissions' }));
+
+  it('starts the Worker on the plugin engine the host admitted, without the built-in catalog', async () => {
+    const admit = admitted();
+    const { deps, service } = createDeps({ admitPluginEngineWorker: admit });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+      providerId: PROVIDER, model: 'dsh-pro', workerPermissionMode: 'bypassPermissions',
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    expect(admit).toHaveBeenCalledWith(expect.objectContaining({ providerId: PROVIDER, model: 'dsh-pro' }));
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: PROVIDER, model: 'dsh-pro', permissionMode: 'bypassPermissions', fastMode: false,
+      // The bootstrap gives a plugin-engine Worker its role instructions from these.
+      vendorOptions: expect.objectContaining({ orcaRole: 'worker', orcaWorkerId: 'worker-1', orcaLeadSessionId: 'lead-1' }),
+    }));
+    expect(deps.addOrUpdateWorker).toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'a worktree', params: { worktree: { sourceBranch: 'main' } }, lead: {} },
+    { name: 'another computer', params: { executionDeviceId: 'desk-b' }, lead: {} },
+    { name: 'an SSH Lead', params: {}, lead: { remoteHostId: 'box' } },
+  ])('refuses $name before starting anything', async ({ params, lead }) => {
+    const admit = admitted();
+    const base = await createDeps().deps.getLeadSessionRow('lead-1');
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admit,
+      getLeadSessionRow: vi.fn(async () => ({ ...base!, ...lead })),
+      // A host that can make worktrees: the refusal must come from the plugin-engine rule itself.
+      createWorkerWorktree: vi.fn(async () => { throw new Error('must not create a worktree'); }),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER, ...params,
+    } as OrcaWorkerCreateParams);
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: expect.stringContaining('plugin engine') });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+  });
+
+  it('reports the plugin refusal (turned off or removed) and creates nothing', async () => {
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: vi.fn(() => { throw new Error('插件已停用或卸载'); }),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER,
+    });
+    expect(result).toEqual({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE', message: '插件已停用或卸载' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+});
 
 describe('Orca worker working directory', () => {
   const params: OrcaWorkerCreateParams = {
@@ -867,7 +930,7 @@ describe('OrcaWorkerCreationService', () => {
       bootstrapSession: vi.fn(async (opts: MakerSessionCreateOpts) => {
         order.push('bootstrap');
         return {
-          session: { id: opts.id ?? WORKER_SESSION_ID, agentKind: opts.agentKind },
+          session: { id: opts.id ?? WORKER_SESSION_ID, agentKind: opts.agentKind as AgentKind },
           didInjectOrcaInstructions: true,
           didInjectProjectContext: false,
         };

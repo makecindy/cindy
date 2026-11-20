@@ -381,6 +381,42 @@ describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => 
     expect(host.textContent).toContain(i18n.t(wechatKey));
     expect(host.textContent).not.toContain(i18n.t(genericKey));
   });
+
+  // #10301, unit in every locale: 电脑端 Codex 已登录,但 Windows 普通权限下建不出指向
+  // 那份凭证的共享链接,宿主把稳定 reason 包在 LAZY_CREATE_FAILED 里送到手机端。文案要说清
+  // 卡点与能执行的动作 —— 未分类摘要只会叫人重新登录,而重登解决不了链接权限。
+  it('explains an unreachable shared Codex login instead of an unclassified failure', async () => {
+    await i18n.changeLanguage(locale);
+    const error =
+      'LAZY_CREATE_FAILED: codex not authenticated: codex_shared_auth_link_unavailable';
+    const key = 'deviceLink.agentAuth.sharedLinkUnavailable';
+    const reason = 'codex_shared_auth_link_unavailable';
+    expect(i18n.exists(key)).toBe(true);
+    const localized = i18n.t(key, { agent: 'Codex', reason });
+    expect(localized).not.toBe(i18n.t('deviceLink.agentAuth.default', { agent: 'Codex', reason }));
+    expect(localized).not.toContain(reason);
+    const [historical] = normalizeRemoteMessages([row(error)]);
+    expect(historical.body).toBe(localized);
+    expect(historical.rawError).toBe(error);
+    await act(async () => root.render(<InlineQueueSection
+      projection={{ error, errorRetryText: 'original' } as InputProjection}
+      onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+    expect(host.textContent).toContain(localized);
+    expect(host.textContent).not.toContain(reason);
+    // 电脑上把链接权限修好就能重试：这条不是「登录失效」，历史错误提示条必须留着「重试」
+    // 按钮，用户修好权限后才有地方再试一次（#10301 review P2）。
+    const state = resolveSessionTailBanner({
+      messages: [row(error)], session: null, projection: { error: null, credentialSwitchWait: null },
+      isSessionStreaming: false, continuationInFlight: false, sessionMetadataSyncedForConnection: true,
+      interruptAcked: false, hiddenErrorClientIds: new Set(),
+    });
+    expect(state?.kind === 'error-tail' && state.retryable).toBe(true);
+    expect(state?.kind === 'error-tail' && state.text).toBe(localized);
+    await act(async () => root.render(<SessionTailBanner
+      state={state!} onContinue={vi.fn()} onDismiss={vi.fn()} />));
+    expect(host.textContent).toContain(localized);
+    expect(host.querySelector('[data-testid="session.tailBanner.continue"]')).not.toBeNull();
+  });
 });
 
 // Unit regression: both live and historical mobile errors share this presenter.
@@ -389,7 +425,7 @@ it('localizes bound-account exhaustion and old ambiguous startup errors', async 
   const error = 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000';
   const text = localizeUnclassifiedAgentError(error);
   expect(text).toContain('用量已达上限');
-  expect(text).toContain('不会自动换号');
+  expect(text).not.toContain('不会自动换号');
   expect(text).not.toContain('需要重新登录');
   expect(text).not.toContain('resetAtMs=');
   const [normalized] = normalizeRemoteMessages([row(error)]);

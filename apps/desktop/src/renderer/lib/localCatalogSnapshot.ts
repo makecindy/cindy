@@ -75,8 +75,7 @@ function failed(owner: DataOwnerGeneration, reason: LocalCatalogFailureReason): 
 
 function hasUnavailableSubscription(snapshot: ProvidersSnapshot | null): boolean {
   return snapshot?.providers.some(provider =>
-    (provider.id === 'openai' || provider.id === 'anthropic')
-    && !provider.suspended && !provider.removed && provider.subscriptionReadUnavailable === true) ?? false;
+    !provider.suspended && !provider.removed && provider.subscriptionReadUnavailable === true) ?? false;
 }
 
 /** Main-window lifecycle owns recovery. Never leave polling behind after unmount/HMR. */

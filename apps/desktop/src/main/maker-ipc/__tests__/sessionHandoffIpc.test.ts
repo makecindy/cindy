@@ -89,7 +89,7 @@ describe('maker:session:handoff (receiving computer)', () => {
     const wire = { ...request, sessionId: id, action: 'create', create: { permissionMode: 'ask' } };
     expect(await handle('source-device', wire)).toMatchObject({ ok: true, wakeKind: 'created', targetSessionId: id,
       model: 'destination-default', projectDir: '/destination/project' });
-    expect(rows.get(id)).toMatchObject({ permissionMode: 'ask', agentKind: 'codex', agentDeviceId: null,
+    expect(rows.get(id)).toMatchObject({ title: 'hello', permissionMode: 'ask', agentKind: 'codex', agentDeviceId: null,
       workingDir: '/destination/project', workspaceKind: 'project' });
     expect(rows.get(id)).not.toHaveProperty('orcaRemoteLead');
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: id, forceQueue: true,
@@ -323,10 +323,11 @@ describe('maker:session:handoff (receiving computer)', () => {
       targetTitle: null,
       targetLastUserSendAt: null,
     }));
-    registerSessionHandoffIpc({ send, validate: async () => true });
+    const create = createRemoteSessionOpener(creationFixture().deps);
+    registerSessionHandoffIpc({ send, create, refineTitle: vi.fn(), validate: async () => true });
     const handler = handlers.get(DL_SESSION_HANDOFF_CHANNEL)!;
-    const within = (context: Partial<DeviceLinkInvokeContext>) =>
-      runDeviceLinkInvokeContext(context as DeviceLinkInvokeContext, () => handler({}, request));
+    const within = (context: Partial<DeviceLinkInvokeContext>, value: unknown = request) =>
+      runDeviceLinkInvokeContext(context as DeviceLinkInvokeContext, () => handler({}, value));
     setRemoteBotSessionLookup(async () => 'ordinary');
     try {
       // 本机 renderer、共享任务对端、借其它 channel 的上下文都不行。
@@ -342,6 +343,8 @@ describe('maker:session:handoff (receiving computer)', () => {
         within({ controllerDeviceId: 'device-A', channel: 'maker:send' }),
       ).rejects.toThrow('authorized device link');
       expect(send).not.toHaveBeenCalled();
+      expect(await within({ controllerDeviceId: 'device-A', channel: DL_SESSION_HANDOFF_CHANNEL },
+        { action: 'task-action-capability' })).toMatchObject({ ordinaryCreateVersion: 1, ordinaryCreateAutoTitle: 1 });
       expect(
         await within({ controllerDeviceId: 'device-A', channel: DL_SESSION_HANDOFF_CHANNEL }),
       ).toMatchObject({ ok: true, wakeKind: 'queued' });

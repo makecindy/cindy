@@ -123,6 +123,7 @@ export interface AgentCapabilities {
    * 到达时无法安全关联后续模型写入。
    */
   supportsSessionAgentSwitchCas?: boolean;
+  supportsRemoteModelWindowRebuild?: boolean;
   supportsQueueHeadRetry?: boolean;
   /**
    * 被控端是否支持在开启 Orca Team 时显式设置 Worker 默认权限。
@@ -316,6 +317,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !value.permissionModes.every(isNamedDescriptor) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
+    !isOptionalBoolean(value.supportsRemoteModelWindowRebuild) ||
     !isOptionalBoolean(value.supportsQueueHeadRetry) ||
     !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
     !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
