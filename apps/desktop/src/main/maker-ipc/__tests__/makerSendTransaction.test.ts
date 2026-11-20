@@ -54,6 +54,7 @@ import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
 import { resetClaudeUserInvocableCommandCache } from '../claudeSlashCommandGuard';
 import { createMakerSteerTransaction } from '../makerSteerTransaction';
 import { registerSessionSubscriptionAccount } from '../../subscription-accounts/session';
+import * as dbCurrent from '../../localDb/client/current.js';
 import { createRuntimePluginControl } from '../../cindy-brain/runtimeControl.js';
 import { createRuntimeContextProviders } from '../../cindy-brain/runtimeContext.js';
 import { createTaskRuntimePlugins } from '../runtimePlugins.js';
@@ -3777,6 +3778,33 @@ describe('mobile client prompt note', () => {
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
+  });
+
+  // Unit / #11777: Pi treats a path as ordinary text. Empty command ranges
+  // should preserve its reply quote even though other notes skip slash inputs.
+  it('preserves the reply quote for Pi text beginning with a path', async () => {
+    const session = createSession({ agentKind: 'pi' });
+    const owner: dbCurrent.CurrentDbClientSnapshot = { client: {} as never, userId: 'owner-1', clientEpoch: 1 };
+    const currentOwner = vi.spyOn(dbCurrent, 'getCurrentDbClientSnapshot').mockReturnValue(owner);
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      readReplyQuoteNote: async () => ({
+        text: '[引用说明] original request', imageUrls: [], sourceSessionId: 'other-session', owner,
+      }),
+    });
+    const text = '/tmp/report.txt please review';
+    try {
+      await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', text, undefined, {
+        fromMobileClient: true,
+        persistUserMessage: {
+          clientId: 'pi-path', content: JSON.stringify({ text, slashCommandRanges: [] }),
+        },
+      });
+    } finally {
+      currentOwner.mockRestore();
+    }
+
+    expect(session.send).toHaveBeenLastCalledWith('[引用说明] original request\n\n' + text, expect.anything());
   });
 
   it('keeps the mobile note for a slash command that is not installed', async () => {

@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from 'vitest';
 
 import {
   extractSlashCommandName,
@@ -40,6 +40,19 @@ function writeCommand(name: string): void {
   const dir = path.join(workDir, '.claude', 'commands');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, `${name}.md`), `# ${name}\n`, 'utf8');
+}
+
+function linkDirectory(target: string, link: string, { skip }: TestContext): void {
+  try {
+    // Windows junctions do not require developer mode or symbolic-link privileges.
+    fs.symlinkSync(target, link, 'junction');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EPERM' || code === 'ENOTSUP' || code === 'EOPNOTSUPP' || code === 'ENOSYS') {
+      skip();
+    }
+    throw error;
+  }
 }
 
 beforeEach(() => {
@@ -112,7 +125,7 @@ describe('resolveClaudeUserInvocableCommandNames', () => {
     expect(names.size).toBe(0);
   });
 
-  it('软链工作目录按真实项目发现命令,不读软链外的无关目录', async () => {
+  it('软链工作目录按真实项目发现命令,不读软链外的无关目录', async (context) => {
     const realRepo = path.join(fixtureRoot, 'real-repo');
     const nested = path.join(realRepo, 'packages', 'app');
     const outer = path.join(fixtureRoot, 'outer');
@@ -122,7 +135,7 @@ describe('resolveClaudeUserInvocableCommandNames', () => {
     writeSkill('linked-command', '');
     writeSkill('wrong-command', '', path.join(outer, '.claude'));
     const link = path.join(outer, 'link');
-    fs.symlinkSync(nested, link, 'dir');
+    linkDirectory(nested, link, context);
 
     const names = await resolveClaudeUserInvocableCommandNames(link, '/linked-command');
 
@@ -132,7 +145,7 @@ describe('resolveClaudeUserInvocableCommandNames', () => {
 
   // Unit / #11637: the runtime walks to the nearest Git root even if a linked
   // working directory points more than 16 levels into the project.
-  it('finds the nearest Git root from a deeply nested linked workdir', async () => {
+  it('finds the nearest Git root from a deeply nested linked workdir', async (context) => {
     const outerRepo = path.join(fixtureRoot, 'outer-repo');
     const repo = path.join(outerRepo, 'worktree');
     const nested = path.join(repo, ...Array<string>(16).fill('sub'));
@@ -142,7 +155,7 @@ describe('resolveClaudeUserInvocableCommandNames', () => {
     writeSkill('worktree-command', '', path.join(repo, '.claude'));
     writeSkill('outer-command', '', path.join(outerRepo, '.claude'));
     const link = path.join(fixtureRoot, 'link');
-    fs.symlinkSync(nested, link, 'junction');
+    linkDirectory(nested, link, context);
 
     const names = await resolveClaudeUserInvocableCommandNames(link, '/worktree-command');
 
@@ -152,14 +165,14 @@ describe('resolveClaudeUserInvocableCommandNames', () => {
 
   // Unit / #11637: a linked Skill is discoverable, but linked namespace folders
   // are not traversed by the runtime scanner.
-  it('accepts a linked Skill without scanning a linked namespace', async () => {
+  it('accepts a linked Skill without scanning a linked namespace', async (context) => {
     const external = path.join(fixtureRoot, 'external');
     const skills = path.join(workDir, '.claude', 'skills');
     fs.mkdirSync(skills, { recursive: true });
     writeSkill('linked-skill', '', external);
-    fs.symlinkSync(path.join(external, 'skills', 'linked-skill'), path.join(skills, 'linked-skill'), 'junction');
+    linkDirectory(path.join(external, 'skills', 'linked-skill'), path.join(skills, 'linked-skill'), context);
     writeSkill('outside-command', '', path.join(external, 'namespace'));
-    fs.symlinkSync(path.join(external, 'namespace', 'skills'), path.join(skills, 'linked-namespace'), 'junction');
+    linkDirectory(path.join(external, 'namespace', 'skills'), path.join(skills, 'linked-namespace'), context);
 
     const names = await resolveClaudeUserInvocableCommandNames(workDir, '/linked-skill');
 

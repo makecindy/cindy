@@ -1629,8 +1629,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             },
           )
         : null;
-      // 引用说明同样排在用户消息前面:命令那一轮不能带它,否则命令又被挤到中间。
-      const replyQuoteNote = isOrdinaryUserTurn && allowsEnvironmentNotes
+      // Claude commands must lead the input. Other engines keep the existing
+      // ordinary-turn quote rule, including Pi text that starts with a path.
+      const replyQuoteNote = isOrdinaryUserTurn && (sess.agentKind !== 'claude-code' || allowsEnvironmentNotes)
         ? ((await deps.readReplyQuoteNote?.(sessionId, typeof reconcilePersistContent === 'string' ? reconcilePersistContent : undefined).catch(() => null)) ?? null)
         : null;
       const withReplyQuoteNote = replyQuoteNote
