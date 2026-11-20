@@ -148,8 +148,28 @@ export function builtInSkillDescriptors(
   }
 }
 
-/** List discovery yields during full content verification, without caching trust. */
+const pendingBuiltInSkillVerifications = new Map<string, Promise<BuiltInSkillDescriptor[]>>();
+
+/** Overlapping discovery shares verification, never completed trust or mutable results. */
 export async function builtInSkillDescriptorsAsync(
+  userDataDir: string,
+  appDataDir?: string,
+): Promise<BuiltInSkillDescriptor[]> {
+  // Profile projections are part of the result even when the bundle is shared.
+  const key = JSON.stringify([userDataDir, appDataDir ?? null]);
+  let pending = pendingBuiltInSkillVerifications.get(key);
+  if (!pending) {
+    pending = verifyBuiltInSkillDescriptors(userDataDir, appDataDir).finally(() => {
+      if (pendingBuiltInSkillVerifications.get(key) === pending) {
+        pendingBuiltInSkillVerifications.delete(key);
+      }
+    });
+    pendingBuiltInSkillVerifications.set(key, pending);
+  }
+  return (await pending).map(descriptor => ({ ...descriptor }));
+}
+
+async function verifyBuiltInSkillDescriptors(
   userDataDir: string,
   appDataDir?: string,
 ): Promise<BuiltInSkillDescriptor[]> {

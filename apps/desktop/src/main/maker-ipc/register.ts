@@ -8028,11 +8028,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return {
           success: true,
           ...result,
-          skills: await markCindyOfficialSkills(activeCindyBuiltInAgentSkills(
-            result.skills,
-            descriptors!,
-            (source) => !disabled!.has(skillActivationKey(source)),
-          ), skillParams.remoteHostId),
+          skills: await measureTraceOperation('maker:list-agent-skills:official-mark',
+            () => markCindyOfficialSkills(activeCindyBuiltInAgentSkills(
+              result.skills,
+              descriptors!,
+              (source) => !disabled!.has(skillActivationKey(source)),
+            ), skillParams.remoteHostId)),
         };
       } catch (err) {
         return toAgentSkillListFailure(err, {

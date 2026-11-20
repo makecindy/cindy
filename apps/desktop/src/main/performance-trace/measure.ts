@@ -11,6 +11,7 @@ export const TRACE_OPERATIONS = new Set([
   'maker:list-agent-skills:global-assets',
   'maker:list-agent-skills:scan',
   'maker:list-agent-skills:identity',
+  'maker:list-agent-skills:official-mark',
   'maker:list-customizations',
   // Screenshot backend/fallback diagnostics: static labels, no screen contents,
   // window titles, display identifiers or raw color profiles.
