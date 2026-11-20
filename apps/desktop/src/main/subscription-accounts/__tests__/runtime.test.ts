@@ -1319,7 +1319,7 @@ describe('pooled Claude model discovery', () => {
       expect(await refreshSubscriptionPoolClaudeModels()).toBe(false);
       // 2026-11-20: the picker keeps the last confirmed list with its time while the account is
       // unreadable; the routing catalog still requires a current sign-in.
-      expect(readSubscriptionPoolClaudeModels()?.map(m => m.id)).toEqual(['claude-owned']);
+      expect(readSubscriptionPoolClaudeModels('anthropic', { includeLastConfirmed: true })?.map(m => m.id)).toEqual(['claude-owned']);
       expect(lastConfirmedSubscriptionModelsAt('anthropic')).toEqual(expect.any(Number));
       expect(readSubscriptionPoolClaudeModels('anthropic', { includeBoundAccounts: true })).toEqual([]);
       await refreshSubscriptionPool('anthropic', true);
@@ -6258,7 +6258,8 @@ describe('unreachable account service', () => {
     // An unreadable account with a saved list must leave room for a healthy fallback.
     expect(hasConnectedSubscriptionPool('openai')).toBe(false);
     expect(hasConnectedSubscriptionPool('openai', { includeLastConfirmed: true })).toBe(true);
-    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-kept']);
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })?.map(m => m.id)).toEqual(['gpt-kept']);
     expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
     expect(hasConnectedSubscriptionPool('openai', { includeBoundAccounts: true })).toBe(false);
@@ -6289,7 +6290,7 @@ describe('unreachable account service', () => {
     await refreshSubscriptionPool('openai', true);
     await refreshSubscriptionPoolCodexModels();
     expect(hasConnectedSubscriptionPool('openai', { includeLastConfirmed: true })).toBe(true);
-    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-saved']);
+    expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })?.map(m => m.id)).toEqual(['gpt-saved']);
     expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
 
     h.read.mockResolvedValue({ authenticated: false });
@@ -6300,7 +6301,7 @@ describe('unreachable account service', () => {
     await refreshSubscriptionPool('openai', true);
     await refreshSubscriptionPoolCodexModels();
     expect(hasConnectedSubscriptionPool('openai')).toBe(false);
-    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })).toEqual([]);
   });
 
   it('does not invent a sign-in for an account that was never confirmed', async () => {

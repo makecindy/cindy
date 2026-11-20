@@ -880,7 +880,7 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterLegacyGptContextProfiles(projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog()));
+  return filterLegacyGptContextProfiles(projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog(), false, true));
 }
 
 function getDesktopSelectableBaseCatalog(): Catalog {
@@ -917,10 +917,10 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
 }
 
 /** Apply account membership to both selectable and full routing snapshots. */
-function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false): Catalog {
+function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog: boolean, includeLastConfirmed = false): Catalog {
   return projectSubscriptionPoolCatalogWith(catalog, { readPool, codexAccountState, readSubscriptionPoolCodexModels,
     getActiveCatalogWithCodexModels, readSubscriptionPoolClaudeModels, getActiveCatalogWithClaudeModels,
-    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog);
+    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog, includeLastConfirmed);
 }
 
 function getDesktopProviderModelAccessCatalog(): Catalog {
@@ -936,16 +936,6 @@ setMergedProviderPoolResolver((providerId) => {
   const ref = merged ? resolveSubscriptionPoolProvider(providerId) : null;
   return ref && merged ? accountProviderId(ref.kind, merged) : undefined;
 });
-
-function subscriptionPoolCatalogConnected(
-  providerId: string,
-  options?: { includeBoundAccounts?: boolean },
-): boolean {
-  return hasConnectedSubscriptionPool(providerId, {
-    includeBoundAccounts: options?.includeBoundAccounts,
-    includeLastConfirmed: !options?.includeBoundAccounts,
-  });
-}
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {
@@ -1002,15 +992,15 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       };
     },
     getCatalog: getDesktopSelectableBaseCatalog,
-    projectCatalog: (catalog, routingCatalog) => {
-      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog);
+    projectCatalog: (catalog, routingCatalog, includeLastConfirmed) => {
+      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog, includeLastConfirmed);
       return routingCatalog ? projected : filterLegacyGptContextProfiles(projected);
     },
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
-      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts }) => {
+      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts, includeLastConfirmed }) => {
         if (readPool('anthropic')) {
           if (!snapshotOnly) {
             await refreshSubscriptionPoolsOfKind('anthropic');
@@ -1020,7 +1010,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
             if (waitForDiscovery) await discovery;
             else void discovery.catch(() => log.warn('Background Claude model discovery unavailable'));
           }
-          return subscriptionPoolCatalogConnected('anthropic', { includeBoundAccounts });
+          return hasConnectedSubscriptionPool('anthropic', { includeBoundAccounts, includeLastConfirmed });
         }
         if (snapshotOnly) return hasClaudeNativeLogin();
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
@@ -1053,14 +1043,14 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
       // 凭证硬链进 codex-home 并为首个 owner 补写绑定 —— 判据不是「有没有发上游请求」,而是
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
-      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts }) => {
+      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts, includeLastConfirmed }) => {
         if (readPool('openai')) {
           if (!snapshotOnly) {
             // Created providers of the kind are read with it (their connection state comes from it).
             await refreshSubscriptionPoolsOfKind('openai');
             await refreshSubscriptionPoolCodexModels();
           }
-          return subscriptionPoolCatalogConnected('openai', { includeBoundAccounts });
+          return hasConnectedSubscriptionPool('openai', { includeBoundAccounts, includeLastConfirmed });
         }
         return allowSideEffects ? desktopCodexAuthAdapter.hasCodexOAuthLogin() : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly();
       },
@@ -1072,8 +1062,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     codexAccountConnected: (providerId, options) => resolveSubscriptionPoolProvider(providerId)
-      ? subscriptionPoolCatalogConnected(providerId, options) : codexAccountState(providerId).authenticated,
-    subscriptionPoolConnected: subscriptionPoolCatalogConnected,
+      ? hasConnectedSubscriptionPool(providerId, options) : codexAccountState(providerId).authenticated,
+    subscriptionPoolConnected: hasConnectedSubscriptionPool,
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
     subscriptionModelsConfirmedAt: lastConfirmedSubscriptionModelsAt,
     subscriptionReadUnavailable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)

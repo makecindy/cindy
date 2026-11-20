@@ -7284,7 +7284,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 便于脱 Electron + 内存 db 单测。CRUD 成功后刷新 active-catalog 并广播 PROVIDER_CHANGED，
   // 让设置页列表 + 对话模型选择器（各 useProviders 实例）live 刷新。
   configureProviderModelAutoRefresh({
-    listProviders: (opts) => getDesktopProviderService().listProviders(opts),
+    listProviders: (opts) => getDesktopProviderService().listProviders({ ...opts, includeLastConfirmed: true }),
     getScopeKey: () => getActiveAppSession().generation,
     // 通知唯一出口是 active-catalog changedListener(capabilities 先对齐再广播);
     // 这里不再补发 PROVIDER_CHANGED——no-op/拒收刷新就该是 0 次广播。

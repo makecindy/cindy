@@ -8,6 +8,8 @@ import { providerShareGuestPeer } from '@cindy/device-link';
 import { describe, expect, it, vi } from 'vitest';
 
 import * as activeCatalogForHostParity from '../active-catalog.js';
+import { resolveAutomaticImSettings } from '../../../shared/imAutomaticModel.js';
+import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
 import { readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
 import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
 import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
@@ -55,6 +57,7 @@ const h = vi.hoisted(() => ({
   /** Providers Cindy created for subscription accounts, and the providers whose accounts were read. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   refreshed: new Set<string>(),
+  retainedOpenAiModels: null as import('@cindy/model-providers').CatalogModel[] | null,
   poolModels: null as import('@cindy/model-providers').CatalogModel[] | null,
   poolModelsByProvider: {} as Record<string, import('@cindy/model-providers').CatalogModel[]>,
   boundPoolModelsByProvider: {} as Record<string, import('@cindy/model-providers').CatalogModel[]>,
@@ -102,7 +105,8 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
   return {
     ...actual,
     // A created provider is connected once its own accounts were read (the built-ins follow the pool).
-    hasConnectedSubscriptionPool: (id: string, options?: { includeBoundAccounts?: boolean }) => h.poolConnectionByProvider[id]
+    hasConnectedSubscriptionPool: (id: string, options?: { includeBoundAccounts?: boolean; includeLastConfirmed?: boolean }) =>
+      id === 'openai' && h.retainedOpenAiModels ? options?.includeLastConfirmed === true : h.poolConnectionByProvider[id]
       ? h.poolConnectionByProvider[id][options?.includeBoundAccounts ? 'bound' : 'serving']
       : (h.created[id] || h.pool?.legacyCodexAccounts?.[id]
         ? h.refreshed.has(id) || h.legacyLoggedIn.has(id) : Boolean(h.pool && !h.pool.disconnected)),
@@ -114,8 +118,9 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
     refreshSubscriptionPoolCodexModels: async () => undefined,
     refreshSubscriptionPoolClaudeModels: h.claudeModelRefresh,
     readSubscriptionPoolClaudeModels: () => null,
-    readSubscriptionPoolCodexModels: (providerId = 'openai', options?: { includeBoundAccounts?: boolean }) =>
-      (options?.includeBoundAccounts ? h.boundPoolModelsByProvider[providerId] : undefined)
+    readSubscriptionPoolCodexModels: (providerId = 'openai', options?: { includeBoundAccounts?: boolean; includeLastConfirmed?: boolean }) =>
+      (providerId === 'openai' && h.retainedOpenAiModels ? options?.includeLastConfirmed ? h.retainedOpenAiModels : [] : undefined)
+      ?? (options?.includeBoundAccounts ? h.boundPoolModelsByProvider[providerId] : undefined)
       ?? h.poolModelsByProvider[providerId] ?? h.poolModels,
   };
 });
@@ -598,6 +603,38 @@ describe('provider catalog realm reload', () => {
       setActiveCatalog(previous);
     }
   });
+  // PR #11754, unit: the default provider list feeds automatic IM and Hook routing.
+  // One unreadable subscription with retained membership can otherwise preempt a live source.
+  it('keeps offline subscription models visible without routing automatic IM to them', async () => {
+    const previous = getActiveCatalog();
+    const openai = BUNDLED_CATALOG.providers.find(provider => provider.id === 'openai')!;
+    const retained = { id: 'gpt-retained', name: 'Retained', contextWindow: 128_000, efforts: [], defaultEffort: null };
+    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    h.retainedOpenAiModels = [retained];
+    try {
+      setActiveCatalog({
+        ...BUNDLED_CATALOG,
+        providers: [openai, { ...openai, id: 'healthy', auth: { method: 'none' },
+          models: { codex: [{ ...retained, id: 'gpt-healthy' }] } }],
+      });
+      const service = getDesktopProviderService({ allowSideEffects: false });
+      const execution = await service.listProviders({ allowSideEffects: true });
+      expect(execution.find(provider => provider.id === 'openai')?.connected).toBe(false);
+      expect(resolveAutomaticImSettings(IM_DEFAULT_SETTINGS, execution, { agentKind: 'codex' })?.agents.codex)
+        .toMatchObject({ model: 'gpt-healthy', providerId: 'healthy' });
+
+      const display = await service.listProviders({ includeLastConfirmed: true });
+      expect(display.find(provider => provider.id === 'openai')).toMatchObject({
+        connected: true, models: { codex: [expect.objectContaining({ id: 'gpt-retained' })] },
+      });
+    } finally {
+      h.retainedOpenAiModels = null;
+      h.pool = null;
+      h.refreshed.clear();
+      setActiveCatalog(previous);
+    }
+  });
+
   // Review regression (2026-11-13, subscription-account-pools.md 合并与拿出由用户决定): a created
   // provider counts as connected from reading its own accounts, but listing providers read only the
   // built-in pool, so a created GPT provider stayed out of the new-task picker until its settings

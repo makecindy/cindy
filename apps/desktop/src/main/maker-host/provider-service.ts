@@ -30,6 +30,12 @@ import {
 
 const log = createLogger('provider-service');
 
+interface SubscriptionConnectionOptions {
+  /** Derived from a host-provided full catalog for existing bound task routes. */
+  includeBoundAccounts?: boolean;
+  includeLastConfirmed?: boolean;
+}
+
 /**
  * 读取连接态时是否允许附带**本机副作用**（绑定自愈、随之而来的清单拉取）。
  *
@@ -37,12 +43,10 @@ const log = createLogger('provider-service');
  * 通道（`maker:provider:list`）同时服务于 device-link 与可能不受信的渲染上下文，所以副作用
  * 只在调用方明确是「本机主页面」时才放行；其余一律降级为纯读（PR #548 review）。
  */
-export interface ConnectionReadOptions {
+export interface ConnectionReadOptions extends SubscriptionConnectionOptions {
   allowSideEffects: boolean;
   /** Host-only snapshot read: never refresh CLI status or load account presentation. */
   snapshotOnly?: boolean;
-  /** Derived only from a host-provided full catalog, for existing bound task routes. */
-  includeBoundAccounts?: boolean;
   /**
    * Wait for post-claim model discovery before materializing this snapshot.
    * This is an internal readiness hint for routing callers; ordinary provider reads
@@ -52,6 +56,9 @@ export interface ConnectionReadOptions {
 }
 
 export interface ProviderListOptions extends ConnectionReadOptions {
+  /** Host-owned presentation and discovery reads can show the last confirmed subscription.
+   * Full catalog overrides always require current authentication. */
+  includeLastConfirmed?: boolean;
   /**
    * Internal catalog override for policy consumers that need the routing truth
    * rather than the user-selectable projection. Never sourced from IPC input.
@@ -89,7 +96,7 @@ export interface ProviderServiceDeps {
   /** 返回当前生效目录（同步）。桌面端注入 active-catalog 的 getActiveCatalog。 */
   getCatalog: () => Catalog;
   /** Live membership precedes access overrides. Explicit/lazy routing reads retain history-only models. */
-  projectCatalog?: (catalog: Catalog, routingCatalog: boolean) => Catalog;
+  projectCatalog?: (catalog: Catalog, routingCatalog: boolean, includeLastConfirmed: boolean) => Catalog;
   /** 连接状态判定器。 */
   connection: ProviderConnectionReaders;
   /**
@@ -97,9 +104,9 @@ export interface ProviderServiceDeps {
    * （生产 = generic-oauth 的 hasGenericOAuthLogin）。缺省 = 一律未连接。
    */
   genericOAuthConnected?: (providerId: string) => boolean;
-  codexAccountConnected?: (providerId: string, options?: { includeBoundAccounts?: boolean }) => boolean;
+  codexAccountConnected?: (providerId: string, options?: SubscriptionConnectionOptions) => boolean;
   /** A provider Cindy created for subscription accounts: one of its own accounts is signed in. */
-  subscriptionPoolConnected?: (providerId: string, options?: { includeBoundAccounts?: boolean }) => boolean;
+  subscriptionPoolConnected?: (providerId: string, options?: SubscriptionConnectionOptions) => boolean;
   subscriptionAccountConnected?: (providerId: string) => boolean;
   subscriptionReadUnavailable?: (providerId: string) => boolean;
   subscriptionModelsConfirmedAt?: (providerId: string) => number | undefined;
@@ -157,11 +164,15 @@ export interface ProviderService {
  */
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
   async function listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]> {
+    const routingCatalog = Boolean(opts?.getCatalog || opts?.catalog);
+    const includeLastConfirmed = !routingCatalog && opts?.includeLastConfirmed === true;
+    const subscriptionOptions = routingCatalog ? { includeBoundAccounts: true }
+      : includeLastConfirmed ? { includeLastConfirmed: true } : undefined;
     const readOpts: ConnectionReadOptions = {
       allowSideEffects: opts?.allowSideEffects === true && opts?.snapshotOnly !== true,
       snapshotOnly: opts?.snapshotOnly === true,
       waitForDiscovery: opts?.waitForDiscovery === true,
-      ...(opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : {}),
+      ...subscriptionOptions,
     };
     const [xd, anthropic, openai, xai] = await Promise.all([
       Promise.resolve(deps.connection.xd(readOpts)),
@@ -170,7 +181,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       Promise.resolve(deps.connection.xai(readOpts)),
     ]);
     const sourceCatalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
-    const catalog = deps.projectCatalog?.(sourceCatalog, !!(opts?.getCatalog || opts?.catalog)) ?? sourceCatalog;
+    const catalog = deps.projectCatalog?.(sourceCatalog, routingCatalog, includeLastConfirmed) ?? sourceCatalog;
     const connected: ConnectionState = { xd, anthropic, openai, xai };
     for (const p of catalog.providers) {
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
@@ -183,16 +194,14 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       }
       // 为订阅账号新建的供应商（2026-11-13）：自己名下有已登录的账号才算连接。
       else if (p.subscriptionPool) {
-        connected[p.id] = deps.subscriptionPoolConnected?.(p.id,
-          opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : undefined) ?? false;
+        connected[p.id] = deps.subscriptionPoolConnected?.(p.id, subscriptionOptions) ?? false;
       }
       // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
       // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
       else if (p.auth.native === 'claude' || p.auth.native === 'xai') {
         connected[p.id] = deps.subscriptionAccountConnected?.(p.id) ?? false;
       } else if (p.auth.native === 'codex') {
-        connected[p.id] = deps.codexAccountConnected?.(p.id,
-          opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : undefined) ?? false;
+        connected[p.id] = deps.codexAccountConnected?.(p.id, subscriptionOptions) ?? false;
       } else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
         connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
       } else if (isCustomRoutedProvider(p)) {

@@ -182,16 +182,20 @@ function sameCodexModelAccount(snapshot: CodexModelSnapshot | undefined, info: P
   return !!snapshot && (info.accountKey || snapshot.accountKey
     ? !!info.accountKey && snapshot.accountKey === info.accountKey : snapshot.auth === info.auth);
 }
+interface SubscriptionCatalogAccountOptions {
+  includeBoundAccounts?: boolean;
+  includeLastConfirmed?: boolean;
+}
+
 /**
  * The sign-in a provider's connection state and model list may show: the current one, or the
  * last confirmed one while the account cannot be read. Display only; never routes a task.
  */
-function displayedSignIn(
-  info: AccountSnapshot | undefined, options: { includeBoundAccounts?: boolean } = {},
+function subscriptionCatalogSignIn(
+  info: AccountSnapshot | undefined, options: SubscriptionCatalogAccountOptions,
 ): Pick<AccountSnapshot, 'auth' | 'accountKey'> | undefined {
   if (info?.auth.authenticated) return info;
-  // The routing catalog (bound accounts) keeps requiring a current sign-in.
-  return info?.unavailable && !options.includeBoundAccounts ? info.lastConfirmed : undefined;
+  return info?.unavailable && options.includeLastConfirmed && !options.includeBoundAccounts ? info.lastConfirmed : undefined;
 }
 
 interface OwnerRuntime {
@@ -243,7 +247,7 @@ function publishClaudeCatalogChange(state: OwnerRuntime): void {
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
     // Readability is part of the snapshot: an account read that only loses or regains the sign-in
     // still has to reach open pickers, even when the confirmed list itself is unchanged.
-    [providerId, { models: readSubscriptionPoolClaudeModels(providerId), unavailable: hasUnavailableSubscriptionPoolAccount(providerId) }])) : null;
+    [providerId, { models: readSubscriptionPoolClaudeModels(providerId, { includeLastConfirmed: true }), unavailable: hasUnavailableSubscriptionPoolAccount(providerId) }])) : null;
   if (isDeepStrictEqual(state.publishedClaudeCatalog ?? null, models)) return;
   state.publishedClaudeCatalog = models;
   for (const listener of claudeModelListeners) {
@@ -260,7 +264,7 @@ function publishCodexCatalogChange(state: OwnerRuntime, refreshId?: string): voi
   const pool = readPool('openai');
   const providers = new Set(['openai', ...pool?.accounts.map(account => accountProviderId('openai', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
-    [providerId, { models: readSubscriptionPoolCodexModels(providerId), unavailable: hasUnavailableSubscriptionPoolAccount(providerId) }])) : null;
+    [providerId, { models: readSubscriptionPoolCodexModels(providerId, { includeLastConfirmed: true }), unavailable: hasUnavailableSubscriptionPoolAccount(providerId) }])) : null;
   if (isDeepStrictEqual(state.publishedCodexCatalog ?? null, models)) return;
   if (refreshId && models) {
     for (const [providerId, next] of Object.entries(models)) {
@@ -1074,7 +1078,7 @@ function servingAccounts(found: NonNullable<ReturnType<typeof poolFor>>) {
 /** Read-only cached aggregate for provider catalog/auth gates; no account identity leaves it. */
 export function hasConnectedSubscriptionPool(
   providerId: string,
-  options: { includeBoundAccounts?: boolean; includeLastConfirmed?: boolean } = {},
+  options: SubscriptionCatalogAccountOptions = {},
 ): boolean {
   const found = poolFor(providerId);
   if (!found || (found.off && !options.includeBoundAccounts)) return false;
@@ -1086,7 +1090,7 @@ export function hasConnectedSubscriptionPool(
     .some(account => {
       const info = state.cache.get(keyOf(found.kind, account.id));
       // Execution readiness uses the current read. Selectable catalogs can opt into history.
-      const signIn = options.includeLastConfirmed ? displayedSignIn(info, options) : info;
+      const signIn = subscriptionCatalogSignIn(info, options);
       return signIn?.auth.authenticated === true;
     });
 }
@@ -1244,7 +1248,7 @@ export async function refreshSubscriptionPoolClaudeModels(force = false, provide
 /** null preserves existing native metadata before a usable account discovery;
  * [] means there is no authenticated account eligible to publish membership. */
 export function readSubscriptionPoolClaudeModels(
-  providerId = 'anthropic', options: { includeBoundAccounts?: boolean } = {},
+  providerId = 'anthropic', options: SubscriptionCatalogAccountOptions = {},
 ): readonly CatalogModel[] | null {
   const found = poolFor(providerId);
   if (!found || found.kind !== 'anthropic') return null;
@@ -1258,7 +1262,7 @@ export function readSubscriptionPoolClaudeModels(
       || disconnectedFor(found.pool, 'anthropic', account.id)) continue;
     if (account.id === 'default' && !defaultAccountBound('anthropic')) continue;
     if ([...state.logins].some(([key, login]) => key.startsWith('anthropic:') && login.accountId === account.id)) continue;
-    const auth = displayedSignIn(state.cache.get(keyOf('anthropic', account.id)), options)?.auth;
+    const auth = subscriptionCatalogSignIn(state.cache.get(keyOf('anthropic', account.id)), options)?.auth;
     const snapshot = state.claudeModels.get(account.id);
     if (!auth?.authenticated) continue;
     if (!snapshot || !(snapshot.auth === auth || (!!auth.identity && snapshot.auth.identity === auth.identity))
@@ -1274,7 +1278,7 @@ export function readSubscriptionPoolClaudeModels(
   if (models.size === 0 && discoveryUnavailable) return null;
   const next = [...models.values()];
   const catalogs = state.claudeCatalogs ??= new Map();
-  const cacheKey = `${providerId}:${options.includeBoundAccounts ? 'routing' : 'selectable'}`;
+  const cacheKey = `${providerId}:${options.includeBoundAccounts ? 'bound' : options.includeLastConfirmed ? 'display' : 'current'}`;
   const previous = catalogs.get(cacheKey);
   if (previous && previous.length === next.length && next.every((model, index) => previous[index] === model)) return previous;
   catalogs.set(cacheKey, next);
@@ -1449,7 +1453,7 @@ export async function refreshSubscriptionPoolCodexModels(
  * Imported connections are projected separately with their original route authorization.
  */
 export function readSubscriptionPoolCodexModels(
-  providerId = 'openai', options: { includeBoundAccounts?: boolean } = {},
+  providerId = 'openai', options: SubscriptionCatalogAccountOptions = {},
 ): readonly CatalogModel[] | null {
   const found = poolFor(providerId);
   if (!found || found.kind !== 'openai') return null;
@@ -1462,14 +1466,14 @@ export function readSubscriptionPoolCodexModels(
     if (disconnectedFor(found.pool, 'openai', account.id)) continue;
     if ((account.paused && !historical.has(account.id)) || readLegacyCodexProviderId(account.id)) continue;
     if ([...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === account.id)) continue;
-    const shown = displayedSignIn(state.cache.get(keyOf('openai', account.id)), options);
+    const shown = subscriptionCatalogSignIn(state.cache.get(keyOf('openai', account.id)), options);
     const snapshot = state.codexModels.get(account.id);
     if (!shown?.auth.authenticated || !snapshot || !sameCodexModelAccount(snapshot, shown)) continue;
     for (const model of snapshot.models) if (!models.has(model.id)) models.set(model.id, model);
   }
   const next = [...models.values()];
   const catalogs = state.codexCatalogs ??= new Map();
-  const cacheKey = `${providerId}:${options.includeBoundAccounts ? 'routing' : 'selectable'}`;
+  const cacheKey = `${providerId}:${options.includeBoundAccounts ? 'bound' : options.includeLastConfirmed ? 'display' : 'current'}`;
   const previous = catalogs.get(cacheKey);
   if (previous && previous.length === next.length && next.every((model, index) => previous[index] === model)) return previous;
   catalogs.set(cacheKey, next);
@@ -1485,7 +1489,7 @@ export function lastConfirmedSubscriptionModelsAt(providerId: string): number | 
   for (const account of servingAccounts(found)) {
     if (account.paused || disconnectedFor(found.pool, found.kind, account.id)) continue;
     const info = state.cache.get(keyOf(found.kind, account.id));
-    const shown = displayedSignIn(info);
+    const shown = subscriptionCatalogSignIn(info, { includeLastConfirmed: true });
     if (!shown?.auth.authenticated) continue;
     if (found.kind === 'openai') {
       const models = state.codexModels.get(account.id);

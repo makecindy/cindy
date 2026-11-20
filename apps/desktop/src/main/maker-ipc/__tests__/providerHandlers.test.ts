@@ -555,6 +555,7 @@ describe('provider:list IPC handler', () => {
     expect(listProviders).toHaveBeenCalledOnce();
     expect(listProviders).toHaveBeenCalledWith({
       allowSideEffects: false,
+      includeLastConfirmed: true,
     });
   });
 

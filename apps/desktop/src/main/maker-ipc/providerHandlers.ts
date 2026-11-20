@@ -323,7 +323,7 @@ export interface ProviderHandlerDeps {
    * 服务 device-link（合成 event）与可能不受信的渲染上下文，所以默认纯读，只有确认 sender
    * 是本机主页面时才放行副作用（PR #548 review）。
    */
-  listProviders(opts?: { allowSideEffects?: boolean; snapshotOnly?: boolean }): Promise<ProviderView[]>;
+  listProviders(opts?: { allowSideEffects?: boolean; snapshotOnly?: boolean; includeLastConfirmed?: boolean }): Promise<ProviderView[]>;
   /** Synchronous catalog ownership check; injected to keep this IPC module free of Host cycles. */
   isOrganizationManagedProviderId(providerId: string): boolean;
   /**
@@ -1296,6 +1296,7 @@ export function registerProviderHandlers(
       const dataOwnerId = ownerAtIngress?.dataOwnerId ?? null;
       const providers = await deps.listProviders({
         allowSideEffects: trusted,
+        includeLastConfirmed: true,
       });
       assertProviderMutationOwner(ownerAtIngress);
       let modelVisibilityOverrides: Record<string, boolean>;
