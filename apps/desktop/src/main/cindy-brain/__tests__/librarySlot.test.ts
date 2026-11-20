@@ -781,7 +781,36 @@ describe('GhostLibrarySlot', () => {
     expect(fs.existsSync(path.join(defaultRootBase, GHOST_ID, 'a.txt'))).toBe(false);
   });
 
+// Unit fixture: real slot/binding/vault and real disk lifecycle. These two
+  // post-initialization cases must reach disappearance/recovery assertions even
+  // when native helper cold start is unavailable. Native held-fd tests stay real.
+  async function prepareLifecycleFixture(): Promise<ReturnType<typeof vi.fn>> {
+    const custom = path.join(candidate, GHOST_ID);
+    const seed = new LibraryVault({ rootDir: () => custom, ghostId: GHOST_ID });
+    expect(await seed.open()).toMatchObject({ ok: true, state: 'ready' });
+    const init = vi.fn(async () => ({ ok: false as const, code: 'IO' as const }));
+    createVault.mockImplementation((deps: LibraryVaultDeps) => {
+      const metaDir = path.join(deps.rootDir(), '.cindy-library');
+      const read = async (name: string): Promise<string | null> => {
+        try { return await fs.promises.readFile(path.join(metaDir, name), 'utf8'); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+          throw error;
+        }
+      };
+      return new LibraryVault({ ...deps, initCustomTree: init,
+        openExistingCustom: async () => {
+          const meta = await read('meta.json');
+          if (meta === null) return { ok: false as const, code: 'MISSING' as const };
+          return parseExistingStdout('OK\n' + meta + '\n' + ((await read('usage.json')) ?? ''));
+        },
+      });
+    });
+    return init;
+  }
+
   it('cached custom session: missing root stays unavailable without mkdir; same disk recovers; recreated path is binding-moved', async () => {
+    const fixtureInit = await prepareLifecycleFixture();
     const bound = await bindingStore.setBinding(GHOST_ID, candidate);
     expect(bound.ok).toBe(true);
     const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
@@ -833,6 +862,8 @@ describe('GhostLibrarySlot', () => {
     expect(retryWrite.ok).toBe(true);
     expect(fs.existsSync(path.join(customRoot, 'retry.txt'))).toBe(true);
 
+
+    expect(fixtureInit).not.toHaveBeenCalled();
     if (process.platform === 'win32') return;
     const replaced = `${candidate}.replaced`;
     await fs.promises.rename(candidate, replaced);
@@ -849,6 +880,7 @@ describe('GhostLibrarySlot', () => {
   });
 
   it('custom 已 ready 后只丢 ghost 子目录: dispose 后再 open 不得重建空库', async () => {
+    const fixtureInit = await prepareLifecycleFixture();
     const bound = await bindingStore.setBinding(GHOST_ID, candidate);
     expect(bound.ok).toBe(true);
     const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
@@ -868,6 +900,8 @@ describe('GhostLibrarySlot', () => {
     expect(fs.existsSync(path.join(`${customRoot}.parked`, 'keep.txt'))).toBe(true);
     const blocked = await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'empty.txt', content: 'nope' });
     expect(blocked).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+    expect(fixtureInit).not.toHaveBeenCalled();
+
   });
   it('delayed resolveLibraryRoot: stale custom after parent rename is disk-missing without recreating empty library', async () => {
     const bound = await bindingStore.setBinding(GHOST_ID, candidate);
