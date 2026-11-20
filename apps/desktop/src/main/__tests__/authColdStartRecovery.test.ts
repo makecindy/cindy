@@ -255,7 +255,7 @@ function setup(random = 0) {
     loadLoginProviders: loadProviders,
     createAuthClient: () => authClient,
     log: { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
-    readActiveVaultRefreshCandidate: () => null,
+    readActiveVaultRefreshCandidate: vi.fn((): { accountKey: string; realm: string; refreshToken: string } | null => null),
     clearConfirmedDeadRefreshTokens: clear,
     resetActiveAuthRealmToBuild: vi.fn(),
     isPassiveSharedUserDataInstance: vi.fn(() => false),
@@ -1264,6 +1264,31 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
     ]);
     expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
     expect(fresh.clear).not.toHaveBeenCalled();
+  });
+
+  it.each(['projection', 'legacy'] as const)('tries an unrequested %s credential already present at a cross-realm vault handoff', async target => {
+    const fresh = setup();
+    fresh.saved.session = { version: 1, realm: 'cn', refreshToken: 'test-stale-cn' };
+    fresh.useProductionCandidates();
+    fresh.deps.readActiveVaultRefreshCandidate.mockReturnValue({
+      accountKey: ORIGINAL_KEY, realm: 'global', refreshToken: 'test-refresh',
+    });
+    fresh.clear.mockImplementation(async () => {
+      fresh.saved.session = { version: 1, realm: 'global', refreshToken: target === 'projection'
+        ? 'test-handoff-compatibility' : 'test-stale-cn' };
+      if (target === 'legacy') fresh.deps.readSafe.mockReturnValue('test-handoff-compatibility');
+    });
+    fresh.request.mockImplementation(async (token: unknown) => token === 'test-handoff-compatibility'
+      ? fresh.ok
+      : { ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } } });
+    const startup = fresh.start();
+    await vi.advanceTimersByTimeAsync(2_500);
+    await startup;
+    expect(fresh.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    expect(fresh.request.mock.calls.map(([token]: unknown[]) => token)).toEqual([
+      'test-stale-cn', 'test-refresh', 'test-handoff-compatibility',
+    ]);
+    expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
   });
 
   it.each(['absent', 'stale'] as const)('recovers the authoritative vault account with an %s compatibility projection', async projection => {

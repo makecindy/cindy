@@ -3569,7 +3569,7 @@ async function runAuthRefreshWithReplacementRetry(
     realm: AuthRegion;
     withTransientRetry: boolean;
     expectedActiveVaultAccountKey?: string;
-    rejectedRefreshTokens?: ReadonlySet<string>;
+    rejectedRefreshTokens?: Set<string>;
     rateLimitDelayMs?: number;
     onFailure?: (info: RefreshFailureInfo) => void;
   },
@@ -3605,6 +3605,9 @@ async function runAuthRefreshWithReplacementRetry(
         }
       }
       const result = await requestAuthRefresh(refreshToken, opts.realm);
+      if (getRefreshErrorCode(result) === 'INVALID_REFRESH_TOKEN') {
+        opts.rejectedRefreshTokens?.add(refreshToken);
+      }
       if (result.ok || result.status === 0 || (result.status >= 200 && result.status < 300)) {
         uncertainResourceRefreshTokens.set(opts.realm, refreshToken);
       }
@@ -3655,27 +3658,30 @@ async function runAuthRefreshWithReplacementRetry(
     );
   }
 
+  const uncertainRefreshToken = uncertainResourceRefreshTokens.get(opts.realm);
   if (
     run.failureAction?.kind === 'definitive-failure' &&
     getRefreshErrorCode(run.result) === 'INVALID_REFRESH_TOKEN' &&
-    uncertainResourceRefreshTokens.get(opts.realm) === run.requestedToken
+    uncertainRefreshToken && run.rejectedTokens.includes(uncertainRefreshToken)
   ) {
     try {
       const pair = await recoverActiveResourceSession(
-        opts.realm, run.requestedToken, expectedActiveVaultAccountKey,
+        opts.realm, uncertainRefreshToken, expectedActiveVaultAccountKey,
       );
       if (pair)
         return {
           ...run,
+          requestedToken: uncertainRefreshToken,
           result: { ok: true, status: 200, data: pair },
           failureAction: undefined,
-          expectedVaultRefreshToken: run.requestedToken,
+          expectedVaultRefreshToken: uncertainRefreshToken,
           expectedActiveVaultAccountKey,
         };
     } catch (error) {
       if (!(error instanceof AuthApiError)) throw error;
       return {
         ...run,
+        requestedToken: uncertainRefreshToken,
         expectedActiveVaultAccountKey,
         result: {
           ok: false,
@@ -5085,19 +5091,14 @@ async function runColdStartRefreshFlow(
   storedRealm: AuthRegion,
   ownershipRecovery: {
     attemptedTokens?: ReadonlySet<string>;
+    rejectedRefreshTokens?: ReadonlySet<string>;
     expectedActiveVaultAccountKey?: string;
     hopsRemaining?: number;
   } = {},
 ): Promise<AuthState> {
   const attemptedOwnershipTokens = new Set(ownershipRecovery.attemptedTokens);
   attemptedOwnershipTokens.add(storedToken);
-  if (ownershipRecovery.expectedActiveVaultAccountKey) {
-    // This entry already selected the vault over its pre-existing projections.
-    // Ignore those old values, while still admitting later compatibility writes.
-    for (const token of readStoredRefreshTokenCandidates(storedRealm)) {
-      if (token && token !== storedToken) attemptedOwnershipTokens.add(token);
-    }
-  }
+  const rejectedRefreshTokens = new Set(ownershipRecovery.rejectedRefreshTokens);
   const epochAtStart = authStateEpoch;
   let expectedActiveVaultAccountKey = ownershipRecovery.expectedActiveVaultAccountKey;
   /**
@@ -5178,13 +5179,12 @@ async function runColdStartRefreshFlow(
         realm: storedRealm,
         withTransientRetry: false,
         expectedActiveVaultAccountKey,
-        rejectedRefreshTokens: attemptedOwnershipTokens,
+        rejectedRefreshTokens,
       });
       // Replacement recovery may have consumed a newer credential. Keep this
       // attempt's deadline and failure history attached to the actual request,
       // including when a paused flow resumes from that credential on disk.
       expectedActiveVaultAccountKey = run.expectedActiveVaultAccountKey ?? expectedActiveVaultAccountKey;
-      for (const token of run.rejectedTokens) attemptedOwnershipTokens.add(token);
       storedToken = run.requestedToken;
       retry.refreshToken = storedToken;
       // A successful rotation must become durable even when publication was
@@ -5272,6 +5272,7 @@ async function runColdStartRefreshFlow(
             nextActiveCandidate.realm,
             {
               attemptedTokens: attemptedOwnershipTokens,
+              rejectedRefreshTokens,
               expectedActiveVaultAccountKey: nextActiveCandidate.accountKey,
               hopsRemaining: hopsRemaining - 1,
             },
@@ -5330,6 +5331,7 @@ async function runColdStartRefreshFlow(
           nextActiveCandidate.realm,
           {
             attemptedTokens: attemptedOwnershipTokens,
+            rejectedRefreshTokens,
             expectedActiveVaultAccountKey: nextActiveCandidate.accountKey,
             hopsRemaining: hopsRemaining - 1,
           },
