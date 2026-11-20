@@ -73,9 +73,11 @@ function selectPlanText(content) {
       const gap = native.slice(previous.start + previous.text.length, roots[i].start);
       const restarts = i - start >= 2 && i + 1 < roots.length
         && Number(roots[i].text.trim().match(/^\d+/)[0]) === 1
-        && roots.slice(start, i).every((line, index, previousItems) => index === 0
-          || Number(line.text.trim().match(/^\d+/)[0])
-            > Number(previousItems[index - 1].text.trim().match(/^\d+/)[0]));
+        && roots.slice(start, i).every((line, index, previousItems) => {
+          const step = Number(line.text.trim().match(/^\d+/)[0]);
+          return Number.isSafeInteger(step) && step > 0 && (index === 0
+            || step > Number(previousItems[index - 1].text.trim().match(/^\d+/)[0]));
+        });
       // A fresh list can restart numbering after a completed enumeration.
       // Paragraphs and blank lines alone are still valid step details.
       if (restarts && /\n[ \t]*\n/.test(gap)) start = i;
