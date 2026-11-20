@@ -6826,6 +6826,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "Traffic on this computer",
+          "range": "Time range",
+          "last5m": "Last 5 min",
+          "lastHour": "Last hour",
+          "lastDay": "Last 24 h",
+          "sent": "Sent",
+          "received": "Received",
+          "total": "Total",
+          "scope": "Estimated traffic over direct and relay connections, including direct file transfers. Excludes device discovery broadcasts and separate audio, video and HTTP transfers."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"

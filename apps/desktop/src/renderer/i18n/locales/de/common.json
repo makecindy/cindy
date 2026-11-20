@@ -6826,6 +6826,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "Datenverkehr dieses Computers",
+          "range": "Zeitraum",
+          "last5m": "Letzte 5 Min.",
+          "lastHour": "Letzte Stunde",
+          "lastDay": "Letzte 24 Std.",
+          "sent": "Gesendet",
+          "received": "Empfangen",
+          "total": "Gesamt",
+          "scope": "Geschätzter Datenverkehr über Direkt- und Relay-Verbindungen einschließlich direkter Dateiübertragungen. Ausgenommen sind Broadcasts zur Geräteerkennung sowie separate Audio-, Video- und HTTP-Übertragungen."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"

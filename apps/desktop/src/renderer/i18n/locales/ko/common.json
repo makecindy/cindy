@@ -6783,6 +6783,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "이 컴퓨터의 통신량",
+          "range": "집계 기간",
+          "last5m": "최근 5분",
+          "lastHour": "최근 1시간",
+          "lastDay": "최근 24시간",
+          "sent": "송신",
+          "received": "수신",
+          "total": "합계",
+          "scope": "파일 직접 전송을 포함한 직접 연결 및 릴레이 연결의 예상 통신량입니다. 기기 검색용 브로드캐스트와 별도 경로의 오디오·비디오 스트림 및 HTTP 전송은 제외됩니다."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
