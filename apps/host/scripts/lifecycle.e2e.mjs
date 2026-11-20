@@ -35,7 +35,7 @@ async function attachFromShortLivedLauncher() {
     ? path.join(releaseDir, 'bin', process.platform === 'win32' ? 'node.exe' : 'node') : process.execPath,
     args: releaseDir ? [path.join(releaseDir, 'bin/host.mjs'), 'serve']
       : ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs', 'src/main.ts', 'serve'],
-    cwd: releaseDir ? profile : appDir, timeoutMs: 20_000 };
+    cwd: releaseDir ? profile : appDir };
   // A real launcher exits completely; no parent object can keep its child alive.
   const child = spawn(process.execPath, ['--input-type=module', '-e',
     'const {ensureBackgroundHost}=await import(process.argv[1]); console.log(JSON.stringify(await ensureBackgroundHost(JSON.parse(process.argv[2]))));',
