@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
+import { pickSessionIdAfterRemoval } from '../lib/sessionRemovalNavigation';
 import { describe, expect, it, vi } from 'vitest';
 
 // Execute the actual sidebar callbacks without mounting its unrelated stores.
@@ -127,9 +128,11 @@ describe('sidebar shared-task archive/delete guard', () => {
 // Inbox Done on a task bound to an active automation only marks it read; without one it archives.
 // Minimal input: Done on the open task with one active binding, then with none.
 describe('sidebar inbox Done with a bound automation', () => {
-  function done(names: Map<string, string[]>) {
-    const runSessionAction = vi.fn();
-    const markSessionsRead = vi.fn(async () => {});
+  function done(names: Map<string, string[]>, current = true, rows = ['before', 'task', 'after'], remaining = rows) {
+    const runSessionAction = vi.fn(async (_id: string, _action: string): Promise<boolean> => true);
+    const handleSessionClick = vi.fn();
+    const navigate = vi.fn();
+    const markSessionsRead = vi.fn(async () => true);
     const session = { id: 'task', deviceLinkDeviceId: undefined };
     const handler = callback('handleActionClick', {
       window: { electronAPI: { binding: { resolveSession: async () => ({ attached: false }) } } },
@@ -137,22 +140,55 @@ describe('sidebar inbox Done with a bound automation', () => {
       sessionsByIdRef: { current: new Map([['task', session]]) }, attachedSessionIdsRef: { current: new Set() },
       isRemoteSessionWriteBlocked: () => false, archiveBlockedByRunning: () => false,
       loadActiveBoundScheduleNames: async () => names, markSessionsRead,
-      viewedSessionIdRef: { current: 'task' },
-      runSessionAction: async (id: string, action: string) => runSessionAction(id, action),
+      viewedSessionIdRef: { current: 'task' }, handleSessionClick, navigate, pickSessionIdAfterRemoval,
+      sidebarScrollRef: { current: { querySelector: () => ({ isConnected: true }) } },
+      getVisibleSidebarSessionIds: vi.fn(() => remaining).mockReturnValueOnce(rows),
+      isSessionRemovalRouteCurrent: () => current,
+      runSessionAction: (id: string, action: string) => runSessionAction(id, action),
     });
-    return { run: () => handler('task', 'complete'), runSessionAction, markSessionsRead };
+    return { run: () => handler('task', 'complete'), runSessionAction, markSessionsRead, handleSessionClick, navigate };
   }
   it('marks the task read and keeps it when an active automation is bound', async () => {
     const h = done(new Map([['task', ['Nightly check']]]));
     expect(await h.run()).toBe('marked-read');
     expect(h.markSessionsRead).toHaveBeenCalledWith(['task'], undefined, { announce: false });
     expect(h.runSessionAction).not.toHaveBeenCalled();
+    expect(h.handleSessionClick).toHaveBeenCalledWith('after');
   });
   it('archives when no active automation is bound', async () => {
     const h = done(new Map());
     await h.run();
     expect(h.markSessionsRead).not.toHaveBeenCalled();
     expect(h.runSessionAction).toHaveBeenCalledWith('task', 'archive');
+    expect(h.handleSessionClick).toHaveBeenCalledWith('after');
+  });
+  it('selects the preceding task at the end and clears the detail when the queue is empty', async () => {
+    const last = done(new Map(), true, ['before', 'task']);
+    await last.run();
+    expect(last.handleSessionClick).toHaveBeenCalledWith('before');
+    const only = done(new Map(), true, ['task']);
+    await only.run();
+    expect(only.navigate).toHaveBeenCalledWith('/cc-agent/new', expect.anything());
+  });
+  it('skips another completed row and advances past the previous display limit', async () => {
+    const h = done(new Map(), true, ['before', 'task', 'busy'], ['before', 'revealed']);
+    await h.run();
+    expect(h.handleSessionClick).toHaveBeenCalledWith('revealed');
+  });
+  it('keeps the selection on cancellation or an intervening navigation', async () => {
+    const cancelled = done(new Map());
+    cancelled.runSessionAction.mockResolvedValue(false);
+    await cancelled.run();
+    expect(cancelled.handleSessionClick).not.toHaveBeenCalled();
+    expect(cancelled.navigate).not.toHaveBeenCalled();
+    const unread = done(new Map([['task', ['Follow-up']]]));
+    unread.markSessionsRead.mockResolvedValue(false);
+    await unread.run();
+    expect(unread.handleSessionClick).not.toHaveBeenCalled();
+    const moved = done(new Map(), false);
+    await moved.run();
+    expect(moved.handleSessionClick).not.toHaveBeenCalled();
+    expect(moved.navigate).not.toHaveBeenCalled();
   });
 });
 

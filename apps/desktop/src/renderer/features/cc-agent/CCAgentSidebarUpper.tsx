@@ -224,6 +224,7 @@ import { advanceViewedPriorityHold, partitionCindyMakeSessions, sortSessionsForM
 import { toStoredSessionTitle } from './lib/sessionDisplayTitle';
 import {
   getVisibleSidebarSessionIds,
+  isSessionRemovalRouteCurrent,
   pickSessionIdAfterRemoval,
 } from './lib/sessionRemovalNavigation';
 import { onRequestSessionSwitch, pickAdjacentSessionId } from './lib/sessionSwitchCommands';
@@ -1042,7 +1043,7 @@ function ExpandedView({
             : scheduleSessionIndex.get(sessionId)
           )?.unreadRunIds ?? [],
       );
-      if (unreadRunIds.length === 0) return;
+      if (unreadRunIds.length === 0) return true;
       const { processed, failed, firstError } = await markScheduleRunsReadAndSync(
         unreadRunIds,
         deviceId,
@@ -1057,6 +1058,7 @@ function ExpandedView({
           }),
         );
       }
+      return failed.length === 0;
     },
     [scheduleSessionIndex, t],
   );
@@ -3238,6 +3240,24 @@ function ExpandedView({
         toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
         return true;
       };
+      // Snapshot the displayed queue before the inbox hides the clicked row. At commit,
+      // skip siblings the user has since completed and respect any intervening navigation.
+      const inbox = action === 'complete' && viewedSessionIdRef.current === sessionId
+        ? sidebarScrollRef.current?.querySelector('[data-task-inbox-section="inbox"]')
+        : null;
+      const order = inbox ? getVisibleSidebarSessionIds(inbox) : [];
+      const advanceInbox = () => {
+        if (!inbox?.isConnected || !isSessionRemovalRouteCurrent(sessionId)) return;
+        const remaining = getVisibleSidebarSessionIds(inbox).filter(id => id !== sessionId);
+        const available = new Set(remaining);
+        const removed = new Set(order.filter(id => !available.has(id)));
+        // Removing the last of the first 20 rows can reveal another task below it.
+        const original = new Set(order);
+        const queue = [...order, ...remaining.filter(id => !original.has(id))];
+        const next = pickSessionIdAfterRemoval(queue, removed, sessionId) ?? remaining[0];
+        if (next) void handleSessionClick(next);
+        else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
+      };
       // 收件箱「完成」遇到绑着启用中自动化的任务，只把这轮结果标为已读、任务回到进行中，
       // 不归档：归档会回收 worktree，下一轮又从快照重建，安静的一轮放回已归档再删一次
       // （2026-11-18 用户决定，task-inbox.md）。读不到绑定时按无绑定处理，照常归档。
@@ -3247,7 +3267,9 @@ function ExpandedView({
         ]).then((names) => names.get(sessionId) ?? [], () => []);
         if (boundNames.length > 0) {
           if (await blockedByAttachment()) return;
-          await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
+          const read = await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
+          if (!read) return;
+          advanceInbox();
           // The inbox owns the reactive placement of this explicit successful action.
           return 'marked-read' as const;
         }
@@ -3257,8 +3279,8 @@ function ExpandedView({
       // 例外:worktree 有未提交改动(归档会顺带回收 worktree)、或任务绑定了
       // active 自动化(后续运行会恢复原任务),这时升级到确认弹窗展示对应提醒。
       if (isArchiveLike) {
-        await runSessionAction(sessionId, 'archive', {
-          activeSessionId: viewedSessionIdRef.current,
+        const archived = await runSessionAction(sessionId, 'archive', {
+          activeSessionId: inbox ? null : viewedSessionIdRef.current,
           prepareArchive: async (isCurrent) => {
             // 接管拦截先结算:被接管时不该弹任何归档确认。
             if (await blockedByAttachment()) return false;
@@ -3307,6 +3329,7 @@ function ExpandedView({
             return confirmed;
           },
         });
+        if (archived) advanceInbox();
         return;
       }
       if (action === 'delete') {
@@ -3329,6 +3352,8 @@ function ExpandedView({
       closeOwnedSharedTask,
       archiveBlockedByRunning,
       confirmTaskArchive,
+      handleSessionClick,
+      navigate,
       markSessionsRead,
       runSessionAction,
       unarchiveSession,
