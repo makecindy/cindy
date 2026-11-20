@@ -117,6 +117,38 @@ it('retains a failed deletion delta until the next successful cache receipt', as
   expect(saved).toMatchObject({ retiredBotIds: ['mia'], newlyRetiredBotIds: [] });
 });
 
+
+it('clears a failed retirement after authoritative hydrate sees the identity active', async () => {
+  let reads = 0;
+  let writes = 0;
+  let latest: unknown;
+  const cache = vi.fn(async (request: { action: string; key: string; value?: unknown }) => {
+    if (request.key !== 'cloud-homes') return null;
+    if (request.action === 'read') {
+      reads += 1;
+      return reads === 1 ? { ...old, retirementRevision: 1 } : { ...old, retiredBotIds: [], retirementRevision: 3 };
+    }
+    if (request.action === 'write') {
+      writes += 1;
+      if (writes === 1) throw new Error('stale fence');
+      latest = request.value;
+      return { retiredBotIds: [], retirementRevision: 4 };
+    }
+    return null;
+  });
+  window.electronAPI.maker.chatDisplayCache = cache as never;
+  window.electronAPI.maker.getCompanionCloudState = vi.fn()
+    .mockResolvedValueOnce(fresh)
+    .mockResolvedValue(old);
+  const probe = renderHook(view);
+  await waitFor(() => expect(writes).toBe(1));
+  await act(async () => refreshCompanionCloudSettled());
+  await waitFor(() => expect(writes).toBe(2));
+  expect(latest).toMatchObject({ retiredBotIds: [], newlyRetiredBotIds: [] });
+  expect(probe.result.current.map(bot => bot.id)).toEqual(['mia']);
+  probe.unmount();
+});
+
 // A slow write is not a failure: keep one latest queued snapshot, and do not
 // acknowledge a newer removal with the older write's receipt.
 it('coalesces updates behind a slow receipt while preserving a newer deletion', async () => {

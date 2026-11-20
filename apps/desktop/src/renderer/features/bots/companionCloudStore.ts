@@ -111,9 +111,11 @@ function accept(next: CompanionCloudSnapshot): void {
       pendingRevivals.delete(actor.externalId);
       void companionCloudApi()?.chatDisplayCache?.({ action: 'remove', key: `companion:${actor.externalId}`, owner }).catch(() => undefined);
     }
-    for (const id of ids) if (retiredBotIds.delete(id)) {
-      pendingRetirements.delete(id);
-      pendingRevivals.set(id, { version: revision, fence: retirementRevision });
+    for (const id of ids) {
+      const wasRetired = retiredBotIds.delete(id);
+      const hadPendingRetirement = pendingRetirements.delete(id);
+      if (wasRetired) pendingRevivals.set(id, { version: revision, fence: retirementRevision });
+      else if (hadPendingRetirement) pendingRevivals.delete(id);
     }
     for (const id of pendingRetirements.keys()) if (!ids.has(id))
       pendingRetirements.set(id, { version: revision, fence: retirementRevision });
