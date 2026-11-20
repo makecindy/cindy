@@ -2718,11 +2718,12 @@ test("only selections that include Desktop need the Electron binary", () => {
 });
 
 // Unit: suites run inside an agent session failed on variables the agent shell carried (#880:
-// CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL; a remotely controlled Cindy task's CINDY_INPUT_HANDOFF_ROUTE),
+// CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL; a remotely controlled Cindy task's CINDY_INPUT_HANDOFF_ROUTE;
+// the Claude Code harness' CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP),
 // though nothing in the code under test changed. Children inherit the runner's env.
 test("the runner drops agent-shell variables that change test results, and nothing else", () => {
-	const env = { NODE_ENV: "production", CINDY_INPUT_HANDOFF_ROUTE: "route-1", CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1", PATH: "/bin", CI: "true" };
-	assert.deepEqual(stripAgentEnvPollutants(env), ["NODE_ENV", "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "CINDY_INPUT_HANDOFF_ROUTE"]);
+	const env = { NODE_ENV: "production", CINDY_INPUT_HANDOFF_ROUTE: "route-1", CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1", CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP: "1", PATH: "/bin", CI: "true" };
+	assert.deepEqual(stripAgentEnvPollutants(env), ["NODE_ENV", "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "CINDY_INPUT_HANDOFF_ROUTE", "CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP"]);
 	assert.deepEqual(env, { PATH: "/bin", CI: "true" });
 	assert.deepEqual(stripAgentEnvPollutants(env), []);
 });
