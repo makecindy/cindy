@@ -1059,6 +1059,18 @@ describe("Pi provider-aware model routing", () => {
               },
             ],
           },
+          {
+            // #11460: a custom provider has no row in Pi's bundled catalog, so every
+            // model here is a full entry. Custom providers legitimately have no price
+            // sheet, yet Pi still dereferences `model.cost.tiers` when a turn finishes.
+            id: "mify",
+            sourceProviderId: "mify",
+            name: "Mify",
+            baseUrl: "https://mify.example/v1",
+            api: "openai-completions",
+            inheritModels: false,
+            models: [{ id: "xiaomi/mimo-v2.6-flash", name: "MiMo" }],
+          },
         ],
         env: { CINDY_PI_OPENAI_PROXY_KEY: "placeholder-jwt" },
       }),
@@ -1090,7 +1102,7 @@ describe("Pi provider-aware model routing", () => {
     ) as {
       providers: Record<
         string,
-        { api?: string; models?: Array<{ id: string; api?: string }> }
+        { api?: string; models?: Array<{ id: string; api?: string; cost?: Record<string, number> }> }
       >;
     };
     expect(models.providers.anthropic).not.toHaveProperty("api");
@@ -1123,6 +1135,23 @@ describe("Pi provider-aware model routing", () => {
       }),
     ]);
     expect(models.providers.xai?.models?.[0]).not.toHaveProperty("api");
+    // #11460: Pi charges every finished turn through `calculateCost`, which reads
+    // `model.cost.tiers` without a guard, and pi-harness.md §5 makes the host catalog
+    // the only source of rates with "缺省按 0". No row may omit `cost` — otherwise the
+    // turn dies on `undefined is not an object (evaluating 'model.cost.tiers')`.
+    expect(models.providers.mify?.models).toEqual([
+      expect.objectContaining({
+        id: "xiaomi/mimo-v2.6-flash",
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      }),
+    ]);
+    for (const model of [
+      ...(models.providers.mify?.models ?? []),
+      ...(models.providers["openai-codex"]?.models ?? []),
+      ...(models.providers.xai?.models ?? []),
+    ]) {
+      expect(model.cost, `${model.id} cost`).toBeDefined();
+    }
     expect(
       JSON.parse(readFileSync(path.join(configHome, "settings.json"), "utf8")),
     ).toEqual({
@@ -3634,6 +3663,33 @@ describe("Pi provider-aware model routing", () => {
     ]);
     expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'max' });
     await handle.close();
+  });
+
+  // #9043: startSession must preserve the native off capability independently
+  // of the server effort list. Missing off means supported in Pi, not disabled.
+  it.each([null, 'low', undefined])('preserves explicit Gateway off capability %s', async off => {
+    const handle = await new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }), logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      binaryPath: path.join(agentHome, 'pi'), logger: noopLogger,
+      capabilityAdditions: { availableModels: [{ id: 'google/gemini-4-argon', displayName: 'Argon',
+        contextWindow: 1_048_576, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' }] },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelSpec: () => ({ api: 'google-generative-ai',
+        thinkingLevelMap: { ...(off !== undefined ? { off } : {}), low: 'low', medium: 'medium', high: 'high' } }),
+    }).startSession({ sessionId: 'gateway-off-capability', workingDir: cwd,
+      model: 'google/gemini-4-argon', providerId: 'xd', thinkingEnabled: false });
+    try {
+      const models = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'));
+      const map = models.providers.cindy.models[0].thinkingLevelMap;
+      expect(map).toEqual({ ...(off !== undefined ? { off } : {}),
+        minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null });
+      expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'off' });
+    } finally { await handle.close(); }
   });
 
   it('keeps unsupported Gateway thinking levels null when server efforts omit them', async () => {

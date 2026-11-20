@@ -46,6 +46,27 @@ export function readLedger(db: Pick<DbClient, 'query'>, firstDay: string): Promi
   );
 }
 
+export function readAccountFirstDay(
+  db: Pick<DbClient, 'query'>,
+  day: string,
+  startsAt: number,
+  generation: string,
+) {
+  const end = Date.parse(day + 'T00:00:00Z') + 86400000;
+  return db.query<LedgerRow>(
+    `SELECT ? day,provider,billing,model,
+    sum(i) ordinary,sum(o) output,sum(r) cacheRead,sum(w) cacheWrite FROM (
+      SELECT provider,billing,model,input i,output o,cache_read r,cache_write w
+      FROM token_reporting_first_day WHERE generation=?
+      UNION ALL SELECT provider_id,CASE WHEN provider_id='xd' THEN 'cindy-ai' ELSE 'unknown' END,model,
+        coalesce(input_tokens,0),coalesce(output_tokens,0),coalesce(cache_read_tokens,0),coalesce(cache_create_tokens,0)
+      FROM auxiliary_usage_receipts WHERE day >= date(?, '-1 day') AND day <= date(?, '+1 day')
+        AND recorded_at >= ? AND recorded_at < ?
+    ) GROUP BY provider,billing,model`,
+    [day, generation, day, day, startsAt, end],
+  );
+}
+
 const sources = new Set([
   'xd',
   'openai',
@@ -81,7 +102,7 @@ for (const m of registry?.localModels?.models ?? []) {
   for (const variant of m.variants ?? [])
     if (variant.libraryName) models.set(variant.libraryName, m.id);
 }
-function publicModel(raw: string) {
+export function publicModel(raw: string) {
   const bare = raw.replace(/\[\d+[km]\]$/i, '');
   return (
     models.get(bare) ??

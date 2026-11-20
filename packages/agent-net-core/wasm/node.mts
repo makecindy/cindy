@@ -105,6 +105,8 @@ export interface EndpointOptions {
   };
   /** 线上每个数据报（UDP 和通道）都会经过这里，测试用来检查有没有明文。 */
   tap?: (direction: 'in' | 'out', datagram: Uint8Array, address: PeerAddress) => void;
+  /** Optional socket-level payload counters [sent, received], shared with the Node host. */
+  udpTraffic?: BigUint64Array;
   /** 先看收到的 UDP 数据报：返回 `true` 表示这是上层自己的（比如查公网地址的回复），不交给核心。 */
   intercept?: (datagram: Uint8Array, from: Address) => boolean;
   /** `false` 时不开 UDP 套接字，只走通道，发往 UDP 地址的包直接丢掉：和 UDP 全被挡一样。默认 `true`。 */
@@ -588,9 +590,11 @@ export class Endpoint extends EventEmitter {
   sendUdp(to: Address, datagram: Uint8Array): void {
     const socket = this.socket;
     if (!socket) return;
+    const bytes = datagram.byteLength;
     this.pendingSends += 1;
     const done = (error?: Error | null) => {
       if (error) this.sendErrors += 1;
+      else if (this.options.udpTraffic) Atomics.add(this.options.udpTraffic, 0, BigInt(bytes));
       this.pendingSends -= 1;
       if (this.pendingSends === 0) this.drained?.();
     };
@@ -704,6 +708,7 @@ export class Endpoint extends EventEmitter {
 
   private onMessage(socket: dgram.Socket, message: Buffer, remote: dgram.RemoteInfo): void {
     if (socket !== this.socket || this.broken || message.length > IO_LEN) return;
+    if (this.options.udpTraffic) Atomics.add(this.options.udpTraffic, 1, BigInt(message.byteLength));
     const from = { address: remote.address, port: remote.port };
     if (this.options.intercept?.(message, from)) return;
     this.input(message, from);

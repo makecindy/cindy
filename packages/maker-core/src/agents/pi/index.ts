@@ -923,13 +923,18 @@ function gatewayThinkingLevelMap(
   if (supported.size === 0) {
     return bundled && Object.keys(bundled).length > 0 ? { ...bundled } : undefined;
   }
-  return Object.fromEntries(
-    PI_THINKING_LEVEL_MAP_KEYS.map((level) => {
-      if (!supported.has(level)) return [level, null];
-      const bundledValue = bundled?.[level];
-      return [level, typeof bundledValue === 'string' ? bundledValue : level];
-    }),
-  );
+  return {
+    // Off is a separate capability, not an effort. Pi treats a missing off as
+    // supported, so dropping explicit null can produce an invalid budget=0.
+    ...(bundled?.off !== undefined ? { off: bundled.off } : {}),
+    ...Object.fromEntries(
+      PI_THINKING_LEVEL_MAP_KEYS.map((level) => {
+        if (!supported.has(level)) return [level, null];
+        const bundledValue = bundled?.[level];
+        return [level, typeof bundledValue === 'string' ? bundledValue : level];
+      }),
+    ),
+  };
 }
 
 /**
@@ -2551,7 +2556,14 @@ export class PiAgent extends BaseAgent {
           input: m.input ?? ['text', 'image'],
           contextWindow,
           maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : piMaxTokensFallback(contextWindow),
-          ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
+          // Pi prices every finished turn through `calculateCost`, which reads
+          // `model.cost.tiers` without a guard, and pi-harness.md §5 makes the host
+          // catalog the only source of rates with "缺省按 0". So every row carries a
+          // cost block: a custom provider without a price sheet is written as zero,
+          // never omitted.
+          cost: m.cost
+            ? structuredClone(m.cost)
+            : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           ...(Object.keys(compat).length > 0 ? { compat: structuredClone(compat) } : {}),
           ...(m.samplingParams ? { samplingParams: structuredClone(m.samplingParams) } : {}),
         };

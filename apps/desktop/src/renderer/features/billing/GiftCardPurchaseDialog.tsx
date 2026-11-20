@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Minus, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { giftCardFaceName } from '@cindy/maker-shared/gift-card';
 
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
@@ -55,7 +56,8 @@ export function GiftCardPurchaseDialog({
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const [policyState, setPolicyState] = useState<PolicyState>({ kind: 'loading' });
-  const [faceCode, setFaceCode] = useState<string>(GIFT_CARD_FACES[0]);
+  // 用户点选的卡面；没点过时为 null，默认选列表里的第一张（服务端给的顺序）。
+  const [faceCode, setFaceCode] = useState<string | null>(null);
   const [offerCode, setOfferCode] = useState<string | null>(null);
   const [quantity, setQuantity] = useState(1);
   const [sender, setSender] = useState('');
@@ -69,15 +71,21 @@ export function GiftCardPurchaseDialog({
   const senderEditedRef = useRef(false);
 
   const policy = policyState.kind === 'ready' ? policyState.policy : null;
-  // 只给出服务端允许、本版本也认识的卡面。规则还没读到时先列出本地卡面（此时不能付款）；
-  // 服务端只允许本版本不认识的卡面时一个都不给，也不能付款，不退回全部本地卡面。
+  // 服务端下发的卡面（底图、金额印法、名称）：新卡面不用发版就能选、能画。
+  const faceStyles = useMemo(
+    () => new Map((policy?.faceCatalog ?? []).map((face) => [face.code, face])),
+    [policy],
+  );
+  // 按服务端给的顺序列出允许的卡面：有服务端卡面的都能选；没有（旧服务端、或这一项不合法）时只留
+  // 本版本认识的。规则还没读到时先列出本地卡面（此时不能付款）；一个能画的都没有时不给，也不能付款，
+  // 不退回全部本地卡面。
   const faces = useMemo<string[]>(() => {
     if (!policy) return [...GIFT_CARD_FACES];
-    const allowed = new Set(policy.faces);
-    return GIFT_CARD_FACES.filter((face) => allowed.has(face));
-  }, [policy]);
-  // 选中的卡面不在允许范围内（如默认的 cindy 被服务端排除）时，改用第一张允许的卡面。
-  const selectedFace = faces.includes(faceCode) ? faceCode : faces[0] ?? null;
+    const bundled = new Set<string>(GIFT_CARD_FACES);
+    return policy.faces.filter((face) => faceStyles.has(face) || bundled.has(face));
+  }, [policy, faceStyles]);
+  // 没点选过、或点选的卡面不在允许范围内时，用第一张允许的卡面。
+  const selectedFace = faceCode !== null && faces.includes(faceCode) ? faceCode : faces[0] ?? null;
   const previewFace = selectedFace ?? GIFT_CARD_FACES[0];
 
   const loadPolicy = async () => {
@@ -100,7 +108,7 @@ export function GiftCardPurchaseDialog({
       return;
     }
     senderEditedRef.current = false;
-    setFaceCode(GIFT_CARD_FACES[0]);
+    setFaceCode(null);
     setOfferCode(null);
     setQuantity(1);
     setMessage('');
@@ -214,8 +222,11 @@ export function GiftCardPurchaseDialog({
     return hint;
   })();
 
-  const faceName = (face: string) =>
-    t(`billing.giftCardPurchase.faces.${face}`, { defaultValue: face });
+  const faceName = (face: string) => {
+    const style = faceStyles.get(face);
+    return (style && giftCardFaceName(style.names, locale)) ??
+      t(`billing.giftCardPurchase.faces.${face}`, { defaultValue: face });
+  };
   const cardLabel = unitAmount === null
     ? t('billing.giftCardPurchase.previewLabel')
     : t('billing.giftCard.cardLabel', { amount: amountOf(unitAmount) });
@@ -262,6 +273,7 @@ export function GiftCardPurchaseDialog({
               <GiftCardStack
                 className="mt-2.5"
                 faceCode={previewFace}
+                face={faceStyles.get(previewFace) ?? null}
                 amount={unitAmount ?? ''}
                 currency={BILLING_CURRENCY}
                 count={effectiveQuantity}
@@ -308,7 +320,7 @@ export function GiftCardPurchaseDialog({
                           : 'border-transparent hover:border-[var(--border-default)]',
                       )}
                     >
-                      <GiftCardFace faceCode={face} className="rounded-lg" />
+                      <GiftCardFace faceCode={face} face={faceStyles.get(face) ?? null} className="rounded-lg" />
                     </button>
                   ))}
                 </div>

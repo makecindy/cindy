@@ -384,7 +384,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           ? responsesStreamBody('pong from fake gateway', 'pi-test-model')
           : url.includes('/chat/completions')
             ? chatCompletionsStreamBody('pong from fake gateway', 'pi-test-model')
-            : anthropicStreamBody('pong from fake gateway');
+            : url.includes(':streamGenerateContent')
+              ? 'data: ' + JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'synthetic Google response' }] }, finishReason: 'STOP' }],
+                usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 } }) + '\n\n'
+              : anthropicStreamBody('pong from fake gateway');
         res.end(scripted ?? fallback);
       });
     });
@@ -445,6 +448,53 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
+
+  // #9043: unlike the RPC fake, this exercises generated models.json through
+  // native Google serialization. The loopback always returns synthetic success;
+  // it proves wire compatibility, not real Gemini/Windows App acceptance.
+  it('preserves Google off capability through native requests and thinking toggles', { timeout: 30_000 }, async () => {
+    const deps = buildDeps();
+    const model = 'google/gemini-4-argon';
+    deps.capabilityAdditions = { availableModels: [{ id: model, displayName: 'Argon',
+      contextWindow: 1_048_576, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+      { id: 'google/gemini-2.5-flash', displayName: 'Flash', contextWindow: 1_048_576,
+        efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' }] };
+    deps.resolvePiGatewayModelSpec = (_provider, id) => ({ api: 'google-generative-ai',
+      thinkingLevelMap: { ...(id === model ? { off: null } : {}), minimal: null, low: 'low', medium: 'medium', high: 'high' } });
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'google-off-capability',
+      workingDir: agentHome, model, providerId: 'xd', thinkingEnabled: false,
+      permissionMode: 'bypassPermissions' });
+    try {
+      // Off is unsupported by this model. Preserve native Pi's lowest-legal-level
+      // behavior, without claiming that LOW truly turns model reasoning off.
+      for (const level of ['off', 'medium', 'high', 'low', 'off'] as const) {
+        if (level === 'off') await handle.setThinkingEnabled!(false);
+        else { await handle.setEffort!(level); await handle.setThinkingEnabled!(true); }
+        const offset = seenRequests.length;
+        const events: AgentEvent[] = [];
+        const done = (async () => { for await (const event of handle.events()) {
+          events.push(event); if (event.type === 'done') break;
+        } })();
+        await handle.send({ type: 'user', content: 'hello' });
+        await done;
+        const requests = seenRequests.slice(offset);
+        expect(requests).toHaveLength(1);
+        const config = JSON.parse(requests[0]!.body).generationConfig.thinkingConfig;
+        expect(config).not.toHaveProperty('thinkingBudget');
+        expect(config.thinkingLevel).toBe(level === 'off' ? 'LOW' : level.toUpperCase());
+        expect(events.some(event => event.type === 'error')).toBe(false);
+        expect(events.some(event => event.type === 'text')).toBe(true);
+      }
+      // Off remains a real native capability on budget-based Google models.
+      await handle.setModel!('google/gemini-2.5-flash', { providerId: 'xd', thinkingEnabled: false });
+      const offset = seenRequests.length;
+      const done = (async () => { for await (const event of handle.events()) if (event.type === 'done') break; })();
+      await handle.send({ type: 'user', content: 'hello' });
+      await done;
+      expect(seenRequests.slice(offset)).toHaveLength(1);
+      expect(JSON.parse(seenRequests[offset]!.body).generationConfig.thinkingConfig).toEqual({ thinkingBudget: 0 });
+    } finally { await handle.close(); }
+  });
 
   // Integration: execute the public ExtensionAPI through the real shipped
   // bridge, not a replacement RPC or a host-side approximation of active tools.

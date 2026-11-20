@@ -1424,6 +1424,10 @@
     "details": "謬誤詳情"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "本機資料庫損毀",
+      "description": "偵測到本機資料庫損毀，已停止存取以保護資料。可重新開啟本機資料；若仍失敗，請複製技術詳細資料並聯絡支援人員。請勿覆寫或刪除資料庫檔案。"
+    },
     "schemaLease": {
       "title": "此機資料暫不能啟",
       "retry": "重啟此機資料",
@@ -2772,9 +2776,7 @@
       "autoUpdateDisabledToast": "已闔閒時自裝更新",
       "autoUpdateSaveFailed": "自更新之設未能存",
       "analyticsLabel": "使用統計",
-      "analyticsDescription": "助吾等知 Cindy 之啟動與留存。所報者為裝置型號、系統版本、應用版本、裝置識別符號等裝置與使用環境資訊，登門後兼含君之名籍 ID；不含任何言談內容、卷或提示詞。闔之則即止上報。",
-      "productTokenUsage": "參與模型用量統計",
-      "productTokenUsageHint": "開啟後，本機上此帳號新增的 token 數按接入來源和模型計數。所屬區域彙總後傳送至 TapDB。",
+      "analyticsDescription": "啟此項，則以匿名代號代帳號與裝置 ID，察回訪之況，彙各模型之用量，以改進本品。君之言談、卷冊與提示詞皆不在所報之列。",
       "analyticsEnabledToast": "已啟使用統計",
       "analyticsDisabledToast": "已闔使用統計",
       "analyticsSaveFailed": "使用統計之設未能存",
@@ -6788,6 +6790,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "本機連線流量",
+          "range": "計量時段",
+          "last5m": "近 5 分鐘",
+          "lastHour": "近 1 小時",
+          "lastDay": "近 24 小時",
+          "sent": "所發",
+          "received": "所收",
+          "total": "共計",
+          "scope": "直連、中繼之收發量皆為估值，檔案直傳亦計。尋機廣播、另循他途之音像及 HTTP 傳輸不計。"
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8246,7 +8259,7 @@
         "agentErrand": "可立差事、行事並讀結果",
         "agentErrandDetail": "所立差事現於 Cindy 差事錄中，可觀其歷程並續言談。",
         "agentSchedule": "可請君新立自運",
-        "agentScheduleDetail": "其僅能為君啟新立自運之面板並填妥內容；立與不立，由君於面板擇定模型後親手存之而決。立後由 Cindy 依君所設之時運行，或生模型費用。",
+        "agentScheduleDetail": "其僅能為君啟新立自運之面板並填妥內容；立與不立，由君於面板擇定模型後親手存之而決。立後由 Cindy 依君所設之時運行，或生模型費用。插件通諸機者，亦可請君定一機行之。",
         "nodeRuntime": "可於此機運行法器所附之 Node 程式",
         "nodeMcp": "可於此機運行法器所附之 stdio MCP",
         "nodeRuntimeDetail": "高風險：其與君本人無異，可讀寫君名籍所能及之本機檔案、存取網路並啟動他程式。Cindy 不能以瀏覽器沙箱約束之。",
@@ -8490,6 +8503,13 @@
         "openInSidebar": "於側欄啟之",
         "panelPageHosted": "自法器頁啟之 · 離法器頁即自闔",
         "panelNone": "此法器無面板",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}：許遠端呼叫",
+          "description": "啟之，則君之他機可用此引擎行差事；Agent 行於此機，用此機之登門與限額；檔案與指令仍留於差事所在之機。",
+          "unsupported": "此法器尚未許他機用其引擎。",
+          "remoteControlOff": "此機尚未許同名籍之裝置遠端控制，他機不可用此引擎。",
+          "ariaLabel": "許君之他機用 {{engine}}"
+        },
         "githubRelease": {
           "title": "插件更新",
           "installed": "目前版本 {{version}}",
@@ -8558,6 +8578,8 @@
         "browserUse": "用此瀏覽器擴充",
         "browserActivated": "已擇此擴充",
         "browserActivationFailed": "未能擇此擴充，請啟擴充功能並確認切換。",
+        "automationHostSelect": "以此機主理「{{name}}」之自動任務乎？",
+        "automationHostClear": "解此機主理「{{name}}」自動任務之任乎？",
         "browserSwitchTitle": "切換瀏覽器擴充連線？",
         "browserSwitchMessage": "以「{{name}}」承此連線？",
         "browserSwitchDetail": "實例：{{instance}}\n註冊名：{{host}}\n將替今之註冊，擴充功能轉連此法器。",
@@ -13036,6 +13058,7 @@
           "overloadRetryingNoCount": "模型服務繁忙，方自動再試…",
           "overloadFailed": "⚠️ 模型服務繁忙：上游暫無餘力。可於此重發此訊再試，或於 Cindy 易一模型。（於桌面端點「再試」亦可續其差事，然其果不返此訊。）"
         },
+        "audioInputUnavailable": "今所接模型未能直辨其聲。可請 Cindy 先錄為文字，再續其事。",
         "toolLoop": {
           "generic": "模型屢呼工具過甚，Cindy 已止此輪，以免無窮循環。可遣新訊以續。",
           "consecutive": "模型連呼同一工具 {{n}} 次，Cindy 已止此輪，以免無窮循環。可遣新訊以續。",
@@ -14073,6 +14096,8 @@
         "fastBadge": "疾"
       },
       "source": {
+        "lastConfirmed": "上次重整：{{time}}",
+        "unconfirmed": "模型錄未新",
         "unavailable": "模型不可用",
         "reconnect": "重連",
         "manage": "理來源",
@@ -14994,6 +15019,8 @@
     },
     "runningStatus": {
       "currentRate": "近速",
+      "lastRequestRate": "前請均速",
+      "recentTokenRate": "近速 {{rate}} tok/s",
       "waitingSample": "方取樣",
       "averageRate": "本輪均速",
       "rateHistory": "生成速率史",
@@ -15859,6 +15886,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "此機不能復差事舊態。請選他機或供方之模型，交接上下文以續行；舊訊皆存。",
       "REMOTE_AGENT_INVALID": "與行 Agent 之機通訊有謬。請再試；若屢現，請將兩機之 Cindy 皆更新至最新版。",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "法器引擎未能復前話。訊息猶存。可擇他引擎續之，或新建任務。",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "此法器引擎不能用差事所在之機之工具，暫不可自他機行此差事。請易他引擎或模型。",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "此法器引擎唯行本機之差事，尚不可為他機所用。",
       "REMOTE_AGENT_RESUME_REJECTED": "運行模型之電腦無法續此差事。請由差事列表新建差事，複製所需內容以續。原差事及待發之訊皆保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達分享者所設之模型占比上限。請擇他可用之模型續之。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼機未向君開放此供方或所擇模型。若為君之他機，於彼機為此供方開「許遠端呼叫」；若為他人所分享，請令機主於「遠端與分享」中調其開放之範圍。亦可易一模型。",
@@ -16995,6 +17024,12 @@
       "unspecifiedDir": "未定目錄"
     },
     "workdirBrowse": {
+      "previewFile": "預覽",
+      "filterDirectory": "篩此目錄…",
+      "projectTree": "項目樹",
+      "systemPreview": "系統預覽",
+      "listView": "列表",
+      "gridView": "縮圖",
       "backToProjects": "返諸案",
       "switchProject": "易案",
       "activeSessionCount_one": "{{count}} 個活躍差事",

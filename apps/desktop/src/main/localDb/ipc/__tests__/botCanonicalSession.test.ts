@@ -775,6 +775,30 @@ describe('Bot canonical Session lifecycle', () => {
     expect(source).not.toHaveProperty('capabilities');
     expect(source).not.toHaveProperty('sessions');
     expect((await listBotRemoteResourceSources()).map((row) => row.id)).toContain(created.id);
+    // Inbox (2026-11-20): the snooze lives on the conversation's Session; both the roster source
+    // and the local profile must mirror it, and it is absent while there is no conversation.
+    const unset = { snoozedUntil: null, snoozedAt: null, userSendAt: null };
+    expect(source?.inboxSnooze).toEqual(unset);
+    h.sqlite!.prepare('UPDATE sessions SET snoozed_until = 3000, snoozed_at = 1000, user_send_at = 2000 WHERE id = ?').run(canonical.session.id);
+    const snoozed = { snoozedUntil: new Date(3000).toISOString(), snoozedAt: new Date(1000).toISOString(), userSendAt: new Date(2000).toISOString() };
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze).toEqual(snoozed);
+    expect((await invoke('local-db:bots:get', created.id)).inboxSnooze).toEqual(snoozed);
+    // A message another task sends with a tool does not move the Session's userSendAt; the
+    // newest message still counts as input, so the snoozed teammate comes back for it.
+    await createMessage(canonical.session.id, { clientId: 'from-a-task', role: 'user', content: 'Please get a decision', createdAt: 5000 });
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze).toEqual({ ...snoozed, userSendAt: new Date(5000).toISOString() });
+    expect((await invoke('local-db:bots:get', created.id)).inboxSnooze.userSendAt).toBe(new Date(5000).toISOString());
+    // Regression #11623: a reply starts before snoozing and seals afterwards. Its
+    // createdAt stays fixed, but the completed turn must wake both local and remote inboxes.
+    await createMessage(canonical.session.id, { clientId: 'streamed-reply', role: 'assistant', content: 'Decision ready', createdAt: 6000 });
+    h.sqlite!.prepare('UPDATE sessions SET snoozed_at = 7000, snoozed_until = 12000, active_turn_started_at = 5500, last_turn_ended_at = 8000 WHERE id = ?').run(canonical.session.id);
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze?.userSendAt).toBe(new Date(8000).toISOString());
+    expect((await invoke('local-db:bots:get', created.id)).inboxSnooze.userSendAt).toBe(new Date(8000).toISOString());
+    // Starting another turn without a new visible reply cannot lend its end time to old text.
+    h.sqlite!.prepare('UPDATE sessions SET active_turn_started_at = 9000, last_turn_ended_at = 10000 WHERE id = ?').run(canonical.session.id);
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze?.userSendAt).toBe(new Date(6000).toISOString());
+    const bare = await invoke('local-db:bots:create', { id: 'no-chat-yet', name: 'Quiet', identitySource: '', capabilities: { permissions: 'auto' } });
+    expect(await getBotRemoteResourceSource(bare.id)).not.toHaveProperty('inboxSnooze');
     h.sqlite!.prepare('UPDATE bot_profiles SET hidden_at = 1 WHERE id = ?').run(created.id);
     expect((await listBotRemoteResourceSources()).map((row) => row.id)).not.toContain(created.id);
   });

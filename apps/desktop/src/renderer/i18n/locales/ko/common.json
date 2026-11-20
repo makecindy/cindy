@@ -1424,6 +1424,10 @@
     "details": "오류 정보"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "로컬 데이터베이스 손상",
+      "description": "데이터베이스 손상이 감지되어 데이터를 보호하기 위해 접근을 중단했습니다. 로컬 데이터를 다시 열어 보세요. 계속 실패하면 오류 세부 정보를 복사하여 지원팀에 문의하세요. 데이터베이스 파일을 덮어쓰거나 삭제하지 마세요."
+    },
     "schemaLease": {
       "title": "아직 로컬 데이터를 열 수 없습니다",
       "retry": "로컬 데이터 다시 열기",
@@ -2772,9 +2776,7 @@
       "autoUpdateDisabledToast": "유휴 상태 자동 업데이트 설치가 꺼졌습니다",
       "autoUpdateSaveFailed": "자동 업데이트 설정을 저장하지 못했습니다",
       "analyticsLabel": "사용 통계",
-      "analyticsDescription": "Cindy의 실행 및 지속 사용 현황을 파악하는 데 사용합니다. 기기 모델, OS 버전, 앱 버전, 기기 식별자 등 기기 및 사용 환경 정보를 전송하며 로그인 후에는 계정 ID도 포함됩니다. 대화 내용, 파일, 프롬프트는 전혀 포함하지 않습니다. 끄면 전송이 즉시 중단됩니다.",
-      "productTokenUsage": "모델 사용량 통계 공유",
-      "productTokenUsageHint": "이 기기의 현재 계정에서 새로 사용한 토큰 수를 지역 내에서 연결 경로와 모델별로 집계해 TapDB로 전송합니다.",
+      "analyticsDescription": "이 설정을 켜면 계정 ID와 기기 ID 대신 가명을 사용합니다. 재방문 현황과 모델별 사용량 합계를 파악해 제품을 개선하는 데 활용합니다. 대화, 파일, 프롬프트는 이 통계에 포함되지 않습니다.",
       "analyticsEnabledToast": "사용 통계를 켰습니다",
       "analyticsDisabledToast": "사용 통계를 껐습니다",
       "analyticsSaveFailed": "사용 통계 설정을 저장하지 못했습니다",
@@ -6788,6 +6790,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "이 컴퓨터의 통신량",
+          "range": "집계 기간",
+          "last5m": "최근 5분",
+          "lastHour": "최근 1시간",
+          "lastDay": "최근 24시간",
+          "sent": "송신",
+          "received": "수신",
+          "total": "합계",
+          "scope": "파일 직접 전송을 포함한 직접 연결 및 릴레이 연결의 예상 통신량입니다. 기기 검색용 브로드캐스트와 별도 경로의 오디오·비디오 스트림 및 HTTP 전송은 제외됩니다."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8260,7 +8273,7 @@
         "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",
         "agentErrandDetail": "생성된 작업은 Cindy 작업 목록에 표시되며 진행 상황을 확인하고 대화를 이어갈 수 있습니다.",
         "agentSchedule": "자동화 새로 만들기를 요청할 수 있음",
-        "agentScheduleDetail": "내용이 미리 채워진 자동화 만들기 패널을 여는 것만 할 수 있으며, 실제로 만들지는 사용자가 모델을 고르고 직접 저장해 결정합니다. 만든 뒤에는 Cindy가 설정한 시간에 실행합니다. 모델 비용이 발생할 수 있습니다.",
+        "agentScheduleDetail": "내용이 미리 채워진 자동화 만들기 패널을 여는 것만 할 수 있으며, 실제로 만들지는 사용자가 모델을 고르고 직접 저장해 결정합니다. 만든 뒤에는 Cindy가 설정한 시간에 실행합니다. 모델 비용이 발생할 수 있습니다. 기기 동기화를 지원하는 플러그인은 자동화를 실행할 컴퓨터를 확인해 달라고 요청할 수도 있습니다.",
         "nodeRuntime": "함께 제공된 Node 프로그램을 이 컴퓨터에서 실행할 수 있음",
         "nodeMcp": "함께 제공된 stdio MCP를 이 컴퓨터에서 실행할 수 있음",
         "nodeRuntimeDetail": "고위험: 사용자 계정과 같은 권한으로 로컬 파일을 읽거나 수정하고, 네트워크에 접근하며, 다른 프로그램을 시작할 수 있습니다. Cindy의 브라우저 샌드박스로 격리할 수 없습니다.",
@@ -8504,6 +8517,13 @@
         "openInSidebar": "사이드바에서 열기",
         "panelPageHosted": "플러그인 페이지에서 열림 · 벗어나면 자동으로 닫힘",
         "panelNone": "이 플러그인에는 패널이 없습니다",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: 원격 사용 허용",
+          "description": "켜면 내 다른 컴퓨터에서 이 엔진으로 작업을 실행할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다. 파일과 명령은 작업이 있는 컴퓨터에 그대로 남습니다.",
+          "unsupported": "이 플러그인은 아직 다른 컴퓨터에서 엔진을 사용하는 것을 지원하지 않습니다.",
+          "remoteControlOff": "이 컴퓨터는 아직 원격 제어를 허용하지 않아 다른 컴퓨터에서 이 엔진을 사용할 수 없습니다.",
+          "ariaLabel": "내 다른 컴퓨터에서 {{engine}} 사용 허용"
+        },
         "githubRelease": {
           "title": "플러그인 업데이트",
           "installed": "설치된 버전 {{version}}",
@@ -8572,6 +8592,8 @@
         "browserUse": "이 브라우저 확장 사용",
         "browserActivated": "브라우저 확장을 선택했습니다",
         "browserActivationFailed": "확장을 선택하지 못했습니다. 플러그인을 활성화하고 연결 전환을 확인하세요.",
+        "automationHostSelect": "이 컴퓨터를 {{name}} 자동 작업의 기본 기기로 지정할까요?",
+        "automationHostClear": "이 컴퓨터의 {{name}} 자동 작업 기본 기기 지정을 해제할까요?",
         "browserSwitchTitle": "브라우저 확장 연결을 전환할까요?",
         "browserSwitchMessage": "이 연결에 “{{name}}”을(를) 사용할까요?",
         "browserSwitchDetail": "인스턴스: {{instance}}\n등록 이름: {{host}}\n현재 등록을 바꾸고 확장을 이 플러그인에 연결합니다.",
@@ -13036,6 +13058,7 @@
           "overloadRetryingNoCount": "모델 서비스가 혼잡합니다. 자동으로 다시 시도하는 중입니다…",
           "overloadFailed": "⚠️ 모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 여기서 이 메시지를 다시 보내 재시도하거나 Cindy에서 다른 모델로 바꿔 주세요. (데스크톱에서 “다시 시도”를 눌러도 작업은 이어지지만, 결과는 이 메시지로 돌아오지 않습니다.)"
         },
+        "audioInputUnavailable": "현재 모델 연결에서는 오디오를 직접 읽을 수 없습니다. Cindy에게 먼저 오디오를 텍스트로 변환한 후 계속해 달라고 요청하세요.",
         "toolLoop": {
           "generic": "모델이 도구를 너무 여러 번 반복 호출해서, 무한 루프를 막기 위해 Cindy가 이번 턴을 중지했습니다. 새 메시지를 보내면 이어서 진행할 수 있습니다.",
           "consecutive": "모델이 같은 도구를 {{n}}번 반복 호출해서, 무한 루프를 막기 위해 Cindy가 이번 턴을 중지했습니다. 새 메시지를 보내면 이어서 진행할 수 있습니다.",
@@ -14074,6 +14097,8 @@
         "fastBadge": "고속"
       },
       "source": {
+        "lastConfirmed": "마지막 새로고침: {{time}}",
+        "unconfirmed": "모델 목록을 갱신하지 못함",
         "unavailable": "모델 사용 불가",
         "reconnect": "다시 연결",
         "manage": "소스 관리",
@@ -15003,6 +15028,8 @@
     },
     "runningStatus": {
       "currentRate": "최근 속도",
+      "lastRequestRate": "최근 요청 평균",
+      "recentTokenRate": "최근 {{rate}} tok/s",
       "waitingSample": "측정 중",
       "averageRate": "이번 턴 평균",
       "rateHistory": "생성 속도 추이",
@@ -15868,6 +15895,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "이 컴퓨터에서는 세션의 이전 실행 상태를 복원할 수 없습니다. 다른 컴퓨터 또는 제공자의 모델을 선택해 컨텍스트를 전달하고 계속하세요. 기존 메시지는 유지됩니다.",
       "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "플러그인 엔진이 이전 대화를 복원하지 못했습니다. 메시지는 보존됩니다. 다른 엔진을 선택하거나 새 작업을 시작하세요.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "이 플러그인 엔진은 작업이 있는 컴퓨터의 도구를 사용할 수 없어, 지금은 다른 컴퓨터에서 이 작업을 실행할 수 없습니다. 다른 엔진이나 모델을 선택하세요.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "이 플러그인 엔진은 이 컴퓨터의 작업만 실행할 수 있으며, 아직 다른 컴퓨터에서 사용할 수 없습니다.",
       "REMOTE_AGENT_RESUME_REJECTED": "모델을 실행하는 컴퓨터에서 이 세션을 재개할 수 없습니다. 세션 목록에서 새 세션을 만들고 계속하는 데 필요한 내용을 복사하세요. 기존 세션과 전송 대기 중인 메시지는 유지됩니다.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "이 모델은 공유자가 설정한 모델 사용 비율 한도에 도달했습니다. 다른 사용 가능한 모델로 계속하세요.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자 또는 선택한 모델의 사용을 허용하지 않았습니다. 내 컴퓨터라면 그 컴퓨터에서 이 제공자의 '원격 사용 허용'을 켜세요. 공유받은 것이라면 소유자에게 원격 및 공유에서 사용 범위를 조정해 달라고 요청하세요. 다른 모델을 선택할 수도 있습니다.",
@@ -16995,6 +17024,12 @@
       "unspecifiedDir": "디렉터리 미지정"
     },
     "workdirBrowse": {
+      "previewFile": "미리보기",
+      "filterDirectory": "이 폴더 필터링…",
+      "projectTree": "프로젝트 트리",
+      "systemPreview": "시스템 미리보기",
+      "listView": "목록",
+      "gridView": "미리보기 이미지",
       "backToProjects": "프로젝트로 돌아가기",
       "switchProject": "프로젝트 전환",
       "activeSessionCount_one": "활성 세션 {{count}}개",
