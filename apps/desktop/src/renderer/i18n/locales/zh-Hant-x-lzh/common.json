@@ -16090,6 +16090,12 @@
       "toggle": "啟閉「{{title}}」之覆書",
       "openTask": "啟差事"
     },
+    "geminiRateLimit": {
+      "retried": "依 Gemini 所請，已自試",
+      "title": "Gemini 每分鐘所入已達其限",
+      "exhausted": "已自試一次，仍受限。可稍後再試。",
+      "retryIn": "{{seconds}} 秒後自試"
+    },
     "subscriptionAccountError": {
       "limited": "此差事所用訂閱帳號，用量已盡。可待用量重設後再試，或另選模型來源。",
       "limitedUntil": "此差事所用訂閱帳號，用量已盡，預計 {{resetAt}} 重設。可待重設後再試，或另選模型來源。",

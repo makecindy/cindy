@@ -1314,6 +1314,7 @@ import {
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
 } from '../usage/accountUsageLimit.js';
+import { parseGeminiInputRateLimit } from '@cindy/maker-shared/error-redaction';
 import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { createUsageLimitRecoveryStore, type SavedUsageLimitWait } from './usageLimitRecoveryStore.js';
 import { type MakerSessionCreateOpts, createSessionStderrOptions, isSessionRunningError } from './sessionRequest.js';
@@ -1938,7 +1939,7 @@ async function restoreSavedUsageLimitWait(sessionId: string): Promise<void> {
     coordinator.cancelUsageLimitWait(sessionId, token);
     return;
   }
-  if (!usageLimitAutoResume.restore(sessionId, token, record.resumeAt, record.attempts, record.groupQuota === true)) {
+  if (!usageLimitAutoResume.restore(sessionId, token, record.resumeAt, record.attempts, record.groupQuota === true, !record.groupQuota && parseGeminiInputRateLimit(record.error) !== null)) {
     coordinator.cancelUsageLimitWait(sessionId, token);
   }
 }

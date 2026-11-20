@@ -201,6 +201,12 @@
     },
     "failed_many": "Fallaron {{count}} llamadas"
   },
+  "geminiRateLimit": {
+    "retried": "Se reintentó automáticamente tras la espera indicada por Gemini",
+    "title": "Se alcanzó el límite de entrada por minuto de Gemini.",
+    "exhausted": "Gemini sigue limitado tras un reintento. Puedes volver a intentarlo manualmente.",
+    "retryIn": "Reintento automático en {{seconds}} s"
+  },
   "subscriptionAccountError": {
     "limited": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Espera a que se restablezca o elige otra fuente de modelos.",
     "limitedUntil": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Restablecimiento previsto: {{resetAt}}. Espera hasta entonces o elige otra fuente de modelos.",

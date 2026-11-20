@@ -190,6 +190,12 @@
       }
     }
   },
+  "geminiRateLimit": {
+    "retried": "Nach der Gemini-Wartezeit automatisch erneut versucht",
+    "title": "Das Eingabelimit pro Minute für Gemini ist erreicht.",
+    "exhausted": "Gemini ist nach einem erneuten Versuch weiterhin begrenzt. Versuche es später manuell.",
+    "retryIn": "Automatischer Versuch in {{seconds}} s"
+  },
   "subscriptionAccountError": {
     "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle.",
     "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle.",

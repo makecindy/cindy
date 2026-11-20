@@ -190,6 +190,12 @@
     "worked": "已工作 {{duration}}",
     "workDetails": "工作过程"
   },
+  "geminiRateLimit": {
+    "retried": "已按 Gemini 建议的时间自动重试",
+    "title": "Gemini 每分钟输入量已达上限",
+    "exhausted": "已自动重试一次，Gemini 仍受限。稍后可手动重试。",
+    "retryIn": "{{seconds}} 秒后自动重试"
+  },
   "subscriptionAccountError": {
     "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。",
     "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。",
