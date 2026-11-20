@@ -70,8 +70,14 @@ export function mobileAgentNetPeerRoute(peer: string): { path: 'direct' | 'relay
   return { path: socket?.pathTo(peer) ?? null, rttMs: socket?.peerSnapshot(peer)?.rttMs ?? null };
 }
 export function mobileAgentNetPeerConnectedAt(peer: string): number | null { return peerConnectedAt.get(peer) ?? null; }
-/** The phone changed networks: connections send from the new address now and candidates are gathered again. */
-export function notifyMobileAgentNetNetworkChanged(): void { live()?.networkChanged(); }
+/**
+ * The phone changed networks: connections send from the new address now and candidates are gathered again. `routeChanged`
+ * (Wi-Fi ↔ cellular, lost and back) also replaces the relay connection, which may sit half-open on the old route.
+ */
+export function notifyMobileAgentNetNetworkChanged(options?: { routeChanged?: boolean }): void {
+  const socket = live();
+  if (options?.routeChanged) socket?.replaceRelayConnection(); else socket?.networkChanged();
+}
 
 // ─── Devices removed in Device Link (docs/dev-rules/protocol-compatibility/agent-net-device-removal.md) ─────────────
 /**
