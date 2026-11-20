@@ -130,7 +130,7 @@ describe('mobile session header desktop-first surface', () => {
     // 同一宽度计算兼容现有调用参数。
     expect(source).toContain('iosPad: Platform.OS === \'ios\' && Platform.isPad,');
     expect(source).toContain('platform: Platform.OS,');
-    expect(source).toContain('{systemBack ? null : nativeHeader ? (');
+    expect(source).toContain('{systemBack || listOnly ? null : nativeHeader ? (');
     expect(source).toContain('onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : goBackToHome}');
     expect(source).toContain('gestureEnabled: !sessionListDrawerOverlayMounted');
     // 抽屉切任务只替换当前 route params：不压栈，也不派发会创建新 route key 的

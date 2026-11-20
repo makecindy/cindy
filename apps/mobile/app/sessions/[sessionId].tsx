@@ -29,6 +29,7 @@ import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionProcessItems } from '@/session/companionConversationPresentation';
 import { useRunningTokenRateHistory } from '@/session/useRunningTokenRateHistory';
+import Svg, { Path, Rect } from 'react-native-svg';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { SessionStackActions, SessionStackHeader } from '@/session/SessionStackHeader';
 import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
@@ -12183,15 +12184,22 @@ function SessionHeaderBar({
   const systemBack = useSystemNavigationBack();
   const headerWindow = useAdaptiveWindow();
   const headerInsets = headerWindow.insets;
+  const listOnly = !!onOpenSessionList && headerWindow.height > headerWindow.width;
   // Budget the title together with both toolbars and, on Duo portrait, the status area.
   const nativeTitleMaxWidth = sessionNavigationTitleMaxWidth({
     barWidth: headerWindow.width - headerInsets.left - headerInsets.right,
-    sessionList: !!onOpenSessionList, detailsOnly: workerHeader, statusRowReserve,
+    additionalListButton: !!onOpenSessionList && !listOnly, detailsOnly: workerHeader, statusRowReserve,
   });
   const sessionListButton = onOpenSessionList ? (
     <HomeHeaderGlassButton accessibilityLabel={t('home.drawer.openA11y')}
-      onPress={onOpenSessionList} testID="session.sessionListButton">
-      <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+      onPress={onOpenSessionList} floatingFallback={listOnly} testID="session.sessionListButton">
+      {listOnly ? (
+        <Svg width={iconSize.action} height={iconSize.action} viewBox="0 0 24 24" fill="none"
+          stroke={colors.textPrimary} strokeWidth={1.6} strokeLinecap="round">
+          <Rect x={1} y={3.5} width={22} height={17} rx={3} />
+          <Path d="M9 4v16 M4 8h2 M4 10.5h2 M4 13h2" />
+        </Svg>
+      ) : <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />}
     </HomeHeaderGlassButton>
   ) : null;
 
@@ -12205,7 +12213,7 @@ function SessionHeaderBar({
       available={!!currentSession} detailsOnly={workerHeader}
       filesDisabled={!files || files.disabled} filesDisabledReason={files?.disabledReason}
       onFiles={onOpenFiles} onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop}
-      screen={liveScreen} onBack={onBack} onOpenSessionList={onOpenSessionList} /></>;
+      screen={liveScreen} onBack={onBack} onOpenSessionList={onOpenSessionList} listOnly={listOnly} /></>;
   }
 
   // 分享选择模式只保留全选；底部关闭按钮负责退出。
@@ -12227,14 +12235,14 @@ function SessionHeaderBar({
   return (
     <View style={[styles.sessionHeaderBar, nativeHeader && styles.sessionHeaderBarNative]} testID="session.summary">
       {projectSettings}
-      <SystemNavigationBack label={t('shared.back')} onPress={onBack} />
+      <SystemNavigationBack label={t('shared.back')} onPress={onBack} hideBackButton={listOnly} />
       {sessionListButton}
       {systemBack ? (
         <SessionStackActions available={!!currentSession} detailsOnly={workerHeader}
           filesDisabled={!overview?.actions.some((action) => action.id === 'files' && !action.disabled)}
           onFiles={onOpenFiles} onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop} screen={liveScreen} />
       ) : null}
-      {systemBack ? null : nativeHeader ? (
+      {systemBack || listOnly ? null : nativeHeader ? (
         <SessionHeaderNativeBack label={t('shared.back')} onPress={onBack} />
       ) : (
         <ScreenBackButton
