@@ -375,6 +375,8 @@ export class RemoteDesktopController {
   /** Leases in userStopped that lost contact and were left under the privacy screen only. */
   private coveredExits = new Map<string, string>();
   private lastEnded: { peer: string; lease: string } | null = null;
+  /** When the last lease ended; its native input may still be shutting down. */
+  private lastEndedAt = 0;
   constructor(private readonly deps: DesktopControllerDeps) {}
   get state(): { peer: string; controlling: boolean } | null {
     this.tick();
@@ -383,6 +385,15 @@ export class RemoteDesktopController {
   /** A viewer holds a lease on this desktop now, whether it controls it or only watches. */
   get hasActiveLease(): boolean {
     return this.active !== null;
+  }
+  /**
+   * A lease ended recently enough that its injected input may still be landing: the native
+   * helper keeps ownership until it closes (inputHost waits up to 1.5 s), so anything that
+   * must stay out of the viewer's clicks — the privacy screen's Touch ID sheet — counts
+   * those first moments after the disconnect as still in use.
+   */
+  leaseJustEnded(withinMs = 2500): boolean {
+    return this.lastEndedAt > 0 && Date.now() - this.lastEndedAt < withinMs;
   }
   get displayId(): string | null {
     return this.active?.display.id ?? null;
@@ -604,7 +615,10 @@ export class RemoteDesktopController {
       void pending.catch(() => log.warn('Screen lock failed while ending remote desktop'));
       return pending;
     }
-    if (this.active) this.lastEnded = { peer: this.active.peer, lease: this.active.lease };
+    if (this.active) {
+      this.lastEnded = { peer: this.active.peer, lease: this.active.lease };
+      this.lastEndedAt = Date.now();
+    }
     this.clipboardTransfer.reset();
     this.controlGeneration++;
     const restoring = this.clearSafety().catch(() =>

@@ -5351,7 +5351,9 @@ const registerIpcHandlers = () => {
       onComputerInUseChange: onComputerUseSessionsChange,
       // A remote viewer receives this same screen: the system sheet must not sit in its
       // video or under its injected clicks (docs/product-rules/privacy-screen.md).
-      remoteInUse: () => remoteDesktop.hasActiveLease,
+      // A viewer that just disconnected may still have injected input landing: the native
+      // helper keeps ownership until it closes (inputHost waits up to 1.5 s for that).
+      remoteInUse: () => remoteDesktop.hasActiveLease || remoteDesktop.leaseJustEnded(),
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });
