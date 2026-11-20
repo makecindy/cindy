@@ -158,25 +158,32 @@ function encodeSecretPayload(plaintext: string): string {
   return `${SECRET_PAYLOAD_PREFIX}${crypto.randomUUID()}:${plaintext}`;
 }
 
-function decodeSecretPayload(value: string): string {
-  const match = new RegExp(
+function matchSecretPayload(value: string): RegExpExecArray | null {
+  return new RegExp(
     `^${SECRET_PAYLOAD_PREFIX}([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):(.*)$`,
     's',
   ).exec(value);
-  return match ? match[2] : value;
+}
+
+function decodeSecretPayload(value: string): string {
+  return matchSecretPayload(value)?.[2] ?? value;
 }
 
 /** Non-secret binding generation for durable IM output. Never returns credential bytes. */
 export function ownerScopedImSecretRevision(name: string): string {
   const target = scopedSecretPath(name);
   if (!target) throw new Error('IM_ACCOUNT_SCOPE_UNAVAILABLE');
-  try {
-    const encrypted = readAtomicFileSync(target);
-    if (encrypted === null) return 'missing';
-    return `sha256:${crypto.createHash('sha256').update(encrypted).digest('hex')}`;
-  } catch (error) {
-    throw error;
+  const encrypted = readAtomicFileSync(target);
+  if (encrypted === null) return 'missing';
+  const payload = safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
+  if (!matchSecretPayload(payload)) {
+    // An unchanged pre-upgrade credential must still match its persisted
+    // outbox authorization. Do not rewrite the file or reauthorize entries:
+    // the next successful write installs the random revision atomically.
+    const stat = fs.statSync(target, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
   }
+  return `sha256:${crypto.createHash('sha256').update(encrypted).digest('hex')}`;
 }
 
 function prepareSecretPath(name: string): string | null {
