@@ -33,6 +33,11 @@ export type HomeListViewMode = 'text' | 'list';
  */
 export type HomeTaskInfoField = 'time' | 'pr' | 'tokens' | 'cost';
 
+export interface HomeModeDisplayPreferences extends HomeFilterSelection {
+  viewMode: HomeListViewMode;
+  taskInfoFields: readonly HomeTaskInfoField[];
+}
+
 /** 项目筛选里「对话」的占位键;与真实项目 key 不会撞(项目 key 带设备 / 路径前缀)。 */
 export const HOME_DIALOGUE_FILTER_KEY = 'dialogue';
 
