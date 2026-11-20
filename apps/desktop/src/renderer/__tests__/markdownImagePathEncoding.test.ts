@@ -110,15 +110,16 @@ describe('Markdown local image path encoding', () => {
 
   // #11607 review: the same normalization feeds Markdown images and rich
   // audio/video. An SSH task must never route an outside path to this host.
-  it.each(['png', 'mp3', 'mp4'])('keeps hostless SSH %s media on its source host', (extension) => {
+  it.each(['xdt-image', 'xdt-file'].flatMap(scheme =>
+    ['png', 'mp3', 'mp4'].map(extension => [scheme, extension])))('keeps hostless SSH %s %s media on its source host', (scheme, extension) => {
     const origin = { kind: 'ssh' as const, remoteHostId: 'remote', workdir: '/repo' };
-    expect(normalizeMarkdownImageSrc(`xdt-image:///tmp/100%.${extension}`, '/repo', true, origin)).toBeUndefined();
-    expect(normalizeMarkdownImageSrc(`xdt-image:///repo/100%.${extension}`, '/repo', true, origin)).toBe(
+    expect(normalizeMarkdownImageSrc(`${scheme}:///tmp/100%.${extension}`, '/repo', true, origin)).toBeUndefined();
+    expect(normalizeMarkdownImageSrc(`${scheme}:///repo/100%.${extension}`, '/repo', true, origin)).toBe(
       `xdt-file://local/?path=${encodeURIComponent(`/repo/100%.${extension}`)}`,
     );
     // Local and device-backed tasks still resolve their own absolute paths.
-    expect(normalizeMarkdownImageSrc(`xdt-image:///tmp/100%.${extension}`, '/repo', true)).toContain('xdt-file://local/');
-    expect(normalizeMarkdownImageSrc(`xdt-image:///tmp/100%.${extension}`, '/repo', true,
+    expect(normalizeMarkdownImageSrc(`${scheme}:///tmp/100%.${extension}`, '/repo', true)).toContain('xdt-file://local/');
+    expect(normalizeMarkdownImageSrc(`${scheme}:///tmp/100%.${extension}`, '/repo', true,
       { kind: 'device', deviceId: 'source-device' })).toContain('xdt-file://local/');
   });
 

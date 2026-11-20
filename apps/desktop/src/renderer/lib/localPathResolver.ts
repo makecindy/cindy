@@ -842,17 +842,18 @@ export function normalizeMarkdownImageSrc(
   if (!allowPrivilegedLinks) {
     return /^https?:\/\//i.test(src) ? src : undefined;
   }
-  // Legacy hostless image URLs describe a local file, not a session cache entry.
-  // Reuse the local-file bridge only after the privileged-link check (#8951).
-  if (src.startsWith('xdt-image:///')) {
+  // Both legacy path-shaped schemes use the local-file bridge. Their raw
+  // Markdown destinations must retain the same source-ownership checks.
+  const hostlessImage = src.startsWith('xdt-image:///');
+  if (hostlessImage || src.startsWith('xdt-file:///')) {
     // A missing remote identity is not proof that this path belongs locally.
     if (origin === null) return undefined;
     const normalized = normalizeXdtFileUrlForRenderer(src.replace(/^xdt-image:/, 'xdt-file:'));
     const localPath = new URL(normalized).searchParams.get('path') ?? '';
     // Decode before checking: encoded slashes must not turn this compatibility
     // bridge into a Windows SMB/WebDAV or device-namespace read.
-    if (/^[\\/]{2}|^[\\/]\?\?[\\/]/.test(localPath)) return undefined;
-    // This bridge must not grant SSH messages access to controller-local files
+    if (hostlessImage && /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(localPath)) return undefined;
+    // Neither compatibility bridge may grant SSH messages access to controller-local files
     // when file-service refuses a path outside the remote task workdir.
     if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(normalized, origin.workdir)) return undefined;
     return normalized;
