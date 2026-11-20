@@ -14207,7 +14207,7 @@
           },
           "default": {
             "label": "Bawaan",
-            "description": "Berjalan sesuai cara bawaan agent; kamu mengonfirmasi permintaan izinnya."
+            "description": "Berjalan sesuai cara bawaan Agent; kamu mengonfirmasi permintaan izinnya."
           },
           "acceptEdits": {
             "label": "Terima edit",
