@@ -22178,7 +22178,8 @@
       "empty": "No model groups yet. Combine a few sources into a mode in Settings to pick it here.",
       "manage": "Manage model groups",
       "switched": "“{{name}}” switched this task to {{model}}",
-      "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed."
+      "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
+      "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected."
     },
     "why": {
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",

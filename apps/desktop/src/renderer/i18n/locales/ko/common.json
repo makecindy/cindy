@@ -22089,7 +22089,8 @@
       "empty": "아직 모델 그룹이 없습니다. 설정에서 소스 몇 개를 모드로 묶으면 여기서 선택할 수 있습니다.",
       "manage": "모델 그룹 관리",
       "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",
-      "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다."
+      "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
+      "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다."
     },
     "why": {
       "expiringQuota": "할당량이 {{left}}% 남았고 {{reset}}에 초기화되어 먼저 사용",

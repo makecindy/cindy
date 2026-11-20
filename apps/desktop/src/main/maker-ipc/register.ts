@@ -1433,7 +1433,8 @@ import {
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
 import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
-import { readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
+import { expandBotModelGroups } from '../model-groups/botRoutes.js';
+import { pickModelGroupRoute, readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
 import { modelGroupRouteFor } from '../model-groups/routeFor.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
 import { bindModelGroupSession, readModelGroupBindingForDispatch } from '../model-groups/sessionBindings.js';
@@ -16884,6 +16885,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     applied: createBotRouteAppliedStore(() => ownerScopedUserDataPath()),
     onSelectionAccepted: (sessionId, expectedBaseline) => updateScheduledPreference(sessionId, null, expectedBaseline),
     withSessionLock: withSendToSessionLock,
+    pickModelGroup: async (groupId, _saved, options) => {
+      const pick = await pickModelGroupRoute(groupId, options);
+      return pick && {
+        route: {
+          agentKind: dbToMakerAgentKind(pick.route.agentKind),
+          model: pick.route.model,
+          providerId: pick.route.providerId,
+          effort: pick.route.effort ?? null,
+          fastMode: false,
+          ...(pick.route.agentDeviceId ? { agentDeviceId: pick.route.agentDeviceId } : {}),
+        },
+        commit: pick.commit,
+      };
+    },
     read: async (sessionId, purpose) => {
       const [row] = await getDbClient().drizzle.select({
         capabilitiesJson: botProfileVersions.capabilitiesJson,
@@ -16921,7 +16936,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const intent = agentSwitchPending.get(sessionId);
       const live = maker.getSession(sessionId);
       return {
-        chain: selection.chain,
+        // Model groups expand into their sources here, at run time only (model-groups.md §6.2).
+        chain: expandBotModelGroups(selection.chain, readModelGroupsConfig()),
         scheduledModelBaseline: row.scheduledModelBaseline,
         followsCindyDefault: selection.followsCindyDefault,
         current: {
@@ -17082,7 +17098,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     } catch {
       return { isBot: true, candidate: null };
     }
-    const chain = await readEffectiveBotModelChain(config);
+    // A model group continues through its other sources before the next saved route.
+    const chain = expandBotModelGroups(await readEffectiveBotModelChain(config), readModelGroupsConfig());
     const toAgentKind = (harness: string): AgentKind =>
       harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
     const currentHarness = current.agentKind === 'codex'

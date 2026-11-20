@@ -7,13 +7,16 @@ import { SettingsRow } from '@/components/ui/settings-rows';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
+import { toast } from '@/lib/toast';
 import { ModelRouteSelector } from '@/components/new-chat/ModelRouteSelector';
 import type { MakerVendor } from '@/lib/ccAgent.types';
+import { previewModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
 import {
   BOT_MODEL_CHAIN_MAX,
   type BotHarness,
   type BotModelRoute,
 } from '../../../shared/botModelChain';
+import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { useBotTranslation } from './botPronounContext';
 
 function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
@@ -75,10 +78,20 @@ export function BotModelChainEditor({
     .filter((vendor) => !hiddenVendors.includes(vendor));
   const unifiedAgents = visibleVendors.map(agentKindFor);
 
+  // 模型组只存在伙伴所在的这台电脑；远程控制与 SSH 读不到那台的组，暂不提供(model-groups.md §6.2)。
+  const groupsAllowed = !remote && !deviceId;
+  const { config: groupsConfig } = useModelGroups(groupsAllowed);
+
+  /** `modelGroup: undefined` in a patch means a plain model was chosen: drop the group. */
+  const merge = (route: BotModelRoute, patch: Partial<BotModelRoute>): BotModelRoute => {
+    const next = { ...route, ...patch };
+    if ('modelGroup' in patch && !patch.modelGroup) delete next.modelGroup;
+    return next;
+  };
   const replace = (index: number, patch: Partial<BotModelRoute>) => {
     if (disabled) return;
     if (pendingRoute && index === routes.length) {
-      const next = { ...pendingRoute, ...patch };
+      const next = merge(pendingRoute, patch);
       if (next.model && routes.length < BOT_MODEL_CHAIN_MAX) {
         onChange([...routes, next]);
         setPendingRoute(null);
@@ -88,7 +101,30 @@ export function BotModelChainEditor({
     const editable = routes.length
       ? routes
       : [{ harness: 'pi' as const, model: '', providerId: null, effort: '', fastMode: false }];
-    onChange(editable.map((route, at) => (at === index ? { ...route, ...patch } : route)));
+    onChange(editable.map((route, at) => (at === index ? merge(route, patch) : route)));
+  };
+  /**
+   * 选中一个模型组：按组的规则预览一次(不推进轮流)，把那个来源存成这一项的具体模型，旧版本和
+   * 组被删掉时都按它运行；真正用谁在伙伴开始用这个设置时由组的规则决定。
+   */
+  const pickGroup = async (index: number, selection: ModelGroupSelection) => {
+    const name = groupsConfig.routes.find((route) => route.id === selection.id)?.name ?? '';
+    const result = await previewModelGroup(selection);
+    // 与选普通模型同一条限制：这个伙伴不能用的引擎不收。
+    if (result?.outcome !== 'routed' || !visibleVendors.includes(result.route.agentKind)) {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name }));
+      return;
+    }
+    const { route } = result;
+    replace(index, {
+      harness: harnessFor(route.agentKind),
+      model: route.model,
+      providerId: route.providerId,
+      effort: route.effort ?? '',
+      fastMode: false,
+      agentDeviceId: route.agentDeviceId ?? null,
+      modelGroup: selection.id,
+    });
   };
   const move = (index: number, delta: -1 | 1) => {
     const target = index + delta;
@@ -125,7 +161,7 @@ export function BotModelChainEditor({
         excludeSubscriptionDirect={remote && !deviceId}
         excludeChatBridgedCodex={remote && !deviceId}
         fastMode={route.fastMode}
-        onModelChange={(model) => replace(index, { model })}
+        onModelChange={(model) => replace(index, { model, modelGroup: undefined })}
         onEffortChange={(effort) => replace(index, { effort })}
         onFastModeChange={(fastMode) => replace(index, { fastMode })}
         onNavigateToProviders={remote || deviceId ? undefined : onNavigateToProviders}
@@ -141,8 +177,20 @@ export function BotModelChainEditor({
             model: selection.modelId,
             effort: selection.effort ?? '',
             fastMode: selection.fast,
+            modelGroup: undefined,
           });
         }}
+        {...(groupsAllowed ? {
+          modelGroups: {
+            config: groupsConfig,
+            active: route.modelGroup && groupsConfig.routes.some((item) => item.id === route.modelGroup)
+              ? { type: 'route' as const, id: route.modelGroup }
+              : null,
+            onSelect: (selection: ModelGroupSelection) => { void pickGroup(index, selection); },
+            // The editor also renders outside a router (tests, settings drawers); the app routes by hash.
+            onManage: () => { window.location.hash = '#/settings?tab=model-groups'; },
+          },
+        } : {})}
         unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
         unknownModelDescription={t('settings.auxiliaryModels.unavailable')}
       />

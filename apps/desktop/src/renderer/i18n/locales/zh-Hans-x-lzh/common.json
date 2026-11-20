@@ -22089,7 +22089,8 @@
       "empty": "尚无模型组。于设定合数源为一模式，即可于此择之。",
       "manage": "理模型组",
       "switched": "「{{name}}」已将此差事易为 {{model}}",
-      "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。"
+      "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
+      "chooseUnavailable": "「{{name}}」今无可用之源，未取之。"
     },
     "why": {
       "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",

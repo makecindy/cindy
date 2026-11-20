@@ -21,6 +21,33 @@ function harness() {
 }
 
 describe('permanent Bot model selection', () => {
+  // 依据：用户反馈（2026-11-20）「模型组设置好，伙伴还是不能用」；model-groups.md §6.2。
+  // 生产入口：reconcile / preview。可观察结果：首选是模型组时套用的是组挑出的来源，套用成功后才记一次选择；
+  // 预览只看不记；组用不了时按存下的具体模型。最小失败输入：首选带 modelGroup 的链。tier：unit。
+  it.each([
+    { name: 'applies the group pick and commits it once applied', pick: true },
+    { name: 'keeps the saved route when the group has nothing usable', pick: false },
+  ])('model group primary: $name', async ({ pick }) => {
+    const h = harness();
+    h.state.chain = [{ harness: 'codex', model: 'luna', providerId: 'xd', effort: '', fastMode: false, modelGroup: 'night' }];
+    const commit = vi.fn();
+    const picked = { agentKind: 'claude-code' as const, model: 'sonnet', providerId: 'sub', effort: 'high', fastMode: false };
+    const pickModelGroup = vi.fn(async () => (pick ? { route: picked, commit } : null));
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: h.read, apply: h.apply, pickModelGroup });
+    expect(await reconcile.preview('canonical')).toEqual(expect.objectContaining({ model: pick ? 'sonnet' : 'luna' }));
+    expect(pickModelGroup).toHaveBeenLastCalledWith('night', expect.anything(), { dryRun: true });
+    expect(commit).not.toHaveBeenCalled();
+    await reconcile('canonical');
+    expect(pickModelGroup).toHaveBeenLastCalledWith('night', expect.anything(), { dryRun: false });
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical',
+      expect.objectContaining(pick ? { agentKind: 'claude-code', model: 'sonnet', providerId: 'sub' } : { agentKind: 'codex', model: 'luna' }),
+      h.state.current);
+    expect(commit).toHaveBeenCalledTimes(pick ? 1 : 0);
+    // Already applied: the next send neither re-picks nor commits again.
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledTimes(pick ? 1 : 0);
+  });
   // Unit regression: ordinary sends/reopen must keep a verified group member
   // after failover; the old fallback tests only covered runtime overrides.
   it('keeps the selected group member across sends and reopen, but applies an explicit profile save', async () => {

@@ -22391,7 +22391,8 @@
       "empty": "Aucun groupe de modèles pour l'instant. Regroupez plusieurs sources en un mode dans les Réglages pour le choisir ici.",
       "manage": "Gérer les groupes de modèles",
       "switched": "« {{name}} » a basculé cette tâche sur {{model}}",
-      "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé."
+      "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé.",
+      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi."
     },
     "why": {
       "expiringQuota": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} : elle passe en premier",

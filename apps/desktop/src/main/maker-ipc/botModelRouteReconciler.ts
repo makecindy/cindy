@@ -110,13 +110,38 @@ export function createBotModelRouteReconciler(deps: {
   onSelectionAccepted?(sessionId: string, expectedBaseline?: string | null): Promise<void | boolean>;
   /** Durable record of the configuration last applied to each task, kept across restarts. */
   applied?: { get(sessionId: string): Promise<string | undefined>; set(sessionId: string, key: string): Promise<void> };
+  /**
+   * The primary entry is a model group: its own rule picks the source (model-groups.md §6.2).
+   * null keeps the saved route. `commit` records the pick once the route is actually applied;
+   * previews pass dryRun and never commit.
+   */
+  pickModelGroup?(groupId: string, saved: RuntimeRoute, options: { dryRun: boolean }):
+    Promise<{ route: RuntimeRoute; commit(): void } | null>;
 }) {
   let owner: string | undefined;
   const configured = new Map<string, string>();
   const revisions = new Map<string, number>();
   const inFlight = new Map<string, Promise<void>>();
-  const resolveConfiguredRoute = async (sessionId: string, state: BotRouteState, previous: string | undefined, chain = state.chain) => {
-    const route = configuredRoute(state, previous, chain);
+  const withModelGroupPick = async (
+    route: RuntimeRoute | null,
+    chain: readonly BotModelRoute[],
+    picked?: (commit: () => void) => void,
+  ): Promise<RuntimeRoute | null> => {
+    const groupId = chain[0]?.modelGroup;
+    if (!route || !groupId || !deps.pickModelGroup) return route;
+    const pick = await deps.pickModelGroup(groupId, route, { dryRun: !picked });
+    if (!pick) return route;
+    picked?.(pick.commit);
+    return pick.route;
+  };
+  const resolveConfiguredRoute = async (
+    sessionId: string,
+    state: BotRouteState,
+    previous: string | undefined,
+    chain = state.chain,
+    picked?: (commit: () => void) => void,
+  ) => {
+    const route = await withModelGroupPick(configuredRoute(state, previous, chain), chain, picked);
     // A committed member is the saved group choice in execution, not a model
     // change. Preserve it after failover/reopen; explicit saves and drafts win.
     if (!route || state.next || (previous !== undefined && previous !== configuredKey(state))
@@ -160,7 +185,8 @@ export function createBotModelRouteReconciler(deps: {
         const key = configuredKey(state);
         const previous = parseScheduledModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
           ? '' : configured.get(sessionId) ?? await deps.applied?.get(sessionId).catch(() => undefined);
-        const route = await resolveConfiguredRoute(sessionId, state, previous);
+        let commitPick: (() => void) | undefined;
+        const route = await resolveConfiguredRoute(sessionId, state, previous, undefined, (commit) => { commitPick = commit; });
         if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
         if ((revisions.get(sessionId) ?? 0) !== revision) continue;
         if (!route) {
@@ -188,6 +214,8 @@ export function createBotModelRouteReconciler(deps: {
         }
         if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
         if ((revisions.get(sessionId) ?? 0) !== revision) continue;
+        // The group's pick was applied: record it (advances「轮流」, writes「最近的选择」).
+        commitPick?.();
         configured.set(sessionId, key);
         await deps.applied?.set(sessionId, key).catch(() => {});
         return;
@@ -239,7 +267,9 @@ export function createBotModelRouteReconciler(deps: {
       if (state.scheduledModelBaseline !== expectedBaseline || !baseline || baseline.pendingBotProfileVersion) {
         throw new ScheduledModelSelectionBusyError('Scheduled model selection changed before recovery');
       }
-      const route = configuredRoute(state, '');
+      let commitPick: (() => void) | undefined;
+      const route = await withModelGroupPick(configuredRoute(state, ''), state.chain, (commit) => { commitPick = commit; });
+      assertCurrent();
       if (!route || !deps.onSelectionAccepted) return false;
       const key = configuredKey(state);
       // Even an equal route must pass validation and the runtime switch boundary.
@@ -267,6 +297,7 @@ export function createBotModelRouteReconciler(deps: {
         throw new ScheduledModelSelectionBusyError('Scheduled model selection changed before recovery cleanup');
       }
       assertCurrent();
+      commitPick?.();
       configured.set(sessionId, key);
       return true;
     },
