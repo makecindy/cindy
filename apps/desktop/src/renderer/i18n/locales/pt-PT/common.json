@@ -17768,6 +17768,7 @@
       "openWorkdirFailed": "Falha ao abrir a pasta"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "O tempo de espera expirou antes de a mensagem ser enviada. Quando a sessão de destino estiver livre, escolhe {{action}} para a executar.",
       "status": {
         "running": "Em execução",
         "success": "Sucesso",

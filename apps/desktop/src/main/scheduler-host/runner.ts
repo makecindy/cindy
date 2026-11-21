@@ -3278,7 +3278,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 排队超时 / 拿不到执行槽都不是"这轮失败了",是"这轮没轮到" —— 与撞忙顺延
       // 同语义:撤销预插的 running run、不通知不亮红点,下次到点重新排队(会话届时
       // 若空闲就直发,槽位届时也可能腾出来)。
-      // 不能顺延的(一次性 / manual / 已 paused)退回可见失败,否则任务静默消失。
+      // 不可顺延的排队超时保留 skipped 记录和未派发原因；槽位异常仍可见失败。
       if (err instanceof ScheduledDispatchStoppedError) {
         waiterSlot.current?.stopListening();
         return this.settleStoppedDispatch(schedule, ctx, sessionId, holder, err);
@@ -3299,6 +3299,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (err instanceof QueuedDispatchTimeoutError || err instanceof QueuedSlotUnavailableError) {
         if (this.canDefer(schedule, ctx)) {
           return this.deferFire(schedule, sessionId, 'queue-wait-timeout');
+        }
+        if (err instanceof QueuedDispatchTimeoutError) {
+          // The prompt never reached the Agent. Keep the bounded wait's reason in
+          // history instead of reporting a model/turn failure; Run now can recover it.
+          return { sessionId, skipped: true, resultText: `[QUEUE_WAIT_TIMEOUT] ${err.message}` };
         }
         const errMsg = formatSchedulerSendError(
           buildSchedulerSendContext(schedule, ctx, sessionId),
