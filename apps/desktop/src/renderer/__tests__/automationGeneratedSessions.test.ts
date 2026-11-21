@@ -1146,8 +1146,8 @@ describe('automation-generated sessions', () => {
       new URL('../features/scheduler/components/RunHistoryCard.tsx', import.meta.url),
       'utf8',
     );
-    expect(schedulerPageSource).toContain('useScheduleUnreadRunCounts(sorted)');
-    expect(taskListPaneSource).toContain('unreadRunCounts.get(s.id) ?? 0');
+    expect(schedulerPageSource).toContain('useScheduleRunAttention(sorted)');
+    expect(taskListPaneSource).toContain('attentionById.get(s.id)');
     expect(taskListCellSource).toContain('<AttentionDot');
     expect(schedulerPageSource).not.toContain('markScheduleRunsRead(selectedId)');
     // 标已读走 …AndSync 包装(IPC settle 后无条件本地刷新,main no-op 不广播时红点也能自愈)

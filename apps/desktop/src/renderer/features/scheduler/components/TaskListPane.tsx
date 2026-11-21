@@ -21,6 +21,7 @@ import type { Schedule, SchedulerRuntimeSnapshot } from '@cindy/maker-scheduler'
 
 import { TaskListCell } from './TaskListCell';
 import { TaskListFilterPopover, type StatusFilter } from './TaskListFilterPopover';
+import type { ScheduleAttentionKind } from '../hooks/useScheduleUnreadRunCounts';
 
 const COLLAPSE_KEY = 'xdt:scheduler.collapsedProjects';
 const OTHER_GROUP_KEY = 'other';
@@ -29,7 +30,8 @@ const DIALOGUE_GROUP_KEY = 'dialogue';
 interface Props {
   schedules: Schedule[];
   selectedId: string | null;
-  unreadRunCounts: ReadonlyMap<string, number>;
+  /** scheduleId → 列表上的点;没有点的任务不在表中。 */
+  attentionById: ReadonlyMap<string, ScheduleAttentionKind>;
   onSelect: (s: Schedule) => void;
   /** 当前 status 筛选值；默认 'active'。 */
   statusFilter: StatusFilter;
@@ -66,7 +68,7 @@ interface Props {
 export function TaskListPane({
   schedules,
   selectedId,
-  unreadRunCounts,
+  attentionById,
   onSelect,
   statusFilter,
   onStatusFilterChange,
@@ -232,7 +234,7 @@ export function TaskListPane({
                       <TaskListCell
                         schedule={s}
                         selected={s.id === selectedId}
-                        unreadCount={unreadRunCounts.get(s.id) ?? 0}
+                        attention={attentionById.get(s.id)}
                         onSelect={onSelect}
                         onTogglePause={onTogglePause}
                         onDelete={s.source === 'project' ? undefined : onDelete}
