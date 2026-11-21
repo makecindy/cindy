@@ -618,6 +618,19 @@ export class Scheduler extends EventEmitter {
    */
   private readonly pendingReplans = new Map<string, StalledClaimPlan>();
   /**
+   * 在途的过期回读（key = scheduleId）。CAS 败者后要回读真实行,这一读也可能超上限;
+   * 超时后迟到收口必须用**原来那次**读的结果 —— 另起一次读,那次更慢(或失败)时
+   * 这一行就丢了,缓存一直停在旧的(已过期)截止时间。同一任务只保留一份在途读,
+   * 免得存储故障期间每 tick 堆一次读(Codex P1 on #11577)。
+   */
+  private readonly pendingExpireReads = new Map<string, Promise<Schedule | null>>();
+  /**
+   * 在途的排期补偿（key = scheduleId）。补排卡死时(预闸门超时只放弃「等」,活儿还在
+   * 跑),后续 tick 不能再对同一条任务重入 —— 条目要等这次补排 settle 才摘掉,否则每
+   * tick 都会再起一份,堆出无界的存储调用,反而饿死 due-fire(Codex P1 on #11577)。
+   */
+  private readonly inFlightReplans = new Map<string, Promise<void>>();
+  /**
    * 严格 cron 解析上线前可能落库的畸形 active 任务。清空 nextFireAt 若遇到存储故障，
    * 周期 DB 同步仍会读回旧的到期时间；在用户修正表达式前必须持续把它们隔离在内存里。
    */
@@ -840,6 +853,12 @@ export class Scheduler extends EventEmitter {
     // 会以为「这条任务还有在途过期写入」而永远不再发过期写入。promise 本身取消
     // 不了,但它的迟到结果已被上面的代次挡住。
     this.pendingExpireWrites.clear();
+    // 在途的过期回读同理:挂死的读取消不了,登记也不能跨生命周期留着(否则重启
+    // 后的调度器会一直复用上一段生命周期那一份挂死的读)。
+    this.pendingExpireReads.clear();
+    // 在途补排同理:上一段生命周期的补排可能永远不 settle,不能让它把新主人的
+    // 补排挡在门外。
+    this.inFlightReplans.clear();
     this.emitRuntimeState();
     await Promise.all(interrupted.map(async (run) => {
       await this.storage.updateRun(run.runId, {
@@ -1082,6 +1101,7 @@ export class Scheduler extends EventEmitter {
       preGateDeadline ?? Date.now() + this.preGateStorageTimeoutMs,
     ));
     let updatePromise: Promise<Schedule | null> | undefined;
+    let fallbackRead: Promise<Schedule | null> | undefined;
     // 生命周期代次必须在**发起** UPDATE 时取,不能在超时之后才取:等待期间宿主
     // 可能 stop() 换代(切账号 / 重启),那时取到的已经是新主人的代次,上一段
     // 生命周期发起的写入回来时会通过代次校验,广播上一账号的时间线
@@ -1093,13 +1113,23 @@ export class Scheduler extends EventEmitter {
       }, schedule);
       this.trackPendingExpireWrite(schedule.id, updatePromise);
       const updated = await withStorageTimeout(updatePromise, budget, 'expireSchedule');
-      const current = updated ?? await withStorageTimeout(
-        this.storage.get(schedule.id),
-        Math.max(1, preGateRemaining(
-          preGateDeadline ?? Date.now() + this.preGateStorageTimeoutMs,
-        )),
-        'expireSchedule',
-      );
+      let current: Schedule | null;
+      if (updated) {
+        current = updated;
+      } else {
+        // CAS 败者(这一行已被别的实例改过):回读真实行。这一读同样可能超上限 ——
+        // 保留**原来那次**读的 promise,超时后的迟到收口用它,不再另起一次读
+        // (Codex P1 on #11577:另起的那次更慢或失败时,这一行的结果就丢了,
+        // 缓存一直停在旧的截止时间,临近的触发要等到下一次 DB sync 才恢复)。
+        fallbackRead = this.getExpiryFallbackRead(schedule.id);
+        current = await withStorageTimeout(
+          fallbackRead,
+          Math.max(1, preGateRemaining(
+            preGateDeadline ?? Date.now() + this.preGateStorageTimeoutMs,
+          )),
+          'expireSchedule',
+        );
+      }
       if (current) this.refreshAutomaticDispatchSchedules(current);
       if (current?.status === 'active') this.activeSchedules.set(current.id, current);
       else this.activeSchedules.delete(schedule.id);
@@ -1111,7 +1141,7 @@ export class Scheduler extends EventEmitter {
         // 迟到收口按状态对齐缓存并补发事件;迟到的 CAS 败者只对齐缓存(胜者
         // 自己已发过)。与真实异常同向:本轮绝不派发,持久化下轮重试。
         this.logPreGateTimeout(err.phase);
-        if (updatePromise) this.armExpireLateApply(schedule.id, updatePromise, generation);
+        if (updatePromise) this.armExpireLateApply(schedule.id, updatePromise, generation, fallbackRead);
         return true;
       }
       // Keep it available for persistence retry, but never dispatch past deadline.
@@ -1125,11 +1155,16 @@ export class Scheduler extends EventEmitter {
    *
    * `generation` 是**发起**这次写入时的生命周期代次,由调用方在等待之前取好:
    * 超时之后才取会拿到 stop() 换代后的新代次,上一段生命周期的迟到写入就会
-   * 混过代次校验(Codex P1 on #11577)。 */
+   * 混过代次校验(Codex P1 on #11577)。
+   *
+   * `fallbackRead` 是 CAS 败者后那一次回读(CAS 赢时没有):超时后的迟到收口
+   * 必须用它,而不是另起一次读 —— 另起的那次更慢或失败时,这一行的结果就丢了
+   * (Codex P1 on #11577)。 */
   private armExpireLateApply(
     scheduleId: string,
     update: Promise<Schedule | null>,
     generation: number,
+    fallbackRead?: Promise<Schedule | null>,
   ): void {
     void update.then(
       (late) => {
@@ -1147,7 +1182,10 @@ export class Scheduler extends EventEmitter {
           this.emitEvent({ type: 'changed', scheduleId: late.id });
           return;
         }
-        void this.storage.get(scheduleId).then(
+        // CAS 败者:回读真实行。优先用**原来那次**读;没有就取一份在途的
+        // (同一任务只保留一份,见 getExpiryFallbackRead)。
+        const read = fallbackRead ?? this.getExpiryFallbackRead(scheduleId);
+        void read.then(
           (current) => {
             if (generation !== this.lifecycleGeneration) return;
             if (!current) return;
@@ -1160,6 +1198,23 @@ export class Scheduler extends EventEmitter {
       },
       () => undefined,
     );
+  }
+
+  /**
+   * 取一条任务在途的过期回读(CAS 败者后的那一次)。同一任务只保留一份:回读卡死
+   * 时后续 tick 复用它,既不丢它最终的结果,也不堆出无界的读(Codex P1 on #11577)。
+   */
+  private getExpiryFallbackRead(scheduleId: string): Promise<Schedule | null> {
+    const existing = this.pendingExpireReads.get(scheduleId);
+    if (existing) return existing;
+    const read = this.storage.get(scheduleId);
+    this.pendingExpireReads.set(scheduleId, read);
+    const clear = () => {
+      if (this.pendingExpireReads.get(scheduleId) === read) this.pendingExpireReads.delete(scheduleId);
+    };
+    // 两个分支都挂 clear:拒绝的 promise 不能变成未处理的 rejection。
+    void read.then(clear, clear);
+    return read;
   }
 
   /**
@@ -3693,11 +3748,25 @@ export class Scheduler extends EventEmitter {
    * 队列通常是空的,非空时也只有个别条目(卡死本身是罕见事件)。
    * 仍失败的条目留在队列里等下一个 tick;成功或确定无需补排的由 replanAfterStalledClaim
    * 自己摘除。
+   *
+   * **在途的那一条不重入**:预闸门超时只放弃「等」,活儿还在跑(补排卡在一次永远不
+   * 返回的 storage 调用上)。条目要等这次补排 settle 才摘掉,所以后续 tick 若再对
+   * 同一条任务起一份,存储故障期间就会每 tick 堆一次调用,把 due-fire 饿死
+   * (Codex P1 on #11577)。
    */
   private async retryPendingReplans(now: number): Promise<void> {
     if (this.pendingReplans.size === 0) return;
     for (const pending of [...this.pendingReplans.values()]) {
-      await this.replanAfterStalledClaim(pending, now);
+      if (this.inFlightReplans.has(pending.scheduleId)) continue; // 上一轮还在途
+      const attempt = this.replanAfterStalledClaim(pending, now);
+      this.inFlightReplans.set(pending.scheduleId, attempt);
+      try {
+        await attempt;
+      } finally {
+        if (this.inFlightReplans.get(pending.scheduleId) === attempt) {
+          this.inFlightReplans.delete(pending.scheduleId);
+        }
+      }
     }
   }
 
