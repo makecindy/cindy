@@ -39,7 +39,8 @@ describe('native package Host tools', () => {
       exportShare: vi.fn(async (options: { targetPath: string; sessionId: string }) => {
         await fs.writeFile(options.targetPath, 'package');
         return { status: 'ok' as const, unpackedBytes: 7, filePath: options.targetPath, fidelity: 'full' as const,
-          missingTranscripts: [], mediaMissing: 0, mediaDropped: 0, orcaWorkers: 0 };
+          missingTranscripts: [], omittedCodexChildThreads: options.sessionId === 'with-child' ? ['child-1'] : [],
+          codexChildThreadCount: options.sessionId === 'with-child' ? 1 : 0, mediaMissing: 0, mediaDropped: 0, orcaWorkers: 0 };
       }),
       inspectShare: vi.fn(async () => ({ draftId: 'draft', encrypted: false as const, preview })),
       commitShare: vi.fn(async () => ({ sessionId: 'imported', fidelity: 'full' as const, notes: [], orcaWorkers: 0 })),
@@ -75,11 +76,13 @@ describe('native package Host tools', () => {
     if (rejected.type === 'text') expect(JSON.parse(rejected.text)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
     expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
     expect(f.ports.exportShare).not.toHaveBeenCalled();
-    const exported = (await registry.call('export_session', { session_id: 'task', exclude_media: true })).content[0];
+    const exported = (await registry.call('export_session', { session_id: 'with-child', exclude_media: true })).content[0];
     expect(exported.type).toBe('text');
     if (exported.type === 'text') expect(JSON.parse(exported.text))
-      .toMatchObject({ ok: true, file_path: path.join(directory, 'chosen.cshare') });
-    expect(f.ports.chooseExportPath).toHaveBeenCalledWith('task');
+      .toMatchObject({ ok: true, file_path: path.join(directory, 'chosen.cshare'), fidelity: 'partial',
+        codex_child_thread_count: 1, missing_transcript_count: 1, orca_workers: 0,
+        omitted_codex_child_threads: [{ thread_id: 'child-1', reason: 'codex_package_supports_one_rollout_per_task' }] });
+    expect(f.ports.chooseExportPath).toHaveBeenCalledWith('with-child');
     expect(await fs.readFile(path.join(directory, 'chosen.cshare'), 'utf8')).toBe('package');
     await expect(fs.stat(supplied)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await f.callbacks.import({ filePath: 'source.cshare', overwrite: false, useWorktree: false }, context))
@@ -127,7 +130,7 @@ describe('native package Host tools', () => {
   it('discards an export if the caller is revoked while packing', async () => {
     const f = fixture(); f.ports.exportShare.mockImplementationOnce(async options => {
       await fs.writeFile(options.targetPath, 'package'); current = false;
-      return { status: 'ok', unpackedBytes: 7, filePath: options.targetPath, fidelity: 'full', missingTranscripts: [], mediaMissing: 0, mediaDropped: 0, orcaWorkers: 0 };
+      return { status: 'ok', unpackedBytes: 7, filePath: options.targetPath, fidelity: 'full', missingTranscripts: [], omittedCodexChildThreads: [], codexChildThreadCount: 0, mediaMissing: 0, mediaDropped: 0, orcaWorkers: 0 };
     });
     expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, plugin))
       .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });

@@ -61,8 +61,15 @@ export function createSessionShareToolCallbacks(ports: {
         scope.assertCurrent();
         if (result.status === 'oversize') return { ok: true, scope: 'local', status: 'oversize',
           total_bytes: result.totalBytes, media_bytes: result.mediaBytes, limit_bytes: result.limitBytes };
-        const summary = { ok: true as const, scope: 'local', status: 'ok', fidelity: result.fidelity,
-          unpacked_bytes: result.unpackedBytes, missing_transcript_count: result.missingTranscripts.length,
+        const omittedChildren = result.omittedCodexChildThreads ?? [];
+        const missing = new Set([...result.missingTranscripts, ...omittedChildren]);
+        const fidelity = omittedChildren.length && result.fidelity === 'full' ? 'partial' : result.fidelity;
+        const summary = { ok: true as const, scope: 'local', status: 'ok', fidelity,
+          unpacked_bytes: result.unpackedBytes, missing_transcript_count: omittedChildren.length ? missing.size : result.missingTranscripts.length,
+          codex_child_thread_count: result.codexChildThreadCount ?? 0,
+          omitted_codex_child_threads: omittedChildren.map(thread_id => ({
+            thread_id, reason: 'codex_package_supports_one_rollout_per_task',
+          })),
           media_missing: result.mediaMissing, media_dropped: result.mediaDropped, orca_workers: result.orcaWorkers };
         if (!scope.pluginId) return { ...summary, file_path: result.filePath };
         const bytes = await readBoundedFileNoFollow(targetPath, GHOST_HANDOFF_MAX_BYTES_PER_FILE,
