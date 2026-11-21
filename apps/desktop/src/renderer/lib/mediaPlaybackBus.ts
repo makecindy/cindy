@@ -26,6 +26,29 @@
 
 const registered = new Set<HTMLMediaElement>();
 
+/** 已脱离页面的播放器 pause 后仍可能留着解码管线；只清这类元素的源。 */
+function releaseDetachedPipeline(el: HTMLMediaElement): void {
+  if (el.isConnected) return;
+  const sources = Array.from(el.querySelectorAll('source'));
+  const hasSource = (el.srcObject !== null && el.srcObject !== undefined)
+    || el.hasAttribute('src')
+    || sources.some((source) => source.hasAttribute('src'));
+  // 浮层自己可能已先释放；不要在 effect cleanup 里重复 load、重置同一媒体。
+  if (!hasSource) return;
+  try {
+    el.srcObject = null;
+  } catch {
+    /* 已脱离文档或浏览器不接受清空 */
+  }
+  el.removeAttribute('src');
+  for (const source of sources) source.removeAttribute('src');
+  try {
+    el.load();
+  } catch {
+    /* 销毁中的元素可能没有 load */
+  }
+}
+
 function pauseOthers(active: HTMLMediaElement): void {
   for (const el of registered) {
     if (el === active) continue;
@@ -51,9 +74,14 @@ export function registerMedia(el: HTMLMediaElement): () => void {
   registered.add(el);
   el.addEventListener('play', onPlay);
   return () => {
-    // Stop playback (including a pending play()) while we still own the player.
-    // Keep its source so React can register the same element again.
-    el.pause();
+    // 无条件 pause 涵盖 play() pending、paused 仍为 true 的窗口。
+    // 仍挂载的元素保留源供 effect replay；脱离页面的元素释放解码管线。
+    try {
+      el.pause();
+    } catch {
+      /* 元素已 detach / 销毁中 — 静默 */
+    }
+    releaseDetachedPipeline(el);
     el.removeEventListener('play', onPlay);
     registered.delete(el);
   };
