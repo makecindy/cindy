@@ -1842,14 +1842,17 @@ export class Scheduler extends EventEmitter {
       }
       if (!Object.prototype.hasOwnProperty.call(patch, 'fastMode')) updates.fastMode = false;
     }
-    // 模型组：显式给了按调用方意图(空 = 去掉模式)。改了具体模型却没提模式的调用方(旧版手机端、
-    // 只认识具体模型的工具)选的是一个具体模型，沿用旧模式会让新选的模型永远不生效，所以一并去掉模式；
-    // 原样回传不算改。
+    // 模型组：显式给了按调用方意图(空 = 去掉模式)。改了具体模型或运行位置却没提模式的调用方(旧版手机端、
+    // 只认识具体模型的工具)选的是一个具体来源，沿用旧模式会让新选的来源永远不生效，所以一并去掉模式；
+    // 原样回传不算改。modelAgentDeviceId 的 '' (本机)与不设(跟着任务)意思不同，不合并。
     if (Object.prototype.hasOwnProperty.call(patch, 'modelGroup')) {
       updates.modelGroup = normalizeScheduleModelGroup(patch.modelGroup);
-    } else if (existing.modelGroup && (['agentKind', 'modelAgentKind', 'model', 'providerId'] as const).some((key) =>
-      Object.prototype.hasOwnProperty.call(patch, key) &&
-      (patch[key] || undefined) !== (existing[key] || undefined))) {
+    } else if (existing.modelGroup && (
+      (['agentKind', 'modelAgentKind', 'model', 'providerId', 'agentDeviceId'] as const).some((key) =>
+        Object.prototype.hasOwnProperty.call(patch, key) &&
+        (patch[key] || undefined) !== (existing[key] || undefined))
+      || (Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId') &&
+        (patch.modelAgentDeviceId ?? undefined) !== (existing.modelAgentDeviceId ?? undefined)))) {
       updates.modelGroup = undefined;
     }
     // 运行位置与来源/模型成对:来源属于那台电脑的目录。改了路由却没带运行位置的

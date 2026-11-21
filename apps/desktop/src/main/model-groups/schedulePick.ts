@@ -35,8 +35,15 @@ export interface ScheduleModelGroupPorts {
    * undefined = 任务不存在或已删除(这次会新建)。
    */
   sessionLocation(sessionId: string): Promise<{ agentDeviceId: string | null; ssh: boolean } | undefined>;
-  /** 写说明：放在 `sinceMs` 之后这个任务的第一条用户消息下面(就是这次运行发出的那条)。 */
-  writeNote(sessionId: string, note: ModelGroupRouteNoteBody, options: { clientId: string; sinceMs: number }): void;
+  /**
+   * 写说明：放在这次运行发出的那条用户消息下面，按消息身份找(`messageClientId`)，不按时间猜——
+   * 选路到派发之间别人发的消息不算。身份可能稍后才有(排队派发)，所以传取值函数。
+   */
+  writeNote(
+    sessionId: string,
+    note: ModelGroupRouteNoteBody,
+    options: { clientId: string; messageClientId: () => string | undefined },
+  ): void;
   t: ModelGroupTranslate;
   locale(): string;
   locationName: ModelGroupLocationName;
@@ -62,7 +69,7 @@ export function createScheduleModelGroupPicker(ports: ScheduleModelGroupPorts) {
     const result = await ports.resolve({ selection, ...(location ? { location } : {}) });
     if (result.outcome === 'missing') return null;
     const note = buildModelGroupRouteNote(result, keptModelName(schedule), ports.t, ports.locale(), ports.locationName);
-    const started = (sessionId: string) => {
+    const started = (sessionId: string, messageClientId: () => string | undefined) => {
       try {
         if (result.decisionId) ports.commit(result.decisionId);
         if (result.outcome === 'routed') {
@@ -71,7 +78,7 @@ export function createScheduleModelGroupPicker(ports: ScheduleModelGroupPorts) {
         if (note) {
           ports.writeNote(sessionId, note, {
             clientId: `model-group-route:${sessionId}:${result.decisionId ?? pickedAt}`,
-            sinceMs: pickedAt,
+            messageClientId,
           });
         }
       } catch {

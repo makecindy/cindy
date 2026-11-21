@@ -53,13 +53,14 @@ describe('scheduled runs pick from their model group', () => {
     expect(calls.resolve[0]).toEqual({ selection: { type: 'route', id: 'daily' } });
     expect(pick?.route).toEqual({ modelAgentKind: 'codex', model: 'gpt-astra', providerId: 'openai-work', effort: 'high', modelAgentDeviceId: 'desk-2' });
     expect(calls.commit).not.toHaveBeenCalled();
-    pick!.started('task-1');
+    pick!.started('task-1', () => 'run-message');
     expect(calls.commit).toHaveBeenCalledWith('d1');
     expect(calls.bind).toHaveBeenCalledWith('task-1', { type: 'route', id: 'daily' }, 'codex\u0000openai-work\u0000gpt-astra\u0000desk-2');
     const [, note, options] = calls.writeNote.mock.calls[0]!;
     expect(note).toMatchObject({ pluginName: 'Daily mode', outcome: 'routed', source: 'model-group' });
     expect(note.modelName).toContain('GPT Astra');
     expect(options.clientId).toBe('model-group-route:task-1:d1');
+    expect(options.messageClientId()).toBe('run-message');
   });
 
   it('a local pick runs on this computer', async () => {
@@ -110,7 +111,7 @@ describe('scheduled runs pick from their model group', () => {
     const { value, calls } = ports({ outcome: 'unavailable', groupName: 'Daily mode', trace: [] });
     const pick = await createScheduleModelGroupPicker(value)(schedule);
     expect(pick?.route).toBeUndefined();
-    pick!.started('task-1');
+    pick!.started('task-1', () => 'run-message');
     expect(calls.bind).not.toHaveBeenCalled();
     expect(calls.writeNote.mock.calls[0]![1]).toMatchObject({ outcome: 'kept', modelName: 'gpt-saved', why: 'unavailable-route' });
   });

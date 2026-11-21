@@ -1224,6 +1224,21 @@ describe('Scheduler', () => {
     await expect(h.scheduler.create({ ...baseInput, modelGroup: 'x'.repeat(65) })).rejects.toThrow('modelGroup');
   });
 
+  // PR #11881 review r4653462650: a client that only moves the same model to another computer changed no
+  // model field, so the mode stayed and its pick overrode the chosen computer. Minimal input: a mode
+  // schedule whose run location alone is echoed, then changed. Tier: unit, real engine, in-memory storage.
+  it('update() 只换了运行位置却没提模式时也去掉模式，原样回传保留', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput, modelAgentKind: 'codex', agentKind: 'codex', model: 'gpt-saved', providerId: 'openai',
+      modelAgentDeviceId: '', modelGroup: 'daily',
+    });
+    const echoed = await h.scheduler.update(sch.id, { model: 'gpt-saved', providerId: 'openai', modelAgentDeviceId: '' });
+    expect(echoed.modelGroup).toBe('daily');
+    const moved = await h.scheduler.update(sch.id, { model: 'gpt-saved', providerId: 'openai', modelAgentDeviceId: 'desk-2' });
+    expect(moved.modelGroup).toBeUndefined();
+    expect(moved.modelAgentDeviceId).toBe('desk-2');
+  });
+
   it('update() 给了真实 workingDir 时翻成 project(与 create 推断对称)', async () => {
     // 对话任务后来被显式改了项目目录 → 不能仍留 dialogue,否则 fire 时
     // 新目录会被管理工作区分配覆盖,显式设置被静默丢弃

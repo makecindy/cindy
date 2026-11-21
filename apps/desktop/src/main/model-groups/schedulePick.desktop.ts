@@ -2,7 +2,7 @@
  * 定时任务按模式选来源的桌面装配：选路用本机的模型组解析器，说明写在这次运行发出的那条消息下面。
  * 依赖都是顶层静态导入(architecture-invariants §2)；解析器只在端口函数里读，模块加载时不调用。
  */
-import { and, asc, eq, gte } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { getResolvedMainLocale, t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
@@ -19,11 +19,10 @@ const log = createLogger('model-groups:schedule');
 const NOTE_WAIT_ATTEMPTS = 40;
 const NOTE_WAIT_STEP_MS = 250;
 
-
-async function userMessageAtOrAfter(sessionId: string, sinceMs: number): Promise<number | null> {
+async function userMessageAt(sessionId: string, clientId: string): Promise<number | null> {
   const [row] = await getDbClient().drizzle.select({ createdAt: messages.createdAt }).from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'user'), gte(messages.createdAt, sinceMs)))
-    .orderBy(asc(messages.createdAt)).limit(1);
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId), eq(messages.role, 'user')))
+    .limit(1);
   const value = row?.createdAt as unknown;
   const at = value instanceof Date ? value.getTime() : typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : Number.NaN;
   return Number.isFinite(at) ? at : null;
@@ -49,11 +48,12 @@ export function createDesktopScheduleModelGroupPicker() {
         ? { agentDeviceId: row.agentDeviceId ?? null, ssh: !!row.remoteHostId }
         : undefined;
     },
-    writeNote: (sessionId, note, { clientId, sinceMs }) => {
+    writeNote: (sessionId, note, { clientId, messageClientId }) => {
       void (async () => {
         let createdAt: number | undefined;
         for (let attempt = 0; attempt < NOTE_WAIT_ATTEMPTS && createdAt === undefined; attempt += 1) {
-          const userAt = await userMessageAtOrAfter(sessionId, sinceMs).catch(() => null);
+          const anchorId = messageClientId();
+          const userAt = anchorId ? await userMessageAt(sessionId, anchorId).catch(() => null) : null;
           if (userAt !== null) createdAt = userAt + 1;
           else await new Promise((resolve) => setTimeout(resolve, NOTE_WAIT_STEP_MS));
         }

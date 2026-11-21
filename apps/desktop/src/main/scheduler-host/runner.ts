@@ -313,8 +313,11 @@ export interface SchedulerQueueDeps {
  */
 export interface ScheduleModelGroupPick {
   route?: Pick<Schedule, 'modelAgentKind' | 'model' | 'providerId' | 'effort' | 'modelAgentDeviceId'>;
-  /** 这一轮消息派发出去时调用一次(不等回复结束)：提交选路记录、记下任务用着哪个来源、在任务里写说明。 */
-  started(sessionId: string): void;
+  /**
+   * 这一轮消息派发出去时调用一次(不等回复结束)：提交选路记录、记下任务用着哪个来源、在任务里写说明。
+   * `messageClientId` 取这次发出的那条用户消息的 clientId(说明挂在它下面)；排队派发时可能稍后才有。
+   */
+  started(sessionId: string, messageClientId: () => string | undefined): void;
 }
 
 export interface MakerScheduleRunnerDeps {
@@ -624,6 +627,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 插件引擎在保存时就确认本机此刻提供它(停用 / 卸载 / 不可用都明确拒绝)。
       this.admitScheduledPluginEngine(schedule);
       return;
+    }
+    // 选着模式时每次运行由模式选来源，存下的具体模型只是兜底：模式此刻能选出可用来源就放行，
+    // 与运行时同一个判断(只选不提交)。选不出来才要求兜底模型可用。
+    if (schedule.modelGroup?.trim() && schedule.agentKind !== 'acp' && this.deps.pickScheduleModelGroup) {
+      const pick = await this.deps.pickScheduleModelGroup(schedule).catch(() => null);
+      if (pick?.route) return;
     }
     const target = schedule.targetSessionId
       ? await this.runtime.getSessionRowSnapshot(schedule.targetSessionId) : null;
@@ -1040,10 +1049,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (modelGroupPick) {
       const pick = modelGroupPick;
       let recorded = false;
-      holder.runDispatched = (sessionId) => {
+      holder.runDispatched = (sessionId, messageClientId) => {
         if (recorded) return;
         recorded = true;
-        pick.started(sessionId);
+        pick.started(sessionId, messageClientId);
       };
     }
     const closeQuietOutput = hidesScheduledTranscript(schedule)
@@ -2455,7 +2464,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (acceptedMessageClientId) {
             this.deps.onModelDispatched?.(session.id, acceptedMessageClientId);
           }
-          holder.runDispatched?.(session.id);
+          holder.runDispatched?.(session.id, () => acceptedMessageClientId);
         },
         planMode: routinePermissions?.planMode ?? heartbeatPermissions?.planMode ?? false,
         onAccepted: async (signal) => {
@@ -2821,6 +2830,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // TS 控制流分析看不到,裸 let 会被收窄成 null/never。
     const waiterSlot: { current: TurnCompletionWaiter | null } = { current: null };
     let dispatched = false;
+    // 排队项的 clientId 就是派发时落库的那条用户消息的 clientId；入队返回后才知道(派发可能更早)。
+    let queuedClientId: string | undefined;
     let pendingRecoveryFailure: string | undefined;
     // ── 纯等待记账 + 派发取消标志 ──────────────────────────────────────────
     // 必须声明在 enqueuePrompt **之前**:队列此刻恰好空时 onAccepted 可能被同步调用,
@@ -2953,7 +2964,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // turn is headless; marking the whole queue wait would suppress setup
         // cards in that unrelated interactive turn.
         markHeadlessTurnDispatched();
-        if (!ctx.signal.aborted) holder.runDispatched?.(sessionId);
+        if (!ctx.signal.aborted) holder.runDispatched?.(sessionId, () => queuedClientId);
         const live = this.deps.maker.getSession(sessionId);
         // abort 撞上"项已转 activeTurn、尚未 accept"的派发窗口时,removeQueuedPrompt
         // 是 no-op、coordinator 会继续把 turn 发出去 —— 这里在 accept 时刻补杀:
@@ -3183,6 +3194,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       return this.settleDuplicateQueuedFire(schedule, ctx, sessionId);
     }
     const { clientId } = enqueueResult;
+    queuedClientId = clientId;
     const stopWaitingForRecovery = sq.onAutoResumeFailed?.(sessionId, ctx.runId, (error) => {
       if (!dispatched) failDispatch(new Error(formatAutoResumeFailure(error || pendingRecoveryFailure)));
     });
@@ -4434,7 +4446,7 @@ interface EphemeralSessionHolder {
    * 这一轮定时消息真的派发出去时调用一次(直发在 onDispatching，排队在 onAccepted)。
    * 模型组的选路记录、任务绑定与说明挂在这里：运行开始就记，不等回复结束、失败也算用过。
    */
-  runDispatched?: (sessionId: string) => void;
+  runDispatched?: (sessionId: string, messageClientId: () => string | undefined) => void;
   preRunHookOutput?: string;
   /** 与引擎写进 run 记录的同一份放行结果；本轮之后的失败通知要带上它，去重才对得上。 */
   preRunHookResult?: ScheduleRun['preRunHookResult'];

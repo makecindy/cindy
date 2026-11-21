@@ -379,7 +379,11 @@ describe('MakerScheduleRunner model selection', () => {
       }));
       expect(pickScheduleModelGroup).toHaveBeenCalledOnce();
       expect(opts.model).toBe('gpt-picked');
-      expect(started).toHaveBeenCalledWith(h.session.id);
+      expect(started).toHaveBeenCalledWith(h.session.id, expect.any(Function));
+      // PR #11881 review r4653462655: the note anchors on the message this run sent, not the first user
+      // message after the pick (another message may land while pre-run checks wait).
+      const userMessage = mocks.createMessage.mock.calls.find((call) => call[1]?.role === 'user')?.[1];
+      expect(started.mock.calls[0]![1]()).toBe(userMessage?.clientId);
     });
 
     // PR #11881 review r4651177672: the pick was recorded only after the whole reply, so a failed run was
@@ -398,7 +402,7 @@ describe('MakerScheduleRunner model selection', () => {
         agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
       }), createFireContext()).catch((error: unknown) => error);
       await vi.waitFor(() => expect(h.send).toHaveBeenCalled());
-      await vi.waitFor(() => expect(started).toHaveBeenCalledWith(h.session.id));
+      await vi.waitFor(() => expect(started).toHaveBeenCalledWith(h.session.id, expect.any(Function)));
       h.emit({ type: 'error', data: { message: 'upstream failed' } });
       await firing;
       expect(started).toHaveBeenCalledOnce();
@@ -550,6 +554,23 @@ describe('MakerScheduleRunner model selection', () => {
     expect(harness.createSession).not.toHaveBeenCalled();
     expect(h.setModel).not.toHaveBeenCalled();
     expect(h.send).not.toHaveBeenCalled();
+  });
+
+  // PR #11881 review r4653462645: saving (create, promote to project, import) required the saved fallback model
+  // even when the mode itself picks a usable source. Minimal input: a mode schedule whose saved model no longer
+  // resolves. Failure: save rejected although runs would use the mode; or a mode with nothing usable admitted.
+  it('admits a mode that picks a usable source even when the saved fallback model is gone', async () => {
+    const resolveModelSelection = vi.fn(async () => { throw new Error('[MODEL_SELECTION_UNAVAILABLE] removed'); });
+    const pickScheduleModelGroup = vi.fn(async () => ({
+      route: { modelAgentKind: 'codex' as const, model: 'gpt-picked', providerId: '', effort: undefined, modelAgentDeviceId: '' },
+      started: vi.fn(),
+    }));
+    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection, pickScheduleModelGroup });
+    const schedule = baseSchedule({ agentKind: 'codex', modelAgentKind: 'codex', model: 'gone', providerId: 'removed', modelGroup: 'daily' });
+    await expect(harness.runner.validateModelSelection(schedule)).resolves.toBeUndefined();
+    expect(resolveModelSelection).not.toHaveBeenCalled();
+    pickScheduleModelGroup.mockResolvedValueOnce({ started: vi.fn() } as never);
+    await expect(harness.runner.validateModelSelection(schedule)).rejects.toThrow('modelAgentDeviceId');
   });
 
   it('does not require a live catalog for unrelated edits or legacy followed models', async () => {
