@@ -78,8 +78,7 @@ export function PushNotificationsBridge() {
     void registerNotificationActionCategories().catch(() => undefined);
   }, [language]);
 
-  // Push registration follows the account identity, not refreshed profile objects.
-  // Reconcile once the signed-in account and its routing preferences are ready.
+  // 登录态就绪后同步注册状态；账号代次或路由改变时重新登记，同账号的资料刷新只用于失败恢复。
   useEffect(() => {
     if (!isPushSupported()) return;
     if (!auth.initialized || !auth.isAuthenticated || !pushAccountId) return;
