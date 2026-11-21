@@ -1258,7 +1258,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         await this.#requireStore().releaseDispatch(task.bindingEpoch, task.id);
         await delay(IDLE_PUMP_DELAY_MS);
       } else {
-        await this.#commitPreDispatchFailure(task, dispatch.reason);
+        // 伙伴不可用时 runner 已拼好「伙伴现在接不了消息：原因」, 优先发它而不是通用的「请稍后重试」。
+        await this.#commitPreDispatchFailure(task, dispatch.reason, dispatch.notice);
       }
       return;
     }
@@ -1559,9 +1560,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     }
   }
 
-  async #commitPreDispatchFailure(task: WechatTask, reason: string): Promise<void> {
+  async #commitPreDispatchFailure(task: WechatTask, reason: string, notice?: string): Promise<void> {
     const companion = this.#turnRuntime?.runner.companionBotIdFor?.(this.#epoch?.credentials.ilinkBotId ?? '');
-    const text = wechatPreDispatchFailureText(reason, Boolean(companion));
+    const text = notice ?? wechatPreDispatchFailureText(reason, Boolean(companion));
     const chunks = chunkWechatText(text);
     await this.#requireStore().commitPreDispatchFailure({
       bindingEpoch: task.bindingEpoch,
