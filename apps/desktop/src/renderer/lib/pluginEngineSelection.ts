@@ -169,6 +169,23 @@ export function resolvePluginEngineEffort(
 }
 
 /**
+ * Effort for an in-session plugin engine pick: carries over the active effort only when staying on
+ * the same plugin engine (and computer); switching to another engine uses the target model's own
+ * default level, matching what the picker rows display.
+ */
+export function resolvePluginEngineSessionSwitchEffort(
+  selection: PluginEngineSelection,
+  targetEngine: Pick<PluginEngineView, 'models'> | null | undefined,
+  currentActive?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
+): PluginEngineEffort | undefined {
+  if (selection.effort) return selection.effort;
+  const carriedEffort = currentActive && isSamePluginEngineChoice(selection, currentActive)
+    ? currentActive.effort
+    : undefined;
+  return resolvePluginEngineEffort(targetEngine, selection.modelId, carriedEffort) ?? undefined;
+}
+
+/**
  * Rows offered under an engine: its last-seen models, or a single default entry until a task ran.
  * When the current choice is the default but models are known, the default entry stays visible
  * so the current choice is shown and can be picked again.

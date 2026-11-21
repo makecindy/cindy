@@ -755,8 +755,14 @@ async function prepareAndStartRemoteAgentSession(
       onState: (incoming) => {
         if (!isCurrent()) return;
         // 组所在电脑发来的「需要换一台」凭证(排在那次错误前面)：交给供应商组服务，不进任务状态。
-        const remaining = takeGroupSwitchState(incoming, captureReconnectOffer && !opened
-          ? token => { startupSwitchToken = token; } : deps.groupSwitch?.offer);
+        const remaining = takeGroupSwitchState(incoming, token => {
+          deps.log?.info('remote agent switch credential received', {
+            sessionId: opts.sessionId,
+            phase: captureReconnectOffer && !opened ? 'reconnect' : 'run',
+          });
+          if (captureReconnectOffer && !opened) startupSwitchToken = token;
+          else deps.groupSwitch?.offer(token);
+        });
         if (!remaining) return;
         let state = remaining;
         const projection = state.workspaceProjection as Parameters<typeof shadowAliases>[0] | undefined;
@@ -886,7 +892,10 @@ async function prepareAndStartRemoteAgentSession(
       }
       if (!projectionReady) applyProjection(started, started.virtualWorkspace ? started.mirrorRoot : undefined);
       opened = true;
-      if (startupSwitchToken) deps.groupSwitch?.offer(startupSwitchToken);
+      if (startupSwitchToken) {
+        deps.log?.info('remote agent switch credential taken over', { sessionId: opts.sessionId, phase: 'reconnect' });
+        deps.groupSwitch?.offer(startupSwitchToken);
+      }
       linkState = 'connected';
       lastStarted = started;
       onOpened(started);
@@ -905,10 +914,14 @@ async function prepareAndStartRemoteAgentSession(
       if (!remoteStarted && token && isCurrent()) {
         if (error instanceof RemoteAgentRemoteError && error.phase === 'start'
           && error.info.name === 'AgentStartupStoppedError' && error.info.code === 'SUBSCRIPTION_ACCOUNT_LIMITED') {
-          stoppedReconnectOffers.set(error, () => deps.groupSwitch?.offer(token));
+          stoppedReconnectOffers.set(error, () => {
+            deps.log?.info('remote agent switch credential taken over', { sessionId: opts.sessionId, phase: 'reconnect' });
+            deps.groupSwitch?.offer(token);
+          });
         } else {
           // Other failures (for example an expired login) retain their existing
           // offer path. This caller may only replay a confirmed quota rejection.
+          deps.log?.info('remote agent switch credential taken over', { sessionId: opts.sessionId, phase: 'reconnect' });
           deps.groupSwitch?.offer(token);
         }
       }

@@ -362,11 +362,19 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
         name: 'openai-codex', source: 'organization', logoKind: 'openai-spectrum',
       }) as unknown as OwnRemoteProvider['provider'],
     };
-    render(<OwnRemoteProviderRows entries={[enterprise]} selectedKey={null} onSelect={() => undefined} />);
+    const rows = (entry: OwnRemoteProvider) => (
+      <OwnRemoteProviderRows entries={[entry]} selectedKey={null} onSelect={() => undefined} />
+    );
+    const view = render(rows(enterprise));
     const mark = screen.getByTestId('own-remote-provider-row').querySelector('[data-remote-source-mark]')!;
     const gradient = mark.querySelector('linearGradient');
     expect(gradient).not.toBeNull();
     expect(mark.querySelector('path[fill^="url"]')?.getAttribute('fill')).toBe(`url(#${gradient!.id})`);
+    view.rerender(rows({ ...enterprise, provider: { ...enterprise.provider, customIcon: '<svg/>' } }));
+    const image = screen.getByTestId('own-remote-provider-row').querySelector('[data-remote-source-mark] img')!;
+    expect(image.getAttribute('src')).toBe('data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E');
+    fireEvent.error(image);
+    expect(screen.getByTestId('own-remote-provider-row').querySelector('linearGradient')).toBeTruthy();
   });
 
   it('uses the existing disabled state and removes model and quota content until re-enabled', () => {

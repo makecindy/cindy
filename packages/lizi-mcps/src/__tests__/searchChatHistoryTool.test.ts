@@ -54,6 +54,24 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('search_chat_history tool', () => {
+  // 测试价值：经 MCP registry 调用真实 search_chat_history；命中上下文里只含一种图片地址时也要给提示，
+  // 两种地址分开断言，删掉任一种识别都会失败。最小失败输入：上下文只含一个图片地址。tier：unit。
+  it.each([
+    ['cindy-media', 'cindy-media://blobs/' + 'b'.repeat(64) + '.jpg'],
+    ['xdt-image', 'xdt-image://s1/legacy-cache.jpg'],
+  ])('adds one image viewing hint when a hit context contains a %s image address', async (_scheme, content) => {
+    const { registry } = setup(makeResult({
+      hits: [{ messageId: 'm1', sessionId: 's1', role: 'user', createdAt: 1000, snippet: null,
+        score: 1, ftsRank: null, vectorRank: null, vectorDistance: null, context: [{
+          id: 'm1', sessionId: 's1', role: 'user', content,
+          toolUseId: null, agentMeta: null, createdAt: 1000, rewindAt: null, isHit: true,
+        }] }],
+    }));
+    const result = parse(await registry.call('search_chat_history', { query: 'image' }));
+    expect(result.image_view_hint).toContain('resolve_local_path');
+    expect(result.image_view_hint).toContain('重发');
+  });
+
   it('超长 query → INVALID_ARGS (zod)', async () => {
     const { registry, searchChatHistory } = setup(makeResult());
     const res = await registry.call('search_chat_history', { query: '边'.repeat(257) });
@@ -244,8 +262,8 @@ describe('search_chat_history tool', () => {
 
 describe('search_chat_history cloud companion rooms', () => {
   const room = { teammateId: 'bot_a', teammateName: 'Cindy', messageId: 'm1', role: 'assistant' as const, text: 'brew', createdAt: 2_000 };
-  const call = async (input: Record<string, unknown>, opts: { session?: string; scoped?: boolean } = {}) => {
-    const searchCompanionRooms = vi.fn(async () => ({ hits: [room], failed: [{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }], incomplete: true }));
+  const call = async (input: Record<string, unknown>, opts: { session?: string; scoped?: boolean; hits?: Array<typeof room> } = {}) => {
+    const searchCompanionRooms = vi.fn(async () => ({ hits: opts.hits ?? [room], failed: [{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }], incomplete: true }));
     const registry = new XdtHelperToolRegistry();
     registerSearchChatHistoryTool(registry, {
       history: {
@@ -267,6 +285,17 @@ describe('search_chat_history cloud companion rooms', () => {
     expect(payload.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['m1']);
     expect(payload.cloud_hits[0].createdAt).toBe('1970-01-01T00:00:02.000Z');
     expect(payload.cloud_failed).toEqual([{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }]);
+  });
+
+  // 测试价值：经 MCP registry 调用真实 search_chat_history；图片地址只出现在其他电脑伙伴的 cloud_hits 里、
+  // 本机没有命中时，也要给 image_view_hint（Codex 审阅指出）。最小失败输入：一条云端伙伴消息只含图片地址。tier：unit。
+  it('adds the image viewing hint when only a cloud companion hit has a managed image', async () => {
+    const hits = [{ ...room, text: 'see cindy-media://blobs/' + 'c'.repeat(64) + '.png' }];
+    const { payload } = await call({}, { session: 's1', hits });
+    expect(payload.hits).toEqual([]);
+    expect(payload.image_view_hint).toContain('resolve_local_path');
+    const { payload: plain } = await call({}, { session: 's1' });
+    expect(plain).not.toHaveProperty('image_view_hint');
   });
 
   it('keeps long room messages to one page and says where to continue', async () => {
