@@ -14441,6 +14441,7 @@
       "steerNotSent": "未遣，暂不能插话，草稿已留",
       "credentialSwitchApplied": "模型所出已易，即行生效。",
       "credentialSwitchFailed": "模型来源切换未成，请重择。",
+      "credentialSwitchKeptSettings": "此次更易未成，任务仍循旧设。",
       "modelSwitchContextGuard": {
         "warnToast": "此段言谈已用 {{used}}，换过去约占新模型容量（{{total}}）之 {{pct}}%",
         "condensedToast": "为合新模型之容量，较早之言将压缩，言谈全录仍可阅。",

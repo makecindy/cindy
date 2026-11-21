@@ -17,6 +17,7 @@ import {
   prepareLocalSessionCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
+import type { PendingCredentialSwitch, PendingCredentialSwitchTarget } from './pendingCredentialSwitch.js';
 
 interface RuntimeSetModelSession {
   agentKind: EngineKind;
@@ -99,8 +100,9 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   registerPendingCredentialSwitch?: (
     sessionId: string,
-    target: { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' },
+    target: PendingCredentialSwitchTarget,
   ) => void | Promise<void>;
+  deferredSelection?: PendingCredentialSwitch['deferredSelection'];
   /**
    * 「无需切换」分支清掉旧 pending(后选覆盖先选)。典型场景:deferred 登记后
    * renderer 持久化失败发起回滚 set-model、用户改选回与当前进程同族的来源、或
@@ -122,7 +124,7 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   getPendingCredentialSwitch?: (
     sessionId: string,
-  ) => { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' } | undefined;
+  ) => PendingCredentialSwitchTarget | undefined;
   /**
    * 当前本地 Codex spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
    * shouldCloseSessionForCredentialSwitch 用它解析隐式来源的凭证家族,精确判定
@@ -314,6 +316,7 @@ export async function applyRuntimeSetModelChange(
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(input.deferredSelection ? { deferredSelection: input.deferredSelection } : {}),
       });
       logger?.info('set-model: provider route switch deferred until turn end', {
         sessionId,
@@ -340,6 +343,7 @@ export async function applyRuntimeSetModelChange(
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(input.deferredSelection ? { deferredSelection: input.deferredSelection } : {}),
         ...(shouldCloseSession ? { forceSessionRebuild: true } : {}),
       });
       logger?.info('set-model: session rebuild deferred until turn end', {
@@ -387,9 +391,10 @@ export async function applyRuntimeSetModelChange(
         isCredentialModeSwitchBusyError(err) &&
         input.registerPendingCredentialSwitch
       ) {
-        input.registerPendingCredentialSwitch(sessionId, {
+        await input.registerPendingCredentialSwitch(sessionId, {
           model,
           providerId: nextProviderId,
+          ...(input.deferredSelection ? { deferredSelection: input.deferredSelection } : {}),
           ...(shouldCloseSession ? { forceSessionRebuild: true } : {}),
         });
         logger?.info('set-model: credential switch deferred after busy race', {

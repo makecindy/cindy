@@ -10,13 +10,39 @@
 import type { Maker } from '@cindy/maker-core';
 import { eq } from 'drizzle-orm';
 import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
-import { getDbClient } from '../localDb/client/current.js';
+import { getDbClient, getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
-import { getSessionProvider } from '../maker-host/session-provider-store.js';
+import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
+import { getSessionEffort, getSessionFastMode } from '../maker-host/session-effort-store.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
 import type { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
-import type { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
-import { captureSessionRuntimeControlOwnerEpoch } from './sessionRuntimeControl.js';
+import type { CredentialTaskSettings, PendingCredentialSwitchService, PendingCredentialSwitchTarget } from './pendingCredentialSwitch.js';
+import { captureSessionRuntimeControlOwnerEpoch, getSessionRuntimeControlSnapshot, sessionRuntimeControlOwnerEpochMatches } from './sessionRuntimeControl.js';
+
+export async function readCredentialTaskSettings(db: DbClient, sessionId: string) {
+  const rows = await db.drizzle.select({
+    createdAt: sessions.createdAt,
+    status: sessions.status,
+    model: sessions.model,
+    providerId: sessions.providerId,
+    effort: sessions.effort,
+    fastMode: sessions.fastMode,
+    contextWindow: sessions.contextWindow,
+    scheduledModelBaseline: sessions.scheduledModelBaseline,
+  }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  return rows.at(0);
+}
+
+export function readEffectiveCredentialSettings(sessionId: string, row: CredentialTaskSettings) {
+  const override = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
+  return {
+    providerId: override ? override.providerId :
+      hasSessionProvider(sessionId) ? getSessionProvider(sessionId) : row.providerId,
+    effort: override ? override.effort : getSessionEffort(sessionId),
+    fastMode: override ? override.fastMode : getSessionFastMode(sessionId),
+  };
+}
 
 export interface PendingCredentialSwitchAccessPorts {
   pendingCredentialSwitchHolder: PendingCredentialSwitchService | null;
@@ -29,7 +55,7 @@ export interface PendingCredentialSwitchAccessPorts {
 export async function registerPendingCredentialSwitchWith(
   ports: PendingCredentialSwitchAccessPorts,
   sessionId: string,
-  target: { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' },
+  target: PendingCredentialSwitchTarget,
 ): Promise<void> {
   const { pendingCredentialSwitchHolder, getSessionDbAgentKind, getMaker } = ports;
   const service = pendingCredentialSwitchHolder;
@@ -52,32 +78,34 @@ export async function registerPendingCredentialSwitchWith(
   if (isPluginEngineKind(dbAgentKind) || liveAgentKind === 'acp') {
     throw new PluginEngineUnsupportedError('Credential switching');
   }
-  let prevRow: {
-    model: string | null;
-    effort: string | null;
-    fastMode: boolean | 'ultrafast' | null;
-    providerId: string | null;
-  } | null = null;
+  const ownerEpoch = captureSessionRuntimeControlOwnerEpoch();
+  const db = getCurrentDbClientSnapshot();
+  let prevRow: Awaited<ReturnType<typeof readCredentialTaskSettings>> = undefined;
   try {
-    const [row] = await getDbClient()
-      .drizzle.select({
-        model: sessions.model,
-        effort: sessions.effort,
-        fastMode: sessions.fastMode,
-        providerId: sessions.providerId,
-      })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    prevRow = row ?? null;
-  } catch {
-    prevRow = null;
+    prevRow = await readCredentialTaskSettings(db?.client ?? getDbClient(), sessionId);
+  } catch (error) {
+    if (target.deferredSelection) throw error;
+  }
+  if (target.deferredSelection &&
+      (!db || !prevRow || prevRow.status !== 'active' ||
+        !sessionRuntimeControlOwnerEpochMatches(ownerEpoch) || db !== getCurrentDbClientSnapshot())) {
+    throw new Error('Task changed during deferred credential selection');
   }
   const prevModel = live?.model ?? prevRow?.model ?? null;
   service.register(sessionId, {
     ...target,
-    ownerEpoch: captureSessionRuntimeControlOwnerEpoch(),
-    ...(dbAgentKind ? { agentKind: dbToMakerAgentKind(dbAgentKind) } : liveAgentKind ? { agentKind: liveAgentKind } : {}),
+    ownerEpoch,
+    ...(target.deferredSelection && db && prevRow
+      ? { deferredState: {
+          db,
+          createdAt: prevRow.createdAt,
+          before: prevRow,
+          effectiveBefore: readEffectiveCredentialSettings(sessionId, prevRow),
+          written: {},
+        } }
+      : {}),
+    agentKind: target.deferredSelection?.agentKind ??
+      (dbAgentKind ? dbToMakerAgentKind(dbAgentKind) : liveAgentKind),
     ...(prevModel
       ? {
           previousRoute: {
@@ -116,12 +144,17 @@ export function wakeSessionInputAfterCredentialSwitchWith(
 export function getPendingCredentialSwitchTargetWith(
   ports: PendingCredentialSwitchAccessPorts,
   sessionId: string,
-): { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' } | undefined {
+): PendingCredentialSwitchTarget | undefined {
   const { pendingCredentialSwitchHolder } = ports;
   const pending = pendingCredentialSwitchHolder?.get(sessionId);
+  if (pending?.deferredSelection && (
+    (pending.ownerEpoch && !sessionRuntimeControlOwnerEpochMatches(pending.ownerEpoch)) ||
+    (pending.deferredState && pending.deferredState.db.userId !== getCurrentDbClientSnapshot()?.userId)
+  )) return undefined;
   return pending ? { model: pending.model, providerId: pending.providerId,
     ...(pending.forceSessionRebuild ? { forceSessionRebuild: true } : {}),
-    ...(pending.selectionSource ? { selectionSource: pending.selectionSource } : {}) } : undefined;
+    ...(pending.selectionSource ? { selectionSource: pending.selectionSource } : {}),
+    ...(pending.deferredSelection ? { deferredSelection: pending.deferredSelection } : {}) } : undefined;
 }
 
 /** register.ts's settlePendingCredentialSwitch (a task's turn settled), with its holder and logger. */

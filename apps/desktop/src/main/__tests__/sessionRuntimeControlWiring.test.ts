@@ -202,6 +202,7 @@ describe.each([
       remoteResponse: response, persistSessionFields: persist, agentSwitchPending: pending,
       readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'next-provider', agentDeviceId: null } }),
       getSessionProvider: () => 'next-provider',
+      getPendingCredentialSwitchHolder: () => null,
       createSubscriptionFastPolicy: () => ({ isAllowed: () => true }),
       // These archived fixtures have no saved automation model scope.
       updateSavedScheduledAxis: vi.fn(async () => false),
@@ -244,7 +245,10 @@ describe.each([
     };
     h.pending.set('archived-task', intent);
     await h.run();
-    expect(h.pending.get('archived-task')).toEqual({ ...intent, [field]: value });
+    expect(h.pending.get('archived-task')).toEqual({
+      ...intent, [field]: value,
+      ...(kind === 'same-agent' ? { credentialSelectionAxes: { effort: true, fastMode: true } } : {}),
+    });
     if (kind !== 'same-agent') expect(h.changed).toHaveBeenCalledWith('archived-task',
       expect.objectContaining({ model: 'next-model', [field]: value }));
     expect(h.row).toMatchObject({ status: 'archived', effort: 'low', fastMode: false });
@@ -772,7 +776,6 @@ describe('session runtime control wiring', () => {
   });
 
   it('reconciles deferred route axes before the pending gate can wake input', () => {
-    // The service's assembly moved verbatim to pendingCredentialSwitchAssembly.ts.
     const persistRoute = handlerBody(
       pendingCredentialSwitchAssemblySource,
       'persistRoute: async (sessionId, route) => {',
@@ -780,7 +783,7 @@ describe('session runtime control wiring', () => {
     );
     const resolveAxes = persistRoute.indexOf('const axes = resolveSessionRuntimeAxes({');
     const persist = persistRoute.indexOf(
-      'await pendingDb.drizzle.update(sessions).set(patch)',
+      'const result = ports.settlementPermit ? update.run() : await update.run();',
       resolveAxes,
     );
     const commitEffort = persistRoute.indexOf('setSessionEffort(sessionId, finalEffort);', persist);
@@ -790,7 +793,7 @@ describe('session runtime control wiring', () => {
     );
     const broadcast = persistRoute.indexOf('broadcastSessionPatched(sessionId, patch);', persist);
 
-    expect(persistRoute).toContain('const [desiredRow] = await pendingDb');
+    expect(persistRoute).toContain('const desiredRow = await readCredentialTaskSettings(pendingDb, sessionId);');
     expect(persistRoute).toContain('assertPendingOwner();');
     expect(persistRoute).toContain('const restoringPreviousRoute =');
     expect(persistRoute).toContain('let finalEffort = restoringPreviousRoute && route.effort');

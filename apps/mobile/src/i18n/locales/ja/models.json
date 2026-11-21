@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "モデルプロバイダーの切り替えが有効になりました。",
-    "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。"
+    "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
+    "previousSettingsRetained": "切り替えは完了しませんでした。タスクは引き続き元の設定を使用します。"
   },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} のモデルを表示"

@@ -52,6 +52,7 @@ import { localNetworkStore, type NetworkState } from '../device-link/localNetwor
 import { remoteSessionStore } from '../session/remoteSessionStore';
 import { getDeviceFetchEpoch, subscribeDeviceProvidersGen } from '../device-link/deviceProvidersCache';
 import { useRemoteAgentCatalogs } from '../session/useRemoteAgentCatalogs';
+import { subscribeSessionCredentialSwitchNotices } from '../session/credentialSwitchOutcome';
 
 const auth = vi.hoisted(() => ({
   isAuthenticated: true,
@@ -230,6 +231,39 @@ beforeEach(async () => {
   await act(async () => render());
 });
 afterEach(async () => { await act(async () => root.unmount()); });
+
+// Unit/jsdom. The real Provider delivers Device Link pushes to the route's scoped alert subscription.
+it('keeps the legacy mobile credential alert unless the host confirms the previous settings', async () => {
+  let focused = true;
+  const show = vi.fn();
+  const off = subscribeSessionCredentialSwitchNotices('controlled', 'task', () => focused, show);
+  const client = transport.clients[0];
+  const push = (reason: string, fields: Record<string, unknown> = {}, src = 'controlled', sessionId = 'task') => act(async () => {
+    client.frame({ v: 1, kind: 'push', src, dst: 'mobile', payload: {
+      channel: 'maker:session-credential-switch-failed', payload: { sessionId, reason, ...fields },
+    } } as Parameters<typeof client.frame>[0]);
+  });
+  try {
+    const retained = { previousSettingsRetained: true };
+    await push('apply-failed', retained, 'other-device');
+    await push('apply-failed', retained, 'controlled', 'other-task');
+    focused = false;
+    await push('apply-failed', retained);
+    expect(show).not.toHaveBeenCalled();
+    focused = true;
+    await push('apply-failed', retained);
+    await push('apply-failed');
+    await push('apply-failed', { previousSettingsRetained: false });
+    await push('apply-failed', { previousSettingsRetained: 'true' });
+    await push('rollback-failed', retained);
+    expect(show.mock.calls).toEqual([
+      ['models.switchOutcome.previousSettingsRetained'],
+      ...Array.from({ length: 4 }, () => ['models.switchOutcome.failed']),
+    ]);
+  } finally {
+    off();
+  }
+});
 
 describe('Provider device roster reads', () => {
   /** 测试价值：render/read getter 用 peek 证明 direct path，不调用可能 detach/emit 的

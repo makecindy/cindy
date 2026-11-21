@@ -54,7 +54,12 @@ import type { createContextOverflowRollover } from './contextOverflowRollover.js
 import type { SessionRuntimeAxisPatch, SessionRuntimeMutationSource, SessionRuntimeProfile } from './sessionRuntimeControl.js';
 import type { MakerSessionAgentSwitchHandlerDeps, PendingAgentSwitchRegistry } from './sessionAgentSwitchHandler.js';
 import type { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
-import type { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
+import {
+  projectDeferredCredentialSwitchIntent,
+  type PendingCredentialSwitch,
+  type PendingCredentialSwitchService,
+  type PendingCredentialSwitchTarget,
+} from './pendingCredentialSwitch.js';
 import type { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import type { Logger } from '../logger.js';
@@ -89,6 +94,7 @@ export type InternalRuntimeSelectionOptions = {
   previousProfile?: SessionRuntimeProfile;
   /** Effective profile observed by the Agent CAS read; axis-only patches use it as the live base. */
   effectiveProfile?: SessionRuntimeProfile;
+  credentialSelectionAxes?: { effort: boolean; fastMode: boolean };
   effortExplicit?: boolean;
   fastExplicit?: boolean;
   /** False only for Agent axis-only patches; model/provider routing stays untouched. */
@@ -146,9 +152,9 @@ export interface SessionRuntimeSelectionPorts {
   clearPendingCredentialSwitchForSession: (sessionId: string, opts?: { wake?: boolean }) => void;
   isSessionInTurn: (sessionId: string) => boolean;
   contextOverflowRolloverHolder: ReturnType<typeof createContextOverflowRollover> | null;
-  getPendingCredentialSwitchTarget: (sessionId: string) => { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' } | undefined;
+  getPendingCredentialSwitchTarget: (sessionId: string) => PendingCredentialSwitchTarget | undefined;
   captureSharedTaskSettingGuard: (sessionId: string) => ReturnType<typeof createSharedTaskSettingGuard>;
-  registerPendingCredentialSwitchForSession: (sessionId: string, target: { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' }) => Promise<void>;
+  registerPendingCredentialSwitchForSession: (sessionId: string, target: PendingCredentialSwitchTarget) => Promise<void>;
   agentInputCoordinatorHolder: Pick<AgentInputCoordinator, 'refreshQueuedRoute'> | null;
   getSessionDbAgentKind: typeof import('../messagePersistBroadcaster.desktop.js').getSessionDbAgentKind;
   broadcastSessionPatched: typeof import('../localDb/ipc/sessions.js').broadcastSessionPatched;
@@ -303,6 +309,10 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
     }
     let atomicSelection = selection as
       { effort: SessionRuntimeProfile['effort']; fastMode: boolean | 'ultrafast'; thinking?: boolean } | undefined;
+    const credentialSelectionAxes = internalOptions.credentialSelectionAxes ?? {
+      effort: atomicSelection !== undefined && internalOptions.configStaged !== true,
+      fastMode: atomicSelection !== undefined && internalOptions.configStaged !== true,
+    };
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     const assertSharedTaskCurrent = internalOptions.pendingSelectionAccess ?? captureSharedTaskSettingGuard(sessionId);
     const assertRuntimeOwnerCurrent = (): void => {
@@ -634,6 +644,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
           ...(internalOptions.configStaged === true ? { configStaged: true } : {}),
           sameAgentSelection: true,
+          credentialSelectionAxes,
           targetAgentKind: dbToMakerAgentKind(runtimeStatus.agentKind),
           model,
           providerId: effectiveProviderId === undefined ? currentProviderId : effectiveProviderId,
@@ -1373,6 +1384,20 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           }
         };
         assertRuntimeOwnerCurrent();
+        const deferredSelection: PendingCredentialSwitch['deferredSelection'] = internalOptions.source === 'user' &&
+          (runtimeAgentKind === 'claude-code' || runtimeAgentKind === 'codex') &&
+          dbToMakerAgentKind(runtimeStatus.agentKind) === runtimeAgentKind
+          ? {
+              agentKind: runtimeAgentKind,
+              explicitAxes: credentialSelectionAxes,
+              effort: atomicSelection ? atomicSelection.effort : currentEffort ?? runtimeStatus.effort,
+              fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode ?? false,
+              clearScheduledBaseline: internalOptions.configStaged !== true,
+              ...(internalOptions.configStaged !== true
+                ? { onCommitted: () => reconcileBotModelRoute.acceptTaskChoice(sessionId) }
+                : {}),
+            }
+          : undefined;
         const result: Awaited<ReturnType<typeof applyRuntimeSetModelChange>> = routeExplicit
           ? await applyRuntimeSetModelChange({
               maker,
@@ -1430,6 +1455,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
                 : {}),
               isSessionInTurn,
               registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
+              deferredSelection,
               clearPendingCredentialSwitch: internalOptions.applyingPiCredentialPending
                 ? () => {}
                 : atomicSelection ||
@@ -1458,6 +1484,17 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         };
         if (supersededByOwnerBoundary()) {
           return { deferred: false, superseded: true };
+        }
+        if (response.deferred && deferredSelection) {
+          // The credential registry owns this choice until settlement. Keep the
+          // effective projection and prevent Device Link's lock-free write-back.
+          if (isDeviceLinkInvoke()) markRemoteSettingPersistedInsideHandler(response);
+          const generation = recordUserSessionRuntimeMutation(sessionId, { preserveEffective: true });
+          agentSwitchPending.clear(sessionId);
+          broadcastSessionPatched(sessionId, {
+            agentSwitchIntent: projectDeferredCredentialSwitchIntent(getPendingCredentialSwitchTarget(sessionId)),
+          });
+          return Object.assign(response, { generation });
         }
         if (result.persistedRoute === true && isDeviceLinkInvoke()) {
           markRemoteSettingPersistedInsideHandler(response);

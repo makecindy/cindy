@@ -14495,6 +14495,7 @@
       "steerNotSent": "Nachricht nicht gesendet. Das Einbringen ist vorübergehend nicht verfügbar; dein Entwurf wurde beibehalten.",
       "credentialSwitchApplied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
       "credentialSwitchFailed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut.",
+      "credentialSwitchKeptSettings": "Dieser Wechsel konnte nicht abgeschlossen werden. Die Aufgabe verwendet weiterhin die bisherigen Einstellungen.",
       "modelSwitchContextGuard": {
         "warnToast": "Diese Unterhaltung nutzt bereits {{used}} — etwa {{pct}} % der Kapazität von {{total}} des neuen Modells",
         "condensedToast": "Ältere Teile des Gesprächs werden für das neue Modell gekürzt. Der vollständige Verlauf bleibt verfügbar.",

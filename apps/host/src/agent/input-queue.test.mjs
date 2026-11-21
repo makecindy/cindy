@@ -3388,7 +3388,8 @@ async function modelChangeRuntime(t, { agent = 'claude-code', queue = {} } = {})
       const stored = row(id);
       // As the Host reads a task for a run: its stored engine (main.ts readSessionForRun).
       return { id, status: stored.status, agentKind: stored.agent_kind === 'cc' ? 'claude-code' : stored.agent_kind, model: stored.model, workingDir: db.root,
-        providerId: stored.provider_id, permissionMode: 'ask', planModeEnabled: false, sdkSessionId: stored.sdk_session_id,
+        providerId: stored.provider_id, effort: stored.effort, permissionMode: 'ask', planModeEnabled: false,
+        fastMode: stored.fast_mode === 'ultrafast' ? 'ultrafast' : stored.fast_mode === 1, sdkSessionId: stored.sdk_session_id,
         source: stored.source, remoteHostId: stored.remote_host_id, agentDeviceId: stored.agent_device_id, orcaRole: stored.orca_role };
     },
     // The runtime selection's queue hooks, as main.ts passes them (runtime-selection.ts), each send's
@@ -3731,6 +3732,70 @@ test('model change at send: a same-engine landing failure is left by discarding 
   assert.equal(r.row('land-drop').model, 'small');
   assert.equal(r.userRows('land-drop').length, 1);
 });
+
+// L342, database tier. A turn starts after the queue's idle check, while the picked
+// route is landing through the real send entry. Each assertion exposes a separate pre-write.
+for (const [label, fields] of [
+  ['model and source', ['model', 'provider_id']],
+  ['effort', ['effort']],
+  ['Fast', ['fast_mode']],
+]) {
+  test(`L342 send-time credential deferral keeps committed ${label}`, async t => {
+    const r = await modelChangeRuntime(t);
+    const id = 'l342-early-write';
+    const models = ['big', 'small'].map(model => ({ ...switchModel(model),
+      efforts: ['medium', 'high'], defaultEffort: 'medium', supportsFastMode: true }));
+    r.views.current = ['prov-a', 'prov-b'].map(id => ({
+      ...switchViews('claude-code')[0], id, models: { 'claude-code': models },
+    }));
+    await r.createTask(id);
+    await r.selection.setEffort(id, 'high');
+    const live = await r.runTurn(id, 'initial');
+    const committed = fields.map(field => r.row(id)[field]);
+    const selection = { effort: 'medium', fastMode: true };
+    const pick = await r.selection.setModel(id, 'small', 'prov-b', undefined, selection);
+    assert.equal(pick.pendingUntilSend, true);
+    assert.deepEqual(fields.map(field => r.row(id)[field]), committed, 'ordinary staging only previews');
+    live.requiresModelSwitchRebuild = async () => { live.running = true; return true; };
+    await r.h.queue.enqueue(id, { clientId: 'next', text: 'next' });
+    await settleUntil(() => r.selection.hasPendingCredentialSwitch(id), 'the queued send hits the busy rebuild');
+    assert.deepEqual(fields.map(field => r.row(id)[field]), committed, 'busy deferral leaves this field committed');
+    assert.equal(getSessionProvider(id), 'prov-a');
+    assert.equal(r.userRows(id).length, 1, 'the second input has not been accepted');
+  });
+}
+
+
+// L342, database tier. The send which actually discovers the busy credential
+// switch must enter the existing wait state and dispatch after a terminal refusal.
+test('L342 the send that discovers busy credential deferral resumes after a rollback', async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'l342-resume-queued-send';
+  const models = ['big', 'small'].map(model => ({ ...switchModel(model), efforts: ['medium'], defaultEffort: 'medium' }));
+  r.views.current = ['prov-a', 'prov-b'].map(id => ({
+    ...switchViews('claude-code')[0], id, models: { 'claude-code': models },
+  }));
+  await r.createTask(id);
+  const live = await r.runTurn(id, 'initial');
+  const picked = await r.selection.setModel(id, 'small', 'prov-b', undefined, { effort: 'medium', fastMode: false });
+  assert.equal(picked.pendingUntilSend, true);
+  live.requiresModelSwitchRebuild = async () => { live.running = true; return true; };
+  await r.h.queue.enqueue(id, { clientId: 'next', text: 'next' });
+  const projection = () => r.h.queue.projection(id);
+  await settleUntil(() => projection().credentialSwitchWait || projection().error, 'the busy send reaches the coordinator');
+  assert.equal(projection().error ?? null, null, 'a pending credential choice is a wait, not a failed input');
+  assert.equal(projection().credentialSwitchWait?.clientId, 'next');
+  assert.equal(r.userRows(id).length, 1);
+  r.db.db.exec(`CREATE TEMP TRIGGER reject_credential_landing BEFORE UPDATE OF provider_id ON sessions
+    WHEN NEW.provider_id = 'prov-b' BEGIN SELECT RAISE(ABORT, 'fixture rollback'); END`);
+  live.running = false;
+  await r.selection.onTurnSettled(id);
+  await settleUntil(() => r.h.maker.getSession(id)?.sent.includes('next'), 'settlement wakes the same queued input');
+  assert.equal(r.h.maker.getSession(id).options.providerId, 'prov-a');
+  assert.equal(r.row(id).model, 'big');
+  assert.equal(r.userRows(id).length, 2);
+});
+
 
 // Rule (the desktop's recovery replay goes through the same send transaction, makerSendTransaction.ts
 // applyPendingAgentSwitch; contextOverflowRollover.ts keeps the task in flight for the whole recovery,
@@ -5888,6 +5953,187 @@ test('auto-resume route switch: the second interruption resumes on another provi
   // As the desktop: a start on the accepted override keeps the task row's saved provider baseline.
   assert.equal(r.row('fb').provider_id, 'prov-a', 'the task row keeps its saved provider');
 });
+
+// L342, database tier. Drive the real picker, credential registry, axis writes,
+// turn completion and input coordinator against SQLite. A busy credential
+// registration used to retry a rejected write or silently overwrite a later axis.
+for (const boundary of [
+  'SQLite rollback', 'close failure', 'no available route', 'reroute', 'newer choice', 'owner changed',
+  'split effort failure', 'split Fast failure', 'another window effort failure',
+  'late effort success', 'late Fast success', 'independent axes without an atomic payload',
+  'explicit default effort and Fast off', 'write outcome not established', 'archive',
+]) {
+  test(`deferred credential choice keeps the Host route until settlement: ${boundary}`, async t => {
+    const agent = boundary.includes('Fast') || boundary === 'independent axes without an atomic payload' ? 'codex' : 'claude-code';
+    const r = await modelChangeRuntime(t, { agent });
+    const id = 'deferred-credential-route';
+    const models = ['big', 'small'].map(model => ({ ...switchModel(model),
+      efforts: ['medium', 'high'], defaultEffort: 'medium', supportsFastMode: true }));
+    r.views.current = ['prov-a', 'prov-b', 'prov-c'].map(provider => ({
+      ...switchViews(agent)[0], id: provider, models: { [agent]: models },
+    }));
+    await r.createTask(id);
+    await r.selection.setEffort(id, 'high');
+    const defaults = boundary === 'explicit default effort and Fast off';
+    if (defaults) await r.selection.setFastMode(id, true);
+    await enqueue(r.h, id, { clientId: 'work', text: 'work' });
+    const live = r.h.maker.getSession(id);
+    live.requiresModelSwitchRebuild = async () => true;
+    const explicit = !boundary.startsWith('split') && boundary !== 'independent axes without an atomic payload';
+    const read = () => {
+      const row = r.row(id);
+      return { model: row.model, providerId: row.provider_id, effort: row.effort, fastMode: row.fast_mode === 1 };
+    };
+    const old = read();
+    const pick = async providerId => r.selection.setModel(id, 'small', providerId, undefined,
+      explicit ? { effort: defaults ? null : 'medium', fastMode: !defaults } : undefined);
+    const landWhileBusy = async provider => {
+      assert.equal((await pick(provider)).pendingUntilSend, true);
+      const running = live.isTurnRunning.bind(live);
+      let checks = 0;
+      live.isTurnRunning = () => ++checks === 1 ? false : running();
+      try {
+        await assert.rejects(r.selection.applyPendingAgentSwitch(id), CredentialModeSwitchBusyError);
+      } finally {
+        live.isTurnRunning = running;
+      }
+      assert.equal(r.selection.hasPendingCredentialSwitch(id), true);
+      assert.deepEqual(read(), old);
+      assert.equal(getSessionProvider(id), 'prov-a');
+      assert.equal(r.h.maker.getSession(id), live);
+      assert.equal(r.selection.projectIntent(id)?.providerId, provider);
+    };
+    const events = kind => r.h.events.filter(e => e.channel === `maker:session-credential-switch-${kind}` && e.payload.sessionId === id);
+    await landWhileBusy('prov-b');
+    if (boundary === 'newer choice') await landWhileBusy('prov-c');
+    assert.ok(!r.h.events.some(e => e.type === 'session_changed' && e.sessionId === id &&
+      [e.patch?.providerId, e.patch?.runtimeEffective?.providerId].some(id => id === 'prov-b' || id === 'prov-c')));
+    const remoteSetter = (channel, call) => runDeviceLinkInvokeContext({
+      controllerDeviceId: 'owner-phone', controllerPlatform: 'ios', channel,
+    }, call);
+    if (boundary === 'split effort failure') {
+      await remoteSetter('maker:set-effort', () => r.selection.setEffort(id, 'medium'));
+    } else if (boundary === 'another window effort failure') {
+      await r.selection.setEffort(id, 'medium');
+    } else if (boundary === 'late effort success') {
+      await r.selection.setEffort(id, 'medium');
+      await r.selection.setEffort(id, 'high');
+    }
+    if (boundary === 'split Fast failure' || boundary === 'independent axes without an atomic payload') {
+      await remoteSetter('maker:set-fast-mode', () => r.selection.setFastMode(id, true));
+    } else if (boundary === 'late Fast success') {
+      await r.selection.setFastMode(id, false);
+    }
+    const beforeSettlement = read();
+    if (!['owner changed', 'archive'].includes(boundary)) {
+      await r.h.queue.enqueue(id, { clientId: 'followup', text: 'followup' });
+      assert.deepEqual(live.sent, ['work'], 'the in-flight turn still uses the old settings');
+    }
+
+    if (boundary === 'archive') {
+      t.after(bindHostSessionRuntimeHooks(r.selection));
+      await taskListUpdate(r)(id, { status: 'archived' });
+      assert.equal(r.row(id).status, 'archived');
+      assert.equal(r.selection.hasPendingCredentialSwitch(id), false);
+      assert.equal(r.selection.projectIntent(id), null);
+      await r.selection.onTurnSettled(id);
+      assert.deepEqual(read(), old);
+      assert.deepEqual(live.sent, ['work']);
+      assert.deepEqual([events('failed').length, events('applied').length], [0, 0]);
+      return;
+    }
+    if (boundary === 'no available route') r.views.current = [];
+    if (boundary === 'reroute') {
+      r.views.current = r.views.current.map(view => view.id === 'prov-b' ? {
+        ...view,
+        models: { [agent]: models.map(model => model.id === 'small' ? { ...model, disabled: true } : model) },
+      } : view);
+    }
+    const entered = Promise.withResolvers();
+    const resume = Promise.withResolvers();
+    t.after(() => resume.resolve());
+    if (boundary === 'owner changed') r.views.beforeList = async () => { entered.resolve(); await resume.promise; };
+    if (boundary === 'close failure') {
+      const close = r.h.maker.closeSession.bind(r.h.maker);
+      r.h.maker.closeSession = async (...args) => {
+        r.h.maker.closeSession = close;
+        throw new Error('fixture native close failed before any SQLite write');
+      };
+    }
+    const unknown = boundary === 'write outcome not established';
+    if (unknown) r.db.db.exec(`CREATE TEMP TRIGGER reject_after_updating_route AFTER UPDATE OF provider_id ON sessions
+      WHEN NEW.provider_id = 'prov-b' BEGIN SELECT RAISE(FAIL, 'fixture may have already changed the row'); END`);
+    const rollback = (boundary.endsWith(' failure') && boundary !== 'close failure') || boundary === 'SQLite rollback';
+    if (rollback) r.db.db.exec(`CREATE TEMP TRIGGER reject_deferred_route BEFORE UPDATE OF provider_id ON sessions
+      WHEN NEW.provider_id = 'prov-b' BEGIN SELECT RAISE(ABORT, 'fixture write rolled back'); END`);
+    const patchStart = r.h.events.length;
+    live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+    if (boundary === 'owner changed') {
+      await entered.promise;
+      const profile = path.join(r.db.root, 'profile');
+      configureHostOwner({ userDataDir: profile, ownerId: null });
+      configureHostOwner({ userDataDir: profile, ownerId: 'another-owner' });
+      resume.resolve();
+      await r.selection.onTurnSettled(id);
+      assert.deepEqual(read(), old);
+      assert.deepEqual([events('failed').length, events('applied').length], [0, 0]);
+      return;
+    }
+    if (unknown) {
+      await settleUntil(() => r.row(id).provider_id === 'prov-b', 'SQLite changed the row before rejecting the write');
+      assert.equal(getSessionProvider(id), 'prov-a', 'a throw is not a successful receipt');
+      r.views.current = [];
+      await r.selection.onTurnSettled(id);
+      assert.equal(r.selection.hasPendingCredentialSwitch(id), true);
+      assert.deepEqual([events('failed').length, events('applied').length], [0, 0]);
+      assert.ok(!r.h.events.slice(patchStart).some(e => e.patch?.agentSwitchIntent === null));
+      assert.equal(r.userRows(id).length, 1, 'the queued input is still gated');
+      r.selection.disposeTurnSettlements();
+      assert.equal(r.selection.hasPendingCredentialSwitch(id), false, 'runtime disposal clears its private registration');
+      assert.equal(r.row(id).provider_id, 'prov-b', 'disposal leaves the disk outcome intact');
+      return;
+    }
+    if (rollback || boundary === 'close failure' || boundary === 'no available route') {
+      await settleUntil(() => events('failed').length > 0, 'the deferred failure is published');
+      assert.equal(r.selection.hasPendingCredentialSwitch(id), false, 'the queue gate was already released when notified');
+      assert.equal(r.selection.projectIntent(id), null);
+      assert.deepEqual(read(), beforeSettlement);
+      assert.equal(getSessionProvider(id), 'prov-a');
+      const retained = !boundary.startsWith('split') && !boundary.startsWith('another window');
+      assert.deepEqual(events('failed').map(e => e.payload),
+        [{ sessionId: id, reason: 'apply-failed', ...(retained ? { previousSettingsRetained: true } : {}) }]);
+      const patches = r.h.events.slice(patchStart).filter(e => e.type === 'session_changed' && e.sessionId === id &&
+        e.patch?.agentSwitchIntent === null);
+      assert.equal(patches.length, 1, 'one authoritative patch clears the intent and restores the four fields');
+      assert.deepEqual(Object.fromEntries(Object.keys(beforeSettlement).map(key => [key, patches[0].patch[key]])), beforeSettlement);
+      assert.equal(events('applied').length, 0);
+      await settleUntil(() => r.h.maker.getSession(id)?.sent.includes('followup'), 'the queued input discovers the current route');
+      const after = r.h.maker.getSession(id);
+      assert.equal(after.model, beforeSettlement.model);
+      assert.equal(after.options.providerId, beforeSettlement.providerId);
+      if (after !== live) {
+        assert.equal(after.options.effort, beforeSettlement.effort);
+        assert.equal(after.options.fastMode, beforeSettlement.fastMode);
+      }
+      await r.selection.onTurnSettled(id);
+      assert.equal(events('failed').length, 1, 'a later settlement tick cannot retry this failure');
+      return;
+    }
+    await settleUntil(() => !r.selection.hasPendingCredentialSwitch(id), 'the latest credential choice settles');
+    const provider = boundary === 'newer choice' ? 'prov-c' : boundary === 'reroute' ? null : 'prov-b';
+    const effort = boundary === 'late effort success' || !explicit ? 'high' : 'medium';
+    const fastMode = boundary !== 'late Fast success' && !defaults;
+    assert.deepEqual(read(), { model: 'small', providerId: provider, effort, fastMode });
+    assert.equal(getSessionProvider(id), provider);
+    assert.deepEqual(events('applied').map(e => e.payload.providerId), [provider]);
+    assert.equal(r.selection.projectIntent(id), null);
+    await settleUntil(() => r.h.maker.getSession(id)?.sent.includes('followup'), 'the first input after commit runs');
+    const first = r.h.maker.getSession(id);
+    assert.deepEqual(first.sent, ['followup']);
+    assert.deepEqual([first.model, first.options.providerId, first.options.effort, first.options.fastMode],
+      ['small', provider, effort, fastMode]);
+  });
+}
 
 // A permission change awaiting the engine's acknowledgement counts as busy in maker-core Session.
 // Exercise its actual accounting. The test engine supplies only the acknowledgement and turn state.

@@ -155,7 +155,7 @@ import { resolveEffectiveConnectionError } from '@/components/connectionBannerVi
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useLocalNetworkStatus } from '@/device-link/localNetworkStatus';
-import { subscribeCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
+import { subscribeSessionCredentialSwitchNotices } from '@/session/credentialSwitchOutcome';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useSharedTaskAccess } from '@/device-link/useSharedTaskAccess';
 import { useLeaveSharedTask } from '@/device-link/useLeaveSharedTask';
@@ -1167,10 +1167,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 这里只需要本 route 所属 navigator 的 state —— session 路由直属 root stack。
     getState(): CollabSessionStateLike | undefined;
   }>();
-  useEffect(() => subscribeCredentialSwitchOutcome((outcome) => {
-    if (outcome.deviceId !== deviceId || outcome.sessionId !== sessionId || !navigation.isFocused()) return;
-    Alert.alert(t(outcome.kind === 'applied' ? 'models.switchOutcome.applied' : 'models.switchOutcome.failed'));
-  }), [deviceId, navigation, sessionId, t]);
+  useEffect(() => subscribeSessionCredentialSwitchNotices(
+    deviceId, sessionId, () => navigation.isFocused(), (key) => Alert.alert(t(key)),
+  ), [deviceId, navigation, sessionId, t]);
   const router = useRouter();
   // 完整消息读取权限按「会话 + 单调代际」登记。focus 与 AppState 正交：后台时
   // 导航仍可能保持 focused，必须立即撤权；重新聚焦/回前台会生成新代际，使旧
@@ -8808,7 +8807,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const runControlAction = useCallback(async (
     action: () => Promise<void | boolean>,
     optimisticPatch?: Partial<RemoteSession>,
-    opts?: { recover?: 'rollback' | 'refetch' },
+    opts?: { recover?: 'rollback' | 'refetch'; protectModelSelection?: boolean },
   ) => {
     if (controlBusy) return false;
     // 新建会话在途:会话可能还没在被控端建成,setModel / setPlanMode 这类 RPC 必然
@@ -8822,7 +8821,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 不要因一次设置尝试清掉仍在恢复中的连接错误,否则会提前放开 outbox 派发门。
     if (!outboxConnectionDispatchBlocked) setError(null);
     let rollbackPatch: Partial<RemoteSession> | null = null;
+    let releaseModelWrite: (() => void) | undefined;
     if (optimisticPatch && deviceId && currentSession) {
+      if (opts?.protectModelSelection) {
+        releaseModelWrite = sessionPendingWrites.track(sessionId, Object.keys(optimisticPatch));
+      }
       const rollback: Record<string, unknown> = {};
       for (const key of Object.keys(optimisticPatch)) {
         rollback[key] = currentSession[key as keyof RemoteSession];
@@ -8873,6 +8876,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setError(formatRemoteError(err));
       return false;
     } finally {
+      releaseModelWrite?.();
       setControlBusy(false);
     }
   }, [
@@ -9372,7 +9376,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         fastMode: next.fastMode,
         ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
         // 旧 host 的兼容 RPC 链可能部分成功；失败时回读权威会话收敛而非本地回滚。
-      }, { recover: 'refetch' });
+      }, { recover: 'refetch', protectModelSelection: true });
     })();
   }, [
     agentLocationMovable,
@@ -9460,7 +9464,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!selection && config.fast !== (currentSession.fastMode ?? false)) await maker.setFastMode(sessionId,config.fast);
       return true;
     }, {model:config.modelId,providerId:config.providerId,effort:config.effort,fastMode:config.fast,
-      ...(agentSwitchIntent ? {agentSwitchIntent:null} : {})}, {recover:'refetch'});
+      ...(agentSwitchIntent ? {agentSwitchIntent:null} : {})}, { recover: 'refetch', protectModelSelection: true });
     if (applied) setModelSheetAgentKind(config.agent);
     return applied;
   }, [canUseRemoteSessionControls,currentSession,controlBusy,composerDeviceProviders.providers,maker,

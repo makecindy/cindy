@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "模型來源切換已生效。",
-    "failed": "模型來源切換失敗，請重新選擇。"
+    "failed": "模型來源切換失敗，請重新選擇。",
+    "previousSettingsRetained": "這次切換未完成，任務會繼續使用原來的設定。"
   },
   "agentSwitch": {
     "browseAccessibility": "瀏覽 {{agent}} 模型"
