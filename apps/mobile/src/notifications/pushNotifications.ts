@@ -448,7 +448,9 @@ async function syncPushRegistrationInternal(
       && isMobileAuthOwnerCurrent(eventRegistration.owner) && eventRegistration.token === opts.deviceToken.data;
     if (registered) return 'skipped';
   }
-  if (!opts.enabled) eventRegistration = null;
+  // A new registration or opt-out supersedes the previous successful state.
+  // Until it succeeds, recovery must retry even when initiated outside the bridge.
+  eventRegistration = null;
 
   if (!opts.enabled) {
     const registeredRealms = await readPushRealms(
@@ -569,12 +571,22 @@ export function syncPushRegistration(opts: {
   enabled: boolean;
   apiFetch: AuthedApiFetch;
   deviceToken?: Awaited<ReturnType<typeof Notifications.getDevicePushTokenAsync>>;
+  /** Profile/foreground recovery can reuse a confirmed registration for this owner. */
+  skipConfirmed?: boolean;
   /** Android settings opt-in, after system permission and before token acquisition. */
   onPermissionGranted?: () => Promise<void>;
 }): Promise<PushSyncResult> {
   const lifecycleGeneration = pushLifecycleGeneration;
   const owner = getMobileAuthOwner();
   return runPushMutation(async () => {
+    if (opts.enabled && opts.skipConfirmed) {
+      // A Settings opt-out may have run while this recovery was queued.
+      if (!await readPushEnabled()) return 'skipped';
+      if (lifecycleGeneration === pushLifecycleGeneration && isMobileAuthOwnerCurrent(owner)
+        && eventRegistration?.generation === lifecycleGeneration && isMobileAuthOwnerCurrent(eventRegistration.owner)) {
+        return 'registered';
+      }
+    }
     const scope = capturePushStateScope(getActiveMobileSessionRealm());
     const registration: PushRegistrationStatus = { version: 1, at: Date.now(), realm: scope.legacyRealm, stage: 'starting' };
     // A token-listener callback that dedupes or is fenced must not replace the evidence
@@ -680,6 +692,7 @@ async function retryPendingUnregisterInternal(
     stateScope,
   );
   if (!pendingRealms.has(realm)) return true;
+  eventRegistration = null;
 
   try {
     const token = await getNativeDeviceTokenBestEffort();

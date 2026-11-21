@@ -83,62 +83,45 @@ export function PushNotificationsBridge() {
     if (!isPushSupported()) return;
     if (!auth.initialized || !auth.isAuthenticated || !pushAccountId) return;
     let cancelled = false;
-    let needsRetry = false;
-    let rotationNeedsRetry = false;
-    let profileRetryAvailable = true;
-    let recoveryWhileRunning = false;
     let running = false;
-    async function reconcile() {
+    let replay = false;
+    let profileRetryAvailable = true;
+    async function reconcile(skipConfirmed: boolean) {
+      if (running) { replay = true; return; }
       running = true;
-      needsRetry = false;
-      rotationNeedsRetry = false;
       try {
-        const unregisterSettled = await retryPendingUnregister(apiFetchRef.current);
+        const unregistered = await retryPendingUnregister(apiFetchRef.current);
         if (cancelled) return;
         const enabled = await readPushEnabled();
         if (cancelled) return;
-        if (!enabled) {
-          needsRetry = !unregisterSettled;
-          return;
+        if (enabled) {
+          const result = await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, skipConfirmed });
+          if (result === 'registered') profileRetryAvailable = true;
+        } else if (unregistered) {
+          profileRetryAvailable = true;
         }
-        const result = await syncPushRegistration({ enabled: true, apiFetch: apiFetchRef.current });
-        needsRetry = result !== 'registered' && result !== 'unsupported';
       } catch {
-        needsRetry = true;
+        // A profile-triggered failure waits for foreground before another retry.
       } finally {
         running = false;
-        const replay = recoveryWhileRunning;
-        recoveryWhileRunning = false;
-        if (!cancelled && (needsRetry || rotationNeedsRetry) && replay) void reconcile();
+        if (replay && !cancelled) { replay = false; void reconcile(true); }
       }
     }
-    function recover() {
-      if (running) recoveryWhileRunning = true;
-      else if (needsRetry || rotationNeedsRetry) void reconcile();
-    }
-    // An auth refresh during registration may itself have been caused by the
-    // PUT. Allow one profile-triggered retry per foreground visit.
     onProfileRefresh.current = () => {
-      if (!profileRetryAvailable || (!running && !needsRetry && !rotationNeedsRetry)) return;
+      if (!profileRetryAvailable) return;
       profileRetryAvailable = false;
-      recover();
+      void reconcile(true);
     };
     const foreground = AppState.addEventListener('change', state => {
       if (state !== 'active') return;
       profileRetryAvailable = true;
-      recover();
+      void reconcile(true);
     });
-    const tokenSubscription = subscribeToTokenRotation(
-      () => apiFetchRef.current,
-      () => cancelled,
-      pending => { rotationNeedsRetry = pending; },
-    );
-    void reconcile();
+    void reconcile(false);
     return () => {
       cancelled = true;
       onProfileRefresh.current = null;
       foreground.remove();
-      tokenSubscription.remove();
     };
   }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, pushAccountId, selfHostedRelay, agentNetPreferences.generation]);
 
@@ -148,6 +131,28 @@ export function PushNotificationsBridge() {
     }
     previousProfile.current = auth.user;
   }, [auth.user]);
+
+  // APNs token 轮换 → 重新上报(仅开关开启且已登录时)
+  useEffect(() => {
+    if (!isPushSupported()) return;
+    if (!auth.initialized || !auth.isAuthenticated) return;
+    let lastToken: string | undefined;
+    let cancelled = false;
+    const sub = Notifications.addPushTokenListener((deviceToken) => {
+      if (typeof deviceToken.data !== 'string' || !deviceToken.data.trim()) return;
+      const token = `${deviceToken.type}:${deviceToken.data}`;
+      if (lastToken === token) return;
+      lastToken = token;
+      void (async () => {
+        const enabled = await readPushEnabled();
+        if (cancelled) return;
+        if (!enabled) { if (lastToken === token) lastToken = undefined; return; }
+        const result = await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, deviceToken });
+        if (result !== 'registered' && lastToken === token) lastToken = undefined;
+      })().catch(() => { if (lastToken === token) lastToken = undefined; });
+    });
+    return () => { cancelled = true; sub.remove(); };
+  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated]);
 
   const flushPendingDeepLink = useCallback((): void => {
     const target = pendingDeepLinkRef.current;
@@ -214,32 +219,4 @@ export function PushNotificationsBridge() {
   }, [auth.initialized, auth.isAuthenticated, flushPendingDeepLink]);
 
   return <><ChatBackgroundBridge /><NotificationReconciliationBridge /></>;
-}
-
-// APNs token 轮换时直接复用系统给出的 token；失败后由同账号的恢复事件补偿。
-function subscribeToTokenRotation(
-  getApiFetch: () => Parameters<typeof syncPushRegistration>[0]['apiFetch'],
-  isCancelled: () => boolean,
-  setPending: (pending: boolean) => void,
-) {
-  let lastToken: string | undefined;
-  return Notifications.addPushTokenListener(deviceToken => {
-    if (typeof deviceToken.data !== 'string' || !deviceToken.data.trim()) return;
-    const token = `${deviceToken.type}:${deviceToken.data}`;
-    if (lastToken === token) return;
-    lastToken = token;
-    void (async () => {
-      const enabled = await readPushEnabled();
-      if (isCancelled() || lastToken !== token) return;
-      if (!enabled) { lastToken = undefined; return; }
-      const result = await syncPushRegistration({ enabled, apiFetch: getApiFetch(), deviceToken });
-      if (isCancelled() || lastToken !== token) return;
-      setPending(result === 'local-only');
-      if (result !== 'registered') lastToken = undefined;
-    })().catch(() => {
-      if (isCancelled() || lastToken !== token) return;
-      lastToken = undefined;
-      setPending(true);
-    });
-  });
 }

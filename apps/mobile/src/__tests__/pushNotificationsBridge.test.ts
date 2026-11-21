@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   uploads: [] as string[],
   reads: 0,
   failNextSync: false,
+  confirmed: false,
   nativeToken: 'initial-token',
   unregisterAttempts: 0,
   pendingUnregister: false,
@@ -46,8 +47,10 @@ vi.mock('@/notifications/pushNotifications', () => ({
     state.pendingUnregister = false;
     return true;
   },
-  syncPushRegistration: async (opts: { deviceToken?: { type: 'ios'; data: string } }) => {
+  syncPushRegistration: async (opts: { skipConfirmed?: boolean; deviceToken?: { type: 'ios'; data: string } }) => {
+    if (opts.skipConfirmed && state.confirmed) return 'registered';
     if (state.failNextSync) {
+      state.confirmed = false;
       state.failNextSync = false;
       throw new Error('temporarily offline');
     }
@@ -57,6 +60,7 @@ vi.mock('@/notifications/pushNotifications', () => ({
       token = { type: 'ios', data: state.nativeToken };
       state.listener?.(token);
     }
+    state.confirmed = true;
     state.uploads.push(token.data);
     return 'registered';
   },
@@ -65,7 +69,7 @@ vi.mock('@/notifications/pushNotifications', () => ({
 const roots: ReturnType<typeof createRoot>[] = [];
 afterEach(async () => {
   await act(async () => { for (const root of roots) root.unmount(); });
-  roots.length = 0; state.uploads = []; state.reads = 0; state.failNextSync = false; state.enabled = true;
+  roots.length = 0; state.uploads = []; state.reads = 0; state.failNextSync = false; state.enabled = true; state.confirmed = false;
   state.nativeToken = 'initial-token'; state.unregisterAttempts = 0; state.pendingUnregister = false;
   vi.unstubAllGlobals();
 });
@@ -170,4 +174,27 @@ it.each(['unregister', 'rotation'] as const)('recovers a pending %s on foregroun
   const reads = state.reads;
   await foreground();
   expect(state.reads).toBe(reads);
+});
+
+// Settings can queue an opt-out after startup has already succeeded.
+it('finds a later offline opt-out on same-account profile recovery', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  const root = createRoot(document.createElement('div'));
+  roots.push(root);
+  const auth = state.auth;
+  try {
+    await act(async () => { root.render(createElement(PushNotificationsBridge)); });
+    const uploads = [...state.uploads];
+    state.enabled = false;
+    state.pendingUnregister = true;
+    state.unregisterAttempts = 1;
+    await act(async () => {
+      state.auth = { ...auth, user: { ...auth.user } };
+      root.render(createElement(PushNotificationsBridge));
+    });
+    expect(state.pendingUnregister).toBe(false);
+    expect(state.uploads).toEqual(uploads);
+  } finally {
+    state.auth = auth;
+  }
 });

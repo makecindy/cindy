@@ -302,6 +302,26 @@ describe('push notification realm routing', () => {
     expect(online).toHaveBeenCalled();
     await expect(syncPushRegistration({ enabled: true, apiFetch: online, deviceToken: token })).resolves.toBe('skipped');
   });
+  // A confirmed upload is reusable until another writer (e.g. token rotation)
+  // starts changing it. Exercise the real mutation queue and both HTTP endpoints.
+  it('reuses a confirmed registration on recovery and repairs a later failed rotation', async () => {
+    store.set('cindy.push.enabled', '1');
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    await syncPushRegistration({ enabled: true, apiFetch });
+    apiFetch.mockClear();
+    const recover = () => syncPushRegistration({ enabled: true, apiFetch, skipConfirmed: true });
+    expect(await recover()).toBe('registered');
+    expect(apiFetch).not.toHaveBeenCalled();
+    const deviceToken = { type: 'ios' as const, data: 'new-ios-token' };
+    const offline = vi.fn().mockRejectedValue(new Error('offline'));
+    await expect(syncPushRegistration({ enabled: true, apiFetch: offline, deviceToken })).rejects.toThrow();
+    mocks.getDevicePushTokenAsync.mockResolvedValueOnce(deviceToken);
+    expect(await recover()).toBe('registered');
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    await recover();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
   it('retains per-service registration failure without leaking tokens or errors', async () => {
     const apiFetch = vi.fn(async (path: string) => {
       if (path === '/v1/push-token') throw Object.assign(new Error('secret-token-in-error'), { status: 503 });
