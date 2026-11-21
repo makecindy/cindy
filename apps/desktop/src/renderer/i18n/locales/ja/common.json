@@ -563,7 +563,8 @@
       "calloutUnknown": "申請者に心当たりがない場合は拒否してください。拒否するとこのリンクは無効になります。",
       "approve": "共有を承認",
       "reject": "申請を拒否",
-      "later": "あとで対応"
+      "later": "あとで対応",
+      "calloutPluginEngine": "{{name}} は自分のパソコンにプラグインや CLI をインストールせずに利用でき、このパソコンの CLI ログインとクォータを使用します。"
     },
     "apply": {
       "loading": "共有リンクを読み込み中…",
@@ -1349,6 +1350,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
     "MODEL_SELECTION_UNAVAILABLE": "選択したモデルは、そのプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
+    "MODEL_CATALOG_UNCONFIRMED": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
     "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
     "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
     "INVALID_PARAMS": "入力内容が無効です。確認して再試行してください。",
@@ -8515,7 +8517,8 @@
           "description": "オンにすると、あなたの他のパソコンがこのエンジンでタスクを実行できます。Agent はこのパソコン上で、このパソコンのログインとクォータを使って実行されます。ファイルとコマンドはタスクのあるパソコンに残ります。",
           "unsupported": "このプラグインは、他のパソコンからのエンジンの利用にまだ対応していません。",
           "remoteControlOff": "このパソコンはまだリモート操作を許可していないため、他のパソコンはこのエンジンを利用できません。",
-          "ariaLabel": "他のパソコンに {{engine}} の利用を許可"
+          "ariaLabel": "他のパソコンに {{engine}} の利用を許可",
+          "descriptionShareable": "オンにすると、あなたの他のパソコンや共有した相手がプラグインをインストールせずにこのエンジンでタスクを実行できます。Agent はこのパソコン上で、このパソコンのログインとクォータを使って実行されます。ファイルとコマンドはタスクのあるパソコンに残ります。"
         },
         "githubRelease": {
           "title": "プラグインの更新",
@@ -13042,6 +13045,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "自動承認モデルの利用枠を使い切りました。Agent を実行しているコンピューターで使用量や請求を確認するか、設定で補助モデルをカスタマイズしてください。承認が必要な操作は引き続きあなたの確認が必要です。",
           "autoReviewNoAvailableModel": "利用できる自動レビュー用モデルがありません。Agent を実行するコンピューターで「モデルプロバイダー」からレビュー用プロバイダーを有効にして接続するか、設定で「補助モデル」をカスタマイズしてください。レビューが必要な操作は引き続きご自身で確認できます。",
           "autoReviewUnavailable": "自動レビューが判断できませんでした。レビューが必要な操作は、ご自身で確認する形に切り替わりました。中断を減らしたい場合は、このタスクを「フルアクセス」に切り替えてください。リスクはより高くなります。",
           "autoReviewUnavailableWechat": "自動レビューが判断できませんでした。レビューが必要な操作は、ご自身で確認する形に切り替わりました。個人 WeChat ではフルアクセスを使えません。この操作を直接確認してください。",
@@ -14092,6 +14096,8 @@
       "source": {
         "lastConfirmed": "最終更新：{{time}}",
         "unconfirmed": "モデル一覧を更新できません",
+        "unreachable": "{{source}} に接続できません",
+        "unreachableDetail": "接続できません。ネットワークを確認してください",
         "unavailable": "モデルを利用できません",
         "reconnect": "再接続",
         "manage": "接続先を管理",
@@ -15061,6 +15067,9 @@
       "usageLimitAutoContinueTitle": "使用量の上限がリセットされるまでに操作がなければ、このタスクを自動で続行します",
       "usageLimitAutoContinueCancel": "キャンセル",
       "usageLimitAutoContinueCancelTitle": "自動続行をキャンセル（エラーと再試行は残ります）",
+      "usageLimitReached": "モデルのアカウントは利用上限に達しました",
+      "usageLimitReachedWithReset": "モデルのアカウントは利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
+      "usageLimitReachedNoReset": "モデルのアカウントは利用上限に達しました。上限のリセットを待つか、別のモデルに切り替えてから再試行してください。",
       "codexOrganizationUsageLimitWithReset": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
       "codexOrganizationUsageLimit": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。上限のリセットを待つか、別の利用可能なアカウントに切り替えてから再試行してください。",
       "codexUsageLimitWithReset": "接続中の Codex アカウントは利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
@@ -15079,7 +15088,7 @@
       "switchClaudeSubscriptionTitle": "このセッションを Claude.ai サブスクリプションに切り替えて再試行",
       "switchingClaudeSubscription": "Claude.ai に切り替え中…",
       "claudeSubscriptionSwitchFailed": "Claude.ai への切り替えまたはこのセッションの再試行に失敗しました：{{msg}}",
-      "codexAppServerRetired": "Codex サービスが再起動または交換されました。現在のリクエストは中断されたため、もう一度実行してください。",
+      "codexAppServerRetired": "Codex との接続が切れ、実行中のリクエストは中断されました。このセッションで続けられます。",
       "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",
       "codexAuthMissingLocal": "このコンピューターの「{{provider}}」接続を認証できませんでした。設定でこの接続のログイン状態を確認し、接続を復旧してからこのセッションに戻って続行してください。",
       "codexSessionExpired": "OpenAI 接続の更新が必要です。ChatGPT に再接続すると続行できます。{{appName}} がシステムの Codex CLI からサインアウトしたり、他のモデルソースへの再接続を求めたりすることはありません。",
@@ -15132,6 +15141,7 @@
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
+      "pluginEngineStatus": "バックグラウンドで作業を続けています…",
       "bashWorkStatus_one": "バックグラウンドで作業中（コマンド {{count}} 件）…",
       "bashServiceStatus_one": "バックグラウンドサービス実行中（{{count}} 件）",
       "bashWorkStatus_other": "バックグラウンドで作業中（コマンド {{count}} 件）…",
@@ -15166,6 +15176,7 @@
       "continueFailed_other": "{{count}} 件のセッションを再開できませんでした。セッションを開いて再試行してください。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
       "actionScheduled": "この操作に対するセッションの許可が失効しました。次の実行は予定されています。",
       "actionExpired": "この操作に対するセッションの許可が失効しました。自動化の直近の実行結果を確認してください。",
       "actionRecovered": "この操作の許可は失効しましたが、その後、同じ自動化が正常に実行されました。",
@@ -15838,10 +15849,12 @@
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "この接続では以前のモデルを使用できないため、モデル切り替え時にコンテキストを圧縮できませんでした。",
       "MODEL_SELECTION_UNAVAILABLE": "選択したモデルはプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
+      "MODEL_CATALOG_UNCONFIRMED": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
       "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
       "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
       "REMOTE_DAEMON_CLOSED": "リモート接続が切れました。更新中の可能性があります。このターンは終了したので、もう一度送信してください。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自動承認モデルの利用枠を使い切りました。Agent を実行しているコンピューターで使用量や請求を確認するか、設定で補助モデルをカスタマイズしてください。承認が必要な操作は引き続きあなたの確認が必要です。",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "利用できる自動レビュー用モデルがありません。Agent を実行するコンピューターで「モデルプロバイダー」からレビュー用プロバイダーを有効にして接続するか、設定で「補助モデル」をカスタマイズしてください。レビューが必要な操作は引き続きご自身で確認できます。",
       "AUTO_REVIEW_UNAVAILABLE": "自動レビューが判断できませんでした。レビューが必要な操作は、ご自身で確認する形に切り替わりました。中断を減らしたい場合は、このタスクを「フルアクセス」に切り替えてください。リスクはより高くなります。",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自動レビューが判断できませんでした。レビューが必要な操作は、ご自身で確認する形に切り替わりました。個人 WeChat ではフルアクセスを使えません。この操作を直接確認してください。",
@@ -16057,7 +16070,6 @@
       "opened": "プレビューページを開きました"
     },
     "sideChat": {
-      "openPage": "タスクページを開く",
       "returnMain": "メインタスクに戻る",
       "new": "新しいサイドチャット",
       "mainWindowDescription": "サイドチャットは現在メインウィンドウで利用できます。内容は保存されています。",
@@ -16065,6 +16077,14 @@
       "commandDescription": "メインタスクをもとにサイドチャットを開きます。コマンドの後の質問は下書きになります。",
       "title": "サイドチャット",
       "context": "開いた時点までの完了済みコンテキストを使います。メインタスクは実行を続けます。履歴はこのタブを閉じるまで保持されます。",
+      "viewCollaboration": "協同を表示",
+      "openConversation": "会話を開く",
+      "openFromTaskList": "左側のタスク一覧からも開けます。",
+      "returnToSideChat": "サイドの追加質問に戻る",
+      "reopenSideChat": "サイドの追加質問を開き直す",
+      "origin": "この会話はサイドの追加質問から始まりました。",
+      "originNamed": "この会話は「{{title}}」のサイドの追加質問から始まりました。",
+      "originUnavailable": "この会話はサイドの追加質問から始まりました。元のタスクは開けません。",
       "opening": "開いています…",
       "notReady": "メインタスクの最初の回答が完了するまでお待ちください。",
       "unsupported": "この Agent のリモートタスクはサイドチャットに未対応です。",
@@ -16073,9 +16093,10 @@
       "mainTaskOnly": "メインタスクからサイドチャットを開いてください。",
       "sharedTaskUnavailable": "共有タスクではサイドチャットを利用できません。",
       "archivedTask": "このタスクのアーカイブを解除してから、サイドチャットを開いてください。",
-      "closeTitle": "サイドチャットを閉じますか？",
-      "closeDescription": "このサイドチャットを停止して削除します。メインタスクには影響しません。",
-      "closeConfirm": "閉じて削除",
+      "closeTitle": "この追加質問を閉じてアーカイブしますか？",
+      "closeDescription": "左側のタスクリストにある対応タスクもアーカイブされます。",
+      "closeDescriptionRunning": "左側のタスクリストにある対応タスクもアーカイブされ、Worker は停止します。",
+      "closeConfirm": "閉じてアーカイブ",
       "closeFailed": "サイドチャットを閉じられませんでした。もう一度お試しください。"
     },
     "botStartedTasks": {
@@ -16098,6 +16119,10 @@
       "retryIn": "{{seconds}} 秒後に自動で再試行"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "このモデルのサブスクリプション利用枠が上限に達しました。別のモデルに切り替えられます。",
+      "poolRetryUntil": "{{resetAt}} 以降に再試行できます。",
+      "poolOtherSignedOut": "別のサブスクリプションアカウントはログアウトしています。タスクを実行するコンピューターでログインして再試行できます。",
+      "poolUnavailable": "このモデルで利用できるサブスクリプションアカウントがありません。モデルを切り替えるか、タスクを実行するコンピューターでアカウントを確認してください。",
       "limited": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。上限のリセットを待って再試行するか、別のモデル接続先を選んでください。",
       "limitedUntil": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。リセット予定：{{resetAt}}。リセット後に再試行するか、別のモデル接続先を選んでください。",
       "loginRequired": "このタスクで使用しているサブスクリプションアカウントへの再ログインが必要です。タスクを実行しているコンピューターで再ログインしてから、再試行してください。",
@@ -16962,7 +16987,41 @@
             "token": "予備トークンを使用中",
             "recheck": "接続を確認",
             "summary": "GitHub のリポジトリ、Issue、PR、Actions を管理。",
-            "otherMethods": "その他の接続方法"
+            "otherMethods": "その他の接続方法",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App のアクセス権",
+            "all": "すべてのリポジトリ",
+            "selected": "選択したリポジトリ",
+            "visible": "現在のアカウントで表示可能：{{count}} 件",
+            "unknownCount": "リポジトリ数を取得できません",
+            "permissions": "権限の詳細",
+            "read": "読み取り専用",
+            "write": "読み書き",
+            "admin": "管理",
+            "loading": "アクセス権を取得中…",
+            "missing": "アクセス権を表示するには、このコンピュータで GitHub App に接続してください。",
+            "unavailable": "アクセス権を取得できません。",
+            "empty": "このアカウントに表示できるインストールはありません。",
+            "suspended": "インストールは停止中です",
+            "events": "このコンピュータでイベントを購読中のリポジトリ：{{count}} 件",
+            "manage": "リポジトリのアクセス権を管理",
+            "names": {
+              "actions": "Actions",
+              "administration": "リポジトリ管理",
+              "checks": "チェック",
+              "contents": "リポジトリの内容",
+              "deployments": "デプロイ",
+              "issues": "Issue",
+              "members": "組織のメンバー",
+              "metadata": "メタデータ",
+              "organization_events": "組織のイベント",
+              "pull_requests": "プルリクエスト",
+              "repository_hooks": "リポジトリの Webhook",
+              "statuses": "コミットステータス",
+              "workflows": "ワークフローファイル"
+            }
           },
           "app": {
             "title": "リポジトリのイベント",
@@ -16975,6 +17034,21 @@
             "repositories": "リポジトリを選択",
             "disconnect": "イベント接続を解除",
             "connect": "GitHub App を接続"
+          },
+          "connection": {
+            "operations": "リポジトリの操作",
+            "operationsMissing": "リポジトリの操作は未承認です",
+            "checking": "GitHub 接続を確認中…",
+            "mismatch": "操作と通知でアカウントが異なります。確認して再接続してください。",
+            "ready": "GitHub アカウントに接続済みです。",
+            "close": "閉じる",
+            "incomplete": "アカウントは連携済みです。このコンピューターでの操作を承認してください。",
+            "eventsOnly": "このアカウントはリポジトリ通知用です。名前の表示だけでは、このコンピューターでの操作権限を確認できません。",
+            "connect": "GitHub に接続",
+            "alternative": "このコンピューターの GitHub ログインを使用",
+            "cliDescription": "既存のログインを引き続き使えます。個人通知など GitHub App 非対応の機能には、この方法が必要です。",
+            "disconnect": "GitHub App の接続を解除",
+            "repositories": "通知を受け取るリポジトリ：{{count}}"
           }
         },
         "unresolved": "未解決のレビューコメント: {{count}} 件",
@@ -17359,7 +17433,8 @@
         "title": "リポジトリの自動化をインポート",
         "description": "取得元：{{workingDir}}。以下の設定を確認してください。インポートすると変更が適用され、新しい自動化が有効になります。コマンドの実行やフルアクセス権限の Agent の起動が可能になるため、信頼できる内容のみインポートしてください。",
         "accept": "インポートを確定",
-        "removed": "削除対象：{{names}}"
+        "removed": "削除対象：{{names}}",
+        "fileMissing": "「{{projectName}}」に自動化ファイルが見つからなかったため、インポートをスキップしました。"
       },
       "toast": {
         "summary": "追加 {{inserted}} · 更新 {{updated}} · 削除 {{deleted}}",
@@ -17456,6 +17531,7 @@
       "openWorkdirFailed": "フォルダを開けませんでした"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "待機時間を超えたため、プロンプトは送信されませんでした。対象のセッションが空いたら「{{action}}」で実行できます。",
       "status": {
         "running": "実行中",
         "success": "成功",
@@ -21384,6 +21460,7 @@
       "reviewed": "審査済み",
       "verified-publisher": "公開元確認済み"
     },
+    "viewLimit": "開いているページが多すぎます。他のページをスクロールして画面外に移すか折りたたむと、このページが自動で開きます。",
     "pluginRevoked": "プラグインが無効化または変更されたため、このページは使用できません。",
     "pluginCspRejected": "ページが未宣言のドメインを要求したため、読み込みを拒否しました。",
     "filesOnExecutionComputer": "ファイルの内容は実行側のコンピューターで確認してください",
@@ -22114,6 +22191,7 @@
     "picker": {
       "empty": "モデルグループはまだありません。設定で複数のソースをモードにまとめると、ここで選べます。",
       "manage": "モデルグループを管理",
+      "deviceTitle": "モデルグループ · {{device}}",
       "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
       "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
       "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"

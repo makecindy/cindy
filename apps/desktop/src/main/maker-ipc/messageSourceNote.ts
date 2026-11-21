@@ -1,6 +1,7 @@
 import {
   buildMessageSourceNote,
   messageSourceSenderFromMeta,
+  buildMessageSourceReplyHint,
   readMessageSourceDevice,
   readMessageSourcePlugin,
   type MessageSourceDevice,
@@ -60,7 +61,10 @@ function forwardedRequestClause(receipt: unknown): string | null {
  */
 export function buildWireMessageSourceNote(
   fields: WireMessageSourceFields | undefined,
-  opts: { visibleText?: string; autoResume?: boolean } = {},
+  opts: { visibleText?: string; autoResume?: boolean; sendToSession?: {
+    agentKind: 'claude-code' | 'codex' | 'pi';
+    supportsRemote: boolean;
+  } } = {},
 ): string | null {
   if (!fields || opts.autoResume) return null;
   const sender = messageSourceSenderFromMeta(fields);
@@ -73,7 +77,10 @@ export function buildWireMessageSourceNote(
   if (!clause && opts.visibleText !== undefined && isSyntheticTriggerText(opts.visibleText.trimStart()))
     return null;
   const note = buildMessageSourceNote(sender);
-  return clause ? `${note ?? '[消息来源] '}${clause}` : note;
+  const replyHint = buildMessageSourceReplyHint(sender, opts.sendToSession);
+  const withClause = clause ? `${note ?? '[消息来源] '}${clause}` : note;
+  if (!replyHint) return withClause;
+  return `${withClause ?? '[消息来源] 本条消息'}\n${replyHint}`;
 }
 
 /** 宽容读取主机透传的设备来源(未知平台 / 缺 id 返回 undefined)。 */

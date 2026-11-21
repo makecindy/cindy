@@ -6,6 +6,16 @@ import { DefaultOverrideControls } from '@/components/settings/DefaultOverrideCo
 import { SettingsRow } from '@/components/ui/settings-rows';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import {
+  requestPluginEnginesRefresh,
+  usePluginEngines,
+  useRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineSelectable,
+  type PluginEngineSelection,
+} from '@/lib/pluginEngineSelection';
 import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
 import { toast } from '@/lib/toast';
 import { ModelRouteSelector } from '@/components/new-chat/ModelRouteSelector';
@@ -17,10 +27,11 @@ import {
   type BotModelRoute,
 } from '../../../shared/botModelChain';
 import { MODEL_GROUPS_DEFAULTS, type ModelGroupSelection, type ModelGroupsConfig } from '../../../shared/modelGroups';
+import { isPluginEngineEffort } from '../../../shared/pluginEngines';
 import { useBotTranslation } from './botPronounContext';
 
 function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
-  return harness === 'claude' ? 'cc' : harness;
+  return harness === 'claude' ? 'cc' : harness === 'acp' ? 'pi' : harness;
 }
 
 function harnessFor(vendor: 'cc' | 'codex' | 'pi'): BotHarness {
@@ -83,6 +94,17 @@ export function BotModelChainEditor({
   const visibleVendors = (['pi', 'codex', 'cc'] as const)
     .filter((vendor) => !hiddenVendors.includes(vendor));
   const unifiedAgents = visibleVendors.map(agentKindFor);
+  const pluginEnginesAllowed = !remote;
+  const localPluginEngines = usePluginEngines(pluginEnginesAllowed && !deviceId);
+  const {
+    engines: remoteHostPluginEngines,
+    refresh: refreshRemoteHostPluginEngines,
+  } = useRemotePluginEngines(
+    pluginEnginesAllowed && deviceId ? deviceId : undefined,
+    pluginEnginesAllowed && deviceId ? 'once' : false,
+  );
+  const pluginEngineChoices = deviceId ? remoteHostPluginEngines ?? [] : localPluginEngines;
+  const readPluginEngineCatalogues = deviceId ? refreshRemoteHostPluginEngines : requestPluginEnginesRefresh;
 
   // 模型组属于伙伴所在的电脑：本机伙伴读本机的组；远程控制另一台电脑时用那台随设置带来的组；SSH 不提供。
   const localGroups = !remote && !deviceId;
@@ -183,83 +205,122 @@ export function BotModelChainEditor({
     [next[index], next[target]] = [next[target]!, next[index]!];
     onChange(next);
   };
+  const selectablePluginEngine = pluginEngineChoices.find(isPluginEngineSelectable);
   const add = () => {
     if (disabled || pendingRoute || routes.length >= BOT_MODEL_CHAIN_MAX) return;
     const unused = visibleVendors.find(
-      (vendor) => !routes.some((route) => vendorFor(route.harness) === vendor),
+      (vendor) => !routes.some((route) => route.harness !== 'acp' && vendorFor(route.harness) === vendor),
     );
     const vendor = unused ?? visibleVendors[0];
-    if (!vendor) return;
-    setPendingRoute({ harness: harnessFor(vendor), model: '', providerId: null, effort: '', fastMode: false });
+    if (vendor) {
+      setPendingRoute({ harness: harnessFor(vendor), model: '', providerId: null, effort: '', fastMode: false });
+      return;
+    }
+    if (selectablePluginEngine) {
+      setPendingRoute({
+        harness: 'acp',
+        model: '',
+        providerId: selectablePluginEngine.providerId,
+        effort: '',
+        fastMode: false,
+      });
+    }
   };
 
-  const picker = (route: BotModelRoute, index: number, wrapperClassName = 'min-w-0 flex-1') => (
-    <div className={wrapperClassName}>
-      <ModelRouteSelector
-        disabled={disabled}
-        deviceId={deviceId}
-        agentDeviceId={route.agentDeviceId}
-        sshRemote={remote && !deviceId}
-        vendorKey={vendorFor(route.harness)}
-        modelId={route.model}
-        effort={route.effort}
-        currentProviderId={route.providerId}
-        agentIdentity={{ vendorKey: vendorFor(route.harness), state: 'current' }}
-        triggerVariant="settings"
-        popoverSide="bottom"
-        ariaContext={t('bots.modelChain.routeLabel', { index: index + 1 })}
-        excludeSubscriptionDirect={remote && !deviceId}
-        excludeChatBridgedCodex={remote && !deviceId}
-        fastMode={route.fastMode}
-        onModelChange={(model) => replace(index, { model, modelGroup: undefined })}
-        onEffortChange={(effort) => replace(index, { effort })}
-        onFastModeChange={(fastMode) => replace(index, { fastMode })}
-        onNavigateToProviders={remote || deviceId ? undefined : onNavigateToProviders}
-        configurationEnabled
-        unifiedPanel
-        unifiedAgents={unifiedAgents}
-        onUnifiedSelect={(selection) => {
-          if (!visibleVendors.includes(selection.engine)) return;
-          replace(index, {
-            harness: harnessFor(selection.engine),
-            ...(route.agentDeviceId || selection.agentDevice ? { agentDeviceId: selection.agentDevice?.deviceId ?? null } : {}),
-            providerId: selection.providerId,
-            model: selection.modelId,
-            effort: selection.effort ?? '',
-            fastMode: selection.fast,
-            modelGroup: undefined,
-          });
-        }}
-        {...(groupsAllowed ? {
-          modelGroups: {
-            config: groupsConfig,
-            active: route.modelGroup && groupsConfig.routes.some((item) => item.id === route.modelGroup)
-              ? { type: 'route' as const, id: route.modelGroup }
+  const picker = (route: BotModelRoute, index: number, wrapperClassName = 'min-w-0 flex-1') => {
+    const routeIsPluginEngine = route.harness === 'acp' && !!route.providerId;
+    const showPluginEngines = pluginEnginesAllowed
+      && (pluginEngineChoices.length > 0 || routeIsPluginEngine);
+    return (
+      <div className={wrapperClassName}>
+        <ModelRouteSelector
+          disabled={disabled}
+          deviceId={deviceId}
+          agentDeviceId={routeIsPluginEngine ? undefined : route.agentDeviceId}
+          sshRemote={remote && !deviceId}
+          vendorKey={vendorFor(route.harness)}
+          modelId={route.model}
+          effort={route.effort}
+          currentProviderId={routeIsPluginEngine ? null : route.providerId}
+          agentIdentity={{ vendorKey: vendorFor(route.harness), state: 'current' }}
+          triggerVariant="settings"
+          popoverSide="bottom"
+          ariaContext={t('bots.modelChain.routeLabel', { index: index + 1 })}
+          excludeSubscriptionDirect={remote && !deviceId}
+          excludeChatBridgedCodex={remote && !deviceId}
+          fastMode={routeIsPluginEngine ? false : route.fastMode}
+          onModelChange={(model) => replace(index, { model, modelGroup: undefined })}
+          onEffortChange={(effort) => replace(index, { effort })}
+          onFastModeChange={(fastMode) => replace(index, { fastMode: routeIsPluginEngine ? false : fastMode })}
+          onNavigateToProviders={remote || deviceId ? undefined : onNavigateToProviders}
+          configurationEnabled
+          unifiedPanel
+          unifiedAgents={unifiedAgents}
+          pluginEngines={showPluginEngines ? {
+            engines: pluginEngineChoices,
+            active: routeIsPluginEngine && route.model
+              ? {
+                  providerId: route.providerId!,
+                  modelId: route.model,
+                  ...(isPluginEngineEffort(route.effort) ? { effort: route.effort } : {}),
+                }
               : null,
-            onSelect: (selection: ModelGroupSelection) => { void pickGroup(index, selection); },
-            // The editor also renders outside a router (tests, settings drawers); the app routes by hash.
-            ...(localGroups ? { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } } : {}),
-          },
-        } : {})}
-        unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
-        unknownModelDescription={t('settings.auxiliaryModels.unavailable')}
-      />
-      {deviceId && !route.agentDeviceId && route.providerId
-        ? (() => {
-            const provider = catalog.providers.find((item) => item.id === route.providerId);
-            return provider ? (
-              <p className="mt-1 break-words px-2 text-12 text-[var(--text-secondary)]">
-                {providerAccountLabel(
-                  providerDisplayName(provider, t),
-                  provider.openAiAccount?.identity?.trim() ||
-                    provider.subscriptionAccount?.identity?.trim(),
-                )}
-              </p>
-            ) : null;
-          })()
-        : null}
-    </div>
-  );
+            readCatalogue: readPluginEngineCatalogues,
+            onSelect: (selection: PluginEngineSelection) => {
+              replace(index, {
+                harness: 'acp',
+                ...(route.agentDeviceId ? { agentDeviceId: null } : {}),
+                providerId: selection.providerId,
+                model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                effort: selection.effort ?? '',
+                fastMode: false,
+                modelGroup: undefined,
+              });
+            },
+          } : undefined}
+          onUnifiedSelect={(selection) => {
+            if (!visibleVendors.includes(selection.engine)) return;
+            replace(index, {
+              harness: harnessFor(selection.engine),
+              ...(route.agentDeviceId || selection.agentDevice ? { agentDeviceId: selection.agentDevice?.deviceId ?? null } : {}),
+              providerId: selection.providerId,
+              model: selection.modelId,
+              effort: selection.effort ?? '',
+              fastMode: selection.fast,
+              modelGroup: undefined,
+            });
+          }}
+          {...(groupsAllowed ? {
+            modelGroups: {
+              config: groupsConfig,
+              active: route.modelGroup && groupsConfig.routes.some((item) => item.id === route.modelGroup)
+                ? { type: 'route' as const, id: route.modelGroup }
+                : null,
+              onSelect: (selection: ModelGroupSelection) => { void pickGroup(index, selection); },
+              // The editor also renders outside a router (tests, settings drawers); the app routes by hash.
+              ...(localGroups ? { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } } : {}),
+            },
+          } : {})}
+          unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
+          unknownModelDescription={t('settings.auxiliaryModels.unavailable')}
+        />
+        {deviceId && !routeIsPluginEngine && !route.agentDeviceId && route.providerId
+          ? (() => {
+              const provider = catalog.providers.find((item) => item.id === route.providerId);
+              return provider ? (
+                <p className="mt-1 break-words px-2 text-12 text-[var(--text-secondary)]">
+                  {providerAccountLabel(
+                    providerDisplayName(provider, t),
+                    provider.openAiAccount?.identity?.trim() ||
+                      provider.subscriptionAccount?.identity?.trim(),
+                  )}
+                </p>
+              ) : null;
+            })()
+          : null}
+      </div>
+    );
+  };
   const fallbackRows = routes.slice(1).map((route, fallbackIndex) => {
     const index = fallbackIndex + 1;
     return (
@@ -321,7 +382,7 @@ export function BotModelChainEditor({
     disabled ||
     pendingRoute !== null ||
     routes.length >= BOT_MODEL_CHAIN_MAX ||
-    visibleVendors.length === 0;
+    (visibleVendors.length === 0 && !selectablePluginEngine);
   const primaryRoute =
     routes[0] ?? { harness: 'pi' as const, model: '', providerId: null, effort: '', fastMode: false };
 

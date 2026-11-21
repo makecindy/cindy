@@ -2,11 +2,11 @@ export default {
   name: 'plugin-engines',
   entry: './fixture.tsx',
   viewport: { width: 560, height: 640 },
-  real: 'ModelSelectorContent, ModelSelector trigger, PluginEnginesSection (available, unknown and unavailable engines) and the plugin-engine task panel',
+  real: 'ModelSelectorContent, ModelSelector trigger, PluginEnginesSection (available and unknown engines, with unavailable candidates hidden) and the plugin-engine task panel',
   notCovered:
     'Engine processes, ACP sessions, task creation and sending, and the full composer and sidebar',
   cases: {
-    default: { about: 'New-task picker with three engines: available (no models yet), unknown (models known) and unavailable with an install hint' },
+    default: { about: 'New-task picker shows available and unknown engines and hides an unavailable candidate' },
     'draft-selected': { about: 'An engine model is the draft choice: its row carries the selected fill, no built-in model row is selected' },
     'effort-config': { about: 'A plugin engine model with reasoning levels: level at the row end and its configuration flyout with the level slider' },
     'agent-modes': { about: 'Permission menu of an engine whose agent publishes its own modes: the agent modes in its order, then Full access', viewport: { width: 560, height: 640 } },
@@ -64,10 +64,10 @@ export default {
       await ui.capture('effort-flyout');
       return;
     }
-    await page.locator('[data-plugin-engine-unavailable]').waitFor();
-    const disabled = page.locator('[data-plugin-engine-model^="acp-plugin:gemini-plugin:gemini#"]');
-    if ((await disabled.getAttribute('aria-disabled')) !== 'true') {
-      throw new Error('unavailable plugin engine row is selectable');
+    const unavailable = page.locator('[data-plugin-engine="acp-plugin:gemini-plugin:gemini"]');
+    const unavailableTab = page.getByRole('button', { name: 'Gemini CLI', exact: true });
+    if (await unavailable.count() || await unavailableTab.count()) {
+      throw new Error('unavailable plugin engine remains in the model list or source rail');
     }
     await group.scrollIntoViewIfNeeded();
     await ui.capture('engines');

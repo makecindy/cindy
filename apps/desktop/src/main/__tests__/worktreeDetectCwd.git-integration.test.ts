@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { createCheckoutService } from '../worktree/checkout';
-import { createWorktree, detectCwd } from '../worktree/WorktreeManager';
+import { awaitBackgroundCheckout, createWorktree, detectCwd } from '../worktree/WorktreeManager';
 import { app } from 'electron';
 import type { WorktreeMeta } from '../worktree/types';
 
@@ -282,3 +282,42 @@ it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
   },
   30_000,
 );
+
+// #6792: createWorktree must populate the linked worktree's full index after
+// background checkout. Existing checks use ordinary repositories. Reproduce
+// with a local submodule and inherited recursion before its linked gitdir exists.
+// Real Git configuration and index behavior belong in git-integration.
+it('completes staged checkout with inherited submodule recursion', async () => {
+  fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-submodule-trial-'));
+  vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+  const git = async (cwd: string, ...args: string[]) =>
+    (await exec('git', args, { cwd, timeout: 10_000 })).stdout.trim();
+  const repo = path.join(fixture, 'repo');
+  const sub = path.join(fixture, 'sub');
+  for (const dir of [repo, sub]) {
+    await fs.mkdir(dir);
+    await git(dir, 'init', '-b', 'main');
+    await git(dir, 'config', 'user.name', 'Cindy fixture');
+    await git(dir, 'config', 'user.email', 'fixture@example.invalid');
+    await fs.writeFile(path.join(dir, 'CLAUDE.md'), 'fixture\n');
+    await fs.writeFile(path.join(dir, 'tracked.txt'), 'fixture\n');
+    await git(dir, 'add', '.');
+    await git(dir, 'commit', '-m', 'fixture');
+  }
+  await git(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', sub, 'deps/sub');
+  await git(repo, 'commit', '-m', 'add local fixture submodule');
+  await git(repo, 'config', 'submodule.recurse', 'true');
+  const result = await createWorktree(
+    { sessionId: 'submodule', baseRepo: repo, name: 'submodule', sourceBranch: 'main' },
+    { trackBackgroundCheckout: true },
+  );
+  await awaitBackgroundCheckout('submodule');
+  expect(result.ok, JSON.stringify(result)).toBe(true);
+  if (!result.ok) return;
+  expect(await git(result.meta.path, 'ls-files')).toBe(
+    await git(repo, 'ls-tree', '-r', '--name-only', 'HEAD'),
+  );
+  expect(await git(result.meta.path, 'status', '--porcelain=v1')).toBe('');
+  expect(await fs.readFile(path.join(result.meta.path, 'tracked.txt'), 'utf8')).toBe('fixture\n');
+  expect(await git(repo, 'config', '--local', 'submodule.recurse')).toBe('true');
+});

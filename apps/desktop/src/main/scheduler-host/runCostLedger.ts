@@ -1,3 +1,4 @@
+import { messageCostDatabase } from '../usage/turnUsageAdmission.js';
 /**
  * scheduler run 费用账本。
  *
@@ -106,7 +107,7 @@ export async function applyScheduleRunCostMetaChange(
 ): Promise<void> {
   const changes = computeScheduleRunCostDeltas(previous, next);
   if (changes.length === 0) return;
-  const db = getDbClient().drizzle;
+  const db = (messageCostDatabase.getStore() ?? getDbClient()).drizzle;
   for (const change of changes) {
     // 单币种快照:币种守卫在同一条 UPDATE 里用 CASE 表达(先查再写有 TOCTOU
     // 窗口)。币种冲突的 delta 原子地弃掉——金额、币种、约值标记全部保持原样,

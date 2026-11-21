@@ -1,6 +1,8 @@
 {
   "sharedTaskReadOnly": "Nur der Besitzer der Sitzung kann mit dieser Karte interagieren.",
   "retry": "Neu laden",
+  "viewLimit": "Zu viele Seiten sind geöffnet. Scrolle eine andere Seite aus dem sichtbaren Bereich oder klappe sie ein. Diese Seite öffnet sich dann automatisch.",
+  "pluginRevoked": "Das Plugin wurde deaktiviert oder geändert. Diese Seite ist nicht mehr verfügbar.",
   "loadFailed": "Die App konnte nicht geladen werden. Prüfe die Verbindung und lade sie neu.",
   "updateRequired": "Dieser Computer unterstützt MCP Apps noch nicht. Aktualisiere Cindy auf diesem Computer und versuch es erneut.",
   "appName": "MCP App",

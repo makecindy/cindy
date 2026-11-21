@@ -1,3 +1,4 @@
+import { readGithubAppToken } from '../git-context/githubAppAuthorization.desktop.js';
 import { createDesktopRuntimePluginHost } from './runtimePluginHost.desktop.js';
 import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/runtime.js';
 import { setPluginEnabled } from './pluginEnableService.js';
@@ -692,6 +693,7 @@ import {
 import { runGhostExternalLinkNavigation } from './ghostExternalLinkNavigation.js';
 import { runGhostPreviewNavigation } from './ghostPreviewNavigation.js';
 import { ownerScopedGhostPartitionForInstalledGhost, resolveGhostWebviewPartitionClaim } from './ghostWebviewPartition.js';
+import { createGhostResourceUsageReader } from './ghostResourceUsage.js';
 import {
   ghostSecretSaved,
   readGhostOauthManifestForUninstall,
@@ -6830,6 +6832,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
       resolveSavedCredential: (ghostId, secretKey) => getGhostSavedCredentialManager().resolve(ghostId, secretKey),
       readGhCliToken: () => getSharedGhCliTokenSource().readToken(),
+      readGithubAppToken,
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
       // 用 Node 侧 undici fetch 而非 Electron net.fetch:redirect:'manual' 在 undici
@@ -8230,7 +8233,10 @@ export async function updatePersonalLocalPlugins() {
           if (createHash('sha256').update(await fs.promises.readFile(backupFile)).digest('hex') !== backupHash)
             throw new Error('Previous personal plugin backup verification failed');
           const backupInspection = await manager.inspect(backupFile);
-          if ('rejection' in backupInspection) throwInstallError(backupInspection.rejection);
+          if ('rejection' in backupInspection) throwInstallError({
+            ...backupInspection.rejection,
+            reason: `Previous plugin backup cannot be imported; keeping the current installation: ${backupInspection.rejection.reason}`,
+          });
           if (!isCurrent()) throw new Error('Personal plugin owner changed');
           assertGhostRelocationIdle(instance);
           const updated = await updateLocalGhostPackageLocked(manager, file, inspected, inspected.packageSha256,
@@ -9576,7 +9582,8 @@ export function registerGhostIpc(): void {
       : [];
     const ghCliAvailable =
       method === 'GET' && pathname === '/secrets' && ghCliSecretDecls.length > 0
-        ? await getSharedGhCliTokenSource().probeAvailability() : false;
+        ? await getSharedGhCliTokenSource().probeAvailability() || Boolean(await readGithubAppToken().catch(() => null))
+        : false;
     return handleGhostSecretsRequest({
       method,
       pathname,
@@ -9976,6 +9983,11 @@ export function registerGhostIpc(): void {
     hostTools: requestPluginHostToolCall,
     warn: (message, details) => log.warn(message, details),
   });
+  const readGhostResourceUsage = createGhostResourceUsageReader({
+    findGhost: findGhostForInstanceId,
+    readOwner: getActiveAppSession,
+    ghostIdForLogicWebContents,
+  });
   ipcMain.handle('ghost-pipe:send', async (event, payload: unknown) => {
     const id = ghostIdForLogicWebContents(event.sender.id);
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
@@ -9995,6 +10007,7 @@ export function registerGhostIpc(): void {
 
     // host-request = 读取宿主只读信息。app-context 不要求卡槽；cindy-preference
     // 只返回调用插件自己已声明能力的当前选型，不返回其它插件配置或凭证。
+    // resource-usage 只返回本机及同 owner × 安装实例的进程合计。
     // 未知 kind 明确拒绝，避免接口悄悄扩面。
     if (type === 'host-request') {
       const kind = (payload as { kind?: unknown } | null)?.kind;
@@ -10006,7 +10019,8 @@ export function registerGhostIpc(): void {
           (payload as { capability?: unknown } | null)?.capability,
         );
       }
-      throwIpcError('INVALID_PARAMS', '未知的宿主请求类型');
+      return readGhostResourceUsage(id, kind, () => !event.sender.isDestroyed() &&
+        ghostIdForLogicWebContents(event.sender.id) === id && isGhostAvailableForActiveSession(id));
     }
     // cindy-request = 请 Cindy 本体代办;旧名 model-request 静默兼容(更名前的老包)。
     if (type === 'cindy-request' || type === 'model-request') {

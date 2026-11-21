@@ -6,7 +6,6 @@ import { PluginShareButton } from './PluginShareButton';
 import { PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
 import { permissionItemDetail } from '../../../shared/ghostPermissionDetail';
 import { Button } from '@/components/ui/button';
-import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -49,6 +48,10 @@ import { GhostAccountReuseSection } from './GhostAccountReuseSection';
 import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
 import { PluginControlPointsSection } from './PluginControlPointsSection';
 import { PluginEngineRemoteUseCards, usePluginRemoteUseEngines } from './PluginEngineRemoteUse';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import { providerShareGate } from '@/features/provider-share/providerShareFormat';
+import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
+import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -210,6 +213,11 @@ export function GhostPluginDetailView({
   // 这个插件在本机提供的执行引擎：每个引擎一张「允许被远程调用」的卡片(远程查看别的电脑的插件时不显示，
   // 开关只能在装着插件的那台电脑上改)。
   const remoteUseEngines = usePluginRemoteUseEngines(!remote && ghost ? detail.id : null);
+  const remoteControlEnabled = useRemoteControlEnabled();
+  const [shareManageSelection, setShareManageSelection] = useState<{ ghostId: string; engineKey: string } | null>(null);
+  const shareManageEngine = !remote && shareManageSelection?.ghostId === detail.id
+    ? remoteUseEngines.find((engine) => engine.key === shareManageSelection.engineKey && engine.remoteUse?.shareSupported === true) ?? null
+    : null;
   const hasConfiguration =
     hasGithubConnection ||
     Boolean(ghost?.manifest.browserExtension) ||
@@ -231,6 +239,27 @@ export function GhostPluginDetailView({
   const localShareAvailable = !remote && ghost?.publishingSource?.kind === 'local' &&
     ghost.approval.state === 'approved' && ghost.namespaceState === 'confirmed' && (ghost.namespace === null || ghost.namespace === 'local') &&
     !ghost.builtin;
+
+  if (shareManageEngine) {
+    return (
+      <main className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-hidden bg-[var(--surface)]">
+        <div className="mx-auto h-full w-full max-w-[824px] px-8 pt-5 max-[760px]:px-6">
+          <ProviderShareManagePage
+            key={`local:${shareManageEngine.providerId}`}
+            providerId={shareManageEngine.providerId}
+            providerName={shareManageEngine.name}
+            providerIcon={<PluginEngineIcon size={18} iconDataUrl={shareManageEngine.iconDataUrl} />}
+            backLabel={detail.name}
+            gate={providerShareGate({
+              remoteControlEnabled,
+              invocationEnabled: shareManageEngine.remoteUse?.enabled === true,
+            })}
+            onBack={() => setShareManageSelection(null)}
+          />
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main
@@ -514,10 +543,11 @@ export function GhostPluginDetailView({
                       reloadKey={githubConnectionVersion}
                       account={
                         hasGithubConnection ? (
-                          <div>
-                            <GithubAccountCard onConnected={() => setGithubConnectionVersion((version) => version + 1)} />
-                            {ghost.manifest.id === 'cindy-github' && ghost.namespace === null && <GithubAppCard />}
-                          </div>
+                          <GithubAccountCard
+                            pluginSettings
+                            includeEvents={ghost.manifest.id === 'cindy-github' && ghost.namespace === null}
+                            onConnected={() => setGithubConnectionVersion((version) => version + 1)}
+                          />
                         ) : undefined
                       }
                       ghost={ghost}
@@ -548,7 +578,11 @@ export function GhostPluginDetailView({
                   </div>
                 )
               ) : null}
-              <PluginEngineRemoteUseCards engines={remoteUseEngines} surfaceClassName={DETAIL_SURFACE_CLASS} />
+              <PluginEngineRemoteUseCards
+                engines={remoteUseEngines}
+                onManageShare={(engine) => setShareManageSelection({ ghostId: detail.id, engineKey: engine.key })}
+                surfaceClassName={DETAIL_SURFACE_CLASS}
+              />
               {ghost?.manifest.routineEvents ? (
                 <p className="text-13 text-[var(--text-secondary)]">
                   {t('routines.pluginCapability')}

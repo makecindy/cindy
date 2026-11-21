@@ -46,8 +46,8 @@ const engine = (key: string, name: string, remoteUse?: PluginEngineView['remoteU
   ...(remoteUse ? { remoteUse } : {}),
 });
 
-function Cards({ ghostId }: { ghostId: string }) {
-  return <PluginEngineRemoteUseCards engines={usePluginRemoteUseEngines(ghostId)} surfaceClassName="" />;
+function Cards({ ghostId, onManageShare }: { ghostId: string; onManageShare?: (engine: PluginEngineView) => void }) {
+  return <PluginEngineRemoteUseCards engines={usePluginRemoteUseEngines(ghostId)} onManageShare={onManageShare} surfaceClassName="" />;
 }
 
 async function renderCards(input: {
@@ -55,6 +55,7 @@ async function renderCards(input: {
   engines: PluginEngineView[];
   remoteControlEnabled?: boolean;
   setPluginEngineRemoteUse?: ReturnType<typeof vi.fn>;
+  onManageShare?: (engine: PluginEngineView) => void;
 }) {
   const setPluginEngineRemoteUse = input.setPluginEngineRemoteUse
     ?? vi.fn(async (_key: string, enabled: boolean) => ({ supported: true, enabled }));
@@ -66,7 +67,7 @@ async function renderCards(input: {
     },
     deviceLink: { getState: vi.fn(async () => ({ remoteControlEnabled: input.remoteControlEnabled ?? true })) },
   });
-  render(<MemoryRouter><Cards ghostId={input.ghostId ?? 'dsh-plugin'} /></MemoryRouter>);
+  render(<MemoryRouter><Cards ghostId={input.ghostId ?? 'dsh-plugin'} onManageShare={input.onManageShare} /></MemoryRouter>);
   // The engine list and this computer's remote-control state both arrive asynchronously.
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   return { setPluginEngineRemoteUse };
@@ -130,5 +131,22 @@ describe('remote use of a plugin’s task engines', () => {
   it('shows nothing for a plugin that provides no engine', async () => {
     await renderCards({ ghostId: 'no-engines', engines: [engine('dsh-plugin:dsh', 'DeepSeek Harness', { supported: true, enabled: true })] });
     expect(screen.queryByRole('switch')).toBeNull();
+  });
+
+  it('shows the Remote & sharing button only when shareSupported is true and routes clicks to onManageShare', async () => {
+    const onManageShare = vi.fn();
+    await renderCards({
+      engines: [engine('dsh-plugin:dsh', 'DeepSeek Harness', { supported: true, enabled: true })],
+      onManageShare,
+    });
+    expect(screen.queryByTestId('provider-share-entry')).toBeNull();
+    cleanup();
+    resetPluginEnginesStoreForTests();
+
+    const shareable = engine('dsh-plugin:dsh', 'DeepSeek Harness', { supported: true, shareSupported: true, enabled: true });
+    await renderCards({ engines: [shareable], onManageShare });
+    expect(screen.getByText('settings.ghosts.detail.engineRemoteUse.descriptionShareable')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('provider-share-entry'));
+    expect(onManageShare).toHaveBeenCalledWith(shareable);
   });
 });

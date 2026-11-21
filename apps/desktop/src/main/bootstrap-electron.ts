@@ -7276,6 +7276,10 @@ const registerIpcHandlers = () => {
       });
       registerMakerCoreIpc(ipcMaker, {
         builtinApiKeyDeps,
+        // Keep aligned with maker-host/index.ts historyRemote injection. That provider fact wires
+        // sendToRemoteSession into cindy_helper; the shared register option carries the same fact
+        // into model-facing delivery hints.
+        supportsRemoteSessionHandoff: true,
         onAnySessionTurnKeepaliveChange: (isRunning) => {
           setMainWindowBackgroundThrottlingForActiveTurn(isRunning);
           notifyUpdateAutoRelaunchBusyStateChanged();

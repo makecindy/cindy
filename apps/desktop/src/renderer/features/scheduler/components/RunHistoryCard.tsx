@@ -396,13 +396,18 @@ export function RunHistoryCard({
           "为什么这轮没跑"在历史里可追溯,与调度器故障区分。 */}
       {run.preRunHookResult && <PreRunHookResultDetails result={run.preRunHookResult} />}
 
-      {run.status === 'skipped' && !run.preRunHookResult && run.resultText && (
+      {run.status === 'skipped' && run.preRunHookResult?.status !== 'skipped' && run.resultText && (
         <p
           className={cn(
             'rounded-[8px] px-2 py-1.5 font-mono text-11 break-words',
             'bg-[hsl(var(--content-area))] text-[var(--cmd-palette-item-meta)]',
           )}
         >
+          {run.resultText.startsWith('[QUEUE_WAIT_TIMEOUT] ') && (
+            <span className="mb-1 block font-sans">
+              {t('scheduler.runs.queueWaitTimeoutRecovery', { action: t('scheduler.button.runNow') })}
+            </span>
+          )}
           {run.resultText}
         </p>
       )}

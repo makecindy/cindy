@@ -49,6 +49,18 @@ const itemSnoozeUntil = (item: InboxItem) =>
 const itemSnoozedUntil = (item: InboxItem) =>
   (item.kind === 'session' ? item.session.snoozedUntil : item.entry.snooze?.snoozedUntil);
 
+type InboxRowAction = Parameters<TaskInboxProps['onAction']>[1];
+
+function InboxSessionRow({ entry, rows, onAction }: {
+  entry: Extract<InboxItem, { kind: 'session' }>;
+  rows: Omit<SessionEntryRowsProps, 'entries'>;
+  onAction: (session: Session, action: InboxRowAction) => ReturnType<TaskInboxProps['onAction']>;
+}) {
+  const session = entry.session;
+  const dispatch = useCallback((_id: string, action: InboxRowAction) => onAction(session, action), [session, onAction]);
+  return <SessionEntryRows {...rows} onAction={dispatch} inboxMode entries={[entry]} showFirstDivider={false} />;
+}
+
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 const NO_TEAMMATES: readonly TeammateInboxEntry[] = [];
 
@@ -74,23 +86,34 @@ export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorit
     }
   }, [rows.activeSessionId, settlement.viewedId]);
   const [explicitMoves, setExplicitMoves] = useState<ReadonlySet<string>>(EMPTY_KEYS);
-  const actionInputs = useRef({ sessions, onAction: rows.onAction, viewedId: rows.activeSessionId });
-  actionInputs.current = { sessions, onAction: rows.onAction, viewedId: rows.activeSessionId };
-  const handleAction = useCallback(async (id: string, action: Parameters<TaskInboxProps['onAction']>[1]) => {
+  const [completing, setCompleting] = useState<ReadonlySet<string>>(EMPTY_KEYS);
+  const actionInputs = useRef({ onAction: rows.onAction, viewedId: rows.activeSessionId });
+  actionInputs.current = { onAction: rows.onAction, viewedId: rows.activeSessionId };
+  const handleAction = useCallback(async (session: Session, action: InboxRowAction) => {
     const input = actionInputs.current;
-    const session = input.sessions.find(session => session.id === id);
-    const result = await input.onAction(id, action);
-    if (action === 'complete' && result === 'marked-read' && session) {
-      const key = sessionRowKey(session);
-      if (actionInputs.current.viewedId === input.viewedId) {
-        setSettlement(previous => ({
-          viewedId: input.viewedId,
-          keys: new Set([...(previous.viewedId === input.viewedId ? previous.keys : EMPTY_KEYS), key]),
-        }));
+    const id = session.id;
+    if (action !== 'complete') return input.onAction(id, action);
+    const key = sessionRowKey(session);
+    setCompleting(previous => new Set(previous).add(key));
+    try {
+      const result = await input.onAction(id, action);
+      if (result === 'marked-read') {
+        if (actionInputs.current.viewedId === input.viewedId) {
+          setSettlement(previous => ({
+            viewedId: input.viewedId,
+            keys: new Set([...(previous.viewedId === input.viewedId ? previous.keys : EMPTY_KEYS), key]),
+          }));
+        }
+        setExplicitMoves(previous => new Set(previous).add(key));
       }
-      setExplicitMoves(previous => new Set(previous).add(key));
+      return result;
+    } finally {
+      setCompleting(previous => {
+        const next = new Set(previous);
+        next.delete(key);
+        return next;
+      });
     }
-    return result;
   }, []);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
     () => new Set(['working', 'snoozed', 'archived']),
@@ -185,12 +208,15 @@ export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorit
     >
       {SECTIONS.map((section) => {
         // Counts stay live; only the rows hold still while hovering Done.
-        const count = groups.get(section)!.length;
-        const items = shown.get(section)!;
+        const live = groups.get(section)!;
+        const placed = shown.get(section)!;
+        const isVisible = (item: InboxItem) => !completing.has(itemKey(item));
+        const count = completing.size ? live.filter(isVisible).length : live.length;
+        const items = completing.size ? placed.filter(isVisible) : placed;
         const closed = collapsed.has(section);
         const visible = expanded.has(section) ? items : items.slice(0, 20);
         return (
-          <section key={section}>
+          <section key={section} data-task-inbox-section={section}>
             <button
               type="button"
               aria-expanded={!closed}
@@ -220,13 +246,7 @@ export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorit
                     {item.kind === 'teammate' ? (
                       <TeammateInboxRow entry={item.entry} section={section} />
                     ) : (
-                      <SessionEntryRows
-                        {...rows}
-                        onAction={handleAction}
-                        inboxMode
-                        entries={[item]}
-                        showFirstDivider={false}
-                      />
+                      <InboxSessionRow entry={item} rows={rows} onAction={handleAction} />
                     )}
                     {section === 'snoozed' && (
                       <div className="px-3 pb-1 text-11 text-[var(--sidebar-list-muted)]">
