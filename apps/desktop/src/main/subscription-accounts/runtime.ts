@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { clearCodexModelSnapshot, restoreCodexModelSnapshot, saveCodexModelSnapshot } from './codexModelSnapshot.js';
+import { clearCodexModelSnapshot, readSavedCodexModelAccount, restoreCodexModelSnapshot, saveCodexModelSnapshot } from './codexModelSnapshot.js';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { isDeepStrictEqual } from 'node:util';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -149,6 +149,13 @@ interface AccountSnapshot {
   unavailable?: boolean;
   /** The failed read could not reach the account service (not a CLI or file problem). */
   unreachable?: boolean;
+  /**
+   * While reads fail: the sign-in this slot last confirmed (in memory, or the saved model list
+   * after a restart). It keeps the provider connected and its last model list on screen; it is
+   * never execution authorization, so selection and dispatch still refuse the account
+   * (2026-11-20: a short outage emptied the local model picker and showed "未登录").
+   */
+  lastConfirmed?: Pick<AccountSnapshot, 'auth' | 'accountKey'>;
   at: number;
   usageAt?: number;
   /**
@@ -170,9 +177,32 @@ interface CodexModelFlight {
   forced: boolean;
   saving?: Promise<void>;
 }
-function sameCodexModelAccount(snapshot: CodexModelSnapshot | undefined, info: AccountSnapshot): boolean {
+function sameCodexModelAccount(snapshot: CodexModelSnapshot | undefined, info: Pick<AccountSnapshot, 'auth' | 'accountKey'>): boolean {
   return !!snapshot && (info.accountKey || snapshot.accountKey
     ? !!info.accountKey && snapshot.accountKey === info.accountKey : snapshot.auth === info.auth);
+}
+interface SubscriptionCatalogAccountOptions {
+  includeBoundAccounts?: boolean;
+  includeLastConfirmed?: boolean;
+}
+
+/**
+ * The sign-in a provider's connection state and model list may show: the current one, or the
+ * last confirmed one while the account cannot be read. Display only; never routes a task.
+ */
+function subscriptionCatalogSignIn(
+  info: AccountSnapshot | undefined, options: SubscriptionCatalogAccountOptions,
+): Pick<AccountSnapshot, 'auth' | 'accountKey'> | undefined {
+  if (info?.auth.authenticated) return info;
+  return info?.unavailable && options.includeLastConfirmed && !options.includeBoundAccounts ? info.lastConfirmed : undefined;
+}
+
+interface PublishedSubscriptionCatalog {
+  models: readonly CatalogModel[] | null;
+  unavailable: boolean;
+  connected?: boolean;
+  displayModels?: readonly CatalogModel[] | null;
+  confirmedAt?: number;
 }
 
 interface OwnerRuntime {
@@ -192,12 +222,12 @@ interface OwnerRuntime {
   codexModels: Map<string, CodexModelSnapshot>;
   codexModelFlights: Map<string, CodexModelFlight>;
   codexCatalogs?: Map<string, readonly CatalogModel[]>;
-  publishedCodexCatalog?: Record<string, { models: readonly CatalogModel[] | null; unavailable: boolean }> | null;
+  publishedCodexCatalog?: Record<string, PublishedSubscriptionCatalog> | null;
   defaultCodexAuthEpoch: number;
-  claudeModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; failedAt?: number }>;
+  claudeModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; confirmedAt?: number; failedAt?: number }>;
   claudeModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
   claudeCatalogs?: Map<string, readonly CatalogModel[]>;
-  publishedClaudeCatalog?: Record<string, readonly CatalogModel[] | null> | null;
+  publishedClaudeCatalog?: Record<string, PublishedSubscriptionCatalog> | null;
   defaultClaudeAuthEpoch: number;
 }
 let runtime: OwnerRuntime | undefined;
@@ -217,12 +247,28 @@ export function onSubscriptionPoolClaudeModelsChanged(listener: () => void): () 
   claudeModelListeners.add(listener);
   return () => { claudeModelListeners.delete(listener); };
 }
+function subscriptionCatalogForPublication(
+  providerId: string,
+  readModels: typeof readSubscriptionPoolCodexModels,
+): PublishedSubscriptionCatalog {
+  const models = readModels(providerId);
+  const unavailable = hasUnavailableSubscriptionPoolAccount(providerId);
+  if (!unavailable) return { models, unavailable };
+  // Either half can change independently when only some accounts are readable.
+  return {
+    models,
+    unavailable,
+    connected: hasConnectedSubscriptionPool(providerId),
+    displayModels: readModels(providerId, { includeLastConfirmed: true }),
+    confirmedAt: lastConfirmedSubscriptionModelsAt(providerId),
+  };
+}
 function publishClaudeCatalogChange(state: OwnerRuntime): void {
-  if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return;
+  if (!isCurrentRuntime(state)) return;
   const pool = readPool('anthropic');
   const providers = new Set(['anthropic', ...pool?.accounts.map(account => accountProviderId('anthropic', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
-    [providerId, readSubscriptionPoolClaudeModels(providerId)])) : null;
+    [providerId, subscriptionCatalogForPublication(providerId, readSubscriptionPoolClaudeModels)])) : null;
   if (isDeepStrictEqual(state.publishedClaudeCatalog ?? null, models)) return;
   state.publishedClaudeCatalog = models;
   for (const listener of claudeModelListeners) {
@@ -235,11 +281,11 @@ export function onSubscriptionPoolCodexModelsChanged(listener: () => void): () =
   return () => { codexModelListeners.delete(listener); };
 }
 function publishCodexCatalogChange(state: OwnerRuntime, refreshId?: string): void {
-  if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return;
+  if (!isCurrentRuntime(state)) return;
   const pool = readPool('openai');
   const providers = new Set(['openai', ...pool?.accounts.map(account => accountProviderId('openai', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
-    [providerId, { models: readSubscriptionPoolCodexModels(providerId), unavailable: hasUnavailableSubscriptionPoolAccount(providerId) }])) : null;
+    [providerId, subscriptionCatalogForPublication(providerId, readSubscriptionPoolCodexModels)])) : null;
   if (isDeepStrictEqual(state.publishedCodexCatalog ?? null, models)) return;
   if (refreshId && models) {
     for (const [providerId, next] of Object.entries(models)) {
@@ -305,8 +351,12 @@ function usageFingerprint(provider: SubscriptionProvider, info: AccountSnapshot)
     ? createHash('sha256').update(`claude-usage:${info.auth.identity}`).digest('hex').slice(0, 16) : undefined;
 }
 
+function isCurrentRuntime(state: OwnerRuntime): boolean {
+  return state === runtime && state.owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
+}
+
 function accountStillPresent(state: OwnerRuntime, provider: SubscriptionProvider, id: string): boolean {
-  if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+  if (!isCurrentRuntime(state)) return false;
   const pool = readPool(provider);
   return pool ? pool.accounts.some(account => account.id === id) && !disconnectedFor(pool, provider, id)
     : id === 'default' && defaultAccountBound(provider);
@@ -941,6 +991,7 @@ async function snapshot(
           || current.auth.planTier !== result.auth.planTier || current.auth.planDisplayName !== result.auth.planDisplayName
           || current.auth.planType !== result.auth.planType);
       } catch (error) {
+        assertOwner(state);
         const account = provider === 'anthropic'
           ? readPool(provider)?.accounts.find((account) => account.id === id) : undefined;
         // A failed read says nothing about who is signed in: keep the identity this owner last
@@ -959,10 +1010,18 @@ async function snapshot(
           error: error instanceof Error ? error.name : typeof error,
           unreachable: isAccountServiceUnreachable(error),
         });
+        // Keep showing the sign-in this slot last confirmed. After a restart there is none in
+        // memory; a Codex model list saved for this slot is that evidence (cleared on sign-out).
+        // A pending re-login has not confirmed anyone yet, so it keeps nothing.
+        const lastConfirmed = account?.reloginIdentity ? undefined
+          : lastRead ? (lastRead.unavailable ? lastRead.lastConfirmed
+            : lastRead.auth.authenticated ? { auth: lastRead.auth, accountKey: lastRead.accountKey } : undefined)
+          : provider === 'openai' ? await savedCodexSignIn(id, identity) : undefined;
         result = {
           auth: { authenticated: false, ...(identity ? { identity } : {}) },
           unavailable: true,
           ...(isAccountServiceUnreachable(error) ? { unreachable: true } : {}),
+          ...(lastConfirmed ? { lastConfirmed } : {}),
           at: Date.now(),
         };
       }
@@ -987,6 +1046,12 @@ async function snapshot(
       await writeStoredAccountUsage(provider, id, null, () => accountStillPresent(state, provider, id)
         && state.cache.get(key) === result).catch(() => log.warn('Account quota persistence unavailable'));
     } else if (observedUsage) await persistUsage(state, provider, id, result);
+    // A confirmed sign-out ends the saved list's role as offline sign-in evidence, also after an
+    // outage (previous unreadable) or at the first read after a restart.
+    if (provider === 'openai' && !result.auth.authenticated && !result.unavailable
+      && (!previous || previous.auth.authenticated || previous.unavailable)) {
+      await clearSignedOutCodexModels(state, id, () => state.cache.get(key) === result);
+    }
     assertOwner(state);
     // Only a change between readable and unreadable is announced, so every open view follows a
     // recovered (or lost) connection; repeated failures within the failure TTL stay quiet.
@@ -1036,7 +1101,10 @@ function servingAccounts(found: NonNullable<ReturnType<typeof poolFor>>) {
     : providerAccounts(kind, pool.accounts, ref.providerId);
 }
 /** Read-only cached aggregate for provider catalog/auth gates; no account identity leaves it. */
-export function hasConnectedSubscriptionPool(providerId: string, options: { includeBoundAccounts?: boolean } = {}): boolean {
+export function hasConnectedSubscriptionPool(
+  providerId: string,
+  options: { includeBoundAccounts?: boolean } = {},
+): boolean {
   const found = poolFor(providerId);
   if (!found || (found.off && !options.includeBoundAccounts)) return false;
   const state = currentRuntime();
@@ -1044,7 +1112,7 @@ export function hasConnectedSubscriptionPool(providerId: string, options: { incl
   const serving = new Set(servingAccounts(found).map(account => account.id));
   return found.pool.accounts.filter(account => (serving.has(account.id) || historical.has(account.id))
     && !disconnectedFor(found.pool, found.kind, account.id))
-    .some((a) => state.cache.get(keyOf(found.kind, a.id))?.auth.authenticated);
+    .some(account => state.cache.get(keyOf(found.kind, account.id))?.auth.authenticated === true);
 }
 
 /**
@@ -1097,7 +1165,11 @@ export function resetDefaultSubscriptionCodexDiscovery(authenticated: boolean): 
   state.codexModels.delete('default');
   const previous = state.cache.get(keyOf('openai', 'default'));
   if (authenticated) state.cache.delete(keyOf('openai', 'default'));
-  else state.cache.set(keyOf('openai', 'default'), { auth: { authenticated: false }, at: Date.now() });
+  else {
+    const signedOut = { auth: { authenticated: false }, at: Date.now() };
+    state.cache.set(keyOf('openai', 'default'), signedOut);
+    void clearSignedOutCodexModels(state, 'default', () => state.cache.get(keyOf('openai', 'default')) === signedOut);
+  }
   publishCodexCatalogChange(state);
   noteSignInEvidence(state, 'openai', previous, state.cache.get(keyOf('openai', 'default')));
 }
@@ -1155,7 +1227,7 @@ export async function refreshSubscriptionPoolClaudeModels(force = false, provide
     }
     const directory = directoryFor('anthropic', id);
     const placement = accountProviderId('anthropic', id);
-    const isCurrent = () => state === runtime && state.owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
+    const isCurrent = () => isCurrentRuntime(state)
       && probe === claudeModelProbe && !loggingIn()
       && !disconnectedFor(readPool('anthropic'), 'anthropic', id)
       && readPool('anthropic')?.accounts.some(account => account.id === id && (!account.paused || historical.has(id))) === true
@@ -1171,10 +1243,11 @@ export async function refreshSubscriptionPoolClaudeModels(force = false, provide
         sameLogin ? previous?.models ?? [] : []);
         assertCurrent();
         if (models === null) throw new Error('Claude model probe did not return a current list');
-        state.claudeModels.set(id, { auth, models });
+        state.claudeModels.set(id, { auth, models, confirmedAt: Date.now() });
       } catch (error) {
         if (isCurrent()) {
-          state.claudeModels.set(id, { auth, models: sameLogin ? previous?.models ?? [] : [], failedAt: Date.now() });
+          state.claudeModels.set(id, { auth, models: sameLogin ? previous?.models ?? [] : [],
+            ...(sameLogin && previous?.confirmedAt !== undefined ? { confirmedAt: previous.confirmedAt } : {}), failedAt: Date.now() });
           log.warn('subscription account model read failed', { accountId: id, error: error instanceof Error ? error.name : typeof error });
         }
       }
@@ -1184,7 +1257,7 @@ export async function refreshSubscriptionPoolClaudeModels(force = false, provide
   };
   await Promise.all(accounts.map(account => refreshAccount(account.id)));
   publishClaudeCatalogChange(state);
-  return state === runtime && state.owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
+  return isCurrentRuntime(state)
     && probe === claudeModelProbe && accounts.some(account => {
     const result = state.claudeModels.get(account.id);
     return result?.failedAt === undefined && !!result && result.auth === state.cache.get(keyOf('anthropic', account.id))?.auth
@@ -1195,7 +1268,7 @@ export async function refreshSubscriptionPoolClaudeModels(force = false, provide
 /** null preserves existing native metadata before a usable account discovery;
  * [] means there is no authenticated account eligible to publish membership. */
 export function readSubscriptionPoolClaudeModels(
-  providerId = 'anthropic', options: { includeBoundAccounts?: boolean } = {},
+  providerId = 'anthropic', options: SubscriptionCatalogAccountOptions = {},
 ): readonly CatalogModel[] | null {
   const found = poolFor(providerId);
   if (!found || found.kind !== 'anthropic') return null;
@@ -1209,7 +1282,7 @@ export function readSubscriptionPoolClaudeModels(
       || disconnectedFor(found.pool, 'anthropic', account.id)) continue;
     if (account.id === 'default' && !defaultAccountBound('anthropic')) continue;
     if ([...state.logins].some(([key, login]) => key.startsWith('anthropic:') && login.accountId === account.id)) continue;
-    const auth = state.cache.get(keyOf('anthropic', account.id))?.auth;
+    const auth = subscriptionCatalogSignIn(state.cache.get(keyOf('anthropic', account.id)), options)?.auth;
     const snapshot = state.claudeModels.get(account.id);
     if (!auth?.authenticated) continue;
     if (!snapshot || !(snapshot.auth === auth || (!!auth.identity && snapshot.auth.identity === auth.identity))
@@ -1225,7 +1298,7 @@ export function readSubscriptionPoolClaudeModels(
   if (models.size === 0 && discoveryUnavailable) return null;
   const next = [...models.values()];
   const catalogs = state.claudeCatalogs ??= new Map();
-  const cacheKey = `${providerId}:${options.includeBoundAccounts ? 'routing' : 'selectable'}`;
+  const cacheKey = `${providerId}:${options.includeBoundAccounts ? 'bound' : options.includeLastConfirmed ? 'display' : 'current'}`;
   const previous = catalogs.get(cacheKey);
   if (previous && previous.length === next.length && next.every((model, index) => previous[index] === model)) return previous;
   catalogs.set(cacheKey, next);
@@ -1249,8 +1322,14 @@ export async function refreshSubscriptionPoolCodexModels(
   const serving = found ? new Set(servingAccounts(found).map(account => account.id)) : null;
   let refreshId: string | undefined;
   const refreshAccount = async (id: string): Promise<void> => {
+    if (!isCurrentRuntime(state)) return;
     const loggingIn = () => [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id);
     const info = state.cache.get(keyOf('openai', id));
+    if (info?.unavailable && info.lastConfirmed && !loggingIn()) {
+      // model/list would fail the same way: keep the confirmed list, or restore the saved one.
+      await restoreConfirmedCodexModels(state, id, info);
+      return;
+    }
     if (!info?.auth.authenticated || loggingIn()) { state.codexModels.delete(id); return; }
     const { auth } = info;
     const previous = state.codexModels.get(id);
@@ -1265,7 +1344,7 @@ export async function refreshSubscriptionPoolCodexModels(
     }
     const directory = directoryFor('openai', id);
     const isCurrent = () => {
-      if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+      if (!isCurrentRuntime(state)) return false;
       const currentPool = readPool('openai');
       return currentPool?.accounts.some(a => a.id === id && (!a.paused || historical.has(id))) === true
         && !disconnectedFor(currentPool, 'openai', id)
@@ -1397,7 +1476,7 @@ export async function refreshSubscriptionPoolCodexModels(
  * Imported connections are projected separately with their original route authorization.
  */
 export function readSubscriptionPoolCodexModels(
-  providerId = 'openai', options: { includeBoundAccounts?: boolean } = {},
+  providerId = 'openai', options: SubscriptionCatalogAccountOptions = {},
 ): readonly CatalogModel[] | null {
   const found = poolFor(providerId);
   if (!found || found.kind !== 'openai') return null;
@@ -1410,30 +1489,41 @@ export function readSubscriptionPoolCodexModels(
     if (disconnectedFor(found.pool, 'openai', account.id)) continue;
     if ((account.paused && !historical.has(account.id)) || readLegacyCodexProviderId(account.id)) continue;
     if ([...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === account.id)) continue;
-    const info = state.cache.get(keyOf('openai', account.id));
+    const shown = subscriptionCatalogSignIn(state.cache.get(keyOf('openai', account.id)), options);
     const snapshot = state.codexModels.get(account.id);
-    if (!info?.auth.authenticated || !snapshot || !sameCodexModelAccount(snapshot, info)) continue;
+    if (!shown?.auth.authenticated || !snapshot || !sameCodexModelAccount(snapshot, shown)) continue;
     for (const model of snapshot.models) if (!models.has(model.id)) models.set(model.id, model);
   }
   const next = [...models.values()];
   const catalogs = state.codexCatalogs ??= new Map();
-  const cacheKey = `${providerId}:${options.includeBoundAccounts ? 'routing' : 'selectable'}`;
+  const cacheKey = `${providerId}:${options.includeBoundAccounts ? 'bound' : options.includeLastConfirmed ? 'display' : 'current'}`;
   const previous = catalogs.get(cacheKey);
   if (previous && previous.length === next.length && next.every((model, index) => previous[index] === model)) return previous;
   catalogs.set(cacheKey, next);
   return next;
 }
-/** Oldest confirmed list still contributing to a partial provider snapshot. */
+/** Oldest confirmed list still contributing to a partial provider snapshot, including a list kept
+ * while its account cannot be read. */
 export function lastConfirmedSubscriptionModelsAt(providerId: string): number | undefined {
   const found = poolFor(providerId);
-  if (found?.kind !== 'openai' || found.off) return;
+  if (!found || found.off) return;
   const state = currentRuntime();
   const times: number[] = [];
   for (const account of servingAccounts(found)) {
-    const info = state.cache.get(keyOf('openai', account.id));
-    const models = state.codexModels.get(account.id);
-    if (!account.paused && info?.auth.authenticated && models?.failedAt !== undefined
-      && models.confirmedAt !== undefined && sameCodexModelAccount(models, info)) times.push(models.confirmedAt);
+    if (account.paused || disconnectedFor(found.pool, found.kind, account.id)) continue;
+    const info = state.cache.get(keyOf(found.kind, account.id));
+    const shown = subscriptionCatalogSignIn(info, { includeLastConfirmed: true });
+    if (!shown?.auth.authenticated) continue;
+    if (found.kind === 'openai') {
+      const models = state.codexModels.get(account.id);
+      if ((models?.failedAt !== undefined || info?.unavailable) && models?.confirmedAt !== undefined
+        && sameCodexModelAccount(models, shown)) times.push(models.confirmedAt);
+    } else {
+      const models = state.claudeModels.get(account.id);
+      if ((models?.failedAt !== undefined || info?.unavailable) && models?.confirmedAt !== undefined
+        && (models.auth === shown.auth || (!!shown.auth.identity && models.auth.identity === shown.auth.identity)))
+        times.push(models.confirmedAt);
+    }
   }
   return times.length ? Math.min(...times) : undefined;
 }
@@ -1465,6 +1555,38 @@ function codexAccountSupportsModel(state: OwnerRuntime, id: string, model: strin
     && sameCodexModelAccount(catalog, info)
     && catalog.models.some(entry => entry.id === model.replace(/^chatgpt\//, ''));
 }
+/** Keep the list confirmed for an unreadable account; after a restart, load the one saved for it. */
+async function restoreConfirmedCodexModels(state: OwnerRuntime, id: string, info: AccountSnapshot): Promise<void> {
+  const confirmed = info.lastConfirmed!;
+  if (sameCodexModelAccount(state.codexModels.get(id), confirmed) || !confirmed.accountKey) return;
+  let saved: Awaited<ReturnType<typeof restoreCodexModelSnapshot>>;
+  try { saved = await restoreCodexModelSnapshot(id, confirmed.accountKey); }
+  catch { log.warn('could not restore Codex model snapshot'); return; }
+  if (!saved || !isCurrentRuntime(state) || state.cache.get(keyOf('openai', id)) !== info) return;
+  state.codexModels.set(id, { auth: confirmed.auth, accountKey: confirmed.accountKey, models: saved.models,
+    confirmedAt: saved.confirmedAt, failedAt: Date.now() });
+}
+
+/** The saved list of a slot that is now signed out must not reappear as an offline sign-in. */
+async function clearSignedOutCodexModels(state: OwnerRuntime, id: string, stillSignedOut: () => boolean): Promise<void> {
+  // Wait for an already-started rename before removing its destination.
+  await state.codexModelFlights.get(id)?.saving;
+  if (!isCurrentRuntime(state) || !stillSignedOut()) return;
+  try { await clearCodexModelSnapshot(id); }
+  catch { log.warn('could not clear signed-out Codex account model snapshot'); }
+}
+
+/** After a restart, a list saved for this slot stands in for the sign-in it was read with. */
+async function savedCodexSignIn(id: string, identity: string | undefined): Promise<AccountSnapshot['lastConfirmed']> {
+  try {
+    const accountKey = await readSavedCodexModelAccount(id);
+    return accountKey ? { auth: { authenticated: true, ...(identity ? { identity } : {}) }, accountKey } : undefined;
+  } catch {
+    log.warn('could not read saved Codex model snapshot');
+    return undefined;
+  }
+}
+
 async function discardRemovedAccountModels(state: OwnerRuntime, provider: SubscriptionProvider, id: string): Promise<void> {
   if (provider !== 'openai') return;
   state.codexModels.delete(id);
