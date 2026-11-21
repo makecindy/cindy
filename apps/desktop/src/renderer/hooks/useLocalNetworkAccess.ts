@@ -5,10 +5,15 @@ import type { LocalNetworkState } from '../../shared/localNetwork';
  * macOS Local Network access of this computer. Main pushes every change; `poll`
  * also re-reads while a settings row is on screen, so a grant made in System
  * Settings shows up without returning focus to Cindy. With `probe: false` the
- * hook only reads what Main already knows, and probes on focus only while a
- * reminder is showing, so an always-mounted surface never triggers the system prompt.
+ * hook only reads what Main already knows; `probeOnFocus` decides at focus time
+ * whether to probe (an always-mounted surface passes "am I visible"), so a
+ * hidden surface never triggers the system prompt.
  */
-export function useLocalNetworkAccess({ poll = false, probe = true }: { poll?: boolean; probe?: boolean } = {}) {
+export function useLocalNetworkAccess({
+  poll = false,
+  probe = true,
+  probeOnFocus,
+}: { poll?: boolean; probe?: boolean; probeOnFocus?: () => boolean } = {}) {
   const [state, setState] = useState<LocalNetworkState | null>(null);
   const [requesting, setRequesting] = useState(false);
   const [openedSettings, setOpenedSettings] = useState(false);
@@ -16,8 +21,8 @@ export function useLocalNetworkAccess({ poll = false, probe = true }: { poll?: b
   const mounted = useRef(false);
   const supported = window.electronAPI?.platform === 'darwin' && !!window.electronAPI.localNetwork;
 
-  const reminding = useRef(false);
-  reminding.current = !!state?.reminder;
+  const focusProbe = useRef(probeOnFocus);
+  focusProbe.current = probeOnFocus;
 
   const refresh = useCallback(async (fresh = probe) => {
     if (!supported) return;
@@ -38,7 +43,7 @@ export function useLocalNetworkAccess({ poll = false, probe = true }: { poll?: b
     const off = window.electronAPI.localNetwork.onChanged((next) => {
       if (mounted.current) setState(next);
     });
-    const onFocus = () => void refresh(probe || reminding.current);
+    const onFocus = () => void refresh(focusProbe.current ? focusProbe.current() : probe);
     window.addEventListener('focus', onFocus);
     const timer = poll
       ? setInterval(() => {

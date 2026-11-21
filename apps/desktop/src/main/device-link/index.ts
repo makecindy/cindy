@@ -2012,9 +2012,12 @@ onAgentNetPathChange(() => peerLinksPush.schedule());
 onAgentNetRelayChange(() => peerLinksPush.schedule());
 // macOS「本地网络」权限：同账号设备已连上却只走中转，是缺许可真正拖慢用户的时刻（local-network/reminder.ts）。
 // 只看 Agent-Net 的实时路径；旧式连接的路径事件在对端下线后不会撤回，会留下过时的提醒。
-onAgentNetPathChange(() => {
+// 主连接关闭或替换时只发 relay 变化、不发 path 变化（路由已清空），两种事件都要重算，才能撤回提醒。
+const syncLocalNetworkRelayOnlyPeers = () => {
   noteLocalNetworkRelayOnlyPeers(agentNetPeerRoutes().filter((route) => route.path === 'relay').map((route) => route.deviceId));
-});
+};
+onAgentNetPathChange(syncLocalNetworkRelayOnlyPeers);
+onAgentNetRelayChange(syncLocalNetworkRelayOnlyPeers);
 // 用户刚给了许可：和网卡变化一样立即重试直连，不等退避到期。
 onLocalNetworkGranted(() => {
   if (linkTornDown || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;

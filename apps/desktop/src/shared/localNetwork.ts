@@ -11,9 +11,10 @@ export type LocalNetworkAccess = 'granted' | 'denied' | 'unknown' | 'notRequired
  * Why the sidebar should remind the user. Only set while access is denied.
  * `controlEnabled`: the user just allowed same-account devices to control this computer.
  * `relayOnly`: same-account devices are connected but only through the relay.
+ * `deviceIds` is always the current relay-only set, so one dismissal covers what was on screen.
  */
 export type LocalNetworkReminder =
-  | { reason: 'controlEnabled'; at: number }
+  | { reason: 'controlEnabled'; at: number; deviceIds: string[] }
   | { reason: 'relayOnly'; deviceIds: string[] };
 
 export interface LocalNetworkState {

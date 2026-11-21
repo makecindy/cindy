@@ -33,10 +33,17 @@ export class LocalNetworkReminderState {
     return true;
   }
 
+  /** When the control reminder stops applying, so the owner can push the change at that moment. */
+  controlExpiresAt(): number | null {
+    if (this.controlAt === null) return null;
+    const at = this.controlAt + CONTROL_REMINDER_MS;
+    return at > this.deps.now() ? at : null;
+  }
+
   current(access: LocalNetworkAccess): LocalNetworkReminder | null {
     if (access !== 'denied') return null;
     if (this.controlAt !== null && this.deps.now() - this.controlAt < CONTROL_REMINDER_MS) {
-      return { reason: 'controlEnabled', at: this.controlAt };
+      return { reason: 'controlEnabled', at: this.controlAt, deviceIds: [...this.relay] };
     }
     if (this.relay.length) return { reason: 'relayOnly', deviceIds: [...this.relay] };
     return null;

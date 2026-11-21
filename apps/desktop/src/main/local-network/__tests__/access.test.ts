@@ -119,8 +119,21 @@ describe('local network access', () => {
     expect(state.current('denied')).toBeNull();
 
     state.controlEnabled();
-    expect(state.current('denied')).toEqual({ reason: 'controlEnabled', at: clock });
+    expect(state.current('denied')).toEqual({ reason: 'controlEnabled', at: clock, deviceIds: [] });
+    // The owner re-publishes at this moment; without it the card would never leave (review r4655121852).
+    expect(state.controlExpiresAt()).toBe(clock + 10 * 60_000);
     clock += 10 * 60_000;
     expect(state.current('denied')).toBeNull();
+    expect(state.controlExpiresAt()).toBeNull();
+  });
+
+  it('carries the relay-only devices on the control reminder so one dismissal covers both', () => {
+    let clock = 0;
+    const state = new LocalNetworkReminderState({ now: () => clock });
+    state.relayOnly(['studio']);
+    state.controlEnabled();
+    expect(state.current('denied')).toEqual({ reason: 'controlEnabled', at: 0, deviceIds: ['studio'] });
+    clock += 10 * 60_000;
+    expect(state.current('denied')).toEqual({ reason: 'relayOnly', deviceIds: ['studio'] });
   });
 });

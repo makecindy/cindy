@@ -35,13 +35,25 @@ const grantedListeners = new Set<() => void>();
 let lastAccess: LocalNetworkAccess | null = null;
 let lastBroadcast = '';
 let settingsWatch: ReturnType<typeof setInterval> | null = null;
+let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
 function currentState(): LocalNetworkState {
   const value = lastAccess ?? 'unknown';
   return { access: value, reminder: reminder.current(value) };
 }
 
+/** The control reminder ends on a clock, not on an event: re-publish when it does. */
+function scheduleReminderExpiry(): void {
+  if (expiryTimer) clearTimeout(expiryTimer);
+  expiryTimer = null;
+  const at = reminder.controlExpiresAt();
+  if (at === null) return;
+  expiryTimer = setTimeout(broadcastIfChanged, Math.max(0, at - Date.now()) + 50);
+  expiryTimer.unref?.();
+}
+
 function broadcastIfChanged(): void {
+  scheduleReminderExpiry();
   const state = currentState();
   const key = JSON.stringify(state);
   if (key === lastBroadcast) return;

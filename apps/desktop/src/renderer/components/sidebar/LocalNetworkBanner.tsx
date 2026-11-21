@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Network, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -28,12 +28,16 @@ export function shouldShowLocalNetworkReminder(
   return reminder.deviceIds.some((id) => !seen.has(id));
 }
 
+/** Remembers everything the dismissed card stood for, so a reason switch alone never brings it back. */
 export function dismissLocalNetworkReminder(
   reminder: LocalNetworkReminder,
   dismissed: LocalNetworkReminderDismissal | null,
 ): LocalNetworkReminderDismissal {
-  if (reminder.reason === 'controlEnabled') return { ...dismissed, controlAt: reminder.at };
-  return { ...dismissed, deviceIds: [...new Set([...(dismissed?.deviceIds ?? []), ...reminder.deviceIds])] };
+  return {
+    ...dismissed,
+    ...(reminder.reason === 'controlEnabled' ? { controlAt: reminder.at } : {}),
+    deviceIds: [...new Set([...(dismissed?.deviceIds ?? []), ...reminder.deviceIds])].slice(-50),
+  };
 }
 
 function readDismissal(): LocalNetworkReminderDismissal | null {
@@ -62,15 +66,20 @@ export function LocalNetworkBanner({ isCollapsed }: LocalNetworkBannerProps) {
   const { t } = useTranslation();
   const { status: updateStatus } = useUpdateStatus();
   const { dismissed: updateDismissed } = useUpdateBannerDismiss();
-  const { state, requesting, request } = useLocalNetworkAccess({ probe: false });
+  const visible = useRef(false);
+  // Only a card on screen may probe on focus: a probe is what lets macOS prompt.
+  const { state, requesting, request } = useLocalNetworkAccess({
+    probe: false,
+    probeOnFocus: () => visible.current,
+  });
   const [dismissal, setDismissal] = useState(readDismissal);
 
   const reminder = state?.access === 'denied' ? state.reminder : null;
   const updateHasPriority =
     (updateStatus === 'ready' || updateStatus === 'superseding') && !updateDismissed;
-  if (isCollapsed || updateHasPriority || !reminder || !shouldShowLocalNetworkReminder(reminder, dismissal)) {
-    return null;
-  }
+  visible.current =
+    !isCollapsed && !updateHasPriority && !!reminder && shouldShowLocalNetworkReminder(reminder, dismissal);
+  if (!visible.current || !reminder) return null;
 
   const handleDismiss = () => {
     const next = dismissLocalNetworkReminder(reminder, dismissal);

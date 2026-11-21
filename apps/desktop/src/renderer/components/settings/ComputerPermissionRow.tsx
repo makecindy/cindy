@@ -51,7 +51,7 @@ export function ComputerPermissionRow({
       ) : (
         <span
           className={cn(
-            'grid shrink-0 place-items-center text-[var(--text-secondary)] opacity-70',
+            'grid shrink-0 place-items-center text-[var(--text-tertiary)]',
             compact ? 'size-4' : 'size-8',
           )}
           aria-hidden="true"
