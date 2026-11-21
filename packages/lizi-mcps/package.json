@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./computer": "./src/computer/index.ts",
+    "./feishu-local": "./src/feishu-local/index.ts",
     "./inline-images": "./src/shared/inlineImages.ts",
     "./history-cursor": "./src/xdt-helper/_history_cursor.ts"
   },

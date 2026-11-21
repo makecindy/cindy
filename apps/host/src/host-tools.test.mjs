@@ -77,6 +77,16 @@ test('disconnect, plugin stop and owner change cancel only their own pending con
   } finally { disconnect(); confirmations.close(); }
 });
 
+// Unit: Desktop and Node Host share one built-in provider assembly. Supplying the
+// Feishu local CLI port must register the first-party toolset in both launchers;
+// without this, only Desktop would expose the capability.
+test('shared provider assembly registers the Feishu local CLI toolset', () => {
+  const providers = createLiziMcpProviders({ enabled: ['cindy_feishu_local'], feishuLocal: {} });
+  assert.equal(providers.length, 1);
+  assert.equal(providers[0].name, 'cindy_feishu_local');
+  assert.equal(providers[0].capability.source, 'builtin');
+});
+
 // Unit: Node's real provider assembly must dispatch installed declarations
 // without a separate approval. Prior coverage required first-use/per-call UI.
 // Minimal input is terminal_list; it creates no PTY or command process.
