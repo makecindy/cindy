@@ -1467,6 +1467,53 @@ describe('Scheduler', () => {
     await local.scheduler.stop();
   });
 
+  // Codex P1 on #11577:在途过期写入的压制必须带版本。第一次写入挂死,之后用户改期
+  // 成功(存储接受了那次编辑,行已经是新的一版):只按 scheduleId 压制的话,每个 tick
+  // 都在「还有在途写入」处退出,新截止时间的过期写入永远发不出去 —— 持久行和 UI
+  // 停在 active 且截止时间已过,直到进程重启。
+  it('expires again after an edit moves the deadline past a stalled write', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 30 });
+    const createdAt = local.clock.now();
+    const firstDeadline = createdAt + 2_000;
+    const schedule = await local.scheduler.create({
+      ...baseInput, intervalMs: 3_600_000, expireAt: firstDeadline,
+    });
+
+    const realUpdate = local.storage.update.bind(local.storage);
+    let expireWrites = 0;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) => {
+      if (patch.status === 'expired') {
+        expireWrites += 1;
+        // 第一次过期写入永不 settle(存储挂死的形态)。
+        if (expireWrites === 1) return new Promise<Schedule | null>(() => {});
+      }
+      return realUpdate(id, patch, expected);
+    });
+
+    // 第一轮:到点 → 过期写入发起后卡死,预闸门超时放弃等待。
+    local.clock.setTo(firstDeadline);
+    await local.scheduler.tick();
+    expect(expireWrites).toBe(1);
+
+    // 存储其实是好的:用户把截止时间改到更晚,那次编辑成功落库。
+    const extended = createdAt + 120_000;
+    const edited = await local.scheduler.update(schedule.id, { expireAt: extended });
+    expect(edited.expireAt).toBe(extended);
+
+    // 新截止时间到达:必须再发一次过期写入 —— 挂死的那一次只属于旧版本。
+    local.clock.setTo(extended);
+    await local.scheduler.tick();
+    expect(expireWrites).toBe(2);
+
+    // 持久行收口到 expired(不再停在 active 且截止时间已过)。
+    expect((await local.storage.get(schedule.id))?.status).toBe('expired');
+
+    // 缓存也已对齐:下一轮不会再发起第三次写入。
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(expireWrites).toBe(2);
+  });
+
 
   it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
     const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';
