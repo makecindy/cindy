@@ -380,7 +380,8 @@ export function createAutoReviewIntentProjection() {
       }
       if (message.role !== "user") continue;
       // An already-persisted retry is the same input, not a second authorization.
-      if (current && message.clientId === current.clientId) {
+      // An empty ID (used by synthetic steers) does not identify a persisted retry.
+      if (current?.clientId && message.clientId === current.clientId) {
         const receipt = message.agentMeta?.autoReviewUserText;
         if ((typeof receipt === "string" ? receipt : verifiedOwnerRequestText(receipt)) !== latest) return "";
         replayed = true;

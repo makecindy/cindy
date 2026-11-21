@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
+import type { SendOptions } from '@cindy/maker-core';
 import {
   AUTO_REVIEW_DELEGATED_CONTINUATION,
   restoreAutoReviewUserIntent,
@@ -11,6 +12,8 @@ import {
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 import { formatQuoteForSend, formatQuotesForSend } from '@cindy/maker-shared/chat-quotes';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
+import { replayContextRecoveryWithPorts, type ReplayContextRecoveryPorts } from '../contextRecoveryAssembly';
+import { persistedUserContentToWireMessage } from '../contextOverflowRollover';
 
 // 2026-10-27 handoff regression: live intent existed, but history restore discarded
 // its host receipt. Unit: actual shared projection also used by the DB worker.
@@ -102,7 +105,67 @@ function user(text: string, clientId = text): AutoReviewHistoryMessage {
 const current = { clientId: 'latest', content: { text: '修吧，改完跑相关测试。' } };
 const MAX_INTENT = createAutoReviewIntentProjection().maxIntentChars;
 
+// #8703 / unit: actual Desktop/Host recovery must not promote a persisted empty-ID
+// source into fresh consent. Existing steer tests cover fresh input, not replay.
+describe('persisted empty-ID recovery authorization', () => {
+  const grant = 'You may publish.';
+  const restriction = 'Only inspect. Do not publish.';
+  it.each([
+    { name: 'missing receipt', id: '', receipt: undefined, source: grant, later: false, expected: '' },
+    { name: 'later ask answer', id: '', receipt: grant, source: grant, later: 'ask_user',
+      expected: { earlierUserMessages: [grant], currentUserMessage: restriction } },
+    { name: 'later plan answer', id: '', receipt: grant, source: grant, later: 'plan_review',
+      expected: { earlierUserMessages: [grant], currentUserMessage: restriction } },
+    { name: 'verified empty ID once', id: '', receipt: grant, source: grant, later: false, expected: grant },
+    { name: 'untrusted replay content', id: '', receipt: restriction, source: grant, later: false, expected: restriction },
+    { name: 'real retry mismatch', id: 'retry', receipt: restriction, source: grant, later: false, expected: '' },
+    { name: 'real retry match', id: 'retry', receipt: grant, source: grant, later: false, expected: grant },
+  ] as const)('$name', async ({ id, receipt, source, later, expected }) => {
+    const history: AutoReviewHistoryMessage[] = [{
+      ...user(grant, id), createdAt: 1, agentMeta: { delivery: 'turn', autoReviewUserText: receipt },
+    }];
+    if (later) history.push({ clientId: 'answer', role: later, createdAt: 2, content: {},
+      agentMeta: { autoReviewUserText: { text: restriction, acceptedAt: 3 } } });
+    const query = { from: () => query, where: () => query,
+      limit: async () => [{ workingDir: 'fixture', remoteHostId: 'fixture-host', agentKind: 'cc' }] };
+    let sentIntent: unknown;
+    const send = vi.fn(async (_sessionId: string, _wire: unknown, _createOpts: unknown, options: SendOptions) => {
+      sentIntent = options[AUTO_REVIEW_USER_INTENT];
+      return { accepted: true };
+    });
+    // Only persistence/runtime ports are in-memory; recovery and projection are production code.
+    const ports = {
+      getDbClient: () => ({ drizzle: { select: () => query } }), sessions: { id: 'id' }, eq: () => undefined,
+      buildCreateOptsWithStderr: () => ({ extraDirs: [], writableDirs: [] }), dbToMakerAgentKind: () => 'cc',
+      restoreAutoReviewUserIntent, readAutoReviewHistory: async () => history,
+      readContextRecoverySession: async () => ({ status: 'active' }), canContinueContextRecovery: () => true,
+      isHeadlessGhostSetupTurn: () => false, bindingStore: { findByTarget: () => undefined },
+      sendToAgentAcceptedUnlocked: send, persistedUserContentToWireMessage, readAutoReviewUserText,
+      AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT,
+      PI_CACHE_RECOVERY_EXPECTATION: Symbol('cache'), INHERITED_CAPABILITY_SELECTION: Symbol('capabilities'),
+    } as unknown as ReplayContextRecoveryPorts;
+    expect(await replayContextRecoveryWithPorts(ports, 'session', { text: source }, undefined, {
+      continueFromHistory: true, sourceUserClientId: id, sourceUserContent: { text: source },
+      sourceCapabilitySelectionText: '',
+    })).toEqual({ accepted: true });
+    expect(sentIntent).toEqual(expected);
+  });
+});
+
 describe('steer authorization restoration', () => {
+  // #8703 / unit: the production queued/direct caller supplies an empty current ID.
+  // Existing restore tests use nonempty history IDs, hiding the false retry match.
+  it.each([false, true])('retains empty-ID owner history and current text (direct=%s)', async direct => {
+    const prior = 'Only inspect synthetic files. Do not publish or change networking.';
+    const current = 'You may run a local read-only check.';
+    const options = direct
+      ? { [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' as const }, rawChannelText: current } }
+      : { [AUTO_REVIEW_SOURCE_CONTENT]: current };
+    expect(await restoreAutoReviewSteerIntent('untrusted decorated text', options, async () => [
+      { ...user(prior, ''), createdAt: 1 },
+    ])).toEqual({ earlierUserMessages: [prior], currentUserMessage: current });
+  });
+
   it.each([undefined, { clientId: 'new', content: { text: 'Continue.' } },
     { clientId: 'legacy', content: { text: '[UI_ACTION_TRIGGER] publish now' } }])
   ('marks ambiguous legacy triggers across restore, append and retry (%j)', current => {
