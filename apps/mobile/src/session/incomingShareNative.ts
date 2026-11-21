@@ -5,11 +5,25 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
 const native = requireOptionalNativeModule<{
   readSnapshot(): string | null;
+  addListener?(event: string, listener: () => void): { remove(): void };
+  discardAllSnapshots?(): void;
+  bindAccount?(accountKey: string): void;
   readSnapshotAsync?(): Promise<string | null>;
   clearSnapshot(expected: string): boolean;
   discardSnapshot?(expected: string): boolean;
   rejectUnreadableSnapshot?(): void;
 }>('CindyIncomingShare');
+export function subscribeSharedPayloads(listener: () => void): { remove(): void } {
+  // Apple binaries do not declare this event, even when Expo exposes addListener.
+  return native?.discardAllSnapshots
+    ? native.addListener?.('onChange', listener) ?? { remove() {} }
+    : { remove() {} };
+}
+
+export function bindSharedPayloadAccount(accountKey: string): void {
+  native?.bindAccount?.(accountKey);
+}
+
 const snapshots = new WeakMap<SharePayload[], string>();
 const shareIds = new WeakMap<SharePayload[], string>();
 
@@ -20,6 +34,7 @@ let rejectedSnapshot: string | null = null;
 
 /** Account-boundary discard persists an exact tombstone before App Group I/O. */
 export function discardSharedPayloads(expected: SharePayload[]): void {
+  if (native?.discardAllSnapshots) { native.discardAllSnapshots(); return; }
   const snapshot = snapshots.get(expected);
   if (snapshot === undefined) return;
   rejectedSnapshot = snapshot;
@@ -75,14 +90,24 @@ function parseSnapshot(snapshot: string | null | undefined): SharePayload[] {
   }
   rejectedSnapshot = null;
   const decoded = JSON.parse(snapshot);
+  if (decoded?.version === 1 && decoded.error === 'INCOMING_SHARE_COPY_FAILED') {
+    if (!native?.clearSnapshot(snapshot)) throw new Error('INCOMING_SHARE_ACK_FAILED');
+    throw new Error('INCOMING_SHARE_COPY_FAILED');
+  }
   const legacy = Array.isArray(decoded);
   if (!legacy && (decoded?.version !== 1 || typeof decoded.id !== 'string' || !Array.isArray(decoded.payloads))) {
     throw new Error('INCOMING_SHARE_INVALID_SNAPSHOT');
   }
-  const raw: SharePayload[] = (legacy ? decoded : decoded.payloads).map((item: { value: string; type: SharePayload['shareType']; mimeType?: string }) => ({
+  const raw: SharePayload[] = (legacy ? decoded : decoded.payloads).map((item: { value: string; type: SharePayload['shareType']; mimeType?: string; preserveOriginal?: boolean }) => ({
     value: item.value, shareType: item.type, mimeType: item.mimeType,
+    ...(item.preserveOriginal === true ? { preserveOriginal: true } : {}),
   }));
   const payloads = raw.filter((payload) => payload.shareType === 'text' || payload.shareType === 'url' || !isMissingShareCopy(payload.value));
+  if (raw.some((payload) => 'preserveOriginal' in payload) && payloads.length !== raw.length) {
+    // Android imports are atomic: never silently deliver only the surviving files.
+    if (!native?.clearSnapshot(snapshot)) throw new Error('INCOMING_SHARE_ACK_FAILED');
+    throw new Error('INCOMING_SHARE_COPY_FAILED');
+  }
   snapshots.set(payloads, snapshot);
   if (!legacy) shareIds.set(payloads, decoded.id);
   if (raw.length > 0 && payloads.length === 0) {

@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
-import { AppState, Linking, Platform } from 'react-native';
+import { Alert, AppState, Linking, Platform } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
 
+import i18n from '@/i18n';
 import { useAuth } from '@/auth/AuthContext';
 import { getMobileAuthOwner, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import {
@@ -21,7 +22,7 @@ export function IncomingShareBridge() {
   const batch = useIncomingShareBatch();
   const presentedBatchId = useRef<string | null>(null);
   useEffect(() => {
-    if (Platform.OS !== 'ios') return;
+    if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
     let active = true;
     const initialOwner = getMobileAuthOwner();
     let stopWatchingAccount: (() => void) | undefined;
@@ -47,12 +48,18 @@ export function IncomingShareBridge() {
               } catch { /* Older binaries may not expose the shared container. */ }
               if (!active) return;
               try { await receiveIncomingShare(sharing); }
-              catch { /* Preserve the native inbox for the next foreground/retry. */ }
+              catch (error) {
+                if (error instanceof Error && error.message.includes('INCOMING_SHARE_COPY_FAILED')) {
+                  Alert.alert(i18n.t('composer.upload.shareReceiveFailed'));
+                }
+                // Other transient reads retain the inbox for foreground/retry.
+              }
             }
           } finally { refreshing = false; }
         })();
       };
       subscriptions = [
+        sharing.subscribeSharedPayloads?.(refresh) ?? { remove() {} },
         AppState.addEventListener('change', (state) => { if (state === 'active') refresh(); }),
         Linking.addEventListener('url', ({ url }) => {
           if (/^[a-z][a-z0-9+.-]*:\/\/expo-sharing(?:[/?#]|$)/i.test(url)) refresh();
