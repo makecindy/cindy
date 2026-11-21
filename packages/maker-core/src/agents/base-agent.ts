@@ -1047,6 +1047,13 @@ export interface AgentDeps {
     modelId: string,
   ) => readonly Effort[] | null;
 
+  /** Claude SDK alias support from the exact provider's Claude Code model list.
+   * Null means unknown; never borrow a same-ID model from another route or engine. */
+  resolveClaudeSdkModelMetadata?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => { contextWindow: number; supportsOneMillionSuffix: boolean } | null;
+
   /** Local disk-auth policy, independent of the actual Provider credential mode. */
   resolveCodexLocalAuthPolicy?: (
     providerId: string | null | undefined,
