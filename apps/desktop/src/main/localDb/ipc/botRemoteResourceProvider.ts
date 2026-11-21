@@ -19,6 +19,7 @@ import {
 import { RemoteResourceRegistryError, remoteResourceRegistry } from '../../device-link/remoteResourceRegistry.js';
 import { markBotReadPositions, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { isIpcError } from '../../../shared/ipc-errors.js';
+import { companionHomes } from '../../companion-cloud/homes.js';
 import {
   BOT_REMOTE_RESOURCE_KIND,
   TEAMMATES_REMOTE_COLLECTION_ID,
@@ -91,6 +92,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
     },
     async list(_context, request) {
       const scope = captureDataOwnerBroadcastScope();
+      const homes = companionHomes.snapshot();
       const rawQuery = request.query?.trim().toLocaleLowerCase() ?? '';
       const sources = visibleBotRemoteResourceSources(await listBotRemoteResourceSources());
       const filtered = rawQuery
@@ -119,6 +121,15 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         collectionId: TEAMMATES_REMOTE_COLLECTION_ID,
         revision: items.map((item) => item.revision).join('|'),
         items,
+        // A home change during the asynchronous read cannot certify an omission. Never
+        // infer hiding from a restore's intentionally empty intermediate roster.
+        ...(!request.query && !request.cursor && items.length < (request.limit ?? 200)
+          && homes.enabled && homes.selfDeviceId && companionHomes.snapshot() === homes
+          && homes.demotedBotIds.length <= 200 ? { teammateRecovery: {
+            version: 1 as const,
+            recoveringIds: homes.actors.filter(actor => actor.homeDeviceId === homes.selfDeviceId
+              && homes.demotedBotIds.includes(actor.externalId)).map(actor => actor.externalId),
+          } } : {}),
       };
     },
     async get(context, request) {

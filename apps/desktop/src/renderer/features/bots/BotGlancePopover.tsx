@@ -36,7 +36,7 @@ import { useBotProfiles, useBotUnreadCounts } from './botStore';
 import { cloudRemoteBots, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
 import { useCompanionCloud } from './companionCloudStore';
 import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot, taskCreatorFilterKey } from './cindyDeviceRoster';
-import { useRemoteBots, useRemoteCindyIds } from './useRemoteBots';
+import { useRemoteBotOmissions, useRemoteBots, useRemoteCindyIds } from './useRemoteBots';
 
 /** 每块先列几条，其余收进「显示更多」。 */
 const TASK_PREVIEW = 5;
@@ -254,8 +254,9 @@ function useCindyComputerRows(bot: BotChatIdentity, enabled: boolean): ComputerR
   const { t } = useTranslation();
   const navigate = useNavigate();
   const cloud = useCompanionCloud();
+  const omissions = useRemoteBotOmissions();
   const bots = withoutCloudCompanions(withoutShadowedBots(useBotProfiles(), cloud), cloud);
-  const remoteBots = withoutCloudCompanions(cloudRemoteBots(cloud, useRemoteBots()), cloud);
+  const remoteBots = withoutCloudCompanions(cloudRemoteBots(cloud, useRemoteBots(), omissions), cloud);
   const devices = useDeviceLinkDeviceList();
   const unread = useBotUnreadCounts();
   if (!enabled) return null;

@@ -41,12 +41,17 @@ export function isCloudCompanionRemote(cloud: CompanionCloudSnapshot, bot: Pick<
  * Companions homed on a computer this device never listed (e.g. it was never online
  * here): still reachable as offline remote rows, so the cloud conversation can open.
  */
-export function cloudOnlyRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[]): RemoteBot[] {
+export function cloudRemoteBotVisibilityKey(actor: CompanionCloudActor): string {
+  return JSON.stringify([actor.id, actor.homeDeviceId, actor.externalId]);
+}
+
+export function cloudOnlyRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[], omissions?: ReadonlySet<string>): RemoteBot[] {
   if (!cloud.enabled) return [];
   return cloud.actors.flatMap((actor) => {
     const home = actor.homeDeviceId;
     // A rejected local restore still needs a read-only entry with its recovery action.
     if (!home || (home === cloud.selfDeviceId && !actor.profileFailure)) return [];
+    if (omissions?.has(cloudRemoteBotVisibilityKey(actor))) return [];
     if (remoteBots.some((bot) => bot.deviceId === home && bot.id === actor.externalId)) return [];
     return [{
       id: actor.externalId,
@@ -70,11 +75,11 @@ export function cloudOnlyRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: r
  * known to be elsewhere (old copies, possibly cached while that computer is offline) are
  * dropped, and companions homed on a computer never listed here get an offline row.
  */
-export function cloudRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[]): RemoteBot[] {
+export function cloudRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[], omissions?: ReadonlySet<string>): RemoteBot[] {
   if (!cloud.enabled) return [...remoteBots];
   const homes = new Map(cloud.actors.flatMap((actor) => actor.homeDeviceId ? [[actor.externalId, actor.homeDeviceId] as const] : []));
   const listed = remoteBots.filter((bot) => { const home = homes.get(bot.id); return !home || home === bot.deviceId; });
-  return [...listed, ...cloudOnlyRemoteBots(cloud, listed)];
+  return [...listed, ...cloudOnlyRemoteBots(cloud, listed, omissions)];
 }
 
 export function homeDeviceName(cloud: CompanionCloudSnapshot, botId: string, fallback: string): string {

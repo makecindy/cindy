@@ -10,7 +10,7 @@ import { filterBotRoster, sortBotRoster } from './botRosterDisplay';
 import { useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from './companionCloudPresentation';
-import { useRemoteBots } from './useRemoteBots';
+import { useRemoteBotOmissions, useRemoteBots } from './useRemoteBots';
 
 export interface TeammateSearchMatch {
   key: string;
@@ -34,11 +34,12 @@ export function useTeammateSearchMatches(
   lockedSessionGroupName: string | null,
 ): TeammateSearchMatch[] {
   const cloud = useCompanionCloud();
+  const omissions = useRemoteBotOmissions();
   const allBots = useBotProfiles();
   const rosterRemoteBots = useRemoteBots();
   // 与伙伴段同一份名册:隐藏已交给别的电脑的本机副本,每个云端伙伴只在主力电脑上列一行。
   const bots = useMemo(() => withoutShadowedBots(allBots, cloud), [allBots, cloud]);
-  const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [rosterRemoteBots, cloud]);
+  const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots, omissions), [rosterRemoteBots, cloud, omissions]);
   const { groups } = useBotGroupList();
   const { t } = useTranslation();
   return useMemo(() => {

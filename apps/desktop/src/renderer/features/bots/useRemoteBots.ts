@@ -13,12 +13,16 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { useCompanionCloud, companionCloudApi } from './companionCloudStore';
+import { cloudRemoteBotVisibilityKey } from './companionCloudPresentation';
 import { parseRemoteBots, parseTeammateInboxSnooze, remoteBotCreatedTaskIds, type RemoteBot } from './remoteBotRoster';
 
 const CACHE_PREFIX = 'cindy.remoteBots.v1.';
+const OMISSIONS_CACHE_PREFIX = 'cindy.remoteBotOmissions.v2.';
+const ROSTER_LIMIT = 200;
 let owner: string | null = null;
 let snapshot: RemoteBot[] = [];
 let cindyIds = new Set<string>();
+let omissions: ReadonlySet<string> = new Set();
 const listeners = new Set<() => void>();
 const publish = (next: RemoteBot[]) => {
   next = next.map(bot => cindyIds.has(bot.id) ? { ...bot, templateId: 'cindy' } : bot);
@@ -34,6 +38,9 @@ const publish = (next: RemoteBot[]) => {
       return cached;
     }));
       if (value.length <= 256 * 1024) window.localStorage.setItem(CACHE_PREFIX + owner, value);
+      const missing = JSON.stringify([...omissions]);
+      if (missing.length <= 256 * 1024) window.localStorage.setItem(OMISSIONS_CACHE_PREFIX + owner, missing);
+      else window.localStorage.removeItem(OMISSIONS_CACHE_PREFIX + owner);
     } catch { /* display cache may be unavailable */ }
   }
   listeners.forEach((fn) => fn());
@@ -65,13 +72,20 @@ export function useRemoteCindyIds(): ReadonlySet<string> {
 }
 const EMPTY_CINDY_IDS: ReadonlySet<string> = new Set();
 
+/** Account-, actor- and home-qualified display evidence, never a permission or deletion. */
+export function useRemoteBotOmissions(): ReadonlySet<string> {
+  const { dataOwnerId, isAuthenticated } = useAuth();
+  const missing = useSyncExternalStore(subscribe, () => omissions);
+  return isAuthenticated && owner === dataOwnerId ? missing : EMPTY_CINDY_IDS;
+}
+
 /** Each complete app window mirrors the roster; only the main window writes the display cache. */
 export function useRemoteBotSync(): void {
   const { dataOwnerId, isAuthenticated } = useAuth();
   const devices = useDeviceLinkDeviceList();
   const cloud = useCompanionCloud();
   const dataOwner = getDataOwnerGeneration();
-  const actorsKey = cloud.actors.map(actor => `${actor.externalId}:${actor.homeDeviceId ?? ''}`).join(',');
+  const actorsKey = cloud.actors.map(cloudRemoteBotVisibilityKey).join(',');
   useEffect(() => subscribeBotReadState(() => {
     if (owner === dataOwnerId && isDataOwnerGenerationCurrent(dataOwner)) publish(snapshot);
   }), [dataOwnerId, dataOwner]);
@@ -84,6 +98,7 @@ export function useRemoteBotSync(): void {
     if (owner !== nextOwner) {
       owner = nextOwner;
       cindyIds = new Set();
+      omissions = new Set();
       unreportedReads.clear();
       inFlightReads.clear();
       let cached: RemoteBot[] = [];
@@ -91,6 +106,18 @@ export function useRemoteBotSync(): void {
         if (!nextOwner) {
           // Signing out clears this mirror, not other accounts' migration sources.
         } else {
+          const missing = window.localStorage.getItem(OMISSIONS_CACHE_PREFIX + nextOwner);
+          if (missing && missing.length <= 256 * 1024) {
+            try {
+              const keys: unknown = JSON.parse(missing);
+              if (Array.isArray(keys)) omissions = new Set(keys.filter((key): key is string => {
+                if (typeof key !== 'string') return false;
+                try { const parts: unknown = JSON.parse(key); return Array.isArray(parts) && parts.length === 3
+                  && parts.every(part => typeof part === 'string' && part.length > 0 && part.length <= 256); }
+                catch { return false; }
+              }));
+            } catch { /* A damaged omission cache must not discard usable roster rows. */ }
+          }
           const raw = window.localStorage.getItem(CACHE_PREFIX + nextOwner);
           if (raw && raw.length <= 256 * 1024) {
             const rows = JSON.parse(raw);
@@ -112,6 +139,10 @@ export function useRemoteBotSync(): void {
       publish(cached);
     }
     if (!nextOwner) return;
+    if (cloud.enabled) {
+      const keys = new Set(cloud.actors.map(cloudRemoteBotVisibilityKey));
+      omissions = new Set([...omissions].filter(key => keys.has(key)));
+    }
     if (!devices) { publish(snapshot.map((bot) => ({ ...bot, online: false, connectionKnown: false, generation: undefined }))); return; }
     let disposed = false;
     let relayAvailable = false;
@@ -142,7 +173,7 @@ export function useRemoteBotSync(): void {
         const request: RemoteCollectionListRequest = {
           client: { protocolVersion: 1, primitives: ['status', 'session-link'] },
           collectionId: 'teammates',
-          limit: 200,
+          limit: ROSTER_LIMIT,
         };
         const result = await window.electronAPI.deviceLink.invoke(
           deviceId,
@@ -158,6 +189,25 @@ export function useRemoteBotSync(): void {
           // Reading on the phone or the home computer counts here too; newest position wins.
           readAt: Math.max(snapshot.find((old) => old.deviceId === deviceId && old.id === bot.id)?.readAt ?? bot.lastReplyAt ?? 0, bot.hostReadAt ?? 0),
         }));
+        const missing = new Set(omissions);
+        const response = result as { items: unknown[]; nextCursor?: unknown; teammateRecovery?: unknown };
+        const evidence = response.teammateRecovery as { version?: unknown; recoveringIds?: unknown } | undefined;
+        const validEvidence = evidence && evidence.version === 1 && Array.isArray(evidence.recoveringIds)
+          && evidence.recoveringIds.length <= 200 && evidence.recoveringIds.every(id => typeof id === 'string' && id.length > 0 && id.length <= 256);
+        const listed = new Set(bots.map(bot => bot.id));
+        const complete = response.items.length < ROSTER_LIMIT && response.nextCursor === undefined;
+        for (const actor of cloud.actors) {
+          if (actor.homeDeviceId !== deviceId) continue;
+          const key = cloudRemoteBotVisibilityKey(actor);
+          if (listed.has(actor.externalId)) missing.delete(key);
+          else if (complete) {
+            // Old/unknown evidence cannot rule out a failed initial restoration. Drop
+            // this host's old inference rather than persisting it over that uncertainty.
+            if (!validEvidence || (evidence.recoveringIds as string[]).includes(actor.externalId)) missing.delete(key);
+            else missing.add(key);
+          }
+        }
+        omissions = missing;
         for (const bot of bots) {
           seedRemoteBotReadState(deviceId, bot.id, bot.lastReplyAt ?? 0);
           if (bot.hostReadAt !== undefined) acknowledgeRemoteBotRead(deviceId, bot.id, bot.hostReadAt);
@@ -245,7 +295,7 @@ export function useRemoteBotSync(): void {
       offStatus();
       timers.forEach(clearTimeout);
     };
-  }, [dataOwnerId, isAuthenticated, devices, revoked, dataOwner]);
+  }, [dataOwnerId, isAuthenticated, devices, revoked, dataOwner, actorsKey, cloud.enabled]);
   useEffect(() => {
     const api = companionCloudApi();
     const requestOwner = isAuthenticated ? dataOwnerId : null;

@@ -35,7 +35,7 @@ export default {
     'src/renderer/features/bots/botStore': {
       partial: `export const useBotProfiles=()=>${data}.bots;export const useBotUnreadCounts=()=>${data}.unread;`,
     },
-    'src/renderer/features/bots/useRemoteBots': `export const useRemoteBots=()=>${data}.remoteBots;`,
+    'src/renderer/features/bots/useRemoteBots': `export const useRemoteBotOmissions=()=>new Set(); export const useRemoteBots=()=>${data}.remoteBots;`,
     'src/renderer/features/device-link/useDeviceLinkDeviceList': `export const useDeviceLinkDeviceList=()=>${data}.devices;`,
   },
   cases: {

@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 const fixture = vi.hoisted(() => ({ handle: vi.fn(), token: 'isolated-test-token', refresh: vi.fn(async () => true),
-  profiles: [] as unknown[], savedProfiles: null as unknown[] | null,
+  rosterChanged: vi.fn(), profiles: [] as unknown[], savedProfiles: null as unknown[] | null,
   capabilitiesJson: '{}', sockets: [] as import('ws').WebSocket[] }));
+vi.mock('../botRemoteResourceInvalidation.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../botRemoteResourceInvalidation.js')>(),
+  broadcastBotRemoteResourceChanged: fixture.rosterChanged,
+}));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => fixture.token, refresh: fixture.refresh }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: vi.fn(async () => ({ id: sourceId, category: 'image', name: 'a.png', mimeType: 'image/png', size: 12, url: 'cindy-media://image', path: null })) }) }));
@@ -340,6 +344,8 @@ describe('Chat Server cloud companions', () => {
     const result = await completed;
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     if (action === 'handover') expect(calls(`/actors/${botActor}`, 'PATCH').at(-1)?.[2]).toMatchObject({ homeDeviceId: 'laptop', expectedHomeDeviceId: 'desk-1' });
+    // #8733 unit: actual chat-server visibility wiring sends a remote invalidation.
+    if (action === 'handover') expect(fixture.rosterChanged).toHaveBeenCalledWith('local-bot', { local: false });
   });
 
   it('continues an explicit action when the background registration it joined was deferred', async () => {

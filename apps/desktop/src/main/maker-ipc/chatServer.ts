@@ -12,6 +12,7 @@ import { validateAvatarUpload } from '../profileEdit.js';
 import { uploadPublicAsset } from '../ossPublicUpload.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { signalBotProfilesChanged, subscribeBotProfilesChanged } from './botProfilesChangedSignal.js';
+import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
 import { t } from '../i18n.desktop.js';
 import { readFile as readMedia } from '../cindy-media/blobStore.desktop.js';
 import { getAccessToken, refresh } from '../authManager.js';
@@ -1183,7 +1184,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       actors: () => actors, refresh: () => refreshHomes('background'), refreshForeground: () => refreshHomes('foreground'),
       publish: publishHomes, syncProfile: syncActorProfiles,
       // A copy that stops or starts being hidden changes who can follow tasks (the built-in follow-up routine).
-      onShadowChanged: signalBotProfilesChanged,
+      onShadowChanged: botIds => {
+        signalBotProfilesChanged();
+        // A restore can finish after its final profile/message write. Controllers
+        // must re-read the now-visible roster, without kicking the cloud mirror again.
+        for (const botId of botIds) broadcastBotRemoteResourceChanged(botId, { local: false });
+      },
       // The owner's attachments go with the conversation; other devices download them from the room.
       media: { upload: async (room, source, files, author) => {
         // The conversation mirror is not a file backup: large files stay a name in the room.
