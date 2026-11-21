@@ -40,6 +40,7 @@ import {
   bindModelGroupSession,
   MODEL_GROUP_SESSION_BINDINGS_MAX,
   readModelGroupSessionBinding,
+  readModelGroupBindingForDispatch,
 } from '../sessionBindings.js';
 
 const NOW = Date.UTC(2026, 10, 11, 4);
@@ -90,6 +91,44 @@ function deps(overrides: {
 }
 
 describe('computeModelGroupSwitchOffer', () => {
+  it.each(['high', undefined])('keeps the route effort only when the fallback supports it: %s', async effort => {
+    const d = deps({
+      config: { routes: [{ ...route('order'), effort: 'high' }] },
+      facts: FACTS.map(fact => ({ ...fact, effort })),
+    });
+    const offer = await computeModelGroupSwitchOffer(d, 's1', {
+      current: CANDIDATES[0], visited: new Set(), accountUnavailable: false, recordUnavailable: vi.fn(),
+    });
+    expect(offer?.providerId).toBe('acct-a');
+    expect(offer?.effort).toBe(effort);
+  });
+
+  it('replays an image turn on the next vision candidate when the route has an image exception', async () => {
+    const d = deps({
+      config: { routes: [{ ...route('order'), exceptions: [{ when: { type: 'image' }, use: 'vision' }] }] },
+      facts: FACTS.map((fact, index) => ({ ...fact, acceptsImage: index === 0 || index === 3 })),
+    });
+    const offer = await computeModelGroupSwitchOffer(d, 's1', {
+      current: CANDIDATES[0], visited: new Set(), accountUnavailable: false, hasImages: true, recordUnavailable: vi.fn(),
+    });
+    expect(offer).toMatchObject({ providerId: 'acct-b', model: 'gpt' });
+  });
+
+  // Unit: after the initially bound account fails, a second failure must advance
+  // past both visited routes, even when the session row still holds the baseline.
+  it('advances an automatic recovery past both failed candidates', async () => {
+    const visited = new Set<string>();
+    const recover = (index: number, accountUnavailable: boolean) => computeModelGroupSwitchOffer(deps(), 's1', {
+      current: CANDIDATES[index], accountUnavailable, visited,
+      recordUnavailable: candidate => visited.add(modelGroupCandidateKey(candidate)),
+    });
+    expect(await recover(0, true)).toMatchObject({ providerId: 'anthropic' });
+    expect(await recover(2, false)).toMatchObject({ providerId: 'acct-b' });
+    expect(await recover(3, false)).toBeNull();
+    visited.clear();
+    expect(await recover(0, false)).toMatchObject({ providerId: 'acct-a', model: 'gpt-mini' });
+  });
+
   it.each([
     ['skips the same account and offers the next source, across engines', {}, { providerId: 'anthropic', agentKind: 'cc', crossEngine: true, sourceName: 'Claude' }],
     ['skips a source whose quota is used up', { facts: [FACTS[0], FACTS[1], fact('Claude', used(100)), FACTS[3]] }, { providerId: 'acct-b', crossEngine: false }],
@@ -182,6 +221,20 @@ describe('model group session bindings', () => {
     expect(readModelGroupSessionBinding('s1')).toBeNull();
     bindModelGroupSession('s1', { type: 'route', id: 'r1' }, CURRENT, 5);
     expect(readModelGroupSessionBinding('s1')).toMatchObject({ pickedKey: CURRENT });
+  });
+
+  it('loads a cold backup for dispatch, caches misses, and publishes writes only to the matching owner', async () => {
+    const entry = { selection: { type: 'route' as const, id: 'r1' }, pickedKey: CURRENT, at: 1 };
+    fs.writeFileSync(paths.file + '.bak', JSON.stringify({ bindings: { task: entry } }));
+    expect(await readModelGroupBindingForDispatch('task')).toEqual(entry);
+    fs.unlinkSync(paths.file + '.bak');
+    expect(await readModelGroupBindingForDispatch('task')).toEqual(entry);
+    expect(await readModelGroupBindingForDispatch('other')).toBeNull();
+    bindModelGroupSession('other', entry.selection, CURRENT, 2);
+    expect(await readModelGroupBindingForDispatch('other')).toMatchObject({ at: 2 });
+    paths.owner = 'owner-2';
+    paths.file = path.join(dir, 'other-owner.json');
+    expect(await readModelGroupBindingForDispatch('other')).toBeNull();
   });
 
   it('neither reads nor writes before an account is signed in', () => {

@@ -109,5 +109,44 @@
     "quotaResetIn": "{{duration}}後にリセット",
     "quotaAverageHint": "週間クォータ · アカウントごとの単純平均",
     "quotaResetHint": "現在の利用ペースではリセット時にクォータが残る見込みです。24時間以内は黄色、6時間以内は赤色で表示します。"
+  },
+  "modelGroups": {
+    "title": "モデルグループ",
+    "sourceCount_other": "ソース {{count}} 件",
+    "strategy": {
+      "expiring": "失効が近いものを先に",
+      "order": "順番どおり",
+      "rotate": "交代で",
+      "cheapest": "最も安く"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "残り {{left}}%、{{reset}} にリセットされるため先に使用",
+      "expiring": "クォータの順で先頭",
+      "order": "利用できる先頭のソース",
+      "rotate": "今回はこのソースの番",
+      "only": "今使えるのはこれだけ",
+      "soonest": "すべてのソースのクォータを使い切りました。これが最も早く回復します",
+      "soonestUntil": "すべてのソースのクォータを使い切りました。これが最も早く回復します（{{reset}}）",
+      "cheapest": "定価が最も安い",
+      "cheapestFree": "サブスクリプションのクォータが残っており、追加費用なし",
+      "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
+      "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
+      "exceptionHours": "この時間帯は「{{name}}」を使用",
+      "separator": "、"
+    },
+    "picker": {
+      "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
+      "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
+      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"
+    },
+    "anotherDevice": "別のコンピュータ"
+  },
+  "pluginEngines": {
+    "genericName": "プラグインエンジン",
+    "defaultModel": "デフォルトモデル",
+    "unavailable": "{{engine}} は利用できません",
+    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}",
+    "worktreeUnsupported": "プラグインエンジンはまだ worktree でタスクを開始できません。worktree をオフにしてから送信してください"
   }
 }

@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "Ajouter un widget",
+  "widgetGuideIntro": "Les widgets sont de petites cartes sur l’écran d’accueil. Consultez votre quota restant et les tokens utilisés aujourd’hui sans ouvrir Cindy.",
+  "widgetGuideExample": "Un widget Cindy à côté des icônes des apps sur l’écran d’accueil.",
+  "widgetGuidePicker": "Modifier → Ajouter un widget",
+  "widgetGuideIOS": "Appuyez longuement sur une zone vide de l’écran d’accueil, puis touchez {{picker}}.\n\nRecherchez Cindy, choisissez « Quota des abonnements » ou « Usage quotidien », puis touchez « Ajouter le widget ».",
+  "widgetGuideAndroid": "Appuyez longuement sur une zone vide de l’écran d’accueil, puis touchez « Widgets ».\n\nTrouvez Cindy et faites glisser « Quota des abonnements » ou « Usage quotidien » sur l’écran d’accueil.",
+  "widgetGuideHome": "Écran d’accueil",
+  "widgetGuideLock": "Écran verrouillé",
+  "widgetGuideLockIOS": "Aussi sur l’écran verrouillé : appuyez longuement dessus, puis touchez « Personnaliser ».",
+  "widgetGuideDismiss": "Compris",
+  "usageOther": "Autres",
+  "usageTitle": "Aperçu de l’utilisation",
+  "usageOnlyDevice": "{{name}} uniquement",
+  "usagePlans": "Quotas restants",
+  "usageBudget": "Budget restant pour la période",
   "management": {
     "title": "Gestion des appareils",
     "openDevice": "Voir les détails de {{name}}",
@@ -428,6 +443,7 @@
       "filterEmptyCopy": "Ajustez ou réinitialisez les filtres dans les paramètres d'affichage.",
       "filterTeammatesHeading": "Amis",
       "filterAnySource": "Toutes les sources",
+      "filterHideAutomations": "Masquer les tâches automatisées",
       "filterHideAllTeammates": "Tout masquer",
       "filterSelectedTeammates": "{{count}} sélectionné(s)",
       "inbox": {
@@ -449,6 +465,7 @@
         "thisEvening": "Ce soir",
         "tomorrow": "Demain",
         "nextWeek": "La semaine prochaine",
+        "indefinite": "Indéfiniment",
         "custom": "Personnaliser…",
         "invalidTime": "Choisissez une date et une heure futures dans l’année à venir."
       },

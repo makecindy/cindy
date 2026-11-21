@@ -352,7 +352,7 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
     expect(parsePayload(result)).toEqual({ ok: true, ghost });
   });
 
-  it("GHOST_NOT_FOUND 引导回查清单或改道，且不要重复重试同一目标", async () => {
+  it("GHOST_NOT_FOUND 保留宿主恢复指引并过滤内部字段", async () => {
     const result = await handleGhostInfo(
       fakeDeps({
         getAwakeGhost: async () =>
@@ -370,7 +370,7 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
       ok: false,
       errorCode: "GHOST_NOT_FOUND",
       message:
-        "目标插件不存在；不要重复重试同一目标；可调用 ghost_list 回查当前可用插件，或改用其它可用方式完成。",
+        "目标插件不存在",
     });
   });
 

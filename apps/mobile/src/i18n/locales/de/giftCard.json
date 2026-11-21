@@ -1,6 +1,6 @@
 {
   "sectionTitle": "Geschenkkarten",
-  "settingsFooter": "Gib einen Einlösecode ein oder füge den Link einer Geschenkkarte ein, um sie deinem Aktionsguthaben gutzuschreiben. Geschenkkarten können nur mit einem persönlichen Konto eingelöst werden.",
+  "settingsFooter": "Gib einen Einlösecode ein oder füge den Link einer Geschenkkarte ein, um sie deinem Guthaben gutzuschreiben. Geschenkkarten können nur mit einem persönlichen Konto eingelöst werden.",
   "action": "Geschenkkarte einlösen",
   "title": "Geschenkkarte einlösen",
   "inputLabel": "Einlösecode",
@@ -17,7 +17,9 @@
     "validityValue_other": "{{count}} Tage nach dem Einlösen",
     "claimBy": "Einlösen bis",
     "destination": "Gutgeschrieben auf",
-    "destinationValue": "Aktionsguthaben"
+    "destinationValue": "Aktionsguthaben",
+    "destinationPurchased": "Aufladeguthaben",
+    "validityPermanent": "Unbegrenzt gültig"
   },
   "doneTitle": "{{amount}} gutgeschrieben",
   "doneDescription": "Deinem Aktionsguthaben gutgeschrieben. Gültig bis {{date}}.",
@@ -33,8 +35,11 @@
     "alreadyClaimed": "Diese Geschenkkarte wurde bereits eingelöst.",
     "expired": "Diese Geschenkkarte kann nicht mehr eingelöst werden. Die Frist ist abgelaufen.",
     "voided": "Diese Geschenkkarte wurde für ungültig erklärt.",
+    "voidedPurchased": "Diese Geschenkkarte kann derzeit nicht eingelöst werden.",
     "rateLimited": "Zu viele Versuche. Versuche es später erneut.",
     "failed": "Die Geschenkkarte konnte nicht eingelöst werden. Versuche es später erneut.",
     "personalRequired": "Geschenkkarten können nur mit einem persönlichen Konto eingelöst werden."
-  }
+  },
+  "doneDescriptionPurchased": "Deinem Aufladeguthaben gutgeschrieben. Es verfällt nie.",
+  "pendingDescriptionPurchased": "{{amount}} wird gutgeschrieben und erscheint gleich in deinem Aufladeguthaben. Du musst die Karte nicht erneut einlösen."
 }

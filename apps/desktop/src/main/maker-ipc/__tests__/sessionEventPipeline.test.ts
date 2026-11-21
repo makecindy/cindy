@@ -99,6 +99,8 @@ vi.mock('../../usage/modelPricing.js', () => ({
   getGatewayModelPricingForModel: effects.fn('getGatewayModelPricingForModel'),
   getModelPriceQuote: effects.fn('getModelPriceQuote'),
 }));
+// The recorders read the reference pricing core the wrapper below re-exports (3c): the same mock.
+vi.mock('../../usage/referenceModelPricingCore.js', async () => await import('../../usage/referenceModelPricing.js'));
 vi.mock('../../usage/referenceModelPricing.js', () => ({
   readModelPriceOverridesSnapshot: effects.fn('readModelPriceOverridesSnapshot'),
   getClaudeSubscriptionValuePrice: effects.fn('getClaudeSubscriptionValuePrice'),
@@ -182,6 +184,7 @@ vi.mock('../../maker-host/claude-session-background-activity.js', async (importO
   ).hasWorkingBackgroundCommand,
   noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
   noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
+  observePluginEngineEvent: effects.fn('observePluginEngineEvent'),
 }));
 vi.mock('../../subagentObservationRewindFence.js', () => ({
   noteSubagentObservationTurnStarted: effects.fn('noteSubagentObservationTurnStarted'),
@@ -737,6 +740,42 @@ describe('production Session event pipeline', () => {
     } finally { await h.dispose(); }
   });
 
+  it('hands the coordinator the terminal error message and only bounded structured signals', async () => {
+    // Auto-resume and the usage-limit wait decide on these signals (isInterruptedTurnError,
+    // usageLimitAutoResume), and the Node Host must hand over the same ones; provider data stays bounded.
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    try {
+      h.emit(event('error', {
+        message: 'Upstream stream ended',
+        sdkError: 'stream_closed',
+        reason: 'upstream',
+        errorStatus: 529,
+        toolLoop: { kind: 'pingpong', count: 4, detail: 'provider text' },
+        outputLimit: { outputTokens: 64, reasoningTokens: 65 },
+        usageLimit: true,
+        usageResetAt: 1_800_000_000_000,
+        codexErrorInfo: 'usageLimitExceeded',
+        extra: 'dropped',
+      }));
+      h.emit(event('error', { message: 'Second failure', usageResetAt: Number.POSITIVE_INFINITY, toolLoop: { kind: 'other', count: 1 } }));
+      const calls = h.deps.agentInputCoordinatorHolder.onTurnEvent.mock.calls.filter(call => call[1] === 'error');
+      expect(calls.map(call => call.slice(0, 4))).toEqual([
+        ['task', 'error', 'Upstream stream ended', {
+          sdkError: 'stream_closed',
+          reason: 'upstream',
+          errorStatus: 529,
+          toolLoop: { kind: 'pingpong', count: 4 },
+          outputLimit: { outputTokens: 64 },
+          usageLimit: true,
+          usageResetAt: 1_800_000_000_000,
+          codexErrorInfo: 'usageLimitExceeded',
+        }],
+        ['task', 'error', 'Second failure', {}],
+      ]);
+    } finally { await h.dispose(); }
+  });
+
   it('suppresses scheduled content before persistence and delivery while preserving unrelated replies', async () => {
     const h = harness();
     const close = beginQuietScheduledOutput('check', 'check-run');
@@ -1107,6 +1146,22 @@ describe('production Session event pipeline', () => {
     h.emit(event('text', { isFinal: true, text: 'real worker reply' }, { source: 'pi' }));
     expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).toHaveBeenCalledWith('task', 'real worker reply', { isFinal: true });
     await h.dispose();
+  });
+
+  // PR #11776 review: a plugin engine's reply between turns has no done to commit it, so it stayed
+  // in memory and was lost on restart. Its final segment commits it; deltas and turn text do not.
+  it('commits a plugin engine reply written between turns at its final segment only', async () => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: 'acp' });
+    try {
+      h.emit(event('text', { text: 'The content', isFinal: false }, { turnScope: 'background' }));
+      h.emit(event('text', { text: 'In a turn', isFinal: true, isFullText: true }));
+      expect(effects.fn('flushAssistantBlock')).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'The content is `finished`', isFinal: true, isFullText: true }, { turnScope: 'background' }));
+      expect(effects.fn('flushAssistantBlock')).toHaveBeenCalledOnce();
+    } finally {
+      await h.dispose();
+    }
   });
 
   it('preserves ordinary Pi text without the Host recovery marker', async () => {
@@ -1625,6 +1680,32 @@ describe('production Session event pipeline', () => {
       });
       expect(effects.fn('markAssistantTurnFailed')).toHaveBeenCalledWith('task', 'failed-row');
       expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  it.each(['claude-code', 'pi'] as const)(
+    'does not seal a partial %s reply as successful when shutdown cancels its turn',
+    async (source) => {
+      const h = harness();
+      h.emit(event('text', { text: 'Working on the remaining changes' }, { source }));
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('partial-row');
+      h.emit(event('done', { status: 'cancelled' }, { source }));
+      expect(effects.fn('markAssistantTurnFailed')).toHaveBeenCalledWith('task', 'partial-row');
+      expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      expect(effects.fn('onTurnErrorEvent')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  it.each(['claude-code', 'pi'] as const)(
+    'keeps a normal %s reply eligible for the successful assistant seal',
+    async (source) => {
+      const h = harness();
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('completed-row');
+      h.emit(event('done', { status: 'completed' }, { source }));
+      expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'completed-row', undefined);
+      expect(effects.fn('markAssistantTurnFailed')).not.toHaveBeenCalled();
       await h.dispose();
     },
   );
@@ -2566,6 +2647,22 @@ describe('usage through the production event pipeline', () => {
     },
   );
 
+  // Unit regression: another task's Gateway spawn must not take a native subscription turn.
+  it('settles the executing Codex route and model when the global proxy points elsewhere', async () => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: { ...usage('codex'), execution: {
+      providerId: 'openai', credentialMode: 'oauth-bearer', model: 'test-model',
+    } } }, { source: 'codex' }));
+    await microtasks();
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'test-model#billing=subscription', inputTokensDelta: 100,
+      attribution: { provider: 'openai', billingSource: 'subscription', modelUnconfirmed: true },
+    }));
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
   it.each([
     ['codex', 'anthropic', 'claude'],
     ['codex', 'claude-account', 'claude'],
@@ -2791,6 +2888,127 @@ describe('usage through the production event pipeline', () => {
     expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
       clientId: 'assistant-row', money: expect.objectContaining({ kind: 'actual-cost' }),
     }));
+    await h.dispose();
+  });
+
+  // #11540 review regression, unit: the production done/account_usage entries
+  // must retain model cost attribution and per-receipt subscription overrides.
+  // Existing tests use one selected/served model and one billing route only.
+  // Minimal failures: two served models, or one direct subscription receipt in
+  // a gateway batch. No filesystem/network or extra module loads are needed.
+  // Standalone file wall-clock: 6.69s (284 cases, shared fixture collection).
+  it.each(['test-model', 'codex/gpt-5.5'])(
+    'keeps Codex money with served-model token rows (selected %s)', async selected => {
+      const h = harness();
+      pricing(false);
+      h.emit(event('done', { usage: {
+        promptTokens: 200, completionTokens: 40, cachedTokens: 20,
+        execution: { model: selected, providerId: 'xd', credentialMode: 'gateway-key' },
+        segments: [{ ...segment, model: 'served-a' }, { ...segment, model: 'served-b' }],
+      } }));
+      await microtasks();
+      for (const model of ['served-a', 'served-b']) {
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: `${model}#billing=api`, inputTokensDelta: 100,
+        }));
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: `${model}#billing=api`, inputTokensDelta: 0,
+          money: expect.objectContaining({ amount: 0.000141 }),
+        }));
+        expect(effects.fn('getModelPriceQuote')).toHaveBeenCalledWith(expect.anything(), 'xd',
+          selected.startsWith('codex/') ? selected : model);
+      }
+      expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+        money: expect.objectContaining({ amount: 0.000282 }),
+        turnUsageDetails: expect.objectContaining({ perModelCost: [
+          expect.objectContaining({ model: 'served-a' }), expect.objectContaining({ model: 'served-b' }),
+        ] }),
+      }));
+      await h.dispose();
+    },
+  );
+
+  // #11616 review, unit: the production done entry must not report a selected
+  // model as observed when proxy matching supplies no proof. Existing served-model
+  // tests assert cost only. Minimal input is one fallback segment with execution.model.
+  // Cases cover legacy receipts, failed/missing matches, invalid totals and mixed rows.
+  // Uses the existing event fixture, no network or extra module loads.
+  // Standalone wall-clock 9.72s, including 6.99s shared fixture collection for 290 cases.
+  it.each([
+    ['legacy', undefined, true],
+    ['unmatched', false, true],
+    ['confirmed', true, true],
+    ['inconsistent totals', true, false],
+  ] as const)('keeps Codex actual-model confirmation separate from execution (%s)', async (_name, confirmed, reliable) => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: {
+      promptTokens: reliable ? 100 : 101, completionTokens: 20, cachedTokens: 10,
+      execution: { model: 'selected-model', providerId: 'xd', credentialMode: 'gateway-key' },
+      segments: [{ ...segment, model: 'selected-model', modelConfirmed: confirmed }],
+    } }));
+    await microtasks();
+    const tokenWrite = effects.fn('recordModelTurnUsage').mock.calls.find(([row]) => row.inputTokensDelta > 0)?.[0];
+    expect(tokenWrite.inputTokensDelta).toBe(reliable ? 100 : 101);
+    expect(tokenWrite.attribution.modelUnconfirmed).toBe(confirmed && reliable ? undefined : true);
+    await h.dispose();
+  });
+
+  it('keeps confirmation with each Codex model in a mixed turn', async () => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: {
+      promptTokens: 200, completionTokens: 40, cachedTokens: 20,
+      execution: { model: 'selected-model', providerId: 'xd', credentialMode: 'gateway-key' },
+      segments: [
+        { ...segment, model: 'served-model', modelConfirmed: true },
+        { ...segment, model: 'selected-model', modelConfirmed: false },
+      ],
+    } }));
+    await microtasks();
+    const tokenWrites = effects.fn('recordModelTurnUsage').mock.calls
+      .map(([row]) => row).filter(row => row.inputTokensDelta > 0);
+    expect(tokenWrites).toEqual([
+      expect.objectContaining({ model: 'served-model#billing=api',
+        attribution: expect.not.objectContaining({ modelUnconfirmed: true }) }),
+      expect.objectContaining({ model: 'selected-model#billing=api',
+        attribution: expect.objectContaining({ modelUnconfirmed: true }) }),
+    ]);
+    await h.dispose();
+  });
+
+  it.each(['live', 'replay'] as const)('uses reference overrides for direct Pi subscriptions (%s)', async mode => {
+    const h = harness();
+    pricing(false);
+    const reference = { override: true };
+    effects.fn('getReferenceModelPricing').mockReturnValue(reference);
+    effects.fn('getCodexProviderSubscriptionValuePrice').mockImplementation((_provider, _model, catalog) => ({
+      providerId: 'openai', modelId: 'chatgpt/gpt-5.5', currency: 'USD',
+      source: 'user-override', approximate: true, inputPerMtok: catalog === reference ? 10 : 1,
+      outputPerMtok: 2, cacheReadPerMtok: 0.1,
+    }));
+    const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    if (mode === 'replay') effects.fn('isLedgerCurrencyKnown').mockReturnValue(false);
+    h.emit(event('account_usage', { usage: { settlementId: 'mixed-turn', receipts: [
+      { ...segment, id: 'pi:gateway', recordedAt: Date.now() },
+      { ...segment, model: 'chatgpt/gpt-5.5', id: 'pi:subscription', recordedAt: Date.now() },
+    ] } }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    if (mode === 'replay') {
+      const saved = writes.mock.calls[0][1][1];
+      const db = { tx: writes, queryOne: async () => null,
+        query: vi.fn(async (_sql, params) => params[0] === 0 ? [{ rowId: 1, sessionId: 'task',
+          settlementId: 'mixed-turn', receiptId: saved.receiptId, payload: saved.pricingPayload }] : []),
+      } as unknown as DbClient;
+      effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
+      effects.fn('getGatewayModelPricing').mockResolvedValue({ xd: {} });
+      setCurrentDbClient(db, 'mixed-replay');
+      try { await retryPendingPiUsageReceipts(); } finally { clearCurrentDbClient(db); }
+    }
+    expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', expect.arrayContaining([
+      expect.objectContaining({ receiptId: 'pi:subscription', amount: 0.001041, actualCost: false }),
+    ]));
     await h.dispose();
   });
 

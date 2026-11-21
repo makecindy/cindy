@@ -13,6 +13,7 @@ export { remoteInvocationModels, withEffectiveModelContextWindows } from './remo
 export {
   BYOK_CREDENTIALS_PATH,
   BYOK_PROVIDERS_PATH,
+  BYOK_PROVIDERS_V1_PATH,
   isByokImageMode,
   isByokProviderId,
   parseByokCredentialsResponse,
@@ -337,7 +338,7 @@ export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels }
 
 export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
 
-export { parseModelsListResponse, isOpenRouterModelsUrl, isOpenHubsModelsUrl } from "./modelDiscovery.js";
+export { copilotModelsUrl, parseModelsListResponse, isOpenRouterModelsUrl, isOpenHubsModelsUrl } from "./modelDiscovery.js";
 
 export type { ProviderModelRecord } from "./providerModelCatalog.js";
 

@@ -191,6 +191,8 @@ export type OAuthProviderDescriptor =
  * 真实上游 + 鉴权 + model id 还原。加新供应商 = 加这份数据，不改路由器代码。
  */
 export interface RoutingDescriptor {
+  /** Verified public connection preset for aggregate usage reporting. */
+  usagePresetId?: string;
   modelInterface?: ModelInterfaceSnapshot;
   /**
    * 上游 wire protocol。Claude Code / Codex 缺省保持历史语义；Pi 必须显式声明。
@@ -584,6 +586,8 @@ export interface Provider {
   name: string;
   /** 内置 / 用户自定义 / 企业下发。企业连接走自定义路由，但不能当个人连接编辑。 */
   source: ProviderSource;
+  /** Server-sanitized BYOK artwork, exposed by ProviderView to the owner. */
+  customIcon?: string;
   /** ★这家能用在哪些 agent；决定它出现在哪个 agent 的来源列表里 + 路由按哪个 agent 取。 */
   agents: AgentKind[];
   /**
@@ -678,6 +682,18 @@ export interface Provider {
  */
 export interface ProviderRuntimeModelConfig extends ModelMetadata {
   opaqueModelId?: true;
+  /**
+   * Set only when a manual Settings refresh found this ID in the runtime's own catalog.
+   * Only such models may later be offered as withdrawn (#11298); manual, preset, import
+   * and pre-upgrade rows stay unmarked and are never offered for removal.
+   */
+  listedUpstream?: true;
+  /**
+   * Current-absence receipt (#11298): the latest complete Settings refresh did not list
+   * this marked model. A later refresh that lists it again clears it, and it is never
+   * inherited across saves, so only a still-current absence can be confirmed for removal.
+   */
+  missingUpstream?: true;
   /** Transient discovery receipt; normalization excludes it from persistent configuration. */
   discoverySnapshotId?: string;
   discoveredSource?: import("./modelSource.js").DiscoveredModelSource;

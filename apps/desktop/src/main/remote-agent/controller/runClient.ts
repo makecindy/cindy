@@ -23,7 +23,7 @@ import {
   shortDeviceRef,
   type RemoteAgentCaps,
   type RemoteAgentErrorInfo,
-  type RemoteAgentKind,
+  type RemoteAgentEngineKind,
   type RemoteAgentMethod,
   type RemoteAgentPayload,
   type RemoteAgentPushFrame,
@@ -48,6 +48,45 @@ const gzipAsync = promisify(gzip);
 // inline values too; character counts alone understate UTF-8 delivery cost.
 const INLINE_PAYLOAD_BYTES = 64 * 1024;
 const PREFERRED_UPLOAD_CHUNK_BYTES = 64 * 1024;
+/**
+ * 一台被控端上所有任务的上传块合起来最多同时在途这么多：不超过 Device Link 每台对端的后台名额（4 个），
+ * 给拉取、读取和交互请求留出调度名额；几个任务同时启动也只共用这几个。
+ * 2026-11-18：启动资料 26 块逐块等回执，回程变慢后每块约 1.6 秒，启动等了 41 秒。被控端从第一版起就按
+ * (uploadId, index) 存块、重复的块忽略，块之间不依赖先后，所以可以同时在途，旧版被控端照样收。
+ */
+const UPLOAD_SLOTS_PER_PEER = 4;
+/** 一份载荷开始时同时在途的块数；回执快就加一，慢就减半，最少一块。 */
+const UPLOAD_WINDOW_START = 2;
+/**
+ * 一块从发出到回执超过这么久就把窗口减半：同时在途的块分着同一条线路，后面的块要等前面的，
+ * 慢线路上不能让排在后面的块拖过 30 秒的请求时限。
+ */
+const UPLOAD_SLOW_CHUNK_MS = 10_000;
+/** 一块遇到链路类错误时按同一块号重发的次数（被控端按块号去重，重发不会多存）。 */
+const UPLOAD_CHUNK_RETRIES = 2;
+const UPLOAD_RETRY_BASE_MS = 500;
+
+/** 每台被控端（共用一个拉取器）的上传名额。 */
+class UploadSlots {
+  private used = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  async acquire(): Promise<void> {
+    if (this.used < UPLOAD_SLOTS_PER_PEER) {
+      this.used += 1;
+      return;
+    }
+    await new Promise<void>((resolve) => this.waiting.push(resolve));
+  }
+
+  /** 名额直接交给排着的下一个；没人排时才收回。 */
+  release(): void {
+    const next = this.waiting.shift();
+    if (next) next();
+    else this.used -= 1;
+  }
+}
+const uploadSlots = new WeakMap<RemoteAgentPoller, UploadSlots>();
 
 /** 单行事件上限(大工具结果)。 */
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
@@ -151,21 +190,69 @@ export class RemoteAgentRunClient implements PolledRun {
     const chunkBytes = Math.min(REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
       Math.max(PREFERRED_UPLOAD_CHUNK_BYTES, Math.ceil(gz.length / REMOTE_AGENT_MAX_UPLOAD_CHUNKS)));
     const chunks = Math.max(1, Math.ceil(gz.length / chunkBytes));
-    for (let index = 0; index < chunks; index += 1) {
-      requireOpen();
-      const data = gz.subarray(index * chunkBytes, (index + 1) * chunkBytes);
-      await invoke([{ op: 'upload', uploadId, index, data: data.toString('base64') }]);
-      // An in-flight chunk can finish after cancellation, but no next chunk or open may start.
-      requireOpen();
-    }
+    await this.uploadChunks(chunks, (index) => gz.subarray(index * chunkBytes, (index + 1) * chunkBytes).toString('base64'),
+      uploadId, requireOpen, invoke);
+    // An in-flight chunk can finish after cancellation, but no next chunk or open may start.
+    requireOpen();
     return { uploadId, chunks, bytes: gz.length };
+  }
+
+  /**
+   * 几块同时在途地上传，全部收到回执才返回（之后才发引用它的 open / call / reply，不依赖链路保序）。
+   * 窗口见 UPLOAD_WINDOW_START / UPLOAD_SLOW_CHUNK_MS，同一台被控端共用 UPLOAD_SLOTS_PER_PEER 个名额。
+   * 一块失败、被取消或任务结束后不再发新块，等已在途的块结束后抛出第一个错误。
+   */
+  private async uploadChunks(chunks: number, chunk: (index: number) => string, uploadId: string,
+    requireOpen: () => void, invoke: RemoteAgentInvoke): Promise<void> {
+    let slots = uploadSlots.get(this.poller);
+    if (!slots) { slots = new UploadSlots(); uploadSlots.set(this.poller, slots); }
+    let window = Math.min(UPLOAD_WINDOW_START, chunks);
+    let failure: { error: unknown } | null = null;
+    const running = new Set<Promise<void>>();
+    const send = async (index: number): Promise<void> => {
+      const data = chunk(index);
+      for (let attempt = 0; ; attempt += 1) {
+        const startedAt = performance.now();
+        try {
+          await invoke([{ op: 'upload', uploadId, index, data }]);
+          window = performance.now() - startedAt > UPLOAD_SLOW_CHUNK_MS
+            ? Math.max(1, Math.floor(window / 2))
+            : Math.min(UPLOAD_SLOTS_PER_PEER, window + 1);
+          return;
+        } catch (error) {
+          if (attempt >= UPLOAD_CHUNK_RETRIES || failure || this.closed || !isRetryableLinkError(error)) throw error;
+          window = 1;
+          await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+          if (failure) throw error;
+          requireOpen();
+        }
+      }
+    };
+    try {
+      for (let index = 0; index < chunks && !failure; index += 1) {
+        while (running.size >= window && !failure) await Promise.race(running);
+        if (failure) break;
+        requireOpen();
+        await slots.acquire();
+        if (failure) { slots.release(); break; }
+        try { requireOpen(); } catch (error) { slots.release(); throw error; }
+        const task = send(index)
+          .catch((error) => { failure ??= { error }; })
+          .finally(() => { slots!.release(); running.delete(task); });
+        running.add(task);
+      }
+    } finally {
+      await Promise.allSettled(running);
+    }
+    if (failure) throw (failure as { error: unknown }).error;
   }
 
   /**
    * 打开任务：等对方启动 Agent 成功(返回会话描述)或失败(抛出对方的错误)。已关闭的连接不能再打开：本机这边的
    * 任务已经结束(撤权、用户关闭)，再打开会在对方留下一个没人拉取、没人关闭的任务。
    */
-  async open(agentKind: RemoteAgentKind, openPayload: unknown, requireActive?: () => void): Promise<Record<string, unknown>> {
+  async open(agentKind: RemoteAgentEngineKind, openPayload: unknown, requireActive?: () => void,
+    onOpenRequest?: () => void): Promise<Record<string, unknown>> {
     if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
     requireActive?.();
     const sessionId =
@@ -190,9 +277,10 @@ export class RemoteAgentRunClient implements PolledRun {
         this.started = { resolve, reject };
       });
       try {
-        await timing.measure('open-request', () =>
-          this.invoke([{ op: 'open', runId: this.runId, agentKind, payload }]),
-        );
+        await timing.measure('open-request', () => {
+          onOpenRequest?.();
+          return this.invoke([{ op: 'open', runId: this.runId, agentKind, payload }]);
+        });
       } catch (error) {
         this.started = null;
         throw error;

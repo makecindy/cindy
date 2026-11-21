@@ -11,6 +11,7 @@ import type { RemoteAgentLimitUsage } from '../../shared/remoteAgentLimits.js';
 import type { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
 import { encodeMessageBodies, versionMessageBody } from './sessionMessageReuse.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
+import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import {
   AGENT_NET_SWITCH_CHANNEL,
   FILE_PEER_CHANNEL,
@@ -66,7 +67,7 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
 
 import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef, invokeIntendedHoldMs } from '@cindy/device-link';
 import { RemoteInvokeTiming, observeRemoteInvoke } from './remoteInvokeTiming.js';
-import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
+import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation, locallyProvenProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
 import {
   computeAllowlistHash,
@@ -89,6 +90,8 @@ import {
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
+  type ProviderPickerModel,
   DL_VOICE_DICTIONARY_GET_CHANNEL,
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
@@ -97,6 +100,7 @@ import {
   SESSION_SYNC_CHANNEL,
   MAKER_EVENT_BATCH_CHANNEL,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
@@ -115,6 +119,7 @@ import {
   type PushOwnerStamp,
   type Topic,
 } from '@cindy/device-link';
+import { withoutPluginEngineSwitchIntent } from './pluginEngineSwitchIntentPush.js';
 import {
   DEVICE_LINK_RECONCILIATION_PROBE_MARKER,
   type MobileVoiceDictionaryLearningRequest,
@@ -446,6 +451,7 @@ export interface InboundDispatchPorts {
   stopFilePeers?: typeof stopFilePeers;
   requestTaskMigration?: typeof requestTaskMigration;
   delegatedProviderShareGuestAccess?: typeof delegatedProviderShareGuestAccess;
+  locallyProvenProviderShareDelegation?: typeof locallyProvenProviderShareDelegation;
   delegatedProviderShareLeases?: typeof delegatedProviderShareLeases;
   invalidateProviderShareDelegation?: typeof invalidateProviderShareDelegation;
   app: Pick<typeof app, "getVersion">;
@@ -504,6 +510,7 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     stopFilePeers,
     requestTaskMigration = unavailable('requestTaskMigration'),
     delegatedProviderShareGuestAccess,
+    locallyProvenProviderShareDelegation,
     delegatedProviderShareLeases,
     invalidateProviderShareDelegation,
     app,
@@ -709,6 +716,18 @@ function invokeControllerCapabilities(payload: InvokePayload): string[] {
   return sanitizeControllerCapabilities(
     (metadata as { capabilities?: unknown }).capabilities,
   );
+}
+
+function providerPickerRequest(payload: InvokePayload): 'available' | ProviderPickerModel {
+  const { retainedModel } = payload.args![0] as { retainedModel?: Partial<ProviderPickerModel> };
+  if (retainedModel === undefined) return 'available';
+  const { agent, modelId, providerId } = retainedModel ?? {};
+  if ((agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi') ||
+    typeof modelId !== 'string' || !modelId ||
+    (providerId !== null && (typeof providerId !== 'string' || !providerId))) {
+    throw new Error('[INVALID_PARAMS] Invalid retained model');
+  }
+  return { agent, modelId, providerId };
 }
 
 function optionalControllerCapabilities(
@@ -1130,7 +1149,7 @@ function projectInvokeResultForTunnel(
     return result;
   }
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown; providerOrder?: unknown;
-    providerContinuity?: unknown };
+    providerContinuity?: unknown; deferredProviderIds?: string[] };
   if (!Array.isArray(r.providers)) return result;
   const modelVisibilityOverrides = r.modelVisibilityOverrides
     && typeof r.modelVisibilityOverrides === 'object'
@@ -1142,6 +1161,7 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    if (!sameAccountController || p.source !== 'organization') delete rest.customIcon;
     if (!sameAccountController) {
       delete rest.subscriptionPoolTarget;
       delete rest.subscriptionAccountKeys;
@@ -1205,6 +1225,7 @@ function projectInvokeResultForTunnel(
   const continuity = readProviderMetadataContinuity(r);
   return {
     providers,
+    ...(sameAccountController && Array.isArray(r.deferredProviderIds) ? { deferredProviderIds: r.deferredProviderIds } : {}),
     ...(modelVisibilityOverrides !== undefined ? { modelVisibilityOverrides } : {}),
     ...(Array.isArray(r.providerOrder) ? { providerOrder: normalizeProviderOrder(r.providerOrder) } : {}),
     providerContinuity: continuity ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS },
@@ -1701,6 +1722,38 @@ const SESSION_SYNC_RETRY_MS = 250;
 // Keep the original pacing when reading/admitting a snapshot actually fails:
 // socket bytes or the authorization queue can be full even below the soft cap.
 const SESSION_SYNC_FAILURE_RETRY_MS = 2_000;
+// Internal to this hop. Remote providers may have measured the sample on a
+// different computer before it reached this broadcaster.
+const MAKER_SPEED_RECEIVED_AT = Symbol('makerSpeedReceivedAt');
+type MakerStatusPush = Record<string, unknown> & {
+  [MAKER_SPEED_RECEIVED_AT]?: number;
+  event?: { type?: unknown; data?: { tokenSpeed?: TokenSpeedSnapshot } };
+};
+
+function anchorMakerSpeedSampleAge(payload: unknown): unknown {
+  const frame = payload as MakerStatusPush | null;
+  if (frame?.event?.type !== 'status' || frame.event.data?.tokenSpeed?.measurement?.sampleAgeMs === undefined) {
+    return payload;
+  }
+  return { ...frame, [MAKER_SPEED_RECEIVED_AT]: Date.now() };
+}
+
+/** Account for time spent in this hop's offline queue and event batch. */
+function refreshMakerSpeedSampleAge(payload: unknown): unknown {
+  const frame = payload as MakerStatusPush | null;
+  const receivedAt = frame?.[MAKER_SPEED_RECEIVED_AT];
+  if (receivedAt === undefined || !frame) return payload;
+  const { [MAKER_SPEED_RECEIVED_AT]: _, event, ...rest } = frame;
+  const speed = event?.data?.tokenSpeed;
+  const measurement = speed?.measurement;
+  if (measurement?.sampleAgeMs === undefined) return { ...rest, event };
+  const sampleAgeMs = measurement.sampleAgeMs + Math.max(0, Date.now() - receivedAt);
+  return {
+    ...rest,
+    event: { ...event, data: { ...event?.data, tokenSpeed: { ...speed, measurement: { ...measurement, sampleAgeMs } } } },
+  };
+}
+
 function isNonFinalTextPush(payload: unknown): boolean {
   const event = (payload as { event?: { type?: unknown; data?: { isFinal?: unknown } } } | null)?.event;
   return event?.type === 'text' && event.data?.isFinal === false;
@@ -2024,7 +2077,7 @@ function flushMakerEventBatchSession(
         outcome.droppedEvents += slice.length;
         continue;
       }
-      const payload: MakerEventBatchPayload = { sessionId, events: slice };
+      const payload: MakerEventBatchPayload = { sessionId, events: slice.map(refreshMakerSpeedSampleAge) };
       const historyRequired = !slice.every(isNonFinalTextPush);
       try {
         if (!activeClient || !canUsePeerDataPath(activeClient, dst)) {
@@ -2531,6 +2584,12 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
   const payloadFor = (dst: string): unknown => {
     let projected = projectedPayloadFor(dst);
+    // 「待切到插件引擎」的意图只给认识它的控制端；旧控制端看到的是「没有待切换」，
+    // 不会把插件引擎显示成 Claude Code。
+    if (channel === 'local-db:sessions:patched'
+      && !subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1)) {
+      projected = withoutPluginEngineSwitchIntent(projected);
+    }
     if (listMessage && receivesListMessages(dst)) {
       if (channel === 'local-db:messages:created') {
         const push = projected as { message: Record<string, unknown> };
@@ -2538,7 +2597,8 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
       }
       projected = listMessagePayload(dst, readPushSessionId(remotePayload)!, projected);
     }
-    return isSharedTaskPeer(dst) ? redactSharedGuestPush(channel, projected) : projected;
+    if (isSharedTaskPeer(dst)) projected = redactSharedGuestPush(channel, projected);
+    return channel === MAKER_PUSH.EVENT ? anchorMakerSpeedSampleAge(projected) : projected;
   };
   const historySessionId = readPushSessionId(remotePayload);
   // 账号级状态快照:同键 latest-wins,不逐帧冲可靠窗口(见 stageLatestStatePush)。
@@ -2689,9 +2749,10 @@ function sendPushBestEffortAuthorized(
     markForRecovery();
     return;
   }
+  const outgoing = channel === MAKER_PUSH.EVENT ? refreshMakerSpeedSampleAge(payload) : payload;
   try {
-    if (ownerStamp === undefined) activeClient.sendPush(dst, channel, payload);
-    else activeClient.sendPush(dst, channel, payload, ownerStamp);
+    if (ownerStamp === undefined) activeClient.sendPush(dst, channel, outgoing);
+    else activeClient.sendPush(dst, channel, outgoing, ownerStamp);
     // Telemetry reads "pushed" only where a frame was actually handed to the link.
     observeRemoteSendPush(channel, payload);
     return;
@@ -2702,7 +2763,7 @@ function sendPushBestEffortAuthorized(
       return;
     }
 
-    const compactPayload = compactOversizedPushPayload(channel, payload);
+    const compactPayload = compactOversizedPushPayload(channel, outgoing);
     if (!compactPayload) {
       markForRecovery();
       reportPushFailure(dst, channel, err);
@@ -4878,10 +4939,11 @@ function projectProviderListForShare(
 async function runProviderShareInvoke(
   src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming,
 ): Promise<InvokeResultPayload> {
-  if (payload?.channel === REMOTE_AGENT_CHANNEL && Array.isArray(payload.args)
-    && payload.args.some((value: unknown) => !!value && typeof value === 'object' && 'op' in value && value.op === 'open')
-    && delegatedProviderShareGuestAccess?.(src)) {
-    try { await prepareShareAvailability(src); } catch { /* Normal O-issued grants do not require this endpoint. */ }
+  if (payload?.channel === REMOTE_AGENT_CHANNEL && Array.isArray(payload.args)) {
+    const request = payload.args[0] as { op?: unknown } | undefined;
+    if (request?.op === 'open' && delegatedProviderShareGuestAccess?.(src) && !locallyProvenProviderShareDelegation?.(src)) {
+      try { await prepareShareAvailability(src); } catch { /* Normal O-issued grants do not require this endpoint. */ }
+    }
   }
   const access = providerShareGuestAccess(src);
   if (!access) {
@@ -5360,6 +5422,8 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       {
         controllerDeviceId: src,
         channel: payload.channel,
+        ...(listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1) && isSameAccountController(src)
+          ? { providerPicker: providerPickerRequest(payload) } : {}),
         sharedTask: getDeviceLinkInvokeContext()?.sharedTask,
         sharedTaskSetting: getDeviceLinkInvokeContext()?.sharedTaskSetting,
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何

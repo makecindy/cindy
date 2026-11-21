@@ -1,6 +1,6 @@
 import { isSharedTaskPeer, type SharedTaskListItem } from '@cindy/device-link';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
-import type { MobileHomePresentation, MobileHomeSessionLike } from './mobileHome';
+import { mobileHomeSessionItems, type MobileHomePresentation, type MobileHomeSessionLike } from '@cindy/maker-shared/mobile-home';
 import type { RemoteSessionListItem } from './sessionList';
 
 export type SharedHomeRow =
@@ -21,7 +21,7 @@ export function splitSharedHomeGroup(home: MobileHomePresentation, owned: readon
     const session = item.session as MobileHomeSessionLike;
     return isSharedTaskPeer(session.deviceLinkDeviceId) || owned.some(task => owns(session, task));
   };
-  const all = [...home.pinned, ...home.chats, ...home.projects.flatMap(project => project.sessions)];
+  const all = mobileHomeSessionItems(home);
   const rows: SharedHomeRow[] = all.filter(isShared)
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
     .map(item => {

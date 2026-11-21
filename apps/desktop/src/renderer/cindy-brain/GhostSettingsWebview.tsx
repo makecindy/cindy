@@ -475,7 +475,11 @@ export function GhostSettingsWebview({
       )}
       {!remoteDeviceId && ghost.namespace === 'local' && ghost.namespaceState === 'confirmed' &&
         releaseRepository && (
-          <GithubPluginReleaseSettings key={`${ownerKey}:${installedGhostStoragePart(ghost)}`} ghost={ghost} repository={releaseRepository} />
+          <GithubPluginReleaseSettings
+            key={JSON.stringify([ownerKey, installedGhostStoragePart(ghost), releaseRepository])}
+            ghost={ghost}
+            repository={releaseRepository}
+          />
         )}
       {ghost.enabled && <Fragment key={`account:${ownerKey}`}>{account}</Fragment>}
       {ghost.enabled && account ? (

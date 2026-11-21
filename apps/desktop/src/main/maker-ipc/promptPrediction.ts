@@ -176,6 +176,9 @@ function sessionStillEligibleForPrediction(
   if (!row || row.status === 'deleted' || row.source === 'review' || row.remoteHostId) {
     return false;
   }
+  // Plugin engine tasks (agent_kind 'acp') would map to Claude below and send their conversation
+  // to a built-in utility model; they get no prediction.
+  if (row.agentKind === 'acp') return false;
   if (dbToMakerAgentKind(row.agentKind) !== params.agentKind) return false;
   if (row.lastTurnEndedAt !== params.completionRevision) return false;
   if (

@@ -1,3 +1,4 @@
+import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
 import { readBotProfileSource } from '../../../shared/botProfileSources.js';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
@@ -52,6 +53,7 @@ import {
   readBotModelChainSettingsState,
   resetBotModelChainSettings,
   readEffectiveBotModelChain,
+  readEffectiveBotPrimaryRoute,
   writeBotModelChainSettings,
 } from '../../maker-host/bot-model-chain-settings-store.js';
 import { extractMessagePreview, sessionToCamel } from '../mapper.js';
@@ -421,7 +423,7 @@ export async function ensureBotGroupLaneSession(input: {
     .limit(1);
   if (!profileVersion) return { ok: false, errorCode: 'MEMBER_UNAVAILABLE', message: '伙伴资料版本不存在' };
   const config = parseJson(profileVersion.capabilitiesJson);
-  const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
+  const primaryRoute = await readEffectiveBotPrimaryRoute(config);
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
   const workspaceKind = wantedProject && !conversationOnly ? ('project' as const) : ('dialogue' as const);
   const now = Date.now();
@@ -542,7 +544,7 @@ async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: strin
     .limit(1);
   if (!profileVersion) return { ok: false, errorCode: 'BOT_UNAVAILABLE', message: '伙伴资料版本不存在' };
   const config = parseJson(profileVersion.capabilitiesJson);
-  const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
+  const primaryRoute = await readEffectiveBotPrimaryRoute(config);
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
   const workspace = await privateBotWorkspace(input.botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
   const now = Date.now();
@@ -588,8 +590,7 @@ export async function ensureBotDmThreadSession(input: {
   botId: string;
   rootSessionId: string;
   rootClientId: string;
-  title: string;
-}): Promise<EnsureBotDmThreadResult> {
+}, onCreated?: (id: string, subject: string, initialTitle: string) => void): Promise<EnsureBotDmThreadResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
@@ -626,7 +627,7 @@ export async function ensureBotDmThreadSession(input: {
     .limit(1);
   if (!profileVersion) return { ok: false, errorCode: 'BOT_UNAVAILABLE', message: '伙伴资料版本不存在' };
   const config = parseJson(profileVersion.capabilitiesJson);
-  const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
+  const primaryRoute = await readEffectiveBotPrimaryRoute(config);
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
   // The canonical Chat's permission profile, not the default of a new Bot session.
   const [canonical] = await db
@@ -636,12 +637,20 @@ export async function ensureBotDmThreadSession(input: {
     .limit(1);
   const workspace = await privateBotWorkspace(input.botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
   const now = Date.now();
+  // Both phone and desktop send a display excerpt. Read the original visible text on
+  // the owning device so attachment labels and stale client previews never reach a title model.
+  const [root] = await db.select({ role: messages.role, content: messages.content })
+    .from(messages).where(and(eq(messages.sessionId, input.rootSessionId),
+      eq(messages.clientId, input.rootClientId), isNull(messages.rewindAt))).limit(1);
+  const subject = root ? extractMessagePreview(root.content, root.role) ?? '' : '';
+  const title = normalizeAutoTitle(subject) || DEFAULT_DRAFT_SESSION_TITLE;
+  owner.assertCurrent();
   const sessionId = resolveBusinessSessionId(undefined);
   let result: BotGroupsCreateLaneResult;
   try {
     ({ value: result } = await openSession({
       id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
-      body: { title: input.title, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
+      body: { title, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
     }, row => client.tx<BotGroupsCreateLaneResult>('bots.createThreadLane', {
       botId: input.botId,
       routeKey,
@@ -665,6 +674,7 @@ export async function ensureBotDmThreadSession(input: {
     await syncBotLinkedLanePermissions(result.permissionRepairCanonicalSessionId);
     owner.assertCurrent();
   }
+  if (result.created && subject) onCreated?.(result.sessionId, subject, title);
   return { ok: true, sessionId: result.sessionId, created: result.created };
 }
 
@@ -1242,6 +1252,7 @@ async function readProfile(
     lastMessageAt: latestMessage.createdAt,
     lastMessageRole: latestMessage.role,
     unreadCount,
+    ...(byId.get(canonicalSessionId ?? '') ? { inboxSnooze: botInboxSnooze(byId.get(canonicalSessionId ?? '')!, latestMessage) } : {}),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
     skills: Array.isArray(config.skills)
@@ -1457,6 +1468,8 @@ export interface BotRemoteResourceSource {
   lastReplyAt?: number;
   /** Host read position of this conversation (botReadStateStore); 0 when none is known. */
   lastReadAt?: number;
+  /** Inbox snooze of the main conversation's Session; absent while there is no conversation. */
+  inboxSnooze?: BotInboxSnooze;
   needsAttention: boolean;
   hiddenAt: number | null;
   pinnedAt: number | null;
@@ -1465,6 +1478,32 @@ export interface BotRemoteResourceSource {
   updatedAt: number;
   /** Open tasks this Bot looks after, for the follow mark on remote task rows. Absent = none. */
   followingSessionIds?: string[];
+}
+
+/**
+ * The inbox snooze of a teammate's main conversation, in the Session's own ISO fields so
+ * controllers reuse the task rule (new input after `snoozedAt` wakes it). `userSendAt` is the
+ * latest input: the Session's own value or the newest visible message, whichever is later. A
+ * message another task sends with a tool does not move the Session's `userSendAt`, and a
+ * teammate asked to get a decision must not stay hidden behind an earlier snooze.
+ */
+export interface BotInboxSnooze {
+  snoozedUntil: string | null;
+  snoozedAt: string | null;
+  userSendAt: string | null;
+}
+
+function botInboxSnooze(
+  row: { snoozedUntil: number | null; snoozedAt: number | null; userSendAt: number | null; activeTurnStartedAt: number | null; lastTurnEndedAt: number | null },
+  latest: { role: BotChatRole | null; createdAt: number | null },
+): BotInboxSnooze {
+  const iso = (ms: number | null) => ms == null ? null : new Date(ms).toISOString();
+  // Streamed text keeps its start timestamp. Use the terminal timestamp only when
+  // the visible reply belongs to that turn, so old replies cannot wake a later snooze.
+  const replyEndedAt = latest.role === 'assistant' && row.activeTurnStartedAt != null
+    && (latest.createdAt ?? 0) >= row.activeTurnStartedAt ? row.lastTurnEndedAt ?? 0 : 0;
+  const inputAt = Math.max(row.userSendAt ?? 0, latest.createdAt ?? 0, replyEndedAt);
+  return { snoozedUntil: iso(row.snoozedUntil), snoozedAt: iso(row.snoozedAt), userSendAt: iso(inputAt || null) };
 }
 
 const MAX_FOLLOWED_TASK_LINKS = 200;
@@ -1516,7 +1555,9 @@ async function readBotRemoteResourceSource(
   const { canonicalSessionId } = await reconcileCanonicalLink(botId, client);
   owner.assertCurrent();
   const [canonical] = canonicalSessionId ? await db
-    .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt })
+    .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt,
+      snoozedUntil: sessions.snoozedUntil, snoozedAt: sessions.snoozedAt, userSendAt: sessions.userSendAt,
+      activeTurnStartedAt: sessions.activeTurnStartedAt, lastTurnEndedAt: sessions.lastTurnEndedAt })
     .from(sessions).where(eq(sessions.id, canonicalSessionId)).limit(1) : [];
   owner.assertCurrent();
   if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
@@ -1543,6 +1584,7 @@ async function readBotRemoteResourceSource(
     lastMessageRole: latest.role,
     lastReplyAt: reply.createdAt ?? 0,
     lastReadAt: hostReadPosition(profile.id),
+    ...(canonical ? { inboxSnooze: botInboxSnooze(canonical, latest) } : {}),
     needsAttention: profile.attentionAt !== null &&
       BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason) &&
       isBotFailureAttentionWorthy(profile.attentionReason as BotFailureReason),
@@ -2367,7 +2409,7 @@ export async function searchBotHistory(botId: string, query: string, limit: numb
   );
 }
 
-export function registerBotIpc(): void {
+export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, initialTitle: string) => void): void {
   registerBotReadStateIpc();
   ipcMain.handle('local-db:bots:generate-avatar', async (event, token: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -2628,7 +2670,7 @@ export function registerBotIpc(): void {
     const invitation = botInvitationProgress(config.invitation);
     if (invitation && invitation.stage !== 'ready' && invitation.stage !== 'welcome')
       throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面');
-    const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
+    const primaryRoute = await readEffectiveBotPrimaryRoute(config);
     if (!primaryRoute) throwIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型');
     const workspace = await privateBotWorkspace(botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
     const { value: result } = await openSession({ id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
@@ -2839,8 +2881,7 @@ export function registerBotIpc(): void {
     if (!parseBotDmThreadRouteKey(`dm-thread:${rootSessionId}:${rootClientId}`)) {
       throwIpcError('INVALID_PARAMS', '话题的原消息无效');
     }
-    const title = typeof body.title === 'string' ? body.title.trim().slice(0, 120) : '';
-    return ensureBotDmThreadSession({ botId, rootSessionId, rootClientId, title: title || '话题' });
+    return ensureBotDmThreadSession({ botId, rootSessionId, rootClientId }, onCreatedTopic);
   });
   ipcMain.handle('local-db:bots:dm-thread:list', async (event, raw: unknown) => {
     const remote = isDeviceLinkInvoke();

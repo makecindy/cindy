@@ -16,11 +16,14 @@ import { readRemoteProviderGroupUsageLimit } from '../../provider-group/failureP
  */
 import os from 'node:os';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import {
   REMOTE_AGENT_GROUP_SWITCH_STATE_KEY,
+  REMOTE_AGENT_PLUGIN_ENGINE_KIND,
   REMOTE_AGENT_RELAY_KEY_PATTERN,
   type RemoteAgentCaps,
+  type RemoteAgentEngineKind,
   type RemoteAgentKind,
   type RemoteAgentMethod,
   type RemoteAgentReply,
@@ -64,6 +67,38 @@ import { createReverseHttpRouter, type LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
 import { isSharedTaskAuthorizationDenied } from './poller';
 
+// Local evidence from the same open that failed. An old offer or a send RPC
+// error must never authorize replay of a persisted input.
+const stoppedReconnectOffers = new WeakMap<RemoteAgentRemoteError, () => void>();
+const reconnectOfferCapture = new AsyncLocalStorage<string>();
+
+export function withSharedReconnectOfferCapture<T>(sessionId: string, send: () => Promise<T>): Promise<T> {
+  return reconnectOfferCapture.run(sessionId, send);
+}
+
+interface SharedReconnectHandoff {
+  signal?: AbortSignal;
+  onOpened(nativeId: string | null): void;
+  assertCurrent(): void;
+}
+
+const reconnectHandoff = new AsyncLocalStorage<SharedReconnectHandoff & { sessionId: string }>();
+
+export function withSharedReconnectHandoff<T>(
+  sessionId: string,
+  handoff: SharedReconnectHandoff,
+  start: () => Promise<T>,
+): Promise<T> {
+  return reconnectHandoff.run({ sessionId, ...handoff }, start);
+}
+
+export function takeStoppedSharedReconnectOffer(error: unknown): (() => void) | undefined {
+  if (!(error instanceof RemoteAgentRemoteError)) return undefined;
+  const offer = stoppedReconnectOffers.get(error);
+  stoppedReconnectOffers.delete(error);
+  return offer;
+}
+
 export interface PreparedRemoteMcp {
   /** 本任务可用的本机 MCP 服务(名字 → 带本任务身份的地址与请求头)。 */
   servers: Map<string, LocalMcpTarget>;
@@ -74,10 +109,14 @@ export interface StartRemoteAgentDeps {
   attachmentPreservation?(sessionId: string): PreserveAttachmentBatch;
   attachmentStorageRoots?(sessionId: string): Record<string, string>;
   nativeHistoryBackup?: boolean;
+  /** The share opens with its owner, without a delegated executor. */
+  recoverSharedReconnect?: boolean;
   /** Cancellation for this startup attempt only; never cancels other starts of the task. */
   startupSignal?: AbortSignal;
   /** Recheck this attempt's permission/explicit-close boundary until its first startup finishes. */
   assertStartupCurrent?(): void;
+  /** From this point a failed or lost write may have started a process on the executor. */
+  onStartupOpenRequest?(): void;
   /** A direct share must renew the original executor's grant before reopening. */
   reconnectAuthorization?(isCurrent: () => boolean, options?: { force?: boolean }): Promise<void>;
   /** Background renewal is allowed only while M has confirmed the current grant. */
@@ -152,7 +191,7 @@ export interface StartRemoteAgentDeps {
    * `token` 是交接后重新打开时带回的凭证；对方发来新凭证时交给 `offer`；`takeNewRound` 为 true 的那次发送告诉
    * 对方开始新的一轮(用户亲自接手过)。
    */
-  groupSwitch?: { token?: string; offer(token: string): void; takeNewRound?(): boolean };
+  groupSwitch?: { token?: string; requireToken?: true; offer(token: string): void; takeNewRound?(): boolean };
   newId(): string;
   log?: {
     debug?(message: string, meta?: Record<string, unknown>): void;
@@ -350,14 +389,22 @@ export function registerPendingRemoteStart(sessionId: string, parent = currentSe
 }
 
 export async function startRemoteAgentSession(
-  kind: RemoteAgentKind,
+  kind: RemoteAgentEngineKind,
   opts: StartSessionOptions,
   deps: StartRemoteAgentDeps,
 ): Promise<AgentSessionHandle> {
   if (!opts.sessionId) throw new Error('remote agent sessions require a session id');
   // 第一处异步准备之前登记，MCP 启动期间的删除/归档也不能漏掉。
   const sessionId = opts.sessionId;
-  const abort = registerPendingRemoteStart(sessionId, deps.startupSignal);
+  const scopedHandoff = reconnectHandoff.getStore();
+  const handoff = scopedHandoff?.sessionId === sessionId ? scopedHandoff : undefined;
+  handoff?.assertCurrent();
+  if (handoff && (!deps.recoverSharedReconnect || !deps.groupSwitch?.token || opts.resumeSessionId)) {
+    throw new Error('The confirmed shared reconnect is no longer authorized');
+  }
+  const startupSignal = handoff?.signal && deps.startupSignal
+    ? AbortSignal.any([handoff.signal, deps.startupSignal]) : handoff?.signal ?? deps.startupSignal;
+  const abort = registerPendingRemoteStart(sessionId, startupSignal);
   const expired = () => new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
   let rejectCancelled!: (error: unknown) => void;
   const cancelled = new Promise<never>((_, reject) => { rejectCancelled = reject; });
@@ -383,6 +430,20 @@ export async function startRemoteAgentSession(
         return handle;
       }), cancelled,
     ]);
+    if (handoff) {
+      // As in cold startup, if O restarts between opens or the token expires,
+      // G can treat an ordinary fresh open as a completed switch. This can add
+      // one unnecessary handoff. The failed run received no send.
+      try {
+        abort.signal.throwIfAborted();
+        deps.assertStartupCurrent?.();
+        handoff.assertCurrent();
+        handoff.onOpened(isNativeSessionId(handle.id) ? handle.id : null);
+      } catch (error) {
+        await handle.close({ reason: 'navigation' });
+        throw error;
+      }
+    }
     status = 'ok';
     return handle;
   } finally {
@@ -393,7 +454,7 @@ export async function startRemoteAgentSession(
 }
 
 async function prepareAndStartRemoteAgentSession(
-  kind: RemoteAgentKind,
+  kind: RemoteAgentEngineKind,
   opts: StartSessionOptions,
   deps: StartRemoteAgentDeps,
   signal: AbortSignal,
@@ -401,6 +462,16 @@ async function prepareAndStartRemoteAgentSession(
 ): Promise<AgentSessionHandle> {
   const client = opts[LOCAL_AGENT_CLIENT];
   const hostToolsOnly = client?.hostToolsOnly === true;
+  /**
+   * 插件引擎(那台电脑上的插件提供)：本机交过去的 Cindy 工具范围、项目与个人说明文件按内置 Pi 的口径
+   * (与本机的插件引擎任务同一约定)；文件与命令经 cindy_exec 在本机执行。写入前的改动抓取属于内置引擎，
+   * 本机的插件引擎任务也没有，这里同样不做。
+   */
+  const pluginEngine = kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND;
+  const builtinKind: RemoteAgentKind = pluginEngine ? 'pi' : kind;
+  if (pluginEngine && client) {
+    throw new Error('[REMOTE_AGENT_UNSUPPORTED] Plugin engines are not available to external applications.');
+  }
   // 附加目录(只读引用)与可写目录分开跟踪，运行中任一侧变化都重算执行器根目录：
   // 否则新授予的目录过不了本机 shell/root 判定，撤掉的还被本机上限当可信根。
   let extraDirs = [...new Set(opts.extraDirs ?? [])];
@@ -427,7 +498,7 @@ async function prepareAndStartRemoteAgentSession(
     workspace,
     gate,
     rgPath: deps.rgPath,
-    capture: deps.capture?.({ kind, opts }),
+    capture: pluginEngine ? undefined : deps.capture?.({ kind: builtinKind, opts }),
     ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
     // 只有 Claude Code 经 cindy_exec 使用这组工具。
     ...(kind === 'claude-code' && deps.webFetch ? { webFetch: deps.webFetch } : {}),
@@ -476,7 +547,7 @@ async function prepareAndStartRemoteAgentSession(
   try {
     if (signal.aborted) throw signal.reason;
     deps.assertStartupCurrent?.();
-    mcp = await startupTiming.measure('mcp-prepare', () => deps.prepareMcp({ kind, opts, vendorOptions }));
+    mcp = await startupTiming.measure('mcp-prepare', () => deps.prepareMcp({ kind: builtinKind, opts, vendorOptions }));
     preparedMcp = mcp;
     if (signal.aborted) throw signal.reason;
     deps.assertStartupCurrent?.();
@@ -533,6 +604,8 @@ async function prepareAndStartRemoteAgentSession(
   // 其它回调会改这两个值：读的时候不让 TypeScript 按局部赋值收窄。
   const stateNow = (): LinkState => linkState;
   const requireOpen = () => {
+    const handoff = reconnectHandoff.getStore();
+    if (handoff && handoff.sessionId === opts.sessionId) handoff.assertCurrent();
     signal.throwIfAborted();
     if (!firstStarted) deps.assertStartupCurrent?.();
     if (stateNow() === 'closed') throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
@@ -644,6 +717,10 @@ async function prepareAndStartRemoteAgentSession(
     const early: Array<{ type: 'event' | 'state'; value: unknown }> = [];
     let closedEarly: { reason: string; message?: string } | null = null;
     const expectedResume = payload.options.resumeSessionId;
+    const captureReconnectOffer = reconnect && deps.recoverSharedReconnect && !!expectedResume
+      && reconnectOfferCapture.getStore() === opts.sessionId
+      && payload.acceptsGroupSwitch && !payload.groupAssigned;
+    let startupSwitchToken: string | undefined;
     let resumeLost = false;
     // 只处理当前这条连接的往来；正在让出名额的那条剩下的收尾不再进任务。
     const isCurrent = () => active === client && linkState !== 'releasing' && linkState !== 'closed';
@@ -678,7 +755,14 @@ async function prepareAndStartRemoteAgentSession(
       onState: (incoming) => {
         if (!isCurrent()) return;
         // 组所在电脑发来的「需要换一台」凭证(排在那次错误前面)：交给供应商组服务，不进任务状态。
-        const remaining = takeGroupSwitchState(incoming, deps.groupSwitch?.offer);
+        const remaining = takeGroupSwitchState(incoming, token => {
+          deps.log?.info('remote agent switch credential received', {
+            sessionId: opts.sessionId,
+            phase: captureReconnectOffer && !opened ? 'reconnect' : 'run',
+          });
+          if (captureReconnectOffer && !opened) startupSwitchToken = token;
+          else deps.groupSwitch?.offer(token);
+        });
         if (!remaining) return;
         let state = remaining;
         const projection = state.workspaceProjection as Parameters<typeof shadowAliases>[0] | undefined;
@@ -791,7 +875,8 @@ async function prepareAndStartRemoteAgentSession(
     active = client;
     let remoteStarted = false;
     try {
-      const raw = await client.open(kind, payload, reconnect ? undefined : requireOpen);
+      const raw = await client.open(kind, payload, reconnect ? undefined : requireOpen,
+        reconnect ? undefined : deps.onStartupOpenRequest);
       remoteStarted = true;
       if (!reconnect) requireOpen();
       if (closedEarly) throw new Error((closedEarly as { message?: string }).message ?? '[REMOTE_AGENT_UNAVAILABLE] The agent stopped right after starting.');
@@ -807,6 +892,10 @@ async function prepareAndStartRemoteAgentSession(
       }
       if (!projectionReady) applyProjection(started, started.virtualWorkspace ? started.mirrorRoot : undefined);
       opened = true;
+      if (startupSwitchToken) {
+        deps.log?.info('remote agent switch credential taken over', { sessionId: opts.sessionId, phase: 'reconnect' });
+        deps.groupSwitch?.offer(startupSwitchToken);
+      }
       linkState = 'connected';
       lastStarted = started;
       onOpened(started);
@@ -821,6 +910,21 @@ async function prepareAndStartRemoteAgentSession(
       }
       return client;
     } catch (error) {
+      const token = startupSwitchToken;
+      if (!remoteStarted && token && isCurrent()) {
+        if (error instanceof RemoteAgentRemoteError && error.phase === 'start'
+          && error.info.name === 'AgentStartupStoppedError' && error.info.code === 'SUBSCRIPTION_ACCOUNT_LIMITED') {
+          stoppedReconnectOffers.set(error, () => {
+            deps.log?.info('remote agent switch credential taken over', { sessionId: opts.sessionId, phase: 'reconnect' });
+            deps.groupSwitch?.offer(token);
+          });
+        } else {
+          // Other failures (for example an expired login) retain their existing
+          // offer path. This caller may only replay a confirmed quota rejection.
+          deps.log?.info('remote agent switch credential taken over', { sessionId: opts.sessionId, phase: 'reconnect' });
+          deps.groupSwitch?.offer(token);
+        }
+      }
       if (active === client) active = null;
       if (remoteStarted && !client.isClosed) {
         // An invalid started descriptor or a local bootstrap error can occur
@@ -910,7 +1014,7 @@ async function prepareAndStartRemoteAgentSession(
     const collectedPersonal = await timing
       .measure(
         'personal-config',
-        () => (!hostToolsOnly && deps.collectPersonal?.(kind, projectFiles, caps.managedSkills
+        () => (!hostToolsOnly && deps.collectPersonal?.(builtinKind, projectFiles, caps.managedSkills
           ? { managedSkillDigests: caps.managedSkills.digests } : undefined) || Promise.resolve(null)),
       )
       .catch(() => null);
@@ -957,6 +1061,7 @@ async function prepareAndStartRemoteAgentSession(
       ...(deps.groupSwitch ? { acceptsGroupSwitch: true } : {}),
       // 交接凭证只给全新打开用；连回是接着原来的会话。
       ...(!reconnect && deps.groupSwitch?.token ? { groupSwitchToken: deps.groupSwitch.token } : {}),
+      ...(!reconnect && deps.groupSwitch?.requireToken ? { requireGroupSwitchToken: true as const } : {}),
     };
   }
 
@@ -992,8 +1097,15 @@ async function prepareAndStartRemoteAgentSession(
       if (caps.virtualWorkspace !== true) {
         throw new Error('[REMOTE_AGENT_UNSUPPORTED] The other computer does not support the virtual workspace required to protect local paths.');
       }
+      // 不认识插件引擎的旧版本会把打开请求判成无效；先说清楚要更新，绝不改用那台的内置引擎。
+      if (pluginEngine && caps.pluginEngines !== true) {
+        throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] Update Cindy on the computer that has this plugin engine to use it from another computer.');
+      }
       if (client && caps.localApplication !== true) {
         throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] Update Cindy on the computer providing this supplier to use it from an external application.');
+      }
+      if (!reconnect && deps.groupSwitch?.requireToken && !caps.directGuestStandby) {
+        throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] The owner does not support confirmed standby task handoff.');
       }
       deps.pool?.noteMaxRuns(caps.maxRuns);
       deps.pool?.noteIdleReclaimMinutes(caps.idleReclaimMinutes);
@@ -1182,10 +1294,12 @@ async function prepareAndStartRemoteAgentSession(
         link,
         started,
         workspace,
+        getExecutorCwd: () => executor.getCwd(),
         recordApproval: (action) => executor.recordApproval(action),
         cancelPendingConfirmations: () => executor.cancelPendingConfirmations(),
         onInvalidResumeSession: opts.onInvalidResumeSession,
-        mapEvent: deps.mapEvent?.(kind),
+        // 插件引擎的工具卡片标题由它自己的 Agent 给出，Cindy 不猜测改名。
+        mapEvent: pluginEngine ? undefined : deps.mapEvent?.(builtinKind),
         newId: deps.newId,
         ...(deps.groupSwitch?.takeNewRound ? { takeGroupNewRound: deps.groupSwitch.takeNewRound } : {}),
         onPermissionMode: (mode) => {

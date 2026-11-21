@@ -24,10 +24,12 @@ import { renderProviderErrorExplanation } from './ProviderErrorExplanation';
 import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { useTranslation } from 'react-i18next';
 import {
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isRemoteAgentResumeRejectedError,
   isResponsesLiteParallelToolCallsError,
   redactSensitiveText,
+  parseGeminiInputRateLimit,
   localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
@@ -88,6 +90,8 @@ export function ErrorMessageCard({
           ? t(i18nKey)
           : undefined;
   const subscriptionGuidance = localizeSubscriptionAccountError(message, t, i18n.resolvedLanguage ?? i18n.language);
+  const geminiGuidance = parseGeminiInputRateLimit(message) === null ? null :
+    t(reason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   const fallbackText = isResponsesLiteParallelToolCallsError(decoded)
     ? t('chat.errorBanner.requestFormatError')
     : isStreamInterrupted
@@ -95,10 +99,11 @@ export function ErrorMessageCard({
       : isGatewayProxyTokenInvalid
         ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
         : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
-          ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+          ?? localizedReasonError ?? remoteGuidance
+          ?? t(isAccountUsageLimitReachedText(decoded) ? 'chat.errorBanner.usageLimitReached' : 'chat.errorBanner.replyFailed');
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
-    : subscriptionGuidance ?? fallbackText;
+    : geminiGuidance ?? subscriptionGuidance ?? fallbackText;
   const showRawToggle = kind === 'reply-error' && Boolean(decoded);
 
   if (!text) return null;

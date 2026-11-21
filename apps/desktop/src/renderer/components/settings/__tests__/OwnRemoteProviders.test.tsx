@@ -291,6 +291,38 @@ describe('useOwnRemoteProviders', () => {
       unmount();
     }
   });
+
+  // Settings list regression: existing group tests only cover explicit group members. A merged
+  // Claude entry can still be in the host catalog alongside its Anthropic pool. Unit, in memory.
+  it('hides merged entries unless the host still shares them or they represent a group', async () => {
+    devices.value = [{ deviceId: 'mini-a', name: 'Mac Mini', platform: 'darwin' }];
+    const group = { strategy: 'least', members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'mini-b', providerId: 'anthropic' }] };
+    const alias = (id: string, overrides: Record<string, unknown> = {}) => provider(id, {
+      name: 'Claude · account', subscriptionPoolAlias: true, subscriptionPoolTarget: 'anthropic', ...overrides,
+    });
+    catalogs.value = new Map([['mini-a', {
+      providers: [provider('anthropic', { group }), alias('merged'), alias('shared'), alias('grouped', { group })],
+      loading: false,
+      error: null,
+    }]]);
+    const originalApi = window.electronAPI;
+    window.electronAPI = {
+      ...originalApi,
+      providerShare: { command: vi.fn().mockResolvedValue({ ready: true, providerIds: ['merged'] }) },
+      providerGroup: {
+        command: vi.fn(async ({ action }: { action: string }) =>
+          action === 'list' ? {} : { ready: true, providerIds: ['shared'] }),
+      },
+    } as unknown as Window['electronAPI'];
+    try {
+      const { result } = renderHook(() => useOwnRemoteProviderList());
+      await act(async () => undefined);
+      expect(result.current.entries.map((entry) => entry.provider.id)).toEqual(['anthropic', 'shared', 'grouped']);
+    } finally {
+      cleanup();
+      window.electronAPI = originalApi;
+    }
+  });
 });
 
 describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
@@ -330,11 +362,19 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
         name: 'openai-codex', source: 'organization', logoKind: 'openai-spectrum',
       }) as unknown as OwnRemoteProvider['provider'],
     };
-    render(<OwnRemoteProviderRows entries={[enterprise]} selectedKey={null} onSelect={() => undefined} />);
+    const rows = (entry: OwnRemoteProvider) => (
+      <OwnRemoteProviderRows entries={[entry]} selectedKey={null} onSelect={() => undefined} />
+    );
+    const view = render(rows(enterprise));
     const mark = screen.getByTestId('own-remote-provider-row').querySelector('[data-remote-source-mark]')!;
     const gradient = mark.querySelector('linearGradient');
     expect(gradient).not.toBeNull();
     expect(mark.querySelector('path[fill^="url"]')?.getAttribute('fill')).toBe(`url(#${gradient!.id})`);
+    view.rerender(rows({ ...enterprise, provider: { ...enterprise.provider, customIcon: '<svg/>' } }));
+    const image = screen.getByTestId('own-remote-provider-row').querySelector('[data-remote-source-mark] img')!;
+    expect(image.getAttribute('src')).toBe('data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E');
+    fireEvent.error(image);
+    expect(screen.getByTestId('own-remote-provider-row').querySelector('linearGradient')).toBeTruthy();
   });
 
   it('uses the existing disabled state and removes model and quota content until re-enabled', () => {

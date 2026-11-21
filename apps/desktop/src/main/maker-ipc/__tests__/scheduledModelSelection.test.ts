@@ -7,6 +7,7 @@ import {
   createScheduledModelSelectionResolver,
   reconcileScheduledModelRouteBeforeBaseline,
   resolveScheduledModelSelection,
+  resolveScheduledModelSelectionWithRefresh,
   type ScheduledModelSelection,
   ScheduledModelSelectionBusyError,
 } from '../scheduledModelSelection';
@@ -61,6 +62,26 @@ describe('one-run automation model preferences', () => {
     const scope = createScheduledModelScope({ ...h.deps, write: async () => false });
     await expect(scope.restore('task')).rejects.toThrow('changed');
     expect(h.state().baseline).not.toBeNull();
+  });
+  // Unit regression: uncertainty must not invoke the recovery for a removed model
+  // and discard the owner's saved choice. Exercise real resolution through restore.
+  it.each(['owner-provider', null])('keeps the saved baseline with source %s when its catalog cannot be confirmed', async providerId => {
+    const h = scopeFixture();
+    await h.deps.apply('task', { ...h.original, providerId });
+    await h.scope.begin('task');
+    h.automate();
+    const before = h.state();
+    const recoverUnavailableBaseline = vi.fn(async () => true);
+    const scope = createScheduledModelScope({ ...h.deps, recoverUnavailableBaseline,
+      apply: async (_id, saved) => resolveScheduledModelSelection(saved, [{
+        ...provider('owner-provider'), agents: ['codex'],
+        routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } },
+        subscriptionReadUnavailable: true, models: { codex: [] },
+      }]),
+    });
+    await expect(scope.restore('task')).rejects.toThrow('MODEL_CATALOG_UNCONFIRMED');
+    expect(h.state()).toEqual(before);
+    expect(recoverUnavailableBaseline).not.toHaveBeenCalled();
   });
   it.each(['same-process', 'restart'])('restores all owner settings after %s', async (mode) => {
     const h = scopeFixture();
@@ -763,5 +784,50 @@ describe('automation restore uses the execution computer', () => {
     await expect(h.scope.restore('task')).rejects.toThrow('provider unavailable');
     expect(h.remote).not.toHaveBeenCalled();
     expect(h.state().baseline).not.toBeNull();
+  });
+});
+
+// Unit regression: a missing model in a stale subscription directory must recover
+// before automation dispatch, and uncertainty must not retire the owner's baseline.
+describe('scheduled model discovery recovery', () => {
+  const missing = (): ProviderView => ({ ...provider('custom'), subscriptionAccountPool: 'openai',
+    subscriptionReadUnavailable: true, models: { pi: [] } });
+  it.each(['custom', null])('recovers the same saved model with source %s before returning its route', async providerId => {
+    const readProviders = vi.fn().mockResolvedValueOnce([missing()]).mockResolvedValue([provider('custom')]);
+    const refreshProvider = vi.fn(async () => {});
+    expect(await resolveScheduledModelSelectionWithRefresh({ ...selection, providerId }, { readProviders, refreshProvider, assertCurrent: () => {} }))
+      .toMatchObject({ model: selection.model, providerId: selection.providerId });
+    expect(refreshProvider).toHaveBeenCalledExactlyOnceWith('custom');
+  });
+  it.each([true, false].flatMap(uncertain => ['custom', null].map(providerId => ({ uncertain, providerId }))))
+  ('classifies still missing membership with uncertain=$uncertain and source=$providerId', async ({ uncertain, providerId }) => {
+    const view: ProviderView = { ...missing(), subscriptionReadUnavailable: uncertain ? true : undefined };
+    const refreshProvider = vi.fn(async () => {});
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId }, {
+      readProviders: async () => [view], refreshProvider, assertCurrent: () => {},
+    })).rejects.toThrow(uncertain ? 'MODEL_CATALOG_UNCONFIRMED' : 'MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).toHaveBeenCalledOnce();
+  });
+  it('preserves an already resolvable implicit route and never refreshes an unrelated explicit source', async () => {
+    const views = [missing(), provider('available')];
+    const refreshProvider = vi.fn(async () => {});
+    const deps = { readProviders: async () => views, refreshProvider, assertCurrent: () => {} };
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId: null }, deps))
+      .resolves.toMatchObject({ providerId: 'available', model: selection.model });
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId: 'removed' }, deps))
+      .rejects.toThrow('MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).not.toHaveBeenCalled();
+  });
+  it('keeps suspension authoritative and rejects an owner switch during refresh', async () => {
+    const refreshProvider = vi.fn(async () => {});
+    await expect(resolveScheduledModelSelectionWithRefresh(selection, {
+      readProviders: async () => [{ ...missing(), suspended: true }], refreshProvider, assertCurrent: () => {},
+    })).rejects.toThrow('MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).not.toHaveBeenCalled();
+    let current = true;
+    await expect(resolveScheduledModelSelectionWithRefresh(selection, {
+      readProviders: async () => [missing()], refreshProvider: async () => { current = false; },
+      assertCurrent: () => { if (!current) throw new Error('owner changed'); },
+    })).rejects.toThrow('owner changed');
   });
 });

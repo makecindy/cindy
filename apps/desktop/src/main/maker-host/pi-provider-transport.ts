@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
+import { withCopilotResponsesHeaders } from './copilot-account-url.js';
 import { once } from 'node:events';
 import type { ServerResponse } from 'node:http';
 import { ChatSseTranslator, translateResponsesRequestWithContext, isUnsupportedResponsesFeatureError, unsupportedFeatureErrorBody, type ResponsesRequest } from '@cindy/responses-chat-bridge';
@@ -62,7 +63,9 @@ export async function readBoundedResponseText(
       size += take.byteLength;
     }
   } finally {
-    await reader.cancel().catch(() => undefined);
+    // A cloned response's cancellation waits for the other branch to settle.
+    // The adapter cannot consume that branch until this diagnostic read returns.
+    void reader.cancel().catch(() => undefined);
   }
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8');
 }
@@ -123,6 +126,7 @@ export interface PiProviderTransportOptions {
   catalogPresetId?: string;
   /** Account-specific destination; the catalog row still identifies its adapter. */
   upstream?: string;
+  copilotOAuth?: boolean;
   apiKey: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
@@ -214,6 +218,7 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
   const row = options.row;
   const destination = options.upstream ?? row.upstream;
   assertHostCredentialEndpoint(row.execution.pi.api, destination, options.apiKey);
+  const headers = withProviderAppAttribution(destination, options.headers, row.execution.pi.headers);
   const model: Model<Api> = { id: modelId, name: row.name, provider: providerModelAdapterId(row) ?? options.providerId,
     api: row.execution.pi.api, baseUrl: destination, contextWindow: row.contextWindow ?? 200_000,
     maxTokens: row.maxOutput ?? Math.min(4096, row.contextWindow ?? 200_000), reasoning: row.reasoning ?? (row.efforts?.length ?? 0) > 0,
@@ -224,7 +229,9 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
       [level, row.efforts?.includes(level) ? row.execution.pi.thinkingLevelMap?.[level] ?? level : null])) },
     compat: row.execution.pi.compat,
     samplingParams: row.execution.pi.samplingParams,
-    headers: withProviderAppAttribution(destination, options.headers, row.execution.pi.headers),
+    headers: options.copilotOAuth && row.execution.pi.api === 'openai-responses'
+      ? withCopilotResponsesHeaders(destination, headers)
+      : headers,
   };
   return model;
 }

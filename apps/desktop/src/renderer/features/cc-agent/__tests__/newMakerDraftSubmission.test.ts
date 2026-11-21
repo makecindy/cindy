@@ -33,7 +33,14 @@ import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 import { sshModel, sshNativeCodexProvider } from './sshModelFixtures';
 import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
 import { createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
+import {
+  pluginEnginePermissionMode,
+  pluginEngineSessionCreateFields,
+  type ActivePluginEngine,
+  type PluginEngineSelection,
+} from '@/lib/pluginEngineSelection';
 import { checkDraftBranchBeforeStart } from '../newMakerDraftBranchCheck';
+import { modelGroupOwnerDevice } from '../../model-groups/draftModelGroupRouting';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 const remoteProjectsStore = vi.hoisted(() => ({
@@ -52,6 +59,7 @@ const source = ts.createSourceFile('NewMakerDraftRoute.tsx', readFileSync(
 const callbacks: Record<string, ts.Expression> = {};
 const routeDeclarations: string[] = [];
 const worktreeDeclarations: string[] = [];
+const pluginEngineDeclarations: string[] = [];
 function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
     && ['wtEffectiveSourceBranch', 'wtSourceReady'].includes(node.name.text)) {
@@ -64,9 +72,13 @@ function visit(node: ts.Node) {
     && ['controlledModelRoute', 'deviceLinkRemoteAgentSupported', 'effectiveAgentDeviceId', 'remoteAgentDevices', 'catalogDeviceId'].includes(node.name.text)) {
     routeDeclarations.push(`const ${node.getText(source)};`);
   }
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+    && ['pluginEnginesAllowed', 'rememberedPluginEngineDeviceId'].includes(node.name.text)) {
+    pluginEngineDeclarations.push(`const ${node.getText(source)};`);
+  }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
     const name = ts.isIdentifier(node.name) ? node.name.text : '';
-    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
+    if (['createSession', 'sendWithPluginEngine', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
       callbacks[name] = node.initializer.arguments[0];
     }
   }
@@ -74,6 +86,9 @@ function visit(node: ts.Node) {
 }
 visit(source);
 const worktreeSnapshotCode = ts.transpileModule(worktreeDeclarations.join('\n') + '\nwtRef.current;', {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
+const pluginEngineSelectionCode = ts.transpileModule(pluginEngineDeclarations.join('\n') + '\nrememberedPluginEngineDeviceId;', {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
@@ -148,6 +163,7 @@ async function submit(options: {
   modelGroupRoute?: ModelGroupResolveResult;
   /** 草稿那台电脑的模型目录读到哪一步；默认 ready。 */
   remoteModelListStatus?: 'ready' | 'loading' | 'error';
+  rememberedPluginEngineDeviceId?: string;
   effort?: Effort;
   submittedEffort?: Effort;
   model?: string;
@@ -190,6 +206,9 @@ async function submit(options: {
   titlePreview?: string;
   /** 被控端 create-session 回包里没有会话 id。 */
   remoteCreateEmpty?: boolean;
+  localModelIssueText?: string;
+  activePluginEngine?: ActivePluginEngine | null;
+  dlPluginEngine?: PluginEngineSelection | null;
 } = {}) {
   const providers = options.providers ?? [provider()];
   const backend = options.backendProviders ?? providers;
@@ -282,7 +301,9 @@ async function submit(options: {
   });
   const sendMessage = vi.fn(async (_id, _text, model, effort) => {
     // The session sends on the provider it was created with, as setSessionRuntime records it.
-    admit({ model, effort, agentKind, providerId: createSession.mock.calls.at(-1)?.[0]?.providerId ?? selectedProviderId });
+    if (!options.activePluginEngine) {
+      admit({ model, effort, agentKind, providerId: createSession.mock.calls.at(-1)?.[0]?.providerId ?? selectedProviderId });
+    }
     return true;
   });
   let done!: () => void;
@@ -312,9 +333,29 @@ async function submit(options: {
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
     activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
-    resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
-    bindModelGroupSession: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
+    // 远程控制草稿由被控那台选；这里直接给出那台(或本机)的选路结果。
+    modelGroupOwnerDevice, resolveDraftModelGroup: vi.fn(async () => options.modelGroupRoute ?? null), writeModelGroupRouteNote: noop,
+    bindModelGroupSession: vi.fn(), commitModelGroupDecision: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
+    bindDeviceModelGroupSession: vi.fn(async () => undefined), commitDeviceModelGroupDecision: vi.fn(),
+    writeDeviceModelGroupRouteNote: vi.fn(), buildModelGroupRouteNote: vi.fn(() => ({ pluginName: 'g', outcome: 'routed', modelName: 'm', source: 'model-group' })),
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
+    // 这些用例都走内置 Harness；插件引擎的新建路径由 newMakerDraft.test.ts 覆盖。
+    activePluginEngine: options.activePluginEngine ?? null,
+    dlPluginEngine: options.dlPluginEngine ?? null,
+    setRemoteDraftPluginEngine: vi.fn(),
+    pluginEngineSessionCreateFields,
+    pluginEnginePermissionMode,
+    NO_PROVIDERS: [],
+    hasAcknowledgedRemoteSessionSubscription: async () => true,
+    setAlternateModel: vi.fn(),
+    localModelIssueText: options.localModelIssueText ?? null,
+    rememberedPluginEngineDeviceId: runInNewContext(pluginEngineSelectionCode, {
+      isDeviceLinkDraft: !!options.deviceId,
+      effectiveRemoteHostId: options.remoteHostId,
+      draft: { vendor: agentKind, pluginEngine: options.rememberedPluginEngineDeviceId
+        ? { deviceId: options.rememberedPluginEngineDeviceId }
+        : null },
+    }),
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
@@ -438,7 +479,11 @@ async function submit(options: {
       deviceDraftDefaults: null,
     })(),
   };
-  Object.assign(environment, { draftInitialModel: selection.model, draftInitialEffort: selection.effort });
+  Object.assign(environment, {
+    draftInitialModel: selection.model,
+    draftInitialEffort: selection.effort,
+    sendWithPluginEngine: runInNewContext(executable('sendWithPluginEngine'), environment),
+  });
   const callback = runInNewContext(executable(options.entry === 'goal' ? 'handleCreateGoal' : 'handleSend'), environment);
   try {
     if (options.entry === 'goal') {
@@ -455,6 +500,47 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  it.each(['send', 'goal'] as const)('keeps the draft when the saved route blocks %s', async (entry) => {
+    const result = await submit({ entry, localModelIssueText: 'Saved engine unavailable' });
+    expect(result.ipcCreate).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    if (entry === 'send') expect(result.toastWarning).toHaveBeenCalledWith('Saved engine unavailable');
+    else expect(result.errors).toMatchObject([{ message: 'Saved engine unavailable' }]);
+  });
+
+  it('distinguishes a loading catalog, missing engine, missing source, and missing model', () => {
+    const source = provider();
+    const input = {
+      agent: 'pi' as const, model: modelId, providerId,
+      engineAvailable: true, enginesLoaded: true, enginesLoading: false,
+      providers: [source], providersLoading: false, providersLoadFailed: false,
+    };
+    expect(draftEffort.savedDraftModelIssue({ ...input, providersLoading: true, providers: [] })).toBe('loading');
+    expect(draftEffort.savedDraftModelIssue({ ...input, engineAvailable: false })).toBe('engine');
+    expect(draftEffort.savedDraftModelIssue({ ...input, providersLoadFailed: true, providers: [] })).toBe('checkFailed');
+    expect(draftEffort.savedDraftModelIssue({ ...input, providers: [{ ...source, id: 'other-source' }] })).toBe('source');
+    expect(draftEffort.savedDraftModelIssue({ ...input, providers: [{ ...source, models: { pi: [] } }] })).toBe('model');
+    expect(draftEffort.savedDraftModelIssue(input)).toBeNull();
+  });
+
+  // PR #11698: a restored remote engine is absent from the initial catalogue.
+  // Exercise both real submission callbacks in the existing unit fixture. Other
+  // catalogue cases use built-in engines and cannot catch this fallback.
+  it.each(['send', 'goal'] as const)('preserves %s while the selected remote plugin engine is unresolved', async (entry) => {
+    const result = await submit({ entry, rememberedPluginEngineDeviceId: 'engine-computer' });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.setGoal).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    if (entry === 'send') expect(result.toastWarning).toHaveBeenCalledWith('newChat.pluginEngines.unavailable');
+    else expect(result.errors[0]).toMatchObject({ message: 'newChat.pluginEngines.unavailable' });
+  });
+  // After moving the draft to another task computer, plugin engines are outside
+  // that composer's scope. A formerly selected one must not block its route.
+  it.each(['send', 'goal'] as const)('allows %s after switching the task computer with a remembered plugin engine', async (entry) => {
+    const result = await submit({ entry, deviceId: 'task-computer', rememberedPluginEngineDeviceId: 'engine-computer' });
+    expect(result.invokeRemote).toHaveBeenCalledWith('task-computer', 'maker:create-session', [expect.objectContaining({ agentKind: 'pi' })]);
+  });
   // Unit regression: hold both real submission boundaries open. The previous
   // route only opened after both resolved and navigated even after the user left.
   it('opens one task while create and attachments are pending, then sends the displayed message into it', async () => {
@@ -889,6 +975,19 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'share:fixture', providerId });
   });
+  // Unit: an immediate 402 must see the binding on the very first new-task dispatch.
+  it('binds a local model group before dispatch and commits its decision after acceptance', async () => {
+    const route = { agentKind: 'pi' as const, model: modelId, providerId };
+    const result = await submit({ entry: 'send', modelGroupRoute: {
+      outcome: 'routed', groupName: 'Fixture', modelName: modelId, sourceName: 'Local',
+      route, why: 'order', quota: null, trace: [], decisionId: 'decision',
+    } });
+    const { bindModelGroupSession, commitModelGroupDecision } = result.environment;
+    expect(bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, route);
+    expect(bindModelGroupSession.mock.invocationCallOrder[0]).toBeLessThan(result.sendMessage.mock.invocationCallOrder[0]);
+    expect(commitModelGroupDecision.mock.invocationCallOrder[0]).toBeGreaterThan(result.sendMessage.mock.invocationCallOrder[0]);
+  });
+
   // 模型组选到另一台电脑上的来源：两条新建路径都要把运行位置带进任务，登录检查读那台的目录，
   // 撞配额用的记录也带上位置。之前只有插件选路覆盖了这条路径。Tier: unit。
   it.each(['send', 'goal'] as const)('creates %s on the computer a model group picked', async (entry) => {
@@ -902,6 +1001,22 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: 'dev-2' });
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+  });
+  // model-groups.md §6.3 / unit：远程控制另一台电脑时由那台的模式选路；那台建成任务后，记录与说明都请那台写，
+  // 不写进本机的撞配额记录。失效后果：本机记下一个不存在的任务，或那台的任务没有说明、撞配额不提议。
+  it.each(['send', 'goal'] as const)('asks the controlled computer to record its model group pick for %s', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'Host', modelName: modelId, sourceName: 'Host source',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'order', quota: null, trace: [], decisionId: 'host-receipt',
+    };
+    const result = await submit({ entry, deviceId: 'host', providers: [provider(providerId, ['medium'])], modelGroupRoute });
+    expect(result.errors).toEqual([]);
+    const env = result.environment;
+    expect(env.resolveDraftModelGroup).toHaveBeenCalledWith({ type: 'route', id: 'r1' }, expect.objectContaining({ draftDeviceId: 'host' }));
+    expect(env.bindDeviceModelGroupSession).toHaveBeenCalledWith('host', expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+    expect(env.writeDeviceModelGroupRouteNote).toHaveBeenCalledWith('host', expect.any(String), expect.objectContaining({ source: 'model-group' }));
+    expect(env.bindModelGroupSession).not.toHaveBeenCalled();
+    expect(env.commitModelGroupDecision).not.toHaveBeenCalled();
   });
   // #10240 / unit: real creation callbacks must not commit a model-group choice
   // after a cancelled auth gate or a rejected create. Success-only coverage missed both.
@@ -1143,5 +1258,72 @@ describe.each(['send', 'goal'] as const)('%s draft model identity', entry => {
     expect(result.errors).toEqual([]);
     expect(result.ipcCreate.mock.calls[0][0].effort).toBe('medium');
     expect(result.environment.chatPrefs.effort).toBe('medium');
+  });
+});
+
+// 生产入口与可观察结果：NewMakerDraftRoute 真实的 handleSend + sendWithPluginEngine；在 A 电脑切到 B 电脑工作时，
+// 选中 B 电脑的插件引擎会经 maker:create-session 创建 acp 会话并直发首条(含 / 命令)，目录未就绪时拦住发送不退回内置模型。
+// 规则依据：acp-plugin-bridge 远程控制建任务协议与「插件引擎自己解释 / 命令；未确认引擎时不把消息交给未选择的模型」。
+// 覆盖缺口：此前 Desktop 新建页对 isDeviceLinkDraft 禁用了插件引擎且 sendWithPluginEngine 只支持本机 createSession。
+// 最小失败输入与 tier：unit；deviceId='task-b' 选插件引擎仍调本机 createSession、把 /plan 分流到 setPending，或目录未到时落入内置模型。
+describe('controlled-computer plugin engine submission', () => {
+  it('creates an acp session on computer B and sends a slash first message directly without local session creation', async () => {
+    const activePluginEngine: ActivePluginEngine = {
+      engine: {
+        key: 'agy-plugin:agy',
+        providerId: 'acp-plugin:agy-plugin:agy',
+        ghostId: 'agy-plugin',
+        harnessId: 'agy',
+        name: 'Antigravity',
+        availability: { state: 'available' },
+        models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'high' }],
+        permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Full access' }],
+        defaultPermissionMode: 'default',
+      },
+      modelId: 'gemini-3-pro',
+      effort: 'high',
+      permissionMode: 'default',
+    };
+    const result = await submit({
+      deviceId: 'task-b',
+      message: '/plan inspect repo',
+      activePluginEngine,
+      createRemote: async (id) => ({ sessionId: id, workDir: '/peer/dialogue' }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.invokeRemote).toHaveBeenCalledWith('task-b', 'maker:create-session', [
+      expect.objectContaining({
+        id: 'remote-created',
+        agentKind: 'acp',
+        providerId: 'acp-plugin:agy-plugin:agy',
+        model: 'gemini-3-pro',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+      }),
+    ]);
+    expect(result.sendMessage).toHaveBeenCalledWith(
+      'remote-created',
+      '/plan inspect repo',
+      'gemini-3-pro',
+      'high',
+      'default',
+      '/peer/dialogue',
+      [],
+      [],
+      expect.any(Object),
+    );
+    expect(result.setPending).not.toHaveBeenCalled();
+  });
+
+  it('blocks sending when computer B’s selected plugin engine is unavailable instead of falling through to a built-in model', async () => {
+    const result = await submit({
+      deviceId: 'task-b',
+      dlPluginEngine: { providerId: 'acp-plugin:agy-plugin:agy', modelId: 'gemini-3-pro' },
+    });
+    expect(result.toastWarning).toHaveBeenCalledWith('newChat.pluginEngines.unavailable');
+    expect(result.invokeRemote).not.toHaveBeenCalled();
+    expect(result.createSession).not.toHaveBeenCalled();
   });
 });

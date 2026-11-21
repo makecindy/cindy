@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "위젯 추가",
+  "widgetGuideIntro": "위젯은 홈 화면에 놓는 작은 카드예요. Cindy를 열지 않고도 구독 잔여량과 오늘의 토큰 사용량을 확인할 수 있어요.",
+  "widgetGuideExample": "홈 화면에 Cindy 위젯과 앱 아이콘이 나란히 놓여 있습니다.",
+  "widgetGuidePicker": "편집 → 위젯 추가",
+  "widgetGuideIOS": "홈 화면의 빈 곳을 길게 누르고 {{picker}}를 탭하세요.\n\nCindy를 검색하고 ‘구독 남은 양’ 또는 ‘일일 사용량’을 선택한 다음 ‘위젯 추가’를 탭하세요.",
+  "widgetGuideAndroid": "홈 화면의 빈 곳을 길게 누르고 ‘위젯’을 탭하세요.\n\nCindy의 ‘구독 남은 양’ 또는 ‘일일 사용량’을 홈 화면으로 드래그하세요.",
+  "widgetGuideHome": "홈 화면",
+  "widgetGuideLock": "잠금 화면",
+  "widgetGuideLockIOS": "잠금 화면에도 추가할 수 있어요. 잠금 화면을 길게 누르고 ‘사용자화’를 탭하세요.",
+  "widgetGuideDismiss": "확인",
+  "usageOther": "기타",
+  "usageTitle": "사용량 개요",
+  "usageOnlyDevice": "{{name}}만",
+  "usagePlans": "요금제 잔여 한도",
+  "usageBudget": "이번 기간 남은 예산",
   "management": {
     "title": "기기 관리",
     "openDevice": "{{name}} 기기 상세 정보 보기",
@@ -425,6 +440,7 @@
       "filterEmptyCopy": "표시 설정의 필터에서 조정하거나 재설정할 수 있습니다.",
       "filterTeammatesHeading": "파트너",
       "filterAnySource": "전체",
+      "filterHideAutomations": "자동화 작업 숨기기",
       "filterHideAllTeammates": "모두 숨기기",
       "filterSelectedTeammates": "{{count}}명 선택",
       "inbox": {
@@ -445,6 +461,7 @@
         "thisEvening": "오늘 저녁",
         "tomorrow": "내일",
         "nextWeek": "다음 주",
+        "indefinite": "무기한",
         "custom": "직접 설정…",
         "invalidTime": "1년 이내의 미래 날짜와 시간을 선택하세요."
       },
