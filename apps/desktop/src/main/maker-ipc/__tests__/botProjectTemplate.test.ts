@@ -155,6 +155,34 @@ describe('applyTeammateTemplate', () => {
         '### In a group\n- Never create a task.\n### Report back\n- Leave out from the standard above: Create a one-time check for long work.');
     });
 
+    // Review r4652615946: nested sections keep their whole path, not just the nearest heading.
+    it('keeps the full section path of a moved rule', async () => {
+      const standard = '---\nname: hand-off\n---\n\n# Hand-off\n\n## In a group\n\n- Answer whoever asked.\n';
+      await setUp(`${standard}\n### When idle\n\n- Never create a task.\n`, true, standard);
+      await upgrade(2, `${standard}\n${OWN_RULES_HEADING}\n\nRules go here.\n`, async (_relative, hash) => hash === sha(standard) ? standard : null);
+      const text = await read();
+      expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain('### In a group\n#### When idle\n- Never create a task.');
+    });
+
+    // Review r4652615952: a skill saved with CRLF line endings still has its frontmatter merged.
+    it('reads a skill saved with CRLF line endings', async () => {
+      const mine = oldStandard.replace('name: hand-off\n', 'name: hand-off\ndisable-model-invocation: true\n').replace(/\n/g, '\r\n');
+      await setUp(mine, true);
+      await upgrade(2, newStandard(), async (_relative, hash) => hash === sha(oldStandard) ? oldStandard : null);
+      const text = await read();
+      expect(/^---\n([\s\S]*?)\n---\n/.exec(text)![1]).toContain('disable-model-invocation: true');
+      expect(text.slice(text.indexOf(OWN_RULES_HEADING))).not.toContain('disable-model-invocation');
+    });
+
+    // Review r4652615940: a fenced code block moves whole; a `#` comment inside it is not a heading.
+    it('moves a fenced code block whole', async () => {
+      const block = '```sh\n# Ask the owner before executing\npnpm release\n```';
+      await setUp(`${oldStandard}\n## Owner-approved commands\n\n${block}\n`, true);
+      await upgrade(2, newStandard(), async (_relative, hash) => hash === sha(oldStandard) ? oldStandard : null);
+      const text = await read();
+      expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain(`### Owner-approved commands\n${block}`);
+    });
+
     it('keeps an own skill that predates the template, for the teammate to tidy', async () => {
       await setUp('---\nname: hand-off\n---\n\n# Hand-off\n\n- Pick the project.\n- Design reviews go straight to the owner.\n', false);
       await upgrade(2, newStandard());
