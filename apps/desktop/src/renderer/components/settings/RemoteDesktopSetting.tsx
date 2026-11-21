@@ -139,7 +139,9 @@ export function RemoteDesktopSetting() {
             {t(
               windowsSupport === 'ready'
                 ? 'remoteDesktop.windowsDisable'
-                : 'remoteDesktop.windowsEnable',
+                : windowsSupport === 'stopped'
+                  ? 'remoteDesktop.windowsStart'
+                  : 'remoteDesktop.windowsEnable',
             )}
           </Button>
         </div>

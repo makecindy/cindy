@@ -40,6 +40,14 @@ export interface DeviceLinkSettings {
   agentNetPendingSwitch?: { switchId: string; controllerId: string; previous: boolean; deadlineAt: number; pid: number; restoring?: boolean } | null;
   /** Full desktop viewing/input is a separate, local opt-in. */
   remoteDesktopEnabled: boolean;
+  /**
+   * 锁屏控制「用户已授权开启」意图持久化（issue #11862 方案 A）。
+   * 授权流程成功后置 true，移除服务置 false。用途：Windows 服务为
+   * SERVICE_DEMAND_START，重启后 STOPPED 而 helper `--status` 把「未注册」
+   * 与「已注册未运行」都报 missing；探测拿不到 SCM 注册态（sc 查询失败）时，
+   * 用本意图回退区分「未安装」与「已安装未运行」，避免设置页回退成从未开启。
+   */
+  lockScreenControlEnabled: boolean;
   remoteControlEnabled: boolean;
   /**
    * 「保持电脑唤醒」:开启后 main 用 powerSaveBlocker('prevent-app-suspension')
@@ -68,6 +76,7 @@ const DEFAULTS: DeviceLinkSettings = {
   agentNetEnabled: false,
   agentNetOnlyEncrypted: false,
   remoteDesktopEnabled: false,
+  lockScreenControlEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
@@ -89,6 +98,7 @@ function normalize(raw: unknown): DeviceLinkSettings {
     ...optional('agentNetChangedBy', normalizeAgentNetChange(r.agentNetChangedBy)),
     ...optional('agentNetPendingSwitch', normalizeAgentNetPendingSwitch(r.agentNetPendingSwitch)),
     remoteDesktopEnabled: r.remoteDesktopEnabled === true,
+    lockScreenControlEnabled: r.lockScreenControlEnabled === true,
     remoteControlEnabled: r.remoteControlEnabled === true,
     keepAwake: r.keepAwake === true,
     revokedControllers: Array.isArray(r.revokedControllers)

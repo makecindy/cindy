@@ -1449,7 +1449,11 @@ export function registerRemoteDesktopIpc(
       overlay: controlledOverlay.visible,
       permissionGuide: permissions.guideOpen,
       ...(checkWindowsSupport === true
-        ? { windowsSupport: await readWindowsDesktopSupport() }
+        ? {
+            windowsSupport: await readWindowsDesktopSupport(
+              readDeviceLinkSettings().lockScreenControlEnabled,
+            ),
+          }
         : {}),
     };
   });
@@ -1473,6 +1477,10 @@ export function registerRemoteDesktopIpc(
       windowsSetupBusy = false;
     }
     windowsAvailable = enabled;
+    // Issue #11862 方案 A：持久化「已授权开启」意图（成功后记录）。服务
+    // SERVICE_DEMAND_START，重启后 STOPPED 且 helper --status 报 missing；
+    // sc 探测失败时用本意图回退区分「未安装」与「已安装未运行」。
+    await writeDeviceLinkSetting('lockScreenControlEnabled', enabled);
   });
   ipcMain.handle(DESKTOP_LOCAL.ENABLE, async (event, enabled: unknown) => {
     assertTrustedAppRendererEvent(event);

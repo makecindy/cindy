@@ -8,6 +8,11 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { createLogger } from '../logger';
 import type { WindowsDesktopSupport } from '../../shared/remoteDesktop';
+import {
+  classifyWindowsSupport,
+  parseServiceRegistration,
+  type WindowsServiceRegistration,
+} from './windowsSupportState';
 
 const exec = promisify(execFile);
 const log = createLogger('remote-desktop:windows');
@@ -232,7 +237,36 @@ export class WindowsDesktopSetupError extends Error {
   }
 }
 
-export async function readWindowsDesktopSupport(): Promise<WindowsDesktopSupport | undefined> {
+/**
+ * SCM registration verdict for any Cindy lock-screen service.
+ *
+ * `sc query state= all` lists every service without needing the installation
+ * id (scanning the `CindyRemoteDesktop-` prefix keeps us independent of the
+ * Rust-side id derivation) and works for standard users. ~70ms / ~110KB on a
+ * developer machine; only run when the helper's `--status` word is `missing`.
+ */
+async function readWindowsServiceRegistration(): Promise<WindowsServiceRegistration> {
+  try {
+    const { stdout } = await exec('sc', ['query', 'state=', 'all'], {
+      timeout: 5_000,
+      maxBuffer: 8 * 1024 * 1024,
+      windowsHide: true,
+    });
+    return parseServiceRegistration(stdout);
+  } catch (error) {
+    log.warn('sc query state=all failed', error instanceof Error ? error.message : error);
+    return 'unknown';
+  }
+}
+
+/**
+ * @param lockScreenControlEnabled persisted "user authorized lock-screen
+ *   control" intent (device-link setting); consulted only when the SCM probe
+ *   itself fails, so a working `sc` always decides over the stored intent.
+ */
+export async function readWindowsDesktopSupport(
+  lockScreenControlEnabled = false,
+): Promise<WindowsDesktopSupport | undefined> {
   if (process.platform !== 'win32') return undefined;
   let stdout: string;
   try {
@@ -258,18 +292,29 @@ export async function readWindowsDesktopSupport(): Promise<WindowsDesktopSupport
     try {
       const connection = await openWindowsDesktopConnection({ mode: 'probe' });
       connection.close();
+      return classifyWindowsSupport('ready', { pipeProbe: 'ok' });
     } catch (error) {
       log.warn('service is running but refused a pipe probe', error);
-      return 'missing';
+      return classifyWindowsSupport('ready', { pipeProbe: 'refused' });
     }
-    return 'ready';
   }
-  if (status === 'missing') return 'missing';
+  if (status === 'missing') {
+    // Issue #11862: `--status` prints `missing` for BOTH "not registered" and
+    // "registered but not running" (service::pid requires SERVICE_RUNNING and
+    // the service is SERVICE_DEMAND_START, so it is stopped after a reboot).
+    // Ask SCM which one it is; fall back to the persisted authorization only
+    // when the probe itself fails.
+    const registration = await readWindowsServiceRegistration();
+    return classifyWindowsSupport('missing', {
+      registration,
+      authorized: lockScreenControlEnabled,
+    });
+  }
   // Anything else means the helper could not even work out where it would
   // install — a broken or incomplete copy of Cindy rather than a setup the
   // user can complete, so it reads as unavailable with the step in the log.
   log.warn('lock-screen setup unavailable:', readWindowsDesktopDetail(stdout) ?? status);
-  return 'unavailable';
+  return classifyWindowsSupport(status);
 }
 
 export async function configureWindowsDesktopSupport(enabled: boolean): Promise<void> {

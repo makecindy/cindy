@@ -1138,6 +1138,8 @@
     "windowsmissing": "许操作锁定画面与管理员提示，须管理员授权。",
     "windowsinstallRequired": "寻不得 Cindy 之安装位置，请重启 Cindy 而后再试。",
     "windowsunavailable": "系统服务不可用，请重装 Cindy 而后再试。",
+    "windowsstopped": "锁定画面之役未运行或不应（重启电脑后常见），可重启之。",
+    "windowsStart": "重启其役",
     "windowsEnable": "准而启之",
     "windowsDisable": "除去服务",
     "windowsError": "授权未竟，请于此机再试。",

@@ -88,7 +88,18 @@ export type DesktopHostReply =
         | 'DESKTOP_VIDEO_STOPPED';
     }
   | null;
-export type WindowsDesktopSupport = 'ready' | 'missing' | 'installRequired' | 'unavailable';
+/**
+ * Lock-screen control service state reported to settings.
+ * `stopped` = the service is registered but not running (issue #11862: after a
+ * reboot the on-demand service sits stopped while `--status` can only say
+ * "missing", which settings used to render as never-authorized).
+ */
+export type WindowsDesktopSupport =
+  | 'ready'
+  | 'missing'
+  | 'stopped'
+  | 'installRequired'
+  | 'unavailable';
 export interface RemoteDesktopApi {
   state(checkWindowsSupport?: boolean): Promise<DesktopLocalState>;
   enable(enabled: boolean): Promise<void>;
