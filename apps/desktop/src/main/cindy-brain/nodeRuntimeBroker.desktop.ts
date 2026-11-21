@@ -14,6 +14,30 @@ export type GhostNodeRuntimeBrokerDeps = Omit<SharedBrokerDeps, 'spawnProcess' |
   Partial<Pick<SharedBrokerDeps, 'spawnProcess' | 'spawnChildProcess'>>;
 type UtilityFork = typeof utilityProcess.fork;
 
+/** Only Desktop plugin processes inherit the CLI's existing HTTP proxy route. */
+function desktopPluginEnvironment(ghostId: string): NodeJS.ProcessEnv {
+  const env = pluginNodeEnvironment(ghostId);
+  const endpoints: NodeJS.ProcessEnv = {};
+  const exclusions: NodeJS.ProcessEnv = {};
+  for (const key of ['http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY', 'no_proxy', 'NO_PROXY']) {
+    const value = process.env[key];
+    if (!value) continue;
+    if (key.toLowerCase() === 'no_proxy') {
+      // A malformed bypass list must never silently redirect private traffic.
+      const entries = value.split(/[,\t ]+/).filter(Boolean);
+      if (!entries.every(entry => /^[a-z0-9_.*:[\]-]+(?:\/\d{1,3})?$/i.test(entry))) return env;
+      exclusions[key] = value;
+      continue;
+    }
+    // Validate the raw authority too: URL parsing alone normalizes paths and whitespace.
+    if (/^https?:\/\/(?:[a-z0-9.-]+|\[[a-f0-9:.]+\])(?::\d+)?\/?$/i.test(value)
+        && URL.canParse(value)) {
+      endpoints[key] = value;
+    }
+  }
+  return Object.keys(endpoints).length ? Object.assign(env, endpoints, exclusions) : env;
+}
+
 /**
  * 用 Electron 官方 utilityProcess 承载第三方 Node 代码。
  *
@@ -29,7 +53,7 @@ export function createUtilityNodeWorkerProcess(
   childArgs?: string[],
 ): NodeWorkerProcess {
   const isChild = childArgs !== undefined;
-  const env = pluginNodeEnvironment(ghostId);
+  const env = desktopPluginEnvironment(ghostId);
   const workerEntry = path.join(__dirname, 'nodeRuntimeWorkerProcess.desktop.js');
   const forkArgs = isChild
     ? [entryPath, GHOST_NODE_CHILD_MODE_FLAG, ...childArgs]

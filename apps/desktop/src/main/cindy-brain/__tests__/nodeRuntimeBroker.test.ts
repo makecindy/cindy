@@ -515,6 +515,31 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     });
   });
 
+  // #11953: exercise the environment actually handed to the Desktop fork.
+  it.each([
+    ['http://127.0.0.1:18080', true],
+    ['http://localhost:99999', false],
+    [undefined, false],
+  ] as const)('passes safe CLI proxy routes through the Desktop fork (%s)', (endpoint, allowed) => {
+    const bypass = 'localhost,127.0.0.1,::1';
+    for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY']) vi.stubEnv(key, undefined);
+    vi.stubEnv('http_proxy', endpoint);
+    vi.stubEnv('https_proxy', 'http://demo:synthetic@localhost:8080');
+    vi.stubEnv('no_proxy', bypass);
+    const fork = vi.fn((_entry: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => new FakeUtilityProcess());
+    const worker = createUtilityNodeWorkerProcess('demo.cjs', os.tmpdir(), 'demo', fork as never);
+    try {
+      const env = fork.mock.calls[0][2].env;
+      expect(env.http_proxy ?? env.HTTP_PROXY).toBe(allowed ? endpoint : undefined);
+      expect(env.no_proxy ?? env.NO_PROXY).toBe(allowed ? bypass : undefined);
+      expect(env.https_proxy).toBeUndefined();
+      expect(env.HTTPS_PROXY).toBeUndefined();
+    } finally {
+      worker.kill();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('不依赖 RunAsNode，过滤宿主秘密，并只用 parentPort 推送 stdin', () => {
     vi.stubEnv('PATH', '/usr/bin');
     vi.stubEnv('NODE_OPTIONS', '--inspect=0.0.0.0:9229');
