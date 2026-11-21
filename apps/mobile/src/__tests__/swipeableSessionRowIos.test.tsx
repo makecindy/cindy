@@ -225,6 +225,25 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
     release("left");
     expect(controls.onArchive).toHaveBeenCalledOnce();
   });
+  // Unit regression: a narrow row settles beyond 55% when its action panel opens.
+  it.each([
+    ["left", -1, "onArchive"],
+    ["right", 1, "onMarkRead"],
+  ] as const)("keeps the %s panel unarmed when it settles on a 240-point row", (direction, sign, action) => {
+    runtime.rowWidth = 240;
+    render("a");
+    drag(sign * 100);
+    release(direction);
+    drag(sign * 148); // The native panel settles after release.
+    drag(sign * 159);
+    release(direction);
+    expect(runtime.timing).not.toHaveBeenCalledWith(1, expect.anything());
+    expect(controls[action]).not.toHaveBeenCalled();
+    drag(sign * 160);
+    expect(runtime.timing).toHaveBeenCalledWith(1, expect.anything());
+    release(direction);
+    expect(controls[action]).toHaveBeenCalledOnce();
+  });
   it.each([
     ["left", -260, "onArchive"],
     ["right", 260, "onMarkRead"],

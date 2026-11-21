@@ -143,15 +143,15 @@ afterEach(() => act(() => root.unmount()));
 // the old import/substring/layout checks never invoked a gesture or React cleanup.
 describe('classic swipe row lifecycle', () => {
   // Unit regression: the floating task list can be narrower than the app window.
-  it('archives at the measured task width threshold in a narrow pane', () => {
+  it.each([[320, 176], [240, 160]])('archives a %i-point row at %i points', (width, threshold) => {
     runtime.width = 900;
-    runtime.rowWidth = 320;
+    runtime.rowWidth = width;
     render();
     act(() => runtime.props.onSwipeableOpenStartDrag());
-    runtime.release = -175;
+    runtime.release = -(threshold - 1);
     act(() => runtime.props.onSwipeableWillOpen('right'));
     expect(controls.onArchive).not.toHaveBeenCalled();
-    runtime.release = -176;
+    runtime.release = -threshold;
     act(() => runtime.props.onSwipeableWillOpen('right'));
     expect(controls.onArchive).toHaveBeenCalledOnce();
   });

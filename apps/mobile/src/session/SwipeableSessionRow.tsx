@@ -1,5 +1,5 @@
 import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
-import { FULL_SWIPE_RATIO, useTaskRowSwipeWidth } from './useTaskRowSwipeWidth';
+import { fullSwipeDistance, useTaskRowSwipeWidth } from './useTaskRowSwipeWidth';
 /**
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
@@ -60,7 +60,7 @@ const LABEL_ICON_OVERLAP = spacing.sm;
 function actionLabelWidth(rowWidth: number): number {
   return Math.max(
     0,
-    rowWidth * FULL_SWIPE_RATIO - BUTTON_GAP * 2 - BUTTON_SIZE + LABEL_ICON_OVERLAP - spacing.lg,
+    fullSwipeDistance(rowWidth) - BUTTON_GAP * 2 - BUTTON_SIZE + LABEL_ICON_OVERLAP - spacing.lg,
   );
 }
 /**
