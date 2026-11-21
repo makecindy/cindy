@@ -5246,7 +5246,7 @@ describe('AgentInputCoordinator send transaction', () => {
   // L343 / unit with SQLite. The real Desktop adapter must update the original
   // row after releasing the error. The old test only manually cleared the error.
   it.each(['live', 'changed-owner', 'wrong-turn', 'cleared', 'compact-only'] as const)(
-    'releases the queue and writes the oversized notice only to the current visible input (%s)',
+    'releases the queue after context overflow and only updates the current visible input (%s)',
     async (mode) => {
       const h = createHarness();
       const sid = 'oversized-notice';
@@ -5258,7 +5258,7 @@ describe('AgentInputCoordinator send transaction', () => {
           CREATE TABLE messages (id TEXT, session_id TEXT, client_id TEXT, role TEXT, content TEXT,
             tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, rewind_at INTEGER, created_at INTEGER);
           INSERT INTO sessions VALUES ('oversized-notice', 'active', NULL), ('other-task', 'active', NULL);
-          INSERT INTO messages VALUES ('old-row', 'oversized-notice', 'original', 'user', '"first prompt"',
+          INSERT INTO messages VALUES ('old-row', 'oversized-notice', 'original', 'user', '"first input"',
             NULL, '{"sourceDevice":{"platform":"ios"}}', NULL, NULL, 100);
           INSERT INTO messages VALUES ('other-row', 'other-task', 'original', 'user', '"other prompt"',
             NULL, NULL, NULL, NULL, 100);`);
@@ -5270,7 +5270,7 @@ describe('AgentInputCoordinator send transaction', () => {
       try {
         const claim = { inputClientId: 'original', instanceId: 'harness-session', generation: 3 };
         h.setTurnGeneration(claim.generation);
-        h.coordinator.enqueue(sid, makeItem('original', 'first prompt'));
+        h.coordinator.enqueue(sid, makeItem('original', 'first input'));
         await flush();
         if (mode === 'compact-only') {
           await h.coordinator.compact(sid, makeItem('compact', '').createOpts);
@@ -5306,14 +5306,14 @@ describe('AgentInputCoordinator send transaction', () => {
         await flush();
         const sent = () => h.sendToAgent.mock.calls.map(([, message]) =>
           typeof message === 'string' ? message : message.content);
-        expect(sent()).toEqual(['first prompt', mode === 'compact-only' ? '/compact' : 'second']);
+        expect(sent()).toEqual(['first input', mode === 'compact-only' ? '/compact' : 'second']);
         if (mode === 'live') {
           h.setRunning(false);
           h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
             sessionInstanceId: claim.instanceId, sessionTurnGeneration: claim.generation + 1,
           });
           await flush();
-          expect(sent()).toEqual(['first prompt', 'second', 'third']);
+          expect(sent()).toEqual(['first input', 'second', 'third']);
         }
         if (mode === 'changed-owner') setCurrentDbClient(otherClient, 'replacement');
         if (mode === 'cleared') old.exec("UPDATE sessions SET cleared_at = 100 WHERE id = 'oversized-notice'");
@@ -5331,7 +5331,7 @@ describe('AgentInputCoordinator send transaction', () => {
           expect(refreshed).toHaveBeenCalledExactlyOnceWith(sid, expect.objectContaining({
             clientId: 'original',
             agentMeta: { sourceDevice: { platform: 'ios' }, inputNotice: 'oversized-input-skipped' },
-          }), null);
+          }), null, { localWindowsOnly: true });
         } else {
           expect(refreshed).not.toHaveBeenCalled();
         }

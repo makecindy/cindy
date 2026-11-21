@@ -94,7 +94,8 @@ export function isContextOverflowErrorData(data: unknown, agentKind?: string): b
 function isPromptLengthRejection(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   const { reason, message, sdkError } = data as Record<string, unknown>;
-  // Recoverable history/compact/option errors are distinct from a prompt limit.
+  // The current input or accumulated context can hit the context limit.
+  // Other recoverable failures, such as invalid compact data, use their own paths.
   if (reason != null && reason !== CONTEXT_OVERFLOW_REASON) return false;
   const diagnostics = [message, sdkError].filter((value): value is string => typeof value === 'string');
   return !diagnostics.some(isRemoteCompactEncryptedContentError) &&

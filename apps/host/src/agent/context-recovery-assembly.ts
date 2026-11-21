@@ -38,6 +38,7 @@ import { findLatestContextRebuildMeta, findLatestUserMessageForRebuild } from '.
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import { dbToMakerAgentKind } from '../../../desktop/src/shared/agentKindConversion.ts';
 import { DEFAULT_MODEL_COMPACTION_PCT } from '../../../desktop/src/shared/modelContextLimit.ts';
+import { MESSAGE_METADATA_REFRESH } from '../events.mjs';
 import { explicitPorts } from './explicit-ports.ts';
 
 type Log = ContextOverflowRolloverDeps['log'];
@@ -117,7 +118,11 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
         if (getCurrentDbClientSnapshot() !== owner) return;
         const row = await markOversizedInputSkippedRow(owner.client, sessionId, clientId);
         if (row && getCurrentDbClientSnapshot() === owner) {
-          host.publish({ type: 'message_created', sessionId, messageId: row.id, message: messageToCamel(row) });
+          const event = {
+            type: 'message_created', sessionId, messageId: row.id, message: messageToCamel(row),
+            [MESSAGE_METADATA_REFRESH]: true,
+          };
+          host.publish(event);
         }
       }).catch(() => host.log.warn('Could not save the skipped input notice', { sessionId }));
     },

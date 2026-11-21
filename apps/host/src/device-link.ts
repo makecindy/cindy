@@ -32,6 +32,7 @@ import { checkRemoteWorkingDir, remoteWorkingDirRejectionToIpcError } from '../.
 import { desktopTransferCodec } from '../../desktop/src/main/device-link/transferCodec.js';
 import { clearControllerPlatforms, setControllerPlatform } from '../../desktop/src/main/device-link/controllerPlatform.js';
 import { createHostWebSocketAgent } from './outbound.mjs';
+import { MESSAGE_METADATA_REFRESH } from './events.mjs';
 import { createDnsFallbackLookup } from '../../desktop/src/main/device-link/dnsFallbackLookup.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
@@ -566,7 +567,12 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       case 'interaction_request': emit(MAKER_PUSH.INTERACTION_REQUEST, { sessionId: id, request: event.request }); break;
       case 'interaction_dismissed': emit(MAKER_PUSH.INTERACTION_DISMISSED, { sessionId: id, requestId: event.requestId, reason: event.reason }); break;
       case 'input_projection': emit(MAKER_PUSH.INPUT_PROJECTION, event.projection); break;
-      case 'message_created': emit('local-db:messages:created', { sessionId: id, message: event.message }); break;
+      case 'message_created':
+        // Existing user rows can consume a pending reply's position on older controllers.
+        if (event[MESSAGE_METADATA_REFRESH] !== true) {
+          emit('local-db:messages:created', { sessionId: id, message: event.message });
+        }
+        break;
       case 'project_aliases_changed':
         emit('local-db:project-aliases:changed', {});
         if (event.catalogChanged === true) emit('local-db:recent-workdirs:changed', {});

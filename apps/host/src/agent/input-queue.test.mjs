@@ -5024,28 +5024,51 @@ for (const full of [false, true]) {
   });
 }
 
-// L343 / integration. The queue gives a rejected prompt's turn to the next input.
-// A fresh reader must find its notice on the original user row, once, even after
-// a duplicate terminal. Real recovery assembly and SQLite, fixture provider.
-for (const writeFails of [false, true]) {
-  test('L343 keeps the ordered queue moving after an oversized input: ' + (writeFails ? 'notice write fails' : 'history reopens with one notice'), async t => {
+// L343 / integration. After context overflow the queue gives the rejected turn
+// to the next input. An already full history can also reject a short input.
+// The persisted row stays unique even after a duplicate terminal.
+for (const { label, writeFails, fullHistory } of [
+  { label: 'history reopens with one notice', writeFails: false, fullHistory: false },
+  { label: 'notice write fails', writeFails: true, fullHistory: false },
+  { label: 'full existing history rejects a short input', writeFails: false, fullHistory: true },
+]) {
+  test('L343 keeps the ordered queue moving after context overflow: ' + label, async t => {
     const r = await assembledRecovery(lifoCleanup(t));
-    const id = 'oversized-notice';
+    const id = 'context-full-notice';
+    const firstText = fullHistory ? '继续' : 'first input';
     await r.db.createTask(id);
+    if (fullHistory) {
+      await r.db.persistMessage(id, { clientId: 'prior-input', role: 'user', content: 'Research the earlier material' });
+      await r.db.persistMessage(id, { clientId: 'prior-output', role: 'assistant', content: 'Prior research and tool results' });
+    }
     if (writeFails) r.db.db.exec(`CREATE TRIGGER reject_input_notice BEFORE UPDATE OF agent_meta ON messages
       WHEN NEW.agent_meta LIKE '%oversized-input-skipped%' BEGIN SELECT RAISE(ABORT, 'notice fixture write failed'); END;`);
-    for (const [clientId, text] of [['original', 'first prompt'], ['next', 'second'], ['last', 'third']]) {
+    for (const [clientId, text] of [['original', firstText], ['next', 'second'], ['last', 'third']]) {
       await r.h.queue.enqueue(id, { clientId, text });
       if (clientId === 'original') await waitFor(() => r.h.maker.getSession(id)?.sent.length === 1);
     }
     const live = r.h.maker.getSession(id);
-    const terminal = { type: 'error', data: OVERFLOW, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId };
+    if (fullHistory) {
+      // The fixture provider reports the full window only once this input
+      // reaches it. The subsequent enqueue dispatch can rebuild that window.
+      live.getUsageSnapshot = () => ({ contextTokens: 200_000, contextWindow: 200_000 });
+      r.db.db.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run('history-before-overflow', id);
+    }
+    const durableInput = (await readMessagesList(id)).find(row => row.clientId === 'original');
+    assert.ok(durableInput, 'the first send already has a durable user row');
+    const { rowid: _historyOrder, ...originalRow } = durableInput;
+    const data = fullHistory ? { ...OVERFLOW, message: 'maximum context length exceeded' } : OVERFLOW;
+    const terminal = { type: 'error', data, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId };
     live.emit(terminal);
     live.emit(terminal);
-    await waitFor(() => live.sent.includes('second'));
-    live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
-    await waitFor(() => live.sent.includes('third'));
-    assert.deepEqual(live.sent, ['first prompt', 'second', 'third']);
+    await waitFor(() => r.h.maker.getSession(id)?.sent.some(text => text.endsWith('second')));
+    const nextRuntime = r.h.maker.getSession(id);
+    const secondText = fullHistory ? r.marker(id).handoff + '\n\nsecond' : 'second';
+    assert.equal(nextRuntime === live, !fullHistory);
+    nextRuntime.emit({ type: 'done', data: {}, sessionTurnGeneration: nextRuntime.generation, sessionInstanceId: nextRuntime.instanceId });
+    await waitFor(() => nextRuntime.sent.includes('third'));
+    assert.deepEqual(live === nextRuntime ? live.sent : [...live.sent, ...nextRuntime.sent],
+      [firstText, secondText, 'third']);
     await r.h.queue.dispose();
     const history = new Database(r.db.db.name, { readonly: true, fileMustExist: true });
     try {
@@ -5053,14 +5076,17 @@ for (const writeFails of [false, true]) {
         FROM messages WHERE session_id = ? AND role = 'user' AND rewind_at IS NULL ORDER BY rowid`).all(id);
       const notice = writeFails ? null : 'oversized-input-skipped';
       assert.deepEqual(users, [
+        ...(fullHistory ? [{ client_id: 'prior-input', notice: null }] : []),
         { client_id: 'original', notice },
         { client_id: 'next', notice: null }, { client_id: 'last', notice: null },
       ]);
       const refreshed = r.h.events.filter(event => event.type === 'message_created' &&
         event.message?.agentMeta?.inputNotice === 'oversized-input-skipped');
-      assert.deepEqual(refreshed.map(event => event.message.clientId), writeFails ? [] : ['original']);
+      assert.deepEqual(refreshed.map(({ sessionId, messageId, message }) => ({ sessionId, messageId, message })),
+        writeFails ? [] : [{ sessionId: id, messageId: originalRow.id,
+          message: { ...originalRow, agentMeta: { ...originalRow.agentMeta, inputNotice: notice } } }]);
       const reopened = (await readMessagesList(id)).find(row => row.clientId === 'original');
-      assert.equal(reopened.content, 'first prompt');
+      assert.equal(reopened.content, firstText);
       assert.equal(reopened.agentMeta?.inputNotice ?? null, notice);
     } finally {
       history.close();

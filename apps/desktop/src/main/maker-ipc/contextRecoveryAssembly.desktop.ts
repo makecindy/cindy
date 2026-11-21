@@ -26,7 +26,10 @@ export function desktopContextRecoveryAbortSignal(
       void ports.enqueueDurableWrite('oversized-input-skipped', async (scope) => {
         if (!isCurrentOwner()) return;
         const row = await markOversizedInputSkippedRow(owner.client, id, clientId);
-        if (row && isCurrentOwner()) ports.broadcastMessageRow(id, messageToCamel(row), scope);
+        if (row && isCurrentOwner()) {
+          // Device Link clients can treat another user-row push as a delayed input.
+          ports.broadcastMessageRow(id, messageToCamel(row), scope, { localWindowsOnly: true });
+        }
       }).catch(() => ports.log.warn('Could not save the skipped input notice', { sessionId: id }));
     },
   }, sessionId, claim && isCurrentOwner() && ports.isCurrentTurn(claim) ? claim : undefined);

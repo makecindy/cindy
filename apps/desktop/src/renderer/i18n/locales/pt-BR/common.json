@@ -15885,7 +15885,7 @@
       }
     },
     "userMessage": {
-      "oversizedInputSkipped": "Esta mensagem era longa demais para ser processada. As próximas mensagens serão processadas em ordem.",
+      "oversizedInputSkipped": "O contexto está cheio, por isso esta mensagem não pôde ser processada. As próximas mensagens serão processadas em ordem.",
       "attachmentPrefix": "Anexos: ",
       "attachmentAttachedAria": "{{name}} anexado",
       "saveAttachmentAs": "Salvar anexo {{name}} como",

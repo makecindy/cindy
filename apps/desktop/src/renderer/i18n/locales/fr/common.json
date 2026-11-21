@@ -15885,7 +15885,7 @@
       }
     },
     "userMessage": {
-      "oversizedInputSkipped": "Ce message était trop long pour être traité. Les messages suivants seront traités dans l’ordre.",
+      "oversizedInputSkipped": "Le contexte a atteint sa limite. Ce message n’a pas pu être traité. Les messages suivants seront traités dans l’ordre.",
       "attachmentPrefix": "Pièces jointes : ",
       "attachmentAttachedAria": "{{name}} joint",
       "saveAttachmentAs": "Enregistrer la pièce jointe {{name}} sous",

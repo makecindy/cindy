@@ -15707,7 +15707,7 @@
       }
     },
     "userMessage": {
-      "oversizedInputSkipped": "此讯过长，未能处理。后讯仍将依次处理。",
+      "oversizedInputSkipped": "上下文已满，此讯未能处理。后讯仍将依次处理。",
       "attachmentPrefix": "附件：",
       "attachmentAttachedAria": "已附 {{name}}",
       "saveAttachmentAs": "另存附卷 {{name}}",

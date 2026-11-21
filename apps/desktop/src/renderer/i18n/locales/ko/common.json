@@ -15716,7 +15716,7 @@
       }
     },
     "userMessage": {
-      "oversizedInputSkipped": "메시지가 너무 길어 처리하지 못했습니다. 이후 메시지는 계속 순서대로 처리됩니다.",
+      "oversizedInputSkipped": "컨텍스트가 가득 차 이 메시지를 처리하지 못했습니다. 이후 메시지는 계속 순서대로 처리됩니다.",
       "attachmentPrefix": "첨부: ",
       "attachmentAttachedAria": "{{name}} 첨부됨",
       "saveAttachmentAs": "첨부 파일 {{name}} 다른 이름으로 저장",

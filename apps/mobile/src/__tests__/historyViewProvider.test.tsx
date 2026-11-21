@@ -7,6 +7,7 @@ import {
   CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+  SESSION_ACTIVITY_CHANNEL,
   SHARED_TASK_CAPABILITY,
   sharedTaskHostPeer,
   type DeviceLinkClient,
@@ -15,7 +16,7 @@ import {
   type LinkAcceptPayload,
   type PresenceSnapshot,
 } from '@cindy/device-link';
-import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
+import { HISTORY_VIEW_VERSION, isHistoryViewUnavailable, type HistoryViewPage } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
 import { setMobileAgentNetPreferences, waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
 // Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
@@ -50,6 +51,9 @@ import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceS
 import { revokedDevicesStore } from '../device-link/revokedDevicesStore';
 import { localNetworkStore, type NetworkState } from '../device-link/localNetworkStatus';
 import { remoteSessionStore } from '../session/remoteSessionStore';
+import { getRemoteHistoryView, mountRemoteHistoryView } from '../session/remoteHistoryViews';
+import { normalizeRemoteMessages } from '../session/messageNormalize';
+import type { RemoteMessage, RemoteSession } from '../session/types';
 import { getDeviceFetchEpoch, subscribeDeviceProvidersGen } from '../device-link/deviceProvidersCache';
 import { useRemoteAgentCatalogs } from '../session/useRemoteAgentCatalogs';
 
@@ -231,7 +235,83 @@ beforeEach(async () => {
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 
+function noticeSession(id: string, createdAt: string, userSendAt: string): RemoteSession {
+  return {
+    id, userId: 'fixture', title: 'fixture', status: 'active', createdAt, userSendAt, updatedAt: userSendAt,
+    workingDir: null, workspaceKind: 'dialogue', agentKind: 'cc', source: 'desktop',
+    model: 'fixture', effort: 'medium', permissionMode: 'default', fastMode: false,
+  };
+}
+
 describe('Provider device roster reads', () => {
+  // L343 / unit: the mounted production routing callback consumes the same
+  // Host row twice, with a newer round in the mirror and a ready history page.
+  // The wire metadata can change without inserting a new visible reply or dot.
+  it('refreshes one older Host user row without changing mobile attention or the newer reply', async () => {
+    const sessionId = 'l343-notice-row';
+    const device = 'l343-host';
+    const client = transport.clients[0];
+    const oldTime = '2026-08-03T00:00:00.000Z';
+    const newTime = '2026-08-03T00:01:00.000Z';
+    const original: RemoteMessage = {
+      id: 'db-old', clientId: 'old', sessionId, role: 'user', content: 'first prompt',
+      createdAt: oldTime, agentMeta: null, toolUseId: null,
+    };
+    const next: RemoteMessage = { ...original, id: 'db-next', clientId: 'next', content: 'second', createdAt: newTime };
+    const refreshed: RemoteMessage = { ...original, agentMeta: { inputNotice: 'oversized-input-skipped' } };
+    const push = (channel: string, payload: object, src = device) => {
+      client.frame({ v: 1, kind: 'push', src, dst: 'mobile', payload: { channel, payload } } as Parameters<typeof client.frame>[0]);
+    };
+    const page = (rows: RemoteMessage[]): HistoryViewPage<RemoteMessage> => ({
+      version: HISTORY_VIEW_VERSION, nextCursor: null, hasMore: false,
+      items: [{ type: 'messages', key: original.id, messages: rows }],
+    });
+    const reader = {
+      readHistoryView: vi.fn().mockResolvedValueOnce(page([original, next])).mockResolvedValue(page([refreshed, next])),
+      readWorkDetails: vi.fn(),
+      setHistoryExpanded: vi.fn(),
+    };
+    remoteSessionStore.upsertDeviceSession(device, 'Fixture', noticeSession(sessionId, oldTime, newTime));
+    push('local-db:messages:created', { sessionId, message: original });
+    push('local-db:messages:created', { sessionId, message: next });
+    vi.useFakeTimers();
+    const entry = getRemoteHistoryView(device, sessionId, reader);
+    const unmount = mountRemoteHistoryView(entry, reader, true);
+    try {
+      await entry.view.refresh();
+      expect(entry.view.getSnapshot().ready).toBe(true);
+      push(SESSION_ACTIVITY_CHANNEL, { sessionId, phase: 'running', attention: false });
+      push('maker:event', { sessionId, persistId: 'live-next', event: {
+        type: 'text', data: { text: 'live next reply', isFinal: false },
+      } });
+      await vi.advanceTimersByTimeAsync(100);
+      const reply = remoteSessionStore.getMessages(sessionId).find(row => row.clientId === 'live-next');
+      expect(reply?.content).toBe('live next reply');
+      const attention = remoteSessionStore.getSessionLiveActivity(sessionId, device);
+      expect(attention).toMatchObject({ phase: 'running', attention: false });
+      const visible = (rows: readonly RemoteMessage[]) => normalizeRemoteMessages(rows).map(({ source, ...message }) => message);
+      const before = visible(remoteSessionStore.getMessages(sessionId));
+      // A list echo from a different device cannot update the selected task.
+      push('local-db:messages:created', { sessionId, message: refreshed, listMessage: true }, 'unrelated-host');
+      expect(remoteSessionStore.getMessages(sessionId).find(row => row.id === original.id)?.agentMeta).toBeNull();
+
+      push('local-db:messages:created', { sessionId, message: refreshed });
+      push('local-db:messages:created', { sessionId, message: refreshed });
+      const raw = remoteSessionStore.getMessages(sessionId);
+      expect(raw.filter(row => row.role === 'user')).toEqual([refreshed, next]);
+      expect(raw.find(row => row.clientId === 'live-next')).toEqual(reply);
+      expect(remoteSessionStore.getSessionLiveActivity(sessionId, device)).toEqual(attention);
+      // The existing Mobile projection ignores this optional history metadata.
+      expect(visible(raw)).toEqual(before);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(reader.readHistoryView).toHaveBeenCalledTimes(2);
+      expect(entry.view.getSnapshot().items).toEqual(page([refreshed, next]).items);
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
+  });
+
   /** 测试价值：render/read getter 用 peek 证明 direct path，不调用可能 detach/emit 的
    * hasOfflineDirectPath；I/O 门禁仍由 canUsePeerData/ensureOnlineForRequest 保留。 */
   it('uses the pure direct-path query for render/read readiness', async () => {

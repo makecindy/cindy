@@ -15716,7 +15716,7 @@
       }
     },
     "userMessage": {
-      "oversizedInputSkipped": "这条消息太长，未能处理。后面的消息会继续按顺序处理。",
+      "oversizedInputSkipped": "上下文已满，这条消息未能处理。后面的消息会继续按顺序处理。",
       "attachmentPrefix": "附件：",
       "attachmentAttachedAria": "已附加 {{name}}",
       "saveAttachmentAs": "另存附件 {{name}}",
