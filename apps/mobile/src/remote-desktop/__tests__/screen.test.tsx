@@ -58,9 +58,35 @@ vi.mock("expo-blur", async () => ({
 }));
 
 vi.mock("react-native-reanimated", async () => {
-  const { View } = await import("react-native");
-  return { default: { View } };
+  const { View, ScrollView } = await import("react-native");
+  const { useRef } = await import("react");
+  return {
+    default: { View, ScrollView },
+    useAnimatedStyle: (fn: () => unknown) => fn(),
+    useAnimatedScrollHandler: (fn: unknown) => fn,
+    useSharedValue: (value: number) => useRef({ value }).current,
+    runOnJS: (fn: () => void) => fn,
+    withTiming: (value: number, _: unknown, done?: (finished: boolean) => void) => {
+      done?.(true);
+      return value;
+    },
+  };
 });
+
+const deckPan = vi.hoisted(() => ({
+  enabled: vi.fn().mockReturnThis(), activeOffsetY: vi.fn().mockReturnThis(),
+  maxPointers: vi.fn().mockReturnThis(), failOffsetX: vi.fn().mockReturnThis(),
+  onUpdate: vi.fn().mockReturnThis(), onEnd: vi.fn().mockReturnThis(),
+  onFinalize: vi.fn().mockReturnThis(),
+}));
+vi.mock("@/platform/gestureHandler", () => ({
+  GestureDetector: ({ children }: any) => children,
+  Gesture: { Pan: () => deckPan },
+}));
+const liveKeyboard = vi.hoisted(() => ({ value: 0 }));
+vi.mock("@/session/useComposerDockKeyboardHeight", () => ({
+  useComposerDockKeyboardHeight: () => liveKeyboard,
+}));
 
 vi.mock("../useAutoUnlockSettings", () => ({
   useAutoUnlockSettings: (
@@ -506,6 +532,7 @@ const visibleInputHint = () =>
 const button = (key: string) =>
   host.querySelector<HTMLButtonElement>(`[aria-label="remoteDesktop.${key}"]`)!;
 beforeEach(async () => {
+  liveKeyboard.value = 0;
   storage.items.clear();
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
@@ -4850,12 +4877,27 @@ describe("remote desktop controls", () => {
     await act(async () => vi.advanceTimersByTimeAsync(150));
     expect(panel()).toBeNull();
   });
+  it("dismisses the computer keyboard after a downward swipe and releases held keys", async () => {
+    await connect();
+    liveKeyboard.value = 324;
+    act(() => button("keyboard").click());
+    expect(fixture.views["remoteDesktop.keyboardSpacer"].style.height).toBe(324);
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
+    expect(deckPan.enabled).toHaveBeenLastCalledWith(true);
+    const endDrag = deckPan.onEnd.mock.calls.at(-1)![0];
+    act(() => endDrag({ translationY: 8, velocityY: 100 }));
+    expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).not.toBeNull();
+    act(() => endDrag({ translationY: 240, velocityY: 300 }));
+    expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).toBeNull();
+    expect(sent()).toContainEqual(expect.objectContaining({ type: "events", events: [{ kind: "release" }] }));
+  });
   it("overlays landscape keyboards and includes their measured occlusion", async () => {
+    liveKeyboard.value = 210;
     fixture.size = { width: 844, height: 390 };
     act(() => root.render(<RemoteDesktopScreen />));
     await connect();
     act(() => button("keyboard").click());
-    expect(fixture.views["remoteDesktop.layout"].enabled).toBe(false);
+    expect(fixture.views["remoteDesktop.keyboardSpacer"].style.height).toBe(0);
     const panel = () => fixture.views["remoteDesktop.keyboardPanel"];
     expect(panel().style.flat(Infinity)).toContainEqual(
       expect.objectContaining({ position: "absolute" }),
@@ -4866,7 +4908,7 @@ describe("remote desktop controls", () => {
         endCoordinates: { screenY: 180 },
       }),
     );
-    expect(panel().style.flat(Infinity)).toContainEqual({ bottom: 210 });
+    expect(panel().style.flat(Infinity)).toContainEqual(expect.objectContaining({ transform: [{ translateY: -210 }] }));
     expect(
       sent()
         .filter((m) => m.type === "mouseButtons")

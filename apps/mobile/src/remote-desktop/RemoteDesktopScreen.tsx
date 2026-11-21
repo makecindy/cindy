@@ -1,4 +1,4 @@
-import { RemoteKeyboardLayout } from "./RemoteKeyboardLayout";
+import { RemoteKeyboardLayout, useRemoteKeyboardMotion } from "./RemoteKeyboardLayout";
 import { deviceDisplayName } from "@/device-link/deviceName";
 import {
   foldDesktopHardware,
@@ -3967,6 +3967,19 @@ export function RemoteDesktopSession({
     caps?.backgroundViewing &&
     (NativeRemoteDesktopView || canPip),
   );
+  const dismissKeyboard = useCallback(() => {
+    setKeyboard(false);
+    setAwaitingSystemKeyboard(false);
+    send({ type: "events", events: [{ kind: "release" }] });
+  }, [send]);
+  const keyboardMotion = useRemoteKeyboardMotion({
+    active: keyboard && fullKeys,
+    overlay: landscapeKeyboardOverlay || !!foldLayout,
+    height: keyboardPanelHeight,
+    dismiss: dismissKeyboard,
+    systemDock: !keyboard || panelKeys || foldLayout ? "none"
+      : landscapeKeyboardOverlay ? "overlay" : "spacer",
+  });
   const latency = network?.latencyMs;
   const deckClipboard = (
     <RemoteDesktopClipboardButton
@@ -3978,9 +3991,10 @@ export function RemoteDesktopSession({
   );
   return (
     <RemoteKeyboardLayout
-      avoid={!landscapeKeyboardOverlay && !foldLayout && !panelKeys}
+      spacerStyle={keyboardMotion.spacerStyle}
       phoneKeyboard={keyboard && nativeKeyboard && !panelKeys}
-      onDismiss={() => setKeyboard(false)}
+      deckGesture={keyboardMotion.gesture}
+      onDismiss={dismissKeyboard}
       style={styles.root}
     >
       {Platform.OS === "android" && focused && <StatusBar hidden />}
@@ -4695,16 +4709,17 @@ export function RemoteDesktopSession({
         </View>
       )}
       {keyboard && (
-        <View
+        <Animated.View
           testID="remoteDesktop.keyboardPanel"
           onLayout={({ nativeEvent: { layout } }) =>
             setKeyboardPanelHeight(layout.height)
           }
           style={[
             styles.keyboard,
+            keyboardMotion.panelStyle,
             landscapeKeyboardOverlay && [
               styles.keyboardOverlay,
-              { bottom: keyboardBottom },
+              { bottom: 0 },
             ],
             {
               paddingLeft: Math.max(spacing.xs, edgePadding.paddingLeft),
@@ -4775,11 +4790,7 @@ export function RemoteDesktopSession({
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={t("remoteDesktop.close")}
-                  onPress={() => {
-                    setKeyboard(false);
-                    setAwaitingSystemKeyboard(false);
-                    send({ type: "events", events: [{ kind: "release" }] });
-                  }}
+                  onPress={dismissKeyboard}
                   style={({ pressed }) => [
                     styles.keyboardBarButton,
                     pressed && mobileInteractionStyles.pressed,
@@ -4794,7 +4805,7 @@ export function RemoteDesktopSession({
               </View>
             </View>
           </View>
-        </View>
+        </Animated.View>
       )}
       {screenPlugin && (
         <LiveScreenControls
