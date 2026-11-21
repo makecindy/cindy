@@ -35,6 +35,31 @@ describe('browserWebviewPool', () => {
     expect(BROWSER_WEBVIEW_POOL_CAPACITY).toBe(5);
   });
 
+  it('keeps parked automation pages at a usable invisible viewport inside compositor bounds', () => {
+    const entry = browserWebviewPool.acquire('background-tab');
+    const parking = entry.wrapper.parentElement!;
+    expect(parking.isConnected).toBe(true);
+    expect(parking.style.width).toBe('1280px');
+    expect(parking.style.height).toBe('720px');
+    expect(parking.style.left).toBe('0px');
+    expect(parking.style.opacity).toBe('0');
+    expect(parking.style.zIndex).toBe('-1');
+    expect(parking.getAttribute('aria-hidden')).toBe('true');
+    expect(parking.style.pointerEvents).toBe('none');
+  });
+
+  it('overlays multiple parked guests instead of stacking them outside the host', () => {
+    const entries = ['background-a', 'background-b', 'background-c'].map(id => browserWebviewPool.acquire(id));
+    const parking = entries[0].wrapper.parentElement!;
+    expect(parking.style.display).toBe('grid');
+    expect(parking.style.gridTemplateColumns).toBe('1280px');
+    expect(parking.style.gridTemplateRows).toBe('720px');
+    for (const entry of entries) {
+      expect(entry.wrapper.parentElement).toBe(parking);
+      expect(entry.wrapper.style.gridArea).toBe('1 / 1');
+    }
+  });
+
   it('acquire returns same entry on repeated tabId', () => {
     const a1 = browserWebviewPool.acquire('tab-a');
     const a2 = browserWebviewPool.acquire('tab-a');
