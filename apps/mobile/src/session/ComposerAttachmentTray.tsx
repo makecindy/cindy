@@ -395,6 +395,12 @@ function makeTrayStyles(colors: ThemeColors) {
       gap: spacing.sm,
       minWidth: 0,
     },
+    chipPreview: {
+      alignItems: 'center' as const,
+      flexDirection: 'row' as const,
+      flexShrink: 1,
+      gap: spacing.sm,
+    },
     chipText: {
       color: colors.textPrimary,
       flexShrink: 1,
