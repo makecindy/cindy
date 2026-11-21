@@ -397,6 +397,72 @@ describe('CreateWorkerPopover', () => {
     expect(onCreate.mock.calls[2]![0]).toMatchObject({ role: 'reviewer', agent: 'claude-code' });
   });
 
+  // 插件引擎 Worker 本机 worktree 支持：生产入口 CreateWorkerPopover → onCreate；
+  // 缺口：此前选中插件引擎并勾选 worktree 时提交按钮被禁用并显示 pluginEngineNoWorktree。
+  // 最小失败输入：leadSessionId + pluginEnginesEnabled + 选插件引擎 + 勾选 worktree。unit/jsdom。
+  it('submits a plugin engine Worker with a local worktree when worktree is enabled', async () => {
+    const onCreate = vi.fn();
+    const user = userEvent.setup();
+    const project = {
+      directory: '/repo', projectPath: '/repo', name: 'repo', baseRepo: '/repo',
+      isWorktree: false, branch: 'main', headState: 'branch' as const, exists: true, dirty: false,
+    };
+    const prevElectronApi = (window as unknown as { electronAPI?: unknown }).electronAPI;
+    const prevResizeObserver = globalThis.ResizeObserver;
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      localDb: {
+        orcaWorkflows: {
+          projectContext: vi.fn().mockResolvedValue({
+            recordedDirectory: '/repo',
+            dialogue: false,
+            inherited: project,
+            selected: project,
+            projects: [project],
+          }),
+        },
+      },
+      worktreeListBranches: vi.fn().mockResolvedValue({ branches: ['main'] }),
+    };
+    try {
+      render(
+        <Tooltip.Provider>
+          <CreateWorkerPopover open leadSessionId="lead-1" pluginEnginesEnabled onClose={vi.fn()} onCreate={onCreate} />
+        </Tooltip.Provider>,
+      );
+      await user.click(screen.getByTestId('pick-plugin-engine'));
+      expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engine-active')).toBe('acp-plugin:dsh-acp:dsh');
+
+      await openMoreSettings();
+      const worktreeToggle = await screen.findByRole('checkbox');
+      await user.click(worktreeToggle);
+      await waitFor(() => expect((worktreeToggle as HTMLInputElement).checked).toBe(true));
+
+      const submit = screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement;
+      await waitFor(() => expect(submit.disabled).toBe(false));
+      await user.click(submit);
+      await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+      expect(onCreate.mock.calls[0]![0]).toMatchObject({
+        agent: 'acp',
+        providerId: 'acp-plugin:dsh-acp:dsh',
+        model: 'dsh-pro',
+        worktree: { sourceBranch: 'main' },
+      });
+      expect(onCreate.mock.calls[0]![0]).not.toHaveProperty('workingDir');
+    } finally {
+      if (prevResizeObserver === undefined) {
+        Reflect.deleteProperty(globalThis, 'ResizeObserver');
+      } else {
+        globalThis.ResizeObserver = prevResizeObserver;
+      }
+      if (prevElectronApi === undefined) {
+        delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+      } else {
+        (window as unknown as { electronAPI: unknown }).electronAPI = prevElectronApi;
+      }
+    }
+  });
+
   it('centers the setup and uses one model picker without a competing Harness control', () => {
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
 

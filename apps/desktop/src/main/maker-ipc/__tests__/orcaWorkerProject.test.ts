@@ -544,6 +544,28 @@ describe('Worker worktree subproject directory', () => {
       }
     },
   );
+
+  it('passes awaitFullCheckout to WorktreeManager when requested', async () => {
+    const target = path.join(fixture, 'acp-wt');
+    mkdirSync(target, { recursive: true });
+    vi.mocked(createWorktree).mockResolvedValueOnce({
+      ok: true,
+      meta: { path: target, branch: 'cindy/acp', baseRepo: repo },
+    } as never);
+    vi.mocked(awaitBackgroundCheckout).mockReset();
+
+    expect(await createWorkerWorktree('acp-root', alias, 'main', { awaitFullCheckout: true })).toBe(target);
+    const calls = vi.mocked(createWorktree).mock.calls;
+    const [req, opts] = calls[calls.length - 1]!;
+    expect(path.resolve(req.baseRepo)).toBe(path.resolve(repo));
+    expect(req).toMatchObject({
+      sessionId: 'acp-root',
+      name: '',
+      sourceBranch: 'main',
+    });
+    expect(opts).toEqual({ trackBackgroundCheckout: true, awaitFullCheckout: true });
+    expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
+  });
 });
 
 // PR2 unit: validate the tool's optional source before any worktree side effect.

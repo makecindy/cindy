@@ -351,12 +351,28 @@ export async function createWorkerWorktree(
   sessionId: string,
   directory: string,
   sourceBranch: string,
+  options?: { awaitFullCheckout?: boolean },
 ): Promise<string> {
   const info = await probeWorkerProject(directory);
   if (!info.baseRepo) throw new Error('Worker worktree requires a Git repository');
+  let resolvedSourceBranch = sourceBranch;
+  // When targeting a linked worktree, resolve the revision inside that worktree first so
+  // worktree-local refs (HEAD, @, @~1, HEAD@{1}, etc.) do not silently resolve against baseRepo.
+  if (info.isWorktree) {
+    const rev = await gitExec(
+      ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sourceBranch}^{commit}`],
+      directory,
+      { timeoutMs: 5000 },
+    );
+    const sha = rev.stdout.trim();
+    if (sha) resolvedSourceBranch = sha;
+  }
   const created = await WorktreeManager.createWorktree(
-    { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch },
-    { trackBackgroundCheckout: true },
+    { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch: resolvedSourceBranch },
+    {
+      trackBackgroundCheckout: true,
+      ...(options?.awaitFullCheckout ? { awaitFullCheckout: true } : {}),
+    },
   );
   if (!created.ok) throw new Error(`Worker worktree creation failed: ${created.error.message}`);
   // Probe paths are realpaths, so a symlink spelling cannot change the subproject offset.
@@ -367,8 +383,11 @@ export async function createWorkerWorktree(
   if (!relative) return created.meta.path;
 
   // Stage checkout only includes root startup files. A subproject and its rules need
-  // the full checkout; root-directory Workers keep the normal asynchronous startup.
-  await WorktreeManager.awaitBackgroundCheckout(sessionId);
+  // the full checkout; root-directory built-in Workers keep asynchronous startup while
+  // ACP plugin-engine Workers pass awaitFullCheckout above.
+  if (!options?.awaitFullCheckout) {
+    await WorktreeManager.awaitBackgroundCheckout(sessionId);
+  }
   const subproject = path.join(created.meta.path, relative);
   try {
     const [realRoot, realSubproject] = await Promise.all([

@@ -306,8 +306,8 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
   用 `create_worker` / `create_workers`（`agent = acp` + `provider_id`，引擎从 `list_available_models` 的
   `plugin_engines` 取）。插件引擎 Worker 能收 Lead 的派活与插话（不支持同轮插话的按排队处理），能用 `send_to_lead`
   回报、改写或撤回排队的回报。Worker 页签与手机上的团队列表显示插件引擎，不显示成 Claude Code。
-- **范围**：Worker 只在 Lead 所在的这台电脑运行；SSH Lead、另一台工作电脑、Agent 在另一台电脑、worktree 都明确拒绝
-  （创建面板选了 worktree 时直接提示，不能提交）。插件引擎任务暂不能当 Lead：开启协同、`start_team`、新建 Worker 的
+- **范围**：Worker 只在 Lead 所在的这台电脑运行，支持本机 Git worktree（新建自有 worktree、按普通任务规则归档回收）；
+  SSH Lead、另一台工作电脑、Agent 在另一台电脑仍明确拒绝。插件引擎任务暂不能当 Lead：开启协同、`start_team`、新建 Worker 的
   所有入口统一拒绝（`PLUGIN_ENGINE_CANNOT_LEAD`）。Lead 不能用 `set_worker_runtime` 改插件引擎 Worker 的模型，需在它
   自己的任务窗口里改。
 - **准入与唤醒**：创建时与在插件引擎上新建任务同一准入（停用、卸载或不可用时创建失败，不回落内置引擎）；休眠后再唤醒

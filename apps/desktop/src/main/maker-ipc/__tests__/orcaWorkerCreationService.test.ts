@@ -654,9 +654,9 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
 
 /**
  * 插件引擎 Worker（docs/plans/acp-plugin-bridge.md 第二期「协作」）：经真实 createWorker 入口建出 agentKind=acp 的
- * Worker 任务，按插件自己的准入定模型与权限，不读内置模型目录；只在本机、不用 worktree。
- * 缺口：此前没有任何用例覆盖 acp 分支，接线错了会静默建成 Claude Code Worker 或带上 worktree 才报错。
- * 最小失败输入：agent=acp + provider_id；再分别带 worktree / execution_device_id / SSH Lead / 已停用的引擎。tier：unit。
+ * Worker 任务，按插件自己的准入定模型与权限，不读内置模型目录；只在本机运行，支持本机 worktree。
+ * 缺口：此前 acp 分支直接拒绝 worktree，且接线错了会静默建成 Claude Code Worker 或漏回收失败 worktree。
+ * 最小失败输入：agent=acp + provider_id + worktree；再分别带 execution_device_id / remote agent_device_id / SSH Lead / 已停用的引擎。tier：unit。
  */
 describe('plugin engine Worker', () => {
   const PROVIDER = 'acp-plugin:dsh-acp:dsh';
@@ -680,9 +680,115 @@ describe('plugin engine Worker', () => {
     expect(deps.addOrUpdateWorker).toHaveBeenCalled();
   });
 
+  it('creates a local Git worktree for a plugin engine Worker and passes the checkout as workingDir', async () => {
+    const admit = admitted();
+    const worktreePath = path.resolve('/tmp/lead-repo/.cindy-worktrees/worker-acp');
+    const owned = { path: worktreePath, branch: 'cindy/worker-acp', baseRepo: path.resolve('/tmp/lead-repo') };
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admit,
+      resolveWorkerWorktreeSource: vi.fn(async () => ({ sourceBranch: 'main', source: 'explicit' as const })),
+      createWorkerWorktree: vi.fn(async () => worktreePath),
+      getWorkerWorktree: vi.fn(() => owned),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+      providerId: PROVIDER, model: 'dsh-pro', worktree: { sourceBranch: 'main' },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      workerSessionId: WORKER_SESSION_ID,
+      workingDir: worktreePath,
+      worktree: owned,
+      worktreeSource: { sourceBranch: 'main', source: 'explicit' },
+    });
+    expect(deps.resolveWorkerWorktreeSource).toHaveBeenCalledWith('C:\\repo', 'main', 'C:\\repo');
+    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'main', { awaitFullCheckout: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: PROVIDER, workingDir: worktreePath,
+    }));
+    expect(deps.discardWorkerWorktree).not.toHaveBeenCalled();
+  });
+
+  it('waits for full worktree checkout before bootstrapping an ACP Worker and aborts on checkout or lease failure', async () => {
+    const worktreePath = path.resolve('/tmp/lead-repo/.cindy-worktrees/worker-acp-slow');
+    const owned = { path: worktreePath, branch: 'cindy/worker-acp-slow', baseRepo: path.resolve('/tmp/lead-repo') };
+    let resolveCheckout!: (value: string) => void;
+    const checkoutPromise = new Promise<string>((resolve) => { resolveCheckout = resolve; });
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admitted(),
+      resolveWorkerWorktreeSource: vi.fn(async () => ({ sourceBranch: 'main', source: 'explicit' as const })),
+      createWorkerWorktree: vi.fn(() => checkoutPromise),
+      getWorkerWorktree: vi.fn(() => owned),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+    });
+
+    const pending = service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+      providerId: PROVIDER, model: 'dsh-pro', worktree: { sourceBranch: 'main' },
+    });
+    await vi.waitFor(() => expect(deps.createWorkerWorktree).toHaveBeenCalledOnce());
+    // Must not launch the ACP endpoint while full checkout is still pending.
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    resolveCheckout(worktreePath);
+    await expect(pending).resolves.toMatchObject({ ok: true, workingDir: worktreePath });
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+
+    // A rejected full checkout prevents ACP bootstrap completely.
+    const failed = createDeps({
+      admitPluginEngineWorker: admitted(),
+      resolveWorkerWorktreeSource: vi.fn(async () => ({ sourceBranch: 'main', source: 'explicit' as const })),
+      createWorkerWorktree: vi.fn(async () => { throw new Error('full checkout failed'); }),
+      getWorkerWorktree: vi.fn(() => owned),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+    });
+    await expect(failed.service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+      providerId: PROVIDER, worktree: { sourceBranch: 'main' },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(failed.deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(failed.deps.discardWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID);
+
+    // An expired lease detected right after checkout aborts before launching the ACP endpoint.
+    const expired = createDeps({
+      admitPluginEngineWorker: admitted(),
+      resolveWorkerWorktreeSource: vi.fn(async () => ({ sourceBranch: 'main', source: 'explicit' as const })),
+      createWorkerWorktree: vi.fn(async () => worktreePath),
+      getWorkerWorktree: vi.fn(() => owned),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+      renewWorkerCreationReservation: vi.fn(async () => false),
+    });
+    await expect(expired.service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+      providerId: PROVIDER, worktree: { sourceBranch: 'main' },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(expired.deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(expired.deps.discardWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID);
+  });
+
+  it('discards the created worktree if plugin engine Worker bootstrap fails', async () => {
+    const worktreePath = path.resolve('/tmp/lead-repo/.cindy-worktrees/worker-acp-fail');
+    const owned = { path: worktreePath, branch: 'cindy/worker-acp-fail', baseRepo: path.resolve('/tmp/lead-repo') };
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admitted(),
+      resolveWorkerWorktreeSource: vi.fn(async () => ({ sourceBranch: 'main', source: 'current' as const })),
+      createWorkerWorktree: vi.fn(async () => worktreePath),
+      getWorkerWorktree: vi.fn(() => owned),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+      bootstrapSession: vi.fn(async () => { throw new Error('acp spawn failed'); }),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+      providerId: PROVIDER, worktree: {},
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(deps.discardWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID);
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+  });
+
   it.each([
-    { name: 'a worktree', params: { worktree: { sourceBranch: 'main' } }, lead: {} },
     { name: 'another computer', params: { executionDeviceId: 'desk-b' }, lead: {} },
+    { name: 'a remote agent device with worktree', params: { agentDeviceId: 'desk-b', worktree: { sourceBranch: 'main' } }, lead: {} },
     { name: 'an SSH Lead', params: {}, lead: { remoteHostId: 'box' } },
   ])('refuses $name before starting anything', async ({ params, lead }) => {
     const admit = admitted();
@@ -698,6 +804,7 @@ describe('plugin engine Worker', () => {
       leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER, ...params,
     } as OrcaWorkerCreateParams);
     expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: expect.stringContaining('plugin engine') });
+    expect(deps.createWorkerWorktree).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
     expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
   });

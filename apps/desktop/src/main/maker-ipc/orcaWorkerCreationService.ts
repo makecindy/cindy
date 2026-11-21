@@ -237,7 +237,7 @@ export interface OrcaWorkerCreateParams {
   role: string;
   /**
    * 'acp' = 本机插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)：providerId 必为 acp-plugin:<插件>:<引擎>，
-   * 只在本机运行，不用 worktree，不走内置模型目录与来源路由。
+   * 只在本机运行，支持本机 worktree，不走内置模型目录与来源路由。
    */
   agent: EngineKind;
   label: string;
@@ -319,7 +319,12 @@ export interface OrcaWorkerCreationDeps {
   resolveWorkerWorkingDir(dir: string, lead: OrcaLeadSessionSnapshot): Promise<string>;
   resolveWorkerWorktreeSource?(directory: string, sourceBranch?: string, leadDirectory?: string | null): Promise<string | WorkerWorktreeSourceSelection>;
   getWorkerWorktree?(sessionId: string): WorkerOwnedWorktree | undefined;
-  createWorkerWorktree?(sessionId: string, directory: string, sourceBranch: string): Promise<string>;
+  createWorkerWorktree?(
+    sessionId: string,
+    directory: string,
+    sourceBranch: string,
+    options?: { awaitFullCheckout?: boolean },
+  ): Promise<string>;
   discardWorkerWorktree?(sessionId: string): Promise<void>;
   getAvailableModels(agent: AgentKind): OrcaWorkerModelCapabilities[];
   /**
@@ -1147,15 +1152,29 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     if (!workerLocation.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: workerLocation.message };
     }
+    const resolveRequestedWorktreeSource = async (
+      targetDir: string,
+    ): Promise<
+      | { ok: true; worktreeSource?: string; worktreeSourceSelection?: WorkerWorktreeSourceSelection }
+      | { ok: false; errorCode: 'INVALID_PARAMS'; message: string }
+    > => {
+      if (!params.worktree) return { ok: true };
+      try {
+        const source = await deps.resolveWorkerWorktreeSource!(targetDir, params.worktree.sourceBranch, lead.workingDir);
+        const worktreeSourceSelection = typeof source === 'string'
+          ? { sourceBranch: source, source: params.worktree.sourceBranch ? 'explicit' as const : 'current' as const }
+          : source;
+        return { ok: true, worktreeSource: worktreeSourceSelection.sourceBranch, worktreeSourceSelection };
+      } catch (error) {
+        return { ok: false, errorCode: 'INVALID_PARAMS', message: error instanceof Error ? error.message : 'Worker worktree target is unavailable' };
+      }
+    };
     if (params.agent === 'acp') {
       // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：只在本机运行(Lead 不在 SSH、Worker 不换电脑、不在
-      // 另一台电脑执行)，不用 worktree；引擎按本机此刻提供的准入，不走内置模型目录与来源路由。
+      // 另一台电脑执行)，支持本机 worktree；引擎按本机此刻提供的准入，不走内置模型目录与来源路由。
       if (lead.remoteHostId || params.executionDeviceId !== undefined || workerLocation.agentDeviceId) {
         return { ok: false, errorCode: 'INVALID_PARAMS',
           message: 'plugin engines run on this computer only; create the Worker locally (agent_device_id "local", no execution_device_id)' };
-      }
-      if (params.worktree !== undefined) {
-        return { ok: false, errorCode: 'INVALID_PARAMS', message: 'plugin engine Workers cannot use a worktree' };
       }
       if (!deps.admitPluginEngineWorker) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'plugin engine Workers are not available here' };
@@ -1183,8 +1202,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           return { ok: false, errorCode: 'INVALID_PARAMS', message: 'working_dir is unavailable or collaboration is disabled for that directory; no Worker was started' };
         }
       }
+      const pluginWorktree = await resolveRequestedWorktreeSource(pluginWorkingDir);
+      if (!pluginWorktree.ok) return pluginWorktree;
       return finishWorkerCreation({
         workingDir: pluginWorkingDir,
+        worktreeSource: pluginWorktree.worktreeSource,
+        worktreeSourceSelection: pluginWorktree.worktreeSourceSelection,
         workerAgentDeviceId: null,
         resolved: {
           model: admitted.model,
@@ -1308,17 +1331,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       }
     }
 
-    let worktreeSource: string | undefined;
-    let worktreeSourceSelection: WorkerWorktreeSourceSelection | undefined;
-    if (params.worktree) {
-      try {
-        const source = await deps.resolveWorkerWorktreeSource!(workingDir, params.worktree.sourceBranch, lead.workingDir);
-        worktreeSourceSelection = typeof source === 'string' ? { sourceBranch: source, source: params.worktree.sourceBranch ? 'explicit' : 'current' } : source;
-        worktreeSource = worktreeSourceSelection.sourceBranch;
-      } catch (error) {
-        return { ok: false, errorCode: 'INVALID_PARAMS', message: error instanceof Error ? error.message : 'Worker worktree target is unavailable' };
-      }
-    }
+    const resolvedWorktree = await resolveRequestedWorktreeSource(workingDir);
+    if (!resolvedWorktree.ok) return resolvedWorktree;
+    const { worktreeSource, worktreeSourceSelection } = resolvedWorktree;
 
     // 轮 42:解除「SSH remote lead 禁 Pi worker」闸 —— 该闸写于 Pi SSH remote 能力
     // 落地之前(前提「PiAgent.startSession 对 remoteHostId 一律 NotSupportedError」
@@ -1687,7 +1702,11 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         const workerSessionId = deps.createSessionId();
         if (params.worktree) {
           createdWorktreeSessionId = workerSessionId;
-          workingDir = await deps.createWorkerWorktree!(workerSessionId, workingDir, worktreeSource!);
+          // ACP plugin engines read project files and agent rules immediately on start,
+          // so wait for the full Git checkout before bootstrapping the endpoint.
+          workingDir = params.agent === 'acp'
+            ? await deps.createWorkerWorktree!(workerSessionId, workingDir, worktreeSource!, { awaitFullCheckout: true })
+            : await deps.createWorkerWorktree!(workerSessionId, workingDir, worktreeSource!);
           // Checkout may fall back from a missing subproject to its root. Authorize
           // the final directory before any runtime starts, for both UI and tool calls.
           try {
@@ -1698,6 +1717,13 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           ownedWorktree = deps.getWorkerWorktree!(workerSessionId);
           if (!ownedWorktree) throw new Error('Worker worktree ownership metadata is unavailable');
           await assertCurrent?.();
+          // Verify the creation lease survived a potentially slow checkout before launching an agent endpoint.
+          const renewedBeforeBootstrap = reservationValid
+            ? await deps.renewWorkerCreationReservation(workerId, ORCA_WORKER_CREATION_RESERVATION_LEASE_MS).catch(() => false)
+            : false;
+          if (!renewedBeforeBootstrap) {
+            return { ok: false, errorCode: 'INTERNAL', message: 'worker creation reservation expired before bootstrap' };
+          }
         }
         const workerVendorOptions = {
           orcaRole: 'worker' as const,
