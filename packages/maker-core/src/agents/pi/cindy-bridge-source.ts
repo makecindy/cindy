@@ -169,6 +169,11 @@ function permissionDenialReason(decision: string | undefined): string {
   return detail ? label + ': ' + detail : label + '.';
 }
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
+// 只读 transcript 记录、不碰文件系统也不执行任何东西：Ask/Auto 与 Review 会话都
+// 不该为它弹框或拒绝，否则每次自动恢复折叠结果都变成一次用户交互。
+// 只对「折叠扩展真的在跑」的会话豁免：该扩展启用后会在进程内立 cindy.pi.toolFold。
+// 折叠关闭时同名工具只能是外部注册的（原生扩展也可以叫这个名字），照常走审批。
+const TRANSCRIPT_ONLY_BUILTINS = new Set(['cindy_toolfold_read']);
 const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
 function isCindyShellTool(toolName: unknown): boolean {
   return toolName === 'bash' || toolName === 'powershell';
@@ -1864,6 +1869,13 @@ function commandReadsProcessEnviron(command: unknown): boolean {
 let textOnlyTurnActive = false;
 let modelRequestControlActive = false;
 function toolsDisabledForTurn(): boolean { return textOnlyTurnActive; }
+// 同一进程里的其他扩展靠这个 Symbol 判断本回合是否禁用了工具（工具载荷折叠要
+// 在这类回合让原文整体可见，否则模型看到折叠后的历史却没有任何取回途径）。
+const TEXT_ONLY_TURN_FLAG = Symbol.for('cindy.pi.textOnlyTurn');
+function setTextOnlyTurn(on: boolean): void {
+  textOnlyTurnActive = on;
+  try { (globalThis as any)[TEXT_ONLY_TURN_FLAG] = on; } catch { /* ignore */ }
+}
 
 function installTextOnlyTurnPolicy(pi: any, prepareRuntimeControl?: (ctx: any) => Promise<void> | undefined): void {
   const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
@@ -1882,17 +1894,17 @@ function installTextOnlyTurnPolicy(pi: any, prepareRuntimeControl?: (ctx: any) =
     if (!text.startsWith(prefix)) {
       // Aborted/failed turns may omit agent_settled. Only a fresh idle RPC input
       // resets their latch; steer, follow-ups and extension continuations retain it.
-      if (ctx.isIdle() && !event.streamingBehavior) textOnlyTurnActive = false;
+      if (ctx.isIdle() && !event.streamingBehavior) setTextOnlyTurn(false);
       const result = controlled ? { action: 'transform', text, images: event.images } : undefined;
       return prepared ? prepared.then(() => result) : result;
     }
-    textOnlyTurnActive = true;
+    setTextOnlyTurn(true);
     const result = { action: 'transform', text: text.slice(prefix.length), images: event.images };
     return prepared ? prepared.then(() => result) : result;
   });
   // agent_end is too early: native retries, compaction and follow-ups retain the policy.
   pi.on('agent_settled', (_event: any, ctx: any) => {
-    if (ctx.isIdle()) textOnlyTurnActive = false;
+    if (ctx.isIdle()) setTextOnlyTurn(false);
   });
   pi.on('session_start', (_event: any, ctx: any) => {
     ctx.ui.notify(${JSON.stringify(CINDY_PI_TEXT_ONLY_READY_PREFIX)} + token, 'info');
@@ -5272,6 +5284,8 @@ export default async function cindyBridge(piApi: any) {
       return { block: true, reason: 'Tools are disabled for this host-owned text-only turn.' };
     }
     const permission = currentPermissionState();
+    // 只读本会话的 transcript 记录：不读写文件、不执行命令，两种权限档都不必打扰用户。
+    if (TRANSCRIPT_ONLY_BUILTINS.has(event.toolName)) return;
     if (permission.reviewOnly) {
       if (
         READONLY_BUILTINS.has(event.toolName)

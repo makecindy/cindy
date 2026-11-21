@@ -871,6 +871,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
             ? path.resolve(override.replace(/^~(?=$|[\\/])/, () => os.homedir()))
             : path.join(os.homedir(), '.pi', 'agent');
         },
+        // 工具载荷折叠的实验开关只存在于桌面端设置（tool-fold-store）；Host 上的 Pi 任务
+        // 不参与该实验，显式留空与默认关闭一致，避免跨进程读桌面设置。
+        resolvePiToolFoldEnabled: undefined,
         // As the desktop (maker-host/index.ts buildPiAgentForDesktop), over the Host's selectable
         // catalog: the live model list, and the descriptors for a resumed retired model and the gateway block.
         resolvePiRuntimeModels: () => deriveAvailableModels(modelContext.getSelectableCatalog(), 'pi'),
