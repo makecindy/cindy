@@ -16639,7 +16639,11 @@
         "awaitingPluginSetup": "Plugin à configurer",
         "awaitingInputHandoff": "Saisie manuelle requise"
       },
+      "expandAllSessions": "Développer toutes les tâches",
+      "collapseInactiveSessions": "Réduire les tâches inactives",
       "showAllSessions": "Afficher les {{count}}",
+      "showMoreSessions": "Afficher {{count}} de plus",
+      "autoCollapseIdleTasks": "Replier les tâches après {{minutes}} min d’inactivité",
       "allSessions": "Toutes les sessions",
       "scopeLocalSessions": "Local",
       "dialogues": "Conversations",

@@ -1,6 +1,12 @@
-// 折叠算法本体已上移到 @cindy/maker-shared(桌面侧栏与手机版首页共用同一套
-// 「前 N 条 + 24h 活动 / 需关注豁免」策略,单侧改动会破坏两端一致性)。
-// 本文件保留为 re-export,维持桌面既有 import 路径稳定。
+import {
+  SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
+  getSessionListCollapseView,
+  type SessionListCollapseView,
+  type SessionListCollapseViewInput,
+} from '@cindy/maker-shared/session-list-collapse';
+import { SIDEBAR_INACTIVE_COLLAPSE_MS } from './sidebarCollapseConfig';
+
+// 保留共享算法供原有数量上限与自动化运行列表使用；手机端默认规则不变。
 export {
   SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
   SESSION_LIST_COLLAPSE_RECENT_WINDOW_MS,
@@ -8,3 +14,46 @@ export {
   type SessionListCollapseView,
   type SessionListCollapseViewInput,
 } from '@cindy/maker-shared/session-list-collapse';
+
+/** The opt-in replaces the task count floor with a shorter activity window. */
+export function getSidebarSessionCollapseView<T>({
+  idleCollapseEnabled = false,
+  isContainerEntry,
+  nowMs = Date.now(),
+  ...input
+}: SessionListCollapseViewInput<T> & {
+  idleCollapseEnabled?: boolean;
+  isContainerEntry?: (entry: T) => boolean;
+}): SessionListCollapseView<T> {
+  if (!idleCollapseEnabled) return getSessionListCollapseView({ ...input, nowMs });
+
+  const {
+    entries,
+    showAll,
+    disableCollapse,
+    isFiltering,
+    isActiveEntry,
+    hasAttentionEntry,
+    getActivityMs,
+    recentWindowMs = SIDEBAR_INACTIVE_COLLAPSE_MS,
+    minVisibleCount = SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
+  } = input;
+  let containerCount = 0;
+  const visibleHeadCount = Math.max(0, Math.round(minVisibleCount));
+  const visibleEntries = showAll || disableCollapse || isFiltering
+    ? entries
+    : entries.filter((entry) => {
+        const container = isContainerEntry?.(entry) ?? false;
+        // Container headers keep their own limit so an all-idle group can be reopened.
+        const withinHead = container && containerCount++ < visibleHeadCount;
+        return withinHead || isActiveEntry(entry) || hasAttentionEntry(entry) ||
+          (!container && getActivityMs != null && getActivityMs(entry) >= nowMs - recentWindowMs);
+      });
+  const hiddenCount = entries.length - visibleEntries.length;
+  return {
+    visibleEntries,
+    isOverflowing: hiddenCount > 0,
+    totalCount: entries.length,
+    hiddenCount,
+  };
+}

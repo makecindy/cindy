@@ -7,6 +7,8 @@ import { sharedTaskHostPeer } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { SessionTaskMenu } from '../SessionTaskMenu';
+import { SidebarActivityClock, useSidebarActivityNow } from '../SidebarActivityClock';
+import { SIDEBAR_IDLE_COLLAPSE_KEY } from '../../lib/sidebarCollapseConfig';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 import { __resetInstalledGhostsStoreForTest, readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
@@ -115,6 +117,52 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+// #11252: earlier menu tests do not mount the sidebar clock. The real
+// portalled menu must keep a task 30 seconds from expiry visible while focused
+// or open, then let the clock catch up after dismissal. Unit/jsdom.
+it('pauses idle folding while the keyboard has opened the task menu', () => {
+  const now = Date.parse('2026-11-18T04:00:00Z');
+  const previousPreference = localStorage.getItem(SIDEBAR_IDLE_COLLAPSE_KEY);
+  localStorage.setItem(SIDEBAR_IDLE_COLLAPSE_KEY, 'true');
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+  vi.setSystemTime(now);
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  function TaskNearExpiry() {
+    const visible = useSidebarActivityNow() < now + 30_000;
+    return visible ? <Harness /> : null;
+  }
+  function Sidebar() {
+    const root = useRef<HTMLDivElement>(null);
+    return <SidebarActivityClock enabled interactionRoot={root}>
+      <div ref={root}><TaskNearExpiry /></div>
+      <button>Outside sidebar</button>
+    </SidebarActivityClock>;
+  }
+  try {
+    render(<Sidebar />);
+    const trigger = screen.getByRole('button', { name: 'More' });
+    trigger.focus();
+    vi.setSystemTime(now + 60_000);
+    openMenu();
+    const menu = screen.getByRole('menu');
+    expect(menu.contains(document.activeElement)).toBe(true);
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.getByRole('menuitem', { name: 'rename' })).toBeTruthy();
+
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    screen.getByRole('button', { name: 'Outside sidebar' }).focus();
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+  } finally {
+    cleanup();
+    if (previousPreference === null) localStorage.removeItem(SIDEBAR_IDLE_COLLAPSE_KEY);
+    else localStorage.setItem(SIDEBAR_IDLE_COLLAPSE_KEY, previousPreference);
+    visibility.mockRestore();
+    vi.useRealTimers();
+  }
+});
 
 // Unit, production menu/dialog: #9803 added an entry to every local task even
 // without a relevant plugin. A saved selection must remain clearable after uninstall.

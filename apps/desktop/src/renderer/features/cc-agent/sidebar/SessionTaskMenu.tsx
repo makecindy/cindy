@@ -231,9 +231,11 @@ function ActiveSessionTaskMenu({
     </DropdownMenuItem>
   );
   const separator = <DropdownMenuSeparator />;
+  // This owner remains in the sidebar while menu or dialog focus is in a portal.
   return (
     <div
       className="contents"
+      data-sidebar-activity-overlay=""
       onClick={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.stopPropagation()}

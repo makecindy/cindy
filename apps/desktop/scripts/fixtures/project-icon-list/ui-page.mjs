@@ -1,13 +1,159 @@
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const avatarData = 'data:image/png;base64,' + readFileSync(new URL('../../../../mobile/assets/bot-presets/cindy.png', import.meta.url)).toString('base64');
 export default {
   name:'project-icon-list',entry:'./fixture.tsx',viewport:{width:360,height:420},
-  real:'ProjectNode, SessionEntryList, SessionItem and ProjectSettingsDialog',
+  real:'ProjectNode, SessionGroupNode, SessionEntryList, SessionItem and ProjectSettingsDialog',
   notCovered:'Full application shell, persisted project settings and device link transport. Example project names and tasks.',
   stubs:{'src/renderer/contexts/AuthContext':{partial:'export const useAuth = () => ({dataOwnerId: "fixture", isAuthenticated: false});'}},
-  cases:{flat:{data:{avatarData,flat:'list'},about:'Project icons beside source labels on task cards'},compact:{data:{avatarData,flat:'text'},about:'Project icons beside source labels on compact task rows'},default:{data:{avatarData},about:'Sidebar folders preserve expand/collapse semantics regardless of saved project icon'}},
-  async ready(page){await page.locator('[data-project-source] img, [data-project-working-dir="local:/Projects/Cindy"] .lucide-folder-open').first().waitFor();},
+  cases:{
+    flat:{data:{avatarData,flat:'list'},about:'Project icons beside source labels on task cards'},
+    compact:{data:{avatarData,flat:'text'},about:'Project icons beside source labels on compact task rows'},
+    default:{data:{avatarData},about:'Sidebar folders preserve expand/collapse semantics regardless of saved project icon'},
+    'idle-projects':{data:{avatarData,inactive:true},about:'Idle tasks fold independently under each project header (#11233)'},
+    'idle-flat':{data:{avatarData,inactive:true,flat:'text'},about:'Idle tasks fold in a flat sidebar and can be shown again (#11233)'},
+    'filtered-projects':{data:{avatarData,inactive:true,filtered:true},about:'Filtered project results show all matches and omit the inactivity toggle (#11233)'},
+    'idle-groups':{data:{avatarData,inactive:true,groups:true},about:'Even small automation and dialogue groups offer independent idle folding (#11282)'},
+    'idle-recent-groups':{data:{avatarData,idleOptIn:true,groups:true},about:'Groups with only recent tasks omit idle actions (#11282)'},
+    'collapsed-automation-status':{data:{groups:true,collapsedAutomation:true},about:'An actionless automation header keeps its status point on hover (#11252)'},
+    'idle-disabled':{data:{avatarData,inactive:true,idleDisabled:true},about:'Thirty-minute-old tasks stay visible by default (#11282)'},
+  },
+  async ready(page){await page.locator('[data-project-source] img, [data-project-working-dir="local:/Projects/Cindy"] .lucide-folder-open, [aria-label="Automation fixture"]').first().waitFor();},
   async check(page,ui){
+    if (ui.case === 'collapsed-automation-status') {
+      // The expanded fixtures cannot cover this regression: the status point
+      // appears on a collapsed group with no create or idle action.
+      const group = page.getByRole('region', { name: 'Automation fixture' });
+      const header = group.getByRole('button', { expanded: false });
+      const status = header.locator('[data-sidebar-right-status="error"]');
+      await status.waitFor();
+      assert.equal(await status.evaluate(element => element.checkVisibility({ opacityProperty: true })), true);
+      await header.hover();
+      assert.equal(await status.evaluate(async element => {
+        await Promise.all(element.parentElement.getAnimations().map(animation => animation.finished));
+        return element.checkVisibility({ opacityProperty: true });
+      }), true, 'Hover must keep the status point visible when no actions replace it');
+      return;
+    }
+    if (ui.case === 'idle-recent-groups') {
+      const expand = await ui.t('ccAgent.sidebar.expandAllSessions');
+      const fold = await ui.t('ccAgent.sidebar.collapseInactiveSessions');
+      for (const name of ['Automation fixture', 'Dialogue fixture']) {
+        const group = page.getByRole('region', { name });
+        await group.getByRole('button', { expanded: true }).first().hover();
+        assert.equal(await group.getByRole('button', { name: expand, exact: true }).count(), 0);
+        assert.equal(await group.getByRole('button', { name: fold, exact: true }).count(), 0);
+      }
+      return;
+    }
+    if (ui.case === 'idle-disabled') {
+      await page.locator('[data-session-id="demo-0-1"]').waitFor();
+      await page.locator('[data-session-id="demo-1-0"]').waitFor();
+      // #11282: one ordinary project must omit the idle action while the
+      // preference is off, even when the rest of its header actions are visible.
+      const header = page.locator('[data-project-working-dir="local:/Projects/Cindy"] [data-project-header]');
+      await header.hover();
+      const expand = await ui.t('ccAgent.sidebar.expandAllSessions');
+      const fold = await ui.t('ccAgent.sidebar.collapseInactiveSessions');
+      assert.equal(await header.getByRole('button', { name: expand, exact: true }).count(), 0);
+      assert.equal(await header.getByRole('button', { name: fold, exact: true }).count(), 0);
+      return;
+    }
+    if (ui.case === 'idle-groups') {
+      const automation = page.getByRole('region', { name: 'Automation fixture' });
+      const dialogue = page.getByRole('region', { name: 'Dialogue fixture' });
+      const expand = await ui.t('ccAgent.sidebar.expandAllSessions');
+      const fold = await ui.t('ccAgent.sidebar.collapseInactiveSessions');
+      const showOne = await ui.t('ccAgent.sidebar.showMoreSessions', { count: 1 });
+      const weekly = automation.getByRole('button', { name: /每周用量报告/ });
+      const idleDialogue = dialogue.locator('[data-session-id="demo-0-1"]');
+      assert.equal(await automation.getByRole('button', { name: showOne, exact: true }).count(), 0);
+      await dialogue.getByRole('button', { name: showOne, exact: true }).waitFor();
+
+      await automation.getByText(await ui.t('ccAgent.layout.automations'), { exact: true }).hover();
+      await automation.getByRole('button', { name: expand, exact: true }).click();
+      await weekly.waitFor();
+      assert.equal(await idleDialogue.count(), 0);
+      assert.equal(await automation.getByRole('button', { name: fold, exact: true }).count(), 1);
+      await ui.capture('automation-expanded');
+      await automation.getByRole('button', { name: fold, exact: true }).click();
+      assert.equal(await weekly.count(), 0);
+
+      await dialogue.getByText(await ui.t('ccAgent.sidebar.dialogues'), { exact: true }).hover();
+      await dialogue.getByRole('button', { name: expand, exact: true }).click();
+      await idleDialogue.waitFor();
+      assert.equal(await dialogue.getByRole('button', { name: fold, exact: true }).count(), 1);
+      await ui.capture('dialogues-expanded');
+      return;
+    }
+    if (ui.case === 'filtered-projects') {
+      await page.locator('[data-session-id="demo-1-0"]').waitFor();
+      const expand=await ui.t('ccAgent.sidebar.expandAllSessions');
+      const fold=await ui.t('ccAgent.sidebar.collapseInactiveSessions');
+      if (await page.getByRole('button', { name: expand, exact: true }).count() ||
+          await page.getByRole('button', { name: fold, exact: true }).count()) {
+        throw new Error('Filtered projects must not offer inactivity folding');
+      }
+      return;
+    }
+    if(ui.case === 'idle-projects') {
+      const project=page.locator('[data-project-working-dir="local:/Projects/Cindy"]');
+      const other=page.locator('[data-project-working-dir="local:/Projects/移动客户端"]');
+      const hidden=page.locator('[data-session-id="demo-0-1"]');
+      if(await hidden.count()) throw new Error('Idle task must start folded');
+      // Regression for #11252: an open project with one idle task keeps only
+      // its header action. This real-component UI check also covers a mixed list.
+      const showOne=await ui.t('ccAgent.sidebar.showMoreSessions',{count:1});
+      if(await other.getByRole('button',{name:showOne,exact:true}).count()) throw new Error('An all-idle project must not show a list footer');
+      // UI regression for #11252: one visible and one idle task exercise the
+      // hidden count and the real header geometry that locator.click() obscures.
+      const header = project.locator('[data-project-header]');
+      const expand = header.getByRole('button', { name: await ui.t('ccAgent.sidebar.expandAllSessions'), exact: true });
+      const more = header.getByRole('button', { name: await ui.t('ccAgent.common.moreActions'), exact: true });
+      const isRevealed = (button) => button.evaluate((element) => {
+        for (let node = element; node && !node.matches('[data-project-header]'); node = node.parentElement) {
+          if (getComputedStyle(node).opacity === '0') return false;
+        }
+        return getComputedStyle(element).pointerEvents !== 'none';
+      });
+      await page.mouse.move(0, 0);
+      const resting = await expand.boundingBox();
+      assert.ok(resting, 'The idle toggle must have a fixed slot before hover');
+      assert.equal(await isRevealed(expand), false, 'The idle toggle should start hidden with the other actions');
+      await project.getByRole('button', { name: showOne, exact: true }).waitFor();
+      await ui.capture('inactive-folded');
+      const x = resting.x + resting.width / 2;
+      const y = resting.y + resting.height / 2;
+      await header.focus();
+      await page.keyboard.press('Tab');
+      assert.equal(await isRevealed(expand), true, 'Keyboard focus must reveal the header actions');
+      assert.deepEqual(await expand.boundingBox(), resting, 'Keyboard focus on project actions must not move the idle toggle');
+      await page.mouse.click(0, 0);
+      await page.mouse.move(x, y);
+      assert.equal(await isRevealed(expand), true, 'Hovering must reveal the idle toggle');
+      assert.equal(await isRevealed(more), true, 'Hovering must reveal the other actions together');
+      assert.deepEqual(await expand.boundingBox(), resting, 'Hovering the project header must not move the idle toggle');
+      await ui.capture('toggle-hover');
+      await page.mouse.click(x, y);
+      await hidden.waitFor();
+      if(await other.locator('[data-session-id="demo-1-0"]').count()) throw new Error('Project controls must stay independent');
+      await ui.capture('project-expanded');
+      const fold = await ui.t('ccAgent.sidebar.collapseInactiveSessions');
+      assert.equal(await project.getByRole('button', { name: fold, exact: true }).count(), 1);
+      await header.getByRole('button', { name: fold, exact: true }).click();
+      if(await hidden.count()) throw new Error('Idle task must fold again');
+      return;
+    }
+    if(ui.case === 'idle-flat') {
+      if(await page.locator('[data-session-id="demo-0-1"]').count()) throw new Error('Idle flat task must start folded');
+      await ui.capture('inactive-folded');
+      await page.getByRole('button',{name:await ui.t('ccAgent.sidebar.showMoreSessions',{count:5}),exact:true}).click();
+      await page.locator('[data-session-id="demo-0-1"]').waitFor();
+      await ui.capture('flat-expanded');
+      await page.getByRole('button',{name:await ui.t('ccAgent.sidebar.collapseInactiveSessions'),exact:true}).click();
+      if(await page.locator('[data-session-id="demo-0-1"]').count()) throw new Error('Idle flat task must fold again');
+      return;
+    }
     if(ui.case !== 'default') {
       await page.locator('[data-project-source] img').first().waitFor();
       await page.locator('[data-project-source] [data-project-monogram]').first().waitFor();

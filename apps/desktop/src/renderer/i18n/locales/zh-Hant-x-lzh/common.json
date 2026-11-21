@@ -16409,7 +16409,11 @@
         "awaitingPluginSetup": "候設法器",
         "awaitingInputHandoff": "候代書"
       },
+      "expandAllSessions": "盡展諸務",
+      "collapseInactiveSessions": "收久閒之務",
       "showAllSessions": "示全部 {{count}} 項",
+      "showMoreSessions": "再示 {{count}} 項",
+      "autoCollapseIdleTasks": "閒置 {{minutes}} 分鐘後自收",
       "allSessions": "諸差事",
       "scopeLocalSessions": "此機差事",
       "dialogues": "言談",

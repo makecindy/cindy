@@ -11,7 +11,10 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('@/components/ui/tooltip', () => ({
   Tip: ({ children }: { children: React.ReactNode }) => children,
 }));
-vi.mock('../features/cc-agent/sidebar/SessionEntryList', () => ({ SessionEntryList: () => null }));
+vi.mock('../features/cc-agent/sidebar/SessionEntryList', () => ({
+  SessionEntryListContent: () => null,
+  useSessionEntryListView: () => ({ canToggleIdle: false }),
+}));
 
 afterEach(cleanup);
 

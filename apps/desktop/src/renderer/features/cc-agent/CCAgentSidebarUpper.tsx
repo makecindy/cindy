@@ -276,6 +276,7 @@ import {
   getProjectSessionCollapseLimit,
 } from './lib/sidebarCollapseConfig';
 import { getSessionListCollapseView } from './lib/sessionListCollapse';
+import { SidebarActivityClock } from './sidebar/SidebarActivityClock';
 import { hasSessionSelectionModifier, type SessionClickModifiers } from './sidebar/SessionItem';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
 import type { CreateProjectFromTaskResult } from '../../../shared/projectsRoot';
@@ -788,6 +789,7 @@ export function CCAgentSidebarUpper() {
     // 保持"热态"即时切换——PR tips 行间穿插着无 tip 的普通行,默认窗口太短,
     // 路过几行热态就丢了,体感退回"每行都要重新等 500ms"(session-git-pr-context)。
     <Tooltip.Provider skipDelayDuration={1500}>
+      <SidebarActivityClock enabled={!isCollapsed && !filesSessionId} interactionRoot={sidebarRootRef}>
       <SessionAttentionUrgencyProvider urgentSessionIds={unreadFailedScheduleSessionIds}>
         <div ref={sidebarRootRef} className="relative flex flex-1 flex-col overflow-hidden">
           {/* Expanded — fade out when collapsed.
@@ -873,6 +875,7 @@ export function CCAgentSidebarUpper() {
           </div>
         </div>
       </SessionAttentionUrgencyProvider>
+      </SidebarActivityClock>
     </Tooltip.Provider>
   );
 }
@@ -4049,6 +4052,7 @@ function ExpandedView({
           与「显示全部」),见 railPanelStore 头注。 */}
       <RailPanels
         projects={visibleRailProjectsWithVendor}
+        disableSessionCollapse={filter.isSessionContentFiltered}
         sortBy={filter.sortBy}
         unclassified={railUnclassified}
         dialogues={railDialogues}
@@ -4310,6 +4314,7 @@ function RailPanelShell({
 interface RailPanelsProps {
   sortBy: Parameters<typeof sortSessionsForMainList>[1];
   projects: ProjectNode[];
+  disableSessionCollapse: boolean;
   /** 未分类(草稿等)会话——展开态 UnclassifiedSection 同源,面板内平铺在项目列表之上。 */
   unclassified: Session[];
   dialogues: Session[];
@@ -4350,6 +4355,7 @@ interface RailPanelsProps {
  */
 function RailPanels({
   projects: inputProjects,
+  disableSessionCollapse,
   unclassified: inputUnclassified,
   dialogues: inputDialogues,
   sortBy,
@@ -4635,7 +4641,7 @@ function RailPanels({
         entries: projects,
         minVisibleCount: getProjectCollapseLimit(),
         showAll: showAllProjects,
-        disableCollapse: false,
+        disableCollapse: disableSessionCollapse,
         isFiltering: false,
         isActiveEntry: (p) => p.sessions.some((s) => s.id === visibilityActiveId),
         // 豁免并入本地 running:第 20 名开外的项目若有会话在跑,rail 段灯已在
@@ -4644,7 +4650,7 @@ function RailPanels({
         hasAttentionEntry: (p) =>
           p.sessions.some((s) => panelNotifications.has(s.id) || runningSessionIds.has(s.id)),
       }),
-    [projects, showAllProjects, visibilityActiveId, panelNotifications, runningSessionIds],
+    [projects, showAllProjects, disableSessionCollapse, visibilityActiveId, panelNotifications, runningSessionIds],
   );
 
   const entryListShared = {
@@ -4751,6 +4757,7 @@ function RailPanels({
                 sessions={dialogues}
                 {...entryListShared}
                 collapsible
+                disableCollapse={disableSessionCollapse}
                 collapseLimit={getDialogueCollapseLimit()}
               />
             </div>
@@ -4773,7 +4780,7 @@ function RailPanels({
                   onToggle={() => setCindyMakeCollapsed((value) => !value)}
                   isCreateDisabled={false}
                   parentSectionCollapsed={false}
-                  disableSessionCollapse={false}
+                  disableSessionCollapse={disableSessionCollapse}
                   sessionVariant="text"
                 />
               )}
@@ -4784,6 +4791,7 @@ function RailPanels({
                   sessions={unclassified}
                   {...entryListShared}
                   collapsible
+                  disableCollapse={disableSessionCollapse}
                   collapseLimit={getProjectSessionCollapseLimit()}
                 />
               )}
@@ -4918,6 +4926,7 @@ function RailPanels({
               sessions={openProject.sessions}
               {...entryListShared}
               collapsible
+              disableCollapse={disableSessionCollapse}
               collapseLimit={getProjectSessionCollapseLimit()}
             />
           </div>

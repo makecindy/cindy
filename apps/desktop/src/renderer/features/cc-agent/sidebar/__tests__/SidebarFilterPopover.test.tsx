@@ -3,6 +3,8 @@ import React, { useState } from 'react';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SidebarFilterPopover } from '../SidebarFilterPopover';
+import { SidebarActivityClock } from '../SidebarActivityClock';
+import { SIDEBAR_IDLE_COLLAPSE_KEY } from '../../lib/sidebarCollapseConfig';
 import type { UseSidebarFilterReturn } from '../../hooks/useSidebarFilter';
 import translations from '@/i18n/locales/zh-CN/common.json';
 
@@ -94,6 +96,27 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('sidebar display settings menu', () => {
+  // #11282: the production display menu must default to unchecked and restore
+  // an explicit choice on remount. Other menu tests do not cover persistence.
+  it('persists the opt-in for 30-minute folding', async () => {
+    localStorage.removeItem(SIDEBAR_IDLE_COLLAPSE_KEY);
+    const mount = () => render(
+      <SidebarActivityClock enabled={false}><Preview filter={makeFilter()} /></SidebarActivityClock>,
+    );
+    const first = mount();
+    const getChoice = (menu: HTMLElement) => within(menu).getByRole('menuitemcheckbox', {
+      name: '闲置 30 分钟后自动收起',
+    });
+    const choice = getChoice(await openSubmenu(/^显示/));
+    expect(choice.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(choice);
+    expect(choice.getAttribute('aria-checked')).toBe('true');
+    first.unmount();
+    const reopened = mount();
+    expect(getChoice(await openSubmenu(/^显示/)).getAttribute('aria-checked')).toBe('true');
+    reopened.unmount();
+    localStorage.removeItem(SIDEBAR_IDLE_COLLAPSE_KEY);
+  });
   it('does not enumerate project menu rows while closed, and uses fresh props on open', async () => {
     const projects = [] as NonNullable<
       React.ComponentProps<typeof SidebarFilterPopover>['allKnownProjects']

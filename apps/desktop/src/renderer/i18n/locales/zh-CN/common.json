@@ -16409,7 +16409,11 @@
         "awaitingPluginSetup": "等待插件设置",
         "awaitingInputHandoff": "等待代输入"
       },
+      "expandAllSessions": "展开全部任务",
+      "collapseInactiveSessions": "收起不活跃任务",
       "showAllSessions": "显示全部 {{count}} 项",
+      "showMoreSessions": "再显示 {{count}} 项",
+      "autoCollapseIdleTasks": "闲置 {{minutes}} 分钟后自动收起",
       "allSessions": "全部任务",
       "scopeLocalSessions": "本机任务",
       "dialogues": "对话",
