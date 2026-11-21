@@ -1512,7 +1512,8 @@
         {
           "id": "gemini-3.5-flash",
           "name": "Gemini 3.5 Flash",
-          "contextWindow": 1000000
+          "contextWindow": 1000000,
+          "defaultEnabled": false
         },
         {
           "id": "gemini-3.5-flash-lite",

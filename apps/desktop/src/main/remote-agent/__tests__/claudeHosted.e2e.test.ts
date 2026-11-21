@@ -559,7 +559,8 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
-  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect', disconnectHandoff = false) {
+  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect',
+    { disconnectHandoff = false, replayAttachments = false } = {}) {
     const reconnect = failure === 'reconnect' || failure === 'scheduled-reconnect';
     const continuation = 'Continue the remaining work.';
     const oldRequestsWithContinuation = () => observations.filter(request =>
@@ -571,6 +572,8 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     const project = path.join(caseRoot, 'project');
     fs.mkdirSync(project, { recursive: true });
     const marker = `CONTEXT_${randomUUID()}`;
+    const image = { originalName: 'handoff-screenshot.png', url: `cindy-media://blobs/${'a'.repeat(64)}.png`, mimeType: 'image/png' };
+    const file = { name: 'handoff-notes.pdf', path: path.join(caseRoot, 'guest-private-files', 'handoff-notes.pdf') };
     const completed = path.join(project, 'completed-step.txt');
     const remaining = path.join(project, 'remaining-step.txt');
     const task = randomUUID();
@@ -779,7 +782,10 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     try {
       await open(); oldNative = active.id;
       const user = 'Complete step one, report its receipt and the remaining step, then wait.';
-      history.push({ clientId: randomUUID(), sessionId: task, role: 'user', content: user, createdAt: Date.now() });
+      const content = replayAttachments
+        ? JSON.stringify({ text: user, images: [image], files: [file], slashCommandRanges: [] })
+        : user;
+      history.push({ clientId: randomUUID(), sessionId: task, role: 'user', content, createdAt: Date.now() });
       if (live) await live.send(user);
       else await active.send({ type: 'user', content: user });
       await vi.waitFor(() => expect(events.filter(event => event.type === 'done')).toHaveLength(1), { timeout: 30_000, interval: 20 });
@@ -964,6 +970,17 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         expect(fs.existsSync(remaining)).toBe(false);
       }
       expect(freshRequests[0].body.includes(marker), 'fresh CLI request must include old tool receipt').toBe(true);
+      if (replayAttachments) {
+        const request = JSON.parse(freshRequests[0].body) as { messages: Array<{ role: string; content: unknown }> };
+        const firstUser = contentText(request.messages.find(message => message.role === 'user')?.content);
+        expect(firstUser.includes('[Attachment references:'), 'fresh CLI request must include attachment references').toBe(true);
+        expect(firstUser).toContain(user);
+        expect(firstUser).toContain(image.originalName);
+        expect(firstUser).toContain(image.url);
+        expect(firstUser).toContain(file.name);
+        expect(firstUser).not.toContain(file.path);
+        expect(firstUser).not.toContain('guest-private-files');
+      }
       expect(freshRequests[0].body.match(/Continue the remaining work\./g)).toHaveLength(1);
       expect(events.some(event => event.type === 'text' && JSON.stringify(event.data).includes('Remaining step completed.'))).toBe(true);
       if (failure === 'run' || failure === 'idle-send') expect(oldRequestsWithContinuation()).toBeGreaterThan(0);
@@ -1003,6 +1020,11 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     await exercise('a', 'idle-send');
   });
   it('fails to finish the remaining action when the production handoff sink is disconnected', { timeout: 90_000 }, async () => {
-    await expect(exercise('a', 'cold', true)).rejects.toThrow('fresh CLI request must include old tool receipt');
+    await expect(exercise('a', 'cold', { disconnectHandoff: true })).rejects.toThrow('fresh CLI request must include old tool receipt');
+  });
+  // E2E: the shared quota switch builds from the saved user envelope. The
+  // replacement CLI's first loopback request must include references but no file path.
+  it('replays image references and file names in the first replacement CLI request', { timeout: 90_000 }, async () => {
+    await exercise('a', 'cold', { replayAttachments: true });
   });
 });

@@ -105,6 +105,7 @@
     "test:unit:related": "node scripts/test-workspaces.mjs --tier unit --related",
     "test:integration": "pnpm test:runner && node scripts/test-workspaces.mjs --tier integration",
     "test:e2e": "pnpm test:runner && node scripts/test-workspaces.mjs --tier e2e",
+    "test:e2e:side-chat-orca": "node apps/desktop/scripts/side-chat-orca-e2e.mjs",
     "test:all": "pnpm test:runner && node scripts/test-workspaces.mjs --all",
     "test:git-integration": "pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration",
     "test:personal-database": "node --test scripts/__tests__/personal-build-database.test.mjs",

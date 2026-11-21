@@ -220,6 +220,48 @@ it('dials a device of the account again when its connection drops while the dire
 });
 
 /** 测试价值
+ * - 生产入口与可观察结果：PortableSocket 在名册里看到同账号设备在线后的拨号（Desktop worker、Node Host 与手机共用）。
+ *   设备号大的一方平时不拨；对方的拨号迟迟不来时自己拨过去，对方按时拨进来时一次也不拨。
+ * - Bug／规则依据：2026-11-21 真机，手机被强杀后重启，设备号比手机小、只能经中转的电脑抱着旧连接不再拨，
+ *   手机这边也不拨，这台电脑在手机上离线 20 秒到 15 分钟。
+ * - 现有覆盖缺口：上一条只覆盖设备号小的一方在连接断开后重拨，没有「该对方拨、对方不拨」的情形。
+ * - 最小失败输入：一台在线、设备号更小的同账号设备，以及它拨进来或不拨进来两种情况。
+ * - tier：unit，真实路由与证书，内存传输，计时器用替身推进；两行合计约 30 毫秒。 */
+it.each([['never comes', false], ['comes in time', true]] as const)(
+  'dials the lower-id device itself only when that device\'s dial %s', async (_name, dialsIn) => {
+    const local = generateIdentity('z-local'), remote = generateIdentity('b-remote');
+    const { root, bootstrap } = createPrivateNetwork('Late dial', local);
+    const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
+    const device: DeviceView = { certificate, name: 'Remote', online: true, remoteControlEnabled: true, capabilities: [] };
+    const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
+      send() {}, presence() {}, onDatagram() {}, close() {} });
+    const remoteId = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+    const channel = (): PeerChannel => ({ remoteId, send() {}, onData() {}, onClose() {}, close() {}, path: () => 'relay' });
+    const connect = vi.fn(async () => channel());
+    let incoming: (channel: PeerChannel) => void = () => undefined;
+    const socket = await AgentNetSocket.openWithBindings({
+      client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
+        connect: async () => uplink },
+      userId: bootstrap.ownerCertificate.subject,
+      bindings: { verifyCertificate, createTransport: async (request) => {
+        incoming = request.onIncoming;
+        return { id: 'local', dial: {}, connect, close: async () => undefined };
+      } },
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+      if (dialsIn) incoming(channel());
+      // Not before the other side had its chance: the delay is LATE_DIAL_MS within ±20%.
+      await vi.advanceTimersByTimeAsync(700);
+      expect(connect).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(connect).toHaveBeenCalledTimes(dialsIn ? 0 : 1);
+      expect(socket.pathTo('b-remote')).toBe('relay');
+    } finally { vi.useRealTimers(); socket.close(); }
+  });
+
+/** 测试价值
  * - 生产入口与可观察结果：PortableSocket 的拨号与入站连接（Desktop worker 与手机共用）；对端重建节点后再拨进来，
  *   本机立刻换用新连接、帧写到新连接上；同时拨号时仍只留一条。
  * - Bug／规则依据：docs/benchmarks/agent-net-session-2026-11-13 卡死复测，控制端重建节点后被控端拒收新连接，

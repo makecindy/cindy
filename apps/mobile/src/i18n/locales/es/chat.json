@@ -208,6 +208,10 @@
     "retryIn": "Reintento automático en {{seconds}} s"
   },
   "subscriptionAccountError": {
+    "poolModelLimited": "Se ha alcanzado el límite de uso de la suscripción para este modelo. Puedes cambiar de modelo.",
+    "poolRetryUntil": "Vuelve a intentarlo después de {{resetAt}}.",
+    "poolOtherSignedOut": "Otra cuenta de suscripción tiene la sesión cerrada. Inicia sesión en el equipo que ejecuta la tarea y vuelve a intentarlo.",
+    "poolUnavailable": "No hay ninguna cuenta de suscripción disponible para este modelo. Cambia de modelo o revisa las cuentas en el equipo que ejecuta la tarea.",
     "limited": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Espera a que se restablezca o elige otra fuente de modelos.",
     "limitedUntil": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Restablecimiento previsto: {{resetAt}}. Espera hasta entonces o elige otra fuente de modelos.",
     "loginRequired": "La cuenta de suscripción de esta tarea requiere iniciar sesión de nuevo. Hazlo en el ordenador que ejecuta la tarea y vuelve a intentarlo.",

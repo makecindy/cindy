@@ -167,6 +167,29 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return client;
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
+  /*
+   * Test value (engineering-conventions §3.2)
+   * - Production entry and observable result: createHostDeviceLink over the real loopback relay;
+   *   a mobile controller can create a project directory, list its parent and stat the result.
+   * - Bug/rule basis: the Host returned NOT_FOUND for fs:list-dir despite the existing allowlist
+   *   and desktop implementation; architecture-invariants §5 requires both launchers to be wired.
+   * - Existing coverage gap: this integration covered tasks and model controls, not the mobile
+   *   project-directory picker or the hold behavior of directory creation.
+   * - Minimal failing input: mkdir-p followed by list-dir on the parent; an unpatched Host fails
+   *   before any filesystem work, and mkdir-p must also be rejected during a desktop profile hold.
+   * - Tier: integration (real relay + temporary profile/filesystem); the whole file takes about
+   *   10 seconds because it also reuses the existing multi-client/database/connection fixtures.
+   */
+  const createdDir = path.join(profile, 'mobile-created-project');
+  const made = await clients[0].invoke('host', { channel: 'fs:mkdir-p', args: [{ path: createdDir }] });
+  assert.equal(made.ok, true, JSON.stringify(made));
+  assert.equal(made.result.resolvedPath, createdDir);
+  const listing = await clients[0].invoke('host', { channel: 'fs:list-dir', args: [{ path: profile }] });
+  assert.equal(listing.ok, true, JSON.stringify(listing));
+  assert.equal(listing.result.resolvedPath, profile);
+  assert.ok(listing.result.entries.some(entry => entry.name === 'mobile-created-project' && entry.kind === 'dir'));
+  const stat = await clients[0].invoke('host', { channel: 'fs:stat-path', args: [{ path: createdDir }] });
+  assert.deepEqual(stat.result, { kind: 'dir', resolvedPath: createdDir });
   // A full round trip from the desktop controller must preview and mutate the Host's project.
   const projectArchive = input => clients[2].invoke('host', { channel: 'local-db:sessions:project-archive',
     args: [{ directory: '/project', ...input }] });
@@ -301,7 +324,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // page's call are refused with the typed reason, and none reaches its handler; reads still answer.
   held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: held for this test';
   for (const [channel, args] of [['maker:input:enqueue', ['task', { clientId: 'held', text: 'refused' }]],
-    ['maker:create-session', [{}]], ['maker:session:prewarm', ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }]],
+    ['maker:create-session', [{}]], ['fs:mkdir-p', [{ path: path.join(profile, 'held-project') }]], ['maker:session:prewarm', ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }]],
     [MCP_APPS_INVOKE, ['task', {}]], [PLUGIN_OAUTH_CHANNEL, [{}]]]) {
     const reply = await clients[0].invoke('host', { channel, args });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
