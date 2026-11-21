@@ -436,6 +436,17 @@ function assertRemotePiContextProfileAvailable(
   );
 }
 const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
+/** Keep image history below gateway request-body limits; Pi otherwise allows 4.5 MiB per image. */
+const PI_IMAGE_INPUT_LIMITS = {
+  images: {
+    resize: {
+      maxWidth: 1568,
+      maxHeight: 1568,
+      maxBytes: 524_288,
+      jpegQuality: 75,
+    },
+  },
+} as const;
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
 /** Pi may spend over 30s restoring a large session during startup; keep this absolute and local to resume. */
@@ -2492,6 +2503,7 @@ export class PiAgent extends BaseAgent {
           : {}),
         reasoning: m.efforts.length > 0,
         input: supportsImageInput ? ['text', 'image'] : ['text'],
+        ...(supportsImageInput ? { inputLimits: PI_IMAGE_INPUT_LIMITS } : {}),
         // Keep request capacity at least as large as the catalog default. A
         // smaller working budget is expressed by native compaction settings.
         contextWindow: Math.max(m.contextWindow, this.deps.resolveModelContextLimit?.(gatewayProviderId ?? 'xd', m.id) ?? 0),
