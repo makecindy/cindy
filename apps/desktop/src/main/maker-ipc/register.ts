@@ -972,7 +972,7 @@ import {
   readModelPriceOverrideView,
   setModelPriceOverride,
 } from '../usage/modelPriceOverrideStore.js';
-import { ClaudeOutputLagTimingGuard, type ModelUsageCumulative } from '../usage/modelUsageDelta.js';
+import { ClaudeOutputLagTimingGuard, computeModelUsageDeltas, type ModelUsageCumulative } from '../usage/modelUsageDelta.js';
 
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { readSessionModelForUsage, unpricedSubscriptionValueMarker } from './turnUsageSessionDefaults.js';
@@ -6364,7 +6364,21 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       persistAgentPlanModeChangeWith({ ownerDb, sessionBindings, persistSessionFields, log }, session, event);
       return;
     }
-    handleSessionEvent(ownerEventDependencies, session, event, usageAccount.forEvent(event.sessionTurnGeneration ?? session.getTurnGeneration()));
+    const generation = event.sessionTurnGeneration ?? session.getTurnGeneration();
+    handleSessionEvent(ownerEventDependencies, session, event, usageAccount.forEvent(generation), () => {
+      // Claude reports process-cumulative usage. Consume a denied turn's snapshot
+      // in memory so its delta cannot be charged to the next admitted turn.
+      if (event.type !== 'done' || event.source !== 'claude-code' || session.agentKind !== 'claude-code'
+          || generation !== session.getTurnGeneration() || sessionBindings.getSession(session.id) !== session) return;
+      const data = event.data as { modelUsage?: Record<string, unknown>; total_cost_usd?: number } | undefined;
+      if (data?.modelUsage && typeof data.modelUsage === 'object') {
+        const { next } = computeModelUsageDeltas(lastReportedModelUsageBySession.get(session.id), data.modelUsage);
+        lastReportedModelUsageBySession.set(session.id, next);
+      }
+      if (typeof data?.total_cost_usd === 'number' && data.total_cost_usd >= 0) {
+        lastReportedCostUsdBySession.set(session.id, data.total_cost_usd);
+      }
+    });
   };
   const ownerDb = getCurrentDbClientSnapshot();
   const ownerEventDependencies = Object.create(sessionEventDependencies) as SessionEventDependencies;

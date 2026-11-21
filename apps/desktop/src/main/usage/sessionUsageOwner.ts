@@ -24,7 +24,9 @@ export function bindSessionUsageAccount(onNewLifetime?: () => void) {
   function admitCandidate(generation: number) {
     if (!candidate || candidate.generation !== generation || !candidate.dispatching) return;
     const account = candidate.account;
-    if (account.mode === admitted.mode && account.dataOwnerId === admitted.dataOwnerId
+    const sameTaskOwner = admitted.dataOwnerId === null ||
+      (account.mode === admitted.mode && account.dataOwnerId === admitted.dataOwnerId);
+    if (sameTaskOwner && account.dataOwnerId !== null && account.lifetime === getDataOwnerLifetime()
         && account.lifetime !== admitted.lifetime) {
       admitted = account;
       firstGeneration = generation;
@@ -44,7 +46,7 @@ export function bindSessionUsageAccount(onNewLifetime?: () => void) {
       if (candidate?.generation === generation) candidate.dispatching = true;
     },
     forEvent(generation: number) {
-      if (candidate?.generation === generation && !candidate.dispatching) return expired;
+      // Until dispatch, the provider can only be finishing the previously admitted turn.
       // Some providers produce their first real event before send() acknowledges.
       admitCandidate(generation);
       return generation < firstGeneration ? expired : admitted.current;

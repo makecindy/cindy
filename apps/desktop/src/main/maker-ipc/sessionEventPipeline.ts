@@ -43,6 +43,7 @@ export function handleSessionEvent(
   session: Session,
   event: AgentEvent,
   admitUsage?: () => boolean,
+  observeUnbilledUsage?: () => void,
 ): void {
   const prepared = prepareSessionEvent(deps, session, event, admitUsage);
   if (!prepared) return;
@@ -78,4 +79,5 @@ export function handleSessionEvent(
   };
   if (admitUsage === undefined) record();
   else if (admitUsage()) turnUsageAdmission.run(admitUsage, record);
+  else observeUnbilledUsage?.();
 }
