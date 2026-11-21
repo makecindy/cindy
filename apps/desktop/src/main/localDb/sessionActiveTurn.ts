@@ -51,7 +51,8 @@
 
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 
-import { getDbClient } from './client/current';
+import type { DbClient } from './client/DbClient.js';
+import { getCurrentDbClientSnapshot, getDbClient, type CurrentDbClientSnapshot } from './client/current';
 import { listCindyMakePendingFailureSessionIds } from './cindyMakeAttention';
 import {
   getSessionInterruptionBootAt,
@@ -155,18 +156,25 @@ const _writeChains = new Map<string, Promise<void>>();
 // Captured synchronously at the running edge, before either durable queue can
 // stall. Notification delivery uses this turn boundary when its DB preview is
 // unavailable; a later turn must never inherit the previous turn's dedupe key.
-const _notificationTurns = new Map<string, { startedAt: number; sequence: number; endedAt?: number }>();
+interface NotificationTurn {
+  startedAt: number;
+  sequence: number;
+  endedAt?: number;
+  continuation?: { startedAt: number; clientEpoch: number };
+}
+const _notificationTurns = new Map<string, NotificationTurn>();
 let _notificationTurnSequence = 0;
 
 export function getSessionNotificationTurnSignal(sessionId: string): { id: string; fallbackEventId: string; ended: boolean } | undefined {
   const turn = _notificationTurns.get(sessionId);
   if (!turn) return undefined;
+  const segmentStartedAt = turn.continuation?.startedAt ?? turn.startedAt;
   return {
     id: `signal:${turn.sequence}`,
     ended: turn.endedAt !== undefined,
     // The mobile deduper can reconcile an anonymous scheduler completion by
     // terminal time even while SQLite is unavailable.
-    fallbackEventId: `turn:${turn.startedAt}:${turn.endedAt ?? turn.startedAt}:signal-${turn.sequence}`,
+    fallbackEventId: `turn:${segmentStartedAt}:${turn.endedAt ?? segmentStartedAt}:signal-${turn.sequence}`,
   };
 }
 
@@ -174,7 +182,7 @@ export function getSessionNotificationTurnSignal(sessionId: string): { id: strin
 function captureSessionTurnEnd(sessionId: string, endedAt: number): number {
   const turn = _notificationTurns.get(sessionId);
   // A delayed previous-turn completion must not freeze the new turn's clock.
-  if (!turn || endedAt < turn.startedAt) return endedAt;
+  if (!turn || endedAt < (turn.continuation?.startedAt ?? turn.startedAt)) return endedAt;
   turn.endedAt ??= endedAt;
   return turn.endedAt;
 }
@@ -231,6 +239,80 @@ function queueSessionTurnStarted(sessionId: string, durable: boolean): Promise<v
       if (durable) throw err;
     }
   }, durable);
+}
+
+/**
+ * A Desktop silent continuation starts a new SDK segment in the same product
+ * turn. Advance the interruption marker without allocating a new notification
+ * identity. Only a confirmed non-dispatch may settle this exact marker.
+ */
+export async function markSessionSilentContinuationStarted(
+  sessionId: string,
+  owner: CurrentDbClientSnapshot,
+  isCurrent: () => boolean,
+): Promise<() => Promise<void>> {
+  const startedAt = Date.now();
+  const turn = _notificationTurns.get(sessionId);
+  const canWrite = () =>
+    !isEndedWriteSuppressed() && getCurrentDbClientSnapshot() === owner && isCurrent();
+  const db = owner.client.drizzle;
+  const continuation = { startedAt, clientEpoch: owner.clientEpoch };
+  await chainWrite(sessionId, async () => {
+    if (!canWrite()) throw new Error('Silent continuation is no longer current');
+    const result = await db.update(sessions)
+      .set({ activeTurnStartedAt: startedAt })
+      .where(and(
+        eq(sessions.id, sessionId),
+        lt(sql`COALESCE(${sessions.activeTurnStartedAt}, 0)`, startedAt),
+        lt(sql`COALESCE(${sessions.lastTurnEndedAt}, 0)`, startedAt),
+      )).run();
+    if (result.changes !== 1) throw new Error('Silent continuation start marker was not saved');
+    if (turn && _notificationTurns.get(sessionId) === turn && getCurrentDbClientSnapshot() === owner) {
+      // A normal terminal may arrive synchronously when provider send starts.
+      // It must capture a new end while keeping this product turn's dedupe key.
+      turn.continuation = continuation;
+      turn.endedAt = undefined;
+    }
+  }, true);
+
+  return async () => {
+    if (isEndedWriteSuppressed() || getCurrentDbClientSnapshot() !== owner) return;
+    const notifyContext = captureTurnEndedPersistedContext();
+    await chainWrite(sessionId, async () => {
+      if (isEndedWriteSuppressed() || getCurrentDbClientSnapshot() !== owner ||
+        _notificationTurns.get(sessionId) !== turn) return;
+      try {
+        const result = await db.update(sessions)
+          .set({ lastTurnEndedAt: startedAt })
+          .where(and(
+            eq(sessions.id, sessionId),
+            eq(sessions.activeTurnStartedAt, startedAt),
+            lt(sql`COALESCE(${sessions.lastTurnEndedAt}, 0)`, startedAt),
+          )).run();
+        if (result.changes !== 1) return;
+        if (turn?.continuation === continuation && _notificationTurns.get(sessionId) === turn
+          && turn.endedAt === undefined) {
+          turn.endedAt = startedAt;
+        }
+        notifyTurnEndedPersisted(sessionId, startedAt, notifyContext);
+      } catch (error) {
+        log.warn('silent continuation marker settlement failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+  };
+}
+
+/** The elapsed clock for that same product turn still uses its original start. */
+export function getContinuedProductTurnStartedAt(
+  sessionId: string, segmentStartedAt: number | null, client: DbClient,
+): number | undefined {
+  const turn = _notificationTurns.get(sessionId);
+  if (!turn?.continuation || turn.continuation.startedAt !== segmentStartedAt) return;
+  const owner = getCurrentDbClientSnapshot();
+  if (owner?.client === client && owner.clientEpoch === turn.continuation.clientEpoch) return turn.startedAt;
 }
 
 /**
@@ -735,6 +817,8 @@ function summarizeRecoveryContent(raw: string): string {
 /** 测试专用:重置模块内存态。 */
 export function _resetSessionActiveTurnStateForTests(): void {
   _writeChains.clear();
+  _notificationTurns.clear();
+  _notificationTurnSequence = 0;
   _quitFrozen = false;
   _endedWriteSuppressions = 0;
   _onTurnEndedPersisted = null;

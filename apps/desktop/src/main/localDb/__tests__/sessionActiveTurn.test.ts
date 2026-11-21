@@ -8,12 +8,20 @@
  */
 
 import Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Session, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
+import { handleDesktopSilentStopTurnEnd } from '../../maker-ipc/silentStopTurnEnd.desktop.js';
+import { ProductTurnWallClockTracker } from '../../maker-ipc/turnWallClock.js';
+import { SilentStopAutoResumeGuard } from '../../maker-ipc/silentStopAutoResume.js';
+import { SilentStopTurnLeaseGate } from '../../maker-ipc/sessionTurnLease.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../../shared/sessionSource.js';
 
 import type { DbClient } from '../client/DbClient.js';
-import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
+import { clearCurrentDbClient, getCurrentDbClientSnapshot, setCurrentDbClient } from '../client/current.js';
 import * as schema from '../schema.js';
 import { listErrorTailPendingRows } from '../sessionActiveTurn.js';
 
@@ -40,10 +48,10 @@ describe('sessionActiveTurn', () => {
     rawDb = null;
   });
 
-  function createTestDbClient(): DbClient {
-    const dbHandle = new Database(':memory:');
+  function createTestDbClient(filename = ':memory:', reopen = false): DbClient {
+    const dbHandle = new Database(filename);
     rawDb = dbHandle;
-    dbHandle.exec(`
+    if (!reopen) dbHandle.exec(`
       CREATE TABLE sessions (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL DEFAULT 'New Maker',
@@ -571,6 +579,235 @@ describe('sessionActiveTurn', () => {
     markSessionTurnStarted('s-notify-ack');
     const endedAt = await ackSessionTurnEndedDurable('s-notify-ack');
     expect(notified).toEqual([endedAt]);
+  });
+
+  async function silentContinuation({
+    deferPreviousEnd = false, reject = false, missingTask = false,
+  } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), 'cindy-l341-'));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const file = join(dir, 'sessions.sqlite');
+    const markers = await import('../sessionActiveTurn.js');
+    const id = 'continued';
+    const db = createTestDbClient(file);
+    if (!missingTask) await seedSession(db, id);
+    const ownerDb = getCurrentDbClientSnapshot();
+    const startedAt = Date.now();
+    let now = startedAt;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    markers.markSessionTurnStarted(id);
+    await markers.drainSessionActiveTurnWrites(id);
+    now += 100;
+    const oldEndedAt = now;
+    let releasePreviousEnd!: () => void;
+    const previousBarrier = deferPreviousEnd ? new Promise<void>((resolve) => { releasePreviousEnd = resolve; }) : Promise.resolve();
+    markers.markSessionTurnEndedAfterBarrier(id, previousBarrier);
+    await Promise.resolve();
+    await markers.drainSessionActiveTurnWrites(id);
+    now += 1500;
+    const resumedAt = now;
+
+    const gate = new SilentStopTurnLeaseGate();
+    const log = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn(), child: () => log };
+    const productClock = new ProductTurnWallClockTracker();
+    productClock.start(id, startedAt);
+    const settle = vi.fn(async () => {});
+    const surface = vi.fn(async () => {});
+    const hiddenMessage = vi.fn(async () => ({} as never));
+    const events: AgentEvent[] = [];
+    let wake: (() => void) | undefined;
+    let closed = false;
+    let clockResult: number | undefined;
+    let sentStartedAt: number | null | undefined;
+    let releaseFinalEnd!: () => void;
+    const finalBarrier = new Promise<void>((resolve) => { releaseFinalEnd = resolve; });
+    const send = vi.fn(async () => {
+      expect(hiddenMessage).toHaveBeenCalledOnce();
+      const row = await readMarks(db, id);
+      sentStartedAt = row?.active_turn_started_at;
+      if (reject) throw new TurnDispatchRejectedError('fixture rejects without sending');
+    });
+    const session = new Session({ id, workDir: dir, agentKind: 'claude-code', capabilities: {} as never,
+      handle: {
+        agentKind: 'claude-code', send,
+        close: async () => { closed = true; wake?.(); },
+        abort: async () => {},
+        setInteractionResolver: vi.fn(),
+        async *events() {
+          while (!closed) {
+            if (events.length) yield events.shift()!;
+            else await new Promise<void>((resolve) => { wake = resolve; });
+          }
+        },
+      } as unknown as AgentSessionHandle, logger: log, turnStallMs: 0 });
+    onTestFinished(() => session.close());
+    const emit = (event: AgentEvent) => { events.push(event); wake?.(); };
+    const done = vi.fn(() => {
+      clockResult = productClock.finish(id);
+      markers.markSessionTurnEndedAfterBarrier(id, finalBarrier);
+    });
+    session.onEvent((event) => {
+      if (event.type === 'done') done();
+    });
+    const guard = new SilentStopAutoResumeGuard({ isEnabled: () => true, now: () => now, log });
+    now = startedAt;
+    guard.noteUserSend(id);
+    now = resumedAt;
+    gate.schedule(id, session, 'lease');
+    let boundSession: Session | undefined = session;
+    const run = () => handleDesktopSilentStopTurnEnd(session, oldEndedAt, 'lease', undefined, {
+      ownerDb, getBoundSession: () => boundSession,
+      silentStopTurnLeaseGate: gate, agentInputCoordinatorHolder: null, silentStopAutoResumeGuard: guard,
+      sessionListActivityTracker: { captureContinuation: () => () => {} },
+      productTurnWallClockTracker: productClock, advanceRuntimeRecoveryNotice: () => {},
+      createDbMessage: hiddenMessage, settleSilentStopDone: settle, surfaceSilentStopExhaustedBanner: surface, log,
+    });
+    const reopen = () => {
+      clearCurrentDbClient(db);
+      rawDb!.close();
+      markers._resetSessionActiveTurnStateForTests();
+      createTestDbClient(file, true);
+      markers._setBootAtMsForTests(now + 100);
+      return markers.listInterruptedPendingSessionIds();
+    };
+    return {
+      db, file, id, markers, run, reopen, hiddenMessage, settle, surface, send, productClock,
+      sentStartedAt: () => sentStartedAt,
+      done, releaseFinalEnd, releasePreviousEnd,
+      startedAt, oldEndedAt, resumedAt, tick: () => (now += 100),
+      clockResult: () => clockResult, emit, session,
+      unbindSession: () => { boundSession = undefined; },
+    };
+  }
+
+  // L341 / standard. Execute the directly imported Desktop continuation adapter
+  // and a real Session on fixture provider/DB ports. Reopening SQLite detects a
+  // missing start even when the previous SDK segment already wrote its end.
+  it.each(['quit', 'logout', 'crash'] as const)('recovers a silent continuation across %s', async (boundary) => {
+    const h = await silentContinuation();
+    await h.run();
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(h.sentStartedAt()).toBe(h.resumedAt);
+    expect(h.surface).not.toHaveBeenCalled();
+    h.tick();
+    if (boundary === 'quit') h.markers.freezeSessionActiveTurnMarkers();
+    const release = boundary === 'logout' ? h.markers.beginSessionTurnEndedSuppression() : undefined;
+    if (boundary !== 'crash') h.markers.markSessionTurnEndedAfterBarrier(h.id, Promise.resolve());
+    await Promise.resolve();
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    release?.();
+    expect(await h.reopen()).toEqual([h.id]);
+  });
+
+  it('keeps the product clock and notification identity across a silent continuation and its real done', async () => {
+    const h = await silentContinuation({ deferPreviousEnd: true });
+    const signal = h.markers.getSessionNotificationTurnSignal(h.id);
+    expect(signal?.ended).toBe(true);
+    const inProvider = Promise.withResolvers<void>();
+    const emitDone = Promise.withResolvers<void>();
+    const recordSend = h.send.getMockImplementation()!;
+    h.send.mockImplementationOnce(async () => {
+      await recordSend();
+      inProvider.resolve();
+      await emitDone.promise;
+      h.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+      await vi.waitFor(() => expect(h.done).toHaveBeenCalledOnce());
+    });
+    const continuation = h.run();
+    await Promise.race([inProvider.promise, continuation]);
+    try {
+      expect(h.send).toHaveBeenCalledOnce();
+      expect(h.markers.getSessionNotificationTurnSignal(h.id)).toMatchObject({ id: signal?.id, ended: false });
+      h.releasePreviousEnd();
+      await Promise.resolve();
+      await h.markers.drainSessionActiveTurnWrites(h.id);
+      expect((await readMarks(h.db, h.id))?.last_turn_ended_at).toBe(h.oldEndedAt);
+      expect(h.markers.getContinuedProductTurnStartedAt(h.id, h.resumedAt, h.db)).toBe(h.startedAt);
+      expect(h.productClock.start(h.id)).toBe(false);
+      h.tick();
+    } finally {
+      emitDone.resolve();
+      await continuation;
+    }
+    const doneAt = Date.now();
+    expect(h.clockResult()).toBe(doneAt - h.startedAt);
+    expect(h.markers.getSessionNotificationTurnSignal(h.id)).toMatchObject({
+      id: signal?.id, ended: true,
+      fallbackEventId: expect.stringContaining(`turn:${h.resumedAt}:${doneAt}:`),
+    });
+    expect((await readMarks(h.db, h.id))?.last_turn_ended_at).toBe(h.oldEndedAt);
+    h.markers.freezeSessionActiveTurnMarkers(); // A real done already captured its end.
+    h.releaseFinalEnd();
+    await Promise.resolve();
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    expect((await readMarks(h.db, h.id))?.last_turn_ended_at).toBe(doneAt);
+    expect(await h.reopen()).toEqual([]);
+  });
+
+  it('settles the marker on an explicit provider rejection and keeps the failure outcome', async () => {
+    const h = await silentContinuation({ reject: true });
+    await h.run();
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(h.surface).toHaveBeenCalledWith(h.id, 'dispatch-not-accepted');
+    expect(h.settle).toHaveBeenCalledOnce();
+    expect(await h.reopen()).toEqual([]);
+  });
+
+  it('does not end a new turn if a previous continuation is definitively rejected late', async () => {
+    const h = await silentContinuation();
+    h.send.mockImplementationOnce(async () => {
+      h.tick();
+      h.markers.markSessionTurnStarted(h.id);
+      await h.markers.drainSessionActiveTurnWrites(h.id);
+      throw new TurnDispatchRejectedError('fixture rejects after replacement start');
+    });
+    await h.run();
+    expect(h.send).toHaveBeenCalledOnce();
+    const marks = await readMarks(h.db, h.id);
+    expect(marks?.active_turn_started_at).toBeGreaterThan(h.resumedAt);
+    expect(marks?.last_turn_ended_at).toBe(h.oldEndedAt);
+  });
+
+  it('leaves unconfirmed dispatch to Session fencing and retains the failure outcome', async () => {
+    const h = await silentContinuation();
+    h.session.onStatusChange((status) => { if (status === 'closed') h.unbindSession(); });
+    h.send.mockImplementationOnce(async () => { throw new TurnDispatchUnconfirmedError('fixture acceptance unknown'); });
+    await h.run();
+    expect(h.session.getStatus()).toBe('closed');
+    expect(h.surface).toHaveBeenCalledWith(h.id, 'dispatch-error');
+    expect((await readMarks(h.db, h.id))?.last_turn_ended_at).toBe(h.oldEndedAt);
+  });
+
+  it('does not dispatch if no task row can record the continuation', async () => {
+    const h = await silentContinuation({ missingTask: true });
+    await h.run();
+    expect(h.send).not.toHaveBeenCalled();
+    expect(h.surface).toHaveBeenCalledWith(h.id, 'dispatch-error');
+  });
+
+  it.each(['owner', 'runtime'])('stops a silent continuation superseded during hidden-message persistence by a new %s', async (replacement) => {
+    const h = await silentContinuation();
+    const replacementDb = new Database(':memory:');
+    try {
+      replacementDb.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, active_turn_started_at INTEGER, last_turn_ended_at INTEGER);
+        INSERT INTO sessions VALUES ('continued', 9, 8)`);
+      const other = { ...h.db, drizzle: drizzle(replacementDb, { schema }) };
+      h.hiddenMessage.mockImplementationOnce(async () => {
+        if (replacement === 'owner') setCurrentDbClient(other, 'next-user');
+        else h.unbindSession();
+        return {} as never;
+      });
+      await h.run();
+      expect(h.send).not.toHaveBeenCalled();
+      expect(h.surface).not.toHaveBeenCalled();
+      expect(h.settle).not.toHaveBeenCalled();
+      expect((await readMarks(h.db, h.id))?.active_turn_started_at).toBe(h.startedAt);
+      expect(replacementDb.prepare('SELECT active_turn_started_at, last_turn_ended_at FROM sessions').get())
+        .toEqual({ active_turn_started_at: 9, last_turn_ended_at: 8 });
+    } finally {
+      clearCurrentDbClient();
+      replacementDb.close();
+    }
   });
 
   it('listInterruptedPendingSessionIds matches startedAt > endedAt on visible active sessions only', async () => {

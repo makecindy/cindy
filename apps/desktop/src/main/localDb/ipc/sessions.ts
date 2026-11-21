@@ -20,7 +20,7 @@ import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js'
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
 import { scheduleNativeHistoryBackupCleanup } from '../../remote-agent/controller/nativeHistoryBackup.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
-import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
+import { getContinuedProductTurnStartedAt, isEndedWriteSuppressed } from '../sessionActiveTurn.js';
 import { writeSessionListActivity } from '../sessionActivityWrite.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
 import {
@@ -1517,10 +1517,11 @@ export function registerSessionIpc(
 
   ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
-    const db = getDbClient().drizzle;
-    const row = await selectSessionWithCount(db, sid);
+    const dbClient = getDbClient();
+    const row = await selectSessionWithCount(dbClient.drizzle, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return projectSessionDetail(row, opts.resolveContextWindow);
+    const productStartedAt = getContinuedProductTurnStartedAt(sid, row.activeTurnStartedAt, dbClient);
+    return projectSessionDetail(row, opts.resolveContextWindow, productStartedAt);
   });
 
   /**

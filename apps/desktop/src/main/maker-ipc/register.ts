@@ -325,7 +325,7 @@ import { createUserMessageDurableWrite } from './userMessageDurableWrite.js';
 import { createInterruptedTurnAutoResumeHooks } from './interruptedTurnAutoResumeHooks.js';
 import { createAutoResumeRuntime } from './autoResumeRuntime.js';
 import { createSessionRuntimeFallback } from './sessionRuntimeFallback.js';
-import { handleSilentStopTurnEndWithPorts } from './silentStopTurnEnd.js';
+import { handleDesktopSilentStopTurnEnd } from './silentStopTurnEnd.desktop.js';
 import { settleSilentStopDoneWithPorts, type SilentStopSettleReason } from './silentStopSettle.js';
 import { surfaceSilentStopFailureWithPorts, type SilentStopFailureCause } from './silentStopFailure.js';
 import { createAgentSwitchBoundaryInsert, createAgentSwitchDbApply, createRememberThinkingIntent, createSwitchedSessionBootstrap, readAgentSwitchSessionRow } from './agentSwitchDepsCore.js';
@@ -5883,9 +5883,12 @@ async function handleSilentStopTurnEnd(
   session: NonNullable<ReturnType<Maker['getSession']>>,
   doneAt: number,
   turnLeaseId: string,
-  turnOrigin?: SendOrigin,
+  turnOrigin: SendOrigin | undefined,
+  ownerDb: ReturnType<typeof getCurrentDbClientSnapshot>,
 ): Promise<void> {
-  await handleSilentStopTurnEndWithPorts(session, doneAt, turnLeaseId, turnOrigin, {
+  await handleDesktopSilentStopTurnEnd(session, doneAt, turnLeaseId, turnOrigin, {
+    ownerDb,
+    getBoundSession: () => sessionBindings.getSession(session.id),
     silentStopTurnLeaseGate, agentInputCoordinatorHolder, silentStopAutoResumeGuard, sessionListActivityTracker,
     productTurnWallClockTracker, advanceRuntimeRecoveryNotice, createDbMessage, settleSilentStopDone,
     surfaceSilentStopExhaustedBanner, log,
@@ -6148,7 +6151,7 @@ const settlePluginTaskTerminal: NonNullable<SessionEventDependencies['onPluginTa
     }
   };
 
-const sessionEventDependencies: SessionEventDependencies = {
+const sessionEventDependencies: Omit<SessionEventDependencies, 'handleSilentStopTurnEnd'> = {
   onPluginTaskTerminal: settlePluginTaskTerminal,
   onSuccessfulProductTurn: finishProductTurn,
   saveRemoteNativeHistory: (sessionId, data, anchor, persisted) =>
@@ -6245,9 +6248,6 @@ const sessionEventDependencies: SessionEventDependencies = {
   },
   get agentInputCoordinatorHolder() {
     return agentInputCoordinatorHolder;
-  },
-  get handleSilentStopTurnEnd() {
-    return handleSilentStopTurnEnd;
   },
   get isRemoteAuthRetryErrorEvent() {
     return isRemoteAuthRetryErrorEvent;
@@ -6364,6 +6364,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   };
   const ownerDb = getCurrentDbClientSnapshot();
   const ownerEventDependencies = Object.create(sessionEventDependencies) as SessionEventDependencies;
+  const continueSilentStop: SessionEventDependencies['handleSilentStopTurnEnd'] =
+    (runtime, doneAt, turnLeaseId, origin) => handleSilentStopTurnEnd(runtime, doneAt, turnLeaseId, origin, ownerDb);
+  Object.defineProperty(ownerEventDependencies, 'handleSilentStopTurnEnd', { value: continueSilentStop });
   Object.defineProperty(ownerEventDependencies, 'onPluginTaskTerminal', {
     value: (...args: Parameters<NonNullable<SessionEventDependencies['onPluginTaskTerminal']>>) => {
       if (!ownerDb || getCurrentDbClientSnapshot() !== ownerDb) return;

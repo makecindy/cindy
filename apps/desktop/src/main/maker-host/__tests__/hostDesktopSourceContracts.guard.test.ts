@@ -653,6 +653,18 @@ describe('shared turn files moved out of register.ts', () => {
     expect(first).toBeLessThan(second);
   });
 
+  // Desktop owner binding must invoke its durable adapter; the shared entry alone
+  // works but loses interrupted tasks after logout or quit.
+  it('routes silent-stop continuation through the Desktop owner binding', () => {
+    const registerSource = read(path.join(desktopMain, 'maker-ipc/register.ts'));
+    const start = registerSource.indexOf('async function handleSilentStopTurnEnd(');
+    const end = registerSource.indexOf('function isFencedStaleProductTerminal(', start);
+    expect(registerSource.slice(start, end)).toContain(
+      'await handleDesktopSilentStopTurnEnd(session, doneAt, turnLeaseId, turnOrigin, {',
+    );
+    expect(registerSource).toContain('handleSilentStopTurnEnd(runtime, doneAt, turnLeaseId, origin, ownerDb)');
+  });
+
   // 原在 silentStopContinuationBinding.test.ts “binds the reserved generation via the extracted helper and rolls back
   // on send failure”。规则：续接预约的代次经 helper 绑定，sendOpts 并入续接调用，未派发与抛出两条失败都回滚。
   // 失效后果：续接失败后代次留着，后面的终止事件被当成过期丢掉。
