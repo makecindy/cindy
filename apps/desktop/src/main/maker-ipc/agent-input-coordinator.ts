@@ -353,8 +353,12 @@ export type AgentInputSendResult =
     };
 
 export interface AgentInputCoordinatorDeps {
-  /** The live session's host-reconciled send_to_session route; undefined until its runtime identity is known. */
-  sendToSessionHint?: (sessionId: string) => AgentSendToSessionHint | undefined;
+  /**
+   * The host-reconciled send_to_session route of the runtime that receives this input: 'live' for a steer
+   * into the running turn, 'send' for a dispatch whose send transaction may first apply a pending switch.
+   * Undefined when that runtime's identity is not known.
+   */
+  sendToSessionHint?: (sessionId: string, receiver: 'live' | 'send') => AgentSendToSessionHint | undefined;
   /** Revalidate a saved report against the current account's active Orca link. */
   canRestoreOrcaReport?: (sessionId: string, item: AgentInputQueuedMessage) => Promise<boolean>;
   awaitQueuePersistence?: (sessionId: string) => Promise<void>;
@@ -3024,7 +3028,7 @@ export class AgentInputCoordinator {
         beforeMutation ? assertSteerAuthority : undefined,
       );
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts, {
-        sendToSession: this.deps.sendToSessionHint?.(sessionId),
+        sendToSession: this.deps.sendToSessionHint?.(sessionId, 'live'),
       }), {
         ...(opts?.beforeMutation ? { beforeProviderStart: async () => {
           try { await opts.beforeMutation!(); }
@@ -5833,7 +5837,7 @@ export class AgentInputCoordinator {
         referenceContexts,
       );
       const makerUserMessage = buildMakerUserMessage(head, referenceContexts, {
-        sendToSession: this.deps.sendToSessionHint?.(sessionId),
+        sendToSession: this.deps.sendToSessionHint?.(sessionId, 'send'),
       });
       if (requiresOrcaReportPersistence(head)) {
         // A crash after allocation may leave a committed grant without a user

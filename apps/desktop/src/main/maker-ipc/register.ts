@@ -11257,16 +11257,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // turn 运行中登记的切换意图(下一条消息发送时刻由 send 事务 apply)。
   const agentSwitchPending = createPendingAgentSwitchRegistry();
   /**
-   * The send_to_session route projected into model input before the send transaction runs (queued
-   * dispatch, steer, context-rollover replay): the live session's host-reconciled route. Nothing while
-   * a switch to another engine is pending, because the transaction applies it first and the live
-   * session is then not the one receiving the message. A same-engine model/provider selection keeps
-   * the route, which depends only on the engine (message-source.md「发给模型的说明」).
+   * The send_to_session route projected into model input before delivery: the live session's
+   * host-reconciled route. A steer ('live') reaches that running runtime as is. A send ('send': queued
+   * dispatch, context-rollover replay) enters the send transaction, which first applies a pending
+   * switch, so a pending switch to another engine yields nothing. A same-engine model/provider
+   * selection keeps the route, which depends only on the engine (message-source.md「发给模型的说明」).
    */
-  function confirmedSendToSessionHint(sessionId: string): AgentSendToSessionHint | undefined {
+  function confirmedSendToSessionHint(
+    sessionId: string,
+    receiver: 'live' | 'send' = 'send',
+  ): AgentSendToSessionHint | undefined {
     const hint = (maker.getSession(sessionId) as { sendToSessionHint?: AgentSendToSessionHint } | null | undefined)
       ?.sendToSessionHint;
-    const pending = agentSwitchPending.get(sessionId);
+    const pending = receiver === 'send' ? agentSwitchPending.get(sessionId) : undefined;
     return pending && pending.targetAgentKind !== hint?.agentKind ? undefined : hint;
   }
   // User send intent owns the next route boundary, including automatic requests

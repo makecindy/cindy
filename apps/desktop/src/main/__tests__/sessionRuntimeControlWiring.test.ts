@@ -2005,6 +2005,8 @@ describe('Desktop recovery assembly ordering and fences', () => {
     // at the wrong or a missing tool. Queued dispatch reads the same predicate.
     h.pendingSwitch.set('s', { targetAgentKind: 'acp' });
     expect(deps.sendToSessionHint('s')).toBeUndefined();
+    // A steer reaches the running runtime without the send transaction's switch, so it keeps the route.
+    expect(deps.sendToSessionHint('s', 'live')).toBe(hint);
     h.pendingSwitch.set('s', { targetAgentKind: 'pi' });
     expect(deps.sendToSessionHint('s')).toBeUndefined();
     // A same-engine model/provider selection (SET_MODEL) keeps the identical helper route.
