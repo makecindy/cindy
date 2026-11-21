@@ -4,6 +4,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import type { TeammateInboxEntry } from '@/features/bots/teammateInbox';
 import { getRemoteSessionActivity, useRemoteSessionActivityRevision } from '@/features/device-link/remoteSessionActivityStore';
 import { sessionNaturalPriorityRank, type MainListPriorityContext } from '../lib/mainListModel';
+import { sessionRowKey } from './sessionRowKey';
 
 /** The button and inbox rows wake together when a snooze expires. */
 export function useInboxUnread(
@@ -39,7 +40,9 @@ export function useInboxUnread(
       const phase = getRemoteSessionActivity(session.id, session.deviceLinkDeviceId)?.phase;
       const unread = phase
         ? phase === 'completed'
-        : sessionNaturalPriorityRank(session, priority) === LIVE_TASK_PRIORITY.unread;
+        : session.deviceLinkDeviceId && priority.remoteUnreadScheduleRows
+          ? priority.remoteUnreadScheduleRows.has(sessionRowKey(session))
+          : sessionNaturalPriorityRank(session, priority) === LIVE_TASK_PRIORITY.unread;
       return unread && taskInboxSection(session, {
         unread, waiting: false, running: false, teammate: isTeammateTask(session),
       }, now) === 'inbox';
