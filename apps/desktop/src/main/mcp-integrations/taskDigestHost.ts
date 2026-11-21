@@ -5,6 +5,7 @@ import { remotePrStatuses, prStatusQuery, type PrIdentity } from '@cindy/maker-s
  * (local-db:sessions:get / maker:list-active / 历史消息 / PR 引用与状态),不新增 wire 协议。
  */
 import { and, eq, isNull } from 'drizzle-orm';
+import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 import type { InvokeResultPayload } from '@cindy/device-link';
 import type { HistoryDevice, TaskDigestRoute } from '@cindy/mcps';
 import type { AgentKind } from '@cindy/model-providers';
@@ -15,6 +16,7 @@ import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { resolveConfiguredContextWindow } from '../maker-host/model-context-settings.js';
 import { lookupVerifiedContextWindow } from '../maker-ipc/contextOverflowRollover.js';
+import { readLatestWorkerTurnError } from '../maker-ipc/orcaTurnErrorQuery.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
 import { lastExchange, readSessionLastExchange } from '../maker-ipc/sessionLastExchange.js';
 import type { BotHarness } from '../../shared/botModelChain.js';
@@ -54,7 +56,7 @@ export interface DesktopTaskDigestHost {
   readRuntimeFacts?(sessionId: string): Promise<{
     live: { contextTokens: number; contextWindow: number } | null;
     closed: { contextTokens: number; contextWindow: number } | null;
-    terminalError: { sdkError?: string; errorStatus?: number; codexErrorInfo?: string } | null;
+    terminalError: { message?: string; sdkError?: string; errorStatus?: number; codexErrorInfo?: string } | null;
   }>;
 }
 
@@ -163,6 +165,8 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const [row] = await getDbClient()
           .drizzle.select({
             title: sessions.title,
+            clearedAt: sessions.clearedAt,
+            activeTurnStartedAt: sessions.activeTurnStartedAt,
             status: sessions.status,
             source: sessions.source,
             agentKind: sessions.agentKind,
@@ -188,6 +192,25 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           runtimeGeneration: num(runtime.runtimeGeneration),
           route: routeFromProfile(runtime.effectiveProfile),
         };
+      },
+      readError: async (sessionId, activity, facts) => {
+        if (activity?.phase !== 'error') return null;
+        const runtime = await host.readRuntimeFacts?.(sessionId).catch(() => null);
+        const terminal = runtime?.terminalError;
+        if (terminal) {
+          const detail = [
+            typeof terminal.errorStatus === 'number' ? `HTTP ${terminal.errorStatus}` : '',
+            terminal.message,
+            terminal.sdkError,
+            terminal.codexErrorInfo,
+          ].filter(Boolean).join(':\n');
+          // Preserve line boundaries until the reader's final redaction/bounding pass.
+          if (detail.trim()) return detail;
+        }
+        // This reader already enforces the tail, rewind and /clear boundaries.
+        const stored = await readLatestWorkerTurnError(sessionId);
+        if (!stored || stored.createdAt < Math.max(facts.startedAtMs ?? 0, activity.startedAtMs ?? 0)) return null;
+        return [stored.message, stored.sdkError].filter(Boolean).join(':\n').trim() || null;
       },
       readLastExchange: readSessionLastExchange,
       queuedCount: async (sessionId) => {
@@ -253,6 +276,32 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           .find((item) => item?.sessionId === sessionId);
         if (!row) return { phase: 'idle' };
         return { phase: typeof row.activityPhase === 'string' ? row.activityPhase : row.isTurnRunning === true ? 'running' : 'idle' };
+      },
+      readError: async (deviceId, sessionId, activity, facts) => {
+        if (activity?.phase !== 'error' && activity?.phase !== 'idle') return null;
+        // One bounded read, using the same authorized history channel as the UI.
+        // The terminal marker must refer to this exact error row, not a newer turn.
+        const page = await unwrap(host.invokeRemote, deviceId, DL_HISTORY_MESSAGES_CHANNEL, [{
+          sessionId, workdir: null,
+          fromMs: Math.max((facts.clearedAt ?? 0) + 1, facts.startedAtMs ?? 0),
+          toMs: null, agentKind: null, roles: ['error'], includeRewound: false,
+          limit: 1, cursor: null, order: 'desc', contentCharLimit: 8000,
+        }]) as { items?: Array<{ sessionId?: unknown; role?: unknown; content?: unknown; createdAt?: unknown }>; terminal?: { status?: unknown; createdAt?: unknown } | null };
+        const row = page?.items?.[0];
+        if (page?.terminal?.status !== 'error' || !row || row.role !== 'error'
+          || row.sessionId !== sessionId || typeof row.createdAt !== 'number'
+          || row.createdAt !== page.terminal.createdAt
+          || row.createdAt <= (facts.clearedAt ?? 0)
+          || row.createdAt < (facts.startedAtMs ?? 0)) return null;
+        let content = row.content;
+        if (typeof content === 'string') {
+          try { content = JSON.parse(content); } catch { return null; }
+        }
+        if (!content || typeof content !== 'object' || Array.isArray(content)) return null;
+        const error = content as Record<string, unknown>;
+        if (error.dismissed === true) return null;
+        return [error.message, error.sdkError]
+          .filter((value): value is string => typeof value === 'string').join(':\n').trim() || null;
       },
       readLastExchange: async (deviceId, sessionId) => {
         const result = await readRemoteMessageItems(host.invokeRemote, deviceId, sessionId, 20);

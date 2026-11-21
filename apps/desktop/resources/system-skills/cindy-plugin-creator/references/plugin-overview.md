@@ -41,7 +41,9 @@ ghost_forge_pack 校验并生成 .cindy 产物。公开市场投稿走 §7.3 的
 从零开始时优先调用 `ghost_forge_scaffold` 生成一份不会覆盖现有文件的骨架，再在
 骨架上修改。可选模板:`plain`(普通沙箱工具)、`agent-action`(卡片点击后让 Agent
 继续工作)、`node-json-rpc`(普通随包 Node 服务)、`node-mcp`(随包 stdio MCP)。正式版
-Cindy 会默认把自身版本写进这份具体插件的 `minCindyVersion`；在开发版或预发布版中制作时，
-调用 scaffold 必须明确传入插件实际依赖的首个 Cindy 正式版本。
+Cindy 会默认把自身版本写进这份具体插件的 `minCindyVersion`，填写规则见 §2。
+当前 scaffold 不接受 `0.0.0`；未启用 `withUi` 时也不接受带预发布后缀的版本。
+开发测试版本不被创建工具接受时，按 §1 在工作目录直接建立插件源码，按 §2 填写清单，
+再调用 `ghost_forge_pack` 校验与打包。
 
 需要工具结果中的交互页面，见[§4.23 编写指南与示例](plugin-interactive-pages.md)。

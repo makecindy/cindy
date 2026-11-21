@@ -681,6 +681,58 @@ describe('exec-server relay gate', () => {
     }, workspace)).toEqual([{ kind: 'fetch', url: 'http://10.0.0.5/wiki' }]);
     expect(approvalActionsFor({ kind: 'ask_user_question', requestId: 'r', questions: [] }, workspace)).toEqual([]);
   });
+
+  // PR #11698: a generic ACP confirmation previously minted a local command or
+  // write grant from its arguments alone. This unit exercises the resulting
+  // grants and the real executor gate, which built-in-tool cases don't cover.
+  it('records only the canonical operation shown on a plugin engine confirmation', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const acp = { acpToolKind: 'other', acpOptions: [{ name: 'Allow', kind: 'allow_once' }] };
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'cindy_exec · Bash', input: { command: 'rm -rf build' }, metadata: acp,
+    }, workspace, true)).toEqual([]);
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Bash', input: { command: 'rm -rf build' },
+    }, workspace, true)).toEqual([{ kind: 'exec', command: 'rm -rf build', cwd: root }]);
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Write',
+      input: { file_path: '.env', content: 'A=1', changes: [{ path: 'hidden.txt' }] },
+    }, workspace, true)).toEqual([{ kind: 'write', path: path.join(root, '.env') }]);
+    const gate = new ExecutorGate(workspace, 'normal');
+    const target = path.join(root, '.env');
+    for (const approval of approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Read', input: { file_path: '.env' },
+    }, workspace, true)) gate.recordApproval(approval);
+    expect(gate.authorize({ kind: 'read', path: target }).ok).toBe(true);
+    expect(gate.authorize({ kind: 'write', path: target }).ok).toBe(false);
+  });
+
+  // PR #11698: the controller must show and grant the cwd used by the executor.
+  // Existing grant checks only use the workspace root. One Bash in a different
+  // cwd exposes the mismatch through the real reverse-interaction handler.
+  it('shows the live shell directory and binds the approval to it', async () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const cwd = path.join(root, 'project');
+    const recordApproval = vi.fn();
+    const controller = createRemoteAgentHandle({
+      client: {} as RemoteAgentRunClient,
+      started: { id: 'acp-1', agentKind: 'acp', model: 'm', shadowDir: '', methods: [], state: {} },
+      workspace,
+      getExecutorCwd: () => cwd,
+      recordApproval,
+      newId: () => 'req',
+      dispose: async () => undefined,
+    });
+    const show = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    controller.handle.setInteractionResolver(show);
+    const command = 'rm -rf build';
+    await controller.onRequest({
+      type: 'interaction',
+      request: { kind: 'permission', requestId: 'bash-1', toolName: 'Bash', input: { command } },
+    });
+    expect(show).toHaveBeenCalledWith(expect.objectContaining({ input: { command, cwd } }));
+    expect(recordApproval).toHaveBeenCalledExactlyOnceWith({ kind: 'exec', command, cwd });
+  });
 });
 
 describe('wire payloads', () => {

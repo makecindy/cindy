@@ -2,6 +2,11 @@
 
 > **读取时机**：要在 Desktop 或 Mobile 上检查界面、截图、做 UI 回归，又不想登录真实
 > 账号或碰真实数据时；新增或修改模拟任务、`--mock` 启动参数时。
+> **适用路径**：`packages/maker-shared/src/uiMock*.ts`、
+> `apps/desktop/src/main/localDb/uiMockSeed.ts`、
+> `apps/desktop/src/main/companion-cloud/uiMock.ts`、
+> `apps/desktop/src/main/maker-ipc/botGroupUiMock.ts`、
+> `apps/mobile/src/debug/visualMock.ts`、`apps/mobile/src/debug/*VisualFixture.ts`
 
 Desktop 与 Mobile 共用一套模拟数据：展示项目、不同状态的回归任务和它们的消息。开发版
 加 `--mock` 启动后直接进入主界面：不登录 Cindy 账号，任务与消息来自模拟数据，不读写正式
@@ -94,7 +99,15 @@ Desktop 群告警：隔离沙箱 `ui-mock/group-alert.json` 写入 `{"status":"w
 主界面可分别检查另一执行失败和待决定状态；不发送消息、不运行模型。该场景只替换合成群的
 服务输入，没有原执行 Session，真实服务器停止动作由生产服务入口回归测试覆盖。
 
+同一文件加 `"composer":true` 可验收群聊发送快捷键：真实输入框、发送队列与话题面板照常运行，
+该合成群的文字发送和话题回复由内存服务响应，不访问服务器或运行模型。消息只保留到本次
+测试进程结束；不用于验证真实投递、附件或伙伴执行。
+
 ## Mobile 模拟器
+
+自动化模拟记录包含发送前保存点超时和原始额度错误，分别打开任务
+`ui-mock-rich-answer` / `visual-automation-unread`，在历史失败提示中展开错误详情，
+检查原因传递后的文本与 Light / Dark 可读性；均为合成数据，不运行模型。
 
 ```bash
 pnpm mobile:sim:start -- --mock
@@ -111,6 +124,7 @@ pnpm mobile:sim:whoami -- --mock --json
 - 模拟电脑支持协同：任务或新建任务的「+」面板 →「协同模式」可以直接打开开启协同的表单，角色清单
   （含添加、长按移除）读写的是模拟电脑上的那一份，只在本次进程内生效。
 - 生效条件是开发构建（`__DEV__`）；正式包不包含这条路径。
+- 复古皮肤：`cindy://retro-skin-preview`，可加 `?skin=thinkpad` 等已有外观标识以直接比较各款键盘；在折叠屏竖向半折叠姿态下，使用正式的外壳、键盘及窗口几何显示原生预览；按键事件仅显示在屏幕内，不连接远程电脑。用于检查屏幕边界、素材拼接及真实触摸反馈，不代表远程连接已验证。
 - 设备画面连接页：`cindy://devices/desktop/cindy-visual-mock-mac?liveScreen=cindy-simulator%7Cpreview`。
   mock provider 保持远程桌面请求等待，真实页面展示连接中、等待较久及原有超时状态，供返回按钮与明暗主题截图；不连接真实电脑。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
@@ -170,3 +184,5 @@ Mobile 只对 `UI_MOCK_SHOWCASE_PROJECTS` 中的展示项目启用这套文件�
   `apps/mobile/scripts/export-realdata-visual-snapshot.mjs`，它导出的是敏感数据，按脚本
   里的限制使用。
 - PR 截图来自模拟数据时要写明，不能当作真实账号、真实 Agent 行为已验证的证据。
+
+空响应暂停回归场景 `ui-mock-silent-stop`（「空响应续跑暂停」）由两端共用，包含预算、频控、任务保护及两种派发失败的历史错误和尾部错误。主提示应保持中性，展开详情可见实际原因；点击诊断仅检查预填内容，不发送消息。

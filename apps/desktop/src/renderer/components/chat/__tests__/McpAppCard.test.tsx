@@ -458,6 +458,16 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
       controller.close.mockReturnValue(closed);
       const receive = added.mock.calls.find(([type]) => type === 'message')![1];
       const frame = container.querySelector('iframe')!;
+      if (scenario === 'unmount') {
+        await act(async () => {
+          controller.message({ method: 'ui/notifications/initialized' });
+          controller.message({ method: 'ui/notifications/sandbox-result-delivered' });
+          controller.message({ method: 'ui/notifications/size-changed', params: { height: 294 } });
+        });
+        expect(frame.style.opacity).toBe('1');
+        // jsdom has no layout. Supply the visible card's box before deleting its message tree.
+        vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue(new DOMRect(32, 64, 640, 294));
+      }
       // The ancestor sandbox must also allow the inner App's submit event (G5).
       expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-forms');
       if (scenario === 'disconnected') frame.remove();
@@ -479,6 +489,13 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
       if (scenario === 'unmount' || scenario === 'failure-retry') {
         expect(frame.parentElement).toBe(document.body);
         expect(frame.isConnected).toBe(true);
+      }
+      if (scenario === 'unmount') {
+        // While teardown is pending, keep the outgoing surface at its last size and hide it from input and paint.
+        const style = getComputedStyle(frame);
+        expect([style.width, style.height]).toEqual(['640px', '294px']);
+        expect(style.opacity).toBe('0');
+        expect(frame.inert).toBe(true);
       }
       if (scenario === 'disconnected') expect(move).not.toHaveBeenCalled();
       await act(async () => { finish(); await closed; });
@@ -762,6 +779,7 @@ it.each(['light', 'dark'])('keeps the live App mounted while entering and leavin
     expect(dialog.getAttribute('aria-label')).toBe('Live form');
     expect(showModal).toHaveBeenCalledOnce();
     expect(document.activeElement).toBe(dialog.querySelector('[data-exit-fullscreen]'));
+    expect(dialog.querySelector('[data-exit-fullscreen]')?.textContent).toBe('mcpApps.exitFullscreen');
     // #10625: host drops the request.
     const logToMain = vi.fn();
     vi.stubGlobal('electronAPI', { logToMain });
@@ -914,4 +932,85 @@ it.each([
   } finally {
     await act(async () => root.unmount()); container.remove();
   }
+});
+
+// Card chrome / unit: real presenter, observed geometry and control requests.
+// Legacy coverage never measured a fill surface or offered Host fullscreen.
+it('fills a panel with nonzero dimensions and ignores App automatic heights without reopening', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  let resize!: () => void;
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="panel" clientId="fill" title="Page" chrome="panel" sizing="fill" />));
+    const frameRoot = container.querySelector('[aria-busy]') ?? container.querySelector('dialog > div:last-child')!;
+    let width = 600, height = 450;
+    Object.defineProperty(frameRoot, 'clientWidth', { configurable: true, get: () => width });
+    Object.defineProperty(frameRoot, 'clientHeight', { configurable: true, get: () => height });
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 600, height: 450 } }));
+    expect(container.textContent).not.toContain('Page');
+    for (let i = 0; i < 10; i++) await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 800 + i * 100 } }));
+    expect((frameRoot as HTMLElement).style.height).toBe('');
+    height = 700;
+    await act(async () => resize());
+    expect(controller.context).toHaveBeenLastCalledWith(expect.objectContaining({ containerDimensions: { width: 600, height: 700 } }));
+    const sent = controller.context.mock.calls.length;
+    width = 0; height = 0;
+    await act(async () => resize());
+    expect(controller.context).toHaveBeenCalledTimes(sent);
+    expect(controller.close).not.toHaveBeenCalled();
+    expect(state.controllers).toHaveLength(1);
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it.each([undefined, false, true])('offers fullscreen only after the Host explicitly permits its button (%s)', async allowed => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="full" clientId="button" title="Planner" />));
+    const dialog = container.querySelector('dialog')!; dialog.showModal = vi.fn(); dialog.close = vi.fn();
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    await act(async () => { controller.message({ method: 'ui/notifications/initialized' }); controller.message({ method: 'ui/notifications/sandbox-result-delivered' });
+      controller.message({ method: 'ui/notifications/host-context-changed', params: allowed === undefined ? {} : { 'cindy/host-controls': { fullscreenButton: allowed } } }); });
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    const button = container.querySelector<HTMLButtonElement>('[aria-label="mcpApps.fullscreen"]');
+    expect(Boolean(button)).toBe(allowed === true);
+    if (button) { await act(async () => button.click()); expect(controller.displayMode).toHaveBeenCalledExactlyOnceWith('fullscreen'); }
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// The public snapshot, rather than title/name matching, decides exception labels.
+// Minimal regression: a local plugin with the same name as a market plugin.
+it.each([
+  [undefined, undefined], [{ kind: 'market' }, undefined], [{ kind: 'organization' }, undefined],
+  [{ kind: 'local' }, 'mcpApps.source.local'], [{ kind: 'new-source' }, 'mcpApps.source.unknown'],
+])('renders source exceptions from the public card snapshot (%j)', async (source, warning) => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="task" clientId="source" title="Planner · legacy title" plugin={{ name: 'Planner', ...(source ? { source } : {}) }} />));
+    expect(container.textContent).toBe('Planner' + (warning ?? ''));
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// R3 / unit: production card title uses the snapshot, and old cards remain readable.
+it.each([true, {}, { name: 42 }, { name: 'Team reports' }])('renders configured custom MCP names with a legacy fallback (%j)', async customMcp => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="task" clientId="custom" title="Tool title" customMcp={customMcp} />));
+    expect(container.textContent).toBe((typeof customMcp === 'object' && customMcp.name === 'Team reports' ? 'Team reports' : 'Tool title') + 'mcpApps.customMcp');
+  } finally { await act(async () => root.unmount()); container.remove(); }
 });

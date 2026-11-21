@@ -5,13 +5,14 @@ mod engine;
 mod media;
 mod media_http;
 mod notification;
+mod udp_paths;
 
 use std::{ffi::{c_char, CString}, panic::{AssertUnwindSafe, catch_unwind}};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 use zeroize::{Zeroizing, Zeroize};
 use crypto::NativeCrypto;
-pub use engine::NativeEngine;
+pub use engine::{NativeEngine, Waiter};
 
 // One authenticated 1 MiB media block, base64 encoded, plus its JSON envelope.
 const MAX_COMMAND: usize = 2 * 1024 * 1024;
@@ -38,7 +39,7 @@ pub fn create(options: &Value) -> Result<NativeEngine, &'static str> {
         || !device_id.bytes().all(|b| b.is_ascii_alphanumeric() || b"._:@/-".contains(&b))
     { return Err("INVALID_DEVICE_ID"); }
     let crypto = NativeCrypto::from_seed(context, seed, options["legacySigning"] == true)?;
-    NativeEngine::new(crypto, device_id.to_owned(), options["udp"].as_bool().unwrap_or(true))
+    NativeEngine::new(crypto, device_id.to_owned(), options["udp"].as_bool().unwrap_or(true), options["enhancedTransport"].as_bool().unwrap_or(false))
 }
 
 /// SAFETY: input must address length readable bytes. Handle calls are serialized
@@ -70,6 +71,40 @@ pub unsafe extern "C" fn cindy_agent_net_command(handle: *mut NativeEngine, inpu
     };
     let value = match result { Ok(value) => json!({"ok":true,"value":value}), Err(code) => json!({"ok":false,"code":code}) };
     CString::new(value.to_string()).expect("JSON cannot contain raw NUL").into_raw()
+}
+
+/// The engine's own turn (`NativeEngine::pump`), serialized with the handle's other calls like a command.
+/// Negative on failure; otherwise bit 0 says the application has something to read with the `poll` command, and the
+/// remaining bits are the milliseconds after which to call again when no datagram arrives first.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cindy_agent_net_pump(handle: *mut NativeEngine) -> i64 {
+    if handle.is_null() { return -1; }
+    match catch_unwind(AssertUnwindSafe(|| unsafe { &mut *handle }.pump())) {
+        Ok(Ok((work, wake_ms))) => ((wake_ms as i64) << 1) | work as i64,
+        Ok(Err(_)) => -1,
+        Err(_) => { unsafe { &mut *handle }.poison(); -1 },
+    }
+}
+
+/// A waiter for this engine's UDP socket, created like a command (serialized with the handle). It stays valid after the
+/// engine is destroyed and is released exactly once with waiter_free, after every wait on it has returned.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cindy_agent_net_waiter(handle: *mut NativeEngine) -> *mut Waiter {
+    if handle.is_null() { return std::ptr::null_mut(); }
+    catch_unwind(AssertUnwindSafe(|| Box::into_raw(Box::new(unsafe { &*handle }.waiter())))).unwrap_or(std::ptr::null_mut())
+}
+
+/// Blocks up to `timeout_ms` for a datagram on the engine's socket: 1 when one is waiting, 0 on timeout. Any thread, and
+/// several at once; it touches no engine state, so it runs beside the handle's serialized calls.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cindy_agent_net_wait(waiter: *const Waiter, timeout_ms: u32) -> i32 {
+    if waiter.is_null() { return 0; }
+    catch_unwind(AssertUnwindSafe(|| unsafe { &*waiter }.wait(timeout_ms) as i32)).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cindy_agent_net_waiter_free(waiter: *mut Waiter) {
+    if !waiter.is_null() { drop(unsafe { Box::from_raw(waiter) }); }
 }
 
 #[unsafe(no_mangle)]

@@ -3,9 +3,27 @@
  * 不在控制端持久化第二份真相。
  */
 import type { MobileAgentCapabilities } from './agentCapabilities';
+import { normalizePluginEngineSwitchIntent } from './pluginEngines';
 import type { RemoteSession, RemoteSessionAgentSwitchIntent } from './types';
 
 export type MobileSessionAgentKind = 'claude-code' | 'codex' | 'pi';
+
+/**
+ * desktop 意图投影拆成两个会话字段：切到内置引擎的进 agentSwitchIntent(既有展示与切换链路不变)，
+ * 切到插件引擎的进 pluginEngineSwitchIntent(targetAgentKind = 'acp' 且带 acp-plugin: 标识)。
+ * 两者互斥；非法值两边都按「无意图」。
+ */
+export function sessionAgentSwitchIntentPatch(
+  value: unknown,
+): {
+  agentSwitchIntent: RemoteSessionAgentSwitchIntent | null;
+  pluginEngineSwitchIntent: NonNullable<RemoteSession['pluginEngineSwitchIntent']> | null;
+} {
+  return {
+    agentSwitchIntent: normalizeSessionAgentSwitchIntent(value),
+    pluginEngineSwitchIntent: normalizePluginEngineSwitchIntent(value),
+  };
+}
 
 /** 将不可信 device-link payload 收窄为公开 intent；非法值按“无意图”处理。 */
 export function normalizeSessionAgentSwitchIntent(
@@ -66,7 +84,18 @@ export function mobileAgentLabel(agentKind: MobileSessionAgentKind): string {
   return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
 }
 
-export function mobileAgentLabelFromUnknown(agentKind: unknown): string {
+/**
+ * 边界行等不可信数据里的引擎名。'acp' = 插件引擎：用切换时记下的引擎名(fromEngineName /
+ * toEngineName)，缺名称时用调用方本地化的通用名称(「插件引擎」)。
+ */
+export function mobileAgentLabelFromUnknown(
+  agentKind: unknown,
+  engineName?: unknown,
+  pluginEngineFallback = 'Plugin engine',
+): string {
+  if (agentKind === 'acp') {
+    return typeof engineName === 'string' && engineName.trim() ? engineName.trim() : pluginEngineFallback;
+  }
   return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
 }
 
@@ -101,27 +130,17 @@ export function effectiveAgentDeviceId(
 }
 
 /**
- * 选中一行模型时 Agent 位置怎么处理(与桌面已建任务的换电脑规则同口径):
- * - catalogDeviceId = 这一行来自哪台电脑的目录(null = 被控电脑本机);
- * - relocateTo:与任务当前位置不同才带给被控端(switchSessionAgent 第 7 参);选回任务当前
- *   所在电脑 = 撤销挂着的换位置,不带位置;
- * - needsConfirm:换到下一条消息时所在电脑以外、且不是任务当前所在电脑时才确认(已确认过的
- *   同一目标、或撤销挂着的换位置都不再问)。
+ * 选回任务当前的运行位置时不带位置，覆盖挂着的搬迁意图。
+ * 固定位置的任务只接受当前电脑的目录。null 位置值指被控电脑。
  */
 export function resolveAgentLocationPick(input: {
+  movable: boolean;
   session: Pick<RemoteSession, 'agentDeviceId'> | null | undefined;
-  intent: RemoteSessionAgentSwitchIntent | null | undefined;
   catalogDeviceId: string | null;
-}): { relocateTo: string | null | undefined; needsConfirm: boolean } {
-  const current = sessionAgentRunsOnOtherComputer(input.session)
-    ? input.session!.agentDeviceId!
-    : null;
-  const effective = effectiveAgentDeviceId(input.session, input.intent);
-  const target = input.catalogDeviceId;
-  return {
-    relocateTo: target !== current ? target : undefined,
-    needsConfirm: target !== effective && target !== current,
-  };
+}): { agentDeviceId?: string | null } | null {
+  const current = effectiveAgentDeviceId(input.session, null);
+  if (input.catalogDeviceId === current) return {};
+  return input.movable ? { agentDeviceId: input.catalogDeviceId } : null;
 }
 
 /** agent_switch 边界行里 Agent 换电脑后的目标位置;缺 toAgentDeviceId 键 = 没换电脑。 */

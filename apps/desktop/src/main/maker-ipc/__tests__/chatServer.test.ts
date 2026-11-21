@@ -196,7 +196,11 @@ describe('Chat Server result delivery and refresh', () => {
       const next = claimed ? null : execution; claimed = true;
       return { body: { execution: next } };
     }
-    if (route.endsWith('/snapshot')) return { body: { room: room(route.split('/')[2]), members: [], messages: [], cursor: '1' } };
+    // The default actor is this owner's companion. Stop-plan regressions need its
+    // membership as well; permission-denial cases provide their own snapshots.
+    if (route.endsWith('/snapshot')) return { body: { room: room(route.split('/')[2]), members: [
+      { id: botId, kind: 'bot', name: 'Bot', state: 'joined', role: 'member', ownerActorId: selfId },
+    ], messages: [], cursor: '1' } };
     if (route.includes('/messages?') || route.endsWith('/executions') || route.includes('/execution-failures?') || route.includes('/plans')) return { body: [] };
     return { body: {} };
   }
@@ -1453,7 +1457,7 @@ describe('Chat Server result delivery and refresh', () => {
   // #10009 real run: a miss was cached like a found folder, so a checkout registered after the
   // repository was set stayed unused for 5 minutes and replies worked in Home. A miss is retried
   // after seconds; a found folder is still served from the cache without reading git again.
-  it('finds a checkout registered after a miss within seconds and keeps a found folder for minutes', async () => {
+  it('looks up newly registered projects without restarting the group', async () => {
     deps.findProjectDirsForRepo = vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['/projects/cindy']);
     deps.validateProjectDir = vi.fn(async (dir: string) => ({ ok: true as const, dir }));
     let next: Record<string, unknown> | null = { ...execution, access_mode: 'owner' };
@@ -1466,17 +1470,9 @@ describe('Chat Server result delivery and refresh', () => {
     const shownDir = async () => { const shown = await service.getGroup(roomId); if (!shown.ok) throw new Error(shown.errorCode); return shown.group.projectDir; };
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     await vi.advanceTimersByTimeAsync(2000);
-    expect(deps.dispatch).not.toHaveBeenCalled();
-    expect(await shownDir()).not.toBe('/projects/cindy');
-    await vi.advanceTimersByTimeAsync(25_000);
-    expect(await shownDir()).toBe('/projects/cindy');
-    expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
-    next = { ...execution, id: '40000000-0000-4000-8000-000000000002', access_mode: 'owner' };
-    await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(deps.dispatch).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(deps.ensureLane).mock.calls[0][0]).toMatchObject({ projectDir: '/projects/cindy' });
     expect(await shownDir()).toBe('/projects/cindy');
-    expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
+
   });
   // bot-group-chat.md §7.5 (2026-11-14 request): choosing this computer's folder first left the
   // group's repository empty, so other members' computers did not know the project. A folder that is
@@ -1553,9 +1549,8 @@ describe('Chat Server result delivery and refresh', () => {
       return response(route);
     });
     await vi.advanceTimersByTimeAsync(2000);
-    const failures = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
-    expect(failures.map(([, , body]) => body.detail)).toEqual(['cindy-runtime-error:RUNTIME_ERROR']);
-    expect(deps.dispatch).not.toHaveBeenCalled();
+    if (how === 'chosen here') expect(deps.dispatch).not.toHaveBeenCalled();
+    else expect(deps.dispatch).toHaveBeenCalledOnce();
   });
   // bot-group-chat.md §7.5: with no folder chosen here, a 分工 works in the registered project of the
   // group's repository instead of the group's own folder.
@@ -1580,7 +1575,7 @@ describe('Chat Server result delivery and refresh', () => {
     else {
       expect(deps.workDir.prepare).not.toHaveBeenCalled();
       expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ projectDir: '/projects/cindy',
-        plan: { planId, workDir: '/projects/cindy', sessionId: undefined } }));
+        plan: { planId, workDir: '', sessionId: undefined } }));
       expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true }));
     }
   });
@@ -1774,9 +1769,152 @@ describe('Chat Server result delivery and refresh', () => {
   });
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
+
+  // Unit / #11488: chat-only dispatch replaces the queue receipt, while recovery
+  // retains retrySourceClientId. Exercise both terminal identities after heartbeats.
+  it.each(['source', 'queue'])('keeps chat-only recovery live and accepts its %s terminal', async identity => {
+    let source = '';
+    deps.dispatch = vi.fn(async input => {
+      source = input.clientId!;
+      await input.onQueued?.('chat-only-queue');
+      await input.onAccepted?.();
+      return { ok: true as const, targetSessionId: input.targetSessionId, wakeKind: 'queued' };
+    });
+    deps.isGroupInputLive = (_sessionId, clientId) => clientId === source;
+    await start();
+    fixture.handle.mockImplementation(route => route.endsWith('/executions') ? { body: [execution] } : response(route));
+    const snapshot = await service.getGroup(roomId);
+    expect(snapshot).toMatchObject({ ok: true, group: { round: { speakers: [expect.objectContaining({ inputClientId: 'chat-only-queue' })] } } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'fail')).toBe(false);
+    expect(await service.settleLaneTurn({ ...terminal, activeInputClientId: identity === 'source' ? source : 'chat-only-queue' })).toBe(true);
+    expect(deliveries()).toHaveLength(1);
+    expect(deliveries()[0][2].content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ namespace: 'cindy.work-record', data: expect.objectContaining({ clientId: 'chat-only-queue' }) }),
+    ]));
+  });
+
+  // Unit / lifecycle regression: the real heartbeat must retire an accepted input
+  // whose terminal notification was lost, without publishing a later task's reply.
+  // Existing lease tests only covered server refusals, not locally orphaned runs.
+  it('retires an orphaned input once and ignores its late completion', async () => {
+    let live = true;
+    deps.isGroupInputLive = vi.fn(() => live);
+    await start();
+    live = false;
+    await vi.advanceTimersByTimeAsync(45_000);
+    const failures = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(failures()).toHaveLength(1);
+    expect(deps.abortLane).not.toHaveBeenCalled();
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: vi.mocked(deps.dispatch).mock.calls[0][0].clientId });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(failures()).toHaveLength(1);
+    expect(deliveries()).toHaveLength(0);
+  });
+
+  it('renews a live long task beyond the former wall-clock limit', async () => {
+    deps.isGroupInputLive = vi.fn(() => true);
+    await start();
+    vi.setSystemTime(Date.now() + 3 * 60 * 60_000);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'fail')).toBe(false);
+    expect(deps.abortLane).not.toHaveBeenCalled();
+    // A terminal without input attribution must not settle whichever run happens to be first.
+    expect(await service.settleLaneTurn(terminal)).toBe(false);
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: vi.mocked(deps.dispatch).mock.calls[0][0].clientId });
+    expect(deliveries()).toHaveLength(1);
+  });
+
+  // Chat-only receipt acceptance waits for actual dispatch. Keep a coordinator-owned
+  // queued input alive across that wait; when ownership is lost, retire it promptly.
+  it('renews a live queued input while dispatch acceptance is still pending', async () => {
+    let queued = true;
+    let release!: () => void;
+    const receipt = new Promise<void>(resolve => { release = resolve; });
+    deps.dispatch = vi.fn(async input => {
+      await input.onQueued?.('waiting-queue-id');
+      await receipt;
+      await input.onAccepted?.();
+      return { ok: true as const, targetSessionId: input.targetSessionId, wakeKind: 'queued' };
+    });
+    deps.isGroupInputLive = (_sessionId, id) => queued && id === 'waiting-queue-id';
+    await start();
+    vi.setSystemTime(Date.now() + 3 * 60 * 60_000);
+    await vi.advanceTimersByTimeAsync(15_000);
+    const failures = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(failures()).toHaveLength(0);
+    expect(deps.abortLane).not.toHaveBeenCalled();
+    queued = false;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(failures()).toHaveLength(1);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it('resets the orphan grace when the original input becomes live again', async () => {
+    let live = true;
+    deps.isGroupInputLive = () => live;
+    await start();
+    live = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    live = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    live = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'fail')).toBe(false);
+    live = true;
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: vi.mocked(deps.dispatch).mock.calls[0][0].clientId });
+    expect(deliveries()).toHaveLength(1);
+  });
+
+  it('fences the prior terminal and Stop receipt when the same execution is explicitly retried', async () => {
+    deps.isGroupInputLive = () => true;
+    let releaseOldReceipt!: () => void;
+    const oldReceipt = new Promise<void>(resolve => { releaseOldReceipt = resolve; });
+    let firstDispatch = true;
+    deps.dispatch = vi.fn(async input => {
+      if (firstDispatch) {
+        firstDispatch = false;
+        await input.onQueued?.('old-queue-receipt');
+        await oldReceipt;
+      }
+      await input.onAccepted?.();
+      return { ok: true as const, targetSessionId: input.targetSessionId, wakeKind: 'queued' };
+    });
+    await start();
+    const oldInput = vi.mocked(deps.dispatch).mock.calls[0][0].clientId;
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: oldInput, outcome: 'error' });
+    let retried = false;
+    fixture.handle.mockImplementation(route => {
+      if (route === '/executions/claim') {
+        const next = retried ? null : { ...execution, epoch: execution.epoch + 2 };
+        retried = true;
+        return { body: { execution: next } };
+      }
+      if (route === `/conversations/${roomId}/executions`) return { body: [execution] };
+      return response(route);
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(deps.dispatch).toHaveBeenCalledTimes(2);
+    // Even a replayed successful receipt from a legacy server cannot abort the new local turn.
+    expect(await service.stopRound(roomId)).toMatchObject({ ok: true });
+    expect(fixture.requests.some(r => r.url.endsWith(`/executions/${execution.id}/control?runEpoch=${execution.epoch}`))).toBe(true);
+    expect(deps.abortLane).not.toHaveBeenCalled();
+    const newInput = vi.mocked(deps.dispatch).mock.calls[1][0].clientId;
+    expect(newInput).not.toBe(oldInput);
+    releaseOldReceipt();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.abortLane).toHaveBeenCalledWith('lane', oldInput);
+    expect(deps.abortLane).not.toHaveBeenCalledWith('lane');
+    expect(await service.settleLaneTurn({ ...terminal, activeInputClientId: oldInput })).toBe(false);
+    expect(deliveries()).toHaveLength(0);
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: newInput, resultText: 'New reply' });
+    expect(deliveries()).toHaveLength(1);
+    expect(deliveries()[0][2]).toMatchObject({ epoch: execution.epoch + 2, content: expect.arrayContaining([{ type: 'text', text: 'New reply' }]) });
+  });
   const processRecord = { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1, fallback: '',
     data: { groupId: roomId, executionId: execution.id, sessionId: 'lane', durationMs: expect.any(Number),
-      clientId: `bot-group:${roomId}:${execution.id}:local-bot` } };
+      clientId: `bot-group:${roomId}:${execution.id}:${execution.epoch}:local-bot` } };
 
   // Unit: the historical locator must keep the executing host even if the
   // companion moves later; the production completion payload is the evidence.
@@ -1793,19 +1931,25 @@ describe('Chat Server result delivery and refresh', () => {
 
   // bot-group-chat.md §4.0: teammates ask each other with @. The turn lists who is in the group
   // (owner and, where known, description); the reply's @ names go out as the completion's mentions.
-  it.each([true, false])('sends the teammates a reply names with @ (server support: %s)', async supported => {
+  it.each([[true, 'Cindy'], [true, 'Luna'], [false, 'Cindy']] as const)('returns a result to its named requester (mentions: %s, requester: %s)', async (supported, requesterName) => {
     const luna = '20000000-0000-4000-8000-000000000002';
     // Incident 2026-11-13 (integration): a companion that shares only the short name of the
     // group's own Cindy must not be woken by 「@Cindy」; one @ names one identity.
     const ownerCindy = '20000000-0000-4000-8000-000000000003', groupCindy = '20000000-0000-4000-8000-000000000004';
+    const requesterLuna = { id: luna, kind: 'bot', name: 'Luna', displayName: 'Luna', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null };
     const members = [
       { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
-      { id: luna, kind: 'bot', name: 'Luna', displayName: 'Luna', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+      requesterLuna,
       { id: ownerCindy, kind: 'bot', name: 'Cindy', displayName: 'Cindy', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
       { id: groupCindy, kind: 'bot', assistant: true, name: 'Cindy', displayName: 'Cindy', nickname: null, state: 'joined', role: 'member', guestAccess: 'none', accessRevision: 1, avatar: null },
       { id: selfId, kind: 'human', name: 'Owner', displayName: 'Owner', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
     ];
+    const requesterId = requesterName === 'Cindy' ? ownerCindy : luna;
+    if (requesterName === 'Luna') members.push({ ...requesterLuna, id: '20000000-0000-4000-8000-000000000005', ownerActorId: '30000000-0000-4000-8000-000000000005', ownerName: 'Alice' });
+    const source = { id: execution.source_message_id, seq: '1', authorId: requesterId, author: { kind: 'bot', name: requesterName },
+      origin: 'bot', content: [{ type: 'text', text: 'Please review' }], deleted: false, threadRootId: null };
     fixture.handle.mockImplementation(route => {
+      if (route.endsWith(`/messages/${source.id}`)) return { body: source };
       if (route === '/me') return { body: { actor: { id: selfId }, capabilities: supported ? { groupTeammateMentions: 1 } : {} } };
       if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [], cursor: '1' } };
       return response(route);
@@ -1814,12 +1958,13 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     const prompt = vi.mocked(deps.dispatch).mock.calls[0][0].message;
     expect(prompt.includes('Do not call another participant just to reply.')).toBe(!supported);
-    expect(prompt.includes('write @ and its name')).toBe(supported);
+    expect(prompt.includes('An @name in your final reply wakes that teammate')).toBe(supported);
     const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
     expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
     expect(data.participants).toContainEqual({ name: 'Luna (Owner)', kind: 'bot', owner: 'Owner' });
-    await service.settleLaneTurn({ ...terminal, resultText: '@Luna can you review this? @Bot is done. @Cindy, anything to add?' });
-    if (supported) expect(deliveries()[0][2].mentions).toEqual([luna, groupCindy]);
+    expect(data.currentRequest.replyToMention).toBe(supported ? `@${requesterName} (Owner)` : undefined);
+    await service.settleLaneTurn({ ...terminal, resultText: `${data.currentRequest.replyToMention ?? ''} review done. @Bot is done. @Cindy, anything to add?` });
+    if (supported) expect(deliveries()[0][2].mentions).toEqual([requesterId, groupCindy]);
     else expect(deliveries()[0][2]).not.toHaveProperty('mentions');
   });
 
@@ -2031,17 +2176,28 @@ describe('Chat Server result delivery and refresh', () => {
     ['the owner', 'owner', selfId, true],
     ['a member with tools access', 'tools', '60000000-0000-4000-8000-000000000001', true],
     ['a chat-only member', 'chat', '60000000-0000-4000-8000-000000000001', true],
+    ['the owner quoting an earlier image', 'owner', selfId, true],
+    ['the owner sending only an image', 'owner', selfId, true],
     ['the owner, once the task is gone', 'owner', selfId, false],
     ['the owner, after their companion leaves', 'owner', selfId, true],
     ['the owner, after an ordinary lease failure', 'owner', selfId, true],
   ] as const)('passes Thread words under a task card into the task only from the owner (%s)', async (_who, mode, speakerId, taskExists) => {
     const rootId = '70000000-0000-4000-8000-000000000001';
-    const words = 'Please also update the docs';
+    const quotedId = '70000000-0000-4000-8000-000000000002';
+    const quoteImage = _who === 'the owner quoting an earlier image';
+    const onlyImage = _who === 'the owner sending only an image';
+    const mediaId = '80000000-0000-4000-8000-000000000001';
+    const media = { type: 'media', mediaId, caption: 'screen.png' };
+    const photo = { id: mediaId, category: 'image', name: 'screen.png', mimeType: 'image/png', size: 12, url: 'cindy-media://screen', path: null };
+    fixture.download.mockResolvedValue(photo);
+    const words = onlyImage ? '[附件: screen.png]' : 'Please also update the docs';
     taskCardStore.value = { [rootId]: { roomId, botId, threadRootId: null, taskId: 'task-1', deviceId: null, title: 'Fix login',
       requesterName: 'Owner', botName: 'Bot (Owner)', state: 'running', revision: 1, createdAt: Date.now() } };
     deps.readGroupTaskStatus = vi.fn(async () => taskExists ? { title: 'Fix login', state: 'running' as const } : null);
     const source = { id: execution.source_message_id, seq: '1', authorId: speakerId, author: { kind: 'human', name: 'Speaker' },
-      origin: 'user', deleted: false, threadRootId: rootId, content: [{ type: 'text', text: words }] };
+      origin: 'user', deleted: false, threadRootId: rootId, content: onlyImage ? [media] : [{ type: 'text', text: words }, quoteImage
+        ? buildBotGroupQuoteCard({ messageId: quotedId, authorName: 'Ann', authorKind: 'user', excerpt: '', attachmentCount: 1, attachmentName: 'screen.png', sequence: null })
+        : media] };
     const members = [
       { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'tools', accessRevision: 1, avatar: null },
       { id: selfId, kind: 'human', name: 'Owner', displayName: 'Owner', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
@@ -2050,6 +2206,7 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.handle.mockImplementation(route => {
       if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: speakerId, access_mode: mode }; claimed = true; return { body: { execution: next } }; }
       if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [], cursor: '1' } };
+      if (route.endsWith(`/messages/${quotedId}`)) return { body: { ...source, id: quotedId, seq: '0', threadRootId: null, content: [media] } };
       if (route.endsWith('/members')) return { body: members };
       if (route.includes('/messages?') && !route.includes('threadRootId')) return { body: [source] };
       // What another member said in the card's Thread before the owner spoke.
@@ -2085,7 +2242,8 @@ describe('Chat Server result delivery and refresh', () => {
     expect(input).toMatchObject({ targetSessionId: 'task-1', message, persistedContent: message,
       origin: { kind: 'session', senderSessionId: '', senderBotId: 'local-bot',
         groupThread: { groupId: roomId, groupName: 'Room', speakerId, speakerName: 'Owner' } } });
-    expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe(words);
+    expect(input.attachments).toEqual([photo]);
+    if (!onlyImage) expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe(words);
     // The model's note and the bubble label read the same stamp.
     expect(buildMessageSourceNote(messageSourceSenderFromMeta({ origin: input.origin })))
       .toContain(`在群聊「Room」(group_id: ${roomId})的话题里发送`);
@@ -2153,7 +2311,7 @@ describe('Chat Server result delivery and refresh', () => {
     // Existing public-Cindy tests cover text background only. Minimal failure: two DOCX files in
     // an earlier message, then a separate @Cindy with a quote and no uploaded files of its own.
     // Targeted run: 14.20s wall / 158ms tests; collecting this existing service suite takes 11.19s.
-    describe('quoted attachments', () => {
+    describe('group request attachments', () => {
       const file = (n: number) => ({ type: 'media', mediaId: `80000000-0000-4000-8000-${String(n).padStart(12, '0')}`, caption: `lesson-${n}.docx` });
       const quote = (n: number, attachmentCount = 2) => buildBotGroupQuoteCard({ messageId: message(n, peerId, '').id,
         authorName: 'Ann', authorKind: 'user', excerpt: 'Lesson files', attachmentCount, attachmentName: attachmentCount ? 'lesson-1.docx' : null, sequence: n });
@@ -2173,10 +2331,46 @@ describe('Chat Server result delivery and refresh', () => {
       });
       afterEach(() => { fixture.download.mockReset(); });
 
+      it('delivers the three screenshots on a Thread root and media in its recent replies to a later @Cindy', async () => {
+        const image = (n: number) => ({ ...file(n), caption: `screenshot-${n}.png` });
+        const attachment = (n: number) => ({ ...downloaded(n), category: 'image', mimeType: 'image/png', name: image(n).caption,
+          path: path.join(os.tmpdir(), image(n).caption) });
+        fixture.download.mockImplementation(async (_room: string, mediaId: string) => attachment(Number(mediaId.slice(-12))));
+        const root = message(1, peerId, '', { content: [image(1), image(2), image(3)] });
+        history.push(root, message(2, peerId, '', { content: [image(5)] }),
+          message(3, peerId, '', { threadRootId: root.id, content: [image(3), image(4)] }),
+          message(4, peerId, '', { threadRootId: root.id, deleted: true, content: [image(6)] }),
+          message(5, selfId, '@Cindy diagnose these', { threadRootId: root.id }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+        const input = dispatched()[0]!;
+        expect(input.attachments).toEqual([1, 2, 3, 4].map(attachment));
+        expect(fixture.download.mock.calls).toEqual([1, 2, 3, 4].map(n => [roomId, image(n).mediaId]));
+        expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe('@Cindy diagnose these');
+        await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId, resultText: 'Done' });
+        history.push(message(6, selfId, 'Continue', { threadRootId: root.id }));
+        queue.push(request(6));
+        await vi.advanceTimersByTimeAsync(12_000);
+        expect(dispatched()[1]!.attachments).toBeUndefined();
+      });
+
+      it('keeps available main-group attachments when a recent message has a failed download', async () => {
+        history.push(message(1, peerId, '', { content: [file(1)] }),
+          message(2, peerId, '', { content: [file(2)] }),
+          message(3, peerId, '', { threadRootId: message(1, peerId, '').id, content: [file(3)] }));
+        fixture.download.mockRejectedValueOnce(new Error('MEDIA_DOWNLOAD_FAILED'));
+        await ask(4, 'Please check');
+        expect(fixture.download.mock.calls).toEqual([2, 1].map(n => [roomId, file(n).mediaId]));
+        expect(dispatched()[0]!.attachments).toEqual([downloaded(1)]);
+        expect(dispatched()[0]!.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        expect(notices()).toHaveLength(1);
+      });
+
       it('delivers the quoted DOCX files even behind text progress, without following nested quotes or other history', async () => {
         history.push(message(1, peerId, '', { content: [quote(2), file(1), file(2)] }),
-          message(2, peerId, '', { content: [file(3)] }));
-        await ask(10, 'Hello');
+          message(2, peerId, '', { content: [file(3)] }),
+          ...Array.from({ length: 20 }, (_, i) => message(i + 3, peerId, 'Later discussion')));
+        await ask(30, 'Hello');
         expect(dispatched()[0]!.attachments).toBeUndefined();
         expect(fixture.download).not.toHaveBeenCalled();
         await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Hi' });
@@ -2271,6 +2465,29 @@ describe('Chat Server result delivery and refresh', () => {
     // Claimed as the group's Cindy, never through AI reply mode; the requester's own words become one
     // ordinary visible message in the group's task with its label and the group's recent messages; only
     // that input's turn end answers the group.
+    it.each(['user', 'teammate'])('delivers a public Cindy handoff only from the exact group input (request from %s)', async sender => {
+      members = [...cindyMembers, luna];
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === '/me'
+        ? { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupTeammateMentions: 1 }, groupAssistantActorId: cindyId } }
+        : original(route, method, body));
+      if (sender === 'user') await ask(5, 'Please arrange this');
+      else {
+        history.push(message(5, teammateId, 'Please review this', { origin: 'bot' }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+      }
+      const [input] = dispatched();
+      expect(input!.message).toContain('Luna');
+      const context = [...input!.message.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
+        .map(match => JSON.parse(match[1])).find(block => block.teammates);
+      expect(context.replyToMention).toBe(sender === 'teammate' ? '@Luna (Chris)' : undefined);
+      const reply = { ...terminal, sessionId: input!.targetSessionId, resultText: sender === 'user' ? '@Luna please draft the offer' : `${context.replyToMention} review done` };
+      expect(await service.settleLaneTurn({ ...reply, activeInputClientId: null })).toBe(false);
+      expect(await service.settleLaneTurn({ ...reply, activeInputClientId: input!.clientId })).toBe(true);
+      expect(deliveries()[0][2]).toMatchObject({ mentions: [teammateId] });
+    });
+
     it('stops the exact public Cindy task input when another device requests a stop', async () => {
       await ask(5, 'Wait until stopped');
       const [input] = dispatched();
@@ -2293,7 +2510,7 @@ describe('Chat Server result delivery and refresh', () => {
       await ask(5, '@Cindy please fix it');
       expect(fixture.requests.some(r => r.url.endsWith('/v1/executions/claim') && r.actor === cindyId)).toBe(true);
       expect(fixture.urls.some(url => url.includes('/mask/'))).toBe(false);
-      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Room', projectDir: expect.any(String) });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Group chat·Cindy · Room', projectDir: null });
       const [input] = dispatched();
       expect(input).toMatchObject({ targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
         message: `@Cindy please fix it\n\n${t('bots.groupChat.assistant.groupRecent')}\nAnn：The build is red again`,
@@ -2342,6 +2559,7 @@ describe('Chat Server result delivery and refresh', () => {
     // every Thread into the main task. Two roots + main are the minimal isolation matrix; restart
     // must retain the same bindings and watermarks rather than replay old mixed context.
     it('isolates main and Thread inputs and reuses each binding after restart', async () => {
+      deps.refineTopicTitle = vi.fn();
       const rootA = message(1, peerId, 'Topic A');
       const rootB = message(2, peerId, 'Topic B');
       history.push(rootA, rootB, message(3, peerId, 'A background', { threadRootId: rootA.id }),
@@ -2361,6 +2579,10 @@ describe('Chat Server result delivery and refresh', () => {
       const b = await send(6, 'Work B', rootB.id);
       const main = await send(7, 'Work main', null);
       expect(new Set([a.targetSessionId, b.targetSessionId, main.targetSessionId]).size).toBe(3);
+      expect(deps.refineTopicTitle).toHaveBeenCalledWith(a.targetSessionId, 'Group chat·Cindy · Work A',
+        { channel: 'Group chat', participant: 'Cindy', text: 'Topic A' });
+      expect(deps.refineTopicTitle).toHaveBeenCalledWith(b.targetSessionId, 'Group chat·Cindy · Work B',
+        { channel: 'Group chat', participant: 'Cindy', text: 'Topic B' });
       expect(main.targetSessionId).toBe('legacy-main');
       expect(a.message).toContain('A background');
       expect(a.message).not.toContain('Topic B');
@@ -2387,7 +2609,7 @@ describe('Chat Server result delivery and refresh', () => {
       const store = { read: () => structuredClone(assistantStore.value) as Record<string, import('../chatServerWorkspaces.js').ChatAssistantSessionRecord>,
         save: (value: Record<string, import('../chatServerWorkspaces.js').ChatAssistantSessionRecord>) => { assistantStore.value = structuredClone(value); } };
       const tasks = createGroupAssistantTasks({ current: () => true, store: () => store,
-        folders: { forWork: async () => ({ dir, auto: false }) },
+        folders: { registered: async () => true, forWork: async () => ({ dir, auto: false, continueConversation: false }) },
         ensureSession: async ({ sessionId }) => ({ ok: true, sessionId: sessionId && !removed.has(sessionId) ? sessionId : `task-${++count}` }) });
       const group = { id: roomId, name: 'Room', project: null };
       const [a, same, b] = await Promise.all([tasks.forRequest(group, () => true, 'a'), tasks.forRequest(group, () => true, 'a'), tasks.forRequest(group, () => true, 'b')]);
@@ -2415,65 +2637,29 @@ describe('Chat Server result delivery and refresh', () => {
       deps.validateProjectDir = vi.fn(async (dir: string) => ({ ok: true as const, dir }));
       history.push(message(2, peerId, 'Old news'));
       await ask(3, 'first');
-      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: '/projects/cindy' });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Group chat·Cindy · Room', projectDir: '/projects/cindy' });
       await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Done' });
       history.push(message(4, cindyId, 'Done', { content: [{ type: 'text', text: 'Done' }, { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1, fallback: '',
         data: { groupId: roomId, executionId: request(3).id, sessionId: 'group-task-1', clientId: dispatched()[0]!.clientId } }] }));
       history.push(message(6, peerId, 'New news'));
       await ask(7, 'second');
-      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ sessionId: 'group-task-1', title: 'Room', projectDir: '/projects/cindy' });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ sessionId: 'group-task-1', title: 'Group chat·Cindy · Room', projectDir: '/projects/cindy' });
       expect(dispatched()[1]).toMatchObject({ targetSessionId: 'group-task-1', message: `second\n\n${t('bots.groupChat.assistant.groupNew')}\nAnn：New news` });
       await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[1]!.clientId, resultText: 'Done' });
       workspaceSettings.set(roomId, { projectDir: '/projects/chosen', plans: {} });
       await ask(8, 'third');
-      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: '/projects/chosen' });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Group chat·Cindy · Room', projectDir: '/projects/chosen' });
       expect(dispatched()[2]).toMatchObject({ targetSessionId: 'group-task-2' });
       expect(assistantStore.value[roomId]).toMatchObject({ sessionId: 'group-task-2', projectDir: '/projects/chosen', deliveredSeq: { main: '8' } });
     });
 
-    // bot-group-chat.md §7.5/§9 (2026-11-13 field report: ~9 minutes of 「正在处理」 with no task while
-    // the repository was cloned and pulled). A group with a repository works in Cindy's folder for it,
-    // which is there at once: the request reaches the task right away and says the repository is
-    // still on its way; the clone runs in the background and later requests use the same task.
-    it('starts the request in the project folder at once while the repository is fetched', async () => {
+    it('runs in the Cindy project when a repository has no registered checkout', async () => {
       project = { kind: 'github', repo: 'makecindy/cindy' };
-      const root = await mkdtemp(path.join(os.tmpdir(), 'group-cindy-'));
-      const dir = path.join(root, 'makecindy', 'cindy');
-      try {
-        deps.validateProjectDir = vi.fn(async (folder: string) => ({ ok: true as const, dir: folder }));
-        let cloned!: () => Promise<void>;
-        const ensure = vi.fn<NonNullable<BotGroupChatServiceDeps['groupCheckouts']>['ensure']>(() => new Promise(resolve => {
-          // This file stubs mkdir; the clone lands on the real disk.
-          cloned = async () => { await (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).mkdir(path.join(dir, '.git'), { recursive: true }); resolve({ status: 'ready', dir }); };
-        }));
-        const sync = vi.fn(() => new Promise<void>(() => {}));
-        deps.groupCheckouts = { ensure, sync, isManaged: folder => folder.startsWith(root), dirOf: () => dir };
-        // Real disk I/O needs real time on Windows; a fixed number of setImmediate turns can
-        // finish before access() completes. Keep fake service timers frozen while waiting.
-        const delivered = async (count: number) => {
-          const deadline = vi.getRealSystemTime() + 2000;
-          while (dispatched().length < count && vi.getRealSystemTime() < deadline) {
-            await yieldToIo(1);
-            await vi.advanceTimersByTimeAsync(0);
-          }
-          expect(dispatched()).toHaveLength(count);
-        };
-        await ask(5, 'Where are the docs?');
-        await delivered(1);
-        expect(ensure).toHaveBeenCalledWith({ kind: 'github', repo: 'makecindy/cindy' }, expect.objectContaining({ signIn: true }));
-        expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: dir });
-        expect(dispatched()[0]!.message.startsWith(`Where are the docs?\n\n${t('bots.groupChat.assistant.checkout.preparing').replaceAll('{{repo}}', 'makecindy/cindy')}`)).toBe(true);
-        await cloned();
-        await vi.advanceTimersByTimeAsync(0);
-        await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Soon' });
-        await ask(6, 'And now?');
-        await delivered(2);
-        expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ sessionId: 'group-task-1', title: 'Room', projectDir: dir });
-        expect(sync).toHaveBeenCalledWith(dir);
-        expect(dispatched()[1]).toMatchObject({ targetSessionId: 'group-task-1' });
-        expect(dispatched()[1]!.message.startsWith('And now?')).toBe(true);
-        expect(dispatched()[1]!.message).not.toContain('makecindy/cindy');
-      } finally { await rm(root, { recursive: true, force: true }); }
+      deps.findProjectDirsForRepo = vi.fn(async () => []);
+      deps.executorProject = vi.fn(async () => '/buddy/cindy');
+      await ask(5, 'Where are the docs?');
+      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Group chat·Cindy · Room', projectDir: '/buddy/cindy' });
+      expect(deps.executorProject).toHaveBeenCalledWith('cindy-default');
     });
 
     // 2026-11-13 field report: the group's task was created but stayed empty. Any heartbeat that did
@@ -3458,7 +3644,7 @@ describe('Chat Server result delivery and refresh', () => {
   // Ordinary group input, copied text and unrelated invitation greetings stay restorable.
   it('recognizes only the old host welcome envelope for queue recovery', () => {
     const text = 'You are participating as yourself in a Cindy group chat. The host has validated a server-issued event confirming that a real human joined this group.';
-    const item = { clientId: `bot-group:${roomId}:${execution.id}:local-bot`, persistedContent: `[UI_ACTION_TRIGGER]${text}` };
+    const item = { clientId: `bot-group:${roomId}:${execution.id}:${execution.epoch}:local-bot`, persistedContent: `[UI_ACTION_TRIGGER]${text}` };
     expect(isRetiredGroupWelcomeInput(item)).toBe(true);
     expect(isRetiredGroupWelcomeInput({ ...item, clientId: 'user-message' })).toBe(false);
     expect(isRetiredGroupWelcomeInput({ ...item, persistedContent: text })).toBe(false);
@@ -3487,7 +3673,7 @@ describe('Chat Server result delivery and refresh', () => {
     const queued: AgentInputQueuedMessage = await build({ targetSessionId: 'lane', clientId: 'random-queue-id',
       message: text, persistedContent: text, meta: {}, toolsDisabled: true,
       files: [{ category: 'document', name: 'history.txt', path: '/isolated/history.txt' }] });
-    queued.retrySourceClientId = `bot-group:${roomId}:${execution.id}:local-bot`;
+    queued.retrySourceClientId = `bot-group:${roomId}:${execution.id}:${execution.epoch}:local-bot`;
     let snapshot: AgentInputQueuedMessage[] = [];
     const coordinator = new AgentInputCoordinator({
       sendToAgent: vi.fn(), steerToAgent: vi.fn(), abortSession: vi.fn(),
@@ -3751,6 +3937,19 @@ describe('Chat Server result delivery and refresh', () => {
     }
     const prompt = () => vi.mocked(deps.dispatch).mock.calls[0][0].message;
 
+    it('posts a new independent message without consulting or adding to a legacy plan', async () => {
+      singleSpeaker(route => route === '/me'
+        ? { body: { actor: { id: selfId }, capabilities: { groupSingleSpeaker: 1, independentReplies: 1 } } }
+        : undefined);
+      const sent = await service.sendMessage({ groupId: roomId, text: 'Another thing', clientId: 'independent-send',
+        mentions: { all: false, botIds: [] } });
+      expect(sent).toMatchObject({ ok: true });
+      expect(fixture.handle.mock.calls).toContainEqual(expect.arrayContaining([
+        `/conversations/${roomId}/messages`, 'POST', expect.objectContaining({ independentReplies: true }),
+      ]));
+      expect(fixture.handle.mock.calls.some(([path]) => path.includes('/plans'))).toBe(false);
+    });
+
     it('posts an un-addressed reply as written and never asks the server to continue a round', async () => {
       singleSpeaker(route => route.endsWith(`/messages/${execution.source_message_id}`) ? { body: message(execution.source_message_id, 'Let us discuss') } : undefined);
       await start();
@@ -3866,8 +4065,9 @@ describe('Chat Server result delivery and refresh', () => {
     describe('安排分工', () => {
       const sourceId = '50000000-0000-4000-8000-000000000031', planId = '80000000-0000-4000-8000-000000000031';
       const named = () => members().map(m => m.id === otherBot ? { ...m, name: 'Nova' } : m);
-      function divisionServer(open: object[] = []) {
+      function divisionServer(open: object[] = [], independentReplies = false) {
         singleSpeaker((route, method) => {
+          if (independentReplies && route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupSingleSpeaker: 1, independentReplies: 1 } } };
           if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: named(), messages: [], cursor: '1' } };
           if (route === `/conversations/${roomId}/messages` && method === 'POST') return { body: { id: sourceId } };
           if (route === `/conversations/${roomId}/plans` && method === 'POST') return { body: { id: planId, revision: 1 } };
@@ -3959,6 +4159,18 @@ describe('Chat Server result delivery and refresh', () => {
         expect(posts().filter(([route]) => route === `/conversations/${roomId}/messages`)).toHaveLength(1);
       });
 
+      it('keeps an accepted division active when a separate independent message arrives', async () => {
+        divisionServer([], true);
+        let finish!: (value: unknown) => void;
+        deps.decidePlan = vi.fn(() => new Promise(resolve => { finish = resolve; })) as typeof deps.decidePlan;
+        await send('Make a draft');
+        expect(await service.sendMessage({ groupId: roomId, text: 'Another thing', clientId: 'independent-after-division',
+          mentions: { all: false, botIds: [] } })).toMatchObject({ ok: true });
+        finish({ needsPlan: true, steps: [{ botId: otherBot, task: 'draft' }] });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(posts().find(([route]) => route === `/conversations/${roomId}/plans`)?.[2]).toMatchObject({ sourceMessageId: sourceId });
+      });
+
       it('asks the organizer when the steps are not written out', async () => {
         divisionServer();
         deps.decidePlan = vi.fn(async () => ({ needsPlan: true as const, steps: [{ botId: otherBot, task: 'build' }] }));
@@ -4022,7 +4234,7 @@ describe('Chat Server result delivery and refresh', () => {
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId, scope)).toMatchObject(scope === 'all'
         ? { ok: false, errorCode: 'PERMISSION_DENIED' } : { ok: true });
-      const stops = fixture.requests.slice(from).filter(r => r.url.endsWith('/control'));
+      const stops = fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control'));
       expect(stops.map(r => [Object.entries(ids).find(([, id]) => r.url.includes(id))![0], r.actor || undefined])).toEqual(expected);
     });
 
@@ -4036,7 +4248,7 @@ describe('Chat Server result delivery and refresh', () => {
       ] } : route.endsWith('/snapshot') ? { body: { room: room(roomId), members: members('admin').map(m => m.id === foreignBot ? { ...m, assistant: true } : m), messages: [], cursor: '1' } } : undefined, 'admin');
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject({ ok: true });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control')).map(r => r.url))
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control')).map(r => r.url))
         .toEqual([expect.stringContaining(`/executions/${execution.id}/control`)]);
     });
 
@@ -4053,7 +4265,7 @@ describe('Chat Server result delivery and refresh', () => {
       plan.status = 'waiting';
       expect(await service.dismissPlan({ groupId: roomId, planId: plan.id })).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
       expect(await service.editPlanStep({ groupId: roomId, planId: plan.id, position: 1, action: 'skip' })).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control')).map(r => r.url))
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control')).map(r => r.url))
         .toEqual([expect.stringContaining(`/executions/${execution.id}/control`)]);
       expect(fixture.handle.mock.calls.filter(([route, method]) => route.includes('/plans/') && method === 'POST')).toEqual([]);
     });
@@ -4066,7 +4278,7 @@ describe('Chat Server result delivery and refresh', () => {
       ] } : route.endsWith('/snapshot') ? { body: { room: room(roomId), members: members(role).map(m => m.id === foreignBot ? { ...m, assistant: true } : m), messages: [], cursor: '1' } } : undefined, role);
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'STOP_OWNERSHIP_UNKNOWN' });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toEqual([]);
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control'))).toEqual([]);
     });
 
     it.each([
@@ -4077,7 +4289,7 @@ describe('Chat Server result delivery and refresh', () => {
         : [{ ...execution, status: 'queued', bot_id: foreignBot, requester_id: requester }] } : undefined);
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toEqual([]);
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control'))).toEqual([]);
     });
 
     it.each([['owned', otherBot, true], ['foreign', foreignBot, false]] as const)('uses companion ownership when requester is absent: %s', async (_label, bot, owned) => {
@@ -4086,7 +4298,7 @@ describe('Chat Server result delivery and refresh', () => {
       ] } : undefined);
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject(owned ? { ok: true } : { ok: false, errorCode: 'PERMISSION_DENIED' });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toHaveLength(owned ? 1 : 0);
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control'))).toHaveLength(owned ? 1 : 0);
     });
 
     it.each([
@@ -4101,7 +4313,7 @@ describe('Chat Server result delivery and refresh', () => {
     ])('rechecks a %s stop response and reports the current %s state', async (status, nextStatus, errorCode) => {
       let rejected = false;
       singleSpeaker(route => {
-        if (route.endsWith('/control')) { rejected = true; return { status, body: { error: { code: 'CONTROL_REFUSED' } } }; }
+        if (route.split('?')[0].endsWith('/control')) { rejected = true; return { status, body: { error: { code: 'CONTROL_REFUSED' } } }; }
         if (route === `/conversations/${roomId}/executions`) return { body: rejected && nextStatus === 'absent' ? []
           : [{ ...execution, status: rejected ? nextStatus : 'queued', bot_id: otherBot, requester_id: selfId }] };
       });
@@ -4112,13 +4324,13 @@ describe('Chat Server result delivery and refresh', () => {
     it('still stops an eligible execution when another stop is refused, without reporting full success', async () => {
       const secondId = '40000000-0000-4000-8000-00000000000a';
       singleSpeaker(route => {
-        if (route.endsWith(`/${execution.id}/control`)) return { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } };
+        if (route.endsWith(`/${execution.id}/control?runEpoch=2`)) return { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } };
         if (route === `/conversations/${roomId}/executions`) return { body: [execution.id, secondId].map(id =>
           ({ ...execution, id, status: 'queued', bot_id: otherBot, requester_id: selfId })) };
       });
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
-      expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith('/control')).map(([route]) => route))
-        .toContain(`/conversations/${roomId}/executions/${secondId}/control`);
+      expect(fixture.handle.mock.calls.filter(([route]) => route.split('?')[0].endsWith('/control')).map(([route]) => route))
+        .toContain(`/conversations/${roomId}/executions/${secondId}/control?runEpoch=2`);
     });
 
     // Unit / PR #10861: HTTP rejection coverage misses actPlan's local ownership recheck.
@@ -4147,7 +4359,7 @@ describe('Chat Server result delivery and refresh', () => {
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
       const controls = fixture.handle.mock.calls.filter(([, method, body]) => method === 'POST' && body?.action === 'stop')
         .map(([route]) => route);
-      expect(controls).toEqual([`/conversations/${roomId}/plans/${ownedId}`, `/conversations/${roomId}/executions/${execution.id}/control`]);
+      expect(controls).toEqual([`/conversations/${roomId}/plans/${ownedId}`, `/conversations/${roomId}/executions/${execution.id}/control?runEpoch=2`]);
       expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/plans`)).toHaveLength(2);
     });
 
@@ -4181,7 +4393,7 @@ describe('Chat Server result delivery and refresh', () => {
       await vi.advanceTimersByTimeAsync(0);
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toEqual({ ok: true });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toHaveLength(1);
+      expect(fixture.requests.slice(from).filter(r => new URL(r.url).pathname.endsWith('/control'))).toHaveLength(1);
     });
     it('keeps the full main-group context on an older server', async () => {
       const history = Array.from({ length: 15 }, (_, n) => message(`50000000-0000-4000-8000-0000000001${String(n).padStart(2, '0')}`, `earlier message ${n}`));
@@ -4391,8 +4603,7 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'chat', revision: 1 }, plan: { planId, workDir: expect.any(String), sessionId: undefined } }));
     const laneInput = vi.mocked(deps.ensureLane).mock.calls[0][0];
-    expect(laneInput.plan?.workDir).toBe(laneInput.projectDir);
-    expect(laneInput.plan?.workDir).not.toBe('');
+    expect(laneInput.plan?.workDir).toBe('');
     expect(deps.workDir.prepare).not.toHaveBeenCalled();
     expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true, message: expect.stringContaining('Discuss the draft') }));
     await service.settleLaneTurn(terminal);

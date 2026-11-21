@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
+import { parseAuxiliaryTokens, parseAuxiliaryResponse, type AuxiliaryUsageRecorder, type AuxiliaryAttribution } from '../../shared/auxiliaryUsage.js';
 /**
  * Direct one-shot text requests (the auxiliary-model chain and the dedicated Auto-review
  * candidates), shared by Desktop and the Node Host. Moved verbatim from oneShotCandidates.ts,
@@ -75,6 +78,7 @@ export interface UtilityTextDispatchRoute {
 }
 
 export type UtilityTextCandidate = {
+  routeProviderId?: string;
   providerId: string;
   model: string;
   transport: UtilityModelTransport;
@@ -83,6 +87,9 @@ export type UtilityTextCandidate = {
 };
 
 export type UtilityTextRequestOptions = {
+  /** Host accounting only; never loads task history or enters the provider body. */
+  source?: string;
+  sessionId?: string;
   maxTokens?: number;
   timeoutMs?: number;
   /** Optional lightweight reasoning hint for short internal classifiers. */
@@ -166,11 +173,16 @@ export type DedicatedAutoReviewCandidate = (typeof DEDICATED_AUTO_REVIEW_CANDIDA
 
 export type AutoReviewAuxiliaryFallback = (
   prompt: string,
-  opts: { timeoutMs: number; signal?: AbortSignal; validateResponse: (text: string) => boolean },
+  opts: { timeoutMs: number; signal?: AbortSignal; sessionId?: string; validateResponse: (text: string) => boolean },
 ) => Promise<UtilityTextResult>;
 
 /** The Desktop-only reads, resolved by each launcher. */
 export interface OneShotCandidatesPorts {
+  /** Local subscription membership, including account-discovered models. */
+  getCatalog?: typeof getActiveCatalog;
+  acquireSubscriptionAccount?: typeof import('../subscription-accounts/runtime.js').acquireSubscriptionAccount;
+  createUsageRecorder?: (attribution: AuxiliaryAttribution) => AuxiliaryUsageRecorder;
+
   readClaudeApiKey: typeof import('../maker-host/auth-adapters.js').readClaudeApiKey;
   getChatgptBridgeAuth: typeof import('../maker-host/anthropic-responses-bridge-host.js').getChatgptBridgeAuth;
   getChatgptBridgeAuthForDispatch: typeof import('../maker-host/anthropic-responses-bridge-host.js').getChatgptBridgeAuthForDispatch;
@@ -190,10 +202,91 @@ export interface OneShotCandidatesPorts {
 
 /** One instance per launcher. */
 export function createOneShotCandidates(ports: OneShotCandidatesPorts) {
+const getCatalog = ports.getCatalog ?? getActiveCatalog;
 const { readClaudeApiKey, getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch, getGrokAccessToken, getGrokOAuthCredentialGeneration, readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken, getGenericOAuthLoginGeneration, undiciFetch, claudeUpstreamEndpoint, reportCindyGatewayKeyRejected, readCustomProviderKey, ensureManagedOllamaReadyForSession, getUtilityModelChainProfiles, getEffectiveAuxiliaryModelChain } = ports;
 
 
 const log = createLogger('utility-model:one-shot');
+const usageContext = new AsyncLocalStorage<{ record: AuxiliaryUsageRecorder; route: AuxiliaryAttribution }>();
+async function observeUsage(body: unknown, wire: string, model: string) {
+  const context = usageContext.getStore();
+  const tokens = parseAuxiliaryTokens(body, wire);
+  if (context && tokens) {
+    const actualModel = body && typeof body === 'object' && 'model' in body && typeof body.model === 'string'
+      ? body.model : model;
+    try { await context.record(tokens, { ...context.route, model: actualModel, transport: wire }); }
+    catch { log.warn('auxiliary usage observer failed'); }
+  }
+}
+async function observedStream(response: Parameters<typeof readUtilityTextStream>[0], wire: string, model: string, onText?: (text: string) => void) {
+  return readUtilityTextStream(response, onText, async raw => {
+    const context = usageContext.getStore();
+    const observed = parseAuxiliaryResponse(raw, wire);
+    if (context && observed.tokens) {
+      try { await context.record(observed.tokens, { ...context.route, model: observed.model ?? model, transport: wire }); }
+      catch { log.warn('auxiliary usage observer failed'); }
+    }
+  });
+}
+/** #8706: classify a bounded prefix in memory, keeping only safe transport metadata.
+ * Also retain existing usage accounting for complete error envelopes within that prefix.
+ * Never call text(): an error page can be unbounded or never finish streaming.
+ */
+async function observeRejectedResponse(
+  response: Parameters<typeof readUtilityTextStream>[0] & { status: number }, wire: string, model: string,
+): Promise<boolean> {
+  if (![400, 402, 422, 429].includes(response.status)) {
+    try { await observedStream(response, wire, model); } catch { /* Preserve the HTTP outcome. */ }
+    return false;
+  }
+  let quotaExhausted = response.status === 402;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try { reader = response.body?.getReader?.(); } catch { return quotaExhausted; }
+  if (!reader) return quotaExhausted;
+  if (quotaExhausted) {
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+    return true;
+  }
+  let raw = '';
+  let bytes = 0;
+  const decoder = new TextDecoder();
+  try {
+    while (bytes < 4096) {
+      const next = await reader.read();
+      const chunk = next.value?.subarray(0, 4096 - bytes);
+      bytes += chunk?.byteLength ?? 0;
+      raw += decoder.decode(chunk, { stream: !next.done });
+      if (matchesDeterministicUsageExhaustionText(raw)) {
+        quotaExhausted = true;
+        break;
+      }
+      if (next.done) break;
+    }
+    const context = usageContext.getStore();
+    const observed = parseAuxiliaryResponse(raw, wire);
+    if (context && observed.tokens) {
+      try { await context.record(observed.tokens, { ...context.route, model: observed.model ?? model, transport: wire }); }
+      catch { log.warn('auxiliary usage observer failed'); }
+    }
+  } catch {
+    // The HTTP status remains the request outcome, even for an incomplete error body.
+  } finally {
+    // Cancellation itself must not turn a known HTTP response into a timeout.
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  return quotaExhausted;
+}
+function metered<Args extends unknown[], Result>(fn: (...args: Args) => Promise<Result>, source?: string) {
+  return (...args: Args): Promise<Result> => {
+    const opts = args[args.length - 1] as UtilityTextRequestOptions | undefined;
+    const route = { providerId: opts?.providerId, model: opts?.model, source: opts?.source ?? source, sessionId: opts?.sessionId };
+    const record = ports.createUsageRecorder?.(route);
+    if (!record) return fn(...args);
+    return usageContext.run({ record, route }, () => fn(...args)).finally(() => { try { record.close(); } catch { log.warn('auxiliary usage recorder cleanup failed'); } });
+  };
+}
 
 const XD_UTILITY_ROUTE_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
@@ -240,7 +333,7 @@ type UtilityTextCandidateResolution =
 
 /** Credential-safe failure raised by a concrete utility transport. */
 type UtilityTextExecutionFailure =
-  | { reason: 'http_error'; httpStatus: number }
+  | { reason: 'http_error'; httpStatus: number; quotaExhausted?: true }
   | {
     reason: Extract<UtilityTextAttemptReason, 'timeout' | 'empty_response' | 'request_failed'>;
     httpStatus?: never;
@@ -473,7 +566,7 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
   const ownerScopeKey = activeOwnerScopeKey();
   const chainSnapshot = stableSnapshot(chain);
   const snapshotRoute = (route: UtilityTextDispatchRoute): string => {
-    const provider = getActiveCatalog().providers.find((item) => item.id === route.providerId);
+    const provider = getCatalog().providers.find((item) => item.id === route.providerId);
     return stableSnapshot({
       source: provider?.source,
       auth: provider?.auth,
@@ -485,7 +578,7 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
   };
   const routes = chain.refs.flatMap((ref) => {
     const parsed = parseAuxiliaryModelRef(ref);
-    if (!parsed) return [];
+    if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) return [];
     const route = auxiliaryRefDispatchRoute(parsed);
     return [{ route, snapshot: snapshotRoute(route) }];
   });
@@ -502,9 +595,9 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
     for (const ref of chain.refs) {
       if (opts.signal?.aborted || !stillCurrent()) break;
       const parsed = parseAuxiliaryModelRef(ref);
-      if (!parsed) continue;
+      if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) continue;
       const route = auxiliaryRefDispatchRoute(parsed);
-      const routing = getActiveCatalog().providers.find((provider) => provider.id === route.providerId)
+      const routing = getCatalog().providers.find((provider) => provider.id === route.providerId)
         ?.routing[route.agentKind];
       const failure = (reason: 'timeout' | 'request_failed'): UtilityTextResult => ({
         ok: false,
@@ -523,7 +616,8 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
         // Normalize legacy profiles into exact catalog HTTP routes too. Never call
         // Agent.oneShot: approval must not start a development Agent or tool loop.
         result = await requestUtilityTextWithinTimeout(
-          (signal) => requestExplicitUtilityText(evidence, {
+          (signal) => metered(requestExplicitUtilityText)(evidence, {
+            source: 'auto-review', sessionId: opts.sessionId,
             ...route,
             systemPrompt,
             maxTokens: DEDICATED_AUTO_REVIEW_MAX_TOKENS,
@@ -562,7 +656,7 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
 async function requestDedicatedAutoReviewCandidateText(
   prompt: string,
   candidate: DedicatedAutoReviewCandidate,
-  opts: { timeoutMs: number; signal?: AbortSignal },
+  opts: { timeoutMs: number; signal?: AbortSignal; sessionId?: string },
 ): Promise<UtilityTextResult> {
   const { systemPrompt, evidence } = splitAutoReviewPrompt(prompt);
   const profile: UtilityModelProfile = {
@@ -621,7 +715,7 @@ async function requestDedicatedAutoReviewCandidateText(
     });
   }
 
-  const provider = getActiveCatalog().providers.find((item) => item.id === candidate.providerId);
+  const provider = getCatalog().providers.find((item) => item.id === candidate.providerId);
   const configured = provider?.models[candidate.agentKind] ?? [];
   if (
     !provider
@@ -658,7 +752,7 @@ function inferUniqueProviderId(agentKind: AgentKind | undefined, model: string |
   // 停用的 (来源, 模型) 不参与推断:被推断出来也会在派发前被 fail closed,
   // 提前剔除让「另一家启用的来源」仍能保住所选路由。
   const disableOverrides = readModelDisableOverrides();
-  const matches = getActiveCatalog().providers.filter((provider) =>
+  const matches = getCatalog().providers.filter((provider) =>
     provider.agents.includes(agentKind)
     && !isProviderDisabled(disableOverrides, provider.id)
     && !isModelDisabled(disableOverrides, provider.id, normalizedModel)
@@ -737,7 +831,7 @@ async function runDefaultProfileCandidates(
       },
     };
     try {
-      const text = (await candidate.execute(prompt, candidateOpts)).trim();
+      const text = (await executeMeteredCandidate(candidate, prompt, candidateOpts)).trim();
       validateUtilityResponse(text, opts);
       return {
         ok: true,
@@ -837,7 +931,7 @@ async function requestDefaultUtilityText(
   const attempts: UtilityTextAttempt[] = [];
   for (const ref of chain.refs) {
     const parsed = parseAuxiliaryModelRef(ref);
-    if (!parsed) continue;
+    if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) continue;
     if (
       requestOpts.beforeDispatch
       && !(await requestOpts.beforeDispatch(auxiliaryRefDispatchRoute(parsed)))
@@ -895,7 +989,7 @@ async function requestExplicitProviderText(
   prompt: string,
   opts: UtilityTextRequestOptions & { providerId: string },
 ): Promise<UtilityTextResult> {
-  const provider = getActiveCatalog().providers.find((item) => item.id === opts.providerId);
+  const provider = getCatalog().providers.find((item) => item.id === opts.providerId);
   const agentKind = opts.agentKind ?? inferProviderAgent(provider);
   const configuredModels = agentKind ? provider?.models[agentKind] ?? [] : [];
   const requestedModel = opts.model?.trim();
@@ -988,7 +1082,7 @@ async function requestExplicitProviderText(
     if (isProviderRouteMutationInProgress(provider.id)) return false;
     if (isProviderModelRouteDisabled(provider.id, model)) return false;
     if (provider.id === 'xd' && isXdGatewayPaymentRequiredRoute(model, agentKind)) return false;
-    const currentProvider = getActiveCatalog().providers.find((item) => item.id === provider.id);
+    const currentProvider = getCatalog().providers.find((item) => item.id === provider.id);
     if (!currentProvider || !currentProvider.agents.includes(agentKind)) return false;
     const currentModel = currentProvider.models[agentKind]?.find((item) => item.id === model);
     if (
@@ -1342,79 +1436,108 @@ async function requestBuiltinProviderText(
   }
 
   if (isOpenAiSubscriptionProvider(input.provider)) {
-    let creds: Awaited<ReturnType<typeof getChatgptBridgeAuth>>;
-    let credentialStillCurrent: (() => boolean) | undefined;
-    try {
-      if (input.beforeDispatch) {
-        const auth = await getChatgptBridgeAuthForDispatch(input.provider.id);
-        creds = auth;
-        credentialStillCurrent = auth.canDispatch;
-      } else {
-        creds = await (input.provider.id === 'openai' ? getChatgptBridgeAuth() : getChatgptBridgeAuth(input.provider.id));
-      }
-    } catch {
-      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
-    }
-    if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
-    if (!creds.accountId) {
-      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
-    }
-    const accountId = creds.accountId;
-    return executeCandidates([{
-      providerId: input.provider.id,
-      model: input.model,
-      transport: 'codex-responses',
-      profile,
-      execute: (text, requestOpts) => requestProviderHttpText({
-        targets: {
-          responses: {
-            endpoint: joinProxyPath(routing.upstream, '/responses'),
-            headers: {
-              Authorization: `Bearer ${creds.accessToken}`,
-              'chatgpt-account-id': accountId,
-              'OpenAI-Beta': 'responses=experimental',
-              originator: 'codex_cli_rs',
-              session_id: randomUUID(),
-              accept: 'text/event-stream',
-            },
-            // ChatGPT only accepts the bare official model id: drop the bridge prefix
-            // and the `[1m]` context-profile suffix, matching the conversation path
-            // (maker-host/anthropic-responses-bridge-host.ts withOpenaiContextProfileModel).
-            model: input.model.replace(/^chatgpt\//, '').replace(/\[1m\]$/, ''),
-          },
-        },
-        ...utilityRequestPlan({
+    return requestUtilityTextWithinTimeout(async (signal) => {
+      let lease: Awaited<ReturnType<NonNullable<OneShotCandidatesPorts['acquireSubscriptionAccount']>>> = null;
+      try {
+        let creds: Awaited<ReturnType<typeof getChatgptBridgeAuth>>;
+        let credentialStillCurrent: (() => boolean) | undefined;
+        try {
+          lease = await ports.acquireSubscriptionAccount?.(
+            input.provider.id, catalogModel ? input.model.replace(/^chatgpt\//, '').replace(/\[1m\]$/, '') : undefined,
+            [], false, { resuming: false },
+          ) ?? null;
+          if (signal.aborted) return cancelledUtilityTextResult(profile);
+          if (lease) {
+            lease.assertDispatchable();
+            lease.running(true);
+          }
+          if (input.beforeDispatch || lease) {
+            // Created pools keep their source id in selection/results. The bridge's
+            // native provider is OpenAI; the lease supplies this pool's exact account.
+            const auth = await getChatgptBridgeAuthForDispatch(
+              lease && input.provider.subscriptionPool === 'openai' ? 'openai' : input.provider.id,
+              lease?.account,
+            );
+            creds = auth;
+            credentialStillCurrent = () => {
+              try { lease?.assertDispatchable(); return auth.canDispatch(); }
+              catch { return false; }
+            };
+          } else {
+            creds = await (input.provider.id === 'openai' ? getChatgptBridgeAuth() : getChatgptBridgeAuth(input.provider.id));
+          }
+        } catch {
+          return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
+        }
+        if (signal.aborted) return cancelledUtilityTextResult(profile);
+        if (!creds.accountId) {
+          return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
+        }
+        const accountId = creds.accountId;
+        const result = await executeCandidates([{
           providerId: input.provider.id,
-          agentKind: input.agentKind,
-          model: input.model.replace(/^chatgpt\//, ''),
-          catalogModel,
-          wire: 'responses',
-          upstreamBase: routing.upstream,
-          disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
-          reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
-        }),
-        prompt: text,
-        maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
-        timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        // ChatGPT's private Codex Responses endpoint rejects this public API
-        // parameter with HTTP 400. The Auto reviewer enforces its own compact
-        // output ceiling after the response instead.
-        supportsMaxOutputTokens: false,
-        signal: requestOpts?.signal ?? input.signal,
-        systemPrompt: requestOpts?.systemPrompt,
-        onText: requestOpts?.onText,
-        responseInstructions: requestOpts?.responseInstructions,
-        beforeDispatch: requestOpts?.beforeDispatch
-          ? () => requestOpts.beforeDispatch!({
+          model: input.model,
+          transport: 'codex-responses',
+          profile,
+          execute: (text, requestOpts) => requestProviderHttpText({
+            targets: {
+              responses: {
+                endpoint: joinProxyPath(routing.upstream, '/responses'),
+                headers: {
+                  Authorization: `Bearer ${creds.accessToken}`,
+                  'chatgpt-account-id': accountId,
+                  'OpenAI-Beta': 'responses=experimental',
+                  originator: 'codex_cli_rs',
+                  session_id: randomUUID(),
+                  accept: 'text/event-stream',
+                },
+                // ChatGPT only accepts the bare official model id: drop the bridge prefix
+                // and the `[1m]` context-profile suffix, matching the conversation path
+                // (maker-host/anthropic-responses-bridge-host.ts withOpenaiContextProfileModel).
+                model: input.model.replace(/^chatgpt\//, '').replace(/\[1m\]$/, ''),
+              },
+            },
+            ...utilityRequestPlan({
               providerId: input.provider.id,
               agentKind: input.agentKind,
-              model: input.model,
-            })
-          : undefined,
-        credentialStillCurrent: requestOpts?.beforeDispatch ? credentialStillCurrent : undefined,
-        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
-      }),
-    }], prompt, [], input);
+              model: input.model.replace(/^chatgpt\//, ''),
+              catalogModel,
+              wire: 'responses',
+              upstreamBase: routing.upstream,
+              disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
+              reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+            }),
+            prompt: text,
+            maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
+            timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+            // ChatGPT's private Codex Responses endpoint rejects this public API
+            // parameter with HTTP 400. The Auto reviewer enforces its own compact
+            // output ceiling after the response instead.
+            supportsMaxOutputTokens: false,
+            signal,
+            systemPrompt: requestOpts?.systemPrompt,
+            onText: requestOpts?.onText,
+            responseInstructions: requestOpts?.responseInstructions,
+            beforeDispatch: requestOpts?.beforeDispatch
+              ? () => requestOpts.beforeDispatch!({
+                  providerId: input.provider.id,
+                  agentKind: input.agentKind,
+                  model: input.model,
+                })
+              : undefined,
+            credentialStillCurrent,
+            routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
+          }),
+        }], prompt, [], { ...input, signal });
+        if (lease && !result.ok && !signal.aborted) {
+          const failure = result.attempts.find(attempt => attempt.httpStatus !== undefined);
+          if (failure) lease.observeFailure({ errorStatus: failure.httpStatus }, input.model, 'run');
+        }
+        return result;
+      } finally {
+        lease?.release();
+      }
+    }, input.timeoutMs ?? 90_000, input.signal, () => cancelledUtilityTextResult(profile));
   }
 
   if (providerCatalogId(input.provider) === 'xai') {
@@ -1486,6 +1609,12 @@ async function requestBuiltinProviderText(
   return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
 }
 
+function executeMeteredCandidate(candidate: UtilityTextCandidate, prompt: string, opts?: UtilityTextRequestOptions) {
+  const current = usageContext.getStore();
+  if (!current) return candidate.execute(prompt, opts);
+  return usageContext.run({ ...current, route: { ...current.route, providerId: candidate.routeProviderId ?? candidate.providerId, model: candidate.model } }, () => candidate.execute(prompt, { ...opts, source: current.route.source, sessionId: current.route.sessionId }));
+}
+
 async function executeCandidates(
   candidates: UtilityTextCandidate[],
   prompt: string,
@@ -1505,7 +1634,7 @@ async function executeCandidates(
         continue;
       }
     try {
-      const text = (await candidate.execute(prompt, opts)).trim();
+      const text = (await executeMeteredCandidate(candidate, prompt, opts)).trim();
       validateUtilityResponse(text, opts);
       log.info('explicit utility text provider succeeded', {
         providerId: candidate.providerId,
@@ -1544,7 +1673,7 @@ async function resolveCodexCandidate(
     const auth = await maker.getAgentAuthState(agentKind);
     if (!auth.authenticated) {
       log.debug('utility text candidate skipped: codex not authenticated', {
-        providerId: profile.id,
+      providerId: profile.id,
         reason: auth.errorReason,
       });
       return { attempt: skippedAttempt(profile, 'not_authenticated') };
@@ -1558,11 +1687,15 @@ async function resolveCodexCandidate(
   }
   return {
     candidate: {
+      routeProviderId: utilityProfileRouteProviderId(profile),
       providerId: profile.id,
       model: profile.model,
       transport: profile.transport,
       profile,
       execute: (prompt, opts) => maker.oneShot(agentKind, prompt, {
+        source: opts?.source,
+        sessionId: opts?.sessionId,
+        providerId: utilityProfileRouteProviderId(profile),
         model: profile.model,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
@@ -1594,6 +1727,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
   }
   return {
     candidate: {
+      routeProviderId: utilityProfileRouteProviderId(profile),
       providerId: profile.id,
       model: profile.model,
       transport: profile.transport,
@@ -1691,12 +1825,12 @@ async function requestLiteLlmText(input: {
     if (!response.ok) {
       // This path always carries the Cindy AI key to the Cindy gateway.
       if (response.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
-      // Do not retain or log upstream response bodies: gateways may echo request
-      // metadata, while the HTTP status is sufficient for user recovery.
-      await response.body?.cancel().catch(() => undefined);
-      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
+      const quotaExhausted = await observeRejectedResponse(response, 'chat-completions', input.model);
+      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status,
+        ...(quotaExhausted ? { quotaExhausted: true as const } : {}) });
     }
     let parsed = await response.json() as ChatCompletionBody;
+    await observeUsage(parsed, 'chat-completions', input.model);
     let text = chatCompletionChoicesText(parsed);
     const retryBudget = !text && maxTokens !== undefined
       && outputBudgetExhausted('chat-completions', parsed)
@@ -1712,10 +1846,13 @@ async function requestLiteLlmText(input: {
       const budgeted = await send();
       if (budgeted.ok) {
         parsed = await budgeted.json() as ChatCompletionBody;
+        await observeUsage(parsed, 'chat-completions', input.model);
         text = chatCompletionChoicesText(parsed);
       } else {
         if (budgeted.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
-        await budgeted.body?.cancel().catch(() => undefined);
+        if (await observeRejectedResponse(budgeted, 'chat-completions', input.model)) {
+          throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: budgeted.status, quotaExhausted: true });
+        }
       }
     }
     if (!text) {
@@ -1915,7 +2052,7 @@ async function requestProviderHttpText(input: {
               : { thinking: { type: 'disabled' }, reasoning_effort: 'minimal' }
             : {}),
           ...(effort ? { reasoning_effort: effort } : {}),
-          ...(input.onText ? { stream: true } : {}),
+          ...(input.onText ? { stream: true, ...(!minimal ? { stream_options: { include_usage: true } } : {}) } : {}),
           messages: [
             ...(instructions ? [{ role: 'system', content: instructions }] : []),
             { role: 'user', content: input.prompt },
@@ -1983,6 +2120,13 @@ async function requestProviderHttpText(input: {
     let response = await send(step, body);
     let requests = 1;
     while (!response.ok) {
+      // Gateways also wrap deterministic quota failures in 400/422. Classify
+      // before the compatibility ladder so a billing failure cannot spend its
+      // request budget retrying different parameters against the same account.
+      const quotaExhausted = await observeRejectedResponse(response, step.wire, targetFor(step).model);
+      if (quotaExhausted) {
+        throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status, quotaExhausted: true });
+      }
       // Only parameter-class rejections advance the plan. Steps already tried
       // in this call, and bodies identical to the rejected one (for example a
       // minimal body with nothing to strip), would only be rejected again.
@@ -2016,7 +2160,6 @@ async function requestProviderHttpText(input: {
       }
       if (next === null || !nextBody) break;
       tried.add(next);
-      await response.body?.cancel().catch(() => undefined);
       log.debug('utility text request rejected, trying the next reasoning step', {
         status: response.status,
         from: utilityRequestStepKey(step),
@@ -2031,11 +2174,11 @@ async function requestProviderHttpText(input: {
     }
     if (!response.ok) {
       if (response.status === 401) input.onUnauthorized?.();
-      await response.body?.cancel().catch(() => undefined);
+      // The rejected response was already observed once at the top of the loop.
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
     }
 
-    let raw = await readUtilityTextStream(response, input.onText);
+    let raw = await observedStream(response, step.wire, targetFor(step).model, input.onText);
     const parsed = responseStructure(step.wire, raw);
     let text = wireResponseText(step.wire, raw);
     // thinking:disabled 只是请求侧建议,BYOM 网关可以无视;max_tokens 是含思考的
@@ -2058,11 +2201,13 @@ async function requestProviderHttpText(input: {
       // 的可选字段不重新加回去(原样重来只会再被拒一次)。
       const budgeted = await send(step, buildBody(step, retryBudget));
       if (budgeted.ok) {
-        raw = await readUtilityTextStream(budgeted, input.onText);
+        raw = await observedStream(budgeted, step.wire, targetFor(step).model, input.onText);
         text = wireResponseText(step.wire, raw);
       } else {
         if (budgeted.status === 401) input.onUnauthorized?.();
-        await budgeted.body?.cancel().catch(() => undefined);
+        if (await observeRejectedResponse(budgeted, step.wire, targetFor(step).model)) {
+          throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: budgeted.status, quotaExhausted: true });
+        }
       }
     }
     // The step was accepted by the provider; remember it even when the model
@@ -2516,7 +2661,8 @@ function failedAttempt(
     status: 'failed' as const,
   };
   return failure.reason === 'http_error'
-    ? { ...base, reason: failure.reason, httpStatus: failure.httpStatus }
+    ? { ...base, reason: failure.reason, httpStatus: failure.httpStatus,
+      ...(failure.quotaExhausted ? { quotaExhausted: true as const } : {}) }
     : { ...base, reason: failure.reason };
 }
 
@@ -2535,5 +2681,5 @@ function joinProxyPath(baseUrl: string, suffix: string): string {
   return appendProviderPath(baseUrl, suffix);
 }
 
-return { isUtilityRoutePaymentRequired, agentSupportsOneShot, getUtilityTextCandidates, isUtilityRouteDisabled, requestUtilityText, requestExplicitUtilityText, createCustomAutoReviewFallback, requestDedicatedAutoReviewCandidateText, toAnthropicApiModelId };
+return { isUtilityRoutePaymentRequired, agentSupportsOneShot, getUtilityTextCandidates, isUtilityRouteDisabled, requestUtilityText: metered(requestUtilityText), requestExplicitUtilityText: metered(requestExplicitUtilityText), createCustomAutoReviewFallback, requestDedicatedAutoReviewCandidateText: metered(requestDedicatedAutoReviewCandidateText, 'auto-review'), toAnthropicApiModelId };
 }

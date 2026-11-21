@@ -13,27 +13,40 @@ export default {
   name: 'teammates-section',
   entry: './teammates-fixture.tsx',
   viewport: { width: 800, height: 600 },
-  real: 'TeammatesSection rows, PinnedSection display sorting and menu, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
-  notCovered: 'Roster loading, cloud/device connections, create/delete menus, message delivery, pinned drag persistence and collapsed RailNav',
+  real: 'TeammatesSection rows, PinnedSection display sorting and menu, single/multi-column SortableJS drag controls, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
+  notCovered: 'Real database readiness and roster reads, cloud/device connections, create/delete menus, message delivery, pinned drag persistence and collapsed RailNav',
   stubs: {
     'src/renderer/features/cc-agent/sidebar/sessionWorktreeInfo': { partial: 'export const useTaskInfoWorktree=()=>null;' },
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
-    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{});` },
+    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{}); export const useBotProfilesLoadState=()=>${data}.loadState||'ready'; export const hasLoadedBotProfiles=()=>!${data}.loadState||${data}.loadState==='ready';` },
     'src/renderer/features/bots/useRemoteBots': { partial: `export const useRemoteBots=()=>${data}.remoteBots;` },
     'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
     'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
-    'src/renderer/features/device-link/useDeviceLinkDeviceList': 'export const useDeviceLinkDeviceList=()=>[];',
+    'src/renderer/features/device-link/useDeviceLinkDeviceList': { partial: 'export const useDeviceLinkDeviceList=()=>[]; export const useDeviceLinkDeviceListRequestState=()=>({status:"ready",error:null});' },
     'src/renderer/state/agentIslandActivity': { partial: `export const useAgentIslandActivityMap=()=>new Map(${data}.activities||[]);` },
     'src/renderer/features/bots/BotCreateMenu': 'export const BotCreateMenu=()=>null;',
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'startup-read-pending': {
+      about: '#9706: initial read is pending; show loading instead of implying no buddies',
+      data: { profiles: [], remoteBots: [], route: '/bots', loadState: 'pending' },
+    },
+    ...Object.fromEntries(['text', 'list', 'card', 'card-columns'].map(mode => [`pinned-sort-drag-${mode}`, {
+      about: 'Recent-activity pins cannot be reordered; switching back restores the manual order and enables dragging',
+      storage: { 'sidebar.cardMode': mode === 'card-columns' ? 'card' : mode },
+      data: { showPinned: true, profiles: [], remoteBots: [], route: '/bots', sidebarWidth: mode === 'card-columns' ? 440 : mode === 'card' ? 240 : 260 },
+    }])),
+    'startup-read-error': {
+      about: 'A failed roster read offers explicit recovery instead of an empty-roster create invitation; presentation fixture only',
+      data: { profiles: [], remoteBots: [], route: '/bots', loadState: 'error' },
+    },
     'pinned-sort': {
       about: 'Pinned display sorting changes task order and restores the manual order without changing view style',
       data: { showPinned: true, profiles: [], remoteBots: [], route: '/bots' },
     },
     'collapse-attention': {
-      about: 'Independent icon/list choice; collapsed sections keep unread and pending feedback only',
+      about: 'Independent icon/list choice; collapsed avatars opt-in preserves the default attention-only behavior',
       data: { showPinned: true, profiles: [
         { ...profiles[0], lastMessageAt: Date.now() - 180000, name: '日程助手', avatar: 'cindy://avatar/preset/cindy', lastMessagePreview: '今天的安排已同步' },
         { ...profiles[1], lastMessageAt: Date.now() - 120000, name: '写作伙伴', avatar: 'cindy://avatar/preset/dash', lastMessageRole: 'assistant', lastMessagePreview: '周报已整理好，请查看' },
@@ -90,6 +103,17 @@ export default {
         lastMessage: { authorKind: index === 0 ? 'bot' : 'user', isSelf: false, authorName: index === 0 ? 'Dash' : 'Alex', preview: index === 0 ? '报告已整理好，等你查看' : '今天的讨论有新消息', createdAt: Date.now() - (index + 1) * 60000 },
         serverUnread: { count: index === 0 ? 3 : 12, mentioned: false }, createdAt: 1, updatedAt: Date.now() - (index + 1) * 60000,
       })) },
+    },
+    // 副标题横贯整行（时间在名称行），未读角标必须自己占列，不能压住预览文字。
+    'topic-reply-unread': {
+      about: 'Topic-reply preview truncates before the unread count instead of running under it',
+      data: { profiles: [], remoteBots: [], route: '/bots', groups: [{
+        id: 'topic-unread', name: 'Cindy Plugin For VSCode', replyMode: 'all', speakingMode: 'auto',
+        members: ['dash', 'lizi'].map(preset => ({ botId: preset, name: preset, avatar: `cindy://avatar/preset/${preset}`, avatarColor: 'violet', status: 'active' })),
+        organizerBotId: 'dash', projectDir: null, speakingBotIds: [], planningBotId: null, openPlan: null,
+        lastMessage: { authorKind: 'user', isSelf: false, authorName: 'liugaowei', preview: '评价一下这个插件的安装步骤和权限说明，顺便看看更新记录', createdAt: Date.now() - 3600000, messageId: '40000000-0000-4000-8000-000000000002', threadRootId: '40000000-0000-4000-8000-000000000001' },
+        serverUnread: { count: 1, mentioned: false }, createdAt: 1, updatedAt: Date.now() - 3600000,
+      }] },
     },
     'message-kinds': {
       about: 'Bot result green, ordinary group unread count, group mention blue count; execution states retain priority',
@@ -225,6 +249,59 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'startup-read-pending') {
+      assert.equal(await page.getByRole('status').innerText(), await ui.t('ccAgent.common.loading'));
+      assert.equal(await page.getByRole('status').isVisible(), true);
+      assert.equal(await page.getByRole('alert').count(), 0);
+      return;
+    }
+    if (ui.case.startsWith('pinned-sort-drag-')) {
+      const subject = page.locator('[data-pinned-reorder-count]');
+      if (ui.case === 'pinned-sort-drag-card') assert.equal(await subject.locator('[data-card-id]').count(), 0, 'single-column cards use SortableList');
+      if (ui.case === 'pinned-sort-drag-card-columns') assert.equal(await subject.locator('[data-col]').count(), 3, 'wide cards use three sortable columns');
+      const row = id => subject.locator(`[data-sortable-id="${id}"], [data-card-id="${id}"]`);
+      const order = () => subject.locator('[data-sortable-id], [data-card-id]').evaluateAll(rows => rows
+        .map((row, index) => ({ id: row.getAttribute('data-sortable-id') ?? row.getAttribute('data-card-id'), rank: Number(row.getAttribute('data-sidebar-row-order') ?? index) }))
+        .sort((a, b) => a.rank - b.rank).map(row => row.id));
+      const chooseSort = async key => {
+        await subject.getByRole('button', { name: await ui.t('ccAgent.sidebar.pinned'), exact: true }).hover();
+        await subject.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+        await page.getByRole('menuitem', { name: await ui.t(key), exact: true }).click();
+      };
+      await chooseSort('ccAgent.sidebar.filterSortBy.activity');
+      await row('pinned-2').dragTo(row('pinned-0'));
+      assert.deepEqual(await order(), ['pinned-2', 'pinned-1', 'pinned-0']);
+      assert.equal(await subject.getAttribute('data-pinned-reorder-count'), '0');
+      await ui.capture('recent-drag-ignored');
+      await chooseSort('ccAgent.sidebar.filterSortBy.manual');
+      assert.deepEqual(await order(), ['pinned-0', 'pinned-1', 'pinned-2']);
+      await row('pinned-0').dragTo(row('pinned-2'));
+      assert.notEqual(await subject.getAttribute('data-pinned-reorder-count'), '0', 'manual mode still permits dragging');
+      assert.notDeepEqual(await order(), ['pinned-0', 'pinned-1', 'pinned-2']);
+      await ui.capture('manual-drag-enabled');
+      return;
+    }
+    if (ui.case === 'startup-read-error') {
+      const alert = page.getByRole('alert');
+      await alert.getByText(await ui.t('bots.rosterLoadFailed'), { exact: true }).waitFor();
+      const retry = alert.getByRole('button', { name: await ui.t('bots.rosterReload'), exact: true });
+      await retry.waitFor({ state: 'visible' });
+      const section = page.locator('[data-sidebar-section="teammates"]');
+      const header = section.getByRole('button', { name: await ui.t('bots.title'), exact: true });
+      const changeView = async (key) => {
+        await header.hover();
+        await section.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+        await page.getByRole('menuitem', { name: await ui.t(key), exact: true }).click();
+      };
+      await changeView('bots.list.viewIcons');
+      await retry.waitFor({ state: 'visible' });
+      await ui.capture('icons-error');
+      await header.click();
+      await retry.waitFor({ state: 'visible' });
+      await changeView('ccAgent.sidebar.viewStyleListWide');
+      await retry.waitFor({ state: 'visible' });
+      return;
+    }
     if (ui.case === 'pinned-sort') {
       const pinned = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.pinned'), exact: true });
       const section = pinned.locator('xpath=../../..');
@@ -248,6 +325,20 @@ export default {
       await openMenu();
       return;
     }
+    if (ui.case === 'topic-reply-unread') {
+      const row = page.locator('[data-bot-group-id="topic-unread"]');
+      await row.getByText('Cindy Plugin For VSCode', { exact: true }).waitFor();
+      assert.equal((await row.locator('[data-teammate-unread-count]').innerText()).trim(), '1');
+      // 预览与角标各占一列：预览（包括可点的话题回复行）右缘必须停在角标左边。
+      const [previewRight, badgeLeft] = await row.evaluate(el => {
+        const badge = el.querySelector('[data-teammate-unread-count]').getBoundingClientRect();
+        const preview = el.querySelector('button[title]').getBoundingClientRect();
+        return [preview.right, badge.left];
+      });
+      assert.ok(previewRight <= badgeLeft, `preview ends at ${previewRight}, badge starts at ${badgeLeft}`);
+      await ui.capture('topic-reply-unread');
+      return;
+    }
     const showIcons = async () => {
       const section = page.locator('[data-sidebar-section="teammates"]');
       await section.getByRole('button', { name: await ui.t('bots.title'), exact: true }).hover();
@@ -265,11 +356,36 @@ export default {
       assert.equal(await page.getByText('写作伙伴', { exact: true }).count(), 1);
       assert.equal(await page.getByText('研究伙伴', { exact: true }).count(), 1);
       await ui.capture('collapsed-list');
+      const openDisplayMenu = async () => {
+        await header.hover();
+        await page.locator('[data-sidebar-section="teammates"]').getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+      };
+      await openDisplayMenu();
+      const avatarsOption = page.getByRole('menuitemcheckbox', { name: await ui.t('bots.list.showCollapsedTeammateAvatars'), exact: true });
+      assert.equal(await avatarsOption.getAttribute('aria-checked'), 'false');
+      await ui.capture('collapsed-avatars-menu-off');
+      await avatarsOption.click();
+      assert.equal(await header.getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.getByRole('button', { name: '日程助手', exact: true }).count(), 1);
+      await page.getByText('写作伙伴', { exact: true }).waitFor({ state: 'hidden' });
+      await ui.capture('collapsed-all-avatars');
+      await openDisplayMenu();
+      assert.equal(await avatarsOption.getAttribute('aria-checked'), 'true');
+      await ui.capture('collapsed-avatars-menu-on');
+      await avatarsOption.click();
+      assert.equal(await page.getByRole('button', { name: '日程助手', exact: true }).count(), 0);
+      await page.getByText('写作伙伴', { exact: true }).waitFor({ state: 'visible' });
+      assert.equal(await page.getByText('写作伙伴', { exact: true }).count(), 1);
       await showIcons();
       assert.equal(await header.getAttribute('aria-expanded'), 'false');
       await ui.capture('collapsed-icons');
       await header.click();
       await ui.capture('expanded-icons');
+      // Leave the published final capture on the new option and its avatar strip.
+      await header.click();
+      await openDisplayMenu();
+      await avatarsOption.click();
+      await openDisplayMenu();
       return;
     }
     if (ui.case === 'group-avatar-hover') {
@@ -389,6 +505,12 @@ export default {
     if (ui.case === 'running-preview-parity') {
       const expand = page.getByRole('button', { name: /Show all|显示全部|查看全部/ });
       if (await expand.count()) await expand.click();
+      // A draggable attribute alone cannot override the global native drag reset.
+      const chatSources = page.locator('[data-sidebar-section="teammates"] button[draggable=true]');
+      assert.equal(await chatSources.count(), 4);
+      for (const source of await chatSources.all()) {
+        assert.equal(await source.evaluate(node => getComputedStyle(node).webkitUserDrag), 'element');
+      }
       const previews = page.locator('[data-teammate-running-preview]');
       assert.equal(await previews.count(), 3);
       // The screenshot runner defaults to reduced motion. Verify both modes explicitly.

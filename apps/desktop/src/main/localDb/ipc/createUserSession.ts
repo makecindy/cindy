@@ -4,6 +4,7 @@
 import { eq } from 'drizzle-orm';
 import { getCurrentDbClientSnapshot } from '../client/current.js';
 import { sessions } from '../schema.js';
+import { projectForNewTask } from '../../mcp-integrations/projectManagementCore.js';
 import { openSession } from '../sessionOpening.js';
 import { sessionCreateToRow, sessionToCamel, normalizeRemoteHostId } from '../mapper.js';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace.js';
@@ -11,10 +12,13 @@ import { resolveBusinessSessionId } from '../../sessionIds.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
 import { isRetainableProjectSession } from '../../../shared/sessionSource.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import { consumeWritableDirectoryPickerGrants, WritableDirectoryPickerGrantError } from '../../maker-ipc/writableDirectoryPickerGrant.js';
 import { forgetProvisionalSession, isProvisionalSession, markProvisionalSession } from '../provisionalSessions.js';
-import { upsertRecentWorkdir } from './recentWorkdirsCore.js';
+import { touchRecentWorkdir } from './recentWorkdirsCore.js';
 import { managedWorktreeRoot } from '../../worktree/managedResourcePath.js';
 import { withWorktreeResourceLocks } from '../../worktree/resourceLock.js';
 import { createLogger } from '../../logger.js';
@@ -62,9 +66,25 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     }
     const createBody = bodyWithoutProvisional as Parameters<typeof sessionCreateToRow>[1];
     // M16: agentKind 白名单校验（防止 renderer 传非法值）
-    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
+    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi', 'acp']);
     if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
+    }
+    if (bodyObj.agentKind === 'acp') {
+      // Plugin engine tasks (docs/plans/acp-plugin-bridge.md): chosen at the computer the task is
+      // on, through the plugin harness id. The engine is this computer's, or one that another
+      // computer of the same account opened for remote use; never an SSH host or a shared provider.
+      if (isDeviceLinkInvoke()) throwIpcError('INVALID_PARAMS', 'plugin engine tasks can only be created on this computer');
+      if (!pluginEngineKeyFromProviderId(typeof bodyObj.providerId === 'string' ? bodyObj.providerId : null)) {
+        throwIpcError('INVALID_PARAMS', 'a plugin engine task needs providerId acp-plugin:<plugin>:<harness>');
+      }
+      if (bodyObj.remoteHostId) {
+        throwIpcError('INVALID_PARAMS', 'plugin engine tasks do not run in SSH workspaces');
+      }
+      if (bodyObj.agentDeviceId !== undefined && bodyObj.agentDeviceId !== null
+        && (typeof bodyObj.agentDeviceId !== 'string' || isProviderShareAgentDeviceId(bodyObj.agentDeviceId))) {
+        throwIpcError('INVALID_PARAMS', 'plugin engines are only offered by your own computers');
+      }
     }
     if (
       bodyObj.title !== undefined &&
@@ -95,7 +115,7 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     ) {
       throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id');
     }
-    const workspaceKind =
+    const requestedKind =
       (createBody?.workspaceKind as 'project' | 'dialogue' | undefined) ?? 'project';
     const explicitWorkingDir =
       normalizeWorkingDirForStorage(
@@ -107,10 +127,15 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
       remoteHostId: createBody?.remoteHostId,
       userData: ports.userDataDir,
     });
+    const membership = requestedKind === 'project' && !createBody?.remoteHostId
+      ? await projectForNewTask(explicitWorkingDir, createBody?.projectDir)
+      : requestedKind === 'dialogue' ? { projectDir: null, workspaceKind: 'dialogue' as const } : undefined;
+    assertOwner();
+    const workspaceKind = membership?.workspaceKind ?? requestedKind;
     const workingDir =
       workspaceKind === 'dialogue' && !explicitWorkingDir
         ? ensureDialogueWorkspaceDir(id, now)
-        : explicitWorkingDir;
+        : explicitWorkingDir ?? membership?.projectDir ?? undefined;
     if (workspaceKind === 'dialogue' && !explicitWorkingDir) {
       log.info('[localDb] allocated dialogue workspace', { sessionId: id, workingDir });
     }
@@ -155,7 +180,7 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     let row: typeof sessions.$inferSelect | undefined;
     try {
       ({ row: insertRow } = await openSession({ id, now, assertCurrent: assertOwner,
-        body: { ...createBody, workspaceKind, workingDir },
+        body: { ...createBody, ...membership, workspaceKind, workingDir },
         ...(provisional ? { deferGitInit: true } : {}),
       }, async (prepared, assertCurrent) => {
         const resource = !prepared.remoteHostId && prepared.workingDir
@@ -189,7 +214,7 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
       !insertRow.remoteHostId &&
       isRetainableProjectSession(insertRow)
     ) {
-      void upsertRecentWorkdir(insertRow.projectDir ?? insertRow.workingDir, now);
+      void touchRecentWorkdir(insertRow.projectDir ?? insertRow.workingDir, now);
     }
     // 订阅槽①旁路通知(fire-and-forget,动态 import 防环):意识旁听会话创建。
     // 资格过滤(用户主会话)与订阅者快路径都在 cindy-brain 内部,这里零判断。

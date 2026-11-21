@@ -8,7 +8,9 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { translateResponsesRequest } from '@cindy/responses-chat-bridge';
+import { createResponsesChatHandler, translateResponsesRequest } from '@cindy/responses-chat-bridge';
+import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
+import { createPiProviderFetch, handlePiProviderRequest } from '../pi-provider-transport.js';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -151,8 +153,6 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
     stripNonCanonicalResponsesItemIdsFromBody: () => null,
     shortenOversizedResponsesItemIdsFromBody: () => null,
     stripNonAnthropicFields: mockState.stripNonAnthropicFields,
-    // 视觉桥 transform：默认短路（controller 未注入 → shouldBridge 恒 false → null 透传）。
-    createVisionBridgeTransform: () => (() => null),
     createInstructionsRegistry: () => {
       const map = new Map<string, string>();
       return {
@@ -1673,30 +1673,55 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   });
 
   // #10269: Carbon discovery has only an ID, unlike the existing explicit API cases.
-  it.each(['individual', 'business', 'enterprise'].flatMap(account => ['anthropic-messages', 'openai-responses', 'openai-completions'].map(api => ({ account, api }))))('keeps the Copilot adapter for $api on the $account host', async ({ account, api }) => {
+  // #11326, unit: a discovered Responses entry must enter the native bridge with the OAuth defaults enabled.
+  it.each([
+    ...['individual', 'business', 'enterprise'].flatMap(account => ['anthropic-messages', 'openai-responses', 'openai-completions']
+      .map(api => ({ account, api, discovered: false, transparent: false }))),
+    { account: 'business', api: 'openai-responses', discovered: true, transparent: false },
+    { account: 'business', api: 'openai-responses', discovered: true, transparent: true },
+  ])('keeps the Copilot adapter for $api on the $account host (discovered: $discovered, transparent: $transparent)', async ({ account, api, discovered, transparent }) => {
     const host = await freshCodexProxyHost();
     const { setCustomProviders } = await import('../active-catalog.js');
     const { setOAuthTokenReader } = await import('../provider-route.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
-    const { buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG, providerModelAdapterId } = await import('@cindy/model-providers');
+    const { buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG, providerModelAdapterId,
+      parseModelsListResponse, mergeDiscoveredRuntimeModels } = await import('@cindy/model-providers');
     const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(model => api === 'openai-completions'
       ? model.id === 'gemini-4-carbon' : model.execution.pi.api === api)!;
     const token = `fixture-token;proxy-ep=proxy.${account}.githubcopilot.com;`;
+    const modelId = discovered ? 'gpt-6.2-sol' : row.id;
+    const requestPath = '/v1/responses';
+    const upstream = transparent ? 'https://api.business.githubcopilot.com' : row.upstream;
+    const models = discovered ? mergeDiscoveredRuntimeModels([], parseModelsListResponse(
+      { data: [{ id: modelId, supported_endpoints: ['/responses'] }] }, row.upstream + '/models',
+    )!) : [{ id: row.id, name: row.name, ...(api === 'openai-completions' ? {} : { api: api as 'anthropic-messages' | 'openai-responses' }) }];
     setCustomProviders([buildUserProvider({ id: 'copilot-account', name: 'Copilot',
       auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
-      runtimes: { codex: { baseUrl: row.upstream, catalogPresetId: 'github-copilot',
+      runtimes: { codex: { baseUrl: upstream, catalogPresetId: 'github-copilot',
+        ...(transparent ? { requestPath } : {}),
         wireProtocol: api === 'openai-completions' ? 'anthropic-messages' : api as 'anthropic-messages' | 'openai-responses',
-        models: [{ id: row.id, name: row.name, ...(api === 'openai-completions' ? {} : { api: api as 'anthropic-messages' | 'openai-responses' }) }] } },
+        models } },
     })]);
     setOAuthTokenReader(() => token);
     host.registerComposed('session-copilot', 'thread-copilot', 'PRODUCT_PROMPT');
     setSessionProvider('session-copilot', 'copilot-account');
     host.setCodexProxyAuthInjection('env-key');
     try {
-      const body = { model: row.id, input: [{ role: 'user', content: 'hello' }] };
+      const body = { model: modelId, input: [{ role: 'user', content: 'hello' }] };
       const decision = await host.createModelRoutingTransform()(body, {
-        reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-copilot' },
+        reqId: 1, method: 'POST', url: '/responses', headers: {
+          'thread-id': 'thread-copilot',
+          ...(transparent ? { 'editor-version': 'fixture-editor' } : {}),
+        },
       });
+      if (transparent) {
+        expect(decision?.localHandler).toBeUndefined();
+        expect(decision?.pathOverride).toBe(requestPath);
+        const headers = new Headers(decision?.headerOverride);
+        expect(headers.get('editor-version')).toBeNull();
+        expect(headers.get('copilot-integration-id')).toBe('vscode-chat');
+        return;
+      }
       expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
       await (decision as { localHandler: (input: unknown) => Promise<void> }).localHandler({
         rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, res: {},
@@ -1704,7 +1729,8 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       expect(mockState.createPiProviderFetch).toHaveBeenLastCalledWith(expect.objectContaining({
         apiKey: token,
         upstream: `https://api.${account}.githubcopilot.com`,
-        row: expect.objectContaining({ id: row.id, upstream: row.upstream }),
+        copilotOAuth: api === 'openai-responses',
+        row: expect.objectContaining({ id: modelId, upstream: row.upstream }),
       }));
       const nativeOptions = (mockState.createPiProviderFetch.mock.calls as unknown as Array<[{ row: typeof row }]>).at(-1)![0];
       expect(providerModelAdapterId(nativeOptions.row)).toBe('github-copilot');
@@ -3550,7 +3576,7 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), DeepSeek V4.1 replay 兼容, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields, 子代理身份观察]
+        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), DeepSeek V4.1 replay 兼容, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields, 子代理身份观察]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
@@ -3558,7 +3584,8 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
-          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), // #11278: route-scoped tool audio recovery
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -3569,9 +3596,12 @@ describe('codex proxy host', () => {
           expect.objectContaining({ id: 'responses_item_id_prefix' }),
           expect.objectContaining({ id: 'responses_item_id_length' }),
           expect.objectContaining({ id: 'responses_reasoning_content' }),
+          expect.objectContaining({ id: 'responses_tool_audio', applyOnUnmatchedRetry: false, allowExtraRules: false }),
           // #7906: 只去重工具 ID，不许在同一次透明重试里叠洗其它 strip。
           expect.objectContaining({ id: 'duplicate_responses_tool_call', allowExtraRules: false }),
           expect.objectContaining({ id: 'xai_model_input' }),
+          // A Responses gateway that routes Claude to Bedrock rejects hosted search; only that rejection is retried once.
+          expect.objectContaining({ id: 'bedrock_unsupported_web_search', applyOnUnmatchedRetry: false, allowExtraRules: false }),
         ]),
       }),
     );
@@ -3818,12 +3848,15 @@ describe('codex proxy host', () => {
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
   });
 
-  it.each(['shared', 'custom-context', 'control-plane'] as const)(
-    'repairs legacy IDs after a WebSocket rejection on the %s proxy, preserving sibling connections', async (proxyKind) => {
+  // #9645: extend the real loopback recovery path beyond fc_ to saved msg_ tool IDs.
+  // The upstream rejects the original ID; HTTP replay/compact must repair it without touching peers.
+  it.each((['shared', 'custom-context', 'control-plane'] as const).flatMap(proxyKind =>
+    ['fc', 'msg'].map(prefix => ({ proxyKind, prefix })),
+  ))('repairs $prefix IDs after a WebSocket rejection on the $proxyKind proxy, preserving sibling connections', async ({ proxyKind, prefix }) => {
     const host = await freshCodexProxyHost();
-    const errorMessage = "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'.";
+    const errorMessage = `Invalid 'input[285].id': '${prefix}_legacy'. Expected an ID that begins with 'ctc'.`;
     const legacy = { model: 'gpt-6', input: [
-      { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
+      { type: 'custom_tool_call', id: `${prefix}_legacy`, name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
       { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
     ] };
     const httpBodies: Array<{ input: typeof legacy.input }> = [];
@@ -4133,6 +4166,81 @@ describe('codex proxy host', () => {
     }
   });
 
+  // #9183 / #9220: real host request adaptation followed by actual proxy HTTP
+  // delivery, including its final guard after namespace restoration.
+  it.each(['collaboration', 'multi_agent_v1', 'multi_agent_v2'])('marks restored %s collaboration calls after namespace lowering (#9183)', async namespace => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('marker-session', 'marker-thread', 'PRODUCT_PROMPT');
+    setSessionProvider('marker-session', 'xd');
+    try {
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+      const names = ['spawn_agent', 'send_message', 'followup_task'];
+      let current: any = { model, tools: [{ type: 'namespace', name: namespace, tools: names.map(name => ({
+        type: 'function', name, parameters: { type: 'object', properties: { message: { type: 'string' } } },
+      })) }] };
+      const ctx = { reqId: 1, method: 'POST', url: '/responses', upstreamBase: XD_GATEWAY_BASE_URL + '/v1', headers: { 'thread-id': 'marker-thread' } };
+      for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+      expect(current.tools.map((tool: any) => tool.name)).toEqual(names.map(name => `${namespace}__${name}`));
+      const calls = names.map((name, i) => ({ type: 'function_call', name: `${namespace}__${name}`, call_id: `c${i}`, arguments: '{"message":"task"}' }));
+      const events = calls.flatMap(item => [
+        { type: 'response.output_item.added', item }, { type: 'response.output_item.done', item },
+      ]).concat([{ type: 'response.completed', response: { output: calls } }] as any);
+      const upstream = createServer(async (req, res) => {
+        await new Promise<void>(resolve => { req.once('end', resolve); req.resume(); });
+        res.writeHead(200, { 'content-type': 'text/event-stream' }).end(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+      });
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+      const { createAnthropicCompatProxy } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      let delivery: Awaited<ReturnType<typeof createAnthropicCompatProxy>> | undefined;
+      let wire = '';
+      try {
+        delivery = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, transformResponse: config.transformResponse, requestGuard: config.requestGuard });
+        const response = await fetch(`${delivery.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': 'marker-thread' }, body: JSON.stringify(current) });
+        expect(response.ok).toBe(true);
+        wire = await response.text();
+      } finally {
+        await delivery?.dispose(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
+      }
+      const output = wire.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+      const restored = output.flatMap(event => event.item ? [event.item] : event.response?.output ?? []);
+      expect(restored).toHaveLength(9);
+      for (const call of restored) {
+        expect(call).toMatchObject({ namespace, name: expect.stringMatching(/^(spawn_agent|send_message|followup_task)$/), encrypted_function_args: [], arguments: '{"message":"task"}' });
+      }
+    } finally {
+      host.unregister('marker-session'); clearSessionProvider('marker-session'); setXdGatewayModels([]);
+    }
+  });
+
+  it('keeps text-only enforcement frozen while normalizing collaboration replies (#9183)', async () => {
+    const host = await freshCodexProxyHost();
+    const { registerCodexTextOnlyPolicy } = await import('../codex-text-only-policy.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    const config = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+    const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'marker-text-only' } };
+    let disabled = false;
+    const release = registerCodexTextOnlyPolicy('marker-text-only', () => disabled);
+    try {
+      expect(config.requestGuard({ ...ctx, url: '/images/generations' })).toBeNull();
+      disabled = true;
+      const guard = config.requestGuard(ctx);
+      const request = { model: 'synthetic', tools: [{ type: 'function', name: 'spawn_agent' }] };
+      expect(JSON.parse(guard.transformBody(Buffer.from(JSON.stringify(request))).toString())).toMatchObject({ tools: [], tool_choice: 'none' });
+      disabled = false; // A later permissive turn cannot relax this admitted response.
+      const stream = guard.response({ 'content-type': 'text/event-stream' });
+      const read = (async () => { for await (const chunk of stream) void chunk; })();
+      stream.end(`data: ${JSON.stringify({ type: 'response.output_item.done', item: { type: 'function_call', namespace: 'collaboration', name: 'spawn_agent', arguments: '{"message":"task"}' } })}\n\n`);
+      await expect(read).rejects.toThrow('text-only');
+    } finally { disabled = false; release(); }
+  });
+
   it('repairs null array fields in passthrough Responses SSE before Codex parses them (#4251)', async () => {
     const host = await freshCodexProxyHost();
     // Minimal reproduction from #4251: a third-party model behind the Responses passthrough
@@ -4214,6 +4322,13 @@ describe('codex proxy host', () => {
   });
 
   it.each([
+    ...['fc', 'fco', 'ctc', 'ctco'].map((prefix): [string, string | null] => [
+      `Invalid 'input[169].id': 'msg_history'. Expected an ID that begins with '${prefix}'.`, 'tool_item_id',
+    ]),
+    [JSON.stringify({ error: { message: 'Invalid "input[169].id": "msg_history". Expected an ID that begins with "ctc".' } }), 'tool_item_id'],
+    ["Invalid 'input[169].call_id': 'msg_history'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[169].id': 'msg_history'. Expected an ID that begins with 'msg'.", 'responses_item_id_prefix'],
+    ["Invalid 'input[169].id': 'MSG_history'. Expected an ID that begins with 'ctc'.", null],
     ["Invalid 'input[2].id': 'ctc_old'. Expected an ID that begins with 'fc'.", 'tool_item_id'],
     [JSON.stringify({ error: { message: "Invalid \"input[2].id\": \"fco_old\". Expected an ID that begins with \"ctco\"." } }), 'tool_item_id'],
     ["Invalid 'input[2].call_id': 'fc_old'. Expected an ID that begins with 'ctc'.", null],
@@ -5614,6 +5729,54 @@ describe('codex proxy host', () => {
     clearSessionProvider('session-gateway-passthrough');
   });
 
+  it.each([false, true])('removes unsupported search on the effective MiMo Pro Responses route (frozen=%s)', async frozen => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders, getActiveCatalog } = await import('../active-catalog.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const provider = buildUserProvider({ id: 'mimo-fixture', name: 'MiMo fixture', runtimes: {
+      codex: { baseUrl: 'https://api.xiaomimimo.com/v1', wireProtocol: 'openai-chat', supportsImageGeneration: true,
+        models: [{ id: 'mimo-v2.6-pro', name: 'MiMo Pro' }] },
+    } });
+    // Runtime config remains Chat, but the active catalog selects the native Responses
+    // interface (the safe provider projection observed in the failing local session).
+    provider.models.codex![0] = { ...provider.models.codex![0]!, api: 'openai-responses',
+      route: { baseUrl: 'https://api.xiaomimimo.com/v1', wireProtocol: 'openai-responses' } };
+    setCustomProviders([provider]);
+    setCustomProviderKeyReader(() => 'fixture-key');
+    const routes = deriveCodexCustomProviderRoutes(getActiveCatalog()).filter(route => route.providerId === provider.id);
+    expect(routes).toHaveLength(1);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    if (frozen) await host.ensureCodexCustomContextProxyReady('mimo-frozen', 'env-key', routes);
+    else await host.ensureCodexProxyReady();
+    host.registerComposed('mimo-search-session', 'mimo-search-thread', '');
+    setSessionProvider('mimo-search-session', 'mimo-fixture');
+    try {
+      const proxy = mockState.createAnthropicCompatProxy.mock.calls[0][0];
+      const body = { model: 'mimo-v2.6-pro', input: [{ role: 'user', content: 'hello' }],
+        tools: [{ type: 'web_search' }, { type: 'function', name: 'read_file' }] };
+      const ctx = { method: 'POST', url: frozen ? `/_cindy/custom-provider/${routes[0]!.routeId}/responses` : '/responses',
+        headers: { 'thread-id': 'mimo-search-thread' } };
+      const decision = await proxy.routingTransform(body, ctx);
+      expect(decision).not.toHaveProperty('localHandler');
+      expect(decision.upstreamOverride).toContain('api.xiaomimimo.com');
+      let current: unknown = body;
+      for (const transform of proxy.transformRequest) {
+        current = transform(current, { ...ctx, upstreamBase: decision.upstreamOverride }) ?? current;
+      }
+      expect(current).toMatchObject({ input: body.input, tools: [{ type: 'function', name: 'read_file' }] });
+      expect(body.tools).toHaveLength(2);
+    } finally {
+      clearSessionProvider('mimo-search-session');
+      host.unregister('mimo-search-session');
+      if (frozen) await host.releaseCodexCustomContextProxy('mimo-frozen');
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+    }
+  });
+
   it('normalizes xAI Codex Responses body before forwarding requests', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
@@ -6539,6 +6702,9 @@ describe('codex proxy host', () => {
       input: [
         { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
         { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
+        // #11371 P2: native-custom compact must not expand a valid 64-char msg_ result to 65.
+        { type: 'custom_tool_call', id: `msg_${'x'.repeat(60)}`, name: 'exec', call_id: 'call_large', input: 'text(2)' },
+        { type: 'custom_tool_call_output', id: `msg_${'x'.repeat(60)}`, call_id: 'call_large', output: '2' },
       ],
     };
     let current: unknown = original;
@@ -6547,8 +6713,11 @@ describe('codex proxy host', () => {
     }
     expect(current).toMatchObject({ input: [
       { ...original.input[0], id: 'ctc_legacy' }, original.input[1],
+      { ...original.input[2], id: `ctc_${'x'.repeat(60)}` },
+      { ...original.input[3], id: expect.stringMatching(/^ctco_[a-f0-9]{59}$/) },
     ] });
     expect(original.input[0].id).toBe('fc_legacy');
+    expect(original.input[3].id).toBe(`msg_${'x'.repeat(60)}`);
     expect(config.transformResponse({ reqId: 8001, responseHeaders: { 'content-type': 'application/json' } })).toBeNull();
   });
 
@@ -8631,7 +8800,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(32); // ordinary transforms + dump + frozen custom-provider effort
+    expect(transforms).toHaveLength(32); // ordinary transforms + dump + frozen custom-provider effort + tool audio recovery
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
@@ -8657,6 +8826,144 @@ describe('codex proxy host', () => {
       body: transformedBody,
     });
   });
+
+  // Routing and response observation must identify the same rejected pre-turn request.
+  // A later sample on the root or a manual/child compaction cannot authorize handoff.
+  it('attributes a downshift denial only to the latest rejected root request', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn() });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session', 'root', '');
+    host.registerChildThread('root', 'child');
+    const proxy = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+    const request = async (thread: string, kind = 'compaction', trigger = 'auto') => {
+      const headers = { 'thread-id': thread, 'x-codex-turn-metadata': JSON.stringify({
+        thread_id: thread, turn_id: 'turn', request_kind: kind,
+        compaction: { trigger, reason: 'model_downshift', phase: 'pre_turn' },
+      }) };
+      await proxy.routingTransform({ model: 'old/large' }, { url: '/v1/responses', method: 'POST', reqId: 1, headers });
+      return (status: number) => proxy.responseObserver({ status, reqId: 1, method: 'POST', url: '/v1/responses',
+        requestHeaders: headers, responseHeaders: {}, requestBody: Buffer.from('{"model":"wire-alias"}'), upstreamBase: 'https://example.invalid' });
+    };
+    const observed = () => host.getRejectedCodexDownshiftModel('session', 'root', 'turn');
+    const compact = await request('root');
+    expect(observed()).toBeUndefined();
+    compact(403);
+    expect(observed()).toEqual({ model: 'old/large', transport: 'http' });
+    expect(host.getRejectedCodexDownshiftModel('session', 'root', 'other-turn')).toBeUndefined();
+    expect(host.getRejectedCodexDownshiftModel('other-session', 'root', 'turn')).toBeUndefined();
+    (await request('child'))(403);
+    expect(host.getRejectedCodexDownshiftModel('session', 'child', 'turn')).toBeUndefined();
+    expect(observed()).toEqual({ model: 'old/large', transport: 'http' });
+    (await request('root', 'turn'))(403);
+    compact(403); // a delayed response from the earlier HTTP request
+    expect(observed()).toBeUndefined();
+    (await request('root', 'compaction', 'manual'))(403);
+    expect(observed()).toBeUndefined();
+    for (const status of [200, 401, 407, 503]) {
+      (await request('root'))(status);
+      expect(observed()).toBeUndefined();
+    }
+    const pending = await request('root');
+    host.unregister('session');
+    host.registerComposed('session', 'root', '');
+    pending(403);
+    expect(observed()).toBeUndefined();
+  });
+
+  // Run the loopback proxy through its actual bridge and upstream error response.
+  // The transparent observer alone misses local handlers.
+  it.each(['openai-chat', 'anthropic-messages', 'native-chat'] as const)(
+    'attributes only an explicit model rejection through the %s bridge',
+    async protocol => {
+      const host = await freshCodexProxyHost();
+      const proxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      const chat = await vi.importActual<typeof import('@cindy/responses-chat-bridge')>('@cindy/responses-chat-bridge');
+      const anthropic = await vi.importActual<typeof import('@cindy/responses-anthropic-bridge')>('@cindy/responses-anthropic-bridge');
+      const native = await vi.importActual<typeof import('../pi-provider-transport.js')>('../pi-provider-transport.js');
+      const { buildUserProvider } = await import('@cindy/model-providers');
+      const { setCustomProviders } = await import('../active-catalog.js');
+      const { setCustomProviderKeyReader } = await import('../provider-route.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      const upstreamPaths: string[] = [];
+      const errors = [
+        { code: 'user_model_access_denied', message: 'user not allowed to access model' },
+        { code: 'permission_error', message: 'generic permission failure'.repeat(1_000) },
+      ];
+      const upstream = createServer(async (req, res) => {
+        for await (const chunk of req) void chunk;
+        const error = errors[upstreamPaths.length];
+        upstreamPaths.push(req.url ?? '');
+        res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error }));
+      });
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+      try {
+        const wireProtocol = protocol === 'anthropic-messages' ? protocol : 'openai-chat';
+        const provider = buildUserProvider({
+          id: 'downshift-bridge', name: 'Bridge',
+          runtimes: { codex: {
+            wireProtocol, baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
+            models: [{ id: 'old/large', name: 'Old model' }],
+          } },
+        });
+        if (protocol === 'openai-chat') provider.routing.codex!.requestPath = '/custom-chat';
+        if (protocol === 'native-chat') provider.models.codex![0]!.api = 'openai-completions';
+        setCustomProviders([provider]);
+        setCustomProviderKeyReader(() => 'fixture-key');
+        setSessionProvider('bridge-session', provider.id);
+        host.registerComposed('bridge-session', 'bridge-root', '');
+        host.setCodexProxyAuthInjection('env-key');
+        mockState.createAnthropicCompatProxy.mockImplementationOnce(proxy.createAnthropicCompatProxy);
+        if (protocol === 'anthropic-messages') {
+          vi.mocked(createResponsesAnthropicHandler).mockImplementation(anthropic.createResponsesAnthropicHandler);
+        } else {
+          vi.mocked(createResponsesChatHandler).mockImplementation(chat.createResponsesChatHandler);
+        }
+        if (protocol === 'native-chat') {
+          vi.mocked(createPiProviderFetch).mockImplementation(native.createPiProviderFetch);
+          vi.mocked(handlePiProviderRequest).mockImplementation(native.handlePiProviderRequest);
+        }
+        await host.ensureCodexProxyReady();
+        const send = async (turn: string) => {
+          const response = await fetch(`${host.getCodexProxyEndpoint()}/responses`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json', 'thread-id': 'bridge-root',
+              'x-codex-turn-metadata': JSON.stringify({
+                thread_id: 'bridge-root', turn_id: turn, request_kind: 'compaction',
+                compaction: { trigger: 'auto', reason: 'model_downshift', phase: 'pre_turn' },
+              }),
+            },
+            body: JSON.stringify({ model: 'old/large', input: [{ role: 'user', content: 'continue' }], stream: false }),
+          });
+          return { status: response.status, body: await response.text() };
+        };
+        const first = await send('denied');
+        expect(first.body).toContain(protocol === 'native-chat' ? 'HTTP 403' : 'user_model_access_denied');
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'denied'))
+          .toMatchObject({ model: 'old/large', transport: 'bridge' });
+        const second = await send('generic');
+        expect(second.status).toBe(protocol === 'native-chat' ? 200 : 403);
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'generic')).toBeUndefined();
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'denied')).toBeUndefined();
+        const upstreamPath = {
+          'openai-chat': '/v1/custom-chat', 'anthropic-messages': '/v1/messages', 'native-chat': '/v1/chat/completions',
+        }[protocol];
+        expect(upstreamPaths).toEqual([upstreamPath, upstreamPath]);
+      } finally {
+        vi.mocked(createResponsesChatHandler).mockReset();
+        vi.mocked(createResponsesAnthropicHandler).mockReset();
+        vi.mocked(createPiProviderFetch).mockReset();
+        vi.mocked(handlePiProviderRequest).mockReset();
+        clearSessionProvider('bridge-session');
+        setCustomProviders([]);
+        setCustomProviderKeyReader(() => null);
+        await host.disposeCodexProxy();
+        upstream.closeAllConnections();
+        await new Promise<void>(resolve => upstream.close(() => resolve()));
+      }
+    },
+  );
 
   it('observes non-streaming provider service_tier from upstream responses', async () => {
     const host = await freshCodexProxyHost();

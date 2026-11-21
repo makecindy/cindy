@@ -9,6 +9,9 @@ import { createProviderGroupExternalLoad } from '../externalLoad';
 import { createProviderGroupGuestRelay, PROVIDER_GROUP_GUEST_INCAPABLE_MS, type ProviderGroupGuestRelayDeps } from '../guestRelay';
 import { PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS } from '../remoteHandler';
 import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, type ProviderGroupPickInput, type ProviderGroupRouter } from '../router';
+import { createProviderGroupRouter } from '../router';
+import { createProviderGroupDirectory } from '../directory';
+import type { ProviderView } from '@cindy/model-providers';
 
 function member(key: string, kind: ProviderGroupMember['kind'], agentDeviceId: string | null, providerId: string): ProviderGroupMember {
   return { key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false };
@@ -63,6 +66,54 @@ function setup(
 const PLAN = { kind: 'claude-code' as const, model: 'opus', providerId: 'anthropic', exclude: new Set<string>() };
 
 describe('provider group guest relay planner', () => {
+  it('routes image generation through the same reshare consent check as a task', async () => {
+    const reshareAllows = vi.fn(() => false);
+    const { relay, router } = setup([FRIEND, MINI], CONFIG, { reshareAllows });
+    const plan = await relay.plan({ ...PLAN, capability: 'image.generate', reshareKey: 'approved-guest' });
+    expect(router.pick).toHaveBeenCalledWith(expect.objectContaining({
+      capability: 'image.generate',
+      exclude: new Set([FRIEND.key]),
+    }));
+    expect(reshareAllows).toHaveBeenCalledWith(FRIEND.agentDeviceId, 'approved-guest');
+    expect(plan).toMatchObject({ kind: 'member', memberKey: MINI.key });
+  });
+
+  // PR #10910 / unit: real guest plan(reserve) → router → relay load. The local
+  // reserveFor regression missed guests, whose pending handles live externally.
+  it('balances concurrent guest reservations and retires pending load on state or release', async () => {
+    const second = member('device:second:anthropic-3', 'device', 'second', 'anthropic-3');
+    const config = { ...CONFIG, strategy: 'least' as const, members: [MINI, second] };
+    const externalLoad = createProviderGroupExternalLoad({ now: () => 1_000 });
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [], localDeviceName: () => 'O',
+      listDevices: async () => config.members.map(m => ({ deviceId: m.agentDeviceId!, name: m.key, platform: 'darwin',
+        online: true, remoteControlEnabled: true, controlEnabled: true, isSelf: false, busy: false, appVersion: null, lastSeenAt: null })),
+      readDeviceProviders: async id => [{ id: id === 'mini' ? MINI.providerId : second.providerId, connected: true,
+        agents: ['claude-code'], models: { 'claude-code': [{ id: 'opus' }] }, routing: { 'claude-code': {} },
+        runningTurns: id === 'mini' ? 4 : 3 } as unknown as ProviderView],
+      listReceivedShares: () => [], isMobilePlatform: () => false, now: () => 1_000,
+    });
+    const router = createProviderGroupRouter({ directory, readGroup: () => config, listBindings: () => ({}),
+      isTurnRunning: () => false, now: () => 1_000, random: () => 0,
+      externalRunning: (p, m) => externalLoad.running(p, m), externalPending: (p, m) => externalLoad.pending(p, m),
+      readPoolScheduling: async m => ({ version: 1, accounts: m.key === MINI.key ? 2 : 1,
+        running: m.key === MINI.key ? 0 : 3, totalRunning: m.key === MINI.key ? 4 : 3,
+        full: false, urgency: null, fiveHourTight: false }),
+    });
+    const relay = createProviderGroupGuestRelay({ scope: () => ({ router, externalLoad, isCurrent: () => true }),
+      readGroup: () => config, connect: () => ({ invoke: async () => ({}), poller: {} as never }), now: () => 1_000, log: { warn() {} } });
+    const plans = await Promise.all(Array.from({ length: 5 }, () => relay.plan({ ...PLAN, reserve: true })));
+    try {
+      expect(plans.map(plan => plan?.kind === 'member' ? plan.memberKey : null)).toEqual([MINI.key, MINI.key, MINI.key, MINI.key, second.key]);
+      expect(externalLoad.pending('anthropic', MINI.key)).toBe(4);
+      if (plans[0]?.kind === 'member') plans[0].load?.setRunning(true);
+      expect(externalLoad.pending('anthropic', MINI.key)).toBe(3);
+      if (plans[1]?.kind === 'member') plans[1].load?.release();
+      expect(externalLoad.pending('anthropic', MINI.key)).toBe(2);
+    } finally { for (const plan of plans) if (plan && 'load' in plan) plan.load?.release(); }
+    expect(externalLoad.pending('anthropic', MINI.key)).toBe(0);
+    expect(externalLoad.running('anthropic', MINI.key)).toBe(0);
+  });
   it('maps the picked computer: this computer runs locally, others are relayed', async () => {
     expect(await setup([LOCAL]).relay.plan(PLAN)).toEqual({ kind: 'local' });
     expect(await setup([MINI]).relay.plan(PLAN)).toEqual({

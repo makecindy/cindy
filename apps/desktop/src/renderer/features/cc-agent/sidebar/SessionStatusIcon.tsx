@@ -17,6 +17,7 @@
  *
  */
 
+import type { ReactNode } from 'react';
 import { Archive, Pencil, RadioTower, UsersRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -35,12 +36,43 @@ import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyC
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
   VendorIcon,
-  agentKindToVendor,
-  type VendorIconKind,
+  engineIconKindOf,
+  type EngineIconKind,
 } from '@/components/sidebar/VendorIcon';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
+import { isProviderShareAgentDeviceId } from '../../../../shared/providerShare';
 import { useCindyMakeActivity } from './useCindyMakeActivity';
+
+/**
+ * 插件引擎任务(agent_kind = 'acp')的身份图标：提供该引擎的插件自己的图标(没有则画通用插件引擎
+ * 图标)，悬停说明是哪个引擎。单独成组件，只有这类任务的行才订阅引擎列表(共享单例，push 驱动)。
+ */
+function PluginEngineVendorIcon({
+  providerId,
+  deviceId,
+  readRemote,
+  ...iconProps
+}: {
+  providerId: string | null | undefined;
+  /** 引擎所在的电脑(被控电脑，或 Agent 所在的自己另一台电脑)；缺省 = 本机。 */
+  deviceId?: string;
+  /** False while the remote host is disconnected/connecting: keep cached icon without firing a read. */
+  readRemote?: boolean;
+  /** 引擎在任务所在电脑之外的另一台电脑上：与远程 Agent 同一个信号波纹。 */
+  remote?: boolean;
+  size: number;
+  running: boolean;
+  colorClassName?: string;
+}) {
+  const selfDeviceId = useOptionalAuthDeviceId();
+  // Remote task whose plugin engine runs on THIS computer: read the local list instead of calling ourselves over Device Link.
+  const effectiveDeviceId = deviceId && deviceId === selfDeviceId ? undefined : deviceId;
+  const { name, iconDataUrl } = usePluginEngineIdentity(providerId, effectiveDeviceId, { readRemote });
+  return <VendorIcon {...iconProps} vendor="acp" title={name} {...(iconDataUrl ? { iconDataUrl } : {})} />;
+}
 
 /**
  * Agent 在另一台电脑运行的 Agent 图标:带信号波纹，悬停说明在哪台电脑、是否离线。
@@ -59,7 +91,7 @@ function AgentDeviceVendorIcon({
    */
   controlledTask: boolean;
   showSignal: boolean;
-  vendor: VendorIconKind;
+  vendor: EngineIconKind;
   size: number;
   running: boolean;
   colorClassName?: string;
@@ -89,6 +121,8 @@ function AgentDeviceVendorIcon({
 }
 
 export interface SessionStatusIconProps {
+  /** Inbox rows use project identity while retaining draft/attention badges. */
+  identityIcon?: ReactNode;
   session: Session;
   isRunning: boolean;
   /** /ctr 接管中:图标切 RadioTower。 */
@@ -116,6 +150,7 @@ export interface SessionStatusIconProps {
 }
 
 export function SessionStatusIcon({
+  identityIcon,
   session,
   isRunning: isAgentRunning,
   isAttached,
@@ -134,7 +169,8 @@ export function SessionStatusIcon({
   // including pinned rail icons that have no row projection.
   const cindyMakeActivity = useCindyMakeActivity(session);
   const isRunning = isAgentRunning || isGhostBusy || cindyMakeActivity != null;
-  const vendor = agentKindToVendor(session.agentKind);
+  // 插件引擎任务画通用引擎图标，不回落成 Claude(docs/plans/acp-plugin-bridge.md)。
+  const vendor = engineIconKindOf(session.agentKind);
   // Agent 在另一台电脑:任务在本机,或在远程控制的被控电脑上(值由被控电脑投影,null = Agent 就在
   // 被控电脑)。两种都用同一个波纹标识(2026-10-09 用户裁决)。SSH 任务整件在远端，没有这一说。
   const agentDeviceId =
@@ -167,8 +203,8 @@ export function SessionStatusIcon({
     : t('ccAgent.sidebar.hasPausedQueue');
 
   return (
-    <span className="relative shrink-0 inline-flex items-center justify-center size-3" aria-hidden>
-      {isArchived ? (
+    <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? "size-[18px]" : "size-3")} aria-hidden>
+      {identityIcon ?? (isArchived ? (
         <Archive
           size={size ?? 12}
           strokeWidth={1.75}
@@ -210,6 +246,24 @@ export function SessionStatusIcon({
         >
           <RadioTower size={size ?? 12} strokeWidth={1.75} className="shrink-0" />
         </span>
+      ) : vendor === 'acp' ? (
+        <PluginEngineVendorIcon
+          providerId={session.providerId}
+          // 引擎在自己的另一台电脑上(Agent 在那台，任务在这台)：名称与图标读那台的列表。别人分享的
+          // 来源不提供插件引擎，不当作引擎所在的电脑。
+          deviceId={(agentDeviceId && !isProviderShareAgentDeviceId(agentDeviceId) ? agentDeviceId : null)
+            ?? session.deviceLinkDeviceId ?? undefined}
+          readRemote={
+            agentDeviceId && !isProviderShareAgentDeviceId(agentDeviceId)
+              ? true
+              : session.deviceLinkConnectionStatus !== 'disconnected'
+                && session.deviceLinkConnectionStatus !== 'connecting'
+          }
+          remote={!!agentDeviceId && !(showAttentionDot && hasAttentionDot)}
+          size={size ?? 12}
+          running={isRunning}
+          colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
+        />
       ) : agentDeviceId ? (
         <AgentDeviceVendorIcon
           deviceId={agentDeviceId}
@@ -227,7 +281,7 @@ export function SessionStatusIcon({
           running={isRunning}
           colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
         />
-      )}
+      ))}
       {showAttentionDot && hasAttentionDot && (
         <AttentionDot size={6} tone={attentionTone} className="absolute -top-0.5 -right-0.5" />
       )}

@@ -196,9 +196,9 @@ describe('sidebar display settings menu', () => {
     const group = await openSubmenu(/^分组/);
     expect(
       within(group)
-        .getAllByRole('menuitem')
+        .getAllByRole('menuitemcheckbox')
         .map((row) => row.textContent),
-    ).toEqual(['项目', '对话']);
+    ).toEqual(['项目', '对话', '自动化']);
     expect(filter.groupDevice).toBe(true);
   });
 });

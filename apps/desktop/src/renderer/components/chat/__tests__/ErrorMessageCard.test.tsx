@@ -3,9 +3,10 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: (key: string) => key.startsWith('chat.remoteError.REMOTE_AGENT_'), language: 'en' } }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: (key: string) => key.startsWith('chat.remoteError.'), language: 'en' } }),
   initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
@@ -18,6 +19,23 @@ const STREAM_RAW =
 afterEach(cleanup);
 
 describe('ErrorMessageCard', () => {
+  // #10385, unit: recover a persisted no-model error via real settings navigation, only for the execution host.
+  it.each([
+    ['settings.tabs.providers', '/settings?tab=providers'],
+    ['settings.sections.auxiliaryModels', '/settings?tab=personalization&section=personalization.auxiliaryModels'],
+  ])('opens %s from missing-model history', (label, destination) => {
+    function Location() { const location = useLocation(); return <output>{location.pathname + location.search}</output>; }
+    render(<MemoryRouter><ErrorMessageCard message="[AUTO_REVIEW_NO_AVAILABLE_MODEL] safe fallback" canConfigureAutoReview /><Location /></MemoryRouter>);
+    expect(screen.getByText('chat.remoteError.AUTO_REVIEW_NO_AVAILABLE_MODEL')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    expect(screen.getByText(destination)).toBeTruthy();
+  });
+
+  it('keeps local configuration actions out of remote or unknown execution hosts', () => {
+    render(<ErrorMessageCard message="[AUTO_REVIEW_NO_AVAILABLE_MODEL] safe fallback" />);
+    expect(screen.getByText('chat.remoteError.AUTO_REVIEW_NO_AVAILABLE_MODEL')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.tabs.providers' })).toBeNull();
+  });
   // #10187, unit: persisted failures need the same specific recovery as live errors.
   it.each([
     ['LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer', 'REMOTE_AGENT_RESUME_UNAVAILABLE'],
@@ -109,6 +127,16 @@ describe('ErrorMessageCard', () => {
     render(createElement(ErrorMessageCard, { message: raw }));
     expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
     expect(screen.queryByText(raw)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+  });
+
+  // History rows of a subscription usage limit showed the same generic summary as the banner did.
+  it('names an account usage limit in history and still offers the original', () => {
+    const raw = "You've hit your session limit · resets 1:20am (Asia/Shanghai)";
+    render(createElement(ErrorMessageCard, { message: raw }));
+    expect(screen.getByText('chat.errorBanner.usageLimitReached')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(raw)).toBeTruthy();
   });

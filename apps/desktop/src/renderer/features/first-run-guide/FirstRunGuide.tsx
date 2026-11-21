@@ -31,7 +31,9 @@ import { IMPORT_SOURCE_NAMES } from '@cindy/maker-shared/import-source-marks';
 import type { CompanionImportSource } from '@cindy/maker-shared/companion-import';
 
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
+import { at, GuideCover } from '@/components/feature-intro/GuideCover';
 import { ImportSourceMark } from '@/components/icons/ImportSourceMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark, type ProviderLogoRouting } from '@/components/icons/ProviderLogoMark';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
@@ -613,50 +615,30 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
         >
           {step === 'intro' ? (
             // Cover: the one page that carries the brand block and no step chrome.
-            <div className="first-run-cover relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-8 py-8">
-              <div className="absolute right-3 top-3">{closeButton}</div>
-              <div className="first-run-rise" style={coverRise(0)}>
-                <ThemeBrandLockup theme={theme} />
-              </div>
-              <Dialog.Title asChild>
-                <h2 className="first-run-rise mt-7 text-center text-28 font-medium leading-tight text-[var(--confirm-title)]" style={coverRise(1)}>
-                  {t('firstRunGuide.title.new')}
-                </h2>
-              </Dialog.Title>
-              <p className="first-run-rise mt-2 max-w-[440px] text-center text-15 leading-relaxed text-[var(--confirm-desc)]" style={coverRise(2)}>
-                {t('firstRunGuide.intro.lead')}
-              </p>
-              <ul className="mt-8 grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
-                {([
-                  ['work', <WorkVignette key="work" start={coverSceneStart(0)} />],
-                  ['connect', (
-                    <ModelsVignette key="connect" start={coverSceneStart(1)} />
-                  )],
-                  ['continue', <DevicesVignette key="continue" start={coverSceneStart(2)} />],
-                ] as const).map(([point, vignette], position) => (
-                  <li key={point} className="first-run-rise flex flex-col rounded-xl border border-[var(--border-default)] p-2" style={coverRise(COVER_CARD_INDEX + position)}>
-                    {/* A small scene made of the product's own elements instead of a generic icon. */}
-                    <div className="flex h-[88px] items-center justify-center rounded-lg bg-[var(--surface-chip)]" aria-hidden="true">
-                      {vignette}
-                    </div>
-                    <div className="flex flex-col gap-1 px-2 pb-2 pt-3">
-                      <span className="text-14 font-medium text-[var(--confirm-title)]">{t(`firstRunGuide.intro.${point}.title`)}</span>
-                      <span className="text-13 leading-relaxed text-[var(--confirm-desc)]">{t(`firstRunGuide.intro.${point}.body`)}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              <div className="first-run-rise mt-8 shrink-0" style={coverRise(COVER_CARD_INDEX + 3)}>
+            <GuideCover
+              mark={<ThemeBrandLockup theme={theme} />}
+              title={t('firstRunGuide.title.new')}
+              lead={t('firstRunGuide.intro.lead')}
+              cards={([
+                ['work', (start: number) => <WorkVignette start={start} />],
+                ['connect', (start: number) => <ModelsVignette start={start} />],
+                ['continue', (start: number) => <DevicesVignette start={start} />],
+              ] as const).map(([point, scene]) => ({
+                id: point,
+                title: t(`firstRunGuide.intro.${point}.title`),
+                body: t(`firstRunGuide.intro.${point}.body`),
+                scene,
+              }))}
+              action={(
                 <Button variant="cta" size="lg" type="button" className="min-w-[168px]" onClick={goNext}>
                   {t('firstRunGuide.intro.start')}
                 </Button>
-              </div>
-              {upcoming.length > 0 ? (
-                <p className="first-run-rise mt-3 text-center text-12 text-[var(--text-tertiary)]" style={coverRise(COVER_CARD_INDEX + 4)}>
-                  {[t('firstRunGuide.intro.next'), ...upcoming.map((id) => t(`firstRunGuide.steps.${id}`))].join(' · ')}
-                </p>
-              ) : null}
-            </div>
+              )}
+              note={upcoming.length > 0
+                ? [t('firstRunGuide.intro.next'), ...upcoming.map((id) => t(`firstRunGuide.steps.${id}`))].join(' · ')
+                : undefined}
+              close={closeButton}
+            />
           ) : (
             <>
               <div className="flex items-center justify-between gap-3 px-5 pb-3 pt-4">
@@ -736,26 +718,6 @@ function IconChip({ icon: Icon }: { icon: LucideIcon }) {
       <Icon size={18} strokeWidth={1.7} />
     </span>
   );
-}
-
-// Cover choreography (DESIGN.md §14.4, get-started guide entrance). The blocks arrive briskly,
-// top first; each card's scene then plays once and carries the part worth watching. Delays are
-// in ms from the moment the cover mounts and mirror `.first-run-cover` in globals.css.
-const COVER_RISE_START = 0;
-const COVER_RISE_STEP = 45;
-const COVER_CARD_INDEX = 3;
-
-function coverRise(index: number): CSSProperties {
-  return { '--rise-index': index } as CSSProperties;
-}
-
-/** When a card's scene starts: once that card has arrived. */
-function coverSceneStart(card: number): number {
-  return COVER_RISE_START + (COVER_CARD_INDEX + card) * COVER_RISE_STEP + 150;
-}
-
-function at(ms: number): CSSProperties {
-  return { '--at': `${ms}ms` } as CSSProperties;
 }
 
 /** Cover scene: three tasks are written down and ticked off one after another. */
@@ -935,7 +897,11 @@ function ConnectedProviderRow({ provider, onClick }: { provider: ProviderView; o
   const detail = [account?.identity, account?.planLabel].filter(Boolean).join(' · ');
   return (
     <OptionRow
-      icon={providerIcon(provider.id, provider.name, provider.routing)}
+      icon={(
+        <CustomProviderIcon svg={provider.customIcon} size={16}>
+          {providerIcon(provider.id, provider.name, provider.routing)}
+        </CustomProviderIcon>
+      )}
       label={provider.name}
       badge={t('firstRunGuide.models.own.connected')}
       sub={detail || undefined}

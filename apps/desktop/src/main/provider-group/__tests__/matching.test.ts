@@ -23,6 +23,19 @@ describe('providerBrand', () => {
 });
 
 describe('isSameProvider', () => {
+  // Unit regression: current subscription connections carry pool metadata, not auth.native.
+  // The older native-login fixtures cannot reproduce openai-sub-* disappearing from candidates.
+  it.each(['subscriptionAccountPool', 'subscriptionPool'] as const)(
+    'matches independent subscriptions by %s without changing their connection identity', (field) => {
+      const account = { ...view('openai-sub-12345678', 'Renamed account', { method: 'oauth' }), [field]: 'openai' as const };
+      expect(providerBrand(account)).toBe('openai');
+      expect(isSameProvider(view('openai', 'OpenAI'), account)).toBe(true);
+      expect(isSameProvider(account, { ...account, id: 'openai-sub-abcdef01', name: 'Another account' })).toBe(true);
+      expect(isSameProvider(view('anthropic', 'Anthropic'), account)).toBe(false);
+      expect(account.id).toBe('openai-sub-12345678');
+    },
+  );
+
   it('matches subscription accounts across computers even though their ids differ', () => {
     expect(isSameProvider(
       view('anthropic', 'Anthropic', { method: 'oauth', native: 'claude' }),

@@ -29,8 +29,13 @@ vi.mock('../../cindy-media/refCompensationJournal.desktop.js', () => ({
 }));
 vi.mock('../../cindy-media/ledger.js', () => ({ addRef: (...args: unknown[]) => state.addRef(...args), removeRefById: (...args: unknown[]) => state.removeRef(...args) }));
 vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: (...args: unknown[]) => state.ingest(...args) }));
-vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ blobUrl: () => 'cindy-media://blobs/test.png', extForMime: () => '.png', resolveSafe: () => ({ absPath: path.join(state.root, 'saved.png') }) }));
-import { createAttachmentRecovery, createRequestSizeController } from '../oversized-attachment-recovery.js';
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ blobUrl: () => 'cindy-media://blobs/test.png', extForMime: (mime: string) => mime === 'image/png' ? '.png' : null, resolveSafe: () => ({ absPath: path.join(state.root, 'saved.png') }) }));
+import { createAttachmentRecovery, createRequestSizeController, attachmentPreservation } from '../oversized-attachment-recovery.js';
+import { bindHostedAttachmentPreservation } from '../attachmentPreservation.js';
+import { createAttachmentPreservationReceiver, remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../../remote-agent/attachmentPreservation.js';
+import { createReverseHttpRouter } from '../../remote-agent/controller/router.js';
+import { ExecutorWorkspace } from '../../remote-agent/executor/workspace.js';
+import type { RemoteExecutor } from '../../remote-agent/executor/executor.js';
 import { sessions } from '../../localDb/schema.js';
 import { createAttachmentRecoveryService } from '../oversizedAttachmentRecoveryCore.js';
 import * as blobs from '../../cindy-media/blobStore.desktop.js';
@@ -74,6 +79,103 @@ function preservedLocalPath(text: string): string {
   return JSON.parse(quoted) as string;
 }
 const factory = () => createAttachmentRecovery(() => state.resolved)({ reqId: 1, method: 'POST', url: '/v1/responses/compact', headers: {} });
+
+// Unit regression for hosted 413: the provider has no task DB row. Existing
+// local recovery cases cannot exercise reverse transport, path projection or
+// publication after remote preparation. Three 3 KiB images cross an 8 KiB budget.
+async function hostedRecovery() {
+  const batch = attachmentPreservation('test-session');
+  let onController = false;
+  state.getSnapshot.mockImplementation(() => onController ? state.snapshot : null);
+  const workspace = new ExecutorWorkspace({ workingDir: state.root });
+  workspace.setVirtualRoot('/provider/task');
+  workspace.addAliases([{ from: '/provider/task/additional/attachments', to: state.root }]);
+  const receiver = createAttachmentPreservationReceiver(batch, async file => workspace.toAgentPath(file));
+  const router = createReverseHttpRouter({ executor: {} as RemoteExecutor, mcpTarget: () => undefined, attachments: receiver });
+  const actions: string[] = [];
+  const remote = remoteAttachmentPreservation(async (request, signal) => {
+    actions.push(String(request.action));
+    onController = true;
+    try {
+      const reply = await router({ method: 'POST', path: ATTACHMENT_PRESERVATION_PATH,
+        headers: [], body: Buffer.from(JSON.stringify(request)).toString('base64') }, signal);
+      if (reply.type !== 'http' || reply.status !== 200) throw new Error('preservation rejected');
+      return JSON.parse(Buffer.from(reply.body!, 'base64').toString());
+    } finally { onController = false; }
+  }, () => {});
+  const unbind = bindHostedAttachmentPreservation('provider-task', remote);
+  return { actions, remote, workspace, close: async () => { unbind(); await receiver.dispose(); } };
+}
+
+// Unit regression for #10966 review: declared MIME can disagree with the bytes.
+// Existing budget cases only used correctly labelled PNGs. A second preservation
+// of the same bytes must reuse the first readable file without another chunk.
+it.each([
+  { name: 'PDF declared as binary', bytes: Buffer.from('%PDF-1.7\nexample'), declared: 'application/octet-stream', ext: '.pdf' },
+  { name: 'PNG declared as binary', bytes: Buffer.from('89504e470d0a1a0a00000000', 'hex'), declared: 'application/octet-stream', ext: '.png' },
+  { name: 'binary declared as PNG', bytes: Buffer.from('opaque attachment'), declared: 'image/png', ext: '.bin' },
+])('reuses hosted $name by its stored type', async ({ bytes, declared, ext }) => {
+  const hosted = await hostedRecovery();
+  const preserve = () => hosted.remote(new AbortController().signal, save => save(bytes, declared, 0));
+  try {
+    const first = await preserve();
+    expect(path.extname(first!)).toBe(ext);
+    expect(await readFile(hosted.workspace.mapAlias(first!))).toEqual(bytes);
+    if (ext === '.png') state.existing = { id: 'retained-ref' };
+    hosted.actions.length = 0;
+    expect(await preserve()).toBe(first);
+    expect(hosted.actions).not.toContain('chunk');
+    expect(hosted.actions).not.toContain('prepare');
+  } finally { await hosted.close(); }
+});
+
+it.each(['responses', 'anthropic', 'chat'] as const)('budgets a hosted request without a provider DB row and preserves readable %s task files across retries', async format => {
+  const hosted = await hostedRecovery();
+  const image = format === 'responses' ? pngBlock() : format === 'chat'
+    ? { type: 'image_url', image_url: { url: pngBlock().image_url } }
+    : { type: 'image', source: { type: 'base64', media_type: 'image/png', data: pngBlock().image_url.split(',')[1] } };
+  const key = format === 'responses' ? 'input' : 'messages';
+  const raw = Buffer.from(JSON.stringify({ [key]: [{ role: 'user', content: [image, image, image] }] }));
+  const original = Buffer.from(raw);
+  const controller = createRequestSizeController(() => 'provider-task');
+  const policy = { signal: new AbortController().signal, route: {}, triggerBytes: 8192, targetBytes: 5000 };
+  try {
+    const result = await controller.control(raw, format, policy);
+    expect(result).not.toBeNull();
+    expect(result!.body.length).toBeLessThanOrEqual(5000);
+    const reference = preservedLocalPath(JSON.parse(result!.body.toString())[key][0].content[0].text);
+    expect(reference).toMatch(/^\/provider\/task\//);
+    expect(await readFile(hosted.workspace.mapAlias(reference))).toEqual(Buffer.from(pngBlock().image_url.split(',')[1], 'base64'));
+    expect(state.addRef).toHaveBeenCalledOnce();
+    expect(raw).toEqual(original);
+    state.existing = { id: 'retained-ref' };
+    hosted.actions.length = 0;
+    expect((await controller.control(raw, format, policy))!.body).toEqual(result!.body);
+    expect(hosted.actions).not.toContain('chunk');
+    expect(state.addRef).toHaveBeenCalledOnce();
+  } finally { await hosted.close(); }
+  // An older peer without the capability retains compression-only behavior.
+  expect(await controller.control(raw, format, policy)).toBeNull();
+});
+
+it.each(['cancel', 'owner', 'deleted', 'unshrinkable'] as const)('does not publish hosted references when %s follows preparation', async failure => {
+  const hosted = await hostedRecovery();
+  const abort = new AbortController();
+  try {
+    const operation = hosted.remote(abort.signal, async preserve => {
+      await preserve(Buffer.from(pngBlock().image_url.split(',')[1], 'base64'), 'image/png', 0);
+      if (failure === 'cancel') abort.abort();
+      if (failure === 'owner') state.invalidOwner = true;
+      if (failure === 'deleted') state.session.status = 'deleted';
+      return failure === 'unshrinkable' ? null : 'reduced request';
+    });
+    if (failure === 'unshrinkable') expect(await operation).toBeNull();
+    else await expect(operation).rejects.toThrow();
+    expect(state.addRef).not.toHaveBeenCalled();
+    expect(state.ingest).not.toHaveBeenCalled();
+    await expect(readFile(path.join(state.root, 'saved.png'))).rejects.toThrow();
+  } finally { await hosted.close(); }
+});
 
 it('persists a PDF under the existing session attachment lifecycle and keeps a usable path', async () => {
   const bytes = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(90_000, 1)]);

@@ -50,7 +50,7 @@ const object = (value: unknown): Record<string, unknown> =>
 /** Whether the old input contract can express this operation, without Guide identities. */
 export function supportsLegacyMediaInput(schema: Record<string, unknown>): boolean {
   const properties = object(schema.properties);
-  const fields = new Set(['prompt', 'image', 'content', 'duration', 'resolution', 'ratio', 'aspect_ratio', 'fps', 'audio', 'generate_audio']);
+  const fields = new Set(['prompt', 'image', 'last_frame', 'reference_images', 'content', 'duration', 'resolution', 'ratio', 'aspect_ratio', 'fps', 'audio', 'generate_audio']);
   return Boolean(properties.prompt || properties.content) &&
     (!Array.isArray(schema.required) || schema.required.every(key => typeof key === 'string' && fields.has(key)));
 }
@@ -74,14 +74,17 @@ export function legacyMediaBody(
       })),
     ];
   } else if (!properties.prompt) throw new Error('所选模型的输入无法由旧媒体接口表达，请通过 Core 媒体工具调用');
-  if (request.images?.length && properties.image) {
+  if (request.images?.length && request.refMode === 'reference_image' && properties.reference_images) {
+    body.reference_images = request.images.map(url => ({ url }));
+  } else if (request.images?.length && properties.image) {
     const field = object(properties.image);
     if (field.type === 'object') {
-      if (request.images.length !== 1) throw new Error('所选媒体接口只接受一张参考图');
+      if (request.images.length > (properties.last_frame ? 2 : 1)) throw new Error('所选媒体接口只接受一张参考图，或已声明的首尾两帧');
       body.image = { url: request.images[0] };
+      if (request.images[1]) body.last_frame = { url: request.images[1] };
     } else body.image = request.images.length === 1 ? request.images[0] : request.images;
   }
-  if (request.kind.startsWith('edit_') && !body.image && !body.content) {
+  if (request.kind.startsWith('edit_') && !body.image && !body.content && !body.reference_images) {
     throw new Error('所选模型无法通过旧接口接收参考图');
   }
   if (request.aspectRatio !== undefined) {

@@ -37,6 +37,7 @@ export interface SessionRowSnapshot {
   agentKind?: string | null;
   /** 会话来源(`bot` = 伙伴会话);限额自动继续据此排除伙伴。 */
   source?: string | null;
+  sideChatPromoted?: boolean;
   /** 会话当前模型;限额判定据此只看该模型的额度窗口。 */
   model?: string | null;
   /** Native id used by the execution host to resolve the task's subscription account. */
@@ -67,6 +68,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       orcaRemoteLead: sessions.orcaRemoteLead,
       agentKind: sessions.agentKind,
       source: sessions.source,
+      sideChatPromoted: sessions.sideChatPromoted,
       model: sessions.model,
       sdkSessionId: sessions.sdkSessionId,
     })

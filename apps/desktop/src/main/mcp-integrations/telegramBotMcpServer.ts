@@ -289,7 +289,7 @@ export function createTelegramBotMcpServer(deps: TelegramBotMcpDeps): McpServer 
         }
         // 非主人触发的轮次只能发本任务工作目录里的文件: 群成员不能借 bot 把本机任意文件发进群。
         // 两端都按 realpath 判定(工作目录里指向外面的 symlink 也拦), 出站用校验过的真实路径。
-        if (scope && !scope.requesterIsOwner) {
+        if ((scope && !scope.requesterIsOwner) || replyScope?.requesterIsOwner === false) {
           const real = await realPathWithinDir(deps.getSessionContext().workingDir, absPath);
           if (!real) return denied('非主人触发的轮次只能发送当前任务工作目录内的文件。');
           uploadPath = real;

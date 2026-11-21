@@ -27,7 +27,7 @@ export function useSettingsSectionTarget(
     const reveal = () => {
       if (stopped) return;
       const exact = document.getElementById(targetId);
-      // 关闭视觉桥后明细仍挂载但 hidden；搜索应落到可见的总开关，而不是隐藏锚点。
+      // 关闭分区后明细仍挂载但 hidden；搜索应落到可见的总开关，而不是隐藏锚点。
       const next = exact?.getClientRects().length
         ? exact
         : (fallbackTargetId ? document.getElementById(fallbackTargetId) : null);

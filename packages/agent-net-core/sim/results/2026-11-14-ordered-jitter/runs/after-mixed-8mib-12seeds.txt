@@ -1,0 +1,15 @@
+    Finished `sim` profile [optimized] target(s) in 0.03s
+     Running tests\exp_mixed.rs (target\sim\deps\exp_mixed-58f55bafbd1fd90b.exe)
+
+running 1 test
+线路 | 单独 | 普通流小请求：用时 / 往返平均 / p99 / 最长 | 交互流小请求：用时 / 往返平均 / p99 / 最长（毫秒，12 个种子平均，最长取最大）
+bench far 50M 200ms | 1674 | 1674 / 226 / 303 / 303 | 1677 / 214 / 270 / 270
+跨地区 50M 200ms 丢0.5% | 1983 | 1950 / 256 / 588 / 688 | 1973 / 228 / 511 / 611
+bench wide 100M 32ms | 724 | 722 / 37 / 49 / 49 | 734 / 32 / 38 / 38
+每秒 1 MB 80ms | 8583 | 8582 / 86 / 144 / 144 | 8739 / 82 / 129 / 129
+每秒 1 MB 80ms 抖动30 不乱序 | 8693 | 8700 / 312 / 2913 / 3813 | 9926 / 188 / 1629 / 2329
+每秒 1 MB 80ms 抖动60 不乱序 | 9015 | 9029 / 275 / 1580 / 2080 | 11666 / 458 / 2943 / 4043
+4G 20M 70ms 抖动20 丢1.5% | 3731 | 3721 / 142 / 423 / 614 | 4230 / 124 / 313 / 602
+test bulk_with_small_requests ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.93s

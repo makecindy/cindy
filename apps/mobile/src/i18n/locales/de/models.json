@@ -46,35 +46,21 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "Diese Unterhaltung passt nicht in dieses Modell",
+    "condensedToast": "Ältere Teile des Gesprächs werden für das neue Modell gekürzt. Der vollständige Verlauf bleibt verfügbar.",
     "remoteTitle": "Dieser Modellwechsel auf dem entfernten Gerät wird nicht unterstützt",
-    "description": "Diese Unterhaltung nutzt bereits {{used}}, mehr als das neue Modell aufnehmen kann ({{total}}, etwa {{pct}} %). Wenn du wechselst, erstellt Cindy eine kurze Zusammenfassung und fährt fort. Dein Chatverlauf bleibt erhalten, wird aber nicht vollständig wortgetreu übergeben.",
     "remoteDescription": "Diese entfernte Aufgabe nutzt bereits {{used}} / {{total}} des Kontexts des kleineren Modells (etwa {{pct}} %). Deshalb kann Cindy nicht sicher wechseln. Behalte das aktuelle Modell oder starte eine neue Aufgabe, bevor du dieses Modell auswählst.",
-    "cancel": "Dieses Modell behalten",
-    "confirm": "Wechseln und fortfahren"
+    "cancel": "Dieses Modell behalten"
   },
   "switchOutcome": {
     "applied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
     "failed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut."
   },
   "agentSwitch": {
-    "browseAccessibility": "Modelle für {{agent}} durchsuchen",
-    "confirmTitle": "Zu {{agent}} wechseln?",
-    "confirmMessage": "Wenn du die nächste Nachricht sendest, übergibt {{appName}} die aktuelle Sitzung an {{agent}}. Die beiden Agents können Kontext und Tools unterschiedlich interpretieren. Bestätige daher den Wechsel, bevor du das Zielmodell auswählst.",
-    "cancel": "Abbrechen",
-    "confirm": "Weiter"
-  },
-  "agentRelocation": {
-    "titleOther": "Agent auf „{{device}}“ ausführen?",
-    "titleHost": "Den Agent wieder auf „{{host}}“ ausführen?",
-    "titleHostUnnamed": "Den Agent wieder auf dem Computer der Sitzung ausführen?",
-    "message": "Der Unterhaltungsverlauf auf dem anderen Computer kann nicht übertragen werden. Die Fortsetzung erfolgt daher anhand einer Übergabezusammenfassung. Denkprozesse und ähnliche Details werden möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
-    "messageNativeHistory": "Der vollständige Unterhaltungsverlauf wird mitkopiert und nahtlos fortgesetzt. Kann er nicht wiederhergestellt werden, erfolgt die Fortsetzung anhand einer Übergabezusammenfassung; Denkprozesse und ähnliche Details werden dann möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
-    "confirm": "Computer wechseln",
-    "cancel": "So beibehalten"
+    "browseAccessibility": "Modelle für {{agent}} durchsuchen"
   },
   "unified": {
-    "accountUnassigned": "Konto nicht zugewiesen",
+    "remoteCopyUnavailableOn": "„{{device}}“ kann {{provider}} derzeit nicht verwenden.",
+    "remoteCopyUnavailableOnTaskComputer": "Der Computer der Aufgabe kann {{provider}} derzeit nicht verwenden.",
     "accountCount_one": "{{count}} Konto",
     "accountCount_other": "{{count}} Konten",
     "accountFallback": "Konto {{index}}",
@@ -124,5 +110,45 @@
     "quotaResetIn": "Zurücksetzung in {{duration}}",
     "quotaAverageHint": "Wochenkontingent · Konten gleich gewichtet",
     "quotaResetHint": "Beim aktuellen Verbrauch bleibt beim Zurücksetzen voraussichtlich Kontingent übrig: gelb innerhalb von 24 Stunden, rot innerhalb von 6 Stunden."
+  },
+  "modelGroups": {
+    "title": "Modellgruppen",
+    "sourceCount_one": "{{count}} Quelle",
+    "sourceCount_other": "{{count}} Quellen",
+    "strategy": {
+      "expiring": "Bald Verfallendes zuerst",
+      "order": "Der Reihe nach",
+      "rotate": "Abwechselnd",
+      "cheapest": "Am günstigsten"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
+      "expiring": "Nach Kontingent an erster Stelle",
+      "order": "Die erste verfügbare Quelle",
+      "rotate": "Diesmal an der Reihe",
+      "only": "Derzeit als einzige verfügbar",
+      "soonest": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst",
+      "soonestUntil": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst ({{reset}})",
+      "cheapest": "Niedrigster Listenpreis",
+      "cheapestFree": "Abo-Kontingent übrig, keine Zusatzkosten",
+      "exceptionImage": "Die Nachricht enthält Bilder, daher wurden nur Quellen berücksichtigt, die Bilder sehen können",
+      "exceptionImageFallback": "Die Nachricht enthält Bilder, aber keine Quelle kann Bilder sehen – daher wie üblich gewählt",
+      "exceptionHours": "In diesem Zeitraum wird „{{name}}“ verwendet",
+      "separator": "; "
+    },
+    "picker": {
+      "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
+      "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
+      "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt."
+    },
+    "anotherDevice": "Anderer Computer"
+  },
+  "pluginEngines": {
+    "genericName": "Plugin-Engine",
+    "defaultModel": "Standardmodell",
+    "unavailable": "{{engine}} ist nicht verfügbar",
+    "unavailableWithHint": "{{engine}} ist nicht verfügbar: {{hint}}",
+    "worktreeUnsupported": "Plugin-Engines können noch keine Aufgaben in einem Worktree starten. Schalte Worktree aus, um zu senden."
   }
 }

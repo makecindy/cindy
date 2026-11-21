@@ -127,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}無法回覆：目前模型不支援圖片。",
         "advice": "請切換至支援圖片的模型。",
-        "details": "請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。"
+        "details": "請切換至支援圖片的模型。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}無法回覆：目前沒有可用模型。",
@@ -291,7 +291,7 @@
     "organizerSaveFailed": "負責人沒能更換，請再試一次",
     "projectDir": "專案資料夾",
     "projectDirNone": "沒選",
-    "projectDirNote": "分工做事時，夥伴們在這裡工作。不選也行，會用這個群聊自己的資料夾；選了 git 專案，每次分工會新開一個 worktree 和分支，不動你手上的程式碼。",
+    "projectDirNote": "可選擇這台電腦上現有的專案。留空時，優先使用儲存庫對應的專案，其次使用執行夥伴自己的專案。Git 專案分工使用獨立 worktree。",
     "add": "新增夥伴",
     "projectDirOnComputer": "在電腦上選擇或更換",
     "memberActions": "{{name}} 的操作",
@@ -547,7 +547,7 @@
     "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
     "work": "分工",
     "organizerHint": "安排誰做哪一步；預設是第一位夥伴。",
-    "ownFolder": "群組自己的資料夾",
+    "ownFolder": "自動選擇",
     "archive": "封存群組",
     "unarchive": "取消封存",
     "archiveHint": "封存會對所有成員停用本群組，停止新訊息與夥伴執行。歷史記錄保留，之後可透過搜尋找到本群組、查看歷史並取消封存。",

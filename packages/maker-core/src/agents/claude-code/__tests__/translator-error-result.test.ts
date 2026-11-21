@@ -714,7 +714,6 @@ describe('Claude Code translator is_error result guard', () => {
 
   it.each([
     { label: '429 rate limit', error_status: 429, error: 'rate_limit_error' },
-    { label: '500 server error', error_status: 500, error: 'api_error' },
     { label: 'connection error', error_status: null, error: 'unknown' },
   ])('does not surface non-overload retry progress ($label)', async ({ error_status, error }) => {
     // 这些类别的 message 不会被 ErrorBanner 本地化，透出等于给所有语言的用户
@@ -739,6 +738,50 @@ describe('Claude Code translator is_error result guard', () => {
 
     const events = await drain(queue);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+  });
+
+  // #8642: production translator must expose repeated HTTP failures without ending
+  // the turn. Existing overload coverage did not cover gateway/server failures.
+  // Unit tier: synthetic SDK input, real translator/queue; no network or waiting.
+  it.each([500, 502, 503, 504])('surfaces HTTP %i retries and preserves recovery', async (errorStatus) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    for (const attempt of [1, 2, 3]) {
+      translateSdkMessage({ type: 'system', subtype: 'api_retry', attempt,
+        max_retries: 10, retry_delay_ms: 1_000, error_status: errorStatus,
+        error: 'api_error Authorization: Bearer secret-token',
+      }, queue, ctx);
+      expect(queue.pending).toBe(Math.max(0, attempt - 1));
+    }
+    translateSdkMessage({ type: 'result', is_error: false, result: 'Recovered.',
+      stop_reason: 'end_turn', total_cost_usd: 0,
+    }, queue, ctx);
+    const events = await drain(queue);
+    const errors = events.filter((event) => event.type === 'error');
+    expect(errors.map((event) => event.data)).toEqual([2, 3].map((attempt) => expect.objectContaining({
+      message: expect.stringContaining(`Reconnecting... ${attempt}/10`),
+      errorStatus, isTerminal: false, willRetry: true,
+    })));
+    expect(JSON.stringify(errors)).not.toContain('secret-token');
+    expect(events.some((event) => event.type === 'text' && (event.data as { text?: string }).text === 'Recovered.')).toBe(true);
+    expect(events.at(-1)?.type).toBe('done');
+    expect(ctx.turn.pendingApiError).toBeNull();
+  });
+
+  it('settles repeated HTTP 500 retries with one terminal error and done', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    translateSdkMessage({ type: 'system', subtype: 'api_retry', attempt: 2,
+      max_retries: 10, retry_delay_ms: 1_000, error_status: 500, error: 'api_error',
+    }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true }, queue, ctx);
+    const events = await drain(queue);
+    const errors = events.filter((event) => event.type === 'error');
+    expect(errors).toHaveLength(2);
+    expect(errors[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+    expect(errors[1].data).toMatchObject({ isTerminal: true, errorStatus: 500 });
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+    expect(ctx.turn.pendingApiError).toBeNull();
   });
 
   it('surfaces 529 overload retries as non-terminal progress carrying errorStatus', async () => {

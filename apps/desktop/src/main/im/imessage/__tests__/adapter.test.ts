@@ -7,8 +7,22 @@ import type { ImChannelAdapter } from '../../shared/types';
 import { wireIMessageOrchestrator } from '../adapter';
 
 vi.mock('../../shared/orchestrator', () => ({ createImOrchestrator: (adapter: ImChannelAdapter) => adapter }));
-vi.mock('../../shared/channelGroupWindow', () => ({ IMESSAGE_GROUP_WINDOW: {}, sanitizeGroupWindowName: (name: string) => name }));
+vi.mock('../../shared/channelGroupWindow', () => ({ IMESSAGE_GROUP_WINDOW: { record: vi.fn(), buildContextPrefix: vi.fn() }, sanitizeGroupWindowName: (name: string) => name }));
 vi.mock('../../shared/botImConnectionStore', () => ({ readBotImConnection: vi.fn() }));
+
+it('passes selected iMessage media as model input on group mentions and inline DM replies', async () => {
+  const { IMESSAGE_GROUP_WINDOW } = await import('../../shared/channelGroupWindow');
+  vi.mocked(IMESSAGE_GROUP_WINDOW.buildContextPrefix).mockResolvedValue({ prefix: 'background', attachmentMessageIds: ['photo'], commit: () => {} });
+  const photo = { kind: 'image' as const, originalName: 'a.png', mimeType: 'image/png', absPath: '/test/a.png' };
+  const contextMedia = vi.fn(async () => ({ attachments: [photo], unavailable: [], providedBy: [{ originalName: 'a.png', author: 'Guest' }] }));
+  const adapter = wireIMessageOrchestrator({ isGroup: (id: string) => id === 'group', contextMedia } as never, {} as never,
+    { instanceKey: 'test', companionBotId: 'bot', connectionId: 'conn' }) as unknown as ImChannelAdapter;
+  for (const chatId of ['group', 'dm']) {
+    const event = { chatId, text: 'look', attachments: [], contextId: 'bot', messageId: 'request', imessageReplyGuid: 'root' } as unknown as IMMessageEvent;
+    expect((await adapter.prepareAgentTurnText!(event))?.contextAttachments).toEqual([photo]);
+    expect(contextMedia).toHaveBeenLastCalledWith(event, chatId === 'group' ? ['photo'] : []);
+  }
+});
 
 // Tier 1: production adapter policy contract consumed by the shared turn runner.
 // Review #9250: guest DM/group + Full access previously failed provider preflight.
@@ -65,6 +79,25 @@ it.each(['send-failed', 'group-only'])('keeps Desktop permission available when 
     expect(desktop.decide({ kind: 'permission', behavior: 'allow' })).toBe(true);
     await expect(decision).resolves.toMatchObject({ kind: 'permission', behavior: 'allow' });
   } finally { lease.release(); await im.dispose(); }
+});
+
+// Tier 1, PR #11402: transport tests cover verified speakers once a reply is owner-scoped.
+// Exercise the adapter that selects the audience and destination for a group-originated plan.
+it('routes plan review to the verified owner and dismisses it when the owner chat is unavailable', async () => {
+  const im = new BlueBubblesIM({} as never, {} as never);
+  const owner = vi.spyOn(im, 'getOwnerUserId').mockReturnValue('owner');
+  const reply = vi.spyOn(im, 'requestTextReply').mockImplementation(async (_chat, _prompt, parse) => parse('deny')!);
+  const adapter = wireIMessageOrchestrator(im, {} as never, {
+    instanceKey: 'test', companionBotId: 'bot-test', connectionId: 'connection-test',
+  }) as unknown as ImChannelAdapter;
+  const plan = { kind: 'plan_review', requestId: 'plan', plan: 'Example plan' } as const;
+  try {
+    await expect(adapter.handleTextInteraction!('group', plan)).resolves.toMatchObject({ kind: 'plan_review', behavior: 'deny' });
+    expect(reply).toHaveBeenCalledWith('owner', expect.any(String), expect.any(Function), undefined, undefined, expect.any(String), 'owner');
+    owner.mockReturnValue(null);
+    await expect(adapter.handleTextInteraction!('group', plan)).resolves.toMatchObject({ kind: 'plan_review', behavior: 'deny', dismissed: true });
+    expect(reply).toHaveBeenCalledTimes(1);
+  } finally { await im.dispose(); }
 });
 
 // Tier 1, #9250: the real router must notify the adapter on route teardown.

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
 import { sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
@@ -697,4 +698,20 @@ it.each(['begin', 'answer'] as const)('keeps full authorization facts when a hin
   await operation;
   expect(h.requests.filter(r => r.actionId === `management:${stage}`)).toHaveLength(1);
   expect(c.getState().errorCode).toBeNull();
+});
+
+// Public projection / unit: new source is optional and must not extend the old
+// four-value trust enum; future source values remain an exception warning.
+it.each([
+  [{ kind: 'market' }, undefined],
+  [{ kind: 'local' }, 'mcpApps.source.local'],
+  [{ kind: 'third-party' }, 'mcpApps.source.third-party'],
+  [{ kind: 'future' }, 'mcpApps.source.unknown'],
+  [undefined, 'mcpApps.source.unknown'],
+])('presents installation source independently of the legacy confirmation trust (%j)', (installationSource, warning) => {
+  const input = { ...confirmation(), consent: { ...confirmation().consent, trust: 'unverified', ...(installationSource ? { installationSource } : {}) } };
+  const consent = parsePluginManagementReceipt(input, 'operation-1').consent!;
+  expect(pluginConsentPresentation(consent, key => key).trust).toBe(warning);
+  expect(consent.trust).toBe('unverified');
+  expect(() => parsePluginManagementReceipt({ ...input, consent: { ...input.consent, trust: 'local' } }, 'operation-1')).toThrow('INVALID_RESPONSE');
 });

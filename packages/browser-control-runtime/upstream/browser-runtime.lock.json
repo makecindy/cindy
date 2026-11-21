@@ -55,6 +55,10 @@
       "desc": "pass chipName into decorateOpenClawProfile instead of the disk key"
     },
     {
+      "file": "extension/src/browser/chrome.ts",
+      "desc": "contain Chrome spawn errors in bootstrap and launch, revalidate automatic executables and rediscover once after ENOENT"
+    },
+    {
       "file": "extension/src/browser/config.ts",
       "desc": "preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access"
     },
@@ -129,10 +133,18 @@
     {
       "file": "extension/src/browser/ssrf-policy-helpers.ts",
       "desc": "one-off hostname grants must also pass a strict hostnameAllowlist (else the loopback CDP endpoint is blocked by proxyAllowedHostnames and every proxied navigation fails)"
+    },
+    {
+      "file": "packages/net-policy/ip.ts",
+      "desc": "support explicit RFC 5180 benchmark fake-IP policy without allowing private networks"
+    },
+    {
+      "file": "leaf/src/infra/net/ssrf.ts",
+      "desc": "support explicit RFC 5180 benchmark fake-IP policy without allowing private networks"
     }
   ],
   "fileCount": 335,
-  "contentHash": "4384650a128fa29db23ef9bfbba184090b2c3f21b7e0a028b798a5b7a0e7b239",
+  "contentHash": "cf2f3fa3db0b3497df2e05d67c36a8c01dcf87b29db23a78bbabeb5e386117ef",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

@@ -23,9 +23,12 @@ it('verifies scoped sharing identities without accepting access tokens, another 
   const issuer = 'https://auth.example.test', networkId = 'private:unit-network';
   const nonce = createHash('sha256').update(sharingIdentityPayload(networkId, root, identity.deviceId, identity.signingKey)).digest('hex');
   const base = { typ: 'identity-card', sub: 'unit-account', device: identity.deviceId, region: 'global', purpose: 'network-session', nonce };
-  const card = (audience = 'cindy-agent-net-sharing', overrides: object = {}, lifetime = 300) => new SignJWT({ ...base, ...overrides })
-    .setProtectedHeader({ alg: 'RS256', kid: 'unit-auth' }).setIssuer(issuer).setAudience(audience).setIssuedAt()
-    .setExpirationTime(Math.floor(Date.now() / 1000) + lifetime).sign(pair.privateKey);
+  const card = (audience = 'cindy-agent-net-sharing', overrides: object = {}, lifetime = 300) => {
+    const issuedAt = Math.floor(Date.now() / 1000);
+    return new SignJWT({ ...base, ...overrides })
+      .setProtectedHeader({ alg: 'RS256', kid: 'unit-auth' }).setIssuer(issuer).setAudience(audience).setIssuedAt(issuedAt)
+      .setExpirationTime(issuedAt + lifetime).sign(pair.privateKey);
+  };
   const auth = createAgentNetSharingAuth({ issuer }, keys);
   const path = '/api/agent-net/sharing/shared-tasks', bytes = Buffer.from('{}');
   const request = (card: string) => ({ method: 'POST', url: path, headers: { authorization: 'AgentNetIdentity ' + Buffer.from(JSON.stringify({
@@ -51,8 +54,11 @@ it('qualifies an allowed peer identity and display card while rejecting unknown 
     fetch: vi.fn(async () => Response.json(jwks)) as typeof fetch }, createLocalJWKSet(jwks));
   const device = generateIdentity('unit-phone'), networkId = 'private:cross-region', root = generateIdentity('unit-root').signingKey;
   const nonce = createHash('sha256').update(sharingIdentityPayload(networkId, root, device.deviceId, device.signingKey)).digest('hex');
-  const card = (claims: object, audience: string, signer = peer) => new SignJWT({ typ: 'identity-card', sub: 'same-id', region: 'cn', ...claims })
-    .setProtectedHeader({ alg: 'RS256', kid: 'peer-unit' }).setIssuer(signer).setAudience(audience).setIssuedAt().setExpirationTime('5m').sign(pair.privateKey);
+  const card = (claims: object, audience: string, signer = peer) => {
+    const issuedAt = Math.floor(Date.now() / 1000);
+    return new SignJWT({ typ: 'identity-card', sub: 'same-id', region: 'cn', ...claims })
+      .setProtectedHeader({ alg: 'RS256', kid: 'peer-unit' }).setIssuer(signer).setAudience(audience).setIssuedAt(issuedAt).setExpirationTime(issuedAt + 300).sign(pair.privateKey);
+  };
   const bytes = Buffer.from('{}'), path = '/api/agent-net/sharing/shared-tasks';
   const request = (card: string) => ({ method: 'POST', url: path, headers: { authorization: 'AgentNetIdentity ' + Buffer.from(JSON.stringify({ networkId,
     deviceId: device.deviceId, signingKey: device.signingKey, card, proof: createRequestProof(device, 'POST', path, bytes) })).toString('base64url') } }) as IncomingMessage;

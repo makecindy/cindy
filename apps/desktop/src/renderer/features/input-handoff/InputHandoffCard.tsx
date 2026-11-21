@@ -154,7 +154,9 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
   // Without a live view from another computer, the form stays the way to finish it.
   const onThisComputer = !getStickySessionDeviceId(sessionId);
   const canUseForm = snapshot.controls.length > 0 || snapshot.picture === true;
-  const directSignIn = snapshot.directSignIn === true && (onThisComputer || !!liveView) && formFor !== snapshot.requestId;
+  const directSignIn = snapshot.directSignIn === true
+    && (onThisComputer || (!!liveView && snapshot.preferRemoteForm !== true))
+    && formFor !== snapshot.requestId;
   const qrScan = snapshot.qr === 'scan' && snapshot.picture === true;
 
   const skip: StripAction = { label: t('inputHandoff.action.skip'), onClick: () => void decide('cancel') };

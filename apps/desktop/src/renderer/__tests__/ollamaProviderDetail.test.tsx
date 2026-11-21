@@ -13,8 +13,8 @@ vi.mock('../components/settings/LocalOllamaInstall', () => ({
   LocalOllamaInstall: () => null,
   offersManagedOllamaInstall: () => false,
 }));
-vi.mock('../components/settings/DownloadMeter', () => ({
-  DownloadMeter: ({ progress }: { progress: { percent?: number } }) => (
+vi.mock('../components/ui/download-meter', () => ({
+  DownloadMeter: ({ progress }: { progress: { percent: number | null } }) => (
     <div data-testid="progress">{progress.percent ?? 'starting'}</div>
   ),
 }));
