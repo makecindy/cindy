@@ -763,6 +763,8 @@ import { registerTaskManagementIpc } from './task-management/ipc.desktop.js';
 import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibility-owner-claim.js';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
+import { registerXcodeBuildIpc } from './xcode-build/index.js';
+import { assertXcodeBuildSessionWorkdir } from './xcode-build/workdir.js';
 import { registerLocalThemesIpc } from './local-themes/register';
 import { registerCindyFileIpc } from './cindy-files/register';
 import {
@@ -10755,6 +10757,9 @@ app.on('ready', async () => {
   registerTerminalHandlers({
     getFallbackOwner: () =>
       mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef.webContents : null,
+  });
+  registerXcodeBuildIpc({
+    assertSessionWorkdir: assertXcodeBuildSessionWorkdir,
   });
   registerLocalThemesIpc();
   registerCindyFileIpc();

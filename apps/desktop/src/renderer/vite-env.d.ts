@@ -1330,6 +1330,9 @@ interface ElectronAPI {
   /** RSB terminal tab —— PTY 后端 + xterm.js,详见 shared/terminal-bridge.ts 注释。 */
   terminal: import('../shared/terminal-bridge').TerminalBridge;
 
+  /** Local Xcode build runner. */
+  xcode: import('../shared/xcodeBuild').XcodeBuildBridge;
+
   /** 应用级快捷键 override 通道 —— registry 与合并逻辑见 shared/appShortcuts.ts。 */
   appShortcuts: {
     getState: () => {
