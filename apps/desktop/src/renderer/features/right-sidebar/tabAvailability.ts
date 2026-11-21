@@ -1,4 +1,5 @@
 import type { InstalledGhost } from '../../../shared/ghost';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { getApprovedGhostHostUi } from '../../../shared/ghost';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { FEATURE_RETIREMENTS } from '../../../shared/featureRetirements';
@@ -9,6 +10,7 @@ import type { TabState } from './types';
 export interface RightSidebarTabAvailability {
   installedGhosts: readonly InstalledGhost[];
   subagentsAvailable: boolean;
+  reviewAvailable?: boolean;
   /**
    * 已弹出到独立窗口的页签:数据仍在桶里,但本 Shell 不投影、不挂 body,其
    * 窗口关闭后再回到投影。缺省 = 没有弹出。
@@ -84,6 +86,7 @@ function retiredTab(
 function isUnavailableTab(tab: TabState, availability: RightSidebarTabAvailability): boolean {
   return (
     availability.hiddenTabIds?.has(tab.id) === true ||
+    (tab.kind === 'review' && availability.reviewAvailable === false) ||
     isUnavailablePluginView(tab, availability) ||
     isUnavailablePluginTask(tab, availability) ||
     (!CINDY_MAKE_ENABLED && tab.kind === 'cindy-make') ||
@@ -164,6 +167,7 @@ export function buildTabAvailabilities(input: TabAvailabilityInput): TabAvailabi
           ? input.installedGhosts.filter((ghost) => ghost.manifest.taskView?.remote === true)
           : input.installedGhosts,
       subagentsAvailable: input.subagentsAvailable === true || !eligibilityKnown,
+      reviewAvailable: !isSharedTaskPeer(input.deviceLinkDeviceId),
       hiddenTabIds: input.hiddenTabIds,
     },
     global: {

@@ -1,9 +1,10 @@
 import { openPluginTaskTab } from './openPluginTaskTab';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { openPluginUiView } from './openPluginUiView';
 import { openMailPreview, openMailCard } from './mailPreview';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
 
-import type { RsbWindowCommand } from '../../../../shared/rightSidebarWindow';
+import type { RsbWindowCommand, RsbWindowContext } from '../../../../shared/rightSidebarWindow';
 import { addOrFocusSingletonTab, closeTab, ensureHydrated, getBucket } from '../store';
 import {
   closeOrcaWorkersTabAfterTeamEnd,
@@ -20,7 +21,10 @@ import { openTurnReview } from './openTurnReview';
 import { openUrlInSidebarBrowser } from './openInSidebarBrowser';
 
 /** 在 main 已选定的当前 renderer host 中执行命令，不自行选择宿主。 */
-export async function executeSidebarCommand(command: RsbWindowCommand): Promise<void> {
+export async function executeSidebarCommand(
+  command: RsbWindowCommand,
+  attachedContext?: Pick<RsbWindowContext, 'sessionId' | 'deviceLinkDeviceId'>,
+): Promise<void> {
   if (command.type === 'open-plugin-view') {
     await openPluginUiView(command.instanceId, command.resourceViewId, null, command.resourceInput);
     return;
@@ -96,6 +100,8 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
     return;
   }
   if (command.type === 'toggle-review-tab') {
+    const context = attachedContext ?? await window.electronAPI.rightSidebarWindow.getContext();
+    if (context?.sessionId !== command.sessionId || isSharedTaskPeer(context.deviceLinkDeviceId)) return;
     await ensureHydrated(command.sessionId);
     const bucket = getBucket(command.sessionId);
     const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');

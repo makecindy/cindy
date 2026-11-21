@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import type { InstalledGhost } from '../../../../shared/ghost';
 import {
   buildTabAvailabilities,
@@ -17,6 +18,19 @@ const affected = {
   retirement: { id: 'embedded-ios-simulator', eligible: true, unread: true },
 } as InstalledGhost;
 describe('sidebar availability', () => {
+  // #11546 (unit): restore a selected review tab when opening a shared task.
+  it('falls back to Files for a guest and preserves Review for the owner and paired devices', () => {
+    const files = tabs[0]!;
+    const review: TabState = { ...files, id: 'git', kind: 'review' };
+    const project = (deviceLinkDeviceId: string | null) => projectAvailableTabs(
+      [files, review], review.id,
+      buildTabAvailabilities({ installedGhosts: [], remoteHostId: null, deviceLinkDeviceId }).session,
+    );
+    expect(project(sharedTaskHostPeer('task', 'owner-device'))).toEqual({ tabs: [files], activeTabId: files.id });
+    for (const owner of [null, 'paired-device']) {
+      expect(project(owner)).toEqual({ tabs: [files, review], activeTabId: review.id });
+    }
+  });
   // 全局插件视图页签:插件卸载 / 停用 / 失去面板声明时隐藏(数据保留),与远程任务无关。
   it('hides plugin-view tabs whose plugin is gone or disabled, only when the local plugin list is given', () => {
     const pluginTabs = [
