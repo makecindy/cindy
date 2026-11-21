@@ -6,7 +6,25 @@ import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '../../../src/renderer/cindy-brain/PluginUiContributions';
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
-import { UI_MOCK_BIDI_TASK, UI_MOCK_BIDI_TEXT, UI_MOCK_BIDI_MARKDOWN, UI_MOCK_BIDI_ORCA_MESSAGES } from '../../../../../packages/maker-shared/src/uiMockBidi';
+import { UI_MOCK_BIDI_TASK, UI_MOCK_BIDI_TEXT, UI_MOCK_BIDI_MARKDOWN } from '../../../../../packages/maker-shared/src/uiMockBidi';
+
+// Teammate reports reach the card as Markdown, like assistant output.
+const ORCA_MARKDOWN = [
+  '## 汇报',
+  '',
+  '### 详情',
+  '',
+  UI_MOCK_BIDI_TEXT.split('\n').join('\n\n'),
+  '',
+  '- **要点**：`index.html` 与 [文档](https://example.com/docs)。',
+  '',
+  '```js',
+  'const greeting = "سلام";',
+  '```',
+].join('\n');
+
+const ORCA_MESSAGES = (['lead', 'worker'] as const).map((orcaSource) =>
+  JSON.stringify({ orcaSource, content: ORCA_MARKDOWN }));
 
 function Fixture({ composerOnly = false }: { composerOnly?: boolean }) {
   const [stream, setStream] = useState('...');
@@ -42,8 +60,8 @@ function SourceMessagesFixture() {
 
 function OrcaMessagesFixture() {
   return <main className="p-4 space-y-4" data-ui-page-subject>
-    {UI_MOCK_BIDI_ORCA_MESSAGES.map((message) => <UserMessage key={message.text}
-      pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content={message.text} workingDir="" />)}
+    {ORCA_MESSAGES.map((content) => <UserMessage key={content}
+      pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content={content} workingDir="" />)}
   </main>;
 }
 
