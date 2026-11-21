@@ -245,8 +245,9 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     };
   }
 
-  const trimmedCommand = input.command.trim();
-  const interpreterPrefix = NODE_INTERPRETER_PREFIX.exec(trimmedCommand);
+  const leadingWhitespace = /^\s*/.exec(input.command)?.[0] ?? '';
+  const commandBody = input.command.slice(leadingWhitespace.length);
+  const interpreterPrefix = NODE_INTERPRETER_PREFIX.exec(commandBody);
   let interpreter: string | null = null;
   if (interpreterPrefix) {
     try {
@@ -262,7 +263,7 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     remainingTimeoutMs = timeoutMs === undefined ? undefined : timeoutMs - (Date.now() - startedAt);
     if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) return timedOutResult();
   }
-  const invalidXdtNode = INVALID_XDT_NODE_PREFIX.test(trimmedCommand);
+  const invalidXdtNode = INVALID_XDT_NODE_PREFIX.test(commandBody);
   if (invalidXdtNode || (interpreterPrefix?.[1] === 'xdt-node' && !interpreter)) {
     const error = invalidXdtNode ? INVALID_XDT_NODE_COMMAND_ERROR : XDT_NODE_RUNTIME_ERROR;
     return {
@@ -280,8 +281,8 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     };
   }
   if (interpreterPrefix && interpreter) {
-    // 只替换首 token;其后的空白、引号、参数与 shell 操作符全部原样保留。
-    command = trimmedCommand.replace(NODE_INTERPRETER_PREFIX, () => interpreter);
+    // 只替换首 token;前后空白、引号、参数与 shell 操作符全部原样保留。
+    command = `${leadingWhitespace}${commandBody.replace(NODE_INTERPRETER_PREFIX, () => interpreter)}`;
   }
 
   return new Promise<PreRunHookResult>((resolve) => {

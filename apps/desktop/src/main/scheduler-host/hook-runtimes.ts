@@ -97,6 +97,9 @@ export interface SystemNodeInterpreterOptions {
   home?: string;
   probeExecutable?: (executable: string, options?: ProbeOptions) => Promise<boolean>;
   readVersions?: (directory: string) => string[] | Promise<string[]>;
+  /** 目标平台与路径算法仅用于跨平台目录发现测试,不直接改写 process.platform。 */
+  platform?: NodeJS.Platform;
+  pathApi?: { join: (...parts: string[]) => string };
 }
 
 const INTERPRETER_CACHE_MAX_ENTRIES = 32;
@@ -181,31 +184,35 @@ async function versionManagerCandidates(
   home: string,
   readVersions: (directory: string) => string[] | Promise<string[]>,
   signal: AbortSignal,
+  platform: NodeJS.Platform,
+  join: (...parts: string[]) => string,
 ): Promise<string[]> {
   const current: string[] = [];
   const roots: VersionRoot[] = [];
-  const executable = process.platform === 'win32' ? 'node.exe' : path.join('bin', 'node');
-  const nvmHome = env.NVM_HOME ?? (process.platform === 'win32' && env.APPDATA ? path.join(env.APPDATA, 'nvm') : undefined);
-  const nvmDir = env.NVM_DIR ?? (process.platform !== 'win32' ? path.join(home, '.nvm') : undefined);
-  if (process.platform === 'win32') {
-    if (env.NVM_SYMLINK) current.push(path.join(env.NVM_SYMLINK, executable));
+  const executable = platform === 'win32' ? 'node.exe' : join('bin', 'node');
+  const nvmHome = env.NVM_HOME ?? (platform === 'win32' && env.APPDATA ? join(env.APPDATA, 'nvm') : undefined);
+  const nvmDir = env.NVM_DIR ?? (platform !== 'win32' ? join(home, '.nvm') : undefined);
+  if (platform === 'win32') {
+    if (env.NVM_SYMLINK) current.push(join(env.NVM_SYMLINK, executable));
     if (nvmHome) {
-      current.push(path.join(nvmHome, 'nodejs', executable));
-      roots.push({ directory: path.join(nvmHome, 'installs'), executable });
+      current.push(join(nvmHome, 'nodejs', executable));
+      roots.push({ directory: join(nvmHome, 'installs'), executable });
       roots.push({ directory: nvmHome, executable });
     }
   } else if (nvmDir) {
-    roots.push({ directory: path.join(nvmDir, 'versions', 'node'), executable });
+    roots.push({ directory: join(nvmDir, 'versions', 'node'), executable });
   }
-  const fnmDir = env.FNM_DIR ?? (process.platform === 'win32'
-    ? path.join(env.APPDATA ?? path.join(home, 'AppData', 'Roaming'), 'fnm')
-    : path.join(home, '.local', 'share', 'fnm'));
-  roots.push({ directory: path.join(fnmDir, 'node-versions'), executable: path.join('installation', executable) });
-  const voltaHome = env.VOLTA_HOME ?? path.join(home, '.volta');
-  roots.push({ directory: path.join(voltaHome, 'tools', 'image', 'node'), executable });
-  if (process.platform !== 'win32') {
-    roots.push({ directory: path.join(env.ASDF_DATA_DIR ?? path.join(home, '.asdf'), 'installs', 'nodejs'), executable });
-    roots.push({ directory: path.join(env.MISE_DATA_DIR ?? path.join(home, '.local', 'share', 'mise'), 'installs', 'node'), executable });
+  const fnmDir = env.FNM_DIR ?? (platform === 'win32'
+    ? join(env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'fnm')
+    : platform === 'darwin'
+      ? join(home, 'Library', 'Application Support', 'fnm')
+      : join(home, '.local', 'share', 'fnm'));
+  roots.push({ directory: join(fnmDir, 'node-versions'), executable: join('installation', executable) });
+  const voltaHome = env.VOLTA_HOME ?? join(home, '.volta');
+  roots.push({ directory: join(voltaHome, 'tools', 'image', 'node'), executable });
+  if (platform !== 'win32') {
+    roots.push({ directory: join(env.ASDF_DATA_DIR ?? join(home, '.asdf'), 'installs', 'nodejs'), executable });
+    roots.push({ directory: join(env.MISE_DATA_DIR ?? join(home, '.local', 'share', 'mise'), 'installs', 'node'), executable });
   }
 
   const candidates = [...current];
@@ -222,13 +229,13 @@ async function versionManagerCandidates(
       .filter(version => /^v?\d/.test(version))
       .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))
       .slice(0, 2);
-    for (const version of versions) candidates.push(path.join(root.directory, version, root.executable));
+    for (const version of versions) candidates.push(join(root.directory, version, root.executable));
   }
   return [...new Set(candidates)].slice(0, 16);
 }
 
-function quoteNodeExecutable(executable: string): string {
-  return process.platform === 'win32' ? `"${executable}"` : `'${executable.replace(/'/g, `'\\''`)}'`;
+function quoteNodeExecutable(executable: string, platform: NodeJS.Platform): string {
+  return platform === 'win32' ? `"${executable}"` : `'${executable.replace(/'/g, `'\\''`)}'`;
 }
 
 /** 共享探测只监听共享 signal;每个调用者的独立 budget 在等待侧处理。 */
@@ -247,7 +254,9 @@ async function discoverSystemNodeInterpreter(
   const probe = options.probeExecutable ?? ((executable: string, probeOptions?: ProbeOptions) =>
     probeCommand(executable, ['--version'], probeOptions));
   const readVersions = options.readVersions ?? (async (directory: string) => readdir(directory));
-  const candidates = await versionManagerCandidates(env, home, readVersions, signal);
+  const candidates = await versionManagerCandidates(
+    env, home, readVersions, signal, options.platform ?? process.platform, options.pathApi?.join ?? path.join,
+  );
   if (signal.aborted) return null;
   // 最多 4 个并发探测;每个进程自身有 3 秒上限,调用者另有独立总预算。
   for (let offset = 0; offset < candidates.length; offset += 4) {
@@ -261,7 +270,7 @@ async function discoverSystemNodeInterpreter(
     }));
     if (signal.aborted) return null;
     const available = results.findIndex(Boolean);
-    if (available >= 0) return quoteNodeExecutable(batch[available]);
+    if (available >= 0) return quoteNodeExecutable(batch[available], options.platform ?? process.platform);
   }
   return null;
 }

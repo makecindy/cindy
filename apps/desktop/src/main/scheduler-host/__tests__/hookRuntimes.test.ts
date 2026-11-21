@@ -119,6 +119,24 @@ describe('resolveSystemNodeInterpreter', () => {
     }
   });
 
+  it('macOS 未设置 FNM_DIR 时发现 Library/Application Support 下的 Node', async () => {
+    const home = '/test/fnm-darwin-home';
+    const fnmRoot = path.posix.join(home, 'Library', 'Application Support', 'fnm', 'node-versions');
+    const expected = path.posix.join(fnmRoot, 'v22.23.5', 'installation', 'bin', 'node');
+    const pathChild = child();
+    spawn.mockReturnValueOnce(pathChild);
+    const probeExecutable = vi.fn(async (executable: string) => executable === expected);
+    const readVersions = vi.fn((directory: string) => directory === fnmRoot ? ['v22.23.5'] : []);
+    const result = resolveSystemNodeInterpreter({
+      forceProbe: true, platform: 'darwin', pathApi: path.posix,
+      env: {}, home, readVersions, probeExecutable,
+    });
+    pathChild.emit('close', 1);
+
+    await expect(result).resolves.toBe(`'${expected}'`);
+    expect(probeExecutable).toHaveBeenCalledWith(expected, expect.anything());
+  });
+
   it('候选全部不可用时返回 null 并缓存,不重复启动 PATH 探测', async () => {
     const pathChild = child();
     spawn.mockReturnValueOnce(pathChild);

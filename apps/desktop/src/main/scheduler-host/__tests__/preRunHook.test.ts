@@ -281,6 +281,15 @@ describe('resolvePreRunHookTimeoutMs(无默认超时)', () => {
 });
 
 describe('Node 解释器执行回退', () => {
+  it.skipIf(process.platform === 'win32')('PATH 可用时保留原始命令前后空白和尾部转义空格', async () => {
+    const result = await executePreRunHook({
+      command: '  node -e "console.log(JSON.stringify(process.argv.slice(1)));process.exit(2)" value\\ ',
+      stdinPayload: payload,
+    });
+    expect(result).toMatchObject({ decision: 'skip', status: 'skipped', exitCode: 2 });
+    expect(JSON.parse(result.stdout)).toEqual(['value ']);
+  });
+
   it('PATH 失效时按字面使用带空格和 $& 的真实 Node 路径,保留 PR 参数与 stdin', async () => {
     const { mkdtempSync, writeFileSync, rmSync, chmodSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
