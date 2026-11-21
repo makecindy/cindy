@@ -519,14 +519,25 @@ export class Scheduler extends EventEmitter {
 
   private readonly activeSchedules = new Map<string, Schedule>();
   /**
-   * 在途的过期写入:scheduleId → 那次 storage.update 的 promise。
+   * 在途的过期写入:scheduleId → 那次 storage.update 的 promise **连同它发起时
+   * 那一版的 updatedAt**。
    *
    * 存储挂死时(事故 #11490 的形态)过期写入永不 settle,而过期扫描每轮 tick 都会
    * 再跑一次:不登记在途写入,每秒就为同一条任务多发一条 UPDATE,未完成的请求无界
    * 增长,恰好在存储故障期间进一步压制其它任务(Codex P2 on #11577)。
    * 一条 schedule 同时只保留一次在途过期写入,settle 前不再重发,也不派发。
+   *
+   * 登记必须带版本:只按 scheduleId 压制的话,挂死的那一次会把**用户改期之后的
+   * 新截止时间**一起挡掉 —— 存储其实接受了那次编辑,行已经是新的一版,而每个 tick
+   * 都在「还有在途写入」处退出,新快照的过期写入永远发不出去,持久行和 UI 一直停在
+   * active 且截止时间已过,直到进程重启(Codex P1 on #11577)。只有同一版本才压制
+   * 重试;版本前进了就放行一次新的写入(旧那次挂死的 promise 随之退出登记,它的
+   * 迟到结果仍受代次与版本判据约束)。
    */
-  private readonly pendingExpireWrites = new Map<string, Promise<Schedule | null>>();
+  private readonly pendingExpireWrites = new Map<string, {
+    version: number;
+    update: Promise<Schedule | null>;
+  }>();
   /**
    * 生命周期代次:每次 stop() +1。
    *
@@ -1128,7 +1139,12 @@ export class Scheduler extends EventEmitter {
     // 重发 UPDATE —— 存储挂死时每秒一轮 tick 会把在途请求堆成无界的量,把存储
     // 故障放大成整台调度器的停摆(Codex P2 on #11577)。等待在途写入 settle,
     // 由迟到收口对齐缓存;期间本轮不派发。
-    if (this.pendingExpireWrites.has(schedule.id)) return true;
+    // 只压制**同一版本**:在途写入发起后用户又编辑了这条任务(改期最典型),行已经
+    // 是新的一版,旧那次挂死的写入不能把新截止时间的过期一起挡掉 —— 否则新快照的
+    // 过期写入永远发不出去,行和 UI 停在 active 且截止时间已过,直到重启
+    // (Codex P1 on #11577)。
+    const pendingWrite = this.pendingExpireWrites.get(schedule.id);
+    if (pendingWrite && pendingWrite.version >= schedule.updatedAt) return true;
     if (preGateDeadline !== undefined && preGateRemaining(preGateDeadline) <= 0) {
       this.logPreGateTimeout('expireSchedule');
       return true;
@@ -1147,7 +1163,7 @@ export class Scheduler extends EventEmitter {
       updatePromise = this.storage.update(schedule.id, {
         status: 'expired', nextFireAt: undefined,
       }, schedule);
-      this.trackPendingExpireWrite(schedule.id, updatePromise);
+      this.trackPendingExpireWrite(schedule.id, schedule.updatedAt, updatePromise);
       const updated = await withStorageTimeout(updatePromise, budget, 'expireSchedule');
       // 在预算内回来同样要过代次栅栏:等待期间宿主 stop()(切账号 / 重启)会把
       // lifecycleGeneration +1,这次 UPDATE 属于上一段生命周期,它的 CAS 结果不得
@@ -1319,13 +1335,19 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
-   * 登记在途的过期写入。settle 之后清位(成功、失败都一样),settle 之前不再为
-   * 同一条任务重发过期写入。
+   * 登记在途的过期写入。`version` 是**发起时那一版**的 updatedAt(见
+   * pendingExpireWrites):只有同一版本才压制后续重试,版本前进了就放行新写入。
+   * settle 之后清位(成功、失败都一样),settle 之前不再为同一条任务重发。
    */
-  private trackPendingExpireWrite(scheduleId: string, update: Promise<Schedule | null>): void {
-    this.pendingExpireWrites.set(scheduleId, update);
+  private trackPendingExpireWrite(
+    scheduleId: string,
+    version: number,
+    update: Promise<Schedule | null>,
+  ): void {
+    this.pendingExpireWrites.set(scheduleId, { version, update });
     const clear = () => {
-      if (this.pendingExpireWrites.get(scheduleId) === update) this.pendingExpireWrites.delete(scheduleId);
+      const tracked = this.pendingExpireWrites.get(scheduleId);
+      if (tracked && tracked.update === update) this.pendingExpireWrites.delete(scheduleId);
     };
     // 两个分支都传 clear:rejected 的 promise 不能变成未处理的 rejection。
     void update.then(clear, clear);
