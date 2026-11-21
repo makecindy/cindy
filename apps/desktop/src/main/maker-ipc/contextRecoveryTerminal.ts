@@ -12,7 +12,6 @@ export interface ContextRecoveryTerminalPorts {
   getSuppressedBroadcasts(): FinishSessionTerminalEventDeps['overflowSuppressedBroadcasts'];
   isTerminalTurnErrorEvent: typeof isTerminalTurnErrorEvent;
   isContextOverflowErrorData: typeof rollover.isContextOverflowErrorData;
-  isPiRequestBodyTooLarge?: typeof rollover.isPiRequestBodyTooLarge;
   isOversizedHistoryErrorData: typeof rollover.isOversizedHistoryErrorData;
   isUnsupportedRequestOptionErrorData: typeof rollover.isUnsupportedRequestOptionErrorData;
   reserveTurnErrorPersistId: typeof persist.reserveTurnErrorPersistId;
@@ -29,11 +28,9 @@ type Input = Pick<PreparedSessionEvent, 'event' | 'attributedEvent' | 'broadcast
   session: Session;
   autoResumeSuppressesPersist: boolean;
   persistId: SessionDeliveryResult['persistId'];
+  /** Classified by launchers that support automatic Pi request-body recovery. */
+  isPiBodyLimitError?: boolean;
 };
-
-function isPiBodyLimitTerminal(ports: ContextRecoveryTerminalPorts, session: Session, data: unknown): boolean {
-  return session.agentKind === 'pi' && ports.isPiRequestBodyTooLarge?.(data) === true;
-}
 
 /** Must run synchronously before any terminal observer can release its owner. */
 export function claimContextRecoveryTerminal(ports: ContextRecoveryTerminalPorts, input: Input): rollover.OverflowClaimResult {
@@ -51,7 +48,7 @@ export function claimContextRecoveryTerminal(ports: ContextRecoveryTerminalPorts
             instanceId: event.sessionInstanceId,
             generation: event.sessionTurnGeneration,
           }, ports.isContextOverflowErrorData(attributedEvent.data)
-            || isPiBodyLimitTerminal(ports, session, attributedEvent.data)
+            || input.isPiBodyLimitError === true
             || ports.isOversizedHistoryErrorData(attributedEvent.data)
             || ports.isUnsupportedRequestOptionErrorData(attributedEvent.data)) ?? 'idle')
         : 'idle';
@@ -113,7 +110,7 @@ export function settleContextRecoveryTerminal(ports: ContextRecoveryTerminalPort
       };
       const turn = { instanceId: event.sessionInstanceId, generation: event.sessionTurnGeneration };
       const activeRollover = ports.getRollover();
-      const recovery = isPiBodyLimitTerminal(ports, session, overflowErrorData)
+      const recovery = input.isPiBodyLimitError
         ? activeRollover?.tryRecover(session.id, overflowErrorData, turn, surfaceOverflowFailure)
         : activeRollover?.tryRecover(session.id, overflowErrorData, turn);
       void recovery?.then((recovered) => {

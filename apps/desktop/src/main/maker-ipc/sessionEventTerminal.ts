@@ -310,7 +310,6 @@ export function finishSessionTerminalEvent(
       getSuppressedBroadcasts: () => deps.overflowSuppressedBroadcasts,
       isTerminalTurnErrorEvent: event => isTerminalTurnErrorEvent(event),
       isContextOverflowErrorData: data => isContextOverflowErrorData(data),
-      isPiRequestBodyTooLarge,
       isOversizedHistoryErrorData: data => isOversizedHistoryErrorData(data),
       isUnsupportedRequestOptionErrorData: data => isUnsupportedRequestOptionErrorData(data),
       reserveTurnErrorPersistId: (...args) => reserveTurnErrorPersistId(...args),
@@ -325,6 +324,8 @@ export function finishSessionTerminalEvent(
       session, event, attributedEvent, broadcastEvent, eventAgentMeta,
       isPlannedUpgradeClose, isRemoteAuthRetry, isGatewayProxyTokenRecovery,
       autoResumeSuppressesPersist, persistId,
+      isPiBodyLimitError: event.type === 'error' && session.agentKind === 'pi'
+        && isPiRequestBodyTooLarge(attributedEvent.data),
     };
     const overflowClaim = claimContextRecoveryTerminal(contextRecoveryPorts, contextRecoveryInput);
     const deferUnsuccessfulProductTurn = (): void => {
