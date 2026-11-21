@@ -22,6 +22,8 @@ export function useSidebarPresentation(
   const previous = useRef<boolean | null>(null);
   const generation = useRef(0);
   const frame = useRef<number | null>(null);
+  // Detaches the window resize listener of the in-flight transition (settled or superseded).
+  const releaseResize = useRef<(() => void) | null>(null);
   const latest = useRef(presentation);
   latest.current = presentation;
 
@@ -32,6 +34,8 @@ export function useSidebarPresentation(
     const id = ++generation.current;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
+    releaseResize.current?.();
+    releaseResize.current = null;
     const resize = window.electronAPI.windowSidebarExpansion;
     const width = root.current?.getBoundingClientRect().width ?? 0;
     // Saved native bounds are standalone; a restored-open sidebar expands normally.
@@ -53,29 +57,61 @@ export function useSidebarPresentation(
       const growth = typeof delta === 'number' ? delta : 0;
       const target = viewport + growth;
       const started = performance.now();
-      const finish = () => {
-        if (id !== generation.current) return;
-        // The invoke reply can arrive before Chromium observes the new native bounds.
-        // A hidden/closing window must not retain a frozen layout indefinitely.
-        if (growth !== 0 && Math.abs(window.innerWidth - target) > 1 && performance.now() - started < 1000) {
-          frame.current = requestAnimationFrame(finish);
-          return;
-        }
+      let settled = false;
+      const settle = () => {
+        if (id !== generation.current || settled) return;
+        settled = true;
         frame.current = null;
+        releaseResize.current?.();
+        releaseResize.current = null;
         setPresentation({ collapsed, instant: growth !== 0,
           ...(!collapsed ? { expandedWidth: width + growth } : {}),
         });
       };
-      if (growth === 0) finish();
-      else frame.current = requestAnimationFrame(finish);
+      const arrived = () => Math.abs(window.innerWidth - target) <= 1;
+      // The native resize reaches the renderer as a window resize event in the frame
+      // the new bounds are applied; rAF callbacks of that frame still read the old
+      // innerWidth (they run before layout), so polling costs an extra frame or two
+      // while the window already shows the frozen layout against new geometry.
+      // Settling from the event unfreezes in that same frame; the poll stays as a
+      // fallback for arrivals the event cannot cover (hidden/closing windows).
+      const onResize = () => { if (arrived()) settle(); };
+      const finish = () => {
+        if (id !== generation.current || settled) return;
+        // A hidden/closing window must not retain a frozen layout indefinitely.
+        if (growth !== 0 && !arrived() && performance.now() - started < 1000) {
+          frame.current = requestAnimationFrame(finish);
+          return;
+        }
+        settle();
+      };
+      if (growth === 0 || arrived()) {
+        // Nothing left to wait for: the reply carried no growth, or the viewport
+        // already reflects the native bounds (a busy main process delivered the
+        // reply late). Settle without scheduling a frame at all.
+        settle();
+        return;
+      }
+      releaseResize.current = () => window.removeEventListener('resize', onResize);
+      window.addEventListener('resize', onResize);
+      frame.current = requestAnimationFrame(finish);
     }).catch(() => {
-      if (id === generation.current) setPresentation({ collapsed, instant: false });
+      // Only the current generation may release here: a superseded invocation
+      // rejecting late would otherwise detach the listener the newer transition
+      // just armed (falling it back to the delayed rAF path).
+      if (id === generation.current) {
+        releaseResize.current?.();
+        releaseResize.current = null;
+        setPresentation({ collapsed, instant: false });
+      }
     });
   }, [collapsed, ready, root]);
 
   useLayoutEffect(() => () => {
     generation.current++;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
+    releaseResize.current?.();
+    releaseResize.current = null;
     // StrictMode's second mount must establish a fresh baseline.
     previous.current = null;
   }, []);

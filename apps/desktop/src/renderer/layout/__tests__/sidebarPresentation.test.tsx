@@ -83,6 +83,67 @@ it('expands a restored-open sidebar and closes without a renderer-derived shrink
   expect(result.current.collapsed).toBe(true);
 });
 
+// Unit regression: the frozen layout must not outlive the frame in which the
+// native bounds land. Polling innerWidth from rAF only observes the new size one
+// frame later (rAF callbacks run before layout), so the window showed resized
+// geometry with the frozen old layout for 1–2 extra frames on every toggle.
+it('unfreezes from the window resize event without waiting for another frame', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 400 : -400));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  await act(async () => { await Promise.resolve(); });
+  expect(result.current).toEqual({ collapsed: true, instant: true, frozenWidth: 800 });
+  // The native resize reaches the renderer as a resize event in the frame the
+  // new bounds apply. No frame() here: settling must not depend on a rAF pass.
+  act(() => {
+    window.innerWidth = 1400;
+    window.dispatchEvent(new Event('resize'));
+  });
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1200 });
+});
+
+// Late reply variant: when main is busy and the invoke reply arrives after the
+// renderer already observed the new bounds, settle immediately — the old code
+// still burned at least one rAF before unfreezing.
+it('settles in the reply itself when the viewport already matches the target', async () => {
+  let resolve!: (delta: number) => void;
+  window.electronAPI = { windowSidebarExpansion: vi.fn(() => new Promise<number>((done) => { resolve = done; })) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  expect(result.current.frozenWidth).toBe(800);
+  window.innerWidth = 1400; // bounds landed before the invoke reply
+  await act(async () => { resolve(400); });
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1200 });
+});
+
+// Codex review P2 on #11561: a superseded invocation rejecting after the newer
+// reply armed its resize listener must not detach that listener — the release
+// ref already belongs to the newer transition, so a late rejection must no-op.
+it('a late rejection from a superseded request leaves the active listener armed', async () => {
+  const resolvers: ((delta: number) => void)[] = [];
+  const rejectors: ((err: Error) => void)[] = [];
+  window.electronAPI = { windowSidebarExpansion: vi.fn(
+    () => new Promise<number>((done, reject) => { resolvers.push(done); rejectors.push(reject); }),
+  ) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  rerender({ collapsed: true });
+  // The newer request (close) replies first and arms its resize listener.
+  await act(async () => { resolvers[1](-400); });
+  expect(result.current.frozenWidth).toBe(800);
+  // The superseded open request only rejects now.
+  await act(async () => { rejectors[0](new Error('superseded')); });
+  act(() => {
+    window.innerWidth = 600;
+    window.dispatchEvent(new Event('resize'));
+  });
+  expect(result.current).toEqual({ collapsed: true, instant: true });
+});
+
 // Bug: leaving the chat route retracts the expansion; returning must expand again
 // instead of adopting the shrunken window (repeated navigation narrowed it 1800 → 1399 → 998).
 it('re-expands when returning to a sidebar route after it was retracted', async () => {
