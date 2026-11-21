@@ -64,6 +64,7 @@ export interface MainListPriorityContext {
   runningSessionIds: ReadonlySet<string>;
   /** Remote rows use the activity of their own device. */
   remotePriorityByRow?: ReadonlyMap<string, number>;
+  remoteUnreadScheduleRows?: ReadonlySet<string>;
   /** 需关注(等待确认 / 完成未读等 attention 通知)的 sessionIds。 */
   attentionSessionIds: ReadonlySet<string>;
   /**

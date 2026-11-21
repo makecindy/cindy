@@ -237,6 +237,7 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
   useRemoteScheduleIndex,
+  useRemoteUnreadScheduleRows,
 } from '@/features/device-link/remoteProjectsStore';
 import {
   getRemoteSessionActivity,
@@ -1336,6 +1337,7 @@ function ExpandedView({
     },
   );
   const remoteScheduleIndex = useRemoteScheduleIndex();
+  const remoteUnreadScheduleRows = useRemoteUnreadScheduleRows();
   // Lead 的 kind / 未读已并入其 Worker 的出错 / 等待确认(lib/orcaLeadWorkerAttention.ts)。
   const attentionKinds = useSessionAttentionKindsWithOrcaLeads();
   const orcaLeadWorkerAttention = useOrcaLeadWorkerAttention();
@@ -2076,6 +2078,7 @@ function ExpandedView({
       runningSessionIds: displayRunningSessionIds,
       attentionSessionIds: sidebarNotifications,
       waitingSessionIds: waiting,
+      remoteUnreadScheduleRows,
     };
     const natural = sidebarPriorityContext(
       base,
@@ -2110,6 +2113,7 @@ function ExpandedView({
     attentionKinds,
     displayRunningSessionIds,
     remoteActivityRevision,
+    remoteUnreadScheduleRows,
     sidebarNotifications,
     urgentSet,
     viewedSessionId,

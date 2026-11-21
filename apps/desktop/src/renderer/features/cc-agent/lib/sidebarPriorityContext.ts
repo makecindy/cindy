@@ -19,11 +19,12 @@ export function sidebarPriorityContext(
   for (const session of sessions) {
     const phase = remotePhaseOf(session);
     if (session.deviceLinkDeviceId) {
+      const rowKey = sessionRowKey(session);
       // Preserve a new send before its first host push; terminal evidence still ends the old turn.
-      remotePriorityByRow.set(sessionRowKey(session), liveTaskPriorityRank({
+      remotePriorityByRow.set(rowKey, liveTaskPriorityRank({
         running: phase === 'running' || (!phase && starting.has(session.id)),
         waiting: phase === 'needs-interaction' || phase === 'error',
-        unread: phase === 'completed',
+        unread: phase === 'completed' || ctx.remoteUnreadScheduleRows?.has(rowKey) === true,
       }));
     }
     if (!phase) continue;
