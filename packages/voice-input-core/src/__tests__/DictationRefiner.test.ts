@@ -95,7 +95,7 @@ describe('DictationRefiner', () => {
     expect(captured.schemaName).toBe('dictation_refinement');
     expect(captured.promptCacheScope).toBe('session-test');
     expect(captured.user).toEqual({
-      promptVersion: 'dictation-refinement.zh.v18',
+      promptVersion: 'dictation-refinement.zh.v19',
       context: {
         uiLanguage: 'zh-CN',
         sourceLanguage: 'zh-CN',

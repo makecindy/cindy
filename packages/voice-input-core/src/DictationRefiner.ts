@@ -73,7 +73,7 @@ const DIVERGENCE_MIN_OUTPUT_CONTENT_CHARS = 48;
 const DIVERGENCE_MIN_LENGTH_RATIO = 3;
 
 /** Stable identifier for the bundled prompt; cache key uses this. */
-export const DEFAULT_DICTATION_REFINER_PROMPT_VERSION = 'dictation-refinement.zh.v18';
+export const DEFAULT_DICTATION_REFINER_PROMPT_VERSION = 'dictation-refinement.zh.v19';
 
 /**
  * Default system prompt bundled with this package. Targets Chinese ASR
@@ -176,7 +176,7 @@ export const DEFAULT_DICTATION_REFINER_SYSTEM_PROMPT: string = `
 - 只返回严格 JSON：
 {"text":"..."}
 - text 字段里只放最终要插入的文本，不要解释你改了什么，不要标题，不要 Markdown 代码块，不要前后缀说明。
-- 用词已经清楚就不要改写用词。没有分点、序号或话题切换时原样返回；有这些结构信号时仍要按结构规则排版。
+- 用词已经清楚就不要改写用词；没有分点、序号或话题切换、且文本已经清楚时，原样返回。有这些结构信号时仍要按结构规则排版。
 `.trim();
 
 /**
