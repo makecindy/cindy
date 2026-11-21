@@ -1029,8 +1029,14 @@ export function UnifiedModelList({
                 是用来在读到某个模型名时顺手知道它贵不贵。拿不到报价就整个
                 不渲染 —— 不画假的「$」也不画「—」。 */}
         {(() => {
-          // Mixed-unit quotes are shown in the existing model details only.
-          if (rep.displayPricing && rep.currency) return null;
+          // 对话模型仍需保留 token 价格档与折扣表达。displayPricing 对媒体模型
+          // 可能使用张、秒等单位，不能把那类报价强行压成通用 token 档位。
+          if (
+            rep.displayPricing &&
+            rep.currency &&
+            !isAgentSelectableModel(rep, { userProvider: provider.source === 'user' })
+          )
+            return null;
           const display = rowPriceDisplay(row);
           if (!display) return null;
           if (display.kind === 'free') {
