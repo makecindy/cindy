@@ -354,6 +354,21 @@ describe('local Cindy version snapshots', () => {
     h.original.development.capabilities = { [DEV_ENVIRONMENT_OVERRIDES_CAPABILITY]: true };
     expect(await verifyPersonalVersion(h.userData, id, h.original)).toMatchObject({ id });
   });
+  it('allows capable personal bundles from an installed original', async () => {
+    const h = await fixture();
+    h.original.development = undefined;
+    const id = (await h.retain())!;
+    publishPersonalVersion(h.userData, id);
+    const item = readPersonalVersion(h.userData, id);
+    await writeFile(
+      path.join(versionDirectory(h.userData, id), item.resources, 'cindy-version-protocol.json'),
+      JSON.stringify({
+        version: 1,
+        capabilities: { [DEV_ENVIRONMENT_OVERRIDES_CAPABILITY]: true },
+      }),
+    );
+    expect(await verifyPersonalVersion(h.userData, id, h.original)).toMatchObject({ id });
+  });
   it('verifies synchronously for the pre-ready startup path with the same outcome', async () => {
     const h = await fixture();
     const id = (await h.retain())!;

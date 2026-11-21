@@ -326,6 +326,7 @@ function personalVersionVerification(profile: string, id: string, original: Orig
   if (protocol?.version !== CINDY_VERSION_PROTOCOL) throw versionError('unavailable');
   if (
     hasCapability(protocol.capabilities, DEV_ENVIRONMENT_OVERRIDES_CAPABILITY) &&
+    original.development &&
     !supportsDevEnvironmentOverrideOrigin(original)
   )
     throw versionError('incompatible');
