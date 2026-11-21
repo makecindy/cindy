@@ -33,15 +33,15 @@ export function isOpenHubsModelsUrl(value: string): boolean {
   } catch { return false; }
 }
 
-/** OpenCode Go documents MIME entries as accepted types, unlike generic relays
+/** OpenCode Zen and Go document MIME entries as accepted types, unlike generic relays
  * which can list formats even when image input is disabled (#11446).
  */
-function isOpenCodeGoModelsUrl(value: string | undefined): boolean {
+function isOpenCodeModelsUrl(value: string | undefined): boolean {
   if (!value) return false;
   try {
     const url = new URL(value);
     return url.origin === 'https://opencode.ai' &&
-      ['/zen/go/v1/models', '/inference/go/v1/models'].includes(url.pathname.replace(/\/+$/, ''));
+      ['/zen/v1/models', '/inference/v1/models', '/zen/go/v1/models', '/inference/go/v1/models'].includes(url.pathname.replace(/\/+$/, ''));
   } catch { return false; }
 }
 
@@ -121,7 +121,7 @@ export function parseModelsListResponse(
   if (!list) return null;
   const copilot = sourceUrl && copilotModelsUrl(sourceUrl);
   const magpieCatalog = list.some(item => !!item && typeof item === "object" && !!discoveredMagpieSource(item as Record<string, unknown>));
-  const openCodeGo = isOpenCodeGoModelsUrl(sourceUrl);
+  const openCode = isOpenCodeModelsUrl(sourceUrl);
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
   for (const item of list) {
@@ -218,7 +218,7 @@ export function parseModelsListResponse(
     const rawModalities = record.modalities ??
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
         ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
-    const modalities = openCodeGo ? openCodeModalities(rawModalities) : rawModalities;
+    const modalities = openCode ? openCodeModalities(rawModalities) : rawModalities;
     const inputModalities = (modalities as { input?: unknown } | undefined)?.input ?? record.input_modalities;
     const contextWindowMax = contextTokens(record.max_context_window ?? record.contextWindowMax);
     const serviceTiers = record.service_tiers;
