@@ -271,7 +271,7 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
         }}
         onContextMenu={linkMenu.onContextMenu}
         splitPaneRouteAction
-        className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+        className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
       />
       {linkMenu.menu}
     </>

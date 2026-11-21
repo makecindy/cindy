@@ -943,7 +943,7 @@ it.each(['rising', 'oscillating'])('follows %s sizes without echoing height-only
     expect(options?.rootMargin).toBe('80px 0px');
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const controller = state.controllers[0];
-    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 0, maxHeight: 5000 } }));
+    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 0, maxHeight: 5000 } }), expect.any(Function));
     await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
     await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
     for (let i = 0; i < 10; i++) await act(async () => {
@@ -1057,7 +1057,7 @@ it('fills a panel with nonzero dimensions and ignores App automatic heights with
     Object.defineProperty(frameRoot, 'clientHeight', { configurable: true, get: () => height });
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const controller = state.controllers[0];
-    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 600, height: 450 } }));
+    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 600, height: 450 } }), expect.any(Function));
     expect(container.textContent).not.toContain('Page');
     for (let i = 0; i < 10; i++) await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 800 + i * 100 } }));
     expect((frameRoot as HTMLElement).style.height).toBe('');

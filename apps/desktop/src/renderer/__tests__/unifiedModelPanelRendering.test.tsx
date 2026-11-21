@@ -233,8 +233,10 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
     unsupported: false,
   }),
 }));
+// Every model is shown unless a case names it here (the picker-visibility switch turned off).
+const hiddenModelIds = vi.hoisted(() => new Set<string>());
 vi.mock('@/state/modelVisibilityPrefs', () => ({
-  isModelEnabled: () => true,
+  isModelEnabled: (_agent: string, _providerId: string, model: { id: string }) => !hiddenModelIds.has(model.id),
   useModelVisibilityVersion: () => 0,
 }));
 vi.mock('@/state/deviceLinkModelMirror', () => ({
@@ -5799,4 +5801,61 @@ it.each([
   } finally {
     providersRef.providers = originalProviders;
   }
+});
+
+// Rule (model-selector-unified.md「已隐藏区」): hiding a provider only folds it out of the regular
+// list; it must stay reachable. The gap: every existing case builds the list from visible
+// providers, so a regression that drops hidden providers from the panel's data (the obvious way
+// to implement hiding) leaves the user unable to pick them and loses their favorites. Minimal
+// failing input: one listed provider plus one with `hidden: true`. Tier: component (real
+// ModelSelectorContent + UnifiedModelPanel, catalog from the providers mock).
+describe('providers hidden from the picker stay reachable', () => {
+  const originalProviders = providersRef.providers;
+  afterEach(() => { providersRef.providers = originalProviders; });
+  const source = (id: string, name: string, model: string, extra: Record<string, unknown> = {}) => ({
+    id, name, source: 'user', agents: ['codex'], auth: { method: 'api-key' }, routing: { codex: {} },
+    connected: true, models: { codex: [{ id: `${id}-model`, name: model, contextWindow: 200_000,
+      efforts: ['high'], defaultEffort: 'high' }] }, ...extra });
+  const memory = { getEffort: () => undefined, getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn() };
+
+  it('folds them under one disclosure that expands, and a click selects the hidden model', async () => {
+    providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
+    const change = vi.fn();
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'shown', modelId: 'shown-model', onProviderChange: change, modelMemory: memory });
+    const list = within(screen.getByRole('listbox'));
+    expect(list.getByText('Listed Model')).toBeTruthy();
+    expect(list.queryByText('Hidden Model')).toBeNull();
+    // The rail offers no entry for it either: hiding is about the picker's regular surface.
+    expect(document.querySelector('[data-rail-item="provider:tucked"]')).toBeNull();
+    const toggle = document.querySelector('[data-hidden-models-toggle]') as HTMLElement;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => { fireEvent.click(toggle); });
+    expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => { fireEvent.click(rowFor('Hidden Model')); });
+    expect(change).toHaveBeenCalledWith('tucked', 'tucked-model', expect.any(String), false);
+  });
+
+  // PR #11565 review: a model whose own picker switch is off lives only in the hidden fold. Its
+  // star worked there, but favorites resolved against the regular list, so the saved favorite
+  // never appeared. Minimal input: one listed model, one switched off, starred from the fold.
+  it('a model starred inside the hidden fold shows up under favorites', async () => {
+    hiddenModelIds.add('quiet-model');
+    try {
+      providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('quiet', 'Quiet', 'Switched Off Model')] as never;
+      renderPanel({ vendorKey: 'codex', currentProviderId: 'shown', modelId: 'shown-model', modelMemory: memory });
+      await act(async () => { fireEvent.click(document.querySelector('[data-hidden-models-toggle]') as HTMLElement); });
+      await act(async () => {
+        fireEvent.click(within(rowFor('Switched Off Model')).getByRole('button', { name: '存为收藏' }));
+      });
+      const favorites = screen.getAllByRole('group').find((group) => group.getAttribute('aria-label') === '收藏');
+      expect(favorites && within(favorites).getByText('Switched Off Model')).toBeTruthy();
+    } finally { hiddenModelIds.delete('quiet-model'); }
+  });
+
+  it('opens the fold by itself when the task is already using a hidden provider', () => {
+    providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'tucked', modelId: 'tucked-model', modelMemory: memory });
+    expect(within(screen.getByRole('listbox')).getByText('Hidden Model')).toBeTruthy();
+    expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
+  });
 });

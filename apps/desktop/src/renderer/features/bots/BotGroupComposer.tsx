@@ -779,7 +779,7 @@ export function BotGroupComposer({
           {dragOver ? (
             <div
               data-testid="bot-group-drop-hint"
-              className="pointer-events-none absolute inset-0 z-10 rounded-[12px]"
+              className="pointer-events-none absolute inset-0 z-10 rounded-xl"
               style={{
                 backgroundColor: 'var(--drop-overlay-bg)',
                 border: '2px dashed var(--drop-overlay-border)',

@@ -3807,6 +3807,7 @@
         "connecting": "Connexion…",
         "rename": "Renommer",
         "suspended": "Désactivé",
+        "hidden": "Masqué",
         "unconfigured": "Non configuré"
       },
       "button": {
@@ -3817,7 +3818,9 @@
         "cancel": "Annuler",
         "retry": "Relancer la détection des modèles",
         "retrying": "Nouvelle détection…",
-        "enableProvider": "Activer le fournisseur"
+        "enableProvider": "Activer le fournisseur",
+        "showProvider": "Afficher",
+        "hideInstead": "Masquer à la place"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4203,7 +4206,7 @@
         "paymentRequired": "Payant",
         "paymentUnlock": "Payer pour débloquer",
         "enableModel": "Activer ce modèle",
-        "capabilityGroupHint": "Non affiché dans le sélecteur de modèles de conversation. L'interrupteur contrôle la visibilité dans la fonctionnalité concernée.",
+        "capabilityGroupHint": "Non affiché dans le sélecteur de modèles. L'interrupteur détermine si la fonctionnalité concernée peut utiliser le modèle.",
         "accessWriteFailed": "Impossible d'enregistrer la modification. Veuillez réessayer.",
         "visibilityWriteFailed": "Impossible d'enregistrer le paramètre de visibilité du modèle. Réessayez, ou redémarrez Cindy si le problème persiste.",
         "disabledGroup": "Désactivés",
@@ -4347,22 +4350,22 @@
           "aria": "Filtrer par type de modèle",
           "chat": "Conversation"
         },
-        "hiddenGroup": "Non affichés",
+        "hiddenGroup": "Masqués",
         "management": {
           "brand": "Fabricant"
         },
         "manage": {
           "title": "Modèles",
-          "selected": "{{count}} sélectionné(s)",
-          "hint": "Utilisez les interrupteurs pour choisir vos modèles de conversation.",
+          "selected": "{{count}} affiché(s)",
+          "hint": "Les interrupteurs déterminent quels modèles apparaissent dans le sélecteur de modèles. En désactiver un le masque seulement ; vous pouvez toujours le choisir sous « Masqués », en bas du sélecteur.",
           "menu": "Gérer",
           "arrange": "Organiser la liste",
           "byBrand": "Grouper par fabricant",
           "byName": "Trier par nom de modèle",
-          "selection": "Sélection des modèles",
-          "showAll": "Sélectionner tous les modèles",
-          "hideAll": "Effacer la sélection",
-          "reset": "Restaurer la sélection par défaut",
+          "selection": "Afficher dans le sélecteur de modèles",
+          "showAll": "Afficher tous les modèles",
+          "hideAll": "Masquer tous les modèles",
+          "reset": "Restaurer l'affichage par défaut",
           "connectionRequired": "Connectez-vous pour utiliser ces modèles. Vos sélections sont enregistrées."
         },
         "modelCount_many": "{{count}} modèles"
@@ -4379,7 +4382,8 @@
         "groupNote": "{{device}} a fait de ce fournisseur un groupe de fournisseurs. Lorsque vous lancez une tâche avec celui-ci, {{device}} l'attribue à l'un des ordinateurs ci-dessous selon la stratégie du groupe, et la déplace vers un autre si cet ordinateur rencontre un problème. Tant que {{device}} est en ligne, utilisez Accès distant et partage ici pour gérer le groupe et ses partages.",
         "groupMembersTitle": "Ordinateurs du groupe",
         "groupMembersFailed": "Impossible d'obtenir pour le moment l'état des ordinateurs du groupe.",
-        "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs"
+        "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs",
+        "hiddenBanner": "Masqué dans le sélecteur de modèles sur cet ordinateur. Les favoris et les sessions qui l'utilisent ne sont pas affectés."
       },
       "genericOAuth": {
         "subtitle": "Compte d'abonnement",
@@ -4423,7 +4427,8 @@
           "rejected": "Ce fournisseur a refusé la requête. La liste ci-dessous provient de la dernière actualisation réussie. Réessayez plus tard ou utilisez un autre fournisseur.",
           "empty": "Ce fournisseur n'a renvoyé aucun modèle utilisable cette fois-ci. La liste ci-dessous provient de la dernière actualisation réussie. Vérifiez les accès de votre compte, puis réessayez."
         },
-        "suspendedBanner": "Ce fournisseur est désactivé. Les identifiants sont conservés ; activez-le pour utiliser à nouveau ses modèles.",
+        "suspendedBanner": "Ce fournisseur est désactivé : les nouvelles sessions et les fonctions en arrière-plan ne l'utilisent plus. Les identifiants sont conservés. Pour simplement le retirer du sélecteur de modèles, masquez-le à la place.",
+        "hiddenBanner": "Masqué dans le sélecteur de modèles. Les sessions et les fonctions en arrière-plan qui l'utilisent ne sont pas affectées, et vous pouvez toujours le choisir sous « Masqués », en bas du sélecteur.",
         "remoteAccess": {
           "label": "Autoriser l'utilisation à distance",
           "description": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. L'Agent s'exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur.",
@@ -4633,7 +4638,9 @@
       },
       "menu": {
         "disableProvider": "Désactiver ce fournisseur",
-        "enableProvider": "Activer ce fournisseur"
+        "enableProvider": "Activer ce fournisseur",
+        "hideProvider": "Masquer dans le sélecteur de modèles",
+        "showProvider": "Afficher dans le sélecteur de modèles"
       },
       "builtinApiKey": {
         "subtitle": "Connexion par clé API",
@@ -14290,6 +14297,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Impossible de lire les modèles de cet ordinateur pour le moment",
         "favoritesGroup": "Favoris",
         "recentGroup": "Récents",
+        "hiddenGroup": "Masqués ({{count}})",
+        "hiddenGroupHint": "Les fournisseurs et modèles masqués restent sélectionnables",
         "recentEmpty": "Aucun modèle récent pour le moment : choisissez un modèle et il apparaîtra ici",
         "favoritesSaveFailed": "Impossible d'enregistrer les modifications des favoris",
         "favoritesCleanupFailed": "Impossible de retirer les favoris liés aux partages de fournisseur révoqués",
@@ -21745,6 +21754,7 @@
       "reviewed": "Examiné",
       "verified-publisher": "Éditeur vérifié"
     },
+    "viewLimit": "Trop de pages sont ouvertes. Faites défiler ou repliez une autre page pour que celle-ci s’ouvre automatiquement.",
     "pluginRevoked": "Le plugin a été désactivé ou modifié. Cette page n'est plus disponible.",
     "pluginCspRejected": "La page a demandé un domaine non déclaré et a été bloquée.",
     "filesOnExecutionComputer": "Afficher le contenu du fichier sur l'ordinateur d'exécution",
