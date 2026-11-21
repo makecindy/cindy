@@ -287,7 +287,7 @@ iOS / Android `/sessions/:sessionId`），完整复用已有任务界面与操�
 - Profile 更新只推进主任务下一轮使用的身份与能力版本，不创建新任务。
 - 只有 canonical Session 确实丢失或已删除时，恢复流程才可以用 CAS 建立替代任务；健康的
   主任务不能被普通创建入口覆盖。
-- 旧版本遗留的 history Session 继续可回看、搜索，不做破坏性迁移。
+- 旧版本遗留的 history Session 继续可回看、搜索，不做破坏性迁移。唯一例外（2026-11-21，待维护者裁决）：V1 例行任务引擎留下、已归入伙伴历史的运行任务（`role = 'history'`、`route_key = 'routine:…'`、已归档），一条消息都没有（含已回撤的）且没有被其他记录引用的，每次启动由伙伴升级流程在一个事务里删除任务及其链接，与 V1 当轮回收未派发空任务（[例行任务](bot-routines.md)「`sessionMode`」，2026-10-30）同一口径；有任何消息的照常保留。实现见 `localDb/worker/opHandlers/botLegacyRoutineHistoryTx.ts`。
 
 ### 3.2 上下文沿用 Session 原生压缩（2026-10-23）
 

@@ -11,6 +11,7 @@
  * A receipt is written only after all steps succeed; a failure retries on the next start.
  * A teammate upgraded before its project memory lived inside the project gets that one move here.
  * Copies whose main computer is another one are skipped: that computer upgrades them.
+ * Each start also removes V1 routine runs left in teammate history as empty shells.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -314,12 +315,27 @@ setNewTeammateSetup(migrateTeammateToV2);
 
 let running: { scope: string; promise: Promise<void> } | null = null;
 
+/**
+ * V1 routine runs archived into teammate history without a single message, and referenced by
+ * nothing else (botLegacyRoutineHistoryTx.ts). Safe to repeat; a failure retries on the next start.
+ */
+async function pruneEmptyLegacyRoutineHistory(): Promise<void> {
+  try {
+    const { removed } = await getDbClient().tx('bots.pruneEmptyLegacyRoutineHistory', {});
+    if (removed > 0) log.info('removed empty V1 routine runs from teammate history', { removed });
+  } catch (error) {
+    log.warn('empty V1 routine run cleanup failed; retries on next start', { error: String(error) });
+  }
+}
+
 /** Startup entry. Never throws; each teammate is independent and retries on the next start. */
 export function migrateTeammatesToV2(): Promise<void> {
   const scope = activeOwnerScopeKey();
   if (running?.scope === scope) return running.promise;
   const promise = (async () => {
     const ownerRoot = ownerScopedUserDataPath();
+    await pruneEmptyLegacyRoutineHistory();
+    if (activeOwnerScopeKey() !== scope) return;
     const rows = await getDbClient().drizzle.select({ id: botProfiles.id }).from(botProfiles)
       .where(inArray(botProfiles.status, ['active', 'paused']));
     const elsewhere = new Set(companionHomes.snapshot().demotedBotIds);

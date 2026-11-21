@@ -598,6 +598,62 @@ describe('Bot named worker transactions', () => {
     expect(db.prepare('SELECT COUNT(*) FROM sessions').pluck().get()).toBe(9);
   });
 
+  // Test value: the startup cleanup (`bots.pruneEmptyLegacyRoutineHistory`) deletes user data, so it pins
+  // exactly what goes: an archived V1 routine run in teammate history with no message and no other
+  // reference. A real account had 102 such shells; the 18 runs with messages must stay. Minimal failure:
+  // a rewound message, a non-routine history task or a run record that the predicate overlooks.
+  // Unit tier, isolated SQLite.
+  it('removes only empty archived V1 routine runs from teammate history, once', () => {
+    db.exec(`
+      CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        rewind_at INTEGER);
+      CREATE TABLE schedule_runs (id TEXT PRIMARY KEY, session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL);
+      CREATE VIRTUAL TABLE messages_fts USING fts5(content);
+    `);
+    tx(db, { name: 'bots.createProfile', args: {
+      id: 'bot-1', displayName: 'Hermes', description: '', avatar: '🤖', avatarColor: 'violet',
+      identitySource: 'identity', capabilitiesJson: '{}', now: 1,
+    } });
+    tx(db, { name: 'bots.replaceCanonicalSession', args: {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      session: { id: 'main', title: 'Hermes', workingDir: '/tmp/fixture', workspaceKind: 'dialogue', model: 'm',
+        effort: 'high', permissionMode: 'ask', agentKind: 'codex', extraDirs: '[]', source: 'bot', createdAt: 1, updatedAt: 1 },
+      now: 1,
+    } });
+    const uuid = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const rows: Array<[id: string, role: string, routeKey: string | null, status: string]> = [
+      ['empty-fresh', 'history', `routine:r1:${uuid}`, 'archived'],
+      ['empty-persistent', 'history', 'routine:r2', 'archived'],
+      ['with-message', 'history', `routine:r1:${uuid.replace('0f', '1f')}`, 'archived'],
+      ['with-rewound', 'history', `routine:r1:${uuid.replace('0f', '2f')}`, 'archived'],
+      ['with-run', 'history', `routine:r1:${uuid.replace('0f', '3f')}`, 'archived'],
+      ['old-canonical', 'history', null, 'archived'],
+      ['delegated', 'history', 'delegation:d1', 'archived'],
+      ['restored', 'history', `routine:r1:${uuid.replace('0f', '4f')}`, 'active'],
+      ['routine-lane', 'routine', 'routine:r3', 'archived'],
+    ];
+    for (const [id, role, routeKey, status] of rows) {
+      db.prepare(`INSERT INTO sessions SELECT ?, title, working_dir, project_dir, workspace_kind, model, effort, permission_mode, ?,
+        scheduled_model_baseline, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode,
+        plan_mode_enabled, cleared_at, pinned_at, snoozed_until, snoozed_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
+        worktree_path, extra_dirs, remote_host_id, provider_id, agent_device_id, source, created_at, updated_at FROM sessions WHERE id = 'main'`).run(id, status);
+      db.prepare(`INSERT INTO bot_session_links (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+        VALUES (?, 'bot-1', ?, 1, ?, ?, 1, ?)`).run(id, id, role, routeKey, role === 'history' ? 2 : null);
+    }
+    db.prepare("INSERT INTO messages (id, session_id, rewind_at) VALUES ('m1', 'with-message', NULL), ('m2', 'with-rewound', 5)").run();
+    db.prepare("INSERT INTO schedule_runs (id, session_id) VALUES ('run-1', 'with-run')").run();
+    const remaining = () => db.prepare('SELECT id FROM sessions ORDER BY id').pluck().all();
+    const kept = ['delegated', 'main', 'old-canonical', 'restored', 'routine-lane', 'with-message', 'with-rewound', 'with-run'];
+
+    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args: {} })).toEqual({ removed: 2 });
+    expect(remaining()).toEqual(kept);
+    expect(db.prepare("SELECT COUNT(*) FROM bot_session_links WHERE session_id IN ('empty-fresh', 'empty-persistent')").pluck().get()).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) FROM messages').pluck().get()).toBe(2);
+    // Repeating it (another window, the next start) changes nothing.
+    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args: {} })).toEqual({ removed: 0 });
+    expect(remaining()).toEqual(kept);
+  });
+
   it('does not insert a losing canonical CAS session', () => {
     tx(db, { name: 'bots.createProfile', args: {
       id: 'bot-1', displayName: 'Hermes', description: '', avatar: '🤖', avatarColor: 'violet',
