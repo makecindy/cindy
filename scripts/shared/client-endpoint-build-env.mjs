@@ -160,6 +160,9 @@ export function mobileClientBundleProcessEnv({
   // selects endpoints, not Babel's build mode. Do not inherit an agent/server's
   // development environment into the production Worklets transform.
   const env = { ...baseEnv, ...bundleEnv, NODE_ENV: 'production', BABEL_ENV: 'production' };
+  // Personal identity is stamped only by the personal builder after this shared step.
+  // Never inherit it into public Release/OTA builds from the shell.
+  delete env.EXPO_PUBLIC_CINDY_PERSONAL_BUILD;
   if (bundleEnv.EXPO_PUBLIC_CINDY_AUTH_REGION !== 'dev') {
     delete env.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL;
   }

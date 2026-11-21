@@ -21,6 +21,12 @@ Mac、Windows 和 Linux 共用 Node 入口；运行应用仍取决于各平台�
 帮助和设置无需引导用户配置它。桌面源码预览与 iPhone 交付可分别使用：仅维护桌面版时，
 可继续搭配官方手机版，无需准备自己的 iOS 签名。本脚本不改变官方发布或默认更新路径。
 
+个人 iOS 打包使用 Release 优化，不能用 React Native `__DEV__` 判断个人身份。
+构建器在共用公开构建环境准备之后注入 `EXPO_PUBLIC_CINDY_PERSONAL_BUILD=1`（仅 JS），
+公共构建入口清除继承的同名标记。包含个人语音诊断实验 PR 的源码组合会据此默认保存
+失败录音；显式 `EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS=0` 可关闭，需重建安装。
+保留范围、取件与验收见 [个人录音实验](../../mobile-voice-failure-experiment.md)。
+
 个人手机版不一定使用 sandbox；APNs 环境由最终签名与描述文件决定，不由“个人版”、
 Release 优化或手写的 `isDevBuild` 决定。开发签名对应 sandbox，Ad Hoc 分发签名对应
 production。**有安装证书并不等于具备服务端 Push 权限**：

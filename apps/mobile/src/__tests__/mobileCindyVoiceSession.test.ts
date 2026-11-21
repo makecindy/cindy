@@ -70,6 +70,7 @@ describe('MobileCindyVoiceRunContext', () => {
     await expect(context.createAsrConnection('qwen-asr-flash-realtime')).resolves.toEqual({
       websocketUrl: 'wss://voice.example.com/api/voice/asr?ticket=ticket-1',
       authorizationToken: 'ticket-1',
+      sessionId: 'session-1',
     });
 
     expect(apiFetch).toHaveBeenCalledWith('/api/voice/sessions', {

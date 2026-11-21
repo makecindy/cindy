@@ -3,6 +3,7 @@ import type { ApiFetchOptions } from '@/api/client';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { createMobileAsrProvider } from '@/session/mobileRealtimeAsrProvider';
 import { prewarmMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
+import { bindMobileVoiceFailureRecording, mobileVoiceFailureRecording } from './mobileVoiceFailureRecording';
 import { isMobileVoiceRateLimited } from '@/session/mobileVoiceInput';
 import {
   CINDY_MANAGED_REFINER_PROVIDER,
@@ -161,7 +162,7 @@ function withPrewarmedStart(provider: AsrProvider, startPromise: Promise<void>):
       transportDroppedWhileParked = true;
     }
   });
-  return {
+  return bindMobileVoiceFailureRecording({
     start(): Promise<void> {
       if (!firstStartConsumed) {
         firstStartConsumed = true;
@@ -210,7 +211,7 @@ function withPrewarmedStart(provider: AsrProvider, startPromise: Promise<void>):
       if (typeof innerRecover !== 'function') return undefined;
       return () => innerRecover.call(provider);
     },
-  };
+  }, mobileVoiceFailureRecording(provider));
 }
 
 export const __testing = {

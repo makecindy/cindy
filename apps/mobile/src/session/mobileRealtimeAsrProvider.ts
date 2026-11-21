@@ -5,12 +5,14 @@ import { isMobileVoiceRateLimited } from '@/session/mobileVoiceInput';
 import { classifyMobileVoiceFailure, logMobileVoice } from '@/session/mobileVoiceDiagnostics';
 import { gzip, ungzip } from 'pako';
 import { i18n } from '@/i18n';
+import { bindMobileVoiceFailureRecording, createMobileVoiceFailureRecording, type VoiceDiagnosticAttempt } from './mobileVoiceFailureRecording';
 
 type MobileRealtimeProtocolProfile =
   | 'openai-transcription-manual'
   | 'qwen-asr-server-vad';
 
 type MobileRealtimeAsrProviderOptions = {
+  failureRecording?: ReturnType<typeof createMobileVoiceFailureRecording>;
   credential: StoredMobileVoiceCredential;
   sourceLanguage?: string;
   websocketFactory?: WebSocketFactory;
@@ -19,6 +21,7 @@ type MobileRealtimeAsrProviderOptions = {
   connectionProvider?: (provider: string) => Promise<{
     websocketUrl: string;
     authorizationToken: string;
+    sessionId?: string;
   }>;
 };
 
@@ -102,22 +105,28 @@ export function createMobileAsrProvider(
   credential: StoredMobileVoiceCredential,
   options: Omit<MobileRealtimeAsrProviderOptions, 'credential'> = {},
 ): AsrProvider {
+  const failureRecording = options.failureRecording ?? createMobileVoiceFailureRecording();
+  options = { ...options, failureRecording };
   const chain = mobileAsrCredentialChain(credential);
   if (chain.length > 1) {
-    return new MobileFallbackAsrProvider(
+    return bindMobileVoiceFailureRecording(new MobileFallbackAsrProvider(
       chain.map((asr) => ({
         provider: asr.provider,
         create: () => createSingleMobileAsrProvider({ ...credential, asr }, options),
       })),
-    );
+    ), failureRecording);
   }
-  return createSingleMobileAsrProvider({ ...credential, asr: chain[0] ?? credential.asr }, options);
+  return bindMobileVoiceFailureRecording(createSingleMobileAsrProvider({ ...credential, asr: chain[0] ?? credential.asr }, options), failureRecording);
 }
 
 function createSingleMobileAsrProvider(
   credential: StoredMobileVoiceCredential,
   options: Omit<MobileRealtimeAsrProviderOptions, 'credential'> = {},
 ): AsrProvider {
+  options.failureRecording?.event('provider_selected', {
+    provider: credential.asr.provider,
+    sentAudioSupported: credential.asr.protocolProfile === 'volcengine-sauc-duration',
+  });
   if (credential.asr.mode === 'realtime-websocket') {
     return new MobileRealtimeAsrProvider({ ...options, credential });
   }
@@ -800,6 +809,8 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
 type VolcengineFlushReason = 'final_response' | 'transport_closed' | 'transport_error' | 'server_error' | 'timeout' | 'stopped' | 'reset';
 
 export class MobileVolcengineSaucAsrProvider implements AsrProvider {
+  private readonly failureRecording: MobileRealtimeAsrProviderOptions['failureRecording'];
+  private diagnosticAttempt?: VoiceDiagnosticAttempt;
   private readonly credential: StoredMobileVoiceCredential;
   private readonly sourceLanguage: string;
   private readonly websocketFactory: WebSocketFactory;
@@ -832,6 +843,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   private pendingConnect?: PendingConnect;
 
   constructor(options: MobileRealtimeAsrProviderOptions) {
+    this.failureRecording = options.failureRecording;
     this.credential = options.credential;
     this.sourceLanguage = options.sourceLanguage ?? this.credential.settings?.language ?? 'auto';
     this.websocketFactory = options.websocketFactory ?? (globalThis.WebSocket as unknown as WebSocketFactory);
@@ -867,6 +879,8 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
     const sessionMs = Date.now() - connectStartedAt;
     if (this.stopped) throw new Error('Volcengine SAUC ASR connection stopped.');
     const { websocketUrl, authorizationToken } = dynamicConnection;
+    const diagnosticAttempt = this.failureRecording?.connection(this.pcmSampleRate, dynamicConnection.sessionId);
+    this.diagnosticAttempt = diagnosticAttempt;
     await new Promise<void>((resolve, reject) => {
       const socket = new this.websocketFactory(
         websocketUrl,
@@ -910,6 +924,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
         cleanup();
         this.connected = true;
         this.sendInitialRequest();
+        this.failureRecording?.event('socket_open', { attempt: diagnosticAttempt?.id });
         logMobileVoice('debug', 'volcengine sauc connected', {
           sessionMs,
           socketOpenMs: Date.now() - connectStartedAt - sessionMs,
@@ -924,6 +939,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
       };
       socket.onerror = (event) => {
         if (this.socket !== socket) return;
+        this.failureRecording?.event('socket_error', { attempt: diagnosticAttempt?.id });
         const { message, specific } = webSocketErrorMessage(event, 'Volcengine SAUC ASR connection failed.');
         const redacted = this.redactError(message);
         if (!settled) {
@@ -943,6 +959,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
       };
       socket.onclose = (event) => {
         if (this.socket !== socket) return;
+        this.failureRecording?.event('socket_close', { attempt: diagnosticAttempt?.id, code: event.code });
         this.connected = false;
         this.resolveFlushWaiters('transport_closed');
         logMobileVoice('debug', 'volcengine sauc transport closed', {
@@ -989,7 +1006,11 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
     const socket = this.socket;
     if (!socket || socket.readyState !== OPEN) return;
     this.finalRequested = true;
-    sendBinary(socket, encodeVolcengineAudioOnlyRequest(silencePcm16(this.pcmSampleRate, VOLCENGINE_NONSTREAM_END_WINDOW_MS), -this.nextSequence()));
+    const pcm = silencePcm16(this.pcmSampleRate, VOLCENGINE_NONSTREAM_END_WINDOW_MS);
+    const sequence = -this.nextSequence();
+    const frame = encodeVolcengineAudioOnlyRequest(pcm, sequence);
+    sendBinary(socket, frame);
+    this.failureRecording?.sent(this.diagnosticAttempt, pcm, sequence, frame.byteLength);
     // The final packet still goes out; only waiting for its response is skipped
     // when the whole transcript is already confirmed past the last sound.
     const decision = this.stopFinalizationDecision();
@@ -997,6 +1018,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
     if (decision.fastFinish) return;
     const flushStartedAt = Date.now();
     const reason = await this.waitForFlush();
+    this.failureRecording?.event('flush', { attempt: this.diagnosticAttempt?.id, reason });
     logMobileVoice('debug', 'volcengine sauc flush settled', {
       waitMs: Date.now() - flushStartedAt,
       hasStable: this.stableEmitted,
@@ -1066,7 +1088,21 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   }
 
   private handleMessage(data: unknown): void {
-    const message = decodeVolcengineMessage(rawDataToBytes(data));
+    const bytes = rawDataToBytes(data);
+    let message: ParsedVolcengineMessage;
+    try {
+      message = decodeVolcengineMessage(bytes);
+    } catch (error) {
+      this.failureRecording?.event('response_decode_error', { attempt: this.diagnosticAttempt?.id, bytes: bytes.byteLength });
+      throw error;
+    }
+    this.failureRecording?.event('response', {
+      attempt: this.diagnosticAttempt?.id, bytes: bytes.byteLength,
+      messageType: message.messageType, flags: message.flags, sequence: message.sequence,
+      hasParsedPayload: message.payload !== undefined, payloadChars: message.payloadText?.length,
+      transcriptChars: extractTranscript(message.payload).length,
+      errorCode: isRecord(message.payload) && typeof message.payload.code === 'number' ? message.payload.code : undefined,
+    });
     if (message.messageType === VOLC_MESSAGE_TYPE_SERVER_ERROR) {
       const errorMessage = this.redactError(
         extractErrorMessage(message.payload) ?? message.payloadText ?? 'Volcengine SAUC ASR failed.',
@@ -1158,7 +1194,10 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
 
   private sendVolcengineAudioEntry(entry: VolcengineReplayAudioChunk, socket: WebSocketLike): boolean {
     if (socket.readyState !== OPEN) return false;
-    sendBinary(socket, encodeVolcengineAudioOnlyRequest(entry.pcm, this.nextSequence()));
+    const sequence = this.nextSequence();
+    const frame = encodeVolcengineAudioOnlyRequest(entry.pcm, sequence);
+    sendBinary(socket, frame);
+    this.failureRecording?.sent(this.diagnosticAttempt, entry.pcm, sequence, frame.byteLength);
     entry.sent = true;
     return true;
   }

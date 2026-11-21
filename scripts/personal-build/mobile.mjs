@@ -13,6 +13,18 @@ const check = (ok, message) => { if (!ok) throw Error(message); };
 const reportPath = file => path.join(path.dirname(path.resolve(file)), 'mobile', 'delivery.json');
 const stamp = () => new Date().toISOString();
 
+/** Personal identity is independent of Release optimization or signing/distribution. */
+export function personalMobileBuildEnv(baseEnv, regionsFile) {
+  const env = {...baseEnv,
+    CINDY_USE_LOCAL_REGION_CONFIG:'1', CINDY_SELF_HOST_REGIONS_FILE:regionsFile,
+    EXPO_NO_DOTENV:'1', NODE_ENV:'production', BABEL_ENV:'production',
+    EXPO_PUBLIC_CINDY_PERSONAL_BUILD:'1'};
+  for (const key of ['EXPO_PUBLIC_APP_VARIANT','EXPO_PUBLIC_BETA_DEV','EXPO_PUBLIC_UI_MOCK','EXPO_PUBLIC_MOCK',
+    'EXPO_PUBLIC_CINDY_MOBILE_VISUAL_MOCK','EXPO_PUBLIC_XDT_OTA_SELFHOST','CINDY_MOBILE_OTA_NATIVE',
+    'EAS_PROJECT_ID','EAS_OWNER','EXPO_PUBLIC_EAS_PROJECT_ID']) delete env[key];
+  return env;
+}
+
 export function mobileConfig(value, base, region) {
   const m = structuredClone(value);
   check(m && typeof m === 'object' && !Array.isArray(m), 'mobile must be an object');
@@ -94,12 +106,9 @@ export async function buildMobile(file) {
     check(regions[m.region], 'Missing mobile region configuration');
     regions[m.region].iosBundleId = m.bundleId;
     const regionsFile = path.join(work, 'regions.json'); durableWrite(regionsFile, regions);
-    const env = withUserGemPodOnPath({env:{...mobileClientBundleProcessEnv({authRegion:m.region}),
-      CINDY_USE_LOCAL_REGION_CONFIG:'1', CINDY_SELF_HOST_REGIONS_FILE:regionsFile,
-      EXPO_NO_DOTENV:'1', NODE_ENV:'production', BABEL_ENV:'production'}});
-    for (const key of ['EXPO_PUBLIC_APP_VARIANT','EXPO_PUBLIC_BETA_DEV','EXPO_PUBLIC_UI_MOCK','EXPO_PUBLIC_MOCK',
-      'EXPO_PUBLIC_CINDY_MOBILE_VISUAL_MOCK','EXPO_PUBLIC_XDT_OTA_SELFHOST','CINDY_MOBILE_OTA_NATIVE',
-      'EAS_PROJECT_ID','EAS_OWNER','EXPO_PUBLIC_EAS_PROJECT_ID']) delete env[key];
+    const env = withUserGemPodOnPath({env: personalMobileBuildEnv(
+      mobileClientBundleProcessEnv({authRegion:m.region}), regionsFile,
+    )});
     const log = fs.openSync(d.log, 'a');
     const exec = (cmd, args, cwd = mobile) => {
       const result = spawnSync(cmd, args, {cwd, env, stdio:['ignore', log, log]});

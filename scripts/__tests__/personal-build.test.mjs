@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import {mobileBuildNumber, mobileConfig, mobileFollowup, mobileNext, mobileReceipt} from '../personal-build/mobile.mjs';
+import {personalMobileBuildEnv, mobileBuildNumber, mobileConfig, mobileFollowup, mobileNext, mobileReceipt} from '../personal-build/mobile.mjs';
 import { localPluginsIdentity } from '../personal-build/automatic.mjs';
 import { exportBuild, parseManifest, syncPlugins } from '../personal-build/managed.mjs';
 import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, prepareLocalPlugins, run, verifyReport, verifyFreshSelection, verifyUpgradeSnapshot } from '../personal-build.mjs';
@@ -19,6 +19,19 @@ import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, p
 const tmp = t => { const p = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-personal-test-')); t.after(() => fs.rmSync(p, { recursive: true, force: true })); return p; };
 const put = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); };
 const repoId = { full_name: 'example/app' };
+
+// Production build environment: personal Release lost recording because __DEV__ is false.
+// Existing artifact/signing tests did not cover Metro identity. Minimal fixture is a public
+// production environment passed to the actual personal builder environment function.
+test('personal mobile Release stamps identity while preserving an explicit recording opt-out', () => {
+  const base = {NODE_ENV:'production', EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS:'0', EXPO_PUBLIC_BETA_DEV:'1'};
+  const env = personalMobileBuildEnv(base, '/test/regions.json');
+  assert.equal(env.EXPO_PUBLIC_CINDY_PERSONAL_BUILD, '1');
+  assert.equal(env.NODE_ENV, 'production');
+  assert.equal(env.EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS, '0');
+  assert.equal(env.EXPO_PUBLIC_BETA_DEV, undefined);
+  assert.equal(base.EXPO_PUBLIC_CINDY_PERSONAL_BUILD, undefined);
+});
 
 test('personal iOS artifact check requires matching signed and provisioned APNs environments', () => {
   const script = fileURLToPath(new URL('../personal-build/mobile-ios.py', import.meta.url));
