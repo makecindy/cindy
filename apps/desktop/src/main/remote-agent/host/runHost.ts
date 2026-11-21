@@ -86,7 +86,7 @@ import {
   type RelayRunFailure,
 } from './groupRelay';
 import { PROVIDER_GROUP_LOCAL_MEMBER_KEY, type ProviderGroupUsageLimit } from '../../../shared/providerGroup';
-import { decideProviderGroupFailure, providerGroupFailureSignals, providerGroupUnavailableError } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, describeProviderGroupFailure, providerGroupFailureSignals, providerGroupUnavailableError } from '../../provider-group/failurePolicy';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
 import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
@@ -642,16 +642,6 @@ export function remoteAgentErrorInfo(error: unknown): RemoteAgentErrorInfo {
   const code = /^\[([A-Z][A-Z0-9_]+)\]/.exec(err.message)?.[1]
     ?? (typeof rawCode === 'string' && rawCode ? rawCode : 'AGENT_ERROR');
   return { code: code.slice(0, 128), message: err.message.slice(0, 2048), name: err.name };
-}
-
-/** 只给诊断日志使用的稳定错误码，不记录错误原文、账号或令牌。 */
-function switchDiagnosticCode(error: unknown): string {
-  if (error && typeof error === 'object') {
-    const failure = error as { usageLimit?: unknown; sdkError?: unknown };
-    if (failure.usageLimit === true) return 'SUBSCRIPTION_ACCOUNT_LIMITED';
-    if (failure.sdkError === 'authentication_failed') return 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED';
-  }
-  return remoteAgentErrorInfo(error).code;
 }
 
 /** Native terminal events prove the attempt ended; share the existing failure policy. */
@@ -2179,11 +2169,21 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     localAccountRecovery = true,
   ): Promise<string | null> {
     const relayDeps = deps.groupRelay;
-    const failureCode = switchDiagnosticCode(failure);
-    const logDecision = (outcome: 'issued' | 'not-issued', reason: string): void => {
-      deps.log?.warn('remote agent group switch decision', {
-        runId: run.id, phase, failureCode, outcome, reason,
-      });
+    const decision = decideProviderGroupFailure(failure, phase);
+    const failureDescription = describeProviderGroupFailure(failure, decision);
+    const failureDetails = {
+      ...(failureDescription.action ? { action: failureDescription.action } : {}),
+      ...(failureDescription.cause ? { cause: failureDescription.cause } : {}),
+      ...(failureDescription.why ? { why: failureDescription.why } : {}),
+      ...(failureDescription.code ? { code: failureDescription.code } : {}),
+      ...(failureDescription.sdkError ? { sdkError: failureDescription.sdkError } : {}),
+      ...(failureDescription.errorStatus !== undefined ? { errorStatus: failureDescription.errorStatus } : {}),
+    };
+    const logDecision = (outcome: 'issued' | 'not-issued', reason: string, localAccount?: string): void => {
+      const details = { runId: run.id, phase, outcome, reason, ...failureDetails,
+        ...(localAccount ? { localAccount } : {}) };
+      if (outcome === 'issued') deps.log?.info('remote agent group switch decision', details);
+      else deps.log?.warn('remote agent group switch decision', details);
     };
     if (!relayDeps || !run.providerId || !run.hostSessionId) {
       logDecision('not-issued', 'not-group-routed');
@@ -2193,7 +2193,6 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     // computer group. Its old native sessions still need a handoff before selecting again.
     // Reuse the guest/task switch token and round budget; never move an old native ID.
     const round = groupSwitchRounds.get(key(run.controller, run.hostSessionId));
-    const decision = decideProviderGroupFailure(failure, phase);
     let unavailableReason: string | undefined;
     if (!run.acceptsGroupSwitch) unavailableReason = 'not-accepted';
     else if (member.memberKey === PROVIDER_GROUP_LOCAL_MEMBER_KEY && !deps.canSwitchLocalAccount) unavailableReason = 'blocked';
@@ -2229,7 +2228,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (available) {
         const exclude = noteGroupSwitchTried(run, member);
         exclude.delete(member.memberKey);
-        logDecision('issued', 'switchAvailable');
+        logDecision('issued', 'switchAvailable', 'switchAvailable');
         return issueGroupSwitchToken(run, exclude);
       }
       unavailableReason = probeTimedOut ? 'probe-timeout' : 'blocked';
@@ -2238,12 +2237,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       ? relayDeps.noteStartFailure(run.providerId, member, failure.message ?? '', model)
       : relayDeps.noteRunFailure(run.providerId, member, failure, model);
     if (!canSwitch) {
-      logDecision('not-issued', unavailableReason ?? 'group-auto-switch-off');
+      logDecision('not-issued', !run.acceptsGroupSwitch ? 'not-accepted'
+        : decision.action === 'switch' ? 'group-declined' : 'failure-not-switchable', unavailableReason);
       return null;
     }
     // 旧版受邀者不认识这个状态：照旧只转出原来的错误。
     if (!run.acceptsGroupSwitch) {
-      logDecision('not-issued', unavailableReason ?? 'not-accepted');
+      logDecision('not-issued', 'not-accepted', unavailableReason);
       return null;
     }
     const exclude = noteGroupSwitchTried(run, member);
@@ -2264,7 +2264,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       from: member.memberKey,
       tried: exclude.size,
     });
-    logDecision('issued', unavailableReason ?? 'replacement-available');
+    logDecision('issued', 'replacement-available', unavailableReason);
     return issueGroupSwitchToken(run, exclude);
   }
 

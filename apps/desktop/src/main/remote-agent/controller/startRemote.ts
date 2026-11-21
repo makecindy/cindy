@@ -914,7 +914,10 @@ async function prepareAndStartRemoteAgentSession(
       if (!remoteStarted && token && isCurrent()) {
         if (error instanceof RemoteAgentRemoteError && error.phase === 'start'
           && error.info.name === 'AgentStartupStoppedError' && error.info.code === 'SUBSCRIPTION_ACCOUNT_LIMITED') {
-          stoppedReconnectOffers.set(error, () => deps.groupSwitch?.offer(token));
+          stoppedReconnectOffers.set(error, () => {
+            deps.log?.info('remote agent switch credential taken over', { sessionId: opts.sessionId, phase: 'reconnect' });
+            deps.groupSwitch?.offer(token);
+          });
         } else {
           // Other failures (for example an expired login) retain their existing
           // offer path. This caller may only replay a confirmed quota rejection.

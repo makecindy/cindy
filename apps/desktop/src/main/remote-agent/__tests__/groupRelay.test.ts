@@ -2196,7 +2196,7 @@ describe('provider group "switch to another computer" for shared users', () => {
       env.memberStarted.mini[0].emit(USAGE_LIMIT_ERROR);
       await waitFor(() => switchTokenIn(task.stream) !== undefined);
       const decision = logs.find(item => item.message === 'remote agent group switch decision');
-      expect(decision?.meta).toMatchObject({ failureCode: 'SUBSCRIPTION_ACCOUNT_LIMITED', outcome: 'issued', reason: 'replacement-available' });
+      expect(decision?.meta).toMatchObject({ cause: 'usage-limit', outcome: 'issued', reason: 'replacement-available' });
       const serialized = JSON.stringify(logs);
       expect(serialized).not.toContain('usage limit');
       expect(serialized).not.toContain('providerId');

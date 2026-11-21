@@ -18166,10 +18166,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return {
         signal: recovery.signal,
         isCurrent: () => {
-          if (!recovery.isCurrent()) { logRecoveryFailure('stop-or-new-input'); return false; }
-          if (!sessionRuntimeControlOwnerEpochMatches(owner)) { logRecoveryFailure('new-input'); return false; }
-          if (getSessionRuntimeControlSnapshot(session.id).generation !== generation) { logRecoveryFailure('new-input'); return false; }
-          if (isAppSessionBoundaryPending()) { logRecoveryFailure('stop'); return false; }
+          if (!recovery.isCurrent()) { logRecoveryFailure('recovery-superseded'); return false; }
+          if (!sessionRuntimeControlOwnerEpochMatches(owner)) { logRecoveryFailure('runtime-owner-changed'); return false; }
+          if (getSessionRuntimeControlSnapshot(session.id).generation !== generation) { logRecoveryFailure('runtime-refreshed'); return false; }
+          if (isAppSessionBoundaryPending()) { logRecoveryFailure('app-session-boundary'); return false; }
           if (providerShareAccessEpoch(shareId) !== access || findReceivedShare(shareId)?.status !== 'active') {
             logRecoveryFailure('share-unavailable');
             return false;

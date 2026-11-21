@@ -2243,27 +2243,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           }
           // The stopped open and its offer prove nothing was sent. If a new
           // input already took over, retire this input without blocking it.
-          try {
+          const abandoned = reconnectInput.signal.aborted ? 'input-cancelled'
+            : requestedSendOpts.signal?.aborted ? 'stop'
+              : !reconnectInput.isCurrent() ? 'new-input'
+                : !reconnect.isCurrent() ? 'share-unavailable' : null;
+          if (abandoned) {
+            deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: abandoned });
             reconnectInput.signal.throwIfAborted();
-            if (requestedSendOpts.signal?.aborted) {
-              deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'stop' });
-              throw err;
-            }
-            if (!reconnectInput.isCurrent()) {
-              deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'new-input' });
-              throw err;
-            }
-            if (!reconnect.isCurrent()) {
-              deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'share-unavailable' });
-              throw err;
-            }
-          } catch (error) {
-            if (error === err) throw error;
-            deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'stop' });
-            throw error;
+            throw err;
           }
-          offer();
-          deps.log.info('send: remote agent switch credential taken over', { sessionId });
           const assertCurrent = () => {
             requestedSendOpts.signal?.throwIfAborted();
             if (!reconnectInput.isCurrent() || !reconnect.isCurrent()) throw err;
