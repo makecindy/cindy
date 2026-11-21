@@ -399,7 +399,8 @@ function createQueueHarness(opts: {
         }
       },
       isPromptTracked: () => (opts.tracked ? opts.tracked() : true),
-      isAutoResumePending: () => opts.autoResumePending?.() === true || opts.sharedReconnectPending?.() === true,
+      isAutoResumePending: () => opts.autoResumePending?.() ?? false,
+      isSharedReconnectPending: () => opts.sharedReconnectPending?.() ?? false,
       onAutoResumeFailed: (_sessionId, _runId, listener, wait) => {
         quotaWait = wait;
         autoResumeFailureListeners.add(listener);
@@ -1860,19 +1861,12 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
     await queue.accept();
 
-    original.emit({
-      type: 'error',
-      source: 'claude-code',
-      data: { message: 'SUBSCRIPTION_ACCOUNT_LIMITED', isTerminal: true },
-    });
-    original.emit({ type: 'done', source: 'claude-code', data: {} });
+    original.emit({ type: 'error', source: 'claude-code', data: { message: 'stopped open', isTerminal: true } });
+    original.emit({ type: 'done', source: 'claude-code', data: { status: 'failed' } });
     await Promise.resolve();
     expect(original.listenerCount()).toBe(1);
-    expect(original.statusListenerCount()).toBe(1);
-    expect(queue.cancelAutoResumeCalls).toHaveLength(0);
-
-    // The provider-group recovery closes the stale instance and publishes a
-    // same-id replacement. The scheduler run must follow that replacement.
+    original.emitStatus('closed');
+    expect(original.listenerCount()).toBe(0);
     replaceLiveSession(replacement.session);
     expect(original.listenerCount()).toBe(0);
     expect(replacement.listenerCount()).toBe(1);

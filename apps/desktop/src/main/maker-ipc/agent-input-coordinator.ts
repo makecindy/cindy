@@ -234,7 +234,7 @@ export interface AgentInputSendOpts {
   /** Host-proven non-dispatch: retain this input while preparation is retried. */
   onUndispatchedRetry?: () => void;
   /** Main-owned boundary for recovering a send that never reached the supplier. */
-  reconnectRecovery?: { signal: AbortSignal; isCurrent(): boolean };
+  reconnectRecovery?: { signal: AbortSignal; isCurrent(): boolean; wasStopped(): boolean };
   readonly [ASYNC_QUESTION_ANSWER]?: true;
   readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
   /** Main-only authorization recheck after async steer preparation, before provider dispatch. */
@@ -756,8 +756,8 @@ interface ActiveTurn {
    */
   providerGroupReconnect?: AutoResumeInfo;
   reconnectRecovery?: AbortController;
-  /** True only after shared reconnect has claimed a stopped-start offer. */
-  sharedReconnectPending?: boolean;
+  schedulerAccepted?: boolean;
+  stopped?: boolean;
 }
 
 interface PendingCompactRequest {
@@ -1377,6 +1377,9 @@ export class AgentInputCoordinator {
   }
 
   private readonly states = new Map<string, SessionInputState>();
+  // Stop can drop the active turn before the in-flight replacement reports
+  // whether its send reached the executor. The transaction releases the claim.
+  private readonly sharedReconnectClaims = new Map<string, { clientId: string; runId: string }>();
   /** 账号限额等待计划的单调令牌（跨会话唯一，迟到的 host 定时器据此失效）。 */
   private usageLimitWaitSeq = 0;
   private providerGroupSwitchHoldSeq = 0;
@@ -3434,6 +3437,7 @@ export class AgentInputCoordinator {
     this.supersedePendingAutoResumeRecoveries(sessionId);
     if (state.autoResumePending?.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON) state.autoResumePending = null;
     this.cancelPreparedAutoResume(sessionId, state);
+    if (state.activeTurn?.reconnectRecovery) state.activeTurn.stopped = true;
     this.abortInputBoundary(sessionId);
     this.abortSteerTransactions(sessionId);
     this.clearAbortReconcileRetry(state);
@@ -5891,6 +5895,7 @@ export class AgentInputCoordinator {
           this.captureReservedVendorGeneration(sessionId, active, generation),
         ...(reconnectRecovery ? { reconnectRecovery: {
           signal: reconnectRecovery.signal,
+          wasStopped: () => active.stopped === true,
           isCurrent: () => !reconnectRecovery.signal.aborted && this.isActiveTurnCurrent(sessionId, active),
         } } : {}),
         onUndispatchedRetry: () => {
@@ -5971,6 +5976,7 @@ export class AgentInputCoordinator {
             } else {
               await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
             }
+            if (head.origin?.kind === 'scheduler') active.schedulerAccepted = true;
             if (!this.isActiveTurnCurrent(sessionId, active)) {
               throw new Error(
                 '[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch',
@@ -7459,6 +7465,9 @@ export class AgentInputCoordinator {
     // permission rejection or a user cancellation must not acquire a new retry.
     if (item.origin?.kind !== 'scheduler' || !item.origin.runId
       || active.dispatchLifecycle !== 'awaiting-dispatch-hooks'
+      // Shared reconnect runs preparation again after the runner already
+      // accepted the original input. Its acceptance cannot be transferred.
+      || active.schedulerAccepted
       || state.queueAbortPending || state.autoResumePending) return false;
     const failure = outcome as { code?: unknown; reason?: unknown } | null;
     if (isTurnDispatchUnconfirmedError(outcome) || failure?.code === 'PRECONDITION_FAILED'
@@ -7567,21 +7576,21 @@ export class AgentInputCoordinator {
   }
 
   markSharedReconnectPending(sessionId: string, clientId: string): void {
-    const active = this.states.get(sessionId)?.activeTurn;
-    if (active?.item?.clientId === clientId) active.sharedReconnectPending = true;
+    const item = this.states.get(sessionId)?.activeTurn?.item;
+    if (item?.clientId === clientId && item.origin?.kind === 'scheduler' && item.origin.runId) {
+      this.sharedReconnectClaims.set(sessionId, { clientId, runId: item.origin.runId });
+    }
   }
 
   clearSharedReconnectPending(sessionId: string, clientId: string): void {
-    const active = this.states.get(sessionId)?.activeTurn;
-    if (active?.item?.clientId === clientId) delete active.sharedReconnectPending;
+    if (this.sharedReconnectClaims.get(sessionId)?.clientId === clientId) {
+      this.sharedReconnectClaims.delete(sessionId);
+    }
   }
 
   /** A scheduler send is awaiting the same-id replacement opened by shared reconnect recovery. */
   isSharedReconnectPending(sessionId: string, runId: string): boolean {
-    const active = this.states.get(sessionId)?.activeTurn;
-    return active?.item?.origin?.kind === 'scheduler'
-      && active.item.origin.runId === runId
-      && active.sharedReconnectPending === true;
+    return this.sharedReconnectClaims.get(sessionId)?.runId === runId;
   }
 
   getAutoResumeAttemptToken(sessionId: string): number | null {

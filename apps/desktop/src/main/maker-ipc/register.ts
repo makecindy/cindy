@@ -2052,7 +2052,7 @@ const pendingSchedulerAutoResumeRunBySession = new Map<
   { runId: string; attemptToken: number; usageLimitToken?: number; retryClientId?: string; error?: string }
 >();
 interface SchedulerRecoveryListener {
-  failed(error?: string): void;
+  failed(error?: string, stopped?: true): void;
   quotaWait?: { start(): void; resume(): boolean };
 }
 const schedulerAutoResumeFailureListeners = new Map<string, Set<SchedulerRecoveryListener>>();
@@ -2094,13 +2094,14 @@ function notifySchedulerAutoResumeFailed(
     return;
   }
   clearSchedulerAutoResumePending(sessionId, runId, attemptToken);
-  const listeners = schedulerAutoResumeFailureListeners.get(
-    schedulerAutoResumeRunKey(sessionId, runId),
-  );
-  if (!listeners) return;
-  for (const listener of listeners) {
+  publishSchedulerRecoveryFailure(sessionId, runId, current.error);
+}
+
+function publishSchedulerRecoveryFailure(sessionId: string, runId: string, detail?: string, stopped?: true): void {
+  const listeners = schedulerAutoResumeFailureListeners.get(schedulerAutoResumeRunKey(sessionId, runId));
+  for (const listener of listeners ?? []) {
     try {
-      listener.failed(current.error);
+      listener.failed(detail, stopped);
     } catch {
       // Runner listener failures must not break chat recovery cleanup.
     }
@@ -2123,14 +2124,17 @@ function finishSchedulerUsageLimitWait(sessionId: string, token: number): void {
 }
 
 export function isSchedulerAutoResumePending(sessionId: string, runId: string): boolean {
-  return pendingSchedulerAutoResumeRunBySession.get(sessionId)?.runId === runId
-    || agentInputCoordinatorHolder?.isSharedReconnectPending(sessionId, runId) === true;
+  return pendingSchedulerAutoResumeRunBySession.get(sessionId)?.runId === runId;
+}
+
+export function isSchedulerSharedReconnectPending(sessionId: string, runId: string): boolean {
+  return agentInputCoordinatorHolder?.isSharedReconnectPending(sessionId, runId) === true;
 }
 
 export function onSchedulerAutoResumeFailed(
   sessionId: string,
   runId: string,
-  listener: (error?: string) => void,
+  listener: SchedulerRecoveryListener['failed'],
   quotaWait?: SchedulerRecoveryListener['quotaWait'],
 ): () => void {
   const key = schedulerAutoResumeRunKey(sessionId, runId);
@@ -18261,6 +18265,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onUndispatchedDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnAbort(sessionId),
     onSharedReconnectClaimed: (sessionId, clientId) =>
       agentInputCoordinatorHolder?.markSharedReconnectPending(sessionId, clientId),
+    onSharedReconnectFailed: (sessionId, runId, error, stopped) =>
+      publishSchedulerRecoveryFailure(sessionId, runId, schedulerFailureDetail(
+        error instanceof Error ? error.message : String(error),
+      ), stopped),
     onSharedReconnectFinished: (sessionId, clientId) =>
       agentInputCoordinatorHolder?.clearSharedReconnectPending(sessionId, clientId),
     ackInterruptedTurnDispatched: async (sessionId, endedAt) => {

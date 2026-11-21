@@ -37,7 +37,8 @@ import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 export function sharedAccountSendTransaction(ports: Pick<MakerSendTransactionDeps,
   'getSession' | 'captureSharedReconnectRecovery' | 'bootstrapSession' | 'peekPendingHandoff'
   | 'consumePendingHandoff' | 'createDbMessage' | 'reconcileCreateOptsWithDb' | 'readScheduledPermissions'>
-  & Partial<Pick<MakerSendTransactionDeps, 'readAutoReviewHistory'>>) {
+  & Partial<Pick<MakerSendTransactionDeps, 'readAutoReviewHistory' | 'onSharedReconnectClaimed'
+    | 'onSharedReconnectFailed' | 'onSharedReconnectFinished'>>) {
   const noop = () => {};
   return createMakerSendTransaction({
     getResolvedMainLocale: () => null,
