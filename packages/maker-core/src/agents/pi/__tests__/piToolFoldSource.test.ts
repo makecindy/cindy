@@ -23,7 +23,7 @@ function loadExtension(env: Record<string, string> = {}) {
   };
   new Function('pi', `const extension = ${body};\nextension(pi);`)(pi);
   if (!handlers.context) throw new Error('context handler was not registered');
-  return { context: handlers.context, toolResult: handlers.tool_result, tool: tools.toolfold_read };
+  return { context: handlers.context, toolResult: handlers.tool_result, tool: tools.cindy_toolfold_read };
 }
 
 function call(id: string, name: string, args: Record<string, unknown>): Message {
@@ -84,7 +84,7 @@ describe('cindy-tool-fold extension source', () => {
     }
     const foldedText = String(out[1].content![0].text);
     expect(foldedText).toContain('[folded] ok');
-    expect(foldedText).toContain('toolfold_read("call-0")');
+    expect(foldedText).toContain('cindy_toolfold_read("call-0")');
     expect(foldedText).toContain('step 0 ok');
     // Large arguments are replaced by an id-only pointer; what they said moves to the record.
     expect(out[0].content![0].arguments).toEqual({ __folded: true, call: 'call-0' });
@@ -103,7 +103,7 @@ describe('cindy-tool-fold extension source', () => {
     expect(record).toContain('[folded] ok \u00b7 read');
     // The call block already shows the path; the record stays on the result side.
     expect(record).not.toContain(args.path);
-    expect(record).toContain('toolfold_read("call-0")');
+    expect(record).toContain('cindy_toolfold_read("call-0")');
   });
 
   it('never rewrites arguments when the argument budget is switched off', () => {
@@ -183,7 +183,7 @@ describe('cindy-tool-fold extension source', () => {
     expect(out[1]).toBe(messages[1]);
   });
 
-  it('recovers a folded original via toolfold_read and pins it until the next user message', async () => {
+  it('recovers a folded original via cindy_toolfold_read and pins it until the next user message', async () => {
     const { context, tool } = loadExtension();
     const messages = pairs(40);
     projection(context, messages);
@@ -212,7 +212,7 @@ describe('cindy-tool-fold extension source', () => {
       role: 'toolResult',
       toolCallId: 'call-5',
       toolName: 'read',
-      content: [{ type: 'text', text: 'docs mention [truncated 100 of 200 chars; toolfold_read("call-0") returns the full text]' }],
+      content: [{ type: 'text', text: 'docs mention [truncated 100 of 200 chars; cindy_toolfold_read("call-0") returns the full text]' }],
     };
     projection(context, messages);
     const recovered = await tool.execute('t1', { call_id: 'call-5' });
@@ -327,7 +327,7 @@ describe('cindy-tool-fold extension source', () => {
       toolResult({ toolName: 'bash', toolCallId: `giant-${index}`, content: [{ type: 'text', text: `body ${'z'.repeat(22000)}` }] });
     }
     // Simulate a resumed session: the transcript holds only the preview of giant-0.
-    const preview = 'body zzz…\n[truncated 20000 of 22009 chars; toolfold_read("giant-0") returns the full text]';
+    const preview = 'body zzz…\n[truncated 20000 of 22009 chars; cindy_toolfold_read("giant-0") returns the full text]';
     const messages = [
       call('giant-0', 'bash', { command: 'make big output' }),
       { role: 'toolResult', toolCallId: 'giant-0', toolName: 'bash', content: [{ type: 'text', text: preview }] },
@@ -379,7 +379,7 @@ describe('cindy-tool-fold extension source', () => {
     // the registry no longer holds them, so recovery refuses instead of serving a preview.
     projection(context, [
       call('g1', 'bash', { command: 'make g1' }),
-      { role: 'toolResult', toolCallId: 'g1', toolName: 'bash', content: [{ type: 'text', text: 'z'.repeat(2000) + '\n[truncated 58000 of 60000 chars; toolfold_read("g1") returns the full text]' }] } as unknown as { content: Block[] },
+      { role: 'toolResult', toolCallId: 'g1', toolName: 'bash', content: [{ type: 'text', text: 'z'.repeat(2000) + '\n[truncated 58000 of 60000 chars; cindy_toolfold_read("g1") returns the full text]' }] } as unknown as { content: Block[] },
     ]);
     const refused = await tool.execute('t1', { call_id: 'g1' });
     expect(refused.isError).toBe(true);
@@ -413,7 +413,7 @@ describe('cindy-tool-fold extension source', () => {
     const messages = pairs(40);
     messages.splice(0, 0,
       { role: 'assistant', content: [{ type: 'toolCall', id: 'giant-arg', name: 'bash', arguments: { command: 'cat big.txt --flag' } }] },
-      { role: 'toolResult', toolCallId: 'giant-arg', toolName: 'bash', content: [{ type: 'text', text: 'q'.repeat(2000) + '\n[truncated 23000 of 25000 chars; toolfold_read("giant-arg") returns the full text]' }] });
+      { role: 'toolResult', toolCallId: 'giant-arg', toolName: 'bash', content: [{ type: 'text', text: 'q'.repeat(2000) + '\n[truncated 23000 of 25000 chars; cindy_toolfold_read("giant-arg") returns the full text]' }] });
     projection(context, messages);
     const recovered = await tool.execute('t1', { call_id: 'giant-arg' });
     const text = String(recovered.content![0].text);
@@ -431,7 +431,7 @@ describe('cindy-tool-fold extension source', () => {
     const kept = (truncated!.content ?? []).map((b) => String(b.text ?? '')).join('\n');
     expect(kept.startsWith('y'.repeat(2000))).toBe(true);
     expect(kept.length).toBeLessThan(2600);
-    expect(kept).toContain('toolfold_read("giant-1")');
+    expect(kept).toContain('cindy_toolfold_read("giant-1")');
     expect(toolResult({ toolName: 'bash', toolCallId: 'giant-2', content: [{ type: 'text', text: 'small' }] })).toBeUndefined();
     // structuredContent must survive a rewrite (pi drops it when only content is returned).
     const structured = toolResult({ toolName: 'mcp__x__y', toolCallId: 'giant-3', content: [{ type: 'text', text: giant }], structuredContent: { ok: true } }) as { structuredContent?: unknown };
@@ -488,7 +488,7 @@ describe('cindy-tool-fold extension source', () => {
     }
     // The transcript keeps only the truncation preview, as pi would store it; the
     // tool_result hook passes it through (small enough), so build it inline.
-    const previewText = 'payload 0 ' + 'g'.repeat(1800) + '\n[truncated 23000 of 25011 chars; toolfold_read("giant-0") returns the full text]';
+    const previewText = 'payload 0 ' + 'g'.repeat(1800) + '\n[truncated 23000 of 25011 chars; cindy_toolfold_read("giant-0") returns the full text]';
     const preview = { role: 'toolResult', toolCallId: 'giant-0', toolName: 'bash', content: [{ type: 'text', text: previewText }] } as unknown as { content: Block[] };
     expect(preview).toBeDefined();
     projection(context, [

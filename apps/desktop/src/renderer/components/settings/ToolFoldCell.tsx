@@ -4,7 +4,7 @@
  * 开关决定**之后启动的 Pi Agent 会话**是否加载内置的 cindy-tool-fold 扩展:
  *   - 关闭(默认): 不写扩展、不 --extension,行为与没有该扩展时完全一致。
  *   - 开启: maker-core 把扩展写进会话 internal-extensions,较老的「工具调用 + 结果」
- *     在送给模型前折成一行,超大的输出入库前先截断,两者都能用 toolfold_read 取回原文。
+ *     在送给模型前折成一行,超大的输出入库前先截断,两者都能用 cindy_toolfold_read 取回原文。
  *
  * 与 LSP Beta 同一口径: pi 进程启动时一次性决定是否加载 —— 新会话和重新打开的
  * 历史会话都算「启动」,已在运行的会话不变,toggle 后 toast 明示。

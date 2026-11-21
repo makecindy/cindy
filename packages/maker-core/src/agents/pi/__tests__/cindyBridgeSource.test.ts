@@ -74,7 +74,7 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
     process: { env: { CINDY_PI_TURN_TOOL_POLICY: 'runtime-token' } },
     guestToolGate: null,
     // 生产源码里这两处常量定义在本用例切片之外；按真实取值注入。
-    TRANSCRIPT_ONLY_BUILTINS: new Set(['toolfold_read']),
+    TRANSCRIPT_ONLY_BUILTINS: new Set(['cindy_toolfold_read']),
     READONLY_BUILTINS: new Set(),
     currentPermissionState: () => { permissionReads++; return { reviewOnly: false, mode: 'bypassPermissions' }; },
     pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
@@ -3021,7 +3021,7 @@ it('leaves a direct tool alone when its required name is not the Cindy envelope'
 });
 
 /**
- * Bug/rule: toolfold_read 只读本会话 transcript，不碰文件系统也不执行命令。
+ * Bug/rule: cindy_toolfold_read 只读本会话 transcript，不碰文件系统也不执行命令。
  * 它若走普通审批门，Ask 模式下每次自动恢复折叠结果都会弹一次确认，被拒绝后
  * 模型只剩摘要（且原文已被摘要替换）。Review 会话同样需要它才能复核全文。
  * 缺口：此前只有 bypassPermissions 才放行，Ask/Review 都会被打断。
@@ -3050,7 +3050,7 @@ it('lets the transcript-only fold reader through Ask and Review without a prompt
   });
   const runWith = (permission: unknown) => {
     handlers.clear();
-    runInNewContext(compiled, {
+    const sandbox: Record<string, unknown> = {
       process: { env: {} },
       guestToolGate: null,
       currentPermissionState: () => permission,
@@ -3058,7 +3058,8 @@ it('lets the transcript-only fold reader through Ask and Review without a prompt
       pi: { on: (event: string, cb: (event: any, ctx: any) => any) => { handlers.set(event, cb); } },
       toolsDisabledForTurn: () => false,
       normalizeReviewReadInput: () => true,
-    });
+    };
+    runInNewContext(compiled, sandbox);
     return handlers.get('tool_call')!;
   };
   for (const permission of [
@@ -3068,7 +3069,10 @@ it('lets the transcript-only fold reader through Ask and Review without a prompt
     const tool = runWith(permission);
     const ctx = makeCtx();
     const before = promptCount;
-    expect(await tool({ toolName: 'toolfold_read', input: { call_id: 'x' }, toolCallId: 't1' }, ctx)).toBeUndefined();
+    expect(await tool({ toolName: 'cindy_toolfold_read', input: { call_id: 'x' }, toolCallId: 't1' }, ctx)).toBeUndefined();
     expect(promptCount).toBe(before);
   }
+
 });
+
+

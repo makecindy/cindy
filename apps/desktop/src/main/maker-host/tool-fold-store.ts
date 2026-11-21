@@ -5,7 +5,7 @@
  *   - 关闭(默认): 不写扩展、不 --extension，行为与没有该扩展时完全一致。
  *   - 开启: maker-core 把扩展写进会话 internal-extensions 并显式 --extension 加载，
  *     把较老的「工具调用 + 结果」折成一行，超大结果入库前截断，两者都能用
- *     toolfold_read 取回原文。
+ *     cindy_toolfold_read 取回原文。
  *
  * 文件: <userData>/tool-fold-settings.json
  *   { "enabled": true }

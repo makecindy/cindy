@@ -3494,13 +3494,13 @@ export class PiAgent extends BaseAgent {
     await writeFile(bridgeExtensionPath, CINDY_BRIDGE_EXTENSION_SOURCE);
     // cindy-tool-fold: 老工具往返折叠成一行。实验开关,默认关闭 —— 用户在
     // 「设置 → 通用 → 实验功能」里打开后,之后启动的 Pi 任务才加载这个扩展。
-    // 取回工具 toolfold_read 在受邀者/Review/仅宿主工具会话里被各自工具门拦下
+    // 取回工具 cindy_toolfold_read 在受邀者/Review/仅宿主工具会话里被各自工具门拦下
     // (受邀者名单只登记经 bridge 代理注册的工具,Review 锁只读工具面,hostToolsOnly
     // 只放行网关);没有取回路径时截断会把全文真的丢掉 —— 这些会话不加载扩展。
     const toolFoldEnabled = this.deps.resolvePiToolFoldEnabled?.() ?? false;
     const toolFoldSupported = toolFoldEnabled && !reviewMode && !guestRoot && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
     // 子代理会话暂不加载本扩展：子代理以 `--no-extensions` 只装 cindy-bridge，bridge 的
-    // 工具门只放行经它代理注册的工具，toolfold_read 不在其中——加载了也取不回原文，
+    // 工具门只放行经它代理注册的工具，cindy_toolfold_read 不在其中——加载了也取不回原文，
     // 截断会变成真丢全文。要覆盖子代理得先在 bridge 侧放行取回工具。
     const toolFoldExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_TOOL_FOLD_EXTENSION_FILENAME);
     if (toolFoldSupported) await writeFile(toolFoldExtensionPath, CINDY_TOOL_FOLD_EXTENSION_SOURCE);

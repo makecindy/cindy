@@ -2,7 +2,7 @@
  * cindy-tool-fold —— 写进 pi `internal-extensions/` 的扩展源码（字符串常量）。
  *
  * 把较老的「工具调用 + 结果」折成一行，只保留最近几次原文；巨型结果在入库前截断；
- * 折叠/截断的原文可经 toolfold_read 取回，取回过的钉住到本轮结束。
+ * 折叠/截断的原文可经 cindy_toolfold_read 取回，取回过的钉住到本轮结束。
  *
  * 为什么：pi 每一步都把整段会话重发给模型；一条工具往返从产生到被压缩之前，每一步都重新
  * 计一次费。实测长会话里 87% 的注入内容就是工具往返（命令原文 + 输出），折叠后输入 token
@@ -96,6 +96,10 @@ export const CINDY_TOOL_FOLD_EXTENSION_SOURCE = String.raw`/**
 export default function (pi) {
   var disabled = process.env.CINDY_PI_TOOL_FOLD;
   if (disabled === 'off' || disabled === '0') return;
+
+  // 权限门只对「本扩展真的注册了恢复工具」的会话免除审批。同名外部工具（原生扩展
+  // 自己也注册 cindy_toolfold_read 时）不该蹭到这份豁免，所以用进程内标志而不是按名字判。
+  try { globalThis[Symbol.for('cindy.pi.toolFold')] = true; } catch (err) { /* ignore */ }
 
   function intEnv(name, fallback, min, max) {
     var raw = Number(process.env[name]);
@@ -322,7 +326,7 @@ export default function (pi) {
       if (tail && tail !== head) summary += ' \u00b7 last: ' + tail;
     }
     if (typeof result.toolCallId === 'string' && result.toolCallId) {
-      summary += ' \u00b7 full: toolfold_read("' + result.toolCallId + '")';
+      summary += ' \u00b7 full: cindy_toolfold_read("' + result.toolCallId + '")';
     }
     // Never trade content for a longer summary. Estimating this was wrong once already
     // (a batch of "ok" results grew); the text is in hand here, so compare exactly.
@@ -366,7 +370,7 @@ export default function (pi) {
   // -----------------------------------------------------------------------
   pi.on('tool_result', function (event) {
     var content = event && event.content;
-    if (event && event.toolName === 'toolfold_read') return undefined;
+    if (event && event.toolName === 'cindy_toolfold_read') return undefined;
     if (typeof content === 'string') {
       if (content.length <= INGEST_LIMIT) return undefined;
       var sid = String((event && event.toolCallId) || '');
@@ -375,7 +379,7 @@ export default function (pi) {
       return { content: [{ type: 'text', text: content.slice(0, INGEST_KEEP)
         + '\n[truncated ' + (content.length - INGEST_KEEP) + ' of ' + content.length
         + ' chars; ' + (sidRetained
-          ? 'toolfold_read("' + sid + '") returns the full text]'
+          ? 'cindy_toolfold_read("' + sid + '") returns the full text]'
           : 'full text not retained (call "' + sid + '"); re-run if needed]') }] };
     }
     if (!Array.isArray(content)) return undefined;
@@ -406,7 +410,7 @@ export default function (pi) {
     }
     parts.push({ type: 'text', text: '[truncated ' + truncated + ' of ' + total
       + ' chars; ' + (retained
-        ? 'toolfold_read("' + id + '") returns the full text]'
+        ? 'cindy_toolfold_read("' + id + '") returns the full text]'
         : 'full text not retained (call "' + id + '"); re-run if needed]') });
     var out = { content: parts };
     if (Object.prototype.hasOwnProperty.call(event, 'structuredContent')) out.structuredContent = event.structuredContent;
@@ -448,7 +452,7 @@ export default function (pi) {
               var endsText = resultText.slice(markerEnd + 1).trim().length === 0;
               var tail = shape.exec(markerBody);
               var tailText = tail ? tail[1] : '';
-              var named = 'toolfold_read("' + key + '") returns the full text';
+              var named = 'cindy_toolfold_read("' + key + '") returns the full text';
               var evictedNow = 'full text not retained (call "' + key + '"); re-run if needed';
               if (endsText && (tailText === named || tailText === evictedNow)) truncatedPreview = markerBody;
             }
@@ -504,7 +508,7 @@ export default function (pi) {
   }
 
   pi.registerTool({
-    name: 'toolfold_read',
+    name: 'cindy_toolfold_read',
     label: 'Read a folded tool result',
     description: 'Return the full original text of one folded or truncated tool round-trip (call arguments plus the complete result). Pass the id shown inside the "[folded]" or "[truncated]" record. The folded original is also restored in the conversation until your next user message, so read once and continue instead of re-running the command.',
     parameters: {
@@ -537,7 +541,7 @@ export default function (pi) {
   pi.on('context', function (event) {
     var messages = event && Array.isArray(event.messages) ? event.messages : null;
     if (!messages || messages.length === 0) return undefined;
-    // Host text-only turns block every tool, toolfold_read included. Leave the history
+    // Host text-only turns block every tool, cindy_toolfold_read included. Leave the history
     // unfolded for that request so the model never sees a summary it cannot expand.
     if (textOnlyTurnActive()) return undefined;
 

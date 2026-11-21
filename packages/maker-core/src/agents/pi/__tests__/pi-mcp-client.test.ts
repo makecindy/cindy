@@ -25,7 +25,7 @@ function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
     guestToolGate: null, toolsDisabledForTurn: () => false,
     currentPermissionState: () => ({ mode: permissionMode }),
     FILE_WRITE_BUILTINS: new Set(), READONLY_BUILTINS: new Set(),
-    TRANSCRIPT_ONLY_BUILTINS: new Set(['toolfold_read']),
+    TRANSCRIPT_ONLY_BUILTINS: new Set(['cindy_toolfold_read']),
     CINDY_HOSTED: null, SUBAGENT_RUN_DIR_ENV: 'fixture-run-dir',
     resolveFileWriteTargetPath: () => null, isCindyShellTool: () => false,
     resolvedCredentialEvidenceForHost: () => [],
