@@ -15415,7 +15415,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
 
   // #11578 / unit: exercise a native Pi terminal through the ordinary model-group
   // recovery hook and input queue. Another Grok model exposes account-wide exclusion.
-  it('resends the original input to GPT after the xAI billing 403', async () => {
+  // #10700: an accepted automatic replacement can later fail. This case verifies
+  // both models in the history details while the banner keeps the backup signal.
+  it.each(['success', 'failure'])('resends the original input to GPT after the xAI billing 403 (%s)', async outcome => {
     const { h, guard, fail } = availabilityHarness();
     const sid = 'pi-billing';
     const item = availabilityInput();
@@ -15428,14 +15430,22 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     let row: AgentSwitchSessionRow = { ...current, id: sid, status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: null };
     const grokSend = vi.fn();
     const codexSend = vi.fn(() => {
-      h.setRunning(false);
-      h.coordinator.onTurnEvent(sid, 'done');
+      if (outcome === 'success') {
+        h.setRunning(false);
+        h.coordinator.onTurnEvent(sid, 'done');
+      }
     });
     let liveSend: typeof grokSend | null = grokSend;
     const explicitModel = vi.spyOn(delegationHistory, 'hasExplicitSessionTaskModel').mockResolvedValue(false);
     const visited = new Set<string>();
+    const persistSuppressedError = vi.fn(() => 'model-fallback-error-row');
     const book = new AutoResumeBookkeeping({
-      persistSuppressedError: vi.fn(), markOutcome: vi.fn(), rollbackGuardPendingResume: vi.fn(), abandonTakeover: vi.fn(),
+      persistSuppressedError, markOutcome: vi.fn(), rollbackGuardPendingResume: vi.fn(),
+      abandonTakeover: (id, message, token, persistId) => h.coordinator.abandonAutoResume(id, message, token, persistId),
+    });
+    h.onUiRetry.mockImplementation((id, clientId, source, token) => {
+      book.claimSuppressedErrorForRetry(id, clientId, source);
+      if (token !== undefined) book.bindSuppressedErrorToClient(id, token, clientId);
     });
     const hooks = createInterruptedTurnAutoResumeHooks<Session>({
       inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
@@ -15447,10 +15457,19 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       autoResumeAttemptToken: () => null, log: mocks.logger,
       maybeApplySessionRuntimeFallback: createSessionRuntimeFallback<Session>({
         maker: { getSession: () => undefined, closeSession: vi.fn() },
-        readSessionRuntimeProfiles: async () => ({
-          effective: { agentKind: 'pi', model: current.model, providerId: current.providerId, effort: null, fastMode: false },
-          control: { pending: null, generation: 0, visitedRoutes: [], fallbackHop: 0 },
-        }),
+        readSessionRuntimeProfiles: async () => {
+          const activeCandidate = candidates.find(candidate => candidate.model === row.model);
+          if (!activeCandidate) throw new Error('No active model group candidate');
+          return {
+            effective: {
+              ...activeCandidate,
+              agentKind: activeCandidate.agentKind === 'cc' ? 'claude-code' : activeCandidate.agentKind,
+              effort: null,
+              fastMode: false,
+            },
+            control: { pending: null, generation: 0, visitedRoutes: [], fallbackHop: 0 },
+          };
+        },
         canApplyAutomaticRuntimeSelection: () => true, readSessionRuntimeFallbackSettings: () => ({ enabled: true }),
         readBotFallbackCandidate: async () => ({ isBot: false, candidate: null }),
         readSessionAgentDeviceId: async () => null, getDesktopProviderService: vi.fn(),
@@ -15470,24 +15489,29 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
             h.setAgentKind('codex');
           },
         },
-        readModelGroupFallbackCandidate: async (id, _profile, _visited, recovery) => {
+        readModelGroupFallbackCandidate: async (id, profile, _visited, recovery) => {
+          const activeCandidate = candidates.find(c => c.model === profile.model)!;
           const offer = await computeModelGroupSwitchOffer({
-            readBinding: () => ({ pickedKey: modelGroupCandidateKey(current), selection: { type: 'route', id: 'group' }, at: 1 }),
-            readSession: async () => ({ ...current, source: 'desktop' }), isShared: () => false, hasGoal: async () => false,
+            readBinding: () => ({ pickedKey: modelGroupCandidateKey(activeCandidate), selection: { type: 'route', id: 'group' }, at: 1 }),
+            readSession: async () => ({ ...activeCandidate, source: 'desktop' }), isShared: () => false, hasGoal: async () => false,
             now: Date.now, config: () => ({ routes: [{ id: 'group', name: 'group', strategy: 'order', candidates }] }),
             candidateFacts: async () => candidates.map(c => ({ available: true, modelName: c.model, sourceName: c.providerId, windows: null })),
-          }, id, { ...recovery, current, visited, recordUnavailable: c => visited.add(modelGroupCandidateKey(c)) });
+          }, id, { ...recovery, current: activeCandidate, visited, recordUnavailable: c => visited.add(modelGroupCandidateKey(c)) });
           return { candidate: offer && { ...offer, agentKind: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind, effort: null, fastMode: false } };
         },
       }),
     });
     h.isResumableTurnErrorCandidate.mockImplementation(hooks.canRecoverTurn);
     h.onResumableTurnError.mockImplementation(hooks.onResumableTurnError);
+    h.onResumableTurnErrorDiscarded.mockImplementation(hooks.onResumableTurnErrorDiscarded);
     h.setAgentKind('pi');
     const send = h.sendToAgent.getMockImplementation()!;
     h.sendToAgent.mockImplementation(async (...args) => {
       if (!liveSend) throw new Error('Engine was closed and has not been bootstrapped');
+      const clientId = args[3].persistUserMessage?.clientId;
+      if (clientId) book.markReplacementDispatching(sid, clientId);
       const result = await send(...args);
+      if (clientId) book.discardSuppressedErrorForRetry(sid, clientId);
       liveSend(args[0], args[1]);
       return result;
     });
@@ -15495,13 +15519,40 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     try {
       h.coordinator.enqueue(sid, item);
       await flush();
-      await fail(sid, { errorMessage: 'HTTP 403: You have run out of credits or need a Grok subscription. Add credits at x.ai.' });
+      const primaryError = 'HTTP 403: You have run out of credits or need a Grok subscription. Add credits at x.ai.';
+      await fail(sid, { errorMessage: primaryError });
+      const firstAttempt = h.coordinator.getAutoResumeAttemptToken(sid);
+      expect(firstAttempt).not.toBeNull();
+      book.stashSuppressedError(sid, { message: primaryError }, firstAttempt);
       await vi.advanceTimersByTimeAsync(3_000);
       await flush();
       expect(grokSend).toHaveBeenCalledOnce();
       expect(codexSend.mock.calls).toEqual(grokSend.mock.calls);
       expect(h.coordinator.getProjection(sid).error).toBeNull();
       expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+      if (outcome === 'success') {
+        expect(persistSuppressedError).not.toHaveBeenCalled();
+        return;
+      }
+      expect(row.model).toBe('gpt-6.1-terra');
+      expect(guard.noteAttemptEvent(sid, firstAttempt!)).toBe(true);
+      const backupError = 'HTTP 429: Backup provider rate limit exceeded.';
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'error', backupError, { errorStatus: 429 });
+      const secondAttempt = h.coordinator.getAutoResumeAttemptToken(sid);
+      expect(secondAttempt).not.toBeNull();
+      expect(secondAttempt).not.toBe(firstAttempt);
+      book.stashSuppressedError(sid, { message: backupError }, secondAttempt);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.coordinator.getProjection(sid)).toMatchObject({
+        error: backupError, errorPersistId: 'model-fallback-error-row',
+      });
+      expect(persistSuppressedError).toHaveBeenCalledExactlyOnceWith(sid, {
+        message: backupError,
+        modelFallbackDetails: `grok-4.7: ${primaryError}\n\ngpt-6.1-terra: ${backupError}`,
+      });
     } finally { explicitModel.mockRestore(); vi.useRealTimers(); }
   });
 

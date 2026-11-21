@@ -45,6 +45,7 @@ export function ErrorMessageCard({
   providerId,
   toolLoop,
   outputLimit,
+  modelFallbackDetails,
   sessionSource,
   canConfigureAutoReview = false,
   kind = 'reply-error',
@@ -59,6 +60,7 @@ export function ErrorMessageCard({
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
+  modelFallbackDetails?: string;
   /** 当前任务来源。个人微信不能建议切到完全访问。 */
   sessionSource?: string | null;
   canConfigureAutoReview?: boolean;
@@ -114,10 +116,10 @@ export function ErrorMessageCard({
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
       description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
         : kind === 'reply-error' && renderProviderErrorExplanation(message, text, t)}
-      details={showRawToggle ? message : undefined}
+      details={showRawToggle ? modelFallbackDetails ?? message : undefined}
       actions={canConfigureAutoReview && parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_NO_AVAILABLE_MODEL'
         ? <AutoReviewRecoveryActions /> : undefined}
-      onDiagnose={showRawToggle && onDiagnose ? () => onDiagnose({ message: text, details: message, reason }) : undefined}
+      onDiagnose={showRawToggle && onDiagnose ? () => onDiagnose({ message: text, details: modelFallbackDetails ?? message, reason }) : undefined}
       data-testid="error-message-card"
     />
   );

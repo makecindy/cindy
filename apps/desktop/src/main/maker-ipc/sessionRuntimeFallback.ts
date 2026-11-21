@@ -313,7 +313,10 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             toProviderId: selected.providerId,
             toModel: selected.model,
           });
-          return { session: runtimeSession, outcome: 'switched' };
+          return {
+            session: runtimeSession, outcome: 'switched',
+            ...(group ? { modelGroupTransition: { fromModel: currentForFallback.model, toModel: selected.model } } : {}),
+          };
         }
         let result: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
         try {
@@ -369,7 +372,11 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           toModel: selected.model,
           applied: !result.superseded,
         });
-        return { session: runtimeSession, outcome: result.superseded ? 'superseded' : 'switched' };
+        return {
+          session: runtimeSession, outcome: result.superseded ? 'superseded' : 'switched',
+          ...(group && !result.superseded && !result.deferred
+            ? { modelGroupTransition: { fromModel: currentForFallback.model, toModel: selected.model } } : {}),
+        };
       }
       return { session: runtimeSession, outcome: 'exhausted' };
     } catch (error) {

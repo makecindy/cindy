@@ -6001,6 +6001,7 @@ function CCAgentSessionContent({
                   errorReason={errorTailMsg?.errorReason}
                   toolLoop={errorTailMsg?.toolLoop}
                   outputLimit={errorTailMsg?.outputLimit}
+                  modelFallbackDetails={errorTailMsg?.modelFallbackDetails}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
@@ -6076,6 +6077,8 @@ function CCAgentSessionContent({
                 errorReason={errorReason}
                 toolLoop={toolLoop}
                 outputLimit={outputLimit}
+                modelFallbackDetails={errorPersistId && errorTailMsg?.clientId === errorPersistId
+                  ? errorTailMsg.modelFallbackDetails : undefined}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 onRetry={handleRetry}

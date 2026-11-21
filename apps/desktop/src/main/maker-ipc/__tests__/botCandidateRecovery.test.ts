@@ -26,7 +26,7 @@ function harness(bot = true, settlePausedResumeIntoHistory?: true) {
     interruptedTurnAutoResumeGuard: { onInterruptedTurn: guard, noteResumeSendFailed: vi.fn() },
     maybeApplySessionRuntimeFallback: fallback,
     autoResumeBookkeeping: {
-      beginAttempt: vi.fn(), finalizeSuppressedError: finalize,
+      beginAttempt: vi.fn(), noteModelGroupSwitch: vi.fn(), finalizeSuppressedError: finalize,
       schedule: (_id: string, _token: number, _delay: number, run: (attempt: { isCurrent(): boolean }) => Promise<void>) => {
         scheduled = () => run({ isCurrent: () => current });
       },

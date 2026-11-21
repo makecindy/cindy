@@ -40,7 +40,7 @@ function createHarness() {
   const autoResumeFailed: Array<{ sessionId: string; attemptToken?: number }> = [];
   const groupFinalized: BotGroupLaneTerminal[] = [];
   const deps: AutoResumeBookkeepingDeps = {
-    persistSuppressedError: (sessionId, detail) => persisted.push({ sessionId, detail }),
+    persistSuppressedError: (sessionId, detail) => { persisted.push({ sessionId, detail }); },
     surfaceSuppressedError: (sessionId, detail) => surfaced.push({ sessionId, detail }),
     finalizeOrcaSuppressedTerminal: (sessionId, payload) =>
       orcaFinalized.push({ sessionId, payload }),

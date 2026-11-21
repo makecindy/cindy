@@ -119,6 +119,7 @@ export function ErrorTailErrorBanner({
   errorReason,
   toolLoop,
   outputLimit,
+  modelFallbackDetails,
   onSilentStopContinue,
   sessionSource,
   className,
@@ -149,6 +150,7 @@ export function ErrorTailErrorBanner({
   errorReason?: string | null;
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
+  modelFallbackDetails?: string;
   onSilentStopContinue?: () => void;
   sessionSource?: string | null;
   className?: string;
@@ -166,6 +168,7 @@ export function ErrorTailErrorBanner({
       errorReason={errorReason}
       toolLoop={toolLoop}
       outputLimit={outputLimit}
+      modelFallbackDetails={modelFallbackDetails}
       retryText={ERROR_TAIL_RETRY_TOKEN}
       onRetry={() => void onContinue()}
       onCancel={onDismiss}

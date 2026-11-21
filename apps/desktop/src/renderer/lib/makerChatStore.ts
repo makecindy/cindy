@@ -697,6 +697,7 @@ export interface ChatMessage {
    * 里的原始 message 文案。live 报错仍走 ErrorBanner(store.error),与本字段无关。
    */
   errorReason?: string;
+  modelFallbackDetails?: string;
   /** Structured details for a tool-loop terminal error. */
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
@@ -20283,6 +20284,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(reason ? { errorReason: reason } : {}),
         ...(toolLoop ? { toolLoop } : {}),
         ...(outputLimit ? { outputLimit } : {}),
+        ...(typeof c.modelFallbackDetails === 'string' ? { modelFallbackDetails: c.modelFallbackDetails } : {}),
         // 错误发生时的 provider 快照:恢复后的分类按它走,不用当前 session.providerId。
         ...(errorProviderId ? { errorProviderId } : {}),
         // interrupted-turn-resume:「忽略」的持久化标记(updateContent 写入)。

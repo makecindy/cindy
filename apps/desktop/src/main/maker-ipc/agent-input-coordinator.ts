@@ -8123,7 +8123,7 @@ export class AgentInputCoordinator {
     return state.pendingQueue.find(item => item.clientId === recovery.clientId);
   }
 
-  abandonAutoResume(sessionId: string, message?: string, attemptToken?: number): void {
+  abandonAutoResume(sessionId: string, message?: string, attemptToken?: number, persistId?: string): void {
     const state = this.getState(sessionId);
     if (attemptToken !== undefined && state.autoResumeAttemptToken !== attemptToken) {
       return;
@@ -8137,6 +8137,7 @@ export class AgentInputCoordinator {
     if (surfacedMessage) {
       state.error = message ?? null;
       clearErrorProjectionSignals(state);
+      if (persistId && message) state.errorPersistBinding = { message, persistId };
     }
     if (startupAdmissionInput) this.notifyRejectedUserTurn(sessionId, startupAdmissionInput);
     if (

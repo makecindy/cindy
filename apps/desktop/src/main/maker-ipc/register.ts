@@ -2295,8 +2295,8 @@ const {
       void markAutoResumeOutcome(sessionId, clientId, outcome);
     },
     // holder 是可变绑定,必须懒读(模块初始化时 coordinator 还没建)。
-    abandonTakeover: (sessionId, message, attemptToken) =>
-      agentInputCoordinatorHolder?.abandonAutoResume(sessionId, message, attemptToken),
+    abandonTakeover: (sessionId, message, attemptToken, persistId) =>
+      agentInputCoordinatorHolder?.abandonAutoResume(sessionId, message, attemptToken, persistId),
     onAutoResumeFailed: (sessionId, attemptToken) =>
       failPendingSchedulerAutoResume(sessionId, attemptToken),
     log: (message, fields) => log.debug(message, fields),

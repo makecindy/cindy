@@ -3142,6 +3142,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           sdkError?: unknown;
           toolLoop?: unknown;
           outputLimit?: unknown;
+          modelFallbackDetails?: unknown;
         }
       | null
       | undefined,
@@ -3212,7 +3213,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   function buildTurnErrorContent(
     sessionId: string,
     data:
-      | { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
+      | { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown; modelFallbackDetails?: unknown }
       | null
       | undefined,
     message: string,
@@ -3226,6 +3227,9 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     const outputLimit = parseOutputLimitDetails(data?.outputLimit);
     if (toolLoop) content.toolLoop = toolLoop satisfies ToolLoopErrorDetails;
     if (outputLimit) content.outputLimit = outputLimit satisfies OutputLimitDetails;
+    if (typeof data?.modelFallbackDetails === 'string' && data.modelFallbackDetails) {
+      content.modelFallbackDetails = redactSensitiveText(data.modelFallbackDetails);
+    }
     // 错误来源 provider 的**同步**快照(session-provider-store 内存态):错误分类必须
     // 绑定到错误发生时的 provider —— session.providerId 可在任务中途切换并持久化,
     // 恢复历史错误时用它会把别家 provider 的 insufficient_quota 误判成 Cindy AI 余额

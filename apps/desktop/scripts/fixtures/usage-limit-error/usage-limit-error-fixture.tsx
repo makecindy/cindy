@@ -13,8 +13,10 @@ void mountPage({
         : ctx.case === 'tail'
           ? <ErrorTailErrorBanner errorText={error} agentKind="cc" onContinue={() => {}} onDismiss={() => {}} />
           : <ErrorBanner error={error} agentKind="cc" onRetry={() => {}} retryText="original input" onCancel={() => {}}
+              modelFallbackDetails={ctx.case === 'fallback'
+                ? `grok-4.7: HTTP 403: You have run out of credits.\n\ngpt-6.1-terra: ${error}` : undefined}
               usageLimitRecovery={{ resetAtMs }}
-              usageLimitWait={ctx.case === 'cancelled' ? null : { resumeAt: resetAtMs + 60_000 }}
+              usageLimitWait={ctx.case === 'cancelled' || ctx.case === 'fallback' ? null : { resumeAt: resetAtMs + 60_000 }}
               onCancelUsageLimitWait={() => {}} />}
     </div>
   ),
