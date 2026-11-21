@@ -28,10 +28,17 @@ const PENDING_DIR = path.join('.cindy', 'template');
  */
 export const OWN_RULES_HEADING = '## Your own rules';
 const OWN_RULES_INTRO = 'Rules the owner asked for, or that you settled with the owner, go in this section. They take precedence over the standard text above. Cindy replaces everything above this section when it updates the standard and keeps this section as it is.';
-const CHANGES_NOTE = 'Changes made to an earlier version of this skill\'s standard, kept when Cindy updated it. Lines starting with + were added and lines starting with - removed; the other lines are that earlier standard, showing where each change was made. Keep the intent of these changes, in the section they were made in, together with the standard above. Where a change touches text the standard no longer has, decide whether it still applies. You may rewrite what still applies as plain rules in this section and then remove this block.';
-const HEADER_NOTE = 'Frontmatter lines from the earlier version of this skill that the updated header does not have (for example a changed standard field). Decide whether to put them back in the header above, then remove this block.';
-const EARLIER_NOTE = 'This skill\'s earlier version, kept when Cindy took over its standard. Keep in this section, as plain rules, only what the owner asked for that the standard above does not already say, then remove this block.';
+const CHANGES_NOTE = 'Changes made to an earlier version of this skill\'s standard, kept when Cindy updated it. Lines starting with + were added and lines starting with - removed; the other lines are that earlier standard, showing where each change was made. Keep the intent of these changes, in the section they were made in, as rules in the skill\'s "Your own rules" section.';
+const HEADER_NOTE = 'Frontmatter lines from the earlier version of this skill that the updated header does not have (for example a changed standard field). Decide whether to put them back in the skill\'s header.';
+const EARLIER_NOTE = 'This skill\'s earlier version, kept when Cindy took over its standard. Keep in the skill\'s "Your own rules" section, as plain rules, only what the owner asked for that the standard does not already say.';
 const LAYERED_FILES = new Set(['.agents/skills/hand-off/SKILL.md']);
+/**
+ * What an upgrade keeps from the earlier version goes beside the skill, not into it: the skill
+ * stays within the size every editor and cloud restore accepts, and the material reaches other
+ * computers with the skill's files.
+ */
+export const EARLIER_VERSION_FILE = 'earlier-version.md';
+const EARLIER_POINTER = `Cindy kept what this skill's earlier version had changed in \`${EARLIER_VERSION_FILE}\` next to this file. Fold what still applies into this section, then delete that file.`;
 /** The standard text last written to a layered file: what a later change is compared with. */
 const STANDARD_DIR = path.join('.cindy', 'template-standard');
 /** Finds an earlier template file by the hash the record kept (from the project's Git history). */
@@ -39,8 +46,22 @@ export type ReadPreviousTemplate = (relative: string, sha256: string) => Promise
 
 const lf = (text: string) => text.replace(/\r\n?/g, '\n');
 
+/** Where the own section starts: its heading outside any fenced code block, or -1. */
+function ownRulesStart(text: string): number {
+  let offset = 0;
+  let fence: string | null = null;
+  for (const line of text.split('\n')) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) { if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null; }
+    else if (marker) fence = marker;
+    else if (line.trim() === OWN_RULES_HEADING) return offset;
+    offset += line.length + 1;
+  }
+  return -1;
+}
+
 function standardPart(text: string): { standard: string; own: string } {
-  const at = text.search(new RegExp(`^${OWN_RULES_HEADING}\\s*$`, 'm'));
+  const at = ownRulesStart(text);
   if (at < 0) return { standard: text, own: '' };
   return { standard: text.slice(0, at), own: text.slice(at).replace(/^.*\n?/, '').trim() };
 }
@@ -91,26 +112,25 @@ function mergedHeader(next: string, current: string, previousStandard: string | 
  * guessed difference loses scope, nesting or moves): as a diff against the standard it started
  * from, or, without a known starting point, its whole earlier text. The teammate folds them in.
  */
-function layeredContent(rawCurrent: string, rawPrevious: string | null, next: string): string {
+function layeredContent(rawCurrent: string, rawPrevious: string | null, next: string): { skill: string; carried: string } {
   const current = lf(rawCurrent);
   const previousStandard = rawPrevious === null ? null : lf(rawPrevious);
   const { standard, own } = standardPart(current);
   const mine = body(standard);
-  let carried = '';
+  const carried: string[] = [];
   if (previousStandard !== null) {
     const before = body(standardPart(previousStandard).standard);
     if (before !== mine) {
       // The whole earlier standard as context, so every change shows the section it was made in.
-      const patch = createTwoFilesPatch('earlier standard', 'your version', `${before}\n`, `${mine}\n`, '', '', { context: 10_000 });
-      const hunks = patch.split('\n').filter(line => !/^(?:Index:|={3,}|--- |\+\+\+ |\\ No newline)/.test(line)).join('\n').trim();
-      carried = `${CHANGES_NOTE}\n\n${fenced('diff', hunks)}`;
+      // Only the metadata before the first hunk goes; every line inside the hunks is content.
+      const lines = createTwoFilesPatch('earlier standard', 'your version', `${before}\n`, `${mine}\n`, '', '', { context: 10_000 }).split('\n');
+      const first = lines.findIndex(line => line.startsWith('@@'));
+      const hunks = (first < 0 ? [] : lines.slice(first)).filter(line => line !== '\\ No newline at end of file').join('\n').trim();
+      if (hunks) carried.push(`${CHANGES_NOTE}\n\n${fenced('diff', hunks)}`);
     }
   } else if (mine && mine !== body(standardPart(next).standard)) {
-    carried = `${EARLIER_NOTE}\n\n${fenced('markdown', mine)}`;
+    carried.push(`${EARLIER_NOTE}\n\n${fenced('markdown', mine)}`);
   }
-  // The new standard's own section brings its intro; an earlier copy of it is not an own rule.
-  const nextOwn = new Set(next.slice(standardPart(next).standard.length).split('\n').map(line => line.trim()).filter(Boolean));
-  const ownRules = own.split('\n').filter(line => !nextOwn.has(line.trim())).join('\n').trim();
   const header = mergedHeader(next, current, previousStandard);
   // Any frontmatter line the merged header does not carry and the starting standard did not have
   // (a changed standard field, or a form the merge did not recognize) is kept for the teammate.
@@ -118,9 +138,14 @@ function layeredContent(rawCurrent: string, rawPrevious: string | null, next: st
   const merged = headerLines(header);
   const started = headerLines(previousStandard);
   const leftover = [...headerLines(current)].filter(line => !merged.has(line) && !started.has(line));
-  const headerNote = leftover.length ? `${HEADER_NOTE}\n\n${fenced('yaml', leftover.join('\n'))}` : '';
-  const sections = [ownRules, carried, headerNote].filter(Boolean);
-  return sections.length ? `${header.trimEnd()}\n\n${sections.join('\n\n')}\n` : header;
+  if (leftover.length) carried.push(`${HEADER_NOTE}\n\n${fenced('yaml', leftover.join('\n'))}`);
+  // The new standard's own section brings its intro; an earlier copy of it is not an own rule.
+  const nextOwn = new Set(next.slice(standardPart(next).standard.length).split('\n').map(line => line.trim()).filter(Boolean));
+  const ownLines = own.split('\n').filter(line => !nextOwn.has(line.trim()));
+  if (carried.length && !ownLines.some(line => line.trim() === EARLIER_POINTER)) ownLines.push('', EARLIER_POINTER);
+  const ownRules = ownLines.join('\n').trim();
+  const skill = ownRules ? `${header.trimEnd()}\n\n${ownRules}\n` : header;
+  return { skill, carried: carried.join('\n\n') };
 }
 
 const MEMORY_ROUTE = [
@@ -321,9 +346,16 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
     const base = record?.files[relative];
     if (LAYERED_FILES.has(relative)) {
       if (await throughLink(workspace, path.join(STANDARD_DIR, relative))) continue;
-      const written = current === null ? content
+      const layered = current === null ? { skill: content, carried: '' }
         : layeredContent(current, await previousStandard(workspace, relative, current, base, readPrevious), content);
-      if (written !== current) await write(target, written);
+      if (layered.carried) {
+        const carriedPath = path.join(path.dirname(relative), EARLIER_VERSION_FILE);
+        if (await throughLink(workspace, carriedPath)) continue;
+        // A later upgrade adds to what an earlier one kept, it never replaces it.
+        const earlier = await readText(path.join(workspace, carriedPath));
+        await write(path.join(workspace, carriedPath), `${earlier ? `${earlier.trimEnd()}\n\n` : ''}${layered.carried}\n`);
+      }
+      if (layered.skill !== current) await write(target, layered.skill);
       await write(path.join(workspace, STANDARD_DIR, relative), content);
       // The new standard replaces any copy an earlier version left waiting to be merged.
       await fs.rm(path.join(workspace, PENDING_DIR, relative), { force: true });

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createHash } from 'node:crypto';
 
-import { OWN_RULES_HEADING, TEAMMATE_TEMPLATE_RECORD, TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate, teammateTemplateFiles } from '../botProjectTemplate.js';
+import { EARLIER_VERSION_FILE, OWN_RULES_HEADING, TEAMMATE_TEMPLATE_RECORD, TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate, teammateTemplateFiles } from '../botProjectTemplate.js';
 
 // 2026-11-09: every teammate starts from a clean template it then owns. A newer template
 // must never overwrite what the owner or the teammate changed, nor an upgraded teammate's own rules.
@@ -76,6 +76,7 @@ describe('applyTeammateTemplate', () => {
     const upgrade = (version: number, standard: string) => applyTeammateTemplate(dir, 'Mimi', version, { [skill]: standard }, fromHistory);
     const read = () => fs.readFile(path.join(dir, skill), 'utf8');
     const ownOf = (text: string) => text.slice(text.indexOf(OWN_RULES_HEADING));
+    const carried = () => fs.readFile(path.join(dir, '.agents/skills/hand-off', EARLIER_VERSION_FILE), 'utf8');
 
     it('replaces an untouched copy with the new standard', async () => {
       await setUp(oldStandard, true);
@@ -94,7 +95,8 @@ describe('applyTeammateTemplate', () => {
       await upgrade(2, newStandard());
       const text = await read();
       expect(text.startsWith(newStandard().trimEnd())).toBe(true);
-      const own = ownOf(text);
+      expect(ownOf(text)).toContain(EARLIER_VERSION_FILE);
+      const own = await carried();
       expect(own).toContain('````diff\n');
       // Every change, with the earlier standard around it as context, in file order (a removal is
       // listed before the addition at the same place, as in any diff).
@@ -113,7 +115,7 @@ describe('applyTeammateTemplate', () => {
       const block = '```sh\n# Ask the owner before executing\npnpm release\n```';
       await setUp(`${oldStandard}\n## Owner-approved commands\n\n${block}\n`, true);
       await upgrade(2, newStandard());
-      const own = ownOf(await read());
+      const own = await carried();
       expect(own).toContain('+## Owner-approved commands\n+\n+```sh\n+# Ask the owner before executing\n+pnpm release\n+```');
       expect(own).toContain('````diff\n');
     });
@@ -137,14 +139,31 @@ describe('applyTeammateTemplate', () => {
       const text = await read();
       expect(/^---\n([\s\S]*?)\n---\n/.exec(text)![1]).toContain('"disable-model-invocation": true');
       expect(/^---\n([\s\S]*?)\n---\n/.exec(text)![1]).toMatch(/^name: hand-off$/m);
-      expect(ownOf(text)).toContain('````yaml\nname: handover\n````');
+      await expect(carried()).resolves.toContain('````yaml\nname: handover\n````');
+    });
+
+    // Reviews r4653079186, r4653079196, r4653079206: an own-rules heading inside a fenced example is
+    // not the boundary; a hunk line like `+++ attempts;` is content; the skill stays within the body
+    // size editors and cloud restore accept, because the kept material lives beside it.
+    it('keeps fenced examples and diff content intact, and the skill small', async () => {
+      const example = `\`\`\`markdown\n${OWN_RULES_HEADING}\n- An example rule.\n\`\`\``;
+      const cpp = '```cpp\n++ attempts;\n```';
+      const filler = `- ${'x'.repeat(200)}\n`.repeat(300);
+      await setUp(`${oldStandard}\n## Examples\n\n${example}\n\n${cpp}\n\n${filler}`, true);
+      await upgrade(2, newStandard());
+      const text = await read();
+      const kept = await carried();
+      expect(kept).toContain(`+${OWN_RULES_HEADING}\n+- An example rule.`);
+      expect(kept).toContain('\n+++ attempts;\n');
+      expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(Buffer.byteLength(newStandard(), 'utf8') + 1024);
+      expect(text.match(new RegExp(`^${OWN_RULES_HEADING}$`, 'gm'))).toHaveLength(1);
     });
 
     it('keeps an own skill that predates the template whole, for the teammate to tidy', async () => {
       const mine = '---\nname: hand-off\n---\n\n# Hand-off\n\n- Design reviews go straight to the owner.\n';
       await setUp(mine, false);
       await upgrade(2, newStandard());
-      const own = ownOf(await read());
+      const own = await carried();
       expect(own).toContain('````markdown\n# Hand-off\n\n- Design reviews go straight to the owner.\n````');
     });
 
@@ -157,7 +176,8 @@ describe('applyTeammateTemplate', () => {
       const text = await read();
       expect(text).toContain('- Check the task digest when asked.');
       expect(text.match(/Weekly summaries on Fridays/g)).toHaveLength(1);
-      expect(text.match(/\+- Never create a task\./g)).toHaveLength(1);
+      expect((await carried()).match(/\+- Never create a task\./g)).toHaveLength(1);
+      expect(text.match(new RegExp(EARLIER_VERSION_FILE.replace('.', '\\.'), 'g'))).toHaveLength(1);
       expect(text.match(new RegExp(OWN_RULES_HEADING, 'g'))).toHaveLength(1);
       expect(text.match(/Rules go here\./g)).toHaveLength(1);
     });
