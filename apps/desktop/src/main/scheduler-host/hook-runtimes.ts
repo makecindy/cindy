@@ -208,7 +208,9 @@ async function versionManagerCandidates(
       ? join(home, 'Library', 'Application Support', 'fnm')
       : join(home, '.local', 'share', 'fnm'));
   roots.push({ directory: join(fnmDir, 'node-versions'), executable: join('installation', executable) });
-  const voltaHome = env.VOLTA_HOME ?? join(home, '.volta');
+  const voltaHome = env.VOLTA_HOME ?? (platform === 'win32'
+    ? join(env.LOCALAPPDATA ?? join(home, 'AppData', 'Local'), 'Volta')
+    : join(home, '.volta'));
   roots.push({ directory: join(voltaHome, 'tools', 'image', 'node'), executable });
   if (platform !== 'win32') {
     roots.push({ directory: join(env.ASDF_DATA_DIR ?? join(home, '.asdf'), 'installs', 'nodejs'), executable });

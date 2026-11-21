@@ -137,6 +137,24 @@ describe('resolveSystemNodeInterpreter', () => {
     expect(probeExecutable).toHaveBeenCalledWith(expected, expect.anything());
   });
 
+  it('Windows 未设置 VOLTA_HOME 时发现 LocalAppData 下的 Node', async () => {
+    const home = 'C:\\test\\volta-home';
+    const voltaRoot = path.win32.join(home, 'AppData', 'Local', 'Volta', 'tools', 'image', 'node');
+    const expected = path.win32.join(voltaRoot, 'v22.23.5', 'node.exe');
+    const pathChild = child();
+    spawn.mockReturnValueOnce(pathChild);
+    const probeExecutable = vi.fn(async (executable: string) => executable === expected);
+    const readVersions = vi.fn((directory: string) => directory === voltaRoot ? ['v22.23.5'] : []);
+    const result = resolveSystemNodeInterpreter({
+      forceProbe: true, platform: 'win32', pathApi: path.win32,
+      env: {}, home, readVersions, probeExecutable,
+    });
+    pathChild.emit('close', 1);
+
+    await expect(result).resolves.toBe(`"${expected}"`);
+    expect(probeExecutable).toHaveBeenCalledWith(expected, expect.anything());
+  });
+
   it('候选全部不可用时返回 null 并缓存,不重复启动 PATH 探测', async () => {
     const pathChild = child();
     spawn.mockReturnValueOnce(pathChild);
