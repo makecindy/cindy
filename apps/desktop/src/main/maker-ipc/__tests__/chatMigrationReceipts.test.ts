@@ -57,6 +57,9 @@ it('reads task cards as the file now is, through the cache of its last read', ()
   const first = store.read();
   delete first.a;
   expect(store.read()).toEqual({ a: card });
+  // The cache holds one file: another account's store in between reads its own cards, never these.
+  expect(chatServerTaskCards('https://chat.example.test', 'bob', () => true).read()).toEqual({});
+  expect(store.read()).toEqual({ a: card });
   const settings = path.join(fixture.root, 'chat-workspace-settings');
   const file = path.join(settings, readdirSync(settings)[0]!, 'task-cards.json');
   writeFileSync(file, JSON.stringify({ b: { ...card, title: 'Renamed elsewhere' } }));

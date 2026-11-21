@@ -539,6 +539,22 @@ describe('permission persistence without a live runtime', () => {
     expect(sqlite.prepare('SELECT DISTINCT permission_mode FROM sessions').pluck().all()).toEqual(['ask']);
   });
 
+  // PR #11993 review: a reconcile that finds the mode unchanged tells nobody, so the one that saved a
+  // new mode but failed to switch the runtime must tell the clients itself. Minimal input: no main
+  // task (no sibling cascade re-announces it), Profile ask, a running bypass lane whose switch fails.
+  it('tells the clients the saved mode when switching the runtime fails', async () => {
+    sqlite.exec(`DELETE FROM sessions WHERE id = 'chat';
+      INSERT INTO sessions (id, permission_mode, updated_at) VALUES ('lane','bypassPermissions',1);
+      INSERT INTO bot_session_links VALUES ('bot-1','lane','channel',NULL);`);
+    h.live.set('lane', { stablePermissionModeState: { mode: 'bypassPermissions' }, setPermissionMode: vi.fn(async () => { throw new Error('switch failed'); }) });
+    await expect(syncBotLanePermission('lane')).rejects.toThrow('switch failed');
+    expect(h.live.has('lane')).toBe(false);
+    expect(h.patched).toHaveBeenCalledWith('lane', { permissionMode: 'ask' });
+    h.patched.mockClear();
+    await syncBotLanePermission('lane');
+    expect(h.patched).not.toHaveBeenCalled();
+  });
+
   it.each(['missing', 'plan'])('keeps Profile authority for lanes when main is %s', async kind => {
     if (kind === 'missing') sqlite.exec("DELETE FROM sessions WHERE id = 'chat'");
     else sqlite.exec("UPDATE sessions SET permission_mode = 'plan' WHERE id = 'chat'");

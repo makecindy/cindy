@@ -54,6 +54,8 @@ export function createBotPermissionSync(ports: {
             await live.setPermissionMode(mode as PermissionMode);
           } catch (error) {
             assertCurrent();
+            // The saved mode stands: tell the clients now, since a later reconcile finds nothing changed.
+            broadcastSessionPatched(sessionId, { permissionMode: mode });
             // Never leave a failed tightening running with its previous authority.
             if (maker?.getSession(sessionId) === live) await maker.closeSession(sessionId);
             throw error;
