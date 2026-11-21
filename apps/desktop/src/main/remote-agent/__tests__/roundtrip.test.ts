@@ -1870,13 +1870,13 @@ describe('shared startup lease budget', () => {
     const renewals = new Map<string, number>();
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
     const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
-      startFailure: '', startFailureName: 'AgentStartupStoppedError', localFailure: '',
+      startFailure: '', startFailureName: 'AgentStartupStoppedError', startedId: undefined as string | undefined, localFailure: '',
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
       blockClose: false, failClose: false, maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
       blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false,
       directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false, rejectHandoff: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
-    const started = (run: Run) => emit(run, { t: 'started', handle: { id: 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
+    const started = (run: Run) => emit(run, { t: 'started', handle: { id: state.startedId ?? 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
     vi.spyOn(RemoteAgentPoller.prototype, 'register').mockImplementation(run => {
       runs.set(run.runId, run);
       if (state.startFailure) {
@@ -2743,6 +2743,45 @@ describe('shared startup lease budget', () => {
       await sibling?.close();
       await handle.close();
     }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：通过真实 starter 和 handle.send 重连，MCP 计数只在拒绝的 run 确认关闭后归零。
+  // - Bug／规则依据：#11905，started 已到达、opened 前失败时 onClosed 无法清理实例。
+  // - 现有覆盖缺口：首启描述错误会销毁整个任务，池让位发生在 opened 之后，两者均不能覆盖此处。
+  // - 最小失败输入：同一任务重连收到缺少 ID 或恢复到错误 ID 的 started，再收到 close 成功或失败回执。
+  // - tier：integration。执行端回包和 MCP 计数为内存夹具。
+  it.each([
+    ['wrong-resume', false],
+    ['wrong-resume', true],
+    ['invalid-descriptor', false],
+    ['invalid-descriptor', true],
+  ] as const)('cleans a rejected reconnect after closing its started run (%s, close failure=%s)', async (reason, failClose) => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      const firstRun = [...f.runs.values()].at(-1)!;
+      if (reason === 'wrong-resume') {
+        await handle.send({ type: 'user', content: 'interrupted turn' });
+        f.emit(firstRun, { t: 'closed', reason: 'provider-restarting' });
+        const events = handle.events()[Symbol.asyncIterator]();
+        expect((await events.next()).value).toMatchObject({ type: 'error', data: { reason: 'remote_agent_restarted' } });
+        f.state.startedId = 'wrong-native-session';
+      } else {
+        f.emit(firstRun, { t: 'closed', reason: 'ended', idleReclaimed: true });
+        expect(f.mcpSessionCount()).toBe(0);
+        f.state.startedId = '';
+      }
+      f.state.failClose = failClose;
+      await expect(handle.send({ type: 'user', content: 'reconnect' })).rejects.toThrow(
+        reason === 'wrong-resume' ? 'original conversation could not be resumed' : 'returned an invalid session',
+      );
+      const rejectedRun = [...f.runs.values()].at(-1)!;
+      expect(rejectedRun.runId).not.toBe(firstRun.runId);
+      expect(f.calls.filter(call => call.op === 'close').map(call => call.runId)).toEqual([rejectedRun.runId]);
+      expect(f.disposed).toEqual([]);
+      expect(f.mcpSessionCount()).toBe(failClose ? 1 : 0);
+    } finally { await handle.close(); }
   });
 
   // 测试价值

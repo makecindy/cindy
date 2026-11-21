@@ -652,12 +652,18 @@ async function prepareAndStartRemoteAgentSession(
     }
   }
 
+  async function closeStartedRun(client: RemoteAgentRunClient): Promise<void> {
+    // A client that has already stopped polling returns from close without a remote receipt.
+    if (client.isClosed) return;
+    await client.close('close', 'navigation');
+    closeRunMcpInstance(client.runId);
+  }
+
   /** 结束对方的这个 Agent 进程，本机部分留着，状态回到已让出(调用前已置为 releasing)。 */
   async function closeRun(client: RemoteAgentRunClient): Promise<void> {
     try {
       // 用 close 而不是 detach：detach 不结束对方的进程，名额让不出来。
-      await client.close('close', 'navigation');
-      closeRunMcpInstance(client.runId);
+      await closeStartedRun(client);
     } catch (error) {
       deps.log?.warn('remote agent: closing a released connection failed', { runId: client.runId, error: String(error) });
       // 没送到：对方可能还占着名额，连接池继续给它占位并再试一次 close。
@@ -897,12 +903,12 @@ async function prepareAndStartRemoteAgentSession(
       if (closedEarly) throw new Error((closedEarly as { message?: string }).message ?? '[REMOTE_AGENT_UNAVAILABLE] The agent stopped right after starting.');
       if (stateNow() === 'closed') {
         // 连回途中任务关掉了(那时还没有这条连接可关)：对方已经起了进程，关掉它让出名额。
-        await client.close('close', 'navigation').catch(() => undefined);
+        await closeStartedRun(client).catch(() => undefined);
         throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       }
       const started = parseStartedInfo(raw, kind);
       if (reconnect && restartResumeRequired && (!expectedResume || started.id !== expectedResume)) {
-        await client.close('close', 'navigation').catch(() => undefined);
+        await closeStartedRun(client).catch(() => undefined);
         throw new Error('[REMOTE_AGENT_UNAVAILABLE] The original conversation could not be resumed after the supplier stopped.');
       }
       if (!projectionReady) applyProjection(started, started.virtualWorkspace ? started.mirrorRoot : undefined);
@@ -945,7 +951,7 @@ async function prepareAndStartRemoteAgentSession(
         // An invalid started descriptor or a local bootstrap error can occur
         // after the other computer has started its Agent. End that run before
         // the caller falls back to another executor.
-        await client.close('close', 'navigation').catch((closeError) => {
+        await closeStartedRun(client).catch((closeError) => {
           deps.log?.warn('remote agent: closing a failed startup run failed', {
             runId: client.runId, error: String(closeError),
           });

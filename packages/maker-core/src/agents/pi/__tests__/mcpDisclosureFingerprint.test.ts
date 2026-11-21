@@ -184,6 +184,7 @@ function loadGateway(options: {
   // executeResolvedCall 走 tool.client.request；用最小 client 桩替代 HTTP 层，
   // 每次真实调用都会在 requests 里留下一条，正好用来断言“恰好执行一次”。
   const httpClient = {
+    close: async () => {},
     request: async (_method: string, params: { name: string; arguments: unknown }) => {
       requests.push(params);
       return { content: [{ type: 'text', text: 'delivered' }] };
@@ -390,7 +391,7 @@ describe('MCP gateway schema disclosure', () => {
 
     // A 为另一个工具 Y 显式披露（list_tools 单工具查询的生产路径）。
     const other = { name: 'list_workers', description: '列出 workers', inputSchema: { type: 'object' } };
-    gateway.add('cindy_orca', { request: async () => ({ content: [] }) }, [other]);
+    gateway.add('cindy_orca', { request: async () => ({ content: [] }), close: async () => {} }, [other]);
     await (gateway as unknown as { listResult: (params: unknown) => Promise<unknown> })
       .listResult({ server: 'cindy_orca', tool: 'list_workers' });
 
