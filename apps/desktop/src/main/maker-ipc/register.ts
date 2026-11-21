@@ -9513,7 +9513,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     botId: string;
     sessionId: string;
     eventType: 'compact-runtime-refresh-requested' | 'compact-runtime-refresh-applied' |
-      'compact-runtime-refresh-deferred' | 'compact-runtime-refresh-failed';
+      'compact-runtime-refresh-deferred' | 'compact-runtime-refresh-failed' |
+      'compact-runtime-refresh-skipped';
     boundary: BotCompactBoundary;
     profileVersion: number;
     reason?: string;
@@ -9676,19 +9677,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // currently healthy runtime. Resolve the exact native Skill/MCP/
         // Toolset bundle before closeSession so a failed preflight leaves the
         // old process and its resume ownership untouched.
-        await withRehydrateCloseSuppressed(expectedSession.id, async () => {
+        const replaced = await withRehydrateCloseSuppressed(expectedSession.id, async () => {
           const refreshed = await replaceBotRuntimeAfterPreflight({
-            preflight: async () => {
-              await preflightBotRuntimeResources(createOpts as MakerSessionCreateOpts);
-            },
+            // Same comparison as the pre-send path: an unchanged runtime epoch
+            // (e.g. a V2 teammate memory edit) is not worth a restart.
+            preflight: async () => !!(await preflightBotRuntimeResources(
+              createOpts as MakerSessionCreateOpts,
+            ))?.runtimeEpochChanged,
             isCurrentOwner: () => maker.getSession(expectedSession.id) === expectedSession,
             isIdle: () => !isRuntimeBusy(),
             close: () => maker.closeSession(expectedSession.id, 'runtime-refresh'),
             bootstrap: async () => (await bootstrapSession(createOpts)).session,
           });
+          if (!refreshed) return false;
           await markOrcaRoleIfNeeded(refreshed.id, createOpts.orcaRole);
           broadcastSessionCreated(refreshed.id);
+          return true;
         });
+        if (!replaced) {
+          await recordBotCompactRuntimeLifecycle({
+            botId: row.botId,
+            sessionId: expectedSession.id,
+            eventType: 'compact-runtime-refresh-skipped',
+            boundary,
+            profileVersion: row.profileVersion,
+            reason: 'runtime-epoch-unchanged',
+          });
+          // Not 'deferred': the coordinator drops the pending mark and keeps the runtime.
+          return 'not-bot';
+        }
         await recordBotCompactRuntimeLifecycle({
           botId: row.botId,
           sessionId: expectedSession.id,

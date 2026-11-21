@@ -49,16 +49,18 @@ export interface BotCompactRuntimeRefreshDeps {
 /**
  * Preserve the live runtime when a frozen Bot resource changed. The preflight
  * must finish before close, and ownership is checked again immediately before
- * the destructive half of the swap.
+ * the destructive half of the swap. The preflight reports whether the runtime
+ * epoch changed; an unchanged epoch keeps the live runtime and returns null,
+ * matching the comparison made before a send.
  */
 export async function replaceBotRuntimeAfterPreflight<T>(deps: {
-  preflight(): Promise<void>;
+  preflight(): Promise<boolean>;
   isCurrentOwner(): boolean;
   isIdle?(): boolean;
   close(): Promise<void>;
   bootstrap(): Promise<T>;
-}): Promise<T> {
-  await deps.preflight();
+}): Promise<T | null> {
+  if (!await deps.preflight()) return null;
   if (!deps.isCurrentOwner()) {
     throw new Error('Bot runtime owner changed before compact refresh');
   }
