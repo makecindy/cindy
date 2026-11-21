@@ -39,6 +39,7 @@ import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeDisplayMathFences } from './normalizeDisplayMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
+import remarkDisambiguateLocalLinks from './remarkDisambiguateLocalLinks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkBareSpaceLocalImages from './remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
@@ -252,6 +253,7 @@ export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   remarkHtmlImages,
   remarkBareSpaceLocalImages,
   remarkSessionLinks,
+  remarkDisambiguateLocalLinks,
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
 ];
