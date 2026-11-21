@@ -21745,6 +21745,7 @@
       "reviewed": "Revisado",
       "verified-publisher": "Publicador verificado"
     },
+    "viewLimit": "Há muitas páginas abertas. Role outra página para fora da tela ou recolha-a para que esta abra automaticamente.",
     "pluginRevoked": "O plugin foi desativado ou alterado. Esta página não está mais disponível.",
     "pluginCspRejected": "A página solicitou um domínio não declarado e foi bloqueada.",
     "filesOnExecutionComputer": "Ver o conteúdo do arquivo no computador de execução",

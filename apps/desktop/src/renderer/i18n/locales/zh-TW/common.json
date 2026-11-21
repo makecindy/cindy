@@ -21460,6 +21460,7 @@
       "reviewed": "已審核",
       "verified-publisher": "發佈者已驗證"
     },
+    "viewLimit": "同時開啟的頁面太多。捲動或收合其他頁面後，這裡會自動開啟。",
     "pluginRevoked": "插件已停用或發生變更，此頁面已失效",
     "pluginCspRejected": "頁面要求未宣告的網域，已拒絕載入",
     "filesOnExecutionComputer": "檔案內容請在執行電腦查看",

@@ -21460,6 +21460,7 @@
       "reviewed": "검토됨",
       "verified-publisher": "확인된 게시자"
     },
+    "viewLimit": "열린 페이지가 너무 많습니다. 다른 페이지를 화면 밖으로 스크롤하거나 접으면 이 페이지가 자동으로 열립니다.",
     "pluginRevoked": "플러그인이 비활성화되거나 변경되어 이 페이지를 사용할 수 없습니다.",
     "pluginCspRejected": "페이지에서 선언되지 않은 도메인을 요청하여 로드를 차단했습니다.",
     "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인하세요",
