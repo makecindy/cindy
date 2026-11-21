@@ -588,12 +588,12 @@ function SettingsViewContent() {
                             id={generalSettings.agentResource.targetId}
                             aria-label={t(generalSettings.agentResource.titleKey)}
                           >
-                            <AgentResourceSection />
+                            <AgentResourceSection enabled={advancedOpen} />
                           </section>
 
                           {/* Section — Git safety savepoints (formal setting, not experimental). */}
                           <section id={generalSettings.gitSafety.targetId} aria-label={t(generalSettings.gitSafety.titleKey)}>
-                            <GitSafetySection />
+                            <GitSafetySection enabled={advancedOpen} />
                           </section>
 
                           {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单；与 Agent 相关设置放在一起。 */}

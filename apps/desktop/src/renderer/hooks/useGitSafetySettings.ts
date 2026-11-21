@@ -81,7 +81,7 @@ async function fetchRemoteGitSafetyAutoSnapshotEnabled(
   return p;
 }
 
-export function useGitSafetySettings(): {
+export function useGitSafetySettings({ enabled = true }: { enabled?: boolean } = {}): {
   mode: GitSafetyMode;
   autoSnapshotEnabled: boolean;
   isCustomized: boolean;
@@ -139,6 +139,7 @@ export function useGitSafetySettings(): {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     void refresh(() => cancelled).catch(() => undefined);
     const unsubscribe = subscribeGitSafetyAutoSnapshotEnabled((next) => {
@@ -158,7 +159,7 @@ export function useGitSafetySettings(): {
       unsubscribe();
       unsubscribeMode();
     };
-  }, [refresh, settingsRevision]);
+  }, [enabled, refresh, settingsRevision]);
 
   return { mode, autoSnapshotEnabled, isCustomized, setMode, setAutoSnapshotEnabled, reset };
 }
