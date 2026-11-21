@@ -1164,6 +1164,84 @@ describe('Scheduler', () => {
     }
   });
 
+  // Codex P1 on #11577:补排重飞只按 scheduleId 压制。上一轮的补排永久挂死(存储
+  // 调用永不返回),任务仍可能被编辑重新触发、又跑挂新一轮 —— 新 run 的凭据顶替了
+  // 旧条目,但旧那一轮的在途登记还在,后续每个 tick 都在「上一轮还在途」处跳过,
+  // 新 run 的补排永远发不出去:它认领过的任务没有 nextFireAt,直到进程重启。
+  it('retries a newer run replan past a wedged older one', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        preGateStorageTimeoutMs: 30,
+        logger: { warn: vi.fn(), error: vi.fn() },
+        runnerImpl: (_s, ctx) => new Promise<FireResult>(() => {
+          ctx.signal.addEventListener('abort', () => {});
+        }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      const realGet = h.storage.get.bind(h.storage);
+      let replanReads = 0;
+      // 补排读的剧本:'fail' 这次没做成(凭据上膛)、'wedge' 永久挂死、'real' 照常。
+      let mode: 'fail' | 'wedge' | 'real' = 'real';
+      vi.spyOn(h.storage, 'get').mockImplementation((id: string) => {
+        if (id !== sch.id) return realGet(id);
+        replanReads += 1;
+        if (mode === 'wedge') return new Promise<Schedule | null>(() => {});
+        if (mode === 'fail') return Promise.reject(new Error('storage unavailable'));
+        return realGet(id);
+      });
+
+      // 第一轮 run:跑挂 → 强制收口那次的补排失败(凭据上膛)。
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      mode = 'fail';
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(replanReads).toBe(1);
+
+      // 补排重试永久挂死:登记留着,任务没有排期。
+      mode = 'wedge';
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanReads).toBe(2);
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBeUndefined();
+
+      // 用户编辑让任务重新触发(update 自己要走 storage.get,先让读恢复正常),
+      // 新一轮 run 又跑挂 → 它的补排失败,凭据顶替旧条目。
+      mode = 'real';
+      await h.scheduler.update(sch.id, { intervalMs: 1_800_000 });
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toEqual(expect.any(Number));
+      h.clock.advance(1_800_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      mode = 'fail';
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBeUndefined();
+
+      // 之后每个 tick 都必须重试**新那一轮**的补排:挂死的旧登记不能把它挡掉。
+      mode = 'real';
+      for (let i = 0; i < 3; i += 1) {
+        void h.scheduler.tick();
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toEqual(expect.any(Number));
+
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Codex P1 on #11577:预算内回来的过期写入同样要过代次栅栏。等待期间宿主
   // stop()(切账号 / 重启)把 lifecycleGeneration 推进了,这次 UPDATE 属于上一段生命
   // 周期;不走超时分支就不会经过 armExpireLateApply 的栅栏,它的 CAS 结果会被写回
@@ -1614,6 +1692,50 @@ describe('Scheduler', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     // 旧回包不得把守卫退回长截止时间。
     expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(false);
+
+    await local.scheduler.stop();
+  });
+
+  // Codex P1 on #11577:共享预算耗尽后,守卫循环不能再逐条等。排队中的自动 attempt
+  // 不计入 maxConcurrentRuns,条数可以是几十条;每条再等一个 1ms 定时器、再发一次
+  // 读,这一轮 advertised 的硬上限就变成 timeout + O(排队 run 数),把预闸门本该让位
+  // 的 due-fire 又推迟下去。改成只挂迟到收口、不当场等 —— 第一条回读失败也不能把
+  // 后面几条的收口一起带崩。
+  it('reconciles every dispatch guard once the shared budget is spent', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 1,
+      logger: { warn: vi.fn() },
+      // 派发停在途中:守卫快照留在 automaticDispatchSchedules。
+      runnerImpl: async () => new Promise<FireResult>(() => {}),
+    });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    const first = await local.scheduler.create({ ...baseInput, intervalMs: 15_000 });
+    const second = await local.scheduler.create({ ...baseInput, intervalMs: 15_000 });
+
+    local.clock.setTo(createdAt + 15_000);
+    void local.scheduler.tick().catch(() => undefined);
+    for (let i = 0; i < 100 && local.fireCalls.length < 2; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(local.fireCalls).toHaveLength(2);
+
+    // 批量读挂死:它自己就把 1ms 预算吃光,守卫回读拿到的剩余 ≤0。
+    // 回读直接失败(不是超时)—— 逐条等的话,第一次失败就会把整个循环带崩,
+    // 后面几条守卫连收口都挂不上。
+    const readIds: string[] = [];
+    vi.spyOn(local.storage, 'listActive').mockImplementation(() => new Promise<Schedule[]>(() => {}));
+    vi.spyOn(local.storage, 'get').mockImplementation((id: string) => {
+      if (id !== first.id && id !== second.id) return Promise.resolve(null);
+      readIds.push(id);
+      return Promise.reject(new Error('storage unavailable'));
+    });
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    // 预算耗尽后不再逐条等,但每条守卫都要挂上迟到收口。
+    expect(readIds).toEqual([first.id, second.id]);
 
     await local.scheduler.stop();
   });
