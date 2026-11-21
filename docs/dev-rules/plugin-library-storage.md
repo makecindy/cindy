@@ -102,6 +102,12 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
    `validateLibraryRelPath` → `isInsideDir` → realpath 祖先收敛），目标 lstat
    不穿透 symlink。写入 = staging + fsync + rename + dev/ino identity 复验
    （对齐 `dirDeposit.writeNewSaveFile` 范式）。
+   用量先在同一串行队列内增量计算，每 32 次变更原子更新 `usage.json`，不强制落盘；
+   正常关闭时补写账本，再强制落盘与该快照匹配的 `usage.clean` 标记。SQLite 可能在文件层
+   之外改动作品，先关闭其 worker，再重扫核对账本。重新打开时，只有账本与标记匹配才复用，
+   且必须先持久清除标记再允许写入。缺失、陈旧或不匹配时按磁盘重算；超过原有扫描条数
+   上限时保持可读但拒绝写入，不保存部分用量，也不写正常关闭标记。作品文件自身的
+   强制落盘和成功回执不变。
 5. **SQL 白名单**：better-sqlite3 无 set_authorizer，唯一可靠防线是首词允许
    清单（deny-by-default）+ prepare 单语句 + 事务/迁移/备份全宿主管理。
    ATTACH/VACUUM INTO/PRAGMA/事务语句一律 `DB_STATEMENT_REJECTED`。改白名单

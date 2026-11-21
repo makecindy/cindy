@@ -546,7 +546,7 @@ describe('LibraryVault', () => {
       expect(fs.existsSync(custom)).toBe(false);
     });
 
-    it('合法 usage.json 只读复用,不因 custom open 丢账本', async () => {
+    it('custom 正常收尾后直接复用用量，不重扫作品树', async () => {
       const parent = path.join(tmpRoot, 'picked-ledger');
       const custom = path.join(parent, 'mivo-canvas');
       await fs.promises.mkdir(custom, { recursive: true });
@@ -559,13 +559,14 @@ describe('LibraryVault', () => {
         rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
       });
       expect(await first.open()).toMatchObject({ ok: true, state: 'ready' });
-      const w = await first.write({ path: 'keep.txt', content: 'abcdef' });
-      expect(w.ok).toBe(true);
+      expect(await first.write({ path: 'keep.txt', content: 'abcdef' })).toMatchObject({ ok: true });
+      await first.invalidate();
       const second = makeVault({
         rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
+        limits: { usageScanFuse: 0 },
       });
       const opened = await second.open();
-      expect(opened).toMatchObject({ ok: true, state: 'ready', usedBytes: Buffer.byteLength('abcdef') });
+      expect(opened).toMatchObject({ ok: true, state: 'ready', usedBytes: 6, fileCount: 1 });
     });
 
     it('existing-open payload: pretty 与 compact 合法 meta 都读, malformed 仍 CORRUPT', () => {
@@ -673,6 +674,108 @@ describe('LibraryVault', () => {
       if (res.ok) expect(res.fileCount).toBe(1);
       const st = await vault.status();
       if (st.ok) expect(st.usedBytes).toBe(Buffer.byteLength('hello'));
+    });
+
+    it('24 次作品写入只同步作品本身，凑满一批才写账本', async () => {
+      const vault = makeVault();
+      await vault.open();
+      const realOpen = fs.promises.open;
+      const syncs = vi.fn();
+      const opened = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+        const handle = await realOpen(...args);
+        if (args[1] === 'wx') {
+          const sync = handle.sync.bind(handle);
+          vi.spyOn(handle, 'sync').mockImplementation(async () => {
+            syncs();
+            await sync();
+          });
+        }
+        return handle;
+      });
+      try {
+        const ledger = path.join(libraryRoot, '.cindy-library', 'usage.json');
+        for (let index = 0; index < 24; index += 1) {
+          const target = `asset-${index}.txt`;
+          expect(await vault.write({ path: target, content: 'abc' })).toEqual({
+            ok: true, path: target, bytes: 3, sha256: sha256Of('abc'),
+          });
+        }
+        expect(syncs).toHaveBeenCalledTimes(24);
+        expect(fs.existsSync(ledger)).toBe(false);
+        for (let index = 24; index < 32; index += 1) {
+          expect(await vault.write({ path: `asset-${index}.txt`, content: 'abc' })).toMatchObject({ ok: true });
+        }
+        expect(syncs).toHaveBeenCalledTimes(32);
+        expect(JSON.parse(await fs.promises.readFile(ledger, 'utf8'))).toMatchObject({ files: 32, bytes: 96 });
+        await vault.invalidate();
+        expect(syncs).toHaveBeenCalledTimes(33);
+      } finally {
+        opened.mockRestore();
+      }
+    });
+
+    it('重开先消费正常收尾标记，下一次异常退出后不复用陈旧账本', async () => {
+      const first = makeVault();
+      await first.open();
+      await first.write({ path: 'first.txt', content: 'one' });
+      await first.invalidate();
+
+      const next = makeVault();
+      const readdir = vi.spyOn(fs.promises, 'readdir');
+      try {
+        expect(await next.open()).toMatchObject({ ok: true, state: 'ready', fileCount: 1, usedBytes: 3 });
+        expect(readdir.mock.calls.some(([dir]) => dir === libraryRoot)).toBe(false);
+        expect(await next.write({ path: 'second.txt', content: 'next' })).toMatchObject({ ok: true });
+        expect(await next.open()).toMatchObject({ ok: true, state: 'ready', fileCount: 2, usedBytes: 7 });
+        expect(readdir.mock.calls.some(([dir]) => dir === libraryRoot)).toBe(false);
+        expect(await makeVault().open()).toMatchObject({ ok: true, state: 'ready', fileCount: 2, usedBytes: 7 });
+        expect(readdir.mock.calls.some(([dir]) => dir === libraryRoot)).toBe(true);
+      } finally {
+        readdir.mockRestore();
+      }
+    });
+
+    it('重扫超限时不发布半截计数，重开仍拒写但可以读', async () => {
+      const first = makeVault();
+      await first.open();
+      await first.write({ path: 'first.txt', content: 'one' });
+      await first.write({ path: 'second.txt', content: 'two' });
+      const ledger = path.join(libraryRoot, '.cindy-library', 'usage.json');
+      const stale = JSON.stringify({ files: 1, bytes: 3, updatedAt: 1, mutations: 1 });
+      await fs.promises.writeFile(ledger, stale);
+
+      const tight = makeVault({ limits: { usageScanFuse: 1 } });
+      expect(await tight.open()).toMatchObject({ ok: true, state: 'readonly', reason: 'usage-scan-limit' });
+      expect(await tight.read({ path: 'first.txt' })).toMatchObject({ ok: true, content: 'one' });
+      expect(await tight.write({ path: 'third.txt', content: 'three' })).toMatchObject({
+        ok: false, errorCode: 'LIBRARY_UNAVAILABLE',
+      });
+      await tight.invalidate();
+      expect(await fs.promises.readFile(ledger, 'utf8')).toBe(stale);
+      const reopened = makeVault({ limits: { usageScanFuse: 1 } });
+      expect(await reopened.open()).toMatchObject({ ok: true, state: 'readonly' });
+      expect(await reopened.delete({ path: 'first.txt' })).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+    });
+
+    it('收尾核对绕过 Vault 的文件变化，保持流提交、改名和删除回执', async () => {
+      const vault = makeVault();
+      await vault.open();
+      const stream = await vault.writeBegin({ path: 'stream.txt', totalBytes: 3 });
+      if (!stream.ok) throw new Error(stream.message);
+      await vault.writeChunk({ streamId: stream.streamId, seq: 1, content: 'abc' });
+      expect(await vault.writeCommit({ streamId: stream.streamId })).toEqual({
+        ok: true, path: 'stream.txt', bytes: 3, sha256: sha256Of('abc'),
+      });
+      expect(await vault.rename({ from: 'stream.txt', to: 'renamed.txt' })).toEqual({
+        ok: true, from: 'stream.txt', to: 'renamed.txt',
+      });
+      expect(await vault.delete({ path: 'renamed.txt' })).toEqual({ ok: true, path: 'renamed.txt', existed: true });
+      vault.noteExternalMutation();
+      await fs.promises.writeFile(path.join(libraryRoot, 'external.sqlite'), 'database');
+      await vault.invalidate();
+      expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
+        ok: true, state: 'ready', fileCount: 1, usedBytes: 8,
+      });
     });
 
     it('markOrphaned / clearOrphaned 往返;invalidate 后 open 拒绝', async () => {

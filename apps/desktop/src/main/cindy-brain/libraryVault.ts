@@ -97,7 +97,6 @@ export interface LibraryMeta {
   orphaned?: { at: number; name: string };
 }
 
-/** 用量账本(.cindy-library/usage.json);损坏/缺失时 open 触发全量重扫。 */
 interface UsageLedger {
   files: number;
   bytes: number;
@@ -182,6 +181,8 @@ const WINDOWS_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)
 const META_DIR = '.cindy-library';
 const META_FILE = 'meta.json';
 const USAGE_FILE = 'usage.json';
+const USAGE_CLEAN_FILE = 'usage.clean';
+const USAGE_BATCH_SIZE = 32;
 const TMP_DIR = 'tmp';
 
 /** Host-owned sibling staging is never a user Library entry, even after a crash. */
@@ -333,6 +334,8 @@ export class LibraryVault {
   /** 用量保险丝触发(扫描条数超限):fail closed 拒写,读照常。 */
   private usageTripped = false;
   private usage: UsageLedger = { files: 0, bytes: 0, updatedAt: 0, mutations: 0 };
+  private usageDirectory: { dev: number; ino: number } | null = null;
+  private usageNeedsRescan = false;
   private meta: LibraryMeta | null = null;
   private readonly streams = new Map<string, ActiveStream>();
   /** 变更串行链(runSerialized 维护)。 */
@@ -361,6 +364,9 @@ export class LibraryVault {
   }
   private get usageFile(): string {
     return path.join(this.metaDir, USAGE_FILE);
+  }
+  private get usageCleanFile(): string {
+    return path.join(this.metaDir, USAGE_CLEAN_FILE);
   }
   private get tmpDir(): string {
     return path.join(this.metaDir, TMP_DIR);
@@ -645,29 +651,25 @@ export class LibraryVault {
 
       if (!customOpen) await this.sweepStaleTmp();
 
-      // 用量:合法账本只读复用;坏/缺才 scan。custom 首次 open 不 persist/unlink。
-      let ledger: UsageLedger | null = customUsage;
-      if (!ledger) {
-      try {
-        const raw = JSON.parse(await fs.promises.readFile(this.usageFile, 'utf8')) as UsageLedger;
-        if (typeof raw === 'object' && raw !== null && typeof raw.files === 'number' && typeof raw.bytes === 'number') {
-          ledger = { files: raw.files, bytes: raw.bytes, updatedAt: raw.updatedAt ?? 0, mutations: raw.mutations ?? 0 };
+      if (!this.opened || this.state === 'unavailable' || !(await this.isUsageDirectoryCurrent())) {
+        try {
+          this.usageDirectory = await this.inspectUsageDirectory();
+          if (!this.usageDirectory) {
+            if (customOpen) return this.customRootUnavailable();
+            throw new Error('Library metadata directory unavailable');
+          }
+          const ledger = customOpen ? customUsage : await this.readUsageUnlocked();
+          if (await this.consumeCleanUsageUnlocked(ledger) && ledger) {
+            this.usage = ledger;
+            this.usageTripped = false;
+          } else {
+            await this.rescanUsageUnlocked();
+          }
+        } catch {
+          this.state = 'unavailable';
+          this.unavailableReason = 'io';
+          return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
         }
-      } catch {
-        /* 损坏/缺失 → 重扫 */
-      }
-      }
-      if (!ledger) {
-        const scanned = await this.scanUsageUnlocked();
-        if (scanned.tripped) {
-          this.usageTripped = true;
-          this.usage = { files: scanned.files, bytes: scanned.bytes, updatedAt: this.now(), mutations: 0 };
-        } else {
-          this.usage = { files: scanned.files, bytes: scanned.bytes, updatedAt: this.now(), mutations: 0 };
-          if (!customOpen) await this.persistUsageUnlocked();
-        }
-      } else {
-        this.usage = ledger;
       }
       this.opened = true;
       if (this.state === 'unavailable') {
@@ -676,14 +678,18 @@ export class LibraryVault {
         this.state = 'ready';
         this.unavailableReason = null;
       }
-      return { ok: true as const, state: this.effectiveState(), reason: this.unavailableReason ?? this.readonlyReason, usedBytes: this.usage.bytes, fileCount: this.usage.files };
+      return { ok: true as const, state: this.effectiveState(), reason: this.effectiveReason(), usedBytes: this.usage.bytes, fileCount: this.usage.files };
     });
   }
 
   private effectiveState(): LibraryState {
     if (this.state === 'unavailable') return 'unavailable';
-    if (this.readonlyReason !== null) return 'readonly';
+    if (this.readonlyReason !== null || this.usageTripped) return 'readonly';
     return 'ready';
+  }
+
+  private effectiveReason(): string | null {
+    return this.unavailableReason ?? this.readonlyReason ?? (this.usageTripped ? 'usage-scan-limit' : null);
   }
 
   /** status:状态 + 占用 + 磁盘余量 + 软水位(软水位仅告警,不阻断写)。 */
@@ -712,7 +718,7 @@ export class LibraryVault {
     return {
       ok: true as const,
       state: this.effectiveState(),
-      reason: this.unavailableReason ?? this.readonlyReason,
+      reason: this.effectiveReason(),
       usedBytes: this.usage.bytes,
       fileCount: this.usage.files,
       diskFreeBytes: diskFree,
@@ -817,16 +823,16 @@ export class LibraryVault {
   private async atomicWrite(
     target: string,
     bytes: Buffer,
-    opts: { ifNotExists?: boolean } = {},
+    opts: { ifNotExists?: boolean; sync?: boolean; createParent?: boolean } = {},
   ): Promise<LibraryResult<{ dev: number; ino: number }>> {
     const tmp = path.join(this.tmpDir, `${randomUUID()}.tmp`);
     let openedStat: fs.Stats | null = null;
     let fh: fs.promises.FileHandle | null = null;
     try {
-      await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      if (opts.createParent !== false) await fs.promises.mkdir(path.dirname(target), { recursive: true });
       fh = await fs.promises.open(tmp, 'wx', 0o600);
       await fh.writeFile(bytes);
-      await fh.sync();
+      if (opts.sync !== false) await fh.sync();
       openedStat = await fh.stat();
       await fh.close();
       fh = null;
@@ -868,12 +874,85 @@ export class LibraryVault {
     return w.ok ? null : w;
   }
 
-  private async persistUsageUnlocked(): Promise<void> {
-    if (!this.meta) return;
-    this.usage.updatedAt = this.now();
-    await this.writeJsonAtomic(this.usageFile, this.usage).catch((err) => {
-      this.deps.log?.warn('library usage persist failed', { error: err instanceof Error ? err.message : String(err) });
-    });
+  private async inspectUsageDirectory(): Promise<{ dev: number; ino: number } | null> {
+    const root = await this.lstatTarget(this.root);
+    if (!root?.isDirectory()) return null;
+    const directory = await this.lstatTarget(this.metaDir);
+    return directory?.isDirectory() ? { dev: directory.dev, ino: directory.ino } : null;
+  }
+
+  private async isUsageDirectoryCurrent(): Promise<boolean> {
+    const directory = await this.inspectUsageDirectory();
+    return directory !== null && this.usageDirectory !== null
+      && directory.dev === this.usageDirectory.dev && directory.ino === this.usageDirectory.ino;
+  }
+
+  private async readUsageUnlocked(): Promise<UsageLedger | null> {
+    try {
+      const raw = JSON.parse(await fs.promises.readFile(this.usageFile, 'utf8')) as UsageLedger;
+      if (raw && typeof raw.files === 'number' && typeof raw.bytes === 'number') {
+        return { files: raw.files, bytes: raw.bytes, updatedAt: raw.updatedAt ?? 0, mutations: raw.mutations ?? 0 };
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  private usageFingerprint(ledger: UsageLedger): string {
+    return crypto.createHash('sha256')
+      .update(JSON.stringify([ledger.files, ledger.bytes, ledger.updatedAt, ledger.mutations]))
+      .digest('hex');
+  }
+
+  private async consumeCleanUsageUnlocked(ledger: UsageLedger | null): Promise<boolean> {
+    const entry = await this.lstatTarget(this.usageCleanFile);
+    if (!entry || entry.size === 0) return false;
+    if (!entry.isFile() || entry.nlink !== 1) throw new Error('Invalid Library usage marker');
+    const marker = await fs.promises.open(this.usageCleanFile, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+    try {
+      const held = await marker.stat();
+      if (!held.isFile() || held.nlink !== 1 || held.dev !== entry.dev || held.ino !== entry.ino
+        || !(await this.isUsageDirectoryCurrent())) {
+        throw new Error('Library usage marker moved');
+      }
+      const valid = held.size === 64 && ledger !== null
+        && Number.isSafeInteger(ledger.files) && ledger.files >= 0
+        && Number.isSafeInteger(ledger.bytes) && ledger.bytes >= 0
+        && (await marker.readFile('utf8')) === this.usageFingerprint(ledger);
+      await marker.truncate(0);
+      await marker.sync();
+      return valid;
+    } finally {
+      await marker.close();
+    }
+  }
+
+  private async persistUsageUnlocked(clean = false): Promise<void> {
+    try {
+      if (!(await this.isUsageDirectoryCurrent())) return;
+      this.usage.updatedAt = this.now();
+      const written = await this.atomicWrite(this.usageFile, Buffer.from(JSON.stringify(this.usage), 'utf8'), {
+        sync: false, createParent: false,
+      });
+      if (!written.ok) throw new Error(written.message);
+      if (!clean || !(await this.isUsageDirectoryCurrent())) return;
+      const marker = await this.atomicWrite(this.usageCleanFile, Buffer.from(this.usageFingerprint(this.usage), 'utf8'), {
+        createParent: false,
+      });
+      if (!marker.ok) throw new Error(marker.message);
+      const synced = await this.fsyncAbsDir(this.metaDir);
+      if (!synced.ok) throw new Error(synced.message);
+    } catch {
+      this.deps.log?.warn('library usage persist failed', {});
+    }
+  }
+
+  private async recordUsageMutationUnlocked(): Promise<void> {
+    this.usage.mutations += 1;
+    if (this.usage.mutations % USAGE_BATCH_SIZE === 0 && !this.usageNeedsRescan) {
+      await this.persistUsageUnlocked();
+    }
   }
 
   /** 清理超龄 staging 残渣(崩溃遗留;龄 > tmpMaxAgeMs)。 */
@@ -909,21 +988,22 @@ export class LibraryVault {
       let entries: fs.Dirent[];
       try {
         entries = await fs.promises.readdir(dir, { withFileTypes: true });
-      } catch {
-        continue;
+      } catch (err) {
+        if (dir !== this.root && (err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
       }
       for (const entry of entries) {
         if (isLibraryPublishTempName(entry.name)) continue;
         if (dir === this.root && entry.name === META_DIR) continue; // 宿主命名空间不入账
-        if (++visited > this.limits.usageScanFuse) return { files, bytes, tripped: true };
+        if (++visited > this.limits.usageScanFuse) return { files: 0, bytes: 0, tripped: true };
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) stack.push(full);
         else if (entry.isFile()) {
-          files += 1;
           try {
             bytes += (await fs.promises.stat(full)).size;
-          } catch {
-            /* 竞态删除,跳过 */
+            files += 1;
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
           }
         }
       }
@@ -1013,8 +1093,7 @@ export class LibraryVault {
       // 用量增量记账(files/bytes);覆盖写扣除旧体积。
       this.usage.bytes += decoded.bytes.byteLength - existedBytes;
       if (!st) this.usage.files += 1;
-      this.usage.mutations += 1;
-      await this.persistUsageUnlocked();
+      await this.recordUsageMutationUnlocked();
       return {
         ok: true as const,
         path: relPath,
@@ -1211,8 +1290,7 @@ export class LibraryVault {
       this.deps.onStreamClosed?.(stream.streamId);
       this.usage.bytes += stream.totalBytes - existedBytes;
       if (!prior) this.usage.files += 1;
-      this.usage.mutations += 1;
-      await this.persistUsageUnlocked();
+      await this.recordUsageMutationUnlocked();
       return { ok: true as const, path: stream.relPath, bytes: stream.totalBytes, sha256 };
     });
   }
@@ -1510,7 +1588,7 @@ export class LibraryVault {
           return this.tmpFailure(err, '删除文件失败(主机 IO 错误)');
         }
         removedBytes = st.isFile() ? st.size : 0;
-        removedFiles = 1;
+        removedFiles = st.isFile() ? 1 : 0;
         // 空目录剪枝(向上 rmdir 到根为止,遇非空即停):不剪则目录残骸永久
         // 计入用量扫描(与 fsSlot 同教训)。
         let dir = path.dirname(resolved.target);
@@ -1527,8 +1605,7 @@ export class LibraryVault {
       }
       this.usage.bytes = Math.max(0, this.usage.bytes - removedBytes);
       this.usage.files = Math.max(0, this.usage.files - removedFiles);
-      this.usage.mutations += 1;
-      await this.persistUsageUnlocked();
+      await this.recordUsageMutationUnlocked();
       return { ok: true as const, path: relPath, existed: true };
     });
   }
@@ -1613,8 +1690,7 @@ export class LibraryVault {
         this.usage.bytes = Math.max(0, this.usage.bytes - prior.size);
         this.usage.files = Math.max(0, this.usage.files - 1);
       }
-      this.usage.mutations += 1;
-      await this.persistUsageUnlocked();
+      await this.recordUsageMutationUnlocked();
       // 源空目录剪枝(rename 腾出的父目录不残留)。
       let dir = path.dirname(src.target);
       while (isInsideDir(this.root, dir) && foldCase(dir) !== foldCase(path.resolve(this.root))) {
@@ -1737,30 +1813,49 @@ export class LibraryVault {
     this.readonlyReason = null;
   }
 
-  /**
-   * 用量对账(全量重扫 + 重写账本 + 保险丝复核)。open 时自动做一次;
-   * 设置页/清理流程可显式调用(例如用户手工清理大目录之后)。
-   */
+  noteExternalMutation(): void {
+    this.usageNeedsRescan = true;
+  }
+
+  private async rescanUsageUnlocked(): Promise<{ files: number; bytes: number; tripped: boolean }> {
+    const scanned = await this.scanUsageUnlocked();
+    this.usageTripped = scanned.tripped;
+    this.usage = { files: scanned.files, bytes: scanned.bytes, updatedAt: this.now(), mutations: 0 };
+    return scanned;
+  }
+
   async reconcileUsage(): Promise<LibraryResult<{ files: number; bytes: number; tripped: boolean }>> {
     return this.runSerialized(async () => {
-      const scanned = await this.scanUsageUnlocked();
-      this.usageTripped = scanned.tripped;
-      this.usage = { files: scanned.files, bytes: scanned.bytes, updatedAt: this.now(), mutations: 0 };
-      await this.persistUsageUnlocked();
-      return { ok: true as const, files: scanned.files, bytes: scanned.bytes, tripped: scanned.tripped };
+      if (this.invalidated) return fail('LIBRARY_UNAVAILABLE', 'Library 实例已作废');
+      try {
+        const scanned = await this.rescanUsageUnlocked();
+        if (!scanned.tripped) await this.persistUsageUnlocked();
+        return { ok: true as const, ...scanned };
+      } catch (err) {
+        return this.tmpFailure(err, 'Library 用量扫描失败');
+      }
     });
   }
 
   /** owner 切换/宿主收口:作废在途流并拒绝后续操作(实例弃用,不可重开)。 */
   async invalidate(): Promise<void> {
     await this.runSerialized(async () => {
+      if (this.invalidated) return;
+      this.invalidated = true;
+      const canCheckpoint = this.opened && this.state !== 'unavailable' && !this.usageTripped;
+      this.state = 'unavailable';
+      this.unavailableReason = 'io';
       for (const stream of Array.from(this.streams.values())) {
         await this.abortStreamUnlocked(stream.streamId).catch(() => {});
       }
+      if (!canCheckpoint) return;
+      try {
+        if (this.usageNeedsRescan && await this.isUsageDirectoryCurrent()) await this.rescanUsageUnlocked();
+        if (!this.usageTripped) await this.persistUsageUnlocked(true);
+      } catch {
+        this.deps.log?.warn('library usage reconcile at close failed', {});
+      }
     });
-    this.invalidated = true;
-    this.state = 'unavailable';
-    this.unavailableReason = 'io';
   }
 }
 

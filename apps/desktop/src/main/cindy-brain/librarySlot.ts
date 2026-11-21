@@ -253,6 +253,7 @@ const vaultFail = (r: { errorCode: string; message: string }): GhostPipeLibraryR
 
 export class GhostLibrarySlot {
   private readonly sessions = new Map<string, GhostLibrarySession>();
+  private readonly sessionTeardowns = new Map<string, Promise<void>>();
   /** 迁移进行中的插件:全部写操作只读化(切换与 grace 前不再有写入落旧根)。 */
   private readonly relocating = new Set<string>();
   private readonly relocationGenerations = new Map<string, number>();
@@ -504,6 +505,11 @@ export class GhostLibrarySlot {
     this.assertRequestCurrent(ghostId, target);
     const resolution = await this.confirmLiveCustomRoot(resolved);
     this.assertRequestCurrent(ghostId, target);
+    const pendingTeardown = this.sessionTeardowns.get(ghostId);
+    if (pendingTeardown) {
+      await pendingTeardown;
+      this.assertRequestCurrent(ghostId, target);
+    }
     session = this.sessions.get(ghostId);
     if (session && session.ownerScopeKey !== scopeKey) {
       const staleScope = session;
@@ -1015,6 +1021,8 @@ export class GhostLibrarySlot {
   }
 
   private async teardownSession(ghostId: string, expected?: GhostLibrarySession): Promise<void> {
+    const pending = this.sessionTeardowns.get(ghostId);
+    if (pending) return pending;
     const session = this.sessions.get(ghostId);
     if (!session) return;
     if (expected && session !== expected) return;
@@ -1022,12 +1030,20 @@ export class GhostLibrarySlot {
     for (const [streamId, epoch] of this.writeEpochByStream) {
       if (epoch.ghostId === ghostId) this.writeEpochByStream.delete(streamId);
     }
-    await session.sql.dispose().catch(() => {});
-    await session.vault.invalidate().catch(() => {});
-    if (this.extraDirGrant?.ghostId === ghostId) {
-      await this.syncAgentReadonlyExtraDir(ghostId, null);
+    const teardown = (async () => {
+      await session.sql.dispose().catch(() => {});
+      await session.vault.invalidate().catch(() => {});
+      if (this.extraDirGrant?.ghostId === ghostId) {
+        await this.syncAgentReadonlyExtraDir(ghostId, null);
+      }
+      if (this.extraDirOpenerGhostId === ghostId) this.extraDirOpenerGhostId = null;
+    })();
+    this.sessionTeardowns.set(ghostId, teardown);
+    try {
+      await teardown;
+    } finally {
+      this.sessionTeardowns.delete(ghostId);
     }
-    if (this.extraDirOpenerGhostId === ghostId) this.extraDirOpenerGhostId = null;
   }
 
   /** 停用/卸载/owner 切换收口:作废全部会话(commit 5 的生命周期接线点)。 */
@@ -1039,7 +1055,7 @@ export class GhostLibrarySlot {
   }
 
   async disposeAll(): Promise<void> {
-    const ids = new Set([...this.sessions.keys(), ...this.stagingReleaseInflight.keys(), ...this.relocationGenerations.keys()]);
+    const ids = new Set([...this.sessions.keys(), ...this.sessionTeardowns.keys(), ...this.stagingReleaseInflight.keys(), ...this.relocationGenerations.keys()]);
     for (const key of this.stagingStores.keys()) {
       const ghostId = key.split('\0')[1];
       if (ghostId) ids.add(ghostId);
@@ -1093,6 +1109,7 @@ export class GhostLibrarySlot {
     if (reason) return fail('PATH_INVALID', `dbPath 非法:${reason}`, 'INVALID_REQUEST');
     const abs = await session.vault.resolveDbTarget(dbPath as string);
     if (abs === null) return fail('PATH_INVALID', 'dbPath 越界或目标不可用作数据库', 'INVALID_REQUEST');
+    session.vault.noteExternalMutation();
     return { abs };
   }
 
