@@ -254,6 +254,8 @@ Codex `developerInstructions` 有两条投递通道。最终选择取决于本 t
 
 ### UI、协同 Tab 与 Worktree
 
+Worker 平铺标签支持拖拽排序，也支持聚焦标签后按 Alt + 左右方向键调整。顺序作为当前客户端的展示偏好，按账号、Lead 所在电脑与 Lead 任务隔离，重开后恢复；新 Worker 追加到末尾，移除后其余 Worker 保持相对顺序。下拉列表沿用同一顺序。排序不改变 focused Worker、执行顺序或队列，不向其他客户端同步。实现见 `features/cc-agent/lib/useWorkerTabOrder.ts` 与 `WorkerListToolbar`。
+
 普通聊天路由不再渲染独立 Worker pane，也不会在 Lead 变成 Orca Lead 后自动跳到 `/cc-agent/orca/<sessionId>`。当前主形态是普通 Lead route `/cc-agent/<leadSessionId>` + 右侧栏「协同」tab：Lead 仍由 `CCAgentSessionView` 渲染，Worker 列表与 focused Worker 会话流由 `apps/desktop/src/renderer/features/right-sidebar/plugins/orca-workers` 挂载。协同 tab 是 singleton，协同进行中常驻；点击 tab 的 X 等价于“结束协同”，会先弹确认，确认后 end team 并关闭 tab。
 
 路由层：`/cc-agent/orca/:sessionId` 只保留为旧 deep link 的兼容 shim。它会转到普通 Lead route；若该 session 仍是 active Orca Lead，则打开/聚焦右侧栏「协同」tab，并把 `?worker=<workerSessionId>` 翻译为协同 tab state，随后清掉 URL query。Worker deep link 解析为 `/cc-agent/<leadSessionId>?worker=<workerSessionId>`，由 `CCAgentSessionView` 在普通 Lead route 中把 worker hint 翻译进协同 tab state 后清 query。实现见 `apps/desktop/src/renderer/lib/orcaSessionIdentity.ts` 的 `resolveSessionRoute`、`apps/desktop/src/renderer/features/cc-agent/OrcaWorkflowRoute.tsx`、`apps/desktop/src/renderer/features/cc-agent/CCAgentSessionView.tsx`。

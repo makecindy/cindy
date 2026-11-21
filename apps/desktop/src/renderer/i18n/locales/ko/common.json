@@ -19535,6 +19535,7 @@
       "layoutMenuLabel": "Worker 목록 표시 방식",
       "layoutTabs": "탭",
       "layoutDropdown": "드롭다운",
+      "reorderHint": "드래그하거나 Alt + ← / →로 순서를 변경하세요. 순서는 이 컴퓨터에 저장됩니다.",
       "scrollWorkersLeft": "이전 Worker 보기",
       "scrollWorkersRight": "다음 Worker 보기",
       "scrollWorkersLeftEdge": "이미 첫 Worker를 표시하고 있습니다",

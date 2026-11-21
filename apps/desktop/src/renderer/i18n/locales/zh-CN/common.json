@@ -19535,6 +19535,7 @@
       "layoutMenuLabel": "Worker 列表显示方式",
       "layoutTabs": "平铺",
       "layoutDropdown": "下拉",
+      "reorderHint": "拖动排序，或按 Alt + ← / →。顺序会记在这台电脑上。",
       "scrollWorkersLeft": "向左查看更多 Worker",
       "scrollWorkersRight": "向右查看更多 Worker",
       "scrollWorkersLeftEdge": "已是最左侧的 Worker",

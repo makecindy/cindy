@@ -19535,6 +19535,7 @@
       "layoutMenuLabel": "Worker 列表之陳法",
       "layoutTabs": "平列",
       "layoutDropdown": "垂列",
+      "reorderHint": "拖曳以易序，亦可按 Alt + ← / →。序存於此機。",
       "scrollWorkersLeft": "左觀更多 Worker",
       "scrollWorkersRight": "右觀更多 Worker",
       "scrollWorkersLeftEdge": "已至最左之 Worker",

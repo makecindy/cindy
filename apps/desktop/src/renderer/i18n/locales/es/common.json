@@ -19794,6 +19794,7 @@
       "layoutMenuLabel": "Diseño de la lista de Workers",
       "layoutTabs": "Pestañas",
       "layoutDropdown": "Menú desplegable",
+      "reorderHint": "Arrastra o usa Alt + ← / → para ordenar. El orden se guarda en este ordenador.",
       "scrollWorkersLeft": "Desplazarse a los Workers anteriores",
       "scrollWorkersRight": "Desplazarse a más Workers",
       "scrollWorkersLeftEdge": "Ya estás en el primer Worker",

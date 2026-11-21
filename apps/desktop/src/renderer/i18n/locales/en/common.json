@@ -19611,6 +19611,7 @@
       "layoutMenuLabel": "Worker list layout",
       "layoutTabs": "Tabs",
       "layoutDropdown": "Dropdown",
+      "reorderHint": "Drag to reorder, or use Alt + ← / →. Order is remembered on this computer.",
       "scrollWorkersLeft": "Scroll to earlier workers",
       "scrollWorkersRight": "Scroll to more workers",
       "scrollWorkersLeftEdge": "Already at the earliest worker",

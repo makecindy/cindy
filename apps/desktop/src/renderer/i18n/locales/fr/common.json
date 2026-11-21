@@ -19794,6 +19794,7 @@
       "layoutMenuLabel": "Disposition de la liste des Workers",
       "layoutTabs": "Onglets",
       "layoutDropdown": "Menu déroulant",
+      "reorderHint": "Faites glisser ou utilisez Alt + ← / →. L’ordre est mémorisé sur cet ordinateur.",
       "scrollWorkersLeft": "Faire défiler vers les Workers précédents",
       "scrollWorkersRight": "Faire défiler vers d'autres Workers",
       "scrollWorkersLeftEdge": "Vous êtes déjà au premier Worker",

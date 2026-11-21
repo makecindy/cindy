@@ -19794,6 +19794,7 @@
       "layoutMenuLabel": "Layout da lista de Workers",
       "layoutTabs": "Abas",
       "layoutDropdown": "Lista suspensa",
+      "reorderHint": "Arraste ou use Alt + ← / → para ordenar. A ordem fica salva neste computador.",
       "scrollWorkersLeft": "Rolar para Workers anteriores",
       "scrollWorkersRight": "Rolar para mais Workers",
       "scrollWorkersLeftEdge": "Já está no primeiro Worker",
