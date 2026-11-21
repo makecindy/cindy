@@ -8,7 +8,7 @@
  * - 规则依据：model-groups.md §6.3(由那台电脑选、选出的模型只用于这次新建、那台是旧版本时不显示)；
  *   协议记录 docs/dev-rules/protocol-compatibility/model-groups-remote-pickers.md。
  * - 现有覆盖缺口：手机此前只在伙伴设置里认识模型组，新任务与进行中任务没有这条路径。
- * - 最小失败输入：旧电脑回 CHANNEL_NOT_ALLOWED 时报错而不是不显示；那台送来坏结果被当成选中；
+ * - 最小失败输入：旧电脑回 CHANNEL_NOT_ALLOWED 时报错而不是不显示，或之后升级了也一直不再问；那台送来坏结果被当成选中；
  *   选出的来源没写进创建参数，或沿用了草稿的 Fast / 另一台电脑的位置；沿用原模型时仍去记绑定。
  * - tier：unit(纯函数与注入 invoke 的 transport，无原生依赖)。
  */
@@ -18,7 +18,10 @@ import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mob
 import {
   applyHostModelGroupResult,
   applyHostModelGroupRoute,
+  cachedHostModelGroups,
   parseHostModelGroupResult,
+  readHostModelGroups,
+  resetHostModelGroupsCacheForTests,
 } from '@/session/hostModelGroups';
 import { buildRemoteCreateSessionOptions, type NewSessionDraft } from '@/session/newSession';
 
@@ -40,6 +43,25 @@ describe('the host computer\'s model groups over device-link', () => {
       throw Object.assign(new Error('[CHANNEL_NOT_ALLOWED] model-groups:get'), { code: 'CHANNEL_NOT_ALLOWED' });
     }) as unknown as RemoteInvoke;
     await expect(createMobileMakerTransport({ deviceId: 'old-desk', invoke }).listModelGroups()).resolves.toBeNull();
+  });
+
+  it('asks an older computer again after a while, so an upgrade shows its modes without reopening the app', async () => {
+    vi.useFakeTimers();
+    resetHostModelGroupsCacheForTests();
+    try {
+      const listModelGroups = vi.fn().mockResolvedValueOnce(null)
+        .mockResolvedValue({ routes: [{ id: 'daily', name: 'Daily', strategy: 'order', candidates: [] }] });
+      await readHostModelGroups('desk', { listModelGroups });
+      await readHostModelGroups('desk', { listModelGroups });
+      expect(listModelGroups).toHaveBeenCalledTimes(1);
+      expect(cachedHostModelGroups('desk')).toBeNull();
+      vi.advanceTimersByTime(5 * 60_000);
+      await readHostModelGroups('desk', { listModelGroups });
+      expect(cachedHostModelGroups('desk')?.map((group) => group.id)).toEqual(['daily']);
+    } finally {
+      vi.useRealTimers();
+      resetHostModelGroupsCacheForTests();
+    }
   });
 
   it('asks the host to pick and builds the new task from its pick, without Fast or the old location', async () => {

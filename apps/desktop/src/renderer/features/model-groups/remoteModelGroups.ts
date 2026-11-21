@@ -60,7 +60,28 @@ function invoke<T>(deviceId: string, channel: string, args: unknown[]): Promise<
   return api.invoke(deviceId, channel, args) as Promise<T>;
 }
 
+let reconnectWatchInstalled = false;
+const knownOnline = new Map<string, boolean>();
+
+/**
+ * 那台电脑离线或链路重置后丢掉它的答案(含「不支持」)：升级、改了模式或换了版本后，下次打开选择器重新读。
+ * 只在状态翻转时清，同一状态的重复推送不触发重读。
+ */
+function watchReconnects(): void {
+  if (reconnectWatchInstalled) return;
+  const link = window.electronAPI?.deviceLink;
+  if (!link) return;
+  reconnectWatchInstalled = true;
+  link.onPeerLinkReset?.((event) => evictDeviceModelGroups(event.deviceId));
+  link.onPresenceChanged?.((presence) => {
+    const was = knownOnline.get(presence.deviceId);
+    knownOnline.set(presence.deviceId, presence.online);
+    if (was === true && !presence.online) evictDeviceModelGroups(presence.deviceId);
+  });
+}
+
 function deviceGroups(owner: DataOwnerGeneration, deviceId: string): DeviceGroups {
+  watchReconnects();
   let devices = devicesByOwner.get(owner);
   if (!devices) {
     devices = new Map();
@@ -113,7 +134,7 @@ function deviceGroups(owner: DataOwnerGeneration, deviceId: string): DeviceGroup
       generation += 1;
       pending = undefined;
       readAt = 0;
-      publish(UNREAD);
+      if (current !== UNREAD) publish(UNREAD);
     },
   };
   devices.set(deviceId, entry);
@@ -128,6 +149,8 @@ export function evictDeviceModelGroups(deviceId: string): void {
 /** 测试用：清掉全部缓存。 */
 export function resetDeviceModelGroupsForTests(): void {
   devicesByOwner = new WeakMap();
+  reconnectWatchInstalled = false;
+  knownOnline.clear();
 }
 
 function subscribeNone(): () => void {

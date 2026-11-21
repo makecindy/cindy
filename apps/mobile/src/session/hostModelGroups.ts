@@ -2,7 +2,8 @@
  * 被控电脑的模型组(model-groups.md §6.3)：手机在那台电脑上新建任务、给进行中的任务换模型时列出那台的模式；
  * 选路、提交记录、记绑定与写说明都由那台电脑做，手机只把结果用到创建参数或换模型上。
  *
- * 读取按需：进入页面时每台电脑读一次，15 秒内复用上次的答案；那台是旧版本(没有该 channel)时不再问。
+ * 读取按需：进入页面时每台电脑读一次，15 秒内复用上次的答案；那台是旧版本(没有该 channel)时 5 分钟内不再问，
+ * 之后再问一次：那台升级后不必重开 App 就能看到它的模式。
  */
 import { useEffect, useMemo, useState } from 'react';
 import type { TFunction } from 'i18next';
@@ -15,6 +16,7 @@ import type { UnifiedMobileModelGroupOptions } from './UnifiedModelPickerSheet';
 export type HostModelGroup = CompanionModelGroup;
 
 const REREAD_MS = 15_000;
+const UNSUPPORTED_REREAD_MS = 5 * 60_000;
 
 interface CacheEntry {
   groups: HostModelGroup[] | null;
@@ -32,11 +34,12 @@ export function resetHostModelGroupsCacheForTests(): void {
 
 type ModelGroupsTransport = Pick<MakerTransport, 'listModelGroups'>;
 
-function readHostModelGroups(deviceId: string, maker: ModelGroupsTransport): Promise<void> {
+export function readHostModelGroups(deviceId: string, maker: ModelGroupsTransport): Promise<void> {
   const entry = cache.get(deviceId) ?? { groups: null, unsupported: false, readAt: 0 };
   cache.set(deviceId, entry);
   if (entry.pending) return entry.pending;
-  if (entry.unsupported || (entry.readAt > 0 && Date.now() - entry.readAt < REREAD_MS)) return Promise.resolve();
+  const reuseFor = entry.unsupported ? UNSUPPORTED_REREAD_MS : REREAD_MS;
+  if (entry.readAt > 0 && Date.now() - entry.readAt < reuseFor) return Promise.resolve();
   entry.readAt = Date.now();
   const run = maker.listModelGroups()
     .then((raw) => {
@@ -45,6 +48,7 @@ function readHostModelGroups(deviceId: string, maker: ModelGroupsTransport): Pro
         entry.groups = null;
         return;
       }
+      entry.unsupported = false;
       entry.groups = parseCompanionModelGroups(raw) ?? [];
     })
     // 连不上时保留上一次的答案。
@@ -67,7 +71,11 @@ export function useHostModelGroups(
     void readHostModelGroups(deviceId, maker).then(() => { if (!cancelled) setVersion((value) => value + 1); });
     return () => { cancelled = true; };
   }, [enabled, deviceId, maker]);
-  if (!enabled || !deviceId) return null;
+  return enabled && deviceId ? cachedHostModelGroups(deviceId) : null;
+}
+
+/** 上次读到的那台电脑的模式；没读到或不支持时为 null。 */
+export function cachedHostModelGroups(deviceId: string): HostModelGroup[] | null {
   const entry = cache.get(deviceId);
   return entry && !entry.unsupported ? entry.groups : null;
 }
