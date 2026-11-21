@@ -47,10 +47,20 @@ const LIKE_SCORE_BASE = 1_000_000_000;
  * 500 是在 bounded latency 与召回之间取的平衡。
  */
 const LIKE_CANDIDATE_LIMIT = 500;
-/** 命中窗口: 命中位置前 60 / 后 120 字符 */
+/** 单词/短语命中窗口: 命中位置前 60 / 后 120 字符 */
 const SNIPPET_BEFORE = 60;
 const SNIPPET_AFTER = 120;
 const SNIPPET_MAX_LEN = 200;
+/**
+ * 多词兜底片段: 每个正文命中的词各取一段窗口 (前 24 / 后 36 字符), 最多 3 段。
+ * 间隔小于 20 字的窗口合并, 避免同一句被切成互相重叠的多段。
+ */
+const MULTI_WINDOW_BEFORE = 24;
+const MULTI_WINDOW_AFTER = 36;
+const MULTI_WINDOW_MERGE_GAP = 20;
+const MULTI_WINDOW_MAX_SEGMENTS = 3;
+/** 打上 <mark> 后的片段上限 (200 字原文 + 省略号与标签余量) */
+const SNIPPET_MARKED_MAX_LEN = 240;
 
 export class MemoryFts {
   constructor(private readonly db: Database.Database) {}
@@ -99,8 +109,9 @@ export class MemoryFts {
    *     见 escapeFtsQuery 说明), bm25 排序, snippet() 高亮;
    *  2. 整串 LIKE — 与改动前同一召回口径, 中文子串(如「边界」在「边界索引
    *     配置说明」中) 由它捞回;
-   *  3. 前两层都为空时, 才按空白拆词做 OR 召回 (「登录 失败」不再直接归零),
-   *     按字段权重 + 覆盖词数 + 正文密度打分。
+   *  3. 前两层都为空时, 才按空白拆词做 OR 召回 (「登录 失败」不再直接归零):
+   *     覆盖词数优先排序, 覆盖不足一半的命中丢弃 (全部低于门槛时退回未过滤
+   *     结果), 片段按每个命中词各取一段窗口。
    * 前两层有任何命中时结果集与改动前一致, 只改排序与片段; OR 只在零命中时兜底。
    * MATCH 已满 limit 时为 LIKE-only 子串命中预留 1 个名额, 避免其被整 token 命中遮蔽。
    */
@@ -196,9 +207,10 @@ export class MemoryFts {
    * 要求原文出现同一字面串 (「登录 失败」命中「登录…失败」)。
    * 大小写不敏感(LIKE 默认 ASCII 不敏感, CJK 逐字节精确)。
    *
-   * SQL 先按字段命中 + 覆盖词数粗排, 只取前 LIKE_CANDIDATE_LIMIT 条候选, 再在
+   * SQL 先按覆盖词数 + 字段命中粗排, 只取前 LIKE_CANDIDATE_LIMIT 条候选, 再在
    * JS 里按正文密度/长度精确打分 — 不再把所有命中行的 body 拉回主进程。
-   * 候选之外的高密度文档会被放弃; 同分时短正文优先, 作为密度的一个廉价近似。
+   * 候选之外的高密度文档会被放弃; 覆盖词数优先做第一排序键, 让全词文档不会被
+   * 大量部分命中挤出候选。
    */
   private searchLike(terms: readonly string[], opts: SearchOptions): SearchHit[] {
     const clauses = terms.map(
@@ -208,30 +220,36 @@ export class MemoryFts {
       const pattern = `%${escapeLikePattern(term)}%`;
       return [pattern, pattern, pattern];
     });
-    // 粗排与最终权重同源(字段 12/6/6, 覆盖词数做乘数), 只少密度与长度归一。
+    // 粗排与 WHERE 用同一套 LIKE pattern: LIKE 对 ASCII 大小写不敏感, 与 JS 打分
+    // (统一小写) 口径一致。若用 instr, 大小写不同的高覆盖文档会在这里被算成 0,
+    // 在 500 候选截断前就被挤掉。
     const coarseParts = terms.map(
       () =>
-        `(CASE WHEN instr(title, ?) > 0 THEN 12 ELSE 0 END` +
-        ` + CASE WHEN instr(description, ?) > 0 THEN 6 ELSE 0 END` +
-        ` + CASE WHEN instr(body, ?) > 0 THEN 6 ELSE 0 END)`,
+        `(CASE WHEN title LIKE ? ESCAPE '!' THEN 12 ELSE 0 END` +
+        ` + CASE WHEN description LIKE ? ESCAPE '!' THEN 6 ELSE 0 END` +
+        ` + CASE WHEN body LIKE ? ESCAPE '!' THEN 6 ELSE 0 END)`,
     );
     const matchedParts = terms.map(
       () =>
-        `(CASE WHEN instr(title, ?) > 0 OR instr(description, ?) > 0 OR instr(body, ?) > 0` +
+        `(CASE WHEN title LIKE ? ESCAPE '!' OR description LIKE ? ESCAPE '!' OR body LIKE ? ESCAPE '!'` +
         ` THEN 1 ELSE 0 END)`,
     );
-    const coarseParams: unknown[] = terms.flatMap((term) => [term, term, term]);
-    const params: unknown[] = [...coarseParams, ...coarseParams, ...whereParams];
+    // 参数顺序严格跟 SELECT 内占位符出现顺序一致: matchedCount → coarse → WHERE → type;
+    // 三段用同一份 pattern, 保证粗排与召回口径完全一致。
+    const params: unknown[] = [...whereParams, ...whereParams, ...whereParams];
     let sql = `SELECT filename, type, title, description, body,
-                      (${coarseParts.join(' + ')}) * (${matchedParts.join(' + ')}) AS coarse
+                      (${matchedParts.join(' + ')}) AS matchedCount,
+                      (${coarseParts.join(' + ')}) AS coarse
                FROM ${TABLE}
                WHERE (${clauses.join(' OR ')})`;
     if (opts.type) {
       sql += ` AND type = ?`;
       params.push(opts.type);
     }
-    // 候选池截断: 同分时正文短的优先 (密度高的文档更像精确命中)。
-    sql += ` ORDER BY coarse DESC, length(body) ASC, filename ASC LIMIT ${LIKE_CANDIDATE_LIMIT}`;
+    // 候选池截断: 先覆盖词数, 再粗排分, 同分时正文短的优先 (密度高的更像精确命中)。
+    sql +=
+      ` ORDER BY matchedCount DESC, coarse DESC, length(body) ASC, filename ASC` +
+      ` LIMIT ${LIKE_CANDIDATE_LIMIT}`;
 
     try {
       const rows = this.db.prepare(sql).all(...params) as Array<{
@@ -243,23 +261,38 @@ export class MemoryFts {
       }>;
       const lowered = terms.map((term) => term.toLowerCase());
       const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
+      const required = requiredMatchCount(lowered.length);
       type Row = (typeof rows)[number];
-      type ScoredRow = { row: Row; score: number; bodyHitAt: number };
-      return rows
+      type ScoredRow = { row: Row; score: number; matched: number; bodyHits: BodyHit[] };
+      const scored = rows
         .map((r): ScoredRow | null => {
-          const scored = scoreLikeHit(r, lowered);
-          if (scored.score <= 0) return null;
-          return { row: r, score: scored.score, bodyHitAt: scored.bodyHitAt };
+          const hit = scoreLikeHit(r, lowered);
+          if (hit.score <= 0) return null;
+          return { row: r, score: hit.score, matched: hit.matched, bodyHits: hit.bodyHits };
         })
-        .filter((hit): hit is ScoredRow => hit !== null)
-        .sort((a, b) => b.score - a.score || a.row.filename.localeCompare(b.row.filename))
+        .filter((hit): hit is ScoredRow => hit !== null);
+      // 覆盖率门槛: 多词至少命中一半; 全部低于门槛时退回未过滤结果, 保证不归零。
+      let qualified = scored.filter((hit) => hit.matched >= required);
+      // 2 词查询的覆盖率阈值是 1: 全词命中全留, 部分命中只留质量分不低于最高分一半的,
+      // 滤掉「一个常见词撞上」的弱命中 (实测 Top-5 全词率 0.28–0.53 → 0.39–0.65)。
+      if (terms.length === 2 && qualified.length > 0) {
+        const topScore = Math.max(...scored.map((hit) => hit.score));
+        qualified = qualified.filter((hit) => hit.matched >= 2 || hit.score >= topScore * 0.5);
+      }
+      return (qualified.length > 0 ? qualified : scored)
+        .sort(
+          (a, b) =>
+            b.matched - a.matched ||
+            b.score - a.score ||
+            a.row.filename.localeCompare(b.row.filename),
+        )
         .slice(0, limit)
         // 只为最终返回的少数命中构建片段, 不在上千条命中上跑正则标记
         .map((hit): SearchHit => ({
           filename: hit.row.filename,
           type: hit.row.type as MemoryType,
           title: hit.row.title,
-          snippet: buildLikeSnippet(hit.row, terms, hit.bodyHitAt),
+          snippet: buildLikeSnippet(hit.row, terms, hit.bodyHits),
           // 越小越相关: 基准 - 质量分, 仍排在 MATCH 命中之后、LIKE 臂内部有序
           score: LIKE_SCORE_BASE - Math.round(hit.score * 1000),
         }));
@@ -330,20 +363,30 @@ function parseQuery(query: string): { matchQuery: string; terms: string[] } {
   return { matchQuery, terms };
 }
 
+/** 多词兜底: 词在正文中的首个命中位置 (小写化坐标, 与 body 等长) */
+type BodyHit = { term: string; at: number };
+
+/** 多词兜底的覆盖率门槛: 至少命中一半查询词 (2 词→1, 3 词→2, 5 词→3) */
+function requiredMatchCount(termCount: number): number {
+  if (termCount <= 1) return 1;
+  return Math.ceil(termCount / 2);
+}
+
 /**
- * LIKE 臂打分: title 12 / description 6 / body 6 (出现次数加成, 按正文长度开方归一),
- * 多词 OR 兜底再乘覆盖词数。分数只用于 LIKE 臂内部排序。
+ * LIKE 臂打分: title 12 / description 6 / body 6 (出现次数加成, 按正文长度开方归一)。
+ * 覆盖词数不再做乘数 — 它已是排序的第一键; 分数只用于同覆盖层内比较。
+ * 同时返回每个在正文出现的词的首个位置, 供多窗口片段使用。
  */
 function scoreLikeHit(
   r: { title: string; description: string; body: string },
   terms: readonly string[],
-): { score: number; bodyHitAt: number } {
+): { score: number; matched: number; bodyHits: BodyHit[] } {
   const title = r.title.toLowerCase();
   const description = r.description.toLowerCase();
   const body = r.body.toLowerCase();
   let score = 0;
   let matched = 0;
-  let bodyHitAt = -1;
+  const bodyHits: BodyHit[] = [];
 
   for (const term of terms) {
     let hit = false;
@@ -361,37 +404,94 @@ function scoreLikeHit(
       const count = countOccurrences(body, term, 6);
       const density = 1 + Math.min(count - 1, 4) * 0.5;
       score += (density * 6) / Math.sqrt(Math.max(1, body.length / 1000));
-      if (bodyHitAt < 0 || pos < bodyHitAt) bodyHitAt = pos;
+      bodyHits.push({ term, at: pos });
     }
     if (hit) matched += 1;
   }
-  if (matched === 0) return { score: 0, bodyHitAt: -1 };
+  if (matched === 0) return { score: 0, matched: 0, bodyHits: [] };
 
-  if (terms.length > 1) {
-    // 命中更多查询词更相关: 覆盖词数做乘数, 避免「一个词落在标题」压过
-    // 「两个词都在正文」(如「缓存 日志」两个词都在正文的文档应排在只有日志的文档前)
-    score *= matched;
-  }
-
-  return { score, bodyHitAt };
+  return { score, matched, bodyHits };
 }
 
-/** 命中窗口片段: body 优先, 没有 body 命中时退回 description/title, 关键词打 <mark> */
+/**
+ * 命中片段: 单词/短语保留原单窗口 (±60/120); 多词按每个正文命中词各取一段
+ * (前 24 / 后 36, 近邻合并, 最多 3 段); 正文无命中时退回 description/title。
+ */
 function buildLikeSnippet(
   r: { title: string; description: string; body: string },
   terms: readonly string[],
-  bodyHitAt: number,
+  bodyHits: readonly BodyHit[],
 ): string {
-  if (bodyHitAt >= 0) {
-    const start = Math.max(0, bodyHitAt - SNIPPET_BEFORE);
-    const end = Math.min(r.body.length, bodyHitAt + SNIPPET_AFTER);
-    const head = start > 0 ? '…' : '';
-    const tail = end < r.body.length ? '…' : '';
-    const text = `${head}${r.body.slice(start, end).replace(/\s+/g, ' ').trim()}${tail}`;
-    return markTerms(truncate(text, SNIPPET_MAX_LEN), terms);
+  if (bodyHits.length > 0) {
+    if (terms.length <= 1) return buildSingleWindowSnippet(r.body, bodyHits[0]!.at, terms);
+    return buildMultiWindowSnippet(r.body, bodyHits, terms);
   }
   const source = [r.description, r.title].find((f) => f && containsAnyTerm(f, terms)) ?? r.title;
   return markTerms(truncate(source, SNIPPET_MAX_LEN), terms);
+}
+
+function buildSingleWindowSnippet(body: string, hitAt: number, terms: readonly string[]): string {
+  const start = Math.max(0, hitAt - SNIPPET_BEFORE);
+  const end = Math.min(body.length, hitAt + SNIPPET_AFTER);
+  const head = start > 0 ? '…' : '';
+  const tail = end < body.length ? '…' : '';
+  const text = `${head}${body.slice(start, end).replace(/\s+/g, ' ').trim()}${tail}`;
+  return markTerms(truncate(text, SNIPPET_MAX_LEN), terms);
+}
+
+function buildMultiWindowSnippet(body: string, bodyHits: readonly BodyHit[], terms: readonly string[]): string {
+  type Window = { start: number; end: number; hitAt: number };
+  const windows: Window[] = bodyHits
+    .map((hit) => ({
+      start: Math.max(0, hit.at - MULTI_WINDOW_BEFORE),
+      end: Math.min(body.length, hit.at + hit.term.length + MULTI_WINDOW_AFTER),
+      hitAt: hit.at,
+    }))
+    .sort((a, b) => a.start - b.start);
+
+  const merged: Window[] = [];
+  for (const w of windows) {
+    const last = merged[merged.length - 1];
+    if (last && w.start - last.end < MULTI_WINDOW_MERGE_GAP) {
+      last.end = Math.max(last.end, w.end);
+    } else {
+      merged.push({ ...w });
+    }
+  }
+  const segments = merged.slice(0, MULTI_WINDOW_MAX_SEGMENTS);
+  const initialBudget = Math.max(
+    16,
+    Math.floor((SNIPPET_MAX_LEN - (segments.length - 1)) / segments.length),
+  );
+
+  let budget = initialBudget;
+  for (;;) {
+    const parts = segments.map((seg) => sliceWindow(body, seg, budget));
+    const head = parts[0]!.start > 0 ? '…' : '';
+    const tail = parts[parts.length - 1]!.end < body.length ? '…' : '';
+    const snippet = markTerms(
+      `${head}${parts.map((part) => part.text).join('…')}${tail}`,
+      terms,
+    );
+    // 关键词多/词长时 <mark> 会撑长片段: 缩预算重来, 守住 240 字上限
+    if (snippet.length <= SNIPPET_MARKED_MAX_LEN || budget <= 12) return snippet;
+    budget = Math.max(12, Math.floor(budget * 0.75));
+  }
+}
+
+/** 超预算时以命中词为中心截断, 避免把关键词本身切掉; 返回实际切片边界供省略号判断 */
+function sliceWindow(
+  body: string,
+  seg: { start: number; end: number; hitAt: number },
+  budget: number,
+): { text: string; start: number; end: number } {
+  let start = seg.start;
+  let end = seg.end;
+  if (end - start > budget) {
+    start = Math.max(seg.start, Math.min(seg.hitAt - Math.floor(budget / 3), end - budget));
+    end = Math.min(end, start + budget);
+  }
+  return { text: body.slice(start, end).replace(/\s+/g, ' ').trim(), start, end };
 }
 
 /** 单次替换 + 长词优先, 避免「登录」与「登录失败」互相嵌套 <mark> */
@@ -415,7 +515,7 @@ function countOccurrences(haystack: string, needle: string, cap: number): number
 
 function containsAnyTerm(text: string, terms: readonly string[]): boolean {
   const lower = text.toLowerCase();
-  return terms.some((term) => lower.includes(term));
+  return terms.some((term) => lower.includes(term.toLowerCase()));
 }
 
 function escapeRegExp(s: string): string {

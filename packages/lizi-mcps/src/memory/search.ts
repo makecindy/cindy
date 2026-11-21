@@ -3,7 +3,8 @@
  *
  * SQLite FTS5 全文检索 (Hermes 风格)。召回分三层: 短语 MATCH → 整串 LIKE →
  * 前两层都为空时按空白拆词 OR (escapeFtsQuery 仍把 MATCH 收成 phrase, 不支持
- * AND/OR/NOT advanced 语法), 保证已有短语命中的结果集不变。
+ * AND/OR/NOT advanced 语法), 保证已有短语命中的结果集不变; 拆词臂按覆盖率过滤
+ * 并按覆盖词数排序。
  *
  * 适用场景: LLM 知道想找的内容大概是什么 (关键词), 但不知道哪个文件; 用 search
  * 拿候选 + snippet, 再走 memory_read 拿全文。
@@ -21,8 +22,10 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
     category: 'search',
     description:
       '关键词检索当前 workdir 的 memory (按 title/description/body)。优先短语精确匹配; ' +
-      '短语无命中时按空格拆词召回, 覆盖关键词越多排得越前; 返回按相关度排序的命中列表 ' +
-      '(filename / type / title / snippet 命中窗口与 <mark> 标记 / score)。' +
+      '短语无命中时按空格拆词召回: 只保留覆盖至少一半关键词的命中 (无满足者时退回全部; ' +
+      '2 个词时再滤掉分数过低的单关键词命中), 覆盖越多排得越前, ' +
+      '片段展示命中词附近的上下文并用 <mark> 标记。' +
+      '返回按相关度排序的命中列表 (filename / type / title / snippet / score)。' +
       ' 可选 type 限定类目, limit 默认 10 (上限 50)。' +
       ' 拿到候选后走 memory_read 拉全文。',
     inputShape: {

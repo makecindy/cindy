@@ -143,9 +143,11 @@ describe('MemoryFts', () => {
   // 测试价值 (engineering-conventions §3.2)
   // - 生产入口与可观察结果: MemoryFts.search → memory_search 的命中数、顺序、snippet。
   // - Bug 依据: 短语零命中时旧实现直接返回 0; 真实记忆库上 5/10 条查询零命中。
-  // - 现有覆盖缺口: 原用例只覆盖单词中文子串与 MATCH 合并, 无多词、排序、窗口片段。
-  // - 最小失败输入: 「登录 缓存」两条正文分别只含一个词 → 旧实现 0 命中。
-  // - tier: unit (真 better-sqlite3 内存库, 无真实 I/O; 整文件约 1.3s)。
+  // - 现有覆盖缺口: 原用例只覆盖单词中文子串与 MATCH 合并; 本块补多词覆盖率门槛、
+  //   覆盖优先排序、候选池大小写与多窗口片段 (原片段只围绕一个命中词)。
+  // - 最小失败输入: 「登录 缓存」两条正文分别只含一个词 → 旧实现 0 命中;
+  //   「登录 失败 缓存」只命中 1/3 → 旧实现会返回低覆盖结果。
+  // - tier: unit (真 better-sqlite3 内存库, 无真实 I/O; 整文件约 1.5s)。
   it('短语零命中时多词按 OR 兜底, 覆盖更多词的排前面', () => {
     // 旧实现把整条 query 当一个 LIKE 子串: 「登录 缓存」只有在原文出现
     // 「登录 缓存」字面串时才命中, 这里两条都不会被捞到 (0 命中)。
@@ -157,6 +159,85 @@ describe('MemoryFts', () => {
     expect(hits.map((h) => h.filename).sort()).toEqual(['project_a.md', 'project_b.md']);
     // b 两个词都命中, a 只命中「登录」
     expect(hits[0]?.filename).toBe('project_b.md');
+  });
+
+  // 覆盖门槛: required = max(1, ceil(词数 / 2)) — 2 词→1, 3 词→2, 5 词→3。
+  it('3 词: 只覆盖 1/3 的命中被丢弃, 2/3 与 3/3 保留且全词在前', () => {
+    fts.upsert(record('project_one.md', '登录说明'));
+    fts.upsert(record('project_two.md', '登录失败时检查 token'));
+    fts.upsert(record('project_three.md', '登录失败后清理缓存'));
+
+    const hits = fts.search('登录 失败 缓存');
+    expect(hits.map((h) => h.filename)).toEqual(['project_three.md', 'project_two.md']);
+  });
+
+  it('5 词: 门槛是 3, 只覆盖 2/5 的命中被丢弃', () => {
+    fts.upsert(record('project_gate.md', '登录说明'));
+    fts.upsert(record('project_two.md', '登录失败说明'));
+    fts.upsert(record('project_three.md', '登录失败后缓存'));
+    fts.upsert(record('project_all.md', '登录失败后缓存 token 过期'));
+
+    const hits = fts.search('登录 失败 缓存 token 过期');
+    expect(hits.map((h) => h.filename)).toEqual(['project_all.md', 'project_three.md']);
+  });
+
+  it('2 词: 全词与高分部分命中保留, 低分部分命中被丢弃', () => {
+    fts.upsert(record('project_full.md', '登录后写缓存'));
+    // 部分命中但标题也命中「登录」, 质量分 18, 高于最高分 18 的一半
+    const strong = record('project_strong.md', '登录项');
+    fts.upsert({ ...strong, frontmatter: { ...strong.frontmatter, title: '登录速查' } });
+    // 部分命中且质量分 6, 低于 0.5 × 18
+    fts.upsert(record('project_weak.md', '登录说明'));
+
+    const hits = fts.search('登录 缓存');
+    expect(hits.map((h) => h.filename)).toEqual(['project_full.md', 'project_strong.md']);
+  });
+
+  it('相对分阈值只作用于 2 词: 3 词的低分 2/3 命中仍按覆盖率保留', () => {
+    // 质量分约 4.9, 低于最高分 18 的一半; 若误用 2 词规则会被丢掉
+    fts.upsert(record('project_two.md', `登录${'填充'.repeat(3000)}失败`));
+    fts.upsert(record('project_three.md', '登录失败后缓存'));
+
+    const hits = fts.search('登录 失败 缓存');
+    expect(hits.map((h) => h.filename)).toEqual(['project_three.md', 'project_two.md']);
+  });
+
+  it('全部低于覆盖率门槛时退回未过滤结果, 不归零', () => {
+    fts.upsert(record('project_a.md', '登录说明'));
+    fts.upsert(record('project_b.md', '缓存说明'));
+
+    // 4 词门槛 2, 两条都只命中 1 个词 — 过滤后为空, 必须退回未过滤结果
+    const hits = fts.search('登录 缓存 日志 边界');
+    expect(hits.map((h) => h.filename).sort()).toEqual(['project_a.md', 'project_b.md']);
+  });
+
+  it('部分命中原始分更高时, 覆盖更多词的全词命中仍排第一', () => {
+    // 全词命中: 两个词都在正文, 正文长, 原始分低
+    fts.upsert(record('project_full.md', `登录${'填充内容'.repeat(400)}缓存`));
+    // 部分命中: 「登录」在标题且正文主要就是它, 原始分高但不含「缓存」
+    const partial = record('project_partial.md', '登录项');
+    fts.upsert({ ...partial, frontmatter: { ...partial.frontmatter, title: '登录速查' } });
+
+    const hits = fts.search('登录 缓存');
+    expect(hits.map((h) => h.filename)).toEqual(['project_full.md', 'project_partial.md']);
+    // 覆盖优先, 不是因为分数更高: LIKE 臂 score 越小越相关
+    expect(hits[0]!.score).toBeGreaterThan(hits[1]!.score);
+  });
+
+  it('候选池: 覆盖词数优先排序, 全词文档在 filename 末尾也进入 500 候选', () => {
+    // 500 条短正文单覆盖文档: title+description+body 都含「缓存」, 粗排分更高,
+    // 按旧的 coarse 排序会占满 500 候选, 把正文更长的全词文档挤到候选外。
+    const singles = Array.from({ length: 500 }, (_, i) => {
+      const base = record(`digest_z${String(i).padStart(4, '0')}.md`, '缓存项');
+      return {
+        ...base,
+        frontmatter: { ...base.frontmatter, title: '缓存速查', description: '缓存速查' },
+      };
+    });
+    fts.rebuild([...singles, record('digest_z0500.md', `缓存项 日志项${'填充'.repeat(3000)}`)]);
+
+    const hits = fts.search('缓存 日志', { limit: 3 });
+    expect(hits[0]?.filename).toBe('digest_z0500.md');
   });
 
   it('title 命中优先于仅正文命中, LIKE 臂内按 score 升序', () => {
@@ -240,6 +321,69 @@ describe('MemoryFts', () => {
     const [code] = fts.search('<T');
     expect(code?.snippet).toContain('<T');
     expect(code?.snippet).not.toContain('&lt;');
+  });
+
+  it('多词片段: 相隔远的两词各取一段, 用 … 连接且都打 mark', () => {
+    fts.upsert(record('project_far.md', `登录说明${'填充'.repeat(100)}缓存说明`));
+    const [hit] = fts.search('登录 缓存');
+    expect(hit?.snippet).toContain('<mark>登录</mark>');
+    expect(hit?.snippet).toContain('<mark>缓存</mark>');
+    expect(hit?.snippet).toContain('…');
+    // 一段连接, 首尾没有省略号
+    expect(hit?.snippet.split('…').length).toBe(2);
+  });
+
+  it('多词片段: 相邻窗口合并成一段, 不重复上下文', () => {
+    fts.upsert(record('project_adjacent_terms.md', '登录成功后写入本地缓存'));
+    const [hit] = fts.search('登录 缓存');
+    expect(hit?.snippet).toBe('<mark>登录</mark>成功后写入本地<mark>缓存</mark>');
+  });
+
+  it('多词片段: 三个分离的词各取一段, 总长不超过 240', () => {
+    fts.upsert(
+      record('project_three_windows.md', `登录${'甲'.repeat(90)}缓存${'乙'.repeat(90)}日志${'丙'.repeat(90)}`),
+    );
+    const [hit] = fts.search('登录 缓存 日志');
+    const snippet = hit?.snippet ?? '';
+    for (const term of ['登录', '缓存', '日志']) expect(snippet).toContain(`<mark>${term}</mark>`);
+    expect(snippet.split('…').length).toBeGreaterThanOrEqual(3);
+    expect(snippet.length).toBeLessThanOrEqual(240);
+  });
+
+  it('多词片段: 正文没有命中时退回 description/title', () => {
+    const titled = record('project_desc_only.md', '正文没有关键词');
+    fts.upsert({
+      ...titled,
+      frontmatter: { ...titled.frontmatter, title: '登录速查', description: '缓存说明' },
+    });
+    const [hit] = fts.search('登录 缓存');
+    expect(hit?.snippet).toBe('<mark>缓存</mark>说明');
+  });
+
+  it('多词片段: 回退字段匹配对大小写不敏感', () => {
+    const titled = record('project_case.md', '正文没有关键词');
+    fts.upsert({
+      ...titled,
+      frontmatter: { ...titled.frontmatter, title: 'Cache Guide', description: 'cache and notes' },
+    });
+    const [hit] = fts.search('Cache notes');
+    expect(hit?.snippet).toBe('<mark>cache</mark> and <mark>notes</mark>');
+  });
+
+  it('候选池: 大小写不同的全词文档不会被粗排算成低覆盖而挤出', () => {
+    // LIKE 大小写不敏感(召回命中), 若粗排用大小写敏感的 instr, 查 CACHE 时
+    // 500 条小写 cache 的短文档会与目标文档同为 1 覆盖, 长正文全词文档按长度被挤出。
+    const singles = Array.from({ length: 500 }, (_, i) =>
+      record(`digest_c${String(i).padStart(4, '0')}.md`, 'cache项 与 缓存项'),
+    );
+    const target = record('digest_c0500.md', `缓存${'填充'.repeat(3000)}`);
+    fts.rebuild([
+      ...singles,
+      { ...target, frontmatter: { ...target.frontmatter, title: 'Cache Guide' } },
+    ]);
+
+    const hits = fts.search('CACHE 缓存', { limit: 3 });
+    expect(hits[0]?.filename).toBe('digest_c0500.md');
   });
 
   it('排序: 出现次数多、正文更短的优先', () => {
