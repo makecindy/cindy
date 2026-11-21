@@ -1,3 +1,5 @@
+import { useWallpaper } from '@/theme/wallpaper';
+import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 import { useRemoteProjectAliases as useProjectInfoSnapshots } from '@/session/remoteProjectAliases';
 import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
 import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
@@ -515,6 +517,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
   const paneLayout = useSessionPaneLayout();
+  const { selected: wallpaper } = useWallpaper();
+  const headerHeight = useOptionalHeaderHeight();
+  const wallpaperUnderHeader = Platform.OS === 'ios' && !paneLayout.persistent && wallpaper !== 'none';
   const systemBack = useSystemNavigationBack();
   const paneHeader = Platform.OS === 'ios' && paneLayout.persistent && !systemBack;
   // Dev-only:把构建信息从全局浮层挪到这里的顶部展示(试 Fast Refresh)。
@@ -5265,7 +5270,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         <SystemNavigationBack label={t('shared.back')} onPress={handleBack} />
       ) : Platform.OS === 'ios' ? (
         <>
-          <Stack.Screen options={{ headerShown: true, headerBackVisible: false, headerShadowVisible: false, title: '', headerStyle: { backgroundColor: colors.surface }, headerTintColor: colors.textPrimary }} />
+          <Stack.Screen options={{ headerShown: true, headerBackVisible: false, headerShadowVisible: false, title: '',
+            headerTransparent: wallpaperUnderHeader, headerStyle: { backgroundColor: wallpaperUnderHeader ? 'transparent' : colors.surface },
+            headerTintColor: colors.textPrimary }} />
           <Stack.Toolbar placement="left">
             <Stack.Toolbar.Button icon="chevron.backward" accessibilityLabel={t('shared.back')} onPress={handleBack} />
           </Stack.Toolbar>
@@ -5279,7 +5286,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         behavior={keyboardAvoidingBehaviorForPlatform(
           Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
         )}
-        style={styles.keyboard}
+        style={[styles.keyboard, wallpaperUnderHeader && { marginTop: headerHeight }]}
       >
         <View style={[styles.screen, paneHeader && styles.paneScreen, composerDock.enabled && { paddingHorizontal: composerGeometry.horizontalInset }]}>
           {Platform.OS !== 'ios' || paneHeader || buildLabel || creating ? (
@@ -6454,7 +6461,7 @@ function formatWorkingDirLabel(workingDir: string): string {
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.surface },
+  safeArea: { flex: 1 },
   keyboard: { flex: 1 },
   screen: {
     flex: 1,
