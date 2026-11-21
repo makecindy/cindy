@@ -16824,7 +16824,8 @@
         "compactResumeFirst": "Sende zuerst eine Nachricht, um diese Aufgabe fortzusetzen, bevor du den Kontext komprimierst.",
         "compactNothing": "Noch nichts zu komprimieren",
         "sessionBranches": "Sitzungszweige",
-        "copySessionLink": "Sitzungslink kopieren"
+        "copySessionLink": "Sitzungslink kopieren",
+        "deliveryReceipt": "Dieses Ergebnis"
       },
       "sessionBranches": {
         "title": "Sitzungszweige",
@@ -22524,6 +22525,50 @@
       "ask": "Standardberechtigungen",
       "auto": "Automatische Prüfung",
       "bypassPermissions": "Vollzugriff"
+    }
+  },
+  "deliveryReceipt": {
+    "title": "Dieses Ergebnis",
+    "loading": "Dieses Ergebnis wird gelesen…",
+    "loadFailed": "Dieses Ergebnis konnte nicht gelesen werden",
+    "copied": "Link kopiert",
+    "copyFailed": "Link konnte nicht kopiert werden",
+    "copyLink": "Link kopieren",
+    "close": "Schließen",
+    "status": "Status",
+    "workingDir": "Arbeitsverzeichnis",
+    "branch": "Branch",
+    "changes": "Was sich geändert hat",
+    "verification": "Ausgeführte Befehle",
+    "outputs": "Was erzeugt wurde",
+    "pullRequest": "Pull Request",
+    "ci": "CI",
+    "ciNone": "Kein Pull Request",
+    "unknown": "Unbekannt",
+    "more": "{{count}} weitere",
+    "conversationOnly": "Diese Sitzung enthält nur das Gespräch. Es wurde nichts geändert oder erzeugt.",
+    "phaseValue": {
+      "running": "Läuft",
+      "waiting-permission": "Wartet auf deine Freigabe",
+      "waiting-answer": "Wartet auf deine Antwort",
+      "errored": "Fehler aufgetreten",
+      "usage-limit": "Nutzungslimit erreicht",
+      "finished": "Dieser Durchgang ist zu Ende",
+      "idle": "Untätig"
+    },
+    "ciValue": {
+      "unknown": "Unbekannt",
+      "none": "Nicht gelaufen",
+      "passed": "Bestanden",
+      "failed": "Fehlgeschlagen",
+      "pending": "Läuft noch"
+    },
+    "next": "Weiter",
+    "nextValue": {
+      "waiting-answer": "Wartet auf deine Antwort",
+      "waiting-approval": "Wartet auf deine Freigabe",
+      "waiting-merge": "Wartet auf den Merge",
+      "none": "Nichts weiter wartet"
     }
   }
 }

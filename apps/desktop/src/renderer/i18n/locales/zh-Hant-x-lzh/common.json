@@ -16750,7 +16750,8 @@
         "compactResumeFirst": "請先遣一訊以續此差事，再壓縮上下文。",
         "compactNothing": "無可壓縮者",
         "sessionBranches": "差事分支",
-        "copySessionLink": "錄差事連結"
+        "copySessionLink": "錄差事連結",
+        "deliveryReceipt": "本次結果"
       },
       "sessionBranches": {
         "title": "差事分支",
@@ -22435,6 +22436,50 @@
       "ask": "預設權柄",
       "auto": "自審",
       "bypassPermissions": "完全存取"
+    }
+  },
+  "deliveryReceipt": {
+    "title": "本次結果",
+    "loading": "正讀本次結果…",
+    "loadFailed": "讀本次結果不得",
+    "copied": "連結已錄",
+    "copyFailed": "錄連結不成",
+    "copyLink": "錄連結",
+    "close": "闔",
+    "status": "狀",
+    "workingDir": "工作目錄",
+    "branch": "枝",
+    "changes": "此番所改",
+    "verification": "所行命令",
+    "outputs": "此番所出",
+    "pullRequest": "PR",
+    "ci": "CI",
+    "ciNone": "無相聯之 PR",
+    "unknown": "未明",
+    "more": "尚有 {{count}} 項",
+    "conversationOnly": "此番唯有言談，未改檔案，亦無產出。",
+    "phaseValue": {
+      "running": "方行",
+      "waiting-permission": "待汝許",
+      "waiting-answer": "待汝答",
+      "errored": "有誤",
+      "usage-limit": "用量已盡",
+      "finished": "此輪已竟",
+      "idle": "閒"
+    },
+    "ciValue": {
+      "unknown": "未明",
+      "none": "未行",
+      "passed": "過",
+      "failed": "敗",
+      "pending": "尚行"
+    },
+    "next": "下一步",
+    "nextValue": {
+      "waiting-answer": "待汝答",
+      "waiting-approval": "待汝許",
+      "waiting-merge": "待併",
+      "none": "無待辦之下一步"
     }
   }
 }

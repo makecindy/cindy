@@ -16986,7 +16986,8 @@
         "compactResumeFirst": "Envía un mensaje para reanudar esta tarea antes de compactar su contexto.",
         "compactNothing": "Aún no hay nada que compactar",
         "sessionBranches": "Ramas de la sesión",
-        "copySessionLink": "Copiar enlace de la sesión"
+        "copySessionLink": "Copiar enlace de la sesión",
+        "deliveryReceipt": "Este resultado"
       },
       "sessionBranches": {
         "title": "Ramas de la sesión",
@@ -22737,6 +22738,50 @@
       "ask": "Permisos predeterminados",
       "auto": "Revisión automática",
       "bypassPermissions": "Acceso completo"
+    }
+  },
+  "deliveryReceipt": {
+    "title": "Este resultado",
+    "loading": "Leyendo este resultado…",
+    "loadFailed": "No se pudo leer este resultado",
+    "copied": "Enlace copiado",
+    "copyFailed": "No se pudo copiar el enlace",
+    "copyLink": "Copiar enlace",
+    "close": "Cerrar",
+    "status": "Estado",
+    "workingDir": "Directorio de trabajo",
+    "branch": "Rama",
+    "changes": "Qué cambió",
+    "verification": "Comandos ejecutados",
+    "outputs": "Qué se produjo",
+    "pullRequest": "Pull request",
+    "ci": "CI",
+    "ciNone": "Sin pull request",
+    "unknown": "Desconocido",
+    "more": "{{count}} más",
+    "conversationOnly": "Esta sesión solo tiene conversación. No hubo cambios ni archivos producidos.",
+    "phaseValue": {
+      "running": "En ejecución",
+      "waiting-permission": "Esperando tu aprobación",
+      "waiting-answer": "Esperando tu respuesta",
+      "errored": "Hubo un error",
+      "usage-limit": "Límite de uso alcanzado",
+      "finished": "Este turno terminó",
+      "idle": "Inactivo"
+    },
+    "ciValue": {
+      "unknown": "Desconocido",
+      "none": "No ejecutado",
+      "passed": "Aprobado",
+      "failed": "Fallido",
+      "pending": "En curso"
+    },
+    "next": "Siguiente",
+    "nextValue": {
+      "waiting-answer": "Esperando tu respuesta",
+      "waiting-approval": "Esperando tu aprobación",
+      "waiting-merge": "Pendiente de fusionar",
+      "none": "No hay otro paso en espera"
     }
   }
 }

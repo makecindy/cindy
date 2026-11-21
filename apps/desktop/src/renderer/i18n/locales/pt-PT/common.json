@@ -16986,7 +16986,8 @@
         "compactResumeFirst": "Envie uma mensagem para retomar esta tarefa antes de compactar o contexto.",
         "compactNothing": "Ainda não há nada para compactar",
         "sessionBranches": "Branches da sessão",
-        "copySessionLink": "Copiar ligação da sessão"
+        "copySessionLink": "Copiar ligação da sessão",
+        "deliveryReceipt": "Este resultado"
       },
       "sessionBranches": {
         "title": "Branches da sessão",
@@ -22737,6 +22738,50 @@
       "ask": "Permissões predefinidas",
       "auto": "Revisão automática",
       "bypassPermissions": "Acesso total"
+    }
+  },
+  "deliveryReceipt": {
+    "title": "Este resultado",
+    "loading": "A ler este resultado…",
+    "loadFailed": "Não foi possível ler este resultado",
+    "copied": "Ligação copiada",
+    "copyFailed": "Não foi possível copiar a ligação",
+    "copyLink": "Copiar ligação",
+    "close": "Fechar",
+    "status": "Estado",
+    "workingDir": "Diretório de trabalho",
+    "branch": "Ramo",
+    "changes": "O que mudou",
+    "verification": "Comandos executados",
+    "outputs": "O que foi produzido",
+    "pullRequest": "Pull request",
+    "ci": "CI",
+    "ciNone": "Sem pull request",
+    "unknown": "Desconhecido",
+    "more": "mais {{count}}",
+    "conversationOnly": "Esta sessão só tem a conversa. Nada foi alterado nem produzido.",
+    "phaseValue": {
+      "running": "Em execução",
+      "waiting-permission": "À espera da tua aprovação",
+      "waiting-answer": "À espera da tua resposta",
+      "errored": "Ocorreu um erro",
+      "usage-limit": "Limite de utilização atingido",
+      "finished": "Esta volta terminou",
+      "idle": "Inativa"
+    },
+    "ciValue": {
+      "unknown": "Desconhecido",
+      "none": "Não executado",
+      "passed": "Aprovado",
+      "failed": "Falhou",
+      "pending": "Ainda a correr"
+    },
+    "next": "Seguinte",
+    "nextValue": {
+      "waiting-answer": "À espera da tua resposta",
+      "waiting-approval": "À espera da tua aprovação",
+      "waiting-merge": "À espera de integrar",
+      "none": "Não há mais nada à espera"
     }
   }
 }

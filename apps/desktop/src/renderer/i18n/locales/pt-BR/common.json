@@ -16986,7 +16986,8 @@
         "compactResumeFirst": "Envie uma mensagem para retomar esta tarefa antes de compactar o contexto.",
         "compactNothing": "Nada para compactar ainda",
         "sessionBranches": "Branches da sessão",
-        "copySessionLink": "Copiar link da sessão"
+        "copySessionLink": "Copiar link da sessão",
+        "deliveryReceipt": "Este resultado"
       },
       "sessionBranches": {
         "title": "Branches da sessão",
@@ -22738,6 +22739,50 @@
       "ask": "Permissões padrão",
       "auto": "Revisão automática",
       "bypassPermissions": "Acesso total"
+    }
+  },
+  "deliveryReceipt": {
+    "title": "Este resultado",
+    "loading": "Lendo este resultado…",
+    "loadFailed": "Não foi possível ler este resultado",
+    "copied": "Link copiado",
+    "copyFailed": "Não foi possível copiar o link",
+    "copyLink": "Copiar link",
+    "close": "Fechar",
+    "status": "Estado",
+    "workingDir": "Diretório de trabalho",
+    "branch": "Branch",
+    "changes": "O que mudou",
+    "verification": "Comandos executados",
+    "outputs": "O que foi produzido",
+    "pullRequest": "Pull request",
+    "ci": "CI",
+    "ciNone": "Sem pull request",
+    "unknown": "Desconhecido",
+    "more": "mais {{count}}",
+    "conversationOnly": "Esta sessão só tem a conversa. Nada foi alterado nem produzido.",
+    "phaseValue": {
+      "running": "Em execução",
+      "waiting-permission": "Aguardando sua aprovação",
+      "waiting-answer": "Aguardando sua resposta",
+      "errored": "Ocorreu um erro",
+      "usage-limit": "Limite de uso atingido",
+      "finished": "Este turno terminou",
+      "idle": "Ociosa"
+    },
+    "ciValue": {
+      "unknown": "Desconhecido",
+      "none": "Não executado",
+      "passed": "Aprovado",
+      "failed": "Falhou",
+      "pending": "Ainda em execução"
+    },
+    "next": "Próximo",
+    "nextValue": {
+      "waiting-answer": "Aguardando sua resposta",
+      "waiting-approval": "Aguardando sua aprovação",
+      "waiting-merge": "Aguardando merge",
+      "none": "Não há mais nada aguardando"
     }
   }
 }

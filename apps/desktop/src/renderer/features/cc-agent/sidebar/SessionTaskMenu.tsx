@@ -42,6 +42,7 @@ import { TaskMigrationDialog } from './TaskMigrationDialog';
 import { TaskRuntimePluginsDialog } from './TaskRuntimePluginsDialog';
 import { setSessionNotificationsMuted } from './sessionNotificationMute';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
+import { requestOpenDeliveryReceipt } from './deliveryReceiptRequest';
 import { readPluginUiEntries, PluginUiSessionMenuItems } from '@/cindy-brain/PluginUiContributions';
 
 // Native window dragging ignores portal stacking. Leave 8px below the 50px drag
@@ -289,6 +290,7 @@ function ActiveSessionTaskMenu({
           </>
         )}
         {copy}
+        {!guest && !empty && item('deliveryReceipt', () => requestOpenDeliveryReceipt(session.id))}
         {session.status === 'active' &&
           (hosted && !guest ? (
             <DropdownMenuSub>

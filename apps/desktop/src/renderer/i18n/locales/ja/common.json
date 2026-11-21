@@ -16750,7 +16750,8 @@
         "compactResumeFirst": "先にメッセージを送信してタスクを再開してから、コンテキストを圧縮してください。",
         "compactNothing": "圧縮できる内容がまだありません",
         "sessionBranches": "セッション分岐",
-        "copySessionLink": "セッションリンクをコピー"
+        "copySessionLink": "セッションリンクをコピー",
+        "deliveryReceipt": "今回の結果"
       },
       "sessionBranches": {
         "title": "セッション分岐",
@@ -22435,6 +22436,50 @@
       "ask": "デフォルト権限",
       "auto": "自動レビュー",
       "bypassPermissions": "フルアクセス"
+    }
+  },
+  "deliveryReceipt": {
+    "title": "今回の結果",
+    "loading": "今回の結果を読み込んでいます…",
+    "loadFailed": "今回の結果を読めませんでした",
+    "copied": "リンクをコピーしました",
+    "copyFailed": "リンクをコピーできませんでした",
+    "copyLink": "リンクをコピー",
+    "close": "閉じる",
+    "status": "状態",
+    "workingDir": "作業ディレクトリ",
+    "branch": "ブランチ",
+    "changes": "変更したファイル",
+    "verification": "実行したコマンド",
+    "outputs": "作られたファイル",
+    "pullRequest": "プルリクエスト",
+    "ci": "CI",
+    "ciNone": "プルリクエストなし",
+    "unknown": "不明",
+    "more": "ほか {{count}} 件",
+    "conversationOnly": "このセッションには会話しかありません。変更も成果物もありません。",
+    "phaseValue": {
+      "running": "実行中",
+      "waiting-permission": "承認待ち",
+      "waiting-answer": "回答待ち",
+      "errored": "エラー",
+      "usage-limit": "利用上限",
+      "finished": "このターンは終了",
+      "idle": "待機"
+    },
+    "ciValue": {
+      "unknown": "不明",
+      "none": "未実行",
+      "passed": "成功",
+      "failed": "失敗",
+      "pending": "実行中"
+    },
+    "next": "次",
+    "nextValue": {
+      "waiting-answer": "回答待ち",
+      "waiting-approval": "承認待ち",
+      "waiting-merge": "マージ待ち",
+      "none": "ほかに待つことはありません"
     }
   }
 }
