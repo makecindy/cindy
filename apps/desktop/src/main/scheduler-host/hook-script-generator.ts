@@ -71,8 +71,8 @@ export interface HookScriptGeneratorDeps {
   ) => Promise<UtilityTextResult>;
   /**
    * 测试注入;缺省走 hook-runtimes.hasSystemNode(探测系统 node)。
-   * false → 生成的命令用 `xdt-node` 前缀(app 自带 Electron 运行时兜底,
-   * 见 pre-run-hook.resolveHookCommand),裸机用户也能跑。
+   * false → 生成 `xdt-node` 前缀;执行时再由 pre-run-hook 发现真实 Node,
+   * 不把 Electron exe 或版本管理器路径写进持久化命令。
    */
   hasSystemNode?: () => Promise<boolean>;
 }
@@ -417,7 +417,7 @@ function shellQuotePath(p: string): string {
 
 /**
  * 由落盘路径拼回命令(可测):项目内用相对路径(cwd=workingDir),否则绝对
- * 路径做平台 shell 转义。runner='xdt-node' = 系统无 node 时的 app 自带运行时兜底前缀。
+ * 路径做平台 shell 转义。runner='xdt-node' = 执行时解析真实 Node 的持久化前缀。
  */
 export function buildHookCommand(
   filePath: string,
@@ -441,7 +441,7 @@ export function buildHookCommand(
 }
 
 /**
- * 选定脚本执行方:系统 node 可用 → 'node';否则 'xdt-node'(app 自带运行时兜底)。
+ * 选定脚本执行方:系统 node 可用 → 'node';否则 'xdt-node'(执行时发现真实 Node)。
  * 探测异常时维持 'node' 旧行为(探测函数本身不 throw,此兜底只防测试桩异常)。
  */
 async function resolveRunner(deps: HookScriptGeneratorDeps): Promise<'node' | 'xdt-node'> {

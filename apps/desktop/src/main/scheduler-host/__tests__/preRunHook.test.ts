@@ -22,6 +22,9 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
+const nodeInterpreter = vi.hoisted(() => vi.fn(async (): Promise<string | null> => 'node'));
+vi.mock('../hook-runtimes', () => ({ resolveSystemNodeInterpreter: nodeInterpreter }));
+
 import {
   assertPreRunHookCommandSyntax,
   executePreRunHook,
@@ -277,22 +280,81 @@ describe('resolvePreRunHookTimeoutMs(无默认超时)', () => {
   });
 });
 
-describe('resolveHookCommand(xdt-node 前缀解析)', () => {
-  it('xdt-node 前缀 → 替换为当前运行时 execPath + ELECTRON_RUN_AS_NODE', async () => {
-    const { resolveHookCommand } = await import('../pre-run-hook');
-    const resolved = resolveHookCommand('xdt-node "C:/x/check.mjs"');
-    expect(resolved.command).toBe(`"${process.execPath}" "C:/x/check.mjs"`);
-    expect(resolved.extraEnv).toEqual({ ELECTRON_RUN_AS_NODE: '1' });
+describe('Node 解释器执行回退', () => {
+  it.skipIf(process.platform === 'win32')('PATH 可用时保留原始命令前后空白和尾部转义空格', async () => {
+    const result = await executePreRunHook({
+      command: '  node -e "console.log(JSON.stringify(process.argv.slice(1)));process.exit(2)" value\\ ',
+      stdinPayload: payload,
+    });
+    expect(result).toMatchObject({ decision: 'skip', status: 'skipped', exitCode: 2 });
+    expect(JSON.parse(result.stdout)).toEqual(['value ']);
   });
 
-  it('普通命令原样透传,无额外 env', async () => {
-    const { resolveHookCommand } = await import('../pre-run-hook');
-    const resolved = resolveHookCommand('node check.mjs');
-    expect(resolved.command).toBe('node check.mjs');
-    expect(resolved.extraEnv).toEqual({});
+  it('PATH 失效时按字面使用带空格和 $& 的真实 Node 路径,保留 PR 参数与 stdin', async () => {
+    const { mkdtempSync, writeFileSync, rmSync, chmodSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const pathMod = await import('node:path');
+    const dir = mkdtempSync(pathMod.join(tmpdir(), 'real-node-hook-'));
+    try {
+      const script = pathMod.join(dir, 'gate.mjs');
+      writeFileSync(script, `
+        let input = '';
+        for await (const chunk of process.stdin) input += chunk;
+        console.log(JSON.stringify({ args: process.argv.slice(2), event: JSON.parse(input).event }));
+        process.exit(2);
+      `);
+      const quotedScript = process.platform === 'win32' ? `"${script}"` : `'${script}'`;
+      // 普通可执行文件即可覆盖字面替换,不依赖 symlink / junction 的宿主能力。
+      const specialNode = pathMod.join(dir, process.platform === 'win32' ? 'real node$&runtime.cmd' : 'real node$&runtime');
+      if (process.platform === 'win32') {
+        writeFileSync(specialNode, `@"${process.execPath}" %*\r\n`);
+      } else {
+        const quotedExecPath = process.execPath.replace(/'/g, `'\\''`);
+        writeFileSync(specialNode, `#!/bin/sh\nexec '${quotedExecPath}' "$@"\n`);
+        chmodSync(specialNode, 0o755);
+      }
+      const quotedNode = process.platform === 'win32' ? `"${specialNode}"` : `'${specialNode}'`;
+      const prUrl = 'https://github.com/makecindy/cindy/pull/11722';
+      nodeInterpreter.mockResolvedValueOnce(quotedNode);
+      const result = await executePreRunHook({
+        command: `node ${quotedScript} ${prUrl}`,
+        cwd: dir,
+        stdinPayload: payload,
+      });
+      expect(nodeInterpreter).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: dir }));
+      expect(result).toMatchObject({ decision: 'skip', status: 'skipped', exitCode: 2 });
+      expect(JSON.parse(result.stdout)).toEqual({ args: [prUrl], event: 'schedule-pre-run' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('xdt-node 找不到真实运行时则 fail-closed,不启动命令', async () => {
+    nodeInterpreter.mockResolvedValueOnce(null);
+    spawnCalls.count = 0;
+    const result = await executePreRunHook({ command: 'xdt-node "gate.mjs"', stdinPayload: payload });
+    expect(result).toMatchObject({ status: 'failed', decision: 'block', exitCode: null });
+    expect(result.error).toContain('requires a working Node.js runtime');
+    expect(spawnCalls.count).toBe(0);
   });
 
-  it('端到端:xdt-node 命令真实执行(测试环境 execPath 即 node)→ exit 2 = skip', async () => {
+  it('xdt-node 的分隔符绕过在保存与执行入口均阻止', async () => {
+    const command = 'xdt-node;exit 0';
+    await expect(assertPreRunHookCommandSyntax(command)).rejects.toThrow(
+      'xdt-node must be followed by a script command',
+    );
+    nodeInterpreter.mockClear();
+    spawnCalls.count = 0;
+    const result = await executePreRunHook({ command, stdinPayload: payload });
+    expect(result).toMatchObject({ status: 'failed', decision: 'block', exitCode: null });
+    expect(result.error).toContain('must be followed by a script command');
+    expect(nodeInterpreter).not.toHaveBeenCalled();
+    expect(spawnCalls.count).toBe(0);
+  });
+});
+
+describe('xdt-node 命令真实执行', () => {
+  it('exit 2 = skip', async () => {
     const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const pathMod = await import('node:path');
