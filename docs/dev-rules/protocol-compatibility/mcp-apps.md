@@ -207,3 +207,5 @@ Host 侧 installationSource 的 namespace 校验、插件详情与安装确认�
 页签及全屏使用标准 containerDimensions 的 `{width,height}` 分支；对话保持 `{width,maxHeight}`，
 尺寸变化沿原 context 操作发送，隐藏/零尺寸不发送。无存储迁移，不重新批准插件。
 Mobile 仅 JS/TS 展示与文案修改，无原生依赖、配置或接口变化，可随热更新交付；最终指纹仍以 CI 同环境比较为准。
+
+插件资源可声明可选的 `initialHeight`。新宿主将有限数字取整并限制在 80–720 CSS px，写入资源和生成时的卡片元数据 `cindy/initial-height`，公开历史 v1 只投影 `initialHeight`。新包声明非有限数字或非数字时校验失败。旧端忽略此字段，新端读取历史安装或历史卡片时只忽略无效高度，页面与原有批准仍然可用。导出已装插件会保留原始声明；将这份文件作为新包本地安装或重新提审时，作者须先修正无效高度。每台查看设备记下的实测宽高仅存本机，不经 device-link。此提示不提高插件最低宿主版本。
