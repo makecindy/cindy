@@ -23,6 +23,14 @@ type UiManifest = { schemaVersion?: unknown; mcpApps?: unknown; tools?: unknown;
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const safeKey = (key: string) => /^[a-z][a-z0-9_-]{0,63}$/.test(key) && !['__proto__', 'constructor', 'prototype'].includes(key);
 const cspKeys = ['connectDomains', 'resourceDomains', 'frameDomains', 'baseUriDomains'] as const;
+const invalidInitialHeight = (value: unknown) => value !== undefined && !Number.isFinite(value);
+export function ghostMcpAppsValidationError(raw: unknown): string {
+  if (object(raw) && object(raw.ui) && Array.isArray(raw.ui.resources) && raw.ui.resources.length <= 16) {
+    const index = raw.ui.resources.findIndex(resource => object(resource) && invalidInitialHeight(resource.initialHeight));
+    if (index >= 0) return `mcpApps.ui.resources[${index}].initialHeight 必须是有限数字（CSS px）`;
+  }
+  return 'mcpApps.ui 页面或工具声明无效，页面域名必须在 network.hosts 内';
+}
 /** Cindy manifest envelope; unknown extensions remain data, never grant authority. */
 export function parseGhostMcpApps(raw: unknown, tools: readonly { name: string }[], hosts: readonly string[], safePath: (value: unknown) => boolean): GhostMcpApps | null {
   if (!object(raw)) return null;
@@ -32,17 +40,28 @@ export function parseGhostMcpApps(raw: unknown, tools: readonly { name: string }
     new Set(ui?.resources.map(resource => resource.uri) ?? []), new Set(tools.map(tool => tool.name)))) return null;
   return raw as GhostMcpApps;
 }
-export function parseGhostUi(raw: unknown, tools: readonly { name: string }[], hosts: readonly string[], safePath: (value: unknown) => boolean): GhostUiNeeds | null {
+export function parseGhostUi(
+  raw: unknown, tools: readonly { name: string }[], hosts: readonly string[], safePath: (value: unknown) => boolean,
+  source: 'package' | 'installed' = 'package',
+): GhostUiNeeds | null {
   if (!object(raw) || !Array.isArray(raw.resources) || !object(raw.tools) || (!raw.resources.length && !Object.keys(raw.tools).length) ||
       raw.resources.length > 16 || Object.keys(raw.tools).length > GHOST_TOOLS_MAX) return null;
   const uris = new Set<string>();
-  for (const resource of raw.resources) {
+  let resources = raw.resources;
+  for (const [index, resource] of raw.resources.entries()) {
     if (!object(resource) || typeof resource.uri !== 'string' || !resource.uri.startsWith('ui://') ||
         resource.uri.length <= 5 || /[\s\x00-\x1f\x7f]/.test(resource.uri) || uris.has(resource.uri) ||
         !safePath(resource.file) || typeof resource.file !== 'string' || !/\.html?$/i.test(resource.file) ||
         (resource.prefersBorder !== undefined && typeof resource.prefersBorder !== 'boolean') ||
         (resource.hostFullscreenButton !== undefined && typeof resource.hostFullscreenButton !== 'boolean') ||
         (resource.domain !== undefined && typeof resource.domain !== 'string')) return null;
+    if (invalidInitialHeight(resource.initialHeight)) {
+      if (source === 'package') return null;
+      // Keep the approved snapshot intact. Only the runtime copy loses the invalid hint.
+      if (resources === raw.resources) resources = raw.resources.slice();
+      const { initialHeight: _ignored, ...page } = resource;
+      resources[index] = page;
+    }
     uris.add(resource.uri);
     if (resource.permissions !== undefined && (!object(resource.permissions) ||
         Object.entries(resource.permissions).some(([key, value]) =>
@@ -68,7 +87,7 @@ export function parseGhostUi(raw: unknown, tools: readonly { name: string }[], h
         (link.resourceUri !== undefined && (typeof link.resourceUri !== 'string' || !uris.has(link.resourceUri))) ||
         (link.visibility !== undefined && (!Array.isArray(link.visibility) || !link.visibility.length || link.visibility.some(v => v !== 'model' && v !== 'app')))) return null;
   }
-  return raw as unknown as GhostUiNeeds;
+  return (resources === raw.resources ? raw : { ...raw, resources }) as unknown as GhostUiNeeds;
 }
 /** Only valid declarations grant page authority, including on historical read paths. */
 export function getPluginToolUi(manifest: UiManifest): GhostUiNeeds | undefined {
@@ -77,7 +96,7 @@ export function getPluginToolUi(manifest: UiManifest): GhostUiNeeds | undefined 
   const hosts = object(manifest.network) ? manifest.network.hosts ?? [] : [];
   if (!Array.isArray(tools) || tools.some(tool => !object(tool) || typeof tool.name !== 'string') ||
       !Array.isArray(hosts) || hosts.some(host => typeof host !== 'string')) return;
-  return parseGhostUi(manifest.mcpApps.ui, tools, hosts, isSafeGhostRelativePath) ?? undefined;
+  return parseGhostUi(manifest.mcpApps.ui, tools, hosts, isSafeGhostRelativePath, 'installed') ?? undefined;
 }
 export function getPluginHostUi(manifest: UiManifest): GhostHostUi | undefined {
   if ((manifest.schemaVersion !== undefined && manifest.schemaVersion !== 3) || !object(manifest.mcpApps)) return;

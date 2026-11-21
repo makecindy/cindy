@@ -12,7 +12,7 @@
 来源由宿主安装记录决定，例外来源只在入口/页签悬停提示中显示，页面不能通过改名隐藏来源。
 `message.body`、`tool.body`、`settings.section` 仍有紧凑标题栏。
 桌面有标题栏且已就绪的页面默认有全屏按钮，前提是 App 的 `availableDisplayModes` 支持 fullscreen；手机只有 inline。
-对话卡片的资源可声明 `mcpApps.ui.resources[].initialHeight`（80–720 CSS px）。同宽时宿主优先使用本机记住的高度，页面就绪后仍需上报实际尺寸。
+对话卡片的资源可声明 `mcpApps.ui.resources[].initialHeight`，值须为有限数字（例如 `240`），单位为 CSS px。宿主将超出范围的值限制到 80–720。同宽时宿主优先使用本机记住的高度，页面就绪后仍需上报实际尺寸。
 资源可声明 `hostFullscreenButton: false` 隐藏该按钮（缺省 true），只影响宿主按钮，不禁止 `app.requestDisplayMode({mode:"fullscreen"})`。
 该字段映射为资源 `_meta["cindy/host-fullscreen-button"]`，自定义 MCP 可直接提供此扩展。
 旧宿主的资源解析保留并忽略该字段，不会拒装；要依赖按钮隐藏行为时，核验实际发布版本并填写对应 `minCindyVersion`，不要猜版本号。
