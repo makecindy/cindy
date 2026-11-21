@@ -79,6 +79,15 @@ it('renders the saved cloud transcript before the remote read and preserves it o
 });
 
 describe('presentation helpers', () => {
+  // #8733 unit: real merge must not resurrect an actor confirmed absent on its home.
+  // Existing controls only covered positive/offline rows; identity replacement stays visible.
+  it('does not resurrect a confirmed absent cloud actor or alias a replacement identity', () => {
+    const cloud = snapshot('laptop');
+    const actor = cloud.actors[0]!;
+    const missing = new Set([JSON.stringify([actor.id, actor.homeDeviceId, actor.externalId])]);
+    expect(cloudRemoteBots(cloud, [], missing)).toEqual([]);
+    expect(cloudRemoteBots({ ...cloud, actors: [{ ...actor, id: 'replacement' }] }, [], missing)).toHaveLength(1);
+  });
   // #10112, unit tier: a rejected shadow must have a recovery entry, never a runnable copy.
   it('retains a read-only entry for a rejected local restore, then removes it on recovery', () => {
     const cloud = snapshot('desk');

@@ -16,7 +16,7 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../useRemoteBots', () => ({
   markRemoteBotRead: vi.fn(),
-  useRemoteBots: () => [{ id: 'writer', deviceId: 'snapshot-host', deviceName: 'Host', name: 'Writer', sessionId: 'canonical', online: true }],
+  useRemoteBotOmissions: () => new Set<string>(), useRemoteBots: () => [{ id: 'writer', deviceId: 'snapshot-host', deviceName: 'Host', name: 'Writer', sessionId: 'canonical', online: true }],
 }));
 // Keep the real entry, mirror, reconciliation, model projection and transport.
 // The expensive transcript/editor tree is represented by its model/send consumer.

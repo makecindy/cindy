@@ -23,7 +23,7 @@ vi.mock('../botStore', () => ({
   ensureBotProfilesLoaded: vi.fn(async () => h.profiles),
 }));
 
-vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => h.remote, useRemoteCindyIds: () => h.cindyIds }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBotOmissions: () => new Set<string>(), useRemoteBots: () => h.remote, useRemoteCindyIds: () => h.cindyIds }));
 
 import { BotFollowMark, useSessionFollowers } from '../BotFollowMark';
 import { __testing, useSessionDelegatingBot, useTaskCreatorIndex, useTaskCreatorOptions, matchesTaskCreators, taskBotKey } from '../botFollowScopes';

@@ -6,12 +6,13 @@ const h = vi.hoisted(() => ({
   devices: [] as any[],
   invoke: vi.fn(),
   cloudEnabled: false,
+  actors: [] as any[],
   copies: vi.fn(),
   status: null as any,
   push: null as any,
 }));
 vi.mock('../companionCloudStore', () => ({
-  useCompanionCloud: () => ({ enabled: h.cloudEnabled, actors: [] }),
+  useCompanionCloud: () => ({ enabled: h.cloudEnabled, actors: h.actors }),
   companionCloudApi: () => ({ listCindyCopies: h.copies }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
@@ -21,8 +22,9 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => h.devices,
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
-import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, markRemoteBotRead } from '../useRemoteBots';
+import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, useRemoteBotOmissions, markRemoteBotRead } from '../useRemoteBots';
 import { parseRemoteCollectionListRequest, REMOTE_RESOURCE_INVOKE_CHANNEL, REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
+import { cloudRemoteBots } from '../companionCloudPresentation';
 import { parseRemoteBots, remoteBotKey, isRemoteBotUnread } from '../remoteBotRoster';
 import { setDataOwnerGeneration, getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { resetBotReadStateForTests, startBotReadStateSync, getBotReadStateSyncStatus, subscribeBotReadState } from '../botReadState';
@@ -66,7 +68,8 @@ beforeEach(async () => {
   window.localStorage.clear();
   resetBotReadStateForTests();
   h.cloudEnabled = false;
-  h.copies.mockReset();
+  h.actors = [];
+  h.copies.mockReset().mockResolvedValue([]);
   h.owner = `owner-${Math.random()}`;
   setDataOwnerGeneration(h.owner);
   reads = botReadStateFixture();
@@ -114,7 +117,7 @@ it('keeps more than 200 device-qualified companions and never scans read storage
   await waitFor(() => expect(result.current).toHaveLength(220));
   await waitFor(() => expect(result.current.every(bot => bot.delegatedSessionIds !== undefined)).toBe(true));
   expect(keys).not.toHaveBeenCalled();
-  expect(get).toHaveBeenCalledTimes(1); // one roster-cache read, no read-position scans
+  expect(get).toHaveBeenCalledTimes(2); // one roster + one omission cache read, no read-position scans
   act(() => markRemoteBotRead('b', 'bot-109', 300));
   h.devices = [host('a', false), host('b', false)]; rerender();
   const late = result.current.find(bot => bot.deviceId === 'b' && bot.id === 'bot-109')!;
@@ -384,6 +387,7 @@ it('applies cloud Cindy identity regardless of roster arrival order and rejects 
   h.owner = 'third-owner';
   setDataOwnerGeneration(h.owner);
   h.cloudEnabled = false;
+  h.actors = [];
   rerender();
   await act(async () => oldFinish([{ botId: 'same-bot' }]));
   expect(result.current.every(bot => bot.templateId === undefined)).toBe(true);
@@ -404,6 +408,72 @@ it('exposes known Cindy IDs before an offline home provides its roster and clear
   h.owner = 'new-empty-owner';
   setDataOwnerGeneration(h.owner);
   h.cloudEnabled = false;
+  h.actors = [];
   rerender();
   expect(result.current.ids.size).toBe(0);
+});
+
+function useCloudRoster() {
+  useRemoteBotSync();
+  const rows = useRemoteBots();
+  const missing = useRemoteBotOmissions();
+  return cloudRemoteBots({ enabled: h.cloudEnabled, actors: h.actors, selfDeviceId: 'controller', humanActorId: 'human', demotedBotIds: [] }, rows, missing);
+}
+const homeActor = { id: 'actor', externalId: 'same-bot', name: 'Writer', avatar: null, homeDeviceId: 'a' };
+const completeRoster = (recoveringIds: string[] = []) => ({ collectionId: 'teammates', items: [], teammateRecovery: { version: 1, recoveringIds } });
+// #8733 unit integration: real sync/store/merge, minimal cloud actor + successful empty
+// home roster. Previous hook tests only consumed positive rows and could miss cloud fallback.
+it('keeps confirmed absence across offline/cache reload and restores a pending or listed companion', async () => {
+  h.cloudEnabled = true; h.actors = [homeActor]; h.devices = [host('a')];
+  h.invoke.mockResolvedValue(completeRoster());
+  const view = renderHook(useCloudRoster);
+  await waitFor(() => expect(view.result.current).toEqual([]));
+  h.devices = [host('a', false)]; view.rerender();
+  expect(view.result.current).toEqual([]);
+  const savedOwner = h.owner; h.owner = 'another-owner'; h.devices = []; view.rerender();
+  expect(view.result.current).toHaveLength(1);
+  h.owner = savedOwner; h.devices = [host('a', false)]; view.rerender();
+  expect(view.result.current).toEqual([]);
+  // No profile yet, or failed restoration: authoritative recovery evidence clears omission.
+  h.invoke.mockResolvedValue(completeRoster(['same-bot'])); h.devices = [host('a')]; view.rerender();
+  await waitFor(() => expect(view.result.current).toMatchObject([{ id: 'same-bot', online: false }]));
+  // Completion push after a long restore (no home/actor identity change).
+  h.invoke.mockResolvedValue({ ...collection(), teammateRecovery: { version: 1, recoveringIds: [] } });
+  vi.useFakeTimers();
+  try {
+    act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+  } finally { vi.useRealTimers(); }
+  expect(view.result.current).toMatchObject([{ id: 'same-bot', online: true, sessionId: 'canonical' }]);
+});
+
+it.each(['legacy', 'unknown-version', 'malformed', 'partial', 'full', 'failed'] as const)('keeps unknown cloud history for %s home evidence', async mode => {
+  h.cloudEnabled = true; h.actors = [homeActor]; h.devices = [host('a')];
+  const value: any = completeRoster();
+  if (mode === 'legacy') delete value.teammateRecovery;
+  if (mode === 'unknown-version') value.teammateRecovery.version = 2;
+  if (mode === 'malformed') value.teammateRecovery.recoveringIds = [null];
+  if (mode === 'partial') value.nextCursor = 'next';
+  if (mode === 'full') value.items = Array.from({ length: 200 }, (_, i) => ({ ...collection().items[0], ref: { collectionId: 'teammates', kind: 'bot', id: `other-${i}` }, links: [] }));
+  if (mode === 'failed') h.invoke.mockRejectedValue(new Error('read failed')); else h.invoke.mockResolvedValue(value);
+  const view = renderHook(useCloudRoster);
+  await act(async () => {});
+  expect(view.result.current.find(bot => bot.id === 'same-bot')).toMatchObject({ online: false });
+});
+
+it('drops late owner/connection replies and refreshes when cloud identities arrive', async () => {
+  h.devices = [host('a')]; h.invoke.mockResolvedValue(completeRoster());
+  const view = renderHook(useCloudRoster); await act(async () => {});
+  h.cloudEnabled = true; h.actors = [homeActor]; view.rerender();
+  await waitFor(() => expect(view.result.current).toEqual([]));
+  let finish!: (value: unknown) => void;
+  h.invoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  act(() => h.status({ status: 'online' }));
+  act(() => h.status({ status: 'stopped' }));
+  await act(async () => finish(completeRoster(['same-bot'])));
+  expect(view.result.current).toEqual([]);
+  act(() => h.status({ status: 'online' }));
+  h.owner = 'new-account'; h.devices = []; view.rerender();
+  await act(async () => finish(completeRoster()));
+  expect(view.result.current).toHaveLength(1);
 });

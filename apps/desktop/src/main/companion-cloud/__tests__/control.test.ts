@@ -719,6 +719,8 @@ describe('take over', () => {
     // Hidden while it is built, visible once the take-over completes: each change is announced once.
     expect(t.state.isDemoted('bot_mia')).toBe(false);
     expect(t.onShadowChanged).toHaveBeenCalledTimes(2);
+    // #8733: the same IDs invalidate remote rosters after visibility returns.
+    expect(t.onShadowChanged.mock.calls).toEqual([[['bot_mia']], [['bot_mia']]]);
   });
 
   it('does not move the home while the cloud has no profile snapshot', async () => {

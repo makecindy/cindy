@@ -203,6 +203,9 @@ export interface RemoteCollectionListResponse {
   revision: string;
   items: RemoteCollectionItem[];
   nextCursor?: string;
+  /** Teammates only: a complete home roster distinguishes absence from pending/failed restoration.
+   * Missing/unknown version means no absence authority. Older controllers ignore this field. */
+  teammateRecovery?: { version: 1; recoveringIds: string[] };
 }
 
 export interface RemoteResourceGetRequest {

@@ -19,8 +19,8 @@ export default {
     'src/renderer/features/cc-agent/sidebar/sessionWorktreeInfo': { partial: 'export const useTaskInfoWorktree=()=>null;' },
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
     'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{}); export const useBotProfilesLoadState=()=>${data}.loadState||'ready'; export const hasLoadedBotProfiles=()=>!${data}.loadState||${data}.loadState==='ready';` },
-    'src/renderer/features/bots/useRemoteBots': { partial: `export const useRemoteBots=()=>${data}.remoteBots;` },
-    'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
+    'src/renderer/features/bots/useRemoteBots': { partial: `export const useRemoteBotOmissions=()=>new Set(${data}.omissions||[]); export const useRemoteBots=()=>${data}.remoteBots;` },
+    'src/renderer/features/bots/companionCloudStore': { partial: `const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>${data}.cloud||snapshot;` },
     'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
     'src/renderer/features/device-link/useDeviceLinkDeviceList': { partial: 'export const useDeviceLinkDeviceList=()=>[]; export const useDeviceLinkDeviceListRequestState=()=>({status:"ready",error:null});' },
     'src/renderer/state/agentIslandActivity': { partial: `export const useAgentIslandActivityMap=()=>new Map(${data}.activities||[]);` },
@@ -28,6 +28,16 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'home-absence': {
+      about: 'Confirmed home absence stays out of the list while pending recovery and offline history remain reachable',
+      data: { profiles: [], remoteBots: [], route: '/bots',
+        omissions: [JSON.stringify(['actor-hidden', 'home', 'hidden'])],
+        cloud: { enabled: true, selfDeviceId: 'controller', humanActorId: 'human', demotedBotIds: [],
+          actors: ['hidden', 'pending', 'history'].map(id => ({ id: `actor-${id}`, externalId: id,
+            name: { hidden: 'Hidden companion', pending: 'Recovering companion', history: 'Saved companion' }[id],
+            avatar: null, homeDeviceId: 'home', homeDevice: { deviceId: 'home', name: 'Home', online: false, isSelf: false } })) },
+      },
+    },
     'startup-read-pending': {
       about: '#9706: initial read is pending; show loading instead of implying no buddies',
       data: { profiles: [], remoteBots: [], route: '/bots', loadState: 'pending' },
@@ -249,6 +259,11 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'home-absence') {
+      assert.equal(await page.getByText('Hidden companion', { exact: true }).count(), 0);
+      for (const name of ['Recovering companion', 'Saved companion']) assert.equal(await page.getByText(name, { exact: true }).count(), 1);
+      return;
+    }
     if (ui.case === 'startup-read-pending') {
       assert.equal(await page.getByRole('status').innerText(), await ui.t('ccAgent.common.loading'));
       assert.equal(await page.getByRole('status').isVisible(), true);
