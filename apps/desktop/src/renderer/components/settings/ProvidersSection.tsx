@@ -48,6 +48,7 @@ import {
   GripVertical,
   KeyRound,
   LogOut,
+  ChevronRight,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -206,6 +207,16 @@ function providerHasModels(provider: ProviderView): boolean {
 function writeProviderDisabled(providerId: string, disabled: boolean, errorText: string): void {
   void window.electronAPI.maker
     .setModelDisable({ kind: 'provider', providerId, disabled })
+    .catch(() => toast.error(errorText));
+}
+
+/**
+ * 写供应商级「在模型选择器中隐藏」(model-disable-store 的 hiddenProviders)。只改陈列:
+ * 已在用它的任务、辅助模型链和后台功能照常调用;刷新同样由 PROVIDER_CHANGED 驱动。
+ */
+function writeProviderHidden(providerId: string, hidden: boolean, errorText: string): void {
+  void window.electronAPI.maker
+    .setModelDisable({ kind: 'provider-hidden', providerId, hidden })
     .catch(() => toast.error(errorText));
 }
 
@@ -826,9 +837,11 @@ function DetailHeader({
                     }
                   />
                 )}
-                {provider?.suspended && (
+                {provider?.suspended ? (
                   <CustomTag label={t('settings.providers.pill.suspended')} />
-                )}
+                ) : provider?.hidden ? (
+                  <CustomTag label={t('settings.providers.pill.hidden')} />
+                ) : null}
                 {badge}
               </div>
               <span
@@ -909,6 +922,23 @@ function DetailHeader({
                     </DropdownMenuItem>
                   )}
                   {menuItems}
+                  {/* 隐藏与停用是两件事,并排放才分得清:隐藏只让它不出现在模型选择器里,
+                    停用是不再让任何新任务和后台功能用它。 */}
+                  <DropdownMenuItem
+                    onClick={() =>
+                      writeProviderHidden(
+                        provider.id,
+                        !provider.hidden,
+                        t('settings.providers.models.visibilityWriteFailed'),
+                      )
+                    }
+                  >
+                    {t(
+                      provider.hidden
+                        ? 'settings.providers.menu.showProvider'
+                        : 'settings.providers.menu.hideProvider',
+                    )}
+                  </DropdownMenuItem>
                   {provider.geminiImageSettingsConnectionId === undefined && <DropdownMenuItem
                     onClick={() =>
                       writeProviderDisabled(
@@ -2443,6 +2473,7 @@ function ListRow({
   total,
   onMove,
   sortable,
+  stateNote = true,
 }: {
   provider: ProviderView;
   selected: boolean;
@@ -2452,6 +2483,8 @@ function ListRow({
   total: number;
   onMove: (delta: -1 | 1) => void;
   sortable: boolean;
+  /** 「已隐藏 / 已停用」注记。行已经收在同名分组里时不再重复，改回显示模型数。 */
+  stateNote?: boolean;
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
@@ -2530,13 +2563,21 @@ function ListRow({
             >
               {t('settings.providers.openai.reconnectRequired')}
             </span>
-          ) : provider.suspended ? (
+          ) : stateNote && provider.suspended ? (
             // 已停用比模型数更要紧:窄栏(224px)只放得下一个注记,停用时以状态取代计数。
             <span
               className="shrink-0 select-none text-11"
               style={{ color: 'var(--text-tertiary)' }}
             >
               {t('settings.providers.pill.suspended')}
+            </span>
+          ) : stateNote && provider.hidden ? (
+            // 同理:已隐藏时窄栏以状态取代计数,回答「它为什么不在选择器里」。
+            <span
+              className="shrink-0 select-none text-11"
+              style={{ color: 'var(--text-tertiary)' }}
+            >
+              {t('settings.providers.pill.hidden')}
             </span>
           ) : (
             // Keep the account suffix visible in the narrow rail; the detail lists the count.
@@ -2967,11 +3008,8 @@ export function ProvidersSection() {
   );
 
   const moveProviderWithKeyboard = useCallback(
-    (providerId: string, delta: -1 | 1): void => {
-      const shared = ownedShares.get(null)?.has(providerId) === true;
-      const currentIds = listProviders
-        .filter(provider => (ownedShares.get(null)?.has(provider.id) === true) === shared)
-        .map(provider => provider.id);
+    (providerId: string, delta: -1 | 1, currentIds: readonly string[]): void => {
+      // 在**所在的那一段**里移动(常规 / 我分享的 / 已隐藏 / 已停用):相邻的是屏幕上相邻的那一行。
       const index = currentIds.indexOf(providerId);
       const nextIndex = index + delta;
       if (index < 0 || nextIndex < 0 || nextIndex >= currentIds.length) return;
@@ -2990,7 +3028,7 @@ export function ProvidersSection() {
         }),
       );
     },
-    [byId, listProviders, ownedShares, persistVisibleProviderOrder, t],
+    [byId, listProviders, persistVisibleProviderOrder, t],
   );
 
   // 检测建议:CLI 已安装 + 对应渠道存在于目录 + 未连接,且**未以任何形态占行**
@@ -3109,8 +3147,16 @@ export function ProvidersSection() {
     (selectedId === CINDY_SIGNIN_ID || (selectedId == null && listProviders.length === 0));
 
   // 选中项:默认第一行;所选供应商被删除/消失时回退第一行(不留空详情)。
+  const defaultSelectedIdRef = useRef<string | null>(null);
   const effectiveSelected = useMemo(() => {
-    const selected = listProviders.find((p) => p.id === selectedId) ?? listProviders[0] ?? null;
+    // 默认落在还在用的供应商上:已隐藏 / 已停用的收在折叠分组里,默认选中它们会一打开就把分组撑开。
+    // 但正在看的那一个被隐藏 / 停用时不能跳走(详情里的说明条和恢复入口就在它身上),
+    // 所以默认选中是粘住的:先认上一次显示的那一个。
+    const selected = listProviders.find((p) => p.id === selectedId)
+      ?? listProviders.find((p) => p.id === defaultSelectedIdRef.current)
+      ?? listProviders.find((p) => !p.suspended && !p.hidden)
+      ?? listProviders[0] ?? null;
+    defaultSelectedIdRef.current = selected?.id ?? null;
     // Pool connection state covers all its accounts; native auth only describes the legacy default login.
     return selected?.id === 'openai'
       ? {
@@ -3551,7 +3597,38 @@ export function ProvidersSection() {
     />
   ) : null;
 
-  const renderLocalProviderList = (sectionProviders: ProviderView[]) => (
+  // ── 左栏分组:已隐藏 / 已停用各自收进一个默认折叠的分组 ─────────────────────
+  // 常规列表只留还在模型选择器里出现的供应商;「我分享的供应商」保持原样(那是管理分享的入口)。
+  const remoteHidden = (entry: OwnRemoteProvider) =>
+    !entry.provider.suspended && remoteDisable.isHidden(entry.deviceId, entry.provider.id);
+  const activeLocalProviders = ordinaryLocalProviders.filter(provider => !provider.suspended && !provider.hidden);
+  const hiddenLocalProviders = ordinaryLocalProviders.filter(provider => !provider.suspended && provider.hidden);
+  const suspendedLocalProviders = ordinaryLocalProviders.filter(provider => provider.suspended);
+  const activeRemoteProviders = ordinaryRemoteProviders.filter(entry => !entry.provider.suspended && !remoteHidden(entry));
+  const hiddenRemoteProviders = ordinaryRemoteProviders.filter(remoteHidden);
+  const suspendedRemoteProviders = ordinaryRemoteProviders.filter(entry => entry.provider.suspended);
+  const [railGroupOpen, setRailGroupOpen] = useState<{ hidden: boolean; suspended: boolean }>(
+    { hidden: false, suspended: false },
+  );
+  // 选中的供应商落进某个分组时(刚把它隐藏 / 停用,或从深链、搜索进来)把那一组打开一次;
+  // 之后用户可以再收起,不反复弹开。
+  const selectedLocalId = !otherDeviceSelected && !cindySigninActive ? effectiveSelected?.id ?? null : null;
+  const selectedRailGroup: 'hidden' | 'suspended' | null =
+    hiddenLocalProviders.some(provider => provider.id === selectedLocalId) ||
+    hiddenRemoteProviders.some(entry => entry.key === selectedRemote?.key)
+      ? 'hidden'
+      : suspendedLocalProviders.some(provider => provider.id === selectedLocalId) ||
+          suspendedRemoteProviders.some(entry => entry.key === selectedRemote?.key)
+        ? 'suspended'
+        : null;
+  const selectedRailKey = selectedRemote?.key ?? selectedLocalId;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selectedRailKey 让「换了一个同组的供应商」也触发一次展开。
+  useEffect(() => {
+    if (!selectedRailGroup) return;
+    setRailGroupOpen(open => (open[selectedRailGroup] ? open : { ...open, [selectedRailGroup]: true }));
+  }, [selectedRailGroup, selectedRailKey]);
+
+  const renderLocalProviderList = (sectionProviders: ProviderView[], stateNote = true) => (
     <SortableList
       items={sectionProviders}
       getId={provider => provider.id}
@@ -3574,8 +3651,9 @@ export function ProvidersSection() {
           }}
           position={index + 1}
           total={sectionProviders.length}
-          onMove={delta => moveProviderWithKeyboard(provider.id, delta)}
+          onMove={delta => moveProviderWithKeyboard(provider.id, delta, sectionProviders.map(item => item.id))}
           sortable={sectionProviders.length > 1}
+          stateNote={stateNote}
         />
       )}
       disabled={sectionProviders.length < 2}
@@ -3596,6 +3674,39 @@ export function ProvidersSection() {
       }}
     />
   );
+
+  /** 「已隐藏 / 已停用」折叠分组:标题即开关,带数量;没有成员时整组不出现。 */
+  const renderRailStateGroup = (
+    group: 'hidden' | 'suspended',
+    locals: ProviderView[],
+    remotes: readonly OwnRemoteProvider[],
+  ) => {
+    const count = locals.length + remotes.length;
+    if (count === 0) return null;
+    const open = railGroupOpen[group];
+    const label = t(group === 'hidden' ? 'settings.providers.pill.hidden' : 'settings.providers.pill.suspended');
+    return (
+      <div data-provider-rail-group={group} role="group" aria-label={label} className="flex flex-col gap-0.5">
+        <button
+          data-settings-search-action="Expand or collapse the hidden or suspended provider navigation group"
+          type="button"
+          aria-expanded={open}
+          onClick={() => setRailGroupOpen(current => ({ ...current, [group]: !current[group] }))}
+          className="mt-2 flex w-full items-center gap-1 rounded-lg px-2.5 py-1 text-left text-11 font-medium text-[var(--text-tertiary)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
+        >
+          <ChevronRight
+            size={12}
+            aria-hidden
+            className={cn('shrink-0 transition-transform motion-reduce:transition-none', open && 'rotate-90')}
+          />
+          <span className="min-w-0 truncate">{label}</span>
+          <span className="tabular-nums opacity-60">{count}</span>
+        </button>
+        {open && renderLocalProviderList(locals, false)}
+        {open && renderRemoteProviderRows(remotes)}
+      </div>
+    );
+  };
 
   return (
     <SubscriptionPoolViewCache.Provider value={subscriptionPoolViews}>
@@ -3635,19 +3746,19 @@ export function ProvidersSection() {
                   }}
                 />
               )}
-              {(ordinaryLocalProviders.length > 1 || sharedLocalProviders.length > 1) && (
+              {(activeLocalProviders.length > 1 || sharedLocalProviders.length > 1) && (
                 <div className="select-none px-1.5 pb-1 pt-1">
                   <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
                     {t('settings.providers.order.hint')}
                   </span>
                 </div>
               )}
-              {renderLocalProviderList(ordinaryLocalProviders)}
+              {renderLocalProviderList(activeLocalProviders)}
               <span className="sr-only" aria-live="polite" aria-atomic="true">
                 {orderAnnouncement}
               </span>
               {/* 自己其他电脑上能用的供应商：接在本机供应商后面，图标带远程角标。 */}
-              {renderRemoteProviderRows(ordinaryRemoteProviders)}
+              {renderRemoteProviderRows(activeRemoteProviders)}
               {(sharedLocalProviders.length > 0 || sharedRemoteProviders.length > 0) && (
                 <div
                   data-testid="provider-share-owned"
@@ -3671,6 +3782,9 @@ export function ProvidersSection() {
                   selectShare(shareId);
                 }}
               />
+              {/* 不在模型选择器里出现的供应商收在列表末尾:先是只隐藏的,再是停用的。 */}
+              {renderRailStateGroup('hidden', hiddenLocalProviders, hiddenRemoteProviders)}
+              {renderRailStateGroup('suspended', suspendedLocalProviders, suspendedRemoteProviders)}
               {suggestions.length > 0 && (
                 <>
                   <span
@@ -3811,13 +3925,52 @@ export function ProvidersSection() {
                       <span style={{ color: 'var(--text-tertiary)' }}>
                         {t('settings.providers.detail.suspendedBanner')}
                       </span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {/* 很多人停用只是不想在选择器里看到它:就地给「改为隐藏」,一步换成
+                          想要的状态(显示关掉 + 恢复调用)。已经隐藏过的不再重复给。 */}
+                        {!effectiveSelected.hidden && (
+                          <PillButton
+                            label={t('settings.providers.button.hideInstead')}
+                            onClick={() => {
+                              void window.electronAPI.maker
+                                .setModelDisable({ kind: 'provider-hidden', providerId: effectiveSelected.id, hidden: true })
+                                .then(() => window.electronAPI.maker.setModelDisable({
+                                  kind: 'provider', providerId: effectiveSelected.id, disabled: false,
+                                }))
+                                .catch(() => toast.error(t('settings.providers.models.accessWriteFailed')));
+                            }}
+                          />
+                        )}
+                        <PillButton
+                          label={t('settings.providers.button.enableProvider')}
+                          onClick={() =>
+                            writeProviderDisabled(
+                              effectiveSelected.id,
+                              false,
+                              t('settings.providers.models.accessWriteFailed'),
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {/* 已隐藏(未停用):说清它还在工作、去哪里还能选到,并就地给恢复入口。
+                    模型区照常显示 —— 隐藏不影响逐模型设置。 */}
+                  {!effectiveSelected.suspended && effectiveSelected.hidden && (
+                    <div
+                      className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
+                      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                    >
+                      <span className="min-w-0 flex-1" style={{ color: 'var(--text-tertiary)' }}>
+                        {t('settings.providers.detail.hiddenBanner')}
+                      </span>
                       <PillButton
-                        label={t('settings.providers.button.enableProvider')}
+                        label={t('settings.providers.button.showProvider')}
                         onClick={() =>
-                          writeProviderDisabled(
+                          writeProviderHidden(
                             effectiveSelected.id,
                             false,
-                            t('settings.providers.models.accessWriteFailed'),
+                            t('settings.providers.models.visibilityWriteFailed'),
                           )
                         }
                       />

@@ -3807,6 +3807,7 @@
         "connecting": "Conectando…",
         "rename": "Cambiar nombre",
         "suspended": "Desactivado",
+        "hidden": "Oculto",
         "unconfigured": "No configurado"
       },
       "button": {
@@ -3817,7 +3818,9 @@
         "cancel": "Cancelar",
         "retry": "Volver a buscar modelos",
         "retrying": "Buscando modelos de nuevo…",
-        "enableProvider": "Habilitar proveedor"
+        "enableProvider": "Habilitar proveedor",
+        "showProvider": "Mostrar",
+        "hideInstead": "Ocultar en su lugar"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4203,7 +4206,7 @@
         "paymentRequired": "De pago",
         "paymentUnlock": "Pagar para desbloquear",
         "enableModel": "Habilitar este modelo",
-        "capabilityGroupHint": "No se muestra en el selector de modelo de chat. El interruptor controla la visibilidad en la función relevante.",
+        "capabilityGroupHint": "No se muestra en el selector de modelos. El interruptor decide si la función correspondiente puede usar el modelo.",
         "accessWriteFailed": "No se pudo guardar el cambio. Por favor inténtalo de nuevo.",
         "visibilityWriteFailed": "No se pudo guardar la configuración de visibilidad del modelo. Inténtelo de nuevo o reinicie Cindy si el problema continúa.",
         "disabledGroup": "Desactivado",
@@ -4347,22 +4350,22 @@
           "aria": "Filtrar por tipo de modelo",
           "chat": "Conversación"
         },
-        "hiddenGroup": "No mostrado",
+        "hiddenGroup": "Ocultos",
         "management": {
           "brand": "Fabricante"
         },
         "manage": {
           "title": "Modelos",
-          "selected": "Seleccionados: {{count}}",
-          "hint": "Utilice los interruptores para elegir sus modelos de chat.",
+          "selected": "Mostrados: {{count}}",
+          "hint": "Los interruptores deciden qué modelos aparecen en el selector de modelos. Al desactivar uno solo se oculta; aún puedes elegirlo en «Ocultos», al final del selector.",
           "menu": "Administrar",
           "arrange": "Organizar lista",
           "byBrand": "Agrupar por fabricante",
           "byName": "Ordenar por nombre de modelo",
-          "selection": "Selección de modelo",
-          "showAll": "Seleccionar todos los modelos",
-          "hideAll": "Borrar selección",
-          "reset": "Restaurar la selección predeterminada",
+          "selection": "Mostrar en el selector de modelos",
+          "showAll": "Mostrar todos los modelos",
+          "hideAll": "Ocultar todos los modelos",
+          "reset": "Restaurar la visibilidad predeterminada",
           "connectionRequired": "Conéctate para usar estos modelos. Tus selecciones se conservan."
         },
         "modelCount_many": "Modelos {{count}}"
@@ -4379,7 +4382,8 @@
         "groupNote": "{{device}} convirtió a este proveedor en un grupo de proveedores. Cuando inicia una tarea con él, {{device}} asigna la tarea a una de las siguientes computadoras según su estrategia de grupo y la mueve a otra si esa computadora tiene un problema. Mientras {{device}} esté en línea, use Remoto y compartido aquí para administrar el grupo y sus recursos compartidos.",
         "groupMembersTitle": "Computadoras en el grupo",
         "groupMembersFailed": "No se pudo obtener el estado de las computadoras del grupo en este momento.",
-        "groupBadge_many": "Grupo de proveedores · {{count}} computadoras"
+        "groupBadge_many": "Grupo de proveedores · {{count}} computadoras",
+        "hiddenBanner": "Oculto del selector de modelos en este ordenador. Los favoritos y las sesiones que lo usan no se ven afectados."
       },
       "genericOAuth": {
         "subtitle": "Cuenta de suscripción",
@@ -4423,7 +4427,8 @@
           "rejected": "Este proveedor rechazó la solicitud. La lista a continuación corresponde a la última actualización exitosa. Vuelve a intentarlo más tarde o utiliza un proveedor diferente.",
           "empty": "Este proveedor no devolvió ningún modelo utilizable esta vez. La lista a continuación corresponde a la última actualización exitosa. Verifique el acceso a su cuenta y luego vuelva a intentarlo."
         },
-        "suspendedBanner": "Este proveedor está deshabilitado. Las credenciales se conservan; habilítalo para volver a usar sus modelos.",
+        "suspendedBanner": "Este proveedor está deshabilitado: las sesiones nuevas y las funciones en segundo plano ya no lo usan. Las credenciales se conservan. Si solo quieres que no aparezca en el selector de modelos, ocúltalo en su lugar.",
+        "hiddenBanner": "Oculto del selector de modelos. Las sesiones y las funciones en segundo plano que lo usan no se ven afectadas, y aún puedes elegirlo en «Ocultos», al final del selector.",
         "remoteAccess": {
           "label": "Permitir uso remoto",
           "description": "Cuando está activado, sus otras computadoras y las personas con las que comparte pueden usar los modelos de este proveedor. El Agent se ejecuta en esta computadora, utilizando el inicio de sesión y la cuota de esta computadora.",
@@ -4633,7 +4638,9 @@
       },
       "menu": {
         "disableProvider": "Deshabilitar este proveedor",
-        "enableProvider": "Habilitar este proveedor"
+        "enableProvider": "Habilitar este proveedor",
+        "hideProvider": "Ocultar del selector de modelos",
+        "showProvider": "Mostrar en el selector de modelos"
       },
       "builtinApiKey": {
         "subtitle": "Conexión con clave API",
@@ -14290,6 +14297,8 @@
         "remoteFavoriteUnavailable": "{{source}} · No se pueden leer los modelos de esa computadora en este momento",
         "favoritesGroup": "Favoritos",
         "recentGroup": "Reciente",
+        "hiddenGroup": "Ocultos ({{count}})",
+        "hiddenGroupHint": "Los proveedores y modelos ocultos se pueden seguir eligiendo",
         "recentEmpty": "Aún no hay modelos recientes. Elige uno y aparecerá aquí",
         "favoritesSaveFailed": "No se pudieron guardar los cambios en favoritos",
         "favoritesCleanupFailed": "No se pudieron quitar los favoritos de los proveedores cuyo acceso compartido se revocó",
