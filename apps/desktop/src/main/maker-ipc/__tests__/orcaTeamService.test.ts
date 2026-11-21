@@ -1404,6 +1404,7 @@ describe('OrcaTeamService', () => {
     const message = result.ok ? '' : result.message;
     expect(message).toContain(`until ${new Date(1794878999000).toISOString()}`);
     expect(message).toContain('set_worker_runtime');
+    expect(message).toContain('Keep the selected model when changing accounts');
     expect(message.endsWith(original)).toBe(true);
   });
 
@@ -2802,6 +2803,7 @@ describe('OrcaTeamService', () => {
         // 出错的 Worker 原样保留：回报末尾告诉 Lead 如何原地继续，而不是归档重建
         // （2026-11-10 现场：五个撞上用量上限的 Worker 被全部归档重建）。
         expect(leadMessages[0]).toMatch(/^\[Auto-bridged: worker 异常终止\]\n\n完成了\n\n\(Host note: /);
+        expect(leadMessages[0]).toContain('let its provider group try another account');
         expect(leadMessages[0]).toContain('session_id: worker-session-1');
         expect(leadMessages[0]).toContain('send_to_worker');
         expect(leadMessages[0]).toContain('set_worker_runtime');
