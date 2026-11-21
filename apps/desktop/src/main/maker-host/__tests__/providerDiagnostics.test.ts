@@ -326,6 +326,30 @@ describe('buildProbeRequest', () => {
     expect(body.max_tokens).toBe(1);
   });
 
+  it('cc probe 剥掉 [1m] wire 后缀：真实会话经 cc 内核剥后缀,裸 ID 上游(智谱)只认 glm-5.3', () => {
+    const { init } = buildProbeRequest({
+      agent: 'claude-code',
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+      modelId: 'glm-5.3[1m]',
+      apiKey: 'sk-test',
+    });
+    expect(JSON.parse(String(init.body)).model).toBe('glm-5.3');
+  });
+
+  it.each(['pi', 'codex'] as const)(
+    '%s probe 保留字面 [1m] ID：仅 cc 有剥后缀约定,Pi/Codex 按字面 ID 路由',
+    (agent) => {
+      const { init } = buildProbeRequest({
+        agent,
+        wireProtocol: 'anthropic-messages',
+        baseUrl: 'https://provider.example/v1',
+        modelId: 'foo[1m]',
+        apiKey: 'sk-test',
+      });
+      expect(JSON.parse(String(init.body)).model).toBe('foo[1m]');
+    },
+  );
+
   it('codex wire：/responses + Bearer', () => {
     const { url, init } = buildProbeRequest({
       agent: 'codex',
