@@ -1040,13 +1040,7 @@ export class Session {
     this.sendReservation = reservation;
     this.unacceptedSendGeneration = reservedTurnGeneration;
     this.terminalObservedDuringReservation = null;
-    const releaseReservation = this.turnLifecycleObserver?.onTurnReserved?.(reservedTurnGeneration);
-    try {
-      onTurnReserved?.(reservedTurnGeneration);
-    } catch (error) {
-      releaseReservation?.(false);
-      throw error;
-    }
+    let releaseReservation: ((dispatched: boolean) => void) | void = undefined;
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
@@ -1067,6 +1061,8 @@ export class Session {
       return { accepted: false, reason: 'cancelled-before-dispatch' };
     };
     try {
+      releaseReservation = turnLifecycleObserver?.onTurnReserved?.(reservedTurnGeneration);
+      onTurnReserved?.(reservedTurnGeneration);
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
       if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
@@ -1289,7 +1285,14 @@ export class Session {
       } else {
         this.terminalObservedDuringReservation = null;
       }
-      releaseReservation?.(turnDispatched);
+      try {
+        releaseReservation?.(turnDispatched);
+      } catch (error) {
+        this.logger.warn('turn reservation observer cleanup failed', {
+          turnGeneration: reservedTurnGeneration,
+          error: String(error),
+        });
+      }
       if (turnLifecyclePrepared && !turnDispatched) {
         try {
           await turnLifecycleObserver?.onUndispatched(reservedTurnGeneration);
