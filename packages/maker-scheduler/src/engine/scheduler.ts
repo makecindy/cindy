@@ -926,6 +926,12 @@ export class Scheduler extends EventEmitter {
         // Other instances can edit the deadline while a claimed run waits in
         // its runner. Include rows that have just left listActive after expiry.
         const currentById = new Map(actives.map((sch) => [sch.id, sch]));
+        // 一条守卫的回读超时不能带崩整轮:后面几条的读同样必须发出去(迟到结果由
+        // 各自的 handler 收口),否则它们的守卫一直停在旧 deadline,而 lastDbSyncAt
+        // 已经前移,要等下一次 30 秒同步才恢复 —— 期间别的实例改短了截止时间的
+        // 排队 run 仍会被放行(Codex P2 on #11577)。超时记下来,循环走完后照旧
+        // 上抛给外层告警(预闸门超时的节流告警语义不变)。
+        let dispatchReadTimeout: StorageAwaitTimeoutError | undefined;
         for (const [runId, previous] of dispatchSnapshots) {
           let current: Schedule | null | undefined = currentById.get(previous.id);
           if (!current) {
@@ -942,6 +948,7 @@ export class Scheduler extends EventEmitter {
               );
             } catch (err) {
               if (err instanceof StorageAwaitTimeoutError) {
+                dispatchReadTimeout = err;
                 void readPromise.then(
                   (value) => {
                     if (value && this.automaticDispatchSchedules.get(runId) === previous) {
@@ -950,6 +957,8 @@ export class Scheduler extends EventEmitter {
                   },
                   () => undefined,
                 );
+                if (this.tickHandle !== tickHandle) return;
+                continue;
               }
               throw err;
             }
@@ -961,6 +970,7 @@ export class Scheduler extends EventEmitter {
             this.automaticDispatchSchedules.set(runId, current);
           }
         }
+        if (dispatchReadTimeout) throw dispatchReadTimeout;
       } catch (err) {
         if (err instanceof StorageAwaitTimeoutError) this.logPreGateTimeout(err.phase);
         else this.logger?.warn?.('scheduler: active-schedule DB sync failed', err);
@@ -1113,6 +1123,11 @@ export class Scheduler extends EventEmitter {
       }, schedule);
       this.trackPendingExpireWrite(schedule.id, updatePromise);
       const updated = await withStorageTimeout(updatePromise, budget, 'expireSchedule');
+      // 在预算内回来同样要过代次栅栏:等待期间宿主 stop()(切账号 / 重启)会把
+      // lifecycleGeneration +1,这次 UPDATE 属于上一段生命周期,它的 CAS 结果不得
+      // 写回缓存、不得广播 changed —— 否则新主人会看到上一个账号的时间线
+      // (Codex P1 on #11577)。栅栏取在发起时的代次,与迟到收口同一把尺子。
+      if (generation !== this.lifecycleGeneration) return true;
       let current: Schedule | null;
       if (updated) {
         current = updated;
@@ -1129,6 +1144,7 @@ export class Scheduler extends EventEmitter {
           )),
           'expireSchedule',
         );
+        if (generation !== this.lifecycleGeneration) return true;
       }
       if (current) this.refreshAutomaticDispatchSchedules(current);
       if (current?.status === 'active') this.activeSchedules.set(current.id, current);
@@ -1189,6 +1205,16 @@ export class Scheduler extends EventEmitter {
           (current) => {
             if (generation !== this.lifecycleGeneration) return;
             if (!current) return;
+            // 这一读发起的时刻可能早于用户后来的改期:回包迟到时代里已经是新的
+            // (更晚的)截止时间。与迟到的 UPDATE 同一把尺子 —— 旧版快照不得覆盖
+            // 缓存和派发守卫,否则排队中的 run 会拿着已作废的、更长的 expireAt
+            // 放行(Codex P1 on #11577)。
+            // 判据只比版本 updatedAt,不带 isStaleExpireResult 的 expireAt 那一项:
+            // 这次回读要拿到的正是「别的实例改过之后的那一行」,它的 expireAt 天然
+            // 与缓存不同,拿 expireAt 判旧会把合法的新版一起拒掉,回读就白做了
+            // (见 reconciles the expiry cache … 一例)。
+            const cached = this.currentScheduleSnapshot(current.id);
+            if (cached && current.updatedAt < cached.updatedAt) return;
             this.refreshAutomaticDispatchSchedules(current);
             if (current.status === 'active') this.activeSchedules.set(current.id, current);
             else this.activeSchedules.delete(current.id);
