@@ -34,6 +34,58 @@ function createDeps(overrides: Record<string, unknown> = {}) {
 }
 
 describe('maker session CREATE_SESSION IPC handler', () => {
+  // Unit regression: ordinary mobile sends must not wait for Agent startup.
+  // A pending bootstrap models the multi-second native thread/start request.
+  it('durably opens a deferred dialogue without starting the Agent', async () => {
+    const harness = new IpcHarness();
+    const prepared = { sessionId: 'session-1', agentKind: 'codex', workDir: '/dialogues/session-1',
+      session: { id: 'session-1', workingDir: '/dialogues/session-1', source: null } };
+    const prepareSession = vi.fn().mockResolvedValue(prepared);
+    const deps = createDeps({ prepareSession, bootstrapSession: vi.fn(() => new Promise(() => {})) });
+    registerMakerSessionCreateHandler(harness, deps);
+    const pending = harness.invoke(MAKER_INVOKE.CREATE_SESSION, {
+      id: 'session-1', agentKind: 'codex', workspaceKind: 'dialogue',
+      workingDir: '/dialogues/session-1', model: 'gpt-5.4', deferRuntimeStart: true,
+    });
+    await vi.waitFor(() => expect(prepareSession).toHaveBeenCalledOnce());
+    await expect(pending).resolves.toEqual(prepared);
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.broadcastSessionCreated).toHaveBeenCalledWith('session-1');
+  });
+
+  it.each([
+    {}, { deferRuntimeStart: true, workspaceKind: 'project' },
+    { deferRuntimeStart: true, remoteHostId: 'ssh-host' },
+    { deferRuntimeStart: true, agentDeviceId: 'other-pc' },
+    { deferRuntimeStart: true, orcaRole: 'lead' },
+    { deferRuntimeStart: true, resumeSessionId: 'native-thread' },
+    { deferRuntimeStart: true, agentKind: 'acp', providerId: 'acp-plugin:test:harness' },
+  ])('keeps native creation for callers outside ordinary deferred dialogues: %j', async (patch) => {
+    const harness = new IpcHarness();
+    const prepareSession = vi.fn();
+    const deps = createDeps({ prepareSession });
+    registerMakerSessionCreateHandler(harness, deps);
+    await harness.invoke(MAKER_INVOKE.CREATE_SESSION, {
+      id: 'session-1', agentKind: 'codex', workspaceKind: 'dialogue', workingDir: '/dialogue', model: 'gpt-5.4', ...patch,
+    });
+    expect(prepareSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+  });
+
+  it('falls back for existing tasks and never acknowledges failed deferred persistence', async () => {
+    const harness = new IpcHarness();
+    const prepareSession = vi.fn().mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('disk full'));
+    const deps = createDeps({ prepareSession });
+    registerMakerSessionCreateHandler(harness, deps);
+    const args = { id: 'session-1', agentKind: 'codex', workspaceKind: 'dialogue', workingDir: '/dialogue', model: 'gpt-5.4', deferRuntimeStart: true };
+    await harness.invoke(MAKER_INVOKE.CREATE_SESSION, args);
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    deps.broadcastSessionCreated.mockClear();
+    await expect(harness.invoke(MAKER_INVOKE.CREATE_SESSION, args)).rejects.toThrow('disk full');
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(deps.broadcastSessionCreated).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])('passes initial plan mode %s to the creation transaction', async (planMode) => {
     const harness = new IpcHarness();
     const deps = createDeps();

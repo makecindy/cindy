@@ -37,7 +37,9 @@ Agent-Net 会话入口同样按载荷做准入分类，并把这些请求放进�
 
 ## 远程慢请求的两端诊断（2026-11-18）
 
-`maker:create-session` 在被控端要等 Agent 真正起来才回结果。Codex 的 `thread/start` 会先等
+`maker:create-session` 通常在被控端等 Agent 真正起来才回结果。带 `deferRuntimeStart: true`
+的新普通对话例外：先持久创建，首条输入再懒启动；混合版本降级与限定条件见
+[发送路径](protocol-compatibility/agent-prewarm-and-remote-send-path.md)。Codex 的 `thread/start` 会先等
 一次上游预热请求，实测两次各约 40 秒，同机当天 Codex 建会话中位数 8 秒、14 次超过 30 秒、
 最长 71 秒；控制端等待预算已放宽到 2 分钟（见协议契约表 `INVOKE_TIMEOUT_OVERRIDES_MS`）。
 当时两端日志对不上：被控端结果被丢弃时不留记录，控制端也不记晚到的结果。

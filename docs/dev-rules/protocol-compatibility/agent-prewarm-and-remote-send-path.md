@@ -36,3 +36,40 @@ projection 见过 `inputDeliveryVersion: 1`、并从 projection / enqueue 回包
 projection 后重发（被控端拒绝时尚未收下，不产生重复）。旧被控端不回 `inputDeliveryVersion`，
 Mobile 始终走原流程。Mobile 学到的这些结论绑定 device-link 连接代次，重连后清空并重新确认。
 没有新的 push、数据库迁移或 Mobile 原生指纹变化。
+
+## 手机普通对话先建记录、首条输入再启动 Agent
+
+Mobile 在普通、本机执行、非协同的 dialogue 创建请求中增量携带
+`deferRuntimeStart: true`。Desktop 在既有创建锁、创建取消和账号边界内，复用
+`createUserSession` 的模型准入与持久化，只保存新任务，不等待原生 Agent 启动。
+首次入队仍由既有持久输入协调器接收，随后发送事务按数据库配置懒启动 Agent；
+凭证、工作区、权限及运行期路由校验继续由该事务执行，启动失败沿用发送错误与恢复路径。
+任务记录创建成功不代表消息已发送，手机仍须等入队回执。
+
+成功结果附带可选 `session`（与 `local-db:sessions:get` 相同的任务投影），手机核对
+id 与分配目录后直接采用，免一次详情往返。旧电脑忽略新提示、照常启动 Agent，
+结果没有 `session` 时手机保留详情查询；旧手机不发提示，Desktop 保持原创建语义。
+已有同 id 的任务、项目、协同、SSH、另一电脑执行、插件引擎和原生恢复继续走原创建路径。
+不更改 `local-db:sessions:create` 的本机准入边界。
+
+订阅意图仍在创建前登记，但首条提交不再等待任务列表订阅的 ACK。正常新对话管线的
+必要远程步骤是建链、fresh 模型校验、持久创建、消息入队（持久发件箱的投递准备仍沿用
+原有查询和边界校验）。测试的四次 200ms 往返预算只验证创建管线，不是全链路真机耗时。
+
+订阅生命周期不变量：创建管线只在同步入口登记 `session:<id>`，其中已包含 `sessions`；
+不得在异步建链或退避后登记属于新建页的 `new-session:<deviceId>`。订阅意图的唯一真相
+仍是 `DeviceLinkTopicRegistry`，页面持有和释放自己的 owner。新建页的有界重试与会话页的
+`createTransientTopicSubscriptionCoordinator` 沿用各自已有的取消／过期判据，不由创建管线复制。
+
+| 事件 | 订阅行为 |
+| --- | --- |
+| 创建入口 | 同步登记任务 owner，首条入队不等 ACK |
+| 新建页退出，建链／退避尚未结束 | 页面释放其 owner，创建管线不再注册或恢复它 |
+| 挂载页面收到瞬态拒绝 | 由页面现有的可取消恢复流程重试 |
+| 任务页退出 | 按既有清理释放任务 owner，创建管线不延迟重加 |
+| 另一页面或设备仍有持有者 | registry 保留其订阅，不受当前页面退出影响 |
+
+沿用既有 invoke、结果与 relay 帧，不新增 channel、权限、重试、缓存或后台连接。
+自建中转只透明转发业务参数，无需升级；新旧客户端可任意顺序更新。无数据库 migration、
+system prompt 或 Mobile 原生指纹改动。回归入口：`sessionCreateHandler.test.ts`、
+`sessionsUpdate.test.ts`、`newSessionCreation.test.ts`；真实网络表现仍需设备验收。

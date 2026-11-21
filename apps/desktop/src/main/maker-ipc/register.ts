@@ -46,6 +46,7 @@ import { onBotReadStateChanged } from './botReadStateStore.js';
 import { assertBotTaskCoordination } from './botTaskCoordination.js';
 import type { BotTaskCoordination } from '../../shared/botTaskCoordination.js';
 import { openSession, setSessionOpeningModelAdmission } from '../localDb/sessionOpening.js';
+import { createUserSession } from '../localDb/ipc/createUserSession.js';
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { createPluginTargetReviewLoader } from '../cindy-brain/pluginTargetReview.js';
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
@@ -10276,6 +10277,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   makerSessionRegistry.handle(CONTROLLED_MODEL_CATALOG_CHANNEL, (_event, request) => readControlledCatalog(request));
   registerMakerSessionCreateHandler<Session>(makerSessionRegistry, {
+    prepareSession: async (o) => {
+      assertSessionCreationCurrent();
+      // The creation handler holds the same per-session lock as normal startup
+      // and cancellation. Existing ids retain the original idempotent path.
+      const existing = await getDbClient().drizzle.select({ id: sessions.id }).from(sessions).where(eq(sessions.id, o.id!));
+      assertSessionCreationCurrent();
+      if (existing.length) return null;
+      const row = await createUserSession({
+        id: o.id, agentKind: makerToDbEngineKind(o.agentKind), workspaceKind: 'dialogue',
+        workingDir: o.workingDir, model: o.model, providerId: o.providerId,
+        effort: o.effort, permissionMode: o.permissionMode, fastMode: o.fastMode,
+        planModeEnabled: o.planMode, extraDirs: o.extraDirs, writableDirs: o.writableDirs,
+      }, {
+        assertCurrent: assertSessionCreationCurrent,
+        senderId: 0, userDataDir: app.getPath('userData'),
+        notifyPluginSessionCreated: (input) => notifyGhostSessionEvent('created', input),
+      });
+      assertSessionCreationCurrent();
+      return { sessionId: row.id, agentKind: o.agentKind, workDir: row.workingDir!, session: row };
+    },
     // CREATE_SESSION 同样先走 remote ensure:remote draft (尤其 collab
     // lead) 的 SSH 重连 / agent 安装 / codex daemon MCP 注入必须先于
     // bootstrap, 否则 lead 首个 turn 没有 cindy_orca, 与 orca 架构文档的

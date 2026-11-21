@@ -12,6 +12,7 @@ import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { createDurableOutbox, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { buildOutboxItem } from '@/session/sessionOutbox';
+import { DeviceLinkTopicRegistry } from '@/device-link/topicRegistry';
 import { createOutboxMessageLeases, outboxNeedsReconciliation, outboxSessionIsHidden } from '@/session/mobileOutboxSessionAdapter';
 
 const recoveryStorage = vi.hoisted(() => new Map<string, string>());
@@ -726,6 +727,113 @@ describe('newSessionCreation pipeline', () => {
       { ...sessionFromCreateResult({ sessionId: 's2' }, DRAFT), title: '登录失败排查' },
     ]);
     expect(remoteSessionStore.getSessions().find((s) => s.id === 's2')?.title).toBe('登录失败排查');
+  });
+
+  // Unit regression: a delayed subscription ACK and redundant session read used
+  // to block the first message, even after the host had durably opened the task.
+  it('sends a deferred dialogue using the returned session while subscription ACKs are pending', async () => {
+    const session = { ...sessionFromCreateResult({ sessionId: 's11', workDir: '/allocated/dialogue-dir' }, {
+      ...DRAFT, workspaceKind: 'dialogue', workingDir: '',
+    }), source: null };
+    const maker = makeMaker({
+      createSession: vi.fn(async () => ({ sessionId: 's11', workDir: session.workingDir, session })),
+      getSession: vi.fn(() => new Promise(() => {})),
+    });
+    const params = makeParams('s11', maker, { draft: { ...DRAFT, workspaceKind: 'dialogue', workingDir: '' } });
+    params.transport.subscribe = vi.fn(() => new Promise<void>(() => {}));
+    startNewSessionCreation(params);
+    await flushPipeline();
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ deferRuntimeStart: true }));
+    expect(maker.input.enqueue).toHaveBeenCalledWith('s11', expect.objectContaining({
+      workingDir: '/allocated/dialogue-dir', createOpts: expect.objectContaining({ workingDir: '/allocated/dialogue-dir' }),
+    }), expect.anything());
+    expect(maker.getSession).not.toHaveBeenCalled();
+    expect(getNewSessionCreationTask('s11')).toBeNull();
+    expect(remoteSessionStore.getSessions().find(s => s.id === 's11')?.pendingLocalCreation).toBe(false);
+  });
+
+  // Unit regression r4651047066: exercise the real creation pipeline and topic
+  // registry. Pending ACK tests did not release owners during an async gap.
+  // Neither delayed linking nor subscription backoff may resurrect a released
+  // page owner; another peer must retain its own subscription throughout.
+  it.each(['link', 'backoff'])(
+    'does not resurrect released page subscriptions after %s', async (gap) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const registry = new DeviceLinkTopicRegistry();
+        registry.trackSubscribe('new-session:dev-1', 'dev-1', ['sessions']);
+        registry.trackSubscribe('home', 'dev-2', ['sessions']);
+        const maker = makeMaker();
+        const params = makeParams('s11', maker);
+        let finishLink!: () => void;
+        const linking = new Promise<void>(resolve => { finishLink = resolve; });
+        params.transport.openLink = async () => { if (gap === 'link') await linking; };
+        params.transport.subscribe = async (owner, device, topics) => {
+          registry.trackSubscribe(owner, device, topics);
+          if (owner.startsWith('new-session:')) throw new Error('BACKPRESSURE');
+        };
+        startNewSessionCreation(params);
+        await flushPipeline();
+        // Releasing the form must retain the task page's shared list topic.
+        expect(registry.untrackSubscribe('new-session:dev-1', 'dev-1')).toEqual([]);
+        expect(registry.hasTopic('dev-1', 'sessions')).toBe(true);
+        registry.untrackSubscribe('session:s11', 'dev-1');
+        finishLink();
+        await flushPipeline();
+        expect(maker.input.enqueue).toHaveBeenCalledOnce();
+        expect(getNewSessionCreationTask('s11')).toBeNull();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(registry.snapshotDevice('dev-1')).toBeNull();
+        expect(registry.hasTopic('dev-2', 'sessions')).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('acknowledges a new dialogue within four 200ms round trips, independently of Agent startup', async () => {
+    // Deterministic unit latency budget, not a real-network benchmark. No sleeps
+    // or native runtime: each required RPC costs 200ms; optional reads never settle.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const rpc = <T,>(value: T) => new Promise<T>(resolve => setTimeout(() => resolve(value), 200));
+      const session = { ...sessionFromCreateResult({ sessionId: 's11', workDir: '/dialogue' }, DRAFT), source: null };
+      const maker = makeMaker({
+        createSession: vi.fn(() => rpc({ sessionId: 's11', workDir: '/dialogue', session })),
+        getSession: vi.fn(() => new Promise(() => {})),
+      });
+      maker.input.enqueue.mockImplementation(() => rpc({ sessionId: 's11', pendingQueue: [] }));
+      const params = makeParams('s11', maker, {
+        draft: { ...DRAFT, workspaceKind: 'dialogue', workingDir: '' },
+        confirmUnauthenticated: () => rpc({ unauthenticated: false, fresh: null }),
+      });
+      params.transport.openLink = () => rpc(undefined);
+      params.transport.subscribe = () => new Promise(() => {});
+      startNewSessionCreation(params);
+      await vi.advanceTimersByTimeAsync(799);
+      expect(getNewSessionCreationTask('s11')?.status).toBe('running');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getNewSessionCreationTask('s11')).toBeNull();
+      expect(remoteSessionStore.getSessions().find(s => s.id === 's11')?.pendingLocalCreation).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { id: 'another-task', workingDir: '/dialogue' },
+    { id: 's11', workingDir: '/wrong-directory' },
+  ])('queries the host instead of adopting a mismatched inline task: %j', async (inline) => {
+    const session = { ...sessionFromCreateResult({ sessionId: 's11', workDir: '/dialogue' }, DRAFT), source: null };
+    const maker = makeMaker({
+      createSession: vi.fn(async () => ({ sessionId: 's11', workDir: '/dialogue', session: inline })),
+      getSession: vi.fn(async () => session),
+    });
+    startNewSessionCreation(makeParams('s11', maker, { draft: { ...DRAFT, workspaceKind: 'dialogue', workingDir: '' } }));
+    await flushPipeline();
+    expect(maker.getSession).toHaveBeenCalledWith('s11');
+    expect(maker.input.enqueue).toHaveBeenCalledWith('s11', expect.objectContaining({ workingDir: '/dialogue' }), expect.anything());
+    expect(getNewSessionCreationTask('s11')).toBeNull();
   });
 
   it('首条消息 enqueue 前应用手机控制端准备的可信引用快照', async () => {

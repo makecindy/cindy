@@ -5,6 +5,7 @@ import { registerMakerSessionCreateHandler } from '../../../maker-ipc/sessionCre
 import { MAKER_INVOKE } from '../../../maker-ipc/channels';
 import { withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
 import { setSessionOpeningModelAdmission, type SessionOpenBody } from '../../sessionOpening';
+import { createUserSession } from '../createUserSession';
 /**
  * sessionsUpdate.test.ts — `local-db:sessions:update` handler 集成接线。
  * -------------------------------------------------------------------
@@ -446,6 +447,20 @@ afterEach(async () => {
     rmSync(dir, { recursive: true, force: true });
     h.userDataDir = null;
   }
+});
+
+it('does not persist a deferred dialogue cancelled while model admission was pending', async () => {
+  // DB regression: cancellation must fence the actual shared creation service,
+  // including its final INSERT; an ACK-only handler check would be too late.
+  let current = true;
+  setSessionOpeningModelAdmission(async body => { current = false; return body; });
+  const notify = vi.fn();
+  await expect(createUserSession({ id: 'cancelled-dialogue', agentKind: 'codex', model: 'gpt-5.4', workspaceKind: 'dialogue' }, {
+    senderId: 0, userDataDir: h.userDataDir!, notifyPluginSessionCreated: notify,
+    assertCurrent: () => { if (!current) throw new Error('creation cancelled'); },
+  })).rejects.toThrow('creation cancelled');
+  expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('cancelled-dialogue')).toBeUndefined();
+  expect(notify).not.toHaveBeenCalled();
 });
 
 // Unit: host IPC preserves durable history and only stops the validated linked task.
