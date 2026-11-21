@@ -188,29 +188,31 @@ describe('chat interaction controls', () => {
     expect((screen.getByLabelText('Chat draft') as HTMLInputElement).value).toBe('My unfinished message');
   });
   // Unit at the real Provider: every group page mounts it, and each read pages all mentions.
-  // Before: the 15s timer read while the window was hidden and on servers without AI replies.
-  it.each([
-    { name: 'pauses while the window is hidden', supported: true, hiddenAtTick: true },
-    { name: 'stops on a server without AI replies', supported: false, hiddenAtTick: false },
-  ])('$name and reads once when the window returns', async ({ supported, hiddenAtTick }) => {
+  // Before: the 15s timer kept reading while the window was hidden. With background throttling off
+  // (a running turn or voice call) document.hidden stays false, so the main broadcast must count too.
+  it.each(['document visibility', 'main window broadcast'] as const)('pauses AI reply reads while hidden by %s and reads once on return', async source => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     onTestFinished(() => { vi.useRealTimers(); });
-    let hidden = false;
-    const visibility = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);
+    let documentHidden = false, broadcast = (_hidden: boolean) => {};
+    const visibility = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => documentHidden);
     onTestFinished(() => visibility.mockRestore());
-    if (supported) mocks.mask.mockResolvedValue({ ok: true, state: maskState() });
+    Object.assign(window.electronAPI, { onWindowHiddenChange: (listener: (hidden: boolean) => void) => { broadcast = listener; return () => {}; } });
+    const setHidden = (hidden: boolean) => act(async () => {
+      if (source === 'main window broadcast') broadcast(hidden);
+      else { documentHidden = hidden; document.dispatchEvent(new Event('visibilitychange')); }
+    });
+    mocks.mask.mockResolvedValue({ ok: true, state: maskState() });
     render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
-    await screen.findByText(supported ? 'Config ready' : 'No config');
+    await screen.findByText('Config ready');
     await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(1));
-    hidden = hiddenAtTick;
+    await setHidden(true);
     await act(async () => { vi.advanceTimersByTime(45_000); });
     expect(mocks.mask).toHaveBeenCalledTimes(1);
-    hidden = false;
-    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    await setHidden(false);
     await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(2));
-    // A visible supported page keeps reading for scheduled windows; an unsupported one stays quiet.
+    // A visible page keeps reading for scheduled windows.
     await act(async () => { vi.advanceTimersByTime(15_000); });
-    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(supported ? 3 : 2));
+    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(3));
   });
   it.each(['Participate', 'Read original'])('retains a failed save after successful %s and retries that save', async operation => {
     let state = maskState(), fail = true;
