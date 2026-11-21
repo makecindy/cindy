@@ -910,19 +910,20 @@ export class Scheduler extends EventEmitter {
         for (const [runId, previous] of dispatchSnapshots) {
           let current: Schedule | null | undefined = currentById.get(previous.id);
           if (!current) {
+            // 迟到的成功不能丢(Codex P2 on #11577),但要用**原来那次**读的
+            // 结果:超时之后再另起一次读,那次读更慢或失败时,排队中的 dispatch
+            // 会一直拿着旧 deadline 放行 —— 别的实例已经过期掉的任务仍会被
+            // 派发出去。身份 guard 兜底后仍要应用迟到结果。
+            const readPromise = this.storage.get(previous.id);
             try {
               current = await withStorageTimeout(
-                this.storage.get(previous.id),
+                readPromise,
                 Math.max(1, preGateRemaining(preGateDeadline)),
                 'dispatchSnapshotGet',
               );
             } catch (err) {
               if (err instanceof StorageAwaitTimeoutError) {
-                // Codex P2 on #11577:迟到的成功不能丢。这是刷新派发守卫快照的
-                // 唯一入口,丢掉会让排队中的 dispatch 拿旧 deadline 放行已被
-                // 别的实例过期的任务 —— 身份 guard 兜底后仍要应用迟到结果。
-                const late = this.storage.get(previous.id);
-                void late.then(
+                void readPromise.then(
                   (value) => {
                     if (value && this.automaticDispatchSchedules.get(runId) === previous) {
                       this.automaticDispatchSchedules.set(runId, value);
@@ -1081,6 +1082,11 @@ export class Scheduler extends EventEmitter {
       preGateDeadline ?? Date.now() + this.preGateStorageTimeoutMs,
     ));
     let updatePromise: Promise<Schedule | null> | undefined;
+    // 生命周期代次必须在**发起** UPDATE 时取,不能在超时之后才取:等待期间宿主
+    // 可能 stop() 换代(切账号 / 重启),那时取到的已经是新主人的代次,上一段
+    // 生命周期发起的写入回来时会通过代次校验,广播上一账号的时间线
+    // (Codex P1 on #11577)。
+    const generation = this.lifecycleGeneration;
     try {
       updatePromise = this.storage.update(schedule.id, {
         status: 'expired', nextFireAt: undefined,
@@ -1105,7 +1111,7 @@ export class Scheduler extends EventEmitter {
         // 迟到收口按状态对齐缓存并补发事件;迟到的 CAS 败者只对齐缓存(胜者
         // 自己已发过)。与真实异常同向:本轮绝不派发,持久化下轮重试。
         this.logPreGateTimeout(err.phase);
-        if (updatePromise) this.armExpireLateApply(schedule.id, updatePromise);
+        if (updatePromise) this.armExpireLateApply(schedule.id, updatePromise, generation);
         return true;
       }
       // Keep it available for persistence retry, but never dispatch past deadline.
@@ -1115,11 +1121,16 @@ export class Scheduler extends EventEmitter {
     return true;
   }
 
-  /** 过期写入在超时后才 settle 时的迟到收口(见 expireSchedule catch)。 */
-  private armExpireLateApply(scheduleId: string, update: Promise<Schedule | null>): void {
-    // 记下发起时的生命周期代次:stop() 之后回来的结果属于上一段生命周期(切账号、
-    // 重启),不能再改缓存、不能再广播(Codex P1 on #11577)。
-    const generation = this.lifecycleGeneration;
+  /** 过期写入在超时后才 settle 时的迟到收口(见 expireSchedule catch)。
+   *
+   * `generation` 是**发起**这次写入时的生命周期代次,由调用方在等待之前取好:
+   * 超时之后才取会拿到 stop() 换代后的新代次,上一段生命周期的迟到写入就会
+   * 混过代次校验(Codex P1 on #11577)。 */
+  private armExpireLateApply(
+    scheduleId: string,
+    update: Promise<Schedule | null>,
+    generation: number,
+  ): void {
     void update.then(
       (late) => {
         if (generation !== this.lifecycleGeneration) return;
