@@ -1,7 +1,8 @@
 import type { AgentKind, NativeSubscriptionAuth, ProviderView } from '@cindy/model-providers';
 import { effectiveSourceIdForModel, NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS } from '@cindy/model-providers';
 import type { AccountUsageLimit } from '../../shared/accountUsageLimit.js';
-import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
+import { readGlmCodingPlanCycleResetAt, readTurnUsageResetAt } from '../goal-host/usageLimit.js';
+import { isGlmCodingPlanProviderId } from '../usage/glmCodingPlanUsage.js';
 import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 
 export interface SessionUsageRoute {
@@ -62,8 +63,19 @@ export async function resolveSessionUsageReset(
   } else {
     family = deps.localFamilyOf(route.agentKind, providerId);
   }
+  const now = deps.now();
+  // 智谱 GLM Coding Plan 走 API key(没有 auth.native),但它的 5 小时 / 每周窗口是周期额度,
+  // 不是分钟级速率限制:报错原文写明的重置时刻按「Coding Plan 默认不采信」之外的唯一例外采信。
+  // 只认本机会话——SSH / 远程 Agent 的原文用的是那台机器的本地时间,不按本机时区换算。
+  if (!route.remoteHostId && !route.agentDeviceId) {
+    const glmResetAt = readGlmCodingPlanCycleResetAt(signals, now, {
+      isGlmCodingPlan: isGlmCodingPlanProviderId(route.providerId),
+      localTimeZoneTrusted: true,
+    });
+    if (glmResetAt !== null && scope === deps.scopeKey()) return glmResetAt;
+  }
   if (!family || scope !== deps.scopeKey()) return null;
-  const fromError = readTurnUsageResetAt(signals, deps.now(), {
+  const fromError = readTurnUsageResetAt(signals, now, {
     localTimeZoneTrusted: !route.remoteHostId && !route.agentDeviceId,
   });
   if (fromError !== null && signals.usageResetAt !== undefined) return fromError;
