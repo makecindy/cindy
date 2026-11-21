@@ -796,7 +796,10 @@ describe('createComputerMcpServer', () => {
     await h.cleanup();
   });
 
-  it('dispatches set_value with value and required window_id', async () => {
+  // Linux CUA 0.47 has a keyboard fallback for fields without EditableText.
+  // The MCP entry must retain the caller's explicit delivery mode; otherwise
+  // that fallback cannot run on X11 hosts without /dev/uinput. Tier: unit.
+  it.each([undefined, 'background', 'foreground'] as const)('dispatches set_value with delivery mode %s', async (deliveryMode) => {
     const deps: ComputerMcpDeps = {
       getStatus: vi.fn(),
       callTool: vi.fn(async () => ({ ok: true })),
@@ -807,7 +810,8 @@ describe('createComputerMcpServer', () => {
       name: 'call_tool',
       arguments: {
         name: 'set_value',
-        args: { pid: 123, window_id: 7, element_index: 2, value: 'Option' },
+        args: { pid: 123, window_id: 7, element_index: 2, value: 'Option',
+          ...(deliveryMode ? { delivery_mode: deliveryMode } : {}) },
       },
     })) as { ok: boolean };
 
@@ -817,6 +821,7 @@ describe('createComputerMcpServer', () => {
       window_id: 7,
       element_index: 2,
       value: 'Option',
+      ...(deliveryMode ? { delivery_mode: deliveryMode } : {}),
     }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
   });
