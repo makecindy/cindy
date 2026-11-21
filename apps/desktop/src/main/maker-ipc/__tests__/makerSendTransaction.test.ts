@@ -5126,7 +5126,6 @@ describe('session-agent-switch handoff injection', () => {
     const sent = vi.mocked(fresh.send).mock.calls[0]?.[0] as { content: string };
     expect(sent.content).toContain('OVERFLOW-HANDOFF');
   });
-
 });
 
 it('persists coordination audit metadata and dispatches the model without a prompt notification', async () => {
