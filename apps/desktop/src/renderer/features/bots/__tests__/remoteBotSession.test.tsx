@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   profileLoadState: 'ready' as 'pending' | 'ready' | 'error',
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
   cloudView: vi.fn(),
+  relayStatus: null as ((state: { status: 'stopped' | 'connecting' | 'online' }) => void) | null,
 }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => h.cloud }));
 vi.mock('../botStore', () => ({ useBotProfilesLoadState: () => h.profileLoadState }));
@@ -69,6 +70,7 @@ vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
   },
 }));
 import { CLOUD_HOME_GRACE_MS, RemoteBotSessionView } from '../RemoteBotSessionView';
+import { FIRST_CONNECTION_WINDOW_MS, startDeviceLinkFirstConnectionWatch } from '@/features/device-link/deviceLinkFirstConnection';
 beforeEach(() => {
   h.markRead.mockClear();
   h.navigate.mockReset();
@@ -98,7 +100,14 @@ beforeEach(() => {
     expect(args).toEqual(['new-canonical']);
     return { id: 'new-canonical', source: 'bot', status: 'active' };
   });
-  window.electronAPI = { deviceLink: { invoke: h.invoke } } as unknown as Window['electronAPI'];
+  window.electronAPI = { deviceLink: {
+    invoke: h.invoke,
+    getState: async () => ({ linkStatus: 'online' }),
+    onStatusChanged: (fn: NonNullable<typeof h.relayStatus>) => { h.relayStatus = fn; return () => undefined; },
+  } } as unknown as Window['electronAPI'];
+  // The relay is online unless a test drops it; a settled directory then decides offline.
+  startDeviceLinkFirstConnectionWatch();
+  act(() => h.relayStatus?.({ status: 'online' }));
 });
 afterEach(cleanup);
 // #9629, unit tier: the real route component must follow a confirmed remote
@@ -302,6 +311,42 @@ it('keeps the open chat through a brief drop, then shows the cloud conversation 
   h.cloud = { ...h.cloud, actors: [{ ...h.cloud.actors[0]!, homeDeviceId: 'elsewhere' }] };
   rerender(<RemoteBotSessionView />);
   expect(h.navigate).toHaveBeenLastCalledWith(expect.objectContaining({ to: '/bots/remote/elsewhere/writer?keep=1' }));
+});
+
+// Unit, cloud-companions.md §3.1: right after launch or waking, the relay reports `stopped`
+// (no client yet) or `connecting`, and a stale directory row may say the home is offline. Before,
+// that opened the cloud view with "continue on this computer" at once and one click moved the
+// companion off its always-on home. Minimal input: relay drops, row offline; until the window
+// ends (or the relay is back and the directory settles) it reads "connecting".
+it.each(['stopped', 'connecting'] as const)('shows connecting, not offline or takeover, while the relay is %s right after a drop', async status => {
+  h.online = false;
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  vi.useFakeTimers();
+  try {
+    act(() => h.relayStatus?.({ status }));
+    render(<RemoteBotSessionView />);
+    expect(screen.getByText('ccAgent.sidebar.machineSwitcher.connecting')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(FIRST_CONNECTION_WINDOW_MS - 1); });
+    expect(h.cloudView).not.toHaveBeenCalled();
+    expect(screen.queryByText('bots.remote.offlineDescription')).toBeNull();
+    // The window always ends: a home that stays unreachable reads as offline as before.
+    act(() => { vi.advanceTimersByTime(1); });
+  } finally {
+    vi.useRealTimers();
+  }
+  expect(await screen.findByText('cloud-offline-view')).toBeTruthy();
+});
+
+it('shows a confirmed offline home as soon as the relay is back and the directory settles', async () => {
+  h.online = false;
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  act(() => h.relayStatus?.({ status: 'connecting' }));
+  render(<RemoteBotSessionView />);
+  expect(screen.getByText('ccAgent.sidebar.machineSwitcher.connecting')).toBeTruthy();
+  act(() => h.relayStatus?.({ status: 'online' }));
+  expect(await screen.findByText('cloud-offline-view')).toBeTruthy();
 });
 
 it('calls a main computer that is not listed offline, and "control off" only when it reports remote control off', async () => {
