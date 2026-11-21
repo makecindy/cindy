@@ -103,6 +103,8 @@ export interface PreparedRemoteMcp {
   /** 本任务可用的本机 MCP 服务(名字 → 带本任务身份的地址与请求头)。 */
   servers: Map<string, LocalMcpTarget>;
   dispose(): void;
+  /** Close only the transports owned by a confirmed remote Agent process run. */
+  closeSessionInstance?(): void;
 }
 
 export interface StartRemoteAgentDeps {
@@ -347,6 +349,12 @@ export function hostRewritesResumeId(
 /** 真正的原生会话 id(Claude Code 首轮完成前是占位)。 */
 function isNativeSessionId(id: unknown): id is string {
   return typeof id === 'string' && id.length > 0 && id !== '<pending>' && id !== '<failed>';
+}
+
+function isConfirmedRunEnd(reason: string, idleReclaimed?: boolean): boolean {
+  // The executor reports idleReclaimed even if native close fails: only quiet
+  // runs are reclaimed, and the next send starts a new run.
+  return idleReclaimed === true || reason === 'ended' || reason === 'closed';
 }
 
 /**
@@ -643,12 +651,25 @@ async function prepareAndStartRemoteAgentSession(
     && controller?.isQuiet() === true
     && resumableAfterRelease();
 
-  /** 连接池让出名额：只结束对方的 Agent 进程，本机部分与对话记录都留着。 */
+  function closeRunMcpInstance(runId: string): void {
+    try { mcp.closeSessionInstance?.(); }
+    catch (error) {
+      deps.log?.warn('remote agent: closing ended run MCP instance failed', { runId, error: String(error) });
+    }
+  }
+
+  async function closeStartedRun(client: RemoteAgentRunClient): Promise<void> {
+    // A client that has already stopped polling returns from close without a remote receipt.
+    if (client.isClosed) return;
+    await client.close('close', 'navigation');
+    closeRunMcpInstance(client.runId);
+  }
+
   /** 结束对方的这个 Agent 进程，本机部分留着，状态回到已让出(调用前已置为 releasing)。 */
   async function closeRun(client: RemoteAgentRunClient): Promise<void> {
     try {
       // 用 close 而不是 detach：detach 不结束对方的进程，名额让不出来。
-      await client.close('close', 'navigation');
+      await closeStartedRun(client);
     } catch (error) {
       deps.log?.warn('remote agent: closing a released connection failed', { runId: client.runId, error: String(error) });
       // 没送到：对方可能还占着名额，连接池继续给它占位并再试一次 close。
@@ -814,6 +835,7 @@ async function prepareAndStartRemoteAgentSession(
       onClosed: (reason, error, idleReclaimed) => {
         // 让出名额或已被换下的连接：不是任务结束。
         if (active !== client || linkState === 'releasing' || linkState === 'closed') return;
+        if (isConfirmedRunEnd(reason, idleReclaimed)) closeRunMcpInstance(client.runId);
         if (!opened) {
           closedEarly = { reason, message: error?.message };
           return;
@@ -882,12 +904,15 @@ async function prepareAndStartRemoteAgentSession(
       if (closedEarly) throw new Error((closedEarly as { message?: string }).message ?? '[REMOTE_AGENT_UNAVAILABLE] The agent stopped right after starting.');
       if (stateNow() === 'closed') {
         // 连回途中任务关掉了(那时还没有这条连接可关)：对方已经起了进程，关掉它让出名额。
-        await client.close('close', 'navigation').catch(() => undefined);
+        await closeStartedRun(client).catch(() => undefined);
         throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       }
       const started = parseStartedInfo(raw, kind);
       if (reconnect && restartResumeRequired && (!expectedResume || started.id !== expectedResume)) {
-        await client.close('close', 'navigation').catch(() => undefined);
+        // Retire the rejected client before closing it. close() emits a local
+        // 'closed' even on failure, so only its successful receipt can clean up.
+        if (active === client) active = null;
+        await closeStartedRun(client).catch(() => undefined);
         throw new Error('[REMOTE_AGENT_UNAVAILABLE] The original conversation could not be resumed after the supplier stopped.');
       }
       if (!projectionReady) applyProjection(started, started.virtualWorkspace ? started.mirrorRoot : undefined);
@@ -911,9 +936,10 @@ async function prepareAndStartRemoteAgentSession(
       return client;
     } catch (error) {
       const token = startupSwitchToken;
+      const startupStopped = !remoteStarted && error instanceof RemoteAgentRemoteError && error.phase === 'start'
+        && error.info.name === 'AgentStartupStoppedError';
       if (!remoteStarted && token && isCurrent()) {
-        if (error instanceof RemoteAgentRemoteError && error.phase === 'start'
-          && error.info.name === 'AgentStartupStoppedError' && error.info.code === 'SUBSCRIPTION_ACCOUNT_LIMITED') {
+        if (startupStopped && error.info.code === 'SUBSCRIPTION_ACCOUNT_LIMITED') {
           stoppedReconnectOffers.set(error, () => {
             deps.log?.info('remote agent switch credential taken over', { sessionId: opts.sessionId, phase: 'reconnect' });
             deps.groupSwitch?.offer(token);
@@ -925,12 +951,15 @@ async function prepareAndStartRemoteAgentSession(
           deps.groupSwitch?.offer(token);
         }
       }
+      // The adapter can initialize MCP before startup returns. This typed
+      // error proves the attempt stopped; a generic start-failed frame does not.
+      if (startupStopped && isCurrent()) closeRunMcpInstance(client.runId);
       if (active === client) active = null;
       if (remoteStarted && !client.isClosed) {
         // An invalid started descriptor or a local bootstrap error can occur
         // after the other computer has started its Agent. End that run before
         // the caller falls back to another executor.
-        await client.close('close', 'navigation').catch((closeError) => {
+        await closeStartedRun(client).catch((closeError) => {
           deps.log?.warn('remote agent: closing a failed startup run failed', {
             runId: client.runId, error: String(closeError),
           });
@@ -938,7 +967,7 @@ async function prepareAndStartRemoteAgentSession(
       } else client.abandon('start-failed');
       if (!remoteStarted && (
         (error instanceof Error && 'code' in error && error.code === 'IPC_ERROR')
-        || (error instanceof RemoteAgentRemoteError && error.phase === 'start' && error.info.name === 'AgentStartupStoppedError')
+        || startupStopped
       )) {
         const quota = readRemoteProviderGroupUsageLimit(error);
         if (quota) throw quota;

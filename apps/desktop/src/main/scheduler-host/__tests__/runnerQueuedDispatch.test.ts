@@ -364,6 +364,8 @@ function createQueueHarness(opts: {
   acceptBeforeEnqueueResolves?: boolean;
   /** runner 收到 terminal error 时，普通自动续跑是否已接管。 */
   autoResumePending?: () => boolean;
+  /** shared reconnect replacement is in flight for this scheduler item. */
+  sharedReconnectPending?: () => boolean;
 }): QueueHarness {
   const enqueueCalls: QueueHarness['enqueueCalls'] = [];
   const removeCalls: QueueHarness['removeCalls'] = [];
@@ -398,6 +400,7 @@ function createQueueHarness(opts: {
       },
       isPromptTracked: () => (opts.tracked ? opts.tracked() : true),
       isAutoResumePending: () => opts.autoResumePending?.() ?? false,
+      isSharedReconnectPending: () => opts.sharedReconnectPending?.() ?? false,
       onAutoResumeFailed: (_sessionId, _runId, listener, wait) => {
         quotaWait = wait;
         autoResumeFailureListeners.add(listener);
@@ -1847,6 +1850,47 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     });
     expect(harness.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
   });
+
+  it('waits for the replacement session when shared reconnect recovery claims the scheduled run', async () => {
+    let recoveryPending = true;
+    const original = createSessionHarness(async () => ({ accepted: true }));
+    const replacement = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, sharedReconnectPending: () => recoveryPending });
+    const { runner, replaceLiveSession } = createRunnerHarness(original.session, queue.deps);
+    const fire = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+
+    original.emit({ type: 'error', source: 'claude-code', data: { message: 'stopped open', isTerminal: true } });
+    original.emit({ type: 'done', source: 'claude-code', data: { status: 'failed' } });
+    await Promise.resolve();
+    expect(original.listenerCount()).toBe(1);
+    original.emitStatus('closed');
+    expect(original.listenerCount()).toBe(0);
+    replaceLiveSession(replacement.session);
+    expect(original.listenerCount()).toBe(0);
+    expect(replacement.listenerCount()).toBe(1);
+
+    recoveryPending = false;
+    replacement.emit({ type: 'text', source: 'claude-code', data: { text: 'recovered scheduled result', isFinal: true } });
+    replacement.emit({ type: 'done', source: 'claude-code', data: {} });
+    await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID, resultText: 'recovered scheduled result' });
+    expect(replacement.listenerCount()).toBe(0);
+  });
+
+  it.each(['local session', 'shared send without an offer'] as const)(
+    'fails promptly when %s closes without claimed shared recovery', async () => {
+      const session = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true, sharedReconnectPending: () => false });
+      const { runner } = createRunnerHarness(session.session, queue.deps);
+      const fire = runner.fire(heartbeatSchedule(), createFireContext());
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      await queue.accept();
+      session.emitStatus('closed');
+      await expect(fire).rejects.toThrow('session ended without a terminal event');
+      expect(session.listenerCount()).toBe(0);
+    },
+  );
 
   // Quota waits may last days: use the engine's existing queue-wait contract,
   // which releases capacity and excludes the run from the no-progress watchdog.
@@ -3539,7 +3583,9 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
     }
   });
 
-  it('不能顺延的任务(一次性)排队超时 → 可见失败,不静默消失', async () => {
+  // #8351: unit, real runner.fire; existing coverage only required an arbitrary failure.
+  // A never-accepted once prompt must retain timeout/cause/recovery, not an Agent failure.
+  it('一次性排队超时 → 保留未派发原因和补跑指引,不报 Agent 失败', async () => {
     vi.useFakeTimers();
     try {
       const harness = createSessionHarness(async () => ({ accepted: true }));
@@ -3547,17 +3593,22 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
       const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
 
       const firePromise = runner.fire(heartbeatSchedule({ recurring: false }), createFireContext());
-      // 先挂上 rejection handler 再推进假时钟:fire 会在 advance 期间同步 reject,
-      // 此时若还没有 handler,Node 会报 unhandled rejection 污染整个测试文件。
-      const rejection = expect(firePromise).rejects.toThrow();
+      const settled = firePromise.then(value => ({ value }), error => ({ error }));
       await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
       await vi.advanceTimersByTimeAsync(
         QUEUED_DISPATCH_MAX_WAIT_MS + QUEUED_DISPATCH_TRACK_POLL_MS,
       );
 
-      await rejection;
+      expect(await settled).toMatchObject({ value: {
+        sessionId: SESSION_ID, skipped: true,
+        resultText: expect.stringMatching(/\[QUEUE_WAIT_TIMEOUT\].*not dispatched.*30min/),
+      } });
       expect(queue.removeCalls).toEqual([{ sessionId: SESSION_ID, clientId: 'client-1' }]);
-      expect(notifier.notify).toHaveBeenCalled();
+      expect(harness.send).not.toHaveBeenCalled();
+      expect(notifier.notify).not.toHaveBeenCalled();
+      // Withdrawal must also prevent a late coordinator acceptance from dispatching.
+      await queue.accept();
+      expect(harness.send).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

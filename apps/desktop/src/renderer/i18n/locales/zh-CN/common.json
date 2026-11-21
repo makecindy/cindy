@@ -17431,7 +17431,8 @@
         "title": "导入仓库自动化",
         "description": "来源：{{workingDir}}。请检查下方配置。导入会应用这些变更并启用新增的自动化，它们可以执行命令、启动拥有完全访问权限的 Agent。请仅导入你信任的内容。",
         "accept": "确认导入",
-        "removed": "将删除：{{names}}"
+        "removed": "将删除：{{names}}",
+        "fileMissing": "找不到「{{projectName}}」中的自动化文件，已跳过导入"
       },
       "toast": {
         "summary": "新增 {{inserted}} · 更新 {{updated}} · 删除 {{deleted}}",
@@ -17528,6 +17529,7 @@
       "openWorkdirFailed": "打开文件夹失败"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "排队等待超时，提示词未发送。目标任务空闲后可点击「{{action}}」补跑。",
       "status": {
         "running": "运行中",
         "success": "成功",

@@ -40,7 +40,7 @@ import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
 import { onSubscriptionPoolCodexModelsChanged, onSubscriptionPoolClaudeModelsChanged } from '../subscription-accounts/runtime.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { installPluginEngines } from './acp-host.js';
-import { builtinAgentKindOrNull, requireBuiltinAgentKind } from './engineKind.js';
+import { builtinAgentKindOrNull } from './engineKind.js';
 import { readCodexThreadStorageReadOnly, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -68,6 +68,7 @@ import {
   CodexAgent,
   configureDefaultImageResizer,
   type AgentKind,
+  type EngineKind,
   type InteractionRequest,
   type AutoReviewDelegate,
   type McpProvider,
@@ -926,10 +927,18 @@ export async function listBotRuntimeMcpServers({ agentKind, remoteHostId }: { ag
   });
 }
 
+// Plugin engines get Cindy tools through the Pi-compatible bridge; session execution keeps its own engine.
+function companionToolAgentKind(kind: EngineKind): AgentKind {
+  return kind === 'acp' ? 'pi' : kind;
+}
+
 function createDesktopBotCapabilityService() {
   return createBotCapabilityService({
     getMaker, getPluginRegistry, isBotToolsetAvailable,
-    listMcpServers: (input) => listBotRuntimeMcpServers({ ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate tools') }),
+    listMcpServers: (input) => listBotRuntimeMcpServers({
+      ...input,
+      agentKind: companionToolAgentKind(input.agentKind),
+    }),
     markOfficialSkills: markCindyOfficialSkills,
     readConversationConnections: async (botId) => {
       if (!_readBotConversationConnections) throw new Error('Bot conversation connections reader is not initialized');
@@ -2439,7 +2448,7 @@ export function getMaker(): Maker {
       getUserName: () => getAuthState().user?.name,
       listSkills: async ({ agentKind: engineKind, workingDir, remoteHostId }) => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
-        const agentKind = requireBuiltinAgentKind(engineKind, 'teammate runtime');
+        const agentKind = companionToolAgentKind(engineKind);
         const result = await _maker.listAgentSkills(agentKind, {
           workingDir,
           remoteHostId,
@@ -2447,7 +2456,10 @@ export function getMaker(): Maker {
         });
         return markCindyOfficialSkills(result.skills, remoteHostId);
       },
-      listMcpServers: (input) => listBotRuntimeMcpServers({ ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate runtime') }),
+      listMcpServers: (input) => listBotRuntimeMcpServers({
+        ...input,
+        agentKind: companionToolAgentKind(input.agentKind),
+      }),
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
       listBotImChannels: ({ botId }) =>
         [...new Set(listBotImConnectionsForBot(botId).map((connection) => connection.channel))],
@@ -2465,7 +2477,7 @@ export function getMaker(): Maker {
                 isBotToolsetAvailable({
                   botId,
                   workingDir,
-                  agentKind: requireBuiltinAgentKind(agentKind, 'teammate runtime'),
+                  agentKind: companionToolAgentKind(agentKind),
                   remoteHostId,
                   toolsetId: plugin.id,
                 }),
@@ -2704,7 +2716,7 @@ export function getMaker(): Maker {
             // V2 teammates (projectContext) get the ordinary task's MCP and plugin surface.
             ...(botRuntimeSnapshot && !createOpts.botRuntimeProfile?.projectContext
               ? {
-                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[requireBuiltinAgentKind(createOpts.agentKind, 'teammate runtime')] ?? [])
+                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[companionToolAgentKind(createOpts.agentKind)] ?? [])
                     .filter((provider) => isBotMcpServerAllowed(createOpts.botRuntimeProfile?.mcpPolicy, provider.name))
                     .map((provider) => provider.name),
                   [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [

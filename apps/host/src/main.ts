@@ -1154,6 +1154,7 @@ const sessionDraftPorts = {
   notifyPluginSessionCreated: (input: { sessionId: string; workdir?: string }) => eventHub.publish({ type: 'session_created', ...input }),
 };
 setSessionOpeningModelAdmission(async body => {
+  if (body.agentKind === 'acp') throw new Error('插件引擎在无界面 Host 上不可用');
   const kind = body.agentKind === 'cc' ? 'claude-code' : body.agentKind;
   const snapshot = await listProviders({ gateway: currentGateway(), ownerId: runtime.owner });
   const execution = resolveSessionExecutionSelection({

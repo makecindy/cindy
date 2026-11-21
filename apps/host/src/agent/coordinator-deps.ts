@@ -207,6 +207,8 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
       ctx.scheduleBridge().onPersistedSendRejected(id, message, item, recovering);
       executor.onPersistedSendRejected(id, message);
     },
+    // The Host does not capture supplier-sharing reconnect offers.
+    getSchedulerRunSignal: undefined,
     onAcceptedQueuedMessage: async (id, item) => {
       ctx.schedulePreparations.delete(item.clientId);
       ctx.scheduleDiscardWatchers.delete(item.clientId);
