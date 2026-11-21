@@ -556,8 +556,30 @@ describe('provider:list IPC handler', () => {
     expect(listProviders).toHaveBeenCalledOnce();
     expect(listProviders).toHaveBeenCalledWith({
       allowSideEffects: false,
-      includeLastConfirmed: true,
     });
+  });
+
+  // Unit: provider:list serves both local display and remote automatic routing.
+  it('requests offline display models only for the local renderer', async () => {
+    const harness = new IpcHarness();
+    const current = { ...fakeView('openai', false), models: { codex: [] } };
+    const retained = { id: 'gpt-retained', name: 'Retained', contextWindow: 128_000, efforts: [], defaultEffort: null };
+    registerProviderHandlers(harness, makeDeps({
+      isTrustedSender: () => true,
+      listProviders: async opts => [opts?.includeSubscriptionDisplayModels
+        ? { ...current, subscriptionDisplayModels: { codex: [retained] } }
+        : current],
+    }));
+    const invoke = () => harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
+    expect(await invoke()).toMatchObject({ providers: [{
+      connected: false, models: { codex: [] }, subscriptionDisplayModels: { codex: [retained] },
+    }] });
+    for (const providerPicker of [undefined, 'available'] as const) {
+      const result = await runDeviceLinkInvokeContext({
+        controllerDeviceId: 'paired-device', channel: MAKER_INVOKE.PROVIDER_LIST, providerPicker,
+      }, invoke) as { providers: ProviderView[] };
+      expect(result.providers).toEqual([current]);
+    }
   });
 
   // #11693: a missing discovered model can still have an explicit hidden preference.

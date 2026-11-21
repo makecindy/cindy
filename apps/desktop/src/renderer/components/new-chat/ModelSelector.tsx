@@ -117,6 +117,7 @@ import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useMod
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
 import { useProviders } from '@/hooks/useProviders';
+import { withSubscriptionDisplayModels } from '@/lib/localCatalogSnapshot';
 import { LocalModelCatalogNotice } from './LocalModelCatalogNotice';
 import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
 import {
@@ -1516,7 +1517,7 @@ function ModelSelectorContentView({
     [localProviders.providers, sshCodexProviders],
   );
   const localTaskProviders = useMemo(
-    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider ?? null),
+    () => withFollowedAccountSource(localProviders.providers.map(withSubscriptionDisplayModels), taskSourceProvider ?? null),
     [localProviders.providers, taskSourceProvider],
   );
   const providers = deviceId
@@ -4606,7 +4607,7 @@ export function ModelSelector({
     [localProviders.providers, sshCodexProviders],
   );
   const localTaskProviders = useMemo(
-    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider ?? null),
+    () => withFollowedAccountSource(localProviders.providers.map(withSubscriptionDisplayModels), taskSourceProvider ?? null),
     [localProviders.providers, taskSourceProvider],
   );
   const providers = deviceId
@@ -4803,7 +4804,9 @@ export function ModelSelector({
     !deviceId &&
     !!currentAgentKind &&
     !providersLoading &&
-    !hasConnectedSource;
+    !hasConnectedSource &&
+    !providers.some(provider => !provider.suspended && !provider.removed &&
+      provider.subscriptionDisplayModels?.[currentAgentKind]?.length);
   // trigger 上仍展示当前模型的 effort(模型支持时)。
   const triggerProvider = actualRoute && routeProvider
     ? routeProvider

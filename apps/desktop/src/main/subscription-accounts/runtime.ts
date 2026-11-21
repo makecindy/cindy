@@ -198,6 +198,14 @@ function subscriptionCatalogSignIn(
   return info?.unavailable && options.includeLastConfirmed && !options.includeBoundAccounts ? info.lastConfirmed : undefined;
 }
 
+interface PublishedSubscriptionCatalog {
+  models: readonly CatalogModel[] | null;
+  unavailable: boolean;
+  connected?: boolean;
+  displayModels?: readonly CatalogModel[] | null;
+  confirmedAt?: number;
+}
+
 interface OwnerRuntime {
   owner: string;
   cache: Map<string, AccountSnapshot>;
@@ -215,12 +223,12 @@ interface OwnerRuntime {
   codexModels: Map<string, CodexModelSnapshot>;
   codexModelFlights: Map<string, CodexModelFlight>;
   codexCatalogs?: Map<string, readonly CatalogModel[]>;
-  publishedCodexCatalog?: Record<string, { models: readonly CatalogModel[] | null; unavailable: boolean }> | null;
+  publishedCodexCatalog?: Record<string, PublishedSubscriptionCatalog> | null;
   defaultCodexAuthEpoch: number;
   claudeModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; confirmedAt?: number; failedAt?: number }>;
   claudeModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
   claudeCatalogs?: Map<string, readonly CatalogModel[]>;
-  publishedClaudeCatalog?: Record<string, { models: readonly CatalogModel[] | null; unavailable: boolean }> | null;
+  publishedClaudeCatalog?: Record<string, PublishedSubscriptionCatalog> | null;
   defaultClaudeAuthEpoch: number;
 }
 let runtime: OwnerRuntime | undefined;
@@ -240,14 +248,28 @@ export function onSubscriptionPoolClaudeModelsChanged(listener: () => void): () 
   claudeModelListeners.add(listener);
   return () => { claudeModelListeners.delete(listener); };
 }
+function subscriptionCatalogForPublication(
+  providerId: string,
+  readModels: typeof readSubscriptionPoolCodexModels,
+): PublishedSubscriptionCatalog {
+  const models = readModels(providerId);
+  const unavailable = hasUnavailableSubscriptionPoolAccount(providerId);
+  if (!unavailable) return { models, unavailable };
+  // Either half can change independently when only some accounts are readable.
+  return {
+    models,
+    unavailable,
+    connected: hasConnectedSubscriptionPool(providerId),
+    displayModels: readModels(providerId, { includeLastConfirmed: true }),
+    confirmedAt: lastConfirmedSubscriptionModelsAt(providerId),
+  };
+}
 function publishClaudeCatalogChange(state: OwnerRuntime): void {
   if (!isCurrentRuntime(state)) return;
   const pool = readPool('anthropic');
   const providers = new Set(['anthropic', ...pool?.accounts.map(account => accountProviderId('anthropic', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
-    // Readability is part of the snapshot: an account read that only loses or regains the sign-in
-    // still has to reach open pickers, even when the confirmed list itself is unchanged.
-    [providerId, { models: readSubscriptionPoolClaudeModels(providerId, { includeLastConfirmed: true }), unavailable: hasUnavailableSubscriptionPoolAccount(providerId) }])) : null;
+    [providerId, subscriptionCatalogForPublication(providerId, readSubscriptionPoolClaudeModels)])) : null;
   if (isDeepStrictEqual(state.publishedClaudeCatalog ?? null, models)) return;
   state.publishedClaudeCatalog = models;
   for (const listener of claudeModelListeners) {
@@ -264,7 +286,7 @@ function publishCodexCatalogChange(state: OwnerRuntime, refreshId?: string): voi
   const pool = readPool('openai');
   const providers = new Set(['openai', ...pool?.accounts.map(account => accountProviderId('openai', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
-    [providerId, { models: readSubscriptionPoolCodexModels(providerId, { includeLastConfirmed: true }), unavailable: hasUnavailableSubscriptionPoolAccount(providerId) }])) : null;
+    [providerId, subscriptionCatalogForPublication(providerId, readSubscriptionPoolCodexModels)])) : null;
   if (isDeepStrictEqual(state.publishedCodexCatalog ?? null, models)) return;
   if (refreshId && models) {
     for (const [providerId, next] of Object.entries(models)) {
@@ -1078,7 +1100,7 @@ function servingAccounts(found: NonNullable<ReturnType<typeof poolFor>>) {
 /** Read-only cached aggregate for provider catalog/auth gates; no account identity leaves it. */
 export function hasConnectedSubscriptionPool(
   providerId: string,
-  options: SubscriptionCatalogAccountOptions = {},
+  options: { includeBoundAccounts?: boolean } = {},
 ): boolean {
   const found = poolFor(providerId);
   if (!found || (found.off && !options.includeBoundAccounts)) return false;
@@ -1087,12 +1109,7 @@ export function hasConnectedSubscriptionPool(
   const serving = new Set(servingAccounts(found).map(account => account.id));
   return found.pool.accounts.filter(account => (serving.has(account.id) || historical.has(account.id))
     && !disconnectedFor(found.pool, found.kind, account.id))
-    .some(account => {
-      const info = state.cache.get(keyOf(found.kind, account.id));
-      // Execution readiness uses the current read. Selectable catalogs can opt into history.
-      const signIn = subscriptionCatalogSignIn(info, options);
-      return signIn?.auth.authenticated === true;
-    });
+    .some(account => state.cache.get(keyOf(found.kind, account.id))?.auth.authenticated === true);
 }
 
 /**

@@ -37,7 +37,6 @@ const log = createLogger('provider-service');
 interface SubscriptionConnectionOptions {
   /** Derived from a host-provided full catalog for existing bound task routes. */
   includeBoundAccounts?: boolean;
-  includeLastConfirmed?: boolean;
 }
 
 /**
@@ -62,9 +61,8 @@ export interface ConnectionReadOptions extends SubscriptionConnectionOptions {
 }
 
 export interface ProviderListOptions extends ConnectionReadOptions {
-  /** Host-owned presentation and discovery reads can show the last confirmed subscription.
-   * Full catalog overrides always require current authentication. */
-  includeLastConfirmed?: boolean;
+  /** Attach cached subscription models for the local UI beside the current routing view. */
+  includeSubscriptionDisplayModels?: boolean;
   /** Same-account remote picker. Full management and routing callers leave this unset. */
   picker?: {
     scope: 'available' | ProviderPickerModel;
@@ -177,9 +175,7 @@ export interface ProviderService {
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
   async function listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]> {
     const routingCatalog = Boolean(opts?.getCatalog || opts?.catalog);
-    const includeLastConfirmed = !routingCatalog && opts?.includeLastConfirmed === true;
-    const subscriptionOptions = routingCatalog ? { includeBoundAccounts: true }
-      : includeLastConfirmed ? { includeLastConfirmed: true } : undefined;
+    const subscriptionOptions = routingCatalog ? { includeBoundAccounts: true } : undefined;
     const readOpts: ConnectionReadOptions = {
       allowSideEffects: opts?.allowSideEffects === true && opts?.snapshotOnly !== true,
       snapshotOnly: opts?.snapshotOnly === true,
@@ -221,7 +217,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         && (p.id === 'openai' || p.id === 'anthropic' || p.subscriptionPool !== undefined || p.auth.native === 'codex'));
       await deps.refreshPickerPools?.(pools);
       readOpts.pickerPoolsReady = true;
-      const projected = deps.projectCatalog?.(base, false, include, includeLastConfirmed) ?? base;
+      const projected = deps.projectCatalog?.(base, false, include) ?? base;
       let providers = projected.providers.filter(include);
       if (scope !== 'available') {
         providers = providers.flatMap(p => {
@@ -239,7 +235,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     ]);
     // Full routing reads must materialize their catalog after all connection claims settle.
     const sourceCatalog = pickerCatalog ?? opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
-    const catalog = pickerCatalog ?? deps.projectCatalog?.(sourceCatalog, routingCatalog, undefined, includeLastConfirmed) ?? sourceCatalog;
+    const catalog = pickerCatalog ?? deps.projectCatalog?.(sourceCatalog, routingCatalog) ?? sourceCatalog;
     const connected: ConnectionState = { xd, anthropic, openai, xai };
     for (const p of catalog.providers) {
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
@@ -271,6 +267,18 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         connected[p.id] = deps.builtinApiKeyConnected?.(p.id) ?? false;
       }
     }
+    const unavailableSubscriptions = new Map<string, number | undefined>();
+    for (const provider of catalog.providers) {
+      if (deps.subscriptionReadUnavailable?.(provider.id)) {
+        unavailableSubscriptions.set(provider.id, deps.subscriptionModelsConfirmedAt?.(provider.id));
+      }
+    }
+    // Both projections read the same cached account state, without starting another refresh.
+    const displayCatalog = !routingCatalog && !picker && opts?.includeSubscriptionDisplayModels &&
+      [...unavailableSubscriptions.values()].some(confirmedAt => confirmedAt !== undefined)
+      ? deps.projectCatalog?.(sourceCatalog, false,
+          provider => unavailableSubscriptions.get(provider.id) !== undefined, true)
+      : undefined;
     const discoveryFailures: ModelDiscoveryFailureState = {};
     if (deps.modelDiscoveryFailure) {
       for (const p of catalog.providers) {
@@ -300,17 +308,20 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
     const contextLimits = deps.getModelContextLimits?.() ?? {};
-    return buildRegistry(catalog, connected, discoveryFailures, picker ? access : deps.getModelAccess?.()).map((provider) => ({
-      ...provider,
-      models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
-        agent, models?.map((model) => {
-          const { contextWindowOverride: _previous, ...base } = model;
-          const limit = contextLimits[`${agent}:${provider.id}:${model.id}`];
-          return typeof limit === 'number' && Number.isFinite(limit) && limit > 0
-            ? { ...base, contextWindowOverride: limit } : base;
-        }),
-      ])),
-    })).map((provider) => {
+    const modelAccess = picker ? access : deps.getModelAccess?.();
+    const formatModels = (provider: ProviderView): ProviderView => {
+      const withContext: ProviderView = {
+        ...provider,
+        models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+          agent, models?.map((model) => {
+            const { contextWindowOverride: _previous, ...base } = model;
+            const limit = contextLimits[`${agent}:${provider.id}:${model.id}`];
+            return typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+              ? { ...base, contextWindowOverride: limit } : base;
+          }),
+        ])),
+      };
+      provider = withContext;
       if (!deps.hasModelAliasOverride) return provider;
       const blocked = new Set(Object.entries(provider.models).flatMap(([agent, models]) =>
         (models ?? []).filter((m) => m.selectionAliasKey &&
@@ -323,15 +334,24 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
           const { selectionAliasKey: _marker, ...original } = m;
           return original;
         })])) };
-    }).map((provider) => ({
+    };
+    const displayModels = new Map(displayCatalog
+      ? buildRegistry({
+          ...displayCatalog,
+          providers: displayCatalog.providers.filter(provider =>
+            unavailableSubscriptions.get(provider.id) !== undefined),
+        }, connected, {}, modelAccess).map(provider => [provider.id, formatModels(provider).models] as const)
+      : []);
+    return buildRegistry(catalog, connected, discoveryFailures, modelAccess).map(formatModels).map((provider) => ({
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
       ...provider, ...(provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) ?? {} : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
       ...(provider.source === 'organization' ? { logoKind: deps.getOrganizationProviderLogoKind?.(provider) } : {}),
       // Deletion disconnects first. A live binding wins over a stale removed flag if
       // restoring display preferences failed after authentication was committed.
       ...(provider.connected ? { removed: false } : {}),
-      ...(deps.subscriptionReadUnavailable?.(provider.id)
-        ? { subscriptionReadUnavailable: true as const, subscriptionModelsConfirmedAt: deps.subscriptionModelsConfirmedAt?.(provider.id) } : {}),
+      ...(unavailableSubscriptions.has(provider.id)
+        ? { subscriptionReadUnavailable: true as const, subscriptionModelsConfirmedAt: unavailableSubscriptions.get(provider.id) } : {}),
+      ...(displayModels.has(provider.id) ? { subscriptionDisplayModels: displayModels.get(provider.id) } : {}),
     })).map(
       (provider) =>
         media === undefined

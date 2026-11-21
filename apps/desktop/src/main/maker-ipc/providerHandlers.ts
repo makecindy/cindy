@@ -1328,7 +1328,8 @@ export function registerProviderHandlers(
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
       const ownerAtIngress = captureProviderOwnerSession();
       const dataOwnerId = ownerAtIngress?.dataOwnerId ?? null;
-      const scope = getDeviceLinkInvokeContext()?.providerPicker;
+      const invokeContext = getDeviceLinkInvokeContext();
+      const scope = invokeContext?.providerPicker;
       let deferredProviderIds: string[] = [];
       let catalogOrder: string[] = [];
       const providers = await deps.listProviders({
@@ -1337,7 +1338,7 @@ export function registerProviderHandlers(
           deferredProviderIds = deferred;
         } } } : {}),
         allowSideEffects: trusted,
-        includeLastConfirmed: true,
+        ...(trusted && !invokeContext ? { includeSubscriptionDisplayModels: true } : {}),
       });
       assertProviderMutationOwner(ownerAtIngress);
       let modelVisibilityOverrides: Record<string, boolean>;

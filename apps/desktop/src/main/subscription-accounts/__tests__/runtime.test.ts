@@ -6859,7 +6859,6 @@ describe('unreachable account service', () => {
     // PR #11754 review: the default gate also drives oneshot model selection.
     // An unreadable account with a saved list must leave room for a healthy fallback.
     expect(hasConnectedSubscriptionPool('openai')).toBe(false);
-    expect(hasConnectedSubscriptionPool('openai', { includeLastConfirmed: true })).toBe(true);
     expect(readSubscriptionPoolCodexModels()).toEqual([]);
     expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })?.map(m => m.id)).toEqual(['gpt-kept']);
     expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
@@ -6877,6 +6876,35 @@ describe('unreachable account service', () => {
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
   });
 
+  // Unit: after one account is unreadable, the aggregate failure marker and display
+  // models stay constant when the last healthy account also becomes unreadable.
+  it('publishes loss of the last usable account even if display models stay the same', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    const offline = new Set<string>();
+    h.read.mockImplementation(async (_provider: string, directory: string) => {
+      if (offline.has(directory.split('/').at(-1)!)) throw unreachable();
+      return { authenticated: true, identity: directory };
+    });
+    h.rpc.mockResolvedValue({ data: [{ id: 'gpt-shared' }], nextCursor: null });
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels(true);
+    offline.add('default');
+    await refreshSubscriptionPool('openai', true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(hasConnectedSubscriptionPool('openai')).toBe(true);
+
+    const observed: boolean[] = [];
+    const stop = onSubscriptionPoolCodexModelsChanged(() => observed.push(hasConnectedSubscriptionPool('openai')));
+    try {
+      offline.add('second');
+      await refreshSubscriptionPool('openai', true);
+      expect(observed).toContain(false);
+      expect(readSubscriptionPoolCodexModels()).toEqual([]);
+      expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })?.map(m => m.id))
+        .toEqual(['gpt-shared']);
+    } finally { stop(); }
+  });
+
   // Offline at startup: memory is gone, so the list saved for the slot is the evidence. A
   // confirmed sign-out clears it, so a later offline start does not resurrect the account.
   it('restores the saved list after an offline restart until a sign-out is confirmed', async () => {
@@ -6891,7 +6919,6 @@ describe('unreachable account service', () => {
     h.read.mockRejectedValue(unreachable());
     await refreshSubscriptionPool('openai', true);
     await refreshSubscriptionPoolCodexModels();
-    expect(hasConnectedSubscriptionPool('openai', { includeLastConfirmed: true })).toBe(true);
     expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })?.map(m => m.id)).toEqual(['gpt-saved']);
     expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
 

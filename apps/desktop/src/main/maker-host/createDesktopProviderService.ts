@@ -880,7 +880,7 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterLegacyGptContextProfiles(projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog(), false, undefined, true));
+  return filterLegacyGptContextProfiles(projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog()));
 }
 
 function getDesktopSelectableBaseCatalog(): Catalog {
@@ -1010,7 +1010,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
-      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts, includeLastConfirmed, pickerPoolsReady }) => {
+      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts, pickerPoolsReady }) => {
         if (readPool('anthropic')) {
           if (!snapshotOnly && !pickerPoolsReady) {
             await refreshSubscriptionPoolsOfKind('anthropic');
@@ -1020,7 +1020,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
             if (waitForDiscovery) await discovery;
             else void discovery.catch(() => log.warn('Background Claude model discovery unavailable'));
           }
-          return hasConnectedSubscriptionPool('anthropic', { includeBoundAccounts, includeLastConfirmed });
+          return hasConnectedSubscriptionPool('anthropic', { includeBoundAccounts });
         }
         if (snapshotOnly) return hasClaudeNativeLogin();
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
@@ -1053,14 +1053,14 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
       // 凭证硬链进 codex-home 并为首个 owner 补写绑定 —— 判据不是「有没有发上游请求」,而是
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
-      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts, includeLastConfirmed, pickerPoolsReady }) => {
+      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts, pickerPoolsReady }) => {
         if (readPool('openai')) {
           if (!snapshotOnly && !pickerPoolsReady) {
             // Created providers of the kind are read with it (their connection state comes from it).
             await refreshSubscriptionPoolsOfKind('openai');
             await refreshSubscriptionPoolCodexModels();
           }
-          return hasConnectedSubscriptionPool('openai', { includeBoundAccounts, includeLastConfirmed });
+          return hasConnectedSubscriptionPool('openai', { includeBoundAccounts });
         }
         return allowSideEffects ? desktopCodexAuthAdapter.hasCodexOAuthLogin() : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly();
       },

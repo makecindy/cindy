@@ -8,6 +8,7 @@ import { providerShareGuestPeer } from '@cindy/device-link';
 import { describe, expect, it, vi } from 'vitest';
 
 import * as activeCatalogForHostParity from '../active-catalog.js';
+import { calibrateDraftModel } from '../../../shared/draftModelCalibration.js';
 import { resolveAutomaticImSettings } from '../../../shared/imAutomaticModel.js';
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
 import { readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
@@ -57,6 +58,7 @@ const h = vi.hoisted(() => ({
   /** Providers Cindy created for subscription accounts, and the providers whose accounts were read. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   refreshed: new Set<string>(),
+  openAiSiblingHealthy: false,
   retainedOpenAiModels: null as import('@cindy/model-providers').CatalogModel[] | null,
   poolModels: null as import('@cindy/model-providers').CatalogModel[] | null,
   poolModelsByProvider: {} as Record<string, import('@cindy/model-providers').CatalogModel[]>,
@@ -106,10 +108,12 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
     ...actual,
     // A created provider is connected once its own accounts were read (the built-ins follow the pool).
     hasConnectedSubscriptionPool: (id: string, options?: { includeBoundAccounts?: boolean; includeLastConfirmed?: boolean }) =>
-      id === 'openai' && h.retainedOpenAiModels ? options?.includeLastConfirmed === true : h.poolConnectionByProvider[id]
+      id === 'openai' && h.retainedOpenAiModels ? h.openAiSiblingHealthy || options?.includeLastConfirmed === true : h.poolConnectionByProvider[id]
       ? h.poolConnectionByProvider[id][options?.includeBoundAccounts ? 'bound' : 'serving']
       : (h.created[id] || h.pool?.legacyCodexAccounts?.[id]
         ? h.refreshed.has(id) || h.legacyLoggedIn.has(id) : Boolean(h.pool && !h.pool.disconnected)),
+    hasUnavailableSubscriptionPoolAccount: (id: string) => id === 'openai' && h.retainedOpenAiModels !== null,
+    lastConfirmedSubscriptionModelsAt: (id: string) => id === 'openai' && h.retainedOpenAiModels ? 123 : undefined,
     // No real CLI homes here: a read only records which provider was read.
     refreshSubscriptionPool: async (id: string) => {
       h.refreshed.add(id);
@@ -119,7 +123,10 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
     refreshSubscriptionPoolClaudeModels: h.claudeModelRefresh,
     readSubscriptionPoolClaudeModels: () => null,
     readSubscriptionPoolCodexModels: (providerId = 'openai', options?: { includeBoundAccounts?: boolean; includeLastConfirmed?: boolean }) =>
-      (providerId === 'openai' && h.retainedOpenAiModels ? options?.includeLastConfirmed ? h.retainedOpenAiModels : [] : undefined)
+      (providerId === 'openai' && h.retainedOpenAiModels ? [
+        ...(options?.includeLastConfirmed ? h.retainedOpenAiModels : []),
+        ...(h.openAiSiblingHealthy ? h.poolModels ?? [] : []),
+      ] : undefined)
       ?? (options?.includeBoundAccounts ? h.boundPoolModelsByProvider[providerId] : undefined)
       ?? h.poolModelsByProvider[providerId] ?? h.poolModels,
   };
@@ -603,34 +610,46 @@ describe('provider catalog realm reload', () => {
       setActiveCatalog(previous);
     }
   });
-  // PR #11754, unit: the default provider list feeds automatic IM and Hook routing.
-  // One unreadable subscription with retained membership can otherwise preempt a live source.
-  it('keeps offline subscription models visible without routing automatic IM to them', async () => {
+  // PR #11754, unit. Automatic draft and IM routing consume the same provider
+  // rows as the UI. The smallest failing input is one retained model plus a
+  // healthy alternative, including a currently healthy sibling in the same pool.
+  it.each([false, true])('keeps retained models out of routing when a sibling is healthy=%s', async siblingHealthy => {
     const previous = getActiveCatalog();
     const openai = BUNDLED_CATALOG.providers.find(provider => provider.id === 'openai')!;
     const retained = { id: 'gpt-retained', name: 'Retained', contextWindow: 128_000, efforts: [], defaultEffort: null };
+    const healthy = { ...retained, id: 'gpt-healthy' };
     h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
     h.retainedOpenAiModels = [retained];
+    h.openAiSiblingHealthy = siblingHealthy;
+    h.poolModels = [healthy];
+    const route = { model: healthy.id, providerId: siblingHealthy ? 'openai' : 'healthy' };
     try {
       setActiveCatalog({
         ...BUNDLED_CATALOG,
-        providers: [openai, { ...openai, id: 'healthy', auth: { method: 'none' },
-          models: { codex: [{ ...retained, id: 'gpt-healthy' }] } }],
+        providers: [openai, ...siblingHealthy ? [] : [{ ...openai, id: 'healthy', auth: { method: 'none' as const },
+          models: { codex: [healthy] } }]],
       });
       const service = getDesktopProviderService({ allowSideEffects: false });
-      const execution = await service.listProviders({ allowSideEffects: true });
-      expect(execution.find(provider => provider.id === 'openai')?.connected).toBe(false);
-      expect(resolveAutomaticImSettings(IM_DEFAULT_SETTINGS, execution, { agentKind: 'codex' })?.agents.codex)
-        .toMatchObject({ model: 'gpt-healthy', providerId: 'healthy' });
+      const local = await service.listProviders({ includeSubscriptionDisplayModels: true });
+      expect(local.find(provider => provider.id === 'openai')).toMatchObject({
+        connected: siblingHealthy,
+        models: { codex: siblingHealthy ? [expect.objectContaining({ id: healthy.id })] : [] },
+        subscriptionDisplayModels: { codex: expect.arrayContaining([expect.objectContaining({ id: retained.id })]) },
+      });
+      expect(calibrateDraftModel({
+        providers: local, model: retained.id, agent: 'codex', chosenByUser: false, providersLoading: false,
+      })).toEqual(route);
 
-      for (const displayOptions of [{}, { picker: { scope: 'available' as const } }]) {
-        const display = await service.listProviders({ ...displayOptions, includeLastConfirmed: true });
-        expect(display.find(provider => provider.id === 'openai')).toMatchObject({
-          connected: true, models: { codex: [expect.objectContaining({ id: 'gpt-retained' })] },
-        });
+      for (const options of [{}, { picker: { scope: 'available' as const } }]) {
+        const remote = await service.listProviders(options);
+        expect(remote.find(provider => provider.id === 'openai')?.subscriptionDisplayModels).toBeUndefined();
+        expect(resolveAutomaticImSettings(IM_DEFAULT_SETTINGS, remote, { agentKind: 'codex' })?.agents.codex)
+          .toMatchObject(route);
       }
     } finally {
       h.retainedOpenAiModels = null;
+      h.openAiSiblingHealthy = false;
+      h.poolModels = null;
       h.pool = null;
       h.refreshed.clear();
       setActiveCatalog(previous);

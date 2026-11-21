@@ -57,6 +57,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
+import { withSubscriptionDisplayModels } from '@/lib/localCatalogSnapshot';
 import { LocalModelCatalogNotice } from '@/components/new-chat/LocalModelCatalogNotice';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { codexRecoveryActionKey, codexRecoveryDescriptionKey } from '@/hooks/codexAuthRecovery';
@@ -2621,7 +2622,8 @@ export function ProvidersSection() {
   const { dataOwnerId } = useAuth();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
-  const { providers, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
+  const { providers: currentProviders, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
+  const providers = useMemo(() => currentProviders.map(withSubscriptionDisplayModels), [currentProviders]);
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();

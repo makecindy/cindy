@@ -6,6 +6,7 @@
  * 或乱序结果一律保留上一份有效快照。
  * device-link 的远端 capabilities 不经过这里，继续按 deviceId 独立缓存。
  */
+import type { ProviderView } from '@cindy/model-providers';
 import { createLogger } from '@/lib/logger';
 import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import {
@@ -38,6 +39,14 @@ import {
   loadProvidersSnapshot,
   type ProvidersSnapshot,
 } from '@/lib/providersSnapshotStore';
+
+/** Only model presentation reads this projection. Shared catalog consumers use current routes. */
+export function withSubscriptionDisplayModels(provider: ProviderView): ProviderView {
+  const models = provider.subscriptionDisplayModels;
+  return !provider.removed && models && Object.values(models).some(entries => entries?.length)
+    ? { ...provider, models, connected: true }
+    : provider;
+}
 
 const log = createLogger('localCatalogSnapshot');
 let refreshGeneration = 0;
