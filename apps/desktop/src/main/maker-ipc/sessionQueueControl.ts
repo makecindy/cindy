@@ -2,7 +2,13 @@ import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import type { ControlSteerOutcome } from './agent-input-coordinator.desktop.js';
 
 export type SessionQueueControlFailureCode =
-  'QUEUED_MESSAGE_NOT_FOUND' | 'MESSAGE_CONSUMING' | 'NOT_AUTHORIZED' | 'INVALID_ARGS' | 'UNSUPPORTED_CAPABILITY';
+  | 'QUEUED_MESSAGE_NOT_FOUND'
+  | 'MESSAGE_CONSUMING'
+  | 'MESSAGE_HELD'
+  | 'QUEUE_HELD_BOUNDARY'
+  | 'NOT_AUTHORIZED'
+  | 'INVALID_ARGS'
+  | 'UNSUPPORTED_CAPABILITY';
 
 export type SessionQueueControlResult =
   | { ok: true; queuedMessageId: string }
@@ -36,6 +42,10 @@ export type SessionQueueMoveResult =
   | { ok: true; queuedMessageId: string; position: number }
   | Exclude<SessionQueueControlResult, { ok: true }>;
 
+export type SessionQueueHoldReleaseResult =
+  | { ok: true; released: true }
+  | Exclude<SessionQueueControlResult, { ok: true }>;
+
 export interface SessionQueueControlDeps {
   getSnapshot(sessionId: string): Promise<SessionQueueControlSnapshot>;
   replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
@@ -46,6 +56,10 @@ export interface SessionQueueControlDeps {
    * or 'locked' while the user is editing it.
    */
   moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
+  /** 把停点移到这条消息上（至多一个，已有的停点被清掉）。 */
+  holdQueuedMessage(sessionId: string, clientId: string): void;
+  /** 清掉目标队列上的停点；队列没有停点时无操作。 */
+  releaseQueueHold(sessionId: string): void;
 }
 
 export type SessionQueueAuthorization = (
@@ -67,7 +81,8 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
   async function resolve(
     params: BaseControlParams,
   ): Promise<
-    { ok: true; item: AgentInputQueuedMessage } | Exclude<SessionQueueControlResult, { ok: true }>
+    | { ok: true; item: AgentInputQueuedMessage; queue: readonly AgentInputQueuedMessage[] }
+    | Exclude<SessionQueueControlResult, { ok: true }>
   > {
     const snapshot = await deps.getSnapshot(params.sessionId);
     if (snapshot.consumingClientIds.includes(params.queuedMessageId)) {
@@ -85,7 +100,9 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
         message: authorization.message,
       };
     }
-    return { ok: true, item };
+    // 把这次读到的队列一起带出去:停点判定复用同一份快照,不再多读一次
+    // (调用方按次编排的快照序列不能被内部多出的读取打乱)。
+    return { ok: true, item, queue: snapshot.pendingQueue };
   }
 
   async function classifyLostRace(
@@ -147,6 +164,14 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
     async steer(params: BaseControlParams): Promise<SessionQueueSteerResult> {
       const resolved = await resolve(params);
       if (!resolved.ok) return resolved;
+      // 停点条目不会参与当前轮,插话与它的语义直接冲突;要先恢复再决定。
+      if (resolved.item.held === true) {
+        return {
+          ok: false,
+          errorCode: 'MESSAGE_HELD',
+          message: `queued message ${params.queuedMessageId} is the queue stop point; resume it before steering`,
+        };
+      }
       await params.beforeMutation?.();
       const outcome = await deps.steerQueuedMessage(params.sessionId, params.queuedMessageId);
       if (outcome.kind === 'gone') return classifyLostRace(params.sessionId, params.queuedMessageId);
@@ -167,6 +192,38 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
       const resolved = await resolve(params);
       if (!resolved.ok) return resolved;
       await params.beforeMutation?.();
+      // 其它条目不得跨过停点:否则停点会把一条本该执行的消息静默降到不执行
+      // 的一侧。停点前后各自区间内的排序仍然可用,停点条目自身也可以移动。
+      // 必须在**实际移动**这一步按最新队列判定:权限复核是异步的,期间用户可能刚设好
+      // 或移动了停点,用复核前的副本会放行一次真正越界的移动。
+      if (resolved.item.held !== true) {
+        const queue = (await deps.getSnapshot(params.sessionId)).pendingQueue;
+        const stopIndex = queue.findIndex((candidate) => candidate.held === true);
+        const movingIndex = queue.findIndex(
+          (candidate) => candidate.clientId === params.queuedMessageId,
+        );
+        if (stopIndex >= 0 && movingIndex >= 0) {
+          // `position` 是移动后的最终下标(适配器再换算成 coordinator 的插入下标),
+          // 这里直接按同一语义模拟落点,避免两套下标语义混用。
+          const others = queue.filter((candidate) => candidate.clientId !== params.queuedMessageId);
+          const insertAt = Math.max(0, Math.min(params.position, others.length));
+          const simulated = [
+            ...others.slice(0, insertAt),
+            resolved.item,
+            ...others.slice(insertAt),
+          ];
+          const finalStopIndex = simulated.findIndex((candidate) => candidate.held === true);
+          const startsBeforeStop = movingIndex < stopIndex;
+          const endsBeforeStop = insertAt < finalStopIndex;
+          if (startsBeforeStop !== endsBeforeStop) {
+            return {
+              ok: false,
+              errorCode: 'QUEUE_HELD_BOUNDARY',
+              message: `queued message ${params.queuedMessageId} cannot move across the queue stop point`,
+            };
+          }
+        }
+      }
       const position = deps.moveQueuedMessage(
         params.sessionId,
         params.queuedMessageId,
@@ -181,6 +238,32 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
         };
       }
       return { ok: true, queuedMessageId: params.queuedMessageId, position };
+    },
+
+    /** 把停点移到这条：前面的照常执行，到它为止不再自动发送。 */
+    async hold(params: BaseControlParams): Promise<SessionQueueControlResult> {
+      const resolved = await resolve(params);
+      if (!resolved.ok) return resolved;
+      await params.beforeMutation?.();
+      deps.holdQueuedMessage(params.sessionId, params.queuedMessageId);
+      // coordinator 对「刚好开始投递」的那一帧是静默拒绝的，回读确认，别让调用方
+      // 以为挂上了停点、实际队列还在往前跑。
+      const row = (await deps.getSnapshot(params.sessionId)).pendingQueue.find(
+        (candidate) => candidate.clientId === params.queuedMessageId,
+      );
+      if (!row) return classifyLostRace(params.sessionId, params.queuedMessageId);
+      if (row.held !== true) return consumingFailure(params.queuedMessageId);
+      return { ok: true, queuedMessageId: params.queuedMessageId };
+    },
+
+    /** 解掉停点；没有停点也算成功（幂等）。 */
+    async releaseHold(params: {
+      sessionId: string;
+      beforeMutation?: () => Promise<void>;
+    }): Promise<SessionQueueHoldReleaseResult> {
+      await params.beforeMutation?.();
+      deps.releaseQueueHold(params.sessionId);
+      return { ok: true, released: true };
     },
   };
 }

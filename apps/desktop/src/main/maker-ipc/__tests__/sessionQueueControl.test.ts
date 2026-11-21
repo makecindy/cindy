@@ -32,6 +32,8 @@ function queued(clientId = 'queued-1'): AgentInputQueuedMessage {
 const noReorder = {
   steerQueuedMessage: vi.fn(async () => ({ kind: 'gone' as const })),
   moveQueuedMessage: vi.fn(() => null),
+  holdQueuedMessage: vi.fn(),
+  releaseQueueHold: vi.fn(),
 };
 
 describe('session queue control service', () => {
@@ -161,6 +163,8 @@ describe('session queue control service', () => {
       removeQueuedMessage: vi.fn(),
       steerQueuedMessage,
       moveQueuedMessage,
+      holdQueuedMessage: vi.fn(),
+      releaseQueueHold: vi.fn(),
     });
     const params = { sessionId: 's', queuedMessageId: item.clientId, authorize: () => ({ ok: true as const }) };
     await expect(service.steer(params)).resolves.toEqual({
@@ -170,7 +174,9 @@ describe('session queue control service', () => {
       .resolves.toEqual({ ok: true, queuedMessageId: item.clientId, position: 2 });
 
     moveQueuedMessage.mockReturnValueOnce(null);
+    // resolve 读一次,停点边界在实际移动前再读一次最新队列,最后 classifyLostRace 读一次。
     getSnapshot.mockResolvedValueOnce({ pendingQueue: [item], consumingClientIds: [] })
+      .mockResolvedValueOnce({ pendingQueue: [item], consumingClientIds: [] })
       .mockResolvedValueOnce({ pendingQueue: [], consumingClientIds: [item.clientId] });
     await expect(service.move({ ...params, position: 0 }))
       .resolves.toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
@@ -181,6 +187,37 @@ describe('session queue control service', () => {
     await expect(service.steer({ ...params, authorize: () => ({ ok: false, message: 'no' }) }))
       .resolves.toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
     expect(steerQueuedMessage).toHaveBeenCalledOnce();
+  });
+
+  it('sets and clears the stop point through the same authorize boundary', async () => {
+    let item = queued();
+    const holdQueuedMessage = vi.fn(() => {
+      item = { ...item, held: true };
+    });
+    const releaseQueueHold = vi.fn();
+    const service = createSessionQueueControlService({
+      getSnapshot: async () => ({ pendingQueue: [item], consumingClientIds: [] }),
+      replaceQueuedMessage: vi.fn(),
+      removeQueuedMessage: vi.fn(),
+      ...noReorder,
+      holdQueuedMessage,
+      releaseQueueHold,
+    });
+    const params = { sessionId: 's', queuedMessageId: item.clientId, authorize: () => ({ ok: true as const }) };
+    await expect(service.hold(params)).resolves.toEqual({ ok: true, queuedMessageId: item.clientId });
+    await expect(service.releaseHold({ sessionId: 's' })).resolves.toEqual({ ok: true, released: true });
+    expect(releaseQueueHold).toHaveBeenCalledWith('s');
+
+    // 挂不上时必须判失败:coordinator 对「刚好开始投递」是静默无操作的。
+    const stuck = createSessionQueueControlService({
+      getSnapshot: async () => ({ pendingQueue: [queued()], consumingClientIds: [] }),
+      replaceQueuedMessage: vi.fn(),
+      removeQueuedMessage: vi.fn(),
+      ...noReorder,
+    });
+    await expect(stuck.hold(params)).resolves.toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
+    await expect(stuck.hold({ ...params, authorize: () => ({ ok: false, message: 'no' }) }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
   });
 });
 

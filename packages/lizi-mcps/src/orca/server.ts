@@ -54,6 +54,7 @@ import {
   registerMergeQueuedMessagesTool,
   registerSteerQueuedMessageTool,
   registerMoveQueuedMessageTool,
+  registerHoldQueuedMessageTool,
   registerIdleWorkerTool,
   registerEndTeamTool,
   registerArchiveWorkerTool,
@@ -261,6 +262,18 @@ export interface OrcaMcpDeps {
       { workerId: string | null; queuedMessageId: string; position: number },
       QueuedMessageControlErrorCode
     >
+  >;
+  /** 把队列停点挂到一条排队协同消息上;workerRef 省略时操作调用方自身队列。 */
+  holdWorkerQueuedMessage: (params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+  }) => Promise<
+    ControlResult<{ workerId: string | null; queuedMessageId: string }, QueuedMessageControlErrorCode>
+  >;
+  /** 解掉调用方自己队列上的停点(worker 队列上的停点由用户解除)。 */
+  releaseOwnQueueHold: (params: { callerLeadSessionId: string }) => Promise<
+    ControlResult<{ released: true }, QueuedMessageControlErrorCode>
   >;
   /** 主动将 worker 设为 idle。 */
   idleWorker: (params: { callerLeadSessionId: string; workerId: string }) => Promise<
@@ -587,6 +600,11 @@ export function createOrcaMcpServer(
   registerMoveQueuedMessageTool(sink, {
     getSessionContext,
     moveWorkerQueuedMessage: deps.moveWorkerQueuedMessage,
+  });
+  registerHoldQueuedMessageTool(sink, {
+    getSessionContext,
+    holdWorkerQueuedMessage: deps.holdWorkerQueuedMessage,
+    releaseOwnQueueHold: deps.releaseOwnQueueHold,
   });
   registerIdleWorkerTool(sink, {
     getSessionContext,

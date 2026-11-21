@@ -163,7 +163,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
     expect(prompt).toContain(
-      'Use interrupt_worker only when the active task must not continue and the new instruction must replace it. To correct or add to a running order, use send_to_worker with delivery=steer plus an explicit "supersedes <what>" note; a steered message cannot be recalled — make it complete. For later work on an idle worker, plain send_to_worker.',
+      'Use interrupt_worker only when the active task must not continue and the new instruction must replace it. To correct or add to a running order, use send_to_worker with delivery=steer plus an explicit "supersedes <what>" note; a steered message cannot be recalled — make it complete. A worker is idle for this purpose only when its own queue is empty and the terminal state you are acting on belongs to the order you mean to change; a worker that already moved on to a later queued order has no report for it yet, so treat that order as still open and correct it with delivery=steer (or revise the queued message), never as plain send_to_worker on the strength of the previous order\'s ready state.',
     );
     expect(prompt).toContain(
       'If get_workspace_info shows queued_count > 0 or queue_paused=true, call get_worker_queue_status first, then revise or withdraw one pending message, merge related messages, or send a separate task.',

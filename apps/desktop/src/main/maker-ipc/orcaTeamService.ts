@@ -71,6 +71,8 @@ export type SendToWorkerResult =
       queuedMessageId?: string;
       /** 请求插话却进了队列时的原因。 */
       steerFallbackReason?: OrcaSteerFallbackReason;
+      /** 目标队列里有用户停点:消息只是入队,不会被自动执行。 */
+      queueHeld?: boolean;
       /** 这次派发取代的、Lead 还没读到的该 Worker 异常终止回报；已从 Lead 队列撤下。 */
       supersededFailureNotices?: WithdrawnFailureNotice[];
     }
@@ -148,6 +150,8 @@ export type DispatchWorkerTaskResult =
       /** 排队消息的可寻址句柄(coordinator 队列内的 clientId)。 */
       queuedMessageId: string;
       steerFallbackReason?: OrcaSteerFallbackReason;
+      /** 目标队列有用户停点:本条只是入队,不会被自动执行。 */
+      queueHeld?: boolean;
     }
   | {
       dispatched: false;
@@ -232,6 +236,9 @@ export type WorkerQueuedMessageFailureCode =
   | 'NOT_LEAD_MESSAGE'
   | 'NOT_ORCA_MESSAGE'
   | 'MESSAGE_CONSUMING'
+  | 'MESSAGE_HELD'
+  | 'QUEUE_HELD_BOUNDARY'
+  | 'QUEUE_HAS_HELD'
   | 'QUEUE_CHANGED'
   | 'INVALID_ARGS'
   | 'INTERNAL';
@@ -250,6 +257,8 @@ export interface WorkerQueuedMessageSnapshot {
   content: string;
   /** true = 该条正在 steering 投递中,不可修改 / 撤回。 */
   consuming: boolean;
+  /** true = 用户把这一条设为队列停点:它及其之后的条目不会自动执行。 */
+  held: boolean;
 }
 
 /** 排队消息控制的 domain result。 */
@@ -274,6 +283,11 @@ export type MoveWorkerQueuedMessageResult =
   | { ok: true; workerId: string | null; queuedMessageId: string; position: number }
   | WorkerQueuedMessageFailure;
 
+/** 把队列停点挂到一条排队消息上;workerId=null 表示 Lead 自己的队列。 */
+export type HoldWorkerQueuedMessageResult =
+  | { ok: true; workerId: string | null; queuedMessageId: string }
+  | WorkerQueuedMessageFailure;
+
 export type ListWorkerQueuedMessagesResult =
   | {
       ok: true;
@@ -284,6 +298,8 @@ export type ListWorkerQueuedMessagesResult =
       isWorking: boolean;
       willQueue: boolean;
       queuePaused: boolean;
+      /** 队列里有用户设置的停点:排队条目不会自动执行,直到用户恢复。 */
+      queueHeld: boolean;
       messages: WorkerQueuedMessageSnapshot[];
     }
   | { ok: false; errorCode: 'WORKER_NOT_FOUND' | 'INTERNAL'; message: string };
@@ -504,6 +520,12 @@ export interface OrcaTeamServiceDeps {
   }>;
   /** Synchronous coordinator projection used when the stop adapter cannot return a result. */
   getWorkerQueuePaused(sessionId: string): boolean;
+  /** 目标队列是否有用户停点(held):给排队回执说明「本条不会自动执行」。 */
+  getWorkerQueueHeld(sessionId: string): boolean;
+  /** 把队列停点挂到指定条目(宿主侧同步操作)。 */
+  holdQueuedMessage(sessionId: string, clientId: string): void;
+  /** 清掉目标队列上的停点(宿主侧同步操作)。 */
+  releaseQueueHold(sessionId: string): void;
   sendAutoBridgeToLead(
     leadSessionId: string,
     message: string,
@@ -524,6 +546,8 @@ export interface OrcaTeamServiceDeps {
     isWorking: boolean;
     willQueue: boolean;
     queuePaused: boolean;
+    /** 队列里是否存在用户停点(由 pendingQueue 的 held 字段投影)。 */
+    queueHeld?: boolean;
   }>;
   /** Strict restore gate for atomic merge; false means no mutation is allowed. */
   ensureWorkerQueueRestored(sessionId: string): Promise<boolean>;
@@ -620,6 +644,14 @@ export interface OrcaTeamService {
     queuedMessageId: string;
     position: number;
   }): Promise<MoveWorkerQueuedMessageResult>;
+  holdWorkerQueuedMessage(params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+  }): Promise<HoldWorkerQueuedMessageResult>;
+  releaseOwnQueueHold(params: {
+    callerLeadSessionId: string;
+  }): Promise<{ ok: true; released: true } | WorkerQueuedMessageFailure>;
   captureWorkerText(sessionId: string, text: string, opts?: { isFinal?: boolean }): void;
   clearAutoBridgeState(sessionId: string): void;
   /**
@@ -723,6 +755,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     removeQueuedMessage: deps.removeQueuedMessage,
     steerQueuedMessage: deps.steerStoredQueuedMessage,
     moveQueuedMessage: deps.moveQueuedMessage,
+    holdQueuedMessage: deps.holdQueuedMessage,
+    releaseQueueHold: deps.releaseQueueHold,
   });
   /** Per-worker transition tails serialize dispatch reservations against implicit done acknowledgement. */
   const workerTransitionTails = new Map<string, Promise<void>>();
@@ -1249,6 +1283,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         targetLastUserSendAt: result.targetLastUserSendAt,
         queuedMessageId: result.clientId,
         ...(result.steerFallbackReason ? { steerFallbackReason: result.steerFallbackReason } : {}),
+        ...(deps.getWorkerQueueHeld(target.sessionId) ? { queueHeld: true } : {}),
       };
     }
     return {
@@ -1604,6 +1639,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             ...(dispatchResult.steerFallbackReason
               ? { steerFallbackReason: dispatchResult.steerFallbackReason }
               : {}),
+            ...(dispatchResult.queueHeld ? { queueHeld: true } : {}),
           }
         : {}),
       ...(await supersededNotices()),
@@ -1959,6 +1995,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           source,
           content,
           consuming: snapshot.consumingClientIds.includes(item.clientId),
+          held: item.held === true,
         };
       })
     ).map((entry) =>
@@ -1973,6 +2010,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       isWorking: snapshot.isWorking,
       willQueue: snapshot.willQueue,
       queuePaused: snapshot.queuePaused,
+      queueHeld: snapshot.queueHeld ?? snapshot.pendingQueue.some((item) => item.held === true),
       messages,
     };
   }
@@ -2032,6 +2070,47 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       queuedMessageId: params.queuedMessageId,
       position: controlled.position,
     };
+  }
+
+  async function holdWorkerQueuedMessage(params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+  }): Promise<HoldWorkerQueuedMessageResult> {
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    const target = await resolveQueueTarget(params.callerLeadSessionId, params.workerRef);
+    if (!target.ok) return target;
+    const ownQueue = target.worker === null;
+    const controlled = await queueControl.hold({
+      beforeMutation: assertCurrent,
+      sessionId: target.sessionId,
+      queuedMessageId: params.queuedMessageId,
+      authorize: (entry) => authorizeOrcaQueueItem(entry, params.queuedMessageId, ownQueue),
+    });
+    if (!controlled.ok) return mapWorkerQueueControlFailure(controlled, ownQueue);
+    deps.log.info('orca queue stop point set', {
+      targetSessionId: target.sessionId,
+      ownQueue,
+      queuedMessageId: params.queuedMessageId,
+    });
+    return {
+      ok: true,
+      workerId: target.worker?.id ?? null,
+      queuedMessageId: params.queuedMessageId,
+    };
+  }
+
+  /** 只能解自己的队列:worker 队列上的停点是用户按下去的手,由用户自己抬。 */
+  async function releaseOwnQueueHold(params: {
+    callerLeadSessionId: string;
+  }): Promise<{ ok: true; released: true } | WorkerQueuedMessageFailure> {
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    const controlled = await queueControl.releaseHold({
+      beforeMutation: assertCurrent,
+      sessionId: params.callerLeadSessionId,
+    });
+    if (!controlled.ok) return mapWorkerQueueControlFailure(controlled, true);
+    return { ok: true, released: true };
   }
 
   async function updateWorkerQueuedMessage(params: {
@@ -2152,6 +2231,24 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         message: 'worker queue could not be restored; no messages were changed',
       };
     }
+    // 区间含停点时整次拒绝:合并后停点归属歧义,由 Lead 先处理停点。
+    const beforeMerge = await deps.getSessionQueueSnapshot(found.worker.sessionId);
+    if (
+      beforeMerge.pendingQueue.some(
+        (item) => item.held === true && params.queuedMessageIds.includes(item.clientId),
+      )
+    ) {
+      const current = await listWorkerQueuedMessages({
+        callerLeadSessionId: params.callerLeadSessionId,
+        workerRef: params.workerRef,
+      });
+      return {
+        ok: false,
+        errorCode: 'QUEUE_HAS_HELD',
+        message: 'one of the messages to merge is the queue stop point; resume it before merging',
+        messages: current.ok ? current.messages : [],
+      };
+    }
     await assertCurrent?.();
     const merged = deps.mergeQueuedMessages(
       found.worker.sessionId,
@@ -2161,6 +2258,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           targets.some((item) => item.origin?.kind !== 'orca' || item.origin.senderLabel !== 'Lead')
         )
           return null;
+        // 异步权限复核期间用户可能刚拍下停点:在同一个无 await 临界区里按最新
+        // 条目再查一次,否则合并会把拦住队列的停点删掉并当场发出去。
+        if (targets.some((item) => item.held === true)) return null;
         // 合并后条目代表全部被合并消息: 其余条目的图片按队列顺序并入保留条目,
         // 避免"只改文本"语义静默丢图。
         const survivor = targets[0]!;
@@ -2298,6 +2398,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     mergeWorkerQueuedMessages,
     steerWorkerQueuedMessage,
     moveWorkerQueuedMessage,
+    holdWorkerQueuedMessage,
+    releaseOwnQueueHold,
     captureWorkerText(sessionId, text, opts) {
       const state = autoBridge.get(sessionId);
       if (!state?.pending || text.length === 0) return;

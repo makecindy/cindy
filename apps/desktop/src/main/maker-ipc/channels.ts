@@ -75,6 +75,8 @@ export const MAKER_INVOKE = {
   /** 整条内容替换(文本+附件+mentions),排队消息复用 composer 编辑的保存入口。 */
   INPUT_UPDATE_CONTENT: 'maker:input:update-content',
   INPUT_MOVE: 'maker:input:move',
+  /** 设置/清除队列停点: clientId = 挂起那一条, null = 恢复。 */
+  INPUT_SET_HOLD: 'maker:input:set-hold',
   INPUT_SET_EXPANDED: 'maker:input:set-expanded',
   INPUT_SET_INTERACTION_LOCK: 'maker:input:set-interaction-lock',
   INPUT_SET_EDIT_LOCK: 'maker:input:set-edit-lock',

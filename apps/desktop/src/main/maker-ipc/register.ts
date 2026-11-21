@@ -487,6 +487,8 @@ import {
 import { runSessionExecutionAction } from './sessionExecutionActions.js';
 import {
   createQueueReorderAdapter,
+  type SessionQueueControlResult,
+  type SessionQueueHoldReleaseResult,
   type SessionQueueMoveResult,
   type SessionQueueSteerResult,
 } from './sessionQueueControl.js';
@@ -1024,7 +1026,9 @@ import { normalizeSessionContextWindowBoundsRoute } from '../../shared/sessionCo
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { readSessionBackgroundTaskOutputTail } from '../background-task-output/reader.js';
 import { AgentInputCoordinator, markManualSchedulerContinuation, SESSION_REWIND_INPUT_LOCK_ID } from './agent-input-coordinator.desktop.js';
+import { applyQueueHold } from './queueHoldHandler.js';
 import { createAutomaticContinueEligibility, createScheduledQuotaDispatchGuard, isQuotaScheduleCurrent, isActiveCompanionFailoverSession } from './automaticContinueEligibility.js';
+import { bindSilentStopContinuationGeneration } from './silentStopContinuationBinding.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import {
   estimateReferenceTokens,
@@ -1169,6 +1173,7 @@ import {
   type ListWorkerQueuedMessagesResult,
   type MergeWorkerQueuedMessagesResult,
   type MoveWorkerQueuedMessageResult,
+  type HoldWorkerQueuedMessageResult,
   type OrcaTeamService,
   type OrcaWorkerEffort,
   type SendToWorkerResult,
@@ -2727,6 +2732,8 @@ interface OrcaCollabService {
           | 'NOT_FOUND'
           | 'QUEUED_MESSAGE_NOT_FOUND'
           | 'MESSAGE_CONSUMING'
+          | 'MESSAGE_HELD'
+          | 'QUEUE_HELD_BOUNDARY'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
           | 'UNSUPPORTED_CAPABILITY'
@@ -2747,6 +2754,8 @@ interface OrcaCollabService {
           | 'NOT_FOUND'
           | 'QUEUED_MESSAGE_NOT_FOUND'
           | 'MESSAGE_CONSUMING'
+          | 'MESSAGE_HELD'
+          | 'QUEUE_HELD_BOUNDARY'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
           | 'UNSUPPORTED_CAPABILITY'
@@ -2769,6 +2778,21 @@ interface OrcaCollabService {
     position: number;
   }) => Promise<
     SessionQueueMoveResult | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
+  holdSessionQueuedMessage: (params: {
+    callerSessionId: string;
+    targetSessionId: string;
+    queuedMessageId: string;
+  }) => Promise<
+    | SessionQueueControlResult
+    | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
+  releaseSessionQueueHold: (params: {
+    callerSessionId: string;
+    targetSessionId: string;
+  }) => Promise<
+    | SessionQueueHoldReleaseResult
+    | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
   >;
   steerSession: (params: {
     callerSessionId?: string;
@@ -3064,6 +3088,14 @@ interface OrcaCollabService {
     queuedMessageId: string;
     position: number;
   }) => Promise<MoveWorkerQueuedMessageResult>;
+  holdWorkerQueuedMessage: (params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+  }) => Promise<HoldWorkerQueuedMessageResult>;
+  releaseOwnQueueHold: (params: {
+    callerLeadSessionId: string;
+  }) => Promise<{ ok: true } | { ok: false; errorCode: string; message: string }>;
   updateWorkerQueuedMessage: (params: {
     callerLeadSessionId: string;
     workerRef: string;
@@ -16172,6 +16204,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 : ('user' as const),
           content: entry.content,
           consuming: entry.consuming,
+          held: entry.held,
         })),
         isWorking: isSessionTurnDispatchBoundaryBusy(
           sessionTurnActivityTracker,
@@ -16181,7 +16214,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         willQueue:
           inputCoordinator.shouldQueueNewTurn(sessionId) || sendToSessionLocks.has(sessionId),
         queuePaused: inputCoordinator.getProjection(sessionId).queuePaused,
+        queueHeld: inputCoordinator
+          .getProjection(sessionId)
+          .pendingQueue.some((item) => item.held === true),
       };
+    },
+    getWorkerQueueHeld: (sessionId: string) =>
+      inputCoordinator.getProjection(sessionId).pendingQueue.some((item) => item.held === true),
+    holdQueuedMessage: (sessionId: string, clientId: string) => {
+      inputCoordinator.hold(sessionId, clientId);
+    },
+    releaseQueueHold: (sessionId: string) => {
+      inputCoordinator.releaseHold(sessionId);
     },
     ensureWorkerQueueRestored: async (sessionId: string) => {
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
@@ -17529,6 +17573,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     steerStoredQueuedMessage: steerStoredControlMessage,
     moveQueuedMessage: moveStoredControlMessage,
+    holdQueuedMessage: (sessionId: string, clientId: string) => {
+      inputCoordinator.hold(sessionId, clientId);
+    },
+    releaseQueueHold: (sessionId: string) => {
+      inputCoordinator.releaseHold(sessionId);
+    },
     createId,
   });
 
@@ -17582,6 +17632,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     cancelSessionQueuedMessage: (params) => sessionControlService.cancelQueuedMessage(params),
     steerSessionQueuedMessage: (params) => sessionControlService.steerQueuedMessage(params),
     moveSessionQueuedMessage: (params) => sessionControlService.moveQueuedMessage(params),
+    holdSessionQueuedMessage: (params) => sessionControlService.holdQueuedMessage(params),
+    releaseSessionQueueHold: (params) => sessionControlService.releaseQueueHold(params),
     steerSession: (params) => sessionControlService.steerSession(params),
     stopSessionTurn: (params) => sessionControlService.stopSessionTurn(params),
     getSessionRuntime: async (params) => {
@@ -17651,6 +17703,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     mergeWorkerQueuedMessages: (params) => orcaTeamService.mergeWorkerQueuedMessages(params),
     steerWorkerQueuedMessage: (params) => orcaTeamService.steerWorkerQueuedMessage(params),
     moveWorkerQueuedMessage: (params) => orcaTeamService.moveWorkerQueuedMessage(params),
+    holdWorkerQueuedMessage: (params) => orcaTeamService.holdWorkerQueuedMessage(params),
+    releaseOwnQueueHold: (params) => orcaTeamService.releaseOwnQueueHold(params),
     startTeam: ({ leadSessionId, workerPermissionMode }) => startOrcaTeamForCaller(leadSessionId, workerPermissionMode),
     createWorker: async (params) => {
       params = { ...params, useCreationPrefs: true };
@@ -21739,6 +21793,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         throw err;
       }
+    },
+  );
+
+  ipcMain.handle(
+    MAKER_INVOKE.INPUT_SET_HOLD,
+    async (_e, sessionId: unknown, clientId: unknown, opts?: unknown) => {
+      const sid = requireSessionId(sessionId);
+      await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+      return applyQueueHold(
+        inputCoordinator,
+        sid,
+        clientId === null ? null : requireClientId(clientId),
+      );
     },
   );
 

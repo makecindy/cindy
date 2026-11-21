@@ -103,6 +103,10 @@ export {
   type MoveQueuedMessageDeps,
 } from './move_queued_message.js';
 export {
+  registerHoldQueuedMessageTool,
+  type HoldQueuedMessageDeps,
+} from './hold_queued_message.js';
+export {
   registerIdleWorkerTool,
   type IdleWorkerDeps,
 } from './idle_worker.js';
@@ -149,6 +153,8 @@ export {
   registerSteerSessionTool,
   registerSteerSessionQueuedMessageTool,
   registerMoveSessionQueuedMessageTool,
+  registerHoldSessionQueuedMessageTool,
+  registerReleaseSessionQueueHoldTool,
   registerStopSessionTurnTool,
   registerGetSessionRuntimeTool,
   registerSetSessionRuntimeTool,
