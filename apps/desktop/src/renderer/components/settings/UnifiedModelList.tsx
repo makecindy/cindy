@@ -672,10 +672,23 @@ export function UnifiedModelList({
     [unionRows, rowDisabledEffective],
   );
 
+  /**
+   * 一行能否从停用恢复。对话模型看聊天连接(未连接时启用没有意义,保持原规则)。
+   * 功能型模型走各自的媒体通道,与聊天登录无关:只配了图片 API 密钥、没登录聊天订阅时
+   * `provider.connected` 为假,但图片照常可用 —— 沿用聊天连接会让它关掉后再也打不开。
+   * 被停用的模型不在就绪清单里,读不到它自己的通道状态;恢复只是撤掉用户自己加的限制,
+   * 不授予任何调用,所以只要供应商没有被整体停用就允许。
+   */
+  const canReenableRow = useCallback(
+    (row: UnionModelRow) =>
+      isCapabilityRow(row, provider.source === 'user') ? !provider.suspended : selectionAvailable,
+    [provider.source, provider.suspended, selectionAvailable],
+  );
+
   /** 写停用轴:乐观覆盖 + IPC;失败回滚并提示(错误 = 发生了什么 + 下一步)。 */
   const setRowDisabled = useCallback(
     (row: UnionModelRow, disabled: boolean) => {
-      if (!disabled && !selectionAvailable) return Promise.resolve(false);
+      if (!disabled && !canReenableRow(row)) return Promise.resolve(false);
       setPendingDisabled((prev) => ({ ...prev, [row.id]: disabled }));
       return window.electronAPI.maker
         .setModelDisable({
@@ -700,7 +713,7 @@ export function UnifiedModelList({
           return false;
         });
     },
-    [provider.id, selectionAvailable, t],
+    [provider.id, canReenableRow, t],
   );
 
   const deleteInstalledModel = useCallback(
@@ -1148,8 +1161,8 @@ export function UnifiedModelList({
             位置的 1M / 128K 缩写在真实数据里是歧义的(1,000,000 /
             1,048,576 / 1,050,000 都印成 1M)。 */}
         {rowAdvancedButton(row)}
-        {/* 功能型模型:单一「启用」开关(停用轴)。开着的随时能关;关着的要重新打开,
-            需要供应商可用(与逐行「启用此模型」同一条件),旧显示开关关掉的还要通道就绪。 */}
+        {/* 功能型模型:单一「启用」开关(停用轴)。开着的随时能关;被停用的随时能恢复
+            (见 canReenableRow,不看聊天登录);被旧显示开关关掉的要等它的媒体通道就绪。 */}
         {capability ? (
           <Switch
             data-capability-enable-switch
@@ -1157,7 +1170,7 @@ export function UnifiedModelList({
             disabled={
               paymentRequired ||
               (!capabilityOn &&
-                (!selectionAvailable || (!rowDisabledEffective(row) && !state.canSelect)))
+                (!canReenableRow(row) || (!rowDisabledEffective(row) && !state.canSelect)))
             }
             checked={capabilityOn}
             onCheckedChange={() => void toggleCapabilityRow(row)}
@@ -1594,6 +1607,7 @@ export function UnifiedModelList({
         }}
         pricePresentationOf={pricePresentationOf}
         disabled={currentAdvancedRow ? rowDisabledEffective(currentAdvancedRow) : false}
+        canEnable={currentAdvancedRow ? canReenableRow(currentAdvancedRow) : true}
         paymentRequired={currentAdvancedRow ? isRowPaymentRequired(currentAdvancedRow) : false}
         onDisable={async (row) => {
           // 抽屉里的停用/启用与列表行同一条写入路径(乐观覆盖 + IPC),不另开一套。

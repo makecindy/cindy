@@ -2096,6 +2096,10 @@ export function registerProviderHandlers(
       deps.broadcastChanged();
       return { ok: true };
     };
+    // 隐藏只改陈列,不收窄任何调用权限:不走「先撤销云端备用分享,再确认本机收窄」这一步。
+    // 否则一次纯显示操作会撤掉别人正在用的分享,服务器不可达时隐藏 / 取消隐藏还会直接失败。
+    // 账号复核与串行写入队列照常(都在 run / enqueueDisableWrite 里)。
+    if (i.kind === 'provider-hidden') return enqueueDisableWrite(run);
     return withAvailabilityPolicyMutation(disableKey, () => enqueueDisableWrite(run));
   };
   registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {

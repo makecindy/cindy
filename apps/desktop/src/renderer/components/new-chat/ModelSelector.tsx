@@ -1917,14 +1917,19 @@ function ModelSelectorContentView({
         isVisible: (providerId, model, agent) =>
           isDeviceModelVisible(catalog.modelVisibilityOverrides, agent, providerId, model),
         includePaymentRequired: true,
+        // 这份 entries 同时是那台电脑上收藏的解析目录(UnifiedModelPanel.resolveDeviceFavorite):
+        // 那台电脑自己隐藏的供应商不能从这里剔掉,否则它名下的收藏会直接消失。左栏另行收起。
+        includeHiddenProviders: true,
         scope: 'draft',
       });
       // 「运行于」收起的供应商只是不占左栏；那台电脑上的收藏仍按完整目录解析，不因收起消失。
-      // 用户在设置里隐藏的那台电脑上的供应商同理:不占左栏,收藏与正在用的那一项照常解析。
+      // 被隐藏的供应商同理(那台电脑自己隐藏的,或用户在本机设置里对它隐藏的):不占左栏,
+      // 收藏与正在用的那一项照常解析。
+      const hiddenThere = new Set(shared.filter((provider) => provider.hidden === true).map((provider) => provider.id));
       const providerIds = [...new Set(entries.map((entry) => entry.providerId))].filter(
         (providerId) =>
           !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)) &&
-          (!remoteDisable.isHidden(device.deviceId, providerId) ||
+          ((!hiddenThere.has(providerId) && !remoteDisable.isHidden(device.deviceId, providerId)) ||
             (remoteAgentDeviceId === device.deviceId && currentProviderId === providerId)),
       );
       return entries.length > 0

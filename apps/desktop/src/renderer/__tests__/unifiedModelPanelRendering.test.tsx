@@ -233,8 +233,10 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
     unsupported: false,
   }),
 }));
+// Every model is shown unless a case names it here (the picker-visibility switch turned off).
+const hiddenModelIds = vi.hoisted(() => new Set<string>());
 vi.mock('@/state/modelVisibilityPrefs', () => ({
-  isModelEnabled: () => true,
+  isModelEnabled: (_agent: string, _providerId: string, model: { id: string }) => !hiddenModelIds.has(model.id),
   useModelVisibilityVersion: () => 0,
 }));
 vi.mock('@/state/deviceLinkModelMirror', () => ({
@@ -5831,6 +5833,23 @@ describe('providers hidden from the picker stay reachable', () => {
     expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
     await act(async () => { fireEvent.click(rowFor('Hidden Model')); });
     expect(change).toHaveBeenCalledWith('tucked', 'tucked-model', expect.any(String), false);
+  });
+
+  // PR #11565 review: a model whose own picker switch is off lives only in the hidden fold. Its
+  // star worked there, but favorites resolved against the regular list, so the saved favorite
+  // never appeared. Minimal input: one listed model, one switched off, starred from the fold.
+  it('a model starred inside the hidden fold shows up under favorites', async () => {
+    hiddenModelIds.add('quiet-model');
+    try {
+      providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('quiet', 'Quiet', 'Switched Off Model')] as never;
+      renderPanel({ vendorKey: 'codex', currentProviderId: 'shown', modelId: 'shown-model', modelMemory: memory });
+      await act(async () => { fireEvent.click(document.querySelector('[data-hidden-models-toggle]') as HTMLElement); });
+      await act(async () => {
+        fireEvent.click(within(rowFor('Switched Off Model')).getByRole('button', { name: '存为收藏' }));
+      });
+      const favorites = screen.getAllByRole('group').find((group) => group.getAttribute('aria-label') === '收藏');
+      expect(favorites && within(favorites).getByText('Switched Off Model')).toBeTruthy();
+    } finally { hiddenModelIds.delete('quiet-model'); }
   });
 
   it('opens the fold by itself when the task is already using a hidden provider', () => {

@@ -643,6 +643,9 @@ export function UnifiedModelPanel({
       // 只比行 id 会把已经列出的模型当成「被隐藏」再列一遍。
       const listed = new Set(entries.flatMap((entry) =>
         entryModelIds(entry).map((modelId) => `${entry.providerId} ${modelId}`)));
+      // 整家隐藏的供应商里显示开关开着的模型,两次派生各出一个对象:统一用 entries 里的那个,
+      // 收藏 / 最近解析出的行与隐藏区里的行才是同一个对象(行身份按引用比较)。
+      const listedByKey = new Map(entries.map((entry) => [`${entry.providerId} ${entry.modelId}`, entry]));
       return unifiedModelEntries({
         ...entryOptions(),
         // 与常规清单唯一的差别:不套逐模型可见性。
@@ -653,11 +656,20 @@ export function UnifiedModelPanel({
           !listHiddenProviderIds?.has(entry.providerId) &&
           (userHiddenProviderIds.has(entry.providerId) ||
             !entryModelIds(entry).some((modelId) => listed.has(`${entry.providerId} ${modelId}`))),
-      );
+      ).map((entry) => listedByKey.get(`${entry.providerId} ${entry.modelId}`) ?? entry);
     },
     // biome-ignore lint/correctness/useExhaustiveDependencies: 与 entries 同一组派生入参(entryOptions 经 ref / key 表达身份),entries 变即重算。
     [entries, listHiddenProviderIds, userHiddenProviderIds],
   );
+  /**
+   * 收藏与最近的解析目录 = 常规清单 ∪ 被隐藏的模型。隐藏只决定常规分组里列不列,
+   * 模型照常可调用,用户存过的收藏和最近不能因此解析不回来(包括在「已隐藏」区里刚点的星)。
+   */
+  const resolvableEntries = useMemo(() => {
+    const known = new Set(entries);
+    const extra = hiddenEntries.filter((entry) => !known.has(entry));
+    return extra.length > 0 ? [...entries, ...extra] : entries;
+  }, [entries, hiddenEntries]);
   const [hiddenExpanded, setHiddenExpanded] = useState(false);
 
   const localRailItems = remoteSources?.localRailItems;
@@ -749,7 +761,7 @@ export function UnifiedModelPanel({
   const activeFavoriteUid = useMemo(() => {
     const item = favorites.find((favorite) => favorite.uid === selectedFavoriteUid);
     if (!item) return null;
-    const entry = resolveStoredModelEntry(entries, item.providerId, item.modelId);
+    const entry = resolveStoredModelEntry(resolvableEntries, item.providerId, item.modelId);
     return entry &&
       favoriteMatchesSelection({
         entry,
@@ -763,7 +775,7 @@ export function UnifiedModelPanel({
       ? item.uid
       : null;
   }, [
-    entries,
+    resolvableEntries,
     favorites,
     selectedFavoriteUid,
     selected.providerId,
@@ -979,11 +991,12 @@ export function UnifiedModelPanel({
         effectiveEngineOf,
         providerOrder,
         ...(foldedProviderIds?.size ? { listHiddenProviderIds: foldedProviderIds } : {}),
+        ...(resolvableEntries !== entries ? { resolveEntries: resolvableEntries } : {}),
         ...(scope === 'session' && liveEngineAgent
           ? { recommendation: { agent: liveEngineAgent, ...selected } }
           : {}),
       }),
-    [entries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, foldedProviderIds],
+    [entries, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, foldedProviderIds],
   );
   // 已隐藏区只跟「全部」与某个供应商的视图走(收藏 / 最近 / 模型组是另一种清单);
   // 搜索时 effectiveRail 已回到「全部」,所以搜索天然覆盖所有被隐藏的模型。
@@ -1741,7 +1754,7 @@ export function UnifiedModelPanel({
                   const matchingFavorite = row.recent
                     ? favorites.find((favorite) => {
                         if (favorite.providerId !== row.entry.providerId) return false;
-                        if (resolveStoredModelEntry(entries, favorite.providerId, favorite.modelId) !== row.entry) return false;
+                        if (resolveStoredModelEntry(resolvableEntries, favorite.providerId, favorite.modelId) !== row.entry) return false;
                         const favoriteConfig = resolveFavoriteRowConfig({
                           entry: row.entry,
                           item: favorite,

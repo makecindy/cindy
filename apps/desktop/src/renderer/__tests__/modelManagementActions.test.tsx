@@ -173,6 +173,28 @@ it.each(['evaluation', 'rerank'] as const)('standalone %s models have one enable
   expect(screen.getByRole('switch', { name: entry.name }).getAttribute('aria-checked')).toBe('true');
 });
 
+// PR #11565 review: with only an OpenAI image API key and no chat sign-in, the image channel
+// works while `provider.connected` is false. The switch could turn such a model off but then
+// refused to turn it back on, because re-enabling was tied to the chat connection. Minimal
+// input: a ready media model on a provider whose chat side is not connected. Tier: component.
+it('a function-type model can be switched back on when only its media channel is connected', async () => {
+  const entry = { id: 'gpt-image-2', name: 'Standalone model', mode: 'image_generation' as const,
+    modalities: { input: [], output: ['image'] } };
+  const view = { ...provider, connected: false, models: {}, imageModels: [entry], availableMediaModelIds: [entry.id] };
+  await setModelVisibility('claude-code', 'xd', entry.id, true);
+  render(<UnifiedModelList provider={view as ProviderView} focusModelId={entry.id} />);
+  const toggle = await screen.findByRole('switch', { name: entry.name });
+  expect(toggle.getAttribute('aria-checked')).toBe('true');
+  await act(async () => { fireEvent.click(toggle); });
+  const off = screen.getByRole('switch', { name: entry.name });
+  expect(off.getAttribute('aria-checked')).toBe('false');
+  expect((off as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { fireEvent.click(off); });
+  expect(window.electronAPI.maker.setModelDisable).toHaveBeenLastCalledWith(
+    { kind: 'model', providerId: 'xd', modelIds: [entry.id], disabled: false });
+  expect(screen.getByRole('switch', { name: entry.name }).getAttribute('aria-checked')).toBe('true');
+});
+
 // Upgrade path: before the single switch, image/decision/rerank models reused the visibility
 // record and "not shown" meant "features cannot use it". Such a model must still read as off
 // after upgrading, and switching it on must clear that old record.
