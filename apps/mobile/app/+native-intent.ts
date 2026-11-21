@@ -100,7 +100,11 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
       if (linkedPeer && linkedPeer.role !== 'host') return path;
       const normalizedParams: string[] = [];
       for (const [key, value] of pairs) {
-        if (key === 'device') {
+        if (key === 'sessionId') {
+          // The route-owned ID comes from the validated path, never from a
+          // query parameter that Expo could merge over the dynamic segment.
+          continue;
+        } else if (key === 'device') {
           if (!hasDeviceId) normalizedParams.push(`deviceId=${encodeURIComponent(value)}`);
         } else if (key === 'message') {
           if (!hasFocusClientId) normalizedParams.push(`focusClientId=${encodeURIComponent(value)}`);

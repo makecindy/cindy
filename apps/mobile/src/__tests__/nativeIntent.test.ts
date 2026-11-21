@@ -191,6 +191,13 @@ describe('mobile native deep-link redirects', () => {
       })).toBe('/sessions/s-123?deviceId=canonical&focusClientId=current');
     });
 
+    it('keeps the validated path session when a query repeats the route key', () => {
+      expect(redirectSystemPath({
+        path: 'cindy://session/s-123?sessionId=other&source=history',
+        initial: false,
+      })).toBe('/sessions/s-123?source=history');
+    });
+
     it.each([true, false])('keeps invalid singular session links out of an unmatched route (initial=%s)', initial => {
       for (const path of ['/session/', '/session/%E0%A4%A', '/session/%2F', '/session/a/b', '/session/.hidden', '/session/a%20b', '/session/' + 'a'.repeat(129)]) {
         expect(redirectSystemPath({ path, initial })).toBe(initial ? '/' : null);
