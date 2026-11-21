@@ -17529,6 +17529,7 @@
       "openWorkdirFailed": "啟卷匣未成"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "排候逾時，提示詞未發。待所繫任務閒，按「{{action}}」補行。",
       "status": {
         "running": "方行",
         "success": "成",
