@@ -167,21 +167,19 @@ export class RemoteMcpAppViews {
       this.opening.delete(entry);
       return { viewId: view.localId, transport: 'sandbox', prefersBorder: document.prefersBorder };
     } catch (error) {
-      let cancel: Promise<unknown> | undefined;
       if (remoteId) {
         // The remote open succeeded. Retire that actual page once, including
         // the local reservation, even if mounting its document failed.
         releasedRemote = await this.call(entry, { op: 'teardown', viewId: remoteId }).then(() => true, confirmsMcpAppViewGone);
       } else if (!/\bMCP_APP_VIEW_LIMIT\b/.test(String(error))) {
-        cancel = this.call(entry, { op: 'cancel-open', openId: entry.remoteOpenId }).catch(() => {});
-        // A lost reply could hide a live page. Let its cleanup settle before
-        // waking a waiter. A definitive refusal releases the local slot now.
+        const cancel = this.call(entry, { op: 'cancel-open', openId: entry.remoteOpenId }).catch(() => {});
+        // Only an unknown outcome can still hide a live page. A definitive refusal
+        // returns its error and local slot even if best-effort cancellation never replies.
         if (!releasedRemote && !isMcpAppOpenRejectedBeforeAllocation(error)) await cancel;
       }
       const freedLocal = this.opening.delete(entry);
       if (freedLocal || releasedRemote)
         this.deps.released?.(owner, caller, releasedRemote ? deviceId : undefined, freedLocal ? 'pending' : undefined);
-      await cancel;
       throw error;
     }
   }

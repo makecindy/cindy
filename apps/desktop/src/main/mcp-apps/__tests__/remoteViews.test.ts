@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { McpAppController } from '@cindy/maker-shared/mcp-app-controller';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
@@ -305,32 +306,43 @@ describe('Main-bound remote MCP App Views', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(f.invoke).toHaveBeenCalledOnce();
   });
-  // Unit, PR #11917: failure before receiving a remote id frees the local
-  // in-flight reservation, without promising remote capacity on an ambiguous reply.
+  // PR #11917, unit: a local slot was returned on a definitive refusal, but
+  // the card controller stayed loading until the best-effort cancellation finished.
   it.each([
     ['MCP_APP_SERVER_CHANGED', true], ['DEVICE_LINK_TIMEOUT', false],
   ] as const)('returns local capacity while the remote cancellation request is still pending only for an ended open (%s)', async (reason, ended) => {
     const f = fixture();
     const pending: Array<(error: Error) => void> = [];
-    let started!: () => void, finish!: () => void;
+    let started!: () => void, failCancel!: (error: Error) => void;
     const cancelStarted = new Promise<void>(resolve => { started = resolve; });
-    const cancelFinished = new Promise<void>(resolve => { finish = resolve; });
+    const cancelFinished = new Promise<void>((_resolve, reject) => { failCancel = reject; });
     f.invoke.mockImplementation(async (_device, _session, input) => {
       if (input.op === 'open') return new Promise((_resolve, reject) => pending.push(reject));
       if (input.op === 'cancel-open') { started(); await cancelFinished; }
       return {};
     });
-    const opens = Array.from({ length: 16 }, () => expect(f.open()).rejects.toThrow(reason));
+    const controller = new McpAppController((_session, request) => f.control(request), 'task', 'card', vi.fn(), vi.fn(), vi.fn());
+    const originalError = new Error(reason);
+    let observedError: unknown;
+    const first = controller.open({}).catch(error => { observedError = error; });
+    const others = Array.from({ length: 15 }, () => expect(f.open()).rejects.toThrow(reason));
     await expect(f.open()).rejects.toThrow('MCP_APP_VIEW_LIMIT');
-    pending[0](new Error(reason));
+    pending[0](originalError);
     await cancelStarted;
-    const beforeRemoteCleanup = f.released.mock.calls.slice();
-    finish();
-    await opens[0];
-    expect(beforeRemoteCleanup).toEqual(ended ? [[expect.any(Object), 'renderer:1', undefined, 'pending']] : []);
-    expect(f.released).toHaveBeenCalledTimes(1);
+    // Observe the caller after pending promise reactions, while the remote cancel still has no reply.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const errorBeforeCleanup = observedError;
+    const releasesBeforeCleanup = f.released.mock.calls.slice();
+    failCancel(new Error('cancel transport failed'));
+    await first;
+    const firstReleases = f.released.mock.calls.slice();
     for (const reject of pending.slice(1)) reject(new Error(reason));
-    await Promise.all(opens);
+    await Promise.all(others);
+    expect(errorBeforeCleanup).toBe(ended ? originalError : undefined);
+    expect(observedError).toBe(originalError);
+    const localRelease = [expect.any(Object), 'renderer:1', undefined, 'pending'];
+    expect(releasesBeforeCleanup).toEqual(ended ? [localRelease] : []);
+    expect(firstReleases).toEqual([localRelease]);
   });
   // Unit: the executor returned a real page, but it cannot be mounted locally.
   // Its confirmed teardown must grant a single opportunity across both quotas.
