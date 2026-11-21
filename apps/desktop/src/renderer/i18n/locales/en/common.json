@@ -22273,6 +22273,7 @@
     "picker": {
       "empty": "No model groups yet. Combine a few sources into a mode in Settings to pick it here.",
       "manage": "Manage model groups",
+      "deviceTitle": "Model groups · {{device}}",
       "switched": "“{{name}}” switched this task to {{model}}",
       "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
       "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected."

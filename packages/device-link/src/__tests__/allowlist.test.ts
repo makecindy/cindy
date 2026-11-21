@@ -46,6 +46,18 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     // 通用写入口不因这条查询放开。
     expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:sessions:update')).toBe(false);
   });
+  it('lets owner controllers use the host model groups but never edit them remotely', () => {
+    // model-groups.md §6.3：读、选路、提交、记绑定、代写说明在被控端执行；改模式只在本机。
+    // 放开 set 等于让手机或另一台电脑改写这台电脑的全局配置。
+    for (const channel of [
+      'model-groups:get', 'model-groups:resolve', 'model-groups:commit', 'model-groups:bind-session', 'model-groups:route-note',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    expect(REMOTE_INVOKE_ALLOWLIST.has('model-groups:set')).toBe(false);
+    // 说明由被控端代写，裸写消息仍然不开。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:messages:create')).toBe(false);
+  });
   it('allows the reduced teammate directory while keeping native configuration local', () => {
     for (const channel of ['local-db:bots:list', 'local-db:bots:get']) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
