@@ -658,6 +658,7 @@ import {
 } from '../localDb/ipc/sessions.js';
 import { createSessionOptionsReconciler } from './sessionOptionsReconciler.js';
 import { readSessionSource } from '../localDb/sessionDispatchSnapshot.js';
+import { scanAtBuddyFiles } from './atBuddyFiles.js';
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
 
 import {
@@ -8223,15 +8224,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     );
   });
 
+  const buddyFileScans = new WeakMap<IpcMainInvokeEvent['sender'], AbortController>();
   ipcMain.handle(
     MAKER_INVOKE.SCAN_AT_RESOURCES,
-    async (_e, agentKind: unknown, params: unknown) => {
+    async (event, agentKind: unknown, params: unknown) => {
       try {
-        const resourceParams = params as { workingDir: string; cap?: number; query?: string };
-        await preparePaletteProjectSkillLinks(resourceParams?.workingDir);
+        const resourceParams = params as { workingDir: string; cap?: number; query?: string; sessionId?: string };
         const kind = requireAgentKind(agentKind);
+        const query = typeof resourceParams?.query === 'string' ? resourceParams.query.trim() : '';
+        let buddyFiles: Promise<Awaited<ReturnType<typeof scanAtBuddyFiles>> | null> = Promise.resolve(null);
+        let buddyScanOwner: string | undefined;
+        if (!isDeviceLinkInvoke() && resourceParams?.sessionId !== undefined) {
+          assertTrustedAppRendererEvent(event);
+          buddyFileScans.get(event.sender)?.abort();
+          if (query && query.length <= 256 && typeof resourceParams.sessionId === 'string'
+            && resourceParams.sessionId.length > 0 && resourceParams.sessionId.length <= 256
+            && typeof resourceParams.workingDir === 'string' && path.isAbsolute(resourceParams.workingDir)
+            && (resourceParams.cap === undefined || Number.isSafeInteger(resourceParams.cap) && resourceParams.cap > 0)) {
+            const scan = new AbortController();
+            buddyScanOwner = activeOwnerScopeKey();
+            buddyFileScans.set(event.sender, scan);
+            buddyFiles = scanAtBuddyFiles({ sessionId: resourceParams.sessionId, workingDir: resourceParams.workingDir, query }, scan.signal)
+              .catch(() => null)
+              .finally(() => { if (buddyFileScans.get(event.sender) === scan) buddyFileScans.delete(event.sender); });
+          }
+        }
+        await preparePaletteProjectSkillLinks(resourceParams?.workingDir);
         const includeProjectAgents = supportsAtProjectAgentResources(kind);
-        const [result, customizationResult] = await Promise.all([
+        const [result, customizationResult, extraFiles] = await Promise.all([
           maker.scanAtResources(kind, resourceParams),
           includeProjectAgents
             ? maker
@@ -8248,6 +8268,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                   return null;
                 })
             : Promise.resolve(null),
+          buddyFiles,
         ]);
         const projectAgents = customizationResult
           ? listAtProjectAgentResources(
@@ -8262,7 +8283,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           projectAgents,
           resourceParams.cap,
         );
-        return { success: true, items: merged.items, truncated: result.truncated || merged.capped };
+        if (!extraFiles || buddyScanOwner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) {
+          return { success: true, items: merged.items, truncated: result.truncated || merged.capped };
+        }
+        const cap = Math.min(resourceParams.cap ?? 2000, 2000);
+        const linkedItems = extraFiles.items.slice(0, Math.min(cap, 256));
+        const workspaceItems = merged.items.slice(0, cap - linkedItems.length);
+        return {
+          success: true,
+          items: [...workspaceItems, ...linkedItems],
+          truncated: result.truncated || merged.capped || extraFiles.truncated
+            || linkedItems.length < extraFiles.items.length || workspaceItems.length < merged.items.length,
+        };
       } catch (err) {
         return {
           success: false,

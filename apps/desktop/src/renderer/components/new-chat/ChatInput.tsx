@@ -926,6 +926,7 @@ interface ChatInputProps {
    * 权限仍使用标准 chip，允许用户随时调整当前任务的执行权限。
    */
   hideRuntimeControls?: boolean;
+  includeBuddyFiles?: boolean;
   /**
    * 工具行采用更紧凑的视觉密度 (字号 -1px)。
    * 用于 doc rail 这种宽度受限的容器,与 compactToolbar (wrap 兜底) 正交:
@@ -1311,6 +1312,7 @@ export function ChatInput({
   compactToolbar = false,
   narrowToolbar = false,
   hideRuntimeControls = false,
+  includeBuddyFiles = false,
   denseToolbar = false,
   visualVariant = 'default',
   middleToolbarSlot,
@@ -4946,6 +4948,7 @@ export function ChatInput({
         {
           sessionId,
           includeLocalContext: !remoteDeviceId,
+          includeBuddyFiles,
           includeTaskHistory: !!normalizedQuery,
           unnamedLabel: t('ccAgent.common.unnamedSession'),
           onPartial: (partial) => {
@@ -4982,7 +4985,7 @@ export function ChatInput({
           setAtState({ kind: 'error', message: m });
         });
     },
-    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId, t],
+    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId, includeBuddyFiles, t],
   );
 
   const syntheticAtQuery = useMemo(
@@ -5574,7 +5577,7 @@ export function ChatInput({
         label: selectedItem.name.replace(/\.md$/, ''),
         // For agent chips we stash the bare name so serialization can
         // degrade to `@{name}` if the host can't map it; for files/dirs
-        // we stash the relative path as-is.
+        // we keep the path as supplied (absolute for external files).
         path: selectedItem.type === 'agent' ? selectedItem.name : selectedItem.relPath,
         ...(selectedItem.type === 'plugin-resource' && selectedItem.sourceLabel
           ? { sourceLabel: selectedItem.sourceLabel }
