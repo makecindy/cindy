@@ -49,11 +49,17 @@ export const REMOTE_PERSIST_FIELDS = new Set([
   'contextWindowBudget',
 ]);
 
+export interface PersistSessionFieldsOptions {
+  /** Plugin engines store '' in sessions.effort when the selected model offers no reasoning levels. */
+  allowEmptyEffort?: boolean;
+}
+
 /** persistSessionFields (localDb/ipc/sessions.ts), with its ports first. */
 export async function persistSessionFieldsWith(
   ports: SessionFieldPersistencePorts,
   sessionId: string,
   patch: Record<string, unknown>,
+  options?: PersistSessionFieldsOptions,
 ): Promise<void> {
   const { captureOwnerScope, isOwnerScopeCurrent, broadcastSessionPatched } = ports;
   const registeredSessionIpcOpts = { get applyContextWindowBudget() { return ports.applyContextWindowBudget(); } };
@@ -63,7 +69,9 @@ export async function persistSessionFieldsWith(
     if (REMOTE_PERSIST_FIELDS.has(k)) clean[k] = patch[k];
   }
   if (Object.prototype.hasOwnProperty.call(clean, 'effort')) {
-    const persistableEffort = persistableSessionEffort(clean.effort);
+    const persistableEffort = options?.allowEmptyEffort && clean.effort === ''
+      ? ''
+      : persistableSessionEffort(clean.effort);
     if (persistableEffort === undefined) delete clean.effort;
     else clean.effort = persistableEffort;
   }
@@ -94,6 +102,7 @@ export async function persistSessionFieldsWith(
   delete rowPatch.contextWindowBudget;
   const setObj = sessionPatchToRow(rowPatch as Parameters<typeof sessionPatchToRow>[0], {
     bumpUpdatedAt: false,
+    allowEmptyEffort: options?.allowEmptyEffort,
   });
   if (Object.keys(setObj).length > 0) {
     await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));

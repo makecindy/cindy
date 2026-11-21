@@ -55,6 +55,9 @@ Renderer 读到的字段相同；图标数据 URL 单个最多 64 KiB、一次�
 同引擎模型变更沿用 `maker:set-model`，按稳定设备归属发往被控端并使用该端的任务变更推送回显。引擎提供的模型标识在 256 字符
 以内原样缓存，超限项目不进入目录，展示名称另行限长。
 
+伙伴的模型设置沿用现有设置表单。每个插件模型保存 `harness: 'acp'`、引擎的 `providerId`、模型 ID 与可选思考深度，在伙伴所在电脑上运行。
+更新后的桌面和手机可以编辑同一份配置。不能识别 ACP 的旧设置服务会拒绝保存这项选择。插件清单、批准状态及中转消息格式沿用原契约。
+
 定时任务（2026-11-19，第二期）：`Schedule` / `CreateScheduleInput` 的 `agentKind`、`modelAgentKind` 新增取值 `acp`（`providerId` 必为
 `acp-plugin:…`），只用于每次新建任务、在自动任务所在电脑运行的 Agent 任务；保存时拒绝绑定任务、持续会话、worktree、运行位置、
 脚本执行，以及只改一半（例如旧端把 `agentKind` 写回内置引擎）的组合。`schedules.agent_kind` / `model_agent_kind` 列只放宽 TS 枚举，

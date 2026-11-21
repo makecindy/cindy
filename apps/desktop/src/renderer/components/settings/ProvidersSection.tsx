@@ -143,6 +143,7 @@ import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { CindyMark } from '@/components/icons/CindyMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
@@ -305,10 +306,15 @@ function RemoteProviderAccessRow({
 
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
 function providerIcon(p: ProviderView, size: number): ReactNode {
-  if (isProviderLogoKind(p.logoKind) || hasProviderLogo(p.id, p.routing)) {
-    return <ProviderLogoMark providerId={p.id} routing={p.routing} logoKind={p.logoKind} size={size} />;
-  }
-  return <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>;
+  return (
+    <CustomProviderIcon svg={p.customIcon} size={size}>
+      {isProviderLogoKind(p.logoKind) || hasProviderLogo(p.id, p.routing) ? (
+        <ProviderLogoMark providerId={p.id} routing={p.routing} logoKind={p.logoKind} size={size} />
+      ) : (
+        <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>
+      )}
+    </CustomProviderIcon>
+  );
 }
 
 // ---------------------------------------------------------------------------

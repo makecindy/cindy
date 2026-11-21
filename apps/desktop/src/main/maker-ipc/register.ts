@@ -1,3 +1,4 @@
+import { assertSessionTreeOwner, navigateAndRehydrateSessionTree } from './sessionTreeNavigation.js';
 import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt, contextRecoveryAbortSignal } from './contextRecoveryAssembly.js';
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
@@ -251,6 +252,7 @@ import {
   parseOfferedPluginEngines,
   PLUGIN_ENGINES_INVOKE,
   pluginEngineKeyFromProviderId,
+  PLUGIN_ENGINE_DEFAULT_MODEL,
 } from '../../shared/pluginEngines.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, PluginEngineUnsupportedError, requireBuiltinAgentKind } from '../maker-host/engineKind.js';
 import type {
@@ -1514,6 +1516,7 @@ import {
   remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeEffort,
   sessionRuntimeControlOwnerEpochMatches,
+  type FallbackRouteProfile,
   type SessionRuntimeProfile,
 } from './sessionRuntimeControl.js';
 import {
@@ -2052,7 +2055,7 @@ const pendingSchedulerAutoResumeRunBySession = new Map<
   { runId: string; attemptToken: number; usageLimitToken?: number; retryClientId?: string; error?: string }
 >();
 interface SchedulerRecoveryListener {
-  failed(error?: string): void;
+  failed(error?: string, stopped?: true): void;
   quotaWait?: { start(): void; resume(): boolean };
 }
 const schedulerAutoResumeFailureListeners = new Map<string, Set<SchedulerRecoveryListener>>();
@@ -2094,13 +2097,14 @@ function notifySchedulerAutoResumeFailed(
     return;
   }
   clearSchedulerAutoResumePending(sessionId, runId, attemptToken);
-  const listeners = schedulerAutoResumeFailureListeners.get(
-    schedulerAutoResumeRunKey(sessionId, runId),
-  );
-  if (!listeners) return;
-  for (const listener of listeners) {
+  publishSchedulerRecoveryFailure(sessionId, runId, current.error);
+}
+
+function publishSchedulerRecoveryFailure(sessionId: string, runId: string, detail?: string, stopped?: true): void {
+  const listeners = schedulerAutoResumeFailureListeners.get(schedulerAutoResumeRunKey(sessionId, runId));
+  for (const listener of listeners ?? []) {
     try {
-      listener.failed(current.error);
+      listener.failed(detail, stopped);
     } catch {
       // Runner listener failures must not break chat recovery cleanup.
     }
@@ -2126,10 +2130,14 @@ export function isSchedulerAutoResumePending(sessionId: string, runId: string): 
   return pendingSchedulerAutoResumeRunBySession.get(sessionId)?.runId === runId;
 }
 
+export function isSchedulerSharedReconnectPending(sessionId: string, runId: string): boolean {
+  return agentInputCoordinatorHolder?.isSharedReconnectPending(sessionId, runId) === true;
+}
+
 export function onSchedulerAutoResumeFailed(
   sessionId: string,
   runId: string,
-  listener: (error?: string) => void,
+  listener: SchedulerRecoveryListener['failed'],
   quotaWait?: SchedulerRecoveryListener['quotaWait'],
 ): () => void {
   const key = schedulerAutoResumeRunKey(sessionId, runId);
@@ -2148,8 +2156,11 @@ export function onSchedulerAutoResumeFailed(
 
 /** Schedule pause/delete：只撤销仍属于该 run 的普通聊天自动续跑。 */
 export function cancelSchedulerAutoResume(sessionId: string, runId: string): boolean {
-  if (!isSchedulerAutoResumePending(sessionId, runId)) return false;
   const pending = pendingSchedulerAutoResumeRunBySession.get(sessionId);
+  // Shared reconnect recovery uses the same runner wait predicate, but its
+  // lifetime belongs to the coordinator's active turn and must not be torn
+  // down through the ordinary auto-resume bookkeeping.
+  if (pending?.runId !== runId) return false;
   if (pending?.usageLimitToken !== undefined) {
     finishSchedulerUsageLimitWait(sessionId, pending.usageLimitToken);
     return true;
@@ -4746,6 +4757,8 @@ export interface SessionRouteSelection {
   effort: string | null;
   fastMode: boolean | 'ultrafast';
 }
+type CompanionSessionRouteSelection = Omit<SessionRouteSelection, 'agentKind'> & { agentKind: EngineKind };
+
 let readPendingAgentSwitchRouteHolder:
   ((sessionId: string) => PendingAgentSwitchRouteRead | undefined) | null = null;
 let applySessionRouteUnderSendLockHolder:
@@ -7861,7 +7874,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const route = await reconcileBotModelRoute.preview(sessionId, chain);
       if (!route) return null;
       const meta = await maker.getSessionMeta(sessionId);
-      return meta ? { agentKind: route.agentKind, remoteHostId: meta.remoteHostId } : null;
+      return meta ? { agentKind: route.agentKind === 'acp' ? 'pi' : route.agentKind, remoteHostId: meta.remoteHostId } : null;
     },
     refreshProviders: () => refreshCustomMcpProviders(),
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.MCP_CHANGED, {}),
@@ -9574,7 +9587,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
       const createOpts = buildCreateOptsWithStderr({
         id: expectedSession.id,
-        agentKind: dbToMakerAgentKind(row.agentKind),
+        agentKind: dbToMakerEngineKind(row.agentKind),
         workingDir: row.workingDir,
         workspaceKind: row.workspaceKind,
         model: row.model ?? undefined,
@@ -9704,7 +9717,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       preflight: async (row) => {
         const createOpts = buildCreateOptsWithStderr({
           id: live.id,
-          agentKind: dbToMakerAgentKind(row.agentKind),
+          agentKind: dbToMakerEngineKind(row.agentKind),
           workingDir: row.workingDir,
           workspaceKind: row.workspaceKind,
           model: row.model ?? undefined,
@@ -11617,7 +11630,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ) => applyScheduledModelSelection(await resolveScheduledExecutionSelection(sessionId, selection), {
     getTarget: async () => {
       const row = await agentSwitchDeps.getSessionRow(sessionId);
-      // Plugin-engine tasks cannot switch engines (docs/plans/acp-plugin-bridge.md).
+      if (row?.status === 'active' && row.agentKind === 'acp' && row.source === 'bot') {
+        throwIpcError('UNSUPPORTED_CAPABILITY', '插件引擎伙伴不支持自动任务临时指定其他模型');
+      }
+      // Explicit automation overrides only use built-in engine routes.
       return row && row.agentKind !== 'acp' ? { agentKind: dbToMakerAgentKind(row.agentKind), status: row.status,
         remoteHostId: row.remoteHostId, agentDeviceId: row.agentDeviceId, orcaRole: row.orcaRole } : null;
     },
@@ -11693,7 +11709,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           isNull(botSessionLinks.archivedAt), inArray(botSessionLinks.role, ['canonical', 'group', 'channel', 'thread', 'routine'])))
         .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
         .where(eq(sessions.id, sessionId)).limit(1);
-      return row?.status === 'active' ? { baseline: row.baseline,
+      return row?.status === 'active' && row.agentKind !== 'acp' ? { baseline: row.baseline,
         profileRevision: row.botId ? JSON.stringify([row.botId, row.profileVersion]) : null, profile: {
         agentKind: dbToMakerAgentKind(row.agentKind), model: row.model, providerId: row.providerId,
         agentDeviceId: row.agentDeviceId,
@@ -14063,7 +14079,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * or the saved run location revalidated against that computer's catalog each time.
    */
   const resolvePluginSavedExecution = async (
-    config: Parameters<typeof resolveSessionExecution>[0] & { agentDeviceId?: string | null },
+    config: Parameters<typeof resolveSessionExecution>[0] & Parameters<typeof savedPluginTaskRemoteRoute>[0],
     sourceSessionId?: string,
     existing?: Parameters<typeof resolveSessionExecution>[2],
   ): Promise<Awaited<ReturnType<typeof resolveSessionExecution>> & { agentDeviceId?: string }> => {
@@ -15381,6 +15397,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAcceptedRollback?: SchedulerQueuedPromptRequest['onAcceptedRollback'];
     onAcceptedCommit?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
+    manualUiSend?: boolean;
     sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
     /** Host-accepted task text or a forwarded request receipt. */
     autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
@@ -15406,7 +15423,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           params.onAcceptedCommit,
         );
       }
-      inputCoordinator.enqueue(params.targetSessionId, queued);
+      inputCoordinator.enqueue(params.targetSessionId, queued, params.manualUiSend ? { manualUiSend: true } : undefined);
     };
     if (params.authorizationGuard) await commitBotAuthorizationInput(params.authorizationGuard, enqueue);
     else enqueue();
@@ -16966,13 +16983,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    */
   const stageSessionRouteSelection = async (
     sessionId: string,
-    route: SessionRouteSelection,
-    currentAgentKind: AgentKind,
-  ): Promise<SessionRouteSelection | void> => {
+    route: CompanionSessionRouteSelection,
+    currentAgentKind: EngineKind,
+    currentProviderId?: string | null,
+  ): Promise<CompanionSessionRouteSelection | void> => {
     // Legacy callers without a location must not move a remote session implicitly.
     const currentDeviceId = await readSessionAgentDeviceId(sessionId);
     if (route.agentDeviceId === undefined && currentDeviceId) return;
-    if (route.agentKind !== currentAgentKind || currentDeviceId !== (route.agentDeviceId ?? null) || currentDeviceId) {
+    const pluginEngineChanges = route.agentKind === 'acp' && currentProviderId !== undefined && currentProviderId !== route.providerId;
+    if (route.agentKind !== currentAgentKind || pluginEngineChanges || currentDeviceId !== (route.agentDeviceId ?? null) || currentDeviceId) {
       await performSessionAgentSwitch(agentSwitchDeps, {
         sessionId, targetAgentKind: route.agentKind, model: route.model,
         providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,
@@ -16980,8 +16999,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         configStaged: true,
       });
       const intent = agentSwitchPending.get(sessionId);
-      // 系统路由只登记内置引擎；插件引擎意图不会出现在这些任务上(切到插件引擎只限普通任务)。
-      return intent && intent.targetAgentKind !== 'acp' ? {
+      return intent ? {
         ...route, agentKind: intent.targetAgentKind, model: intent.model,
         providerId: intent.providerId ?? null,
         agentDeviceId: intent.targetAgentDeviceId === undefined ? currentDeviceId : intent.targetAgentDeviceId,
@@ -17132,14 +17150,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           eq(sessions.source, 'bot'),
           eq(sessions.status, 'active'),
         )).limit(1);
-      // Teammate model chains drive built-in engines only; plugin-engine rows have none.
-      if (!row || row.agentKind === 'acp') return null;
+      if (!row) return null;
       // An old routine lane follows its teammate's model like the other lanes.
       const selection = await readEffectiveBotModelSelection(JSON.parse(row.capabilitiesJson));
       const control = getSessionRuntimeControlSnapshot(sessionId);
       const intent = agentSwitchPending.get(sessionId);
       const live = maker.getSession(sessionId);
       const modelGroupsSignature = botModelGroupsSignature(selection.chain, readModelGroupsConfig());
+      const currentAgentKind = live?.agentKind ?? dbToMakerEngineKind(row.agentKind);
+      const isPluginEngine = currentAgentKind === 'acp';
       return {
         // The saved chain: a model group's own rule picks its source (pickModelGroup), and the
         // saved model stays the fallback. Editing a group it uses re-picks (model-groups.md §6.2).
@@ -17149,17 +17168,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         followsCindyDefault: selection.followsCindyDefault,
         current: {
           agentDeviceId: row.agentDeviceId,
-          agentKind: builtinAgentKindOrNull(live?.agentKind) ?? dbToMakerAgentKind(row.agentKind),
-          model: live?.model ?? row.model ?? '',
-          providerId: live && hasSessionProvider(sessionId)
+          agentKind: currentAgentKind,
+          // The engine reports its concrete model even when the companion delegated that choice to it.
+          model: isPluginEngine && row.model === PLUGIN_ENGINE_DEFAULT_MODEL ? row.model : live?.model ?? row.model ?? '',
+          providerId: !isPluginEngine && live && hasSessionProvider(sessionId)
             ? getSessionProvider(sessionId) ?? null : row.providerId,
-          effort: (live ? getSessionEffort(sessionId) : row.effort) ?? null,
-          fastMode: live ? getSessionFastMode(sessionId) : (row.fastMode ?? false),
+          effort: (!isPluginEngine && live ? getSessionEffort(sessionId) : row.effort) ?? null,
+          fastMode: isPluginEngine ? false : (live ? getSessionFastMode(sessionId) : (row.fastMode ?? false)),
         },
         // The task owns its model: a manual change sticks until the configured route itself changes.
         hasRuntimeOverride: control.effectiveOverride !== null || control.pending !== null || !!intent,
-        // 伙伴任务不能切到插件引擎，这里的意图只会是内置引擎。
-        next: intent && intent.targetAgentKind !== 'acp' ? { agentDeviceId: intent.targetAgentDeviceId === undefined ? row.agentDeviceId : intent.targetAgentDeviceId, agentKind: intent.targetAgentKind, model: intent.model,
+        next: intent ? { agentDeviceId: intent.targetAgentDeviceId === undefined ? row.agentDeviceId : intent.targetAgentDeviceId, agentKind: intent.targetAgentKind, model: intent.model,
           providerId: intent.providerId ?? null, effort: intent.effort ?? null, fastMode: intent.fastMode ?? false }
           : control.pending?.profile ?? control.effectiveOverride ?? undefined,
       };
@@ -17167,7 +17186,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readAppliedGroup: (sessionId) => providerGroupService?.sessionGroup(sessionId) ?? Promise.resolve(null),
     apply: createBotModelRouteApplier({
       stage: (sessionId, route, current) => stageSessionRouteSelection(
-        sessionId, { ...route, agentDeviceId: route.agentDeviceId ?? null }, current.agentKind),
+        sessionId, { ...route, agentDeviceId: route.agentDeviceId ?? null }, current.agentKind, current.providerId),
       isIdle: isSessionIdleForRouteApply,
       applyPendingSwitch: (sessionId) => applyPendingAgentSwitchIfIdle(
         agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true }),
@@ -17275,9 +17294,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const readBotFallbackCandidate = async (
     sessionId: string,
-    current: SessionRuntimeProfile,
+    current: FallbackRouteProfile,
     controlSessionId = sessionId,
-  ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null; routeLocked?: boolean }> => {
+  ): Promise<{ isBot: boolean; candidate: FallbackRouteProfile | null; routeLocked?: boolean }> => {
     const [row] = await getDbClient()
       .drizzle.select({
         capabilitiesJson: botProfileVersions.capabilitiesJson,
@@ -17312,13 +17331,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     // A model group continues through its other sources before the next saved route.
     const chain = expandBotModelGroups(await readEffectiveBotModelChain(config), readModelGroupsConfig(), Date.now());
-    const toAgentKind = (harness: string): AgentKind =>
-      harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
-    const currentHarness = current.agentKind === 'codex'
-      ? 'codex'
-      : current.agentKind === 'pi'
-        ? 'pi'
-        : 'claude';
+    const currentHarness = current.agentKind === 'claude-code' ? 'claude' : current.agentKind;
     const control = getSessionRuntimeControlSnapshot(controlSessionId);
     const [controlSession] = controlSessionId === sessionId ? [{ remoteHostId: row.remoteHostId }]
       : await getDbClient().drizzle.select({ remoteHostId: sessions.remoteHostId })
@@ -17326,7 +17339,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const currentRoute: Pick<BotModelRoute, 'harness' | 'model' | 'providerId' | 'agentDeviceId'> = {
       harness: currentHarness, model: current.model, providerId: current.providerId, agentDeviceId: current.agentDeviceId,
     };
-    const usable = (candidate: BotModelRoute) => !controlSession?.remoteHostId || candidate.harness === currentHarness;
+    const usable = (candidate: BotModelRoute) =>
+      !controlSession?.remoteHostId || (candidate.harness !== 'acp' && candidate.harness === currentHarness);
     const route = nextBotModelRoute(chain, currentRoute, control.visitedRoutes, usable);
     // No other usable route is configured at all: nothing can be exhausted.
     const currentIndex = botModelRouteIndex(chain, currentRoute);
@@ -17336,7 +17350,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       routeLocked,
       candidate: route
         ? {
-            agentKind: toAgentKind(route.harness),
+            agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
             agentDeviceId: route.agentDeviceId ?? null,
             model: route.model,
             providerId: route.providerId,
@@ -18157,13 +18171,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const generation = getSessionRuntimeControlSnapshot(session.id).generation;
       const access = providerShareAccessEpoch(shareId);
       const recovery = providerGroupService.trackGuestStartRecovery(session.id);
+      let loggedRecoveryFailure: string | null = null;
+      const logRecoveryFailure = (reason: string): void => {
+        if (loggedRecoveryFailure === reason) return;
+        loggedRecoveryFailure = reason;
+        log.warn('provider group reconnect recovery unavailable', { sessionId: session.id, reason });
+      };
       return {
         signal: recovery.signal,
-        isCurrent: () => recovery.isCurrent() && sessionRuntimeControlOwnerEpochMatches(owner)
-          && getSessionRuntimeControlSnapshot(session.id).generation === generation
-          && !isAppSessionBoundaryPending()
-          && providerShareAccessEpoch(shareId) === access
-          && findReceivedShare(shareId)?.status === 'active',
+        isCurrent: () => {
+          if (!recovery.isCurrent()) { logRecoveryFailure('recovery-superseded'); return false; }
+          if (!sessionRuntimeControlOwnerEpochMatches(owner)) { logRecoveryFailure('runtime-owner-changed'); return false; }
+          if (getSessionRuntimeControlSnapshot(session.id).generation !== generation) { logRecoveryFailure('runtime-refreshed'); return false; }
+          if (isAppSessionBoundaryPending()) { logRecoveryFailure('app-session-boundary'); return false; }
+          if (providerShareAccessEpoch(shareId) !== access || findReceivedShare(shareId)?.status !== 'active') {
+            logRecoveryFailure('share-unavailable');
+            return false;
+          }
+          return true;
+        },
         close: async () => (await withRehydrateCloseSuppressed(session.id, () =>
           maker.closeSessionIfCurrent(live, 'runtime-refresh', { onlyIfIdle: true }))) === 'closed',
         takeOffer: takeStoppedSharedReconnectOffer,
@@ -18242,6 +18268,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
     },
     onUndispatchedDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnAbort(sessionId),
+    onSharedReconnectClaimed: (sessionId, clientId) =>
+      agentInputCoordinatorHolder?.markSharedReconnectPending(sessionId, clientId),
+    onSharedReconnectFailed: (sessionId, runId, error, stopped) =>
+      publishSchedulerRecoveryFailure(sessionId, runId, schedulerFailureDetail(
+        error instanceof Error ? error.message : String(error),
+      ), stopped),
+    onSharedReconnectFinished: (sessionId, clientId) =>
+      agentInputCoordinatorHolder?.clearSharedReconnectPending(sessionId, clientId),
     ackInterruptedTurnDispatched: async (sessionId, endedAt) => {
       await ackSessionTurnEndedDurable(sessionId, endedAt);
     },
@@ -19819,6 +19853,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       void settleTaskActionInput(item).catch(() => undefined);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
     },
+    getSchedulerRunSignal: (sessionId, item) => schedulerQueueBridgeHolder?.runSignalFor(sessionId, item),
     onAcceptedQueuedMessage: async (sessionId, item, restoredFromSnapshot): Promise<void> => {
       if (item.clientId.startsWith('plugin-target:')) {
         try { await assertPluginTargetQueuedDelivery(sessionId, item.clientId); }
@@ -22728,7 +22763,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ) {
         throwIpcError('INVALID_PARAMS', 'customInstructions must be string');
       }
+      const owner = getCurrentDbClientSnapshot();
+      assertSessionTreeOwner(owner);
       const sess = await getOrResumeSessionForHistory(sessionId, 'pi-history');
+      assertSessionTreeOwner(owner);
       if (!sess || !sess.capabilities.sessionTree?.supported) return null;
       // 整个「原生分支导航 → 捕获 result.messages → session.treeRehydrate 重建 SQLite」窗口
       // 必须与 maker:send 走同一把 per-session 锁(acquireSendToSessionLock)。否则另一窗口 /
@@ -22737,33 +22775,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 在 JSONL 里有、SQLite 里被旧快照覆盖/隐藏(hiddenClientIds 只修复 Renderer 删除广播,
       // 修不了 JSONL 与 DB 的这处分叉,codex review P1)。summarize turn 是 Pi 内部 RPC,不经
       // maker:send IPC,故不与本锁重入。
-      const { result, hiddenClientIds, now } = await withSendToSessionLock(sessionId, async () => {
-        const result = await sess.navigateSessionTree(entryId, {
+      const { result, hiddenClientIds, now } = await withSendToSessionLock(sessionId, () =>
+        navigateAndRehydrateSessionTree(sessionId, owner, () => sess.navigateSessionTree(entryId, {
           summarize: parsed.summarize === true,
           ...(typeof parsed.customInstructions === 'string'
             ? { customInstructions: parsed.customInstructions }
             : {}),
-        });
-        const now = Date.now();
-        // hiddenClientIds 由重投影事务原子返回:它是隐藏动作发生那一刻的完整可见集。
-        const { hiddenClientIds } = await getDbClient().tx('session.treeRehydrate', {
-          sessionId,
-          now,
-          contextTokens: result.contextTokens,
-          contextWindow: result.contextWindow,
-          messages: result.messages.map((message) => ({
-            id: createId(),
-            clientId: message.clientId,
-            role: message.role,
-            content: JSON.stringify(message.content),
-            toolUseId: message.toolUseId ?? null,
-            agentMeta: message.agentMeta ? JSON.stringify(message.agentMeta) : null,
-            agentKind: 'pi',
-            createdAt: message.createdAt,
-          })),
-        });
-        return { result, hiddenClientIds, now };
-      });
+        })),
+      );
+      assertSessionTreeOwner(owner);
+      if (result.cancelled) return { tree: result.tree, draftText: result.draftText, cancelled: true };
       clearSessionThinkingSnapshots(sessionId);
       resetTurnPersistState(sessionId);
 
@@ -22775,11 +22796,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           clientIds: hiddenClientIds,
         });
       }
-      const visibleRows = await getDbClient()
+      const visibleRows = await owner.client
         .drizzle.select()
         .from(messages)
         .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt)))
         .orderBy(messages.createdAt);
+      assertSessionTreeOwner(owner);
       for (const row of visibleRows) broadcastMessageRow(sessionId, messageToCamel(row));
       broadcastSessionPatched(sessionId, {
         clearedAt: null,
@@ -22791,7 +22813,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return {
         tree: result.tree,
         draftText: result.draftText,
-        cancelled: result.cancelled === true,
+        cancelled: false,
       };
     },
   );

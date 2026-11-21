@@ -45,6 +45,7 @@ import {
   RefreshCw,
   Search,
   Unplug,
+  WifiOff,
   Zap,
   Lock,
 } from 'lucide-react';
@@ -69,6 +70,7 @@ import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provide
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { CindyMark } from '@/components/icons/CindyMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { agentOptionOf } from './agentOptions';
 import type { SelectableVendor } from '@/lib/agentVendors';
@@ -120,7 +122,7 @@ import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
 import { useProviders } from '@/hooks/useProviders';
 import { withSubscriptionDisplayModels } from '@/lib/localCatalogSnapshot';
 import { LocalModelCatalogNotice } from './LocalModelCatalogNotice';
-import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
+import { PROVIDER_TITLE_KEY, providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
 import {
   evictDeviceProviders,
   prefetchDeviceProviders,
@@ -438,7 +440,18 @@ function modelDisplayProvider(
 
 // 来源供应商 → 单色官方 mark(fill=currentColor)。trigger 默认右间距 + trigger 文字色;
 // 列表行前缀通过 colorClass / withMargin 改用 secondary 色 + 由 flex gap 控间距。
-export function ProviderMark({
+export function ProviderMark(props: Parameters<typeof DefaultProviderMark>[0] & {
+  customIcon?: string;
+}) {
+  return (
+    <CustomProviderIcon svg={props.customIcon} size={props.dense ? 12.3 : 13}
+      className={cn(props.withMargin !== false && 'mr-1.5', 'shrink-0')}>
+      <DefaultProviderMark {...props} />
+    </CustomProviderIcon>
+  );
+}
+
+function DefaultProviderMark({
   providerId,
   name,
   routing,
@@ -492,11 +505,12 @@ export function ProviderMark({
 
 /**
  * 模型行 / trigger 的图标 —— 统一规则(桌面与手机同源,见 resolveModelIconKind):
- * 模型条目带 `icon`(**AI Gateway / 目录设定**)就渲染对应厂牌 mark;缺省或未知值
- * 回落该行来源供应商标(ProviderMark)。禁止在客户端按 model id 猜厂牌。
+ * 优先使用模型目录的厂牌 `icon`，缺省时回落来源供应商标。
+ * 禁止在客户端按 model id 猜厂牌。
  */
 export function ModelIconMark({
   icon,
+  customIcon,
   providerId,
   name,
   routing,
@@ -507,6 +521,7 @@ export function ModelIconMark({
 }: {
   /** 模型条目的展示图标 id(CatalogModel.icon);undefined = 未设定。 */
   icon?: string;
+  customIcon?: string;
   /** 回落用的来源供应商 id / 展示名(与 ProviderMark 同语义)。 */
   providerId: string;
   name?: string;
@@ -520,14 +535,8 @@ export function ModelIconMark({
   if (kind) {
     const common = cn(withMargin && 'mr-1.5', 'shrink-0', colorClass);
     const markSize = dense ? 12.3 : 13;
-    if (kind === 'claude') return <AnthropicMark size={markSize} className={common} />;
-    if (kind === 'codex') return <OpenAIMark size={markSize} className={common} />;
-    return (
-      <CindyMark
-        size={markSize}
-        className={common}
-      />
-    );
+    const Mark = kind === 'claude' ? AnthropicMark : kind === 'codex' ? OpenAIMark : CindyMark;
+    return <Mark size={markSize} className={common} />;
   }
   return (
     <ProviderMark
@@ -535,6 +544,7 @@ export function ModelIconMark({
       name={name}
       routing={routing}
       logoKind={logoKind}
+      customIcon={customIcon}
       colorClass={colorClass}
       withMargin={withMargin}
       dense={dense}
@@ -3318,6 +3328,7 @@ function ModelSelectorContentView({
                     name={provider.name}
                     routing={provider.routing}
                     logoKind={provider.logoKind}
+                    customIcon={provider.customIcon}
                     colorClass="text-[var(--text-secondary)]"
                     withMargin={false}
                     dense
@@ -4901,12 +4912,22 @@ export function ModelSelector({
     !!currentAgentKind && chatEligibleSourcesForModel([disconnectedProvider], modelId, currentAgentKind, { includeDisabled: true }).length === 0;
   const lastConfirmedAt = unconfirmedList ? routeProvider?.subscriptionModelsConfirmedAt : undefined;
   const showStaleList = unconfirmedList && (showSourceDisconnected || lastConfirmedAt !== undefined);
+  // The read failed because the provider's service could not be reached: say that, not "not updated".
+  const staleUnreachable = showStaleList && routeProvider?.subscriptionReadUnreachable === true;
   const showSourceIssue = showSourceDisconnected || showStaleList;
   const issueColor = showStaleList ? 'text-[var(--text-secondary)]' : 'text-[var(--error-fg)]';
-  const IssueIcon = showStaleList ? Clock3 : selectedSourceUnavailable ? CircleAlert : Unplug;
-  const sourceIssueLabel = t(showStaleList ? 'newChat.modelSelector.source.unconfirmed' : selectedSourceUnavailable
-    ? 'newChat.modelSelector.source.unavailable'
-    : 'newChat.modelSelector.source.disconnected');
+  const IssueIcon = staleUnreachable ? WifiOff : showStaleList ? Clock3 : selectedSourceUnavailable ? CircleAlert : Unplug;
+  const unreachableVendorKey = routeProvider?.subscriptionAccountPool
+    ? PROVIDER_TITLE_KEY[routeProvider.subscriptionAccountPool] : undefined;
+  const sourceIssueLabel = staleUnreachable
+    ? t('newChat.modelSelector.source.unreachable', {
+      source: unreachableVendorKey ? t(unreachableVendorKey) : routeProvider ? providerDisplayName(routeProvider, t) : currentProviderId,
+    })
+    : t(showStaleList ? 'newChat.modelSelector.source.unconfirmed' : selectedSourceUnavailable
+      ? 'newChat.modelSelector.source.unavailable'
+      : 'newChat.modelSelector.source.disconnected');
+  // The panel header already names the source and account.
+  const sourceIssueHeaderLabel = staleUnreachable ? t('newChat.modelSelector.source.unreachableDetail') : sourceIssueLabel;
   const baseAriaLabel = noSource
     ? t('newChat.modelSelector.source.connect')
     : showSourceIssue
@@ -5310,6 +5331,7 @@ export function ModelSelector({
             name={disconnectedProvider?.name}
             routing={disconnectedProvider?.routing}
             logoKind={disconnectedProvider?.logoKind}
+            customIcon={disconnectedProvider?.customIcon}
             colorClass={issueColor}
           />
           {agentIdentityPrefix}
@@ -5372,6 +5394,7 @@ export function ModelSelector({
                 name={triggerActiveProvider?.name}
                 routing={triggerActiveProvider?.routing}
                 logoKind={triggerActiveProvider?.logoKind}
+                customIcon={triggerActiveProvider?.customIcon}
                 colorClass="text-current"
                 withMargin={false}
               />
@@ -5383,6 +5406,7 @@ export function ModelSelector({
               name={triggerActiveProvider?.name}
               routing={triggerActiveProvider?.routing}
               logoKind={triggerActiveProvider?.logoKind}
+              customIcon={triggerActiveProvider?.customIcon}
               colorClass={
                 isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : undefined
               }
@@ -5508,7 +5532,7 @@ export function ModelSelector({
       {showSourceIssue && (showStaleList || onReconnectSource) && !deviceId && (
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-default)] px-3 py-2" role="status">
           <div className="min-w-0 text-12 text-[var(--text-secondary)]">
-            <div className="truncate">{disconnectedProvider ? providerDisplayName(disconnectedProvider, t) : currentProviderId} · {sourceIssueLabel}</div>
+            <div className="truncate">{disconnectedProvider ? providerDisplayName(disconnectedProvider, t) : currentProviderId} · {sourceIssueHeaderLabel}</div>
             {lastConfirmedAt !== undefined && (
               <time dateTime={new Date(lastConfirmedAt).toISOString()}>
                 {t('newChat.modelSelector.source.lastConfirmed', { time: new Date(lastConfirmedAt).toLocaleString(i18n.language) })}

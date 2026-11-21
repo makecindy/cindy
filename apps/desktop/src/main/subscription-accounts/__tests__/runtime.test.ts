@@ -235,6 +235,7 @@ vi.mock('../store.js', () => ({
 import {
   acquireSubscriptionAccount,
   hasUnavailableSubscriptionPoolAccount,
+  isSubscriptionPoolReadUnreachable,
   needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
   readSubscriptionPool,
   readSubscriptionUsage,
@@ -862,6 +863,28 @@ describe('owner-only subscription identity', () => {
       expect(readSubscriptionPoolCodexModels()).toEqual([]);
       expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
     } finally { clock.mockRestore(); }
+  });
+
+  // Unit: a model read that cannot reach OpenAI is reported as a connection problem;
+  // any other failure, and a later success, are not.
+  it('marks a failed model read as unreachable only when the service could not be reached', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(isSubscriptionPoolReadUnreachable('openai')).toBe(false);
+    h.rpc.mockRejectedValueOnce(new AccountServiceUnreachableError('Codex account read timed out'));
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(isSubscriptionPoolReadUnreachable('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    h.rpc.mockRejectedValueOnce(new Error('Invalid Codex model list'));
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(isSubscriptionPoolReadUnreachable('openai')).toBe(false);
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+    expect(isSubscriptionPoolReadUnreachable('openai')).toBe(false);
   });
 
   // Unit: the first launch after an upgrade may have only the CLI cache as evidence.

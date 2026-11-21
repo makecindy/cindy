@@ -14093,6 +14093,8 @@
       "source": {
         "lastConfirmed": "上次重新整理：{{time}}",
         "unconfirmed": "模型清單尚未更新",
+        "unreachable": "連不上 {{source}}",
+        "unreachableDetail": "連不上，請檢查網路",
         "unavailable": "模型無法使用",
         "reconnect": "重新連線",
         "manage": "管理來源",
@@ -17429,7 +17431,8 @@
         "title": "匯入儲存庫自動化",
         "description": "來源：{{workingDir}}。請檢查下方設定。匯入會套用這些變更並啟用新增的自動化，它們可以執行命令、啟動具有完整存取權限的 Agent。請僅匯入你信任的內容。",
         "accept": "確認匯入",
-        "removed": "將刪除：{{names}}"
+        "removed": "將刪除：{{names}}",
+        "fileMissing": "找不到「{{projectName}}」中的自動化檔案，已略過匯入"
       },
       "toast": {
         "summary": "新增 {{inserted}} · 更新 {{updated}} · 刪除 {{deleted}}",
@@ -17526,6 +17529,7 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
         "success": "成功",

@@ -1,6 +1,6 @@
-import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
+import { mcpAppInitialHeight, parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { MCP_APP_MAX_HEIGHT } from '@cindy/maker-shared/mcp-app-controller';
-import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Keyboard, Pressable, StyleSheet, View, type ViewInstance } from 'react-native';
 import { MessageListRevealContext, MessageListKeepKeyboardContext } from './messageListReveal';
 import { useTranslation } from 'react-i18next';
@@ -9,10 +9,11 @@ import { Text } from '@/components/AppText';
 import { useTheme, textStyles, fontWeight, radius, spacing } from '@/theme';
 import { useMcpAppViews, NativeMcpAppSlot, mcpAppSurfaceAvailable } from './McpAppViews';
 import type { McpAppView, McpAppViewState } from './mcpAppView';
-import { MCP_APP_DEFAULT_HEIGHT, getMcpAppHeight } from './mcpAppView';
-import { getMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { MCP_APP_DEFAULT_HEIGHT } from './mcpAppView';
+import { getLoadedMobileHeights, getMobileHeights, subscribeMobileHeights } from './mcpAppMeasuredHeights';
 
 interface McpAppCardProps {
+  initialHeight?: unknown;
   plugin?: unknown; customMcp?: unknown;
   deviceId?: string; sessionId: string; clientId: string; title: string; active?: boolean; fallbackText?: string;
 }
@@ -39,24 +40,29 @@ export function McpAppCard(props: McpAppCardProps) {
       <Text style={[styles.error, { color: colors.textSecondary }]}>{t('mcpApps.sharedTaskReadOnly')}</Text>
     </View>
   );
+  return <MeasuredMcpAppCard {...props} />;
+}
+
+function MeasuredMcpAppCard(props: McpAppCardProps) {
+  // The cache hydrates asynchronously. Keep the normal 320/declared placeholder
+  // visible while it loads, then reuse the hydrated value on the next open.
+  useSyncExternalStore(subscribeMobileHeights, getLoadedMobileHeights);
   return <InteractiveMcpAppCard {...props} />;
 }
 
-function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = true, fallbackText, plugin, customMcp }: McpAppCardProps) {
+function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = true, fallbackText, plugin, customMcp, initialHeight }: McpAppCardProps) {
   const host = useMcpAppViews();
   const { colors, mode } = useTheme();
   const { t, i18n } = useTranslation();
   const [attempt, setAttempt] = useState(0);
   const [view, setView] = useState<McpAppView>();
-  // Only the initial state needs the remembered height; avoid re-reading it on every render.
-  const [state, setState] = useState<McpAppViewState>(() => ({ loading: true,
-    height: (deviceId ? getMcpAppHeight(getMobileAuthOwner().generation, deviceId, sessionId, clientId) : undefined)
-      ?? MCP_APP_DEFAULT_HEIGHT }));
+  const declaredHeight = mcpAppInitialHeight(initialHeight) ?? MCP_APP_DEFAULT_HEIGHT;
+  const [state, setState] = useState<McpAppViewState>({ loading: true, height: declaredHeight });
   const foreground = host?.foreground ?? false;
   // Keyboard resizing can temporarily remove the row from the visible set.
   // Its focused document must survive that transition, including unsaved input.
   const surfaceActive = active || !!state.focus;
-  const width = useRef(1);
+  const width = useRef(0);
   const frame = useRef<ViewInstance>(null);
   const reveal = useContext(MessageListRevealContext);
   const keepKeyboard = useContext(MessageListKeepKeyboardContext);
@@ -101,9 +107,11 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   const open = host?.open;
   const hasHost = !!host;
   useEffect(() => {
+    const measuredWidth = frame.current?.getBoundingClientRect?.().width ?? width.current;
     setView(undefined);
     if (!surfaceActive || (hasHost && !foreground)) {
-      setState((previous) => ({ height: previous.height, loading: false }));
+      const remembered = deviceId && getMobileHeights().get(JSON.stringify([deviceId, sessionId, clientId]), measuredWidth);
+      setState({ height: remembered || declaredHeight, loading: false });
       return;
     }
     if (!mcpAppSurfaceAvailable || !open) {
@@ -114,8 +122,8 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
       setState((previous) => ({ ...previous, loading: false, error: 'mcpApps.loadFailed' }));
       return;
     }
-    const current = open(deviceId, sessionId, clientId, contextRef.current);
-    current.setWidth(width.current);
+    const current = open(deviceId, sessionId, clientId, contextRef.current, declaredHeight);
+    current.setWidth(measuredWidth);
     setView(current);
     const unsubscribe = current.subscribe(setState);
     return () => {
@@ -124,7 +132,7 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
       // card/route unmount. Its close() removes that same View only at the bound.
       void current.close();
     };
-  }, [open, hasHost, foreground, deviceId, sessionId, clientId, attempt, surfaceActive]);
+  }, [open, hasHost, foreground, deviceId, sessionId, clientId, attempt, surfaceActive, declaredHeight]);
   useEffect(() => { if (!view?.closing) void view?.controller.context(context).catch(() => {}); }, [view, context]);
   const { error, loading, height, filesUnavailable } = state;
   return (
