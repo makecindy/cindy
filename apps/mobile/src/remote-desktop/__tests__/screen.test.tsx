@@ -20,7 +20,8 @@ import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
 import { resolveMobileInvokeTimeoutMs } from "@/device-link/invokeTimeouts";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { darkColors, lightColors } from "@/theme/tokens";
+import { withTiming } from "react-native-reanimated";
+import { darkColors, lightColors, motionDuration } from "@/theme/tokens";
 
 // Node >= 25 replaces jsdom's localStorage (AsyncStorage's web fallback) with a
 // method-less stub, so keep storage in memory like the other mobile tests.
@@ -57,6 +58,11 @@ vi.mock("expo-blur", async () => ({
   BlurView: (await import("react-native")).View,
 }));
 
+const motionPreference = vi.hoisted(() => ({ value: false as boolean | null }));
+vi.mock("@/hooks/useReduceMotion", () => ({
+  useReduceMotionEnabled: () => motionPreference.value,
+}));
+
 vi.mock("react-native-reanimated", async () => {
   const { View, ScrollView } = await import("react-native");
   const { useRef } = await import("react");
@@ -66,10 +72,11 @@ vi.mock("react-native-reanimated", async () => {
     useAnimatedScrollHandler: (fn: unknown) => fn,
     useSharedValue: (value: number) => useRef({ value }).current,
     runOnJS: (fn: () => void) => fn,
-    withTiming: (value: number, _: unknown, done?: (finished: boolean) => void) => {
+    Easing: { bezier: (...points: number[]) => points },
+    withTiming: vi.fn((value: number, _: unknown, done?: (finished: boolean) => void) => {
       done?.(true);
       return value;
-    },
+    }),
   };
 });
 
@@ -532,6 +539,7 @@ const visibleInputHint = () =>
 const button = (key: string) =>
   host.querySelector<HTMLButtonElement>(`[aria-label="remoteDesktop.${key}"]`)!;
 beforeEach(async () => {
+  motionPreference.value = false;
   liveKeyboard.value = 0;
   storage.items.clear();
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -4888,6 +4896,27 @@ describe("remote desktop controls", () => {
     act(() => endDrag({ translationY: 8, velocityY: 100 }));
     expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).not.toBeNull();
     act(() => endDrag({ translationY: 240, velocityY: 300 }));
+    expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).toBeNull();
+    expect(sent()).toContainEqual(expect.objectContaining({ type: "events", events: [{ kind: "release" }] }));
+  });
+  // Unit regression: the previous deck always animated for 140 ms, including
+  // reduced-motion and unknown preferences. Existing swipe coverage only checked
+  // the terminal state. Exercise the screen's drag callbacks and animation port.
+  it.each([false, true, null])("respects reduced motion (%s) for deck settle and cancellation", async (preference) => {
+    motionPreference.value = preference;
+    await connect();
+    act(() => button("keyboard").click());
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
+    const endDrag = deckPan.onEnd.mock.calls.at(-1)![0];
+    const finalize = deckPan.onFinalize.mock.calls.at(-1)![0];
+    const duration = preference === false ? motionDuration.fast : 0;
+    act(() => endDrag({ translationY: 8, velocityY: 100 }));
+    expect(withTiming).toHaveBeenLastCalledWith(0, expect.objectContaining({ duration }), expect.any(Function));
+    expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).not.toBeNull();
+    act(() => finalize({}, false));
+    expect(withTiming).toHaveBeenLastCalledWith(0, expect.objectContaining({ duration }));
+    act(() => endDrag({ translationY: 240, velocityY: 300 }));
+    expect(withTiming).toHaveBeenLastCalledWith(expect.any(Number), expect.objectContaining({ duration }), expect.any(Function));
     expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).toBeNull();
     expect(sent()).toContainEqual(expect.objectContaining({ type: "events", events: [{ kind: "release" }] }));
   });

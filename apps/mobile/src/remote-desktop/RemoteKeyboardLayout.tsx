@@ -7,6 +7,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import Animated, {
+  Easing,
   runOnJS,
   useAnimatedScrollHandler,
   useAnimatedStyle,
@@ -14,6 +15,8 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "@/platform/gestureHandler";
+import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
+import { motionDuration, motionEasing } from "@/theme/tokens";
 import { useComposerDockKeyboardHeight } from "@/session/useComposerDockKeyboardHeight";
 
 function useZeroKeyboardHeight() {
@@ -38,6 +41,8 @@ export function useRemoteKeyboardMotion({
   dismiss: () => void;
   systemDock: "none" | "overlay" | "spacer";
 }) {
+  const reduceMotion = useReduceMotionEnabled();
+  const duration = reduceMotion === false ? motionDuration.fast : 0;
   const systemHeight = useSystemHeight();
   const offset = useSharedValue(0);
   useEffect(() => {
@@ -59,16 +64,21 @@ export function useRemoteKeyboardMotion({
             (e.translationY > height / 3 || e.velocityY > 400);
           offset.value = withTiming(
             close ? height : 0,
-            { duration: 140 },
+            { duration, easing: Easing.bezier(...motionEasing.move) },
             (finished) => {
               if (finished && close) runOnJS(dismiss)();
             },
           );
         })
         .onFinalize((_, success) => {
-          if (!success) offset.value = withTiming(0, { duration: 140 });
+          if (!success) {
+            offset.value = withTiming(0, {
+              duration,
+              easing: Easing.bezier(...motionEasing.move),
+            });
+          }
         }),
-    [active, height, offset, dismiss],
+    [active, height, offset, dismiss, duration],
   );
   const panelStyle = useAnimatedStyle(() => ({
     transform: [
