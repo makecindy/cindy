@@ -37,6 +37,25 @@ describe('new task remote Agent wiring', () => {
 });
 
 describe('session Agent switch UI wiring', () => {
+  // L342 protocol/ordering guard. Dropping a screen call site's protection
+  // lets an older host patch replace a newer in-flight pick. The real frame
+  // and pending-write behavior are covered in historyViewProvider.test.tsx.
+  it('protects both model pickers until their optimistic settings writes settle', () => {
+    const source = readSource('app/sessions/[sessionId].tsx');
+    const routeControls = source.slice(source.indexOf('const runControlAction = useCallback'),
+      source.indexOf('const writeSessionAgentSwitchIntent = useCallback'));
+    expect(routeControls).toMatch(/if \(opts\?\.protectModelSelection\) \{\s*releaseModelWrite = sessionPendingWrites\.track\(sessionId, Object\.keys\(optimisticPatch\)\);/);
+    expect(routeControls).toMatch(/finally \{\s*releaseModelWrite\?\.\(\);/);
+    for (const [picker, next] of [
+      ['selectComposerModelRow', 'selectUnifiedComposerModel'],
+      ['selectUnifiedComposerModel', 'selectComposerPluginEngine'],
+    ]) {
+      const start = source.indexOf(`const ${picker} = useCallback`);
+      const end = source.indexOf(`const ${next} = useCallback`, start);
+      expect(source.slice(start, end)).toContain("}, { recover: 'refetch', protectModelSelection: true });");
+    }
+  });
+
   it('locks guest model controls while preserving message and stop controls', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     const modelAccess = source.slice(source.indexOf('const canConfigureSessionModel'), source.indexOf('// 共享模型自造'));

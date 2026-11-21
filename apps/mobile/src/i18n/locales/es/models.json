@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "El cambio de proveedor de modelo ya está en vigor.",
-    "failed": "Error en el cambio de proveedor de modelo. Elige el modelo de nuevo."
+    "failed": "Error en el cambio de proveedor de modelo. Elige el modelo de nuevo.",
+    "previousSettingsRetained": "No se completó el cambio. La tarea seguirá usando la configuración anterior."
   },
   "agentSwitch": {
     "browseAccessibility": "Explorar modelos {{agent}}"

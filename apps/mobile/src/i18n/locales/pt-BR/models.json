@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "A troca de provedor de modelo entrou em vigor.",
-    "failed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente."
+    "failed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente.",
+    "previousSettingsRetained": "A troca não foi concluída. A tarefa continuará usando as configurações anteriores."
   },
   "agentSwitch": {
     "browseAccessibility": "Explorar modelos de {{agent}}"

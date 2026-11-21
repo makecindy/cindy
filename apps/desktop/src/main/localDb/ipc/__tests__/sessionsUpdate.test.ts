@@ -197,6 +197,9 @@ vi.mock('../../../maker-host/session-context-budget-store.js', async (importOrig
   return { ...actual, writeSessionContextWindowBudget: vi.fn(actual.writeSessionContextWindowBudget) };
 });
 
+import { PendingCredentialSwitchService } from '../../../maker-ipc/pendingCredentialSwitch.js';
+import { createSessionRuntimeCleanup } from '../../../maker-ipc/sessionRuntimeProjection.js';
+
 import {
   applyAgentSwitchToSessionRow,
   broadcastSessionPatched,
@@ -2495,6 +2498,39 @@ describe('terminal intent during session creation', () => {
       expect(f.broadcast.mock.calls.map(call => call[0]).sort()).toEqual(['cc-local', 'codex-local']);
     } finally { oldHold.resolve(); for (const hold of f.holds.values()) hold.resolve(); await Promise.all([old, sibling, terminal]); }
   });
+  // L342, SQLite tier. The real task-status writer must retire the deferred
+  // credential registration before a later close or its timer can apply it.
+  it.each(['archived', 'deleted'] as const)('%s retires a deferred credential selection without dispatch', async status => {
+    const sessionId = 'codex-local';
+    const wake = vi.fn();
+    const persistRoute = vi.fn(async () => {});
+    const credential = new PendingCredentialSwitchService({
+      maker: { listActiveSessions: () => [], closeSession: async () => {} },
+      onApplied: wake,
+      persistRoute,
+    });
+    setSessionRuntimeCleanup(createSessionRuntimeCleanup({
+      cancelPendingRemoteStart: () => {},
+      discardWorkingDirectoryRecovery: () => {},
+      clearDeferredCredentialSelection: id => credential.clearDeferredSelection(id),
+      broadcastSessionRuntimeProjection: async () => {},
+      log: { debug() {} },
+    }));
+    credential.register(sessionId, {
+      model: 'next', providerId: 'next-source', agentKind: 'codex',
+      deferredSelection: { agentKind: 'codex', effort: 'high', fastMode: true, clearScheduledBaseline: false },
+    });
+    try {
+      expect((await patchSessionMetaInDb(sessionId, { status })).status).toBe(status);
+      expect(credential.has(sessionId)).toBe(false);
+      await credential.onTurnSettled(sessionId);
+      expect(persistRoute).not.toHaveBeenCalled();
+      expect(wake).not.toHaveBeenCalled();
+    } finally {
+      credential.clear(sessionId);
+    }
+  });
+
   it('patch-meta checks authorization before cancelling a held creation', async () => {
     const f = creationFixture(); let failure: unknown, denied: unknown;
     const opening = f.start().catch(error => { failure = error; });

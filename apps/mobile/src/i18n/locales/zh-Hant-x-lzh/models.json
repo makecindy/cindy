@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "模型來源之易已生效。",
-    "failed": "模型來源之易未成，請重擇。"
+    "failed": "模型來源之易未成，請重擇。",
+    "previousSettingsRetained": "此次更易未成，任務仍循舊設。"
   },
   "agentSwitch": {
     "browseAccessibility": "覽 {{agent}} 模型"

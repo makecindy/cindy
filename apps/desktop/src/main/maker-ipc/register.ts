@@ -1541,7 +1541,7 @@ import {
   type PendingCredentialSwitchAccessPorts,
 } from './pendingCredentialSwitchAccess.js';
 import { createApplyPiPendingSelection, createPendingCredentialSwitchRouteReader, createPendingCredentialSwitchService } from './pendingCredentialSwitchAssembly.js';
-import { PendingCredentialSwitchService, type PendingCredentialSwitchDeps } from './pendingCredentialSwitch.js';
+import { PendingCredentialSwitchService, type PendingCredentialSwitchDeps, projectDeferredCredentialSwitchIntent } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
   runMemoryChangeWithCodexRestart,
@@ -6621,6 +6621,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pendingWorkerQuestion: id => isKnownOrcaWorkerSession(id) ? hasPendingWorkerQuestion(id) : undefined,
   }));
   setSessionRuntimeCleanup(createSessionRuntimeCleanup({
+    clearDeferredCredentialSelection: sessionId => pendingCredentialSwitchHolder?.clearDeferredSelection(sessionId),
     cancelPendingRemoteStart,
     discardWorkingDirectoryRecovery: (sessionId) => workingDirectoryRecovery.discard(sessionId),
     broadcastSessionRuntimeProjection,
@@ -11340,6 +11341,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     applyAgentSwitchToDb: createAgentSwitchDbApply(applyAgentSwitchToSessionRow, resolveConfiguredContextWindow),
     setSessionProvider,
     supersedePendingCredentialSwitch: clearPendingCredentialSwitchForSession,
+    projectDeferredCredentialSwitchIntent: (sessionId) =>
+      projectDeferredCredentialSwitchIntent(getPendingCredentialSwitchTarget(sessionId)),
     insertBoundaryMessage: createAgentSwitchBoundaryInsert(createDbMessage),
     applyResumeFallbackAtomically: applyAgentSwitchResumeFallbackAtomically,
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
@@ -11672,7 +11675,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (signal?.aborted) throw new Error('Scheduled model selection aborted');
       const result = await applySessionRuntimeSelection(sessionId, route.model, route.providerId,
         { effort: route.effort, fastMode: route.fastMode },
-        { source: 'user', configStaged: true, sessionLockHeld: true, applyingUserSelectionOnSend: true });
+        { source: 'user', configStaged: true, sessionLockHeld: true, applyingUserSelectionOnSend: true }).catch(error => {
+        if (isCredentialModeSwitchBusyError(error)) {
+          throw new ScheduledModelSelectionBusyError('Scheduled model selection deferred', { cause: error });
+        }
+        throw error;
+      });
       if (result.deferred) throw new ScheduledModelSelectionBusyError('Scheduled model selection deferred');
       if (result.superseded || runtimeSelectionRequiresModelWindowConfirmation(result)) {
         throw new Error('Scheduled model selection could not be applied');

@@ -14441,6 +14441,7 @@
       "steerNotSent": "전송되지 않았습니다. 지금은 끼어들기를 사용할 수 없습니다. 초안은 유지됩니다.",
       "credentialSwitchApplied": "모델 제공자 전환이 적용되었습니다.",
       "credentialSwitchFailed": "모델 제공자 전환에 실패했습니다. 모델을 다시 선택해 주세요.",
+      "credentialSwitchKeptSettings": "전환이 완료되지 않았습니다. 작업에는 이전 설정이 계속 적용됩니다.",
       "modelSwitchContextGuard": {
         "warnToast": "이 대화는 이미 {{used}}를 사용 중입니다. 바꾸면 새 모델 용량({{total}})의 약 {{pct}}%가 됩니다",
         "condensedToast": "새 모델에 맞게 이전 대화를 압축합니다. 전체 대화 기록은 계속 볼 수 있습니다.",

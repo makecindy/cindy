@@ -14611,6 +14611,7 @@
       "steerNotSent": "Message non envoyé. La réorientation est temporairement indisponible ; votre brouillon a été conservé.",
       "credentialSwitchApplied": "Le changement de fournisseur de modèles est désormais effectif.",
       "credentialSwitchFailed": "Échec du changement de fournisseur de modèles. Choisissez à nouveau le modèle.",
+      "credentialSwitchKeptSettings": "Le changement n’a pas abouti. La tâche continuera d’utiliser ses paramètres précédents.",
       "modelSwitchContextGuard": {
         "warnToast": "Cette conversation utilise déjà {{used}}, soit environ {{pct}} % de la capacité de {{total}} du nouveau modèle",
         "condensedToast": "Les parties précédentes de la conversation seront condensées pour le nouveau modèle. L’historique complet reste consultable.",

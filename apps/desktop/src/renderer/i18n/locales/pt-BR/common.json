@@ -14611,6 +14611,7 @@
       "steerNotSent": "Mensagem não enviada. O encaminhamento está temporariamente indisponível; seu rascunho foi mantido.",
       "credentialSwitchApplied": "A troca de provedor de modelo entrou em vigor.",
       "credentialSwitchFailed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente.",
+      "credentialSwitchKeptSettings": "A troca não foi concluída. A tarefa continuará usando as configurações anteriores.",
       "modelSwitchContextGuard": {
         "warnToast": "Esta conversa já usa {{used}} — cerca de {{pct}}% da capacidade de {{total}} do novo modelo",
         "condensedToast": "As partes anteriores da conversa serão condensadas para caber no novo modelo. O histórico completo continua disponível.",

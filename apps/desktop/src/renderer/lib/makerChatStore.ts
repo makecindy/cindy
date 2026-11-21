@@ -2602,6 +2602,15 @@ export function builtinAgentSwitchIntent(
   return intent && intent.target !== 'acp' ? (intent as BuiltinAgentSwitchIntentRecord) : null;
 }
 
+/** Same-engine Claude/Codex previews are applied only by the task's host. */
+export function isSameEngineNonPiModelIntent(
+  intent: BuiltinAgentSwitchIntentRecord | null,
+  agentKind: AgentSwitchIntentRecord['target'],
+): boolean {
+  return !!intent && (agentKind === 'claude-code' || agentKind === 'codex') &&
+    intent.target === agentKind && intent.agentDeviceId === undefined;
+}
+
 /** 待切到插件引擎的意图(下一条消息发送时生效)。 */
 export function pluginEngineAgentSwitchIntent(
   intent: AgentSwitchIntentRecord | null | undefined,
@@ -15044,6 +15053,7 @@ export function buildCreateOptsForCurrentSession(
 ): AgentInputCreateOpts {
   const current = getOrCreateState(sessionId);
   const deviceLinkRemote = isRemoteSessionSticky(sessionId);
+  const intent = builtinAgentSwitchIntent(current.agentSwitchIntent);
   return {
     agentKind: current.agentKind,
     workingDir,
@@ -15063,9 +15073,9 @@ export function buildCreateOptsForCurrentSession(
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),
-    // 待切到插件引擎时 createOpts 仍描述当前引擎：主进程在发送事务里先完成切换，再按任务行启动插件引擎。
-    ...(builtinAgentSwitchIntent(current.agentSwitchIntent)
-      ? { providerId: current.agentSwitchIntent!.providerId }
+    // Same-engine credential previews and plugin-engine intents keep the committed source in the send snapshot.
+    ...(intent && !isSameEngineNonPiModelIntent(intent, current.agentKind)
+      ? { providerId: intent.providerId }
       : current.sessionProviderId !== undefined
         ? { providerId: current.sessionProviderId }
         : {}),

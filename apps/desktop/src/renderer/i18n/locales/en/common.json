@@ -14495,6 +14495,7 @@
       "steerNotSent": "Message not sent. Steer is temporarily unavailable; your draft has been kept.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "credentialSwitchFailed": "Model provider switch failed. Choose the model again.",
+      "credentialSwitchKeptSettings": "The switch didn’t complete. The task will keep using its previous settings.",
       "modelSwitchContextGuard": {
         "warnToast": "This conversation already uses {{used}} — about {{pct}}% of the new model's {{total}} capacity",
         "condensedToast": "Earlier parts of the conversation will be condensed for the new model. Your full conversation history stays available.",

@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "Model provider switch is now in effect.",
-    "failed": "Model provider switch failed. Choose the model again."
+    "failed": "Model provider switch failed. Choose the model again.",
+    "previousSettingsRetained": "The switch didn’t complete. The task will keep using its previous settings."
   },
   "agentSwitch": {
     "browseAccessibility": "Browse {{agent}} models"

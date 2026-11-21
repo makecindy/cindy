@@ -85,6 +85,8 @@ const desktopDbExclude = [
 const desktopGitIntegrationInclude = [
   'src/main/**/*.git-integration.test.ts',
 ];
+const desktopCredentialCompatibilityTest =
+  'src/renderer/components/new-chat/__tests__/l342SignedCompatibility.test.tsx';
 const makerCoreIntegrationInclude = [
   'src/agents/codex/*.integration.test.ts',
   'src/agents/claude-code/__tests__/*.integration.test.ts',
@@ -394,6 +396,7 @@ export default {
             '**/*.git-integration.test.ts',
             '**/*.integration.test.ts',
             '**/*.e2e.test.ts',
+            desktopCredentialCompatibilityTest,
             'src/main/localDb/**',
             'src/main/__tests__/*Migration.test.ts',
             'src/main/__tests__/schemaDriftRepair.test.ts',
@@ -410,7 +413,7 @@ export default {
         },
         integration: {
           status: 'manual',
-          reason: 'Local Agent protocol tests use real sockets; Skill archive size regressions perform large encrypted disk transfers; the Host Pi package parity runs the bundled Pi binary.',
+          reason: 'Local Agent protocol tests use real sockets; Skill archive regressions transfer large encrypted files; Host compatibility and Pi parity run isolated subprocesses.',
           execution: 'exclusive',
           coverage: 'allowlist',
           command: vitestBin('run', '--maxWorkers=2'),
@@ -420,6 +423,7 @@ export default {
             'src/main/bot-import/__tests__/skillArchive.integration.test.ts',
             'src/main/maker-host/__tests__/codexSmartNamespace.integration.test.ts',
             'src/main/maker-host/__tests__/hostPiPackagesParity.integration.test.ts',
+            desktopCredentialCompatibilityTest,
           ],
         },
         'git-integration': {
