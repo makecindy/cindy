@@ -79,6 +79,8 @@ export interface RunMarker {
   startedAt: string; // ISO
   /** 精确的 OS 进程创建时刻(epoch ms),用于 PID 复用身份比较;旧标记可能缺失。 */
   processStartedAtMs?: number;
+  /** 最近一次落盘时基于 process.uptime() 的存活毫秒数;旧标记可能缺失。 */
+  aliveMs?: number;
   heartbeatAt: string; // ISO
   heartbeatIntervalMs: number;
   state: RunMarkerState;
@@ -180,6 +182,31 @@ function defaultIsPidAlive(pid: number): boolean {
   }
 }
 
+function defaultAliveMs(): number | null {
+  try {
+    const uptimeMs = process.uptime() * 1000;
+    return Number.isFinite(uptimeMs) && uptimeMs >= 0 ? Math.round(uptimeMs) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 优先使用与 wall clock 无关的存活时长;旧标记退回 startedAt/heartbeatAt。 */
+export function markerAliveSeconds(marker: RunMarker): number | null {
+  if (
+    typeof marker.aliveMs === 'number' &&
+    Number.isFinite(marker.aliveMs) &&
+    marker.aliveMs >= 0
+  ) {
+    return Math.round(marker.aliveMs / 1000);
+  }
+  const started = Date.parse(marker.startedAt);
+  const lastBeat = Date.parse(marker.heartbeatAt);
+  return Number.isFinite(started) && Number.isFinite(lastBeat)
+    ? Math.round((lastBeat - started) / 1000)
+    : null;
+}
+
 /**
  * run marker 的读写与尸检核心。不 import electron —— 依赖全部注入,单测可在
  * os.tmpdir 下直接驱动(规则 14 / 23)。
@@ -219,6 +246,8 @@ export class RunMarkerStore {
   private persist(): void {
     if (!this.current) return;
     try {
+      const aliveMs = defaultAliveMs();
+      if (aliveMs !== null) this.current.aliveMs = aliveMs;
       fs.mkdirSync(this.dir, { recursive: true });
       const tmp = `${this.markerPath}.${this.pid}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(this.current));
@@ -512,12 +541,7 @@ function logPreviousRunReports(reports: PreviousRunReport[]): boolean {
         hadAbnormal = true;
         // 心跳跑在 main event loop:若进程死前 event loop 已被卡死(hang),
         // heartbeatAt 会冻结在卡死时刻 —— 与「用户看到 app 消失」的时间差即 hang 时长。
-        const started = Date.parse(m!.startedAt);
-        const lastBeat = Date.parse(m!.heartbeatAt);
-        const aliveSec =
-          Number.isFinite(started) && Number.isFinite(lastBeat)
-            ? Math.round((lastBeat - started) / 1000)
-            : null;
+        const aliveSec = markerAliveSeconds(m!);
         log.error(
           `[exit-diagnosis] previous run exited abnormally with NO exit record: pid=${m!.pid} ` +
             `v=${m!.version} startedAt=${m!.startedAt} lastHeartbeatAt=${m!.heartbeatAt}` +
