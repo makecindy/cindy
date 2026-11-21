@@ -204,8 +204,6 @@ async function pruneEvidence(outputRoot, current) {
 }
 
 const SCRATCH_PREFIX = 'cindy-ui-check-';
-// Folders from runners that predate the owner PID in the name; no live check runs this long.
-const LEGACY_SCRATCH_MS = 24 * 60 * 60 * 1000;
 
 const processAlive = (pid) => {
   try {
@@ -229,10 +227,9 @@ export async function sweepScratch(tmp = os.tmpdir()) {
       .map(async (entry) => {
         const dir = path.join(tmp, entry.name);
         const owner = /^(\d+)-/.exec(entry.name.slice(SCRATCH_PREFIX.length))?.[1];
-        const stale = owner
-          ? !processAlive(Number(owner))
-          : Date.now() - (await stat(dir)).mtimeMs > LEGACY_SCRATCH_MS;
-        if (stale) await rm(dir, { recursive: true, force: true, maxRetries: 3 });
+        // Legacy previews may remain open indefinitely; without an owner, leave them alone.
+        if (owner && !processAlive(Number(owner)))
+          await rm(dir, { recursive: true, force: true, maxRetries: 3 });
       })
       .map((removal) => removal.catch(() => {})),
   );
