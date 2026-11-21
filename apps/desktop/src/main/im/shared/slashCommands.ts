@@ -36,7 +36,7 @@ import {
 import { startThreadControlFlow } from './controlFlow';
 import { enterControl } from './controlState';
 import { bindingStore, executeDetach } from '../binding';
-import type { IdentityKey, InteractiveCardSpec } from '@cindy/im';
+import { decodeFeishuLaneUserId, type IdentityKey, type InteractiveCardSpec } from '@cindy/im';
 import type { ImChannelAdapter } from './types';
 import {
   permissionModeCommandContext,
@@ -91,6 +91,17 @@ export function createSlashHandlers(
   turnRunner: ImTurnRunner,
 ): ImSlashHandlers {
   const { im, output, ui, channel, threadScoped } = adapter;
+  const feishuControlContext = (userId: string): {
+    chatKind?: 'group' | 'direct';
+    controlUserId?: string;
+  } => (
+    channel === 'feishu'
+      ? {
+          chatKind: decodeFeishuLaneUserId(userId) ? 'group' : 'direct',
+          controlUserId: userId,
+        }
+      : {}
+  );
   const richIm = output.kind === 'rich-card' ? output.im : null;
   const log = createLogger(`im:${channel}:slash`);
   // threadScoped 渠道的 thread 文案组 — orchestrator 接线期已断言存在
@@ -509,6 +520,7 @@ export function createSlashHandlers(
           botAppId: ctx.botContextId,
           projects,
           currentAttachedTitle,
+          ...feishuControlContext(ctx.userId),
         });
         const sent = await safeSendCard(ctx, spec);
         if (sent) {
@@ -531,6 +543,7 @@ export function createSlashHandlers(
         const spec = cards.buildRecentSessionPickerCard({
           botAppId: ctx.botContextId,
           sessions: recent,
+          ...feishuControlContext(ctx.userId),
         });
         try {
           await safeSendCard(ctx, spec);

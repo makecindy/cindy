@@ -15,6 +15,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChannelIM, IMCardActionEvent } from '@cindy/im';
+import { enterControl, exitControl, isInControl } from '../controlState';
 
 const mocks = vi.hoisted(() => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -184,6 +185,8 @@ const CONTROL_NEW: Partial<IMCardActionEvent> = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  exitControl('cli_abc', 'ou_owner');
+  exitControl('cli_abc', 'g/oc_chat1/omt_t1');
   activateImAccountBoundary();
   mocks.getMaker.mockReturnValue({
     createSession: mocks.createSession,
@@ -249,6 +252,53 @@ describe('飞书群卡片 lane 丢失时的 /ctr fail-closed', () => {
       'sess-target',
       expect.anything(),
     );
+  });
+
+  it('飞书单聊 chatId 也是 oc_ 时仍按私聊放行, 不把接管判成失效群卡', async () => {
+    const im = makeIm();
+
+    await press(im, {
+      ...SESSION_PICK,
+      chatId: 'oc_p2p',
+      senderId: 'ou_owner',
+      payload: { ...SESSION_PICK.payload, chatKind: 'direct', controlUserId: 'ou_owner' },
+    });
+
+    expect(mocks.bindingAttach).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'feishu', userId: 'ou_owner' }),
+      'sess-target',
+      expect.anything(),
+    );
+  });
+
+  it('无 controlUserId 的旧群卡不会误清另一场私聊 /ctr', async () => {
+    const im = makeIm();
+    enterControl('cli_abc', 'ou_owner');
+
+    await press(im, { ...SESSION_PICK, senderId: 'ou_owner' });
+
+    expect(mocks.bindingAttach).not.toHaveBeenCalled();
+    expect(isInControl('cli_abc', 'ou_owner')).toBe(true);
+  });
+
+  it('失效群卡被拒后释放 /ctr 锁, 用户可以再发消息', async () => {
+    const im = makeIm();
+    enterControl('cli_abc', 'g/oc_chat1/omt_t1');
+    enterControl('cli_abc', 'ou_owner');
+
+    await press(im, {
+      ...SESSION_PICK,
+      senderId: 'ou_owner',
+      payload: {
+        ...SESSION_PICK.payload,
+        chatKind: 'group',
+        controlUserId: 'g/oc_chat1/omt_t1',
+      },
+    });
+
+    expect(mocks.bindingAttach).not.toHaveBeenCalled();
+    expect(isInControl('cli_abc', 'g/oc_chat1/omt_t1')).toBe(false);
+    expect(isInControl('cli_abc', 'ou_owner')).toBe(true);
   });
 });
 

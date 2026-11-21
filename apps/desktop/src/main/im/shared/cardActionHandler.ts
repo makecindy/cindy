@@ -149,13 +149,42 @@ export function createCardActionHandler(
    * 都是绑定那个项目」)。绑定错身份比不绑定糟得多 —— fail-closed, 让用户在目标
    * 话题里重发 /ctr 拿一张新卡。
    *
-   * 判据: 群卡(chatId 为 `oc_` 前缀)+ senderId 不是 lane。DM 卡(chatId 是对方
-   * open_id)与改投 owner 私聊的卡本就该按 open_id 记账, 不受影响。
+   * 判据: 发卡时写入的 chatKind=group, 且 senderId 不是 lane。飞书单聊的
+   * chatId 同样以 oc_ 开头, 不能用前缀区分。没有 chatKind 的旧群卡仍按 oc_
+   * fail-closed, 避免重启后的老卡把接管挂到点击人的私聊身份上。
    */
   function isGroupCardWithLostLane(event: IMCardActionEvent): boolean {
     if (channel !== 'feishu') return false;
-    if (!event.chatId.startsWith('oc_')) return false;
-    return decodeFeishuLaneUserId(event.senderId) === null;
+    if (decodeFeishuLaneUserId(event.senderId) !== null) return false;
+    if (event.payload.chatKind === 'direct') return false;
+    if (event.payload.chatKind === 'group') return true;
+    return event.chatId.startsWith('oc_');
+  }
+
+  function controlCardContext(event: IMCardActionEvent): {
+    chatKind?: 'group' | 'direct';
+    controlUserId?: string;
+  } {
+    const chatKind = event.payload.chatKind === 'group' || event.payload.chatKind === 'direct'
+      ? event.payload.chatKind
+      : undefined;
+    const controlUserId = typeof event.payload.controlUserId === 'string' && event.payload.controlUserId
+      ? event.payload.controlUserId
+      : undefined;
+    return {
+      ...(chatKind ? { chatKind } : {}),
+      ...(controlUserId ? { controlUserId } : {}),
+    };
+  }
+
+  function releaseLostLaneControl(event: IMCardActionEvent): void {
+    const botAppId = String(event.payload.botAppId ?? '');
+    if (!botAppId) return;
+    // 群卡回调的 senderId 在重启后会落成点击人的 open_id。只释放卡片明确
+    // 记录的身份；旧卡没有该字段时不能拿 senderId 猜，否则会误清另一场私聊 /ctr。
+    // 重启本就清空旧锁，因此无需为旧卡兜底释放一个无法确认的身份。
+    const locked = event.payload.controlUserId;
+    if (typeof locked === 'string' && locked) exitControl(botAppId, locked);
   }
 
   /** 认不出话题的群卡: 原地收口成「重发 /ctr」提示, 不建任何绑定。 */
@@ -171,6 +200,7 @@ export function createCardActionHandler(
     const body =
       ui.cards.control.staleGroupCard ??
       ui.cards.control.attachFailed('card lane unresolved (app restarted)');
+    releaseLostLaneControl(event);
     try {
       await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(body));
     } catch (err) {
@@ -690,6 +720,7 @@ export function createCardActionHandler(
           displayName,
           sessions,
           anchorMessageId: String(event.payload.anchorMessageId ?? '') || undefined,
+          ...controlCardContext(event),
         }),
       );
     } catch (err) {
@@ -734,6 +765,7 @@ export function createCardActionHandler(
           projects,
           currentAttachedTitle,
           anchorMessageId: String(event.payload.anchorMessageId ?? '') || undefined,
+          ...controlCardContext(event),
         }),
       );
     } catch (err) {
@@ -1012,7 +1044,9 @@ export function createCardActionHandler(
     // 万一那道门被放宽时权限档不会静默退回私聊那档(宁可按群算)。
     const isFeishuGroupControl =
       channel === 'feishu' &&
-      (decodeFeishuLaneUserId(event.senderId) !== null || event.chatId.startsWith('oc_'));
+      (event.payload.chatKind === 'group' ||
+        (event.payload.chatKind !== 'direct' &&
+          (decodeFeishuLaneUserId(event.senderId) !== null || event.chatId.startsWith('oc_'))));
     const controlNewPermissionMode = isFeishuGroupControl
       ? readImDefaultSettings('feishu').groupPermissionMode
       : desktopPrefs.permissionMode;
