@@ -5,51 +5,67 @@ import { buildUserProvider } from '../user-provider.js';
 import { BUNDLED_CATALOG } from '../catalog.js';
 
 describe('shared provider discovery', () => {
-  // #11446, unit: real discovery -> existing-connection refresh -> runtime catalog.
-  // Existing cases only use bare image. A single image/jpeg previously persisted false.
-  it.each(['https://opencode.ai/zen/go/v1/models', 'https://opencode.ai/inference/go/v1/models'])(
-    'restores OpenCode Go MIME image input on refresh without changing user denials: %s', sourceUrl => {
-      const id = 'deepseek-v4.1-flash';
-      const discovered = parseModelsListResponse({ data: [
-        { id, modalities: { input: ['text', 'image/jpeg', 'image/png', 'image/gif', 'image/webp'], output: ['text'] } },
-        { id: 'deepseek-v4-pro', modalities: { input: ['text'], output: ['text'] } },
-      ] }, sourceUrl)!;
-      expect(discovered[0].discoveredMetadata).toMatchObject({ supportsImageInput: true,
-        modalities: { input: ['text', 'image'], output: ['text'] } });
-      const previous = [{ id, name: id, discoveredMetadata: { supportsImageInput: false } }];
-      const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels(previous, discovered)));
-      const runtime = { baseUrl: sourceUrl.replace(/\/models$/, ''), models };
-      const provider = buildUserProvider({ id: 'opencode-go', name: 'Go', runtimes: { pi: runtime } });
-      expect(provider.models.pi?.find(model => model.id === id)?.supportsImageInput).toBe(true);
-      expect(provider.models.pi?.find(model => model.id === 'deepseek-v4-pro')?.supportsImageInput).toBe(false);
-      const disabled = buildUserProvider({ id: 'opencode-go', name: 'Go', runtimes: { pi: {
+  // #11446 / #8311, unit: real discovery -> refresh -> JSON save -> three engines.
+  // Previous coverage only exercised Go; Zen's image/jpeg persisted false.
+  it.each([
+    ['https://opencode.ai/zen/go/v1/models', 'deepseek-v4.1-flash', 1_000_000],
+    ['https://opencode.ai/inference/go/v1/models', 'deepseek-v4.1-flash', 1_000_000],
+    ['https://opencode.ai/zen/v1/models', 'deepseek-v4.1-flash-free', 200_000],
+    ['https://opencode.ai/inference/v1/models', 'deepseek-v4.1-flash-free', 200_000],
+  ])('restores OpenCode MIME image input on refresh without changing user denials: %s', (sourceUrl, id, context) => {
+    const discovered = parseModelsListResponse({ data: [
+      { id, limit: { context, output: 32_000 },
+        modalities: { input: ['text', 'image/jpeg', 'image/png', 'image/gif', 'image/webp'], output: ['text'] } },
+      { id: 'deepseek-v4-pro', modalities: { input: ['text'], output: ['text'] } },
+    ] }, sourceUrl)!;
+    expect(discovered[0].discoveredMetadata).toMatchObject({ supportsImageInput: true,
+      modalities: { input: ['text', 'image'], output: ['text'] } });
+    const previous = [{ id, name: id, discoveredMetadata: { supportsImageInput: false } }];
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels(previous, discovered)));
+    const runtime = { baseUrl: sourceUrl.replace(/\/models$/, ''), models };
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'opencode', name: 'OpenCode', runtimes: { [agent]: runtime } });
+      expect(provider.models[agent]?.find(model => model.id === id)).toMatchObject({
+        supportsImageInput: true, contextWindow: context, maxOutput: 32_000,
+      });
+      expect(provider.models[agent]?.find(model => model.id === 'deepseek-v4-pro')?.supportsImageInput).toBe(false);
+      const disabled = buildUserProvider({ id: 'opencode', name: 'OpenCode', runtimes: { [agent]: {
         ...runtime, models: models.map((model: typeof previous[number]) => ({ ...model, supportsImageInput: false })),
       } } });
-      expect(disabled.models.pi?.find(model => model.id === id)?.supportsImageInput).toBe(false);
-      expect(previous[0].discoveredMetadata.supportsImageInput).toBe(false);
-    });
+      expect(disabled.models[agent]?.find(model => model.id === id)?.supportsImageInput).toBe(false);
+    }
+    expect(previous[0].discoveredMetadata.supportsImageInput).toBe(false);
+  });
 
   it('keeps coarse OpenCode media types while excluding document MIME from vision', () => {
-    const [model] = parseModelsListResponse({ data: [{ id: 'media-model', modalities: {
-      input: ['text', 'audio/wav', 'video/mp4', 'application/pdf'], output: ['image/png', 'image'],
-    } }] }, 'https://opencode.ai/zen/go/v1/models')!;
-    expect(model.discoveredMetadata).toMatchObject({ supportsImageInput: false,
-      modalities: { input: ['text', 'audio', 'video'], output: ['image'] } });
+    for (const sourceUrl of ['https://opencode.ai/zen/go/v1/models', 'https://opencode.ai/zen/v1/models']) {
+      const [model] = parseModelsListResponse({ data: [{ id: 'media-model', modalities: {
+        input: ['text', 'audio/wav', 'video/mp4', 'application/pdf'], output: ['image/png', 'image'],
+      } }] }, sourceUrl)!;
+      expect(model.discoveredMetadata).toMatchObject({ supportsImageInput: false,
+        modalities: { input: ['text', 'audio', 'video'], output: ['image'] } });
+    }
   });
 
   it.each([
     { input: ['text', 'application/pdf'], output: ['image/png'] },
     { input: ['text'], output: ['image/png'] },
   ])('does not infer OpenCode image input from PDF or output MIME: %j', modalities => {
-    const [model] = parseModelsListResponse({ data: [{ id: 'private-model', modalities }] },
-      'https://opencode.ai/zen/go/v1/models')!;
-    expect(model.discoveredMetadata?.supportsImageInput).toBe(false);
+    for (const sourceUrl of ['https://opencode.ai/zen/go/v1/models', 'https://opencode.ai/zen/v1/models']) {
+      const [model] = parseModelsListResponse({ data: [{ id: 'private-model', modalities }] },
+        sourceUrl)!;
+      expect(model.discoveredMetadata?.supportsImageInput).toBe(false);
+    }
   });
 
   it.each([
     'https://proxy.example/v1/models',
     'https://opencode.ai.proxy.example/zen/go/v1/models',
     'https://opencode.ai/other/v1/models',
+    'http://opencode.ai/zen/v1/models',
+    'https://opencode.ai:8443/zen/v1/models',
+    'https://opencode.ai.proxy.example/zen/v1/models',
+    'https://proxy.example/zen/v1/models',
     undefined,
   ])('keeps MIME-only proxy declarations conservative: %s', sourceUrl => {
     const [model] = parseModelsListResponse({ data: [{ id: 'private-model',
@@ -61,10 +77,13 @@ describe('shared provider discovery', () => {
 
   it.each([{ supports_image_input: false }, { model_info: { supports_vision: false } },
     { capabilities: { vision: false } }])('keeps explicit OpenCode image denials ahead of MIME: %j', fields => {
-    const [model] = parseModelsListResponse({ data: [{ id: 'private-model', ...fields,
-      modalities: { input: ['text', 'image/jpeg'], output: ['text'] },
-    }] }, 'https://opencode.ai/zen/go/v1/models')!;
-    expect(model.discoveredMetadata?.supportsImageInput).toBe(false);
+    for (const sourceUrl of ['https://opencode.ai/zen/go/v1/models', 'https://opencode.ai/zen/v1/models']) {
+      const [model] = parseModelsListResponse({ data: [{ id: 'private-model', ...fields,
+        modalities: { input: ['text', 'image/jpeg', 'audio/wav'], output: ['text', 'image/png'] },
+      }] }, sourceUrl)!;
+      expect(model.discoveredMetadata).toMatchObject({ supportsImageInput: false,
+        modalities: { input: ['text', 'audio'], output: ['text', 'image'] } });
+    }
   });
 
   it.each([

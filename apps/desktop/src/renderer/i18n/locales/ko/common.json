@@ -14094,6 +14094,8 @@
       "source": {
         "lastConfirmed": "마지막 새로고침: {{time}}",
         "unconfirmed": "모델 목록을 갱신하지 못함",
+        "unreachable": "{{source}}에 연결할 수 없음",
+        "unreachableDetail": "연결할 수 없습니다. 네트워크를 확인하세요",
         "unavailable": "모델 사용 불가",
         "reconnect": "다시 연결",
         "manage": "소스 관리",
@@ -17429,7 +17431,8 @@
         "title": "저장소 자동화 가져오기",
         "description": "출처: {{workingDir}}. 아래 설정을 확인하세요. 가져오면 변경 사항이 적용되고 새 자동화가 활성화됩니다. 명령을 실행하고 전체 액세스 권한으로 Agent를 시작할 수 있으므로 신뢰하는 내용만 가져오세요.",
         "accept": "가져오기 확인",
-        "removed": "삭제 예정: {{names}}"
+        "removed": "삭제 예정: {{names}}",
+        "fileMissing": "가져오기를 건너뛰었습니다. {{projectName}}에서 자동화 파일을 찾을 수 없습니다."
       },
       "toast": {
         "summary": "추가 {{inserted}} · 업데이트 {{updated}} · 삭제 {{deleted}}",
@@ -17526,6 +17529,7 @@
       "openWorkdirFailed": "폴더를 열지 못했습니다"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "대기 시간이 초과되어 프롬프트가 전송되지 않았습니다. 대상 세션이 유휴 상태가 되면 {{action}}을 선택하여 실행하세요.",
       "status": {
         "running": "실행 중",
         "success": "성공",
@@ -22184,6 +22188,7 @@
     "picker": {
       "empty": "아직 모델 그룹이 없습니다. 설정에서 소스 몇 개를 모드로 묶으면 여기서 선택할 수 있습니다.",
       "manage": "모델 그룹 관리",
+      "deviceTitle": "모델 그룹 · {{device}}",
       "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",
       "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
       "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다."

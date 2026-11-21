@@ -490,11 +490,11 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     }),
     log: deps.log,
   }));
-  const persistSessionFields: SessionRuntimeSelectionPorts['persistSessionFields'] = (sessionId, patch) => persistSessionFieldsWith(explicitPorts<Parameters<typeof persistSessionFieldsWith>[0]>({
+  const persistSessionFields: SessionRuntimeSelectionPorts['persistSessionFields'] = (sessionId, patch, options) => persistSessionFieldsWith(explicitPorts<Parameters<typeof persistSessionFieldsWith>[0]>({
     captureOwnerScope, isOwnerScopeCurrent, broadcastSessionPatched,
     // The session settings' budget hook, as the desktop registers it (bootstrap-electron.ts).
     applyContextWindowBudget: () => contextWindowBudgetReconcile.sessionContextWindowBudgetApplier,
-  }), sessionId, patch);
+  }), sessionId, patch, options);
   const ports = (): SessionRuntimeSelectionPorts => explicitPorts<SessionRuntimeSelectionPorts>({
     maker: maker(),
     agentSwitchPending: pendingSwitches,

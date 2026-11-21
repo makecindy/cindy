@@ -1,3 +1,4 @@
+import { assertSessionTreeOwner, navigateAndRehydrateSessionTree } from './sessionTreeNavigation.js';
 import { bindSessionUsageAccount } from '../usage/sessionUsageOwner.js';
 import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt, contextRecoveryAbortSignal } from './contextRecoveryAssembly.js';
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
@@ -2053,7 +2054,7 @@ const pendingSchedulerAutoResumeRunBySession = new Map<
   { runId: string; attemptToken: number; usageLimitToken?: number; retryClientId?: string; error?: string }
 >();
 interface SchedulerRecoveryListener {
-  failed(error?: string): void;
+  failed(error?: string, stopped?: true): void;
   quotaWait?: { start(): void; resume(): boolean };
 }
 const schedulerAutoResumeFailureListeners = new Map<string, Set<SchedulerRecoveryListener>>();
@@ -2095,13 +2096,14 @@ function notifySchedulerAutoResumeFailed(
     return;
   }
   clearSchedulerAutoResumePending(sessionId, runId, attemptToken);
-  const listeners = schedulerAutoResumeFailureListeners.get(
-    schedulerAutoResumeRunKey(sessionId, runId),
-  );
-  if (!listeners) return;
-  for (const listener of listeners) {
+  publishSchedulerRecoveryFailure(sessionId, runId, current.error);
+}
+
+function publishSchedulerRecoveryFailure(sessionId: string, runId: string, detail?: string, stopped?: true): void {
+  const listeners = schedulerAutoResumeFailureListeners.get(schedulerAutoResumeRunKey(sessionId, runId));
+  for (const listener of listeners ?? []) {
     try {
-      listener.failed(current.error);
+      listener.failed(detail, stopped);
     } catch {
       // Runner listener failures must not break chat recovery cleanup.
     }
@@ -2127,10 +2129,14 @@ export function isSchedulerAutoResumePending(sessionId: string, runId: string): 
   return pendingSchedulerAutoResumeRunBySession.get(sessionId)?.runId === runId;
 }
 
+export function isSchedulerSharedReconnectPending(sessionId: string, runId: string): boolean {
+  return agentInputCoordinatorHolder?.isSharedReconnectPending(sessionId, runId) === true;
+}
+
 export function onSchedulerAutoResumeFailed(
   sessionId: string,
   runId: string,
-  listener: (error?: string) => void,
+  listener: SchedulerRecoveryListener['failed'],
   quotaWait?: SchedulerRecoveryListener['quotaWait'],
 ): () => void {
   const key = schedulerAutoResumeRunKey(sessionId, runId);
@@ -2149,8 +2155,11 @@ export function onSchedulerAutoResumeFailed(
 
 /** Schedule pause/delete：只撤销仍属于该 run 的普通聊天自动续跑。 */
 export function cancelSchedulerAutoResume(sessionId: string, runId: string): boolean {
-  if (!isSchedulerAutoResumePending(sessionId, runId)) return false;
   const pending = pendingSchedulerAutoResumeRunBySession.get(sessionId);
+  // Shared reconnect recovery uses the same runner wait predicate, but its
+  // lifetime belongs to the coordinator's active turn and must not be torn
+  // down through the ordinary auto-resume bookkeeping.
+  if (pending?.runId !== runId) return false;
   if (pending?.usageLimitToken !== undefined) {
     finishSchedulerUsageLimitWait(sessionId, pending.usageLimitToken);
     return true;
@@ -15400,6 +15409,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAcceptedRollback?: SchedulerQueuedPromptRequest['onAcceptedRollback'];
     onAcceptedCommit?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
+    manualUiSend?: boolean;
     sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
     /** Host-accepted task text or a forwarded request receipt. */
     autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
@@ -15425,7 +15435,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           params.onAcceptedCommit,
         );
       }
-      inputCoordinator.enqueue(params.targetSessionId, queued);
+      inputCoordinator.enqueue(params.targetSessionId, queued, params.manualUiSend ? { manualUiSend: true } : undefined);
     };
     if (params.authorizationGuard) await commitBotAuthorizationInput(params.authorizationGuard, enqueue);
     else enqueue();
@@ -18176,13 +18186,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const generation = getSessionRuntimeControlSnapshot(session.id).generation;
       const access = providerShareAccessEpoch(shareId);
       const recovery = providerGroupService.trackGuestStartRecovery(session.id);
+      let loggedRecoveryFailure: string | null = null;
+      const logRecoveryFailure = (reason: string): void => {
+        if (loggedRecoveryFailure === reason) return;
+        loggedRecoveryFailure = reason;
+        log.warn('provider group reconnect recovery unavailable', { sessionId: session.id, reason });
+      };
       return {
         signal: recovery.signal,
-        isCurrent: () => recovery.isCurrent() && sessionRuntimeControlOwnerEpochMatches(owner)
-          && getSessionRuntimeControlSnapshot(session.id).generation === generation
-          && !isAppSessionBoundaryPending()
-          && providerShareAccessEpoch(shareId) === access
-          && findReceivedShare(shareId)?.status === 'active',
+        isCurrent: () => {
+          if (!recovery.isCurrent()) { logRecoveryFailure('recovery-superseded'); return false; }
+          if (!sessionRuntimeControlOwnerEpochMatches(owner)) { logRecoveryFailure('runtime-owner-changed'); return false; }
+          if (getSessionRuntimeControlSnapshot(session.id).generation !== generation) { logRecoveryFailure('runtime-refreshed'); return false; }
+          if (isAppSessionBoundaryPending()) { logRecoveryFailure('app-session-boundary'); return false; }
+          if (providerShareAccessEpoch(shareId) !== access || findReceivedShare(shareId)?.status !== 'active') {
+            logRecoveryFailure('share-unavailable');
+            return false;
+          }
+          return true;
+        },
         close: async () => (await withRehydrateCloseSuppressed(session.id, () =>
           maker.closeSessionIfCurrent(live, 'runtime-refresh', { onlyIfIdle: true }))) === 'closed',
         takeOffer: takeStoppedSharedReconnectOffer,
@@ -18261,6 +18283,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
     },
     onUndispatchedDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnAbort(sessionId),
+    onSharedReconnectClaimed: (sessionId, clientId) =>
+      agentInputCoordinatorHolder?.markSharedReconnectPending(sessionId, clientId),
+    onSharedReconnectFailed: (sessionId, runId, error, stopped) =>
+      publishSchedulerRecoveryFailure(sessionId, runId, schedulerFailureDetail(
+        error instanceof Error ? error.message : String(error),
+      ), stopped),
+    onSharedReconnectFinished: (sessionId, clientId) =>
+      agentInputCoordinatorHolder?.clearSharedReconnectPending(sessionId, clientId),
     ackInterruptedTurnDispatched: async (sessionId, endedAt) => {
       await ackSessionTurnEndedDurable(sessionId, endedAt);
     },
@@ -19838,6 +19868,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       void settleTaskActionInput(item).catch(() => undefined);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
     },
+    getSchedulerRunSignal: (sessionId, item) => schedulerQueueBridgeHolder?.runSignalFor(sessionId, item),
     onAcceptedQueuedMessage: async (sessionId, item, restoredFromSnapshot): Promise<void> => {
       if (item.clientId.startsWith('plugin-target:')) {
         try { await assertPluginTargetQueuedDelivery(sessionId, item.clientId); }
@@ -22747,7 +22778,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ) {
         throwIpcError('INVALID_PARAMS', 'customInstructions must be string');
       }
+      const owner = getCurrentDbClientSnapshot();
+      assertSessionTreeOwner(owner);
       const sess = await getOrResumeSessionForHistory(sessionId, 'pi-history');
+      assertSessionTreeOwner(owner);
       if (!sess || !sess.capabilities.sessionTree?.supported) return null;
       // 整个「原生分支导航 → 捕获 result.messages → session.treeRehydrate 重建 SQLite」窗口
       // 必须与 maker:send 走同一把 per-session 锁(acquireSendToSessionLock)。否则另一窗口 /
@@ -22756,33 +22790,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 在 JSONL 里有、SQLite 里被旧快照覆盖/隐藏(hiddenClientIds 只修复 Renderer 删除广播,
       // 修不了 JSONL 与 DB 的这处分叉,codex review P1)。summarize turn 是 Pi 内部 RPC,不经
       // maker:send IPC,故不与本锁重入。
-      const { result, hiddenClientIds, now } = await withSendToSessionLock(sessionId, async () => {
-        const result = await sess.navigateSessionTree(entryId, {
+      const { result, hiddenClientIds, now } = await withSendToSessionLock(sessionId, () =>
+        navigateAndRehydrateSessionTree(sessionId, owner, () => sess.navigateSessionTree(entryId, {
           summarize: parsed.summarize === true,
           ...(typeof parsed.customInstructions === 'string'
             ? { customInstructions: parsed.customInstructions }
             : {}),
-        });
-        const now = Date.now();
-        // hiddenClientIds 由重投影事务原子返回:它是隐藏动作发生那一刻的完整可见集。
-        const { hiddenClientIds } = await getDbClient().tx('session.treeRehydrate', {
-          sessionId,
-          now,
-          contextTokens: result.contextTokens,
-          contextWindow: result.contextWindow,
-          messages: result.messages.map((message) => ({
-            id: createId(),
-            clientId: message.clientId,
-            role: message.role,
-            content: JSON.stringify(message.content),
-            toolUseId: message.toolUseId ?? null,
-            agentMeta: message.agentMeta ? JSON.stringify(message.agentMeta) : null,
-            agentKind: 'pi',
-            createdAt: message.createdAt,
-          })),
-        });
-        return { result, hiddenClientIds, now };
-      });
+        })),
+      );
+      assertSessionTreeOwner(owner);
+      if (result.cancelled) return { tree: result.tree, draftText: result.draftText, cancelled: true };
       clearSessionThinkingSnapshots(sessionId);
       resetTurnPersistState(sessionId);
 
@@ -22794,11 +22811,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           clientIds: hiddenClientIds,
         });
       }
-      const visibleRows = await getDbClient()
+      const visibleRows = await owner.client
         .drizzle.select()
         .from(messages)
         .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt)))
         .orderBy(messages.createdAt);
+      assertSessionTreeOwner(owner);
       for (const row of visibleRows) broadcastMessageRow(sessionId, messageToCamel(row));
       broadcastSessionPatched(sessionId, {
         clearedAt: null,
@@ -22810,7 +22828,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return {
         tree: result.tree,
         draftText: result.draftText,
-        cancelled: result.cancelled === true,
+        cancelled: false,
       };
     },
   );
