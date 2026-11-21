@@ -300,6 +300,33 @@ describe('remote home references', () => {
     );
   });
 
+  it('shows enough parent directories to distinguish same-name file links without moving their targets', async () => {
+    const local = { kind: 'local' } as const;
+    const view = render(reply([
+      '[guide.html](/workspace/A/docs/guide.html)',
+      '[guide.html](/workspace/B/docs/guide.html)',
+      '[intro.html](/workspace/A/docs/intro.html)',
+    ].join(' '), 'unused', '/workspace/A', local));
+    await act(async () => {});
+    const links = view.getAllByRole('link');
+    expect(links.map(link => link.textContent)).toEqual(['A/docs/guide.html', 'B/docs/guide.html', 'intro.html']);
+    localResolve.mockResolvedValueOnce({ status: 'unique', candidates: ['/workspace/B/docs/guide.html'], kind: 'file' });
+    await act(async () => fireEvent.click(view.getByRole('link', { name: 'B/docs/guide.html' })));
+    expect(openHtmlFileByPreference).toHaveBeenCalledWith(
+      'session', '/workspace/B/docs/guide.html', expect.any(Function),
+      expect.objectContaining({ origin: local }), undefined,
+    );
+  });
+
+  it('explains multiple matches when an authored local link is clicked', async () => {
+    const view = render(reply('[notes.html](docs/notes.html)', 'unused', '/workspace', { kind: 'local' }));
+    await act(async () => {});
+    localResolve.mockResolvedValueOnce({ status: 'multiple', candidates: ['/workspace/A/docs/notes.html', '/workspace/B/docs/notes.html'] });
+    await act(async () => fireEvent.click(view.getByRole('link', { name: 'notes.html' })));
+    expect(toast.error).toHaveBeenCalledWith('chat.markdownRenderer.duplicateFiles');
+    expect(openHtmlFileByPreference).not.toHaveBeenCalled();
+  });
+
   it.each(['~/.config', '~/report.html'])('preserves resolved directory kind outside the workdir for %s', async directoryHref => {
     // PR #11154: the owner knows this is a directory, but chatStat cannot inspect
     // paths outside the workdir. Existing file-only fixtures lose this boundary.
