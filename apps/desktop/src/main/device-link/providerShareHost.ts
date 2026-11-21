@@ -21,7 +21,9 @@ import {
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getAuthState, getDeviceId } from '../authManager.js';
 import { createLogger } from '../logger.js';
+import { isPluginEngineOfferedToGuests } from '../maker-host/pluginEngineRemoteUse.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { providerShareApi, providerShareOwnerKey } from './providerShareApi.js';
 import { delegatedProviderShareGuestAccess, locallyProvenProviderShareDelegation } from './providerShareDelegatedAccess.js';
@@ -616,7 +618,11 @@ function checkGuestAccess(controller: string): GuestAccessCheck {
     return { denied: 'member-cleanup-pending' };
   }
   if (!readDeviceLinkSettings().remoteControlEnabled) return { denied: 'remote-control-off' };
-  if (!isRemoteProviderInvocationAllowed(share.providerId)) return { denied: 'provider-not-remote' };
+  if (pluginEngineKeyFromProviderId(share.providerId)
+    ? !isPluginEngineOfferedToGuests(share.providerId)
+    : !isRemoteProviderInvocationAllowed(share.providerId)) {
+    return { denied: 'provider-not-remote' };
+  }
   return { access: { shareId: share.shareId, memberId: member.memberId, providerId: share.providerId } };
 }
 

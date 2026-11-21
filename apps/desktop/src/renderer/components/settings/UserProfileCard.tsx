@@ -72,7 +72,7 @@ export function UserProfileCard() {
     return (
       <div
         className={cn(
-          'flex w-full items-center gap-[14px] rounded-xl p-5',
+          'flex w-full items-center gap-3.5 rounded-xl p-5',
           'bg-[var(--settings-profile-card-bg)]',
           'border border-[var(--settings-profile-card-border)]',
         )}
@@ -154,7 +154,7 @@ export function UserProfileCard() {
   return (
     <div
       className={cn(
-        'flex w-full flex-wrap items-center gap-[14px] rounded-xl p-5',
+        'flex w-full flex-wrap items-center gap-3.5 rounded-xl p-5',
         'bg-[var(--settings-profile-card-bg)]',
         'border border-[var(--settings-profile-card-border)]',
       )}

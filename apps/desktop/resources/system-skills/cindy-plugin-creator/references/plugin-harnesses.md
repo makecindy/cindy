@@ -128,18 +128,23 @@ npm 的 `.cmd` 启动器，从可信的安装目录定位该包声明的 JavaScr
 
 引擎在安装插件的电脑上运行。手机可以选择被控电脑提供的引擎来新建普通任务。每次新建本机任务的自动化也可以选择插件引擎。
 
-### 让用户的其他电脑使用
+### 让用户的其他电脑与分享好友免装使用
 
-用户可以在自己账号的另一台电脑上新建任务，让 Agent 在装了插件的这台电脑上运行：用这台的程序、登录和额度，
-项目文件与命令仍在任务所在的那台电脑。这类任务里，Agent 自带的读写文件、执行命令的工具只能碰到 Agent
-所在的电脑，而项目不在这里，所以必须关掉，改用 Cindy 经 MCP 提供的工具。
+用户可以在自己账号的另一台电脑上新建任务，也可以把引擎分享给好友——对方无需安装插件或 CLI，就能让
+Agent 在装了插件的这台电脑上运行：用这台的程序、登录和额度，项目文件与命令仍在任务所在的那台电脑。这类任务里，
+Agent 自带的读写文件、执行命令的工具只能碰到 Agent 所在的电脑，而项目不在这里，所以必须关掉，改用 Cindy 经 MCP 提供的工具。
 
-支持这种用法的引擎，在 `PUT /harnesses` 对应条目设置 `remoteWorkspace: true`(只在 `available: true` 时有效)。
+支持同账号远程调用的引擎，在 `PUT /harnesses` 对应条目设置 `remoteWorkspace: true`(只在 `available: true` 时有效)。
 不设置时，这个引擎只能运行本机任务。用户还要在插件设置里为该引擎打开「允许被远程调用」，默认关闭；
 开关由 Cindy 提供，插件不能替用户打开。
 
-这类任务启动时，入口进程的 `process.argv` 里会多一个由 Cindy 给出的固定参数 `--cindy-remote-workspace`，
-没有其它参数。看到它时入口必须做到：
+若引擎同时支持跨账号分享给好友，还需在 `PUT /harnesses` 对应条目设置 `guestWorkspace: true`(与 `remoteWorkspace: true` 一起发布)。
+声明 `guestWorkspace: true` 后，插件详情页会显示「远程与分享」入口，允许用户生成一次性分享链接并管理授权成员。
+
+- 同账号远程任务启动时，入口进程的 `process.argv` 会收到固定参数 `--cindy-remote-workspace`；
+- 跨账号分享受邀者任务启动时，入口进程的 `process.argv` 会收到 `--cindy-remote-workspace` 和 `--cindy-guest-workspace`。
+
+看到 `--cindy-remote-workspace` 时入口必须做到：
 
 - **只对这一次启动关掉 Agent 自带的文件与命令工具**，包括读写与搜索文件、执行命令、后台任务、切换目录，
   以及在本机运行模型写的代码的工具。用这次启动的命令行参数、环境变量或一份独立的配置实现，
@@ -150,9 +155,16 @@ npm 的 `.cmd` 启动器，从可信的安装目录定位该包声明的 JavaScr
   报告的工具调用，出现自带的文件或命令工具就结束任务。
 - **让 Agent 在一个空目录里启动**，不要用用户的主目录或项目目录作为它的工作目录。
 
+当同时看到 `--cindy-guest-workspace` 时，入口还必须做到：
+
+- **隔离分享者本机的个人配置、技能、自定义命令、记忆与会话列表**，避免受邀者的会话读取分享者的个人提示词、
+  本地插件/MCP 配置或列举历史会话（但保留 CLI 登录凭据使其可正常访问模型服务）；
+- **关掉 Agent 在分享者本机直接发起网页抓取的工具**（如 `WebFetch` / `tool-web`），防止受邀者借分享者网络访问内网地址；
+  Cindy 会在受邀者自己的电脑上通过 `cindy_exec` 提供 `WebFetch`。
+
 Cindy 在 `session/new` 的 `mcpServers` 里交给 Agent 的全部是任务所在电脑的工具(HTTP 传输，
 带 `Authorization` 头)。其中 `cindy_exec` 提供 `Bash`、`BashOutput`、`KillShell`、`Read`、`Write`、`Edit`、
-`NotebookEdit`，在任务所在电脑上执行。Agent 握手时没有声明 `mcpCapabilities.http` 的，这类任务会被拒绝；
+`NotebookEdit`(受邀者任务还包含在受邀者本机执行的 `WebFetch`)，在任务所在电脑上执行。Agent 握手时没有声明 `mcpCapabilities.http` 的，这类任务会被拒绝；
 Agent 实际能连 HTTP 的 MCP 服务却没有声明时，由入口在转发 `initialize` 的回包时补上。
 `session/new` 的 `cwd` 是一个只含项目说明文件的目录，路径仅用于对话，不代表项目在这台电脑上。
 Agent 收不到 Cindy 的系统提示，Cindy 会在新会话的第一条消息前附一段说明，告诉它项目在哪、该用哪些工具。
@@ -163,7 +175,7 @@ Cindy 按工具调用里的名称和参数显示卡片，并在用户同意后�
 用原名(`Bash`、`Read`、`Write` 等)，`command`、`file_path` 等保持在 `rawInput` 顶层。不还原时，用户确认过的
 命令与实际执行的对不上，需要确认的高风险操作会一直被任务所在电脑拒绝。
 
-只有同一账号的电脑可以这样使用。用户把供应商分享给别人或放进供应商组时，不包含插件引擎。
+插件引擎目前不加入多机供应商组或备用机委托。
 
 ### 显示账号用量
 

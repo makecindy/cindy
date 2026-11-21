@@ -16,6 +16,15 @@ import {
 } from '@cindy/model-providers';
 import type { ByokConnection } from './byokSync.js';
 
+/** Display metadata shared by connected and pending BYOK suppliers. */
+export function byokProviderPresentation(provider: ByokConnection['provider']) {
+  return {
+    id: provider.id,
+    name: provider.name,
+    ...(provider.icon ? { customIcon: provider.icon } : {}),
+  };
+}
+
 /** Project trusted directory metadata into the existing routing/catalog shape. No secrets. */
 export function buildByokProvider({ provider, credential }: ByokConnection): Provider {
   const inferenceBase = credential.endpoint.replace(/\/+$/, '').replace(/\/v1$/, '');
@@ -125,8 +134,7 @@ export function buildByokProvider({ provider, credential }: ByokConnection): Pro
       defaultEnabled: model.defaultEnabled ?? true,
     }));
   return {
-    id: provider.id,
-    name: provider.name,
+    ...byokProviderPresentation(provider),
     source: 'organization',
     auth: { method: 'managed' },
     access: { kind: 'managed' },

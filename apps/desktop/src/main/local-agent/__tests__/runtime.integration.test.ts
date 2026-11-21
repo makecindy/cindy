@@ -251,12 +251,13 @@ describe('local client runtime lifecycle', () => {
   });
 
   // Remote application failures must remain actionable without leaking peer diagnostics.
-  it('preserves the old-peer error code when rebuilding an application session', async () => {
+  // REMOTE_AGENT_SHARE_UNAVAILABLE: an unconfirmed shared-provider list now reports this retryable code (#11889).
+  it.each(['REMOTE_AGENT_PEER_TOO_OLD', 'REMOTE_AGENT_SHARE_UNAVAILABLE'])('preserves the %s code when rebuilding an application session', async (code) => {
     const f = await fixture();
-    f.maker.startLocalAgentSession.mockRejectedValueOnce(new Error('[REMOTE_AGENT_PEER_TOO_OLD] private peer details'));
+    f.maker.startLocalAgentSession.mockRejectedValueOnce(new Error(`[${code}] private peer details`));
     await f.runtime.call('instructions', { instructions: 'updated' });
     await expect(f.runtime.call('send', message)).rejects.toMatchObject({
-      code: 'REMOTE_AGENT_PEER_TOO_OLD',
+      code,
       message: '远程供应商暂不可用，请在 Cindy 中检查连接或更新远端版本。',
     });
     expect(f.first.send).not.toHaveBeenCalled();

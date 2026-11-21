@@ -722,9 +722,9 @@ function WorkerLayoutMenu({
                         className={cn(
                           'flex w-full flex-col px-4 py-2 text-left transition-colors',
                           isError
-                            ? 'bg-[var(--error-bg)] border-l-2 border-[var(--error-fg)] pl-[14px]'
+                            ? 'bg-[var(--error-bg)] border-l-2 border-[var(--error-fg)] pl-3.5'
                             : isFocused
-                              ? 'bg-[var(--surface-chip)] border-l-2 border-[var(--status-bar-accent)] pl-[14px]'
+                              ? 'bg-[var(--surface-chip)] border-l-2 border-[var(--status-bar-accent)] pl-3.5'
                               : 'pl-4',
                         )}
                         onClick={() => {
@@ -1497,9 +1497,9 @@ export function RolePillDropdown({
                     className={cn(
                       'flex w-full flex-col px-4 py-2 text-left transition-colors',
                       isError
-                        ? 'bg-[var(--error-bg)] border-l-2 border-[var(--error-fg)] pl-[14px]'
+                        ? 'bg-[var(--error-bg)] border-l-2 border-[var(--error-fg)] pl-3.5'
                         : isFocused
-                          ? 'bg-[var(--surface-chip)] border-l-2 border-[var(--status-bar-accent)] pl-[14px]'
+                          ? 'bg-[var(--surface-chip)] border-l-2 border-[var(--status-bar-accent)] pl-3.5'
                           : 'pl-4',
                     )}
                     onClick={() => {

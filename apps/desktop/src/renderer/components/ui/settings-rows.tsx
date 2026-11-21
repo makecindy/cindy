@@ -102,7 +102,7 @@ export function SettingsSection({ title, titleId, count, description, action, ca
       </section>
     </PageScope.Provider>;
   }
-  return <section {...rest} className={cn('flex min-w-0 flex-col', !drawer && 'gap-[14px]', className)} data-testid={testId}>
+  return <section {...rest} className={cn('flex min-w-0 flex-col', !drawer && 'gap-3.5', className)} data-testid={testId}>
     {(title || action) && <div className={cn('flex items-center justify-between gap-3', (drawer || action) && 'min-h-6', drawer && 'mb-2')}>
       <div className="flex min-w-0 flex-col gap-1">
         <Heading id={titleId} data-settings-section-heading={!drawer && title ? '' : undefined}

@@ -463,7 +463,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
         {renderMoreMenu(
           <button
             aria-label={moreLabel}
-            className={cn('flex min-w-0 flex-1 items-center gap-[10px]', 'text-left')}
+            className={cn('flex min-w-0 flex-1 items-center gap-2.5', 'text-left')}
           >
             {/* Avatar — admin 用户加 1.5px 反色描边 + 右下角盾牌角标 */}
             <div

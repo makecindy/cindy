@@ -55,7 +55,7 @@ const IM_BOT_GROUP_TIP_KEY: Record<ImBotSettingsGroup, string> = {
 function GroupTip({ message }: { message: string }) {
   return (
     <div className="flex items-start gap-2 rounded-xl bg-[var(--surface-chip)] px-3.5 py-2.5">
-      <Lightbulb size={14} className="mt-[2px] shrink-0 text-[var(--text-tertiary)]" />
+      <Lightbulb size={14} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
       <p className="text-12 leading-[1.6] text-[var(--text-secondary)]">{message}</p>
     </div>
   );
@@ -151,7 +151,7 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
     <div className="flex flex-col gap-6">
       <SettingsPageHeader
         title={t(imBotSettings.imBot.sectionKey)}
-        adornment={<span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
+        adornment={<span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
           {t('settings.imBot.beta')}
         </span>}
       />

@@ -526,6 +526,32 @@ it('tells a directly connected peer right away when its worker socket is termina
   host.terminate();
   await vi.waitFor(() => expect(controller.pathTo('a-host')).toBeNull(), { timeout: 2_000 });
 });
+/** 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 与真实中转读目录。
+ *   目录里一台设备有新旧两个设备号、同一把传输密钥时，交给业务的目录里只有新的；旧设备号不可用（`supports` 为否），
+ *   但仍算见过的 Agent-Net 设备（`knowsPeer` 为是），Desktop 据此不让它改走 Device Link、仍要它出示关闭证明。
+ * - Bug／规则依据：PR #11899 两轮审阅。worker 线程和调用它的线程各有一份「见过的设备」，后者只从收到的目录和路径事件里填；
+ *   被顶替的设备号两样都不出现，本机没有缓存、冷启动时它就成了「没见过的设备」，防降级检查对它直接放行。
+ * - 现有覆盖缺口：`portableSocket.test.ts` 的同密钥用例只到 worker 里面那一层；没有经过 worker 的。
+ * - 最小失败输入：一台已登记的设备用同一套密钥、另一个设备号再登记一次；之后不带缓存打开另一台设备的 worker socket。
+ * - tier：integration，真实 worker、真实中转与证书，不建对端连接；约 0.3 秒。 */
+it('keeps a device id superseded for sharing a transport key known through the worker when it starts without a cache', async () => {
+  const f = await network(false, undefined, true);
+  const code = await f.a.request<{ joinCode: string }>('POST', '/join-codes');
+  const join = createJoinRequest({ ...f.b.identity, deviceId: 'c-controller-renamed' }, f.bootstrap.networkId, code.joinCode, 'Controller again', 'unit-only-pairing-secret');
+  await submitJoin(f.relay.url, join);
+  await f.a.request('POST', '/join-requests/' + join.requestId + '/approve',
+    { certificate: approveJoin(f.root, join, 'unit-only-pairing-secret', f.bootstrap.ownerCertificate.subject) });
+  f.host.stop();
+  const directories: DeviceView[][] = [];
+  const socket = await AgentNetWorkerSocket.open({ workerFile: new URL('../../dist/node-worker.mjs', import.meta.url), client: f.a,
+    userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false, bindAddress: '127.0.0.1', lanDiscovery: false,
+    onDirectory: values => { directories.push(values); } });
+  cleanup.push(() => socket.close());
+  await vi.waitFor(() => expect(directories.at(-1)?.map(view => view.certificate.deviceId).sort()).toEqual(['a-host', 'c-controller-renamed']));
+  await vi.waitFor(() => expect(socket.knowsPeer('b-controller')).toBe(true));
+  expect([socket.supports('b-controller'), socket.knowsPeer('c-controller-renamed'), socket.certificateFor('b-controller')]).toEqual([false, true, undefined]);
+});
 it('applies a member revocation immediately, rejects its cached restart and keeps another peer usable', async () => {
   const f = await network(false); serve(f.host);
   const identity = generateIdentity('c-controller');

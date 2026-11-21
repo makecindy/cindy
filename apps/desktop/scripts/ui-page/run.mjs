@@ -203,6 +203,38 @@ async function pruneEvidence(outputRoot, current) {
   await Promise.all(stale.map((run) => rm(run.dir, { recursive: true, force: true })));
 }
 
+const SCRATCH_PREFIX = 'cindy-ui-check-';
+
+const processAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== 'ESRCH';
+  }
+};
+
+/**
+ * A runner that is killed outright cannot remove its scratch folder (profile and bundle).
+ * Each folder names its runner's PID; remove those whose runner is gone. A reused PID only
+ * keeps a folder for longer. Removal is best effort: a folder still in use stays.
+ */
+export async function sweepScratch(tmp = os.tmpdir()) {
+  const entries = await readdir(tmp, { withFileTypes: true }).catch(() => []);
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(SCRATCH_PREFIX))
+      .map(async (entry) => {
+        const dir = path.join(tmp, entry.name);
+        const owner = /^(\d+)-/.exec(entry.name.slice(SCRATCH_PREFIX.length))?.[1];
+        // Legacy previews may remain open indefinitely; without an owner, leave them alone.
+        if (owner && !processAlive(Number(owner)))
+          await rm(dir, { recursive: true, force: true, maxRetries: 3 });
+      })
+      .map((removal) => removal.catch(() => {})),
+  );
+}
+
 /**
  * Runs every variant with owned, isolated runtime state, then exits.
  * Preview mode keeps the single variant open and rebuilds on source changes.
@@ -214,7 +246,8 @@ export async function runPlan(plan, options, externalSignal) {
   const label = plan.label ?? plan.pages.map((item) => item.definition.name).join('+');
   const evidence = await mkdtemp(path.join(outputRoot, `${label}-`));
   if (!options.output) await pruneEvidence(outputRoot, evidence);
-  const scratch = await mkdtemp(path.join(os.tmpdir(), 'cindy-ui-check-'));
+  await sweepScratch();
+  const scratch = await mkdtemp(path.join(os.tmpdir(), `${SCRATCH_PREFIX}${process.pid}-`));
   const summary = {
     status: 'failed',
     mode: options.mode,
@@ -374,6 +407,8 @@ export async function runPlan(plan, options, externalSignal) {
             CINDY_UI_WIDTH: String(size.width),
             CINDY_UI_HEIGHT: String(size.height),
             CINDY_UI_PREVIEW: options.mode === 'preview' ? '1' : '0',
+            // electron.cjs quits on its own if this runner dies without closing it.
+            CINDY_UI_OWNER_PID: String(process.pid),
           },
         }).then((runtime) => {
           app = runtime;

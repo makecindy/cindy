@@ -119,7 +119,7 @@ export function AgentActionsBlock({
           type="button"
           onClick={onToggle}
           className={cn(
-            'flex w-full items-center gap-[6px] py-[2px]',
+            'flex w-full items-center gap-1.5 py-0.5',
             'select-none cursor-pointer',
             'hover:opacity-80 transition-opacity',
             'text-left',
@@ -155,7 +155,7 @@ export function AgentActionsBlock({
         <Collapse open={expanded}>
           <div
             className={cn(
-              'mt-1 pl-3 py-[2px]',
+              'mt-1 pl-3 py-0.5',
               'border-l-2 border-[var(--agent-actions-rail)]',
               'flex flex-col',
             )}

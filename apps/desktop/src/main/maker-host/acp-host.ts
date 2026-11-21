@@ -48,7 +48,7 @@ export interface BuildAcpAgentOpts {
   makerMemory?: AgentDeps['makerMemory'];
   getMcpToolApprovalPolicy?: AgentDeps['getMcpToolApprovalPolicy'];
   /** Starts the declared entry of a listed harness in raw-stdio mode. */
-  spawnHarness(key: string, options?: { remoteWorkspace?: boolean }): Promise<NodeWorkerProcess>;
+  spawnHarness(key: string, options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean }): Promise<NodeWorkerProcess>;
 }
 
 export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
@@ -65,7 +65,12 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
     clientInfo: { name: 'cindy', title: 'Cindy', version: opts.appVersion },
     endpoints: {
       connect: async (key, options) => createAcpProcessTransport(
-        options?.remoteWorkspace ? await opts.spawnHarness(key, { remoteWorkspace: true }) : await opts.spawnHarness(key),
+        options?.remoteWorkspace || options?.guestWorkspace
+          ? await opts.spawnHarness(key, {
+              ...(options.remoteWorkspace ? { remoteWorkspace: true } : {}),
+              ...(options.guestWorkspace ? { guestWorkspace: true } : {}),
+            })
+          : await opts.spawnHarness(key),
         logger,
       ),
     },
