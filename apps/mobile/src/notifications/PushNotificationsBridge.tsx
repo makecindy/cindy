@@ -37,6 +37,7 @@ type NotificationResponse = Parameters<
  */
 export function PushNotificationsBridge() {
   const auth = useAuth();
+  const pushAccountId = auth.user?.id;
   const { i18n: { language } } = useTranslation();
   const router = useRouter();
   const pathname = usePathname();
@@ -75,10 +76,11 @@ export function PushNotificationsBridge() {
     void registerNotificationActionCategories().catch(() => undefined);
   }, [language]);
 
-  // 登录态就绪后同步注册状态(开关关闭 / 从未注册时是 no-op)
+  // Push registration follows the account identity, not refreshed profile objects.
+  // Reconcile once the signed-in account and its routing preferences are ready.
   useEffect(() => {
     if (!isPushSupported()) return;
-    if (!auth.initialized || !auth.isAuthenticated) return;
+    if (!auth.initialized || !auth.isAuthenticated || !pushAccountId) return;
     let cancelled = false;
     void (async () => {
       // 只用当前会话补偿当前区域的注销，再按本机开关同步注册状态。
@@ -91,7 +93,7 @@ export function PushNotificationsBridge() {
     return () => {
       cancelled = true;
     };
-  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, auth.user, selfHostedRelay, agentNetPreferences.generation]);
+  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, pushAccountId, selfHostedRelay, agentNetPreferences.generation]);
 
   // APNs token 轮换 → 重新上报(仅开关开启且已登录时)
   useEffect(() => {

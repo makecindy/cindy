@@ -72,3 +72,29 @@ it('settles native callbacks and uploads only changed event tokens without anoth
   await act(async () => { state.listener?.({ type: 'ios', data: 'disabled-token' }); });
   expect(state.uploads).not.toContain('disabled-token');
 });
+
+// Unit regression: refreshing the same signed-in profile must not re-upload
+// its push token. The native-event test above does not rerender the auth context.
+it('keeps the same registration after a profile refresh and resyncs on account switch', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  const root = createRoot(document.createElement('div'));
+  roots.push(root);
+  const auth = state.auth;
+  try {
+    await act(async () => { root.render(createElement(PushNotificationsBridge)); });
+    const uploads = [...state.uploads];
+    await act(async () => {
+      state.auth = { ...auth, user: { ...auth.user } };
+      root.render(createElement(PushNotificationsBridge));
+    });
+    expect(state.uploads).toEqual(uploads);
+    await act(async () => {
+      state.auth = { ...auth, accountGeneration: auth.accountGeneration + 1, user: { id: 'next-user' } };
+      root.render(createElement(PushNotificationsBridge));
+    });
+    expect(state.reads).toBe(2);
+    expect(state.uploads.length).toBeGreaterThan(uploads.length);
+  } finally {
+    state.auth = auth;
+  }
+});
