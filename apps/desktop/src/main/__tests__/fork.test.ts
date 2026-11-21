@@ -453,15 +453,17 @@ describe('forkSessionAtMessage', () => {
   it('lists archived side chats with active siblings, excluding deleted and unrelated tasks', async () => {
     const sqlite = new Database(':memory:');
     try {
-      sqlite.exec('CREATE TABLE sessions (id TEXT, parent_session_id TEXT, source TEXT, status TEXT, created_at INTEGER)');
-      const insert = sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?)');
+      sqlite.exec('CREATE TABLE sessions (id TEXT, parent_session_id TEXT, source TEXT, status TEXT, created_at INTEGER, side_chat_promoted INTEGER NOT NULL DEFAULT 0)');
+      const insert = sqlite.prepare('INSERT INTO sessions (id, parent_session_id, source, status, created_at) VALUES (?, ?, ?, ?, ?)');
       for (const row of [
         ['active', 'main', 'side-chat', 'active', 20],
         ['archived', 'main', 'side-chat', 'archived', 10],
         ['deleted', 'main', 'side-chat', 'deleted', 30],
         ['other-parent', 'other', 'side-chat', 'archived', 5],
         ['ordinary', 'main', 'desktop', 'archived', 6],
+        ['promoted', 'main', 'side-chat', 'active', 7],
       ]) insert.run(...row);
+      sqlite.prepare("UPDATE sessions SET side_chat_promoted = 1 WHERE id = 'promoted'").run();
       messageDb = drizzle(sqlite);
       expect(await listSideChats('main')).toEqual([{ id: 'archived' }, { id: 'active' }]);
     } finally {

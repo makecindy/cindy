@@ -197,6 +197,8 @@ const MAIN_ONLY_SEND_FIELDS = [
   'expectedTurnGeneration',
   'inputAbortSignal',
   'signal',
+  'reconnectRecovery',
+  'onUndispatchedRetry',
   'turnPermissionPolicy',
   'toolsDisabled',
   'origin',

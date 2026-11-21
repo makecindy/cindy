@@ -110,6 +110,16 @@
     "quotaAverageHint": "Kuota mingguan · Bobot sama per akun",
     "quotaResetHint": "Dengan laju saat ini, kuota mungkin masih tersisa saat reset: kuning dalam 24 jam, merah dalam 6 jam."
   },
+  "modelGroups": {
+    "title": "Grup model",
+    "sourceCount_other": "{{count}} sumber",
+    "strategy": {
+      "expiring": "Kedaluwarsa lebih dulu",
+      "order": "Sesuai urutan",
+      "rotate": "Bergiliran",
+      "cheapest": "Paling murah"
+    }
+  },
   "pluginEngines": {
     "genericName": "Mesin plugin",
     "defaultModel": "Model bawaan",

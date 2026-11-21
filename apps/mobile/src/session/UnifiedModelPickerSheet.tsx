@@ -190,6 +190,24 @@ export interface UnifiedMobilePickerBaseOptions {
    * 一段，列在内置模型之前。只给能用插件引擎的入口传(被控电脑本机的普通任务 / 新任务)。
    */
   pluginEngines?: UnifiedMobilePluginEngineOptions;
+  /**
+   * 被控电脑上的模型组(model-groups.md §6.2)：「全部」最上方一段。只给能用模型组的入口传(伙伴模型设置)。
+   */
+  modelGroups?: UnifiedMobileModelGroupOptions;
+}
+
+export interface UnifiedMobileModelGroupRow {
+  id: string;
+  title: string;
+  /** 来源数 · 选法 · 推理强度。 */
+  subtitle: string;
+  selected: boolean;
+}
+
+export interface UnifiedMobileModelGroupOptions {
+  rows: readonly UnifiedMobileModelGroupRow[];
+  /** 返回 false = 没有应用(选择器留在原地)。 */
+  onSelect(id: string): Promise<boolean> | boolean;
 }
 
 export interface UnifiedMobilePluginEngineOptions {
@@ -258,6 +276,12 @@ export interface UnifiedMobilePickerViewProps {
     remote?: { deviceId: string; deviceName: string; providerLabel: string };
   }[];
   groups: UnifiedMobileGroup[];
+  /** 模型组(列在插件引擎与 groups 之前)；搜索时只列命中的。 */
+  modelGroups?: {
+    title: string;
+    rows: readonly UnifiedMobileModelGroupRow[];
+    onSelect(id: string): void;
+  };
   /** 插件引擎分组(列在 groups 之前)；effort 只改思考深度、不关闭选择器。 */
   pluginEngines?: {
     groups: UnifiedMobilePluginEngineGroup[];
@@ -345,6 +369,9 @@ export function UnifiedModelPickerSheet(
   }, [p.visible, onPluginEnginesOpen]);
   // 选中的是插件引擎时，内置模型行都不显示选中态(也不列「推荐」)。
   const pluginEngineActive = !!pluginEngineOptions?.active;
+  // 选中的是模型组时同理：只有组那一行打勾，具体模型行不打勾、不列「推荐」，打开时停在顶部(和桌面一致)。
+  const modelGroupActive = !!p.unified.modelGroups?.rows.some((row) => row.selected);
+  const otherChoiceActive = pluginEngineActive || modelGroupActive;
   useEffect(() => {
     if (!p.visible) return;
     if (rememberRemote) void hydrateRemoteAgentModelMemory();
@@ -647,7 +674,7 @@ export function UnifiedModelPickerSheet(
         routing: provider?.routing,
         logoKind: provider?.logoKind,
       },
-      selected: !favorite && selected && !pluginEngineActive,
+      selected: !favorite && selected && !otherChoiceActive,
       disabled:
         !caps[config.agent] ||
         budgetRowDisabled(
@@ -774,7 +801,7 @@ export function UnifiedModelPickerSheet(
         logoKind: provider?.logoKind,
       },
       remoteDevice: { deviceId: catalog.deviceId, name: catalog.name },
-      selected,
+      selected: selected && !modelGroupActive,
       disabled: !entry.capabilities[config.agent],
       // 「收藏」一节没有带电脑名的分段标题,电脑名写进说明行,和本机同名模型的收藏区分开。
       subtitle: favorite
@@ -879,7 +906,7 @@ export function UnifiedModelPickerSheet(
       rows: favoriteRows,
     });
   const recommended =
-    all && p.existingSessionRoute && !pluginEngineActive
+    all && p.existingSessionRoute && !otherChoiceActive
       ? filtered
           .filter((row) => row.selected || row.config.agent === p.agentKind)
           .sort((a, b) => Number(b.selected) - Number(a.selected))
@@ -1124,6 +1151,18 @@ export function UnifiedModelPickerSheet(
     });
   };
   // 插件引擎行：选中模型时关闭选择器；只改思考深度时留在原地。
+  const modelGroupOptions = p.unified.modelGroups;
+  const modelGroupRows = (modelGroupOptions?.rows ?? []).filter((row) => {
+    const needle = query.trim().toLowerCase();
+    return !needle || `${row.title} ${row.subtitle}`.toLowerCase().includes(needle);
+  });
+  const selectModelGroup = (id: string) => {
+    if (!modelGroupOptions) return;
+    void transact(async (isCurrent) => {
+      const applied = await modelGroupOptions.onSelect(id);
+      if (applied !== false && isCurrent()) p.onClose();
+    });
+  };
   const selectPluginEngine = (row: UnifiedMobilePluginEngineRow, effort?: PluginEngineEffort) => {
     if (row.disabled || !pluginEngineOptions) return;
     void transact(async (isCurrent) => {
@@ -1416,6 +1455,9 @@ export function UnifiedModelPickerSheet(
         ...remoteFilters,
       ]}
       groups={groups}
+      {...(modelGroupRows.length
+        ? { modelGroups: { title: t("models.modelGroups.title"), rows: modelGroupRows, onSelect: selectModelGroup } }
+        : {})}
       {...(pluginEngineGroups.length
         ? { pluginEngines: { groups: pluginEngineGroups, onSelect: selectPluginEngine } }
         : {})}

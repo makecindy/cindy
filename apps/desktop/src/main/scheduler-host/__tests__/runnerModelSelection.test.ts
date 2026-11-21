@@ -1253,6 +1253,20 @@ describe('MakerScheduleRunner model selection', () => {
       sdkSessionId: 'sdk-1',
     };
 
+    it('continues a primary persistent task locally and skips it after transfer to another execution host', async () => {
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h, HEARTBEAT_META);
+      const task = baseSchedule({ persistentSession: true, targetSessionId: 'scheduler-session', primaryHostKey: 'public/cindy-contacts' });
+      await fireToCompletion(harness, h, task);
+      const calls = h.send.mock.calls.length;
+      expect(calls).toBe(1);
+      for (const location of [{ agentDeviceId: 'other' }, { remoteHostId: 'ssh' }]) {
+        mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', ...location });
+        expect(await harness.runner.fire(task, createFireContext())).toMatchObject({ skipped: true, sessionId: 'scheduler-session' });
+      }
+      expect(h.send).toHaveBeenCalledTimes(calls);
+    });
+
     it('schedule.model 显式设置时优先于绑定 session 的 meta.model，并同步给运行时 + 落库', async () => {
       const h = createSessionHarness();
       const harness = createRunnerHarness(h, HEARTBEAT_META);

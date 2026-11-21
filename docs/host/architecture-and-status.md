@@ -99,7 +99,7 @@ flowchart LR
 | 真实 Maker/Agent Runtime | 已验证（Host 持有） | Host 进程独占持有真实 Maker/Session 运行时与数据库写锁；桌面客户端模式下通过 `setMakerClientMode(true)` 阻断本地装配，所有请求代理至 Host。 |
 | 现有 session/message SQLite 与历史恢复 | 已验证 | 生产 profile（owner `cmv9i0xz401c8yg013q3zkqb0`）全部 192 条存量任务与消息完整接管，数据库安全推至 seq 129，`fuser -v` 验证单写者，无数据丢失。 |
 | Cindy 登录（`cindy-host login`） | 部分 | 复用 Desktop 的 authorize URL、PKCE、托管回调轮询与 session 记录；实测已生成与 Desktop 同形的 authorize URL 并完成对真实 auth 服务的 `getProviders`。**用户交互后的 code 兑换尚未实测**。 | 
-| Cindy OAuth 与凭据持久化 | 已验证（单写者） | Host 接管凭据层与令牌刷新：直接读写 `safeStorage`（Chromium OSCrypt v11）；后台每 30 分钟定时刷新，暴露 `/api/auth/refresh` 供 Desktop 代理调用，彻底解决多端并发 refresh token 轮转失效问题。 |
+| Cindy OAuth 与凭据持久化 | 已验证（单写者） | Host 接管凭据层与令牌刷新：直接读写 `safeStorage`（Chromium OSCrypt v11）；按 access token 的 exp 减 300 秒续期（与桌面同一个函数；access token 约 60 分钟（推算，未在服务端核实）），失败按桌面的退避重试，暴露 `/api/auth/refresh` 供 Desktop 代理调用，彻底解决多端并发 refresh token 轮转失效问题。 |
 | Claude 订阅判定（Host） | 部分 | Host 通过共享模块读出「CLI 是否订阅登录 + Cindy 是否获准使用」：真实 profile 与临时 profile 均实测返回 `{"cliLoggedIn":false,"allowed":false,"connected":false}`（本机 CLI 非订阅登录）。判定来源与 Desktop 同源，未读取或复制任何 Anthropic 凭证。 |
 | Claude Code / Codex / Pi Harness | 部分 | 二进制就绪查询已抽成 `agent-binaries/binaryStatus.ts`，Desktop 与 Host 共用同一判定；实测 Host `/health` 对三种 Harness 均报告可用。Agent 启动所需的认证适配、代理、目录与 MCP 注入尚未迁出。 |
 | Plugin 执行与状态 | 未实现 | `cindy-brain`/plugin manager 依赖 Main 宿主接口与 Electron IPC；存量 plugin 向下兼容是阻断条件。 |
@@ -136,7 +136,7 @@ flowchart LR
 - 无 Secret Service 时抛 `CREDENTIAL_STORE_UNAVAILABLE`，不回退明文、不静默失败。
 - 新写入使用 0600 与同目录临时文件 + rename 原子替换。
 - 实现：`apps/host/src/credentials/{oscrypt,linux-keyring,store}.mjs`；测试 `store.test.mjs`（9 例）。
-- 令牌续期：`apps/host/src/auth/refresh.mjs` 复用 `@cindy/auth-client` 的刷新语义，服务端轮换时原子写回同一记录，access token 只留内存。单测覆盖轮换/不轮换/缺失三种分支。
+- 令牌续期：`apps/host/src/auth/refresh.mjs` 与桌面运行时续期对齐（被拒后经共用的 `runRefreshWithReplacementRetry` 改用别的进程写下的新令牌；只有盘上仍是被拒的那枚才判确定失败；在账号库跨进程锁里按桌面 `authRefreshCommit.ts` 的同一条规则写账号库、v1 记录与旧版独立令牌），access token 只留内存。细节与测试见个人版迁移放行表并存行“后续九”。
 - 未覆盖：macOS Keychain 与 Windows DPAPI 分支；对真实账号发起刷新（会轮换真实凭据，需 Desktop 关闭后单独验证）；重启续期与 Desktop 交替运行的端到端验证。
 
 ## 明确排除的参考实现

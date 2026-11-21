@@ -60,6 +60,27 @@ const STATE_PEER_CLOSED = 16;
  */
 const TIMER_GRANULARITY_US = process.platform === 'win32' ? 16_000 : 1_000;
 /**
+ * 最近这么久（微秒）收到过数据报，就不为短等待一轮一轮看时间：数据在传时对端每两个包回一个确认，每个到达的包都会带着核心
+ * 走一轮、把到点的包发出去，这些到达本身就是比计时器细的时钟；计时器照设，只在到达停了的时候兜底。
+ * 没有它时，只要有连接在快速发送，驱动所在的线程就整段时间占满一个 CPU 核。2026-11-21（Windows，Electron 42，20 MiB、
+ * 512 KiB 一块、4 块在途）：家宽档每 MiB 的 CPU 139–155 → 96–109 毫秒，跨地区档 223–248 → 114–134 毫秒，线路利用率不变
+ * （91% / 79%）。剩下的是每一阵开头、第一个确认回来之前的那一个往返，那一段没有到达可依靠，照旧看时间。
+ */
+export const INBOUND_CLOCK_US = 2_000;
+
+/**
+ * 核心下一次要在 `delayUs` 微秒后醒来时驱动怎么等，见 {@link TIMER_GRANULARITY_US} 与 {@link INBOUND_CLOCK_US}。
+ * - `now`：已经到点，这一轮事件循环末尾就处理。
+ * - `poll`：短于计时器精度、等不起，又没有到达的包可依靠：每轮事件循环看一次时间。
+ * - 数字：交给计时器的毫秒数。长的等待提前一个精度醒来；短的等待有到达的包带着走，计时器只兜底。
+ * `fine`：短于计时器精度的等待等不等得起（核心的 `fine_timer`，或者计时器本来就准）。
+ */
+export function wakePlan(delayUs: number, granularityUs: number, fine: () => boolean, sinceInboundUs: number): 'now' | 'poll' | number {
+  if (delayUs <= 0) return 'now';
+  if (delayUs >= granularityUs || !fine()) return Math.max(1, Math.floor((delayUs - granularityUs) / 1000) + 1);
+  return sinceInboundUs >= INBOUND_CLOCK_US ? 'poll' : 1;
+}
+/**
  * 关端点时最多等这么久（毫秒），让已经交给套接字的包（各条连接的关闭包）发出去再关套接字。
  * UDP 发送是异步的：发完立刻关套接字，还没发出的包会被丢掉，Windows 和 macOS 上都是全丢（2026-11-16 实测 0/50）；
  * 直连的对端收不到关闭包，就要等约 30 秒判断断开。平常几毫秒就发完。
@@ -542,6 +563,8 @@ export class Endpoint extends EventEmitter {
   private drained: (() => void) | null = null;
   private timer: NodeJS.Timeout | null = null;
   private immediate: NodeJS.Immediate | null = null;
+  /** 最近一次把收到的数据报交给核心的时刻（{@link now} 的微秒数），见 {@link INBOUND_CLOCK_US}。 */
+  private inboundAtUs = Number.NEGATIVE_INFINITY;
   private busy = false;
   private broken: Error | null = null;
   private panicMessage = '';
@@ -723,10 +746,12 @@ export class Endpoint extends EventEmitter {
   private input(datagram: Uint8Array, from: PeerAddress): void {
     this.options.tap?.('in', datagram, from);
     try {
+      const now = this.now();
+      this.inboundAtUs = now;
       this.call((core, io, addr) => {
         io().set(datagram);
         this.encode(addr(), from);
-        core.datagram(this.now(), datagram.length);
+        core.datagram(now, datagram.length);
       });
     } catch (error) {
       this.fail(error);
@@ -850,11 +875,11 @@ export class Endpoint extends EventEmitter {
     const at = this.call((core) => core.next_wake());
     if (at < 0) return;
     const now = this.now();
-    const delayUs = at - now;
     // 短于计时器精度的等待放到下一轮事件循环再看（计时器本来就准，或者核心说有连接等不起），长的提前一个精度醒来，剩下的同样一轮一轮看。
-    // 否则交给计时器，迟到的部分核心醒来时补发。
-    if (delayUs <= 0 || (delayUs < TIMER_GRANULARITY_US && this.needsFineTimer())) this.schedule();
-    else this.timer = setTimeout(() => this.pump(), Math.max(1, Math.floor((delayUs - TIMER_GRANULARITY_US) / 1000) + 1));
+    // 否则交给计时器，迟到的部分核心醒来时补发。数据在传、不断有包到达时不看时间，见 INBOUND_CLOCK_US。
+    const plan = wakePlan(at - now, TIMER_GRANULARITY_US, () => this.needsFineTimer(), now - this.inboundAtUs);
+    if (typeof plan === 'number') this.timer = setTimeout(() => this.pump(), plan);
+    else this.schedule();
   }
 
   /** @internal */

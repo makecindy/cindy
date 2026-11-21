@@ -120,6 +120,8 @@ function createDb(): Database.Database {
       id TEXT PRIMARY KEY,
       cleared_at INTEGER,
       source TEXT NOT NULL DEFAULT 'desktop',
+      side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       parent_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL DEFAULT 0,
@@ -384,10 +386,10 @@ describe('local-db:messages:list cursor', () => {
 
   // Side-chat fork boundary: inherited history remains readable but cannot authorize new actions.
   // This real SQLite fixture covers the query predicate missing from ordinary history tests (unit).
-  it('keeps inherited context out of side-chat authorization, including late answers to old cards', async () => {
+  it.each([0, 1])('keeps inherited context out of side-chat authorization (promoted=%s)', async promoted => {
     const sqlite = createDb();
     try {
-      sqlite.prepare("INSERT INTO sessions (id, source, created_at) VALUES ('s1', 'side-chat', 100)").run();
+      sqlite.prepare("INSERT INTO sessions (id, source, created_at, side_chat_promoted) VALUES ('s1', 'side-chat', 100, ?)").run(promoted);
       insertCostMessage(sqlite, { id: 'parent-grant', role: 'user', createdAt: 10 });
       insertCostMessage(sqlite, { id: 'parent-card', role: 'ask_user', createdAt: 20,
         agentMeta: { autoReviewUserText: { text: 'Deploy now', acceptedAt: 150 } } });

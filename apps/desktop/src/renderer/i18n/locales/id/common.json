@@ -1350,6 +1350,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Tugas SSH ini belum bisa mengganti Harness. Pilih model di Harness-nya saat ini, atau buat tugas SSH baru dengan Harness yang dibutuhkan.",
     "MODEL_SELECTION_UNAVAILABLE": "Model yang dipilih tidak lagi tersedia dari penyedianya. Periksa koneksi di Pengaturan atau pilih model lain yang tersedia.",
+    "MODEL_CATALOG_UNCONFIRMED": "Daftar model tidak dapat dikonfirmasi. Model pilihan kamu tetap disimpan. Muat ulang daftar model lalu coba lagi.",
     "HARNESS_SWITCH_NOT_READY": "Pergantian Harness belum selesai. Lihat detail kesalahan dan coba lagi setelah Harness siap.",
     "DEVICE_LINK_BUSY": "Komputer jarak jauh sedang sibuk. Coba lagi sebentar lagi.",
     "INVALID_PARAMS": "Ada masukan yang tidak valid. Periksa lalu coba lagi.",
@@ -8512,6 +8513,13 @@
         "openInSidebar": "Buka di sidebar",
         "panelPageHosted": "Dibuka dari halaman Plugin · tertutup saat meninggalkan halaman",
         "panelNone": "Plugin ini tidak punya panel",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: Izinkan penggunaan jarak jauh",
+          "description": "Saat aktif, komputer lain kamu dapat menjalankan tugas dengan mesin ini. Agent berjalan di komputer ini dan memakai sesi masuk serta kuota komputer ini. File dan perintah tetap di komputer tempat tugas berada.",
+          "unsupported": "Plugin ini belum mendukung penggunaan mesinnya dari komputer lain.",
+          "remoteControlOff": "Komputer ini belum mengizinkan kendali jarak jauh, jadi komputer lain tidak dapat memakai mesin ini.",
+          "ariaLabel": "Izinkan komputer lain kamu memakai {{engine}}"
+        },
         "githubRelease": {
           "title": "Pembaruan Plugin",
           "installed": "Versi saat ini {{version}}",
@@ -8580,6 +8588,8 @@
         "browserUse": "Pakai ekstensi browser ini",
         "browserActivated": "Ekstensi browser ini dipilih",
         "browserActivationFailed": "Ekstensi ini tidak dapat dipilih. Pastikan ekstensi aktif dan setujui perpindahan koneksi.",
+        "automationHostSelect": "Pakai komputer ini untuk tugas otomatis {{name}}?",
+        "automationHostClear": "Hapus komputer utama untuk tugas otomatis {{name}}?",
         "browserSwitchTitle": "Ganti koneksi ekstensi browser?",
         "browserSwitchMessage": "Serahkan koneksi browser ini ke “{{name}}”?",
         "browserSwitchDetail": "Instance: {{instance}}\nRegistrasi: {{host}}\nIni menggantikan registrasi saat ini; ekstensi akan terhubung ke Plugin ini.",
@@ -13041,6 +13051,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "Penyedia tinjauan otomatis sudah kehabisan kuota. Periksa pemakaian atau tagihannya, atau sesuaikan Model tambahan di Pengaturan pada komputer yang menjalankan Agent. Tindakan yang perlu ditinjau tetap memerlukan konfirmasi kamu.",
           "autoReviewNoAvailableModel": "Tidak ada model peninjauan otomatis yang tersedia. Di komputer yang menjalankan Agent, buka “Penyedia model” untuk mengaktifkan dan menghubungkan penyedia peninjauan, atau atur “Model bantu” sendiri di Pengaturan. Tindakan yang butuh peninjauan tetap menunggu konfirmasimu.",
           "autoReviewUnavailable": "Peninjauan otomatis untuk sementara tidak dapat mengambil keputusan, jadi tindakan yang perlu ditinjau kini perlu konfirmasimu. Ganti tugas ini ke “Akses penuh” jika tidak ingin sering terganggu. Mode itu risikonya lebih tinggi.",
           "autoReviewUnavailableWechat": "Peninjauan otomatis tidak dapat mengambil keputusan, jadi tindakan yang perlu ditinjau kini perlu konfirmasimu. WeChat Pribadi tidak bisa memakai “Akses penuh”. Konfirmasi tindakan ini secara langsung.",
@@ -15061,6 +15072,9 @@
       "usageLimitAutoContinueTitle": "Jika belum ditangani saat batas penggunaan direset, tugas ini dilanjutkan otomatis",
       "usageLimitAutoContinueCancel": "Batal",
       "usageLimitAutoContinueCancelTitle": "Batalkan kelanjutan otomatis. Error dan Coba lagi tetap tersedia.",
+      "usageLimitReached": "Akun model ini sudah mencapai batas pemakaian",
+      "usageLimitReachedWithReset": "Akun model ini sudah mencapai batas pemakaian. Pemakaian diperkirakan direset pada {{resetAt}}.",
+      "usageLimitReachedNoReset": "Akun model ini sudah mencapai batas pemakaian. Tunggu batasnya direset, atau ganti ke model lain sebelum mencoba lagi.",
       "codexOrganizationUsageLimitWithReset": "Akun Codex yang terhubung dikelola organisasimu dan sudah mencapai batas penggunaan. Penggunaan diperkirakan direset pada {{resetAt}}.",
       "codexOrganizationUsageLimit": "Akun Codex yang terhubung dikelola organisasimu dan sudah mencapai batas penggunaan. Tunggu batas penggunaan direset, atau ganti ke akun lain yang tersedia lalu coba lagi.",
       "codexUsageLimitWithReset": "Akun Codex yang terhubung sudah mencapai batas penggunaan. Penggunaan diperkirakan direset pada {{resetAt}}.",
@@ -15132,6 +15146,7 @@
     },
     "backgroundActivity": {
       "status": "Subtugas latar belakang berjalan, penggunaan model masih terpakai…",
+      "pluginEngineStatus": "Masih bekerja di latar belakang…",
       "bashWorkStatus_one": "Bekerja di latar belakang ({{count}} perintah)…",
       "bashServiceStatus_one": "{{count}} layanan latar belakang berjalan",
       "bashWorkStatus_other": "Bekerja di latar belakang ({{count}} perintah)…",
@@ -15166,6 +15181,7 @@
       "continueFailed_other": "{{count}} tugas gagal dilanjutkan. Buka tugasnya untuk mencoba lagi."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "Daftar model tidak dapat dikonfirmasi. Model pilihan kamu tetap disimpan. Muat ulang daftar model lalu coba lagi.",
       "actionScheduled": "Otorisasi tugas untuk operasi ini telah kedaluwarsa. Putaran berikutnya tetap berjalan sesuai jadwal.",
       "actionExpired": "Otorisasi tugas untuk operasi ini telah kedaluwarsa. Lihat hasil eksekusi terakhir otomatisasi.",
       "actionRecovered": "Otorisasi untuk operasi ini telah kedaluwarsa. Otomatisasi yang sama kemudian berhasil dijalankan.",
@@ -15836,11 +15852,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Tugas SSH ini belum bisa mengganti Harness. Pilih model di Harness-nya saat ini, atau buat tugas SSH baru dengan Harness yang dibutuhkan.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Pemadatan konteks gagal saat pengalihan karena koneksi ini tidak dapat memakai model sebelumnya.",
       "MODEL_SELECTION_UNAVAILABLE": "Model yang dipilih tidak lagi tersedia dari penyedianya. Periksa koneksi di Pengaturan atau pilih model lain yang tersedia.",
+      "MODEL_CATALOG_UNCONFIRMED": "Daftar model tidak dapat dikonfirmasi. Model pilihan kamu tetap disimpan. Muat ulang daftar model lalu coba lagi.",
       "HARNESS_SWITCH_NOT_READY": "Pergantian Harness belum selesai. Lihat detail kesalahan dan coba lagi setelah Harness siap.",
       "DEVICE_LINK_BUSY": "Komputer jarak jauh sedang sibuk. Coba lagi sebentar lagi.",
       "REMOTE_DAEMON_CLOSED": "Koneksi jarak jauh terputus, mungkin sedang diperbarui. Giliran ini sudah berakhir. Kirim ulang pesannya.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Lampiran berkas/gambar lokal tidak dapat diakses di sesi jarak jauh. Tempel isinya secara langsung.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "Penyedia tinjauan otomatis sudah kehabisan kuota. Periksa pemakaian atau tagihannya, atau sesuaikan Model tambahan di Pengaturan pada komputer yang menjalankan Agent. Tindakan yang perlu ditinjau tetap memerlukan konfirmasi kamu.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Tidak ada model peninjauan otomatis yang tersedia. Di komputer yang menjalankan Agent, buka “Penyedia model” untuk mengaktifkan dan menghubungkan penyedia peninjauan, atau atur “Model bantu” sendiri di Pengaturan. Tindakan yang butuh peninjauan tetap menunggu konfirmasimu.",
       "AUTO_REVIEW_UNAVAILABLE": "Peninjauan otomatis tidak dapat mengambil keputusan, jadi tindakan yang perlu ditinjau kini perlu konfirmasimu. Ganti tugas ini ke “Akses penuh” jika tidak ingin sering terganggu. Mode itu risikonya lebih tinggi.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Peninjauan otomatis tidak dapat mengambil keputusan, jadi tindakan yang perlu ditinjau kini perlu konfirmasimu. WeChat Pribadi tidak bisa memakai “Akses penuh”. Konfirmasi tindakan ini secara langsung.",
@@ -15886,6 +15905,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Komputer ini tidak bisa melanjutkan status berjalan tugas sebelumnya. Pilih model dari komputer atau penyedia lain untuk melanjutkan lewat serah terima konteks; pesan asli tetap disimpan.",
       "REMOTE_AGENT_INVALID": "Terjadi kesalahan saat berkomunikasi dengan komputer yang menjalankan Agent. Coba lagi; jika terus terjadi, perbarui Cindy di kedua komputer ke versi terbaru.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "Mesin plugin tidak dapat memulihkan percakapan sebelumnya. Pesan kamu tetap tersimpan. Pilih mesin lain atau mulai tugas baru.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "Mesin plugin ini tidak dapat memakai alat di komputer tempat tugas berada, jadi belum bisa menjalankan tugas ini dari komputer lain. Pilih mesin atau model lain.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "Mesin plugin ini hanya dapat menjalankan tugas di komputer ini. Komputer lain belum bisa memakainya.",
       "REMOTE_AGENT_RESUME_REJECTED": "Komputer yang menjalankan model tidak bisa melanjutkan tugas ini. Buat tugas baru dari daftar tugas dan salin isi yang perlu dilanjutkan. Tugas asli dan pesan yang mengantre tetap disimpan.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Model ini sudah mencapai batas porsi model yang ditetapkan pemiliknya. Pilih model lain yang tersedia untuk melanjutkan.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Komputer itu belum membuka penyedia atau model yang dipilih untukmu. Jika itu komputermu sendiri, aktifkan “Izinkan komputer lain memakai model komputer ini” di pengaturan Koneksi Jarak Jauh-nya; jika orang lain membagikannya, minta mereka menyesuaikan akses di Remote & Sharing. Atau pilih model lain.",
@@ -16054,7 +16075,6 @@
       "opened": "Membuka halaman pratinjau"
     },
     "sideChat": {
-      "openPage": "Buka halaman tugas lengkap",
       "returnMain": "Kembali ke tugas utama",
       "new": "Obrolan samping baru",
       "mainWindowDescription": "Obrolan samping saat ini berjalan di jendela utama. Riwayat pertanyaannya tetap tersimpan.",
@@ -16062,6 +16082,14 @@
       "commandDescription": "Buka obrolan samping berdasarkan tugas utama. Tambahkan pertanyaan setelah perintah sebagai draf pertanyaan.",
       "title": "Obrolan samping",
       "context": "Bertanya berdasarkan konteks tugas utama yang sudah selesai saat dibuka; tugas utama tetap berjalan. Riwayat pertanyaan disimpan sampai tab ini ditutup.",
+      "viewCollaboration": "Lihat kolaborasi",
+      "openConversation": "Buka percakapan",
+      "openFromTaskList": "Juga tersedia di daftar tugas di sebelah kiri.",
+      "returnToSideChat": "Kembali ke obrolan samping",
+      "reopenSideChat": "Buka lagi obrolan samping",
+      "origin": "Percakapan ini dimulai di obrolan samping.",
+      "originNamed": "Percakapan ini dimulai di obrolan samping dari “{{title}}”.",
+      "originUnavailable": "Percakapan ini dimulai di obrolan samping. Tugas asalnya tidak tersedia.",
       "opening": "Sedang membuka…",
       "notReady": "Tunggu tugas utama menyelesaikan balasan pertamanya.",
       "unsupported": "Agent tugas ini berjalan di lingkungan eksekusi lain; obrolan samping belum didukung di sini.",
@@ -16072,6 +16100,7 @@
       "archivedTask": "Batalkan pengarsipan dulu, lalu buka obrolan samping",
       "closeTitle": "Tutup obrolan samping?",
       "closeDescription": "Tindak lanjut ini akan dihentikan dan dihapus; tugas utama tidak terpengaruh.",
+      "closeDescriptionRunning": "Tugas yang cocok di bilah sisi kiri juga akan diarsipkan, dan worker-nya berhenti.",
       "closeConfirm": "Tutup dan hapus",
       "closeFailed": "Gagal menutup obrolan samping. Coba lagi nanti."
     },
@@ -16088,7 +16117,17 @@
       "toggle": "Tampilkan atau sembunyikan balasan dari “{{title}}”",
       "openTask": "Buka tugas"
     },
+    "geminiRateLimit": {
+      "retried": "Dicoba ulang otomatis setelah batas laju Gemini",
+      "title": "Batas token masukan per menit Gemini tercapai.",
+      "exhausted": "Gemini masih dibatasi setelah satu percobaan ulang. Kamu dapat mencoba lagi secara manual.",
+      "retryIn": "Mencoba ulang otomatis dalam {{seconds}} dtk"
+    },
     "subscriptionAccountError": {
+      "poolModelLimited": "Pemakaian langganan untuk model ini sudah mencapai batas. Kamu dapat mengganti model sekarang.",
+      "poolRetryUntil": "Coba lagi setelah {{resetAt}}.",
+      "poolOtherSignedOut": "Akun langganan lain sudah keluar. Kamu dapat masuk di komputer yang menjalankan tugas lalu coba lagi.",
+      "poolUnavailable": "Tidak ada akun langganan yang tersedia untuk model ini. Ganti model atau periksa akun di komputer yang menjalankan tugas.",
       "limited": "Akun langganan yang dipakai tugas ini sudah mencapai batas penggunaan. Tunggu batasnya diatur ulang lalu coba lagi, atau pilih sumber model lain. Tugas ini tetap terikat ke akun semula dan tidak berganti akun otomatis.",
       "limitedUntil": "Akun langganan yang dipakai tugas ini sudah mencapai batas penggunaan. Perkiraan reset: {{resetAt}}. Tunggu sampai waktu itu lalu coba lagi, atau pilih sumber model lain. Tugas ini tetap terikat ke akun semula dan tidak berganti akun otomatis.",
       "loginRequired": "Akun langganan yang dipakai tugas ini perlu masuk ulang. Masuk lagi ke akun tersebut di komputer yang menjalankan tugas, lalu coba lagi.",
@@ -16325,6 +16364,14 @@
       "remoteProviderUnsupported": "Penyedia ini tidak didukung di sesi jarak jauh SSH, pilih sumber lain",
       "remoteNativeOauthUnavailable": "Tugas jarak jauh tidak bisa memakai langganan Claude; pilih gateway atau model API key",
       "claudeSubscriptionWorkspaceOverride": "Pengaturan .claude di folder ini mengubah alamat hulu atau cara autentikasi Claude, jadi langganan Claude tidak bisa dipakai di sini. Hapus pengaturan itu, atau pilih gateway atau model API key",
+      "savedModel": {
+        "loading": "Menghubungkan ke model pilihan…",
+        "checkFailed": "Tidak dapat memeriksa model pilihan",
+        "engine": "Mesin pilihan tidak tersedia. Pilih model untuk tugas ini.",
+        "source": "Sumber pilihan tidak tersedia. Pilih model untuk tugas ini.",
+        "model": "Model pilihan tidak tersedia. Pilih model untuk tugas ini.",
+        "thisTaskOnly": "Model dipilih hanya untuk tugas ini"
+      },
       "deviceStillLoading": "Perangkat jarak jauh masih dimuat. Tunggu sebentar.",
       "remoteDefaultsLoadFailed": "Gagal memuat pengaturan perangkat jarak jauh. Periksa koneksi; Cindy sedang mencoba lagi.",
       "branchChanged": "Branch proyek sekarang {{branch}}, periksa dulu sebelum mengirim",
@@ -16946,7 +16993,41 @@
             "token": "Sedang memakai token cadangan",
             "recheck": "Periksa koneksi",
             "summary": "Kelola repositori, Issue, PR, dan Actions GitHub.",
-            "otherMethods": "Cara koneksi lain"
+            "otherMethods": "Cara koneksi lain",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "Akses GitHub App",
+            "all": "Semua repositori",
+            "selected": "Repositori terpilih",
+            "visible": "Repositori yang terlihat: {{count}}",
+            "unknownCount": "Jumlah repositori tidak tersedia",
+            "permissions": "Izin",
+            "read": "Hanya baca",
+            "write": "Baca dan tulis",
+            "admin": "Admin",
+            "loading": "Memuat akses…",
+            "missing": "Hubungkan GitHub App di komputer ini untuk melihat akses.",
+            "unavailable": "Detail akses tidak tersedia.",
+            "empty": "Tidak ada instalasi yang terlihat oleh akun ini.",
+            "suspended": "Instalasi ditangguhkan",
+            "events": "Repositori yang berlangganan peristiwa di komputer ini: {{count}}",
+            "manage": "Kelola akses repositori",
+            "names": {
+              "actions": "Actions",
+              "administration": "Administrasi repositori",
+              "checks": "Checks",
+              "contents": "Isi repositori",
+              "deployments": "Deployment",
+              "issues": "Issue",
+              "members": "Anggota organisasi",
+              "metadata": "Metadata",
+              "organization_events": "Peristiwa organisasi",
+              "pull_requests": "Pull request",
+              "repository_hooks": "Webhook repositori",
+              "statuses": "Status commit",
+              "workflows": "File workflow"
+            }
           },
           "app": {
             "title": "Peristiwa repositori",
@@ -16959,6 +17040,21 @@
             "repositories": "Pilih repositori",
             "disconnect": "Putuskan koneksi peristiwa",
             "connect": "Sambungkan GitHub App"
+          },
+          "connection": {
+            "operations": "Operasi repositori",
+            "operationsMissing": "Akses repositori belum diizinkan",
+            "checking": "Memeriksa koneksi GitHub…",
+            "mismatch": "Operasi dan notifikasi memakai akun berbeda. Periksa akun lalu hubungkan ulang.",
+            "ready": "Akun GitHub terhubung.",
+            "close": "Tutup",
+            "incomplete": "Akun tertaut. Izinkan operasi repositori di komputer ini untuk menyelesaikan.",
+            "eventsOnly": "Akun ini menerima peristiwa repositori. Namanya saja tidak memastikan izin di komputer ini.",
+            "connect": "Hubungkan GitHub",
+            "alternative": "Pakai sesi masuk GitHub lokal",
+            "cliDescription": "Tetap pakai sesi masuk lokal kamu. Notifikasi pribadi dan fitur lain yang tidak didukung GitHub App masih memerlukannya.",
+            "disconnect": "Putuskan GitHub App",
+            "repositories": "Repositori yang dipantau: {{count}}"
           }
         },
         "unresolved": "{{count}} komentar review yang belum selesai",
@@ -22099,7 +22195,8 @@
       "empty": "Belum ada grup model. Gabungkan beberapa sumber jadi satu mode di Pengaturan supaya bisa dipilih di sini.",
       "manage": "Kelola grup model",
       "switched": "“{{name}}” mengganti tugas ini ke {{model}}",
-      "switchUnavailable": "“{{name}}” sekarang tidak punya sumber yang bisa dipakai tugas ini, model tidak diganti."
+      "switchUnavailable": "“{{name}}” sekarang tidak punya sumber yang bisa dipakai tugas ini, model tidak diganti.",
+      "chooseUnavailable": "“{{name}}” tidak punya sumber yang bisa dipakai saat ini, jadi tidak dipilih."
     },
     "why": {
       "expiringQuota": "Sisa kuota {{left}}%, di-reset {{reset}}, jadi dipakai dulu",

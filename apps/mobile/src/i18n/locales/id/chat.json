@@ -190,7 +190,17 @@
     "worked": "Bekerja selama {{duration}}",
     "workDetails": "Detail pekerjaan"
   },
+  "geminiRateLimit": {
+    "retried": "Dicoba ulang otomatis setelah batas laju Gemini",
+    "title": "Batas token masukan per menit Gemini tercapai.",
+    "exhausted": "Gemini masih dibatasi setelah satu percobaan ulang. Kamu dapat mencoba lagi secara manual.",
+    "retryIn": "Mencoba ulang otomatis dalam {{seconds}} dtk"
+  },
   "subscriptionAccountError": {
+    "poolModelLimited": "Pemakaian langganan untuk model ini sudah mencapai batas. Kamu dapat mengganti model sekarang.",
+    "poolRetryUntil": "Coba lagi setelah {{resetAt}}.",
+    "poolOtherSignedOut": "Akun langganan lain sudah keluar. Kamu dapat masuk di komputer yang menjalankan tugas lalu coba lagi.",
+    "poolUnavailable": "Tidak ada akun langganan yang tersedia untuk model ini. Ganti model atau periksa akun di komputer yang menjalankan tugas.",
     "limited": "Akun langganan yang dipakai tugas ini sudah mencapai batas penggunaan. Tunggu batasnya diatur ulang lalu coba lagi, atau pilih sumber model lain. Tugas ini tetap terikat ke akun semula dan tidak berganti akun otomatis.",
     "limitedUntil": "Akun langganan yang dipakai tugas ini sudah mencapai batas penggunaan. Perkiraan reset: {{resetAt}}. Tunggu sampai waktu itu lalu coba lagi, atau pilih sumber model lain. Tugas ini tetap terikat ke akun semula dan tidak berganti akun otomatis.",
     "loginRequired": "Akun langganan yang dipakai tugas ini perlu masuk ulang. Masuk lagi ke akun tersebut di komputer yang menjalankan tugas, lalu coba lagi.",
