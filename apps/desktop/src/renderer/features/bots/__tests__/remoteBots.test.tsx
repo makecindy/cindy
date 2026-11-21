@@ -321,30 +321,80 @@ it('hydrates exact creation attribution through the existing task-card API on ea
   expect(h.invoke).toHaveBeenCalledWith('b', 'maker:bot-delegations:list', ['canonical']);
 });
 
-it('refreshes creation attribution on a delegation push, keeps it on failure and clears it on a successful empty read', async () => {
+const taskReads = () => h.invoke.mock.calls.filter(call => call[1] === 'maker:bot-delegations:list').length;
+const rosterReads = () => h.invoke.mock.calls.filter(call => call[1] === REMOTE_RESOURCE_LIST_CHANNEL).length;
+
+// Unit, cindy-bots-runtime.md §6.1: current hosts answer the V1 list from rows that no longer
+// change. Before, every connect / reconnect re-read it once per teammate (field logs: 16-18
+// timeouts of 10-30 s per host over 8 days). Minimal input: attribution known, relay reconnects.
+// Older hosts that push `maker:bot-delegation:changed` still refresh, and catch up on reconnect.
+it('reads creation attribution once, then only on delegation pushes, keeping it on failure', async () => {
   h.devices = [host('a')];
   let response: unknown = { ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: 'child' }] };
   h.invoke.mockImplementation(async (_device, channel) => channel === REMOTE_RESOURCE_LIST_CHANNEL ? collection() : response);
   const { result } = renderHook(useRoster);
   await waitFor(() => expect(result.current[0]?.delegatedSessionIds).toEqual(['child']));
-  const taskReads = () => h.invoke.mock.calls.filter(call => call[1] === 'maker:bot-delegations:list').length;
-  const beforeStatusPush = taskReads();
+  expect(taskReads()).toBe(1);
   vi.useFakeTimers();
   try {
     act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(taskReads()).toBe(beforeStatusPush);
-  } finally { vi.useRealTimers(); }
-  response = { ok: false, errorCode: 'HOST_NOT_READY' };
-  act(() => h.status({ status: 'online' }));
-  await act(async () => {});
-  expect(result.current[0].delegatedSessionIds).toEqual(['child']);
-  response = { ok: true, delegations: [] };
-  vi.useFakeTimers();
-  try {
+    act(() => h.status({ status: 'reconnecting' }));
+    act(() => h.status({ status: 'online' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(rosterReads()).toBe(3);
+    expect(taskReads()).toBe(1);
+    response = { ok: false, errorCode: 'HOST_NOT_READY' };
     act(() => h.push({ deviceId: 'a', channel: 'maker:bot-delegation:changed' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(taskReads()).toBe(2);
+    expect(result.current[0].delegatedSessionIds).toEqual(['child']);
+    // This host still runs V1 tasks: a reconnect re-reads what may have changed while away.
+    response = { ok: true, delegations: [] };
+    act(() => h.status({ status: 'online' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(taskReads()).toBe(3);
     expect(result.current[0].delegatedSessionIds).toEqual([]);
+  } finally { vi.useRealTimers(); }
+});
+
+// Unit, same rule: the display cache keeps attribution across launches; a teammate cached
+// without it (never read successfully) is still read once. Before, a missing field restored as [].
+it('reads attribution only for cached teammates that do not have it yet', async () => {
+  const cached = (deviceId: string, extra = {}) => ({ id: 'same-bot', deviceId, deviceName: deviceId, name: 'Writer',
+    avatar: '', avatarColor: '', description: '', preview: '', activityAt: 100, sessionId: 'canonical', ...extra });
+  localStorage.setItem(`cindy.remoteBots.v1.${h.owner}`, JSON.stringify([cached('a', { delegatedSessionIds: ['a-child'] }), cached('b')]));
+  h.invoke.mockImplementation(async (device, channel) => channel === REMOTE_RESOURCE_LIST_CHANNEL
+    ? collection() : { ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: `${device}-new` }] });
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([['a-child'], ['b-new']]));
+  expect(h.invoke.mock.calls.filter(call => call[1] === 'maker:bot-delegations:list')).toEqual([['b', 'maker:bot-delegations:list', ['canonical']]]);
+});
+
+// Unit, same rule: a host that never answers holds the read for 10 s, not the 30 s invoke
+// budget; the next teammate there is not queued behind the stalled request, and ordinary
+// refreshes leave the host alone for 5 minutes. Minimal input: two teammates, a pending read.
+it('stops waiting for a stalled attribution read and backs off the host before retrying', async () => {
+  h.devices = [host('a')];
+  const two = collection();
+  two.items.push({ ...two.items[0], ref: { ...two.items[0].ref, id: 'second-bot' },
+    links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'second' } }] });
+  h.invoke.mockImplementation((_device, channel) => channel === REMOTE_RESOURCE_LIST_CHANNEL
+    ? Promise.resolve(two) : new Promise(() => {}));
+  vi.useFakeTimers();
+  try {
+    const { result } = renderHook(useRoster);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(taskReads()).toBe(1);
+    act(() => h.status({ status: 'online' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(rosterReads()).toBe(2);
+    expect(taskReads()).toBe(1);
+    expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([undefined, undefined]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+    act(() => h.status({ status: 'online' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(taskReads()).toBe(2);
   } finally { vi.useRealTimers(); }
 });
 

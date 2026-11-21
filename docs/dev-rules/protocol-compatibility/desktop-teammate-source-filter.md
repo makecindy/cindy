@@ -14,6 +14,15 @@
 切账号、撤权、断线后的旧响应仍受原请求代次隔离。只读关系请求失败不重启 relay、
 不影响其它设备、不重放任何任务操作。不增加 IPC、权限、服务端字段或数据库迁移。
 
+2026-11-21 读取时机：新 Host 的旧行不再变化，原先每次上线、重连、设备列表变化都对每个伙伴重读，
+实测两台电脑 8 天各超时 16、18 次（每次等 10–30 秒，并占远程并发名额）。桌面现在只在本机还没有
+这位伙伴的归属（含显示缓存里没有该字段）、伙伴主任务 ID 变了、或收到 `maker:bot-delegation:changed`
+时读取；推送过该事件的 Host（仍跑 V1 委派）在本次登录内重连时也重读，补上离线期间漏掉的推送。
+单次读取 10 秒不再等待（请求本身不取消），失败保留已知归属，普通刷新 5 分钟内不重试该伙伴；
+超时则同一 Host 本轮停读、5 分钟内不再排队下一位。只改控制端何时发请求，线协议与 Host 不变。
+手机端（`apps/mobile/src/session/readTeammateTasks.ts`）尚未跟进。实现与回归：`useRemoteBots.ts`、
+`remoteBots.test.tsx`。
+
 Task creator filtering resolves built-in Cindy identity through the existing local `listCindyCopies` read,
 which now returns even a single remaining cloud Cindy. The merge settings entry still requires two copies.
 This allows old remote hosts without template metadata to participate in the unified filter without

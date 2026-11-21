@@ -86,6 +86,8 @@ export function useRemoteBotSync(): void {
       cindyIds = new Set();
       unreportedReads.clear();
       inFlightReads.clear();
+      legacyDelegationHosts.clear();
+      delegationRetryAt.clear();
       let cached: RemoteBot[] = [];
       try {
         if (!nextOwner) {
@@ -99,7 +101,8 @@ export function useRemoteBotSync(): void {
               templateId: typeof bot.templateId === 'string' ? bot.templateId : undefined,
               avatar: bot.avatar, avatarColor: bot.avatarColor, description: bot.description, preview: bot.preview,
               followingSessionIds: Array.isArray(bot.followingSessionIds) ? bot.followingSessionIds.filter((id: unknown) => typeof id === 'string') : [],
-              delegatedSessionIds: Array.isArray(bot.delegatedSessionIds) ? bot.delegatedSessionIds.filter((id: unknown) => typeof id === 'string') : [],
+              // Missing means never read: that teammate's attribution is still fetched once.
+              delegatedSessionIds: Array.isArray(bot.delegatedSessionIds) ? bot.delegatedSessionIds.filter((id: unknown) => typeof id === 'string') : undefined,
               activityAt: bot.activityAt, sessionId: typeof bot.sessionId === 'string' ? bot.sessionId : null,
               lastReplyAt: Number.isFinite(bot.lastReplyAt) ? bot.lastReplyAt : undefined,
               // A snoozed teammate stays snoozed while its computer is offline.
@@ -129,7 +132,7 @@ export function useRemoteBotSync(): void {
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
     const taskRefreshes = new Set<string>();
     const current = () => !disposed && owner === nextOwner && isDataOwnerGenerationCurrent(dataOwner);
-    async function refresh(deviceId: string, refreshTasks = true) {
+    async function refresh(deviceId: string, refreshTasks = false) {
       const host = byId.get(deviceId);
       if (!host?.online || !relayAvailable || !current()) return;
       if (refreshTasks) taskRefreshes.add(deviceId);
@@ -166,22 +169,30 @@ export function useRemoteBotSync(): void {
         flushUnreportedReads(deviceId, bots);
         // Every host answers the V1 task-card list (newer ones read-only from stored rows):
         // the children a teammate started there keep their "opened by" mark. Read serially
-        // per host; never per task row.
+        // per host; never per task row. Stored rows no longer change, so an ordinary refresh
+        // only reads a teammate whose attribution is unknown or whose main chat changed.
         for (const bot of bots) {
           if (!current() || generations.get(deviceId) !== epoch) return;
           if (!bot.sessionId) continue;
           const old = previous.get(bot.id);
-          if (!refreshTasks && old?.delegatedSessionIds !== undefined && old.sessionId === bot.sessionId) continue;
+          const retryKey = `${deviceId}\n${bot.id}\n${bot.sessionId}`;
+          if (!refreshTasks && ((old?.delegatedSessionIds !== undefined && old.sessionId === bot.sessionId)
+            || Math.max(delegationRetryAt.get(retryKey) ?? 0, delegationRetryAt.get(deviceId) ?? 0) > Date.now())) continue;
           try {
-            const tasks = await window.electronAPI.deviceLink.invoke(
-              deviceId, 'maker:bot-delegations:list', [bot.sessionId],
-            );
+            const tasks = await readLegacyDelegations(deviceId, bot.sessionId);
             if (!current() || generations.get(deviceId) !== epoch) return;
             const created = remoteBotCreatedTaskIds(tasks, bot.id);
-            if (created === null) continue;
+            if (created === null) { delegationRetryAt.set(retryKey, Date.now() + DELEGATION_RETRY_MS); continue; }
+            delegationRetryAt.delete(retryKey);
             publish(snapshot.map(row => row.deviceId === deviceId && row.id === bot.id
               ? { ...row, delegatedSessionIds: created } : row));
-          } catch { /* Keep this host's last known attribution on a temporary read failure. */ }
+          } catch (error) {
+            // Keep this host's last known attribution on a temporary read failure.
+            if (!current()) return;
+            delegationRetryAt.set(retryKey, Date.now() + DELEGATION_RETRY_MS);
+            // A stalled host still holds that request: do not queue the next teammate behind it.
+            if (error === DELEGATION_READ_TIMEOUT) { delegationRetryAt.set(deviceId, Date.now() + DELEGATION_RETRY_MS); break; }
+          }
         }
         if (current() && generations.get(deviceId) === epoch) taskRefreshes.delete(deviceId);
       } catch {
@@ -192,7 +203,8 @@ export function useRemoteBotSync(): void {
       }
     }
     // Older hosts still run V1 background tasks and push `maker:bot-delegation:changed`;
-    // newer hosts never do. Either way it only refreshes this host's created-task marks.
+    // newer hosts never do. Either way it only refreshes this host's created-task marks;
+    // a host seen pushing it also re-reads them on reconnect, catching pushes missed offline.
     // The app's existing remote-session synchronizer owns the sessions topic.
     // Sharing its pushes avoids competing subscribe/unsubscribe owners.
     // Subscribe before reading status: a stopped/connecting relay cannot inherit
@@ -205,7 +217,10 @@ export function useRemoteBotSync(): void {
         !isDeviceLinkRemotePushCurrent(push, stamp)
       )
         return;
-      if (push.channel === 'maker:bot-delegation:changed') taskRefreshes.add(push.deviceId);
+      if (push.channel === 'maker:bot-delegation:changed') {
+        taskRefreshes.add(push.deviceId);
+        legacyDelegationHosts.add(push.deviceId);
+      }
       if (timers.has(push.deviceId)) return;
       timers.set(
         push.deviceId,
@@ -221,7 +236,7 @@ export function useRemoteBotSync(): void {
       statusRevision += 1;
       relayAvailable = state.status === 'online';
       if (state.status === 'online') {
-        for (const host of hosts) if (host.online) void refresh(host.deviceId);
+        for (const host of hosts) if (host.online) void refresh(host.deviceId, legacyDelegationHosts.has(host.deviceId));
       } else {
         for (const id of byId.keys()) generations.set(id, (generations.get(id) ?? 0) + 1);
         publish(
@@ -234,7 +249,7 @@ export function useRemoteBotSync(): void {
       if (!current() || revision !== statusRevision) return;
       relayAvailable = state.linkStatus === 'online';
       if (relayAvailable) {
-        for (const host of hosts) if (host.online) void refresh(host.deviceId);
+        for (const host of hosts) if (host.online) void refresh(host.deviceId, legacyDelegationHosts.has(host.deviceId));
       } else publish(snapshot.map((bot) => ({ ...bot, online: false, connectionKnown: state.linkStatus === 'stopped' || !byId.get(bot.deviceId)?.online, generation: undefined })));
     }).catch(() => {
       if (current() && revision === statusRevision) publish(snapshot.map((bot) => ({ ...bot, online: false, connectionKnown: false, generation: undefined })));
@@ -278,6 +293,31 @@ function settleReadReportOwner(): void {
   readReportOwner = next;
 }
 const readReportKey = (deviceId: string, botId: string) => `${deviceId}\n${botId}`;
+
+/** Hosts seen pushing `maker:bot-delegation:changed` (still running V1 tasks) since sign-in. */
+const legacyDelegationHosts = new Set<string>();
+/**
+ * When an ordinary refresh may retry a failed attribution read: `deviceId\nbotId\nsessionId` after
+ * a failure, or `deviceId` (the whole host) after a stalled read. Pushes and re-reads bypass it.
+ */
+const delegationRetryAt = new Map<string, number>();
+const DELEGATION_READ_TIMEOUT_MS = 10_000;
+const DELEGATION_RETRY_MS = 5 * 60_000;
+const DELEGATION_READ_TIMEOUT = new Error('legacy delegation read timed out');
+
+/**
+ * The legacy task-card list is static on current hosts; stop waiting before the 30 s invoke budget
+ * so a stalled host does not hold the roster refresh. The request itself is not cancelled.
+ */
+function readLegacyDelegations(deviceId: string, sessionId: string): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    window.electronAPI.deviceLink.invoke(deviceId, 'maker:bot-delegations:list', [sessionId]),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(DELEGATION_READ_TIMEOUT), DELEGATION_READ_TIMEOUT_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 function sendRemoteBotRead(deviceId: string, botId: string, at: number): void {
   settleReadReportOwner();

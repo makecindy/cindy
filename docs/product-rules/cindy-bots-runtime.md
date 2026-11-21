@@ -826,7 +826,8 @@ V1 的伙伴专用后台任务（「委派」：`start_session_task` / `check_se
   照常呈现（标题、冻结结果、文件、PR、打开原任务），不再有停止、补一句等实时操作；未落终态的旧行
   只在子任务实际运行时显示运行中，否则显示状态未知。近况的「输出内容」继续列出已完成旧委派的文件与
   伙伴任务的 PR。旧委派子任务继续算作「由这位伙伴开的」（本机经 `readBotResponsibilityScope`，
-  远程经 `maker:bot-delegations:list`）。
+  远程经 `maker:bot-delegations:list`，桌面只在归属未知、主任务变化或旧 Host 推送变更时读取，见
+  [桌面伙伴来源筛选](../dev-rules/protocol-compatibility/desktop-teammate-source-filter.md)）。
 - **兼容**：`maker:bot-delegations:list` 继续应答（本机与 device-link），`maker:bot-delegation:cancel`
   对旧控制端稳定返回 `UNSUPPORTED_CAPABILITY`；新控制端连旧 Host 时照常读取旧 Host 的实时行和
   `maker:bot-delegation:changed` 推送，只是不再提供停止与补一句。升级前排队、尚未派发的委派输入
