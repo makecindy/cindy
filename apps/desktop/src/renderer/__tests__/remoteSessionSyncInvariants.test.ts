@@ -217,7 +217,13 @@ describe('弱网 optimistic mutation 粘滞路由不变式', () => {
       'const operation = beginInputProjectionOperation(sessionId, remoteDeviceId);',
     );
     expect(makerChatStoreSrc).toContain(
-      'const triggerApi = remoteDeviceId ? makerApiForDevice(remoteDeviceId) : makerApiFor(sessionId);',
+      'const targetDeviceId = deviceId === undefined ? getStickySessionDeviceId(sessionId) ?? null : deviceId;',
+    );
+    expect(makerChatStoreSrc).toContain(
+      'return getSessionFor(sessionId, targetDeviceId)',
+    );
+    expect(makerChatStoreSrc).toContain(
+      'const operation = beginInputProjectionOperation(sessionId, targetDeviceId);',
     );
     expect(makerChatStoreSrc).toMatch(/clearOperation\.api\s*\.closeSession/);
     expect(makerChatStoreSrc).toContain(
