@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import path from 'node:path';
-import { lstat, realpath } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
 import { isSensitiveCredentialPath, scanWorkspaceFileResources, type AtResourceItem } from '@cindy/maker-core';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -89,8 +89,8 @@ export async function scanAtBuddyFiles(
   let truncated = false;
   for (const root of roots.values()) {
     if (!isCurrent()) return empty;
-    const stat = await lstat(root).catch(() => null);
-    if (!stat?.isDirectory() || !isCurrent()) continue;
+    // Match the project picker: directory aliases are allowed when their target
+    // passes the same owner and sensitive-path checks as an ordinary directory.
     const actualRoot = await realpath(root).catch(() => null);
     if (!actualRoot || !isCurrent() || !canSearch(actualRoot)) continue;
     const actualKey = linkedProjectDirectoryKey(actualRoot);

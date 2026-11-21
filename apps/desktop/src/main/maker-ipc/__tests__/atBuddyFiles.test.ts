@@ -58,7 +58,7 @@ describe('scanAtBuddyFiles', () => {
     return scanAtBuddyFiles({ sessionId, workingDir, query: 'report' }, new AbortController().signal);
   }
 
-  it('returns the current reports from saved local roots and excludes other devices, symlinks and the workspace', async () => {
+  it('searches a linked directory alias without exposing sensitive aliases, other devices or the workspace', async () => {
     const linked = path.join(fixture.root, 'linked');
     const reference = path.join(fixture.root, 'reference');
     const remote = path.join(fixture.root, 'remote');
@@ -69,16 +69,18 @@ describe('scanAtBuddyFiles', () => {
       await fs.writeFile(path.join(dir, 'report.md'), dir);
     }
     await fs.writeFile(path.join(workspace, 'report.md'), 'old backup');
-    const alias = path.join(fixture.root, 'alias');
-    await fs.symlink(sensitive, alias, 'junction');
+    const linkedAlias = path.join(fixture.root, 'linked-alias');
+    const sensitiveAlias = path.join(fixture.root, 'sensitive-alias');
+    await fs.symlink(linked, linkedAlias, 'junction');
+    await fs.symlink(sensitive, sensitiveAlias, 'junction');
     session([reference, otherOwner]);
     const workbench = path.join(path.dirname(workspace), 'workbench.json');
     await fs.writeFile(workbench, JSON.stringify({ directories: [
-      { path: linked }, { path: remote, deviceId: 'other-device' }, { path: alias }, { path: workspace },
+      { path: linkedAlias }, { path: remote, deviceId: 'other-device' }, { path: sensitiveAlias }, { path: workspace },
     ] }));
     const result = await search();
     expect(result.items.map(({ relPath, sourceLabel, sourceRelativePath }) => ({ relPath, sourceLabel, sourceRelativePath }))).toEqual([
-      { relPath: path.join(linked, 'report.md'), sourceLabel: 'linked', sourceRelativePath: 'report.md' },
+      { relPath: path.join(linkedAlias, 'report.md'), sourceLabel: 'linked-alias', sourceRelativePath: 'report.md' },
       { relPath: path.join(reference, 'report.md'), sourceLabel: 'reference', sourceRelativePath: 'report.md' },
     ]);
     await fs.writeFile(workbench, JSON.stringify({ directories: [] }));
