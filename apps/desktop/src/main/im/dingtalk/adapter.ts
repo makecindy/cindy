@@ -55,6 +55,12 @@ export function buildDingTalkAdapter(
   options: DingTalkAdapterOptions = {},
 ): ImChannelAdapter {
   const companion = Boolean(options.companionBotId);
+  let ownerApprovalQueue: Promise<void> = Promise.resolve();
+  const enqueueOwnerApproval = <T>(operation: () => Promise<T>): Promise<T> => {
+    const run = ownerApprovalQueue.then(operation, operation);
+    ownerApprovalQueue = run.then(() => undefined, () => undefined);
+    return run;
+  };
   return {
     channel: 'dingtalk',
     // The shared card-action subscription still expects the rich interface.
@@ -119,7 +125,7 @@ export function buildDingTalkAdapter(
         request.kind === 'ask_user_question'
           ? userId
           : dingtalkIm.getOwnerUserId() || userId;
-      return handleDingTalkTextInteraction(
+      const runInteraction = () => handleDingTalkTextInteraction(
         {
           sendText: (target, text) => dingtalkIm.sendText(target, text),
           requestTextReply: (target, prompt, parse, timeoutMs, shared) =>
@@ -129,6 +135,9 @@ export function buildDingTalkAdapter(
         request,
         options,
       );
+      return targetUserId === dingtalkIm.getOwnerUserId() && request.kind !== 'ask_user_question'
+        ? enqueueOwnerApproval(runInteraction)
+        : runInteraction();
     },
     // 对齐 Telegram / 飞书的边界：主人私聊完全遵循 session.permissionMode，
     // 因而可以显式选择 bypassPermissions（完全访问）；群聊携带成员可控上下文，

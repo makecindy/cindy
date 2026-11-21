@@ -143,6 +143,38 @@ describe('dingtalk turn permission boundary', () => {
     expect(sendText).not.toHaveBeenCalledWith('guest-user', expect.any(String));
   });
 
+  it('serializes permission approvals shared by concurrent guest lanes', async () => {
+    let releaseFirst!: () => void;
+    const firstReply = new Promise<{ kind: 'permission'; behavior: 'allow' }>((resolve) => {
+      releaseFirst = () => resolve({ kind: 'permission', behavior: 'allow' });
+    });
+    const requestTextReply = vi
+      .fn()
+      .mockReturnValueOnce(firstReply)
+      .mockResolvedValueOnce({ kind: 'permission', behavior: 'deny' });
+    const im = {
+      getOwnerUserId: () => 'owner-user',
+      requestTextReply,
+      sendText: vi.fn(async () => undefined),
+    } as unknown as DingTalkIM;
+    const guestAdapter = buildDingTalkAdapter(im, CONFIG);
+    const first = guestAdapter.handleTextInteraction?.(
+      'guest-a',
+      { kind: 'permission', requestId: 'request-a', toolName: 'file_change', input: {} },
+      {},
+    );
+    const second = guestAdapter.handleTextInteraction?.(
+      'guest-b',
+      { kind: 'permission', requestId: 'request-b', toolName: 'file_change', input: {} },
+      {},
+    );
+    await Promise.resolve();
+    expect(requestTextReply).toHaveBeenCalledTimes(1);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(requestTextReply).toHaveBeenCalledTimes(2);
+  });
+
   it('directs unsupported permission modes to Cindy, not an unsupported chat command', () => {
     const copy = adapter.ui.error!.permissionModeUnsupported;
     const message = typeof copy === 'function' ? copy('bypassPermissions') : copy;
