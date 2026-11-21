@@ -45,7 +45,7 @@
      `# 标题` 的 `#` 字符),不是渲染后的 HTML。CSS 层能做到密度 / 字号 / 间距对齐
      prose,做不到把源码标记隐藏成 HTML 渲染。要那样请走全屏 doc 模式之外的只读
      HTML 路径(本次 CSS-only 路线不在范围)。 */
-  font-size: 14px !important;
+  font-size: var(--app-editor-font-size, 14px) !important;
   line-height: 1.6 !important;
 }
 

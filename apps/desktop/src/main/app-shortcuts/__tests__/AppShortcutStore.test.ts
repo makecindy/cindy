@@ -79,7 +79,7 @@ describe('AppShortcutStore', () => {
     expect(store.setOverride('toggle-sidebar', { code: '' })).toBe('invalid-combo');
     expect(store.setOverride('toggle-sidebar', combo('KeyJ'))).toBe('not-bindable');
     expect(store.setOverride('toggle-sidebar', combo('KeyC', { meta: true }))).toBe('system-reserved');
-    expect(store.setOverride('zoom-in', combo('KeyJ', { ctrl: true }))).toBe('platform-unavailable');
+    expect(store.setOverride('zoom-reset', combo('KeyJ', { ctrl: true }))).toBe('platform-unavailable');
     expect(store.getOverrides()).toEqual({});
   });
 
@@ -107,7 +107,7 @@ describe('AppShortcutStore', () => {
       'menu-inexpressible',
     );
     // 非菜单专属 id 不受限 (renderer 匹配路径可用任意 code)
-    expect(store.setOverride('save-file', combo('NumpadAdd', { meta: true }))).toBeNull();
+    expect(store.setOverride('save-file', combo('IntlYen', { meta: true }))).toBeNull();
     // win32 上 new-maker 走 before-input-event, 不受菜单可表达性限制
     // (IntlYen 无 accelerator 映射且不与任何默认组合撞键)
     const winStore = makeStore('win32');

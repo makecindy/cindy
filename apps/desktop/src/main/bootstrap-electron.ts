@@ -3452,7 +3452,12 @@ function persistedZoomMenuItem(
   return {
     label: nativeMenuRoleLabel(role),
     accelerator,
-    registerAccelerator,
+    // macOS keeps the visible shortcut labels, but zoomIn/zoomOut are dispatched
+    // by the renderer so a focused code editor can own Cmd +/- first.
+    registerAccelerator:
+      process.platform === 'darwin' && (role === 'zoomIn' || role === 'zoomOut')
+        ? false
+        : registerAccelerator,
     click: () => {
       void updatePersistedWindowZoom(delta).catch((error: unknown) => {
         createLogger('appearance-settings-menu').error('persisted page zoom update failed', {
