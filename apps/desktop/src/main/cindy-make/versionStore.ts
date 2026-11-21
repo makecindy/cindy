@@ -24,10 +24,11 @@ export const ORIGINAL_DEV_ENV_KEYS = [
   'XDT_SCHEDULER_PASSIVE',
   'XDT_ENDPOINTS_CDN',
   'XDT_ENDPOINT_MANIFEST_FILE',
-  'XDT_DISABLE_GLOBAL_SHORTCUTS',
   'XDT_DEV_SAFE_STORAGE_BASIC',
   'CINDY_AUTH_REGION',
 ];
+/** Dev-only switches live outside `environment` so older readers ignore them safely. */
+export const ORIGINAL_DEV_ENVIRONMENT_OVERRIDES = ['XDT_DISABLE_GLOBAL_SHORTCUTS'] as const;
 export interface VersionProfile {
   userData: string;
   appName: string;
@@ -51,6 +52,7 @@ export interface OriginalVersion {
     node: string;
     mode: 'local' | 'remote';
     environment: Record<string, string>;
+    environmentOverrides?: Record<string, string>;
   };
 }
 export interface PersonalVersion {
@@ -130,7 +132,13 @@ export function readOriginalVersion(profile: string): OriginalVersion | null {
       !value.development.environment ||
       Object.entries(value.development.environment).some(
         ([key, entry]) => !ORIGINAL_DEV_ENV_KEYS.includes(key) || typeof entry !== 'string',
-      ))
+      ) ||
+      (value.development.environmentOverrides !== undefined &&
+        (!value.development.environmentOverrides ||
+          Object.entries(value.development.environmentOverrides).some(
+            ([key, entry]) =>
+              !ORIGINAL_DEV_ENVIRONMENT_OVERRIDES.includes(key) || typeof entry !== 'string',
+          ))))
   )
     throw versionError('unavailable');
   return value;

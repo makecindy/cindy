@@ -128,7 +128,6 @@ beforeEach(async ({ task }) => {
     'XDT_SCHEDULER_PASSIVE',
     'XDT_ENDPOINT_MANIFEST_FILE',
     'XDT_ENDPOINTS_CDN',
-    'XDT_DISABLE_GLOBAL_SHORTCUTS',
     'XDT_DESKTOP_DEV_MODE',
   ])
     vi.stubEnv(key, undefined);
@@ -259,7 +258,10 @@ describe('one original version type for Dev and installed Cindy', () => {
     });
     expect(value.development?.environment).not.toHaveProperty('OPENAI_API_KEY');
     expect(value.development?.environment).not.toHaveProperty('NODE_OPTIONS');
-    expect(value.development?.environment).toMatchObject({ XDT_DISABLE_GLOBAL_SHORTCUTS: '1' });
+    expect(value.development?.environmentOverrides).toMatchObject({ XDT_DISABLE_GLOBAL_SHORTCUTS: '1' });
+    expect(store.readOriginalVersion(h.profile)?.development?.environmentOverrides).toMatchObject({
+      XDT_DISABLE_GLOBAL_SHORTCUTS: '1',
+    });
     expect(JSON.parse(value.profile.endpointSnapshot!.manifestText).authApiBaseUrl).toBe(
       'https://auth.example.invalid',
     );
