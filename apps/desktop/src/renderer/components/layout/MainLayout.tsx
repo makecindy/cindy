@@ -1877,6 +1877,7 @@ export function MainLayout() {
                     headerContent 路由下 ContentHeader 会因 sidebarVisible=true 提前 return null,
                     我们为 rail 浮动 chrome 预留的 spacer 不渲染、按钮悬空。 */}
                 <ContentHeaderSlot
+                  containerRef={mainRef}
                   sidebarVisible={!isSettingsRoute && !isSidebarCollapsed && !isRailMode}
                   showCollapsedActions={!isSettingsRoute && (isSidebarCollapsed || isRailMode)}
                   isSidebarRail={hasRailChromeActions && !rightSidebarOwnsRailChromeActions}

@@ -22,7 +22,7 @@
  * 右栏（Sidebar 侧保持无横线的连续表面）；设置页隐形 chrome 连边框也不画。
  */
 
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, type ReactNode, type RefObject } from 'react';
 import { useChromeActionsOverlap } from './useChromeActionsOverlap';
 
 import { useFeatureContentHeader } from '@/features/feature-context';
@@ -68,13 +68,20 @@ export function useContentHeaderHidden(args: {
   sidebarVisible: boolean;
   rightSidebarAvailable: boolean;
   sidebarWidth?: number;
+  containerRef?: RefObject<HTMLElement | null>;
 }): boolean {
   const { isMac, isFullscreen, trafficLightInset = CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft } = useMacFullscreen();
   const headerContent = useFeatureContentHeader();
-  // 替代拖拽条不拥有浮动按钮的命中洞；按钮溢出侧栏时保留公共 chrome。
-  const hasOverflow = !isFullscreen && chromeActionsHitHoleWidth(
+  // Observe the persistent chat pane, not the header that this decision hides.
+  // A left/top tab group may own the overflow even when the sidebar is narrow.
+  const overlap = useChromeActionsOverlap(
+    isMac && !isFullscreen && !!args.containerRef,
+    trafficLightInset + CHROME_ACTIONS_GEOMETRY.clusterWidth,
+    args.containerRef,
+  );
+  const hasOverflow = !isFullscreen && (overlap.width ?? chromeActionsHitHoleWidth(
     args.sidebarWidth ?? CHROME_ACTIONS_MAC_RIGHT_EDGE, trafficLightInset,
-  ) > 0;
+  )) > 0;
   return isMac && args.sidebarVisible && headerContent == null && !args.rightSidebarAvailable && !hasOverflow;
 }
 
@@ -275,8 +282,12 @@ export function ContentHeaderSlot({
   rightSidebarAvailable,
   trailing,
   children,
-}: Omit<ContentHeaderProps, 'hidden'> & { children: ReactNode }) {
-  const hidden = useContentHeaderHidden({ sidebarVisible, rightSidebarAvailable, sidebarWidth }) && !trailing;
+  containerRef,
+}: Omit<ContentHeaderProps, 'hidden'> & {
+  children: ReactNode;
+  containerRef?: RefObject<HTMLElement | null>;
+}) {
+  const hidden = useContentHeaderHidden({ sidebarVisible, rightSidebarAvailable, sidebarWidth, containerRef }) && !trailing;
   return (
     <>
       <ContentHeader

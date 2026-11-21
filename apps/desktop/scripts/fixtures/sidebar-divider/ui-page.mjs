@@ -9,7 +9,7 @@ export default {
   name: 'sidebar-divider',
   entry: './fixture.tsx',
   viewport: { width: 800, height: 360 },
-  real: 'Sidebar, useSidebarMaterial, useWallpaperBackground and production theme/CSS',
+  real: 'ContentHeaderSlot, useChromeActionsOverlap, Sidebar, useSidebarMaterial, useWallpaperBackground and production theme/CSS',
   notCovered: 'Native macOS material generation; task list, account and update contents',
   stubs: {
     'src/renderer/components/sidebar/SidebarTopNav': 'export const SidebarTopNav = () => null;',
@@ -20,6 +20,9 @@ export default {
     'src/renderer/features/cc-agent/sidebar/conversationSearchContext': 'export const ConversationSearchProvider = ({ children }) => children;',
   },
   cases: {
+    'empty-left': { about: '#11830: a preceding left pane owns zoomed chrome; empty route has no blank header' },
+    'empty-top': { about: '#11830: a preceding top pane owns zoomed chrome; empty route has no blank header' },
+    'empty-direct': { about: '#11830: chat directly beside the narrow sidebar retains its overflow header' },
     'inbox-zoom': { about: '#8656: default 260px expanded sidebar at 50% keeps inbox visible below chrome' },
     'inbox-normal': { about: '#8656: default 260px expanded sidebar at 100% keeps inbox in the top row' },
     'inbox-wide': { about: '#8656: 360px expanded sidebar at 50% keeps inbox in the top row' },
@@ -35,6 +38,33 @@ export default {
     const aside = page.locator('aside.bg-sidebar');
     const bounds = await aside.boundingBox();
     assert.ok(bounds);
+    if (ui.case.startsWith('empty-')) {
+      const main = page.locator('[data-empty-route]');
+      const header = main.locator('header');
+      const content = page.locator('[data-full-page-content]');
+      const direct = ui.case === 'empty-direct';
+      await page.waitForFunction((direct) => !!document.querySelector('[data-empty-route] header') === direct, direct);
+      const checkTop = async (hasHeader) => {
+        const mainBox = await main.boundingBox();
+        const contentBox = await content.boundingBox();
+        assert.ok(mainBox && contentBox);
+        assert.equal(contentBox.y - mainBox.y, hasHeader ? 46 : 0,
+          'Full-page content only leaves a row when its own pane overlaps chrome');
+      };
+      await checkTop(direct);
+      if (!direct) {
+        await page.locator('[data-toggle-owner]').click();
+        await header.waitFor();
+        await checkTop(true);
+        const hole = main.locator('[data-testid="content-header-rail-chrome-actions-hit-hole"]');
+        assert.equal(await hole.evaluate(el => el.getBoundingClientRect().width), 20);
+        await page.locator('[data-toggle-owner]').click();
+        await header.waitFor({ state: 'detached' });
+        await checkTop(false);
+      }
+      await ui.capture('empty-route-placement');
+      return;
+    }
     if (ui.case.startsWith('inbox-')) {
       const button = page.locator('[data-task-list-mode-toggle]');
       await button.waitFor();

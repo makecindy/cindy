@@ -1,11 +1,13 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 
 /** Each clipped drag header owns the part of window chrome over its actual box. */
 export function useChromeActionsOverlap<T extends HTMLElement>(
   enabled: boolean,
   rightEdge: number,
+  containerRef?: RefObject<T | null>,
 ) {
-  const ref = useRef<T | null>(null);
+  const localRef = useRef<T | null>(null);
+  const ref = containerRef ?? localRef;
   const [width, setWidth] = useState<number | null>(null);
 
   // A React layout/reorder can move the box without resizing it.
@@ -15,7 +17,9 @@ export function useChromeActionsOverlap<T extends HTMLElement>(
     setWidth(rect.top < 46 && rect.bottom > 0 ? Math.max(0, rightEdge - rect.left) : 0);
   });
 
-  useLayoutEffect(() => {
+  // An external ref can belong to an ancestor, whose ref attaches after child
+  // layout effects. Subscribe after the full commit so that pane is available.
+  useEffect(() => {
     const element = ref.current;
     if (!enabled || !element) return;
     const measure = () => {
@@ -54,7 +58,7 @@ export function useChromeActionsOverlap<T extends HTMLElement>(
       if (frame !== undefined) cancelAnimationFrame(frame);
       unsubscribe?.();
     };
-  }, [enabled, rightEdge]);
+  }, [enabled, rightEdge, ref]);
 
   return { ref, width: enabled ? width : null };
 }

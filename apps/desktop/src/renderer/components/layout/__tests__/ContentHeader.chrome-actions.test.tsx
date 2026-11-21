@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { createRef } from 'react';
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -115,6 +116,49 @@ describe('ContentHeader rail ChromeActions hit hole', () => {
     expect(view.container.querySelector('header')).toBeNull();
     expect(screen.getByText('Original content')).toBeTruthy();
   });
+  // #11830 review r4651847154: the empty route's header must follow the
+  // chat pane, including when an owning left/top pane moves without a resize.
+  // Unit tier: existing drag-hole tests force hidden=false and miss visibility.
+  it.each([[300, 0], [260, 120]])(
+    'hides empty chrome when a preceding pane owns the overlap (left=%s, top=%s)',
+    (left, initialTop) => {
+      chrome.trafficLightInset = 156;
+      let x = left;
+      let top = initialTop;
+      const observers: (() => void)[] = [];
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(callback: () => void) { observers.push(callback); }
+        observe() {}
+        disconnect() {}
+      });
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        return { x, left: x, y: top, top, width: 600, height: 400, right: x + 600, bottom: top + 400, toJSON() {} };
+      });
+      const containerRef = createRef<HTMLElement>();
+      const view = render(<FeatureSidebarSlotProvider isCollapsed={false}>
+        <main ref={containerRef}>
+          <ContentHeaderSlot sidebarVisible sidebarWidth={260} showCollapsedActions={false}
+            isSidebarRail={false} rightSidebarAvailable={false} containerRef={containerRef}>
+            <p>Full-page content</p>
+          </ContentHeaderSlot>
+        </main>
+      </FeatureSidebarSlotProvider>);
+      expect(view.container.querySelector('header')).toBeNull();
+      expect(screen.getByText('Full-page content').parentElement?.style.getPropertyValue('--content-header-h')).toBe('0px');
+      // Removing the preceding pane transfers the actual overflow back to chat.
+      x = 260;
+      top = 0;
+      act(() => observers.forEach((measure) => measure()));
+      expect(view.container.querySelector('header')).not.toBeNull();
+      expect(screen.getByTestId('content-header-rail-chrome-actions-hit-hole').style.width).toBe('20px');
+      // Reinsert the owner: hiding the header must not stop position observation.
+      x = left;
+      top = initialTop;
+      act(() => observers.forEach((measure) => measure()));
+      expect(view.container.querySelector('header')).toBeNull();
+    },
+  );
+
   it('keeps the macOS rail-edge ChromeActions area outside the window drag region', () => {
     render(
       <FeatureSidebarSlotProvider isCollapsed>
