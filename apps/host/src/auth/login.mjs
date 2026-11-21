@@ -19,8 +19,10 @@ import {
   runHostedCallbackPolling,
 } from '../../../desktop/src/main/authHostedCallback.ts';
 import { parseAuthLoopbackCallback } from '../../../desktop/src/main/authLoopbackCallback.ts';
+import { assertHostSessionRegion, hostPackageRegion } from './region-policy.ts';
 
 const BROWSER_AUTH_TIMEOUT_MS = 5 * 60_000;
+const REFUSED_SESSION_LOGOUT_TIMEOUT_MS = 5_000;
 
 function pkce() {
   const verifier = crypto.randomBytes(32).toString('base64url');
@@ -84,6 +86,11 @@ function listenOnLoopback(server) {
  *   client: any,
  *   store: {write(key: string, value: string): void},
  *   region: 'cn' | 'global',
+ *   packageRegion?: 'cn' | 'global',
+ *   warn?: (line: string) => void,
+ *   admitAccount?: (membership: { id: string }) => void,
+ *   persistSession?: (record: string, membership: { id: string }) => Promise<void>,
+ *   refusedSessionLogoutTimeoutMs?: number,
  *   hostedCallbackUrl?: string,
  *   openBrowser: (url: string) => Promise<void>,
  *   method?: string,
@@ -107,9 +114,51 @@ export async function runHostLogin(deps) {
 
   const pair = await deps.client.exchangeAuthorizationCode(authorization.code, verifier);
   if (pair?.status !== 'ok') throw new Error(unfinishedLoginMessage(pair));
-  deps.store.write(AUTH_SESSION_KEY, deps.deviceId ? serializeHostSession(deps.region, pair.refreshToken, deps.deviceId) : serializeAuthSessionRecord(deps.region, pair.refreshToken));
+  // H-1, as the Desktop: a personal account of another region is refused before anything is saved.
+  try {
+    assertHostSessionRegion({ packageRegion: deps.packageRegion ?? hostPackageRegion(), sessionRealm: deps.region,
+      membershipKind: pair.membership?.kind });
+    // A running serve with another account's runtime: that account must stop first (login-cli.mjs).
+    deps.admitAccount?.(pair.membership);
+  } catch (error) {
+    await endRefusedSession(deps, pair.accessToken);
+    throw error;
+  }
+  const record = deps.deviceId ? serializeHostSession(deps.region, pair.refreshToken, deps.deviceId) : serializeAuthSessionRecord(deps.region, pair.refreshToken);
+  // The Skill projection owner commit (login-cli.mjs) saves the session inside its own transaction.
+  if (deps.persistSession) {
+    // A save or commit that fails leaves an issued session nobody holds: end it, as a refusal does.
+    try { await deps.persistSession(record, pair.membership); }
+    catch (error) { await endRefusedSession(deps, pair.accessToken); throw error; }
+  } else deps.store.write(AUTH_SESSION_KEY, record);
   if (deps.onSignedIn && typeof pair.accessToken === 'string' && pair.accessToken) await deps.onSignedIn(pair.accessToken);
   return { authenticated: true, realm: deps.region, method: method.providerOrConnectionId ?? method.type };
+}
+
+/**
+ * The exchange above already issued a session that nobody will hold. The Desktop has no such path
+ * (its personal code login always uses the build region); the Host ends it so no orphan is left.
+ * Only through the client that exchanged the code, i.e. the account's own region's sign-in service,
+ * never the package region's. Best effort: a few seconds at most, a failure is logged without the
+ * token or the account, and the refusal stands either way.
+ */
+async function endRefusedSession(deps, accessToken) {
+  const warn = deps.warn ?? ((line) => console.warn(line));
+  if (!accessToken || typeof deps.client.logout !== 'function') return;
+  let timer;
+  try {
+    await Promise.race([
+      deps.client.logout(accessToken),
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), deps.refusedSessionLogoutTimeoutMs ?? REFUSED_SESSION_LOGOUT_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } catch {
+    warn('The refused sign-in could not be ended on the sign-in service; it will expire on its own.');
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function authorizeViaHostedCallback({ client, method, challenge, hostedCallbackUrl, openBrowser, onAuthorizeUrl, signal, now }) {

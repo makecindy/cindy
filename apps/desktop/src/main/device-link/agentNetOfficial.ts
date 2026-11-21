@@ -2,14 +2,14 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createHash, createPrivateKey, randomBytes } from 'node:crypto';
-import WebSocket from 'ws';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
 import { identityFromSeed, publicBytes, verifyCertificate, type Identity } from '@cindy/agent-net-relay';
 import { AgentNetClient, acceptEnrollment, createEnrollmentRequest } from '@cindy/agent-net-relay/client';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getActiveAuthRealm, getCurrentUserId, getDeviceId } from '../authManager.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
-import { outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { readRelaySecrets, writeRelaySecrets, relayDataPath, type RelaySecrets } from './selfHostedRelayConfig.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { withCrossProcessLock } from './crossProcessLock.js';
@@ -40,7 +40,7 @@ function client(base: string, secrets: RelaySecrets): AgentNetClient | null {
   const keys = identity(officialAgentNetSlot(base), secrets), stored = secrets.agentNet;
   if (!stored || stored.certificate.expiresAt <= Date.now()) return null;
   return new AgentNetClient(base, keys, stored.certificate, stored.rootPublicKey, undefined, {
-    fetch: outboundFetch, createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createOutboundHttpAgent(url) }),
+    fetch: outboundFetch, createWebSocket: (url, options) => openLinkWebSocket('agent-net', url, options),
   });
 }
 /**

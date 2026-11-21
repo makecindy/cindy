@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暫不支援易 Harness。請擇今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
     "MODEL_SELECTION_UNAVAILABLE": "所擇模型於此供方下已不可用。請於規制中察連線，或另擇可用之模型。",
+    "MODEL_CATALOG_UNCONFIRMED": "模型清單暫未能核實。已保留所選模型，可刷新清單後重試。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未易畢。請察錯誤詳情，俟 Harness 就緒而後再試。",
     "DEVICE_LINK_BUSY": "遠端方忙，請稍後再試。",
     "INVALID_PARAMS": "引數無效，請察之而後再試。",
@@ -6783,6 +6784,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "本機連線流量",
+          "range": "計量時段",
+          "last5m": "近 5 分鐘",
+          "lastHour": "近 1 小時",
+          "lastDay": "近 24 小時",
+          "sent": "所發",
+          "received": "所收",
+          "total": "共計",
+          "scope": "直連、中繼之收發量皆為估值，檔案直傳亦計。尋機廣播、另循他途之音像及 HTTP 傳輸不計。"
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8241,7 +8253,7 @@
         "agentErrand": "可立差事、行事並讀結果",
         "agentErrandDetail": "所立差事現於 Cindy 差事錄中，可觀其歷程並續言談。",
         "agentSchedule": "可請君新立自運",
-        "agentScheduleDetail": "其僅能為君啟新立自運之面板並填妥內容；立與不立，由君於面板擇定模型後親手存之而決。立後由 Cindy 依君所設之時運行，或生模型費用。",
+        "agentScheduleDetail": "其僅能為君啟新立自運之面板並填妥內容；立與不立，由君於面板擇定模型後親手存之而決。立後由 Cindy 依君所設之時運行，或生模型費用。插件通諸機者，亦可請君定一機行之。",
         "nodeRuntime": "可於此機運行法器所附之 Node 程式",
         "nodeMcp": "可於此機運行法器所附之 stdio MCP",
         "nodeRuntimeDetail": "高風險：其與君本人無異，可讀寫君名籍所能及之本機檔案、存取網路並啟動他程式。Cindy 不能以瀏覽器沙箱約束之。",
@@ -8485,6 +8497,13 @@
         "openInSidebar": "於側欄啟之",
         "panelPageHosted": "自法器頁啟之 · 離法器頁即自闔",
         "panelNone": "此法器無面板",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}：許遠端呼叫",
+          "description": "啟之，則君之他機可用此引擎行差事；Agent 行於此機，用此機之登門與限額；檔案與指令仍留於差事所在之機。",
+          "unsupported": "此法器尚未許他機用其引擎。",
+          "remoteControlOff": "此機尚未許同名籍之裝置遠端控制，他機不可用此引擎。",
+          "ariaLabel": "許君之他機用 {{engine}}"
+        },
         "githubRelease": {
           "title": "插件更新",
           "installed": "目前版本 {{version}}",
@@ -8553,6 +8572,8 @@
         "browserUse": "用此瀏覽器擴充",
         "browserActivated": "已擇此擴充",
         "browserActivationFailed": "未能擇此擴充，請啟擴充功能並確認切換。",
+        "automationHostSelect": "以此機主理「{{name}}」之自動任務乎？",
+        "automationHostClear": "解此機主理「{{name}}」自動任務之任乎？",
         "browserSwitchTitle": "切換瀏覽器擴充連線？",
         "browserSwitchMessage": "以「{{name}}」承此連線？",
         "browserSwitchDetail": "實例：{{instance}}\n註冊名：{{host}}\n將替今之註冊，擴充功能轉連此法器。",
@@ -13022,6 +13043,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "自動審模型之額度已盡。請於運行 Agent 之電腦查用量或計費，或於設定自訂輔助模型。需審之操作，仍待君確認。",
           "autoReviewNoAvailableModel": "無可用之自動審批模型。請於執行 Agent 之電腦，在「模型供應商」啟用並連接審批供應商，或於設定自訂「輔助模型」。待審之舉仍由君確認。",
           "autoReviewUnavailable": "自動審批暫不能斷，須審批之操作已改由君確認。欲少受擾，可將差事切至「完全存取」，然風險更高。",
           "autoReviewUnavailableWechat": "自動審批暫不能斷，須審批之操作已改由君確認。個人微信不可用「完全存取」，請徑確認此舉。",
@@ -13031,6 +13053,7 @@
           "overloadRetryingNoCount": "模型服務繁忙，方自動再試…",
           "overloadFailed": "⚠️ 模型服務繁忙：上游暫無餘力。可於此重發此訊再試，或於 Cindy 易一模型。（於桌面端點「再試」亦可續其差事，然其果不返此訊。）"
         },
+        "audioInputUnavailable": "今所接模型未能直辨其聲。可請 Cindy 先錄為文字，再續其事。",
         "toolLoop": {
           "generic": "模型屢呼工具過甚，Cindy 已止此輪，以免無窮循環。可遣新訊以續。",
           "consecutive": "模型連呼同一工具 {{n}} 次，Cindy 已止此輪，以免無窮循環。可遣新訊以續。",
@@ -14068,6 +14091,8 @@
         "fastBadge": "疾"
       },
       "source": {
+        "lastConfirmed": "上次重整：{{time}}",
+        "unconfirmed": "模型錄未新",
         "unavailable": "模型不可用",
         "reconnect": "重連",
         "manage": "理來源",
@@ -14987,6 +15012,8 @@
     },
     "runningStatus": {
       "currentRate": "近速",
+      "lastRequestRate": "前請均速",
+      "recentTokenRate": "近速 {{rate}} tok/s",
       "waitingSample": "方取樣",
       "averageRate": "本輪均速",
       "rateHistory": "生成速率史",
@@ -15027,6 +15054,9 @@
       "usageLimitAutoContinueTitle": "耗用上限重置之時，若君尚未處置，此差事將自續",
       "usageLimitAutoContinueCancel": "罷",
       "usageLimitAutoContinueCancelTitle": "罷其自續；謬誤與再試仍留",
+      "usageLimitReached": "模型名籍，耗用已達上限",
+      "usageLimitReachedWithReset": "模型名籍，耗用已達上限，預計於 {{resetAt}} 恢復。",
+      "usageLimitReachedNoReset": "模型名籍，耗用已達上限。請俟上限重置，或易他模型，再試。",
       "codexOrganizationUsageLimitWithReset": "今所連者乃企業 Codex 名籍，耗用已達上限，預計於 {{resetAt}} 恢復。",
       "codexOrganizationUsageLimit": "今所連者乃企業 Codex 名籍，耗用已達上限。請俟上限重置，或易他可用名籍，再試。",
       "codexUsageLimitWithReset": "今所連之 Codex 名籍，耗用已達上限，預計於 {{resetAt}} 恢復。",
@@ -15045,7 +15075,7 @@
       "switchClaudeSubscriptionTitle": "將此差事易為 Claude.ai 訂閱並再試",
       "switchingClaudeSubscription": "方易為 Claude.ai…",
       "claudeSubscriptionSwitchFailed": "未能易為 Claude.ai 或再試此差事：{{msg}}",
-      "codexAppServerRetired": "Codex 之服已重啟或更替；今之請求已斷，請再行之。",
+      "codexAppServerRetired": "Codex 之連線已斷，所請遂中止。可於此差事續行。",
       "codexAuthMissing": "遠端 Codex 尚未同步登入之態（401 Unauthorized）。點右側「同步登入」，將此機 Codex 憑證推至遠端 Cindy Codex home，再試遣之。",
       "codexAuthMissingLocal": "本機的「{{provider}}」連線未通過驗證。請前往該連線的設定檢查登入狀態，修復後回到此差事繼續。",
       "codexSessionExpired": "OpenAI 連線須更新。重連 ChatGPT 即可續之；{{appName}} 不會令系統 Codex CLI 登出，亦不請君重連他模型來源。",
@@ -15098,6 +15128,7 @@
     },
     "backgroundActivity": {
       "status": "後臺子差事方行，模型耗用未止…",
+      "pluginEngineStatus": "後臺續作未輟…",
       "bashWorkStatus_one": "後臺猶作（令 {{count}} 道）…",
       "bashServiceStatus_one": "後臺常役方行（{{count}} 件）",
       "bashWorkStatus_other": "後臺猶作（令 {{count}} 道）…",
@@ -15132,6 +15163,7 @@
       "continueFailed_other": "有 {{count}} 件差事未能續，可開差事再試。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "模型清單暫未能核實。已保留所選模型，可刷新清單後重試。",
       "actionScheduled": "這次操作的任務授權已失效。下一輪仍會按計畫執行。",
       "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
       "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
@@ -15802,11 +15834,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暫不支援易 Harness。請擇今 Harness 下之模型，或以所需 Harness 另立 SSH 差事。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所連者無權用前一模型，故易模型時未能壓縮上下文。",
       "MODEL_SELECTION_UNAVAILABLE": "所擇模型於此供方下已不可用。請於規制中察其連線，或另擇可用之模型。",
+      "MODEL_CATALOG_UNCONFIRMED": "模型清單暫未能核實。已保留所選模型，可刷新清單後重試。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未易畢。請覽謬誤詳情，待 Harness 就緒再試。",
       "DEVICE_LINK_BUSY": "遠端方忙，請稍後再試。",
       "REMOTE_DAEMON_CLOSED": "遠端連線中斷，或方更新。此輪已終，請再遣。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端差事不能取此機之卷／圖附件。請徑貼其內容。",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自動審模型之額度已盡。請於運行 Agent 之電腦查用量或計費，或於設定自訂輔助模型。需審之操作，仍待君確認。",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "無可用之自動審批模型。請於執行 Agent 之電腦，在「模型供應商」啟用並連接審批供應商，或於設定自訂「輔助模型」。待審之舉仍由君確認。",
       "AUTO_REVIEW_UNAVAILABLE": "自動審批暫不能斷，須審批之操作已改由君確認。欲少受擾，可將差事切至「完全訪問」，然風險更高。",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自動審批暫不能斷，須審批之操作已改由君確認。個人微信不可用「完全訪問」，請徑確認此舉。",
@@ -15852,6 +15887,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "此機不能復差事舊態。請選他機或供方之模型，交接上下文以續行；舊訊皆存。",
       "REMOTE_AGENT_INVALID": "與行 Agent 之機通訊有謬。請再試；若屢現，請將兩機之 Cindy 皆更新至最新版。",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "法器引擎未能復前話。訊息猶存。可擇他引擎續之，或新建任務。",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "此法器引擎不能用差事所在之機之工具，暫不可自他機行此差事。請易他引擎或模型。",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "此法器引擎唯行本機之差事，尚不可為他機所用。",
       "REMOTE_AGENT_RESUME_REJECTED": "運行模型之電腦無法續此差事。請由差事列表新建差事，複製所需內容以續。原差事及待發之訊皆保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達分享者所設之模型占比上限。請擇他可用之模型續之。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼機未向君開放此供方或所擇模型。若為君之他機，於彼機為此供方開「許遠端呼叫」；若為他人所分享，請令機主於「遠端與分享」中調其開放之範圍。亦可易一模型。",
@@ -16021,7 +16058,6 @@
     },
     "sessionLoading": "差事方載",
     "sideChat": {
-      "openPage": "啟全差事頁",
       "returnMain": "歸主差事",
       "new": "增旁問",
       "mainWindowDescription": "旁問今於主窗中用之。所問之錄猶存。",
@@ -16029,6 +16065,14 @@
       "commandDescription": "依主差事開旁問。可於命令後附問，以為追問草稿。",
       "title": "旁問",
       "context": "以開啟時已成之上下文為據；主差事照常行之。闔此分頁前，所問之錄猶存。",
+      "viewCollaboration": "觀協同",
+      "openConversation": "啟此對話",
+      "openFromTaskList": "亦可自左欄任務表開啟。",
+      "returnToSideChat": "返回側欄追問",
+      "reopenSideChat": "重啟側欄追問",
+      "origin": "此對話出自側欄追問。",
+      "originNamed": "此對話出自「{{title}}」之側欄追問。",
+      "originUnavailable": "此對話出自側欄追問，原差事今不可啟。",
       "opening": "方啟…",
       "notReady": "主差事尚未答一回，且稍安勿躁。",
       "unsupported": "此 Agent 之遠端差事暫不支援旁問。",
@@ -16037,9 +16081,10 @@
       "mainTaskOnly": "請自主差事開旁問。",
       "sharedTaskUnavailable": "共事不可開旁問。",
       "archivedTask": "請先解封存，再開旁問。",
-      "closeTitle": "闔旁問？",
-      "closeDescription": "將止而刪此番追問，主差事不受其擾。",
-      "closeConfirm": "闔而刪之",
+      "closeTitle": "閉而藏此追問乎？",
+      "closeDescription": "左列所載之追問亦將歸檔。",
+      "closeDescriptionRunning": "左列所載之追問亦將歸檔，協同諸 Worker 將止。",
+      "closeConfirm": "關閉歸檔",
       "closeFailed": "刪追問未成，請稍後再試。"
     },
     "pluginModelRoute": {
@@ -16063,9 +16108,19 @@
       "toggle": "啟閉「{{title}}」之覆書",
       "openTask": "啟差事"
     },
+    "geminiRateLimit": {
+      "retried": "依 Gemini 所請，已自試",
+      "title": "Gemini 每分鐘所入已達其限",
+      "exhausted": "已自試一次，仍受限。可稍後再試。",
+      "retryIn": "{{seconds}} 秒後自試"
+    },
     "subscriptionAccountError": {
-      "limited": "此差事所用訂閱帳號，用量已盡。可待用量重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
-      "limitedUntil": "此差事所用訂閱帳號，用量已盡，預計 {{resetAt}} 重設。可待重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
+      "poolModelLimited": "此模型訂閱之額已盡，可先易模型。",
+      "poolRetryUntil": "俟 {{resetAt}} 後可再試。",
+      "poolOtherSignedOut": "另有訂閱帳號已退出，可於行此任務之機重新登入而試。",
+      "poolUnavailable": "此模型無可用訂閱帳號。可易模型，或於行此任務之機查帳號。",
+      "limited": "此差事所用訂閱帳號，用量已盡。可待用量重設後再試，或另選模型來源。",
+      "limitedUntil": "此差事所用訂閱帳號，用量已盡，預計 {{resetAt}} 重設。可待重設後再試，或另選模型來源。",
       "loginRequired": "此差事所用訂閱帳號需要重新登入。請在執行差事的電腦上重新登入該帳號，再重試。",
       "signingIn": "此差事所用訂閱帳號正在登入，請完成登入後重試。",
       "unavailable": "此差事所繫訂閱帳號，無法用於本次請求。請於執行差事的電腦檢查模型供方的帳號設定，或另選模型來源。",
@@ -16299,6 +16354,14 @@
       "remoteProviderUnsupported": "此供方不支援 SSH 遠端會話，請易來源",
       "remoteNativeOauthUnavailable": "遠端差事不可用 Claude 訂閱，請擇閘道器或 API Key 模型",
       "claudeSubscriptionWorkspaceOverride": "此工作目錄之 .claude 設定改易 Claude 之上游位址或驗證方式，故此處不可用 Claude 訂閱。請除此諸設定，或擇閘道器或 API Key 模型",
+      "savedModel": {
+        "loading": "方連所擇模型…",
+        "checkFailed": "未能察所擇模型",
+        "engine": "所擇引擎不可用，請為此務另擇模型",
+        "source": "所擇來源不可用，請為此務另擇模型",
+        "model": "所擇模型不可用，請為此務另擇模型",
+        "thisTaskOnly": "所擇模型僅用於此務"
+      },
       "deviceStillLoading": "遠端裝置猶方載，請稍候",
       "remoteDefaultsLoadFailed": "不能讀遠端裝置之配置。請察連線，Cindy 方再試。",
       "branchChanged": "專案分支已為 {{branch}}，請核實後再傳",
@@ -16920,7 +16983,41 @@
             "token": "今用備用 Token",
             "recheck": "察連線",
             "summary": "掌 GitHub 儲存庫、Issues、PR 與 Actions。",
-            "otherMethods": "他種連線之法"
+            "otherMethods": "他種連線之法",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App 存取權限",
+            "all": "所有儲存庫",
+            "selected": "指定儲存庫",
+            "visible": "目前帳號可見 {{count}} 個儲存庫",
+            "unknownCount": "暫時無法讀取儲存庫數量",
+            "permissions": "權限明細",
+            "read": "唯讀",
+            "write": "可讀寫",
+            "admin": "管理",
+            "loading": "正在讀取授權範圍…",
+            "missing": "在這台電腦連接 GitHub App 後即可查看授權範圍。",
+            "unavailable": "暫時無法讀取授權明細。",
+            "empty": "目前帳號沒有可見的安裝紀錄。",
+            "suspended": "此安裝已暫停",
+            "events": "這台電腦訂閱了 {{count}} 個儲存庫的事件",
+            "manage": "管理儲存庫存取權限",
+            "names": {
+              "actions": "Actions",
+              "administration": "儲存庫管理",
+              "checks": "檢查結果",
+              "contents": "儲存庫內容",
+              "deployments": "部署",
+              "issues": "Issue",
+              "members": "組織成員",
+              "metadata": "儲存庫中繼資料",
+              "organization_events": "組織事件",
+              "pull_requests": "提取要求",
+              "repository_hooks": "儲存庫 Webhook",
+              "statuses": "提交狀態",
+              "workflows": "工作流程檔案"
+            }
           },
           "app": {
             "title": "倉庫之變",
@@ -16933,6 +17030,21 @@
             "repositories": "擇倉庫",
             "disconnect": "斷事件之連",
             "connect": "連 GitHub App"
+          },
+          "connection": {
+            "operations": "儲存庫操作",
+            "operationsMissing": "尚未取得儲存庫操作授權",
+            "checking": "正在檢查 GitHub 連線…",
+            "mismatch": "操作帳號與通知帳號不同，請核對後重新連線。",
+            "ready": "GitHub 帳號已連線。",
+            "close": "閉之",
+            "incomplete": "帳號已綁定，請補充此電腦的操作授權。",
+            "eventsOnly": "此帳號用於儲存庫通知；顯示帳號名稱不代表此電腦已取得操作授權。",
+            "connect": "連線 GitHub",
+            "alternative": "使用本機 GitHub 登入",
+            "cliDescription": "可沿用本機登入；個人通知等 GitHub App 不支援的功能仍需要此方式。",
+            "disconnect": "中斷 GitHub App 連線",
+            "repositories": "正在關注 {{count}} 個儲存庫"
           }
         },
         "unresolved": "{{count}} 條未決之 review 評論",
@@ -22073,7 +22185,8 @@
       "empty": "尚無模型組。於設定合數源為一模式，即可於此擇之。",
       "manage": "理模型組",
       "switched": "「{{name}}」已將此差事易為 {{model}}",
-      "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。"
+      "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。",
+      "chooseUnavailable": "「{{name}}」今無可用之源，未取之。"
     },
     "why": {
       "expiringQuota": "限額尚餘 {{left}}%，{{reset}} 重設，故先用之",

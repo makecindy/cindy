@@ -21,9 +21,10 @@ import {
 
 import { resolveNewTaskDefaultRoute } from '../../shared/draftModelCalibration.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
-import { activeOwnerScopeKey } from '../appSessionState.js';
-import { resolveScheduledModelSelection, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
+import { activeOwnerScopeKey, getActiveAppSession } from '../appSessionState.js';
+import { resolveScheduledModelSelection, resolveScheduledModelSelectionWithRefresh, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
 import { getDesktopProviderService } from './createDesktopProviderService.js';
+import { refreshSubscriptionPoolCodexModels } from '../subscription-accounts/runtime.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { createOneShotRouteGuard } from './oneShotRouteGuardCore.js';
 import {
@@ -177,10 +178,16 @@ export async function resolveScheduledModelSelectionLive(
     if (rejection) throw new Error(`Scheduled remote model route unavailable: ${rejection}`);
     return resolveScheduledModelSelection(selection, views);
   }
-  const providers = await getDesktopProviderService().listProviders({
-    allowSideEffects: false, catalog: getActiveCatalog(),
+  const generation = getActiveAppSession().generation;
+  return resolveScheduledModelSelectionWithRefresh(selection, {
+    readProviders: () => getDesktopProviderService().listProviders({
+      allowSideEffects: false, getCatalog: getActiveCatalog,
+    }),
+    refreshProvider: providerId => refreshSubscriptionPoolCodexModels(true, providerId),
+    assertCurrent: () => {
+      if (getActiveAppSession().generation !== generation) throw new Error('Owner changed during model discovery');
+    },
   });
-  return resolveScheduledModelSelection(selection, providers);
 }
 
 /**

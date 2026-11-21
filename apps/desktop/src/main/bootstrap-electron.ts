@@ -592,6 +592,7 @@ import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import {
   acquirePiSubagentLaunchFence,
   clearStalePiSubagentLaunchFence,
+  hasActivePiSubagentRuns,
   hasActivePiSubagentRunsSync,
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
@@ -7265,6 +7266,8 @@ const registerIpcHandlers = () => {
         app.once('will-quit', () => { clearInterval(monitorTimer); stopObserving(); });
       }
       registerRelaunchBusyActivityIpc(readRelaunchActivitySources, {
+        readPiActivityForBanner: () =>
+          hasActivePiSubagentRuns(path.join(app.getPath('userData'), 'pi-agent-home'), { hostPid: process.pid }),
         describeTurns: () => describeRelaunchTurns(() => listInTurnSessionIds(getMakerIfReady())),
       });
       // Client mode returned above and never reaches the runtime assembly.

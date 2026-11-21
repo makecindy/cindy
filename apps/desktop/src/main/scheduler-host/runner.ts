@@ -1,3 +1,4 @@
+import { primaryHostTargetIsRemote, skipPrimaryHostRun } from './pluginAutomationHostGuard.js';
 import { projectForScheduledTask, type ScheduleProjectLookup } from './scheduleProject.js';
 import { throwIpcError } from '../utils/ipcValidate';
 import { beginQuietScheduledOutput, hidesScheduledTranscript, hasVisibleScheduledOutput, isQuietScheduledOutput } from './silent-output.js';
@@ -1083,6 +1084,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // and service-owned Bot lifecycle separate.
     if (schedule.source !== 'bot' && schedule.targetSessionId) {
       const target = await this.runtime.getSessionRowSnapshot(schedule.targetSessionId);
+      if (primaryHostTargetIsRemote(schedule, target)) return skipPrimaryHostRun(ctx, 'The persistent task moved off the automation host.', schedule.targetSessionId);
       if (target && !schedule.persistentSession && (target.status === 'deleted'
         || (target.status === 'archived' && this.runtime.isManagedScheduledTarget(target)))) {
         return this.retireHeartbeat(schedule, ctx, target.status);
@@ -1285,6 +1287,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
         this.deps.maker.getSessionMeta(sessionId).catch(() => null),
         this.runtime.getSessionRowSnapshot(sessionId),
       ]);
+      if (primaryHostTargetIsRemote(schedule, row) || primaryHostTargetIsRemote(schedule, resolvedSelection)) {
+        return skipPrimaryHostRun(ctx, 'The persistent task moved off the automation host.', sessionId);
+      }
       const archived = !row || row.status === 'archived' || row.status === 'deleted';
       if (archived) {
         holder.releaseAgentSwitchLock?.();
@@ -2356,7 +2361,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
         throwIfFireAborted(ctx.signal, 'agent turn dispatch');
       }
-      if (ctx.canDispatch && !ctx.canDispatch()) {
+      if (primaryHostTargetIsRemote(schedule, session) || (ctx.canDispatch && !ctx.canDispatch())) {
         waiter.stopListening();
         ctx.signal.removeEventListener('abort', onAbort);
         return this.deferFire(schedule, session.id, 'routine-dispatch-invalidated');
@@ -2458,7 +2463,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             await this.deps.beforeDispatchUserTurn(session.id, signal);
             baselineStarted = true;
           }
-          if (ctx.canDispatch && !ctx.canDispatch()) {
+          if (primaryHostTargetIsRemote(schedule, session) || (ctx.canDispatch && !ctx.canDispatch())) {
             // Throw before Session.send reaches its vendor-dispatch boundary. The
             // deferral error is itself an AcceptedCallbackDispatchCancelled, so the
             // direct Session.send path and any accepted-callback wrapper both cancel
@@ -3049,6 +3054,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           this.clearPermissionMismatchStreak(schedule.id, ctx.runId);
           acceptedSnapshot = { session: live, ...permissions };
+        }
+        if (primaryHostTargetIsRemote(schedule, live)) {
+          const error = new RoutineDispatchDeferredError('Persistent task moved off the automation host');
+          failAfterAccept(error);
+          failDispatch(error);
+          blockAcceptedDispatch(live, error.message);
+          return;
         }
         if (ctx.canDispatch && !ctx.canDispatch()) {
           const error = new RoutineDispatchDeferredError(

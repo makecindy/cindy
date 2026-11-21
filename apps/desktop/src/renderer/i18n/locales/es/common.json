@@ -1380,6 +1380,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no permite cambiar de Harness. Elige un modelo en su Harness actual o crea otra tarea SSH con el Harness que necesitas.",
     "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
+    "MODEL_CATALOG_UNCONFIRMED": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
     "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
     "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Inténtalo de nuevo en breve.",
     "INVALID_PARAMS": "Entrada no válida. Revísala e inténtalo de nuevo.",
@@ -6893,6 +6894,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "Tráfico de este equipo",
+          "range": "Intervalo de tiempo",
+          "last5m": "Últimos 5 min",
+          "lastHour": "Última hora",
+          "lastDay": "Últimas 24 h",
+          "sent": "Enviado",
+          "received": "Recibido",
+          "total": "Total",
+          "scope": "Tráfico estimado de las conexiones directas y por relé, incluida la transferencia directa de archivos. Se excluyen los anuncios de detección de dispositivos y las transmisiones independientes de audio, vídeo y HTTP."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8370,7 +8382,7 @@
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",
         "agentErrandDetail": "Las tareas creadas aparecen en la lista de tareas de Cindy, donde puedes ver el progreso y continuar la conversación.",
         "agentSchedule": "Puede pedirte que crees una automatización",
-        "agentScheduleDetail": "Solo puede abrir el panel de nueva automatización con los campos completados; tú decides si se crea: elige un modelo y guárdala tú mismo. Una vez creada, Cindy la ejecuta según la programación que establezcas. Pueden aplicarse cargos por uso del modelo.",
+        "agentScheduleDetail": "Solo puede abrir el panel de nueva automatización con los campos completados; tú decides si se crea: elige un modelo y guárdala tú mismo. Una vez creada, Cindy la ejecuta según la programación que establezcas. Pueden aplicarse cargos por uso del modelo. En los complementos con sincronización también puedes confirmar qué ordenador ejecuta la automatización.",
         "nodeRuntime": "Puede ejecutar un programa Node incluido en esta computadora",
         "nodeMcp": "Puede ejecutar un stdio MCP incluido en esta computadora",
         "nodeRuntimeDetail": "Alto riesgo: tiene el mismo acceso local que tu cuenta de usuario, incluidos archivos, red e inicio de otros programas. Cindy no puede contenerlo en el entorno aislado del navegador.",
@@ -8614,6 +8626,13 @@
         "openInSidebar": "Abrir en la barra lateral",
         "panelPageHosted": "Se abre desde la página del complemento · se cierra al salir",
         "panelNone": "Este complemento no tiene panel",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: permitir uso remoto",
+          "description": "Cuando está activado, tus otras computadoras pueden ejecutar tareas con este motor. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea.",
+          "unsupported": "Este complemento todavía no permite usar su motor desde otras computadoras.",
+          "remoteControlOff": "Esta computadora aún no permite el control remoto, por lo que otras computadoras no pueden usar este motor.",
+          "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}"
+        },
         "githubRelease": {
           "title": "Actualizaciones del complemento",
           "installed": "Instalada {{version}}",
@@ -8682,6 +8701,8 @@
         "browserUse": "Usar esta extensión del navegador",
         "browserActivated": "Extensión del navegador seleccionada",
         "browserActivationFailed": "No se pudo seleccionar la extensión. Comprueba que esté activada y confirma cualquier cambio de conexión.",
+        "automationHostSelect": "¿Usar este equipo para las tareas automáticas de {{name}}?",
+        "automationHostClear": "¿Quitar este equipo como principal para las tareas automáticas de {{name}}?",
         "browserSwitchTitle": "¿Cambiar la conexión de la extensión?",
         "browserSwitchMessage": "¿Usar «{{name}}» para esta conexión?",
         "browserSwitchDetail": "Instancia: {{instance}}\nRegistro: {{host}}\nEsto sustituye el registro actual. La extensión se conectará a este complemento.",
@@ -13182,6 +13203,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "Un modelo de revisión automática ha agotado su cuota. Revisa el uso o la facturación, o personaliza los modelos auxiliares en los ajustes del ordenador que ejecuta el Agent. Las acciones que requieren revisión siguen necesitando tu confirmación.",
           "autoReviewNoAvailableModel": "No hay ningún modelo disponible para la revisión automática. En el ordenador donde se ejecuta el agente, activa y conecta un proveedor de revisión en Proveedores de modelos, o configura los modelos auxiliares en Ajustes. Las acciones que requieren revisión seguirán necesitando tu confirmación.",
           "autoReviewUnavailable": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. Cambia esta tarea a Acceso completo si prefieres evitar las interrupciones. Ese modo implica un mayor riesgo.",
           "autoReviewUnavailableWechat": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. WeChat personal no puede usar Acceso completo. Confirma esta acción directamente.",
@@ -13191,6 +13213,7 @@
           "overloadRetryingNoCount": "El servicio del modelo está ocupado. Reintentando automáticamente…",
           "overloadFailed": "⚠️ El servicio del modelo está ocupado: el proveedor no tiene capacidad en este momento. Vuelve a enviar este mensaje aquí para reintentarlo o cambia a otro modelo en Cindy. (Pulsar «Reintentar» en la app de escritorio también continúa la tarea, pero el resultado no volverá a este mensaje)."
         },
+        "audioInputUnavailable": "Esta conexión al modelo no admite audio directamente. Pide a Cindy que transcriba el audio antes de continuar.",
         "toolLoop": {
           "generic": "El modelo llamó a herramientas repetidamente demasiadas veces, así que Cindy detuvo este turno para evitar un bucle infinito. Envía un mensaje nuevo para continuar.",
           "consecutive": "El modelo llamó a la misma herramienta {{n}} veces seguidas, así que Cindy detuvo este turno para evitar un bucle infinito. Envía un mensaje nuevo para continuar.",
@@ -14238,6 +14261,8 @@
         "fastBadge": "Rápido"
       },
       "source": {
+        "lastConfirmed": "Última actualización: {{time}}",
+        "unconfirmed": "Lista de modelos sin actualizar",
         "unavailable": "Modelo no disponible",
         "reconnect": "Reconectar",
         "manage": "Administrar fuente",
@@ -15155,6 +15180,8 @@
     },
     "runningStatus": {
       "currentRate": "Última velocidad",
+      "lastRequestRate": "Media de la última solicitud",
+      "recentTokenRate": "Reciente {{rate}} tok/s",
       "waitingSample": "Muestreando",
       "averageRate": "Promedio por turno",
       "rateHistory": "Historial de velocidad de generación",
@@ -15197,6 +15224,9 @@
       "usageLimitAutoContinueTitle": "Si no has realizado ninguna acción cuando se restablezca el límite de uso, esta tarea continuará automáticamente",
       "usageLimitAutoContinueCancel": "Cancelar",
       "usageLimitAutoContinueCancelTitle": "Cancelar la continuación automática. El error y la opción Reintentar seguirán disponibles.",
+      "usageLimitReached": "La cuenta del modelo alcanzó su límite de uso",
+      "usageLimitReachedWithReset": "La cuenta del modelo alcanzó su límite de uso. Se espera que el uso se restablezca el {{resetAt}}.",
+      "usageLimitReachedNoReset": "La cuenta del modelo alcanzó su límite de uso. Espera a que se restablezca el límite o cambia a otro modelo antes de reintentar.",
       "codexOrganizationUsageLimitWithReset": "La cuenta de Codex conectada está administrada por tu organización y alcanzó su límite de uso. Se espera que el uso se restablezca el {{resetAt}}.",
       "codexOrganizationUsageLimit": "La cuenta de Codex conectada está administrada por tu organización y alcanzó su límite de uso. Espera a que se restablezca el límite o cambia a otra cuenta disponible antes de reintentar.",
       "codexUsageLimitWithReset": "La cuenta de Codex conectada alcanzó su límite de uso. Se espera que el uso se restablezca el {{resetAt}}.",
@@ -15215,7 +15245,7 @@
       "switchClaudeSubscriptionTitle": "Cambiar esta sesión a la suscripción de Claude.ai y reintentar",
       "switchingClaudeSubscription": "Cambiando a Claude.ai…",
       "claudeSubscriptionSwitchFailed": "No se pudo cambiar a Claude.ai o reintentar esta sesión: {{msg}}",
-      "codexAppServerRetired": "El servicio de Codex se reinició o fue reemplazado. La solicitud actual se interrumpió; ejecútala de nuevo.",
+      "codexAppServerRetired": "Se perdió la conexión con Codex y se interrumpió la solicitud en curso. Puedes continuar en esta sesión.",
       "codexAuthMissing": "Aún no se ha iniciado sesión en el Codex remoto (401 Unauthorized). Haz clic en «Sincronizar autenticación» para enviar tus credenciales locales de Codex al directorio de inicio de Cindy Codex remoto y luego reintenta.",
       "codexAuthMissingLocal": "No se pudo autenticar la conexión «{{provider}}» en este ordenador. Revisa su estado de inicio de sesión en la configuración y vuelve a esta sesión cuando se haya restablecido la conexión.",
       "codexSessionExpired": "La conexión con OpenAI necesita una actualización. Vuelve a conectar ChatGPT para continuar; {{appName}} no cerrará tu sesión en el Codex CLI del sistema ni te pedirá que vuelvas a conectar otras fuentes de modelos.",
@@ -15268,6 +15298,7 @@
     },
     "backgroundActivity": {
       "status": "Hay subtareas en segundo plano que siguen consumiendo uso del modelo…",
+      "pluginEngineStatus": "Sigue trabajando en segundo plano…",
       "bashWorkStatus_one": "Trabajando en segundo plano ({{count}} comando)…",
       "bashServiceStatus_one": "{{count}} servicio en segundo plano en ejecución",
       "bashWorkStatus_other": "Trabajando en segundo plano ({{count}} comandos)…",
@@ -15307,6 +15338,7 @@
       "continueFailed_many": "No se pudieron reanudar {{count}} sesiones. Ábrelas para volver a intentarlo."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
       "actionScheduled": "La autorización para esta acción caducó. La próxima ejecución sigue programada.",
       "actionExpired": "La autorización de la sesión para esta acción ha caducado. Consulta la última ejecución de la automatización.",
       "actionRecovered": "La autorización para esta acción caducó. La misma automatización se ejecutó correctamente más tarde.",
@@ -15980,11 +16012,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no puede cambiar de Harness. Elige un modelo en su Harness actual o crea una nueva tarea SSH con el Harness que necesitas.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "No se pudo compactar el contexto al cambiar de modelo porque esta conexión no permite usar el modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
+      "MODEL_CATALOG_UNCONFIRMED": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
       "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
       "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Vuelve a intentarlo en breve.",
       "REMOTE_DAEMON_CLOSED": "La conexión remota se interrumpió, posiblemente durante una actualización. Este turno ha terminado. Envía el mensaje nuevamente.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "No se puede acceder a los archivos o imágenes adjuntos locales en sesiones remotas. En su lugar, pega el contenido directamente.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "Un modelo de revisión automática ha agotado su cuota. Revisa el uso o la facturación, o personaliza los modelos auxiliares en los ajustes del ordenador que ejecuta el Agent. Las acciones que requieren revisión siguen necesitando tu confirmación.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "No hay ningún modelo disponible para la revisión automática. En el ordenador donde se ejecuta el agente, activa y conecta un proveedor de revisión en Proveedores de modelos, o configura los modelos auxiliares en Ajustes. Las acciones que requieren revisión seguirán necesitando tu confirmación.",
       "AUTO_REVIEW_UNAVAILABLE": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. Cambia esta tarea a Acceso completo si prefieres evitar las interrupciones. Ese modo implica un mayor riesgo.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. WeChat personal no puede usar Acceso completo. Confirma esta acción directamente.",
@@ -16030,6 +16065,8 @@
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent no está disponible en la otra computadora. Instálalo o inicia sesión allí, o elige otro Agent.",
       "REMOTE_AGENT_INVALID": "Se produjo un error al comunicarse con la computadora que ejecuta el Agent. Vuelve a intentarlo; si sigue ocurriendo, actualiza Cindy en ambas computadoras.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "El motor del complemento no ha podido restaurar la conversación anterior. Tus mensajes se conservan. Elige otro motor o inicia una tarea nueva.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "Este motor de complemento no puede usar las herramientas de la computadora donde está la tarea, así que por ahora no puede ejecutarla desde otra computadora. Elige otro motor o modelo.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "Este motor de complemento solo puede ejecutar tareas de esta computadora. Otras computadoras todavía no pueden usarlo.",
       "REMOTE_AGENT_RESUME_REJECTED": "El ordenador que ejecuta el modelo no puede reanudar esta sesión. Crea una nueva sesión desde la lista de sesiones y copia el contenido que necesites para continuar. La sesión original y los mensajes en cola se conservan.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo ha alcanzado el límite de participación de modelo establecido por su propietario. Elige otro modelo disponible para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no te ha dado acceso a este proveedor o al modelo seleccionado. Si es tu propia computadora, activa «Permitir uso remoto» en ese proveedor. Si alguien te lo compartió, pídele que ajuste el acceso en Remoto y compartido. También puedes elegir otro modelo.",
@@ -16216,7 +16253,6 @@
       "opened": "Se abrió una página de vista previa"
     },
     "sideChat": {
-      "openPage": "Abrir página completa de la tarea",
       "returnMain": "Volver a la tarea principal",
       "new": "Nuevo chat secundario",
       "mainWindowDescription": "Los chats secundarios se ejecutan actualmente en la ventana principal. Tu conversación está guardada.",
@@ -16224,6 +16260,14 @@
       "commandDescription": "Abre un chat secundario con el contexto de esta tarea. El texto opcional se convierte en un borrador de pregunta.",
       "title": "Chat secundario",
       "context": "Usa el contexto completado hasta el momento en que lo abriste. La tarea principal sigue ejecutándose. El historial se conserva hasta que cierres esta pestaña.",
+      "viewCollaboration": "Ver colaboración",
+      "openConversation": "Abrir conversación",
+      "openFromTaskList": "También en la lista de tareas de la izquierda.",
+      "returnToSideChat": "Volver a la consulta lateral",
+      "reopenSideChat": "Volver a abrir la consulta lateral",
+      "origin": "Esta conversación comenzó en una consulta lateral.",
+      "originNamed": "Esta conversación comenzó en una consulta lateral de «{{title}}».",
+      "originUnavailable": "Esta conversación comenzó en una consulta lateral. La tarea original no está disponible.",
       "opening": "Abriendo…",
       "notReady": "Espera a que la tarea principal complete su primera respuesta.",
       "unsupported": "El Agent de esta tarea se ejecuta en otro entorno. El chat secundario aún no está disponible aquí.",
@@ -16232,9 +16276,10 @@
       "mainTaskOnly": "Abre un chat secundario desde la tarea principal.",
       "sharedTaskUnavailable": "Los chats secundarios no están disponibles en tareas compartidas.",
       "archivedTask": "Desarchiva esta tarea para abrir un chat secundario.",
-      "closeTitle": "¿Cerrar el chat secundario?",
-      "closeDescription": "Este seguimiento se detendrá y su historial se eliminará. La tarea principal seguirá ejecutándose.",
-      "closeConfirm": "Cerrar y eliminar",
+      "closeTitle": "¿Cerrar y archivar este seguimiento?",
+      "closeDescription": "La tarea correspondiente de la barra lateral izquierda también se archivará.",
+      "closeDescriptionRunning": "La tarea correspondiente de la barra lateral izquierda también se archivará y sus Workers se detendrán.",
+      "closeConfirm": "Cerrar y archivar",
       "closeFailed": "No se pudo cerrar el chat secundario. Inténtalo de nuevo."
     },
     "teammateProcess": {
@@ -16288,9 +16333,19 @@
       "toggle": "Mostrar u ocultar la respuesta de «{{title}}»",
       "openTask": "Abrir tarea"
     },
+    "geminiRateLimit": {
+      "retried": "Se reintentó automáticamente tras la espera indicada por Gemini",
+      "title": "Se alcanzó el límite de entrada por minuto de Gemini.",
+      "exhausted": "Gemini sigue limitado tras un reintento. Puedes volver a intentarlo manualmente.",
+      "retryIn": "Reintento automático en {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Espera a que se restablezca o elige otra fuente de modelos. La cuenta no cambia automáticamente.",
-      "limitedUntil": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Restablecimiento previsto: {{resetAt}}. Espera hasta entonces o elige otra fuente de modelos. La cuenta no cambia automáticamente.",
+      "poolModelLimited": "Se ha alcanzado el límite de uso de la suscripción para este modelo. Puedes cambiar de modelo.",
+      "poolRetryUntil": "Vuelve a intentarlo después de {{resetAt}}.",
+      "poolOtherSignedOut": "Otra cuenta de suscripción tiene la sesión cerrada. Inicia sesión en el equipo que ejecuta la tarea y vuelve a intentarlo.",
+      "poolUnavailable": "No hay ninguna cuenta de suscripción disponible para este modelo. Cambia de modelo o revisa las cuentas en el equipo que ejecuta la tarea.",
+      "limited": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Espera a que se restablezca o elige otra fuente de modelos.",
+      "limitedUntil": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Restablecimiento previsto: {{resetAt}}. Espera hasta entonces o elige otra fuente de modelos.",
       "loginRequired": "La cuenta de suscripción de esta tarea requiere iniciar sesión de nuevo. Hazlo en el ordenador que ejecuta la tarea y vuelve a intentarlo.",
       "signingIn": "Se está iniciando sesión en la cuenta de suscripción de esta tarea. Vuelve a intentarlo cuando termine.",
       "unavailable": "La cuenta de suscripción asignada a esta tarea no se puede usar para esta solicitud. Revisa la cuenta en los ajustes del proveedor de modelos del ordenador que ejecuta la tarea o elige otra fuente de modelos.",
@@ -16528,6 +16583,14 @@
       "remoteProviderUnsupported": "Este proveedor no es compatible con sesiones remotas SSH; elige otra fuente",
       "remoteNativeOauthUnavailable": "Las tareas remotas no pueden usar una suscripción de Claude: elige una puerta de enlace o un modelo con clave API",
       "claudeSubscriptionWorkspaceOverride": "La configuración de .claude de esta carpeta cambia adónde envía solicitudes Claude o cómo inicia sesión, por lo que no se puede usar la suscripción de Claude aquí. Elimina esa configuración o elige un modelo con puerta de enlace o clave de API",
+      "savedModel": {
+        "loading": "Conectando con el modelo seleccionado…",
+        "checkFailed": "No se pudo comprobar el modelo seleccionado",
+        "engine": "El motor seleccionado no está disponible. Elige un modelo para esta tarea.",
+        "source": "La fuente seleccionada no está disponible. Elige un modelo para esta tarea.",
+        "model": "El modelo seleccionado no está disponible. Elige un modelo para esta tarea.",
+        "thisTaskOnly": "El modelo seleccionado solo se aplica a esta tarea"
+      },
       "deviceStillLoading": "El dispositivo remoto aún se está cargando. Espera",
       "remoteDefaultsLoadFailed": "No se pudo cargar la configuración del dispositivo remoto. Revisa la conexión; Cindy lo está reintentando.",
       "branchChanged": "El proyecto está ahora en {{branch}}. Compruébalo y vuelve a enviar.",
@@ -17157,7 +17220,41 @@
             "token": "Usando token de respaldo",
             "recheck": "Comprobar conexión",
             "summary": "Administra repositorios, incidencias, pull requests y Actions de GitHub.",
-            "otherMethods": "Otros métodos de conexión"
+            "otherMethods": "Otros métodos de conexión",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "Acceso de GitHub App",
+            "all": "Todos los repositorios",
+            "selected": "Repositorios seleccionados",
+            "visible": "Repositorios visibles: {{count}}",
+            "unknownCount": "Cantidad no disponible",
+            "permissions": "Permisos",
+            "read": "Solo lectura",
+            "write": "Lectura y escritura",
+            "admin": "Administración",
+            "loading": "Cargando acceso…",
+            "missing": "Conecta GitHub App en este equipo para ver el acceso.",
+            "unavailable": "Permisos no disponibles.",
+            "empty": "Esta cuenta no tiene instalaciones visibles.",
+            "suspended": "Instalación suspendida",
+            "events": "Repositorios con eventos suscritos en este equipo: {{count}}",
+            "manage": "Gestionar acceso a repositorios",
+            "names": {
+              "actions": "Actions",
+              "administration": "Administración del repositorio",
+              "checks": "Comprobaciones",
+              "contents": "Contenido del repositorio",
+              "deployments": "Despliegues",
+              "issues": "Issues",
+              "members": "Miembros de la organización",
+              "metadata": "Metadatos",
+              "organization_events": "Eventos de la organización",
+              "pull_requests": "Pull requests",
+              "repository_hooks": "Webhooks del repositorio",
+              "statuses": "Estados de commits",
+              "workflows": "Archivos de flujo de trabajo"
+            }
           },
           "app": {
             "title": "Eventos del repositorio",
@@ -17170,6 +17267,21 @@
             "repositories": "Elegir repositorios",
             "disconnect": "Desconectar eventos",
             "connect": "Conectar GitHub App"
+          },
+          "connection": {
+            "operations": "Operaciones del repositorio",
+            "operationsMissing": "Acceso al repositorio aún no autorizado",
+            "checking": "Comprobando conexión con GitHub…",
+            "mismatch": "Las operaciones y las notificaciones usan cuentas diferentes. Revísalas y vuelve a conectar.",
+            "ready": "Cuenta de GitHub conectada.",
+            "close": "Cerrar",
+            "incomplete": "Cuenta vinculada. Autoriza las operaciones en este equipo para terminar.",
+            "eventsOnly": "Esta cuenta recibe eventos del repositorio. Su nombre no confirma la autorización en este equipo.",
+            "connect": "Conectar GitHub",
+            "alternative": "Usar el inicio de sesión local de GitHub",
+            "cliDescription": "Puedes seguir usando tu sesión local. Las notificaciones personales y otras funciones no compatibles con GitHub Apps aún la necesitan.",
+            "disconnect": "Desconectar GitHub App",
+            "repositories": "Repositorios seguidos: {{count}}"
           }
         },
         "unresolved": "Hilos de revisión sin resolver: {{count}}",
@@ -22375,7 +22487,8 @@
       "empty": "Aún no hay grupos de modelos. Combina varias fuentes en un modo en Ajustes para elegirlo aquí.",
       "manage": "Gestionar grupos de modelos",
       "switched": "«{{name}}» cambió esta tarea a {{model}}",
-      "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo."
+      "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo.",
+      "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó."
     },
     "why": {
       "expiringQuota": "Le queda un {{left}}% de cuota y se restablece el {{reset}}, así que va primero",

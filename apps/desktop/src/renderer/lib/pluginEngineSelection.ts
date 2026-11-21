@@ -11,19 +11,48 @@ import {
   PLUGIN_ENGINE_AGENT_KIND,
   PLUGIN_ENGINE_DEFAULT_MODEL,
   isPluginEngineEffort,
+  isPluginEngineOfferedRemotely,
   pluginEngineKeyFromProviderId,
   type PluginEngineEffort,
   type PluginEngineModel,
   type PluginEnginePermissionMode,
   type PluginEngineView,
 } from '../../shared/pluginEngines';
+import { isOrganizationPluginNamespace, parsePluginStoragePart } from '../../shared/pluginIdentity';
 import type { PermissionMode } from '@/lib/userPreferences.types';
 
 export { PLUGIN_ENGINE_DEFAULT_MODEL };
 
+/**
+ * An engine a picker offers. `deviceId` is set for an engine that belongs to another computer of
+ * the same account (opened there for remote use): the agent runs on that computer while the task,
+ * its files and its commands stay on this one. The same plugin can be installed on several
+ * computers with the same `providerId`, so an engine is identified by both fields.
+ */
+export interface PluginEngineChoice extends PluginEngineView {
+  deviceId?: string;
+  /** Display name of that computer; shown next to the engine name. */
+  deviceName?: string;
+}
+
+/** Identity of a choice inside one picker (rail tab, list block, React key). */
+export function pluginEngineChoiceKey(choice: { providerId: string; deviceId?: string | null }): string {
+  return choice.deviceId ? `${choice.deviceId}\n${choice.providerId}` : choice.providerId;
+}
+
+/** Whether a selection (or rail tab) names this engine: same engine id on the same computer. */
+export function isSamePluginEngineChoice(
+  a: { providerId: string; deviceId?: string | null } | null | undefined,
+  b: { providerId: string; deviceId?: string | null } | null | undefined,
+): boolean {
+  return !!a && !!b && a.providerId === b.providerId && (a.deviceId ?? null) === (b.deviceId ?? null);
+}
+
 /** What the new-task draft remembers: which engine, which of its models and its permission mode. */
 export interface PluginEngineSelection {
   providerId: string;
+  /** The other computer of this account that has the engine; absent = the computer the task is on. */
+  deviceId?: string;
   modelId: string;
   /**
    * Kept with the engine choice, apart from the built-in Harness preferences: an engine offers only
@@ -36,7 +65,7 @@ export interface PluginEngineSelection {
 
 /** A draft selection that can be used right now. */
 export interface ActivePluginEngine {
-  engine: PluginEngineView;
+  engine: PluginEngineChoice;
   modelId: string;
   permissionMode: PluginEnginePermissionMode['id'];
   /** The level the task starts with; null = the model has none (or the engine keeps its own). */
@@ -61,15 +90,57 @@ export function isPluginEngineSelectable(engine: PluginEngineView): boolean {
 }
 
 /**
+ * Engines shown in a model picker: engines reported unavailable (for example, plugin installed
+ * locally without signing in) stay out of the picker unless one is already the active choice.
+ */
+export function visiblePluginEngineChoices<T extends PluginEngineChoice>(
+  engines: readonly T[],
+  active?: { providerId: string; deviceId?: string | null } | null,
+): T[] {
+  return engines.filter((engine) => isPluginEngineSelectable(engine) || isSamePluginEngineChoice(active, engine));
+}
+
+function parseHarnessIdentity(providerId: string): { storagePart: string; harnessId: string } | null {
+  const key = pluginEngineKeyFromProviderId(providerId);
+  if (!key) return null;
+  const separator = key.lastIndexOf(':');
+  if (separator <= 0 || separator >= key.length - 1) return null;
+  return { storagePart: key.slice(0, separator), harnessId: key.slice(separator + 1) };
+}
+
+/**
+ * Whether two engine entries come from the same plugin harness across computers of the same
+ * account. Public/root (`foo` / `_root__foo`) and local (`.cindy` / GitHub release `_ns__local__foo`)
+ * installs of the same plugin id match; organization-scoped plugins match only the same org.
+ */
+export function sameInstalledPluginHarness(
+  a: Pick<PluginEngineView, 'providerId'>,
+  b: Pick<PluginEngineView, 'providerId'>,
+): boolean {
+  const left = parseHarnessIdentity(a.providerId);
+  const right = parseHarnessIdentity(b.providerId);
+  if (!left || !right || left.harnessId !== right.harnessId) return false;
+  if (left.storagePart === right.storagePart) return true;
+  const leftIdentity = parsePluginStoragePart(left.storagePart);
+  const rightIdentity = parsePluginStoragePart(right.storagePart);
+  if (!leftIdentity || !rightIdentity || leftIdentity.ghostId !== rightIdentity.ghostId) return false;
+  if (isOrganizationPluginNamespace(leftIdentity.namespace) || isOrganizationPluginNamespace(rightIdentity.namespace)) {
+    return leftIdentity.namespace === rightIdentity.namespace;
+  }
+  return true;
+}
+
+/**
  * The draft's remembered engine, if it can still start a task. A removed or unavailable engine
  * reads as "not selected", so the draft falls back to its built-in model like a removed plugin model.
  */
 export function resolveActivePluginEngine(
-  engines: readonly PluginEngineView[],
+  engines: readonly PluginEngineChoice[],
   selection: PluginEngineSelection | null | undefined,
 ): ActivePluginEngine | null {
   if (!selection || !pluginEngineKeyFromProviderId(selection.providerId)) return null;
-  const engine = engines.find((item) => item.providerId === selection.providerId);
+  // An engine of another computer never falls back to this computer's engine of the same plugin.
+  const engine = engines.find((item) => isSamePluginEngineChoice(item, selection));
   if (!engine || !isPluginEngineSelectable(engine)) return null;
   const known = engine.models.some((model) => model.id === selection.modelId);
   // A model the engine no longer lists falls back to the engine's own default, never to another model.
@@ -155,7 +226,8 @@ export function pluginEnginePermissionMode(
 
 /**
  * Engine fields of the session row created for a plugin engine task (local-db sessions:create).
- * Main accepts `agentKind: 'acp'` only with an `acp-plugin:` providerId and without remote fields.
+ * Main accepts `agentKind: 'acp'` only with an `acp-plugin:` providerId; `agentDeviceId` names the
+ * other computer of this account that has the engine (never SSH or a shared provider).
  */
 export function pluginEngineSessionCreateFields(selection: ActivePluginEngine): {
   agentKind: typeof PLUGIN_ENGINE_AGENT_KIND;
@@ -163,11 +235,36 @@ export function pluginEngineSessionCreateFields(selection: ActivePluginEngine): 
   model: string;
   /** '' = the engine keeps its own level; main keeps a level only if the engine lists it. */
   effort: PluginEngineEffort | '';
+  agentDeviceId?: string;
 } {
   return {
     agentKind: PLUGIN_ENGINE_AGENT_KIND,
     providerId: selection.engine.providerId,
     model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
     effort: selection.effort ?? '',
+    ...(selection.engine.deviceId ? { agentDeviceId: selection.engine.deviceId } : {}),
   };
+}
+
+/**
+ * The engines other computers of this account offer, as picker choices. `catalogues` holds what
+ * each computer last answered (null = not read yet or unreachable: it offers nothing for now);
+ * only engines opened there for remote use, able to run, and whose plugin is also installed on the
+ * task's computer (`installedEngines`) are kept. Shared providers are not computers of this account
+ * and never offer plugin engines.
+ */
+export function remotePluginEngineChoices(
+  devices: readonly { deviceId: string; name?: string | null }[],
+  catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>,
+  displayName: (deviceId: string, name?: string | null) => string,
+  installedEngines: readonly Pick<PluginEngineView, 'providerId'>[],
+): PluginEngineChoice[] {
+  if (installedEngines.length === 0) return [];
+  return devices.flatMap((device) =>
+    (catalogues.get(device.deviceId) ?? [])
+      .filter((engine) =>
+        !!pluginEngineKeyFromProviderId(engine.providerId)
+        && isPluginEngineOfferedRemotely(engine)
+        && installedEngines.some((installed) => sameInstalledPluginHarness(installed, engine)))
+      .map((engine) => ({ ...engine, deviceId: device.deviceId, deviceName: displayName(device.deviceId, device.name) })));
 }

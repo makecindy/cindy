@@ -14,7 +14,7 @@ import {
 } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
 import { findErrorTailMessage } from './errorTailMessage';
-import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { receiveTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
@@ -881,6 +881,7 @@ export interface PendingPermission {
   description?: string;
   suggestions?: unknown[];
   autoReviewUnavailable?: boolean;
+  autoReviewQuotaExhausted?: boolean;
   autoReviewReason?: string;
   /** Renderer-only delivery state; never part of the permission decision. */
   submitting?: boolean;
@@ -3271,6 +3272,8 @@ const sessions = new Map<string, SessionChatState>();
 let nextSessionIncarnation = 1;
 const sessionIncarnations = new Map<string, number>();
 const listeners = new Map<string, Set<() => void>>();
+type MessageRemovalListener = (clientIds: Iterable<string>) => void;
+const messageRemovalListeners = new Map<string, Set<MessageRemovalListener>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
 
 /**
@@ -6612,6 +6615,7 @@ export function handleStreamEvent(
           ...messages[existingUpdatableToolIdx],
           content: formatToolUseSummary(toolName, input),
           toolInput: input,
+          ...(assistantMetaFields.replyToClientId ? { replyToClientId: assistantMetaFields.replyToClientId } : {}),
           ...(toolName === 'update_plan'
             ? { planUpdatedAtMs: Date.now(), terminalPlanSnapshot: false }
             : {}),
@@ -6633,6 +6637,7 @@ export function handleStreamEvent(
             toolUseId,
             toolName,
             toolInput: input,
+            ...(assistantMetaFields.replyToClientId ? { replyToClientId: assistantMetaFields.replyToClientId } : {}),
             ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
             isStreaming: false,
             createdAt: new Date().toISOString(),
@@ -7031,6 +7036,7 @@ export function handleStreamEvent(
         description?: string;
         suggestions?: unknown[];
         autoReviewUnavailable?: boolean;
+        autoReviewQuotaExhausted?: boolean;
         autoReviewReason?: string;
       };
       return {
@@ -7045,6 +7051,7 @@ export function handleStreamEvent(
           sourceDescription: data.sourceDescription,
           suggestions: data.suggestions,
           autoReviewUnavailable: data.autoReviewUnavailable === true,
+          ...(data.autoReviewUnavailable === true && data.autoReviewQuotaExhausted === true ? { autoReviewQuotaExhausted: true } : {}),
           autoReviewReason: data.autoReviewReason,
           ...(state.pendingPermission?.requestId === data.requestId
             ? {
@@ -7606,7 +7613,7 @@ function mergeLiveGenerationStatus(
   // Speed belongs to the turn that produced it: a new turn drops the old value,
   // frames without the field keep the latest one (including the final average).
   // An unreliable frame without it means the host withdrew the speed (suspend).
-  const tokenSpeed = readTokenSpeedSnapshot(update.tokenSpeed)
+  const tokenSpeed = receiveTokenSpeedSnapshot(update.tokenSpeed, isTurnStart ? undefined : previous.tokenSpeed)
     ?? (isTurnStart || update.generationReliable === false ? undefined : previous.tokenSpeed);
   // Turn start drops leftover metrics from the previous turn, then keeps any
   // live fields carried by this same status. A reconnect-shaped first event
@@ -9065,6 +9072,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           title: typeof request.title === 'string' ? request.title : undefined,
           description: typeof request.description === 'string' ? request.description : undefined,
           autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+          ...(metadata?.autoReviewUnavailable === true && metadata?.autoReviewUnavailableReason === 'quota_exhausted' ? { autoReviewQuotaExhausted: true } : {}),
           autoReviewReason: typeof metadata?.autoReviewReason === 'string' ? metadata.autoReviewReason : undefined,
           suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
           mcpApp: { clientId: app.clientId, serverId: app.serverId, title: app.title, scope: app.scope === 'session' ? 'session' : 'once' },
@@ -9087,6 +9095,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         description: typeof request.description === 'string' ? request.description : undefined,
         suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
         autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+        ...(metadata?.autoReviewUnavailable === true && metadata?.autoReviewUnavailableReason === 'quota_exhausted' ? { autoReviewQuotaExhausted: true } : {}),
         autoReviewReason: typeof metadata?.autoReviewReason === 'string' && metadata.autoReviewReason.trim()
           ? metadata.autoReviewReason.trim() : undefined,
         sourceDescription: typeof metadata?.imSourceDescription === 'string' ? metadata.imSourceDescription : undefined,
@@ -10369,6 +10378,33 @@ function subscribe(sessionId: string, cb: () => void): () => void {
     s.delete(cb);
     if (s.size === 0) listeners.delete(sessionId);
   };
+}
+
+function subscribeToMessageRemovals(sessionId: string, listener: MessageRemovalListener): () => void {
+  let subscribers = messageRemovalListeners.get(sessionId);
+  if (!subscribers) {
+    subscribers = new Set();
+    messageRemovalListeners.set(sessionId, subscribers);
+  }
+  subscribers.add(listener);
+  return () => {
+    subscribers.delete(listener);
+    if (subscribers.size === 0) messageRemovalListeners.delete(sessionId);
+  };
+}
+
+function notifyMessageRemovals(sessionId: string, clientIds: Iterable<string>): void {
+  for (const listener of messageRemovalListeners.get(sessionId) ?? []) listener(clientIds);
+}
+
+// Only committed rewinds use this path. A cache reload alone is not evidence of removal.
+function notifyRewoundMessages(sessionId: string, clientId: string): void {
+  if (!messageRemovalListeners.has(sessionId)) return;
+  const messages = sessions.get(sessionId)?.messages ?? [];
+  const index = messages.findIndex((message) => message.clientId === clientId);
+  if (index >= 0) {
+    notifyMessageRemovals(sessionId, messages.slice(index).map((message) => message.clientId));
+  }
 }
 
 function allPendingQuestions(state: SessionChatState): PendingAskUser[] {
@@ -13231,7 +13267,11 @@ async function continuePlanResolutionAfterIdleDiscovery(sessionId: string): Prom
  * view automatically. Resets pagination cursors and isStreaming flags so the
  * slice looks like a clean session (re-)open.
  */
-function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean }): void {
+function reloadMessages(
+  sessionId: string,
+  opts?: { allowCacheHydrate?: boolean; rewindFromClientId?: string },
+): void {
+  if (opts?.rewindFromClientId) notifyRewoundMessages(sessionId, opts.rewindFromClientId);
   discardPendingTextDelta(sessionId);
   if (!opts?.allowCacheHydrate) invalidateRemoteMessageCache(sessionId);
   // 代际递增:作废 in-flight 的 loadOlderMessages 追页窗口(见 _messagesEpoch 注释)。
@@ -13301,6 +13341,7 @@ function removeMessagesByClientIds(
 ): void {
   const deletedClientIds = new Set(clientIds.filter(Boolean));
   if (deletedClientIds.size === 0) return;
+  notifyMessageRemovals(sessionId, deletedClientIds);
   // 远程会话:删消息(菜单删除镜像 / 被控端 messages:deleted 推送)**不会**触发"最新页"
   // 重拉 —— 那是唯一的写缓存路径。盘上那份还带着刚被删掉的行,此刻退出 app,下次离线冷
   // 启动就把它 hydrate 回来(review: codex P1)。缓存是纯优化,清掉即可(下一次成功的
@@ -13382,6 +13423,7 @@ function removeMessageByClientId(sessionId: string, clientId: string): void {
  * selectRewindMessageIds(createdAt >= target)对齐。clientId 不在列表时 no-op。
  */
 function dropMessagesFromClientId(sessionId: string, clientId: string): void {
+  notifyRewoundMessages(sessionId, clientId);
   // edit-last 已经在权威侧提交了 rewind,而"重发"可能失败(受支持的失败路径)—— 那时不会有
   // 任何最新页拉取来刷新缓存,盘上仍是 rewind 之前的尾巴(review: codex P1)。
   invalidateRemoteMessageCache(sessionId);
@@ -19140,6 +19182,7 @@ function mirrorSessionFields(
 export const makerChatStore = {
   initGlobalListeners,
   subscribe,
+  subscribeToMessageRemovals,
   subscribeLight,
   getSnapshot,
   acknowledgeSharedTaskRecovery(sessionId: string, episode: string) {
@@ -20019,6 +20062,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   }
   const legacyUserTurnCosts = projectLegacyUserTurnCosts(ordered);
   const mapped = ordered.map((m) => {
+    const replyToFields = typeof m.agentMeta?.replyToClientId === 'string' && m.agentMeta.replyToClientId
+      ? { replyToClientId: m.agentMeta.replyToClientId } : {};
     if (m.role === 'assistant' && m.agentMeta?.voiceCall?.version === 1) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'voice-call' as const, systemCardData: { record: m.agentMeta.voiceCall },
@@ -20064,6 +20109,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...replyToFields,
         ...(agentTaskStatus ? { agentTaskStatus } : {}),
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
           ? {
@@ -20215,6 +20261,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           role: m.role,
           content: m.content,
           isStreaming: false,
+          ...replyToFields,
         };
       }
       const c = (m.content && typeof m.content === 'object' ? m.content : {}) as Record<
@@ -20232,6 +20279,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         role: m.role,
         content: message,
         isStreaming: false,
+        ...replyToFields,
         ...(reason ? { errorReason: reason } : {}),
         ...(toolLoop ? { toolLoop } : {}),
         ...(outputLimit ? { outputLimit } : {}),

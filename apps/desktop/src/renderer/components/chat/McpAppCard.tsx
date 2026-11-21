@@ -470,8 +470,15 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       // Layout cleanup runs before React removes the ancestor message tree.
       // Keep a live frame connected for the bounded teardown, including on failure.
       if (frame) {
-        frame.style.cssText =
-          'position:fixed;width:1px;height:1px;visibility:hidden;pointer-events:none';
+        // Keep the outgoing iframe at its current size so the App can receive
+        // ui/resource-teardown and reply while the task is unmounting.
+        const { top, left, width, height } = frame.getBoundingClientRect();
+        Object.assign(frame.style, {
+          position: 'fixed', top: `${top}px`, left: `${left}px`,
+          width: `${width}px`, height: `${height}px`,
+          opacity: '0', pointerEvents: 'none',
+        });
+        frame.inert = true;
         const body = document.body as HTMLElement & {
           moveBefore?: (node: Node, child: Node | null) => void;
         };

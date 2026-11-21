@@ -3046,6 +3046,9 @@ it.each([
     }
     const final = codexSpeedSnapshot(rt);
     expect(final).toMatchObject({ streaming: false, tokens: realOutput });
+    // The tool-loop fixture ends its first text item at 3788 ms, long before
+    // the tool start. Only the final request clears the one-second measurement floor.
+    if (recorded === recordedToolLoop) expect(final?.measurement?.average).toBeCloseTo(367_000 / 7_510, 1);
     expect(final!.average).toBeGreaterThan(slowest);
     expect(final!.average).toBeLessThan(fastest);
     // The answer is read while it streams, at the pace it streams.
@@ -3093,11 +3096,16 @@ describe('codex speed around unpaired output and human waits', () => {
       expect(speed?.streaming).toBe(true);
       expect(speed!.rate).toBeCloseTo(20, 0);
       expect(speed!.tokens).toBe(280);
+      expect(speed!.measurement?.latest).toEqual(source === 'content'
+        ? expect.objectContaining({ kind: 'stream', rate: 20 }) : null);
       // A just-published warm-up must not hide the first reading until the next delta.
       expect(codexUsageRefreshDue(rt, Date.now() - 1, false)).toBe(true);
       expect(codexUsageRefreshDue(rt, Date.now() - 1, true)).toBe(false);
       settleCodexSpeedUsage(rt, { outputTokens: 400, reasoningOutputTokens: 400 });
-      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 400, streaming: false });
+      const settled = codexSpeedSnapshot(rt);
+      expect(settled).toMatchObject({ tokens: 400, streaming: false, measurement: { latest: { kind: 'request' } } });
+      expect(settled?.measurement?.latest?.rate).toBeCloseTo(400 / 14);
+      expect(settled?.measurement?.average).toBeCloseTo(400 / 14);
     } finally {
       vi.useRealTimers();
     }
