@@ -1,13 +1,14 @@
-import { mkdtemp, mkdir, writeFile, readFile, access, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, access, realpath, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { expect, it } from 'vitest';
 import { runSourceGit } from '../sourceGit.js';
 import { manageCindyMakeWorkspace } from '../taskCleanup.js';
+import { createCindyMakeWorktree } from '../taskWorkspace.js';
 import { makeSourceCheckoutPath, makeTaskWorktreePath, makeTaskBranch } from '../sourcePaths.js';
 
 it('preserves archives and finished unintegrated changes, and completely removes discarded work with real Git', async () => {
-  const profile = await mkdtemp(path.join(os.tmpdir(), 'cindy-make-cleanup-'));
+  const profile = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cindy-make-cleanup-')));
   const source = makeSourceCheckoutPath(profile);
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
@@ -99,9 +100,13 @@ it('preserves archives and finished unintegrated changes, and completely removes
     await expect(access(discarded)).rejects.toThrow();
     // Match Windows' failed removal: no registration/.git, but dependencies and
     // the task branch survive. Preparation metadata is the recovery authority.
-    const partial = makeTaskWorktreePath(profile, 'partial');
-    const partialBranch = makeTaskBranch('partial');
-    await git(['worktree', 'add', '-b', partialBranch, partial]);
+    const linkedProfile = path.join(profile, 'linked-profile');
+    await symlink(profile, linkedProfile, process.platform === 'win32' ? 'junction' : 'dir');
+    const prepared = await createCindyMakeWorktree(linkedProfile, 'partial', signal, {
+      processEnvironment: env,
+    });
+    const partial = prepared.path;
+    const partialBranch = prepared.branch;
     await git(['worktree', 'remove', '--force', partial]);
     const deep = path.join(
       partial,
@@ -121,9 +126,18 @@ it('preserves archives and finished unintegrated changes, and completely removes
     await expect(
       manageCindyMakeWorkspace(profile, 'partial', 'delete', env, signal),
     ).rejects.toMatchObject({ code: 'unavailable' });
+    // #9845, git-integration: profile aliases survive in persisted preparation
+    // records after Git registration/.git are gone. The old residue fixture used
+    // canonical paths on both sides, so it missed this recovery failure.
     await expect(
-      manageCindyMakeWorkspace(profile, 'partial', 'end', env, signal, {
-        preparedWorkspace: { path: partial, branch: partialBranch },
+      manageCindyMakeWorkspace(linkedProfile, 'partial', 'end', env, signal, {
+        preparedWorkspace: { path: outside, branch: partialBranch },
+      }),
+    ).rejects.toMatchObject({ code: 'unavailable' });
+    expect(await readFile(path.join(deep, 'leftover.js'), 'utf8')).toBe('locked during previous cleanup');
+    await expect(
+      manageCindyMakeWorkspace(linkedProfile, 'partial', 'end', env, signal, {
+        preparedWorkspace: prepared,
       }),
     ).resolves.toBe(true);
     await expect(access(partial)).rejects.toThrow();
