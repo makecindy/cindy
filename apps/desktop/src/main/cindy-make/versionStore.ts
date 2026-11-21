@@ -28,7 +28,9 @@ export const ORIGINAL_DEV_ENV_KEYS = [
   'CINDY_AUTH_REGION',
 ];
 /** Dev-only switches live outside `environment` so older readers ignore them safely. */
-export const ORIGINAL_DEV_ENVIRONMENT_OVERRIDES = ['XDT_DISABLE_GLOBAL_SHORTCUTS'] as const;
+export const ORIGINAL_DEV_ENVIRONMENT_OVERRIDES = {
+  XDT_DISABLE_GLOBAL_SHORTCUTS: true,
+} as const;
 export const DEV_ENVIRONMENT_OVERRIDES_CAPABILITY = 'dev-environment-overrides';
 export interface VersionProfile {
   userData: string;
@@ -140,7 +142,7 @@ export function readOriginalVersion(profile: string): OriginalVersion | null {
         (!value.development.environmentOverrides ||
           Object.entries(value.development.environmentOverrides).some(
             ([key, entry]) =>
-              !ORIGINAL_DEV_ENVIRONMENT_OVERRIDES.some((allowed) => allowed === key) ||
+              !Object.prototype.hasOwnProperty.call(ORIGINAL_DEV_ENVIRONMENT_OVERRIDES, key) ||
               typeof entry !== 'string',
           ))))
   )

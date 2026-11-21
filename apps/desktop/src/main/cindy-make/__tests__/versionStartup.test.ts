@@ -418,6 +418,7 @@ describe('one original version type for Dev and installed Cindy', () => {
     vi.stubEnv('WAYLAND_DISPLAY', 'wayland-1');
     vi.stubEnv('XDG_RUNTIME_DIR', '/run/user/1000');
     vi.stubEnv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus');
+    original.development!.environmentOverrides = { XDT_DISABLE_GLOBAL_SHORTCUTS: '1' };
     saveOriginal();
     const value = launchRequest({ state: 'pending' });
     process.argv.push('--cindy-version-profile=' + h.profile, '--cindy-version-helper=' + value.id);
@@ -430,6 +431,7 @@ describe('one original version type for Dev and installed Cindy', () => {
         WAYLAND_DISPLAY: 'wayland-1',
         XDG_RUNTIME_DIR: '/run/user/1000',
         DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus',
+        XDT_DISABLE_GLOBAL_SHORTCUTS: '1',
       });
       queueMicrotask(() => {
         const file = startup.versionRequestPath(h.profile, value.id);
