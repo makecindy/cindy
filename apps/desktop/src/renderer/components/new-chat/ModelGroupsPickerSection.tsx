@@ -126,7 +126,7 @@ export function ModelGroupsPickerSection({
       {groups.map((group) => (
         <div key={group.key} role="group" aria-label={group.label}>
           <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta,var(--text-tertiary))]">
-            <span className="truncate">{group.label}</span>
+            <span title={group.label} className="truncate">{group.label}</span>
           </div>
           {group.rows.map((row) => {
             const selected = isModelGroupSelected(picker.active, row.selection);
@@ -163,7 +163,7 @@ export function ModelGroupsPickerSection({
                   <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
                     <ModelGroupIcon size={16} />
                   </span>
-                  <span className="min-w-0 truncate font-medium leading-5">{row.name}</span>
+                  <span title={row.name} className="min-w-0 truncate font-medium leading-5">{row.name}</span>
                   {/* 与模型行的 ☆ 同一个样子：收藏后常亮，未收藏的悬停或键盘聚焦时出现。 */}
                   {starEnabled && <button
                     type="button"
