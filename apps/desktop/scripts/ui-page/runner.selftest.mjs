@@ -3,15 +3,15 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { setImmediate as nextTurn } from 'node:timers/promises';
+import { setImmediate as nextTurn, setTimeout as delay } from 'node:timers/promises';
 import { _electron } from 'playwright-core';
-import { runPlan } from './run.mjs';
+import { runPlan, sweepScratch } from './run.mjs';
 import { adhocPage } from './registry.mjs';
 import { parseOptions, variantsFor } from './options.mjs';
 import { scanPage, buildPage, inputsChanged } from './build.mjs';
@@ -598,6 +598,54 @@ test(
     const summary = JSON.parse(await readFile(summaryFile, 'utf8'));
     assert.match(summary.errors.join('\n'), /用户中断/);
     assert.equal(leftoverRunners(), '');
+  },
+);
+
+// A runner killed outright (stopped task, tool timeout) runs no cleanup at all. Its hidden
+// Electron window used to stay for days and its scratch folder was never removed.
+test(
+  'a runner killed outright leaves no Electron or scratch folder behind',
+  { skip: process.platform === 'win32' && 'finds the runtime with pgrep' },
+  async () => {
+    const file = await entry('killed', `export {};\n`);
+    const child = spawn(process.execPath, [cli, '--entry', file, '--timeout', '60000'], {
+      env: { ...process.env, NODE_DEBUG: '', CINDY_UI_PROGRESS: '1' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    const exited = new Promise((resolve) => child.on('exit', resolve));
+    let stderr = '';
+    await new Promise((resolve, reject) => {
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+        if (/^UI_VARIANT /m.test(stderr)) resolve();
+      });
+      child.on('exit', () => reject(new Error(`runner ended before its variant ran:\n${stderr}`)));
+    });
+    const runtimes = ['-P', String(child.pid), '-f', 'ui-page/electron.cjs'];
+    const electron = execFileSync('pgrep', runtimes, { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .map(Number);
+    const tmp = os.tmpdir();
+    const scratch = (await readdir(tmp))
+      .filter((name) => name.startsWith(`cindy-ui-check-${child.pid}-`))
+      .map((name) => path.join(tmp, name));
+    assert.equal(scratch.length, 1, 'the scratch folder names its runner');
+    child.kill('SIGKILL');
+    await exited;
+    const alive = (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const deadline = Date.now() + 10000;
+    while (electron.some(alive) && Date.now() < deadline) await delay(200);
+    assert.deepEqual(electron.filter(alive), [], 'Electron quits once its runner is gone');
+    await sweepScratch();
+    assert.equal(existsSync(scratch[0]), false, "the next run removes the dead runner's scratch");
   },
 );
 
