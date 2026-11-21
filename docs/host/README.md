@@ -80,6 +80,22 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 - Electron 客户端模式覆盖任务、消息、供应商、能力、Agent 命令/技能、输入队列、交互与告警；
   插件执行、MCP、scheduler、device-link、记忆/文件工具仍由 Desktop Runtime 承担（见上表 TODO）。
 
+## 部署在反向代理的子路径下
+
+反向代理把网页端放在某个路径下（例如 `https://nas.example/cindy/`）时，Host 本身不需要知道这个前缀，
+由构建和代理完成三件事：
+
+1. 构建 renderer 时带上前缀：`pnpm --filter desktop exec vite build --config vite.renderer.config.ts --base=/cindy/`。
+2. 代理去掉前缀后转发给 Host（`/cindy/api/...` → `/api/...`），并负责身份校验，例如由代理注入 Host bearer。
+   Host 仍只监听 `127.0.0.1`，上游 `Host` 请求头应设为实际监听的地址和端口（例如 `127.0.0.1:3456`）。
+   代理须先校验浏览器的 `Origin`（例如只允许 `https://nas.example`），通过后才移除该请求头或改写为匹配的回环来源
+   （例如 `http://127.0.0.1:3456`）。
+3. 代理改写 Host 返回的首页：在 `<script src="/shim.js">` 之前设置 `window.__CINDY_BASE__ = '/cindy/'`，
+   并把这个地址改为 `/cindy/shim.js`。shim 会在 `/api`、`/chat`、`/events` 请求和退出后跳转的
+   `/connect` 前加上这个前缀；未设置时行为不变，不是同源路径的值（完整 URL、`//host`、含反斜杠）会被忽略。
+
+配对页 `/connect` 仍按根路径加载脚本，经代理部署时不要依赖它完成网页配对。
+
 ## 验证
 
 ```bash
