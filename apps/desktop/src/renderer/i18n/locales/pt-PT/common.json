@@ -2248,6 +2248,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Disposição da conversa",
+        "standard": "Padrão",
+        "wide": "Larga",
+        "width": "Largura do conteúdo",
+        "hint": "Usa o espaço entre as margens da conversa. Os painéis estreitos ajustam-se automaticamente."
+      },
       "title": "Aspeto",
       "modeLabel": "Modo de aspeto",
       "appIcon": {

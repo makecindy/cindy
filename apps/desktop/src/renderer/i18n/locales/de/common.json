@@ -2210,6 +2210,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Chat-Layout",
+        "standard": "Standard",
+        "wide": "Breit",
+        "width": "Inhaltsbreite",
+        "hint": "Der Anteil bezieht sich auf den Platz zwischen den Chaträndern. Schmale Bereiche passen sich automatisch an."
+      },
       "title": "Darstellung",
       "modeLabel": "Darstellungsmodus",
       "appIcon": {

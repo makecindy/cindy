@@ -94,7 +94,7 @@ import {
   providerOffersModel,
 } from '@cindy/model-providers';
 import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
-import { useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { STANDARD_CHAT_MESSAGE_WIDTH, useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import {
   Activity,
@@ -920,6 +920,7 @@ function CCAgentSessionContent({
   const hasPluginStatusbar = usePluginUiHas('statusbar');
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
+  const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
   const creationPreview = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
     remoteProjectsStore.getCreationPreview(sessionId));
   const awaitingCreation = !!creationPreview && !creationPreview.handedOff;
@@ -1075,7 +1076,9 @@ function CCAgentSessionContent({
     inputHalfWidth,
     isCompact,
     getMessageWidth,
-  } = useProportionalWidth(914, { compact: isCompactRail });
+  } = useProportionalWidth(STANDARD_CHAT_MESSAGE_WIDTH, {
+    compact: isCompactRail,
+  });
   const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;
   const { sessions: allSessions, refreshSessions, patchLocal: patchLocalSession } = useCCSessions();
   // /ctr 接管态: attached=true 时把 ChatInput 替换为 TakeoverMask, 防止 desktop
@@ -1139,7 +1142,6 @@ function CCAgentSessionContent({
   const voiceModeOpen = voiceCall.open && voiceCall.sessionId === sessionId;
   const activeVoiceCallId = voiceCall.sessionId === sessionId ? voiceCall.callId : null;
   const voiceQuestionBridge = useRef<VoiceQuestionTarget | null>(null);
-  const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
   const companionSettingsOpen = new URLSearchParams(location.search).get('settings') === '1';
   const openVoiceSettings = useCallback(() => {
     const search = new URLSearchParams(location.search);

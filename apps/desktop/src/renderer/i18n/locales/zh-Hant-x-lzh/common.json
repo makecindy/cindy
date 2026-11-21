@@ -2180,6 +2180,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "對談布置",
+        "standard": "常式",
+        "wide": "寬式",
+        "width": "內容之寬",
+        "hint": "以對談兩旁留白之外為準。欄狹則自調。"
+      },
       "title": "儀容",
       "modeLabel": "顯示之式",
       "appIcon": {

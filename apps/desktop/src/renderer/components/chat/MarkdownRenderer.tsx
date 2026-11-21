@@ -628,7 +628,7 @@ const baseComponents: Components = {
   table({ children, ...props }) {
     return (
       <CopyAsImageBlock
-        className="my-3"
+        className="my-3 w-[var(--cindy-markdown-table-width,100%)] max-w-full"
         contentClassName="overflow-x-auto"
         extractPlainText={tableToTsv}
       >
@@ -667,6 +667,9 @@ const baseComponents: Components = {
           // overflow-x-auto 横滚 + .is-scrolling 自动隐藏滚动条,
           // 视觉上像被右边截断。anywhere 让浏览器在任意位置可断行。
           'break-words [overflow-wrap:anywhere]',
+          // In narrow task panes, keep column labels readable and let the
+          // existing table scrollport contain columns that no longer fit.
+          '[.chat-rail-compact_&]:whitespace-nowrap',
         )}
         {...props}
       >

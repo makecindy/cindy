@@ -2248,6 +2248,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Diseño del chat",
+        "standard": "Estándar",
+        "wide": "Ancho",
+        "width": "Ancho del contenido",
+        "hint": "Se calcula sobre el espacio entre los márgenes del chat. Los paneles estrechos se ajustan automáticamente."
+      },
       "title": "Apariencia",
       "modeLabel": "Modo de apariencia",
       "appIcon": {

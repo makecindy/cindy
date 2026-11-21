@@ -6699,7 +6699,7 @@ export function MessageStream({
               ref={scrollRef}
               data-scroll-container=""
               onCopy={copyChatSelection}
-              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
+              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable_both-edges]"
               onScroll={handleScroll}
               onPointerDownCapture={() => refreshViewportAnchor()}
               onKeyDownCapture={() => refreshViewportAnchor()}
