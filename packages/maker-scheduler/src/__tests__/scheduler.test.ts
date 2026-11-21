@@ -1164,6 +1164,168 @@ describe('Scheduler', () => {
     }
   });
 
+  // Codex P1 on #11577:预算内回来的过期写入同样要过代次栅栏。等待期间宿主
+  // stop()(切账号 / 重启)把 lifecycleGeneration 推进了,这次 UPDATE 属于上一段生命
+  // 周期;不走超时分支就不会经过 armExpireLateApply 的栅栏,它的 CAS 结果会被写回
+  // 缓存并广播 changed —— 新主人于是看到上一个账号的时间线。
+  it('drops an in-budget expiry completion that lands after a stop', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 5_000 });
+    const changed: string[] = [];
+    local.scheduler.on('changed', (e: { scheduleId: string }) => changed.push(e.scheduleId));
+    const expireAt = local.clock.now() + 60_000;
+    const schedule = await local.scheduler.create({ ...baseInput, expireAt });
+    const realUpdate = local.storage.update.bind(local.storage);
+    let releaseExpire!: (value: Schedule | null) => void;
+    let expireLaunched = false;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) => {
+      if (patch.status === 'expired') {
+        expireLaunched = true;
+        // 在预算内(5s)回来,但回来之前宿主先 stop()。
+        return new Promise<Schedule | null>((resolve) => { releaseExpire = resolve; });
+      }
+      return realUpdate(id, patch, expected);
+    });
+    local.clock.setTo(expireAt + 1);
+    const tickPromise = local.scheduler.tick();
+    for (let i = 0; i < 100 && !expireLaunched; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(expireLaunched).toBe(true);
+
+    await local.scheduler.stop();
+    changed.length = 0;
+    // 这次 UPDATE 在预算内完成(不走超时分支),仍属于上一段生命周期。
+    releaseExpire({ ...schedule, status: 'expired', nextFireAt: undefined, updatedAt: expireAt + 1 });
+    await tickPromise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(changed).toEqual([]);
+  });
+
+  // Codex P1 on #11577:CAS 败者后的回读迟到回来时,要和迟到的 UPDATE 用同一把尺子。
+  // 回读发起时用户还没改期,回包里是更早的、截止时间更长的那一版;无条件应用它,
+  // 排队中的 run 就会拿着已作废的 expireAt 放行。
+  it('rejects a stale CAS-loser fallback read before replacing dispatch guards', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 30,
+      // 派发停在途中:守卫快照留在 automaticDispatchSchedules,便于观察。
+      runnerImpl: async () => new Promise<FireResult>(() => {}),
+    });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    const schedule = await local.scheduler.create({
+      ...baseInput, intervalMs: 15_000, expireAt: createdAt + 60_000,
+    });
+
+    // 到点派发:守卫快照 = 原始那一版(截止时间在 60s 后)。
+    local.clock.setTo(schedule.nextFireAt!);
+    void local.scheduler.tick().catch(() => undefined);
+    for (let i = 0; i < 100 && local.fireCalls.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(local.fireCalls).toHaveLength(1);
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(true);
+
+    // 另一实例把这一行的截止时间改短(已经过期),行重新排期后仍在 listActive 里:
+    // 下一次 DB sync 把它带回 activeSchedules,过期扫描才会走到 CAS 败者分支。
+    const shortened: Schedule = {
+      ...schedule,
+      expireAt: createdAt + 16_000,
+      updatedAt: createdAt + 5,
+    };
+    local.storage.schedules.set(schedule.id, shortened);
+    local.clock.advance(30_000);
+
+    const realUpdate = local.storage.update.bind(local.storage);
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) =>
+      patch.status === 'expired' ? Promise.resolve(null) : realUpdate(id, patch, expected),
+    );
+    let releaseRead!: (value: Schedule | null) => void;
+    let reads = 0;
+    const realGet = local.storage.get.bind(local.storage);
+    vi.spyOn(local.storage, 'get').mockImplementation(async (id: string) => {
+      if (id !== schedule.id) return realGet(id);
+      reads += 1;
+      // CAS 败者后的回读:慢到超时之后才回来,带回的是**发起时那一版**(截止更长)。
+      if (reads === 1) return await new Promise<Schedule | null>((resolve) => { releaseRead = resolve; });
+      return realGet(id);
+    });
+
+    // DB sync 把改短后的行带回内存 → 过期扫描 → CAS 败者 → 回读超上限。
+    await local.scheduler.tick();
+
+    // 迟到的回读带回旧版行(截止时间 60s 后)。
+    releaseRead({ ...schedule, status: 'active', expireAt: createdAt + 60_000, updatedAt: createdAt });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(reads).toBe(1);
+
+    // 守卫必须停在改短后的那一版:截止时间已过 → 不得放行。
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(false);
+
+    await local.scheduler.stop();
+  });
+
+  // Codex P2 on #11577:一条派发守卫的回读超时不能带崩整轮。两条守卫都离开了
+  // listActive 时,第一条的回读超时若直接上抛,后面那条连读都不会发 —— 它的守卫停在
+  // 旧 deadline,而 lastDbSyncAt 已经前移,要等下一次 30 秒同步才恢复;期间别的实例
+  // 改短了截止时间的排队 run 仍会被放行。
+  it('keeps later dispatch guards refreshing after an earlier read timeout', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 30,
+      logger: { warn: vi.fn() },
+      // 两条派发都停在途中:守卫快照留在 automaticDispatchSchedules。
+      runnerImpl: async () => new Promise<FireResult>(() => {}),
+    });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    const first = await local.scheduler.create({
+      ...baseInput, intervalMs: 15_000, expireAt: createdAt + 60_000,
+    });
+    const second = await local.scheduler.create({
+      ...baseInput, intervalMs: 15_000, expireAt: createdAt + 60_000,
+    });
+
+    local.clock.setTo(first.nextFireAt!);
+    void local.scheduler.tick().catch(() => undefined);
+    for (let i = 0; i < 200 && local.fireCalls.length < 2; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(local.fireCalls).toHaveLength(2);
+    const guardOf = (id: string) => local.fireCalls.find((c) => c.schedule.id === id)!;
+    expect(guardOf(first.id).ctx.canDispatch?.()).toBe(true);
+    expect(guardOf(second.id).ctx.canDispatch?.()).toBe(true);
+
+    // 另一实例把两条都过期掉了(行离开 listActive),DB sync 必须回读它们。
+    const expiredRow = (sch: Schedule): Schedule => ({
+      ...sch, status: 'expired', nextFireAt: undefined, expireAt: createdAt - 1, updatedAt: createdAt + 1,
+    });
+    local.storage.schedules.set(first.id, expiredRow(first));
+    local.storage.schedules.set(second.id, expiredRow(second));
+
+    // 第一条的回读挂死(超时),第二条的回读慢但会回来。
+    const readIds: string[] = [];
+    let releaseSecond!: (value: Schedule | null) => void;
+    const realGet = local.storage.get.bind(local.storage);
+    vi.spyOn(local.storage, 'get').mockImplementation((id: string) => {
+      if (id !== first.id && id !== second.id) return realGet(id);
+      readIds.push(id);
+      if (id === first.id) return new Promise<Schedule | null>(() => {});
+      return new Promise<Schedule | null>((resolve) => { releaseSecond = resolve; });
+    });
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    // 第一条超时之后,第二条的读仍然必须发出去(它的迟到结果才有 handler 收口)。
+    expect(readIds).toEqual([first.id, second.id]);
+
+    // 第二条的迟到回读回来:守卫必须用这一版(截止时间已过 → 不再放行)。
+    releaseSecond(expiredRow(second));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(guardOf(second.id).ctx.canDispatch?.()).toBe(false);
+
+    await local.scheduler.stop();
+  });
+
 
   it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
     const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';
