@@ -468,10 +468,12 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
     // One transport key is one device. A device that enrolled again under another device id keeps its key, and its earlier
     // certificate stays in the directory: the same device twice. Only the certificate that supersedes the others is this
-    // account's device; the rest are left out here, as if not listed, and reach nothing over Agent-Net (callers that
-    // route by `knowsPeer` use Device Link for them). Kept, a connection made with that key was filed under whichever id
-    // came first, and the phone's engine, which admits by key, refused the whole list (DUPLICATE_PEER): on 2026-11-21
-    // one such pair in an account of 26 devices kept every phone of the account from opening Agent-Net at all.
+    // account's device; the rest are left out here, as a device no longer listed is: not admitted, not dialed, shown
+    // offline. They stay in `knownV2` like any device this socket has seen on Agent-Net, so being left out opens no way
+    // around it over Device Link (2026-11-21 review: `worker.ts` and `AgentNetWorkerSocket` keep their own add-only copy
+    // of that set). Kept in the directory, a connection made with that key was filed under whichever id came first, and
+    // the phone's engine, which admits by key, refused the whole list (DUPLICATE_PEER): on 2026-11-21 one such pair in
+    // an account of 26 devices kept every phone of the account from opening Agent-Net at all.
     // This device's own key under another device id is this device as it was: never a peer. (The key of `identity`: a
     // guest's `certificate` is the one of the computer it was let in to.)
     const holders = new Map<string, DeviceView>(), ownKey = this.options.client.identity.transportKey;
@@ -481,7 +483,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
     for (const [id, view] of [...next]) {
       const c = view.certificate;
-      if (holders.get(c.transportKey) !== view || c.transportKey === ownKey && id !== this.deviceId) { next.delete(id); this.knownV2.delete(id); }
+      if (holders.get(c.transportKey) !== view || c.transportKey === ownKey && id !== this.deviceId) next.delete(id);
     }
     this.roster = next;
     this.keyIndex = null;

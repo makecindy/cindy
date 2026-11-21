@@ -264,7 +264,8 @@ it.each([['never comes', false], ['comes in time', true]] as const)(
 /** 测试价值
  * - 生产入口与可观察结果：PortableSocket.openWithBindings 读目录、交给传输层的准入名单（`admittedPeers`）、拨号与入站连接的归属
  *   （Desktop worker、Node Host 与手机共用）。目录里同账号两张证书带同一把传输密钥时，只认签发晚的那一张：准入名单里这把密钥只出现一次，
- *   用这把密钥建的连接记在那台设备名下，另一个设备号按「不在 Agent-Net 上」处理；带本机自己密钥的别的设备号不算对端。
+ *   用这把密钥建的连接记在那台设备名下，另一个设备号像不在目录里的设备一样连不上，但仍记作 Agent-Net 设备（不因此改走 Device Link）；
+ *   带本机自己密钥的别的设备号不算对端。
  * - Bug／规则依据：2026-11-21 真机，账号目录 26 台设备里有两个设备号带同一把传输密钥（同一台设备换了设备号重新登记，旧证书还在）。
  *   手机的原生引擎按密钥准入，遇到重复就拒收整份名单（`DUPLICATE_PEER`），手机每次打开 Agent-Net 都失败；电脑上连接被记到排在前面的旧设备号名下。
  * - 现有覆盖缺口：没有任何用例的目录里有重复的传输密钥；原生引擎的 `DUPLICATE_PEER` 只在名单本身出错时测过。
@@ -299,8 +300,9 @@ it.each([['listed first', true], ['listed last', false]] as const)(
       expect(new Set(admitted.map(peer => peer.id)).size).toBe(admitted.length);
       expect(admitted.map(peer => peer.relayId)).not.toContain('z-carries-the-local-key');
       expect(transport.relayIdOf!(key)).toBe('m-renamed-device');
-      expect([socket.knowsPeer('m-renamed-device'), socket.knowsPeer('m-earlier-device-id'), socket.knowsPeer('z-carries-the-local-key')]).toEqual([true, false, false]);
-      expect([socket.supports('m-renamed-device'), socket.supports('m-earlier-device-id')]).toEqual([true, false]);
+      expect([socket.supports('m-renamed-device'), socket.supports('m-earlier-device-id'), socket.supports('z-carries-the-local-key')]).toEqual([true, false, false]);
+      // Left out, not forgotten: a device this socket has seen on Agent-Net is not handed to Device Link instead.
+      expect([socket.knowsPeer('m-renamed-device'), socket.knowsPeer('m-earlier-device-id'), socket.knowsPeer('z-carries-the-local-key')]).toEqual([true, true, true]);
       socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
       await vi.waitFor(() => expect(socket.pathTo('m-renamed-device')).toBe('relay'));
       expect(socket.pathTo('m-earlier-device-id')).toBeNull();
