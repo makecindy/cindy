@@ -1,7 +1,9 @@
 import { BrowserWindow } from 'electron';
 import { and, desc, eq, gt, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import type { EngineKind } from '@cindy/maker-core';
 import { orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
+import { dbToMakerEngineKind } from '../../shared/agentKindConversion.js';
 import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 
@@ -103,7 +105,7 @@ export interface OrcaWorkerLinkRecord {
   leadSessionId: string;
   leadSession: {
     sessionId: string;
-    agentKind: MakerAgentKind;
+    agentKind: EngineKind;
     workingDir: string;
     model: string;
     providerId?: string | null;
@@ -587,7 +589,7 @@ export async function getWorkerLink(input: {
     leadSessionId: row.team.leadSessionId,
     leadSession: {
       sessionId: row.leadSession.id,
-      agentKind: fromDbAgentKind(row.leadSession.agentKind),
+      agentKind: dbToMakerEngineKind(row.leadSession.agentKind),
       workingDir: row.leadSession.workingDir ?? '',
       model: row.leadSession.model,
       providerId: row.leadSession.providerId ?? null,

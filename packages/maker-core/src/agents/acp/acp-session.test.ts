@@ -887,6 +887,68 @@ describe('AcpAgent (the acp engine)', () => {
     expect(contexts[0]).toMatchObject({ mcpCallerKind: kind, mcpCallerAttested: attested });
   });
 
+  // 本机插件引擎当 Orca Lead：活会话经 setVendorOptions 原地更新 HTTP MCP 桥引用的 vendorOptions，
+  // 且仅在显式 forceBriefingOnResume 时对已恢复会话一次性注入 Lead 说明，普通恢复不重复。
+  it('updates live vendorOptions in-place for the MCP bridge and delivers Lead briefing once on promotion resume', async () => {
+    const contexts: Array<{ vendorOptions?: Record<string, unknown> }> = [];
+    const liveAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } } });
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async () => liveAgent.transport },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => {
+        contexts.push(ctx as { vendorOptions?: Record<string, unknown> });
+        return null;
+      },
+    });
+    const handle = await engine.startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+    });
+    expect(handle.pluginEngineHttpMcpSupported).toBe(true);
+    expect(handle.pluginEngineResumeSupported).toBe(true);
+    await handle.setVendorOptions?.({ orcaRole: 'lead', orcaWorkflowId: 'team-1', orcaLeadSessionId: 'lead-1' });
+    expect(contexts[0]?.vendorOptions).toMatchObject({
+      orcaRole: 'lead', orcaWorkflowId: 'team-1', orcaLeadSessionId: 'lead-1',
+    });
+
+    // Live non-resumable briefing queueing & clearing on disableOrca (orcaRole: null).
+    handle.queuePluginEngineBriefing?.('Lead rules');
+    await handle.setVendorOptions?.({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+    expect(contexts[0]?.vendorOptions?.orcaRole).toBeNull();
+    await handle.send({ type: 'user', content: 'plain turn' });
+    await vi.waitFor(() => expect(liveAgent.prompts).toHaveLength(1));
+    expect(liveAgent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: 'plain turn' }]);
+
+    // Promotion resume delivers briefing once when forceBriefingOnResume is set, but normal resume does not.
+    const promoAgent = createFakeAgent({
+      agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } },
+      handlers: { 'session/resume': () => ({ configOptions: [] }) },
+    });
+    const promoHandle = await createAcpAgent(() => promoAgent.transport).startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+      resumeSessionId: 'existing-1', pluginEngineBriefing: 'You are Lead.', pluginEngineForceBriefingOnResume: true,
+    });
+    await promoHandle.send({ type: 'user', content: 'start delegating' });
+    await vi.waitFor(() => expect(promoAgent.prompts).toHaveLength(1));
+    expect(promoAgent.prompts[0]!.params.prompt).toEqual([
+      { type: 'text', text: 'You are Lead.' },
+      { type: 'text', text: 'start delegating' },
+    ]);
+
+    const normalResumeAgent = createFakeAgent({
+      agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } },
+      handlers: { 'session/resume': () => ({ configOptions: [] }) },
+    });
+    const normalHandle = await createAcpAgent(() => normalResumeAgent.transport).startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+      resumeSessionId: 'existing-1', pluginEngineBriefing: 'You are Lead.',
+    });
+    await normalHandle.send({ type: 'user', content: 'continue' });
+    await vi.waitFor(() => expect(normalResumeAgent.prompts).toHaveLength(1));
+    expect(normalResumeAgent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: 'continue' }]);
+  });
+
   // 第三期(2026-11-20，docs/plans/acp-plugin-bridge.md)：任务的文件与命令在同账号另一台电脑上。插件引擎自带的
   // 文件与命令工具只会作用在 Agent 所在的这台电脑，所以：入口以远程工作区方式启动(插件关掉自带工具)，
   // 工具全部来自任务所在电脑的隧道，没有 cindy_exec 就拒绝；受邀者一律拒绝。此前这类会话在这里一律被拒，没有覆盖。
@@ -956,6 +1018,85 @@ describe('AcpAgent (the acp engine)', () => {
     expect(confirmNativeReset).not.toHaveBeenCalled();
     expect(agent.methods()).toEqual(['initialize']);
     expect(agent.closedByClient).toBe(true);
+  });
+
+  it('requires cindy_orca for local ACP Leads and tracks pluginEngineHasOrcaMcp', async () => {
+    const noHttpAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });
+    const engineNoHttp = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger, clientInfo: { name: 'cindy', version: 'test' },
+      preparePiExtraSpawnConfig: async () => ({
+        mcpBridge: { token: 'tok', servers: [{ name: 'cindy_orca', url: 'http://127.0.0.1:1/mcp/cindy_orca' }] },
+      }),
+      endpoints: { connect: async () => noHttpAgent.transport },
+    });
+    await expect(engineNoHttp.startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:agy-acp:agy',
+      vendorOptions: { orcaRole: 'lead', orcaLeadSessionId: 'lead-1' },
+    })).rejects.toThrow('[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED]');
+    expect(noHttpAgent.methods()).not.toContain('session/new');
+
+    const httpAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const engineWithOrca = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger, clientInfo: { name: 'cindy', version: 'test' },
+      preparePiExtraSpawnConfig: async () => ({
+        mcpBridge: { token: 'tok', servers: [{ name: 'cindy_orca', url: 'http://127.0.0.1:1/mcp/cindy_orca' }] },
+      }),
+      endpoints: { connect: async () => httpAgent.transport },
+    });
+    const handle = await engineWithOrca.startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:agy-acp:agy',
+      vendorOptions: { orcaRole: 'lead', orcaLeadSessionId: 'lead-1' },
+    });
+    expect(handle.pluginEngineHasOrcaMcp).toBe(true);
+    await handle.close();
+  });
+
+  it('defers pending briefing and its delivery callback past native slash commands until the next regular prompt', async () => {
+    const agent = createFakeAgent();
+    const delivered = vi.fn();
+    const session = await openAcpSession({
+      transport: agent.transport,
+      cwd: '/w',
+      clientInfo: { name: 'cindy', version: 'test' },
+      briefing: 'Orca Lead role instructions',
+      onBriefingDelivered: delivered,
+    });
+    expect(delivered).not.toHaveBeenCalled();
+
+    await session.send({ type: 'user', content: '/compact' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/compact' }]);
+    expect(delivered).not.toHaveBeenCalled();
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+    await session.send({ type: 'user', content: 'coordinate workers' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([
+      { type: 'text', text: 'Orca Lead role instructions' },
+      { type: 'text', text: 'coordinate workers' },
+    ]);
+    expect(delivered).toHaveBeenCalledOnce();
+    await session.close();
+  });
+
+  it('probes ACP initialize HTTP MCP support without creating a session', async () => {
+    const { probeAcpHttpMcpSupport } = await import('./session.js');
+    const withHttp = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    await expect(probeAcpHttpMcpSupport({
+      transport: withHttp.transport,
+      clientInfo: { name: 'cindy', version: 'test' },
+    })).resolves.toBe(true);
+    expect(withHttp.methods()).toEqual(['initialize']);
+    expect(withHttp.closedByClient).toBe(true);
+
+    const withoutHttp = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });
+    await expect(probeAcpHttpMcpSupport({
+      transport: withoutHttp.transport,
+      clientInfo: { name: 'cindy', version: 'test' },
+    })).resolves.toBe(false);
+    expect(withoutHttp.methods()).toEqual(['initialize']);
   });
 
   it('retains cleanup responsibility when resume fails and the endpoint is still running', async () => {

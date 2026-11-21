@@ -245,6 +245,7 @@ import { redactEventForRenderer } from './rendererEventRedaction.js';
 import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
 import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
 import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
+import { probePluginHarnessHttpMcpSupport } from '../maker-host/acp-host.js';
 import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
 import {
   isPluginEngineKind,
@@ -1188,15 +1189,19 @@ import {
 } from './sendToSessionExecutionConfig.js';
 import { registerOrcaWorkerControlHandlers } from './orcaWorkerControlHandlers.js';
 import {
+  clearAcpLeadTeamBriefed,
   clearOrcaMcpHydrated,
+  isAcpLeadTeamBriefed,
   isOrcaMcpHydrated,
   knownNonOrcaSessionIds,
+  markAcpLeadTeamBriefed,
   markOrcaMcpHydratedIfNeeded,
   markKnownNonOrcaIfApplicable,
 } from './orcaMcpHydrationCache.js';
 import {
   applyOrcaInstructions,
   renderOrcaRoleInstructions,
+  resolveOrcaRoleInstructions,
   synthesizeOrcaVendorOptionsFromDb,
 } from './orcaSessionStartOptions.js';
 import {
@@ -7135,6 +7140,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 新控制端只有看到此位，才对这台电脑上的运行设备 Worker(Lead 在另一台电脑)列出其他电脑与
       // 分享、允许换 Agent 所在电脑。更早的 host 会以 UNSUPPORTED_CAPABILITY 拒绝，缺省 false 时不提供。
       supportsOrcaRemoteWorkerAgentRelocation: true,
+      // Local ACP plugin engine tasks can act as Orca collaboration Leads on this host.
+      supportsPluginEngineLead: true,
       // 调度更新支持 intervalMs:null 的显式清空表达(IPC 入口归一化成引擎的
       // 「带 key 的 undefined」)。旧 desktop 缺省为 false——旧引擎会把 null 当
       // 已设间隔算出 now+null 立即触发,mobile 必须据此回退旧 wire 形态(省略
@@ -8672,6 +8679,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertCurrent();
     await assertReviewSettingsUnlocked(sessionId);
     assertCurrent();
+    if (orcaRole === 'lead') {
+      // Fence against disableOrca finishing while a resume/rehydrate is still in flight:
+      // never rewrite orca_role='lead' after the active team has already been ended.
+      const activeTeam = await getActiveTeamByLead(sessionId);
+      assertCurrent();
+      if (!activeTeam) return;
+    }
     if (orcaRole === 'worker') {
       markKnownOrcaWorkerSession(sessionId);
       clearSuppressedOrcaWorkerAgentIslandSession(sessionId);
@@ -8976,14 +8990,53 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await applyPersistedReviewMode(o);
     assertAccess?.();
     const didInjectOrcaInstructions = o.reviewMode === true ? false : await applyOrcaInstructions(o);
-    // Plugin engines get no Cindy system prompt (docs/plans/acp-plugin-bridge.md). A collaboration
-    // Worker cannot work without its role instructions, so they travel ahead of its first message,
-    // and the engine is trusted as a whole to report to its Lead (user decision 2026-11-19).
-    if (o.agentKind === 'acp' && o.reviewMode !== true && o.vendorOptions?.orcaRole === 'worker') {
-      const briefing = renderOrcaRoleInstructions(o);
-      if (briefing) {
-        o.pluginEngineBriefing = briefing;
-        o.pluginEngineTrustedCaller = true;
+    // Plugin engines get no Cindy system prompt (docs/plans/acp-plugin-bridge.md). Collaboration
+    // Leads and Workers receive their role instructions ahead of the first prompt (or once on
+    // promotion/restart resume for Leads). Only Workers receive pluginEngineTrustedCaller so
+    // orca_worker_bridge can authorize reports; Leads keep standard unattested caller provenance.
+    if (o.agentKind === 'acp' && o.reviewMode !== true) {
+      const role = o.vendorOptions?.orcaRole;
+      if (role === 'worker') {
+        const briefing = renderOrcaRoleInstructions(o);
+        if (briefing) {
+          o.pluginEngineBriefing = briefing;
+          o.pluginEngineTrustedCaller = true;
+        }
+      } else if (role === 'lead') {
+        const activeTeam = o.id ? await getActiveTeamByLead(o.id) : null;
+        assertAccess?.();
+        if (!activeTeam) {
+          // No active team in DB (e.g. caller spoofed vendorOptions or disableOrca finished concurrently):
+          // clear stale Lead markers instead of bootstrapping an orphaned ACP Lead.
+          o.orcaRole = null;
+          if (o.vendorOptions) {
+            const restVendor = { ...o.vendorOptions };
+            delete restVendor.orcaRole;
+            delete restVendor.orcaWorkflowId;
+            delete restVendor.orcaLeadSessionId;
+            delete restVendor.initialWorker;
+            o.vendorOptions = restVendor;
+          }
+        } else {
+          o.vendorOptions = {
+            ...(o.vendorOptions ?? {}),
+            orcaRole: 'lead',
+            orcaWorkflowId: activeTeam.id,
+            ...(o.id ? { orcaLeadSessionId: o.id } : {}),
+          };
+          const briefing = renderOrcaRoleInstructions(o);
+          if (briefing) {
+            o.pluginEngineBriefing = briefing;
+            const briefedSessionId = o.id;
+            const briefedTeamId = activeTeam.id;
+            o.pluginEngineOnBriefingDelivered = () => {
+              if (briefedSessionId) markAcpLeadTeamBriefed(briefedSessionId, briefedTeamId);
+            };
+            if (o.resumeSessionId && o.id && !isAcpLeadTeamBriefed(o.id, activeTeam.id)) {
+              o.pluginEngineForceBriefingOnResume = true;
+            }
+          }
+        }
       }
     }
     const didInjectProjectContext =
@@ -11938,10 +11991,62 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (leadRow?.orcaRole === 'worker' || leadRow?.orcaRemoteLead) {
       throwIpcError('PRECONDITION_FAILED', '[WORKER_CANNOT_NEST] a worker task cannot start collaboration');
     }
-    // A plugin engine can be a Worker but not yet a Lead (docs/plans/acp-plugin-bridge.md): it has
-    // no live role switch and receives no Lead instructions. Refuse every Lead entry here.
+    // Local plugin engines can act as Orca Lead (docs/plans/acp-plugin-bridge.md). Remote-hosted
+    // (another computer) and SSH plugin engines remain excluded, and a live engine without HTTP
+    // MCP cannot reach cindy_orca tools.
     if (lead?.agentKind === 'acp' || leadRow?.agentKind === 'acp') {
-      throwIpcError('UNSUPPORTED_CAPABILITY', '[PLUGIN_ENGINE_CANNOT_LEAD] a plugin engine task cannot start collaboration yet; switch the task to a built-in engine first');
+      if (lead?.remoteHostId || leadRow?.remoteHostId || lead?.agentDeviceId || leadRow?.agentDeviceId) {
+        throwIpcError(
+          'UNSUPPORTED_CAPABILITY',
+          '[PLUGIN_ENGINE_CANNOT_LEAD] a plugin engine task running on another computer cannot start collaboration yet; run the task locally or switch to a built-in engine first',
+        );
+      }
+      if (
+        lead?.agentKind === 'acp'
+        && (
+          lead.pluginEngineHttpMcpSupported === false
+          || (lead.pluginEngineHasOrcaMcp === false && lead.pluginEngineResumeSupported === false)
+        )
+      ) {
+        throwIpcError(
+          'UNSUPPORTED_CAPABILITY',
+          '[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED] this plugin engine does not support HTTP MCP collaboration tools on this session, so it cannot act as a collaboration Lead',
+        );
+      }
+      if (!lead) {
+        // Dormant ACP Lead (e.g. after app restart): preflight the plugin harness before committing
+        // a team or creating a Worker so non-HTTP engines fail cleanly with zero side effects.
+        const harnessKey = pluginEngineKeyFromProviderId(leadRow?.providerId);
+        const harness = harnessKey
+          ? getPluginHarnessRegistry().list().find((entry) => entry.key === harnessKey)
+          : undefined;
+        if (!harnessKey || !harness || harness.availability.state === 'unavailable') {
+          throwIpcError(
+            'PROVIDER_ROUTE_UNAVAILABLE',
+            'this plugin engine is currently unavailable, so it cannot start collaboration',
+          );
+        }
+        let httpMcpSupported = false;
+        try {
+          httpMcpSupported = await probePluginHarnessHttpMcpSupport(harnessKey, app.getVersion());
+        } catch (err) {
+          log.warn('assertLeadCollabProjectEnabled: dormant ACP HTTP MCP preflight failed', {
+            leadSessionId,
+            harnessKey,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throwIpcError(
+            'UNSUPPORTED_CAPABILITY',
+            '[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED] could not verify HTTP MCP collaboration tool support for this plugin engine',
+          );
+        }
+        if (!httpMcpSupported) {
+          throwIpcError(
+            'UNSUPPORTED_CAPABILITY',
+            '[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED] this plugin engine does not support HTTP MCP collaboration tools, so it cannot act as a collaboration Lead',
+          );
+        }
+      }
     }
     const rawWorkingDir =
       typeof leadRow?.workingDir === 'string' ? leadRow.workingDir : lead?.workDir;
@@ -15525,7 +15630,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createId,
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId).catch(() => null),
     getSessionRowSnapshot,
-    getLiveSession: (sessionId) => builtinLiveSession(sessionId),
+    getLiveSession: (sessionId) => maker.getSession(sessionId),
     recycleProjectResourceRuntime: async (sessionId) => {
       const current = maker.getSession(sessionId);
       if (current?.agentKind !== 'pi' || current.hasRecyclableProjectResourceDrift() !== true) return false;
@@ -15649,7 +15754,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // Agent 选择的排队行插话 / 排序(cindy_orca 与 cindy_helper 共用)。
   const { steerStoredControlMessage, moveStoredControlMessage } = createQueueReorderAdapter({
-    getLiveSession: (sessionId) => builtinLiveSession(sessionId),
+    getLiveSession: (sessionId) => maker.getSession(sessionId),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
     // inputCoordinator 在本函数更后面才声明,只能在调用时取用。
     getCoordinator: () => inputCoordinator,
@@ -15819,6 +15924,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertCurrent?.();
     if (persistRole) await setSessionOrcaRole(leadSessionId, null);
     knownNonOrcaSessionIds.delete(leadSessionId);
+    clearOrcaMcpHydrated(leadSessionId);
+    clearAcpLeadTeamBriefed(leadSessionId);
 
     const leadSess = maker.getSession(leadSessionId);
     if (leadSess) {
@@ -16566,9 +16673,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return {
         ...readLeadProviderGroupEntry(leadRow.id, leadRow.remoteHostId),
         id: leadRow.id,
-        // 走转换正本:pi lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
-        // 判等失效,pi-lead 建 pi-worker 会走错默认分支(见 orcaWorkerCreationService)。
-        agentKind: dbToMakerAgentKind(leadRow.agentKind),
+        // 走转换正本:pi / acp lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
+        // 判等失效,acp-lead 建 claude-code worker 会误继承插件模型/来源。
+        agentKind: dbToMakerEngineKind(leadRow.agentKind),
         workspaceKind: leadRow.workspaceKind,
         workingDir: leadRow.workingDir,
         model: leadRow.model,
@@ -18137,6 +18244,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     consumeWorkingDirectoryRecoveryNote: (sessionId, note) =>
       workingDirectoryRecovery.consume(sessionId, note),
     isOrcaMcpHydrated,
+    renderOrcaRoleInstructions,
+    resolveOrcaRoleInstructions,
+    markOrcaMcpHydratedIfNeeded,
+    markAcpLeadTeamBriefed,
+    hasActiveOrcaTeam: async (sessionId, expectedTeamId) => {
+      const team = await getActiveTeamByLead(sessionId);
+      return Boolean(team && (!expectedTeamId || team.id === expectedTeamId));
+    },
     buildCreateOptsWithStderr,
     synthesizeOrcaVendorOptionsFromDb,
     readSessionExtraDirsFromDb,

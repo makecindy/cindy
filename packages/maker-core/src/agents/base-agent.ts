@@ -2098,13 +2098,23 @@ export interface StartSessionOptions {
   /**
    * Plugin engines only (agentKind 'acp'): host text sent ahead of the first message of a newly
    * created engine session. Plugin engines get no Cindy system prompt, so role instructions that
-   * the task cannot work without (collaboration Workers) travel this way. Other engines ignore it.
+   * the task cannot work without (collaboration Leads and Workers) travel this way. Other engines ignore it.
    */
   pluginEngineBriefing?: string;
   /**
+   * Plugin engines only: deliver `pluginEngineBriefing` even when resuming an existing native
+   * session (used once when an already-started local ACP task is promoted to Orca Lead).
+   */
+  pluginEngineForceBriefingOnResume?: boolean;
+  /**
+   * Plugin engines only: invoked once when `pluginEngineBriefing` is actually attached to a
+   * dispatched prompt (not when deferred past a native slash command or before any turn runs).
+   */
+  pluginEngineOnBriefingDelivered?: () => void;
+  /**
    * Plugin engines only: Cindy cannot tell the engine's own sub-agents from the engine itself.
    * true = the host trusts the engine as a whole, so its tool calls count as the task's own
-   * (collaboration Workers reporting to their Lead). Default: caller unknown.
+   * (collaboration Leads and Workers). Default: caller unknown.
    */
   pluginEngineTrustedCaller?: boolean;
   /**
@@ -2589,6 +2599,14 @@ export interface AgentSessionHandle {
    * agent-level set. Built-in engines leave it undefined.
    */
   readonly negotiatedCapabilities?: Capabilities;
+  /** ACP plugin engines only: whether the engine declared HTTP MCP support during initialize. */
+  readonly pluginEngineHttpMcpSupported?: boolean;
+  /** ACP plugin engines only: whether the cindy_orca MCP server was accepted when opening this session. */
+  readonly pluginEngineHasOrcaMcp?: boolean;
+  /** ACP plugin engines only: whether the engine supports resuming or loading an existing session. */
+  readonly pluginEngineResumeSupported?: boolean;
+  /** ACP plugin engines only: queue a one-shot host briefing ahead of the next prompt on a live session. */
+  queuePluginEngineBriefing?(briefing: string, onDelivered?: () => void): void;
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;

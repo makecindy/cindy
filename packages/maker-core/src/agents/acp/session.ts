@@ -120,9 +120,16 @@ export interface OpenAcpSessionOptions {
   /**
    * Host text sent ahead of the first message of a newly created agent session (for example
    * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
-   * loaded session already has it in its own history, so it is not repeated.
+   * loaded session already has it in its own history, so it is not repeated unless
+   * `forceBriefingOnResume` is explicitly set (one-shot mid-session role promotion).
    */
   briefing?: string;
+  /** Deliver `briefing` once even on a resumed/loaded session (mid-session Orca Lead promotion). */
+  forceBriefingOnResume?: boolean;
+  /** Invoked once when `briefing` is actually prepended to a dispatched non-command prompt. */
+  onBriefingDelivered?: () => void;
+  /** Called when the host mutates per-session vendor options (e.g. Orca Lead role activation/teardown). */
+  onSetVendorOptions?: (patch: Record<string, unknown>) => void;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
@@ -149,7 +156,12 @@ export class AcpAuthRequiredError extends Error {
 /** The agent cannot connect to an MCP server this task depends on. */
 export class AcpRequiredMcpUnavailableError extends Error {
   constructor(readonly servers: readonly string[]) {
-    super('[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED] This plugin engine cannot use the tools of the computer the task is on, so it cannot run this task from another computer.');
+    const isLeadCollabOnly = servers.includes('cindy_orca') && !servers.includes('cindy_exec');
+    super(
+      isLeadCollabOnly
+        ? '[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED] This plugin engine cannot connect to Cindy collaboration tools (cindy_orca), so it cannot act as a collaboration Lead.'
+        : '[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED] This plugin engine cannot use the tools of the computer the task is on, so it cannot run this task from another computer.',
+    );
     this.name = 'AcpRequiredMcpUnavailableError';
   }
 }
@@ -223,6 +235,37 @@ class AcpRouter {
   }
 }
 
+export async function probeAcpHttpMcpSupport(opts: {
+  transport: AcpLineTransport;
+  clientInfo: AcpClientInfo;
+  logger?: Logger;
+  requestTimeoutMs?: number;
+}): Promise<boolean> {
+  const connection = new AcpConnection(opts.transport, {
+    ...(opts.logger ? { logger: opts.logger } : {}),
+    ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
+    onNotification: () => {},
+    onRequest: async (method) => {
+      throw methodNotFound(method);
+    },
+  });
+  try {
+    const init = normalizeInitializeResult(await connection.request('initialize', {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      clientInfo: {
+        name: opts.clientInfo.name,
+        version: opts.clientInfo.version,
+        ...(opts.clientInfo.title ? { title: opts.clientInfo.title } : {}),
+      },
+    }));
+    if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
+    return init.agentCapabilities.mcpCapabilities.http === true;
+  } finally {
+    await connection.close().catch(() => {});
+  }
+}
+
 export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSession> {
   const router = new AcpRouter();
   const connection = new AcpConnection(opts.transport, {
@@ -287,6 +330,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       sessionId,
       configOptions: normalizeConfigOptions(result.configOptions),
       resumeOutcome: outcome,
+      acceptedMcpServers: accepted.map((server) => server.name),
       droppedMcpServers: dropped,
       options: opts,
     });
@@ -311,6 +355,7 @@ interface AcpSessionInit {
   sessionId: string;
   configOptions: AcpConfigOption[];
   resumeOutcome: AcpResumeOutcome;
+  acceptedMcpServers: string[];
   droppedMcpServers: string[];
   options: OpenAcpSessionOptions;
 }
@@ -349,17 +394,22 @@ export class AcpSession {
   /** MCP servers the agent could not accept (transport not advertised). */
   readonly droppedMcpServers: readonly string[];
   readonly initializeResult: AcpInitializeResult;
+  readonly pluginEngineHttpMcpSupported: boolean;
+  readonly pluginEngineHasOrcaMcp: boolean;
+  readonly pluginEngineResumeSupported: boolean;
 
   private readonly connection: AcpConnection;
   private readonly logger: Logger | undefined;
   private readonly readImage: (path: string) => Promise<Uint8Array>;
   private readonly cancelGraceMs: number;
   private readonly onEnded: (() => void) | undefined;
+  private readonly onSetVendorOptions: ((patch: Record<string, unknown>) => void) | undefined;
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
   private readonly pendingPrompts: AcpContentBlock[][] = [];
   /** Sent once, ahead of the first prompt of a new session. */
   private pendingBriefing: string | null;
+  private pendingBriefingDelivered: (() => void) | undefined;
   private sendChain: Promise<void> = Promise.resolve();
   private stopGeneration = 0;
   private readonly permissionControllers = new Set<AbortController>();
@@ -386,6 +436,10 @@ export class AcpSession {
   constructor(init: AcpSessionInit) {
     this.connection = init.connection;
     this.initializeResult = init.init;
+    this.pluginEngineHttpMcpSupported = init.init.agentCapabilities.mcpCapabilities.http === true;
+    this.pluginEngineHasOrcaMcp = init.acceptedMcpServers.includes('cindy_orca');
+    this.pluginEngineResumeSupported =
+      init.init.agentCapabilities.sessionCapabilities.resume === true || init.init.agentCapabilities.loadSession === true;
     this.id = init.sessionId;
     this.resumeOutcome = init.resumeOutcome;
     this.droppedMcpServers = init.droppedMcpServers;
@@ -395,9 +449,14 @@ export class AcpSession {
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onEnded = init.options.onEnded;
+    this.onSetVendorOptions = init.options.onSetVendorOptions;
     this.now = init.options.now ?? Date.now;
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
-    this.pendingBriefing = init.resumeOutcome === 'new' && init.options.briefing?.trim() ? init.options.briefing : null;
+    this.pendingBriefing =
+      (init.resumeOutcome === 'new' || init.options.forceBriefingOnResume === true) && init.options.briefing?.trim()
+        ? init.options.briefing
+        : null;
+    this.pendingBriefingDelivered = this.pendingBriefing ? init.options.onBriefingDelivered : undefined;
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
@@ -468,6 +527,23 @@ export class AcpSession {
     this.resolver = resolver;
   }
 
+  queuePluginEngineBriefing(briefing: string, onDelivered?: () => void): void {
+    if (this.ended || this.closing) return;
+    if (briefing.trim()) {
+      this.pendingBriefing = briefing;
+      this.pendingBriefingDelivered = onDelivered;
+    }
+  }
+
+  async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
+    if (this.ended || this.closing) throw new Error('ACP session is closed');
+    this.onSetVendorOptions?.(patch);
+    if (patch.orcaRole === null) {
+      this.pendingBriefing = null;
+      this.pendingBriefingDelivered = undefined;
+    }
+  }
+
   /** Starts a turn, or queues it behind the running one (ACP allows one prompt per session). */
   async send(message: UserMessage): Promise<void> {
     if (this.ended || this.closing) throw new Error('ACP session is closed');
@@ -479,9 +555,14 @@ export class AcpSession {
       if (this.ended || this.closing) throw new Error('ACP session is closed');
       // Stop also discards messages that were still being prepared, like queued ones.
       if (generation !== this.stopGeneration) return;
-      if (this.pendingBriefing) {
+      const firstBlock = prompt[0];
+      const isNativeSlashCommand = firstBlock?.type === 'text' && firstBlock.text.trimStart().startsWith('/');
+      if (this.pendingBriefing && !isNativeSlashCommand) {
         prompt.unshift({ type: 'text', text: this.pendingBriefing });
         this.pendingBriefing = null;
+        const onDelivered = this.pendingBriefingDelivered;
+        this.pendingBriefingDelivered = undefined;
+        onDelivered?.();
       }
       this.pendingPrompts.push(prompt);
       this.pump();

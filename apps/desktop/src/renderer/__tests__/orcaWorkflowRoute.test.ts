@@ -239,7 +239,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('renders lead labels with dynamic agent text and a VendorIcon in both Orca layouts', () => {
     expect(splitViewSource).toContain("const leadPaneLabel = t('orca.split.leadLabel', {");
-    expect(splitViewSource).toContain('agent: orcaAgentLabel(leadAgentKind)');
+    expect(splitViewSource).toContain('orcaAgentLabel(leadAgentKind)');
     expect(splitViewSource).toContain('const leadPaneIcon = (');
     expect(splitViewSource).toContain('<VendorIcon');
     expect(splitViewSource).toContain('{leadPaneIcon}');

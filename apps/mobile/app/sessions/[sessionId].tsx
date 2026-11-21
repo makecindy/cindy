@@ -2329,8 +2329,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     prefsScope: outboxOwner.accountKey || null,
     connectionEpoch,
     getProviders: () => collabProvidersRef.current,
-    // 插件引擎任务暂不能当协同 Lead(Desktop 同样拒绝)。
-    enabled: !isSharedTaskPeer(deviceId) && !sessionManagedByHost && !pluginEngineTask,
+    // Local plugin engines can act as Orca Lead when the controlled host advertises
+    // supportsPluginEngineLead; an already-active Desktop ACP Lead stays manageable even
+    // while capabilities are still loading.
+    enabled: !isSharedTaskPeer(deviceId) && !sessionManagedByHost && (
+      !pluginEngineTask
+      || currentSession?.orcaRole === 'lead'
+      || (capabilities?.supportsPluginEngineLead === true && !currentSession?.agentDeviceId && !currentSession?.remoteHostId)
+    ),
     sheetView: contextSheetView === 'collab' || contextSheetView === 'collab-create' ? contextSheetView : null,
     sheetOpen: contextSheetOpen,
     setSheetView: setContextSheetView,

@@ -11,6 +11,7 @@
 
 import {
   AcpAgent,
+  probeAcpHttpMcpSupport,
   type AgentDeps,
   type AuthAdapter,
   type Capabilities,
@@ -19,6 +20,7 @@ import {
 import { rememberPluginHarnessModels } from './pluginEngineModelCache.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.desktop.js';
 import { getPluginHarnessRegistry, type PluginHarness } from '../cindy-brain/pluginHarnesses.js';
+import { createLogger } from '../logger.js';
 import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
 import type { NodeWorkerProcess } from '../cindy-brain/nodeRuntimeBroker.js';
 import { createAcpProcessTransport } from './acp-transport.js';
@@ -37,8 +39,62 @@ const pluginEngineAuthAdapter: AuthAdapter = {
   getAuthEnv: async () => ({}),
 };
 
+const cachedHttpMcpSupport = new Map<string, boolean>();
+let httpMcpCacheSubscribed = false;
+
+function ensureHttpMcpCacheSubscription(): void {
+  if (httpMcpCacheSubscribed) return;
+  httpMcpCacheSubscribed = true;
+  getPluginHarnessRegistry().onChange(() => {
+    cachedHttpMcpSupport.clear();
+  });
+}
+
 function rememberCapabilities(key: string, capabilities: Capabilities): void {
   rememberPluginHarnessModels(key, capabilities.availableModels);
+}
+
+function rememberHttpMcpSupport(key: string, supported: boolean): void {
+  ensureHttpMcpCacheSubscription();
+  cachedHttpMcpSupport.set(key, supported);
+}
+
+function createCoreLogger(scope: string): Logger {
+  const base = createLogger(scope);
+  return {
+    trace: (message, meta) => base.debug(message, meta),
+    debug: (message, meta) => base.debug(message, meta),
+    info: (message, meta) => base.info(message, meta),
+    warn: (message, meta) => base.warn(message, meta),
+    error: (message, meta) => base.error(message, meta),
+    fatal: (message, meta) => base.error(message, meta),
+    child: (childScope) => createCoreLogger(`${scope}:${childScope}`),
+  };
+}
+
+/**
+ * Preflights whether a dormant local ACP plugin harness advertises HTTP MCP support during
+ * `initialize`, using a cached result when available and invalidating on harness registry changes.
+ */
+export async function probePluginHarnessHttpMcpSupport(
+  harnessKey: string,
+  appVersion: string,
+): Promise<boolean> {
+  ensureHttpMcpCacheSubscription();
+  const cached = cachedHttpMcpSupport.get(harnessKey);
+  if (cached !== undefined) return cached;
+  const registry = getPluginHarnessRegistry();
+  const proc = await registry.spawn(harnessKey);
+  const probeLogger = createCoreLogger(`acp-probe:${harnessKey}`);
+  const transport = createAcpProcessTransport(proc, probeLogger);
+  const supported = await probeAcpHttpMcpSupport({
+    transport,
+    clientInfo: { name: 'cindy', title: 'Cindy', version: appVersion },
+    logger: probeLogger,
+    requestTimeoutMs: 10_000,
+  });
+  cachedHttpMcpSupport.set(harnessKey, supported);
+  return supported;
 }
 
 export interface BuildAcpAgentOpts {
@@ -70,6 +126,7 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
       ),
     },
     onSessionCapabilities: rememberCapabilities,
+    onSessionHttpMcpSupport: rememberHttpMcpSupport,
   });
 }
 

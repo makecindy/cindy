@@ -1849,6 +1849,79 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(statusUpdates).toEqual([]);
   });
 
+  it('does not wake a dormant ACP Lead through raw maker.createSession on read_lead or lead_status', async () => {
+    const createSession = vi.fn(async () => {
+      throw new Error('must not call raw createSession for dormant ACP Lead');
+    });
+    const maker = {
+      getSession: vi.fn(() => undefined),
+      createSession,
+    };
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => maker as unknown as Maker,
+      logger: makeLogger() as never,
+      persistUserMessage: async () => undefined,
+      wireSession: () => undefined,
+      orcaTeamStore: {
+        async getWorkerLink() {
+          return {
+            workerId: 'worker-acp',
+            workflowId: 'team-acp',
+            workerSessionId: 'worker-session-acp',
+            leadSessionId: 'lead-session-acp',
+            leadSession: {
+              sessionId: 'lead-session-acp',
+              agentKind: 'acp',
+              workingDir: '/repo',
+              model: 'gemini-pro-orchestrator-neon',
+              providerId: 'acp-plugin:agy-acp:agy',
+              sdkSessionId: 'acp-native-1',
+            },
+          };
+        },
+        async updateWorkerStatus() {
+          return undefined;
+        },
+      },
+    });
+    const server = getServer(provider, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      vendorOptions: {},
+      getSessionContext: () => ({
+        agentKind: 'codex',
+        workingDir: '/repo',
+        sessionId: 'worker-session-acp',
+        mcpCallerKind: 'root',
+        mcpCallerAttested: true,
+        vendorOptions: {
+          orcaRole: 'worker',
+          orcaWorkerId: 'worker-acp',
+          orcaWorkerSessionId: 'worker-session-acp',
+        },
+      }),
+    });
+
+    const readResult = (await server._registeredTools.read_lead.handler({ worker_id: 'worker-acp' })) as {
+      content: Array<{ text: string }>;
+    };
+    const statusResult = (await server._registeredTools.lead_status.handler({ worker_id: 'worker-acp' })) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(createSession).not.toHaveBeenCalled();
+    expect(JSON.parse(readResult.content[0]!.text)).toMatchObject({
+      worker_id: 'worker-acp',
+      lead_session_id: 'lead-session-acp',
+      session_status: 'not_running',
+    });
+    expect(JSON.parse(statusResult.content[0]!.text)).toMatchObject({
+      worker_id: 'worker-acp',
+      lead_session_id: 'lead-session-acp',
+      session_status: 'not_running',
+    });
+  });
+
   it('worker tools reject non-worker calls without identity', async () => {
     const { maker } = makeProvider();
     const provider = createOrcaWorkerBridgeMcpProvider({

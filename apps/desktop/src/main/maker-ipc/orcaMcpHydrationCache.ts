@@ -7,6 +7,8 @@ interface OrcaRoleCreateOpts {
 
 export const knownNonOrcaSessionIds = new Set<string>();
 const orcaMcpHydratedSessionIds = new Set<string>();
+/** Tracks the active teamId whose Lead briefing has already been delivered to an ACP session. */
+const acpLeadBriefedTeamBySession = new Map<string, string>();
 
 export function readOrcaRoleFromVendorOptions(
   vendorOptions: Record<string, unknown> | undefined,
@@ -39,4 +41,17 @@ export function isOrcaMcpHydrated(sessionId: string): boolean {
 
 export function clearOrcaMcpHydrated(sessionId: string): void {
   orcaMcpHydratedSessionIds.delete(sessionId);
+}
+
+export function markAcpLeadTeamBriefed(sessionId: string, teamId: string): void {
+  if (!sessionId || !teamId) return;
+  acpLeadBriefedTeamBySession.set(sessionId, teamId);
+}
+
+export function isAcpLeadTeamBriefed(sessionId: string, teamId: string): boolean {
+  return Boolean(sessionId && teamId && acpLeadBriefedTeamBySession.get(sessionId) === teamId);
+}
+
+export function clearAcpLeadTeamBriefed(sessionId: string): void {
+  acpLeadBriefedTeamBySession.delete(sessionId);
 }

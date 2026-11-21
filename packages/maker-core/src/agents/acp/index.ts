@@ -29,6 +29,7 @@ export {
   AcpResumeUnavailableError,
   AcpSession,
   openAcpSession,
+  probeAcpHttpMcpSupport,
   type AcpClientInfo,
   type AcpResumeOutcome,
   type OpenAcpSessionOptions,

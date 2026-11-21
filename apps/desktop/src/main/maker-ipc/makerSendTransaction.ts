@@ -15,7 +15,6 @@ import {
   ASYNC_QUESTION_ANSWER,
   PINNED_SKILL_INVOCATION,
   LIBRARY_READ_ROOT,
-  type AgentKind,
   type EngineKind,
   type MainOwnedSendContext,
   type SessionSendOptions,
@@ -275,6 +274,13 @@ export interface MakerSendTransactionSession {
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
   isTurnRunning(): boolean;
+  /** ACP plugin engines only: false when the agent cannot resume or load an existing session. */
+  readonly pluginEngineResumeSupported?: boolean;
+  /** ACP plugin engines only: whether cindy_orca was mounted when opening this live session. */
+  readonly pluginEngineHasOrcaMcp?: boolean;
+  /** ACP plugin engines only: queue a one-shot host briefing ahead of the next prompt on a live session. */
+  queuePluginEngineBriefing?(briefing: string, onDelivered?: () => void): void;
+  setVendorOptions?(patch: Record<string, unknown>): Promise<void>;
   /** 项目资源漂移且满足回收空闲口径(仅 pi 本地根任务实现;其余会话缺省,永不回收)。 */
   hasRecyclableProjectResourceDrift?(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
@@ -342,6 +348,11 @@ export interface MakerSendTransactionDeps {
     sessionId: string,
   ): Promise<{ exists: boolean; workingDir: string | null }>;
   isOrcaMcpHydrated(sessionId: string): boolean;
+  renderOrcaRoleInstructions?(opts: CreateOpts): string | null;
+  resolveOrcaRoleInstructions?(opts: CreateOpts): Promise<string | null>;
+  markOrcaMcpHydratedIfNeeded?(sessionId: string, opts: CreateOpts): void;
+  markAcpLeadTeamBriefed?(sessionId: string, teamId: string): void;
+  hasActiveOrcaTeam?(sessionId: string, expectedTeamId?: string): Promise<boolean>;
   buildCreateOptsWithStderr(opts: CreateOpts): CreateOpts;
   synthesizeOrcaVendorOptionsFromDb(sessionId: string, opts: CreateOpts): Promise<boolean>;
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
@@ -1034,6 +1045,50 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         sessionId,
       });
       return null;
+    }
+    // Branch on the live session's agentKind rather than `co.agentKind`: queued send snapshots
+    // normalize plugin engines to `'claude-code'` until rehydration reconciles them against DB.
+    if (sess.agentKind === 'acp') {
+      if (sess.pluginEngineResumeSupported === false) {
+        if (co.vendorOptions?.orcaRole === 'lead') {
+          if (sess.pluginEngineHasOrcaMcp === false) {
+            return {
+              kind: 'failure',
+              result: toCompatibleMakerSendResult(
+                createHostSendFailure(
+                  'REHYDRATE_FAILED',
+                  '[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED] This plugin engine does not have collaboration tools mounted on this session and cannot resume.',
+                ),
+              ),
+            };
+          }
+          // An ACP engine that cannot resume/load would lose its conversation on close+rehydrate.
+          // Resolve the active Worker route, verify the team is still active after awaiting DB
+          // (disableOrca does not hold the send lock), then push synthesized vendorOptions,
+          // queue the one-shot Lead briefing, and mark hydrated.
+          const teamId = typeof co.vendorOptions?.orcaWorkflowId === 'string'
+            ? co.vendorOptions.orcaWorkflowId
+            : undefined;
+          const briefing = deps.resolveOrcaRoleInstructions
+            ? await deps.resolveOrcaRoleInstructions(co)
+            : deps.renderOrcaRoleInstructions?.(co) ?? null;
+          if (deps.hasActiveOrcaTeam && !(await deps.hasActiveOrcaTeam(sessionId, teamId))) {
+            return null;
+          }
+          if (co.vendorOptions) {
+            await sess.setVendorOptions?.(co.vendorOptions);
+          }
+          if (briefing) {
+            sess.queuePluginEngineBriefing?.(briefing, () => {
+              if (teamId) deps.markAcpLeadTeamBriefed?.(sessionId, teamId);
+            });
+          }
+          deps.markOrcaMcpHydratedIfNeeded?.(sessionId, co);
+        }
+        return null;
+      }
+      // Mid-session promotion to Orca Lead/Worker: deliver role instructions once on resume.
+      co.pluginEngineForceBriefingOnResume = true;
     }
     return rehydrateActiveSession(sessionId, co, fromDeviceLinkClient);
   }
