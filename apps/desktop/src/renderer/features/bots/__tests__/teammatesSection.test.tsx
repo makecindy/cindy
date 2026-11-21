@@ -1047,16 +1047,16 @@ describe('TeammatesSection rows', () => {
   // Regression: roster writes are not optimistic, so a rejected pin / hide used to
   // leave the row unchanged with no feedback (an unhandled rejection).
   it.each([
-    { item: 'bots.list.pin', write: () => mocks.setBotPinned },
-    { item: 'bots.list.hide', write: () => mocks.setBotHidden },
-  ])('reports a failed $item instead of silently doing nothing', async ({ item, write }) => {
+    { item: 'bots.list.pin', write: () => mocks.setBotPinned, message: 'bots.list.pinFailed' },
+    { item: 'bots.list.hide', write: () => mocks.setBotHidden, message: 'bots.list.hideFailed' },
+  ])('reports a failed $item instead of silently doing nothing', async ({ item, write, message }) => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
     mocks.params = { botId: 'bot-1' };
     write().mockRejectedValueOnce(new Error('ipc down'));
     await renderSidebar();
     fireEvent.contextMenu(screen.getByText('PR steward'));
     fireEvent.click(await screen.findByRole('menuitem', { name: item }));
-    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledExactlyOnceWith('ipcError.INTERNAL'));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledExactlyOnceWith(message));
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 

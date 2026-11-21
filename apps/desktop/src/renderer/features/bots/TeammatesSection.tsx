@@ -254,10 +254,11 @@ export function TeammatesSection() {
   };
 
   // Roster writes are not optimistic: a failure leaves the row unchanged, so say so.
-  const rosterAction = (action: Promise<unknown>) => {
+  // The cause is unknown here, so the message names the action without advising a retry.
+  const rosterAction = (action: Promise<unknown>, failedKey: 'bots.list.pinFailed' | 'bots.list.hideFailed') => {
     const owner = getDataOwnerGeneration();
     action.catch(() => {
-      if (isDataOwnerGenerationCurrent(owner)) toast.error(t('ipcError.INTERNAL'));
+      if (isDataOwnerGenerationCurrent(owner)) toast.error(t(failedKey));
     });
   };
 
@@ -483,7 +484,7 @@ export function TeammatesSection() {
   );
 
   const renderBotContextMenu = (bot: BotProfile, selected: boolean) => renderContextMenu('bot', bot.id, <>
-        <DropdownMenuItem onSelect={() => rosterAction(setBotPinned(bot.id, !bot.pinnedAt))}>
+        <DropdownMenuItem onSelect={() => rosterAction(setBotPinned(bot.id, !bot.pinnedAt), 'bots.list.pinFailed')}>
           <Pin size={14} className="mr-2" />
           {t(bot.pinnedAt ? 'bots.list.unpin' : 'bots.list.pin')}
         </DropdownMenuItem>
@@ -495,7 +496,7 @@ export function TeammatesSection() {
                 (candidate) => candidate.id !== bot.id,
               );
               navigate(fallback ? `/bots/${fallback.id}` : '/bots');
-            }));
+            }), 'bots.list.hideFailed');
           }}
         >
           <EyeOff size={14} className="mr-2" />
@@ -965,7 +966,7 @@ export function TeammatesSection() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => rosterAction(setBotHidden(bot.id, false))}
+                          onClick={() => rosterAction(setBotHidden(bot.id, false), 'bots.list.hideFailed')}
                           className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--surface-hover)]"
                           aria-label={t('bots.list.unhideNamed', { name: bot.name })}
                         >
