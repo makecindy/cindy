@@ -18,6 +18,7 @@ export type DeliveryProjection = InputProjection &
   InputDeliveryProjection & { clearBoundaryMs?: number | null };
 export type OutboxSessionPolicy = 'deliver' | 'discard' | 'wait';
 const MAX_UNCONFIRMED_ENQUEUE_ATTEMPTS = 5;
+const MAX_RETRY_DELAY_MS = 30_000;
 export interface DurableOutboxDeliveryDeps {
   store: ReturnType<typeof createDurableOutbox>;
   isCurrent(): boolean;
@@ -68,6 +69,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
   let stopped = false;
   let cursor = 0;
   const due = new Map<string, number>();
+  const failedReconciliationDue = new Map<string, number>();
   const attempts = new Map<string, number>();
   const unconfirmedEnqueues = new Map<string, number>();
   /** Records currently inside `deliver`; a later run never starts the same record twice. */
@@ -128,6 +130,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (!current(record)) return;
       await deps.store.remove(record);
       due.delete(id(record));
+      failedReconciliationDue.delete(id(record));
       attempts.delete(id(record));
       unconfirmedEnqueues.delete(id(record));
       requireProjection.delete(id(record));
@@ -426,7 +429,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       });
       due.set(
         id(record),
-        Date.now() + Math.min(30_000, 1_000 * 2 ** Math.min(count, 5)),
+        Date.now() + Math.min(MAX_RETRY_DELAY_MS, 1_000 * 2 ** Math.min(count, 5)),
       );
       // Never turn an uncertain write into a fresh message or discard its ID.
       await update({
@@ -444,6 +447,10 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           ? { refreshUploads: true }
           : {}),
       }).catch(() => undefined);
+    } finally {
+      if (current(record) && record.state === "failed" && record.retrySafe && !record.cancelRequested) {
+        failedReconciliationDue.set(id(record), Date.now() + MAX_RETRY_DELAY_MS);
+      }
     }
   }
   // Bound aggregate replay as well as concurrency; reconnecting many tasks must not
@@ -482,7 +489,15 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
             ...group.filter(isDurableOutboxHandedOff),
           ];
         })
-        .filter((r) => !inFlight.has(id(r)) && deps.canRun(r) && (due.get(id(r)) ?? 0) <= Date.now());
+        .filter((r) => {
+          const key = id(r);
+          if (inFlight.has(key) || !deps.canRun(r)) return false;
+          const reconciliationDue = failedReconciliationDue.get(key);
+          if (reconciliationDue === undefined) return (due.get(key) ?? 0) <= Date.now();
+          // Wake-ups may resume delivery, but only a user action can bypass the
+          // quiet period for a failed record. A retry or cancellation changes its state.
+          return r.state !== "failed" || r.cancelRequested || reconciliationDue <= Date.now();
+        });
       // Round robin prevents one failed head starving peers.
       const capacity = Math.min(MAX_IN_FLIGHT - inFlight.size, candidates.length);
       for (let n = 0; n < capacity; n++) {
@@ -491,7 +506,11 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       cursor = candidates.length
         ? (cursor + work.length) % candidates.length
         : 0;
-      for (const record of work) inFlight.add(id(record));
+      for (const record of work) {
+        const key = id(record);
+        failedReconciliationDue.delete(key);
+        inFlight.add(key);
+      }
     } finally {
       scanning = false;
     }

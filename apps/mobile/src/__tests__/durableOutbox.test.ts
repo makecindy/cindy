@@ -1013,6 +1013,41 @@ describe("app-owned delivery and reconciliation", () => {
     expect(restarted.deps.enqueue).toHaveBeenCalledOnce();
     expect(restarted.deps.enqueue.mock.calls[0]?.[0]).toMatchObject({ prepared: failed.prepared, sendAtMs: failed.sendAtMs });
   });
+  it('backs off failed sends across wake-ups and still clears a late receipt (#10785)', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+    try {
+      const { store, runner, deps } = await setup();
+      await store.add(message());
+      deps.enqueue.mockRejectedValue(new Error('response lost'));
+      for (let attempt = 0; attempt <= 5; attempt++) {
+        runner.wake();
+        await runner.run();
+      }
+      expect(store.getSnapshot()[0]?.state).toBe('failed');
+      deps.projection.mockClear();
+      deps.history.mockClear();
+      clock.mockReturnValue(106_000);
+      runner.wake();
+      await runner.run();
+      expect(deps.projection).not.toHaveBeenCalled();
+      expect(deps.history).not.toHaveBeenCalled();
+      clock.mockReturnValue(130_000);
+      await runner.run();
+      expect(deps.projection).toHaveBeenCalledOnce();
+      expect(deps.history).toHaveBeenCalledOnce();
+      deps.projection.mockResolvedValue(projection('id-1', 'removed'));
+      clock.mockReturnValue(136_000);
+      runner.wake();
+      await runner.run();
+      expect(store.getSnapshot()).toHaveLength(1);
+      clock.mockReturnValue(160_000);
+      await runner.run();
+      expect(store.getSnapshot()).toEqual([]);
+      expect(deps.enqueue).toHaveBeenCalledTimes(5);
+    } finally {
+      clock.mockRestore();
+    }
+  });
   it("holds uncertain writes on legacy hosts, including after restart", async () => {
     const first = await setup();
     await first.store.add(message());
