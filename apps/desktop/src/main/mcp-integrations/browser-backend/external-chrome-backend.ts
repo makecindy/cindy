@@ -184,6 +184,8 @@ export class ExternalChromeBackend implements BrowserBackend {
    */
   private routeBlockedByUnprovenLiveness = false;
   private quiescing = false;
+  /** Quit is terminal; controller and wrapper disposal share its queued work. */
+  private quitDisposal: Promise<void> | undefined;
   private readonly linkHandoff: Pick<ExternalLinkHandoff, 'ensure' | 'dispose'> | undefined;
   private tabOpensInFlight = 0;
   private lastTabOpenEndedAt = Number.NEGATIVE_INFINITY;
@@ -262,11 +264,25 @@ export class ExternalChromeBackend implements BrowserBackend {
   }
 
   async dispose(): Promise<void> {
+    if (this.quiescing && this.quitDisposal) return this.quitDisposal;
     this.linkHandoff?.dispose();
-    return this.enqueue(async () => {
-      if (!this.used) return;
+    const disposal = this.enqueue(async () => {
+      let completed = false;
       try {
+        // A previous Cindy instance may have left its managed browser alive.
+        // Probe without dispatch: even status can boot the runtime service in
+        // a browser-less session. Any survivor still goes through stopBrowser's
+        // existing profile/port ownership checks before adopted-process cleanup.
+        if (!this.used) {
+          // Backend switches do not own quit-time inherited-process cleanup.
+          if (!this.quiescing) return;
+          if (await this.confirmBrowserGone()) {
+            completed = true;
+            return;
+          }
+        }
         const stopped = await this.stopBrowser({ action: 'stop' });
+        completed = stopped.ok;
         if (!stopped.ok) {
           this.logger.warn('managed browser stop during dispose failed', {
             errorCode: stopped.errorCode,
@@ -276,8 +292,14 @@ export class ExternalChromeBackend implements BrowserBackend {
       } catch (err) {
         this.routeBlocked = true;
         this.logger.warn('managed browser stop during dispose threw', redactBrowserProxyText(err));
+      } finally {
+        // Share an in-flight attempt, but let the quit wrapper retry failures.
+        if (!completed && this.quitDisposal === disposal) this.quitDisposal = undefined;
       }
     });
+    // Only verified terminal cleanup can remain cached after the attempt.
+    if (this.quiescing) this.quitDisposal = disposal;
+    return disposal;
   }
 
   getEffectiveProxy(): ReturnType<typeof redactBrowserProxyRoute> {
@@ -412,11 +434,8 @@ export class ExternalChromeBackend implements BrowserBackend {
       if (state === 'running') {
         this.route = this.runtimeRoute;
         this.runtimeOwnsNextLaunch = false;
-        // An action can launch Chrome and then fail without a numeric status,
-        // which is what `used` is normally set from. Establishing a running
-        // browser here IS the proof that we own one, so record it or dispose()
-        // takes its `if (!this.used) return` path and leaves a headed Chrome
-        // alive after Cindy quits.
+        // An action can launch Chrome and then fail without a numeric status.
+        // Record the live browser so dispose sends stop without a cold probe.
         this.used = true;
       }
     }
@@ -519,7 +538,7 @@ export class ExternalChromeBackend implements BrowserBackend {
     const hardBlocked = this.routeBlocked && !this.routeBlockedByUnprovenLiveness;
     const sameRouteAlive = sameRoute
       && !hardBlocked
-      && (state === 'running' || (await this.resolveLiveness(currentStatus)) !== 'gone');
+      && (state === 'running' || (await this.resolveLiveness(currentStatus, true)) !== 'gone');
     if (sameRouteAlive) {
       // The process is confirmed alive on the route we still hold, so a block
       // this path was allowed past — transient by definition — has served its
@@ -719,13 +738,17 @@ export class ExternalChromeBackend implements BrowserBackend {
     }
 
     // `stopped: true` means "termination signals were sent", NOT "the process
-    // exited": stopOpenClawChrome breaks its wait as soon as proc.killed is set
-    // (which SIGTERM does synchronously), then SIGKILLs and returns without
-    // awaiting exit, and stopRunningBrowser reports stopped:true regardless.
+    // exited": stopOpenClawChrome can exhaust its grace period, send SIGKILL
+    // and return without awaiting exit. stopRunningBrowser still reports true.
     // Readiness is not exit either — a busy Chrome reports running:false while
     // still alive. Confirm absence independently before releasing the proxy
     // guard, or a survivor keeps serving the old route while we reset to direct.
-    let stoppedSafely = (await this.resolveLiveness()) === 'gone';
+    // Wait only when the runtime actually sent a stop. With stopped:false it
+    // owns no process; waiting would delay the adopted-process cleanup below.
+    let stoppedSafely = (await this.resolveLiveness(
+      undefined,
+      (result.data as { stopped?: unknown } | undefined)?.stopped === true,
+    )) === 'gone';
     // An adopted process (Cindy restarted while its managed Chrome stayed
     // alive) cannot be terminated by the vendored stop: its ownership state is
     // in-memory and empty, so `stop` reports ok with stopped:false forever.
@@ -779,7 +802,7 @@ export class ExternalChromeBackend implements BrowserBackend {
    * whether a `'stopped'` readiness signal can be trusted. Pass the result of a
    * call that already carries state to avoid a redundant `status` round trip.
    */
-  private async resolveLiveness(known?: BrowserControlResult): Promise<Liveness> {
+  private async resolveLiveness(known?: BrowserControlResult, waitForExit = false): Promise<Liveness> {
     const cheap = known ? runningState(known) : 'unknown';
     if (cheap === 'running') return 'running';
     const state = cheap === 'unknown'
@@ -788,14 +811,14 @@ export class ExternalChromeBackend implements BrowserBackend {
     if (state === 'running') return 'running';
     // Readiness says stopped/unknown — that is not proof of absence, so ask the
     // non-destructive probe. Anything short of verified absence is `unproven`.
-    return (await this.confirmBrowserGone()) ? 'gone' : 'unproven';
+    return (await this.confirmBrowserGone(waitForExit)) ? 'gone' : 'unproven';
   }
 
-  private async confirmBrowserGone(): Promise<boolean> {
+  private async confirmBrowserGone(waitForExit = false): Promise<boolean> {
     try {
-      return await (this.options.isBrowserGone ?? isManagedBrowserGone)(
-        this.resolveCdpHttpUrl(),
-      );
+      const cdpHttpUrl = this.resolveCdpHttpUrl();
+      if (this.options.isBrowserGone) return await this.options.isBrowserGone(cdpHttpUrl);
+      return await isManagedBrowserGone(cdpHttpUrl, { waitForExit });
     } catch (err) {
       this.logger.warn('managed browser liveness probe failed', redactBrowserProxyText(err));
       return false;
@@ -877,7 +900,10 @@ export class ExternalChromeBackend implements BrowserBackend {
     // Require verified absence before handing the route to a new launch. The
     // vendored `stopped: true` only means signals were sent, so it cannot skip
     // this check: a survivor would keep serving the old route under a new one.
-    if ((await this.resolveLiveness()) !== 'gone') {
+    if ((await this.resolveLiveness(
+      undefined,
+      (stopped.data as { stopped?: unknown } | undefined)?.stopped === true,
+    )) !== 'gone') {
       this.routeBlocked = true;
       return {
         ok: false,
@@ -901,7 +927,10 @@ export class ExternalChromeBackend implements BrowserBackend {
         // this runtime launched — readiness alone would again mistake a busy
         // browser for an exited one, and the vendored `stopped: true` only
         // reports that signals were sent, not that the process exited.
-        stoppedSafely = (await this.resolveLiveness()) === 'gone';
+        stoppedSafely = (await this.resolveLiveness(
+          undefined,
+          (stopped.data as { stopped?: unknown } | undefined)?.stopped === true,
+        )) === 'gone';
       }
     } catch (err) {
       stoppedSafely = false;

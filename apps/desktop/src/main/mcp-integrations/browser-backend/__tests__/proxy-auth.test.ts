@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 import { resetBrowserProxyDnsVerdictCache } from '@cindy/browser-control-runtime';
+import { ExternalChromeBackend } from '../external-chrome-backend.js';
 
 import {
   BrowserProxyAuthCoordinator,
   closeAdoptedManagedBrowser,
+  isManagedBrowserGone,
   commandLineHasArgumentValue,
   commandLineHasExactArgument,
   readWindowsProcessCommandLine,
@@ -394,6 +396,121 @@ describe('terminateManagedChromePortOwner', () => {
 });
 
 describe('BrowserProxyAuthCoordinator', () => {
+  // #11600 review regression: a successful stop only means signals were sent.
+  // Existing injected liveness tests cannot expose the default TCP probe
+  // rejecting a port that is still closing. Exercise both public stop paths
+  // against a loopback listener; no browser, profile, or OS signal is involved.
+  it.each(['stop', 'switch'] as const)('waits for delayed port release after %s', async action => {
+    const server = createServer((_request, response) => response.end('{}'));
+    const port = await listen(server);
+    let running = true;
+    let release: ReturnType<typeof setTimeout> | undefined;
+    const closeAdoptedBrowser = vi.fn(async () => true);
+    const backend = new ExternalChromeBackend({
+      call: async request => ({ ok: true, action: request.action, status: 200, data: { running } }),
+    }, { warn: vi.fn() }, {
+      cdpHttpUrl: `http://127.0.0.1:${port}`,
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      closeAdoptedBrowser,
+      createProxyAuth: () => ({ start: async () => {}, dispose: async () => {} }),
+      createRuntime: () => ({
+        call: async request => {
+          if (request.action === 'start') running = true;
+          if (request.action === 'stop') {
+            running = false;
+            // real-wait: model OS port release after a stop receipt; production TCP/HTTP probes must observe the delay.
+            release = setTimeout(() => server.close(), 100);
+          }
+          return {
+            ok: true, action: request.action, status: 200,
+            data: request.action === 'stop' ? { stopped: true } : { running },
+          };
+        },
+      }),
+    });
+    try {
+      expect((await backend.call({ action: 'start' })).ok).toBe(true);
+      // No rescue can mask the absence-confirmation regression after stop.
+      closeAdoptedBrowser.mockResolvedValue(false);
+      closeAdoptedBrowser.mockClear();
+      const result = await backend.call(action === 'stop'
+        ? { action: 'stop' }
+        : { action: 'start', proxyServer: 'http://proxy.test:8080', proxyAllowedHostnames: ['allowed.example'] });
+
+      expect(result.ok).toBe(true);
+      expect(server.listening).toBe(false);
+      expect(closeAdoptedBrowser).not.toHaveBeenCalled();
+      expect((await backend.call({ action: 'tabs' })).ok).toBe(true);
+    } finally {
+      clearTimeout(release);
+    }
+  });
+
+  // #11600 review: same-route start must distinguish a closing browser from
+  // one that is merely busy. Unit/integration tier: real loopback probe and
+  // one externally initiated exit, without signals or a real browser profile.
+  it('restarts the same route after a closing browser releases its port', async () => {
+    const server = createServer((_request, response) => response.end('{}'));
+    const port = await listen(server);
+    let running = true;
+    const starts = vi.fn();
+    const backend = new ExternalChromeBackend({
+      call: async request => ({ ok: true, action: request.action, status: 200, data: { running } }),
+    }, { warn: vi.fn() }, {
+      cdpHttpUrl: `http://127.0.0.1:${port}`,
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      closeAdoptedBrowser: async () => true,
+      createRuntime: () => ({
+        call: async request => {
+          if (request.action === 'start') { starts(); running = true; }
+          return { ok: true, action: request.action, status: 200, data: { running } };
+        },
+      }),
+    });
+    expect((await backend.call({ action: 'start' })).ok).toBe(true);
+    running = false;
+    // real-wait: an external browser exit releases the port after readiness fails.
+    const release = setTimeout(() => server.close(), 100);
+    try {
+      const restarted = await backend.call({ action: 'start' });
+      expect(restarted.ok).toBe(true);
+      expect(starts).toHaveBeenCalledTimes(2);
+      expect(server.listening).toBe(false);
+    } finally {
+      clearTimeout(release);
+    }
+  });
+
+  // #8992: use the real default liveness probe against the existing loopback
+  // fixture, not an immediate injected verdict. HTTP can answer while the
+  // runtime's WebSocket readiness is false. Two 10s exit-confirmation probes
+  // then exhaust Desktop's 16s quit budget before ownership cleanup begins.
+  // Integration fixture in this existing CDP suite; no real browser/profile.
+  it('cleans an unused HTTP-responsive browser before the Desktop quit budget', async () => {
+    const cdp = await createFakeCdp();
+    const closeAdoptedBrowser = vi.fn(async () => true);
+    const warn = vi.fn();
+    const backend = new ExternalChromeBackend({
+      call: async request => ({
+        ok: true, action: request.action, status: 200,
+        data: request.action === 'status' ? { running: false } : { stopped: false },
+      }),
+    }, { warn }, {
+      cdpHttpUrl: cdp.cdpUrl,
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      closeAdoptedBrowser,
+    });
+
+    backend.beginQuiescence();
+    await backend.dispose();
+
+    expect(closeAdoptedBrowser).toHaveBeenCalledWith(cdp.cdpUrl, '/managed/browser/Cindy/user-data');
+    expect(warn).not.toHaveBeenCalled();
+    // The endpoint is still listening: the cleanup receipt above is a seam,
+    // while both presence decisions exercise the production TCP/CDP probe.
+    await expect(isManagedBrowserGone(cdp.cdpUrl)).resolves.toBe(false);
+  }, 16_000);
+
   beforeEach(() => {
     // DNS verdicts are cached per hostname across coordinators, so one test's
     // resolver would otherwise decide the next test's verdict for the same host.
