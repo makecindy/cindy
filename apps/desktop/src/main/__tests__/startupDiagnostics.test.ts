@@ -155,6 +155,22 @@ describe('RunMarkerStore state machine', () => {
     expect(m.heartbeatAt).toBe('2026-07-07T12:00:21.000Z');
   });
 
+  it('begin() preserves OS creation time across backward clock steps', () => {
+    const processStartedAt = new Date('2026-07-07T12:01:00.000Z');
+    const now = new Date('2026-07-07T12:00:00.000Z');
+    Object.defineProperty(process, 'getCreationTime', {
+      configurable: true,
+      value: () => processStartedAt.getTime(),
+    });
+    const store = makeStoreWithDefaultProcessStart({ pid: 45, now: () => now });
+
+    store.begin();
+
+    const m = readMarker(45);
+    expect(m.startedAt).toBe('2026-07-07T12:01:00.000Z');
+    expect(m.heartbeatAt).toBe('2026-07-07T12:00:00.000Z');
+  });
+
   it('begin() falls back to process uptime when creation time is unavailable', () => {
     const now = new Date('2026-07-07T12:00:21.000Z');
     Object.defineProperty(process, 'getCreationTime', {

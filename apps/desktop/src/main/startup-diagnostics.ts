@@ -157,11 +157,7 @@ function defaultProcessStartedAt(now: Date): Date {
       process as NodeJS.Process & { getCreationTime?: () => number | null }
     ).getCreationTime;
     const creationTimeMs = getCreationTime?.call(process);
-    if (
-      typeof creationTimeMs === 'number' &&
-      Number.isFinite(creationTimeMs) &&
-      creationTimeMs <= now.getTime()
-    ) {
+    if (typeof creationTimeMs === 'number' && Number.isFinite(creationTimeMs)) {
       return new Date(creationTimeMs);
     }
   } catch {
