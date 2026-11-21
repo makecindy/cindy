@@ -107,7 +107,7 @@ it('waits for local DB readiness before querying pending imports', async () => {
   expect(listPendingImports).toHaveBeenCalledOnce();
 });
 
-// #11839, unit/jsdom: a real review dialog and toast must explain a skipped
+// Issue 11839, unit/jsdom: a real review dialog and toast must explain a skipped
 // import when reconcile returns no-file. Success and thrown-error cases miss it.
 it('explains a skipped import when its automation file is gone', async () => {
   vi.useFakeTimers();
