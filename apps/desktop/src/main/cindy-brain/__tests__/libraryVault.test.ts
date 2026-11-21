@@ -784,6 +784,24 @@ describe('LibraryVault', () => {
       });
     });
 
+    it('从目录别名访问的数据库只从用量扣减一次', async () => {
+      const vault = makeVault();
+      await vault.open();
+      await vault.write({ path: 'data/db.sqlite', content: 'database' });
+      await vault.write({ path: 'keep.txt', content: 'yes' });
+      await fs.promises.symlink(path.join(libraryRoot, 'data'), path.join(libraryRoot, 'alias'),
+        process.platform === 'win32' ? 'junction' : 'dir');
+
+      const database = await vault.resolveDbTarget('alias/db.sqlite');
+      if (!database) throw new Error('库内目录别名应正常解析');
+      expect(await vault.prepareExternalMutation(database)).toBeNull();
+      expect(await vault.delete({ path: 'data', recursive: true })).toMatchObject({ ok: true, existed: true });
+      await vault.invalidate();
+      expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
+        ok: true, state: 'ready', fileCount: 1, usedBytes: 3,
+      });
+    });
+
     it('超限的旧版合法账本可读写，新版首次变更先持久写下未收尾状态', async () => {
       const initial = makeVault();
       await initial.open();

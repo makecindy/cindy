@@ -272,15 +272,15 @@ function isInsideDir(base: string, target: string): boolean {
  * symlink 逃逸校验:找 target 最深的已存在祖先,realpath 后必须仍在 realBase 内
  * (base 内的 symlink 目录指向外面 → 组合路径逃出根,必须拦)。
  */
-async function deepestExistingAncestorInside(realBase: string, target: string): Promise<boolean> {
+async function resolvePathThroughAncestor(realBase: string, target: string): Promise<string | null> {
   let probe = target;
   for (;;) {
     const parent = path.dirname(probe);
     try {
       const real = await fs.promises.realpath(parent);
-      return isInsideDir(realBase, real);
+      return isInsideDir(realBase, real) ? path.join(real, path.relative(parent, target)) : null;
     } catch {
-      if (parent === probe) return false; // 到根还不存在(理论不可达)
+      if (parent === probe) return null;
       probe = parent;
     }
   }
@@ -820,7 +820,7 @@ export class LibraryVault {
   }
 
   /** 解析并校验相对路径 → 绝对目标;含越界与祖先 symlink 收敛检查。 */
-  private async resolveTarget(relPath: string): Promise<{ target: string; realBase: string } | LibraryFailure> {
+  private async resolveTarget(relPath: string): Promise<{ target: string; realBase: string; usageTarget: string } | LibraryFailure> {
     const base = this.root;
     let realBase: string;
     try {
@@ -830,10 +830,11 @@ export class LibraryVault {
     }
     const target = path.join(base, ...relPath.split('/'));
     if (!isInsideDir(base, target)) return fail('PATH_INVALID', 'path 越界');
-    if (!(await deepestExistingAncestorInside(realBase, target))) {
+    const realTarget = await resolvePathThroughAncestor(realBase, target);
+    if (!realTarget) {
       return fail('PATH_INVALID', 'path 越界(中间目录含指向根外的符号链接)');
     }
-    return { target, realBase };
+    return { target, realBase, usageTarget: path.join(base, path.relative(realBase, realTarget)) };
   }
 
   /** 目标本身不得是 symlink(不穿透);返回 stat 或 null(不存在)。写路径继续用 numeric。 */
@@ -1159,7 +1160,7 @@ export class LibraryVault {
         return w;
       }
       // 用量增量记账(files/bytes);覆盖写扣除旧体积。
-      this.accountFileUsageChange(resolved.target, st?.isFile() ? st.size : null, decoded.bytes.byteLength);
+      this.accountFileUsageChange(resolved.usageTarget, st?.isFile() ? st.size : null, decoded.bytes.byteLength);
       await this.recordUsageMutationUnlocked();
       return {
         ok: true as const,
@@ -1359,7 +1360,7 @@ export class LibraryVault {
       }
       this.streams.delete(stream.streamId);
       this.deps.onStreamClosed?.(stream.streamId);
-      this.accountFileUsageChange(resolved.target, prior?.isFile() ? prior.size : null, stream.totalBytes);
+      this.accountFileUsageChange(resolved.usageTarget, prior?.isFile() ? prior.size : null, stream.totalBytes);
       await this.recordUsageMutationUnlocked();
       return { ok: true as const, path: stream.relPath, bytes: stream.totalBytes, sha256 };
     });
@@ -1636,7 +1637,7 @@ export class LibraryVault {
       let removedFiles = 0;
       if (st.isDirectory()) {
         if (req.recursive === true) {
-          const usage = await this.scanDirUsage(resolved.target);
+          const usage = await this.scanDirUsage(resolved.usageTarget);
           try {
             await fs.promises.rm(resolved.target, { recursive: true, force: false });
           } catch (err) {
@@ -1646,7 +1647,7 @@ export class LibraryVault {
           removedBytes = usage.bytes;
           removedFiles = usage.files;
           for (const { target } of this.sqliteUsage.values()) {
-            if (isInsideDir(resolved.target, target)) this.accountFileUsageChange(target, null, null);
+            if (isInsideDir(resolved.usageTarget, target)) this.accountFileUsageChange(target, null, null);
           }
         } else {
           try {
@@ -1665,7 +1666,7 @@ export class LibraryVault {
         } catch (err) {
           return this.tmpFailure(err, '删除文件失败(主机 IO 错误)');
         }
-        this.accountFileUsageChange(resolved.target, st.isFile() ? st.size : null, null);
+        this.accountFileUsageChange(resolved.usageTarget, st.isFile() ? st.size : null, null);
         // 空目录剪枝(向上 rmdir 到根为止,遇非空即停):不剪则目录残骸永久
         // 计入用量扫描(与 fsSlot 同教训)。
         let dir = path.dirname(resolved.target);
@@ -1768,8 +1769,8 @@ export class LibraryVault {
         return fail('INTERNAL', '重命名就位校验失败(identity 不一致)');
       }
       // 账本:文件数不变;覆盖替换时扣掉被替换文件的体积与计数。
-      this.accountFileUsageChange(src.target, st.size, null);
-      this.accountFileUsageChange(dst.target, prior?.isFile() ? prior.size : null, st.size);
+      this.accountFileUsageChange(src.usageTarget, st.size, null);
+      this.accountFileUsageChange(dst.usageTarget, prior?.isFile() ? prior.size : null, st.size);
       await this.recordUsageMutationUnlocked();
       // 源空目录剪枝(rename 腾出的父目录不残留)。
       let dir = path.dirname(src.target);
@@ -1881,7 +1882,10 @@ export class LibraryVault {
     if (!('target' in resolved)) return null;
     const st = await this.lstatTarget(resolved.target);
     if (st && !st.isFile() && !st.isSymbolicLink()) return null; // 目录/非常规对象不可当库
-    return resolved.target;
+    if (!st?.isSymbolicLink()) return resolved.usageTarget;
+    const real = await fs.promises.realpath(resolved.target).catch(() => null);
+    if (!real || !isInsideDir(resolved.realBase, real)) return null;
+    return path.join(this.root, path.relative(resolved.realBase, real));
   }
 
   /** 迁移等场景显式置只读(读写闸见 requireWritable)。 */
