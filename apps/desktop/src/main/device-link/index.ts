@@ -91,8 +91,11 @@ import { markStartupMilestone } from '../startupTimeline';
 import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
+import type { OutboundSocketProxyDecision } from '../maker-host/outbound-fetch.desktop';
+import { createPinnedSocketProxyStore } from './pinnedSocketProxy';
+import { classifyPeerTransportRoute } from './peerTransportRoute';
 import { currentLinkTraffic, flushLinkTraffic } from './linkTraffic.desktop';
-import { openLinkWebSocket } from './linkWebSocket.desktop';
+import { openLinkWebSocket, type LinkWebSocketOptions } from './linkWebSocket.desktop';
 import {
   DeviceLinkOwnershipArbiter,
   createSqliteExclusiveFileLock,
@@ -247,14 +250,104 @@ const relayDnsLookup = createDnsFallbackLookup({ log });
 // 注意:不回退到 apiBaseUrl —— device-link 已从主 server 摘除,主 server 没有这组端点。
 const WS_PATH = '/api/device-link/ws';
 
+/**
+ * 每条 relay socket **真正建立之后**钉住的出站判定(脱敏地址 / 直连原因)。
+ *
+ * 诊断(#9537)必须报「活着的 socket 走没走代理」,而不是「现在这份系统 / PAC 配置解析
+ * 出来是什么」:socket 建立之后改了系统代理,重新解析会得到与这条 socket 不同的结论,
+ * banner 于是信心十足地指认一个根本没在用的代理,或者反过来漏报真实在用的那个
+ * (Codex review P1)。判定随建连产生、重连时覆盖;写入时机见 pinnedSocketProxy.ts。
+ */
+const pinnedSocketProxy = createPinnedSocketProxyStore();
+
 /** 官方中转的 WebSocket 地址:主连接走自建中转时,跨账号 peer 仍连这里。 */
 function officialWsUrl(): string {
   return officialDeviceLinkApiBase().replace(/^http/, 'ws') + WS_PATH;
 }
 
+/**
+ * 某个对端的控制通道当前实际使用的 WebSocket URL(#9537 出站路径诊断用)。
+ *
+ * 诊断必须探**真实 socket 用的那个地址**:协议(ws/wss)与 path(`/api/device-link/ws`)
+ * 都会进代理解析的 key,PAC / env 规则完全可以按协议或路径给出不同答案,拿 REST base
+ * 的判定代替就是张冠李戴。自建中转选中时跨账号 peer(共享任务 / 供应商分享)走独立的
+ * 官方连接(routedClient 的 crossAccountConnection),同账号 peer 走当前中转 —— 用
+ * client 的实际承载连接判定,不靠猜。
+ *
+ * 无法静态确定时返回 null(主连接由 agent-net 承载、对端在 scoped agent-net 路由连接上、
+ * client 未就绪),调用方按「没有判定」处理:宁可不报,也不谎称走了代理。
+ *
+ * legacy 连接从 `compatibilityConnection` 拿,不走 `client`:业务拿到的 client 是路由外壳
+ * (PeerLinks,会话层与 Device Link 共用),外壳上只暴露归组过的方法,legacy 连接由外壳外的
+ * `compatibilityConnection` 直接给出。
+ */
+export function deviceLinkPeerTransportUrl(deviceId: string): string | null {
+  if (!client) return null;
+  const conn = client.connectionFor(deviceId);
+  const cross = client.crossAccountConnection();
+  const legacy = compatibilityConnection?.() ?? null;
+  const route = classifyPeerTransportRoute({
+    isPrimary: conn === client,
+    isLegacy: !!legacy && conn === legacy,
+    isCrossAccount: conn === cross,
+    isScopedPeer: isScopedPeer(deviceId),
+  });
+  if (route === 'primary') {
+    // 对端在主连接上:agent-net 承载时实际 URL 由节点协商决定,静态不可知。
+    return primaryUsesEncryptedTransport ? null : wsUrl();
+  }
+  if (route === 'cross-account') {
+    // 跨账号 / 共享任务:独立的官方连接(自建中转时);无自建中转时这条连接是 legacy
+    // 连接,URL 与官方 base 相同 —— 两种情况都指向官方 base。
+    return officialWsUrl();
+  }
+  if (route === 'legacy') {
+    // 旧同账号对端被路由到独立的 legacy 连接(Agent-Net 开着 legacy 兜底):那条连接用的
+    // 就是当前中转(legacyConnectionOptions.getWsUrl = wsUrl),URL 是已知的。早先把它
+    // 当成「不可知的 scoped 路由连接」一律返回 null,会让这种配置下所有 degraded 的
+    // 中继路径会话都变成「没有判定」(Codex review P2)。
+    return wsUrl();
+  }
+  // scoped agent-net 路由连接:URL 由 route server 决定(含 /api/agent-net/guest 变体),
+  // 静态不可知 → 不给判定,宁可不报也不谎称走了代理。
+  return null;
+}
+
 /** 跨账号 peer 是否在独立连接上;官方线路下只有一条连接。 */
 function hasSeparateCrossAccountConnection(): boolean {
   return !!client && client.crossAccountConnection() !== client;
+}
+
+/**
+ * 某个对端**当前**的数据面路径:'direct' = 直连通道可用,'relay' = 走中转。
+ *
+ * 与 `deviceLinkPeerTransportUrl` 配对使用:可靠帧是先试直连、失败才回落中继
+ * (`client.ts` 的 `sendReliableFrames` → `directChannelForSend`),所以对端此刻走直连时,
+ * 中继那条 WebSocket 并不承载这次流量 —— 拿它的代理判定去解释这次失败是张冠李戴。
+ * client 未就绪时返回 null(不判定)。
+ */
+export function deviceLinkPeerDataPath(deviceId: string): 'direct' | 'relay' | null {
+  if (!client) return null;
+  // 必须问**承载这个对端的那条连接**:RoutedDeviceLinkClient 把一部分对端路由到独立的
+  // legacy / scoped 连接上,而它没有覆写 getPeerPath —— 问外层 client 只会读到外层自己
+  // 那份 transport 表,把实际走直连的对端说成走中继。
+  return client.connectionFor(deviceId).getPeerPath(deviceId);
+}
+
+/**
+ * 承载这个对端的那条 relay socket 在**建连时**钉住的出站判定。
+ *
+ * 与 `deviceLinkPeerTransportUrl` 配对:先问出这个对端实际走哪条 socket,再取那条
+ * socket 建立时选定的出口。回答的是「这条活着的 socket 走没走代理」,不是「当前配置
+ * 解析出来是什么」—— 后者会与活着的 socket 不一致(见 pinnedSocketProxyByUrl)。
+ *
+ * 拿不到(socket 还没建 / 对端在 agent-net 路由连接上 / client 未就绪)返回 null:
+ * 调用方按「没有判定」处理,宁可不报也不谎称走了代理。
+ */
+export function deviceLinkPeerPinnedProxy(deviceId: string): OutboundSocketProxyDecision | null {
+  const url = deviceLinkPeerTransportUrl(deviceId);
+  if (!url) return null;
+  return pinnedSocketProxy.get(url);
 }
 
 /** relay REST base(media presign / devices 等);供 mediaTransfer / ipc 复用。 */
@@ -1037,7 +1130,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         // ClientOptions 类型未声明 lookup,但 ws 会把额外选项透传给
         // http.request(其 RequestOptions 原生支持 lookup)→ net/tls 建连。
         lookup: relayDnsLookup,
-      } as WebSocket.ClientOptions),
+        // 判定与 agent 同源:openLinkWebSocket 内部用 createOutboundHttpAgentWithDecision
+        // 建连,这里只在 socket 上钉住结果(#9959)。挂载时机见 pinnedSocketProxy.ts ——
+        // 真的 open 才算这条线路被采用,过期建连结果不会写进诊断。
+        // 断言必须落到 LinkWebSocketOptions:断成 ClientOptions 会抹掉回调的
+        // 上下文类型,decision/ws 变成 implicit any(TS7006,CI 四红之源)。
+        onOutboundDecision: (decision, ws) => pinnedSocketProxy.track(url, decision, ws),
+      } as LinkWebSocketOptions),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),
@@ -1267,6 +1366,21 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   const dataPathClient = client;
   client.onPeerPathChanged(({ deviceId, path }) => {
     if (client !== dataPathClient) return;
+    if (path === 'direct') directDataPeers.add(deviceId); else directDataPeers.delete(deviceId);
+    broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status: getDeviceLinkStatus(), directDataDeviceIds: getDirectDataDeviceIds(), dataPathChangedDeviceId: deviceId });
+  });
+  // 承载连接换人(legacy ↔ 主连接)时,「这个对端走哪条 socket」变了,而两条连接的 path 表
+  // 可能都没动、onPeerPathChanged 不会响:directDataPeers 会停在旧连接那份路径上,渲染层钉在
+  // 旧 socket 上的出站代理判定也不会失效(熔断未解除时那条提示一直在)。按新承载连接重算并广播
+  // 一次,让订阅方重新读事实(#9537 的 Codex review P1)。拓扑页自己 2s 轮询,不需要这个信号。
+  const routeOwnerClient = routedClient;
+  routeOwnerClient.onPeerRouteOwnerChanged((deviceId) => {
+    // client 是 routeSessionPeers 分路面层,与底层 routedClient 恒为两个对象
+    // (sessionRouting.ts),拿它们比永远不等、处理器一次都不会执行。失效判定和
+    // 旁边 primaryFacade / dataPathClient 一致:只在本次初始化交出的门面仍是
+    // 全局 client 时生效(codex P1 on #9959)。
+    if (client !== primaryFacade) return;
+    const path = deviceLinkPeerDataPath(deviceId);
     if (path === 'direct') directDataPeers.add(deviceId); else directDataPeers.delete(deviceId);
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status: getDeviceLinkStatus(), directDataDeviceIds: getDirectDataDeviceIds(), dataPathChangedDeviceId: deviceId });
   });

@@ -10,6 +10,14 @@ import { onProviderDirectoryDenied } from '../device-link/providerMetadataContin
 const capabilities = vi.hoisted(() => ({ canUseDeviceLink: true }));
 const metadataOwner = vi.hoisted(() => ({ key: 'directory-owner-a', generation: 0 }));
 const dataPath = vi.hoisted(() => ({ available: vi.fn<(deviceId: string) => boolean>(() => false) }));
+// #9537:对端实际 transport URL 的替身(null = 拿不到,handler 退回两条 REST 线路 origin)。
+const peerTransport = vi.hoisted(() => ({ url: null as string | null }));
+// 对端当前的数据面路径(null = 判定不了,'direct' = 可靠帧走直连通道)。
+const peerDataPath = vi.hoisted(() => ({ path: null as 'direct' | 'relay' | null }));
+// 活着的 relay socket 在建连时钉住的出站判定(null = 没有钉住的判定)。
+const peerPinnedProxy = vi.hoisted(() => ({
+  decision: null as { kind: 'proxy'; proxy: string } | { kind: 'direct'; reason: string } | null,
+}));
 vi.mock('../appSessionState.js', async importOriginal => ({
   ...await importOriginal<typeof import('../appSessionState.js')>(), activeOwnerScopeKey: () => `${metadataOwner.key}:${metadataOwner.generation}`,
 }));
@@ -23,6 +31,9 @@ const relayScope = vi.hoisted(() => ({ baseUrl: 'https://relay-a.test.invalid' }
 vi.mock('../device-link/deviceLinkApi.desktop.js', () => ({
   deviceLinkApiFetch: vi.fn(),
   resolveDeviceLinkApiBase: () => relayScope.baseUrl,
+  // #9537:出站判定的第二条候选线路。这里与 resolveDeviceLinkApiBase 同值,让无自建中转的
+  // 用例退化为单候选(见下面 #9537 用例的注释)。
+  officialDeviceLinkApiBase: () => relayScope.baseUrl,
 }));
 
 // Transport windows are outside this in-memory IPC handler harness.
@@ -91,6 +102,9 @@ vi.mock('./index', () => ({
 vi.mock('../device-link/index', () => ({
   getDeviceLinkStatus: () => 'online',
   getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
+  deviceLinkPeerTransportUrl: () => peerTransport.url,
+  deviceLinkPeerDataPath: () => peerDataPath.path,
+  deviceLinkPeerPinnedProxy: () => peerPinnedProxy.decision,
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: dataPath.available,
   clearDeviceResponsiveness: vi.fn(),
@@ -153,6 +167,7 @@ vi.mock('../appCapabilities.js', () => ({
 
 import {
   handleGetState,
+  handleGetProxyVerdict,
   handleSetEnabled,
   handleSetKeepAwake,
   handleSetDeviceControlEnabled,
@@ -205,6 +220,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
       unresponsiveDeviceIds: [],
     }),
     getPeerLinks: vi.fn(() => ({ links: [], relayRttMs: null })),
+    probeProxyVerdict: vi.fn(async () => null),
     setEnabled: vi.fn(),
     setKeepAwake: vi.fn(),
     apiFetch: vi.fn().mockResolvedValue({ devices: [] }),
@@ -247,6 +263,9 @@ describe('device-link IPC handlers', () => {
     refcountTesting.reset(); // 多窗口订阅引用计数:每个用例独立
     capabilities.canUseDeviceLink = true;
     metadataOwner.key = 'directory-owner-a';
+    peerTransport.url = null;
+    peerDataPath.path = null;
+    peerPinnedProxy.decision = null;
     metadataOwner.generation = 0;
     __resetDeviceListCoalescingForTests(); // /devices 合并窗口:不让上一用例的在途请求漏到下一个
     vi.restoreAllMocks();
@@ -265,6 +284,127 @@ describe('device-link IPC handlers', () => {
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     });
+  });
+
+  it('#9537 出站路径判定:两条候选线路 origin 都探测,透传脱敏判定', async () => {
+    const probe = vi.fn(async () => ({
+      source: 'system' as const,
+      kind: 'proxy' as const,
+      proxy: 'http://127.0.0.1:7890',
+      upstream: 'https://continuity.test.invalid',
+      at: 0,
+    }));
+    await expect(handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }))).resolves.toEqual({
+      kind: 'proxy',
+      proxy: 'http://127.0.0.1:7890',
+    });
+    // 两条候选:当前中转(同账号设备)+ 官方中转(自建中转下共享任务走独立官方连接)。
+    // 测试端点替身对两者同值,无自建中转时即退化为单候选。
+    expect(probe).toHaveBeenCalledWith([
+      'https://relay-a.test.invalid',
+      'https://relay-a.test.invalid',
+    ]);
+  });
+
+  it('#9537 出站路径判定:优先探这个对端实际走的 transport URL', async () => {
+    // 协议(ws/wss)与 path 都进代理解析 key,PAC / env 可按协议或路径给出不同答案,
+    // 拿 REST base 代替就是张冠李戴(Codex review P1)。
+    peerTransport.url = 'wss://relay.example.com/api/device-link/ws';
+    const probe = vi.fn(async () => ({
+      source: 'system' as const,
+      kind: 'proxy' as const,
+      proxy: 'http://127.0.0.1:7890',
+      upstream: 'wss://relay.example.com',
+      at: 0,
+    }));
+    await expect(
+      handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
+    ).resolves.toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+    expect(probe).toHaveBeenCalledWith(['wss://relay.example.com/api/device-link/ws']);
+  });
+
+  // Codex review P1:对端此刻走直连时,可靠帧走 directChannelForSend,中继那条 WebSocket
+  // 并不承载这次流量(应用/数据库超时就是这么来的)。这时探中继 URL 的代理,报出来的是
+  // 一条「自信的假提示」—— 用户看到「本机可能在走代理」,而卡住的那条路根本没走中转。
+  // 必须不给判定,一次探针都不发。
+  it('#9537 出站路径判定:对端当前走直连 → null,不探中继 URL 的代理', async () => {
+    peerDataPath.path = 'direct';
+    peerTransport.url = 'wss://relay.example.com/api/device-link/ws';
+    const probe = vi.fn(async () => ({
+      source: 'system' as const,
+      kind: 'proxy' as const,
+      proxy: 'http://127.0.0.1:7890',
+      upstream: 'wss://relay.example.com',
+      at: 0,
+    }));
+    await expect(
+      handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
+    ).resolves.toBeNull();
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  // 测试价值(#9537 review): 指名了设备、却查不到它实际走的 transport URL(主连接由
+  // agent-net 承载 / 对端在 scoped 路由连接上 / client 未就绪)时,这条对端根本不走
+  // 那两条 REST base。探它们得到的是无关端点的判定,报出来是一条自信的假提示 ——
+  // 必须直接返回 null,一次探针都不发。
+  it('#9537 出站路径判定:指名了设备但 transport URL 不可知 → null,不探 REST base', async () => {
+    const probe = vi.fn(async () => null);
+    await expect(
+      handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
+    ).resolves.toBeNull();
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  // Codex review P1:系统 / PAC 代理在 socket 建立之后被改过时,重新解析会得到与这条
+  // **活着的** socket 不同的结论 —— banner 于是指认一个根本没在用的代理,或者漏报真实
+  // 在用的那个。判定必须取自 socket 建连那一刻钉住的那份。
+  it('#9537 出站路径判定:有活着的 socket → 用它建连时钉住的判定,不重新解析当前配置', async () => {
+    peerPinnedProxy.decision = { kind: 'proxy', proxy: 'http://10.0.0.2:8080' };
+    peerTransport.url = 'wss://relay.example.com/api/device-link/ws';
+    const probe = vi.fn(async () => ({
+      source: 'system' as const,
+      kind: 'direct' as const,
+      upstream: 'wss://relay.example.com',
+      at: 0,
+    }));
+    await expect(
+      handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
+    ).resolves.toEqual({ kind: 'proxy', proxy: 'http://10.0.0.2:8080' });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  // 钉住的判定是「直连」时,如实回 direct(渲染侧据此不显示代理提示),同样不重新解析。
+  it('#9537 出站路径判定:钉住的判定是直连 → direct,不重新解析当前配置', async () => {
+    peerPinnedProxy.decision = { kind: 'direct', reason: 'no-proxy' };
+    peerTransport.url = 'wss://relay.example.com/api/device-link/ws';
+    const probe = vi.fn(async () => ({
+      source: 'system' as const,
+      kind: 'proxy' as const,
+      proxy: 'http://127.0.0.1:7890',
+      upstream: 'wss://relay.example.com',
+      at: 0,
+    }));
+    await expect(
+      handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
+    ).resolves.toEqual({ kind: 'direct', proxy: null });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('#9537 出站路径判定:没问出判定(unknown)照实透传、地址缺省归一 null;无快照 → null', async () => {
+    await expect(
+      handleGetProxyVerdict(
+        makeDeps({
+          probeProxyVerdict: vi.fn(async () => ({
+            source: 'env' as const,
+            kind: 'unknown' as const,
+            reason: 'resolve_failed' as const,
+            upstream: 'https://continuity.test.invalid',
+            at: 0,
+          })),
+        }),
+      ),
+    ).resolves.toEqual({ kind: 'unknown', proxy: null });
+    await expect(handleGetProxyVerdict(makeDeps())).resolves.toBeNull();
   });
 
   it('getState 透传待命状态', () => {

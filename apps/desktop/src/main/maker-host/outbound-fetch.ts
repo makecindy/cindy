@@ -1002,22 +1002,47 @@ const outboundUndiciFetch: typeof undiciFetch = async (input, init) => {
  * `wss://`;真遇到就记一次告警并直连,不静默。
  */
 async function createOutboundHttpAgent(url: string): Promise<NodeHttpAgent | undefined> {
+  return (await createOutboundHttpAgentWithDecision(url)).agent;
+}
+
+/**
+ * 取 socket 的代理 agent,并把**这次建连实际选中的出口**一并报出来。
+ *
+ * 诊断(#9537)要回答的是「活着的 socket 走没走代理」,不是「现在这份系统 / PAC 配置
+ * 解析出来是什么」—— socket 建立之后改了系统代理,再解析一次就会得到与这条 socket
+ * 不同的结论,banner 于是信心十足地指认一个根本没在用的代理(Codex review P1)。所以
+ * 判定必须与建连同一时刻产出,由调用方钉在这条连接上。
+ */
+async function createOutboundHttpAgentWithDecision(url: string): Promise<{
+  agent: NodeHttpAgent | undefined;
+  decision: OutboundSocketProxyDecision;
+}> {
   const upstream = parseUpstream(url);
-  if (!upstream) return undefined;
+  if (!upstream) {
+    return { agent: undefined, decision: { kind: 'direct', reason: 'unparsable-url' } };
+  }
   const proxy = await resolveProxyTarget(upstream);
-  if (!proxy) return undefined;
+  if (!proxy) {
+    return { agent: undefined, decision: { kind: 'direct', reason: 'no-proxy' } };
+  }
   const protocol = upstreamProtocol(upstream);
   if (proxy.kind === 'socks5') {
-    return protocol === 'https:' ? new Socks5HttpsAgent(proxy) : new Socks5HttpAgent(proxy);
+    return {
+      agent: protocol === 'https:' ? new Socks5HttpsAgent(proxy) : new Socks5HttpAgent(proxy),
+      decision: { kind: 'proxy', proxy: redactProxyUrlForLog(proxy.url) },
+    };
   }
   if (protocol !== 'https:') {
     warnOnce(`${protocol}//${upstream.host}`, 'plaintext-upstream-unsupported', {
       upstream: `${protocol}//${upstream.host}`,
       proxy: proxy.url,
     });
-    return undefined;
+    return { agent: undefined, decision: { kind: 'direct', reason: 'plaintext-refused' } };
   }
-  return new TunnelingHttpsAgent(proxy);
+  return {
+    agent: new TunnelingHttpsAgent(proxy),
+    decision: { kind: 'proxy', proxy: redactProxyUrlForLog(proxy.url) },
+  };
 }
 
 /** @internal 单测用:清空 dispatcher 池与告警去重状态。 */
@@ -1041,5 +1066,52 @@ function resetOutboundFetchStateForTest(): void {
   }
 }
 
-return { resolveConnectOptions, rewritePinnedProxyDispatchOptions, createPinnedProxyDispatcher, guardedOutboundFetch, resolveOutboundDispatcher, outboundFetch, outboundUndiciFetch, createOutboundHttpAgent, resetOutboundFetchStateForTest };
+return { resolveConnectOptions, rewritePinnedProxyDispatchOptions, createPinnedProxyDispatcher, guardedOutboundFetch, resolveOutboundDispatcher, outboundFetch, outboundUndiciFetch, createOutboundHttpAgent, createOutboundHttpAgentWithDecision, resetOutboundFetchStateForTest };
+}
+
+/**
+ * socket 建立时**钉住**的出站判定(#9537 诊断用):这条活着的 socket 到底走没走代理。
+ *
+ * kind='proxy' 时 `proxy` 是脱敏后的代理地址(scheme://host:port,不含凭证);kind='direct'
+ * 时 `reason` 说明为什么是直连(没配代理 / 明文上游拒用 HTTP 代理 / URL 解析不出来)。
+ * 「钉住」的含义:判定在建连那一刻产出,之后系统 / PAC 代理怎么改都不改 —— 诊断要报的
+ * 是这条 socket 的事实,不是当前配置的重新解析结果。
+ */
+export type OutboundSocketProxyDecision =
+  | { kind: 'direct'; reason: 'no-proxy' | 'plaintext-refused' | 'unparsable-url' }
+  | { kind: 'proxy'; proxy: string };
+
+/**
+ * 传输层的代理解析键(与真实 socket 同一把尺子):协议归一(ws→http / wss→https)+ host + path。
+ *
+ * 对外暴露是为了让**诊断探针**用同一把尺子:#9537 的连接诊断要回答的是「这个对端的真实
+ * socket 走不走代理」,而 env 代理按协议分槽(HTTPS_PROXY / HTTP_PROXY)、PAC 可以按 path
+ * 判定 —— 只送 origin 会让探针读到另一个槽、丢掉 path,判出来的路径与真实 socket 不是同一条。
+ *
+ * 规则与上面 createOutboundTransport 里真实请求用的 `resolveKeyOf` 是同一条;这里单独写一份
+ * 是因为那份关在工厂闭包里,而诊断侧(outbound-proxy-resolver)与工厂之间是初始化期环,
+ * 静态 import 工厂产物会在环上拿到半初始化的模块。改其中一处时两处一起改。
+ */
+export function transportProxyResolveKey(url: string): string {
+  let upstream: URL;
+  try {
+    upstream = new URL(url);
+  } catch {
+    return url;
+  }
+  const protocol = upstream.protocol === 'wss:' || upstream.protocol === 'https:' ? 'https:' : 'http:';
+  return `${protocol}//${upstream.host}${upstream.pathname}`;
+}
+
+/**
+ * 上游是不是**明文** WebSocket(`ws://`)。明文 ws 遇到 HTTP 代理时传输层拒用该代理
+ * (HTTP 代理下的明文上游走绝对形式请求,upgrade 握手必须是隧道,见工厂里的
+ * createOutboundHttpAgent)—— 实际是直连,诊断不能报「经代理」。
+ */
+export function transportIsPlaintextWebSocket(url: string): boolean {
+  try {
+    return new URL(url).protocol === 'ws:';
+  } catch {
+    return false;
+  }
 }

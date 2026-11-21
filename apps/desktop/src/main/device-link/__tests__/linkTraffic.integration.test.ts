@@ -21,7 +21,13 @@ vi.mock('../../appSessionState', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(session.directory, session.owner, ...parts),
   isAppSessionBoundaryPending: () => false,
 }));
-vi.mock('../../maker-host/outbound-fetch.desktop', () => ({ createOutboundHttpAgent: async () => undefined }));
+vi.mock('../../maker-host/outbound-fetch.desktop', () => ({
+  createOutboundHttpAgent: async () => undefined,
+  createOutboundHttpAgentWithDecision: async () => ({
+    agent: undefined,
+    decision: { kind: 'direct' as const, reason: 'no-proxy' as const },
+  }),
+}));
 
 it('counts encoded relay bytes once, pins late close bytes to their owner and restores both routes', async () => {
   session.directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-link-traffic-'));

@@ -143,3 +143,74 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
   return deriveRemoteConnectionStatus(isSharedTaskPeer(deviceId) || directReady ? 'online' : linkStatus,
     hostOnline || directReady, hostUnresponsive);
 }
+
+/**
+ * 出站路径诊断(#9537):degraded(通路不稳定)时探一次本机跨设备通道 origin 的代理判定。
+ * 只回传「已确证经 Proxy 出站」这一种事实(kind='proxy' + 脱敏地址);unknown / unsupported /
+ * direct / 探测失败一律 null —— `unknown` 是「没问出判定」的 fail-open 兜底,不是「确认无
+ * 代理」,不得当事实展示。降级恢复后清空,再次降级时重新探(用户可能中途改了系统代理)。
+ * deviceId 让 main 取这个对端实际走的 transport URL(协议 + path 都与真实 socket 一致)。
+ *
+ * 对端的数据面路径(直连↔中继)变了要**重探**:路径一变,承载这次流量的通路就换了,
+ * 旧判定针对的是另一条路 —— 直连化之后还挂着中继的代理提示,是条自信的假提示;反过来
+ * 从直连回到中继时也拿不到该有的提示(Codex review P1)。路径变化由 main 的
+ * STATUS_CHANGED(dataPathChangedDeviceId)告知,这里用代数把它并进探测的依赖。
+ *
+ * 主连接本身重建(relay↔relay 重连)不发 dataPathChangedDeviceId,只发
+ * PEER_LINK_REOPENED(index.ts 建链/受流时广播):新 socket 可能落在另一条出站
+ * 通路上,旧判定同样作废,一并计入 pathEpoch(Codex review P1)。
+ */
+export function useOutboundProxyVerdict(
+  active: boolean,
+  deviceId?: string,
+): DeviceLinkProxyVerdict | null {
+  const [verdict, setVerdict] = useState<DeviceLinkProxyVerdict | null>(null);
+  // 对端数据面路径变化的代数:变了就重探(见上面的注释)。
+  const [pathEpoch, setPathEpoch] = useState(0);
+
+  useEffect(() => {
+    if (!active || !deviceId) return;
+    let cancelled = false;
+    const bump = () => setPathEpoch((e) => e + 1);
+    const off = window.electronAPI.deviceLink.onStatusChanged((p) => {
+      if (cancelled) return;
+      if (p.dataPathChangedDeviceId !== deviceId) return;
+      bump();
+    });
+    const offReopened = window.electronAPI.deviceLink.onPeerLinkReopened?.((p) => {
+      if (cancelled) return;
+      if (p.deviceId !== deviceId) return;
+      bump();
+    });
+    return () => {
+      cancelled = true;
+      off();
+      offReopened?.();
+    };
+  }, [active, deviceId]);
+
+  useEffect(() => {
+    if (!active) {
+      setVerdict(null);
+      return;
+    }
+    // 每次探测开始前先清空:换对端(同一路由组件复用,只有 deviceId 变)时,新探测还没
+    // 回来之前不能把上一家的代理提示挂在新对端上;探测被拒时也一样 —— 不清的话上一次的
+    // 判定会一直留在界面上,新对端永远顶着别人的提示。
+    setVerdict(null);
+    let cancelled = false;
+    void window.electronAPI.deviceLink
+      .getProxyVerdict(deviceId)
+      .then((v) => {
+        if (!cancelled) setVerdict(v && v.kind === 'proxy' ? v : null);
+      })
+      .catch(() => {
+        /* 诊断不可用 → 不提示,静默失败。旧判定已在探测开始前清空,这里不必再动。 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, deviceId, pathEpoch]);
+
+  return active ? verdict : null;
+}
