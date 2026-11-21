@@ -518,7 +518,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   /** A device the directory has online and this side is not connected to: the lower id dials now, the other side if that dial does not come (LATE_DIAL_MS). */
   private dialOnline(id: string, view: DeviceView): void {
     if (!view.online || id === this.deviceId || !this.memberAccepted(id)) return;
-    if (this.deviceId < id) void this.dial(id).catch(() => undefined);
+    if (this.deviceId < id) void this.dial(id).catch(() => this.scheduleRedial(id));
     else this.scheduleRedial(id);
   }
   private memberAccepted(deviceId: string): boolean {
