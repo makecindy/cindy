@@ -116,6 +116,28 @@ export function browserViewportScript(viewport: BrowserViewport): string {
   })(); true;`;
 }
 
+/**
+ * Reopen a rebuilt page at CSS offsets. Layout can still grow after load (fonts, images),
+ * so retry briefly; any touch, wheel or key input hands scrolling back to the reader.
+ */
+export function browserScrollRestoreScript(x: number, y: number): string {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || (x <= 0 && y <= 0)) return 'true;';
+  return `(() => {
+    const x = ${JSON.stringify(Math.max(0, x))}, y = ${JSON.stringify(Math.max(0, y))}, started = Date.now();
+    const inputs = ['touchstart', 'wheel', 'keydown'];
+    let timer = 0;
+    const stop = () => { clearTimeout(timer); inputs.forEach(type => window.removeEventListener(type, stop, true)); };
+    inputs.forEach(type => window.addEventListener(type, stop, { capture: true, passive: true }));
+    const attempt = () => {
+      window.scrollTo(x, y);
+      const reached = Math.abs(window.scrollX - x) < 2 && Math.abs(window.scrollY - y) < 2;
+      if ((reached && document.readyState === 'complete') || Date.now() - started > 3000) stop();
+      else timer = setTimeout(attempt, 100);
+    };
+    attempt();
+  })(); true;`;
+}
+
 /** UIKit offset includes the negative initial contentInset; window.scrollY does not. */
 export function browserViewportScrollScript(x: number, y: number): string {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return 'true;';
