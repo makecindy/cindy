@@ -25,6 +25,13 @@ const messages: ChatMessage[] = [
   text('stage-3', '已经继续获取任务信息，接下来核对未完成 PR 的当前状态。', 'commentary'),
   text('stage-4', '任务与 PR 的信息已核对，正在整理成便于你校正口径的摘要。', 'commentary'),
 ];
+const scheduledReportMessages: ChatMessage[] = [
+  text('other-work', '正在处理另一项请求。', 'commentary'),
+  {
+    ...text('schedule-main-chat-report:sample-run', '## 邮箱日检\n\n有一项需要关注：合成样例的确认单今天到期。', 'final_answer'),
+    turnCompleted: true,
+  },
+];
 const retryMessages: ChatMessage[] = [
   { ...text('retry-ask', '查看当前启用的技能。'), role: 'user' },
   { ...text('retry-one', ''), role: 'tool_use', toolName: 'mcp__helper__call_tool', toolInput: { name: 'list_skills' }, toolUseId: 'retry-one' },
@@ -176,5 +183,10 @@ void mountPage({
       return { kind: missing ? 'missing' : 'file', birthtimeMs: Date.now() - 46000, mtimeMs: Date.now() - 46000 };
     } },
   }),
-  render: ctx => <Subject columns={ctx.data.columns === true} ordinary={ctx.data.ordinary === true} unread={ctx.data.unread === true} switched={ctx.data.switched === true} done={ctx.data.done === true} retry={ctx.data.retry === true} refresh={ctx.data.refresh === true} disclosure={ctx.data.disclosure === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
+  render: ctx => ctx.case === 'scheduled-report' ? (
+    <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
+      <MessageStream workingDir="" historyLoaded isSessionStreaming simplifiedBotConversation messages={scheduledReportMessages}
+        assistantAvatar={<span data-testid="fixture-partner-avatar"><BotAvatar bot={{ id: 'fixture', name: '合成测试伙伴', avatar: 'cindy://avatar/preset/cindy' }} size="sm" /></span>} />
+    </div>
+  ) : <Subject columns={ctx.data.columns === true} ordinary={ctx.data.ordinary === true} unread={ctx.data.unread === true} switched={ctx.data.switched === true} done={ctx.data.done === true} retry={ctx.data.retry === true} refresh={ctx.data.refresh === true} disclosure={ctx.data.disclosure === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
 });

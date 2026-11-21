@@ -54,6 +54,19 @@ it('keeps working prose through streaming metadata and tools, folding only after
 });
 
 describe('teammate final-result presentation', () => {
+  // A scheduled report between process and ordinary reply owns its unread
+  // boundary without moving the ordinary turn's boundary to the report.
+  it('keeps an interleaved report separate from the ordinary reply and its unread boundary', () => {
+    const process: RenderItem = { type: 'work_group', key: 'process', children: [tool('one')], isStreaming: false };
+    const report = message('schedule-main-chat-report:run', 'assistant', 'Scheduled report', { turnCompleted: true });
+    const ordinary = message('ordinary', 'assistant', 'Ordinary reply', { turnCompleted: true });
+    const items = [process, report, ordinary];
+    const continuations = botTurnContinuations(items);
+    expect([...continuations]).toEqual([ordinary.key]);
+    expect(botUnreadBoundaryItemKey(items, report.message.clientId, continuations)).toBe(report.key);
+    expect(botUnreadBoundaryItemKey(items, ordinary.message.clientId, continuations)).toBe(process.key);
+  });
+
   // User screenshot: NEW split one portrait's process from its result. The old
   // unread tests only selected a message ID, never its production render group.
   // Unit tier: group real process/reply items, then assert the displayed boundary.

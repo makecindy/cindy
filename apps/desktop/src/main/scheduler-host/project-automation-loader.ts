@@ -39,6 +39,13 @@ export interface ProjectAutomationsFile {
   schedules: ProjectScheduleConfig[];
 }
 
+interface ProjectScheduleSaveOptions {
+  /** Host writers must not replace a file they cannot read whole. */
+  keepUnreadable?: boolean;
+  /** The desktop form does not edit the report destination. */
+  preserveReportDelivery?: boolean;
+}
+
 export interface ProjectScheduleConfig {
   id: string;
   name: string;
@@ -64,6 +71,8 @@ export interface ProjectScheduleConfig {
   useWorktree?: boolean;
   persistentSession?: boolean;
   silentWhenIdle?: boolean;
+  /** Opt-in for the canonical chat of this declaration's own teammate project. */
+  deliverReportToMainChat?: boolean;
   /**
    * 前置检查脚本(Pre-run Hook)。省略 = 未启用;reconcile 恒带 key,配置文件里
    * 删掉即清空 DB 里的 hook。与 renderer projectAutomationConfig.ts 同形。
@@ -277,16 +286,21 @@ export class ProjectAutomationLoader {
   async upsertSchedule(
     workingDir: string,
     config: ProjectScheduleConfig,
-    /** Host writers (a teammate's own automations) must not replace a file they cannot read whole. */
-    options: { keepUnreadable?: boolean } = {},
+    options: ProjectScheduleSaveOptions = {},
   ): Promise<ReconcileResult> {
     return this.serializeProjectMutation(workingDir, () => this.upsertScheduleUnlocked(workingDir, config, options));
+  }
+
+  async deliversReportToMainChat(workingDir: string, id: string): Promise<boolean> {
+    const read = await this.readProjectAutomationsFromDisk(workingDir);
+    return read.kind === 'loaded' &&
+      read.schedules.find(schedule => schedule.id === id)?.deliverReportToMainChat === true;
   }
 
   private async upsertScheduleUnlocked(
     workingDir: string,
     config: ProjectScheduleConfig,
-    options: { keepUnreadable?: boolean },
+    options: ProjectScheduleSaveOptions,
   ): Promise<ReconcileResult> {
     if (await this.deps.getTeammateProjectState?.(workingDirKey(workingDir)) === 'deleted') {
       const err = new Error('project automations belong to a deleted teammate');
@@ -306,11 +320,18 @@ export class ProjectAutomationLoader {
       throw err;
     }
     const schedules = read.kind === 'loaded' ? read.schedules : [];
+    // Project editors that do not surface this option must preserve explicit choices.
+    // false disables it; an omitted field on an editor save has no opinion.
+    const previousDelivery = schedules.find(item => item.id === config.id)?.deliverReportToMainChat;
+    const savedConfig = options.preserveReportDelivery &&
+      config.deliverReportToMainChat === undefined && previousDelivery !== undefined
+      ? { ...config, deliverReportToMainChat: previousDelivery }
+      : config;
     const next: ProjectAutomationsFile = {
       version: 1,
       schedules: [
         ...schedules.filter((item) => item.id !== config.id),
-        config,
+        savedConfig,
       ],
     };
     const writtenContent = await this.writeProjectAutomationsFile(workingDir, next);
@@ -724,6 +745,7 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     optionalBoolean(config.useWorktree) &&
     optionalBoolean(config.persistentSession) &&
     optionalBoolean(config.silentWhenIdle) &&
+    optionalBoolean(config.deliverReportToMainChat) &&
     optionalPreRunHook(config.preRunHook) &&
     optionalNotify(config.notify)
   );

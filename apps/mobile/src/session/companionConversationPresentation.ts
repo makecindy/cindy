@@ -2,7 +2,7 @@ import { groupTeammateProcess } from '@cindy/maker-shared/message-render';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
-import { collectBotTurnContinuations } from '@cindy/maker-shared/botTimeline';
+import { collectBotTurnContinuations, isTeammateScheduledReport } from '@cindy/maker-shared/botTimeline';
 import type { MobileMessageRenderItem, MobileWorkGroupItem, MobileWorkChildItem } from './messageRenderModel';
 
 export function companionTurnContinuations(items: readonly MobileMessageRenderItem[]): ReadonlySet<string> {
@@ -12,7 +12,7 @@ export function companionTurnContinuations(items: readonly MobileMessageRenderIt
     return {
       kind: item.type === 'work_group' ? 'process'
         : item.type === 'message' && item.message.kind === 'assistant' && !item.message.systemCardType
-          && !item.message.companion ? 'reply'
+          && !item.message.companion ? isTeammateScheduledReport(item.message.source.clientId) ? 'standalone-reply' : 'reply'
         : item.type === 'message' && item.message.companion ? 'artifact'
         : item.type === 'message' || item.type === 'pending_send' || item.type === 'fork_origin' ? 'boundary' : 'artifact',
       completed: item.type === 'message' && item.message.turnCompleted === true,
@@ -79,6 +79,7 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
   let sealedRun = false;
   let nextAssistantAt: number | null = null;
   for (const item of expandWorkGroups(items).reverse()) {
+    if (item.type === 'message' && item.message.kind === 'assistant' && isTeammateScheduledReport(item.message.source.clientId)) continue;
     if (item.type !== 'message' || item.message.kind !== 'assistant' || item.message.failedSamplingAttempt || !item.message.body.trim() || item.message.systemCardType
       || item.message.source.agentMeta?.assistantPhase === 'commentary') {
       sealedRun = false;
@@ -136,6 +137,7 @@ export function companionProcessItems(items: readonly MobileMessageRenderItem[],
     const item = visible[i]!;
     if (item.type !== 'message' || item.message.kind !== 'assistant' || item.message.systemCardType
       || item.message.source.agentMeta?.assistantPhase === 'commentary') { sealed = false; continue; }
+    if (isTeammateScheduledReport(item.message.source.clientId)) { addressed.add(item); continue; }
     sealed ||= item.message.turnCompleted === true || item.message.source.agentMeta?.assistantPhase === 'final_answer';
     if (sealed || item.message.sourceGroup || item.message.explicitDelivery || hasRichAnswer(item.message.body)) addressed.add(item);
   }
@@ -146,7 +148,8 @@ export function companionProcessItems(items: readonly MobileMessageRenderItem[],
     const at = 'message' in item ? Date.parse(item.message.createdAt) : 'createdAt' in item && typeof item.createdAt === 'string' ? Date.parse(item.createdAt) : NaN;
     return Number.isFinite(at) ? at : null;
   };
-  const lastCompleted = visible.findLastIndex(item => item.type === 'message' && item.message.turnCompleted === true);
+  const lastCompleted = visible.findLastIndex(item => item.type === 'message' && item.message.turnCompleted === true
+    && !isTeammateScheduledReport(item.message.source.clientId));
   const liveItems = new Set(isStreaming ? visible.slice(Math.max(lastUser, lastCompleted) + 1) : []);
   return groupTeammateProcess(visible, {
     children: item => item.type === 'work_group' ? item.children : undefined,

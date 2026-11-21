@@ -127,7 +127,7 @@ export function registerProjectAutomationIpc(
       const config = requireObject(body.config, 'config') as unknown as ProjectScheduleConfig;
       try {
         const loader = await getReadyLoader();
-        return await loader.upsertSchedule(workingDir, config);
+        return await loader.upsertSchedule(workingDir, config, { preserveReportDelivery: true });
       } catch (err) {
         rewrapProjectAutomationError(err);
       }

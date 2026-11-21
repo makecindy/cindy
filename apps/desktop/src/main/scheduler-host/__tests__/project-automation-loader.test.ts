@@ -16,6 +16,24 @@ import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../shared/projectAutomati
 
 const workingDir = 'C:\\project';
 
+// Unit: the real declaration reader and editor preserve explicit report opt-in
+// across an unrelated save. Previous fixtures have no fields read at run settlement.
+it('keeps the project report destination until explicitly disabled', async () => {
+  await withConcurrentProject(async ({ dir, loader }) => {
+    const config = projectConfig();
+    expect(await loader.deliversReportToMainChat(dir, config.id)).toBe(false);
+    await loader.upsertSchedule(dir, { ...config, deliverReportToMainChat: true });
+    expect(await loader.deliversReportToMainChat(dir, config.id)).toBe(true);
+    await loader.upsertSchedule(dir, { ...config, prompt: 'Updated prompt' }, { preserveReportDelivery: true });
+    expect(await loader.deliversReportToMainChat(dir, config.id)).toBe(true);
+    await loader.upsertSchedule(dir, { ...config, deliverReportToMainChat: false });
+    expect(await loader.deliversReportToMainChat(dir, config.id)).toBe(false);
+    await loader.upsertSchedule(dir, { ...config, deliverReportToMainChat: true });
+    await loader.upsertSchedule(dir, config, { keepUnreadable: true });
+    expect(await loader.deliversReportToMainChat(dir, config.id)).toBe(false);
+  });
+});
+
 // #11134 / unit: real loader + Scheduler updates + database mapper round trips.
 // Existing coverage never changed a project definition after its first persistent
 // run had bound a task. Cover both writers and an already-saved stale binding;

@@ -99,7 +99,7 @@ vi.mock('@/session/messageActions', async (original) => ({ ...await original<obj
 
 import { MessageRenderer } from '@/session/MessageRenderer';
 import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
-import { companionConversationItems } from '@/session/companionConversationPresentation';
+import { companionConversationItems, companionProcessItems } from '@/session/companionConversationPresentation';
 import type { RemoteMessage } from '@/session/types';
 const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: Partial<RemoteMessage> = {}): RemoteMessage => ({ id, clientId: id, sessionId: 's', role, content, toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00Z', ...extra });
 
@@ -264,6 +264,33 @@ function renderClient(element: ReturnType<typeof createElement>): string {
 }
 
 describe('partner conversation presentation', () => {
+  // Unit: render a persisted automation result during an unrelated live turn.
+  // A completed-reply fixture alone cannot catch a report inheriting the process portrait.
+  it('shows a scheduled report once as its own assistant bubble with the companion portrait', () => {
+    const report = 'Synthetic scheduled report';
+    const items = companionProcessItems(buildMobileMessageRenderItems([
+      msg('progress', 'assistant', 'Working on another request', {
+        agentMeta: { assistantPhase: 'commentary' },
+      }),
+      msg('schedule-main-chat-report:sample-run', 'assistant', report, {
+        agentMeta: { turnCompleted: true, origin: {
+          kind: 'scheduler', scheduleId: 'sample-rule', scheduleName: 'Synthetic automation', runId: 'sample-run',
+        } },
+      }),
+    ], { isSessionStreaming: true }), true);
+    const host = document.createElement('div');
+    host.innerHTML = renderClient(<MessageRenderer items={items} companion isSessionStreaming
+      companionAvatar={<i data-testid="report-portrait" aria-label="合成测试伙伴" />} />);
+    const rendered = (viewportHarness.list.data as typeof items)
+      .flatMap((item, index) => item.type === 'message' && item.message.body === report ? [index] : []);
+    expect(rendered).toHaveLength(1);
+    const row = host.querySelectorAll('section')[rendered[0]].querySelector('[data-testid="companion.replyRow"]');
+    expect(row?.querySelector('[data-testid="message.agentBubble"]')).toBeTruthy();
+    expect(row?.querySelector('[data-testid="report-portrait"]')?.getAttribute('aria-label')).toBe('合成测试伙伴');
+    expect(row?.querySelector('[data-testid="message.userBubble"],[data-testid="message.automationOrigin"]')).toBeNull();
+    expect(row?.textContent).not.toMatch(/消息来源|Synthetic automation/);
+  });
+
   const result = (delegationId: string) => ({
     v: 1, role: 'delegation-result', delegationId, fromBotId: 'bot', fromBotName: 'Cindy',
     toBotId: null, toBotName: '', parentSessionId: 's', childSessionId: 'child', objective: 'Report',

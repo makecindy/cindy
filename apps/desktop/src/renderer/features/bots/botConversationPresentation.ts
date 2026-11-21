@@ -3,7 +3,7 @@ import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
-import { collectBotTurnContinuations } from '@cindy/maker-shared/botTimeline';
+import { collectBotTurnContinuations, isTeammateScheduledReport } from '@cindy/maker-shared/botTimeline';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import {
   isCompletedAssistantMessage,
@@ -19,7 +19,8 @@ type WorkGroupItem = Extract<RenderItem, { type: 'work_group' }>;
 export function botTurnContinuations(items: readonly RenderItem[]): ReadonlySet<string> {
   return collectBotTurnContinuations(items, item => ({
     kind: item.type === 'work_group' ? 'process'
-      : item.type === 'message' ? item.message.role === 'assistant' && !item.message.systemCardType ? 'reply'
+      : item.type === 'message' ? item.message.role === 'assistant' && !item.message.systemCardType
+        ? isTeammateScheduledReport(item.message.clientId) ? 'standalone-reply' : 'reply'
         : ['bot-session-task', 'bot-session-task-result', 'bot-session-task-message', 'bot-direct-message']
           .includes(item.message.systemCardType ?? '') ? 'artifact' : 'boundary'
       : item.type === 'fork_origin' ? 'boundary' : 'artifact',
@@ -39,6 +40,10 @@ export function botUnreadBoundaryItemKey(
   if (!unreadClientId) return null;
   let ownerKey: string | null = null;
   for (const item of items) {
+    if (isProse(item) && isTeammateScheduledReport(item.message.clientId)) {
+      if (item.message.clientId === unreadClientId) return item.key;
+      continue;
+    }
     const portraitRow = item.type === 'work_group' || isProse(item);
     if (portraitRow && (ownerKey === null || !continuations.has(item.key))) ownerKey = item.key;
     if (item.type === 'message' && item.message.clientId === unreadClientId) {
@@ -137,12 +142,14 @@ export function botProcessItems(
   for (let i = projected.length - 1; i >= 0; i--) {
     const item = projected[i]!;
     if (!isProse(item) || item.message.assistantPhase === 'commentary') { sealed = false; continue; }
+    if (isTeammateScheduledReport(item.message.clientId)) { addressed.add(item); continue; }
     sealed ||= isCompletedAssistantMessage(item.message) || item.message.assistantPhase === 'final_answer';
     if (sealed) addressed.add(item);
   }
   const lastUser = projected.findLastIndex(item => item.type === 'message' && item.message.role === 'user'
     && !item.message.isSyntheticTrigger && !item.message.systemCardType);
-  const lastCompleted = projected.findLastIndex(item => isProse(item) && isCompletedAssistantMessage(item.message));
+  const lastCompleted = projected.findLastIndex(item => isProse(item) && !isTeammateScheduledReport(item.message.clientId)
+    && isCompletedAssistantMessage(item.message));
   const liveItems = new Set(isStreaming ? projected.slice(Math.max(lastUser, lastCompleted) + 1) : []);
   return groupTeammateProcess(projected, {
     children: item => item.type === 'work_group' ? item.children : undefined,
@@ -324,6 +331,7 @@ function projectWindow(
   let sealedRun = false;
   for (let index = expanded.length - 1; index >= 0; index -= 1) {
     const item = expanded[index];
+    if (isProse(item) && isTeammateScheduledReport(item.message.clientId)) continue;
     if (!isProse(item) || !item.message.content.trim() || item.message.failedSamplingAttempt
       || item.message.assistantPhase === 'commentary') {
       sealedRun = false;

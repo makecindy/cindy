@@ -1,14 +1,20 @@
 import { HISTORY_GAP_SPLIT_MS } from './historyGap.js';
 
 export const BOT_MESSAGE_TIME_GROUP_MS = 5 * 60 * 1_000;
+export const TEAMMATE_SCHEDULED_REPORT_PREFIX = 'schedule-main-chat-report:';
+
+export function isTeammateScheduledReport(clientId: string): boolean {
+  return clientId.startsWith(TEAMMATE_SCHEDULED_REPORT_PREFIX);
+}
 
 /** Presentation only: process and reply rows keep their keys and share one portrait.
  * A sealed reply, visible boundary or unloaded history gap starts a new turn.
- * Artifacts do not claim a portrait or break the surrounding reply column. */
+ * Standalone reports get a separate portrait without changing the one used by
+ * the surrounding turn. Artifacts never claim a portrait. */
 export function collectBotTurnContinuations<T extends { key: string }>(
   items: readonly T[],
   describe: (item: T) => {
-    kind: 'process' | 'reply' | 'boundary' | 'artifact';
+    kind: 'process' | 'reply' | 'standalone-reply' | 'boundary' | 'artifact';
     completed?: boolean;
     start?: number | null;
     end?: number | null;

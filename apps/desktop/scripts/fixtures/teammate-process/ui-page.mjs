@@ -16,6 +16,7 @@ export default {
     'reply-columns-task': { about: 'Ordinary tasks keep their original unindented card column', data: { columns: true, ordinary: true } },
     'unread-turn': { about: 'NEW precedes the portrait and completed process instead of splitting the answer', data: { unread: true, done: true } },
     'unread-live': { about: 'NEW stays above the process as commentary folds on completion', data: { unread: true } },
+    'scheduled-report': { about: 'A scheduled result has its own companion portrait as an ordinary assistant reply during unrelated work' },
     'model-switch': { about: 'The existing switch notice stays visible between collapsed process records', data: { done: true, switched: true } },
     disclosure: { about: 'Frame-by-frame disclosure stability in a long companion conversation', data: { done: true, disclosure: true } },
     'disclosure-live': { about: 'Inspection survives completion, late updates and explicit follow', data: { disclosure: true } },
@@ -31,6 +32,17 @@ export default {
     'artifacts-missing': { about: 'Missing files leave no empty avatar row' },
   },
   async check(page, ui) {
+    if (ui.case === 'scheduled-report') {
+      const report = page.getByRole('heading', { name: '邮箱日检', exact: true });
+      await report.waitFor();
+      assert.equal(await report.count(), 1);
+      const row = report.locator('xpath=ancestor::*[@data-render-item-key][1]');
+      assert.equal(await row.locator('[data-plugin-appearance-speaker="assistant"]').count(), 1);
+      assert.equal(await row.getByTestId('fixture-partner-avatar').isVisible(), true);
+      assert.equal(await row.locator('[data-user-msg-id]').count(), 0);
+      assert.doesNotMatch(await row.innerText(), /消息来源|Message source/i);
+      return;
+    }
     if (ui.data.columns) {
       const reply = page.locator('[data-message-client-id="columns-answer"]');
       await reply.scrollIntoViewIfNeeded();
