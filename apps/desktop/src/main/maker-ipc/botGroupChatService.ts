@@ -94,7 +94,8 @@ type DispatchResult =
   | { ok: true; targetSessionId: string; wakeKind: string }
   | { ok: false; errorCode: string; message: string };
 
-type LaneResult = { ok: true; sessionId: string; created?: boolean; replacedSessionId?: string } | { ok: false; errorCode: string; message: string };
+/** `permissionSynced`: the lane was reused and its permission reconciled just now (`syncLanePermission`). */
+type LaneResult = { ok: true; sessionId: string; created?: boolean; replacedSessionId?: string; permissionSynced?: boolean } | { ok: false; errorCode: string; message: string };
 
 interface TurnExecution {
   instanceId: string;

@@ -3141,7 +3141,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           settings.plans[key] = run.workspace; settings.plans[run.plan.id] = run.workspace;
           workspaces().save(s.room.id, settings);
         }
-        await deps.syncLanePermission?.(lane.sessionId, bot.id);
+        // A reused lane was reconciled inside ensureLane, with nothing in between; a new or moved one still is here.
+        if (!lane.permissionSynced) await deps.syncLanePermission?.(lane.sessionId, bot.id);
         return { ...lane, name };
       })();
       const contextRead = (async () => {

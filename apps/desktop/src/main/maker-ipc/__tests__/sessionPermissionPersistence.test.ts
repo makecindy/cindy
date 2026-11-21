@@ -495,9 +495,12 @@ describe('permission persistence without a live runtime', () => {
       expect(h.patched).toHaveBeenCalledWith(id, { permissionMode: mainMode });
       expect(h.live.get(id)?.setPermissionMode).toHaveBeenCalledTimes(1);
     }
-    // Reload/next send keeps the repaired authority without another hot switch.
+    // Reload/next send keeps the repaired authority without another hot switch. The sibling above
+    // reads as unchanged in its own reconcile yet was told; a send that changes nothing tells nobody.
+    h.patched.mockClear();
     await syncBotLanePermission('lane');
     expect(h.live.get('lane')?.setPermissionMode).toHaveBeenCalledTimes(1);
+    expect(h.patched).not.toHaveBeenCalled();
   });
 
   it('serializes successive lane updates and discards an outgoing account continuation', async () => {
