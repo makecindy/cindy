@@ -1,6 +1,6 @@
 import { getActiveAppSession, type ActiveAppSession } from '../appSessionState.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
-import { forgetSilentContinuationProjection, markSessionSilentContinuationStarted } from '../localDb/sessionActiveTurn.js';
+import { markSessionSilentContinuationStarted, noteSilentContinuationSettled } from '../localDb/sessionActiveTurn.js';
 import {
   handleSilentStopTurnEndWithPorts,
   type SilentStopTurnEndPorts,
@@ -29,8 +29,8 @@ export async function handleDesktopSilentStopTurnEnd(
   await handleSilentStopTurnEndWithPorts(session, doneAt, turnLeaseId, turnOrigin, {
     ...ports,
     settleSilentStopDone: (...args) => {
-      if (getOwnerDb() && getBoundSession() === session) {
-        forgetSilentContinuationProjection(session.id, session.instanceId, args[4]);
+      if (getBoundSession() === session) {
+        noteSilentContinuationSettled(session.id, session.instanceId, args[4]);
       }
       return ports.settleSilentStopDone(...args);
     },

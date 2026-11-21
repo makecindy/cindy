@@ -1520,8 +1520,8 @@ export function registerSessionIpc(
     const dbClient = getDbClient();
     const row = await selectSessionWithCount(dbClient.drizzle, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    const productStartedAt = getSilentContinuationTiming(sid, row.activeTurnStartedAt, dbClient)?.startedAt ?? undefined;
-    return projectSessionDetail(row, opts.resolveContextWindow, productStartedAt);
+    const timing = getSilentContinuationTiming(sid, row.activeTurnStartedAt, dbClient);
+    return projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt);
   });
 
   /**

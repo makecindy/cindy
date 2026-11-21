@@ -28,6 +28,9 @@ import type { BrowserWindow } from 'electron';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getTableConfig } from 'drizzle-orm/sqlite-core';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { DbClient } from '../localDb/client/DbClient';
 import { botProfiles, botSessionLinks, messages, sessions } from '../localDb/schema';
 
@@ -156,10 +159,16 @@ vi.mock('../messagePersistBroadcaster.desktop', () => ({
 const drainSessionActiveTurnWrites = vi.fn((_sessionId: string): Promise<void> => Promise.resolve());
 const getSessionNotificationTurnSignal = vi.fn((_sessionId: string): { id: string; fallbackEventId: string; ended: boolean } | undefined => undefined);
 const getSilentContinuationTiming = vi.fn<typeof import('../localDb/sessionActiveTurn').getSilentContinuationTiming>();
+const startSilentMarker = vi.fn<typeof import('../localDb/sessionActiveTurn').markSessionSilentContinuationStarted>();
+const forgetSilentProjection = vi.fn<typeof import('../localDb/sessionActiveTurn').forgetSilentContinuationProjection>();
+const noteSilentSettlement = vi.fn<(sessionId: string, instanceId: string, generation: number) => void>();
 vi.mock('../localDb/sessionActiveTurn', () => ({
   drainSessionActiveTurnWrites: (sessionId: string) => drainSessionActiveTurnWrites(sessionId),
   getSessionNotificationTurnSignal: (sessionId: string) => getSessionNotificationTurnSignal(sessionId),
   getSilentContinuationTiming: (...args: Parameters<typeof getSilentContinuationTiming>) => getSilentContinuationTiming(...args),
+  markSessionSilentContinuationStarted: (...args: Parameters<typeof startSilentMarker>) => startSilentMarker(...args),
+  forgetSilentContinuationProjection: (...args: Parameters<typeof forgetSilentProjection>) => forgetSilentProjection(...args),
+  noteSilentContinuationSettled: (...args: Parameters<typeof noteSilentSettlement>) => noteSilentSettlement(...args),
 }));
 
 // L341 / unit with real SQLite and the real notification handler. A recovery
@@ -258,6 +267,158 @@ it.each(['parent', 'two continuations'] as const)('keeps the original mobile pre
     clearCurrentDbClient(client);
     marker._resetSessionActiveTurnStateForTests();
     sqlite.close();
+  }
+});
+
+// L341 D3 / unit. The handler's own settle branches used to discard the
+// original product timestamps. Run the same history, budget, and provider
+// outcomes through the Desktop handler and the shared handler without the
+// recovery port. Compare what actual notification IPC and the detail query
+// projection return, including the original reply and the /clear lower bound.
+it.each(['skip', 'budget', 'second send failure'] as const)('matches the parent terminal presentation after %s', async (scenario) => {
+  const { initNotificationService } = await freshService();
+  const { clearCurrentDbClient, setCurrentDbClient } = await import('../localDb/client/current');
+  const { commitVolatileAppSession, getActiveAppSession } = await import('../appSessionState');
+  const marker = await vi.importActual<typeof import('../localDb/sessionActiveTurn')>('../localDb/sessionActiveTurn');
+  const preview = await vi.importActual<typeof import('../localDb/sessionNotificationPreview')>('../localDb/sessionNotificationPreview');
+  const { projectSessionDetail } = await import('../localDb/sessionQueries');
+  const { handleDesktopSilentStopTurnEnd } = await import('../maker-ipc/silentStopTurnEnd.desktop');
+  const { handleSilentStopTurnEndWithPorts } = await import('../maker-ipc/silentStopTurnEnd');
+  const { SilentStopAutoResumeGuard } = await import('../maker-ipc/silentStopAutoResume');
+  const { SilentStopTurnLeaseGate } = await import('../maker-ipc/sessionTurnLease');
+  const { ProductTurnWallClockTracker } = await import('../maker-ipc/turnWallClock');
+  const sqlite = new Database(':memory:');
+  const db = drizzle(sqlite);
+  const client = { drizzle: db } as unknown as DbClient;
+  for (const table of [sessions, messages, botProfiles, botSessionLinks]) {
+    const { name, columns } = getTableConfig(table);
+    sqlite.exec(`CREATE TABLE "${name}" (${columns.map(column => `"${column.name}" ${column.getSQLType()}`).join(', ')})`);
+  }
+  const { configureUserDataDir } = await import('../userDataPath');
+  const userData = mkdtempSync(join(tmpdir(), 'cindy-l341-notification-'));
+  configureUserDataDir(userData);
+  const priorOwner = getActiveAppSession();
+  const owner = commitVolatileAppSession('cloud', 'settlement-fixture');
+  setCurrentDbClient(client, 'settlement-fixture');
+  const time = vi.spyOn(Date, 'now');
+  try {
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    drainSessionActiveTurnWrites.mockImplementation(marker.drainSessionActiveTurnWrites);
+    getSessionNotificationTurnSignal.mockImplementation(marker.getSessionNotificationTurnSignal);
+    readSessionNotificationPreview.mockImplementation(preview.readSessionNotificationPreview);
+    if (marker.getSilentContinuationTiming) getSilentContinuationTiming.mockImplementation(marker.getSilentContinuationTiming);
+    if (marker.markSessionSilentContinuationStarted) startSilentMarker.mockImplementation(marker.markSessionSilentContinuationStarted);
+    if (marker.forgetSilentContinuationProjection) forgetSilentProjection.mockImplementation(marker.forgetSilentContinuationProjection);
+    if (marker.noteSilentContinuationSettled) noteSilentSettlement.mockImplementation(marker.noteSilentContinuationSettled);
+
+    async function run(withRecovery: boolean) {
+      marker._resetSessionActiveTurnStateForTests();
+      const task = withRecovery ? 'desktop-settlement' : 'parent-settlement';
+      db.insert(sessions).values({ id: task, source: 'desktop', clearedAt: 900, createdAt: 1, updatedAt: 1 }).run();
+      db.insert(messages).values({
+        id: task, clientId: 'visible', sessionId: task, role: 'assistant', createdAt: 1050,
+        content: JSON.stringify('Product reply'), agentMeta: JSON.stringify({ turnCompleted: true, assistantPhase: 'final_answer' }),
+      }).run();
+      time.mockReturnValue(1000);
+      marker.markSessionTurnStarted(task);
+      await marker.drainSessionActiveTurnWrites(task);
+      const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+      const gate = new SilentStopTurnLeaseGate();
+      const guard = new SilentStopAutoResumeGuard({ isEnabled: () => true, log });
+      const clock = new ProductTurnWallClockTracker();
+      clock.start(task);
+      guard.noteUserSend(task);
+      let generation = 1;
+      let attempts = 0;
+      const instanceId = 'settlement-session';
+      const session = {
+        id: task, instanceId, getTurnGeneration: () => generation,
+        async sendHostTurnContinuation(_input: unknown, opts: Parameters<Session['sendHostTurnContinuation']>[1]) {
+          const prior = generation;
+          opts?.onTurnReserved?.(++generation);
+          await opts?.onAccepted?.();
+          opts?.onDispatching?.();
+          attempts++;
+          if (scenario === 'second send failure' && attempts === 2) {
+            generation = prior;
+            throw new Error('fixture: second provider send failed');
+          }
+          return { accepted: true };
+        },
+      } as unknown as Session;
+      const settle = vi.fn(async () => { clock.clear(task); });
+      const banner = vi.fn(async () => {});
+      const ports = {
+        silentStopTurnLeaseGate: gate,
+        agentInputCoordinatorHolder: null,
+        silentStopAutoResumeGuard: guard,
+        sessionListActivityTracker: { captureContinuation: () => () => {} },
+        productTurnWallClockTracker: clock, advanceRuntimeRecoveryNotice: () => {},
+        createDbMessage: async () => ({} as never),
+        settleSilentStopDone: settle, surfaceSilentStopExhaustedBanner: banner, log,
+      };
+      const decisions = scenario === 'budget' ? 3 : 2;
+      for (let index = 0; index < decisions; index++) {
+        const doneAt = 1100 + index * 6000;
+        time.mockReturnValue(doneAt);
+        marker.markSessionTurnEndedAfterBarrier(task, Promise.resolve(), { sessionInstanceId: instanceId, sessionTurnGeneration: generation });
+        await Promise.resolve();
+        await marker.drainSessionActiveTurnWrites(task);
+        const lease = `lease-${index}`;
+        expect(gate.schedule(task, session, lease)).toBe(true);
+        time.mockReturnValue(doneAt + 1500);
+        if (scenario === 'skip' && index === 1) guard.noteSessionReset(task);
+        if (withRecovery) {
+          await handleDesktopSilentStopTurnEnd(session, doneAt, lease, undefined, { ...ports, owner, getBoundSession: () => session });
+        } else {
+          await handleSilentStopTurnEndWithPorts(session, doneAt, lease, undefined, ports);
+        }
+        await marker.drainSessionActiveTurnWrites(task);
+        if (index + 1 < decisions) guard.noteTurnStarted(task);
+      }
+      expect(attempts).toBe(scenario === 'skip' ? 1 : 2);
+      expect(settle).toHaveBeenCalledOnce();
+      sendMobileSessionNotify.mockClear();
+      notificationCtor.mockClear();
+      const payload = { sessionId: task, title: 'Task', kind: 'done', channels: { desktop: true, mobile: true } };
+      await invokeHandler(payload, windowEvent(1));
+      await invokeHandler(payload, windowEvent(2));
+      const notice = await preview.readSessionNotificationPreview(task);
+      const row = db.select().from(sessions).all().find(entry => entry.id === task)!;
+      const timing = marker.getSilentContinuationTiming?.(task, row.activeTurnStartedAt, client);
+      const detail = projectSessionDetail({ ...row, messageCount: 1, latestMessageExtract: null, latestMessageRole: null },
+        undefined, timing?.startedAt ?? undefined, timing?.settledEndAt);
+      sqlite.prepare('UPDATE sessions SET cleared_at = 1060 WHERE id = ?').run(task);
+      const cleared = await preview.readSessionNotificationPreview(task);
+      const sends = sendMobileSessionNotify.mock.calls as unknown as Array<[{ sessionId: string; eventId: string; detail?: string }]>;
+      expect(sends).toHaveLength(1);
+      const [{ eventId, detail: reply }] = sends[0];
+      return {
+        eventId, reply, notice, cleared, signal: marker.getSessionNotificationTurnSignal(task),
+        elapsed: detail.turnElapsedMs, desktopCount: notificationCtor.mock.calls.length,
+        settlements: settle.mock.calls.length, failures: banner.mock.calls.length,
+      };
+    }
+
+    const parent = await run(false);
+    if (process.env.CINDY_L341_D3_REFERENCE_ONLY === '1') {
+      console.info('L341 D3 parent', scenario, JSON.stringify(parent));
+      return;
+    }
+    const desktop = await run(true);
+    if (process.env.CINDY_L341_D3_CAPTURE === '1') console.info('L341 D3 desktop', scenario, JSON.stringify(desktop));
+    expect(desktop).toEqual(parent);
+  } finally {
+    startSilentMarker.mockReset();
+    forgetSilentProjection.mockReset();
+    noteSilentSettlement.mockReset();
+    getSilentContinuationTiming.mockReset();
+    time.mockRestore();
+    clearCurrentDbClient(client);
+    marker._resetSessionActiveTurnStateForTests();
+    sqlite.close();
+    commitVolatileAppSession(priorOwner.mode, priorOwner.dataOwnerId);
+    rmSync(userData, { recursive: true, force: true });
   }
 });
 

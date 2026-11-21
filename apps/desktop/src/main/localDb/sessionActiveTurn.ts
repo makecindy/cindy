@@ -54,7 +54,7 @@ import type { AgentEvent } from '@cindy/maker-core';
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 
 import type { DbClient } from './client/DbClient.js';
-import { getDbClient } from './client/current';
+import { getDbClient, onCurrentDbClientInstalled } from './client/current';
 import { listCindyMakePendingFailureSessionIds } from './cindyMakeAttention';
 import {
   getSessionInterruptionBootAt,
@@ -168,6 +168,7 @@ interface SilentContinuationMarker {
   instanceId: string;
   generation: number;
   getOwnerDb(): DbClient | null;
+  writtenDb: DbClient;
   startedAt: number;
   previousStartedAt: number | null;
   logicalStartedAt: number | null;
@@ -175,9 +176,17 @@ interface SilentContinuationMarker {
   product: NotificationTurn | undefined;
   endedAt?: number;
   hideProjection?: boolean;
+  locallySettled?: boolean;
+  previous?: SilentContinuationMarker;
+  stopRollbackRetry?: () => void;
 }
 const continuationMarkers = new Map<string, SilentContinuationMarker>();
 type MarkerTerminal = Pick<AgentEvent, 'sessionInstanceId' | 'sessionTurnGeneration' | 'turnScope'>;
+
+function retireContinuationMarker(sessionId: string): void {
+  continuationMarkers.get(sessionId)?.stopRollbackRetry?.();
+  continuationMarkers.delete(sessionId);
+}
 
 const _notificationTurns = new Map<string, NotificationTurn>();
 let _notificationTurnSequence = 0;
@@ -237,7 +246,7 @@ function queueSessionTurnStarted(sessionId: string, durable: boolean): Promise<v
   if (_quitFrozen) return durable ? Promise.reject(new Error('Turn markers are frozen')) : Promise.resolve();
   const startedAt = Date.now();
   const db = captureMarkerDb();
-  continuationMarkers.delete(sessionId);
+  retireContinuationMarker(sessionId);
   _notificationTurns.set(sessionId, { startedAt, sequence: ++_notificationTurnSequence });
   return chainWrite(sessionId, async () => {
     try {
@@ -307,11 +316,13 @@ export async function markSessionSilentContinuationStarted(
         && previous.startedAt === prior.start && previous.getOwnerDb() === activeDb;
       const logicalEndedAt = (prior.end ?? 0) >= (prior.start ?? 0) ? prior.end : product?.endedAt ?? prior.end;
       marker = {
-        instanceId, generation, getOwnerDb, startedAt, previousStartedAt: prior.start, product,
+        instanceId, generation, getOwnerDb, writtenDb: current, startedAt, previousStartedAt: prior.start, product,
         logicalStartedAt: sameProduct ? previous.logicalStartedAt : prior.start,
         logicalEndedAt: sameProduct ? previous.logicalEndedAt : logicalEndedAt,
         hideProjection: !isCurrent(),
+        previous: sameProduct && previous.endedAt !== undefined && !previous.hideProjection ? previous : undefined,
       };
+      retireContinuationMarker(sessionId);
       continuationMarkers.set(sessionId, marker);
     } catch (error) {
       warn(error);
@@ -320,16 +331,21 @@ export async function markSessionSilentContinuationStarted(
 
   const written = marker;
   if (!written) return;
-  return () => {
+  const restore = () => {
     void chainWrite(sessionId, async () => {
       if (continuationMarkers.get(sessionId) !== written || written.endedAt !== undefined) return;
-      continuationMarkers.delete(sessionId);
       const db = written.getOwnerDb();
-      if (!db) return;
+      if (!db) return; // The receipt remains eligible when this account's connection returns.
       try {
-        await db.drizzle.update(sessions)
+        const result = await db.drizzle.update(sessions)
           .set({ activeTurnStartedAt: written.previousStartedAt })
           .where(and(eq(sessions.id, sessionId), eq(sessions.activeTurnStartedAt, written.startedAt))).run();
+        if (continuationMarkers.get(sessionId) !== written) return;
+        retireContinuationMarker(sessionId);
+        if (result.changes === 1 && written.previous) {
+          written.previous.locallySettled = true;
+          continuationMarkers.set(sessionId, written.previous);
+        }
       } catch (error) {
         log.warn('silent continuation marker restore failed', {
           sessionId, error: error instanceof Error ? error.message : String(error),
@@ -337,28 +353,43 @@ export async function markSessionSilentContinuationStarted(
       }
     });
   };
+  return () => {
+    if (continuationMarkers.get(sessionId) !== written || written.endedAt !== undefined) return;
+    written.stopRollbackRetry ??= onCurrentDbClientInstalled(restore);
+    restore();
+  };
 }
 
-export function forgetSilentContinuationProjection(sessionId: string, instanceId: string, generation?: number): void {
+export function noteSilentContinuationSettled(sessionId: string, instanceId: string, generation: number): void {
   const marker = continuationMarkers.get(sessionId);
-  if (marker?.instanceId === instanceId && (generation === undefined || marker.generation === generation)) {
+  if (marker?.instanceId === instanceId && marker.generation === generation) marker.locallySettled = true;
+}
+
+export function forgetSilentContinuationProjection(sessionId: string, instanceId: string): void {
+  const marker = continuationMarkers.get(sessionId);
+  if (marker?.instanceId !== instanceId) return;
+  if (marker.endedAt !== undefined) {
+    retireContinuationMarker(sessionId);
+  } else {
     // Keep the rollback receipt if the failed Session closes before reporting its result.
-    if (marker.endedAt === undefined) marker.hideProjection = true;
-    else continuationMarkers.delete(sessionId);
+    marker.hideProjection = true;
+    marker.previous = undefined;
   }
 }
 
 export function clearSilentContinuationMarkers(): void {
+  for (const marker of continuationMarkers.values()) marker.stopRollbackRetry?.();
   continuationMarkers.clear();
 }
 
 export function getSilentContinuationTiming(
   sessionId: string, persistedStart: number | null, client: DbClient,
-): { startedAt: number | null; endedAt: number | null } | undefined {
+): { startedAt: number | null; endedAt: number | null; settledEndAt?: number | null } | undefined {
   const marker = continuationMarkers.get(sessionId);
   if (marker && !marker.hideProjection && marker.startedAt === persistedStart &&
     marker.getOwnerDb() === client && _notificationTurns.get(sessionId) === marker.product) {
-    return { startedAt: marker.logicalStartedAt, endedAt: marker.logicalEndedAt ?? marker.product?.endedAt ?? null };
+    const endedAt = marker.logicalEndedAt ?? marker.product?.endedAt ?? null;
+    return { startedAt: marker.logicalStartedAt, endedAt, ...(marker.locallySettled && { settledEndAt: endedAt }) };
   }
 }
 
@@ -370,11 +401,12 @@ function endSilentContinuation(
   const marker = continuationMarkers.get(sessionId);
   if (!marker || !event || event.turnScope === 'background' || marker.instanceId !== event.sessionInstanceId ||
     marker.generation !== event.sessionTurnGeneration) return false;
-  const admittedDb = marker.getOwnerDb();
-  if (!admittedDb) return false;
+  const admittedDb = marker.getOwnerDb() ?? marker.writtenDb;
   if (marker.endedAt !== undefined) return true;
   const endedAt = Math.max(observedAt, marker.startedAt);
   marker.endedAt = endedAt;
+  marker.previous = undefined;
+  marker.stopRollbackRetry?.();
   // Advertise this write immediately to the existing notification drain. Only
   // the marked segment waits inside the chain; ordinary terminals retain their order.
   void chainWrite(sessionId, async () => {
@@ -910,7 +942,7 @@ function summarizeRecoveryContent(raw: string): string {
 export function _resetSessionActiveTurnStateForTests(): void {
   _writeChains.clear();
   _notificationTurns.clear();
-  continuationMarkers.clear();
+  clearSilentContinuationMarkers();
   _notificationTurnSequence = 0;
   _quitFrozen = false;
   _endedWriteSuppressions = 0;

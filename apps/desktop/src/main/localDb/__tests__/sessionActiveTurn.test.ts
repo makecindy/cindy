@@ -1034,6 +1034,48 @@ describe('sessionActiveTurn', () => {
     expect(await h.reopen()).toEqual([]);
   });
 
+  // L341 D4 / standard: provider rejection holds a real durable start while
+  // the owner connection is absent. Installing the same file reconciles the
+  // receipt, while an unrelated account or a replacement input cannot use it.
+  it.each(['same product', 'new user turn'] as const)('retries an undispatched start after reconnect for %s', async (scenario) => {
+    const h = await silentContinuation();
+    const originalHandle = rawDb!;
+    const send = h.send.getMockImplementation()!;
+    h.send.mockImplementationOnce(async () => {
+      await send();
+      clearCurrentDbClient(h.db);
+      throw new TurnDispatchRejectedError('fixture rejects during connection replacement');
+    });
+    await h.run();
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(h.settle).toHaveBeenCalledOnce();
+    expect(await readMarks(h.db, h.id)).toEqual({
+      active_turn_started_at: h.resumedAt, last_turn_ended_at: h.oldEndedAt,
+    });
+
+    const other = createTestDbClient(h.file + '.other', false, 'next-user');
+    await seedSession(other, h.id, { startedAt: h.resumedAt, endedAt: h.oldEndedAt });
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    expect(await readMarks(other, h.id)).toEqual({
+      active_turn_started_at: h.resumedAt, last_turn_ended_at: h.oldEndedAt,
+    });
+    originalHandle.close();
+
+    const replacement = h.reopenCurrentConnection();
+    const expectedStart = scenario === 'same product' ? h.startedAt : h.tick();
+    if (scenario === 'new user turn') {
+      h.send.mockResolvedValueOnce(undefined);
+      const send = h.session.send('next input');
+      h.markers.markSessionTurnStarted(h.id);
+      await send;
+    }
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    expect(await readMarks(replacement, h.id)).toEqual({
+      active_turn_started_at: expectedStart, last_turn_ended_at: h.oldEndedAt,
+    });
+  });
+
   it('does not end a new turn if a previous continuation is definitively rejected late', async () => {
     const h = await silentContinuation();
     h.send.mockImplementationOnce(async () => {
