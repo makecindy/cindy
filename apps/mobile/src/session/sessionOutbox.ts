@@ -212,6 +212,7 @@ export interface MobileOutboxDisplayItem {
   failed: boolean;
   /** 已交给电脑(发送中 / 待确认 / 电脑已接手):断线时不是「等着发」,而是在等对账。 */
   dispatching?: boolean;
+  pendingDelivery?: boolean;
   /** 本机写入发件箱的时刻(手机时钟),跨重启稳定,用于伙伴对话的时间分隔。 */
   sentAt?: number;
   /** False while a first-message creation record still owns recovery of the draft. */
