@@ -18,11 +18,13 @@ import { useDeviceLinkDeviceListRequestState } from './useDeviceLinkDeviceList';
  */
 export const FIRST_CONNECTION_WINDOW_MS = 30_000;
 /**
- * A window timer this late (wall clock) means the computer slept through it: the window opened
- * at suspend (the client goes `connecting` before sleep, and waking sends no new status). Hidden
- * windows' timers are throttled by about a minute at most, so this needs a real sleep.
+ * A window timer this late (wall clock) means the computer slept through part of it: the window
+ * opened at suspend (the client goes `connecting` before sleep, and waking sends no new status),
+ * so even a one-minute sleep must give the connection after waking its own window. A hidden,
+ * throttled window can also fire this late; that only re-opens a window nobody is looking at,
+ * and once visible its timer fires on time, so the window still ends within 30 visible seconds.
  */
-const SLEPT_THROUGH_MS = 2 * 60_000;
+const SLEPT_THROUGH_MS = 5_000;
 
 type LinkStatus = 'stopped' | 'connecting' | 'online';
 let started = false;
@@ -44,7 +46,7 @@ function openWindow(durationMs: number): void {
     if (token !== windowToken) return;
     windowTimer = null;
     // Slept through it: the connection after waking gets its own window. Each extension
-    // needs another real sleep, so an awake computer always reaches the end.
+    // needs another late timer, so an awake, visible computer always reaches the end.
     if (linkStatus !== 'online' && Date.now() - openedAt > Math.max(0, durationMs) + SLEPT_THROUGH_MS) {
       openWindow(FIRST_CONNECTION_WINDOW_MS);
       return;

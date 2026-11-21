@@ -351,13 +351,13 @@ it.each([['stopped', true], ['connecting', true], ['connecting', false]] as cons
 // The client goes `connecting` at suspend and waking sends no new status, so the window opened
 // before sleep. A timer that fires long after its deadline slept through it; the connection
 // after waking gets its own window instead of an immediate offline/takeover.
-it('gives the connection after waking its own window when the computer slept through one', async () => {
+it.each([['one minute', 60_000], ['a night', 8 * 60 * 60_000]] as const)('gives the connection after waking its own window when the computer slept for %s during one', async (_label, sleptMs) => {
   homeOfflineActor();
   vi.useFakeTimers();
   try {
     act(() => h.relayStatus?.({ status: 'connecting' }));
     render(<RemoteBotSessionView />);
-    act(() => { vi.setSystemTime(Date.now() + 8 * 60 * 60_000); });
+    act(() => { vi.setSystemTime(Date.now() + sleptMs); });
     act(() => { vi.advanceTimersByTime(FIRST_CONNECTION_WINDOW_MS); });
     expect(screen.getByText('ccAgent.sidebar.machineSwitcher.connecting')).toBeTruthy();
     expect(h.cloudView).not.toHaveBeenCalled();
