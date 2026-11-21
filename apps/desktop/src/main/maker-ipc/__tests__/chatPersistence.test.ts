@@ -18,13 +18,15 @@ vi.mock('../../cindy-media/ledger.js', () => ({ hasRef: async () => false, pinBl
 import { chatSendJournal } from '../chatSendJournal.js';
 import { accessBotGroupOutbox } from '../botGroupOutboxStorage.js';
 import { accessChatDisplayCache } from '../chatDisplayCache.js';
+import { companionHomes } from '../../companion-cloud/homes.js';
+import { extractIpcError } from '../../../shared/ipcError.js';
 
 beforeEach(() => {
   state.root = mkdtempSync(path.join(tmpdir(), 'cindy-chat-persistence-'));
   state.owner = { dataOwnerId: 'a', generation: 1 };
   state.pin.mockReset().mockResolvedValue(undefined); state.add.mockReset().mockResolvedValue('ref'); state.remove.mockReset().mockResolvedValue(1);
 });
-afterEach(() => rmSync(state.root, { recursive: true, force: true }));
+afterEach(() => { companionHomes.reset(); rmSync(state.root, { recursive: true, force: true }); });
 
 it('restores display snapshots, removes them durably and rejects late writes from another login', () => {
   const owner = state.owner;
@@ -91,4 +93,137 @@ it('restores a companion broadcast unchanged for a lost-receipt retry', async ()
   restarted.confirm(restored!.input.clientId, restored!.signature as string, 'broadcast-receipt');
   expect(chatSendJournal('https://chat.example', () => state.owner === owner)
     .read(restored!.input.clientId, restored!.signature as string)).toMatchObject({ receipt: 'broadcast-receipt' });
+});
+
+// #9760 / #8350, unit tier: real shared display-cache file. Prior tests only
+// covered one writer. A stale window must not undo a newer window's deletion.
+it('keeps cloud tombstones even when a stale window still lists the removed actor', () => {
+  const owner = state.owner;
+  const hydrated = accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }) as { retirementRevision: number };
+  const value = { enabled: true, actors: [], retiredBotIds: ['mia'], newlyRetiredBotIds: ['mia'], retirementRevision: hydrated.retirementRevision };
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value });
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner,
+    value: { enabled: true, actors: [{ externalId: 'mia' }], retiredBotIds: [] } });
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner })).toMatchObject({ retiredBotIds: ['mia'] });
+});
+
+// A real active actor after retirement can restore the same identity; a stored
+// revival is one-shot metadata and must not be replayed on the next window read.
+it('revives a known retired identity explicitly and keeps account caches separate', () => {
+  const owner = state.owner;
+  const hydrated = accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }) as { retirementRevision: number };
+  const retired = accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: { actors: [], retiredBotIds: ['mia'], newlyRetiredBotIds: ['mia'], retirementRevision: hydrated.retirementRevision } }) as { retirementRevision: number };
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner,
+    value: { actors: [{ externalId: 'mia' }], retiredBotIds: [], revivedBotIds: ['mia'], retirementRevision: retired.retirementRevision } });
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner })).toMatchObject({ actors: [{ externalId: 'mia' }], retiredBotIds: [] });
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner })).not.toHaveProperty('revivedBotIds');
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner })).not.toHaveProperty('newlyRetiredBotIds');
+  state.owner = { dataOwnerId: 'b', generation: 2 };
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner: state.owner })).toEqual({ retirementRevision: expect.any(Number) });
+  expect(() => accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: {} })).toThrow('OWNER_CHANGED');
+});
+
+// A revival prepared before a newer retirement must not erase that deletion.
+it.each(['after revival', 'while retired'])('rejects a stale revival after a newer deletion (%s)', phase => {
+  const owner = state.owner;
+  const hydrated = accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }) as { retirementRevision: number };
+  const retired = accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: { actors: [], retiredBotIds: ['mia'], newlyRetiredBotIds: ['mia'], retirementRevision: hydrated.retirementRevision } }) as { retirementRevision: number };
+  const revival = { actors: [{ externalId: 'mia' }], retiredBotIds: [], revivedBotIds: ['mia'], retirementRevision: retired.retirementRevision };
+  if (phase === 'after revival') accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: revival });
+  const current = accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }) as { retirementRevision: number };
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: { actors: [], retiredBotIds: ['mia'], newlyRetiredBotIds: ['mia'], retirementRevision: current.retirementRevision } });
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: revival });
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner })).toMatchObject({ retiredBotIds: ['mia'] });
+});
+
+// #9760 review F1: rejected writes cross IPC; callers must receive typed errors
+// while failed writes leave the authoritative deletion intact.
+it('encodes unhydrated and invalid cloud cache writes without losing tombstones', () => {
+  const owner = state.owner;
+  const write = (value: unknown) => accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value });
+  const errorCode = (value: unknown) => {
+    try { write(value); } catch (error) {
+      // Electron forwards the message without custom Error properties.
+      const forwarded = new Error(`Error invoking remote method: Error: ${(error as Error).message}`);
+      return extractIpcError(forwarded)?.code;
+    }
+    return null;
+  };
+  expect(errorCode({ actors: [] })).toBe('PRECONDITION_FAILED');
+  const hydrated = accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }) as { retirementRevision: number };
+  write({ actors: [], retiredBotIds: ['mia'], newlyRetiredBotIds: ['mia'], retirementRevision: hydrated.retirementRevision });
+  expect(errorCode([])).toBe('INVALID_PARAMS');
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner })).toMatchObject({ retiredBotIds: ['mia'] });
+});
+
+// #11303 review: a dormant window's saved retirement is history, not a new deletion.
+// Unit tier, real shared cache: retire -> revive in A -> B writes its old snapshot.
+it('keeps a revived identity and its roster when another window writes retirement history', () => {
+  const owner = state.owner;
+  const hydrated = accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }) as { retirementRevision: number };
+  const retired = accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner,
+    value: { actors: [], retiredBotIds: ['mia'], newlyRetiredBotIds: ['mia'], retirementRevision: hydrated.retirementRevision } }) as { retirementRevision: number };
+  const dormant = { actors: [], retiredBotIds: ['mia'], newlyRetiredBotIds: [], retirementRevision: retired.retirementRevision };
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner,
+    value: { actors: [{ externalId: 'mia' }], retiredBotIds: [], revivedBotIds: ['mia'], retirementRevision: retired.retirementRevision } });
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: dormant });
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }))
+    .toMatchObject({ actors: [{ externalId: 'mia' }], retiredBotIds: [] });
+});
+
+// Empty hydration still supplies the fence: consecutive normal updates may be
+// sent before the first write receipt reaches the renderer.
+it('persists the latest ordinary roster after empty-cache hydration', () => {
+  const owner = state.owner;
+  const hydrated = accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }) as { retirementRevision: number };
+  expect(hydrated.retirementRevision).toEqual(expect.any(Number));
+  for (const name of ['Mia', 'Mia updated']) accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner,
+    value: { actors: [{ externalId: 'mia', name }], newlyRetiredBotIds: [], retirementRevision: hydrated.retirementRevision } });
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }))
+    .toMatchObject({ actors: [{ externalId: 'mia', name: 'Mia updated' }], retiredBotIds: [] });
+});
+
+// Deletion and the next authoritative roster can be sent before Main's first
+// receipt arrives. A stale fence must retain new identities without reviving old ones.
+it('keeps a newly accepted actor while the preceding deletion receipt is pending', () => {
+  const owner = state.owner;
+  const hydrated = accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }) as { retirementRevision: number };
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner,
+    value: { actors: [], newlyRetiredBotIds: ['mia', 'ada'], retirementRevision: hydrated.retirementRevision } });
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner,
+    value: { actors: [{ externalId: 'bob' }, { externalId: 'ada' }], newlyRetiredBotIds: [], retirementRevision: hydrated.retirementRevision } });
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }))
+    .toMatchObject({ actors: [{ externalId: 'bob' }], retiredBotIds: ['mia', 'ada'] });
+});
+
+// Two windows can derive the same removal before either receives Main's receipt.
+// A delayed duplicate must not retire an identity revived after that observation.
+it('rejects a delayed deletion derived before another window revived the identity', () => {
+  const owner = state.owner;
+  const hydrated = accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }) as { retirementRevision: number };
+  const deletion = { actors: [], newlyRetiredBotIds: ['mia'], retirementRevision: hydrated.retirementRevision };
+  const retired = accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: deletion }) as { retirementRevision: number };
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner,
+    value: { actors: [{ externalId: 'mia' }], revivedBotIds: ['mia'], retirementRevision: retired.retirementRevision } });
+  expect(() => accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: deletion }))
+    .toThrow('PRECONDITION_FAILED');
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }))
+    .toMatchObject({ actors: [{ externalId: 'mia' }], retiredBotIds: [] });
+});
+
+// #11303 pre-commit revival fix: Main's live corroboration must not let an old
+// active renderer undo a newer deletion, even with the current disk fence.
+// Existing multi-window tests only covered the stale-disk-revision case.
+// Unit tier, same real cache handler and unique temporary directory as above.
+it('retains the latest authoritative deletion against an explicitly revived stale actor', () => {
+  const owner = state.owner;
+  const request = { key: 'cloud-homes', owner };
+  companionHomes.update({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human',
+    actors: [], demotedBotIds: [], disabledBotIds: ['mia'] });
+  const seed = accessChatDisplayCache({ ...request, action: 'read' }) as { retirementRevision: number };
+  const retired = accessChatDisplayCache({ ...request, action: 'write',
+    value: { actors: [], newlyRetiredBotIds: ['mia'], ...seed } }) as { retirementRevision: number };
+  accessChatDisplayCache({ ...request, action: 'write', value: {
+    actors: [{ externalId: 'mia' }], revivedBotIds: ['mia'], ...retired } });
+  expect(accessChatDisplayCache({ ...request, action: 'read' })).toMatchObject({ retiredBotIds: ['mia'] });
 });

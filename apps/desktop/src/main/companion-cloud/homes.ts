@@ -140,6 +140,9 @@ export function companionSnapshot(input: {
     id: a.id, externalId: a.externalId, name: a.name, avatar: a.avatar ?? null, homeDeviceId: a.homeDeviceId ?? null,
     ...(input.profileFailure?.(a.externalId) ? { profileFailure: input.profileFailure(a.externalId) } : {}),
   }));
+  const activeIds = new Set(actors.map(actor => actor.externalId));
+  const disabledBotIds = [...new Set(input.actors.filter(actor => actor.kind === 'bot' && actor.disabled
+    && !activeIds.has(actor.externalId)).map(actor => actor.externalId))].sort();
   return { enabled: input.enabled, selfDeviceId: input.selfDeviceId, humanActorId: input.humanActorId, actors,
-    demotedBotIds: [...(input.demotedBotIds ?? [])].sort() };
+    demotedBotIds: [...(input.demotedBotIds ?? [])].sort(), disabledBotIds };
 }
