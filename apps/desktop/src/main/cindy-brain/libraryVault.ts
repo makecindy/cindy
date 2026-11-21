@@ -717,6 +717,8 @@ export class LibraryVault {
           this.usageTripped = false;
           this.usageScanIncomplete = false;
           if (!ledger || ledger.checkpoint === 'dirty') await this.rescanUsageUnlocked();
+        } else if (this.usageTripped || this.usageScanIncomplete) {
+          await this.rescanUsageUnlocked();
         }
       } catch {
         this.state = 'unavailable';

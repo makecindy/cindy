@@ -735,7 +735,7 @@ describe('LibraryVault', () => {
       }
     });
 
-    it('重扫超限时不发布半截计数，重开仍拒写但可以读', async () => {
+    it('重扫超限时不发布半截计数，清理后同一会话重开恢复写入', async () => {
       const first = makeVault();
       await first.open();
       await first.write({ path: 'first.txt', content: 'one' });
@@ -755,6 +755,9 @@ describe('LibraryVault', () => {
       const reopened = makeVault({ limits: { usageScanFuse: 1 } });
       expect(await reopened.open()).toMatchObject({ ok: true, state: 'readonly' });
       expect(await reopened.delete({ path: 'first.txt' })).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+      await fs.promises.unlink(path.join(libraryRoot, 'second.txt'));
+      expect(await reopened.open()).toMatchObject({ ok: true, state: 'ready', fileCount: 1, usedBytes: 3 });
+      expect(await reopened.write({ path: 'first.txt', content: 'updated' })).toMatchObject({ ok: true });
     });
 
     it('收尾核对绕过 Vault 的文件变化，保持流提交、改名和删除回执', async () => {
@@ -814,8 +817,8 @@ describe('LibraryVault', () => {
         if (args[0] === inaccessible) return Promise.reject(Object.assign(new Error('access denied'), { code: 'EACCES' }));
         return readdir(...args);
       }) as typeof readdir);
+      const reopened = makeVault();
       try {
-        const reopened = makeVault();
         expect(await reopened.open()).toMatchObject({
           ok: true, state: 'readonly', reason: 'usage-scan-incomplete', fileCount: 5, usedBytes: 21,
         });
@@ -823,13 +826,12 @@ describe('LibraryVault', () => {
         expect(await reopened.write({ path: 'new.txt', content: 'denied' })).toMatchObject({
           ok: false, errorCode: 'LIBRARY_UNAVAILABLE',
         });
-        await reopened.invalidate();
         expect(await fs.promises.readFile(ledgerFile, 'utf8')).toBe(stale);
       } finally {
         spy.mockRestore();
       }
-      const recovered = makeVault();
-      expect(await recovered.open()).toMatchObject({ ok: true, state: 'ready', fileCount: 1, usedBytes: 8 });
+      expect(await reopened.open()).toMatchObject({ ok: true, state: 'ready', fileCount: 1, usedBytes: 8 });
+      expect(await reopened.write({ path: 'new.txt', content: 'allowed' })).toMatchObject({ ok: true });
     });
 
     it('markOrphaned / clearOrphaned 往返;invalidate 后 open 拒绝', async () => {
