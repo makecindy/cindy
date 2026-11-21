@@ -35,4 +35,5 @@ it('keeps trusted requester authority separate from message text', () => {
   expect(createDingTalkTurnPermissionPolicy('message', true).autoReviewContext).toEqual({ requesterAuthority: 'owner', source: 'group' });
   expect(createDingTalkTurnPermissionPolicy('message', false).autoReviewContext).toEqual({ requesterAuthority: 'guest', source: 'group' });
   expect(createDingTalkTurnPermissionPolicy('message').autoReviewContext?.requesterAuthority).toBe('unknown');
+  expect(createDingTalkTurnPermissionPolicy('message', false).forceConfirmToolCall('read', { path: 'notes.md' })).toBe(true);
 });

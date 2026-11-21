@@ -19,6 +19,8 @@ export function createDingTalkTurnPermissionPolicy(taskId: string, isOwner?: boo
     autoReviewContext: { requesterAuthority: isOwner === true ? 'owner' : isOwner === false ? 'guest' : 'unknown', source: 'group' },
     confirmationSurface: 'channel',
     confirmationTimeoutMs: 30 * 60 * 1_000,
-    forceConfirmToolCall: channelForceConfirmToolCall,
+    // Companion guests share the bot Home/Profile, so owner approval must guard
+    // reads as well as writes; otherwise a guest could inspect owner data.
+    forceConfirmToolCall: isOwner === false ? () => true : channelForceConfirmToolCall,
   };
 }
