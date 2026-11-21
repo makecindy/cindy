@@ -9710,6 +9710,12 @@
       "support": "Wenn das Problem nach dem Warten weiterhin besteht, sende die Protokolle vertraulich an feedback@cindy.app und gib dein Betriebssystem, die Cindy-Version, den Fehlerzeitpunkt und den unten stehenden Code an. Veröffentliche die Protokolle nicht."
     }
   },
+  "legalTermsUpdate": {
+    "title": "Bedingungen aktualisiert",
+    "body": "Cindys <terms>Nutzungsbedingungen</terms> und <privacy>Datenschutzerklärung</privacy> wurden aktualisiert. Stimme zu, um fortzufahren, oder melde dich ab.",
+    "agree": "Zustimmen",
+    "disagree": "Abmelden"
+  },
   "legacyMigration": {
     "title": "Daten aus der vorherigen Version migrieren",
     "description": "Auf diesem Gerät wurden Daten einer vorherigen Version gefunden. Dein Chatverlauf und deine Mediendateien werden an den neuen Speicherort migriert. Falls die alte App noch läuft, beende sie zuerst vollständig und lasse {{appName}} während der Migration geöffnet. Hinweis: Autorisierte Drittanbieterschlüssel und Zugangsdaten können nicht migriert werden — nach der Migration musst du sie in den Einstellungen erneut autorisieren oder eingeben.",
@@ -20412,6 +20418,7 @@
       "totalDetail_other": "{{count}} Karten × {{amount}}",
       "pay": "Weiter zur Zahlung",
       "refundNote": "Geschenkkarten lassen sich nicht in Bargeld umtauschen. Eingelöste Karten werden nicht erstattet. Für eine noch nicht eingelöste Karte kannst du dich wegen einer Erstattung an den Support wenden.",
+      "termsNote": "Mit „Weiter zur Zahlung“ stimmst du den <terms>Geschenkkartenbedingungen</terms> zu.",
       "cancel": "Abbrechen",
       "loadFailed": "Die Kauflimits für Geschenkkarten konnten nicht geladen werden. Bitte versuche es später erneut.",
       "checkoutSubtitle_one": "Geschenkkarte {{amount}} × {{count}} · wird direkt nach der Zahlung erstellt",

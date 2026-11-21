@@ -9782,6 +9782,12 @@
       "support": "Se o problema continuar após a espera, envie os logs em particular para feedback@cindy.app com seu sistema operacional, a versão do Cindy, o horário do erro e o código abaixo. Não publique logs."
     }
   },
+  "legalTermsUpdate": {
+    "title": "Termos atualizados",
+    "body": "Atualizamos os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy. Aceite para continuar usando ou saia.",
+    "agree": "Aceitar",
+    "disagree": "Sair"
+  },
   "legacyMigration": {
     "title": "Migrar dados da versão anterior",
     "description": "Foram encontrados dados de uma versão anterior neste dispositivo. Seu histórico de conversas e arquivos de mídia serão migrados para o novo local de dados. Se o aplicativo antigo ainda estiver em execução, encerre-o completamente primeiro e mantenha o {{appName}} aberto durante a migração. Observação: chaves e credenciais de terceiros autorizadas não podem ser migradas — após a migração, será necessário autorizá-las novamente ou inseri-las nas Configurações.",
@@ -20600,6 +20606,7 @@
       "totalDetail_other": "{{count}} cartões × {{amount}}",
       "pay": "Continuar para o pagamento",
       "refundNote": "Cartões-presente não podem ser trocados por dinheiro. Cartões resgatados não são reembolsáveis. Para pedir o reembolso de um cartão não resgatado, entre em contato com o suporte.",
+      "termsNote": "Ao selecionar Continuar para o pagamento, você aceita os <terms>Termos do cartão-presente</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
       "checkoutSubtitle_one": "Cartão-presente {{amount}} × {{count}} · emitido assim que o pagamento for concluído",

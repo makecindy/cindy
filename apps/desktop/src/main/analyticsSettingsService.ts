@@ -6,6 +6,8 @@
  *  - 状态变化时广播 `analytics:settings-change`,让 renderer 的 tapdbClient 即时
  *    初始化或 opt-out,不必等下次冷启动
  *  - 承接一次性存量迁移:本次改动之前就已登录的用户视为已同意
+ *  - 协议版本:同意过旧版协议的个人账号需要重新确认(legalTermsUpdateRequired),
+ *    任何一次明示同意都记录当前版本(legal-terms-store)
  *
  * 为什么 gate 放在 main:同意状态是持久真相,必须由 main 持有(见
  * docs/dev-rules/electron-security-and-process-boundaries.md §2)。renderer 只拿
@@ -25,6 +27,7 @@ import {
   readAnalyticsSettings,
   setAnalyticsEnabled,
 } from './analytics-settings-store';
+import { acceptCurrentLegalTerms, readAcceptedLegalTermsVersion } from './legal-terms-store';
 import { createLogger } from './logger';
 import { onQuit } from './lifecycle';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
@@ -33,6 +36,7 @@ import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
   type AnalyticsSettingsPayload,
 } from '../shared/analyticsSettings';
+import { LEGAL_TERMS_VERSION } from '../shared/legalTermsVersion';
 
 const log = createLogger('analytics-settings');
 
@@ -95,7 +99,23 @@ export function analyticsSettingsPayload(): AnalyticsSettingsPayload {
     analyticsEnabled: value.analyticsEnabled,
     analyticsEnabledCustomized: isAnalyticsEnabledCustomized(),
     allowed: isReportingAllowedNow(),
+    legalTermsUpdateRequired: isLegalTermsUpdateRequired(value.privacyConsentAccepted),
   };
+}
+
+/**
+ * 只问同意过隐私政策的人:企业 SSO 与「跳过登录」本来就被登录页协议门豁免,没有同意记录,
+ * 也就不会被协议更新弹窗拦住。读失败按「不需要」处理(fail open):弹窗会挡住整个主界面,
+ * 一次设置文件读取故障不能把用户锁在外面。
+ */
+function isLegalTermsUpdateRequired(privacyConsentAccepted: boolean): boolean {
+  if (!privacyConsentAccepted) return false;
+  try {
+    return readAcceptedLegalTermsVersion() !== LEGAL_TERMS_VERSION;
+  } catch (err) {
+    log.warn('read legal terms consent failed (non-fatal)', err);
+    return false;
+  }
 }
 
 function broadcastSettingsChange(): void {
@@ -320,7 +340,17 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
   ipcMain.handle('analytics:consent-accept', (event) => {
     assertTrustedAppRendererEvent(event);
     writeOrThrowIpcError(() => acceptPrivacyConsent(), 'record privacy consent failed');
+    // 登录页展示的就是当前版本协议:新用户与重新登录的老用户在这里同意后不再弹更新确认。
+    writeOrThrowIpcError(() => acceptCurrentLegalTerms(), 'record legal terms consent failed');
     applyPermissionChange();
+    return analyticsSettingsPayload();
+  });
+
+  // 主界面「协议更新」确认弹窗点「同意」:只改协议版本记录,不影响统计授权,广播即可。
+  ipcMain.handle('analytics:legal-terms-accept', (event) => {
+    assertTrustedAppRendererEvent(event);
+    writeOrThrowIpcError(() => acceptCurrentLegalTerms(), 'record legal terms consent failed');
+    broadcastSettingsChange();
     return analyticsSettingsPayload();
   });
 

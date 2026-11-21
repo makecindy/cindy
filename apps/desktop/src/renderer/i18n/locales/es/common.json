@@ -9782,6 +9782,12 @@
       "support": "Si esto continúa después de esperar, envía los registros de forma privada a feedback@cindy.app e incluye tu sistema operativo, la versión de Cindy, la hora del error y el código que aparece abajo. No publiques los registros."
     }
   },
+  "legalTermsUpdate": {
+    "title": "Términos actualizados",
+    "body": "Actualizamos los <terms>Términos del servicio</terms> y la <privacy>Política de privacidad</privacy> de Cindy. Acéptalos para continuar o cierra sesión.",
+    "agree": "Aceptar",
+    "disagree": "Cerrar sesión"
+  },
   "legacyMigration": {
     "title": "Migrar datos de la versión anterior",
     "description": "Se encontraron datos de una versión anterior en este dispositivo. Tu historial de chat y tus archivos multimedia se migrarán a la nueva ubicación de datos. Si la aplicación anterior sigue ejecutándose, ciérrala por completo primero y mantén {{appName}} abierto durante la migración. Nota: las claves y credenciales autorizadas de terceros no se pueden migrar; después de la migración tendrás que volver a autorizarlas o ingresarlas en Configuración.",
@@ -20600,6 +20606,7 @@
       "totalDetail_other": "{{count}} tarjetas × {{amount}}",
       "pay": "Continuar al pago",
       "refundNote": "Las tarjetas de regalo no se pueden cambiar por dinero. Las tarjetas canjeadas no se reembolsan. Para solicitar el reembolso de una tarjeta sin canjear, ponte en contacto con el soporte.",
+      "termsNote": "Al seleccionar Continuar al pago, aceptas los <terms>Términos de las tarjetas de regalo</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "No se pudieron cargar los límites de compra. Vuelve a intentarlo más tarde.",
       "checkoutSubtitle_one": "Tarjeta de regalo {{amount}} × {{count}} · se emite en cuanto se complete el pago",

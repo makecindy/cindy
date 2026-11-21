@@ -1004,6 +1004,7 @@ export function LoginConsentDialog({
   onDisagree,
   onOpenTerms,
   onOpenPrivacy,
+  zIndex,
 }: {
   title: string;
   body: string;
@@ -1013,6 +1014,8 @@ export function LoginConsentDialog({
   onDisagree: () => void;
   onOpenTerms: () => void;
   onOpenPrivacy: () => void;
+  /** 登录页之外复用时(主界面协议更新确认)需要盖过应用内所有浮层;不传沿用 z-50。 */
+  zIndex?: number;
 }) {
   const agreeRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -1084,7 +1087,7 @@ export function LoginConsentDialog({
         if (event.target === event.currentTarget) event.currentTarget.focus();
       }}
       className="fixed inset-0 z-50 grid place-items-center outline-none"
-      style={{ background: LOGIN_COLORS.consentOverlay }}
+      style={{ background: LOGIN_COLORS.consentOverlay, ...(zIndex === undefined ? {} : { zIndex }) }}
       onKeyDown={handleKeyDown}
     >
       <div
