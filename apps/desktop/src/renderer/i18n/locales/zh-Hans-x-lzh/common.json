@@ -4838,6 +4838,9 @@
           "confirm": "仍改之",
           "cancel": "罢"
         }
+      },
+      "setup": {
+        "afterBind": "既系之後归开放平台「事件与回调」，将订阅方式设为使用长连接接收事件，并添加接收消息（im.message.receive_v1）事件。于回调配置中选使用长连接接收回调，并添加卡片回传交互（card.action.trigger），令卡片按钮可用。完成版本发布，如需审核则待其通过。"
       }
     },
     "wechatBot": {

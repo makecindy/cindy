@@ -175,4 +175,23 @@ describe('ImBotSection', () => {
       screen.getByRole('heading', { name: 'settings.imBot.groups.personal' }).closest('section'),
     );
   });
+
+  it('shows the Feishu app permission hint and keeps the setup steps collapsed in the unbound form', () => {
+    render(<ImBotSection targetGroup={null} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /settings.feishuBot.title/ }));
+
+    expect(screen.getByText('bots.channels.add.feishu.stepCreate')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.feishuBot.createLink' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.feishuBot.bind' })).toBeTruthy();
+
+    const steps = screen.getByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' });
+    expect(steps.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('settings.feishuBot.setup.afterBind')).toBeNull();
+
+    fireEvent.click(steps);
+
+    expect(steps.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('settings.feishuBot.setup.afterBind')).toBeTruthy();
+  });
 });

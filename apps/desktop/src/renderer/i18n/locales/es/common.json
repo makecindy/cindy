@@ -4939,6 +4939,9 @@
           "confirm": "Cambiar de todos modos",
           "cancel": "Cancelar"
         }
+      },
+      "setup": {
+        "afterBind": "Después de vincular, en Events & Callbacks de Open Platform, selecciona el modo de suscripción de conexión persistente y agrega el evento Receive message (im.message.receive_v1). En Callback Configuration, selecciona el modo de conexión persistente y agrega Card action callback (card.action.trigger) para que funcionen los botones de las tarjetas. Publica la versión de la aplicación y espera la aprobación si es necesaria."
       }
     },
     "wechatBot": {

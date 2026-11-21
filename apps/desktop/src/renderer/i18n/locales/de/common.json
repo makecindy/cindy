@@ -4881,6 +4881,9 @@
           "confirm": "Trotzdem ändern",
           "cancel": "Abbrechen"
         }
+      },
+      "setup": {
+        "afterBind": "Wähle nach dem Verknüpfen unter Events & Callbacks auf der Open Platform den Abonnementmodus für dauerhafte Verbindungen und füge das Ereignis Receive message (im.message.receive_v1) hinzu. Wähle unter Callback Configuration den Modus für dauerhafte Verbindungen und füge den Card action callback (card.action.trigger) hinzu, damit die Kartenbuttons funktionieren. Veröffentliche die App-Version und warte bei Bedarf auf die Genehmigung."
       }
     },
     "wechatBot": {

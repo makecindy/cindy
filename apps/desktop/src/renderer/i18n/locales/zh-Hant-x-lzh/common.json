@@ -4838,6 +4838,9 @@
           "confirm": "仍改之",
           "cancel": "罷"
         }
+      },
+      "setup": {
+        "afterBind": "既繫之後歸開放平台「事件與回呼」，將訂閱方式設為使用長連線接收事件，並新增接收訊息（im.message.receive_v1）事件。於回呼設定中選使用長連線接收回呼，並新增卡片回傳互動（card.action.trigger），令卡片按鈕可用。完成版本發布，如需審核則待其通過。"
       }
     },
     "wechatBot": {

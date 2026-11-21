@@ -4881,6 +4881,9 @@
           "confirm": "Change anyway",
           "cancel": "Cancel"
         }
+      },
+      "setup": {
+        "afterBind": "After binding, go back to Events & Callbacks on the Open Platform, select the long connection subscription mode, and add the Receive message event (im.message.receive_v1). In Callback Configuration, select long connection mode and add the Card action callback (card.action.trigger) so card buttons work. Publish the app version and wait for approval if required."
       }
     },
     "wechatBot": {

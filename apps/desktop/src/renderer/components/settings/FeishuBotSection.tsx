@@ -1,8 +1,9 @@
 import { imBotSettings } from './ImBotSection.settings-search';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Trash2, Check, RefreshCw, Link } from 'lucide-react';
+import { Eye, EyeOff, Trash2, Check, RefreshCw, Link, Info, ChevronRight } from 'lucide-react';
 
+import { Collapse } from '@/components/ui/collapse';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { useFeishuBot, type FeishuBotService, type FeishuBotStatus } from '@/hooks/useFeishuBot';
@@ -335,6 +336,8 @@ function ManualConfig(props: {
   onOpenLauncher: () => void;
 }) {
   const { t } = useTranslation();
+  const [guideOpen, setGuideOpen] = useState(false);
+  const guideId = useId();
   return (
     <div className="flex flex-col gap-3">
       <fieldset className="flex flex-col gap-2">
@@ -357,6 +360,57 @@ function ManualConfig(props: {
           optionHeight={34}
         />
       </fieldset>
+
+      <section className="flex items-start gap-2.5 rounded-xl bg-[var(--surface-chip)] px-3.5 py-3">
+        <Info size={14} className="mt-[2px] shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+        <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+          <p className="text-12 leading-[1.6] text-[var(--settings-section-desc)] [text-wrap:pretty]">
+            {t('bots.channels.add.feishu.stepCreate')}
+          </p>
+          <p
+            className="text-12 text-[var(--settings-section-desc)]"
+            style={{ letterSpacing: '0.12px' }}
+          >
+            <button data-settings-search-action="Open the bot setup guide"
+              type="button"
+              onClick={props.onOpenLauncher}
+              className="cursor-pointer bg-transparent p-0 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
+            >
+              {t('settings.feishuBot.createLink', {
+                service: t(`settings.feishuBot.services.${props.service}`),
+              })}
+            </button>
+            <span>{t('settings.feishuBot.createLinkSuffix')}</span>
+          </p>
+          <div className="flex flex-col gap-1.5">
+            <Button data-setting-id={imBotSettings.feishu.id}
+              type="button"
+              variant="secondary"
+              tone="quiet"
+              size="sm"
+              className="w-fit justify-start gap-1 px-0 text-[var(--settings-section-desc)]"
+              aria-expanded={guideOpen}
+              aria-controls={guideId}
+              onClick={() => setGuideOpen((open) => !open)}
+            >
+              <ChevronRight
+                size={12}
+                aria-hidden
+                className={cn(
+                  'shrink-0 transition-transform motion-reduce:transition-none',
+                  guideOpen && 'rotate-90',
+                )}
+              />
+              {t('bots.channels.add.feishu.stepsLabel')}
+            </Button>
+            <Collapse open={guideOpen} id={guideId}>
+              <p className="pl-4 text-12 leading-[1.6] text-[var(--settings-section-desc)] [text-wrap:pretty]">
+                {t('settings.feishuBot.setup.afterBind')}
+              </p>
+            </Collapse>
+          </div>
+        </div>
+      </section>
 
       <label
         className="text-12 font-medium text-[var(--settings-section-desc)]"
@@ -416,34 +470,16 @@ function ManualConfig(props: {
         </button>
       </div>
 
-      <div className="flex min-h-[18px] items-center justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          {props.validationError ? (
-            <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-              {props.validationError}
-            </p>
-          ) : props.errorMessage ? (
-            <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-              {props.errorMessage}
-            </p>
-          ) : (
-            <p
-              className="text-12 text-[var(--settings-source-meta)]"
-              style={{ letterSpacing: '0.12px' }}
-            >
-              <button data-settings-search-action="Open the bot setup guide"
-                type="button"
-                onClick={props.onOpenLauncher}
-                className="cursor-pointer bg-transparent p-0 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
-              >
-                {t('settings.feishuBot.createLink', {
-                  service: t(`settings.feishuBot.services.${props.service}`),
-                })}
-              </button>
-              <span>{t('settings.feishuBot.createLinkSuffix')}</span>
-            </p>
-          )}
-        </div>
+      <div className="flex min-h-[18px] flex-col justify-center gap-1">
+        {props.validationError ? (
+          <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+            {props.validationError}
+          </p>
+        ) : props.errorMessage ? (
+          <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+            {props.errorMessage}
+          </p>
+        ) : null}
       </div>
 
       <Button data-settings-search-action="Save the bot connection form"
