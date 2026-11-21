@@ -18,6 +18,16 @@ describe('parseVerdict', () => {
     expect(parseVerdict(text)).toEqual({ status: 'complete', reason: 'all green' });
   });
 
+  it('parses a waiting verdict (no-work exit; 2026-10 token-idle incident)', () => {
+    const text = [
+      '无变化。待命。',
+      '```json',
+      '{"goal_status":"waiting","reason":"B3 与 D4a 交单前无事可做"}',
+      '```',
+    ].join('\n');
+    expect(parseVerdict(text)).toEqual({ status: 'waiting', reason: 'B3 与 D4a 交单前无事可做' });
+  });
+
   it('takes the LAST valid fenced block when multiple appear', () => {
     const text = [
       '```json',
