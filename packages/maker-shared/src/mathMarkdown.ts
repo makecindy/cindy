@@ -1,3 +1,21 @@
+import {
+  parseMarkdownTableBlock,
+  advanceMarkdownHtmlCommentState,
+  COMPLETE_MARKDOWN_HTML_TAG_LINE,
+  MARKDOWN_BLOCK_HTML_LINE,
+  markdownRawHtmlEnd,
+  type MarkdownRawMarkupState,
+} from './markdownBlocks';
+export type { MarkdownRawMarkupState } from './markdownBlocks';
+export {
+  parseMarkdownTableBlock,
+  advanceMarkdownHtmlCommentState,
+  markdownLiteralMarkupSpans,
+  COMPLETE_MARKDOWN_HTML_TAG_LINE,
+  MARKDOWN_BLOCK_HTML_LINE,
+  markdownRawHtmlEnd,
+} from './markdownBlocks';
+
 /**
  * mathMarkdown — LaTeX 数学公式在 markdown 消息里的共用纯逻辑层。
  * desktop(react-markdown + remark-math/KaTeX)与 mobile(自研 parser +
@@ -57,7 +75,153 @@ export interface NormalizeMathDelimitersOptions {
 // reference 式链接定义行:≤3 空格缩进 + [label]:(单字符类 + 行锚点,线性)。
 // 整行(destination + 可选 title)纳入保护——定义行不是 prose,行上不存在
 // 合法的数学公式场景,整行保护安全且省去 destination/title 的精细切分。
-const LINK_REFERENCE_DEFINITION_RE = /^ {0,3}\[[^\]\n]*\]:/gm;
+const LINK_REFERENCE_DEFINITION_RE = /^ {0,3}\[(?!\^)((?:\\[^\n]|[^\[\]\\\n]){1,999})\]:/gm;
+
+/** Protect complete destinations and titles; invalid continuation prose stays math. */
+function continuationDefinitionEnd(text: string, start: number): number | null {
+  const newline = text.indexOf('\n', start);
+  const lineEnd = newline === -1 ? text.length : newline;
+  const line = text.slice(start, lineEnd);
+  const match = /^[ \t]*(?:<(?:\\[^\n]|[^<>\\\n])*>|(?!<)(?:\\[^\n]|[^\s\\])+)/.exec(line);
+  if (!match) return null;
+  const token = match[0].trimStart();
+  if (!token.startsWith('<')) {
+    let depth = 0;
+    for (let at = 0; at < token.length; at++) {
+      if (token[at] === '\\') { at++; continue; }
+      if (token[at] === '(') depth++;
+      if (token[at] === ')' && --depth < 0) return null;
+      if (depth > 32) return null;
+    }
+    if (depth !== 0) return null;
+  }
+  const end = start + match[0].length;
+  const suffix = line.slice(match[0].length);
+  let titleStart = end + suffix.length - suffix.trimStart().length;
+  let title = suffix.trimStart();
+  let titleOnNextLine = false;
+  if (!title) {
+    if (newline === -1) return end;
+    const following = /^[ \t]*(["'(])/.exec(text.slice(newline + 1));
+    if (!following) return end;
+    titleStart = newline + 1 + following[0].length - 1;
+    title = text.slice(titleStart);
+    titleOnNextLine = true;
+  } else if (!/^\s/.test(suffix)) return null;
+  const invalidTitleEnd = titleOnNextLine ? end : null;
+  if (!['"', "'", '('].includes(title[0])) return invalidTitleEnd;
+  const close = title[0] === '(' ? ')' : title[0];
+  for (let at = titleStart + 1; at < text.length && at - titleStart <= 10_000; at++) {
+    if (text[at] === '\\') { at++; continue; }
+    if (text[at] === '\n' && /^[ \t]*(?:\n|$)/.test(text.slice(at + 1))) return invalidTitleEnd;
+    if (text[at] === close) {
+      const nextEnd = text.indexOf('\n', at + 1);
+      return text.slice(at + 1, nextEnd === -1 ? text.length : nextEnd).trim() ? invalidTitleEnd : at + 1;
+    }
+  }
+  return invalidTitleEnd;
+}
+
+/** Read complete literal definitions before inline-code or fence segmentation. */
+function findReferenceDefinitionRanges(text: string, completeOnly = false): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let lineCursor = 0;
+  let paragraph = false;
+  let fence: string | null = null;
+  let html = false;
+  let comment = false;
+  let rawHtmlEnd: RegExp | undefined;
+  const referenceRawState: MarkdownRawMarkupState = {};
+  const lines = text.split('\n');
+  let lineIndex = 0;
+  for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
+    // A definition cannot interrupt prose. Advance through physical lines once
+    // so a header in an open paragraph cannot claim the following math line.
+    while (lineCursor < match.index) {
+      const newline = text.indexOf('\n', lineCursor);
+      const end = newline === -1 ? text.length : newline;
+      const line = text.slice(lineCursor, end);
+      const marker = line.match(FENCE_OPEN_RE)?.[1];
+      lineCursor = end + 1;
+      const currentLine = lineIndex++;
+      if (fence) {
+        if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = null;
+        paragraph = false;
+        continue;
+      }
+      if (marker) {
+        fence = marker;
+        html = false;
+        rawHtmlEnd = undefined;
+        referenceRawState.raw = undefined;
+        paragraph = false;
+        continue;
+      }
+      if (rawHtmlEnd) {
+        if (rawHtmlEnd.test(line)) rawHtmlEnd = undefined;
+        paragraph = false;
+        continue;
+      }
+      if (referenceRawState.raw) {
+        comment = advanceMarkdownHtmlCommentState(line, comment, referenceRawState);
+        paragraph = false;
+        continue;
+      }
+      if (!paragraph && !comment && COMPLETE_MARKDOWN_HTML_TAG_LINE.test(line)) html = true;
+      const table = !html && !comment && !/^(?:#{1,6}\s|\s*>)/.test(line)
+        ? parseMarkdownTableBlock(lines, currentLine) : null;
+      if (table) {
+        for (let row = currentLine; row <= table.endIndex; row++) {
+          comment = advanceMarkdownHtmlCommentState(lines[row], comment, referenceRawState);
+          if (row > currentLine) lineCursor += lines[row].length + 1;
+        }
+        lineIndex = table.endIndex + 1;
+        paragraph = false;
+        continue;
+      }
+      const startsInComment = comment;
+      comment = advanceMarkdownHtmlCommentState(line, comment, referenceRawState);
+      const rawEnd = !startsInComment ? markdownRawHtmlEnd(line) : null;
+      if (rawEnd) {
+        if (!referenceRawState.raw && !rawEnd.test(line)) rawHtmlEnd = rawEnd;
+        paragraph = false;
+        continue;
+      }
+      if (startsInComment || comment || line.includes('<!--')) {
+        if (/^(?:#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(line)) paragraph = false;
+        else if (!startsInComment) paragraph = !/^ {0,3}<!--/.test(line);
+        continue;
+      }
+      if (!line.trim()) { html = false; paragraph = false; continue; }
+      if (MARKDOWN_BLOCK_HTML_LINE.test(line)) html = true;
+      if (html) continue;
+      paragraph = !/^(?: {0,3}#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s| {0,3}(?:[-*_]\s*){3,}$)/.test(line);
+    }
+    if (lineCursor > match.index) continue;
+    if (!match[1].trim() || (ranges.length && match.index < ranges[ranges.length - 1][1])) continue;
+    let lineEnd = text.indexOf('\n', match.index);
+    // An empty definition header can put its destination on the next line.
+    // Include a valid optional title, whose escaped delimiters are not prose.
+    // Invalid definitions must not suppress math on the following line.
+    const headerEnd = match.index + match[0].length;
+    const destinationStart = lineEnd !== -1 && !text.slice(headerEnd, lineEnd).trim() ? lineEnd + 1 : headerEnd;
+    const destinationEnd = !paragraph && !fence && !html && !comment && !rawHtmlEnd && !referenceRawState.raw ? continuationDefinitionEnd(text, destinationStart) : null;
+    // Coarse header shielding can protect URL-shaped text, but only complete
+    // definitions may take precedence over real code spans or fence lines.
+    if (completeOnly && destinationEnd === null) continue;
+    if (destinationEnd !== null) lineEnd = Math.max(lineEnd, destinationEnd);
+    ranges.push([match.index, lineEnd === -1 ? text.length : lineEnd]);
+    if (destinationEnd !== null) {
+      while (lineCursor <= (lineEnd === -1 ? text.length : lineEnd)) {
+        const newline = text.indexOf('\n', lineCursor);
+        lineCursor = newline === -1 ? text.length + 1 : newline + 1;
+        lineIndex++;
+      }
+      paragraph = false;
+    }
+  }
+  return ranges;
+}
 
 /**
  * markdown 链接目标的保护区间,两类形态(review 分两轮实捉):
@@ -66,7 +230,7 @@ const LINK_REFERENCE_DEFINITION_RE = /^ {0,3}\[[^\]\n]*\]:/gm;
  * `[log](./run\(1\).md)` / `[r]: ./run\(1\).md` 里的 URL 转义括号都不能被
  * 当成数学定界符改写。单调推进,线性复杂度;结果按起点排序供单指针消费。
  */
-function findLinkDestinationRanges(text: string): Array<[number, number]> {
+function findLinkDestinationRanges(text: string, references: Array<[number, number]>): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   let i = 0;
   while (i < text.length) {
@@ -89,10 +253,7 @@ function findLinkDestinationRanges(text: string): Array<[number, number]> {
     // 无论是否闭合都推进到已扫过的位置,不回头重扫
     i = Math.max(open + 2, j);
   }
-  for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
-    const lineEnd = text.indexOf('\n', match.index);
-    ranges.push([match.index, lineEnd === -1 ? text.length : lineEnd]);
-  }
+  for (const range of references) ranges.push(range);
   return ranges.sort((a, b) => a[0] - b[0]);
 }
 
@@ -101,12 +262,12 @@ function findLinkDestinationRanges(text: string): Array<[number, number]> {
  * 双指针:consumed 是 out 已覆盖到的位置,scan 是扫描位置——跳过分支只推进
  * scan、不动 consumed,被跳过的文本由下一次成功替换或结尾统一搬运。
  */
-function transformMathInText(text: string, preserveLineCount: boolean): string {
+function transformMathInText(text: string, preserveLineCount: boolean, references = findReferenceDefinitionRanges(text)): string {
   if (!text.includes('\\(') && !text.includes('\\[')) return text;
   // link destination 内的 \( \) \[ \] 是 URL 转义,整段保护不参与转换。
   // 惰性条件覆盖两种形态:inline 的 `](` 与 reference 定义的 `]:`。
   const protectedRanges =
-    text.includes('](') || text.includes(']:') ? findLinkDestinationRanges(text) : [];
+    text.includes('](') || text.includes(']:') ? findLinkDestinationRanges(text, references) : [];
   let rangeIndex = 0;
   const inProtectedRange = (pos: number): number => {
     while (rangeIndex < protectedRanges.length && protectedRanges[rangeIndex][1] <= pos) rangeIndex += 1;
@@ -186,11 +347,36 @@ function transformOutsideInlineCode(segment: string, preserveLineCount: boolean)
   if (!segment.includes('`')) return transformMathInText(segment, preserveLineCount);
   let out = '';
   let cursor = 0;
+  const definitions = findReferenceDefinitionRanges(segment, true);
+  const references = findReferenceDefinitionRanges(segment);
+  let referenceIndex = 0;
+  const transformText = (start: number, end: number): string => {
+    // Keep the original paragraph context when inline-code segmentation slices
+    // away earlier prose. Consume intersecting masks in source order.
+    while (referenceIndex < references.length && references[referenceIndex][1] <= start) referenceIndex++;
+    const masks: Array<[number, number]> = [];
+    for (let at = referenceIndex; at < references.length && references[at][0] < end; at++) {
+      masks.push([Math.max(start, references[at][0]) - start, Math.min(end, references[at][1]) - start]);
+    }
+    return transformMathInText(segment.slice(start, end), preserveLineCount, masks);
+  };
+  let definitionIndex = 0;
   // 等长闭合缺席记忆化:某长度的闭合运行在位置 p 之后不存在,则更靠后也不
   // 存在(与 transformMathInText 的 closer 记忆化同理,防对抗性输入二次扫描)。
   const noCloserForLength = new Set<number>();
   while (cursor < segment.length) {
+    while (definitionIndex < definitions.length && definitions[definitionIndex][0] < cursor) definitionIndex++;
+    const definition = definitions[definitionIndex];
     const tick = segment.indexOf('`', cursor);
+    // Definition titles are literal, so their backticks must not split the
+    // destination/title validation or open a code span in following prose.
+    if (definition && (tick === -1 || definition[0] <= tick)) {
+      out += transformText(cursor, definition[0]);
+      out += segment.slice(definition[0], definition[1]);
+      cursor = definition[1];
+      definitionIndex++;
+      continue;
+    }
     if (tick === -1) break;
     let openEnd = tick;
     while (openEnd < segment.length && segment[openEnd] === '`') openEnd += 1;
@@ -214,7 +400,7 @@ function transformOutsideInlineCode(segment: string, preserveLineCount: boolean)
       }
       if (closeStart === -1) noCloserForLength.add(runLength);
     }
-    out += transformMathInText(segment.slice(cursor, tick), preserveLineCount);
+    out += transformText(cursor, tick);
     if (closeStart === -1) {
       // 无闭合:开序列按字面输出,其后文本继续参与转换
       out += segment.slice(tick, openEnd);
@@ -224,7 +410,7 @@ function transformOutsideInlineCode(segment: string, preserveLineCount: boolean)
     out += segment.slice(tick, closeEnd);
     cursor = closeEnd;
   }
-  return out + (cursor < segment.length ? transformMathInText(segment.slice(cursor), preserveLineCount) : '');
+  return out + (cursor < segment.length ? transformText(cursor, segment.length) : '');
 }
 
 export function normalizeMathDelimiters(
@@ -241,6 +427,10 @@ export function normalizeMathDelimiters(
   const out: string[] = [];
   let textBuf: string[] = [];
   let fenceMarker: string | null = null; // 开 fence 的字符序列,如 "```"
+  const definitions = findReferenceDefinitionRanges(markdown, true);
+  let definitionIndex = 0;
+  let definitionEnd = 0;
+  let sourceOffset = 0;
 
   const flushText = () => {
     if (textBuf.length === 0) return;
@@ -249,8 +439,14 @@ export function normalizeMathDelimiters(
   };
 
   for (const line of lines) {
+    const lineStart = sourceOffset;
+    sourceOffset += line.length + 1;
+    while (definitionIndex < definitions.length && definitions[definitionIndex][0] < lineStart) definitionIndex++;
     if (fenceMarker == null) {
-      const open = line.match(FENCE_OPEN_RE);
+      if (lineStart >= definitionEnd && definitions[definitionIndex]?.[0] === lineStart) definitionEnd = definitions[definitionIndex][1];
+      // Keep complete titles in one text buffer; fence-looking title lines
+      // are literal, not openings that can swallow math after the definition.
+      const open = lineStart < definitionEnd ? null : line.match(FENCE_OPEN_RE);
       if (open) {
         flushText();
         fenceMarker = open[1];

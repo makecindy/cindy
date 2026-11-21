@@ -1,5 +1,14 @@
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
-import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
+import {
+  normalizeMathDelimiters,
+  parseMarkdownTableBlock as parseTableBlock,
+  advanceMarkdownHtmlCommentState as advanceHtmlCommentState,
+  COMPLETE_MARKDOWN_HTML_TAG_LINE as COMPLETE_HTML_TAG_LINE,
+  MARKDOWN_BLOCK_HTML_LINE,
+  markdownRawHtmlEnd,
+  markdownLiteralMarkupSpans,
+  type MarkdownRawMarkupState,
+} from '@cindy/maker-shared/math-markdown';
 import {
   BARE_HTTP_URL_RE_SOURCE,
   clipBareHttpAutolinkText,
@@ -15,6 +24,7 @@ import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
 // App bootstrap initializes this instance; parsing summaries must not initialize React bindings.
 import i18n from 'i18next';
 import { createMarkdownRegexSearch } from './markdownRegexSearch';
+import { nextMarkdownReference, readMarkdownReferenceDefinition, type MarkdownReferenceDefinitions } from './markdownReferences';
 
 // 加粗 / 斜体 / 删除线里的内容会继续按行内语法解析(`**https://…**` 的链接照样可点,
 // 与桌面 remark 同口径),结果拍平进同一层 inline 列表:里面的纯文本就是该强调类型本身,
@@ -106,6 +116,168 @@ export interface ParseMobileMarkdownOptions {
   listIndents?: readonly number[];
   /** Previous committed parse, used only for immutable paragraph inline prefixes. */
   previous?: MobileMarkdownParseResult;
+  /** Full-document references when only an append-only suffix is reparsed. */
+  referenceContext?: MarkdownReferenceContext;
+}
+
+interface MarkdownReferenceContext {
+  definitions: MarkdownReferenceDefinitions;
+  definitionLines: ReadonlySet<number>;
+  signature: string;
+  candidateFree: boolean;
+}
+const referenceContexts = new WeakMap<MobileMarkdownParseResult, MarkdownReferenceContext>();
+const REFERENCE_DEFINITION_CANDIDATE = /^ {0,3}\[(?!\^)[^\n]*\]:/m;
+
+function singleLineMathBody(line: string): string | null {
+  const match = line.trim().match(/^\$\$((?:(?!\$\$).)+)\$\$$/);
+  return match && match[1].trim() ? match[1] : null;
+}
+
+function isOpeningMathFence(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed === '$$' || (trimmed.startsWith('$$') && !trimmed.slice(2).includes('$$'));
+}
+
+function isClosingMathFence(line: string): boolean {
+  const trimmed = line.trimEnd();
+  return trimmed.trim() === '$$'
+    || (trimmed.endsWith('$$') && !trimmed.endsWith('\\$$') && !trimmed.slice(0, -2).includes('$$'));
+}
+
+// CommonMark type-7 HTML: a complete single tag at a block boundary.
+// Attribute values may contain > or |, but autolinks and inline tag pairs
+// are not standalone tags. Type 7 never interrupts an open paragraph.
+
+function collectMarkdownReferences(source: string): MarkdownReferenceContext {
+  const definitions = new Map<string, string>();
+  const definitionLines = new Set<number>();
+  if (!REFERENCE_DEFINITION_CANDIDATE.test(source)) return { definitions, definitionLines, signature: '', candidateFree: true };
+  const lines = source.split('\n');
+  let fence: CodeFenceState | null = null;
+  let comment = false;
+  let math = false;
+  let html = false;
+  let rawHtmlEnd: RegExp | undefined;
+  const referenceRawState: MarkdownRawMarkupState = {};
+  const listContentIndents: number[] = [];
+  const leaveListScopes = (indent: number) => {
+    while (listContentIndents.length && indent < listContentIndents[listContentIndents.length - 1]) {
+      listContentIndents.pop();
+    }
+  };
+  let paragraph = false;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (fence) {
+      if (isClosingCodeFence(line, fence)) fence = null;
+      continue;
+    }
+    if (math) {
+      if (isClosingMathFence(line)) math = false;
+      continue;
+    }
+    // Block fences interrupt HTML paragraphs in the document parser too.
+    // Recognize them before HTML/comment exclusions so their literal bodies
+    // cannot become hidden reference definitions after an internal blank line.
+    const opening = parseOpeningCodeFence(line);
+    if (opening) {
+      leaveListScopes(leadingIndentColumns(line));
+      fence = { ...opening, start: index, lines: [] };
+      html = false;
+      rawHtmlEnd = undefined;
+      referenceRawState.raw = undefined;
+      paragraph = false;
+      continue;
+    }
+    if (singleLineMathBody(line)) {
+      leaveListScopes(leadingIndentColumns(line));
+      html = false;
+      rawHtmlEnd = undefined;
+      referenceRawState.raw = undefined;
+      paragraph = false;
+      continue;
+    }
+    if (isOpeningMathFence(line)) {
+      leaveListScopes(leadingIndentColumns(line));
+      math = true;
+      html = false;
+      rawHtmlEnd = undefined;
+      referenceRawState.raw = undefined;
+      paragraph = false;
+      continue;
+    }
+    // Excluded HTML/comment text still contributes its physical list boundary.
+    if (line.trim()) leaveListScopes(leadingIndentColumns(line));
+    if (rawHtmlEnd) {
+      if (rawHtmlEnd.test(line)) rawHtmlEnd = undefined;
+      continue;
+    }
+    if (referenceRawState.raw) {
+      comment = advanceHtmlCommentState(line, comment, referenceRawState);
+      paragraph = false;
+      continue;
+    }
+    // A legal root definition wins over the body's deliberately loose table
+    // heuristic. Excluded containers/comments and open paragraphs still win.
+    const rootDefinition = !html && !comment && !paragraph && listContentIndents.length === 0
+      ? readMarkdownReferenceDefinition(lines, index) : null;
+    if (rootDefinition) {
+      if (!definitions.has(rootDefinition.label)) definitions.set(rootDefinition.label, rootDefinition.url);
+      for (; index <= rootDefinition.endLine; index++) definitionLines.add(index);
+      index--;
+      continue;
+    }
+    if (!paragraph && !comment && COMPLETE_HTML_TAG_LINE.test(line)) html = true;
+    if (!html && line.trim()) {
+      const table = parseTableBlock(lines, index);
+      if (table && !/^(?:#{1,6}\s|\s*>)/.test(line)) {
+        // Match pushBlock: a table can leave an earlier list, while a nested
+        // table retains any ancestor whose content column it still reaches.
+        let tableIndent = Infinity;
+        for (let row = index; row <= table.endIndex; row++) {
+          if (lines[row].trim()) tableIndent = Math.min(tableIndent, leadingIndentColumns(lines[row]));
+        }
+        leaveListScopes(tableIndent);
+        // Consume the body parser's span before interpreting inline comments.
+        for (let row = index; row <= table.endIndex; row++) {
+          comment = advanceHtmlCommentState(lines[row], comment, referenceRawState);
+        }
+        index = table.endIndex;
+        paragraph = false;
+        continue;
+      }
+      const list = /^(\s*)(?:[-*+]|\d+[.)])(\s+)/.exec(line);
+      // Retain enclosing items, but replace siblings: marker width can change
+      // (for example 9. to 10.) and therefore changes the content column.
+      if (list) {
+        const contentColumn = leadingIndentColumns(list[0].replace(/\S/g, ' '));
+        const markerEnd = list[0].slice(0, -list[2].length);
+        const markerColumn = leadingIndentColumns(markerEnd.replace(/\S/g, ' '));
+        // More than four columns are item content, not marker padding.
+        listContentIndents.push(contentColumn - markerColumn > 4 ? markerColumn + 1 : contentColumn);
+      }
+    }
+    const startsInComment = comment;
+    comment = advanceHtmlCommentState(line, comment, referenceRawState);
+    const rawEnd = !startsInComment ? markdownRawHtmlEnd(line) : null;
+    if (rawEnd) {
+      if (!referenceRawState.raw && !rawEnd.test(line)) rawHtmlEnd = rawEnd;
+      paragraph = false;
+      continue;
+    }
+    if (startsInComment || comment || line.includes('<!--')) {
+      // Body headings/quotes/lists interrupt even a comment continuation.
+      if (/^(?:#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(line)) paragraph = false;
+      else if (!startsInComment) paragraph = !/^ {0,3}<!--/.test(line);
+      continue;
+    }
+    if (!line.trim()) { html = false; paragraph = false; continue; }
+    if (MARKDOWN_BLOCK_HTML_LINE.test(line)) html = true;
+    if (html) continue;
+    paragraph = !/^(?:#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(line);
+  }
+  return { definitions, definitionLines, signature: definitions.size ? JSON.stringify([[...definitions], [...definitionLines]]) : '', candidateFree: false };
 }
 
 export interface MobileMarkdownBlockRange {
@@ -169,12 +341,6 @@ function joinParagraphInlines(left: MobileMarkdownInline[], right: MobileMarkdow
   return [...left, ...right];
 }
 
-interface ParsedTableBlock {
-  header: string[];
-  rows: Array<{ lineIndex: number; cells: string[] }>;
-  endIndex: number;
-}
-
 interface CodeFenceState {
   language?: string;
   lines: string[];
@@ -232,6 +398,9 @@ export function parseMobileMarkdownDocument(
   const normalized = options?.sourceIsNormalized === true
     ? source
     : normalizeMathDelimiters(source, { preserveLineCount: withSrc });
+  const references = options?.referenceContext ?? collectMarkdownReferences(normalized);
+  const parseDocumentInlines = (text: string, inComment = false, raw?: MarkdownRawMarkupState['raw']) =>
+    parseMobileMarkdownInlines(text, inComment, references.definitions, raw);
   const lines = normalized.split('\n');
   const blocks: MobileMarkdownBlock[] = [];
   const ranges: MobileMarkdownBlockRange[] = [];
@@ -292,7 +461,9 @@ export function parseMobileMarkdownDocument(
   // 必须把"仍在注释内"的状态带给 inline 解析,否则注释里的图片标记会被当正常图渲染(review 实捉)。
   // 代码围栏内是字面代码,不参与注释状态推进。
   let inHtmlComment = false;
+  const rawMarkupState: MarkdownRawMarkupState = {};
   let paragraphStartsInComment = false;
+  let paragraphStartsInRaw: MarkdownRawMarkupState['raw'];
   let paragraphStart = 0;
 
   const flushParagraph = (lineIndex: number) => {
@@ -301,19 +472,19 @@ export function parseMobileMarkdownDocument(
     if (!text) return;
     let snapshot: ParagraphInlineSnapshot | undefined;
     let inlines: MobileMarkdownInline[];
-    if (!paragraphStartsInComment && text.length >= 1024) {
+    if (!paragraphStartsInComment && !paragraphStartsInRaw && text.length >= 1024) {
       const previous = previousParagraphs.get(lineNumber(paragraphStart));
       const retained = previous && text.startsWith(previous.source) ? previous : undefined;
       const from = retained?.safeOffset ?? 0;
       const safeOffset = safeParagraphInlineEnd(text, from);
       const stable = joinParagraphInlines(retained?.stable ?? [],
-        safeOffset > from ? parseMobileMarkdownInlines(text.slice(from, safeOffset)) : []);
+        safeOffset > from ? parseDocumentInlines(text.slice(from, safeOffset)) : []);
       inlines = joinParagraphInlines(stable,
-        safeOffset < text.length ? parseMobileMarkdownInlines(text.slice(safeOffset)) : []);
+        safeOffset < text.length ? parseDocumentInlines(text.slice(safeOffset)) : []);
       snapshot = { source: text, safeOffset, stable };
       reusedInlineUtf16Length += from;
     } else {
-      inlines = parseMobileMarkdownInlines(text, paragraphStartsInComment);
+      inlines = parseDocumentInlines(text, paragraphStartsInComment, paragraphStartsInRaw);
     }
     const block: MobileMarkdownBlock = {
       type: 'paragraph',
@@ -327,6 +498,13 @@ export function parseMobileMarkdownDocument(
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
+    if (references.definitionLines.has(lineNumber(index))) {
+      flushParagraph(index);
+      // Collected definitions are root blocks even though they emit no block.
+      // End the preceding list just as a visible root paragraph would.
+      listIndents.length = 0;
+      continue;
+    }
     if (code) {
       if (isClosingCodeFence(line, code)) {
         pushBlock(
@@ -335,7 +513,7 @@ export function parseMobileMarkdownDocument(
           index + 1,
         );
         code = null;
-        checkpoints.push({
+        if (!inHtmlComment && !rawMarkupState.raw) checkpoints.push({
           charOffset: lineEndOffset(index),
           lineIndex: lineNumber(index + 1),
           blockCount: blockNumber(),
@@ -349,13 +527,7 @@ export function parseMobileMarkdownDocument(
 
     if (math) {
       const mathClosingTrimmed = line.trimEnd();
-      const closesMathFence = mathClosingTrimmed.trim() === '$$'
-        || (
-          mathClosingTrimmed.endsWith('$$')
-          && !mathClosingTrimmed.endsWith('\\$$')
-          && !mathClosingTrimmed.slice(0, -2).includes('$$')
-        );
-      if (closesMathFence) {
+      if (isClosingMathFence(line)) {
         const trailingContent = mathClosingTrimmed.trim() === '$$'
           ? ''
           : mathClosingTrimmed.slice(0, -2);
@@ -369,7 +541,7 @@ export function parseMobileMarkdownDocument(
             math.start,
             index + 1,
           );
-          checkpoints.push({
+          if (!inHtmlComment && !rawMarkupState.raw) checkpoints.push({
             charOffset: lineEndOffset(index),
             lineIndex: lineNumber(index + 1),
             blockCount: blockNumber(),
@@ -381,6 +553,7 @@ export function parseMobileMarkdownDocument(
           // 硬编码 UI 文案的 i18n 问题(规则 18,review 实捉)。
           paragraphStart = math.start;
           paragraphStartsInComment = false;
+          paragraphStartsInRaw = undefined;
           paragraph = [math.openingLine ?? '$$', ...math.lines, line];
           flushParagraph(index + 1);
         }
@@ -394,6 +567,7 @@ export function parseMobileMarkdownDocument(
     const fence = parseOpeningCodeFence(line);
     if (fence) {
       flushParagraph(index);
+      rawMarkupState.raw = undefined;
       code = {
         language: fence.language,
         lines: [],
@@ -409,18 +583,20 @@ export function parseMobileMarkdownDocument(
     // 形态;模型也会原生输出)。单行 $$x$$ 直接成块(不含内嵌 $$);
     // 裸 $$ 或以 $$ 开头但未在同行闭合的行开围栏跨行收集。
     const mathTrimmed = line.trim();
-    const singleLineMath = mathTrimmed.match(/^\$\$((?:(?!\$\$).)+)\$\$$/);
-    if (singleLineMath && singleLineMath[1].trim()) {
+    const singleLineMath = singleLineMathBody(line);
+    if (singleLineMath) {
       flushParagraph(index);
+      rawMarkupState.raw = undefined;
       pushBlock(
-        buildMathBlock(singleLineMath[1], index, blockNumber(), withSrc, lineOffset),
+        buildMathBlock(singleLineMath, index, blockNumber(), withSrc, lineOffset),
         index,
         index + 1,
       );
       continue;
     }
-    if (mathTrimmed === '$$' || (mathTrimmed.startsWith('$$') && !mathTrimmed.slice(2).includes('$$'))) {
+    if (isOpeningMathFence(line)) {
       flushParagraph(index);
+      rawMarkupState.raw = undefined;
       const firstBody = mathTrimmed.slice(2).trimStart();
       math = {
         lines: firstBody ? [firstBody] : [],
@@ -435,7 +611,7 @@ export function parseMobileMarkdownDocument(
       // The final empty split segment after a trailing newline is not itself
       // a terminated line yet; retaining a checkpoint for it would advance
       // lineIndex one extra step on the next streaming append.
-      if (!inHtmlComment && paragraph.length === 0 && index < lines.length - 1) {
+      if (!inHtmlComment && !rawMarkupState.raw && paragraph.length === 0 && index < lines.length - 1) {
         checkpoints.push({
           charOffset: lineEndOffset(index),
           lineIndex: lineNumber(index + 1),
@@ -447,7 +623,8 @@ export function parseMobileMarkdownDocument(
     }
 
     const lineStartsInComment = inHtmlComment;
-    inHtmlComment = advanceHtmlCommentState(line, inHtmlComment);
+    const lineStartsInRaw = rawMarkupState.raw ? { ...rawMarkupState.raw } : undefined;
+    inHtmlComment = advanceHtmlCommentState(line, inHtmlComment, rawMarkupState);
 
     const heading = line.match(/^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/);
     if (heading) {
@@ -457,7 +634,7 @@ export function parseMobileMarkdownDocument(
         key: `h:${lineNumber(index)}:${blockNumber()}`,
         ...(withSrc ? { srcLine: lineNumber(index) } : {}),
         level: heading[1].length,
-        inlines: parseMobileMarkdownInlines(heading[2].trim(), lineStartsInComment),
+        inlines: parseDocumentInlines(heading[2].trim(), lineStartsInComment, lineStartsInRaw),
       }, index, index + 1);
       continue;
     }
@@ -467,7 +644,7 @@ export function parseMobileMarkdownDocument(
       const quoteStart = index;
       const quoteLines: string[] = [];
       while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
-        if (index > quoteStart) inHtmlComment = advanceHtmlCommentState(lines[index], inHtmlComment);
+        if (index > quoteStart) inHtmlComment = advanceHtmlCommentState(lines[index], inHtmlComment, rawMarkupState);
         quoteLines.push(lines[index].replace(/^\s*>\s?/, ''));
         index += 1;
       }
@@ -476,7 +653,7 @@ export function parseMobileMarkdownDocument(
         type: 'blockquote',
         key: `quote:${lineNumber(quoteStart)}:${blockNumber()}`,
         ...(withSrc ? { srcLine: lineNumber(quoteStart) } : {}),
-        inlines: parseMobileMarkdownInlines(quoteLines.join('\n').trim(), lineStartsInComment),
+        inlines: parseDocumentInlines(quoteLines.join('\n').trim(), lineStartsInComment, lineStartsInRaw),
       }, quoteStart, index + 1);
       continue;
     }
@@ -489,23 +666,26 @@ export function parseMobileMarkdownDocument(
       // 每个数据行的单元格用该行行首的注释状态解析,不再沿用表头行状态近似(review 实捉)。
       // 同一行内注释也可能跨单元格(| start <!-- | ![hidden] | --> |):每个 cell 以
       // "行首状态 + 前序 cell 逐个推进"后的状态解析,不再整行共用行首状态(review 实捉)。
-      const parseCellsWithCommentState = (cells: readonly string[], rowState: boolean) => {
+      const parseCellsWithCommentState = (cells: readonly string[], rowState: boolean, raw?: MarkdownRawMarkupState['raw']) => {
         let cellState = rowState;
+        const cellRawState: MarkdownRawMarkupState = { raw: raw ? { ...raw } : undefined };
         return cells.map((cell) => {
-          const parsed = parseMobileMarkdownInlines(cell, cellState);
-          cellState = advanceHtmlCommentState(cell, cellState);
+          const parsed = parseDocumentInlines(cell, cellState, cellRawState.raw);
+          cellState = advanceHtmlCommentState(cell, cellState, cellRawState);
           return parsed;
         });
       };
       const rowStartsInComment = new Map<number, boolean>();
+      const rowStartsInRaw = new Map<number, MarkdownRawMarkupState['raw']>();
       for (let consumed = index + 1; consumed <= table.endIndex; consumed += 1) {
         rowStartsInComment.set(consumed, inHtmlComment);
-        inHtmlComment = advanceHtmlCommentState(lines[consumed], inHtmlComment);
+        rowStartsInRaw.set(consumed, rawMarkupState.raw ? { ...rawMarkupState.raw } : undefined);
+        inHtmlComment = advanceHtmlCommentState(lines[consumed], inHtmlComment, rawMarkupState);
       }
-      const header = parseCellsWithCommentState(table.header, lineStartsInComment);
+      const header = parseCellsWithCommentState(table.header, lineStartsInComment, lineStartsInRaw);
       const rows = table.rows.map((row, rowIndex): MobileMarkdownTableRow => ({
         key: `tr:${lineNumber(row.lineIndex)}:${rowIndex}`,
-        cells: parseCellsWithCommentState(row.cells, rowStartsInComment.get(row.lineIndex) ?? lineStartsInComment),
+        cells: parseCellsWithCommentState(row.cells, rowStartsInComment.get(row.lineIndex) ?? lineStartsInComment, rowStartsInRaw.get(row.lineIndex)),
       }));
       index = table.endIndex;
       pushBlock({
@@ -518,7 +698,7 @@ export function parseMobileMarkdownDocument(
       continue;
     }
 
-    const list = line.match(/^(\s*)([-*]|\d+[.)])\s+(.+)$/);
+    const list = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
     if (list) {
       flushParagraph(index);
       // Use observed indentation levels rather than assuming two/four spaces:
@@ -537,13 +717,14 @@ export function parseMobileMarkdownDocument(
         marker,
         ...(depth ? { depth } : {}),
         checked: task ? task[1].toLowerCase() === 'x' : undefined,
-        inlines: parseMobileMarkdownInlines(task ? task[2] : list[3], lineStartsInComment),
+        inlines: parseDocumentInlines(task ? task[2] : list[3], lineStartsInComment, lineStartsInRaw),
       }, index, index + 1);
       continue;
     }
 
     if (paragraph.length === 0) {
       paragraphStartsInComment = lineStartsInComment;
+      paragraphStartsInRaw = lineStartsInRaw;
       paragraphStart = index;
     }
     paragraph.push(line);
@@ -569,7 +750,7 @@ export function parseMobileMarkdownDocument(
       : ['$$', ...math.lines];
   }
   flushParagraph(lines.length);
-  return {
+  const result: MobileMarkdownParseResult = {
     source: normalized,
     blocks,
     ranges,
@@ -579,6 +760,8 @@ export function parseMobileMarkdownDocument(
     parsedSourceUtf16Length: normalized.length,
     reusedInlineUtf16Length,
   };
+  referenceContexts.set(result, references);
+  return result;
 }
 
 /**
@@ -595,6 +778,16 @@ export function parseMobileMarkdownIncremental(
   if (!previous || !normalizedInput.startsWith(previous.source)) {
     return parseMobileMarkdownDocument(input);
   }
+
+  const priorReferences = referenceContexts.get(previous) ?? collectMarkdownReferences(previous.source);
+  // Without an earlier definition-shaped line, only the former last physical
+  // line and appended text can introduce one. Reuse the known empty context.
+  const references = priorReferences.candidateFree
+    && !REFERENCE_DEFINITION_CANDIDATE.test(normalizedInput.slice(previous.source.lastIndexOf('\n') + 1))
+    ? priorReferences
+    : collectMarkdownReferences(normalizedInput);
+  // A definition appended at the end can resolve references in any earlier block.
+  if (references.signature !== priorReferences.signature) return parseMobileMarkdownDocument(input);
 
   // normalizeMathDelimiters can resolve a delimiter that was incomplete in an
   // earlier streaming flush. In that case the normalized prefix itself changes
@@ -648,10 +841,11 @@ export function parseMobileMarkdownIncremental(
       blockIndexOffset: checkpoint.blockCount,
       charOffset: suffixCharOffset,
       previous,
+      referenceContext: references,
     },
   );
 
-  return {
+  const result: MobileMarkdownParseResult = {
     source: normalizedInput,
     blocks: [
       ...previous.blocks.slice(0, checkpoint.blockCount),
@@ -672,6 +866,8 @@ export function parseMobileMarkdownIncremental(
     parsedSourceUtf16Length: suffixResult.parsedSourceUtf16Length,
     reusedInlineUtf16Length: suffixResult.reusedInlineUtf16Length,
   };
+  referenceContexts.set(result, references);
+  return result;
 }
 
 function hasUnclosedEscapedMathDelimiter(source: string): boolean {
@@ -1229,17 +1425,21 @@ function stripCodeFenceIndent(line: string, indent: string): string {
 export function parseMobileMarkdownInlines(
   input: string,
   startsInsideHtmlComment = false,
+  references: MarkdownReferenceDefinitions = new Map(),
+  startsInsideRaw?: MarkdownRawMarkupState['raw'],
 ): MobileMarkdownInline[] {
-  return parseInlines(input, startsInsideHtmlComment, false);
+  return parseInlines(input, startsInsideHtmlComment, false, references, startsInsideRaw);
 }
 
 function parseInlines(
   input: string,
   startsInsideHtmlComment: boolean,
   imagesAsText: boolean,
+  references: MarkdownReferenceDefinitions,
+  startsInsideRaw?: MarkdownRawMarkupState['raw'],
 ): MobileMarkdownInline[] {
   const out: MobileMarkdownInline[] = [];
-  const context = createInlineParseContext(input, startsInsideHtmlComment);
+  const context = createInlineParseContext(input, startsInsideHtmlComment, references, startsInsideRaw);
   let cursor = 0;
   while (cursor < input.length) {
     const token = findNextInlineToken(input, cursor, context);
@@ -1281,9 +1481,8 @@ function parseMarkedInlines(
   index: number,
   context: InlineParseContext,
 ): MobileMarkdownInline[] {
-  const innerStartsInsideHtmlComment = context.needsCommentCheck
-    && isInsideHtmlComment(context.commentProbe(), index, context.startsInsideHtmlComment);
-  return parseInlines(text, innerStartsInsideHtmlComment, true).map((inline) => (
+  const state = context.markupStateAt(index);
+  return parseInlines(text, state.inComment, true, context.references, state.raw).map((inline) => (
     inline.type === 'text'
       ? { type: mark, text: inline.text }
       : { ...inline, marks: [mark, ...(inline.marks ?? [])] }
@@ -1300,18 +1499,83 @@ function mobileMarkdownWrapMarker(prefix: string): string | null {
 // Image guards inspect the whole paragraph, not the remaining suffix: a later
 // disallowed HTML tag must still suppress an earlier image. Prepare those masks
 // lazily once rather than copying/scanning the paragraph for every inline token.
-function createInlineParseContext(input: string, startsInsideHtmlComment: boolean) {
+function createInlineParseContext(input: string, startsInsideHtmlComment: boolean, references: MarkdownReferenceDefinitions, startsInsideRaw?: MarkdownRawMarkupState['raw']) {
   let probe: string | undefined;
   let imagesAllowed: boolean | undefined;
   let bareUrl: ReturnType<typeof matchBareUrl> | undefined;
+  let tagSpans: Array<[number, number]> | undefined;
+  let markupSpans: Array<[number, number]> | undefined;
+  let reference: ReturnType<typeof nextMarkdownReference> | undefined;
+  const contains = (spans: Array<[number, number]>, index: number) => {
+    let low = 0;
+    let high = spans.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (spans[middle][0] <= index) low = middle + 1;
+      else high = middle;
+    }
+    return low > 0 && index < spans[low - 1][1];
+  };
+  const needsCommentCheck = startsInsideHtmlComment || input.includes('<!--');
+  const needsMarkupState = startsInsideRaw !== undefined || startsInsideHtmlComment || /<!|<\?/.test(input);
+  let markupStateCursor = 0;
+  let markupStateInComment = startsInsideHtmlComment;
+  const markupState: MarkdownRawMarkupState = { raw: startsInsideRaw ? { ...startsInsideRaw } : undefined };
   const commentProbe = () => (probe ??= blankEscapedAngles(blankCodeSpans(input)));
+  const literalOpeningIgnored = (at: number) => {
+    if (!tagSpans) {
+      tagSpans = [];
+      HTML_TAG_SPAN_RE.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = HTML_TAG_SPAN_RE.exec(input)) !== null) {
+        tagSpans.push([match.index, match.index + match[0].length]);
+      }
+    }
+    return contains(tagSpans, at) || commentProbe()[at] !== input[at];
+  };
   return {
     startsInsideHtmlComment,
+    references,
     search: createMarkdownRegexSearch<{ index: number; end: number; inline: MobileMarkdownInline } | null>(input),
-    needsCommentCheck: startsInsideHtmlComment || input.includes('<!--'),
+    needsCommentCheck,
     hasMarkdownImage: input.includes('!['),
     hasHtmlImage: HTML_IMG_HINT_RE.test(input),
     commentProbe,
+    nextReference: (from: number) => {
+      // An unresolved label is immutable too. Keep the next resolved candidate
+      // (or terminal miss) while other inline grammars consume earlier tokens.
+      if (reference === undefined || (reference !== null && reference.index < from)) {
+        reference = nextMarkdownReference(input, from, references, regex => regex.exec(input));
+      }
+      return reference;
+    },
+    markupStateAt: (index: number) => {
+      if (!needsMarkupState) return { inComment: false, raw: undefined };
+      // Marked tokens advance monotonically within this immutable context.
+      // Preserve the consumed raw/comment state instead of rescanning prefixes.
+      if (index < markupStateCursor) {
+        markupStateCursor = 0;
+        markupStateInComment = startsInsideHtmlComment;
+        markupState.raw = startsInsideRaw ? { ...startsInsideRaw } : undefined;
+      }
+      const from = markupStateCursor;
+      const last = markdownLiteralMarkupSpans(input.slice(from, index), markupStateInComment,
+        at => literalOpeningIgnored(from + at), markupState).at(-1);
+      markupStateCursor = index;
+      markupStateInComment = Boolean(last?.comment && !last.closed);
+      return { inComment: markupStateInComment, raw: markupState.raw ? { ...markupState.raw } : undefined };
+    },
+    referenceInsideMarkup: (index: number) => {
+      if (literalOpeningIgnored(index) && tagSpans && contains(tagSpans, index)) return true;
+      if (!markupSpans) {
+        markupSpans = markdownLiteralMarkupSpans(
+          input, startsInsideHtmlComment,
+          literalOpeningIgnored,
+          { raw: startsInsideRaw ? { ...startsInsideRaw } : undefined },
+        ).map(span => [span.start, span.end]);
+      }
+      return contains(markupSpans, index);
+    },
     nextBareUrl: (from: number) => {
       // parseInlines advances monotonically. Reuse only this paragraph's pending
       // candidate (including a miss), never a token whose start was consumed.
@@ -1331,6 +1595,41 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
 }
 type InlineParseContext = ReturnType<typeof createInlineParseContext>;
 
+const REFERENCE_LINK_URL_RE = new RegExp(
+  `^(?:https?://[^\\s]+|(?:${DEEP_LINK_SCHEME_GROUP})://(?:session|project)/[^\\s]+|cindy-media://blobs/[0-9a-f]{64}\\.(?:mp4|webm|mov))$`,
+);
+
+function matchMarkdownReference(input: string, from: number, context: InlineParseContext): {
+  index: number; end: number; inline: MobileMarkdownInline;
+} | null {
+  let cursor = from;
+  while (cursor < input.length) {
+    const reference = context.nextReference(cursor);
+    if (!reference) return null;
+    cursor = reference.end;
+    if (reference.image && isBackslashEscaped(input, reference.index)) {
+      // Escaping ! leaves the following bracket available as a normal link.
+      cursor = reference.index + 1;
+      continue;
+    }
+    if (isBackslashEscaped(input, reference.index)
+      || context.referenceInsideMarkup(reference.index)) continue;
+    const url = reference.url;
+    // Entity decoding must not introduce controls into a native URL/path target.
+    if (/[\x00-\x1f\x7f]/.test(url)) continue;
+    if (reference.image) {
+      if (!context.allowsImages()
+        || (!(SAFE_IMAGE_SRC_RE.test(url) && !/\s/.test(url)) && !classifyChatPathLinkTarget(url))) continue;
+      return { ...reference, inline: { type: 'image', alt: reference.text,
+        url: SAFE_IMAGE_SRC_RE.test(url) ? normalizeImageUrlScheme(url) : url } };
+    }
+    if (!REFERENCE_LINK_URL_RE.test(url) && !classifyChatPathLinkTarget(url)) continue;
+    return { ...reference, inline: { type: 'link', text: reference.text, url,
+      ...(url.startsWith('cindy-media://') ? { managedMediaKind: 'video' as const } : {}) } };
+  }
+  return null;
+}
+
 function findNextInlineToken(
   input: string,
   from: number,
@@ -1342,6 +1641,7 @@ function findNextInlineToken(
     // 靠 image 的起点(`!`)更靠前在排序里胜出,这里的顺序只是可读性上的强调。
     context.search.next('MarkdownImage', from, () => matchMarkdownImage(input, from, context)),
     context.search.next('HtmlImage', from, () => matchHtmlImage(input, from, context)),
+    matchMarkdownReference(input, from, context),
     // 链接语法:http(s) 之外放行 Cindy 深链(双 scheme:cindy 主 + xdt-maker
     // 兼容存量消息)session|project/(session 渲染成会话 chip;project 在
     // renderInline 里显示 label 纯文本,不落 Linking.openURL——桌面端粘贴
@@ -1589,26 +1889,6 @@ const HTML_IMG_HINT_RE = /<img/i;
 // 与 inline matcher 同口径,标记检测在 code-span 空白填充的副本上做:文档文本里的字面 `<!--`
 // 不能把状态卡在"注释内"、吞掉后续段落的图片(review 实捉)。取舍:注释内部文本里的反引号
 // 本无 code-span 语义,填充可能漏掉恰好被反引号夹住的 -->,该形态远罕于字面 `<!--` 的文档场景。
-function advanceHtmlCommentState(line: string, inComment: boolean): boolean {
-  const scan = blankCodeSpans(line);
-  let pos = 0;
-  let state = inComment;
-  while (pos < scan.length) {
-    if (state) {
-      const close = scan.indexOf('-->', pos);
-      if (close === -1) return true;
-      state = false;
-      pos = close + 3;
-    } else {
-      const open = scan.indexOf('<!--', pos);
-      if (open === -1) return false;
-      state = true;
-      pos = open + 4;
-    }
-  }
-  return state;
-}
-
 // code span 以等长空白填充(偏移保持):`<div>` / `<!--` 这类行内代码里的字面标记是代码文本、
 // 不是任意 HTML,不参与拒转判定;等长填充让注释 span 的位置与原串上的匹配位置对齐。
 function blankCodeSpans(input: string): string {
@@ -1899,103 +2179,4 @@ function pushText(out: MobileMarkdownInline[], text: string): void {
 
 function trimUrlPunctuation(url: string): string {
   return url.replace(/[),.;:!?]+$/g, '');
-}
-
-function parseTableBlock(lines: readonly string[], index: number): ParsedTableBlock | null {
-  const header = parseTableRow(lines[index]);
-  if (!isTableDataRow(lines[index]) || header.length < 2) return null;
-
-  if (isTableSeparator(lines[index + 1] ?? '')) {
-    const rows: ParsedTableBlock['rows'] = [];
-    let rowIndex = index + 2;
-    while (rowIndex < lines.length && isTableDataRow(lines[rowIndex])) {
-      rows.push({
-        lineIndex: rowIndex,
-        cells: parseTableRow(lines[rowIndex]),
-      });
-      rowIndex += 1;
-    }
-    return {
-      header,
-      rows,
-      endIndex: rowIndex - 1,
-    };
-  }
-
-  return parseLooseTableBlock(lines, index, header);
-}
-
-function parseLooseTableBlock(
-  lines: readonly string[],
-  index: number,
-  header: string[],
-): ParsedTableBlock | null {
-  if (!isLooseTableDataRow(lines[index])) return null;
-  const columnCount = header.length;
-  const rows: ParsedTableBlock['rows'] = [];
-  let rowIndex = index + 1;
-  while (rowIndex < lines.length && isLooseTableDataRow(lines[rowIndex])) {
-    const cells = parseTableRow(lines[rowIndex]);
-    if (cells.length !== columnCount) break;
-    rows.push({
-      lineIndex: rowIndex,
-      cells,
-    });
-    rowIndex += 1;
-  }
-  if (rows.length === 0) return null;
-  return {
-    header,
-    rows,
-    endIndex: rowIndex - 1,
-  };
-}
-
-function isTableDataRow(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.includes('|') && !isTableSeparator(trimmed);
-}
-
-function isLooseTableDataRow(line: string): boolean {
-  const cells = parseTableRow(line);
-  return isTableDataRow(line) && cells.length >= 2 && cells.every((cell) => cell.length > 0);
-}
-
-function isTableSeparator(line: string): boolean {
-  const cells = parseTableRow(line);
-  if (cells.length < 2) return false;
-  return cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
-}
-
-function parseTableRow(line: string): string[] {
-  let trimmed = line.trim();
-  if (trimmed.startsWith('|')) trimmed = trimmed.slice(1);
-  if (endsWithUnescapedPipe(trimmed)) trimmed = trimmed.slice(0, -1);
-  const cells: string[] = [];
-  let cell = '';
-  for (let index = 0; index < trimmed.length; index++) {
-    const char = trimmed[index];
-    if (char === '\\' && trimmed[index + 1] === '|') {
-      cell += '|';
-      index += 1;
-      continue;
-    }
-    if (char === '|') {
-      cells.push(cell.trim());
-      cell = '';
-      continue;
-    }
-    cell += char;
-  }
-  cells.push(cell.trim());
-  return cells;
-}
-
-function endsWithUnescapedPipe(value: string): boolean {
-  if (!value.endsWith('|')) return false;
-  let backslashCount = 0;
-  for (let index = value.length - 2; index >= 0 && value[index] === '\\'; index--) {
-    backslashCount += 1;
-  }
-  return backslashCount % 2 === 0;
 }

@@ -7,6 +7,7 @@ import {
   mobileMarkdownListMarkerText,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageTitle,
+  mobileMarkdownPreviewText,
   mobileMarkdownImageUrlForWorkdir,
   mobileMarkdownManagedImagePreviewUrl,
   mobileMarkdownImageAltChipText,
@@ -2271,4 +2272,744 @@ it('uses rendered nested-prefix offsets when quoting text with an emoji', () => 
   const rendered = prefix + item.inlines.map(i => i.type === 'image' ? i.alt : i.text).join('');
   expect(sliceRenderedSelection([rendered], prefix.length, rendered.length)).toBe('B😀C');
   expect(sliceRenderedSelection([rendered], 0, rendered.length)).toBe('\u2003◦ B😀C');
+});
+
+
+function inlines(source: string) {
+  return parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines
+    : block.type === 'table' ? [...block.header, ...block.rows.flatMap(row => row.cells)].flat() : []);
+}
+const link = { type: 'link', text: 'site', url: 'https://example.com/' };
+const image = { type: 'image', alt: 'picture', url: 'https://example.com/a.png' };
+
+describe('Markdown reference links and images (#9440)', () => {
+  it('resolves definitions before or after uses and omits definition paragraphs', () => {
+    const uses = '[site][s]\n\n![picture][p]';
+    const definitions = '[s]: https://example.com/\n[p]: <https://example.com/a.png> "Caption"';
+    for (const source of [uses + '\n\n' + definitions, definitions + '\n\n' + uses]) {
+      expect(inlines(source)).toEqual([link, image]);
+      expect(parseMobileMarkdown(source)).toHaveLength(2);
+      expect(collectMobileMarkdownImages(source)).toEqual([image]);
+      expect(mobileMarkdownPreviewText(source)).toBe('site picture');
+    }
+  });
+
+  it('supports collapsed, shortcut and normalized labels; first definition wins', () => {
+    const source = '[site][] [SiTe] ![picture][] ![PICTURE]\n\n'
+      + '[SITE]: https://example.com/\n[site]: https://wrong.example/\n'
+      + '[picture]: https://example.com/a.png\n'
+      + '[multi label]: https://example.com/multi\n\n[text][  MULTI   label ]';
+    const parsed = inlines(source);
+    expect(parsed.filter(value => value.type === 'link').map(value => value.url)).toEqual([
+      'https://example.com/', 'https://example.com/', 'https://example.com/multi',
+    ]);
+    expect(parsed.filter(value => value.type === 'image')).toHaveLength(2);
+  });
+
+  it('keeps unresolved references literal instead of manufacturing URLs', () => {
+    expect(inlines('[missing][no] ![image][absent] [shortcut]')).toEqual([
+      { type: 'text', text: '[missing][no] ![image][absent] [shortcut]' },
+    ]);
+  });
+
+  it('accepts balanced destinations and optional multiline titles', () => {
+    const source = '[one][a] [two][b]\n\n'
+      + '[a]: <https://example.com/a?x=1&amp;y=2>\n  "first\nsecond"\n\n'
+      + '[b]:\n https://example.com/a(1).png \'title\'';
+    expect(inlines(source).filter(value => value.type === 'link').map(value => value.url)).toEqual([
+      'https://example.com/a?x=1&y=2', 'https://example.com/a(1).png',
+    ]);
+    expect(mobileMarkdownPreviewText(source)).toBe('one two');
+  });
+
+  it('uses the existing scheme/path boundary for links and images', () => {
+    const hash = 'a'.repeat(64);
+    const source = '[control][c] ![control][c] [bad][j] ![bad][d] [file][f] ![local][f] [video][v] ![managed][m]\n\n'
+      + '[c]: https://example.com/&#1;\n[j]: javascript&#58;alert(1)\n[d]: data:image/png;base64,abc\n'
+      + '[f]: <docs/a b.png>\n'
+      + '[v]: cindy-media://blobs/' + hash + '.mp4\n'
+      + '[m]: cindy-media://blobs/' + hash + '.png';
+    const parsed = inlines(source);
+    expect(parsed.filter(value => value.type === 'link')).toEqual([
+      { type: 'link', text: 'file', url: 'docs/a b.png' },
+      { type: 'link', text: 'video', url: 'cindy-media://blobs/' + hash + '.mp4', managedMediaKind: 'video' },
+    ]);
+    expect(parsed.filter(value => value.type === 'image')).toEqual([
+      { type: 'image', alt: 'local', url: 'docs/a b.png' },
+      { type: 'image', alt: 'managed', url: 'cindy-media://blobs/' + hash + '.png' },
+    ]);
+  });
+
+  it('does not collect definitions from code, math, HTML comments or raw HTML', () => {
+    for (const enclosed of [
+      '~~~md\n[x]: https://example.com/\n~~~',
+      '$$\n[x]: https://example.com/\n$$',
+      '<!--\n[x]: https://example.com/\n-->',
+      '<div>\n[x]: https://example.com/\n</div>',
+    ]) {
+      expect(inlines('[target][x]\n\n' + enclosed).some(value => value.type === 'link' && value.text === 'target')).toBe(false);
+    }
+    expect(mobileMarkdownPreviewText('paragraph\n[x]: https://example.com/\n\n[target][x]')).toContain('[target][x]');
+    expect(inlines('[site][s]\n\n$$\n~~~\n<!--\n[x]: https://wrong.example/\n$$\n\n[s]: https://example.com/')
+      .filter(value => value.type === 'link')).toEqual([link]);
+  });
+
+  it('preserves code and escaping and resolves references inside emphasis', () => {
+    const tick = String.fromCharCode(96);
+    const parsed = inlines(tick + '[site][s]' + tick + ' \\[site][s] **[site][s]**\n\n[s]: https://example.com/');
+    expect(parsed[0]).toEqual({ type: 'code', text: '[site][s]' });
+    expect(parsed.filter(value => value.type === 'link')).toEqual([{ ...link, marks: ['strong'] }]);
+  });
+
+  it('resolves references in headings, quotes, lists and table cells', () => {
+    const source = '# [site][s]\n\n> [site][s]\n\n- [site][s]\n\n'
+      + '| label | image |\n| --- | --- |\n| [site][s] | ![picture][p] |\n\n'
+      + '[s]: https://example.com/\n[p]: https://example.com/a.png';
+    expect(inlines(source).filter(value => value.type === 'link')).toEqual([link, link, link, link]);
+    expect(collectMobileMarkdownImages(source)).toEqual([image]);
+  });
+
+  it('keeps original source line positions when definitions are hidden', () => {
+    const source = '[s]: https://example.com/\n\n[site][s]\n\ntext';
+    const parsed = parseMobileMarkdownDocument(source, { srcLines: true });
+    expect(parsed.blocks.map(block => block.srcLine)).toEqual([2, 4]);
+    expect(parsed.ranges).toEqual([{ startLine: 2, endLineExclusive: 3 }, { startLine: 4, endLineExclusive: 5 }]);
+  });
+
+  it('reparses earlier blocks when a streamed definition first appears or grows', () => {
+    const prefix = '[site][s]\n\n![picture][p]\n\n';
+    const tail = '[s]: https://example.com/\n[p]: https://example.com/a.png';
+    let result = parseMobileMarkdownIncremental(prefix);
+    for (let count = 1; count <= tail.length; count++) {
+      const source = prefix + tail.slice(0, count);
+      result = parseMobileMarkdownIncremental(source, result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(source).blocks);
+    }
+    expect(result.blocks.flatMap(block => 'inlines' in block ? block.inlines : [])).toEqual([link, image]);
+  });
+
+  it('invalidates long inline prefixes when a late definition resolves them', () => {
+    const prefix = 'plain '.repeat(250) + '[site][s]\n\n';
+    const first = parseMobileMarkdownIncremental(prefix);
+    const source = prefix + '[s]: https://example.com/';
+    const resolved = parseMobileMarkdownIncremental(source, first);
+    expect(resolved.blocks).toEqual(parseMobileMarkdownDocument(source).blocks);
+    expect(resolved.blocks[0]).toMatchObject({ inlines: expect.arrayContaining([link]) });
+  });
+
+  it('retains resolved references when append-only parsing reuses earlier blocks', () => {
+    const source = '[s]: https://example.com/\n\n[site][s]\n\n';
+    const previous = parseMobileMarkdownIncremental(source);
+    const next = parseMobileMarkdownIncremental(source + 'next [site][s]', previous);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(source + 'next [site][s]').blocks);
+    expect(next.reusedBlockCount).toBeGreaterThan(0);
+    expect(next.blocks[0]).toBe(previous.blocks[0]);
+  });
+});
+
+// #9440: collector exclusions and incremental/full equivalence use the same
+// production document parser as chat, previews and the source-line reader.
+describe('reference definition boundaries', () => {
+  it('shares opening and trailing display math boundaries with the block parser', () => {
+    for (const math of ['$$x\n\n[fake]: https://wrong.example/\ny$$', '$$\nx\ny$$', '$$x$$']) {
+      const source = '[site][s] [fake]\n\n' + math + '\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link')).toEqual([link]);
+      expect(parseMobileMarkdown(source).some(block => block.type === 'math')).toBe(true);
+    }
+  });
+
+  it('does not activate references inside HTML attributes or blank-separated raw HTML', () => {
+    const source = '<span title="[site][s]">label</span>\n\n'
+      + '<script>\n\n[hidden]: https://wrong.example/\n</script>\n\n'
+      + '[site][s] [hidden]\n\n[s]: https://example.com/';
+    expect(inlines(source).filter(value => value.type === 'link' && ['site', 'hidden'].includes(value.text))).toEqual([link]);
+  });
+
+  // #9440 / PR #11411 P2: unit production parser must preserve fenced text
+  // after HTML and never activate definitions from it. Existing cases isolated
+  // HTML from fences; the minimal failure is <div> + ~~~md + blank + [s]: URL.
+  it('keeps fence boundaries consistent after HTML while definitions stream in', () => {
+    const definition = '[s]: https://example.com/';
+    for (const [open, close] of [['<div>', '</div>'], ['<pre>', '</pre>'], ['<!--', '-->']]) {
+      for (const [fence, end, type] of [['~~~md', '~~~', 'code'], ['$$', '$$', 'math']]) {
+        const source = [open, fence, '', definition, end, close, '', '[site][s]'].join('\n');
+        const blocks = parseMobileMarkdownDocument(source, { srcLines: true }).blocks;
+        expect(blocks.find(block => block.type === type)).toMatchObject({
+          type, srcLine: 1, text: type === 'code' ? '\n' + definition : definition,
+        });
+        expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+        let result = parseMobileMarkdownIncremental('');
+        for (let end = 1; end <= source.length; end++) {
+          const value = source.slice(0, end);
+          result = parseMobileMarkdownIncremental(value, result);
+          expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+        }
+        const withRootDefinition = source + '\n\n' + definition;
+        expect(inlines(withRootDefinition).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      }
+    }
+  });
+
+  // PR #11411 P2: inline comments must not let a definition interrupt a
+  // paragraph; standalone comment boundaries and table endings differ.
+  it('keeps definitions literal in open paragraphs containing inline comments', () => {
+    for (const prefix of ['[site][s] <!-- note -->', '[site][s] <!-- note\ncontinued -->']) {
+      const source = prefix + '\n[s]: https://example.com/';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(mobileMarkdownPreviewText(source)).toContain('[s]:');
+    }
+    for (const item of ['- item', '- item <!-- note -->']) {
+      const source = '[site][s]\n\n' + item + '\n\n  [s]: https://wrong.example/';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+    }
+    for (const block of ['# heading', '> quote', '- item']) {
+      const source = '[site][s]\n\n' + block + ' <!-- note -->\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    }
+    const standalone = '[site][s]\n\n<!-- note -->\n[s]: https://example.com/';
+    expect(inlines(standalone).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+  });
+
+  it('collects definitions immediately after tables without leading pipes', () => {
+    for (const table of ['name | value\n--- | ---\na | b', 'name | value\na | b', 'name <!-- note --> | value\n--- | ---\na | b']) {
+      const source = '[site][s]\n\n' + table + '\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      expect(mobileMarkdownPreviewText(source)).not.toContain('[s]:');
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+  });
+
+  // #9440 / current review: non-table pipes remain paragraphs; root
+  // definitions after lists use content indentation, not marker indentation.
+  // Unit production entry; earlier table/list cases omitted these boundaries.
+  it('does not let non-table pipe lines introduce definitions', () => {
+    for (const line of ['| note', '| note <!-- comment -->']) {
+      const source = '[site][s]\n\n' + line + '\n[s]: https://example.com/';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(mobileMarkdownPreviewText(source)).toContain('[s]:');
+    }
+  });
+
+  it('distinguishes root definitions from list content indentation', () => {
+    for (const [item, rootIndent, nestedIndent] of [['- item', ' ', '  '], ['10. item', '   ', '    '], ['9. first\n10. second', '   ', '    '], ['- parent\n  10. child', ' ', '  '], ['  - item', '   ', '    ']]) {
+      const prefix = '[site][s]\n\n' + item + '\n\n';
+      expect(inlines(prefix + rootIndent + '[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      expect(inlines(prefix + nestedIndent + '[s]: https://wrong.example/').some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      const source = prefix + rootIndent + '[s]: https://example.com/';
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+  });
+
+  // #9440 / review 4624073426: block boundaries can end a prior list.
+  // Unit production entry; prior list cases did not cross these boundaries.
+  it('ends list scope at root blocks while preserving nested block ancestors', () => {
+    for (const indent of ['', '  ']) {
+      for (const lines of [
+        ['name | value', '--- | ---', 'a | b'],
+        ['~~~md', 'code', '~~~'],
+        ['$$', 'x', '$$'],
+      ]) {
+        const block = lines.map(line => indent + line).join('\n');
+        const source = '[site][s]\n\n- item\n\n' + block + '\n  [s]: https://example.com/';
+        expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual(indent ? [] : [link]);
+        let result = parseMobileMarkdownIncremental('');
+        for (let end = 1; end <= source.length; end++) {
+          const value = source.slice(0, end);
+          result = parseMobileMarkdownIncremental(value, result);
+          expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+        }
+      }
+    }
+  });
+
+  // #9440 / review 4624231454: whitespace-only display math remains a
+  // paragraph. Unit production entry; prior math cases only used nonempty bodies.
+  it('preserves open paragraphs around whitespace-only display math', () => {
+    for (const body of [' ', '\t', ' \t ']) {
+      const prefix = '[site][s]\n\n$$' + body + '$$';
+      const source = prefix + '\n[s]: https://example.com/';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(mobileMarkdownPreviewText(source)).toContain('[s]:');
+      expect(inlines(prefix + '\n\n[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+    const valid = '[site][s]\n\n$$ x $$\n[s]: https://example.com/';
+    expect(inlines(valid).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    expect(parseMobileMarkdownDocument(valid).blocks.some(block => block.type === 'math')).toBe(true);
+  });
+
+  // #9440 / review 4624401097: autolinks are ordinary paragraph input, not
+  // raw HTML openers. Unit production entry; prior HTML cases used real tags.
+  it('recognizes definition boundaries after autolinks without treating them as HTML', () => {
+    for (const autolink of ['<a@example.com>', '<https://example.com/>']) {
+      const source = '[site][s]\n\n' + autolink + '\n# heading\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      expect(mobileMarkdownPreviewText(source)).not.toContain('[s]:');
+      const paragraph = '[site][s]\n\n' + autolink + '\n[s]: https://example.com/';
+      expect(inlines(paragraph).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+    const html = '[site][s]\n\n<div>\n# heading\n[s]: https://example.com/\n</div>';
+    expect(inlines(html).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+  });
+
+  // #9440 / review 4624401108: an excluded comment can leave a list too.
+  // Unit production entry; prior comment cases did not dedent the closer.
+  it('unwinds list scopes on dedented comment lines and retains nested ancestors', () => {
+    for (const close of ['-->', '  -->']) {
+      const source = '[site][s]\n\n- item\n  <!--\n' + close + '\n\n  [s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual(close.startsWith(' ') ? [] : [link]);
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+  });
+
+  // #9440 / review 4624540427: excluded HTML lines still leave list scopes.
+  // Unit production entry; prior HTML tests did not cross a dedented closer.
+  it('unwinds list scopes on dedented HTML continuations and closers', () => {
+    for (const tag of ['div', 'pre']) {
+      for (const indent of ['', '  ']) {
+        const source = '[site][s]\n\n- item\n  <' + tag + '>\n' + indent + '</' + tag + '>\n\n  [s]: https://example.com/';
+        expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual(indent ? [] : [link]);
+        let result = parseMobileMarkdownIncremental('');
+        for (let end = 1; end <= source.length; end++) {
+          const value = source.slice(0, end);
+          result = parseMobileMarkdownIncremental(value, result);
+          expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+        }
+      }
+    }
+  });
+
+  // #9440 / review 4624540428: body block boundaries apply inside comments.
+  // Unit production entry; prior cases only closed comments on ordinary lines.
+  it('honors structural boundaries on comment continuation lines', () => {
+    for (const close of ['# heading -->', '> quote -->', '- item -->', 'name | value\na | -->']) {
+      const source = '[site][s]\n\ntext <!--\n' + close + '\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      expect(mobileMarkdownPreviewText(source)).not.toContain('[s]:');
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+    const paragraph = '[site][s]\n\ntext <!--\ncontinued -->\n[s]: https://example.com/';
+    expect(inlines(paragraph).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+  });
+
+  // #9440 / review 4624662216: inline HTML does not interrupt an open
+  // paragraph. Unit production entry; prior HTML cases used block tags.
+  it('keeps definitions visible after inline HTML but excludes block HTML', () => {
+    const inline = '[site][s]\n\ntext\n<span>inline</span>\n# heading\n[s]: https://example.com/';
+    expect(inlines(inline).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    expect(mobileMarkdownPreviewText(inline)).not.toContain('[s]:');
+    const block = '[site][s]\n\ntext\n<pre>\n[s]: https://wrong.example/\n</pre>\n# heading';
+    expect(inlines(block).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+    let result = parseMobileMarkdownIncremental('');
+    for (let end = 1; end <= inline.length; end++) {
+      const value = inline.slice(0, end);
+      result = parseMobileMarkdownIncremental(value, result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+    }
+  });
+
+  // #9440 / review PRRT_kwDOTgdRUs65V-BZ: special raw-HTML declarations
+  // have explicit terminators and must not hide a following root definition.
+  it('closes special raw HTML declarations at their own terminators', () => {
+    for (const declaration of [
+      '<!DOCTYPE html>',
+      '<?xml version="1.0"?>',
+      '<![CDATA[content]]>',
+    ]) {
+      const source = '[site][s]\n\n' + declaration + '\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      expect(mobileMarkdownPreviewText(source)).not.toContain('[s]:');
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+  });
+
+  // #9440 / review 4625242633: a hidden root definition ends the prior list.
+  // Unit production entry; earlier boundary tests only checked resolved links.
+  it('ends list nesting when consuming root reference definitions', () => {
+    for (const definition of ['[s]: https://example.com/', ' [s]: https://example.com/\n  "title"']) {
+      const source = '- first\n' + definition + '\n  - second\n    - child';
+      const result = parseMobileMarkdownDocument(source, { srcLines: true });
+      expect(result.blocks.filter(block => block.type === 'list_item').map(block => block.depth ?? 0)).toEqual([0, 0, 1]);
+      expect(result.blocks[1].srcLine).toBe(source.split('\n').indexOf('  - second'));
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    }
+    const nested = '- first\n\n  [s]: https://example.com/\n  - second';
+    expect(parseMobileMarkdownDocument(nested).blocks.filter(block => block.type === 'list_item').map(block => block.depth ?? 0)).toEqual([0, 1]);
+  });
+
+  // #9440 / reviews 4625603886/3895/3901: validate actual reference targets
+  // and HTML exclusion boundaries, not just whether a token was recognized.
+  it('preserves escaped continuation destinations before math normalization', () => {
+    for (const path of ['docs/a\\(1\\).md', 'docs/a\\[1\\].md']) {
+      const source = '[file][f]\n\n[f]:\n ' + path + '\n\n\\(x\\)';
+      for (const srcLines of [false, true]) {
+        const result = parseMobileMarkdownDocument(source, { srcLines });
+        expect(result.blocks[0]).toMatchObject({ inlines: [{ type: 'link', text: 'file', url: path.replace(/\\/g, '') }] });
+      }
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    }
+  });
+
+  it('excludes reference definitions inside the complete block HTML tag set', () => {
+    for (const tag of ['iframe', 'base', 'basefont', 'col', 'frame', 'frameset', 'menuitem', 'noframes', 'optgroup', 'option', 'param', 'search']) {
+      const source = '[site][s]\n\n<' + tag + '>\n# hidden\n[s]: https://wrong.example/\n</' + tag + '>';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(inlines(source + '\n\n[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    }
+  });
+
+  it('ends generic HTML declarations at the first closing angle', () => {
+    for (const declaration of ['<!ELEMENT note>', '<!ATTLIST note\n id ID #REQUIRED>']) {
+      const source = '[site][s]\n\n' + declaration + '\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    }
+  });
+
+  it('does not let nested definitions change root references', () => {
+    const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
+    expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+  });
+
+  it('keeps full and incremental output equivalent while multiline titles arrive', () => {
+    const source = '[site][s]\n\n[s]: https://example.com/\n  "first\nsecond"\n\nafter [site][s]';
+    let result = parseMobileMarkdownIncremental('');
+    for (let end = 1; end <= source.length; end++) {
+      const value = source.slice(0, end);
+      result = parseMobileMarkdownIncremental(value, result);
+      const full = parseMobileMarkdownDocument(value);
+      expect(result.blocks).toEqual(full.blocks);
+      expect(result.ranges).toEqual(full.ranges);
+    }
+  });
+});
+
+it('resolves full reference images with empty alt text like the inline control (#9440)', () => {
+  const url = 'https://example.com/a.png';
+  const reference = '![][p]\n\n[p]: ' + url;
+  expect(collectMobileMarkdownImages('![](' + url + ')')).toEqual([{ type: 'image', alt: '', url }]);
+  expect(inlines(reference)).toEqual([{ type: 'image', alt: '', url }]);
+  expect(collectMobileMarkdownImages(reference)).toEqual([{ type: 'image', alt: '', url }]);
+});
+
+// #9440 / reviews4627375220/5228/5240: unit production entry; prior cases
+// omitted oversized marker padding, hgroup and escaped image-prefix fallback.
+describe('review reference boundary regressions', () => {
+  it('keeps definitions nested after oversized list padding and tab equivalents', () => {
+    for (const item of ['-     item', '-\t  item', '1.     item', '10.     item']) {
+      const indent = item.startsWith('10.') ? '    ' : item.startsWith('1.') ? '   ' : '  ';
+      const source = '[site][s]\n\n' + item + '\n\n' + indent + '[s]: https://wrong.example/';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(mobileMarkdownPreviewText(source)).toContain('[s]:');
+      expect(inlines(source + '\n\n[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    }
+  });
+
+  it('excludes hgroup definitions while accepting a following root definition', () => {
+    const source = '[site][s]\n\n<hgroup>\n# hidden\n[s]: https://wrong.example/\n</hgroup>';
+    expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+    expect(inlines(source + '\n\n[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+  });
+
+  it('parses a reference link after an escaped image marker like the inline control', () => {
+    const definition = '\n\n[s]: https://example.com/';
+    expect(inlines('\\![site](https://example.com/)').filter(value => value.type === 'link')).toEqual([link]);
+    for (const use of ['\\![site][s]', '\\![site][]', '\\![site]']) {
+      const source = use + definition + '\n[site]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link')).toEqual([link]);
+      expect(collectMobileMarkdownImages(source)).toEqual([]);
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    }
+    expect(collectMobileMarkdownImages('![picture][s]' + definition)).toHaveLength(1);
+  });
+});
+
+// User review of #9440: preserve unsupported footnotes/prose and list scope;
+// real parser results and counted full-source passes, not a timing threshold.
+describe('user review reference compatibility', () => {
+  it('keeps footnote definitions visible rather than treating them as link definitions', () => {
+    for (const label of ['1', '中文']) {
+      const source = 'Text[^' + label + ']\n\n[^' + label + ']: important';
+      expect(mobileMarkdownPreviewText(source)).toContain('[^' + label + ']: important');
+      expect(parseMobileMarkdownDocument(source, { srcLines: true }).blocks.map(block => block.srcLine)).toEqual([0, 2]);
+    }
+  });
+
+  it('normalizes prose math after an invalid next-line reference definition', () => {
+    const source = '[note]:\n \\(x\\) plus text';
+    expect(parseMobileMarkdownDocument(source).source).toBe('[note]:\n $x$ plus text');
+  });
+
+  it('does not collect nested definitions after plus list markers', () => {
+    const source = '[ok]\n\n+ item\n\n  [ok]: https://example.com/';
+    expect(inlines(source).some(value => value.type === 'link' && value.text === 'ok')).toBe(false);
+    expect(mobileMarkdownPreviewText(source)).toContain('[ok]:');
+    expect(inlines(source + '\n\n[ok]: https://example.org/').find(value => value.type === 'link' && value.text === 'ok')).toEqual({ type: 'link', text: 'ok', url: 'https://example.org/' });
+  });
+
+  it('avoids full-source definition scans on ordinary append-only messages with bracket prose', () => {
+    const source = '[normal text]\n\n' + 'ordinary paragraph\n\n'.repeat(1500);
+    const split = String.prototype.split;
+    let fullSourceSplits = 0;
+    const spy = vi.spyOn(String.prototype, 'split').mockImplementation(function (this: string, ...args: Parameters<typeof split>) {
+      const separator: unknown = args[0];
+      if (String(this).length >= source.length && separator === '\n') fullSourceSplits++;
+      return Reflect.apply(split, this, args);
+    });
+    let input = source;
+    let previous;
+    try {
+      previous = parseMobileMarkdownIncremental(input);
+      for (let count = 0; count < 100; count++) {
+        input += ' appended';
+        previous = parseMobileMarkdownIncremental(input, previous);
+      }
+      expect(fullSourceSplits).toBeLessThanOrEqual(2);
+    } finally { spy.mockRestore(); }
+    expect(previous!.blocks).toEqual(parseMobileMarkdownDocument(input).blocks);
+    const defined = input + '\n\n[normal text]: https://example.com/';
+    const next = parseMobileMarkdownIncremental(defined, previous);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(defined).blocks);
+    expect(next.blocks[0]).toMatchObject({ inlines: [{ type: 'link', text: 'normal text', url: 'https://example.com/' }] });
+  });
+});
+
+
+// #9440 current review: definitions win over loose tables; complete generic
+// HTML blocks and invalid labels retain the same production parsing boundaries.
+describe('final reference review boundaries', () => {
+  it('resolves legal definition destinations containing pipes before loose tables', () => {
+    const source = '[site][s]\n\n[s]: <https://example.com/a|b>\n[t]: <https://example.com/c|d>';
+    expect(inlines(source).filter(value => value.type === 'link')).toEqual([{ type: 'link', text: 'site', url: 'https://example.com/a|b' }]);
+    expect(parseMobileMarkdownDocument(source).blocks.some(block => block.type === 'table')).toBe(false);
+    expect(parseMobileMarkdownDocument('a | b\nc | d').blocks.some(block => block.type === 'table')).toBe(true);
+    let streamed = parseMobileMarkdownIncremental('');
+    for (let end = 1; end <= source.length; end++) {
+      const prefix = source.slice(0, end);
+      streamed = parseMobileMarkdownIncremental(prefix, streamed);
+      expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+    }
+  });
+
+  it('excludes complete standalone generic HTML tags only outside an open paragraph', () => {
+    for (const tag of ['<span>', '</span>', '<custom-tag data-x="a > b">', "<span title='x' />", '<SPAN disabled>']) {
+      const source = '[site][s]\n\n' + tag + '\n# hidden\n[s]: https://wrong.example/';
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(inlines(source + '\n\n[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    }
+    for (const tag of ['<span>inline</span>', '<https://example.com/>', '<a@example.com>', '<span bad@attr>', '<span value=>']) {
+      const source = '[site][s]\n\n' + tag + '\n# heading\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    }
+    const source = '[site][s]\n\ntext\n<span>\n# heading\n[s]: https://example.com/';
+    expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+  });
+
+  it('preserves complete continuation definition titles containing display delimiters', () => {
+    for (const separator of [' ', '\n ']) {
+      const source = '[f]:\n docs/a\\(1\\).md' + separator + '"\\[x\\]"\n\n[file][f]';
+      for (const srcLines of [false, true]) {
+        expect(inlines(source).filter(value => value.type === 'link')).toEqual([{ type: 'link', text: 'file', url: 'docs/a(1).md' }]);
+        expect(parseMobileMarkdownDocument(source, { srcLines }).source).toBe(source);
+      }
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    }
+  });
+
+  it('does not protect math following empty reference labels', () => {
+    for (const label of ['', ' ', '^1']) {
+      expect(parseMobileMarkdownDocument('[' + label + ']:\n\\(x\\)').source).toBe('[' + label + ']:\n$x$');
+    }
+  });
+});
+
+
+// #9440 independent final review: a supported title is literal even when it
+// contains Markdown code markers. Unit production entry and actual target.
+describe('reference title code-marker boundaries', () => {
+  for (const [name, title] of [
+    ['inline ticks', '"caption `code` \\[x\\]"'],
+    ['fence lines', '"caption\n```\n\\[x\\]\n```\nend"'],
+  ]) {
+    it('preserves reference targets and following math through ' + name, () => {
+      const source = '[f]:\n docs/a\\(1\\).md ' + title + '\n\n[file][f]\n\n\\(z\\)';
+      expect(inlines(source).filter(value => value.type === 'link')).toEqual([{ type: 'link', text: 'file', url: 'docs/a(1).md' }]);
+      expect(parseMobileMarkdownDocument(source).source).toBe(source.slice(0, -5) + '$z$');
+      expect(parseMobileMarkdownDocument(source, { srcLines: true }).source).toBe(source.slice(0, -5) + '$z$');
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    });
+  }
+});
+
+
+// #9440 final reviewer: invalid reference text does not override real code.
+it('keeps cross-line code math literal after an invalid reference header', () => {
+  const source = '[f]: invalid `code\n\\(x\\)`\n\n\\(z\\)';
+  for (const srcLines of [false, true]) {
+    expect(parseMobileMarkdownDocument(source, { srcLines }).source).toBe('[f]: invalid `code\n\\(x\\)`\n\n$z$');
+  }
+});
+
+
+describe('reference comment checkpoint and markup scanning regressions', () => {
+  it('keeps an open HTML comment across code and math fence checkpoints', () => {
+    for (const fence of ['```\nx\n```', '$$\nx\n$$']) {
+      const prefix = '[s]: https://example.com\n\n<!--\n' + fence + '\n';
+      let previous = parseMobileMarkdownIncremental(prefix);
+      for (const tail of ['[s]', '\n-->\n\n[s]']) {
+        const source = previous.source + tail;
+        previous = parseMobileMarkdownIncremental(source, previous);
+        expect(previous.blocks).toEqual(parseMobileMarkdownDocument(source).blocks);
+      }
+    }
+  });
+
+  it('scans HTML tag markup once per reference paragraph while retaining guards', () => {
+    const paragraph = '<b>x</b> [s] <!-- [s] --> '.repeat(200);
+    const source = '[s]: https://example.com\n\n' + paragraph;
+    const original = RegExp.prototype.exec;
+    let tagScans = 0;
+    const spy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+      if (this.source.startsWith('<\\/?[A-Za-z]')) tagScans++;
+      return original.call(this, input);
+    });
+    let result: ReturnType<typeof parseMobileMarkdown>;
+    try { result = parseMobileMarkdown(source); } finally { spy.mockRestore(); }
+    const links = result.flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link');
+    expect(links).toHaveLength(200);
+    expect(tagScans).toBeLessThan(1000);
+    const guarded = parseMobileMarkdown('[s]: https://example.com\n\n<span title="[s]">[s]</span> <!-- [s] --> [s]');
+    expect(guarded.flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toHaveLength(2);
+  });
+});
+
+
+describe('unresolved references and raw declaration regressions', () => {
+  it('does not rescan unresolved labels for each intervening inline code token', () => {
+    const source = '[ok]: https://example.com/\n\n' + '[missing] `x` '.repeat(200) + '[ok]';
+    const original = RegExp.prototype.exec;
+    let scans = 0;
+    const spy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+      if (this.source === '!?\\[') scans++;
+      return original.call(this, input);
+    });
+    let blocks: ReturnType<typeof parseMobileMarkdown>;
+    try { blocks = parseMobileMarkdown(source); } finally { spy.mockRestore(); }
+    const inlines = blocks.flatMap(block => 'inlines' in block ? block.inlines : []);
+    expect(inlines.filter(inline => inline.type === 'code')).toHaveLength(200);
+    expect(inlines.filter(inline => inline.type === 'link')).toEqual([{ type: 'link', text: 'ok', url: 'https://example.com/' }]);
+    expect(scans).toBeLessThan(2000);
+    // Raw-context propagation must not reintroduce prefix rescans for emphasis.
+    let markupWork = 0;
+    const markupSpy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+      if (this.source === '<!--|<!\\[CDATA\\[|<!(?!--)|<\\?') markupWork += input.length;
+      return original.call(this, input);
+    });
+    try { blocks = parseMobileMarkdown('[s]: https://example.com/\n\n<!DOCTYPE html> ' + '**x** '.repeat(200) + '[site][s]'); } finally { markupSpy.mockRestore(); }
+    const marked = blocks.flatMap(block => 'inlines' in block ? block.inlines : []);
+    expect(marked.filter(inline => inline.type === 'strong')).toHaveLength(200);
+    expect(marked.filter(inline => inline.type === 'link')).toHaveLength(1);
+    expect(markupWork).toBeLessThan(30000);
+  });
+
+  it('keeps references inside raw declarations, processing instructions and CDATA literal', () => {
+    for (const markup of ['<!DOCTYPE [site][s]>', '<?xml [site][s]?>', '<![CDATA[[site][s]]]>', '<!DOCTYPE root [ <!ENTITY x "a > [site][s]"> ]>', '<!DOCTYPE "a > [site][s]">', '<![CDATA[<!--]]>', '<?xml value="<!--"?>', '<!DOCTYPE x "a <!-- b">', '<!-- <? <!DOCTYPE -->']) {
+      const source = '[s]: https://example.com/\n\n' + markup + ' [site][s]';
+      const links = parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link');
+      expect(links).toEqual([{ type: 'link', text: 'site', url: 'https://example.com/' }]);
+    }
+    for (const markup of ['<![CDATA[<!--]]>', '<?xml value="<!--"?>', '<!DOCTYPE x "a <!-- b">', '<![CDATA[\n<!--\n]]>', '<![CDATA[\n\n<!--\n]]>', '<![CDATA[\n\n**[site][s]**\n<!--\n]]>', '<?xml\n<!--\n?>', '<!DOCTYPE x "a\n<!--\nb">', '<!DOCTYPE x "a >\n<!--\nb">', '<![CDATA[\n```\n]]>\n```', '<?xml\n$$\n?>\n$$']) {
+      for (const source of ['[s]: https://example.com/\n\n' + markup + '\n\n[site][s]', markup + '\n\n[s]: https://example.com/\n\n[site][s]']) {
+        expect(parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toEqual([{ type: 'link', text: 'site', url: 'https://example.com/' }]);
+        let streamed = parseMobileMarkdownIncremental('');
+        let prefix = '';
+        for (const line of source.split('\n')) {
+          prefix += line + '\n';
+          streamed = parseMobileMarkdownIncremental(prefix, streamed);
+          expect(streamed.blocks).toEqual(parseMobileMarkdown(prefix));
+        }
+      }
+    }
+    const literal = '[s]: https://example.com/\n\n`<?` [site][s] <!-- <? --> [site][s]';
+    expect(parseMobileMarkdown(literal).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toHaveLength(2);
+  });
+
+  it('keeps accepted continuation destinations after tables unchanged', () => {
+    for (const table of ['name | value\n--- | ---', '| name | value |\n| one | two |', 'a\\|b | value\n--- | ---']) {
+      const source = table + '\n[f]:\n docs/a\\(1\\).md\n\n[file][f]';
+      expect(parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toEqual([{ type: 'link', text: 'file', url: 'docs/a(1).md' }]);
+    }
+  });
 });
