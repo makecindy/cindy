@@ -402,10 +402,9 @@ describe('lead turn declaration reconciliation', () => {
     });
     await service.handleLeadTurnSettled({ leadSessionId: 'lead-1', turnGeneration: 0 });
 
-    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledWith(
-      'lead-1',
-      expect.stringContaining('dispatched to research'),
-    );
+    // 唤醒文本还带别的参数（worker 归属与来源标签），只验第一句对人说的话。
+    expect(deps.sendAutoBridgeToLead.mock.calls[0]?.[0]).toBe('lead-1');
+    expect(deps.sendAutoBridgeToLead.mock.calls[0]?.[1]).toContain('dispatched to research');
   });
 
   it('refuses a declaration from a session that leads no workers', async () => {
