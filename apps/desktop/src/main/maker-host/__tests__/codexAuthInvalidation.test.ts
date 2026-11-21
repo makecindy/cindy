@@ -3537,7 +3537,7 @@ describe('Codex 系统凭证备份与旧硬链接 (#9316 review)', () => {
    *   或对未迁移的存量硬链直接执行显式 logout（用户在原生 Codex CLI/App 重登而不在 Cindy 点登录）。
    * - tier：unit（临时目录真实文件链接，无子进程与网络）。
    */
-  it.skipIf(!canLinkFile)(
+  it(
     '对账被抑制或显式断开时拆掉当前 profile 的存量硬链,避免永久卡死原生 Codex 登录保存',
     async () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-suppressed-hardlink-'));

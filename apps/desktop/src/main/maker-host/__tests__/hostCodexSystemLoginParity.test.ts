@@ -332,7 +332,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
     ]);
   });
 
-  it.skipIf(!canLinkFile)('an explicit disconnect before migration detaches a legacy hardlink on both sides', async () => {
+  it('an explicit disconnect before migration detaches a legacy hardlink on both sides', async () => {
     const d = fixture({ local: 'hardlink', binding: 'shared' });
     const hst = fixture({ local: 'hardlink', binding: 'shared' });
     d.enter(); await new DesktopCodexAuthAdapter().logout();
