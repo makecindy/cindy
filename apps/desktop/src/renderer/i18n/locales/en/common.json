@@ -289,7 +289,7 @@
     "leaveShort": "Leave",
     "joinTab": "Join Shared Task",
     "joinedEmptyTitle": "No shared tasks joined",
-    "joinedEmptyHint": "Open an invitation link from a teammate to join a shared task.",
+    "joinedEmptyHint": "Open an invitation link from a collaborator to join a shared task.",
     "joinedLoadFailed": "Could not load your joined shared tasks. Try again.",
     "joinedTab": "Joined by Me",
     "reconnecting": "Reconnecting…",
@@ -305,7 +305,7 @@
     "joined": "Joined Shared Task",
     "joinedBody": "You can view earlier messages, tool results and attachments, and message the same Agent.",
     "enterTask": "Enter Task",
-    "inviteBoxTitle": "Send the invitation link to your teammates",
+    "inviteBoxTitle": "Send the invitation link to your collaborators",
     "roleGuest": "Guest",
     "removeShort": "Remove",
     "removeNamedTitle": "Remove {{name}}?",
@@ -336,13 +336,13 @@
     "host": "Host",
     "remove": "Remove Guest",
     "invite": "Copy invitation",
-    "invitationCopied": "Invitation copied. Paste it into a message to your teammate.",
+    "invitationCopied": "Invitation copied. Paste it into a message to your collaborator.",
     "tabOwned": "Shared by Me",
-    "startIntro": "Invite a partner to read everything in this task and work with the same Agent.",
+    "startIntro": "Invite a collaborator to read everything in this task and work with the same Agent.",
     "runsOnThisDevice": "Runs on this device",
     "inviteNotice": "Anyone holding the invitation link can join after signing in, with the same Agent access as the host.",
     "offlineAutoClose": "Sharing ends automatically if the host computer stays offline.",
-    "inviteBoxHint": "Send the link to your teammate. They can open it to join, or paste it into Join Shared Task in Cindy.",
+    "inviteBoxHint": "Send the link to your collaborator. They can open it to join, or paste it into Join Shared Task in Cindy.",
     "invitationMessage": "You’re invited to join “{{title}}”\n{{link}}\nOpen the link to join. If Cindy doesn’t open, choose Join Shared Task in Cindy and paste this link.",
     "membersWithLimit": "Members · {{count}} (up to 2 guests)",
     "me": "Me",
@@ -351,7 +351,7 @@
     "hostOfflineNote": "Sharing ends automatically if this computer stays offline. Start sharing again and send a new invitation link to resume.",
     "sharingBadge": "Sharing",
     "ownedEmptyTitle": "Nothing is being shared",
-    "ownedEmptyHint": "Open any task and click “Share Task” to invite a partner.",
+    "ownedEmptyHint": "Open any task and click “Share Task” to invite a collaborator.",
     "closeAll": "Stop all sharing ({{count}})",
     "closeAllTitle": "Stop all sharing?",
     "closeAllBody": "All guests will lose access to the tasks below, and their invitation links will expire.",
@@ -12760,7 +12760,7 @@
           "detachedBySlash": "🚪 Remote control ended — we’re back in our Discord DM. Send /ctr whenever you want to control the desktop again.",
           "detachedByRevoke": "⚠️ You took back control on the desktop, so further messages go to our Discord DM again.",
           "notAttached": "🤷 You’re not controlling any session right now, so /exctr has nothing to do.",
-          "companionManagedCommand": "🧭 This bot has been handed over to a teammate — its model, permissions, and working directory follow the teammate’s settings. To change them, go to the teammate’s settings in Cindy."
+          "companionManagedCommand": "🧭 This bot has been handed over to a buddy — its model, permissions, and working directory follow the buddy’s settings. To change them, go to the buddy’s settings in Cindy."
         },
         "agent": {
           "completedNoText": "✅ Done (the Agent didn’t say anything this turn)",
@@ -12954,13 +12954,13 @@
           "help": "🤖 Here's what I can do:\n\n/new         Create a new session (old ones are kept; in groups, it's created for the current group topic)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/session     List recent desktop sessions; tap one to take it over and keep chatting\n/model       Bring in a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/settings    See the current project, Agent, model, effort, and permissions\n/ctr         Remotely take over a project on desktop (send it again during a takeover to switch sessions)\n/exctr       End the takeover and go back to the Telegram chat\n/help        See what I can do\n\nSomething running that you want to stop? Send /stop (or `!stop`) — I'll halt the current run right away and drop any queued messages. The session is kept so you can continue.\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages — and I remember recent group messages for context.",
           "unknownCommand": "I don't recognize the command `{{cmd}}` 🤔\nCommands I understand: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Current settings\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nTo change them, send /project, /model, or /permission.",
-          "settingsCompanion": "⚙️ Current settings (teammate)\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nModel, permissions, and working directory follow the teammate's settings. Change them in the teammate settings in Cindy.",
+          "settingsCompanion": "⚙️ Current settings (buddy)\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nModel, permissions, and working directory follow the buddy's settings. Change them in the buddy settings in Cindy.",
           "detachedBySlash": "🚪 Takeover ended — we're back to the Telegram chat. Send /ctr next time you want to control desktop remotely.",
           "detachedByRevoke": "⚠️ You ended the takeover from desktop. New messages go back to the Telegram chat.",
           "notAttached": "🤷 You're not controlling any session right now, so /exctr has nothing to do.",
-          "companionDmNew": "🧭 This is your teammate's main conversation — it keeps going and doesn't open new sessions. To change the subject, just say so; for separate work, your teammate starts background tasks on its own.",
+          "companionDmNew": "🧭 This is your buddy's main conversation — it keeps going and doesn't open new sessions. To change the subject, just say so; for separate work, your buddy starts background tasks on its own.",
           "companionLaneNew": "🌱 Started a new conversation for this group. Earlier context has been put away — let's start fresh!",
-          "companionManagedCommand": "🧭 This connection has been handed to a teammate, so model, permissions, and working directory follow the teammate's settings. Change them in the teammate settings in Cindy."
+          "companionManagedCommand": "🧭 This connection has been handed to a buddy, so model, permissions, and working directory follow the buddy's settings. Change them in the buddy settings in Cindy."
         },
         "agent": {
           "completedNoText": "✅ All done (the Agent didn't say anything this turn)",
@@ -12979,7 +12979,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automation “{{name}}”",
           "unsupportedOnly": "🙏 I can't take this message:\n{{list}}\n\nWhat I can handle: text, images (jpg/png/gif/webp), PDFs, and code or config text files.",
           "unsupportedNotice": "ℹ️ I can't process the following, so I've set it aside:\n{{list}}\n\nGot the rest — working on it now.",
-          "companionUnavailable": "⏸ Your teammate can't take messages right now: {{reason}}",
+          "companionUnavailable": "⏸ Your buddy can't take messages right now: {{reason}}",
           "authMissing": {
             "currentProvider": "current provider",
             "reasonGatewayKey": "a Cindy AI Key needs to be set up first",
@@ -13176,7 +13176,7 @@
         },
         "slash": {
           "detachFailed": "❌ Couldn't end the takeover: {{error}}",
-          "companionManaged": "🧭 This connection is handed over to a teammate, so the model, permissions and working directory follow the teammate's settings. Change them in the teammate settings in Cindy."
+          "companionManaged": "🧭 This connection is handed over to a buddy, so the model, permissions and working directory follow the buddy's settings. Change them in the buddy settings in Cindy."
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 A task in a group chat needs your approval. The approval card isn't posted in the group — confirm it here.",
@@ -13249,7 +13249,7 @@
           "detachedBySlash": "🚪 Takeover ended. New messages go back to this WeCom chat.",
           "detachedByRevoke": "⚠️ The takeover was revoked in Cindy Desktop. New messages go back to this WeCom chat.",
           "notAttached": "You're not controlling any task right now.",
-          "companionManagedCommand": "🧭 This connection is handed over to a teammate, so the model, permissions, and working directory follow the teammate settings. Change them in the teammate settings in Cindy."
+          "companionManagedCommand": "🧭 This connection is handed over to a buddy, so the model, permissions, and working directory follow the buddy settings. Change them in the buddy settings in Cindy."
         },
         "agent": {
           "completedNoText": "✅ Task complete (no text output this turn)",
@@ -13392,9 +13392,9 @@
           "detachedBySlash": "🚪 Remote control ended — we're back in our DM. Send /ctr whenever you want to control the desktop app again",
           "detachedByRevoke": "⚠️ You ended remote control from the desktop app. New messages will go to our DM again.",
           "notAttached": "🤷 You aren't controlling any session right now, so /exctr has nothing to do.",
-          "companionDmNew": "🧭 This is your teammate's main conversation. It keeps going and won't start a new session. Just say so if you want to change the subject; for separate work, your teammate will start a background session on its own.",
+          "companionDmNew": "🧭 This is your buddy's main conversation. It keeps going and won't start a new session. Just say so if you want to change the subject; for separate work, your buddy will start a background session on its own.",
           "companionLaneNew": "🌱 Started a new conversation for this group and set the previous context aside. Let's start fresh!",
-          "companionManagedCommand": "🧭 This connection is managed by a teammate, so the model, permissions, and working directory follow the teammate's settings. Change them in the teammate's settings in Cindy."
+          "companionManagedCommand": "🧭 This connection is managed by a buddy, so the model, permissions, and working directory follow the buddy's settings. Change them in the buddy's settings in Cindy."
         },
         "agent": {
           "completedNoText": "✅ Done (the Agent didn't say anything this turn)",
@@ -13413,7 +13413,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automation “{{name}}”",
           "unsupportedOnly": "🙏 I can't take in this message:\n{{items}}\n\nWhat I can handle: text, images (jpg/png/gif/webp), PDFs, and code or config text files.",
           "unsupportedNotice": "ℹ️ I can't handle the following, so I've set it aside:\n{{items}}\n\nGot the rest — working on it~",
-          "companionUnavailable": "⏸ Your teammate can't take messages right now: {{reason}}",
+          "companionUnavailable": "⏸ Your buddy can't take messages right now: {{reason}}",
           "authMissing": {
             "defaultProvider": "current provider",
             "message": "⚠️ This conversation uses the provider “{{provider}}” ({{model}}): {{reason}}.",
@@ -13668,18 +13668,18 @@
           "delayedReplyQuestion": "Original message: {{question}}",
           "stillProcessing": "Still working on it…",
           "ownerOnlyCommands": "Only the owner can use bot commands.",
-          "companionManagedCommand": "Open this teammate in Cindy: change the model in the teammate's settings, and switch permissions below the input box.",
+          "companionManagedCommand": "Open this buddy in Cindy: change the model in the buddy's settings, and switch permissions below the input box.",
           "help": "Commands: /new start a new conversation; /stop stop the current run; /stop all stop all runs; /status check status; /help show help.",
           "status_one": "Cindy's WeChat connection is OK. {{count}} message queued.",
           "status_other": "Cindy's WeChat connection is OK. {{count}} messages queued.",
           "stopped": "Stopped.",
-          "companionDmNew": "Here you share one long-running session with the teammate, so history and memory are kept. To clean up the context, restart the teammate in Cindy.",
+          "companionDmNew": "Here you share one long-running session with the buddy, so history and memory are kept. To clean up the context, restart the buddy in Cindy.",
           "newConversation": "Started a new conversation.",
           "unknownCommand": "Unknown command. Send /help to see available commands.",
           "overloaded": "WeChat is handling a lot of tasks right now. Try again later."
         },
         "preDispatch": {
-          "companionPermissionUnsupported": "This message needs a permission confirmation for each action, but the teammate's current model or permission mode doesn't support that, so the message can't start.\nThe owner should open this teammate in Cindy, check the model in the teammate's settings, and choose Default permissions or Auto-review below the input box.",
+          "companionPermissionUnsupported": "This message needs a permission confirmation for each action, but the buddy's current model or permission mode doesn't support that, so the message can't start.\nThe owner should open this buddy in Cindy, check the model in the buddy's settings, and choose Default permissions or Auto-review below the input box.",
           "missingAuth": "The current Agent isn't authorized yet. Connect a model service in Cindy first.",
           "generic": "This message can't start right now. Try again later."
         },
@@ -21974,9 +21974,9 @@
       "pick": "Choose one by one",
       "started": "Import started in the background. Check progress in Settings → Session Import.",
       "startFailed": "The import did not start. Import again from Settings → Session Import.",
-      "teammatesHeading": "Teammates",
-      "teammatesHint": "Import an Agent from another tool as a teammate, with its memory, skills and automations.",
-      "importTeammate": "Import as a teammate"
+      "teammatesHeading": "Buddies",
+      "teammatesHint": "Import an Agent from another tool as a buddy, with its memory, skills and automations.",
+      "importTeammate": "Import as a buddy"
     },
     "finish": {
       "title": "You are all set",

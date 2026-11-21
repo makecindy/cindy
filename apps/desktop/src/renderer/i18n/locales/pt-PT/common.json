@@ -343,7 +343,7 @@
     "invite": "Copiar convite",
     "invitationCopied": "Convite copiado. Cole-o numa mensagem para o seu colega.",
     "tabOwned": "Partilhadas por mim",
-    "startIntro": "Convide alguém para ler todo o conteúdo desta tarefa e trabalhar com o mesmo Agent.",
+    "startIntro": "Convide um colega para ler todo o conteúdo desta tarefa e trabalhar com o mesmo Agent.",
     "runsOnThisDevice": "Executada neste dispositivo",
     "inviteNotice": "Qualquer pessoa com a ligação de convite pode aderir após iniciar sessão, com o mesmo acesso ao Agent que o anfitrião.",
     "offlineAutoClose": "A partilha termina automaticamente se o computador do anfitrião permanecer offline.",
@@ -356,7 +356,7 @@
     "hostOfflineNote": "A partilha termina automaticamente se este computador permanecer offline. Inicie novamente a partilha e envie uma nova ligação de convite para a retomar.",
     "sharingBadge": "Em partilha",
     "ownedEmptyTitle": "Não há nada a ser partilhado",
-    "ownedEmptyHint": "Abra qualquer tarefa e clique em «Partilhar tarefa» para convidar um parceiro.",
+    "ownedEmptyHint": "Abra qualquer tarefa e clique em «Partilhar tarefa» para convidar um colega.",
     "closeAll": "Parar todas as partilhas ({{count}})",
     "closeAllTitle": "Parar todas as partilhas?",
     "closeAllBody": "Todos os convidados perderão o acesso às tarefas abaixo e as respetivas ligações de convite expirarão.",
@@ -11598,7 +11598,7 @@
         "stepTimeout": "{{name}} demorou demasiado, pelo que este passo foi parado",
         "stepUnavailable": "{{name}} está indisponível e não pode executar este passo",
         "runtimeFailureReason": {
-          "unclaimed_timeout": "{{name}} não começou a processar dentro do prazo de espera. Este pedido terminou.\nPeça ao proprietário do colega para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede."
+          "unclaimed_timeout": "{{name}} não começou a processar dentro do prazo de espera. Este pedido terminou.\nPeça ao proprietário do amigo para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede."
         },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} não pode responder: o dispositivo do amigo atingiu o limite de sessões remotas.\nPeça ao proprietário do amigo para arquivar sessões não utilizadas ou ao proprietário do computador remoto para aumentar o limite em Acesso remoto e partilha.",
@@ -12860,7 +12860,7 @@
           "detachedBySlash": "🚪 Controlo remoto terminado — voltámos às nossas mensagens diretas no Discord. Para controlar o computador novamente, envie /ctr.",
           "detachedByRevoke": "⚠️ O controlo foi retomado no computador, por isso as mensagens seguintes voltam às nossas mensagens diretas no Discord.",
           "notAttached": "🤷 Neste momento não está a controlar nenhuma sessão, por isso /exctr não tem nada para fazer.",
-          "companionManagedCommand": "🧭 Este bot foi entregue a um colega — o modelo, as permissões e o diretório de trabalho seguem as definições do colega. Para os alterar, aceda às definições do colega no Cindy."
+          "companionManagedCommand": "🧭 Este bot foi entregue a um amigo — o modelo, as permissões e o diretório de trabalho seguem as definições do amigo. Para os alterar, aceda às definições do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
@@ -13060,13 +13060,13 @@
           "help": "🤖 Eis o que posso fazer:\n\n/new         Criar uma nova sessão (as antigas são mantidas; nos grupos, é criada para o tópico atual do grupo)\n/project     Trabalhar numa pasta de projeto (corre aqui no bot, sem assumir o computador)\n/session     Listar as sessões recentes do computador; toque numa para a assumir e continuar a conversa\n/model       Pôr outro modelo em campo\n/permission  Ajustar o modo de permissões (auto / bypass / ask, etc.)\n/settings    Ver o projeto, o Agent, o modelo, o esforço de raciocínio e as permissões atuais\n/ctr         Assumir remotamente um projeto no computador (envie de novo durante o controlo para mudar de sessão)\n/exctr       Terminar o controlo e voltar à conversa do Telegram\n/help        Ver o que sei fazer\n\nHá algo a correr que pretende parar? Envie /stop (ou `!stop`) — interrompo de imediato a execução atual e retiro também as mensagens em fila. A sessão é mantida para poder continuar.\n\nNuma conversa privada, basta enviar-me uma mensagem. Nos grupos, só respondo quando me menciona com @ ou responde a uma das minhas mensagens — e também guardo as mensagens recentes do grupo como contexto.",
           "unknownCommand": "Não reconheço o comando `{{cmd}}` 🤔\nComandos que entendo: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Definições atuais\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nPara alterar, envie /project, /model ou /permission.",
-          "settingsCompanion": "⚙️ Definições atuais (colega)\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nO modelo, as permissões e o diretório de trabalho seguem as definições do colega. Altere-os nas definições do colega no Cindy.",
+          "settingsCompanion": "⚙️ Definições atuais (amigo)\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nO modelo, as permissões e o diretório de trabalho seguem as definições do amigo. Altere-os nas definições do amigo no Cindy.",
           "detachedBySlash": "🚪 Controlo terminado — voltámos à conversa do Telegram. Da próxima vez que quiser controlar o computador remotamente, envie /ctr",
           "detachedByRevoke": "⚠️ O controlo foi retomado no computador. As mensagens seguintes voltam à conversa do Telegram.",
           "notAttached": "🤷 Não está a controlar nenhuma sessão neste momento, por isso o /exctr não tem nada para fazer.",
-          "companionDmNew": "🧭 Esta é a conversa principal do seu colega: continua sempre e não abre novas sessões. Para mudar de assunto, basta dizê-lo; para trabalho à parte, o colega abre tarefas em segundo plano por iniciativa própria.",
+          "companionDmNew": "🧭 Esta é a conversa principal do seu amigo: continua sempre e não abre novas sessões. Para mudar de assunto, basta dizê-lo; para trabalho à parte, o amigo abre tarefas em segundo plano por iniciativa própria.",
           "companionLaneNew": "🌱 Foi iniciada uma nova conversa para este grupo. O contexto anterior foi arrumado — vamos começar do zero!",
-          "companionManagedCommand": "🧭 Esta ligação foi entregue a um colega, por isso o modelo, as permissões e o diretório de trabalho seguem as definições dele. Altere-os nas definições do colega no Cindy."
+          "companionManagedCommand": "🧭 Esta ligação foi entregue a um amigo, por isso o modelo, as permissões e o diretório de trabalho seguem as definições dele. Altere-os nas definições do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
@@ -13086,7 +13086,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automatização «{{name}}»",
           "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{list}}\n\nO que consigo processar: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto de código ou configuração.",
           "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, por isso pus de lado:\n{{list}}\n\nO resto foi recebido e já está a ser processado.",
-          "companionUnavailable": "⏸ O seu colega não pode receber mensagens agora: {{reason}}",
+          "companionUnavailable": "⏸ O seu amigo não pode receber mensagens agora: {{reason}}",
           "authMissing": {
             "currentProvider": "fornecedor atual",
             "reasonGatewayKey": "é necessário configurar primeiro uma Cindy AI Key",
@@ -13283,7 +13283,7 @@
         },
         "slash": {
           "detachFailed": "❌ Não foi possível terminar a tomada de controlo: {{error}}",
-          "companionManaged": "🧭 Esta ligação foi entregue a um colega, pelo que o modelo, as permissões e o diretório de trabalho seguem as definições do colega. Altere-os nas definições do colega no Cindy."
+          "companionManaged": "🧭 Esta ligação foi entregue a um amigo, pelo que o modelo, as permissões e o diretório de trabalho seguem as definições do amigo. Altere-os nas definições do amigo no Cindy."
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 Uma tarefa numa conversa de grupo precisa da sua autorização. O cartão de autorização não é publicado no grupo: confirme aqui.",
@@ -13360,7 +13360,7 @@
           "detachedBySlash": "🚪 Controlo remoto terminado. As mensagens seguintes voltam para a conversa do WeCom.",
           "detachedByRevoke": "⚠️ O controlo remoto foi revogado no Cindy Desktop. As mensagens seguintes voltam para a conversa do WeCom.",
           "notAttached": "De momento, não está a controlar nenhuma tarefa.",
-          "companionManagedCommand": "🧭 Esta ligação foi entregue a um colega: o modelo, as permissões e o diretório de trabalho seguem as definições do colega. Altere-os nas definições do colega no Cindy."
+          "companionManagedCommand": "🧭 Esta ligação foi entregue a um amigo: o modelo, as permissões e o diretório de trabalho seguem as definições do amigo. Altere-os nas definições do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Tarefa concluída (sem saída de texto neste turno)",
@@ -13504,9 +13504,9 @@
           "detachedBySlash": "🚪 Controlo remoto terminado — de volta à conversa privada. Para controlar novamente a aplicação para computador, basta enviar /ctr",
           "detachedByRevoke": "⚠️ O controlo remoto foi terminado na aplicação para computador. As próximas mensagens voltam para a conversa privada.",
           "notAttached": "🤷 Não há nenhuma sessão sob controlo remoto neste momento, por isso /exctr não tem nada a fazer.",
-          "companionDmNew": "🧭 Esta é a conversa principal do colega: continua sempre e não abre uma nova sessão. Para mudar de assunto, basta dizê-lo; para trabalho à parte, o colega abre por si uma sessão em segundo plano.",
+          "companionDmNew": "🧭 Esta é a conversa principal do amigo: continua sempre e não abre uma nova sessão. Para mudar de assunto, basta dizê-lo; para trabalho à parte, o amigo abre por si uma sessão em segundo plano.",
           "companionLaneNew": "🌱 Foi iniciada uma nova conversa para este grupo e o contexto anterior foi posto de parte. Vamos recomeçar!",
-          "companionManagedCommand": "🧭 Esta ligação foi entregue a um colega, por isso o modelo, as permissões e o diretório de trabalho seguem as definições do colega. As alterações devem ser feitas nas definições do colega no Cindy."
+          "companionManagedCommand": "🧭 Esta ligação foi entregue a um amigo, por isso o modelo, as permissões e o diretório de trabalho seguem as definições do amigo. As alterações devem ser feitas nas definições do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
@@ -13526,7 +13526,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automatização “{{name}}”",
           "unsupportedOnly": "🙏 Não é possível processar esta mensagem:\n{{items}}\n\nFormatos suportados: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto de código ou configuração.",
           "unsupportedNotice": "ℹ️ Não é possível processar o seguinte, por isso ficou de parte:\n{{items}}\n\nO resto foi recebido e já está a ser tratado~",
-          "companionUnavailable": "⏸ O colega não pode receber mensagens neste momento: {{reason}}",
+          "companionUnavailable": "⏸ O amigo não pode receber mensagens neste momento: {{reason}}",
           "authMissing": {
             "defaultProvider": "fornecedor atual",
             "message": "⚠️ Esta conversa usa o fornecedor “{{provider}}” ({{model}}): {{reason}}.",
@@ -13782,19 +13782,19 @@
           "delayedReplyQuestion": "Mensagem original: {{question}}",
           "stillProcessing": "Ainda em processamento…",
           "ownerOnlyCommands": "Só o proprietário pode usar os comandos do bot.",
-          "companionManagedCommand": "Abra este colega no Cindy: o modelo muda-se nas definições do colega e as permissões por baixo da caixa de entrada da conversa.",
+          "companionManagedCommand": "Abra este amigo no Cindy: o modelo muda-se nas definições do amigo e as permissões por baixo da caixa de entrada da conversa.",
           "help": "Comandos disponíveis: /new nova conversa; /stop parar a execução atual; /stop all parar todas as execuções; /status ver o estado; /help ver a ajuda.",
           "status_one": "A ligação do Cindy ao WeChat está a funcionar. {{count}} mensagem em fila.",
           "status_other": "A ligação do Cindy ao WeChat está a funcionar. {{count}} mensagens em fila.",
           "status_many": "A ligação do Cindy ao WeChat está a funcionar. {{count}} mensagens em fila.",
           "stopped": "Tarefa interrompida.",
-          "companionDmNew": "Aqui partilha a mesma sessão de longa duração com o colega, por isso o histórico e a memória são mantidos. Para organizar o contexto, reinicie o colega no Cindy.",
+          "companionDmNew": "Aqui partilha a mesma sessão de longa duração com o amigo, por isso o histórico e a memória são mantidos. Para organizar o contexto, reinicie o amigo no Cindy.",
           "newConversation": "Nova conversa iniciada.",
           "unknownCommand": "Comando desconhecido. Envie /help para ver os comandos disponíveis.",
           "overloaded": "Há demasiadas tarefas do WeChat neste momento. Tente novamente mais tarde."
         },
         "preDispatch": {
-          "companionPermissionUnsupported": "Esta mensagem precisa de confirmação de permissões a cada ação, mas o modelo ou o modo de permissões atual do colega não o suporta, por isso a mensagem não pode ser iniciada.\nO proprietário deve abrir este colega no Cindy, verificar o modelo nas definições do colega e escolher “Permissões predefinidas” ou “Revisão automática” por baixo da caixa de entrada da conversa.",
+          "companionPermissionUnsupported": "Esta mensagem precisa de confirmação de permissões a cada ação, mas o modelo ou o modo de permissões atual do amigo não o suporta, por isso a mensagem não pode ser iniciada.\nO proprietário deve abrir este amigo no Cindy, verificar o modelo nas definições do amigo e escolher “Permissões predefinidas” ou “Revisão automática” por baixo da caixa de entrada da conversa.",
           "missingAuth": "O Agent atual ainda não está autorizado. Ligue primeiro um serviço de modelos no Cindy.",
           "generic": "Esta mensagem não pode ser iniciada agora. Tente novamente mais tarde."
         },
@@ -22186,9 +22186,9 @@
       "pick": "Escolher uma a uma",
       "started": "A importação começou em segundo plano. Acompanhe o progresso em Definições → Importação de sessões.",
       "startFailed": "A importação não começou. Importe novamente em Definições → Importação de sessões.",
-      "teammatesHeading": "Colegas",
-      "teammatesHint": "Importe um Agent de outra ferramenta como colega, com a memória, as Skills e as automatizações dele.",
-      "importTeammate": "Importar como colega"
+      "teammatesHeading": "Amigos",
+      "teammatesHint": "Importe um Agent de outra ferramenta como amigo, com a memória, as Skills e as automatizações dele.",
+      "importTeammate": "Importar como amigo"
     },
     "finish": {
       "title": "Está tudo pronto",
