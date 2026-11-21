@@ -311,6 +311,24 @@ More/Archive,复用 `TimeActionsSlot`),行 2 = 固定 1 行预览;整行恒两�
 - 双层分组(设备+项目):点击循环 **收起项目层 → 收起设备层 → 全部展开**,
   tooltip 提示下一步动作,全收起后图标切「展开」形态。
 
+### 6.1 段头最右侧的新建入口(#11860,2026-11-21 用户裁决)
+
+「全部任务 ▾」操作行最右侧加一个「＋」,任务列表与收件箱共用这一行,所以两种模式下
+位置一致;手机端不在范围内。
+
+- **同一个动作,不是新语义**:与左上角导航行的「新建」、⌘N 走同一条链路
+  (`makeGenericNewMakerRouteState`),恢复当前账号最近一次成功创建时的电脑与项目
+  (含「无项目」,见 #11420)。段头标题表示「正在看什么」,不表示「新任务去哪台电脑」,
+  所以这个入口**不读**机器范围——范围是「所有」或另一台设备时照样打开通用草稿,而不像
+  项目行 / 对话组头那样按所属设备创建;因此设备离线时也不禁用,与左上角的新建一致。
+- **显隐**:跟随段头 hover / 键盘聚焦出现,与折叠、整理同一套规则;「已归档」视图下
+  整理按钮常驻,新建入口不常驻。
+- **落点**:[`SidebarNewTaskButton.tsx`](../../apps/desktop/src/renderer/features/cc-agent/sidebar/SidebarNewTaskButton.tsx)
+  只画按钮与动作,显隐由所在行给;[`MainListScopeHeader.tsx`](../../apps/desktop/src/renderer/features/cc-agent/sidebar/MainListScopeHeader.tsx)
+  把它挂在操作行最后;[`useNewMakerDraftEntry.ts`](../../apps/desktop/src/renderer/features/cc-agent/hooks/useNewMakerDraftEntry.ts)
+  与 `SidebarTopNav` 共用同一个动作。冻结测试见
+  [`MainListScopeHeader.test.tsx`](../../apps/desktop/src/renderer/features/cc-agent/sidebar/__tests__/MainListScopeHeader.test.tsx)。
+
 ## 7. 存储边界(维持现状口径)
 
 - **显示类**(两个显示方式、分组三开关、排序、筛选、任务信息复选):本地

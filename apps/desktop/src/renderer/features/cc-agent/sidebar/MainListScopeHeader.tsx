@@ -13,6 +13,7 @@ import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { MachineSwitcherMenu } from './MachineSwitcherMenu';
+import { SidebarNewTaskButton } from './SidebarNewTaskButton';
 import { sidebarContentFilterCount } from '../hooks/helpers/sidebarFilterCore';
 import { SidebarFilterPopover } from './SidebarFilterPopover';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
@@ -89,6 +90,11 @@ export function MainListScopeHeader({
               open={displaySettingsOpen}
               onOpenChange={setDisplaySettingsOpen}
             />
+          </div>
+          {/* 最右侧:与左上角「新建」同一个动作,不携带段头的机器范围(#11860)。
+              任务列表与收件箱共用这一行,所以两种模式位置天然一致。 */}
+          <div className={HEADER_HOVER_ACTION_CLASS}>
+            <SidebarNewTaskButton />
           </div>
         </div>
       </div>

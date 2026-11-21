@@ -30,6 +30,10 @@ export default {
       about: 'The first switch into the inbox on this computer introduces it once; later switches do not',
       viewport: { width: 1040, height: 760 },
     },
+    'header-actions': {
+      about: 'Hovering the section header reveals its actions, and the new-task entry stays at the right end in both task-list and inbox modes',
+      viewport: { width: 880, height: 560 },
+    },
   },
   async check(page, ui) {
     if (ui.case === 'reply') {
@@ -111,6 +115,67 @@ export default {
       await toggle.click();
       await toggle.click();
       assert.equal(await intro.count(), 0);
+      return;
+    }
+    if (ui.case === 'header-actions') {
+      const label = await ui.t('ccAgent.sidebar.newDialogue');
+      const header = page.locator('[class*="group/sidebar-header"]').first();
+      const entry = page.getByRole('button', { name: label, exact: true });
+      // 段头的显隐在包裹层上(opacity-0 + group-hover),按钮自身不隐身。
+      const wrapperOpacity = () => entry.evaluate((node) => {
+        const wrapper = node.closest('.pointer-events-none');
+        return wrapper ? getComputedStyle(wrapper).opacity : 'none';
+      });
+      // 行内最右:范围标题在左,折叠 / 整理 / 新建在右。
+      const rightMost = async () => {
+        const boxes = await header.locator('button').evaluateAll((nodes) => nodes.map((node) => ({
+          label: node.getAttribute('aria-label') ?? '',
+          left: Math.round(node.getBoundingClientRect().left),
+        })));
+        return boxes.reduce((a, b) => (b.left > a.left ? b : a)).label;
+      };
+      await header.waitFor();
+      assert.equal(await entry.count(), 1, 'The header carries one new-task entry');
+      assert.equal(await wrapperOpacity(), '0', 'The entry stays hidden until the header is hovered');
+      assert.equal(await rightMost(), label, 'The new-task entry is the right-most action of the row');
+      await header.hover();
+      await page.waitForFunction((text) => {
+        const node = [...document.querySelectorAll('button')]
+          .find((element) => element.getAttribute('aria-label') === text);
+        const wrapper = node?.closest('.pointer-events-none');
+        return !!wrapper && getComputedStyle(wrapper).opacity === '1';
+      }, label);
+      await ui.capture('header-hover', { locator: header });
+      // 移开鼠标又变回去，证明它是悬停才出现，不是恒显（恒显的样式改错会被这条抓住）。
+      await page.mouse.move(1, ui.viewport.height - 1);
+      await page.waitForFunction((text) => {
+        const node = [...document.querySelectorAll('button')]
+          .find((element) => element.getAttribute('aria-label') === text);
+        const wrapper = node?.closest('.pointer-events-none');
+        return !!wrapper && getComputedStyle(wrapper).opacity === '0';
+      }, label);
+      // 键盘可达：用真实 Tab 走到它，而不是用 hover 撑出同一张图。
+      let reached = false;
+      for (let i = 0; i < 15 && !reached; i += 1) {
+        await page.keyboard.press('Tab');
+        reached = await entry.evaluate((node) => document.activeElement === node);
+      }
+      assert.ok(reached, 'Tab reaches the new-task entry');
+      await page.waitForFunction((text) => {
+        const node = [...document.querySelectorAll('button')]
+          .find((element) => element.getAttribute('aria-label') === text);
+        const wrapper = node?.closest('.pointer-events-none');
+        return !!wrapper && getComputedStyle(wrapper).opacity === '1';
+      }, label);
+      await ui.capture('header-keyboard', { locator: header });
+      // 收件箱与任务列共用这行:同一个入口、同一个位置,折叠按钮则不再存在。
+      await page.locator('[data-task-list-mode-toggle]').click();
+      await page.waitForFunction(() => document.querySelector('[data-task-list-mode-toggle]')
+        ?.getAttribute('aria-pressed') === 'true');
+      assert.equal(await entry.count(), 1, 'Inbox mode keeps the same entry');
+      assert.equal(await rightMost(), label, 'The inbox row keeps it at the right end');
+      await header.hover();
+      await ui.capture('header-hover-inbox', { locator: header });
       return;
     }
     if (ui.case === 'structure') {

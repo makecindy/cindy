@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
+import { getDraft, patchDraft } from '@/state/newMakerDraft';
 import { SidebarRailNavigation, SidebarTopNav, type SidebarRailSearchOptions } from '../SidebarTopNav';
 import {
   __testing as navigationTesting,
@@ -763,4 +764,18 @@ it.each(['disabled', 'archived', 'revoked', 'enabled', 'approved'])('uses the re
   const entry = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
   const tone = status === 'enabled' || status === 'approved' ? 'done' : 'error';
   expect([...entry.querySelectorAll('span')].some(span => span.className.includes(`--card-status-${tone}`))).toBe(true);
+});
+
+// 通用「新建」只导航,不重置 newMakerDraft(2026-07 回归)。任务列表段头的「＋」
+// 用同一个 hook,两处入口的行为在此一起被覆盖。
+describe('通用新建入口', () => {
+  it('opens the generic new-task draft and keeps the saved working directory', () => {
+    patchDraft({ workingDir: '/workspace/keep-me' });
+    // getDraft() 返回内存里的同一份对象,先拍一份快照才能看出改动。
+    const before = structuredClone(getDraft());
+    render(<Harness initialPath="/cc-agent/session-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.layout.new' }));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/new');
+    expect(getDraft()).toEqual(before);
+  });
 });

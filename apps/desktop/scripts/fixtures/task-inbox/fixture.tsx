@@ -241,7 +241,7 @@ void mountPage({
   },
   render: () => (
     <WorktreeProvider>
-      {ctx.case === 'intro' ? <IntroSpecimen /> : ctx.case === 'structure' ? <StructureSpecimen /> : <Specimen />}
+      {ctx.case === 'intro' ? <IntroSpecimen /> : ctx.case === 'structure' || ctx.case === 'header-actions' ? <StructureSpecimen /> : <Specimen />}
     </WorktreeProvider>
   ),
 });

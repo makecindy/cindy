@@ -49,7 +49,7 @@ import { SidebarIconButton, SIDEBAR_RAIL_ICON_BUTTON_CLASS } from './SidebarIcon
 import { Tip } from '@/components/ui/tooltip';
 import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conversationSearchContext';
 import { GhostMainViewNavEntry, MAIN_VIEW_ICONS } from './GhostMainViewNavEntries';
-import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
+import { useNewMakerDraftEntry } from '@/features/cc-agent/hooks/useNewMakerDraftEntry';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -424,7 +424,6 @@ export function SidebarTopNav({
   section?: SidebarTopNavSection;
 } = {}): React.ReactElement {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const location = useLocation();
   const { navigateToView } = useActiveMainView();
   const { search, allKnownProjects, openSignal } = useConversationSearchContext();
@@ -438,9 +437,8 @@ export function SidebarTopNav({
     setSearchOpenSignal((signal) => signal + 1);
   });
 
-  const handleNew = () => {
-    navigate('/cc-agent/new', { state: makeGenericNewMakerRouteState(location.pathname) });
-  };
+  // 任务列表段头最右侧的「＋」共用同一个动作,两处打开的草稿预选保持一致。
+  const handleNew = useNewMakerDraftEntry();
 
   // 搜索结果 overlay 只在 cc-agent 视图(CCAgentSidebarUpper)绘制;本行却在所有非 rail 视图都渲染。
   // 用户在 plugins / 设置等视图输入搜索时,先切回 cc-agent 视图,结果才有处显示(同视图为 no-op)。

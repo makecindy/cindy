@@ -55,14 +55,6 @@ describe('通用「新建」保留 newMakerDraft 选择', () => {
     expect(block).toContain('state: makeGenericNewMakerRouteState(location.pathname)');
   });
 
-  it('展开态 SidebarTopNav.handleNew 只 navigate、不清空 workingDir', () => {
-    const block = extractHandlerBlock(topNavSource, 'handleNew');
-    expect(block).toMatch(/navigate\(['`]\/cc-agent\/new['`]/);
-    expect(block).not.toContain('workingDir: null');
-    // 通用入口不再需要 patchDraft/patchNewMakerDraft,连 value import 都应移除。
-    expect(topNavSource).not.toContain("from '@/state/newMakerDraft'");
-  });
-
   it('折叠态 CCAgentSidebarUpper.handleNewCCS 只 navigate、不清空 workingDir', () => {
     const block = extractHandlerBlock(sidebarUpperSource, 'handleNewCCS');
     expect(block).toMatch(
