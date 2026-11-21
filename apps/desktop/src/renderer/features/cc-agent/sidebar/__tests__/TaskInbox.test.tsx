@@ -163,10 +163,11 @@ it.each([false, true])('settles an already-read open task without another data u
   expect(rows(0)).toContain('a');
 });
 
-it('keeps a held task Pending when its completion was blocked', async () => {
+it('immediately removes a held task and restores it if the remote completion is blocked', async () => {
   const a = { id: 'a', status: 'active', title: 'A' } as Session;
   following.add(a);
-  const onAction = vi.fn(async () => {});
+  let cancel!: () => void;
+  const onAction = vi.fn(() => new Promise<void>(resolve => { cancel = resolve; }));
   const props: Parameters<typeof TaskInbox>[0] = {
     activeSessionId: 'a', sessions: [a], onAction,
     priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set(), heldPriorityRanks: new Map([['a', 1]]) },
@@ -176,7 +177,9 @@ it('keeps a held task Pending when its completion was blocked', async () => {
   const view = render(<TaskInbox {...props} />);
   fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:a' }));
   fireEvent.click(screen.getByRole('button', { name: 'complete:a' }));
-  await waitFor(() => expect(onAction).toHaveBeenCalledOnce());
+  expect(screen.queryByTestId('row')).toBeNull();
+  expect(view.container.querySelector('section > button')?.lastElementChild?.textContent).toBe('0');
+  await act(async () => cancel());
   expect(view.container.querySelector('section')?.querySelector('[data-testid="row"]')?.textContent).toBe('a');
 });
 

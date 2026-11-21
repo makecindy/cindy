@@ -840,6 +840,7 @@ interface CCAgentPermissionRequestPayload {
   description?: string;
   suggestions?: unknown[];
   autoReviewUnavailable?: boolean;
+  autoReviewQuotaExhausted?: boolean;
   /** Auto-review's reason for asking; shown as the card's "why". */
   autoReviewReason?: string;
 }
@@ -4833,6 +4834,7 @@ interface ElectronAPI {
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    githubAppAccess: () => Promise<import('../shared/githubSetup').GithubAppAccess>;
     githubAppStatus: () => Promise<import('../shared/githubSetup').GithubAppConnectionState>;
     connectGithubApp: () => Promise<void>;
     installGithubApp: () => Promise<void>;
@@ -5176,6 +5178,7 @@ interface ElectronAPI {
       }) => Promise<import('@/lib/ccAgent.types').Session>;
       get: (id: string) => Promise<import('@/lib/ccAgent.types').Session>;
       getMany: (ids: string[]) => Promise<import('@/lib/ccAgent.types').Session[]>;
+      archiveLinkedSideChat: (id: string, parentId: string) => Promise<import('@/lib/ccAgent.types').Session>;
       resolveReferences: (
         sessionIds: string[],
       ) => Promise<import('../shared/sessionReference').SessionReference[]>;
@@ -7410,9 +7413,9 @@ interface ElectronAPI {
           day: string;
           money: import('../shared/regionalMoney').RegionalMoney;
           costUsd?: number;
-        }) => void,
+        }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
       ) => () => void;
-      onTodayTokensChanged: (cb: (p: CodexUsageSnapshot) => void) => () => void;
+      onTodayTokensChanged: (cb: (p: CodexUsageSnapshot, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
       onClaudeAccountChanged: (
         cb: (p: {
           spend: number;

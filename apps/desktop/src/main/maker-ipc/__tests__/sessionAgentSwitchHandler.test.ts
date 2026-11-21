@@ -12,7 +12,7 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
   type PendingAgentSwitchIntent,
 } from '../sessionAgentSwitchHandler';
-import { createAgentHandoffPendingRegistry } from '../agentHandoff';
+import { createAgentHandoffPendingRegistry, prependHandoffToUserMessage } from '../agentHandoff';
 import { MAKER_INVOKE } from '../channels';
 import { remoteAgentLinkError } from '../../remote-agent/controller/runClient';
 import { IpcHarness } from './helpers/ipcHarness';
@@ -403,6 +403,87 @@ describe('same-harness native relocation', () => {
       resumed: false, nativeHistory: 'fallback', handoff: expect.stringContaining('你好'),
     }));
     expect(deps.setPendingHandoff).toHaveBeenLastCalledWith('s1', expect.stringContaining('你好'), undefined);
+  });
+
+  // 价值门槛：这条用例走真实的会话切换事务，而不是直接调用交接构造器，
+  // 锁住用户输入从生产换引擎入口进入 handoff 后仍保留附件引用。它覆盖现场
+  // 图片地址落库但图片字节不应被读取的最小失败输入，并防止后续调用方绕过统一构造器。
+  it('replays user attachment references through the real session-agent-switch handoff', async () => {
+    const history = [
+      {
+        role: 'user',
+        content: {
+          text: '这个改服务端能兼容吗',
+          images: [{
+            originalName: 'clipboard-shot.png',
+            url: 'cindy-media://blobs/abc.png',
+            // A byte-like field must never be inspected or copied into handoff.
+            data: 'base64-should-not-be-read',
+          }],
+          files: [],
+        },
+        createdAt: 1,
+      },
+    ];
+    const { deps } = makeDeps({
+      listMessagesForHandoff: vi.fn(async () => history),
+    });
+
+    await performSessionAgentSwitch(deps, {
+      ...validParams,
+      targetAgentKind: 'claude-code',
+      agentDeviceId: 'mini',
+      applyNow: true,
+    });
+
+    const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0]![1];
+    expect(boundary.handoff).toContain('[User]');
+    expect(boundary.handoff).toContain('这个改服务端能兼容吗');
+    expect(boundary.handoff).toContain('clipboard-shot.png');
+    expect(boundary.handoff).toContain('cindy-media://blobs/abc.png');
+    expect(boundary.handoff).toContain('resolve_local_path');
+    expect(boundary.handoff).not.toContain('base64-should-not-be-read');
+  });
+
+  // Unit: a shared relocation sends the file name while keeping the local
+  // path out of the pending handoff that will be sent to the replacement.
+  it('keeps attachment names without local paths in shared relocation', async () => {
+    const inside = '/guest/project/draft;  [v2]/spec.md';
+    const outside = '/guest/elsewhere/raw; [v1].txt';
+    const aliased = '/guest/extra/draft; [v3]/report.md';
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => makeRow({ agentDeviceId: 'share:owner', providerId: 'anthropic' })),
+      listMessagesForHandoff: vi.fn(async () => [{
+        role: 'user',
+        content: {
+          text: '请看附件',
+          images: [{ originalName: 'screen.png', url: 'cindy-media://blobs/guest-hash.png' }],
+          files: [
+            { name: 'spec.md', path: inside },
+            { name: 'raw.txt', filePath: outside },
+            { name: 'report.md', localPath: aliased },
+          ],
+        },
+        createdAt: 1,
+      }]),
+    });
+
+    await relocateForFreshStart(deps, {
+      sessionId: 's1',
+      agentDeviceId: 'share:owner',
+      providerId: 'anthropic',
+      from: { agentDeviceId: 'share:owner', providerId: 'anthropic' },
+      sharedRelocation: true,
+    });
+
+    const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0]![1];
+    const pending = vi.mocked(deps.setPendingHandoff).mock.calls[0]![1];
+    expect(pending).toBe(boundary.handoff);
+    const next = prependHandoffToUserMessage({ type: 'user', content: '继续' }, pending);
+    if (typeof next === 'string' || typeof next.content !== 'string') throw new Error('expected a text send');
+    for (const name of ['spec.md', 'raw.txt', 'report.md']) expect(next.content).toContain('file ' + name);
+    for (const path of [inside, outside, aliased]) expect(next.content).not.toContain(path);
+    expect(next.content).toContain('screen.png · cindy-media://blobs/guest-hash.png');
   });
 
   // #9973, unit: ordinary and Orca Lead switches must deliver early constraints

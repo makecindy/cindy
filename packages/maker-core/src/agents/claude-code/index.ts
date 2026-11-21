@@ -1135,7 +1135,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         query.supportedModels(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
-            () => reject(new Error('supportedModels probe timed out')),
+            () => reject(new Error('Request timed out: supportedModels probe')),
             SUPPORTED_MODELS_PROBE_TIMEOUT_MS,
           );
         }),
@@ -1145,6 +1145,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       return true;
     } catch (error) {
       log.warn('probe failed', { error: String(error) });
+      if (options?.throwOnError) throw error;
       return false;
     } finally {
       if (timer) clearTimeout(timer);
@@ -2762,9 +2763,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (autoDecision.unavailable) {
             autoReviewUnavailableNotice.notify(autoDecision);
             unavailableHandoff = true;
-          } else {
-            autoReviewAskReason = autoDecision.reason;
           }
+          autoReviewAskReason = autoDecision.reason;
           forcePrompt = true;
         }
       } else {
@@ -4262,9 +4262,8 @@ export class ClaudeCodeAgent extends BaseAgent {
               if (autoDecision.unavailable) {
                 autoReviewUnavailableNotice.notify(autoDecision);
                 remoteUnavailableHandoff = true;
-              } else {
-                remoteAutoReviewAskReason = autoDecision.reason;
               }
+              remoteAutoReviewAskReason = autoDecision.reason;
               remoteForcePrompt = true;
             } else {
               remoteForcePrompt = remoteForcePrompt || remoteMcpPolicy === 'prompt-each-time';

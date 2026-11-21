@@ -5886,6 +5886,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     starCindy: (): Promise<boolean | null> => ipcRenderer.invoke('git-context:github-star:add'),
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown): Promise<unknown> =>
       ipcRenderer.invoke('git-context:github-read', { method, args }),
+    githubAppAccess: (): Promise<import('../shared/githubSetup').GithubAppAccess> => ipcRenderer.invoke('git-context:github-app:access'),
     githubAppStatus: (): Promise<import('../shared/githubSetup').GithubAppConnectionState> => ipcRenderer.invoke('git-context:github-app:status'),
     connectGithubApp: (): Promise<void> => ipcRenderer.invoke('git-context:github-app:connect'),
     installGithubApp: (): Promise<void> => ipcRenderer.invoke('git-context:github-app:install'),
@@ -6297,6 +6298,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:sessions:restore-if-archived', id, expected),
       update: (id: string, patch: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:update', id, patch),
+      archiveLinkedSideChat: (id: string, parentId: string): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:sessions:patch-meta', id, { status: 'archived', archiveSideChatParentId: parentId }),
       touchUserSend: (id: string, atMs?: number): Promise<void> =>
         ipcRenderer.invoke('local-db:sessions:touchUserSend', id, atMs),
       setPinnedCardSummaries: (enabled: boolean): Promise<void> =>

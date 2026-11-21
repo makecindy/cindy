@@ -1,11 +1,12 @@
-import type { BotModelRoute } from '../../../shared/botModelChain';
+import type { ModelRoute } from '@cindy/maker-shared/model-route';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { availableAppDefaultModels, changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel, validateTaskModel, resolveAvailableTaskModels, resolveTaskModelSelection } from '../appDefaultModelControl';
 import { setNewMakerDraftCache, syncNewMakerDraftCache } from '../../maker-host/newMakerDefaultsCache';
 
 const host = vi.hoisted(() => ({ owner: 'owner:1', enabled: true, connected: true, agents: ['codex'],
-  enableSecond: false, providers: vi.fn(), remote: vi.fn() }));
+  enableSecond: false, providers: vi.fn(), remote: vi.fn(), pluginEngines: vi.fn((): unknown[] => []) }));
+vi.mock('../pluginEnginesIpc.js', () => ({ listPluginEngineViews: host.pluginEngines }));
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readRemoteProviderRoute: host.remote }));
 vi.mock('../../maker-host/index.js', () => ({ getMakerIfReady: () => ({ listAvailableAgents: () => host.agents }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
@@ -19,12 +20,14 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
 }));
 const route = { harness: 'codex' as const, providerId: 'openai', model: 'luna', effort: 'medium', fastMode: false };
-const mirror = (selectedRoute: BotModelRoute = route, requestId?: string) => setNewMakerDraftCache({ selectedRoute,
+const mirror = (selectedRoute: ModelRoute = route, requestId?: string) => setNewMakerDraftCache({ selectedRoute,
   lastByVendor: {}, fastModeByModel: {}, effortByModel: {} }, host.owner, requestId);
 const id = JSON.stringify(['codex', 'openai', 'luna']);
 
 beforeEach(() => {
   host.enableSecond = false;
+  host.pluginEngines.mockReset();
+  host.pluginEngines.mockReturnValue([]);
   host.owner = 'owner:1'; host.enabled = true; host.connected = true; host.agents = ['codex'];
   host.providers.mockImplementation(async () => [{ id: 'openai', source: 'builtin', connected: host.connected, agents: ['codex'], routing: { codex: { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
     models: { codex: ['luna', 'sol'].map(model => ({ id: model, status: 'active', mode: 'chat', defaultEnabled: true,
@@ -32,6 +35,18 @@ beforeEach(() => {
   mirror();
 });
 afterEach(() => { configureAppDefaultModelSelection(null); vi.useRealTimers(); });
+
+// Companion creation validates the chosen plugin model even on a computer with no built-in account.
+it('validates the offered companion model on its host without adding it to application defaults', async () => {
+  const plugin = { harness: 'acp' as const, providerId: 'acp-plugin:sample:engine', model: 'chosen', effort: 'high', fastMode: false };
+  host.pluginEngines.mockReturnValue([{ providerId: plugin.providerId, availability: { state: 'available' },
+    models: [{ id: 'chosen', efforts: ['high'] }] }]);
+  host.connected = false;
+  expect(await resolveAvailableTaskModels([plugin, { ...plugin, model: 'missing' }])).toEqual([plugin, null]);
+  expect(await inspectAppDefaultModel()).toMatchObject({ current: route, available: [] });
+  host.pluginEngines.mockReturnValue([]);
+  expect(await validateTaskModel(plugin)).toBe(false);
+});
 
 describe('Bot control of the real Cindy default', () => {
   it('includes an authenticated native Google route in formal task and teammate model discovery', () => {

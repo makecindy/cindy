@@ -3855,6 +3855,13 @@ export class PiAgent extends BaseAgent {
     let mcpBridge: PiExtraSpawnConfig['mcpBridge'] = null;
     let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
+    let closeSessionInstance: (() => void) | undefined;
+    let sessionInstanceClosed = false;
+    const closeSessionInstanceOnce = (): void => {
+      if (sessionInstanceClosed) return;
+      sessionInstanceClosed = true;
+      closeSessionInstance?.();
+    };
     const registeredMcpServerNames = new Set<string>();
     // 远端会话:host 可 gate 掉 in-process MCP bridge(loopback URL 远端够不到;
     // Phase 1 不桥 orca/memory/ghost)。外部 HTTP MCP 直连不受影响。
@@ -3900,6 +3907,7 @@ export class PiAgent extends BaseAgent {
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
         disposeSessionCtx = extra?.disposeSessionCtx;
+        closeSessionInstance = extra?.closeSessionInstance;
         // 归属判定只认本会话实际注册过的 server 名(见 shared/mcp-tool-target.ts:
         // 盲切 `__` 会让第三方 server 冒名顶替第一方信任表)。
         for (const server of mcpBridge?.servers ?? []) {
@@ -5170,7 +5178,8 @@ export class PiAgent extends BaseAgent {
           if (decision.unavailable) autoReviewUnavailableNotice.notify(decision);
           return requestUserDecision({
             forcePrompt: true,
-            ...(decision.unavailable ? { unavailableHandoff: true } : { autoReviewReason: decision.reason }),
+            ...(decision.unavailable ? { unavailableHandoff: true } : {}),
+            autoReviewReason: decision.reason,
           });
         } catch (error) {
           this.deps.logger.warn('PI Subagent auto-review failed; denying', {
@@ -6326,6 +6335,13 @@ export class PiAgent extends BaseAgent {
             // 本地 stdio 无 daemon, onExit 即真死, 保持清理。
             if (!remote) {
               try {
+                closeSessionInstanceOnce();
+              } catch (err) {
+                this.deps.logger.warn('pi MCP session-instance cleanup failed (non-fatal)', {
+                  message: err instanceof Error ? err.message : String(err),
+                });
+              }
+              try {
                 disposeSessionRegistrations();
               } catch (err) {
                 this.deps.logger.warn('pi dispose on unexpected exit failed (non-fatal)', {
@@ -7003,6 +7019,13 @@ export class PiAgent extends BaseAgent {
       let cleanupPending: AgentStartupCleanupPendingError | null = null;
       try {
         await proc.close();
+        try {
+          closeSessionInstanceOnce();
+        } catch (err) {
+          this.deps.logger.warn('pi MCP session-instance cleanup failed (non-fatal)', {
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
         piProcessExited = true;
       } catch (error) {
         if (!remote) configHomeCleanupDeferredToQuarantine = true;
@@ -8740,6 +8763,7 @@ export class PiAgent extends BaseAgent {
         // Until then the still-live process may continue reading its isolated
         // config, permission policy, and subagent routing snapshot.
         await proc.close();
+        closeSessionInstanceOnce();
         // Belt and braces for a transport that resolves `close()` without ever
         // emitting `onExit`: the supervisor must not wait out its hard deadline
         // holding a lease for a process that is already gone.

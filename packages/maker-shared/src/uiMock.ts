@@ -220,6 +220,17 @@ export const UI_MOCK_TASKS: readonly UiMockTask[] = [
     ],
   },
   {
+    id: 'visual-input-handoff',
+    title: 'Set up the Mac mail app',
+    project: 'cindy-demo',
+    agentKind: 'cc', model: 'claude-sonnet-5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: 'Finish setting up the mail app on my Mac.' },
+      { role: 'assistant', text: 'The app is asking for your account. Please type it on your phone.' },
+    ],
+  },
+  {
     id: 'ui-mock-inline-math',
     title: '行内公式语义验收',
     project: 'cindy-demo',

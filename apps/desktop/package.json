@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "productName": "Cindy",
-  "version": "0.1.143",
+  "version": "0.0.0",
   "description": "Cindy desktop client",
   "main": ".vite/build/index.js",
   "private": true,

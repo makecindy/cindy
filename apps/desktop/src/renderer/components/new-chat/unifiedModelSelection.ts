@@ -347,8 +347,11 @@ export type UnifiedRailItem =
   | { kind: 'favorites' }
   | { kind: 'engine'; agent: AgentKind }
   | { kind: 'all' }
-  /** 用户建的模式与路线(模型组)。只在新任务草稿出现，列表内容由调用方提供，不按目录筛选。 */
-  | { kind: 'model-groups' }
+  /**
+   * 用户建的模式与路线(模型组)。只在新任务草稿出现，列表内容由调用方提供，不按目录筛选。
+   * `deviceId` = 另一台电脑自己的模式(model-groups.md §6.3)，格位排进那台电脑那一段。
+   */
+  | { kind: 'model-groups'; deviceId?: string }
   /**
    * 一个插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，与供应商格一样每个引擎一格、用插件
    * 自己的图标。只在新任务草稿出现；列表内容由调用方提供，不按目录筛选。`deviceId` = 引擎在自己的
@@ -378,7 +381,31 @@ export interface PluginEngineRailTab {
 /** 这一格所属的另一台电脑(远程供应商格，或另一台电脑上的插件引擎格)；其余格为 null。 */
 export function railItemDeviceId(item: UnifiedRailItem): string | null {
   if (item.kind === 'remote-provider') return item.deviceId;
-  return item.kind === 'plugin-engine' ? (item.deviceId ?? null) : null;
+  return item.kind === 'plugin-engine' || item.kind === 'model-groups' ? (item.deviceId ?? null) : null;
+}
+
+/** 左侧栏一台电脑的「模型组」格：那台电脑的 id 与悬停显示的名字。 */
+export interface DeviceModelGroupsRailTab {
+  deviceId: string;
+  name: string;
+}
+
+/**
+ * 把另一台电脑的「模型组」格放进左侧栏：与本机「模型组」紧跟「全部」同理，排在那台电脑那一段的最前面；
+ * 那台没有别的格时在末尾单独成段。
+ */
+export function withRemoteModelGroupRailItems(
+  items: readonly UnifiedRailItem[],
+  tabs: readonly Pick<DeviceModelGroupsRailTab, 'deviceId'>[],
+): UnifiedRailItem[] {
+  const out = [...items];
+  for (const tab of tabs) {
+    const item: UnifiedRailItem = { kind: 'model-groups', deviceId: tab.deviceId };
+    const first = out.findIndex((entry) => railItemDeviceId(entry) === tab.deviceId);
+    if (first < 0) out.push(item);
+    else out.splice(first, 0, item);
+  }
+  return out;
 }
 
 /**
@@ -423,6 +450,7 @@ export function railItemKey(item: UnifiedRailItem): string {
   if (item.kind === 'plugin-engine') {
     return item.deviceId ? `plugin-engine:${item.deviceId}:${item.providerId}` : `plugin-engine:${item.providerId}`;
   }
+  if (item.kind === 'model-groups' && item.deviceId) return `model-groups:${item.deviceId}`;
   return item.kind;
 }
 

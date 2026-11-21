@@ -388,6 +388,9 @@ async function getPiExtraSpawnConfig(
           }
         }
       },
+      ...(sessionCtx?.sessionInstanceId
+        ? { closeSessionInstance: () => bridge.closeSessionInstance(sessionCtx.sessionInstanceId!) }
+        : {}),
     };
   } catch (err) {
     // 注册后构造失败必须回滚,否则调用方拿不到 dispose,ctx 永久残留(该 id 的

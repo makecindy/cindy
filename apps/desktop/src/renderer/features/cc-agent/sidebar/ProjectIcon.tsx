@@ -3,6 +3,7 @@ import {
   parseAutomaticProjectIcon,
   type AutomaticProjectIcon,
 } from '@cindy/maker-shared/project-alias-sync';
+import { isDeviceUnresponsiveRemoteError, isTransientRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { useEffect, useState } from 'react';
 import { Folder } from 'lucide-react';
 import {
@@ -45,7 +46,7 @@ export function ProjectIcon({
     projectKey,
     value,
   ]);
-  const [loaded, setLoaded] = useState<{ identity: string; data: string } | null>(null);
+  const [loaded, setLoaded] = useState<{ identity: string; data: string | null } | null>(null);
   useEffect(() => {
     if (!isProjectImage(value)) return;
     let active = true;
@@ -64,14 +65,15 @@ export function ProjectIcon({
     );
     void read.promise
       .then((data) => {
-        if (active && typeof data === 'string' && isDataOwnerGenerationCurrent(owner))
-          setLoaded({ identity: imageIdentity, data });
+        if (active && isDataOwnerGenerationCurrent(owner))
+          setLoaded({ identity: imageIdentity, data: typeof data === 'string' ? data : null });
       })
       .catch(() => {});
     return () => {
       active = false;
     };
   }, [imageIdentity]);
+  const cachedImage = iconCache.get(imageIdentity)?.value;
   const [failedSource, setFailedSource] = useState<string | null>(null);
   const source =
     value === null && !automatic.result?.candidate
@@ -80,7 +82,7 @@ export function ProjectIcon({
         ? value
         : loaded?.identity === imageIdentity
           ? loaded.data
-          : null;
+          : typeof cachedImage === 'string' ? cachedImage : null;
   if (source && source !== failedSource)
     return (
       <img
@@ -171,10 +173,13 @@ export function ProjectIcon({
 }
 
 // Shared by list and settings previews: one host request per account/device/project.
-const iconCache = new Map<
-  string,
-  { until: number; promise: Promise<AutomaticProjectIcon | string | null> }
->();
+type IconValue = AutomaticProjectIcon | string | null;
+interface IconEntry {
+  until: number;
+  value?: IconValue;
+  promise: Promise<IconValue>;
+}
+const iconCache = new Map<string, IconEntry>();
 export function useAutomaticProjectIcon(
   projectKey: string,
   deviceId: string | null | undefined,
@@ -190,7 +195,6 @@ export function useAutomaticProjectIcon(
   useEffect(() => {
     if (!enabled) return;
     let live = true;
-    setState({ identity, result: null, loading: true });
     const item = sharedIconRequest(identity, () =>
       Promise.resolve(
         deviceId
@@ -211,7 +215,9 @@ export function useAutomaticProjectIcon(
       live = false;
     };
   }, [identity, enabled]);
-  return state?.identity === identity ? state : { result: null, loading: enabled };
+  const cached = enabled ? iconCache.get(identity)?.value : undefined;
+  if (enabled && state?.identity === identity) return state;
+  return { result: cached && typeof cached !== 'string' ? cached : null, loading: enabled && cached === undefined };
 }
 
 function sharedIconRequest(
@@ -220,14 +226,27 @@ function sharedIconRequest(
 ) {
   let item = iconCache.get(identity);
   if (!item || item.until < Date.now()) {
-    if (iconCache.size >= 256) iconCache.clear();
-    item = {
-      until: Date.now() + 60_000,
-      promise: Promise.resolve()
-        .then(read)
-        .catch(() => null),
+    const previous = item?.value;
+    if (!item && iconCache.size >= 256) {
+      const oldest = iconCache.keys().next();
+      if (!oldest.done) iconCache.delete(oldest.value);
+    }
+    const entry: IconEntry = {
+      until: Infinity,
+      value: previous,
+      promise: Promise.resolve().then(read).then(value => {
+        entry.value = value;
+        return value;
+      }).catch((error: unknown) => {
+        entry.value = isTransientRemoteError(error) || isDeviceUnresponsiveRemoteError(error)
+          ? previous : null;
+        return entry.value ?? null;
+      }).finally(() => {
+        entry.until = Date.now() + 60_000;
+      }),
     };
-    iconCache.set(identity, item);
+    iconCache.set(identity, entry);
+    return entry;
   }
   return item;
 }

@@ -782,6 +782,47 @@ describe('MCP App message authorization', () => {
 });
 
 describe('maker SEND transaction', () => {
+  // 测试价值
+  // - 生产入口与可观察结果：真实 maker SEND 事务走共享重连恢复分支，观察 close 与凭证交出回调。
+  // - Bug／规则依据：凭证只能在旧会话 close 成功后交给供应商组，close 失败时提前交出会造成重复或过早换号。
+  // - 现有覆盖缺口：普通重连用例覆盖成功交接，但没有覆盖 close 返回 false 的失败边界。
+  // - 最小失败输入：一次已持久化的共享任务发送，恢复凭证存在且 close 返回 false。
+  // - tier：unit；使用真实 createMakerSendTransaction 入口和生产恢复接口形状。
+  it('does not offer a reconnect credential when closing the old session fails', async () => {
+    const reconnectError = new Error('reconnect failed');
+    const offer = vi.fn();
+    const close = vi.fn(async () => false);
+    const signal = new AbortController().signal;
+    const { deps, session } = createDeps({
+      getSession: vi.fn(() => Object.assign(session, { agentDeviceId: 'share:fixture' })),
+      captureSharedReconnectRecovery: () => ({
+        signal,
+        isCurrent: () => true,
+        close,
+        captureOffer: async <T>(send: () => Promise<T>) => send(),
+        takeOffer: (error: unknown) => error === reconnectError ? offer : undefined,
+        dispose: vi.fn(),
+      }),
+    });
+    vi.mocked(session.send).mockImplementation(async (_message, options) => {
+      await options?.onAccepted?.();
+      throw reconnectError;
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted(
+      session.id,
+      'continue after reconnect',
+      { id: session.id, agentKind: 'codex', workingDir: session.workDir, model: 'gpt-5.4' },
+      { persistUserMessage: { clientId: 'reconnect-input', content: 'continue after reconnect' },
+        reconnectRecovery: { signal, isCurrent: () => true } },
+    )).rejects.toBe(reconnectError);
+    expect(close).toHaveBeenCalledOnce();
+    expect(offer).not.toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalledWith('send: remote agent switch credential abandoned', {
+      sessionId: session.id, reason: 'close-not-closed',
+    });
+  });
+
   // #10559: a quota-looking message alone cannot authorize transparent replay.
   // Unit: the real bootstrap boundary must retain proof that startup stopped.
   it.each(['stopped-quota', 'opaque-quota', 'stopped-other'] as const)(

@@ -18,6 +18,7 @@ import {
   AgentStartupCleanupPendingError,
   AgentStartupStoppedError,
   BaseAgent,
+  isolatedBotProfile,
   type AgentDeps,
   type AgentSessionHandle,
   type PiExtraSpawnConfig,
@@ -58,6 +59,11 @@ export interface AcpEndpointConnectOptions {
    * plugin does not offer that mode.
    */
   remoteWorkspace?: boolean;
+  /**
+   * The task belongs to another Cindy account (provider sharing). The host starts the entry in
+   * guest-workspace mode and refuses an engine whose plugin has not declared guest isolation.
+   */
+  guestWorkspace?: boolean;
 }
 
 /** Host side: starts the endpoint process for one task and adapts it to a line transport. */
@@ -161,16 +167,13 @@ export class AcpAgent extends BaseAgent {
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
-    // SSH workspaces are not offered. A task of another account must not run here either: the
-    // agent runs as this computer's user with its own login and history, and Cindy can neither
-    // isolate it per guest nor prove that its own tools are off.
-    if (opts.remoteHostId || opts.deviceHosted?.guest) {
+    // SSH workspaces are not offered. Shared-user tasks require guest-workspace support, enforced
+    // by the endpoint launcher against the plugin's live published capabilities.
+    if (opts.remoteHostId) {
       throw new AgentStartupStoppedError(new NotSupportedError('remoteSession', {
         supported: false,
         reason: 'not-implemented',
-        message: opts.remoteHostId
-          ? 'Plugin engines do not run in SSH workspaces'
-          : 'Plugin engines are not available to shared users',
+        message: 'Plugin engines do not run in SSH workspaces',
       }));
     }
     const hosted = opts.deviceHosted;
@@ -183,6 +186,7 @@ export class AcpAgent extends BaseAgent {
     }
 
     const logger = this.deps.logger.child(`acp:${harnessKey}`);
+    const botMcpPolicy = isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy;
     let extra: PiExtraSpawnConfig | null = null;
     // Hosted for another computer: Cindy tools are that computer's and arrive through the tunnel,
     // so this computer's own tool bridge (and its installed plugins, memory, sessions) stays out.
@@ -196,6 +200,7 @@ export class AcpAgent extends BaseAgent {
           workingDir: opts.workingDir,
           ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           memoryEnabled: opts.makerMemoryEnabled === true,
+          ...(botMcpPolicy ? { botMcpPolicy } : {}),
           ...(opts.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
           // The external agent's own sub-agents may call tools; Cindy cannot attest who called. A host
           // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
@@ -216,14 +221,27 @@ export class AcpAgent extends BaseAgent {
       }
     };
 
+    // Only a host-provided companion profile supplies the identity for this chat.
+    const companionBriefing = opts.botRuntimeProfile ? [
+      opts.botProfilePrompt ?? '',
+      opts.botProfileContextPrompt ?? '',
+      opts.makerMemoryEnabled && opts.makerMemoryIndexSnapshot?.trim()
+        ? opts.makerMemoryIndexSnapshot
+        : '',
+      opts.botUserProfilePrompt ?? '',
+    ].filter((part) => part.trim()).join('\n\n') : '';
     // The workspace note comes first: without it the agent has no way to know where the project is.
     const briefing = [
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
+      companionBriefing,
       opts.pluginEngineBriefing ?? '',
     ].filter((part) => part.trim()).join('\n\n');
     const open = async (): Promise<AcpSession> => {
       const tracked = trackClose(hosted
-        ? await this.acpDeps.endpoints.connect(harnessKey, { remoteWorkspace: true })
+        ? await this.acpDeps.endpoints.connect(harnessKey, {
+            remoteWorkspace: true,
+            ...(hosted.guest ? { guestWorkspace: true } : {}),
+          })
         : await this.acpDeps.endpoints.connect(harnessKey));
       try {
         return await openAcpSession({
@@ -235,9 +253,11 @@ export class AcpAgent extends BaseAgent {
           ...(hosted ? { requiredMcpServers: [DEVICE_HOSTED_EXEC_MCP_SERVER] } : {}),
           ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
           ...(opts.model ? { model: opts.model } : {}),
+          ...(opts.botRuntimeProfile || hosted ? { requireSelectedModel: true } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
           ...(briefing ? { briefing } : {}),
+          ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           logger,
           onEnded: disposeBridge,
         });

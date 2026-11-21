@@ -1317,7 +1317,7 @@ export class AgentIslandService {
       if (changed) this.publish();
       return;
     }
-    if (event.type === 'completed' || event.type === 'failed' || event.type === 'deferred') {
+    if (event.type === 'completed' || event.type === 'failed' || event.type === 'deferred' || event.type === 'skipped') {
       this.clearSilencedScheduleRun(event.runId);
     }
   }

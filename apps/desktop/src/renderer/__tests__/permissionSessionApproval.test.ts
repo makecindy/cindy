@@ -135,6 +135,14 @@ function deferred<T>() {
 }
 
 describe('permission interaction IPC', () => {
+  // #8706 unit: the actual interaction listener and pending store must not discard the safe cause.
+  it('projects quota metadata from main into the pending permission', () => {
+    makerChatStore.initGlobalListeners();
+    listeners.interaction?.({ sessionId: SESSION_ID, request: { kind: 'permission', requestId: 'quota', toolName: 'Bash', input: {},
+      metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' } } });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission).toMatchObject({ autoReviewUnavailable: true, autoReviewQuotaExhausted: true });
+  });
+
   it('rehydrates a running turn from main after renderer listener init', async () => {
     listActive.mockResolvedValueOnce([
       {

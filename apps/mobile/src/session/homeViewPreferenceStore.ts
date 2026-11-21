@@ -11,6 +11,7 @@ import {
   normalizeVendorFilter,
   normalizeViewMode,
   type HomeFilterSelection,
+  type HomeModeDisplayPreferences,
   type HomeLastActivityFilter,
   type HomeListViewMode,
   type HomeProjectFilter,
@@ -43,7 +44,7 @@ export interface HomeViewPreferences {
   lastActivityFilter: HomeLastActivityFilter;
   hideAutomations?: boolean;
   /** 旧记录的顶层筛选属于普通任务列表；收件箱的选择单独保存。 */
-  inboxFilters?: HomeFilterSelection;
+  inboxFilters?: HomeModeDisplayPreferences;
   taskListMode?: 'tasks' | 'inbox';
   /** 缺省列表(带预览行):手机首页一直是这个样子。 */
   viewMode: HomeListViewMode;
@@ -122,9 +123,9 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch, filterMo
   assign('projectOrder', patch.projectOrder);
   assign('manualProjectOrder', patch.manualProjectOrder ? [...patch.manualProjectOrder] : undefined);
   assign('taskListMode', patch.taskListMode);
-  assign('viewMode', patch.viewMode);
-  assign('taskInfoFields', patch.taskInfoFields ? [...patch.taskInfoFields] : undefined);
   const filters = filterMode === 'inbox' ? { ...readRecord(record.inboxFilters) } : record;
+  if (patch.viewMode !== undefined) filters.viewMode = patch.viewMode;
+  if (patch.taskInfoFields !== undefined) filters.taskInfoFields = [...patch.taskInfoFields];
   for (const field of ['projectFilter', 'teammateFilter'] as const) {
     const filter = patch[field];
     if (!filter) continue;
@@ -230,7 +231,11 @@ function normalizeStoredPreferences(value: unknown, owner: string): HomeViewPref
     ...readFilters(record, owner),
     projectFilterOwner: readString(record.projectFilterOwner) === owner ? owner : '',
     teammateFilterOwner: readString(record.teammateFilterOwner) === owner ? owner : '',
-    ...(inbox ? { inboxFilters: readFilters(inbox, owner) } : {}),
+    ...(inbox ? { inboxFilters: {
+      ...readFilters(inbox, owner),
+      viewMode: normalizeViewMode(inbox.viewMode),
+      taskInfoFields: normalizeTaskInfoFields(inbox.taskInfoFields),
+    } } : {}),
     taskListMode: record.taskListMode === 'inbox' ? 'inbox' : 'tasks',
     viewMode: normalizeViewMode(record.viewMode),
     taskInfoFields: normalizeTaskInfoFields(record.taskInfoFields),
@@ -288,6 +293,7 @@ export interface HomeNavigationPreferences {
   teammatesCollapsed?: boolean;
   /** Explicit account override; absent defaults to showing the collapsed avatar strip. */
   showCollapsedTeammateAvatars?: boolean;
+  inboxShowCollapsedTeammateAvatars?: boolean;
 }
 const NAVIGATION_PREFIX = 'cindy.mobile.home.navigation.v1.';
 
@@ -300,6 +306,7 @@ export function normalizeHomeNavigationPreferences(value: unknown): HomeNavigati
     typeof last[field] === 'string' && last[field].trim().length > 0 && last[field].length <= 256);
   // The retired tasks/teammates `mode` is dropped here, so the next write clears it.
   return {
+    ...(typeof record.inboxShowCollapsedTeammateAvatars === 'boolean' ? { inboxShowCollapsedTeammateAvatars: record.inboxShowCollapsedTeammateAvatars } : {}),
     ...(typeof record.showCollapsedTeammateAvatars === 'boolean' ? { showCollapsedTeammateAvatars: record.showCollapsedTeammateAvatars } : {}),
     ...(typeof record.teammatesCollapsed === 'boolean' ? { teammatesCollapsed: record.teammatesCollapsed } : {}),
     ...(validLast ? { lastTeammate: {
@@ -321,7 +328,7 @@ export async function readHomeNavigationPreferences(owner: string): Promise<Home
 
 export function saveHomeNavigationPreferences(
   owner: string,
-  patch: { lastTeammate?: LastTeammateIdentity | null; teammatesCollapsed?: boolean; showCollapsedTeammateAvatars?: boolean },
+  patch: Omit<HomeNavigationPreferences, 'lastTeammate'> & { lastTeammate?: LastTeammateIdentity | null },
 ): Promise<void> {
   if (!owner) return Promise.resolve();
   // Share the existing serialized writer; each operation captures its own owner.

@@ -881,6 +881,7 @@ export interface PendingPermission {
   description?: string;
   suggestions?: unknown[];
   autoReviewUnavailable?: boolean;
+  autoReviewQuotaExhausted?: boolean;
   autoReviewReason?: string;
   /** Renderer-only delivery state; never part of the permission decision. */
   submitting?: boolean;
@@ -7035,6 +7036,7 @@ export function handleStreamEvent(
         description?: string;
         suggestions?: unknown[];
         autoReviewUnavailable?: boolean;
+        autoReviewQuotaExhausted?: boolean;
         autoReviewReason?: string;
       };
       return {
@@ -7049,6 +7051,7 @@ export function handleStreamEvent(
           sourceDescription: data.sourceDescription,
           suggestions: data.suggestions,
           autoReviewUnavailable: data.autoReviewUnavailable === true,
+          ...(data.autoReviewUnavailable === true && data.autoReviewQuotaExhausted === true ? { autoReviewQuotaExhausted: true } : {}),
           autoReviewReason: data.autoReviewReason,
           ...(state.pendingPermission?.requestId === data.requestId
             ? {
@@ -9069,6 +9072,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           title: typeof request.title === 'string' ? request.title : undefined,
           description: typeof request.description === 'string' ? request.description : undefined,
           autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+          ...(metadata?.autoReviewUnavailable === true && metadata?.autoReviewUnavailableReason === 'quota_exhausted' ? { autoReviewQuotaExhausted: true } : {}),
           autoReviewReason: typeof metadata?.autoReviewReason === 'string' ? metadata.autoReviewReason : undefined,
           suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
           mcpApp: { clientId: app.clientId, serverId: app.serverId, title: app.title, scope: app.scope === 'session' ? 'session' : 'once' },
@@ -9091,6 +9095,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         description: typeof request.description === 'string' ? request.description : undefined,
         suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
         autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+        ...(metadata?.autoReviewUnavailable === true && metadata?.autoReviewUnavailableReason === 'quota_exhausted' ? { autoReviewQuotaExhausted: true } : {}),
         autoReviewReason: typeof metadata?.autoReviewReason === 'string' && metadata.autoReviewReason.trim()
           ? metadata.autoReviewReason.trim() : undefined,
         sourceDescription: typeof metadata?.imSourceDescription === 'string' ? metadata.imSourceDescription : undefined,
@@ -20076,7 +20081,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp, initialHeight: mcpApp.initialHeight },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =
