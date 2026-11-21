@@ -14148,6 +14148,8 @@
       "source": {
         "lastConfirmed": "Zuletzt aktualisiert: {{time}}",
         "unconfirmed": "Modellliste nicht aktuell",
+        "unreachable": "{{source}} nicht erreichbar",
+        "unreachableDetail": "Keine Verbindung. Netzwerk prüfen.",
         "unavailable": "Modell nicht verfügbar",
         "reconnect": "Erneut verbinden",
         "manage": "Quelle verwalten",
@@ -17503,7 +17505,8 @@
         "title": "Repository-Automatisierungen importieren",
         "description": "Quelle: {{workingDir}}. Prüfe die folgenden Definitionen. Der Import übernimmt diese Änderungen und aktiviert neue Automatisierungen. Diese können Befehle ausführen und Agents mit Vollzugriff starten. Importiere nur vertrauenswürdige Inhalte.",
         "accept": "Import bestätigen",
-        "removed": "Wird entfernt: {{names}}"
+        "removed": "Wird entfernt: {{names}}",
+        "fileMissing": "Import übersprungen. Die Automatisierungsdatei in {{projectName}} wurde nicht gefunden."
       },
       "toast": {
         "summary": "{{inserted}} hinzugefügt · {{updated}} aktualisiert · {{deleted}} entfernt",
@@ -22273,6 +22276,7 @@
     "picker": {
       "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einem Modus zusammen, um ihn hier auszuwählen.",
       "manage": "Modellgruppen verwalten",
+      "deviceTitle": "Modellgruppen · {{device}}",
       "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
       "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
       "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt."

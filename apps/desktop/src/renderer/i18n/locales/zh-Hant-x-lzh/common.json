@@ -14093,6 +14093,8 @@
       "source": {
         "lastConfirmed": "上次重整：{{time}}",
         "unconfirmed": "模型錄未新",
+        "unreachable": "{{source}} 不能達",
+        "unreachableDetail": "不能達，請察網路",
         "unavailable": "模型不可用",
         "reconnect": "重連",
         "manage": "理來源",
@@ -17429,7 +17431,8 @@
         "title": "納儲存庫之自運",
         "description": "來源：{{workingDir}}。請檢查下方設定。匯入會套用這些變更並啟用新增自運，它們可以執行命令、啟動具有完整存取權限的 Agent。請僅匯入你信任的內容。",
         "accept": "確認匯入",
-        "removed": "將刪除：{{names}}"
+        "removed": "將刪除：{{names}}",
+        "fileMissing": "「{{projectName}}」中未見自運卷，故未納入"
       },
       "toast": {
         "summary": "增 {{inserted}} · 更 {{updated}} · 刪 {{deleted}}",
@@ -22184,6 +22187,7 @@
     "picker": {
       "empty": "尚無模型組。於設定合數源為一模式，即可於此擇之。",
       "manage": "理模型組",
+      "deviceTitle": "模型組 · {{device}}",
       "switched": "「{{name}}」已將此差事易為 {{model}}",
       "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。",
       "chooseUnavailable": "「{{name}}」今無可用之源，未取之。"

@@ -14094,6 +14094,8 @@
       "source": {
         "lastConfirmed": "上次刷新：{{time}}",
         "unconfirmed": "模型列表暂未更新",
+        "unreachable": "连不上 {{source}}",
+        "unreachableDetail": "连不上，请检查网络",
         "unavailable": "模型不可用",
         "reconnect": "重新连接",
         "manage": "管理来源",
@@ -17429,7 +17431,8 @@
         "title": "导入仓库自动化",
         "description": "来源：{{workingDir}}。请检查下方配置。导入会应用这些变更并启用新增的自动化，它们可以执行命令、启动拥有完全访问权限的 Agent。请仅导入你信任的内容。",
         "accept": "确认导入",
-        "removed": "将删除：{{names}}"
+        "removed": "将删除：{{names}}",
+        "fileMissing": "找不到「{{projectName}}」中的自动化文件，已跳过导入"
       },
       "toast": {
         "summary": "新增 {{inserted}} · 更新 {{updated}} · 删除 {{deleted}}",
@@ -22184,6 +22187,7 @@
     "picker": {
       "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
       "manage": "管理模型组",
+      "deviceTitle": "模型组 · {{device}}",
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
       "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
       "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"

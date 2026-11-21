@@ -543,7 +543,7 @@ export function sessionPatchToRow(
     extraDirs?: string[];
     writableDirs?: string[];
   },
-  opts?: { bumpUpdatedAt?: boolean },
+  opts?: { bumpUpdatedAt?: boolean; allowEmptyEffort?: boolean },
 ): Partial<SessionInsert> {
   const out: Partial<SessionInsert> = {};
   if (patch.title !== undefined) out.title = patch.title;
@@ -555,7 +555,9 @@ export function sessionPatchToRow(
   if (patch.workspaceKind === 'dialogue'
     || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
   if (patch.model !== undefined) out.model = patch.model;
-  const persistableEffort = persistableSessionEffort(patch.effort);
+  const persistableEffort = opts?.allowEmptyEffort && patch.effort === ''
+    ? ('' as SessionInsert['effort'])
+    : persistableSessionEffort(patch.effort);
   if (persistableEffort !== undefined) out.effort = persistableEffort;
   if (patch.permissionMode !== undefined)
     out.permissionMode = patch.permissionMode as SessionInsert['permissionMode'];

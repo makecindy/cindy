@@ -112,14 +112,20 @@ import {
   pluginEngineSessionCreateFields,
   remotePluginEngineChoices,
   resolveActivePluginEngine,
+  resolvePluginEngineSessionSwitchEffort,
 } from '@/lib/pluginEngineSelection';
 import { engineIconKindOf } from '@/components/sidebar/VendorIcon';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
+  DEVICE_PLUGIN_ENGINES_REFRESH_MS,
+  DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS,
+  DEVICE_PLUGIN_ENGINES_REREAD_MS,
   findPluginEngine,
   hasRemotePluginEngineSubscribers,
+  markRemotePluginEnginesStale,
   resetPluginEnginesStoreForTests,
   useDevicesPluginEngines,
+  usePluginEngineIdentity,
   useRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
 import { PLUGIN_ENGINES_INVOKE, type PluginEngineView } from '../../../../shared/pluginEngines';
@@ -230,6 +236,182 @@ it('reads the selected computer once and discards a former account’s directory
     cleanup();
     vi.unstubAllGlobals();
     setDataOwnerGeneration(before.dataOwnerId, before.generation);
+    resetPluginEnginesStoreForTests();
+  }
+});
+
+// 生产入口与可观察结果：useRemotePluginEngines(deviceId, 'once') 与 refresh()；被控电脑草稿／会话先加载一次引擎目录，
+// 打开模型选择器时经 maker:refresh-plugin-engines 请被控电脑插件重报模型，并在 2.5s 后复读出完整模型列表。
+// 规则依据：acp-plugin-bridge 远程控制电脑模型刷新(对端 plugin-engines-changed 只推本机窗口，控制端须触发 refresh 后复读)
+// 与 server-channel-review 冷却门禁(60s 内重复开面板不连发 refresh；断线重连 markStale 后允许立即重刷)。
+// 覆盖缺口：此前 Desktop 控制端从未调用 maker:refresh-plugin-engines，被控电脑未在本机打开过面板时永远只有「默认模型」。
+// 最小失败输入与 tier：unit；被控电脑初始 models=[]，打开面板调用 refresh() 后不触发 REFRESH 或 2.5s 后仍为空模型列表。
+it('asks the controlled computer to republish plugin engine models on picker refresh and re-reads once after cooldown', async () => {
+  vi.useFakeTimers();
+  const initialDsh = engine('dsh-plugin:dsh', 'DeepSeek Harness', { models: [] });
+  const publishedDsh = engine('dsh-plugin:dsh', 'DeepSeek Harness', {
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['low', 'high'], defaultEffort: 'high' }],
+  });
+  let remoteModelsPublished = false;
+  const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+    if (channel === PLUGIN_ENGINES_INVOKE.REFRESH) {
+      remoteModelsPublished = true;
+      return undefined;
+    }
+    if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
+      return [remoteModelsPublished ? publishedDsh : initialDsh];
+    }
+    return undefined;
+  });
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  try {
+    const first = renderHook(() => useRemotePluginEngines('computer-b', 'once'));
+    await act(async () => { await Promise.resolve(); });
+    expect(first.result.current.engines).toEqual([initialDsh]);
+    expect(invoke.mock.calls).toEqual([['computer-b', PLUGIN_ENGINES_INVOKE.LIST, []]]);
+
+    // Entering a second task on the same controlled computer reuses the loaded catalogue.
+    const second = renderHook(() => useRemotePluginEngines('computer-b', 'once'));
+    await act(async () => { await Promise.resolve(); });
+    expect(second.result.current.engines).toEqual([initialDsh]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    // Opening the model picker reuses the fresh snapshot (<15s), triggers REFRESH once,
+    // and re-reads published models once at 2.5s.
+    await act(async () => {
+      first.result.current.refresh();
+      await Promise.resolve();
+    });
+    expect(invoke.mock.calls).toEqual([
+      ['computer-b', PLUGIN_ENGINES_INVOKE.LIST, []],
+      ['computer-b', PLUGIN_ENGINES_INVOKE.REFRESH, []],
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(first.result.current.engines).toEqual([publishedDsh]);
+    expect(invoke).toHaveBeenCalledTimes(3);
+
+    // Re-opening immediately within the 15s read window and 60s refresh cooldown makes zero extra calls.
+    await act(async () => {
+      first.result.current.refresh();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
+
+    // After the controlled computer reconnects (markStale), refresh re-reads LIST and asks REFRESH again.
+    markRemotePluginEnginesStale('computer-b');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_MS);
+      first.result.current.refresh();
+      await Promise.resolve();
+    });
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(2);
+
+    // Leaving or hiding the picker view cancels the pending 2.5s re-read even while sidebar rows remain mounted.
+    const sidebarRow = renderHook(() => usePluginEngineIdentity(publishedDsh.providerId, 'computer-b'));
+    const callsBeforeLeave = invoke.mock.calls.length;
+    first.unmount();
+    second.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(invoke.mock.calls).toHaveLength(callsBeforeLeave);
+    sidebarRow.unmount();
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    resetPluginEnginesStoreForTests();
+  }
+});
+
+// 生产入口与可观察结果：useRemotePluginEngines 空初始目录复读 + resolvePluginEngineSessionSwitchEffort；
+// 被控电脑初始无引擎时后续重开面板仍可发现新装插件，跨插件引擎切换模型使用目标模型默认档位而非旧引擎档位。
+// 规则依据：server-channel-review(15s 冷却后可重新读取空目录、离开页面后在途 refresh 不再安排定时器)与模型选择器行展示一致性。
+// 覆盖缺口：此前空目录未保留远程读取或离开后在途 refresh 仍挂定时器，且跨插件引擎切换误带入旧引擎的 high 档位。
+// 最小失败输入与 tier：unit；在途 refresh 返回前卸载视图仍触发延迟 LIST，或引擎 A(high)切到引擎 B(默认 low)提交了 high。
+it('discovers newly enabled remote engines after an initially empty list, stops in-flight refresh on leave, and keeps cross-engine default effort', async () => {
+  vi.useFakeTimers();
+  const newlyEnabled = engine('agy-plugin:agy', 'Antigravity', { models: [] });
+  const newlyPublished = engine('agy-plugin:agy', 'Antigravity', {
+    models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'low' }],
+  });
+  let hasEngineOnPeer = false;
+  let modelsPublishedOnPeer = false;
+  let finishRefresh!: () => void;
+  const invoke = vi.fn((_deviceId: string, channel: string) => {
+    if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
+      if (!hasEngineOnPeer) return Promise.resolve([]);
+      return Promise.resolve([modelsPublishedOnPeer ? newlyPublished : newlyEnabled]);
+    }
+    if (channel === PLUGIN_ENGINES_INVOKE.REFRESH) {
+      return new Promise<void>((resolve) => {
+        finishRefresh = () => {
+          modelsPublishedOnPeer = true;
+          resolve();
+        };
+      });
+    }
+    return Promise.resolve(undefined);
+  });
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  try {
+    const draft = renderHook(
+      ({ active }) => useRemotePluginEngines('computer-b', 'once', active),
+      { initialProps: { active: true } },
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(draft.result.current.engines).toEqual([]);
+
+    // User installs/enables a plugin on computer B and opens the picker after the 15s read cooldown.
+    hasEngineOnPeer = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REREAD_MS);
+      draft.result.current.refresh();
+      await Promise.resolve();
+    });
+    expect(draft.result.current.engines).toEqual([newlyEnabled]);
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
+
+    // Leaving before the in-flight REFRESH resolves prevents scheduling a delayed LIST download while away.
+    const callsWhenLeaving = invoke.mock.calls.length;
+    draft.rerender({ active: false });
+    await act(async () => {
+      finishRefresh();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(invoke.mock.calls).toHaveLength(callsWhenLeaving);
+
+    // Returning within the 15s/60s cooldown completes the owed post-REFRESH LIST read once without re-sending REFRESH.
+    draft.rerender({ active: true });
+    await act(async () => { await Promise.resolve(); });
+    expect(draft.result.current.engines).toEqual([newlyPublished]);
+    expect(invoke.mock.calls).toHaveLength(callsWhenLeaving + 1);
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
+
+    // Same plugin engine carries over explicit 'high'; switching to a different plugin engine uses its own 'low' default.
+    expect(
+      resolvePluginEngineSessionSwitchEffort(
+        { providerId: newlyPublished.providerId, modelId: 'gemini-3-pro' },
+        newlyPublished,
+        { providerId: newlyPublished.providerId, effort: 'high' },
+      ),
+    ).toBe('high');
+    expect(
+      resolvePluginEngineSessionSwitchEffort(
+        { providerId: newlyPublished.providerId, modelId: 'gemini-3-pro' },
+        newlyPublished,
+        { providerId: 'acp-plugin:dsh-plugin:dsh', effort: 'high' },
+      ),
+    ).toBe('low');
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
     resetPluginEnginesStoreForTests();
   }
 });
