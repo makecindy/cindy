@@ -821,6 +821,7 @@ import {
 import { createDynamicMaker } from './maker-host/dynamic-maker.js';
 import { makerStartupGate } from './maker-host/startup-gate.js';
 import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
+import { requestUtilityText } from './utility-model/oneShotCandidates.js';
 import {
   ensureActiveCatalogLoaded,
   getDesktopSelectableCatalog,
@@ -10735,6 +10736,20 @@ app.on('ready', async () => {
       } catch {
         return false;
       }
+    },
+    generateCommitMessage: async (prompt) => {
+      const ownerScope = activeOwnerScopeKey();
+      const result = await requestUtilityText(getMakerCore(), prompt, {
+        maxTokens: 600,
+        timeoutMs: 20_000,
+        disableReasoning: true,
+        reasoningEffort: 'minimal',
+        responseInstructions: 'Return only the commit message in the requested format.',
+        beforeDispatch: async () =>
+          !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScope,
+      });
+      if (!result.ok) throw new Error(`commit message model unavailable: ${result.reason}`);
+      return result.text;
     },
   });
   // device-link 远程 git 审查(只读):git-review:remote-op handler(被控端角色;

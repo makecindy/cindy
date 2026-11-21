@@ -10255,7 +10255,8 @@
       "deviceTooOld": "O dispositivo remoto está executando uma versão antiga do {{appName}} que não oferece suporte à navegação remota de arquivos. Atualize e tente novamente",
       "loadFailed": "Falha ao carregar a árvore de arquivos",
       "unsupportedDropFile": "Ainda não é possível visualizar este formato de arquivo",
-      "multipleDropFilesUnsupported": "Solte um arquivo por vez"
+      "multipleDropFilesUnsupported": "Solte um arquivo por vez",
+      "pushNow": "Push"
     },
     "browser": {
       "newTab": "Nova aba",
@@ -17517,7 +17518,17 @@
         "loadFailed": "Falha ao carregar imagem",
         "viewLarge": "Ver em tamanho real"
       },
-      "activeSessionCount_many": "{{count}} sessões ativas"
+      "activeSessionCount_many": "{{count}} sessões ativas",
+      "gitStatus": {
+        "modified": "Modificado",
+        "added": "Adicionado",
+        "deleted": "Excluído",
+        "renamed": "Renomeado",
+        "copied": "Copiado",
+        "typechange": "Tipo alterado",
+        "untracked": "Não rastreado",
+        "unmerged": "Em conflito"
+      }
     },
     "search": {
       "open": "Pesquisar",

@@ -45,11 +45,13 @@ import { useFileTree, type DirEntry } from './hooks/useFileTree';
 import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
 import { useConfirmSwitchAwayIfDirty } from './hooks/useConfirmSwitchAwayIfDirty';
 import { useProjectFileList } from './hooks/useProjectFileList';
+import { useWorkdirGitChanges } from './hooks/useWorkdirGitChanges';
 import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { FileTreeView, type FileTreeViewHandle, type PendingCreate } from './FileTreeView';
 import { FileTreeHeaderActions } from './FileTreeHeaderActions';
 import { useRevealFileInTree } from './hooks/useRevealFileInTree';
 import { FileFilterInput } from './FileFilterInput';
+import { ChangedFilesList } from './ChangedFilesList';
 import { FilterResultList } from './FilterResultList';
 import { FILTER_RESULT_LIMIT, filterFiles } from './lib/filterFiles';
 import { loadSelectedFile, saveSelectedFile } from './lib/selectedFileStore';
@@ -164,6 +166,7 @@ export function WorkdirBrowseSidebar({
     setSearchQuery('');
     setSearchCaseSensitive(false);
     setFilterQuery('');
+    setShowChanges(false);
   }, [workdir]);
 
   // Doc 模式 Ctrl/Cmd+Shift+F → 转过来的 CustomEvent。FileBodyView 在自己的
@@ -229,10 +232,12 @@ export function WorkdirBrowseSidebar({
     docMode: false,
     showIgnoredDirs,
   });
+  const gitChanges = useWorkdirGitChanges(sessionId, workdir, deviceId);
 
   // 文件名筛选 query —— tree 模式下用,独立于内容搜索。空 query 显示文件树,有
   // 内容显示筛选结果列表。workdir 切换时自动清空(下方 useEffect)。
   const [filterQuery, setFilterQuery] = useState('');
+  const [showChanges, setShowChanges] = useState(false);
   // 项目级文件名扁平列表(走 ripgrep --files honor .gitignore),给"筛选文件"用。
   // 模块级 cache 跨 doc 模式 / RSB plugin 共享同一份索引;tree refresh 时同步 invalidate。
   // enabled 惰性拉取:query 为空(FilterResultList 不显示)时不扫描 —— 切会话
@@ -354,10 +359,10 @@ export function WorkdirBrowseSidebar({
 
   const handleRefresh = useCallback(() => {
     void tree.refresh();
-    // 文件树刷新时同步 invalidate 项目级文件索引,新增 / 重命名 / 删除的文件下次
-    // 筛选才能看到。
+    gitChanges.refresh();
+    // 文件树刷新时同步 invalidate 文件索引和 Git 状态。
     projectFiles.refresh();
-  }, [tree, projectFiles]);
+  }, [tree, gitChanges.refresh, projectFiles]);
 
   // FileTreeView 的 imperative ref —— useRevealFileInTree 通过它调 scrollToPath。
   const fileTreeRef = useRef<FileTreeViewHandle>(null);
@@ -770,8 +775,34 @@ export function WorkdirBrowseSidebar({
             内部 `min-h-0 flex-1` 拿不到明确高度,FileTreeView 的 overflow-y-auto
             就滚不动了。 */}
         <div className={cn('flex h-full flex-col', mode !== 'tree' && 'hidden')}>
-          <FileFilterInput value={filterQuery} onChange={setFilterQuery} />
-          {filterQuery ? (
+          <FileFilterInput
+            value={filterQuery}
+            onChange={setFilterQuery}
+            changedOnly={showChanges}
+            onToggleChangedOnly={() => setShowChanges((value) => !value)}
+          />
+          {showChanges ? (
+            <ChangedFilesList
+              sessionId={sessionId}
+              deviceId={deviceId}
+              data={gitChanges.data}
+              changes={gitChanges.files}
+              query={filterQuery}
+              selectedPath={selectedPath}
+              loading={gitChanges.loading}
+              error={gitChanges.error}
+              onSelectFile={handleSelectFile}
+              onGitStateChanged={() => {
+                gitChanges.refresh();
+                void tree.refresh();
+                projectFiles.refresh();
+                window.dispatchEvent(
+                  new CustomEvent('workdir-files-reverted', { detail: { workdir } }),
+                );
+              }}
+              onRefresh={gitChanges.refresh}
+            />
+          ) : filterQuery ? (
             <FilterResultList
               files={filteredFiles}
               truncated={
@@ -788,6 +819,8 @@ export function WorkdirBrowseSidebar({
               tree={tree}
               scrollScope="doc"
               selectedPath={selectedPath}
+              gitFiles={gitChanges.files}
+              gitDirectories={gitChanges.directories}
               onSelectFile={handleSelectFile}
               onNewFile={handleNewFile}
               onNewFolder={handleNewFolder}

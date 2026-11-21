@@ -10139,7 +10139,8 @@
       "deviceTooOld": "对方设备的 {{appName}} 版本过旧，不支持远程文件浏览，请升级后重试",
       "loadFailed": "文件树加载失败",
       "unsupportedDropFile": "暂时不支持展示该格式的文件",
-      "multipleDropFilesUnsupported": "一次只能拖入一个文件"
+      "multipleDropFilesUnsupported": "一次只能拖入一个文件",
+      "pushNow": "推送"
     },
     "browser": {
       "newTab": "新标签",
@@ -17277,6 +17278,16 @@
       "imagePreview": {
         "loadFailed": "无法加载图片",
         "viewLarge": "查看大图"
+      },
+      "gitStatus": {
+        "modified": "已修改",
+        "added": "新增",
+        "deleted": "已删除",
+        "renamed": "已重命名",
+        "copied": "已复制",
+        "typechange": "类型变更",
+        "untracked": "未跟踪",
+        "unmerged": "有冲突"
       }
     },
     "search": {

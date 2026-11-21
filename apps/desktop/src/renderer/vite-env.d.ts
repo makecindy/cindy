@@ -4882,6 +4882,9 @@ interface ElectronAPI {
       sessionId: string;
       ignoreWhitespace?: boolean;
     }) => Promise<import('@/lib/gitReview.types').ReviewData>;
+    commitMessage: (params: {
+      sessionId: string;
+    }) => Promise<import('@/lib/gitReview.types').ReviewCommitMessageDraft>;
     summary: (params: {
       sessionId: string;
     }) => Promise<import('@/lib/gitReview.types').ReviewDirtySummary>;

@@ -10139,7 +10139,8 @@
       "deviceTooOld": "彼设备之 {{appName}} 版本过旧，不支持远程览卷，请升级后再试",
       "loadFailed": "卷树加载未成",
       "unsupportedDropFile": "此格式之卷，暂不能展示",
-      "multipleDropFilesUnsupported": "一次仅可拖入一卷"
+      "multipleDropFilesUnsupported": "一次仅可拖入一卷",
+      "pushNow": "推"
     },
     "browser": {
       "newTab": "新分页",
@@ -17277,6 +17278,16 @@
       "imagePreview": {
         "loadFailed": "图不能载",
         "viewLarge": "览大图"
+      },
+      "gitStatus": {
+        "modified": "已改",
+        "added": "新增",
+        "deleted": "已删",
+        "renamed": "已易名",
+        "copied": "已复制",
+        "typechange": "类型易",
+        "untracked": "未随",
+        "unmerged": "有冲突"
       }
     },
     "search": {
