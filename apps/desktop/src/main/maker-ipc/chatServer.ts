@@ -2686,7 +2686,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           const ordinaryReply = !run.plan || run.plan.kind === 'talk';
           const validateUpload = async () => {
             assertCurrent();
-            if (pending.fileReply?.attachments.length || pending.fileReply?.omittedFiles) {
+            if (pending.fileReply?.attachments.length || pending.fileReply?.omittedFiles
+              || pending.reply?.attachments.some(attachment => attachment.mimeType === 'video/mp4')) {
               try { await validateExecutionAuthority(run); }
               catch (error) {
                 // Definitive revocation ends delivery; transport failures retain
