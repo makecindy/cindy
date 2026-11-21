@@ -12,6 +12,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { createTwoFilesPatch } from 'diff';
 import { GROUP_REQUEST_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
 export const TEAMMATE_TEMPLATE_VERSION = 9;
@@ -27,7 +28,8 @@ const PENDING_DIR = path.join('.cindy', 'template');
  */
 export const OWN_RULES_HEADING = '## Your own rules';
 const OWN_RULES_INTRO = 'Rules the owner asked for, or that you settled with the owner, go in this section. They take precedence over the standard text above. Cindy replaces everything above this section when it updates the standard and keeps this section as it is.';
-const KEPT_NOTE = 'Kept from the earlier version of this skill when Cindy updated its standard. Remove anything the standard above already covers:';
+const CHANGES_NOTE = 'Changes made to an earlier version of this skill\'s standard, kept when Cindy updated it. Lines starting with + were added and lines starting with - removed; the other lines are that earlier standard, showing where each change was made. Keep the intent of these changes, in the section they were made in, together with the standard above. Where a change touches text the standard no longer has, decide whether it still applies. You may rewrite what still applies as plain rules in this section and then remove this block.';
+const EARLIER_NOTE = 'This skill\'s earlier version, kept when Cindy took over its standard. Keep in this section, as plain rules, only what the owner asked for that the standard above does not already say, then remove this block.';
 const LAYERED_FILES = new Set(['.agents/skills/hand-off/SKILL.md']);
 /** The standard text last written to a layered file: what a later change is compared with. */
 const STANDARD_DIR = path.join('.cindy', 'template-standard');
@@ -39,49 +41,17 @@ const lf = (text: string) => text.replace(/\r\n?/g, '\n');
 function standardPart(text: string): { standard: string; own: string } {
   const at = text.search(new RegExp(`^${OWN_RULES_HEADING}\\s*$`, 'm'));
   if (at < 0) return { standard: text, own: '' };
-  const own = text.slice(at).replace(/^.*\n?/, '').split('\n')
-    .filter(line => line.trim() !== OWN_RULES_INTRO && line.trim() !== KEPT_NOTE).join('\n').trim();
-  return { standard: text.slice(0, at), own };
+  return { standard: text.slice(0, at), own: text.slice(at).replace(/^.*\n?/, '').trim() };
 }
 
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n/;
+const body = (text: string) => text.replace(FRONTMATTER, '').trim();
 
-/**
- * A skill body as units: a heading, a fenced code block (whole, so a `#` comment inside is not a
- * heading), or any other non-blank line. Each unit carries its ancestor headings: the full path,
- * so a rule under "In a group" > "When idle" stays scoped to both. The skill's title is no scope.
- */
-interface Unit { text: string; heading: boolean; path: string[] }
-function units(text: string): Unit[] {
-  const lines = text.replace(FRONTMATTER, '').split('\n');
-  const result: Unit[] = [];
-  const stack: Array<{ level: number; text: string }> = [];
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index].trimEnd();
-    const fence = /^\s*(`{3,}|~{3,})/.exec(line);
-    if (fence) {
-      const block = [line];
-      while (++index < lines.length) {
-        block.push(lines[index].trimEnd());
-        if (lines[index].trim().startsWith(fence[1])) break;
-      }
-      result.push({ text: block.join('\n'), heading: false, path: stack.map(entry => entry.text) });
-      continue;
-    }
-    if (!line.trim()) continue;
-    const heading = /^\s*(#{1,6})\s/.exec(line);
-    if (heading) {
-      const level = heading[1].length;
-      while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
-      if (level > 1) {
-        result.push({ text: line.trim(), heading: true, path: stack.map(entry => entry.text) });
-        stack.push({ level, text: line.trim() });
-      }
-      continue;
-    }
-    result.push({ text: line, heading: false, path: stack.map(entry => entry.text) });
-  }
-  return result;
+/** A fence longer than any backtick run in the text, so a code block inside it stays intact. */
+function fenced(language: string, text: string): string {
+  const longest = Math.max(3, ...[...text.matchAll(/`+/g)].map(run => run[0].length));
+  const fence = '`'.repeat(longest + 1);
+  return `${fence}${language}\n${text}\n${fence}`;
 }
 
 /** Top-level frontmatter fields as blocks (a key line plus its indented or list continuation lines). */
@@ -99,8 +69,9 @@ function frontmatterFields(text: string): Map<string, string> {
 
 /**
  * The new standard's frontmatter plus the fields the teammate added (native invocation settings,
- * allowed tools, metadata). The standard's own fields keep the standard's value; a field an earlier
- * standard had and the new one dropped is not brought back unless the teammate changed it.
+ * allowed tools, metadata): these take effect only in the header. The standard's own fields keep
+ * the standard's value; a field an earlier standard had and the new one dropped is not brought back
+ * unless the teammate changed it.
  */
 function mergedHeader(next: string, current: string, previousStandard: string | null): string {
   const mine = frontmatterFields(current);
@@ -112,60 +83,32 @@ function mergedHeader(next: string, current: string, previousStandard: string | 
 }
 
 /**
- * The new file for a layered template: the new standard, then the own rules it already had, then
- * whatever the earlier standard text had that neither the standard it started from nor the new
- * standard says (the changes made to it), and the standard lines it removed that the new standard
- * still has. Each moved unit keeps its full section path; unscoped units come first, so none falls
- * under a section it did not belong to. Without a known starting point, every unit the new
- * standard does not have is kept, for the teammate to tidy.
+ * The new file for a layered template: the new standard, the own rules it already had, and the
+ * changes it had made to its earlier standard text, kept exactly rather than reinterpreted (a
+ * guessed difference loses scope, nesting or moves): as a diff against the standard it started
+ * from, or, without a known starting point, its whole earlier text. The teammate folds them in.
  */
 function layeredContent(rawCurrent: string, rawPrevious: string | null, next: string): string {
   const current = lf(rawCurrent);
   const previousStandard = rawPrevious === null ? null : lf(rawPrevious);
   const { standard, own } = standardPart(current);
-  const nextUnits = units(standardPart(next).standard);
-  const previousUnits = previousStandard === null ? [] : units(standardPart(previousStandard).standard);
-  const mineUnits = units(standard);
-  const key = (unit: Unit) => unit.text.trim();
-  const known = new Set([...nextUnits, ...previousUnits].map(key));
-  const groups = new Map<string, { path: string[]; lines: string[] }>();
-  const add = (path: string[], line?: string) => {
-    const id = JSON.stringify(path);
-    if (!groups.has(id)) groups.set(id, { path, lines: [] });
-    if (line !== undefined) groups.get(id)!.lines.push(line);
-  };
-  add([]);
-  for (const unit of mineUnits) {
-    if (known.has(key(unit))) continue;
-    // A heading the teammate added stays, even without new lines under it.
-    if (unit.heading) add([...unit.path, unit.text]);
-    else add(unit.path, unit.text);
-  }
+  const mine = body(standard);
+  let carried = '';
   if (previousStandard !== null) {
-    const mine = new Set(mineUnits.map(key));
-    const theirs = new Set(nextUnits.map(key));
-    for (const unit of previousUnits) {
-      if (unit.heading || mine.has(key(unit)) || !theirs.has(key(unit))) continue;
-      add(unit.path, `- Leave out from the standard above: ${key(unit).replace(/^(?:[-*]|\d+\.)\s+/, '')}`);
+    const before = body(standardPart(previousStandard).standard);
+    if (before !== mine) {
+      // The whole earlier standard as context, so every change shows the section it was made in.
+      const patch = createTwoFilesPatch('earlier standard', 'your version', `${before}\n`, `${mine}\n`, '', '', { context: 10_000 });
+      const hunks = patch.split('\n').filter(line => !/^(?:Index:|={3,}|--- |\+\+\+ |\\ No newline)/.test(line)).join('\n').trim();
+      carried = `${CHANGES_NOTE}\n\n${fenced('diff', hunks)}`;
     }
-  }
-  // Paths are nested under the own section from level 3, keeping their relative depth; a heading
-  // the previous group already opened is not repeated.
-  const additions: string[] = [];
-  let open: string[] = [];
-  for (const { path: headings, lines } of [...groups.values()].sort((a, b) => Number(a.path.length > 0) - Number(b.path.length > 0))) {
-    if (!lines.length && headings.length === 0) continue;
-    let shared = 0;
-    while (shared < headings.length && shared < open.length && open[shared] === headings[shared]) shared++;
-    headings.slice(shared).forEach((heading, depth) =>
-      additions.push(`${'#'.repeat(Math.min(6, 3 + shared + depth))} ${heading.replace(/^\s*#+\s*/, '')}`));
-    additions.push(...lines);
-    open = headings;
+  } else if (mine && mine !== body(standardPart(next).standard)) {
+    carried = `${EARLIER_NOTE}\n\n${fenced('markdown', mine)}`;
   }
   // The new standard's own section brings its intro; an earlier copy of it is not an own rule.
   const nextOwn = new Set(next.slice(standardPart(next).standard.length).split('\n').map(line => line.trim()).filter(Boolean));
   const ownRules = own.split('\n').filter(line => !nextOwn.has(line.trim())).join('\n').trim();
-  const sections = [ownRules, additions.length ? `${KEPT_NOTE}\n\n${additions.join('\n')}` : ''].filter(Boolean);
+  const sections = [ownRules, carried].filter(Boolean);
   const header = mergedHeader(next, current, previousStandard);
   return sections.length ? `${header.trimEnd()}\n\n${sections.join('\n\n')}\n` : header;
 }
