@@ -40,13 +40,13 @@ async function databases() {
   const handles: Array<Awaited<ReturnType<typeof openOwnerDatabase>>> = [];
   onTestFinished(() => {
     clearCurrentDbClient();
-    for (const handle of handles) handle.db.close();
+    for (const handle of handles) if (handle.db.open) handle.db.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
   async function open(ownerId: string) {
     const handle = await openOwnerDatabase({ userDataDir: root, ownerId, isPackaged: false, drizzleDir, sqliteVecExtPath });
     handles.push(handle);
-    const client = createDbClientForHandle({ db: handle.db, drizzle: handle.drizzle });
+    const client = createDbClientForHandle({ db: handle.db, drizzle: handle.drizzle, dispose: async () => { handle.db.close(); } });
     return { db: handle.db, client, activate: () => setCurrentDbClient(client, ownerId) };
   }
   const a = await open('a');
@@ -201,7 +201,7 @@ it.each(['return to A', 'sign out', 'cloud to local', 'local to cloud', 'same co
   await turn.deliver({ type: 'done', source: 'codex', data: { usage: { promptTokens: 7, completionTokens: 3 } } } as AgentEvent);
   await setImmediate();
   const admitted = scenario === 'DB becomes ready' || scenario === 'same connection replaced';
-  expect(await codexTotal()).toBe(before + (admitted ? 10 : 0));
+  expect(await codexTotal()).toBe(admitted ? before + 10 : 0);
   for (const owner of [a, b, local]) {
     const tokens = owner === a && admitted ? 10 : 0;
     expect(owner.db.prepare('SELECT total_token_usage FROM sessions WHERE id=?').pluck().get(id)).toBe(tokens);
@@ -361,7 +361,15 @@ it('keeps accepted tokens while pricing/model lookup was pending at account swit
 // The message patch and both sides of a schedule ledger correction are a single
 // admitted operation. Switch at the actual SQLite UPDATE, before the ledger opens.
 it('finishes the admitted message and both scheduled runs in A after switch', async () => {
-  const { a, b } = await databases();
+  const { a, b, open } = await databases();
+  const { createLifecycleDbClientManager } = await import('../localDb/client/lifecycleDbClient.js');
+  const lifecycle = createLifecycleDbClientManager({
+    getCurrentDbPath: () => a.db.name, closeMainDb: noop, quarantineMainDb: noop,
+    createWorkerClient: async () => a.client, createInprocClient: async () => a.client,
+    setCurrentDbClient, clearCurrentDbClient, log: logger,
+  });
+  await lifecycle.ensure('a', {});
+  let closing: Promise<void> | undefined;
   const { bindSessionUsageAccount } = await import('../usage/sessionUsageOwner.js');
   const { turnUsageAdmission } = await import('../usage/turnUsageAdmission.js');
   const { recordTurnCostOnMessage } = await import('../turnCostBroadcaster.js');
@@ -376,7 +384,9 @@ it('finishes the admitted message and both scheduled runs in A after switch', as
   const write = mutations.patchMessageAgentMetaWithResultRow;
   const ack = vi.spyOn(mutations, 'patchMessageAgentMetaWithResultRow').mockImplementation(async (...args) => {
     const result = await write(...args);
-    commitActiveAppSession('cloud', 'b'); b.activate();
+    commitActiveAppSession('cloud', 'b');
+    closing = lifecycle.dispose('test account change');
+    b.activate();
     return result;
   });
   onTestFinished(() => { ack.mockRestore(); });
@@ -388,11 +398,14 @@ it('finishes the admitted message and both scheduled runs in A after switch', as
   }));
   expect(ack).toHaveBeenCalled();
   expect(recorded).toBe(true);
-  for (const owner of [a, b]) {
+  await closing;
+  expect(a.db.open).toBe(false);
+  const reopened = await open('a');
+  for (const owner of [reopened, b]) {
     const values = owner.db.prepare('SELECT cost_amount FROM schedule_runs ORDER BY id').pluck().all();
-    expect(values).toEqual(owner === a ? [0, 2] : [1, 0]);
+    expect(values).toEqual(owner === reopened ? [0, 2] : [1, 0]);
     const meta = JSON.parse(String(owner.db.prepare("SELECT agent_meta FROM messages WHERE id='m'").pluck().get()));
-    expect(meta.turnCostUsd).toBe(owner === a ? 2 : 1);
+    expect(meta.turnCostUsd).toBe(owner === reopened ? 2 : 1);
   }
 });
 
@@ -415,4 +428,99 @@ it('deduplicates the same Pi settlement and keeps its confirmed currency after r
   }
   expect(a.db.prepare('SELECT tokens FROM daily_session_usage WHERE session_id=?').pluck().all(id)).toEqual([10]);
   expect(a.db.prepare('SELECT cost_currency FROM daily_model_usage').pluck().all()).toEqual(['CNY']);
+});
+
+// Desktop DB tier. Provider cumulative counters span real sends and account changes.
+function seedUsageSession(id: string, ...owners: Awaited<ReturnType<typeof databases>>['a'][]) {
+  for (const owner of owners) owner.db.prepare("INSERT INTO sessions(id,source,status,created_at,updated_at,model) VALUES (?,'desktop','active',1,1,'fixture')").run(id);
+}
+
+const claudeCumulativeDone = (n: number): AgentEvent => ({ type: 'done', source: 'claude-code',
+  data: { modelUsageCumulativeStartsAtZero: true, modelUsage: { fixture: { inputTokens: 7*n, outputTokens: 3*n } } } } as AgentEvent);
+
+it('settles the previous turn while the next Session send is only reserved', async () => {
+  const { a } = await databases();
+  const id = randomUUID();
+  seedUsageSession(id, a);
+  const turn = bindSession(id, 'claude-code');
+  await turn.send();
+  await turn.session.send('next', { afterTurnReserved: async () => {
+    await turn.deliver(claudeCumulativeDone(1));
+    await setImmediate();
+    expect(a.db.prepare('SELECT tokens FROM daily_session_usage').pluck().all()).toEqual([10]);
+  } });
+});
+
+it('keeps the rejected Claude cumulative snapshot out of the next A turn', async () => {
+  const { a, b } = await databases();
+  const id = randomUUID();
+  seedUsageSession(id, a, b);
+  const turn = bindSession(id, 'claude-code');
+  await turn.send();
+  await turn.deliver(claudeCumulativeDone(1));
+  await setImmediate();
+  await turn.send();
+  commitActiveAppSession('cloud', 'b'); b.activate();
+  await turn.deliver(claudeCumulativeDone(2));
+  await setImmediate();
+  expect(b.db.prepare('SELECT tokens FROM daily_session_usage').all()).toEqual([]);
+  commitActiveAppSession('cloud', 'a'); a.activate();
+  await turn.send();
+  await turn.deliver(claudeCumulativeDone(3));
+  await setImmediate();
+  expect(a.db.prepare('SELECT tokens FROM daily_session_usage').pluck().all()).toEqual([20]);
+  expect(a.db.prepare('SELECT input_tokens+output_tokens FROM daily_model_usage').pluck().all()).toEqual([20]);
+});
+
+it('binds an initially ownerless Session on its first actual dispatch', async () => {
+  const { a } = await databases();
+  const id = randomUUID();
+  seedUsageSession(id, a);
+  commitActiveAppSession('signed-out');
+  clearCurrentDbClient();
+  const turn = bindSession(id, 'codex');
+  commitActiveAppSession('cloud', 'a'); a.activate();
+  await turn.send();
+  await turn.deliver({ type: 'done', source: 'codex', data: { usage: { promptTokens: 7, completionTokens: 3 } } } as AgentEvent);
+  await setImmediate();
+  expect(a.db.prepare('SELECT tokens FROM daily_session_usage').pluck().all()).toEqual([10]);
+});
+
+it('starts B with its own Codex process total in both its first read and push', async () => {
+  const { a, b } = await databases();
+  const id = randomUUID(); seedUsageSession(id, a, b);
+  const win = new BrowserWindow({show:false});
+  const frames = vi.spyOn(win.webContents, 'send');
+  const windows = vi.spyOn(BrowserWindow,'getAllWindows').mockReturnValue([win]);
+  onTestFinished(() => { frames.mockRestore(); windows.mockRestore(); });
+  const complete = async (n: number) => {
+    const turn = bindSession(id, 'codex');
+    await turn.send();
+    await turn.deliver({ type:'done',source:'codex',data:{usage:{promptTokens:n}} } as AgentEvent);
+    await setImmediate();
+  };
+  await complete(10);
+  const before = await codexTotal(); renewAppSession(); expect(await codexTotal()).toBe(before);
+  commitActiveAppSession('cloud','b'); b.activate();
+  expect.soft(await codexTotal()).toBe(0);
+  frames.mockClear();
+  await complete(3);
+  expect(await codexTotal()).toBe(3);
+  expect(frames.mock.calls.find(([ch])=>ch==='usage:today-tokens-changed')?.[1]).toMatchObject({total:3});
+});
+
+it.each(['logout','cloud to local','local to cloud'] as const)('rejects both running Claude tasks on %s', async transition => {
+  const { a, open } = await databases(); const local=await open(LOCAL_DATA_OWNER_ID);
+  if (transition==='local to cloud') { commitActiveAppSession('local'); local.activate(); }
+  const tasks=[randomUUID(),randomUUID()].map(id=>{seedUsageSession(id,a,local);return bindSession(id,'claude-code');});
+  for (const task of tasks) await task.send();
+  if (transition==='logout') commitActiveAppSession('signed-out');
+  else if (transition==='cloud to local') { commitActiveAppSession('local'); local.activate(); }
+  else { commitActiveAppSession('cloud','a'); a.activate(); }
+  for (const task of tasks) await task.deliver(claudeCumulativeDone(1));
+  await setImmediate();
+  for(const owner of [a,local]) {
+    expect(owner.db.prepare('SELECT tokens FROM daily_session_usage').all()).toEqual([]);
+    expect(owner.db.prepare('SELECT input_tokens FROM daily_model_usage').all()).toEqual([]);
+  }
 });
