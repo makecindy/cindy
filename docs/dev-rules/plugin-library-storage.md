@@ -102,12 +102,17 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
    `validateLibraryRelPath` → `isInsideDir` → realpath 祖先收敛），目标 lstat
    不穿透 symlink。写入 = staging + fsync + rename + dev/ino identity 复验
    （对齐 `dirDeposit.writeNewSaveFile` 范式）。
-   用量先在同一串行队列内增量计算，每 32 次变更原子更新 `usage.json`，不强制落盘；
-   正常关闭时补写账本，再强制落盘与该快照匹配的 `usage.clean` 标记。SQLite 可能在文件层
-   之外改动作品，先关闭其 worker，再重扫核对账本。重新打开时，只有账本与标记匹配才复用，
-   且必须先持久清除标记再允许写入。缺失、陈旧或不匹配时按磁盘重算；超过原有扫描条数
-   上限时保持可读但拒绝写入，不保存部分用量，也不写正常关闭标记。作品文件自身的
-   强制落盘和成功回执不变。
+   用量在同一串行队列内增量计算，每 32 次变更原子更新 `usage.json`，不强制落盘。
+   老账本无 `checkpoint` 字段：合法时照旧复用，现存的大库不会因为升级而被强制重扫。
+   新账本将计数和 `checkpoint: "clean" | "dirty"` 原子写在一起。打开已有库只读；
+   有可信账本时第一次变更前须持久写入 `dirty`，已无可信账本时不额外同步。
+   切换账号、停用、迁库及 Desktop 的异步退出收尾等待在途变更，最终写入并同步
+   `clean` 账本。SQLite 可能绕过文件层改动作品，先关闭其 worker 再核算。
+   缺失、损坏或 `dirty` 的账本重扫，`clean` 账本免扫。超过原扫描上限或子目录无法核算时，
+   作品仍可读，拒绝写入，不持久化部分计数；此时返回的用量只是上次账本值（无账本则为 0）。
+   设置页优先读已有会话的有效用量，否则只读最近磁盘快照，不开库、不触发扫描。
+   新版异常退出后降级，旧版可能沿用陈旧快照；旧版不识别 `checkpoint`，再次写入会按旧格式保存，
+   这一降级链路可能留下用量偏差。作品文件的原子写、强制落盘和成功回执不变。
 5. **SQL 白名单**：better-sqlite3 无 set_authorizer，唯一可靠防线是首词允许
    清单（deny-by-default）+ prepare 单语句 + 事务/迁移/备份全宿主管理。
    ATTACH/VACUUM INTO/PRAGMA/事务语句一律 `DB_STATEMENT_REJECTED`。改白名单

@@ -104,6 +104,8 @@ interface UsageLedger {
   mutations: number;
 }
 
+type UsageCheckpoint = UsageLedger & { checkpoint?: 'clean' | 'dirty' };
+
 /**
  * 读路径身份(bigint dev/ino/size)。与 fileReadBytes.FileIdentityStat 同口径:
  * 默认 numeric Stats 在 inode > 2^53 时会把不同文件比成相等。
@@ -181,8 +183,44 @@ const WINDOWS_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)
 const META_DIR = '.cindy-library';
 const META_FILE = 'meta.json';
 const USAGE_FILE = 'usage.json';
-const USAGE_CLEAN_FILE = 'usage.clean';
 const USAGE_BATCH_SIZE = 32;
+
+export async function readLibraryUsageSnapshot(root: string): Promise<UsageCheckpoint | null> {
+  const filename = path.join(root, META_DIR, USAGE_FILE);
+  let entry: fs.Stats;
+  try {
+    entry = await fs.promises.lstat(filename);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+  if (!entry.isFile() || entry.size > 4096) return null;
+  const handle = await fs.promises.open(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+  try {
+    const held = await handle.stat();
+    if (!held.isFile() || held.dev !== entry.dev || held.ino !== entry.ino || held.size > 4096) {
+      throw new Error('Library usage entry changed');
+    }
+    const buffer = Buffer.alloc(4097);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead !== held.size) throw new Error('Library usage entry changed');
+    try {
+      const raw = JSON.parse(buffer.toString('utf8', 0, bytesRead)) as UsageCheckpoint;
+      if (!raw || !Number.isSafeInteger(raw.files) || raw.files < 0 || !Number.isSafeInteger(raw.bytes) || raw.bytes < 0) return null;
+      const ledger = {
+        files: raw.files, bytes: raw.bytes,
+        updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : 0,
+        mutations: Number.isSafeInteger(raw.mutations) && raw.mutations >= 0 ? raw.mutations : 0,
+      };
+      if (!Object.hasOwn(raw, 'checkpoint')) return ledger;
+      return { ...ledger, checkpoint: raw.checkpoint === 'clean' ? 'clean' : 'dirty' };
+    } catch {
+      return null;
+    }
+  } finally {
+    await handle.close();
+  }
+}
 const TMP_DIR = 'tmp';
 
 /** Host-owned sibling staging is never a user Library entry, even after a crash. */
@@ -333,9 +371,13 @@ export class LibraryVault {
   private readonlyReason: string | null = null;
   /** 用量保险丝触发(扫描条数超限):fail closed 拒写,读照常。 */
   private usageTripped = false;
+  private usageScanIncomplete = false;
   private usage: UsageLedger = { files: 0, bytes: 0, updatedAt: 0, mutations: 0 };
   private usageDirectory: { dev: number; ino: number } | null = null;
   private usageNeedsRescan = false;
+  private usageDirtyOnDisk = false;
+  private usageChanged = false;
+  private usagePrepareFailed = false;
   private meta: LibraryMeta | null = null;
   private readonly streams = new Map<string, ActiveStream>();
   /** 变更串行链(runSerialized 维护)。 */
@@ -364,9 +406,6 @@ export class LibraryVault {
   }
   private get usageFile(): string {
     return path.join(this.metaDir, USAGE_FILE);
-  }
-  private get usageCleanFile(): string {
-    return path.join(this.metaDir, USAGE_CLEAN_FILE);
   }
   private get tmpDir(): string {
     return path.join(this.metaDir, TMP_DIR);
@@ -519,6 +558,7 @@ export class LibraryVault {
         return fail('LIBRARY_UNAVAILABLE', 'Library 实例已作废(owner 切换/宿主收口);请重新 open');
       }
       let customUsage: UsageLedger | null = null;
+      let customUsageDirectory: { dev: number; ino: number } | null = null;
       try {
         if ((this.deps.locationKind ?? 'default') === 'custom') {
           const before = await this.inspectCustomParent();
@@ -547,6 +587,7 @@ export class LibraryVault {
             const heldId = { dev: held.dev, ino: held.ino };
             const heldBefore = await this.assertHeldCustomParent(heldId);
             if (heldBefore) return heldBefore;
+            customUsageDirectory = await this.inspectUsageDirectory();
             const existing = await (this.deps.openExistingCustom ?? openExistingCustomLibrary)({
               parentFd: parentHandle.fd,
               ghostId: dirSeg,
@@ -590,6 +631,9 @@ export class LibraryVault {
             }
             const afterTree = await this.assertHeldCustomParent(heldId);
             if (afterTree) return afterTree;
+            if (existing.ok && (!customUsageDirectory || !(await this.isUsageDirectoryCurrent(customUsageDirectory)))) {
+              return this.customRootUnavailable('binding-moved');
+            }
           } finally {
             if (parentHandle) {
               try {
@@ -651,25 +695,33 @@ export class LibraryVault {
 
       if (!customOpen) await this.sweepStaleTmp();
 
-      if (!this.opened || this.state === 'unavailable' || !(await this.isUsageDirectoryCurrent())) {
-        try {
-          this.usageDirectory = await this.inspectUsageDirectory();
-          if (!this.usageDirectory) {
-            if (customOpen) return this.customRootUnavailable();
-            throw new Error('Library metadata directory unavailable');
-          }
-          const ledger = customOpen ? customUsage : await this.readUsageUnlocked();
-          if (await this.consumeCleanUsageUnlocked(ledger) && ledger) {
-            this.usage = ledger;
-            this.usageTripped = false;
-          } else {
-            await this.rescanUsageUnlocked();
-          }
-        } catch {
-          this.state = 'unavailable';
-          this.unavailableReason = 'io';
-          return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
+      try {
+        const currentUsageDirectory = customUsageDirectory ?? await this.inspectUsageDirectory();
+        if (!currentUsageDirectory || !(await this.isUsageDirectoryCurrent(currentUsageDirectory))) {
+          if (customOpen) return this.customRootUnavailable();
+          throw new Error('Library metadata directory unavailable');
         }
+        if (!this.opened || this.state === 'unavailable' || !(await this.isUsageDirectoryCurrent())) {
+          this.usageDirectory = currentUsageDirectory;
+          const ledger = await readLibraryUsageSnapshot(this.root).catch(() => null);
+          if (!(await this.isUsageDirectoryCurrent())) return this.customRootUnavailable('binding-moved');
+          if (customUsage && ledger && (customUsage.files !== ledger.files || customUsage.bytes !== ledger.bytes
+            || customUsage.updatedAt !== ledger.updatedAt || customUsage.mutations !== ledger.mutations)) {
+            return this.customRootUnavailable('binding-moved');
+          }
+          this.usage = ledger ?? { files: 0, bytes: 0, updatedAt: 0, mutations: 0 };
+          this.usageDirtyOnDisk = ledger?.checkpoint === 'dirty'
+            || (!ledger && !(await this.lstatTarget(this.usageFile)));
+          this.usageChanged = !ledger || ledger.checkpoint === 'dirty';
+          this.usagePrepareFailed = false;
+          this.usageTripped = false;
+          this.usageScanIncomplete = false;
+          if (!ledger || ledger.checkpoint === 'dirty') await this.rescanUsageUnlocked();
+        }
+      } catch {
+        this.state = 'unavailable';
+        this.unavailableReason = 'io';
+        return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
       }
       this.opened = true;
       if (this.state === 'unavailable') {
@@ -684,12 +736,15 @@ export class LibraryVault {
 
   private effectiveState(): LibraryState {
     if (this.state === 'unavailable') return 'unavailable';
-    if (this.readonlyReason !== null || this.usageTripped) return 'readonly';
+    if (this.readonlyReason !== null || this.usageTripped || this.usageScanIncomplete || this.usagePrepareFailed) return 'readonly';
     return 'ready';
   }
 
   private effectiveReason(): string | null {
-    return this.unavailableReason ?? this.readonlyReason ?? (this.usageTripped ? 'usage-scan-limit' : null);
+    if (this.unavailableReason !== null || this.readonlyReason !== null) return this.unavailableReason ?? this.readonlyReason;
+    if (this.usageTripped) return 'usage-scan-limit';
+    if (this.usageScanIncomplete) return 'usage-scan-incomplete';
+    return this.usagePrepareFailed ? 'usage-checkpoint-io' : null;
   }
 
   /** status:状态 + 占用 + 磁盘余量 + 软水位(软水位仅告警,不阻断写)。 */
@@ -737,7 +792,7 @@ export class LibraryVault {
     if (this.readonlyReason !== null) {
       return fail('LIBRARY_READONLY', `Library 只读(${this.readonlyReason})`);
     }
-    if (this.usageTripped) {
+    if (this.usageTripped || this.usageScanIncomplete) {
       return fail('LIBRARY_UNAVAILABLE', 'Library 结构过大,无法核算占用;请清理后重试');
     }
     return null;
@@ -881,77 +936,46 @@ export class LibraryVault {
     return directory?.isDirectory() ? { dev: directory.dev, ino: directory.ino } : null;
   }
 
-  private async isUsageDirectoryCurrent(): Promise<boolean> {
+  private async isUsageDirectoryCurrent(expected = this.usageDirectory): Promise<boolean> {
     const directory = await this.inspectUsageDirectory();
-    return directory !== null && this.usageDirectory !== null
-      && directory.dev === this.usageDirectory.dev && directory.ino === this.usageDirectory.ino;
+    return directory !== null && expected !== null
+      && directory.dev === expected.dev && directory.ino === expected.ino;
   }
 
-  private async readUsageUnlocked(): Promise<UsageLedger | null> {
+  private async persistUsageUnlocked(checkpoint: 'clean' | 'dirty', durable: boolean): Promise<boolean> {
     try {
-      const raw = JSON.parse(await fs.promises.readFile(this.usageFile, 'utf8')) as UsageLedger;
-      if (raw && typeof raw.files === 'number' && typeof raw.bytes === 'number') {
-        return { files: raw.files, bytes: raw.bytes, updatedAt: raw.updatedAt ?? 0, mutations: raw.mutations ?? 0 };
-      }
+      if (!(await this.isUsageDirectoryCurrent())) return false;
+      const ledger = {
+        files: this.usage.files, bytes: this.usage.bytes, mutations: this.usage.mutations,
+        updatedAt: this.now(), checkpoint,
+      };
+      const result = await this.atomicWrite(this.usageFile, Buffer.from(JSON.stringify(ledger), 'utf8'), {
+        sync: durable, createParent: false,
+      });
+      if (!result.ok || !(await this.isUsageDirectoryCurrent())) return false;
+      return !durable || (await this.fsyncAbsDir(this.metaDir)).ok;
     } catch {
-      return null;
+      return false;
     }
+  }
+
+  private async prepareUsageMutationUnlocked(): Promise<LibraryFailure | null> {
+    if (!this.usageDirtyOnDisk) {
+      if (!(await this.persistUsageUnlocked('dirty', true))) {
+        this.usagePrepareFailed = true;
+        return fail('LIBRARY_UNAVAILABLE', '无法保存 Library 用量恢复状态，暂不允许写入');
+      }
+      this.usageDirtyOnDisk = true;
+    }
+    this.usagePrepareFailed = false;
+    this.usageChanged = true;
     return null;
-  }
-
-  private usageFingerprint(ledger: UsageLedger): string {
-    return crypto.createHash('sha256')
-      .update(JSON.stringify([ledger.files, ledger.bytes, ledger.updatedAt, ledger.mutations]))
-      .digest('hex');
-  }
-
-  private async consumeCleanUsageUnlocked(ledger: UsageLedger | null): Promise<boolean> {
-    const entry = await this.lstatTarget(this.usageCleanFile);
-    if (!entry || entry.size === 0) return false;
-    if (!entry.isFile() || entry.nlink !== 1) throw new Error('Invalid Library usage marker');
-    const marker = await fs.promises.open(this.usageCleanFile, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
-    try {
-      const held = await marker.stat();
-      if (!held.isFile() || held.nlink !== 1 || held.dev !== entry.dev || held.ino !== entry.ino
-        || !(await this.isUsageDirectoryCurrent())) {
-        throw new Error('Library usage marker moved');
-      }
-      const valid = held.size === 64 && ledger !== null
-        && Number.isSafeInteger(ledger.files) && ledger.files >= 0
-        && Number.isSafeInteger(ledger.bytes) && ledger.bytes >= 0
-        && (await marker.readFile('utf8')) === this.usageFingerprint(ledger);
-      await marker.truncate(0);
-      await marker.sync();
-      return valid;
-    } finally {
-      await marker.close();
-    }
-  }
-
-  private async persistUsageUnlocked(clean = false): Promise<void> {
-    try {
-      if (!(await this.isUsageDirectoryCurrent())) return;
-      this.usage.updatedAt = this.now();
-      const written = await this.atomicWrite(this.usageFile, Buffer.from(JSON.stringify(this.usage), 'utf8'), {
-        sync: false, createParent: false,
-      });
-      if (!written.ok) throw new Error(written.message);
-      if (!clean || !(await this.isUsageDirectoryCurrent())) return;
-      const marker = await this.atomicWrite(this.usageCleanFile, Buffer.from(this.usageFingerprint(this.usage), 'utf8'), {
-        createParent: false,
-      });
-      if (!marker.ok) throw new Error(marker.message);
-      const synced = await this.fsyncAbsDir(this.metaDir);
-      if (!synced.ok) throw new Error(synced.message);
-    } catch {
-      this.deps.log?.warn('library usage persist failed', {});
-    }
   }
 
   private async recordUsageMutationUnlocked(): Promise<void> {
     this.usage.mutations += 1;
     if (this.usage.mutations % USAGE_BATCH_SIZE === 0 && !this.usageNeedsRescan) {
-      await this.persistUsageUnlocked();
+      if (!(await this.persistUsageUnlocked('dirty', false))) this.deps.log?.warn('library usage persist failed', {});
     }
   }
 
@@ -978,7 +1002,7 @@ export class LibraryVault {
 
   /** 用量全量扫描(条数保险丝;触发 fail closed,见 requireWritable)。
    *  宿主命名空间 .cindy-library/ 不计入——那是 meta/账本/staging,不是插件作品。 */
-  private async scanUsageUnlocked(): Promise<{ files: number; bytes: number; tripped: boolean }> {
+  private async scanUsageUnlocked(): Promise<{ files: number; bytes: number; tripped: boolean; incomplete: boolean }> {
     let files = 0;
     let bytes = 0;
     let visited = 0;
@@ -990,12 +1014,13 @@ export class LibraryVault {
         entries = await fs.promises.readdir(dir, { withFileTypes: true });
       } catch (err) {
         if (dir !== this.root && (err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        if (dir !== this.root) return { files: 0, bytes: 0, tripped: false, incomplete: true };
         throw err;
       }
       for (const entry of entries) {
         if (isLibraryPublishTempName(entry.name)) continue;
         if (dir === this.root && entry.name === META_DIR) continue; // 宿主命名空间不入账
-        if (++visited > this.limits.usageScanFuse) return { files: 0, bytes: 0, tripped: true };
+        if (++visited > this.limits.usageScanFuse) return { files: 0, bytes: 0, tripped: true, incomplete: false };
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) stack.push(full);
         else if (entry.isFile()) {
@@ -1003,12 +1028,12 @@ export class LibraryVault {
             bytes += (await fs.promises.stat(full)).size;
             files += 1;
           } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return { files: 0, bytes: 0, tripped: false, incomplete: true };
           }
         }
       }
     }
-    return { files, bytes, tripped: false };
+    return { files, bytes, tripped: false, incomplete: false };
   }
 
   /* ── 文件操作 ───────────────────────────────────────────────────── */
@@ -1085,11 +1110,16 @@ export class LibraryVault {
       }
       const disk = await this.checkDiskReserve(decoded.bytes.byteLength);
       if (disk) return disk;
+      const checkpoint = await this.prepareUsageMutationUnlocked();
+      if (checkpoint) return checkpoint;
       const existedBytes = st && st.isFile() ? st.size : 0;
       const w = await this.atomicWrite(resolved.target, decoded.bytes, {
         ifNotExists: req.ifNotExists === true,
       });
-      if (!w.ok) return w;
+      if (!w.ok) {
+        if (w.errorCode !== 'ALREADY_EXISTS') this.usageNeedsRescan = true;
+        return w;
+      }
       // 用量增量记账(files/bytes);覆盖写扣除旧体积。
       this.usage.bytes += decoded.bytes.byteLength - existedBytes;
       if (!st) this.usage.files += 1;
@@ -1242,6 +1272,8 @@ export class LibraryVault {
         await this.abortStreamUnlocked(stream.streamId).catch(() => {});
         return fail('STREAM_INVALID', `字节数不完整(已收 ${stream.written} / 声明 ${stream.totalBytes})`);
       }
+      const checkpoint = await this.prepareUsageMutationUnlocked();
+      if (checkpoint) return checkpoint;
       const sha256 = stream.hash.digest('hex');
       if (stream.sha256Declared !== null && sha256 !== stream.sha256Declared) {
         await this.abortStreamUnlocked(stream.streamId).catch(() => {});
@@ -1256,6 +1288,7 @@ export class LibraryVault {
           await fh.close();
         }
       } catch (err) {
+        this.usageNeedsRescan = true;
         await this.abortStreamUnlocked(stream.streamId).catch(() => {});
         return this.tmpFailure(err, '分块提交失败(主机 IO 错误)');
       }
@@ -1284,6 +1317,7 @@ export class LibraryVault {
       }
       const after = await this.lstatTarget(resolved.target);
       if (!after || !after.isFile()) {
+        this.usageNeedsRescan = true;
         return fail('INTERNAL', '分块提交就位校验失败');
       }
       this.streams.delete(stream.streamId);
@@ -1416,6 +1450,8 @@ export class LibraryVault {
         if (!prior.isDirectory()) return fail('ALREADY_EXISTS', `目标已存在且不是目录:${relPath}`);
         return { ok: true as const, path: relPath, existed: true };
       }
+      const checkpoint = await this.prepareUsageMutationUnlocked();
+      if (checkpoint) return checkpoint;
       try {
         await fs.promises.mkdir(resolved.target, { recursive: true });
       } catch (err) {
@@ -1558,6 +1594,8 @@ export class LibraryVault {
       if (!('target' in resolved)) return resolved;
       const st = await this.lstatTarget(resolved.target);
       if (!st) return { ok: true as const, path: relPath, existed: false }; // 幂等
+      const checkpoint = await this.prepareUsageMutationUnlocked();
+      if (checkpoint) return checkpoint;
       let removedBytes = 0;
       let removedFiles = 0;
       if (st.isDirectory()) {
@@ -1566,6 +1604,7 @@ export class LibraryVault {
           try {
             await fs.promises.rm(resolved.target, { recursive: true, force: false });
           } catch (err) {
+            this.usageNeedsRescan = true;
             return this.tmpFailure(err, '删除目录失败(主机 IO 错误)');
           }
           removedBytes = usage.bytes;
@@ -1666,6 +1705,8 @@ export class LibraryVault {
       }
       const disk = await this.checkDiskReserve(0);
       if (disk) return disk;
+      const checkpoint = await this.prepareUsageMutationUnlocked();
+      if (checkpoint) return checkpoint;
       const identity = { dev: st.dev, ino: st.ino };
       try {
         await fs.promises.mkdir(path.dirname(dst.target), { recursive: true });
@@ -1679,10 +1720,12 @@ export class LibraryVault {
           await fs.promises.unlink(src.target);
         }
       } catch (err) {
+        this.usageNeedsRescan = true;
         return this.tmpFailure(err, '重命名失败(主机 IO 错误)');
       }
       const after = await this.lstatTarget(dst.target);
       if (!after || after.dev !== identity.dev || after.ino !== identity.ino) {
+        this.usageNeedsRescan = true;
         return fail('INTERNAL', '重命名就位校验失败(identity 不一致)');
       }
       // 账本:文件数不变;覆盖替换时扣掉被替换文件的体积与计数。
@@ -1813,14 +1856,28 @@ export class LibraryVault {
     this.readonlyReason = null;
   }
 
-  noteExternalMutation(): void {
-    this.usageNeedsRescan = true;
+  getLiveUsageSnapshot(): { usedBytes: number; fileCount: number } | null {
+    if (!this.opened || this.effectiveState() !== 'ready' || this.usageNeedsRescan) return null;
+    return { usedBytes: this.usage.bytes, fileCount: this.usage.files };
   }
 
-  private async rescanUsageUnlocked(): Promise<{ files: number; bytes: number; tripped: boolean }> {
+  async prepareExternalMutation(): Promise<LibraryFailure | null> {
+    return this.runSerialized(async () => {
+      const gate = this.requireWritable();
+      if (gate) return gate;
+      const checkpoint = await this.prepareUsageMutationUnlocked();
+      if (!checkpoint) this.usageNeedsRescan = true;
+      return checkpoint;
+    });
+  }
+
+  private async rescanUsageUnlocked() {
     const scanned = await this.scanUsageUnlocked();
     this.usageTripped = scanned.tripped;
-    this.usage = { files: scanned.files, bytes: scanned.bytes, updatedAt: this.now(), mutations: 0 };
+    this.usageScanIncomplete = scanned.incomplete;
+    if (!scanned.tripped && !scanned.incomplete) {
+      this.usage = { files: scanned.files, bytes: scanned.bytes, updatedAt: this.now(), mutations: 0 };
+    }
     return scanned;
   }
 
@@ -1829,8 +1886,13 @@ export class LibraryVault {
       if (this.invalidated) return fail('LIBRARY_UNAVAILABLE', 'Library 实例已作废');
       try {
         const scanned = await this.rescanUsageUnlocked();
-        if (!scanned.tripped) await this.persistUsageUnlocked();
-        return { ok: true as const, ...scanned };
+        if (scanned.incomplete) return fail('LIBRARY_UNAVAILABLE', 'Library 用量扫描不完整');
+        if (!scanned.tripped) {
+          const checkpoint = await this.prepareUsageMutationUnlocked();
+          if (checkpoint) return checkpoint;
+          if (!(await this.persistUsageUnlocked('dirty', false))) this.deps.log?.warn('library usage persist failed', {});
+        }
+        return { ok: true as const, files: scanned.files, bytes: scanned.bytes, tripped: scanned.tripped };
       } catch (err) {
         return this.tmpFailure(err, 'Library 用量扫描失败');
       }
@@ -1842,7 +1904,8 @@ export class LibraryVault {
     await this.runSerialized(async () => {
       if (this.invalidated) return;
       this.invalidated = true;
-      const canCheckpoint = this.opened && this.state !== 'unavailable' && !this.usageTripped;
+      const canCheckpoint = this.opened && this.state !== 'unavailable' && this.usageChanged
+        && !this.usageTripped && !this.usageScanIncomplete && !this.usagePrepareFailed;
       this.state = 'unavailable';
       this.unavailableReason = 'io';
       for (const stream of Array.from(this.streams.values())) {
@@ -1851,7 +1914,9 @@ export class LibraryVault {
       if (!canCheckpoint) return;
       try {
         if (this.usageNeedsRescan && await this.isUsageDirectoryCurrent()) await this.rescanUsageUnlocked();
-        if (!this.usageTripped) await this.persistUsageUnlocked(true);
+        if (!this.usageTripped && !this.usageScanIncomplete && !(await this.persistUsageUnlocked('clean', true))) {
+          this.deps.log?.warn('library usage checkpoint at close failed', {});
+        }
       } catch {
         this.deps.log?.warn('library usage reconcile at close failed', {});
       }

@@ -706,7 +706,7 @@ describe('LibraryVault', () => {
           expect(await vault.write({ path: `asset-${index}.txt`, content: 'abc' })).toMatchObject({ ok: true });
         }
         expect(syncs).toHaveBeenCalledTimes(32);
-        expect(JSON.parse(await fs.promises.readFile(ledger, 'utf8'))).toMatchObject({ files: 32, bytes: 96 });
+        expect(JSON.parse(await fs.promises.readFile(ledger, 'utf8'))).toMatchObject({ files: 32, bytes: 96, checkpoint: 'dirty' });
         await vault.invalidate();
         expect(syncs).toHaveBeenCalledTimes(33);
       } finally {
@@ -741,7 +741,7 @@ describe('LibraryVault', () => {
       await first.write({ path: 'first.txt', content: 'one' });
       await first.write({ path: 'second.txt', content: 'two' });
       const ledger = path.join(libraryRoot, '.cindy-library', 'usage.json');
-      const stale = JSON.stringify({ files: 1, bytes: 3, updatedAt: 1, mutations: 1 });
+      const stale = JSON.stringify({ files: 1, bytes: 3, updatedAt: 1, mutations: 1, checkpoint: 'dirty' });
       await fs.promises.writeFile(ledger, stale);
 
       const tight = makeVault({ limits: { usageScanFuse: 1 } });
@@ -770,12 +770,66 @@ describe('LibraryVault', () => {
         ok: true, from: 'stream.txt', to: 'renamed.txt',
       });
       expect(await vault.delete({ path: 'renamed.txt' })).toEqual({ ok: true, path: 'renamed.txt', existed: true });
-      vault.noteExternalMutation();
+      expect(await vault.prepareExternalMutation()).toBeNull();
       await fs.promises.writeFile(path.join(libraryRoot, 'external.sqlite'), 'database');
       await vault.invalidate();
       expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
         ok: true, state: 'ready', fileCount: 1, usedBytes: 8,
       });
+    });
+
+    it('超限的旧版合法账本可读写，新版首次变更先持久写下未收尾状态', async () => {
+      const initial = makeVault();
+      await initial.open();
+      await fs.promises.writeFile(path.join(libraryRoot, 'old.txt'), 'one');
+      const ledgerFile = path.join(libraryRoot, '.cindy-library', 'usage.json');
+      const legacy = JSON.stringify({ files: 1, bytes: 3, updatedAt: 1, mutations: 1 });
+      await fs.promises.writeFile(ledgerFile, legacy);
+
+      const upgraded = makeVault({ limits: { usageScanFuse: 0 } });
+      expect(await upgraded.open()).toMatchObject({ ok: true, state: 'ready', fileCount: 1, usedBytes: 3 });
+      expect(await fs.promises.readFile(ledgerFile, 'utf8')).toBe(legacy);
+      expect(await upgraded.write({ path: 'new.txt', content: 'second' })).toMatchObject({ ok: true });
+      expect(JSON.parse(await fs.promises.readFile(ledgerFile, 'utf8'))).toMatchObject({
+        checkpoint: 'dirty', files: 1, bytes: 3,
+      });
+      await upgraded.invalidate();
+      expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
+        ok: true, state: 'ready', fileCount: 2, usedBytes: 9,
+      });
+    });
+
+    it('标记异常且子目录不可读时保留其他文件，既不放行写入也不覆盖账本', async () => {
+      const initial = makeVault();
+      await initial.open();
+      await fs.promises.writeFile(path.join(libraryRoot, 'keep.txt'), 'readable');
+      const inaccessible = path.join(libraryRoot, 'inaccessible');
+      await fs.promises.mkdir(inaccessible);
+      const ledgerFile = path.join(libraryRoot, '.cindy-library', 'usage.json');
+      const stale = JSON.stringify({ files: 5, bytes: 21, checkpoint: 'invalid' });
+      await fs.promises.writeFile(ledgerFile, stale);
+
+      const readdir = fs.promises.readdir;
+      const spy = vi.spyOn(fs.promises, 'readdir').mockImplementation(((...args: Parameters<typeof readdir>) => {
+        if (args[0] === inaccessible) return Promise.reject(Object.assign(new Error('access denied'), { code: 'EACCES' }));
+        return readdir(...args);
+      }) as typeof readdir);
+      try {
+        const reopened = makeVault();
+        expect(await reopened.open()).toMatchObject({
+          ok: true, state: 'readonly', reason: 'usage-scan-incomplete', fileCount: 5, usedBytes: 21,
+        });
+        expect(await reopened.read({ path: 'keep.txt' })).toMatchObject({ ok: true, content: 'readable' });
+        expect(await reopened.write({ path: 'new.txt', content: 'denied' })).toMatchObject({
+          ok: false, errorCode: 'LIBRARY_UNAVAILABLE',
+        });
+        await reopened.invalidate();
+        expect(await fs.promises.readFile(ledgerFile, 'utf8')).toBe(stale);
+      } finally {
+        spy.mockRestore();
+      }
+      const recovered = makeVault();
+      expect(await recovered.open()).toMatchObject({ ok: true, state: 'ready', fileCount: 1, usedBytes: 8 });
     });
 
     it('markOrphaned / clearOrphaned 往返;invalidate 后 open 拒绝', async () => {

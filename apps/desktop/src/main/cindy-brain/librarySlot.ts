@@ -251,9 +251,17 @@ const vaultFail = (r: { errorCode: string; message: string }): GhostPipeLibraryR
     : { ok: false, errorCode: r.errorCode, message: r.message }
 );
 
+export function registerLibraryQuit(
+  register: (name: string, dispose: () => Promise<void>, phase: 'async') => void,
+  getSlot: () => GhostLibrarySlot | null,
+): void {
+  register('plugin-library', async () => { await getSlot()?.disposeForShutdown(); }, 'async');
+}
+
 export class GhostLibrarySlot {
   private readonly sessions = new Map<string, GhostLibrarySession>();
   private readonly sessionTeardowns = new Map<string, Promise<void>>();
+  private closing = false;
   /** 迁移进行中的插件:全部写操作只读化(切换与 grace 前不再有写入落旧根)。 */
   private readonly relocating = new Set<string>();
   private readonly relocationGenerations = new Map<string, number>();
@@ -313,6 +321,7 @@ export class GhostLibrarySlot {
   }
 
   private isRequestCurrent(ghostId: string, target: GhostLibraryRequestTarget): boolean {
+    if (this.closing) return false;
     return !this.relocating.has(ghostId)
       && target.relocationGeneration === this.relocationGenerations.get(ghostId)
       && target.ownerScopeKey === this.deps.captureOwnerScope()
@@ -1069,6 +1078,18 @@ export class GhostLibrarySlot {
     }
   }
 
+  async disposeForShutdown(): Promise<void> {
+    this.closing = true;
+    await this.disposeAll();
+  }
+
+  getLiveUsageSnapshot(ghostId: string, root: string): { usedBytes: number; fileCount: number } | null {
+    const session = this.sessions.get(ghostId);
+    if (!session || session.drift !== null || session.vault.getRootDir() !== root
+      || !this.isRequestCurrent(ghostId, session.requestTarget)) return null;
+    return session.vault.getLiveUsageSnapshot();
+  }
+
   private async disposeStagingStores(ghostId?: string): Promise<void> {
     const entries = [...this.stagingStores.entries()].filter(([key]) => {
       if (!ghostId) return true;
@@ -1109,7 +1130,8 @@ export class GhostLibrarySlot {
     if (reason) return fail('PATH_INVALID', `dbPath 非法:${reason}`, 'INVALID_REQUEST');
     const abs = await session.vault.resolveDbTarget(dbPath as string);
     if (abs === null) return fail('PATH_INVALID', 'dbPath 越界或目标不可用作数据库', 'INVALID_REQUEST');
-    session.vault.noteExternalMutation();
+    const gate = await session.vault.prepareExternalMutation();
+    if (gate) return vaultFail(gate);
     return { abs };
   }
 

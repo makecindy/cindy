@@ -16,13 +16,14 @@ import {
   libraryAvailableRef,
   mintLibraryEpochIdentity,
   parseLibraryAssetRef,
+  registerLibraryQuit,
   resolveLibraryAssetPath,
   type GhostLibrarySlotDeps,
 } from '../librarySlot.js';
 import { createHash } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import { LibraryBindingStore, relocateLibraryMetaOwner } from '../libraryBinding.js';
-import { LibraryVault, type LibraryVaultDeps } from '../libraryVault.js';
+import { LibraryVault, readLibraryUsageSnapshot, type LibraryVaultDeps } from '../libraryVault.js';
 import { initCustomLibraryTree, openExistingCustomLibrary, parseExistingStdout } from '../libraryDirFd.js';
 import { createLibraryDbCore, type SqliteDatabaseConstructor } from '../libraryDbCore.js';
 import { LibrarySqlService } from '../librarySqlService.js';
@@ -136,6 +137,23 @@ describe('GhostLibrarySlot', () => {
   afterEach(async () => {
     await slot.disposeAll();
     await fs.promises.rm(tmp, { recursive: true, force: true });
+  });
+
+  it('Desktop 异步退出等待已打开的作品库收尾，不新建会话', async () => {
+    const root = path.join(defaultRootBase, GHOST_ID);
+    const register = vi.fn<(name: string, disposer: () => Promise<void>, phase: 'async') => void>();
+    registerLibraryQuit(register, () => slot);
+    const [name, dispose, phase] = register.mock.calls[0]!;
+    expect({ name, phase }).toEqual({ name: 'plugin-library', phase: 'async' });
+    expect(slot.getLiveUsageSnapshot(GHOST_ID, root)).toBeNull();
+    expect(createVault).not.toHaveBeenCalled();
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'asset.txt', content: 'abc' })).toMatchObject({ ok: true });
+    expect(slot.getLiveUsageSnapshot(GHOST_ID, root)).toEqual({ fileCount: 1, usedBytes: 3 });
+    expect(await readLibraryUsageSnapshot(root)).toBeNull();
+    await dispose();
+    expect(await readLibraryUsageSnapshot(root)).toMatchObject({ checkpoint: 'clean', files: 1, bytes: 3 });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'late.txt', content: 'abc' })).toMatchObject({ ok: false });
+    expect(createVault).toHaveBeenCalledTimes(1);
   });
 
   function pauseNextLibraryRootResolution() {
