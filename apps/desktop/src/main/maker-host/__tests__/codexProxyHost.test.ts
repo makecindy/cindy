@@ -3712,8 +3712,12 @@ describe('codex proxy host', () => {
     expect(JSON.parse(rule.strip(Buffer.from(JSON.stringify({ input: history }))).toString()).input).toEqual(projected);
   });
 
-  it.each(['/responses', '/_cindy/custom-provider/0123456789abcdefabcd/responses'])(
-    'recovers local IDs in one retry and remembers the limit for the next turn (%s, #11867)', async requestPath => {
+  it.each([
+    ['/responses', false],
+    ['/_cindy/custom-provider/0123456789abcdefabcd/responses', false],
+    ['/responses', true],
+  ] as const)(
+    'recovers local IDs in one retry and remembers the limit for the next turn (%s, selected interface=%s, #11867)', async (requestPath, selectedInterface) => {
       const host = await freshCodexProxyHost();
       const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
       const long = 'x'.repeat(86);
@@ -3736,12 +3740,33 @@ describe('codex proxy host', () => {
       });
       await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
       const upstreamBase = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+      const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+      const { setActiveCatalog } = await import('../active-catalog.js');
+      const { setCustomProviderKeyReader } = await import('../provider-route.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      if (selectedInterface) {
+        const route = { baseUrl: upstreamBase, wireProtocol: 'openai-responses' as const };
+        const provider = buildUserProvider({ id: 'cprov-test-interface', name: 'Synthetic provider', runtimes: {
+          codex: { ...route, models: [{ id: history.model, name: 'Selected model' }] },
+        } });
+        provider.models.codex![0]!.selectedInterface = {
+          profileId: 'synthetic-interface', providerId: provider.id, revision: '1', api: 'openai-responses',
+          wireModelId: 'actual-wire-model', route, defaults: {}, compatibility: [], preferred: true,
+        };
+        setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider], modelRegistry: undefined });
+        setCustomProviderKeyReader(() => 'synthetic-key');
+        for (const threadId of ['oversized-call-thread', 'another-thread']) {
+          host.registerComposed(threadId, threadId, 'fixture');
+          setSessionProvider(threadId, provider.id);
+        }
+      }
       mockState.realStripTransforms = true;
       mockState.createAnthropicCompatProxy.mockImplementationOnce((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
         actual.createAnthropicCompatProxy({
           upstream: upstreamBase,
           resolveOutboundProxy: () => null,
           transformRequest: opts.transformRequest,
+          ...(selectedInterface ? { routingTransform: opts.routingTransform } : {}),
           recoveryRules: [
             ...(opts.recoveryRules ?? []),
             actual.createEncryptedContentRecoveryRule({ enabled: () => true }),
@@ -3771,7 +3796,16 @@ describe('codex proxy host', () => {
         await post('another-thread');
         expect(received).toHaveLength(5);
         expect(received[3].input[0].call_id).toBe(long);
+        if (selectedInterface) expect(received.map(body => body.model)).toEqual(Array(5).fill('actual-wire-model'));
       } finally {
+        if (selectedInterface) {
+          for (const threadId of ['oversized-call-thread', 'another-thread']) {
+            host.unregister(threadId);
+            clearSessionProvider(threadId);
+          }
+          setCustomProviderKeyReader(() => null);
+          setActiveCatalog(BUNDLED_CATALOG);
+        }
         await host.disposeCodexProxy();
         mockState.realStripTransforms = false;
         upstream.closeAllConnections();

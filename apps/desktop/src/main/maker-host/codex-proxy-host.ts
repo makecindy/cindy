@@ -3714,7 +3714,7 @@ async function createCodexProxyHandle(
           ?? (gatewayProviderIdForRewrittenModel(model) ? null : (frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : null),
       }, ctx);
       const rewrite = decision?.transformRequestBody;
-      if (decision && rewrite && !decision.localHandler && isCodexCustomProviderNamespacePath(ctx.url) && isResponsesReplayPath(ctx.url)) {
+      if (decision && rewrite && !decision.localHandler && isResponsesReplayPath(ctx.url)) {
         lateReplayRequests.add(ctx.headers);
         decision = { ...decision, transformRequestBody: async (raw, transformCtx) => {
           const rewritten = await rewrite(raw, transformCtx);
