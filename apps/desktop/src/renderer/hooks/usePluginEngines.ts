@@ -175,6 +175,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
   let lastReadAt = 0;
   let lastFailedAt = 0;
   let lastRefreshAt = 0;
+  let refreshRereadDueAt = 0;
   let refreshRereadTimer: ReturnType<typeof setTimeout> | undefined;
   let unsupported = false;
   const clearRefreshTimer = () => {
@@ -183,12 +184,48 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
     activeRefreshTimers.delete(refreshRereadTimer);
     refreshRereadTimer = undefined;
   };
+  const scheduleRefreshReread = () => {
+    if (
+      refreshRereadDueAt <= 0
+      || pickerUsers === 0
+      || unsupported
+      || !isDataOwnerGenerationCurrent(owner)
+    ) {
+      return;
+    }
+    clearRefreshTimer();
+    const remaining = refreshRereadDueAt - Date.now();
+    if (remaining <= 0) {
+      refreshRereadDueAt = 0;
+      void catalogue.read();
+      return;
+    }
+    const scheduledGeneration = deviceGeneration;
+    const timer = setTimeout(() => {
+      activeRefreshTimers.delete(timer);
+      if (refreshRereadTimer === timer) refreshRereadTimer = undefined;
+      if (
+        !isDataOwnerGenerationCurrent(owner)
+        || scheduledGeneration !== deviceGeneration
+        || pickerUsers === 0
+        || refreshRereadDueAt <= 0
+      ) {
+        return;
+      }
+      refreshRereadDueAt = 0;
+      void catalogue.read();
+    }, remaining);
+    (timer as unknown as { unref?: () => void })?.unref?.();
+    refreshRereadTimer = timer;
+    activeRefreshTimers.add(timer);
+  };
   const subscribers = new Map<() => void, boolean>();
   const catalogue: DeviceCatalogue = {
     read() {
       if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return Promise.resolve();
       if (pending) return pending;
       const readGeneration = deviceGeneration;
+      const readStartedAt = Date.now();
       const run = Promise.resolve()
         .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration
           ? window.electronAPI?.deviceLink?.invoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
@@ -201,6 +238,10 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
           lastReadAt = Date.now();
           lastFailedAt = 0;
           unsupported = false;
+          if (refreshRereadDueAt > 0 && readStartedAt >= refreshRereadDueAt) {
+            refreshRereadDueAt = 0;
+            clearRefreshTimer();
+          }
           retainReportingPluginEngines(owner, deviceId, next);
           if (sameEngineViews(current, next)) return;
           current = next;
@@ -227,7 +268,11 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       void catalogue.read();
     },
     retainPicker() {
+      const becameActive = pickerUsers === 0;
       pickerUsers += 1;
+      if (becameActive && refreshRereadDueAt > 0) {
+        scheduleRefreshReread();
+      }
       return () => {
         pickerUsers = Math.max(0, pickerUsers - 1);
         if (pickerUsers === 0) {
@@ -248,31 +293,33 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
         && pickerUsers > 0
         && activePickerGeneration === pickerGeneration;
       const now = Date.now();
+      const owedRereadReady = refreshRereadDueAt > 0 && now >= refreshRereadDueAt;
+      if (owedRereadReady) {
+        refreshRereadDueAt = 0;
+        clearRefreshTimer();
+      }
       const freshEnough =
-        current !== null && lastReadAt > 0 && now - lastReadAt < DEVICE_PLUGIN_ENGINES_REREAD_MS;
+        !owedRereadReady
+        && current !== null
+        && lastReadAt > 0
+        && now - lastReadAt < DEVICE_PLUGIN_ENGINES_REREAD_MS;
       const ensureCurrent = freshEnough ? Promise.resolve() : catalogue.read();
       void ensureCurrent.then(() => {
         if (!isPickerActive() || !(current?.length)) return;
         const afterRead = Date.now();
-        if (lastRefreshAt > 0 && afterRead - lastRefreshAt < DEVICE_PLUGIN_ENGINES_REFRESH_MS) return;
+        if (lastRefreshAt > 0 && afterRead - lastRefreshAt < DEVICE_PLUGIN_ENGINES_REFRESH_MS) {
+          if (refreshRereadDueAt > 0) scheduleRefreshReread();
+          return;
+        }
         const invoke = window.electronAPI?.deviceLink?.invoke;
         if (!invoke) return;
         lastRefreshAt = afterRead;
         clearRefreshTimer();
         void Promise.resolve(invoke(deviceId, PLUGIN_ENGINES_INVOKE.REFRESH, []))
           .then(() => {
-            if (!isPickerActive()) return;
-            clearRefreshTimer();
-            const timer = setTimeout(() => {
-              activeRefreshTimers.delete(timer);
-              if (refreshRereadTimer === timer) refreshRereadTimer = undefined;
-              if (isPickerActive()) {
-                void catalogue.read();
-              }
-            }, DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
-            (timer as unknown as { unref?: () => void })?.unref?.();
-            refreshRereadTimer = timer;
-            activeRefreshTimers.add(timer);
+            if (!isDataOwnerGenerationCurrent(owner) || refreshGeneration !== deviceGeneration) return;
+            refreshRereadDueAt = Date.now() + DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS;
+            scheduleRefreshReread();
           })
           .catch(() => undefined);
       });
@@ -289,6 +336,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
     },
     markStale() {
       clearRefreshTimer();
+      refreshRereadDueAt = 0;
       lastReadAt = 0;
       lastFailedAt = 0;
       lastRefreshAt = 0;
@@ -298,6 +346,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       deviceGeneration += 1;
       pending = undefined;
       clearRefreshTimer();
+      refreshRereadDueAt = 0;
       lastReadAt = 0;
       lastFailedAt = 0;
       lastRefreshAt = 0;

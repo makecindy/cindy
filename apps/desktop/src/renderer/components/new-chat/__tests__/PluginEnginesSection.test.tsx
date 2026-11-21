@@ -335,17 +335,25 @@ it('asks the controlled computer to republish plugin engine models on picker ref
 // 最小失败输入与 tier：unit；在途 refresh 返回前卸载视图仍触发延迟 LIST，或引擎 A(high)切到引擎 B(默认 low)提交了 high。
 it('discovers newly enabled remote engines after an initially empty list, stops in-flight refresh on leave, and keeps cross-engine default effort', async () => {
   vi.useFakeTimers();
-  const newlyEnabled = engine('agy-plugin:agy', 'Antigravity', {
+  const newlyEnabled = engine('agy-plugin:agy', 'Antigravity', { models: [] });
+  const newlyPublished = engine('agy-plugin:agy', 'Antigravity', {
     models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'low' }],
   });
   let hasEngineOnPeer = false;
+  let modelsPublishedOnPeer = false;
   let finishRefresh!: () => void;
   const invoke = vi.fn((_deviceId: string, channel: string) => {
     if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
-      return Promise.resolve(hasEngineOnPeer ? [newlyEnabled] : []);
+      if (!hasEngineOnPeer) return Promise.resolve([]);
+      return Promise.resolve([modelsPublishedOnPeer ? newlyPublished : newlyEnabled]);
     }
     if (channel === PLUGIN_ENGINES_INVOKE.REFRESH) {
-      return new Promise<void>((resolve) => { finishRefresh = resolve; });
+      return new Promise<void>((resolve) => {
+        finishRefresh = () => {
+          modelsPublishedOnPeer = true;
+          resolve();
+        };
+      });
     }
     return Promise.resolve(undefined);
   });
@@ -368,7 +376,7 @@ it('discovers newly enabled remote engines after an initially empty list, stops 
     expect(draft.result.current.engines).toEqual([newlyEnabled]);
     expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
 
-    // Leaving before the in-flight REFRESH resolves prevents scheduling a delayed LIST download.
+    // Leaving before the in-flight REFRESH resolves prevents scheduling a delayed LIST download while away.
     const callsWhenLeaving = invoke.mock.calls.length;
     draft.rerender({ active: false });
     await act(async () => {
@@ -378,18 +386,25 @@ it('discovers newly enabled remote engines after an initially empty list, stops 
     });
     expect(invoke.mock.calls).toHaveLength(callsWhenLeaving);
 
+    // Returning within the 15s/60s cooldown completes the owed post-REFRESH LIST read once without re-sending REFRESH.
+    draft.rerender({ active: true });
+    await act(async () => { await Promise.resolve(); });
+    expect(draft.result.current.engines).toEqual([newlyPublished]);
+    expect(invoke.mock.calls).toHaveLength(callsWhenLeaving + 1);
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
+
     // Same plugin engine carries over explicit 'high'; switching to a different plugin engine uses its own 'low' default.
     expect(
       resolvePluginEngineSessionSwitchEffort(
-        { providerId: newlyEnabled.providerId, modelId: 'gemini-3-pro' },
-        newlyEnabled,
-        { providerId: newlyEnabled.providerId, effort: 'high' },
+        { providerId: newlyPublished.providerId, modelId: 'gemini-3-pro' },
+        newlyPublished,
+        { providerId: newlyPublished.providerId, effort: 'high' },
       ),
     ).toBe('high');
     expect(
       resolvePluginEngineSessionSwitchEffort(
-        { providerId: newlyEnabled.providerId, modelId: 'gemini-3-pro' },
-        newlyEnabled,
+        { providerId: newlyPublished.providerId, modelId: 'gemini-3-pro' },
+        newlyPublished,
         { providerId: 'acp-plugin:dsh-plugin:dsh', effort: 'high' },
       ),
     ).toBe('low');
