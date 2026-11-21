@@ -1079,7 +1079,7 @@ function PrStatusRow({ slot }: { slot: PrStatusSlot }) {
           );
         }
         const color = key === "threadsOpen" ? styles.statusAccentText : tone === "bad" ? styles.statusBadText
-          : key === "mergeReady" || key === "merged" ? styles.statusGoodText : undefined;
+          : key === "merged" ? styles.statusMergedText : key === "mergeReady" ? styles.statusGoodText : undefined;
         return (
           <Text key={key} style={[styles.note, color]}>
             {t(`plugins.prStatus.${key}`, count === undefined ? undefined : { count })}
@@ -1199,6 +1199,7 @@ const makeStyles = (c: ThemeColors) =>
     statusItem: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
     statusDot: { width: 7, height: 7, borderRadius: radius.pill },
     statusGoodText: { color: c.statusDone },
+    statusMergedText: { color: c.prMerged },
     statusBadText: { color: c.errorText },
     statusAccentText: { color: c.statusAccent },
     statusCount: { fontWeight: fontWeight.medium, fontVariant: ["tabular-nums"] },
