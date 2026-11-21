@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import type { LocalNetworkState } from '../../shared/localNetwork';
 
 /**
@@ -45,9 +46,11 @@ export function useLocalNetworkAccess({
     });
     const onFocus = () => void refresh(focusProbe.current ? focusProbe.current() : probe);
     window.addEventListener('focus', onFocus);
+    // With background throttling off (running tasks), a minimized window still reports
+    // `visible`; the window-hidden broadcast is the reliable signal (main/windowHiddenBroadcast.ts).
     const timer = poll
       ? setInterval(() => {
-          if (!document.hidden) void refresh();
+          if (!document.hidden && !isWindowHidden()) void refresh();
         }, 1500)
       : null;
     return () => {

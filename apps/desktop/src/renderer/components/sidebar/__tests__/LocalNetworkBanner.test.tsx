@@ -19,8 +19,11 @@ vi.mock('@/hooks/useUpdateStatus', () => ({ useUpdateStatus: () => ({ status: 'i
 vi.mock('@/hooks/useUpdateBannerDismiss', () => ({
   useUpdateBannerDismiss: () => ({ dismissed: false }),
 }));
+const windowHidden = vi.hoisted(() => ({ value: false }));
+vi.mock('@/lib/hiddenAnimationGate', () => ({ isWindowHidden: () => windowHidden.value }));
 
 import { LocalNetworkBanner } from '../LocalNetworkBanner';
+import { LocalNetworkPermission } from '../../settings/LocalNetworkPermission';
 
 function installApi(initial: LocalNetworkState) {
   let push: ((state: LocalNetworkState) => void) | null = null;
@@ -46,6 +49,8 @@ function installApi(initial: LocalNetworkState) {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
+  windowHidden.value = false;
   window.localStorage.clear();
 });
 
@@ -103,5 +108,23 @@ describe('LocalNetworkBanner', () => {
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.localNetwork.dismiss' }));
     act(() => window.dispatchEvent(new Event('focus')));
     expect(status).toHaveBeenLastCalledWith({ probe: false });
+  });
+});
+
+describe('LocalNetworkPermission polling', () => {
+  // Review r4655241779: with throttling off a minimized window keeps visibilityState 'visible'.
+  it('stops probing while the window is hidden even if the document still reports visible', async () => {
+    vi.useFakeTimers();
+    installApi({ access: 'denied', reminder: null });
+    const status = window.electronAPI.localNetwork.status as ReturnType<typeof vi.fn>;
+    render(<LocalNetworkPermission />);
+    await act(async () => {});
+    const initial = status.mock.calls.length;
+    await act(async () => vi.advanceTimersByTime(1500));
+    expect(status.mock.calls.length).toBe(initial + 1);
+
+    windowHidden.value = true;
+    await act(async () => vi.advanceTimersByTime(4500));
+    expect(status.mock.calls.length).toBe(initial + 1);
   });
 });
