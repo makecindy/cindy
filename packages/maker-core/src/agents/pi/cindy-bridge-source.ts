@@ -2746,7 +2746,13 @@ function isAllowedMcpUrl(url: URL): boolean {
 }
 
 /** Authenticated loopback MCP must use a socket, not Bun fetch's environment proxy. */
-async function fetchDirectLoopbackMcp(url: string, headers: Headers, body: string, signal: AbortSignal): Promise<Response> {
+async function fetchDirectLoopbackMcp(
+  url: string,
+  headers: Headers,
+  body: string | undefined,
+  signal: AbortSignal,
+  method = 'POST',
+): Promise<Response> {
   const parsed = new URL(url);
   if (!isLoopbackMcpHostname(parsed.hostname)) throw new McpBridgeError('URL outside security boundary');
   const host = parsed.hostname.replace(/^\[|\]$/g, '');
@@ -2770,16 +2776,16 @@ async function fetchDirectLoopbackMcp(url: string, headers: Headers, body: strin
     }
     const requestHeaders = new Headers(headers);
     requestHeaders.set('host', parsed.host);
-    requestHeaders.set('content-length', String(Buffer.byteLength(body)));
+    requestHeaders.set('content-length', String(body ? Buffer.byteLength(body) : 0));
     requestHeaders.set('connection', 'close');
     requestHeaders.set('accept-encoding', 'identity');
     requestHeaders.delete('transfer-encoding');
     const requestPath = (parsed.pathname || '/') + parsed.search;
-    const head = 'POST ' + requestPath + ' HTTP/1.1\r\n'
+    const head = method + ' ' + requestPath + ' HTTP/1.1\r\n'
       + Array.from(requestHeaders, ([name, value]) => name + ': ' + value + '\r\n').join('')
       + '\r\n';
     const iterator = socket[Symbol.asyncIterator]();
-    socket.write(head + body);
+    socket.write(head + (body ?? ''));
 
     let pending = Buffer.alloc(0);
     const readMore = async (): Promise<boolean> => {
@@ -2899,6 +2905,8 @@ async function fetchDirectLoopbackMcp(url: string, headers: Headers, body: strin
 class McpHttpClient {
   private nextId = 1;
   private sessionId: string | null = null;
+  private inFlight = 0;
+  private readonly idleWaiters: Array<() => void> = [];
   needsReconnect = false;
   private readonly requestUrl: string;
   private readonly directLoopback: boolean;
@@ -2980,6 +2988,7 @@ class McpHttpClient {
 
   private async post<T>(body: unknown, consume: (response: Response) => Promise<T>, signal?: AbortSignal, notificationTimeoutMs?: number): Promise<T> {
     const requestTimeoutMs = notificationTimeoutMs ?? this.nextRequestTimeoutMs();
+    this.inFlight += 1;
     const controller = new AbortController();
     const cancel = () => controller.abort();
     signal?.addEventListener('abort', cancel, { once: true });
@@ -3031,7 +3040,29 @@ class McpHttpClient {
     } finally {
       clearTimeout(timeout);
       signal?.removeEventListener('abort', cancel);
+      this.inFlight -= 1;
+      if (this.inFlight === 0) {
+        for (const resolve of this.idleWaiters.splice(0)) resolve();
+      }
     }
+  }
+
+  private async waitForIdle(timeoutMs: number): Promise<void> {
+    if (this.inFlight === 0) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      }, timeoutMs);
+      this.idleWaiters.push(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 
   /** 按 SSE event 增量取当前 JSON-RPC response；server 保持流打开也不阻塞。 */
@@ -3127,6 +3158,29 @@ class McpHttpClient {
       { jsonrpc: '2.0', method, ...(params !== undefined ? { params } : {}) },
       async (res) => { await res.body?.cancel(); },
     ).catch(() => {});
+  }
+
+  /** Best-effort bounded DELETE for a transport whose owning Pi client is gone. */
+  async close(timeoutMs = 1_000): Promise<void> {
+    if (!this.sessionId) return;
+    await this.waitForIdle(timeoutMs);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const headers = this.headers();
+      const response = this.directLoopback
+        ? await fetchDirectLoopbackMcp(this.requestUrl, headers, undefined, controller.signal, 'DELETE')
+        : await fetch(this.requestUrl, {
+          method: 'DELETE', headers, redirect: 'error', signal: controller.signal,
+          timeout: false,
+        });
+      await response.body?.cancel();
+    } catch {
+      // Session teardown is best-effort. The process is already replacing or
+      // abandoning this client, so a failed DELETE must not block its successor.
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async initialize(): Promise<void> {
@@ -3385,6 +3439,7 @@ class CindyMcpGateway {
   }
 
   add(serverName: string, client: McpHttpClient, tools: any[], displayName?: string): void {
+    const previous = this.clients.get(serverName);
     const resolvedDisplayName = mcpServerDisplayName(serverName, displayName, client.serverInfoName);
     this.serverDisplayNames.set(serverName, resolvedDisplayName);
     for (const [key, tool] of this.tools) {
@@ -3392,6 +3447,7 @@ class CindyMcpGateway {
     }
     this.innerListingCache.delete(serverName); // 工具表刷新 → 内层代拉缓存一并失效
     this.clients.set(serverName, client);
+    if (previous && previous !== client) void previous.close();
     this.unavailableServers.delete(serverName);
     for (const rawTool of tools) {
       if (!rawTool || typeof rawTool !== 'object' || typeof rawTool.name !== 'string' || !rawTool.name) {
@@ -4352,27 +4408,32 @@ async function connectServer(server: McpServerRef, token: string): Promise<{
   displayName: string;
 }> {
   const client = new McpHttpClient(server, token);
-  await client.initialize();
-  const tools: any[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | undefined;
-  for (;;) {
-    const listed = await client.request('tools/list', cursor === undefined ? {} : { cursor });
-    if (Array.isArray(listed?.tools)) tools.push(...listed.tools);
-    if (!listed || typeof listed !== 'object' || !('nextCursor' in listed)) break;
-    const nextCursor = listed.nextCursor;
-    if (typeof nextCursor !== 'string' || seenCursors.has(nextCursor)) {
-      throw new McpBridgeError('invalid tools pagination');
+  try {
+    await client.initialize();
+    const tools: any[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (;;) {
+      const listed = await client.request('tools/list', cursor === undefined ? {} : { cursor });
+      if (Array.isArray(listed?.tools)) tools.push(...listed.tools);
+      if (!listed || typeof listed !== 'object' || !('nextCursor' in listed)) break;
+      const nextCursor = listed.nextCursor;
+      if (typeof nextCursor !== 'string' || seenCursors.has(nextCursor)) {
+        throw new McpBridgeError('invalid tools pagination');
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
     }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
+    client.finishStartup();
+    return {
+      client,
+      tools,
+      displayName: mcpServerDisplayName(server.name, server.displayName, client.serverInfoName),
+    };
+  } catch (error) {
+    await client.close();
+    throw error;
   }
-  client.finishStartup();
-  return {
-    client,
-    tools,
-    displayName: mcpServerDisplayName(server.name, server.displayName, client.serverInfoName),
-  };
 }
 
 // Pi 内置 find 依赖 fd；PI_OFFLINE=1 时缺失后不会下载。Cindy 已随 Desktop 校验并
