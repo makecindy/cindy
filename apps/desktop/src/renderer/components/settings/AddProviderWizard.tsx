@@ -1978,6 +1978,7 @@ export function AddProviderWizard({
                   {t('settings.providers.custom.fields.apiKey')}
                 </label>
                 <SettingsTextInput
+                  data-settings-search-action="Enter the API key of the built-in provider draft in this wizard"
                   value={apiKey}
                   onChange={setApiKey}
                   size="md"
@@ -2023,6 +2024,7 @@ export function AddProviderWizard({
                     {t('settings.providers.custom.fields.apiKey')}
                   </label>
                   <SettingsTextInput
+                    data-settings-search-action="Enter the API key of the preset provider draft in this wizard"
                     value={apiKey}
                     onChange={setApiKey}
                     placeholder={isMimoTokenPlanPreset(sel.preset) ? 'tp-…' : 'sk-…'}

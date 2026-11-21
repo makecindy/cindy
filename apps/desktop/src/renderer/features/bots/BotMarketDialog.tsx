@@ -203,7 +203,7 @@ export function BotMarketDialog({ onClose, initialPackageId, api = window.electr
       <Dialog.Portal>
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content onPointerDownOutside={event => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[min(760px,calc(100vh-32px))] w-[min(960px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden outline-none">
+          className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[min(760px,calc(100vh-32px))] w-[min(960px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden outline-none">
           <header className={cn('flex shrink-0 items-center justify-between gap-4 px-8 transition-colors', selection
             ? cn('border-b py-3', stuck ? 'border-[var(--border-default)]' : 'border-transparent') : 'pb-2 pt-6')}>
             {selection ? <>

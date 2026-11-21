@@ -289,6 +289,7 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
                 {(control) => (
                   <SettingsTextInput
                     {...control}
+                    data-settings-search-action="Enter the bearer token of this MCP server draft"
                     surface="ivory"
                     value={token}
                     onChange={setToken}

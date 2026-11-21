@@ -2760,6 +2760,7 @@ export function ProviderConnectionDialog({
                   {(control) => (
                     <SettingsTextInput
                       {...control}
+                      data-settings-search-action="Enter the API key of the current provider draft"
                       key={activeTab}
                       surface="ivory"
                       size={simpleAdding ? 'md' : undefined}
