@@ -1359,6 +1359,39 @@ describe('provider share guest routing', () => {
     expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 退出、重新获准后的名单刷新，以及远程目标解析入口。
+  // - Bug／规则依据：退出后又重新加入同一个分享时，服务端会复用 shareId；新的成员身份应取代旧的退出记录，
+  //   之后名单失败时仍报“暂不可用”（Greptile、Codex 审阅指出）。
+  // - 现有覆盖缺口：退出用例只覆盖退出后刷新失败，没有覆盖重新加入。
+  // - 最小失败输入：退出 → 名单重新包含该分享 → 下一次刷新失败。
+  // - tier：unit。
+  it('drops the exit marker once a later list includes the share again', async () => {
+    state.received = [received('active')];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    await leaveProviderShare('m1');
+    state.received = [received('active')];
+    await refreshReceivedShares('rejoined');
+    state.receivedError = true;
+    await refreshReceivedShares('failed');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
+  });
+
+  // 测试价值：「仅使用 Agent-Net」隐藏旧版分享是本机设置给出的确定答案，名单暂时未确认时也要报
+  // LEGACY_DISABLED，告诉用户关掉开关即可恢复（Codex 审阅指出）。最小失败输入：首次名单 401 + 该分享被本机设置隐藏。tier：unit。
+  it('keeps the encrypted-only answer while the list is unconfirmed', async () => {
+    state.receivedDenied = true;
+    state.legacyHidden.add('share-1');
+    try {
+      startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+      await refreshReceivedShares('first-denial');
+      expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/^\[REMOTE_AGENT_SHARE_LEGACY_DISABLED\]/);
+    } finally {
+      state.legacyHidden.clear();
+    }
+  });
+
   it('keeps the local directory budget from the list request start and does not renew it after a failure', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     try {

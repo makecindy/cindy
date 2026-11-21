@@ -219,6 +219,8 @@ function invalidateShareMetadataTarget(share: ProviderShareReceived, keepDenialN
 function emitChanged(rt: Runtime): Promise<void> | void {
   if (!current(rt)) return;
   const received = allReceived(rt);
+  // Leaving removes the row before the next list; seeing it again means a newer membership.
+  for (const share of received) rt.leftShareIds.delete(share.shareId);
   const permissionFingerprint = JSON.stringify(received.map(share => [share.shareId, share.memberId,
     share.providerId, share.hostDeviceId, share.status]));
   if (permissionFingerprint !== metadataPermissionFingerprint) {
@@ -352,14 +354,15 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
   if (!shareId) return agentDeviceId;
   const share = findReceivedShare(shareId);
   if (!share) {
+    // A local setting that hides this older share is a definite answer, whatever the list state.
+    let hidden = false;
+    try { hidden = providerShareHiddenByEncryptedOnly(shareId); } catch { /* unreadable settings/vault: keep the removed verdict */ }
+    if (hidden) throw new Error('[REMOTE_AGENT_SHARE_LEGACY_DISABLED] encrypted-only connections block this older share');
     if (!runtime?.leftShareIds.has(shareId)
       && ((!runtime || !current(runtime) || !runtime.listConfirmed || runtime.unavailable.has(shareId))
         || hasUnconfirmedCrossRegionReceivedList())) {
       throw new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE);
     }
-    let hidden = false;
-    try { hidden = providerShareHiddenByEncryptedOnly(shareId); } catch { /* unreadable settings/vault: keep the removed verdict */ }
-    if (hidden) throw new Error('[REMOTE_AGENT_SHARE_LEGACY_DISABLED] encrypted-only connections block this older share');
     throw new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
   }
   if (share.status !== 'active') throw new Error('[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share');
