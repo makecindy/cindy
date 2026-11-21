@@ -1,3 +1,4 @@
+import { RemoteKeyboardLayout } from "./RemoteKeyboardLayout";
 import { deviceDisplayName } from "@/device-link/deviceName";
 import {
   foldDesktopHardware,
@@ -42,7 +43,6 @@ import {
   Dimensions,
   StatusBar,
   Keyboard,
-  KeyboardAvoidingView,
   type KeyboardEvent,
   Platform,
   Pressable,
@@ -593,6 +593,9 @@ export function RemoteDesktopSession({
   const [keyboard, setKeyboard] = useState(false);
   const [fullKeys, setFullKeys] = useState(false);
   const [keyboardFocusRequest, setKeyboardFocusRequest] = useState(0);
+  const [fieldTap, setFieldTap] = useState<{ lease: string; sequence: number } | null>(null);
+  const fullKeysRef = useRef(fullKeys);
+  fullKeysRef.current = fullKeys;
   const [nativeKeyboard, setNativeKeyboard] = useState(false);
   const [nativeKeyboardHeight, setNativeKeyboardHeight] = useState(0);
   const [keyboardPanelHeight, setKeyboardPanelHeight] = useState(0);
@@ -865,6 +868,32 @@ export function RemoteDesktopSession({
     },
     [deviceId, sendOverChannel],
   );
+  useEffect(() => {
+    if (!fieldTap) return;
+    const current = active.current;
+    if (!current || fieldTap.lease !== current.lease || !caps?.editableClick || !canInput ||
+        !focused || appState !== "active" || operations || keyboard || handoff || screenPlugin) {
+      setFieldTap(null);
+      return;
+    }
+    let valid = true;
+    // Let the click take focus and coalesce a double tap before consulting AX.
+    const timer = setTimeout(() => {
+      void request<{ editable: boolean }>({ op: "editableClick", ...fieldTap })
+        .then((result) => {
+          if (valid && result?.editable === true && active.current === current &&
+              current.controlling && !viewOnlyRef.current && focusedRef.current &&
+              AppState.currentState === "active") {
+            setFullKeys(false);
+            setKeyboard(true);
+          }
+        })
+        .catch(() => {}) // Optional hint. A failed read must never interrupt control.
+        .finally(() => { if (valid) setFieldTap(null); });
+    }, 90);
+    return () => { valid = false; clearTimeout(timer); };
+  }, [fieldTap, caps?.editableClick, canInput, focused, appState, operations, keyboard,
+      handoff, screenPlugin, request, lease?.lease]);
   const viewerSession = useMemo(
     () => ({ current: new RemoteDesktopViewerSession(request) }),
     [request],
@@ -1025,13 +1054,16 @@ export function RemoteDesktopSession({
     }
   };
   useEffect(() => {
+    let wasVisible = false;
     const updateFrame = (event: KeyboardEvent) => {
       const height = Math.max(
         0,
         Dimensions.get("window").height - event.endCoordinates.screenY,
       );
+      const visible = height > 0 || (Platform.OS === "android" && event.endCoordinates.height > 0);
+      if (visible) wasVisible = true;
       setNativeKeyboardHeight(height);
-      setNativeKeyboard(height > 0);
+      setNativeKeyboard(visible);
       // Android resizes the window for the keyboard, leaving only this field reliable.
       const measured = event.endCoordinates.height;
       if (measured > 0) {
@@ -1055,6 +1087,8 @@ export function RemoteDesktopSession({
     const hide = Keyboard.addListener("keyboardDidHide", () => {
       setNativeKeyboard(false);
       setNativeKeyboardHeight(0);
+      if (wasVisible && !fullKeysRef.current) setKeyboard(false);
+      wasVisible = false;
     });
     return () => {
       show.remove();
@@ -2560,6 +2594,11 @@ export function RemoteDesktopSession({
         });
         break;
       }
+      case "fieldTap": {
+        if (caps?.editableClick && canInput && !keyboard && Number.isSafeInteger(message.sequence))
+          setFieldTap({ lease: current.lease, sequence: message.sequence as number });
+        break;
+      }
       case "inputOverflow": {
         // The viewer replaced a stalled queue with a release, then this handler
         // posts control:false, which clears that release without flushing it.
@@ -2623,6 +2662,10 @@ export function RemoteDesktopSession({
             events,
           });
         })()
+          .then(() => {
+            if (ownsBatch() && message.fieldTap === true && caps?.editableClick && !keyboard)
+              setFieldTap({ lease: current.lease, sequence: message.sequence as number });
+          })
           .catch((cause) => {
             if (!ownsBatch()) return;
             resolveControlFailure(cause, true);
@@ -3934,10 +3977,10 @@ export function RemoteDesktopSession({
     />
   );
   return (
-    <KeyboardAvoidingView
-      testID="remoteDesktop.layout"
-      enabled={!landscapeKeyboardOverlay && !foldLayout && !panelKeys}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    <RemoteKeyboardLayout
+      avoid={!landscapeKeyboardOverlay && !foldLayout && !panelKeys}
+      phoneKeyboard={keyboard && nativeKeyboard && !panelKeys}
+      onDismiss={() => setKeyboard(false)}
       style={styles.root}
     >
       {Platform.OS === "android" && focused && <StatusBar hidden />}
@@ -4828,7 +4871,7 @@ export function RemoteDesktopSession({
           }}
         />
       )}
-    </KeyboardAvoidingView>
+    </RemoteKeyboardLayout>
   );
 }
 
