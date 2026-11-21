@@ -11262,6 +11262,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // turn 运行中登记的切换意图(下一条消息发送时刻由 send 事务 apply)。
   const agentSwitchPending = createPendingAgentSwitchRegistry();
+  /**
+   * The send_to_session route projected into model input before the send transaction runs (queued
+   * dispatch, steer, context-rollover replay): the live session's host-reconciled route. Nothing while
+   * an engine switch is pending, because the transaction applies the switch first and the live session
+   * is then not the one receiving the message (message-source.md「发给模型的说明」).
+   */
+  function confirmedSendToSessionHint(sessionId: string): AgentSendToSessionHint | undefined {
+    if (agentSwitchPending.get(sessionId)) return undefined;
+    return (maker.getSession(sessionId) as { sendToSessionHint?: AgentSendToSessionHint } | null | undefined)
+      ?.sendToSessionHint;
+  }
   // User send intent owns the next route boundary, including automatic requests
   // that read the runtime generation after the picker accepted that intent.
   const canApplyAutomaticRuntimeSelection = createCanApplyAutomaticRuntimeSelection({ agentSwitchPending });
@@ -18581,6 +18592,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       eq: (left, right) => eq(left, right),
     }, sessionId);
   contextOverflowRolloverHolder = createContextOverflowRollover({
+    sendToSessionHint: confirmedSendToSessionHint,
     hasExternalRecoveryOwner: (sessionId) =>
       isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: readContextRecoverySession,
@@ -19589,8 +19601,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
-    sendToSessionHint: (sessionId) =>
-      (maker.getSession(sessionId) as { sendToSessionHint?: AgentSendToSessionHint } | null | undefined)?.sendToSessionHint,
+    sendToSessionHint: confirmedSendToSessionHint,
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
         let runtimePreparationStarted = false;

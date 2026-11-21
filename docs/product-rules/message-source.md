@@ -70,7 +70,9 @@
 - 只在当前任务实际能调用 `send_to_session` 时出现，判据与 `cindy_helper` 的挂载一致（Review、SSH 上的
   Claude/Codex、插件引擎没有）；跨电脑写法跟随宿主是否注入跨电脑投递。判据只取运行中任务在启动时由宿主核实的身份，
   不读排队快照：Review 与插件引擎在排队时都记成内置引擎，启动时才恢复。任务还没启动时（例如重启后的第一条消息）不加，
-  宁可少给，不给不存在的工具。
+  有待生效的引擎切换时也不加（发送事务先切换引擎再投递，运行中的旧引擎不是收消息的那个），宁可少给，不给不存在的工具。
+  排队派发和上下文重建在发送事务之前生成提示，统一走 `register.ts` 的 `confirmedSendToSessionHint`；发送事务里的
+  `[消息来源]` 在切换完成后才生成，直接读最终任务。
 - 同样只进当次发给模型的输入，不进 `getAgentFacingText` 的默认投影、落库正文和交接摘要；上下文重建时沿用重建前
   运行中任务的同一份判据。
 - 实现：`agentInputProjection.ts`（`resolveAgentSendToSessionHint`）、`messageSource.ts`

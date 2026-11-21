@@ -1873,15 +1873,17 @@ describe('scheduled session bootstrap wiring', () => {
 async function recoveryAssembly(bindings: Record<string, unknown>) {
   let rowReader: ts.VariableStatement | undefined;
   let assembly: ts.ExpressionStatement | undefined;
+  let hintReader: ts.FunctionDeclaration | undefined;
   function visit(node: ts.Node): void {
     if (ts.isVariableStatement(node) && node.declarationList.declarations.some(d => d.name.getText(registerAst) === 'readContextRecoverySession')) rowReader = node;
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'confirmedSendToSessionHint') hintReader = node;
     if (ts.isExpressionStatement(node) && ts.isBinaryExpression(node.expression)
       && node.expression.left.getText(registerAst) === 'contextOverflowRolloverHolder') assembly = node;
     ts.forEachChild(node, visit);
   }
   visit(registerAst);
-  if (!rowReader || !assembly) throw new Error('Desktop recovery assembly is missing');
-  const code = ts.transpileModule(`let contextOverflowRolloverHolder;\n${rowReader.getText(registerAst)}\n${assembly.getText(registerAst)}\nreturn contextOverflowRolloverHolder;`,
+  if (!rowReader || !assembly || !hintReader) throw new Error('Desktop recovery assembly is missing');
+  const code = ts.transpileModule(`let contextOverflowRolloverHolder;\n${rowReader.getText(registerAst)}\n${hintReader.getText(registerAst)}\n${assembly.getText(registerAst)}\nreturn contextOverflowRolloverHolder;`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, removeComments: true } }).outputText;
   // Load newly extracted production functions from their real imports. Existing
   // Desktop IO remains injected. This same guard runs unchanged before/after
@@ -1912,7 +1914,9 @@ function recoveryFixture() {
   const db = { clientEpoch: 1, client: { drizzle: { select: () => query } } };
   const coordinator = { clearError: vi.fn(() => { order.push('clear'); return { status: 'idle' }; }),
     hasPendingQueuedWork: vi.fn(() => false), getInputAbortSignal: () => new AbortController().signal };
+  const pendingSwitch = new Map<string, unknown>();
   const bindings: Record<string, unknown> = {
+    agentSwitchPending: { get: (sessionId: string) => pendingSwitch.get(sessionId) },
     createContextOverflowRollover: (deps: unknown) => deps,
     getDbClient: () => db.client, getCurrentDbClientSnapshot: () => ({ ...db }),
     captureDataOwnerBroadcastScope: () => 'owner', isDataOwnerBroadcastScopeCurrent: () => current,
@@ -1951,10 +1955,23 @@ function recoveryFixture() {
     },
     withSendToSessionLock: vi.fn(), withRehydrateCloseSuppressed: vi.fn(),
   };
-  return { bindings, row, order, db, coordinator, setCurrent: (value: boolean) => { current = value; } };
+  return { bindings, row, order, db, coordinator, pendingSwitch, setCurrent: (value: boolean) => { current = value; } };
 }
 
 describe('Desktop recovery assembly ordering and fences', () => {
+  it('projects a send_to_session route only from the live session that will receive the message', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    const hint = { agentKind: 'claude-code', supportsRemote: true };
+    (h.bindings.maker as { getSession: ReturnType<typeof vi.fn> }).getSession.mockReturnValue({ sendToSessionHint: hint });
+    expect(deps.sendToSessionHint('s')).toBe(hint);
+    // PR #11894 review: the send transaction applies a pending engine switch before dispatch, so the
+    // old runtime's route would point the next engine (Pi, or a plugin engine without cindy_helper)
+    // at the wrong or a missing tool. Queued dispatch reads the same predicate.
+    h.pendingSwitch.set('s', { targetAgentKind: 'acp' });
+    expect(deps.sendToSessionHint('s')).toBeUndefined();
+    expect(registerSource).toMatch(/new AgentInputCoordinator\(\{\s*sendToSessionHint: confirmedSendToSessionHint,/);
+  });
+
   it('reads an active companion role only while its link and profile are active', async () => {
     const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
     expect(await deps.getSessionRow('s')).toMatchObject({ botRole: 'canonical' });
