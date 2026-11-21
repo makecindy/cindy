@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CODEX_HISTORY_OVERSIZED_REASON, CONTEXT_OVERFLOW_REASON, UNSUPPORTED_REQUEST_OPTION_REASON } from '@cindy/maker-core';
+import { CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON, CODEX_HISTORY_OVERSIZED_REASON, CONTEXT_OVERFLOW_REASON, UNSUPPORTED_REQUEST_OPTION_REASON } from '@cindy/maker-core';
 
 import {
   CODEX_HISTORY_CONTINUE_MESSAGE,
@@ -82,6 +82,7 @@ describe('holdsContextRecoveryBroadcast', () => {
   const local = { remoteHostId: null };
   const error = (data: Record<string, unknown>) => ({ type: 'error', data } as never);
   it.each([
+    ['previous compaction model denied', { reason: CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON }],
     ['context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }],
     ['oversized history', { reason: CODEX_HISTORY_OVERSIZED_REASON, message: 'history too large' }],
     ['unsupported request option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON, message: 'option refused' }],
@@ -333,7 +334,7 @@ describe('shouldRebuildForModelWindowSwitch', () => {
 });
 
 describe('createContextOverflowRollover', () => {
-  function makeDeps(source: OverflowSourceMessage[]) {
+  function makeDeps(source: OverflowSourceMessage[], agentKind = 'pi') {
     return {
       getSessionRow: vi.fn(
         async (): Promise<{
@@ -352,7 +353,7 @@ describe('createContextOverflowRollover', () => {
         }> => ({
           status: 'active',
           source: 'desktop',
-          agentKind: 'pi',
+          agentKind,
           remoteHostId: null,
           clearedAt: null,
           sdkSessionId: '/tmp/dead.jsonl',
@@ -1786,15 +1787,18 @@ describe('createContextOverflowRollover', () => {
     expect(deps.onRebuilt).not.toHaveBeenCalled();
   });
 
-  it('does not replay when the failed turn already had tool side effects', async () => {
+  it.each([
+    ['pi', CONTEXT_OVERFLOW_REASON],
+    ['codex', CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON],
+  ])('does not replay %s input after tool side effects and %s', async (agentKind, reason) => {
     const deps = makeDeps([
       msg('user', '改文件', 'u1'),
       msg('tool_use', { toolName: 'Edit', input: { file_path: '/repo/a.ts' } }, 't1'),
-    ]);
+    ], agentKind);
     const rollover = createContextOverflowRollover(deps);
     rollover.claim('s1');
     await expect(
-      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+      rollover.tryRecover('s1', { reason }),
     ).resolves.toBe(false);
     expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
@@ -2202,7 +2206,7 @@ describe('createContextOverflowRollover', () => {
     expect(deps.closeSession).toHaveBeenCalledWith('s1');
   });
 
-  it('rolls over a local Codex session on explicit overflow', async () => {
+  it.each([CONTEXT_OVERFLOW_REASON, CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON])('rolls over a local Codex session after %s', async reason => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
@@ -2219,9 +2223,31 @@ describe('createContextOverflowRollover', () => {
     const rollover = createContextOverflowRollover(deps);
     rollover.claim('s1');
     await expect(
-      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+      rollover.tryRecover('s1', { reason }),
     ).resolves.toBe(true);
     expect(deps.closeSession).toHaveBeenCalledWith('s1');
+  });
+
+  it('claims a rejected compaction input only once, even if saving the handoff fails', async () => {
+    const deps = makeDeps([msg('user', 'continue', 'u1')], 'codex');
+    deps.commitRebuild.mockRejectedValueOnce(new Error('save failed'));
+    const rollover = createContextOverflowRollover(deps);
+    const error = { reason: CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON };
+    rollover.claim('s1');
+    expect(await rollover.tryRecover('s1', error)).toBe(false);
+    rollover.claim('s1');
+    expect(await rollover.tryRecover('s1', error)).toBe(false);
+    expect(deps.commitRebuild).toHaveBeenCalledTimes(1);
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('leaves a denied compaction with the external owner of the input', async () => {
+    const deps = makeDeps([msg('user', 'previous desktop input', 'u1')], 'codex');
+    const rollover = createContextOverflowRollover({ ...deps, hasExternalRecoveryOwner: () => true });
+    rollover.claim('s1');
+    expect(await rollover.tryRecover('s1', { reason: CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON })).toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
   it('keeps SSH remote sessions out of automatic rollover', async () => {
@@ -2560,6 +2586,14 @@ describe('withReplaySourceNotes', () => {
     expect(withReplaySourceNotes(wire, null)).toBe(wire);
     const withNote = withReplaySourceNotes(wire, { sourcePlugin: { pluginId: 'p' } });
     expect(typeof withNote).toBe('object');
+  });
+
+  it('rebuilds the live reply hint with the same session capability on replay', () => {
+    const replayed = withReplaySourceNotes('reply body', {
+      origin: { kind: 'session', senderSessionId: 'studio::source', senderSessionTitle: 'Source' },
+    }, { agentKind: 'pi', supportsRemote: true });
+    expect(JSON.stringify(replayed)).toContain('cindy_mcp_call_tool');
+    expect(JSON.stringify(replayed)).toContain('studio::source');
   });
 
   it('adds no source note to hidden host instructions or auto-resume rows', () => {

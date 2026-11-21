@@ -109,5 +109,44 @@
     "quotaResetIn": "{{duration}}后重置",
     "quotaAverageHint": "周配额 · 按账号等权平均",
     "quotaResetHint": "按当前使用速度，重置时可能仍有余量：24 小时内为黄色，6 小时内为红色。"
+  },
+  "modelGroups": {
+    "title": "模型组",
+    "sourceCount_other": "{{count}} 个来源",
+    "strategy": {
+      "expiring": "快作废的先用",
+      "order": "按顺序",
+      "rotate": "轮流",
+      "cheapest": "最省钱"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",
+      "expiring": "按配额排在最前",
+      "order": "排在最前面的可用来源",
+      "rotate": "这次轮到它",
+      "only": "现在只有它能用",
+      "soonest": "所有来源的配额都用完了，它最早恢复",
+      "soonestUntil": "所有来源的配额都用完了，它最早恢复（{{reset}}）",
+      "cheapest": "标价最低",
+      "cheapestFree": "订阅还有配额，不另外花钱",
+      "exceptionImage": "消息里有图片，只在能看图的来源里选",
+      "exceptionImageFallback": "消息里有图片，但没有能看图的来源，照常选",
+      "exceptionHours": "这个时段改走「{{name}}」",
+      "separator": "；"
+    },
+    "picker": {
+      "switched": "「{{name}}」把这个任务换成了 {{model}}",
+      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
+      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"
+    },
+    "anotherDevice": "另一台电脑"
+  },
+  "pluginEngines": {
+    "genericName": "插件引擎",
+    "defaultModel": "默认模型",
+    "unavailable": "{{engine}} 暂不可用",
+    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}",
+    "worktreeUnsupported": "插件引擎暂不支持在 worktree 中新建任务，请取消勾选 worktree 后再发送"
   }
 }

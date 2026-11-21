@@ -4,7 +4,7 @@ import { getDeviceId } from '../authManager';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 import { githubObservations } from '../localDb/schema';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
-import { getSharedGhCliTokenSource } from './ghCliTokenSource';
+import { readGithubTokenDetailed } from './githubToken.desktop.js';
 import { GithubReadService, type Journal } from './githubReadService';
 import { GithubReadTransport } from './githubReadTransport';
 import { readGithubDetails, readGithubFirstPages, type Connection } from './githubPrDetails';
@@ -15,7 +15,7 @@ const digest = (value: string) => createHash('sha256').update(value).digest('hex
 
 export async function githubReadScope(): Promise<string> {
   const account = getCurrentDbClientSnapshot();
-  const read = await getSharedGhCliTokenSource().readTokenDetailed();
+  const read = await readGithubTokenDetailed();
   if (account !== getCurrentDbClientSnapshot()) throw new Error('ACCOUNT_CHANGED');
   return `${account?.userId ?? 'none'}:${account?.clientEpoch ?? 0}:${read.ok ? digest(read.token) : 'no-token'}`;
 }
@@ -45,7 +45,7 @@ export function createGithubReadService(statusService: PrStatusService): GithubR
   return new GithubReadService(async () => {
     const account = getCurrentDbClientSnapshot();
     if (!account) throw new Error('HOST_NOT_READY');
-    const read = await getSharedGhCliTokenSource().readTokenDetailed();
+    const read = await readGithubTokenDetailed();
     if (!read.ok) throw new Error(read.reason);
     const scope = digest(`${account.userId}:${read.token}`);
     const transportScope = await githubReadScope();

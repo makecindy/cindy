@@ -1,3 +1,4 @@
+import { primaryHostTargetIsRemote, withPluginAutomationHost } from './pluginAutomationHostGuard.js';
 /** Shared scheduler startup, target validation, locking and account-bound teardown. */
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -53,6 +54,7 @@ export interface SchedulerHostRuntime<Deps extends SchedulerHostStartDeps> {
   onStarted(scheduler: Scheduler, deps: Deps, passive: boolean): void;
   /** Wraps the runner, e.g. to skip a teammate project's automations on a computer it was handed away from. */
   wrapRunner?(runner: ScheduleRunner): ScheduleRunner;
+  automationAccount?: Parameters<typeof withPluginAutomationHost>[1];
   captureFireContext?: () => () => void;
   /** Existing teammate projects sync directly; deleted ones cannot be recreated by late writes. */
   getTeammateProjectState?(workingDir: string): Promise<TeammateProjectState | null>;
@@ -119,7 +121,8 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
             : promptRunner.fire(schedule, ctx);
         }),
     };
-    const runner = runtime.wrapRunner ? runtime.wrapRunner(baseRunner) : baseRunner;
+    const primaryGuard = withPluginAutomationHost(baseRunner, runtime.automationAccount);
+    const runner = runtime.wrapRunner ? runtime.wrapRunner(primaryGuard) : primaryGuard;
 
     // 双开让位开关:同一台机器同时跑 dev + release(共用同一 userData/DB)时,
     // 给其中一个实例(通常 dev)设 XDT_SCHEDULER_PASSIVE=1 → 本实例不参与自动触发
@@ -163,8 +166,15 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
           .from(sessions)
           .where(eq(sessions.id, targetSessionId))
           .limit(1);
+        if (primaryHostTargetIsRemote(selection, row)) {
+          throw new Error('The persistent task must run on the selected automation computer.');
+        }
         if (isReviewSessionSource(row?.source)) {
           throw new Error('Review tasks cannot be targets of scheduled automations');
+        }
+        // 插件引擎只用于每次新建任务的自动任务(docs/plans/acp-plugin-bridge.md)，不能绑定已有任务。
+        if (selection.modelAgentKind === 'acp') {
+          throw new Error('A plugin engine schedule starts a new task each run');
         }
         assertScheduledHarnessSupported(row ? {
           ...row, agentKind: dbToMakerAgentKind(row.agentKind),
@@ -230,9 +240,9 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
   ) {
     const runner = _promptRunner;
     if (!_scheduler || !runner) return null;
-    return _scheduler.resumeInterruptedRun(sessionId, {
+    return _scheduler.resumeInterruptedRun(sessionId, withPluginAutomationHost({
       fire: (schedule, ctx) => runner.fireManualContinuation(schedule, ctx, enqueuePrompt),
-    });
+    }, runtime.automationAccount));
   }
 
   /** Cold-start probe for callers that own a durable deferred queue. */

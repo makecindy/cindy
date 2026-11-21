@@ -482,7 +482,10 @@ describe('mobile home desktop-first surface', () => {
     expect(desktopVendorIconSource).toContain('<CodexMark size={size} />');
     expect(desktopVendorIconSource).toContain('<ClaudeMark size={size} />');
     expect(desktopVendorIconSource).toContain("export type VendorIconKind = 'cc' | 'codex' | 'pi'");
-    expect(desktopVendorIconSource).toContain('vendor: VendorIconKind;');
+    // The desktop prop also accepts plugin engines ('acp', docs/plans/acp-plugin-bridge.md); the built-in
+    // marks above are unchanged.
+    expect(desktopVendorIconSource).toContain("export type EngineIconKind = VendorIconKind | 'acp'");
+    expect(desktopVendorIconSource).toContain('vendor: EngineIconKind;');
     expect(desktopVendorIconSource).toContain('session-status-breathing');
     expect(vendorIconSource).not.toContain('XD_SYMBOL_PATHS');
     expect(vendorIconSource).not.toContain('XD_INC_MARK_ASPECT_RATIO');
@@ -729,8 +732,10 @@ describe('mobile home desktop-first surface', () => {
     expect(stylesSource).toContain('height: HOME_SESSION_ROW_HEIGHT');
     expect(stylesSource).toContain('height: HOME_SESSION_SINGLE_LINE_ROW_HEIGHT');
     expect(stylesSource).not.toContain('height: CINDY_LIST_ROW_HEIGHT');
-    // 通栏:项目子行回 surface 全宽底(用户改稿 2026-07-21)。
-    expect(stylesSource).toContain('projectChildren: {\n    backgroundColor: colors.surface,');
+    // 项目子行沿用通栏列表底色；开启壁纸时同一块背景要透出壁纸。
+    expect(source).toContain('const makeStyles = (colors: ThemeColors, listSurface: string = colors.surface)');
+    expect(source).toContain("makeStyles(colors, 'transparent')");
+    expect(stylesSource).toContain('projectChildren: {\n    backgroundColor: listSurface,');
     expect(stylesSource).not.toContain('sessionListRowIndentedCindy');
     expect(stylesSource).not.toContain('sessionListRowDeepIndentedCindy');
     expect(stylesSource).not.toContain('automationGroupChildrenCindy');

@@ -51,6 +51,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.hidden': '已隐藏',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
+        'newChat.modelSelector.source.unconfirmed': '模型列表暂未更新',
+        'newChat.modelSelector.source.unreachableDetail': '连不上，请检查网络',
+        'settings.providers.openai.title': 'OpenAI',
         'newChat.modelSelector.source.unavailable': '模型不可用',
         'newChat.modelSelector.source.reconnect': '重新连接',
         'newChat.modelSelector.source.manage': '管理来源',
@@ -91,6 +94,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
       }
       if (key === 'newChat.modelSelector.pricing.discount') {
         return `立省 ${options?.percent}%`;
+      }
+      if (key === 'newChat.modelSelector.source.unreachable') {
+        return `连不上 ${options?.source}`;
       }
       return translations[key] ?? options?.defaultValue ?? key;
     },
@@ -456,7 +462,7 @@ const ModelSelector = (props: React.ComponentProps<typeof SharedModelSelector>) 
   React.createElement(SharedModelSelector, { unifiedPanel: false, ...props });
 const ModelSelectorContent = (props: React.ComponentProps<typeof SharedModelSelectorContent>) =>
   React.createElement(SharedModelSelectorContent, { unifiedPanel: false, ...props });
-import { makerChatStore } from '@/lib/makerChatStore';
+import { builtinAgentSwitchIntent, makerChatStore } from '@/lib/makerChatStore';
 
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
 
@@ -1445,6 +1451,51 @@ describe('ModelSelector trigger variants', () => {
     } finally { providersRef.providers = providersRef.DEFAULT_PROVIDERS; }
   });
 
+  // Unit: the saved route is unchanged while its first account model read times out.
+  // A complete empty list and a failed read previously rendered the same red error.
+  it('keeps Astra identifiable and retries an unconfirmed subscription catalog', async () => {
+    const source = { id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'], routing: { codex: {} } };
+    providersRef.providers = [{
+      ...source, connected: false, subscriptionReadUnavailable: true, subscriptionModelsConfirmedAt: 123,
+      models: { codex: [] },
+      subscriptionDisplayModels: { codex: [{ id: 'gpt-6.2-astra', name: 'Astra from last confirmed list', efforts: ['high'] }] },
+    }];
+    const props = { remoteAgent: undefined, modelId: 'gpt-6.2-astra', effort: 'high' as Effort,
+      onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'codex' as const, currentProviderId: 'openai',
+      actualRoute: true, sourceDisconnected: true, unifiedPanel: true, onReconnectSource: vi.fn() };
+    const refresh = vi.fn(async () => ({ ok: true }));
+    Object.assign(window.electronAPI.maker, { refreshBuiltinProviderModels: refresh });
+    const view = render(React.createElement(ModelSelector, props));
+    const trigger = screen.getByRole('button', { name: /模型列表暂未更新.*Astra from last confirmed list/i });
+    fireEvent.click(trigger);
+    const retry = await screen.findByRole('button', { name: '重新读取模型' });
+    await act(async () => { fireEvent.click(retry); });
+    expect(refresh).toHaveBeenCalledWith('openai');
+    expect(props.onReconnectSource).not.toHaveBeenCalled();
+    providersRef.providers = [{ ...source, models: { codex: [{ id: props.modelId, name: 'GPT-6.2 Astra', efforts: ['high'] }] } }];
+    view.rerender(React.createElement(ModelSelector, { ...props, sourceDisconnected: false }));
+    expect(screen.getByRole('button', { name: /Select model.*GPT-6.2 Astra/ })).toBeTruthy();
+  });
+
+  // Unit: a model read that could not reach the provider names the connection, not a stale list.
+  it('says the provider cannot be reached when the model read failed on the network', async () => {
+    const source = { id: 'openai', name: 'OpenAI · a@example.com', connected: true, agents: ['codex'],
+      routing: { codex: {} }, subscriptionAccountPool: 'openai' as const };
+    providersRef.providers = [{ ...source, subscriptionReadUnavailable: true, subscriptionReadUnreachable: true,
+      subscriptionModelsConfirmedAt: Date.UTC(2026, 10, 20), models: { codex: [] } }];
+    try {
+      render(React.createElement(ModelSelector, { remoteAgent: undefined, modelId: 'gpt-6.2-astra',
+        effort: 'high' as Effort, onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'codex' as const,
+        currentProviderId: 'openai', actualRoute: true, sourceDisconnected: false, unifiedPanel: true }));
+      const trigger = screen.getByRole('button', { name: /连不上 OpenAI.*astra/i });
+      expect(trigger.textContent).not.toContain('模型列表暂未更新');
+      fireEvent.click(trigger);
+      const status = await screen.findByRole('status');
+      expect(status.textContent).toContain('OpenAI · a@example.com · 连不上，请检查网络');
+      expect(await screen.findByRole('button', { name: '重新读取模型' })).toBeTruthy();
+    } finally { providersRef.providers = providersRef.DEFAULT_PROVIDERS; }
+  });
+
   it('keeps the disconnected status in the compact trigger title', () => {
     render(
       React.createElement(ModelSelector, {
@@ -1527,7 +1578,7 @@ describe('ModelSelector trigger variants', () => {
         onEffortChange: vi.fn(),
         vendorKey: displayAgent === 'codex' ? 'codex' : 'cc',
         // 稳态来自已加载的真实 runtime；intent 是下一条消息的明确目标，不能写成 Current。
-        agentIdentity: resolveModelSelectorAgentIdentity('claude-code', intent?.target),
+        agentIdentity: resolveModelSelectorAgentIdentity('claude-code', builtinAgentSwitchIntent(intent)?.target),
         currentProviderId: intent?.providerId ?? null,
         onProviderChange: vi.fn(),
         onNavigateToProviders: vi.fn(),

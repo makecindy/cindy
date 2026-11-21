@@ -16,12 +16,13 @@
  * assigned once in register.ts, at the top level of registerMakerIpc before the set-model handler is
  * registered, and never reassigned (a guard test keeps that so), so a call sees the same values.
  */
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import { acpHarnessKeyFromProviderId, type AgentKind, type Maker, type Session, type SessionMeta } from '@cindy/maker-core';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { sessions } from '../localDb/schema.js';
 import { isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, deviceLinkInvokeControllerSupports } from '../device-link/invoke-context.js';
 import { normalizeSessionProviderId, getSessionProvider, hasSessionProvider, setSessionProvider, hydrateSessionProvider, clearSessionProvider } from '../maker-host/session-provider-store.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, isPluginEngineEffort } from '../../shared/pluginEngines.js';
 import { getSessionFastMode, getSessionEffort, setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { sessionRuntimeControlOwnerEpochMatches, acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot, captureSessionRuntimeControlOwnerEpoch, resolveSessionRuntimeRefreshEffort, resolveSessionRuntimeAxes, deferSessionRuntimeAxisMutation, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation } from './sessionRuntimeControl.js';
@@ -50,7 +51,7 @@ import { CredentialModeSwitchBusyError } from '../maker-host/codex-credential-sw
 import { withSendToSessionLock } from './sendToSessionLock.js';
 import type { ModelWindowSwitchPreparationResult } from './contextOverflowRollover.js';
 import type { createContextOverflowRollover } from './contextOverflowRollover.js';
-import type { SessionRuntimeAxisPatch, SessionRuntimeMutationSource, SessionRuntimeProfile } from './sessionRuntimeControl.js';
+import type { FallbackRouteProfile, SessionRuntimeAxisPatch, SessionRuntimeMutationSource, SessionRuntimeProfile } from './sessionRuntimeControl.js';
 import type { MakerSessionAgentSwitchHandlerDeps, PendingAgentSwitchRegistry } from './sessionAgentSwitchHandler.js';
 import type { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
 import type { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
@@ -85,7 +86,7 @@ export type InternalRuntimeSelectionOptions = {
   expectedGeneration?: number;
   deferWhileRunning?: boolean;
   applyingPendingGeneration?: number;
-  previousProfile?: SessionRuntimeProfile;
+  previousProfile?: FallbackRouteProfile;
   /** Effective profile observed by the Agent CAS read; axis-only patches use it as the live base. */
   effectiveProfile?: SessionRuntimeProfile;
   effortExplicit?: boolean;
@@ -185,6 +186,12 @@ export interface AgentDeviceRuntimeSelectionInput {
   supersededByOwnerBoundary(): boolean;
 }
 
+/** Maker as seen after checking the persisted route and the current handle inside the route lock. */
+type BuiltinSessionsMaker = {
+  getSession(sessionId: string): (Session & { agentKind: AgentKind }) | undefined;
+  getSessionMeta(sessionId: string): Promise<(SessionMeta & { agentKind: AgentKind }) | null>;
+} & Maker;
+
 export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPorts) {
   const handleSetModel = async (
     sessionId: unknown,
@@ -195,7 +202,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
     internalOptions: InternalRuntimeSelectionOptions,
   ): ReturnType<ApplySessionRuntimeSelection> => {
     const {
-      maker,
+      maker: makerPort,
       agentSwitchPending,
       broadcastSessionRuntimeProjection,
       assertReviewSettingsUnlocked,
@@ -378,6 +385,65 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       ) {
         return { deferred: false, superseded: true };
       }
+      const live = makerPort.getSession(sessionId);
+      if (runtimeStatus.agentKind === 'acp') {
+        if ((internalOptions.source !== 'user' && internalOptions.source !== 'fallback') || (live && live.agentKind !== 'acp')) {
+          return { deferred: false, superseded: true };
+        }
+        if (!runtimeStatus.providerId || !acpHarnessKeyFromProviderId(runtimeStatus.providerId)
+          || (providerId != null && providerId !== runtimeStatus.providerId)) {
+          throwIpcError('PRECONDITION_FAILED', 'a plugin engine task cannot switch to another engine or model source');
+        }
+        // 引擎在自己的另一台电脑上(第三期)：这台不必装这个插件，没有本机的引擎列表可核对。可选的模型与思考深度
+        // 来自那台握手给出的选项，是否仍然开放、取值认不认识都由那台在 setModel 时裁决，被拒就原样报错。
+        const engineElsewhere = !!runtimeStatus.agentDeviceId && !runtimeStatus.remoteHostId;
+        if (!engineElsewhere && !agentSwitchDeps.admitPluginEngineTarget) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
+        }
+        if (atomicSelection && atomicSelection.fastMode !== false) {
+          throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
+        }
+        // Keep the same owner, write authorization and send lock across the ACP round trip.
+        assertRuntimeOwnerCurrent();
+        assertSharedTaskCurrent.admit();
+        const target = engineElsewhere
+          ? {
+              model: model.trim() ? model : PLUGIN_ENGINE_DEFAULT_MODEL,
+              effort: isPluginEngineEffort(atomicSelection?.effort) ? atomicSelection.effort : '',
+            }
+          : agentSwitchDeps.admitPluginEngineTarget!({
+              providerId: runtimeStatus.providerId,
+              model,
+              effort: atomicSelection?.effort,
+            });
+        const effort = isPluginEngineEffort(target.effort) ? target.effort : undefined;
+        if (live && runtimeStatus.status === 'active') {
+          await live.setModel(target.model, effort ? { effort } : undefined);
+          assertRuntimeOwnerCurrent();
+          assertSharedTaskCurrent.admit();
+        }
+        await persistSessionFields(sessionId, { model: target.model, effort: effort ?? '' }, { allowEmptyEffort: true });
+        assertRuntimeOwnerCurrent();
+        const generation = internalOptions.source === 'fallback'
+          ? acceptSessionRuntimeMutation({
+              sessionId, source: 'fallback', deferred: false, previousProfile: internalOptions.previousProfile,
+              profile: { agentKind: 'acp', agentDeviceId: runtimeStatus.agentDeviceId, providerId: runtimeStatus.providerId,
+                model: target.model, effort: effort ?? null, fastMode: false },
+            })
+          : recordUserSessionRuntimeMutation(sessionId);
+        const response = {
+          deferred: false,
+          superseded: false,
+          generation,
+          persistedRoute: true as const,
+          effectiveModelId: target.model,
+          effectiveProviderId: runtimeStatus.providerId,
+        };
+        if (isDeviceLinkInvoke()) markRemoteSettingPersistedInsideHandler(response);
+        return response;
+      }
+      if (live?.agentKind === 'acp') return { deferred: false, superseded: true };
+      const maker = makerPort as BuiltinSessionsMaker;
       if (runtimeStatus.agentDeviceId && !runtimeStatus.remoteHostId) {
         return applyAgentDeviceRuntimeSelection({
           sessionId, model, providerId, atomicSelection, internalOptions, runtimeStatus,

@@ -15,7 +15,8 @@ import { nativeHistoryStorage } from '../nativeHistoryStorage';
 import fsp from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 
-import { isProviderSharePeer, parseProviderSharePeer, providerShareGuestPeer, REMOTE_AGENT_KINDS, type RemoteAgentRequest } from '@cindy/device-link';
+import { isProviderSharePeer, parseProviderSharePeer, providerShareGuestPeer, REMOTE_AGENT_KINDS, REMOTE_AGENT_PLUGIN_ENGINE_KIND, type RemoteAgentRequest } from '@cindy/device-link';
+import { isPluginEngineOfferedRemotely, isPluginEngineOfferedToGuests } from '../../maker-host/pluginEngineRemoteUse.js';
 import type { Maker, StartSessionOptions } from '@cindy/maker-core';
 import { LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
 
@@ -67,7 +68,7 @@ import { captureGeneratedImageStorage, generatedImageErrorCode, handleGeneratedI
 const log = createLogger('remote-agent:host');
 
 /** 对方任务的启动选项 → 本机 Agent 的启动选项(工作目录是影子目录，工具经隧道回到对方)。 */
-export function hostedStartOptions(input: HostedStartInput): StartSessionOptions {
+export function hostedStartOptions(input: Omit<HostedStartInput, 'kind'>): StartSessionOptions {
   const { options, workspace } = input;
   const client = options.localApplication;
   if (client && (!input.localApplicationStorage || !input.mcpServers.includes(client.mcpName))) {
@@ -1007,6 +1008,28 @@ export function installRemoteAgentHost(options: {
         return false;
       }
     },
+    // 插件提供的引擎：给同账号电脑和声明了 guestWorkspace 的直连分享受邀者使用，用引擎自己的登录直连厂商。
+    pluginEngines: {
+      canUse: (controller) => {
+        if (!isProviderSharePeer(controller)) return isControllerAuthorized(controller);
+        const access = ownedProviderShareGuestAccess(controller);
+        return !!access && isControllerAuthorized(controller) && isPluginEngineOfferedToGuests(access.providerId);
+      },
+      isOffered: (providerId, controller, model) => {
+        if (!isControllerAuthorized(controller)) return false;
+        if (isProviderSharePeer(controller)) {
+          const access = ownedProviderShareGuestAccess(controller);
+          return !!access
+            && access.providerId === providerId
+            && isPluginEngineOfferedToGuests(providerId)
+            && (model === undefined || remoteModelAccess.allows(providerId, model, access.memberId));
+        }
+        return isPluginEngineOfferedRemotely(providerId)
+          && (model === undefined || remoteModelAccess.allows(providerId, model));
+      },
+      start: (input) => options.getMaker().startHostedAgentSession(REMOTE_AGENT_PLUGIN_ENGINE_KIND,
+        hostedStartOptions(input)),
+    },
     ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     startHosted: async (input) => {
       if (input.groupProviderId) await bindLocalHostedGroupFastPolicy(input.groupProviderId, input.hostSessionId);
@@ -1114,7 +1137,7 @@ export function installRemoteAgentHost(options: {
           void recordStandbyUsage({ shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId,
             sessionId, generation: authority.generation }, sample.samples).then(flushStandbyUsage)
             .catch(error => log.warn('standby usage persistence/upload unavailable', { error: String(error) }));
-        } else if (authority && sessionId) {
+        } else if (authority && sessionId && sample.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND) {
           for (let i = 0; i < sample.samples.length; i += 64) {
             const usageId = randomUUID();
             const request: Extract<RemoteAgentRequest, { op: 'direct-usage' }> = {

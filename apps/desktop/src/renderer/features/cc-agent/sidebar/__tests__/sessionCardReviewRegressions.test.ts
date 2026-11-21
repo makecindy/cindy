@@ -155,7 +155,7 @@ describe('SessionCard review regressions', () => {
 
   // 置顶卡片等高(2026-11-08 用户定稿):正文区不论有无内容都占 2 行;失效后两列卡片底边错开。
   it('keeps card preview at a fixed two-line height across content sources', () => {
-    expect(sessionCardSource).toContain("'mt-[4px] h-[2.8em] text-11 leading-[1.4]'");
+    expect(sessionCardSource).toContain("'mt-1 h-[2.8em] text-11 leading-[1.4]'");
     expect(sessionCardSource).toContain(
       "'[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden'",
     );
@@ -484,11 +484,10 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).not.toContain('sourceLabel={sourceLabel}');
   });
 
-  it('aligns list automation headers with regular tasks and indents only expanded children', () => {
+  it('aligns list automation headers with regular tasks', () => {
     expect(automationGroupSource).toMatch(
-      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: indented\s*\? 'pl-5 pr-2'\s*: 'pl-3 pr-2'/,
+      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: 'pl-3 pr-2'/,
     );
-    expect(automationGroupSource).toContain('<div className="flex flex-col gap-0.5 pl-2">');
     expect(automationGroupSource).toContain("sessionVariant === 'list' ? 'w-3' : 'w-[15px]'");
     expect(automationGroupSource).toContain("sessionVariant === 'list' && 'order-2'");
   });

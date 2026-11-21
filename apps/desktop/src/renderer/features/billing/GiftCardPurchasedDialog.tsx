@@ -96,6 +96,7 @@ export function GiftCardPurchasedDialog({
                 <GiftCardStack
                   className="mx-[22px]"
                   faceCode={first.faceCode}
+                  face={first.face}
                   amount={first.amount}
                   currency={first.currency}
                   count={cards!.length}

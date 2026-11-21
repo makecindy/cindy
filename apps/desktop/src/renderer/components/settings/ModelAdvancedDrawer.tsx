@@ -211,6 +211,11 @@ interface Props {
   onDeleteLocal?: (row: UnionModelRow) => void;
   /** 该行当前是否已被停用（用于底部动作区的方向）。 */
   disabled: boolean;
+  /**
+   * 已停用时能否恢复。由列表按行判定（功能型模型不看聊天登录，见 UnifiedModelList 的
+   * canReenableRow）；缺省沿用聊天连接。
+   */
+  canEnable?: boolean;
   /** 付费锁定行不给写入入口（与列表行同一判定）。 */
   paymentRequired: boolean;
   /** Parent discovery owns a full-config snapshot until its readback finishes. */
@@ -228,6 +233,7 @@ export function ModelAdvancedDrawer({
   onDisable,
   onDeleteLocal,
   disabled,
+  canEnable: canEnableProp,
   paymentRequired,
   refreshing = false,
 }: Props) {
@@ -251,6 +257,7 @@ export function ModelAdvancedDrawer({
     if (!await refetch()) setUnconfirmedProvider(latestProviderRef.current);
   };
   const selectionAvailable = provider.connected && !provider.suspended;
+  const canEnable = canEnableProp ?? selectionAvailable;
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
   const pricePendingRef = useRef(false);
   const [priceSaving, setPriceSaving] = useState(false);
@@ -747,7 +754,7 @@ export function ModelAdvancedDrawer({
         {discount !== undefined && discount > 0 && discount <= 1 && (
           <Row label={t('settings.providers.models.advanced.discount')}>
             <span
-              className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
+              className="inline-flex items-center rounded-full px-2 py-px text-10 font-medium"
               style={{
                 color: EFFORT_TIER_COLORS.low,
                 backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
@@ -1407,7 +1414,8 @@ export function ModelAdvancedDrawer({
                   compact
                   type="button"
                   loading={toggleSaving}
-                  disabled={nameSaving || toggleSaving || (disabled && !selectionAvailable)}
+                  disabled={nameSaving || toggleSaving || (disabled && !canEnable)}
+                  data-settings-search-action="Enable or disable the displayed model group"
                   onClick={() => void toggleModel()}
                 >
                   {disabled

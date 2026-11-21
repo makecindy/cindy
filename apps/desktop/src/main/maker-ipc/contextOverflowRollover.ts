@@ -6,6 +6,7 @@
  */
 
 import {
+  CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON,
   CODEX_HISTORY_OVERSIZED_REASON,
   CONTEXT_OVERFLOW_REASON,
   REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON,
@@ -21,6 +22,7 @@ import {
 import {
   projectAgentFacingText,
   readAgentInputReferences,
+  type AgentSendToSessionHint,
 } from '@cindy/maker-shared/agent-input-projection';
 
 import {
@@ -74,9 +76,14 @@ export type OverflowRolloverPlan =
     }
   | { action: 'stop'; reason: OverflowRolloverStopReason };
 
-export function isContextOverflowErrorData(data: unknown): boolean {
+function isCompactionModelUnavailable(data: unknown): boolean {
+  return (data as { reason?: unknown } | null)?.reason === CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON;
+}
+
+export function isContextOverflowErrorData(data: unknown, agentKind?: string): boolean {
   if (!data || typeof data !== 'object') return false;
   const rec = data as { reason?: unknown; message?: unknown; sdkError?: unknown };
+  if (isCompactionModelUnavailable(data)) return agentKind === undefined || agentKind === 'codex';
   if (rec.reason === CONTEXT_OVERFLOW_REASON || rec.reason === REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON) return true;
   return [rec.message, rec.sdkError].some(
     (value) =>
@@ -162,7 +169,7 @@ function isPiRequestBodyRecoveryExhausted(data: unknown): boolean {
 
 /** PI 原生会话已经无法继续：超限，或 prompt RPC 超时（巨大 jsonl resume 卡死）。 */
 export function shouldRebuildPiNativeSession(data: unknown): boolean {
-  return isContextOverflowErrorData(data) || isPiPromptRpcTimeoutError(data) || isPiRequestBodyRecoveryExhausted(data);
+  return isContextOverflowErrorData(data, 'pi') || isPiPromptRpcTimeoutError(data) || isPiRequestBodyRecoveryExhausted(data);
 }
 
 const GROK_4_CONTEXT_CAP = 500_000;
@@ -338,6 +345,7 @@ export function planContextOverflowRollover(
 export function withReplaySourceNotes(
   wire: OverflowReplayWireMessage,
   agentMeta: Record<string, unknown> | null | undefined,
+  sendToSession?: AgentSendToSessionHint,
 ): OverflowReplayWireMessage {
   if (!agentMeta) return wire;
   const sourceNote = buildWireMessageSourceNote(
@@ -346,6 +354,7 @@ export function withReplaySourceNotes(
     {
       visibleText: typeof wire === 'string' ? wire : extractPlainText(wire.content),
       autoResume: agentMeta.autoResume === true,
+      sendToSession,
     },
   );
   const device = readMessageSourceDevice(agentMeta);
@@ -362,8 +371,9 @@ export function withReplaySourceNotes(
 function replayWireWithSourceNotes(
   sourceWire: OverflowReplayWireMessage,
   plan: Extract<OverflowRolloverPlan, { action: 'rebuild' }>,
+  sendToSession?: AgentSendToSessionHint,
 ): unknown {
-  const withNotes = withReplaySourceNotes(sourceWire, plan.sourceUserAgentMeta);
+  const withNotes = withReplaySourceNotes(sourceWire, plan.sourceUserAgentMeta, sendToSession);
   return withNotes === sourceWire ? plan.sourceUserAgentFacingWireContent : withNotes;
 }
 
@@ -430,6 +440,8 @@ export function findLatestRebuildableError(
 }
 
 export interface ContextOverflowRolloverDeps {
+  /** Confirmed send_to_session route of the session about to be replayed; sampled before close. */
+  sendToSessionHint?(sessionId: string): AgentSendToSessionHint | undefined;
   getSessionRow(sessionId: string): Promise<{
     status: string;
     source?: string | null;
@@ -708,6 +720,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   ): Promise<boolean> => {
     if (signal?.aborted) return true;
     const oversized = isOversizedHistoryErrorData(errorData);
+    const checkExternalOwner = oversized || isCompactionModelUnavailable(errorData);
     const unsupportedOption = isUnsupportedRequestOptionErrorData(errorData);
     if (!isContextOverflowErrorData(errorData) && !oversized && !unsupportedOption) return false;
     await deps.drainPersistQueue();
@@ -719,10 +732,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // compat 自愈只服务本机桌面会话（与 replayUserMessage 的 continueFromHistory 一致）：
     // 外部派单方有自己的重试语义，canonical bot 的派单走 owner 路径，不在这里代播。
     if (unsupportedOption && (sessionRow.source !== 'desktop' || sessionRow.agentKind !== 'pi')) return false;
-    if (oversized && (!canContinueContextRecovery(sessionRow) || sessionRow.agentKind !== 'codex')) return false;
+    if (checkExternalOwner && sessionRow.agentKind !== 'codex') return false;
+    if (oversized && !canContinueContextRecovery(sessionRow)) return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
+      // Sampled while the source runtime is still live; the replay below goes through the send transaction.
+      const sendToSession = deps.sendToSessionHint?.(sessionId);
       if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) {
         deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
         return false;
@@ -829,7 +845,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         const replay = await deps.replayUserMessage(
           sessionId,
           plan.sourceUserContent,
-          replayWireWithSourceNotes(sourceWire, plan),
+          replayWireWithSourceNotes(sourceWire, plan, sendToSession),
           {
             signal,
             // 保留同一 Pi 会话历史：失败轮的 error assistant 会被 pi-ai 序列化时
@@ -895,7 +911,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         return false;
       }
 
-      if (oversized) {
+      if (checkExternalOwner) {
         if (plan.skipGenericReplay || deps.hasExternalRecoveryOwner?.(sessionId)) return false;
         if (continuedInputs.get(sessionId) === plan.sourceUserClientId) return false;
         // Claim the input before any destructive recovery step, even if commit/send fails.
@@ -904,7 +920,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 
       if (live) await deps.closeSession(sessionId);
       signal?.throwIfAborted();
-      if (oversized && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
+      if (checkExternalOwner && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
       const sourceWire = persistedUserContentToWireMessage(
         plan.sourceUserAgentFacingWireContent ?? plan.sourceUserContent,
       );
@@ -939,11 +955,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         });
         return true;
       }
-      if (oversized && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
+      if (checkExternalOwner && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
       const replay = await deps.replayUserMessage(
         sessionId,
         oversized ? CODEX_HISTORY_CONTINUE_MESSAGE : plan.sourceUserContent,
-        oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan),
+        oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan, sendToSession),
         oversized ? {
           signal,
           continueFromHistory: true,
@@ -1181,7 +1197,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const compactFailed = liveUsage?.needsRollover === true;
     const piByteRecoveryFailed = sessionRow.agentKind === 'pi' && isPiRequestBodyRecoveryExhausted(lastError);
     const tokenViolated =
-      isContextOverflowErrorData(lastError) ||
+      isContextOverflowErrorData(lastError, sessionRow.agentKind) ||
       isPiPromptRpcTimeoutError(lastError) ||
       pressure ||
       compactFailed ||
@@ -1385,7 +1401,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       try {
         // IM may not persist this input (protected content), and an attached IM
         // turn can outlive its binding. Check live ownership before any await.
-        if (isOversizedHistoryErrorData(errorData) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
+        if ((isOversizedHistoryErrorData(errorData) || isCompactionModelUnavailable(errorData))
+          && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
         // Terminal subscribers may release a headless/IM marker immediately.
         // Keep learning, but never take over that turn's replay after an await.
         const externalOwnerAtFailure = isUnsupportedRequestOptionErrorData(errorData)

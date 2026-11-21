@@ -25,10 +25,12 @@ import {
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  providerPickerListArgs,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
   CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
   CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
@@ -259,6 +261,8 @@ export interface DeviceLinkContextValue {
   reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
   recoverWaitingPeer(deviceId: string): Promise<boolean>;
   closeLink(deviceId: string): void;
+  getUserCloseEpoch?(deviceId: string): number;
+  onUserClose?(deviceId: string, listener: () => void): () => void;
   /** Acquire before background grace ends; always release on settlement/cancellation. Hard deadline enforced by lifecycle. */
   beginBackgroundTransition?(): () => void;
   /**
@@ -324,6 +328,8 @@ const CONTROLLER_CAPABILITIES = [
   // 重连后 rebuildSessionSnapshot 重读打开中的任务页;被控端因此把重连前已读且折叠的任务
   // 保持折叠到重读完成,离线积压不留历史详情。
   CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  // 认识「待切到插件引擎」的意图(sessionAgentSwitch 把它单独交给插件引擎的展示)。
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
 ];
 
 // 任意目标端真实应答的独立时序证据。它不等同于 presence verdict,也不参与 IPC/DB
@@ -1470,7 +1476,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         && presenceAvailableByDeviceRef.current.get(deviceId) !== false,
       readProviders: (deviceId) => sendInvokeWithAccessHandling<DeviceProvidersPayload>(
         client, deviceId, 'maker:provider:list',
-        [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
+        providerPickerListArgs(),
       ),
       readCapabilities: (deviceId, agent) => sendInvokeWithAccessHandling<unknown>(
         client, deviceId, 'maker:get-capabilities', [agent],
@@ -1492,12 +1498,16 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const recoverNetwork = (urgent: boolean) => {
       const replaceOldPath = networkPathChanged;
       networkPathChanged = false;
-      // Agent-Net connections send from the new address now and gather candidates again (the Desktop's network watcher does the same).
-      if (agentNetEnabled && (urgent || replaceOldPath)) notifyMobileAgentNetNetworkChanged();
+      // Agent-Net connections send from the new address now and gather candidates again (the Desktop's network watcher does the same);
+      // on a route change its relay connection is replaced too, as Device Link's below.
+      if (agentNetEnabled && (urgent || replaceOldPath)) notifyMobileAgentNetNetworkChanged({ routeChanged: replaceOldPath });
       // Only this phone's established connection used the lost route. Keep
       // handshakes and congestion backoff on their existing recovery path.
       if (replaceOldPath && client.getStatus() === 'online') {
-        client.restartConnections('network-path-changed');
+        // An Agent-Net primary moves to the new address by itself and replaced only its relay connection (above). Rebuilding it
+        // closed every session and connected from scratch: 2026-11-20 on a phone, about 12 s after Wi-Fi/5G switches against
+        // 1.8 s on Device Link.
+        client.restartConnections('network-path-changed', { keepPrimary: primaryEncrypted });
       } else {
         client.notifyNetworkChanged({ urgent });
       }
@@ -2217,8 +2227,20 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     return true;
   }, [hasOutboundPeerRecoveryIntent, rehydrateWithClient, sendOpenLinkOnce]);
 
+  const userCloseListeners = useRef(new Map<string, Set<() => void>>());
+  const onUserClose = useCallback((deviceId: string, listener: () => void) => {
+    const listeners = userCloseListeners.current.get(deviceId) ?? new Set<() => void>();
+    userCloseListeners.current.set(deviceId, listeners);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) userCloseListeners.current.delete(deviceId);
+    };
+  }, []);
+  const getUserCloseEpoch = useCallback((deviceId: string) => userCloseEpochsRef.current.get(deviceId) ?? 0, []);
   const closeLink = useCallback((deviceId: string) => {
     userCloseEpochsRef.current.set(deviceId, (userCloseEpochsRef.current.get(deviceId) ?? 0) + 1);
+    for (const listener of userCloseListeners.current.get(deviceId) ?? []) listener();
     resetMobilePeer(deviceId);
     registryRef.current.untrackOpenLink(deviceId);
     forcedPeerRecoveryIntentRef.current.cancel(deviceId);
@@ -2364,6 +2386,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     openLink,
     recoverWaitingPeer,
     reopenLink,
+    getUserCloseEpoch,
+    onUserClose,
     closeLink,
     invoke,
     subscribe,
@@ -2373,6 +2397,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }), [
     beginBackgroundTransition,
     holdBackgroundConnection,
+    getUserCloseEpoch,
+    onUserClose,
     closeLink,
     recoveringDeviceIds,
     connectionEpoch,

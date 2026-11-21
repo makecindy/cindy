@@ -1,4 +1,8 @@
 import { createAuxiliaryUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
+import { createMemoryReviewOneShotCore } from '../../../desktop/src/main/maker-host/memory-review-one-shot-core.js';
+import { createOneShotRouteGuard } from '../../../desktop/src/main/maker-host/oneShotRouteGuardCore.js';
+import { verdictForModelRouteWithProviders } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.js';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import type { AutoReviewDelegate, Maker } from '@cindy/maker-core';
 import { createOneShotCandidates, DEDICATED_AUTO_REVIEW_CANDIDATES } from '../../../desktop/src/main/utility-model/oneShotCandidatesCore.js';
 import { AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS, createAutoReviewModelRouter } from '../../../desktop/src/main/maker-host/autoReviewModelRouterCore.js';
@@ -80,6 +84,38 @@ export function createHostAutoReview(options: {
   const toolLoopReviewer = createToolLoopReviewer({
     requestText: (prompt, opts) => oneShot.requestUtilityText(options.getMaker(), prompt, { ...opts, source: 'tool-loop-review' }),
   });
+  const memoryReview = (profileHold: () => string | null) => {
+    const assertNotHeld = () => {
+      const held = profileHold();
+      if (held) throwIpcError('PRECONDITION_FAILED', held);
+    };
+    const listRouteGuardProviders = () => config.publicViews(Boolean(options.gateway?.credential));
+    const isDisabled = createOneShotRouteGuard({
+      listRouteGuardProviders,
+      verdictForModelRoute: (...args) => verdictForModelRouteWithProviders(listRouteGuardProviders, ...args),
+    });
+    const review = createMemoryReviewOneShotCore({
+      getMaker: options.getMaker,
+      requestText: (maker, prompt, opts) => oneShot.requestUtilityText(maker, prompt, {
+        ...opts,
+        beforeDispatch: async () => !profileHold(),
+      }),
+    });
+    return {
+      isOneShotRouteDisabled: async (agent: Parameters<typeof isDisabled>[0]) => {
+        assertNotHeld();
+        const disabled = await isDisabled(agent);
+        assertNotHeld();
+        return disabled;
+      },
+      reviewOneShot: async (...args: Parameters<typeof review>) => {
+        assertNotHeld();
+        const result = await review(...args);
+        if (result === null) assertNotHeld();
+        return result;
+      },
+    };
+  };
   let contextResolver: AutoReviewDelegate['prepareRequest'];
   // As the desktop before its resolver is set: no review without the authorization context.
   reviewAutoPermissionAction.prepareRequest = async request => {
@@ -87,7 +123,7 @@ export function createHostAutoReview(options: {
     return contextResolver(request);
   };
   return {
-    reviewAutoPermissionAction, toolLoopReviewer, oneShot, chain,
+    reviewAutoPermissionAction, toolLoopReviewer, oneShot, chain, memoryReview,
     /** The desktop's setAutoReviewContextResolver. */
     setContextResolver(resolver: AutoReviewDelegate['prepareRequest']) { contextResolver = resolver; },
   };

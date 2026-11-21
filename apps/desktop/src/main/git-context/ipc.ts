@@ -1,3 +1,4 @@
+import { readGithubTokenDetailed } from './githubToken.desktop.js';
 import { glabCliTokenSource } from './glabCliTokenSource';
 import { fetchGitlabMr } from './gitlabPrSummary';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
@@ -114,7 +115,7 @@ function broadcastToAllWindows(channel: string, payload: unknown): void {
 const ghCliTokenSource = getSharedGhCliTokenSource();
 
 async function readGithubToken() {
-  return ghCliTokenSource.readTokenDetailed();
+  return readGithubTokenDetailed();
 }
 
 async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteState> {

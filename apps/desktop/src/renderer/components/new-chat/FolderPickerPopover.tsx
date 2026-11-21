@@ -316,7 +316,7 @@ export function FolderPickerPopover({
       <div
         key={project.key ?? project.path}
         className={cn(
-          'group flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px]',
+          'group flex w-full items-center gap-3 rounded-lg px-3 py-2.5',
           'transition-colors',
           'hover:bg-[var(--folder-item-hover)]',
           isEnterTarget && 'bg-[var(--folder-item-hover)]',
@@ -427,7 +427,7 @@ export function FolderPickerPopover({
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
         className={cn(
-          'z-[10010] w-[320px] rounded-[12px] p-2',
+          'z-[10010] w-[320px] rounded-xl p-2',
           'bg-[var(--folder-picker-bg)]',
           'border border-[var(--folder-picker-border)]',
         )}
@@ -465,7 +465,7 @@ export function FolderPickerPopover({
                   disabled={selectionPending}
                   onClick={() => handleSelectPath('', 'dialogue')}
                   className={cn(
-                    'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
+                    'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
                     'transition-colors outline-none',
                     'hover:bg-[var(--folder-item-hover)]',
                   )}
@@ -532,7 +532,7 @@ export function FolderPickerPopover({
               )}
             >
               {deviceScope?.status === 'loading' ? (
-                <div className="flex items-center gap-2 px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
+                <div className="flex items-center gap-2 px-3 py-2.5 text-sm text-[var(--folder-item-path)]">
                   <span className="inline-flex shrink-0 animate-spinner motion-reduce:animate-none">
                     <Loader2 size={14} />
                   </span>
@@ -567,14 +567,14 @@ export function FolderPickerPopover({
               ) : activeProjectQuery ? (
                 <div
                   role="status"
-                  className="px-3 py-[10px] text-sm text-[var(--folder-item-path)]"
+                  className="px-3 py-2.5 text-sm text-[var(--folder-item-path)]"
                 >
                   {t('newChat.folderPicker.noMatchingProjects')}
                 </div>
               ) : deviceScope && onAddRemoteProject ? (
                 /* 对端设备上一个项目都没有:空态里直接给「浏览文件夹」,并带着设备身份进弹窗 ——
                    否则用户得自己退出去找入口,而这台机器恰恰是最可能需要新建目录的。 */
-                <div className="flex items-center justify-between gap-3 px-3 py-[10px]">
+                <div className="flex items-center justify-between gap-3 px-3 py-2.5">
                   <span className="min-w-0 text-xs text-[var(--folder-item-path)]">
                     {t('newChat.addRemoteProject.existingEmpty')}
                   </span>
@@ -591,7 +591,7 @@ export function FolderPickerPopover({
                   </button>
                 </div>
               ) : (
-                <div className="px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
+                <div className="px-3 py-2.5 text-sm text-[var(--folder-item-path)]">
                   {t('newChat.folderPicker.noProjects')}
                 </div>
               )}
@@ -623,7 +623,7 @@ export function FolderPickerPopover({
                   disabled={selectionPending}
                   onClick={() => handleSelectPath(folder.path, 'recent')}
                   className={cn(
-                    'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
+                    'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
                     'transition-colors outline-none',
                     'hover:bg-[var(--folder-item-hover)]',
                   )}
@@ -657,7 +657,7 @@ export function FolderPickerPopover({
           disabled={selectionPending}
           onClick={handleChooseDifferent}
           className={cn(
-            'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
+            'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
             'transition-colors outline-none',
             'hover:bg-[var(--folder-item-hover)]',
           )}
@@ -696,7 +696,7 @@ export function FolderPickerPopover({
               onOpenChange(false);
             }}
             className={cn(
-              'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
+              'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
               'transition-colors outline-none',
               'hover:bg-[var(--folder-item-hover)]',
             )}

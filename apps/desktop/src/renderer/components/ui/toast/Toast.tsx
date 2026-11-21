@@ -135,7 +135,7 @@ export function Toast({ item, message }: ToastProps) {
         item.placement === 'top-right' && 'shadow-[shadow:var(--shadow-menu)]',
         'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
         // padding 对称
-        'px-4 py-[10px]',
+        'px-4 py-2.5',
       )}
     >
       <span className="inline-flex shrink-0">

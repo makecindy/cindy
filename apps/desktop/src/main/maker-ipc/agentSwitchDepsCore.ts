@@ -3,7 +3,7 @@ import { createId } from '@paralleldrive/cuid2';
 import type { MakerSessionCreateOpts as CreateOpts } from './sessionRequest.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, dbToMakerEngineKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { setThinkingEnabledInMemory } from '../maker-host/newMakerDefaultsCache.js';
 import { MAKER_PUSH } from './channels.js';
@@ -31,6 +31,7 @@ export const readAgentSwitchSessionRow: SwitchDeps['getSessionRow'] = async (ses
         workingDir: sessions.workingDir,
         source: sessions.source,
         agentDeviceId: sessions.agentDeviceId,
+        permissionMode: sessions.permissionMode,
       })
       .from(sessions)
       .where(eq(sessions.id, sessionId))
@@ -46,7 +47,8 @@ export function createAgentSwitchDbApply(
   return async (sessionId, patch) => {
       // 把 Agent 挪到另一台电脑时那台的目录才算数，不拿本机目录的窗口写进去。
       const movingToOtherDevice = typeof patch.agentDeviceId === 'string';
-      const verifiedWindow = movingToOtherDevice ? undefined : lookupVerifiedContextWindow(
+      // 插件引擎不在内置模型目录里，没有可核实的上下文窗口。
+      const verifiedWindow = movingToOtherDevice || isPluginEngineKind(patch.agentKind) ? undefined : lookupVerifiedContextWindow(
         (agentKind, modelId, pid) =>
           resolveConfiguredContextWindow(
             getActiveCatalog(),
@@ -116,7 +118,8 @@ export function createSwitchedSessionBootstrap({
       }
       const co = buildCreateOptsWithStderr({
         id: sessionId,
-        agentKind: dbToMakerAgentKind(row.agentKind),
+        // 插件引擎任务按自己的引擎重建(dbToMakerAgentKind 会把 'acp' 当成 Claude Code)。
+        agentKind: dbToMakerEngineKind(row.agentKind),
         workingDir: row.workingDir,
         model: row.model ?? undefined,
         providerId: row.providerId,

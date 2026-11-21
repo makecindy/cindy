@@ -6,7 +6,7 @@ import type {
 import { BILLING_CURRENCY, formatBillingAmount } from './money';
 import { isSupportedPurchaseOption, type SupportedPurchaseOption } from './purchaseSupport';
 
-/** 卡面的展示顺序；与分享网页、Platform 后台同一组成品图。 */
+/** 本版本内置的卡面：服务端没给卡面详情（旧服务端）时只能选这几张，也是规则读到前的占位顺序。 */
 export const GIFT_CARD_FACES = ['cindy', 'cat', 'bell', 'leap'] as const;
 
 /** 一个可买的礼品卡价格方案：固定面额，或买家在 minAmount..maxAmount 内自填单张面额。 */

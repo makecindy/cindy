@@ -20,6 +20,7 @@ import { PaneEdgeInsetProvider, usePaneEdgeInset, useSessionPaneDivider } from '
 import { NativeHistoryHost, NativeHistorySlot, NativeTaskDrawerHost, taskDrawerHandoffAvailable } from './NativeResidentHistory';
 import { HomePresentationFocus } from './HomePresentationFocus';
 import { LocalHomeList } from './ResidentHomeList';
+import { useWallpaper } from '@/theme/wallpaper';
 
 const DRAWER_CLOSE_DISTANCE_RATIO = 1 / 3;
 const DRAWER_CLOSE_VELOCITY = -800;
@@ -167,6 +168,7 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   motion?: SessionListDrawerMotion;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { selected: wallpaper } = useWallpaper();
   const window = useAdaptiveWindow();
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -522,6 +524,7 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   </RetainedHost> : null;
   if (!mounted || collapsingColumn || sharedList && retainHome && persistent && !handoff) return <>{retainedHome}</>;
   const panel = (handoffShell: boolean) => <Animated.View style={[styles.panel, { paddingLeft: insets.left, paddingTop: topInset ?? insets.top, width: panelWidth },
+        persistent && wallpaper !== 'none' && { backgroundColor: 'transparent' },
         (!persistent || handoffShell) && panelStyle,
         handoffShell && { width: handoff!.width, paddingTop: handoff!.top, backgroundColor: 'transparent', borderRightWidth: 0 },
       ]} testID="sessionDrawer.panel">

@@ -6,7 +6,7 @@ import { CERT_LIFETIME_MS, type DeviceView } from '@cindy/agent-net-protocol';
 import { fromBase64Url, toBase64Url, utf8 } from '@cindy/agent-net/portable';
 import { getMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import type { PreparedMobileAgentNetIdentity } from './agentNetIdentity';
-import { verifyMobileAgentNetCertificate } from './agentNetProtocol';
+import { restoreVerifiedMobileAgentNetCertificate, verifyMobileAgentNetCertificate } from './agentNetProtocol';
 
 interface DirectoryRecord { version: 2; receivedAt: number; devices: DeviceView[]; mac: string; }
 const writes = new Map<string, Promise<void>>();
@@ -23,10 +23,11 @@ function mac(identity: PreparedMobileAgentNetIdentity, value: Omit<DirectoryReco
     value.version, value.receivedAt, value.devices,
   ])));
 }
-function trusted(identity: PreparedMobileAgentNetIdentity, devices: unknown): devices is DeviceView[] {
+type VerifyCertificate = typeof verifyMobileAgentNetCertificate;
+function trusted(identity: PreparedMobileAgentNetIdentity, devices: unknown, verify: VerifyCertificate = verifyMobileAgentNetCertificate): devices is DeviceView[] {
   return Array.isArray(devices) && devices.length <= 512 && devices.every(view => {
     const c = view?.certificate;
-    return c && verifyMobileAgentNetCertificate(identity.api.rootPublicKey, c, c.issuedAt)
+    return c && verify(identity.api.rootPublicKey, c, c.issuedAt)
       && c.issuedAt <= Date.now() + 30_000 && c.networkId === identity.api.certificate.networkId
       && c.subject === identity.api.certificate.subject;
   });
@@ -42,12 +43,17 @@ export async function readMobileAgentNetDirectory(identity: PreparedMobileAgentN
     const value = JSON.parse(raw) as DirectoryRecord;
     if (value.version !== 2 || !Number.isSafeInteger(value.receivedAt) || value.receivedAt < 0
       || value.receivedAt > Date.now() + 30_000 || value.receivedAt + CERT_LIFETIME_MS <= Date.now()
-      || !trusted(identity, value.devices)) return null;
+      || !Array.isArray(value.devices) || value.devices.length > 512 || typeof value.mac !== 'string') return null;
+    // The MAC first. Its key is this device's seed and it covers every certificate, and `writeMobileAgentNetDirectory`
+    // verified each certificate's signature before it wrote the record: an intact record holds exactly the certificates
+    // this device verified then. Their signatures are recorded as verified instead of verified again, which in pure JS
+    // took 28 ms each, about 0.7 s of every cold start with 24 devices (2026-11-21). Everything else is checked as before.
     const expected = mac(identity, value), supplied = fromBase64Url(value.mac);
     if (expected.length !== supplied.length) return null;
     let difference = 0;
     for (let index = 0; index < expected.length; index++) difference |= expected[index] ^ supplied[index];
-    return difference === 0 ? { devices: value.devices, expiresAt: value.receivedAt + CERT_LIFETIME_MS } : null;
+    if (difference !== 0 || !trusted(identity, value.devices, restoreVerifiedMobileAgentNetCertificate)) return null;
+    return { devices: value.devices, expiresAt: value.receivedAt + CERT_LIFETIME_MS };
   } catch { return null; }
 }
 export function writeMobileAgentNetDirectory(identity: PreparedMobileAgentNetIdentity, devices: DeviceView[]): Promise<void> {

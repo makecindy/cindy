@@ -33,7 +33,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { hasDeliveryNamespace } from '../../shared/pluginIdentity.js';
+import { hasDeliveryNamespace, pluginAutomationHostKey } from '../../shared/pluginIdentity.js';
 
 import {
   GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_MS,
@@ -214,7 +214,14 @@ export class GhostScheduleSlot {
         : `
 
 调用这个插件时使用 ghost_id「${logicalId}」，namespace 传 null。`;
+    if (request.primaryDeviceOnly === true && (pending || ghost.namespaceState !== 'confirmed' || ghost.manifest.deviceSync !== true)) {
+      return fail('INVALID_REQUEST', 'A confirmed device-sync plugin is required');
+    }
+    const primaryHostKey = request.primaryDeviceOnly === true
+      ? pluginAutomationHostKey(ghost.namespace ?? null, logicalId)
+      : undefined;
     const draft: GhostScheduleDraftPush = {
+      ...(primaryHostKey ? { primaryHostKey } : {}),
       requestId: this.deps.newRequestId?.() ?? randomUUID(),
       ghostId: logicalId,
       ...(pending ? {} : { namespace: ghost.namespace ?? null }),
@@ -224,7 +231,9 @@ export class GhostScheduleSlot {
       prompt: prompt + address,
       ...(intervalMs !== undefined ? { intervalMs } : {}),
     };
-    const delivered = typeof request.mobilePageId === 'string'
+    // Older controllers save only the edited name and prompt. The bound draft belongs to the
+    // execution computer, whose native editor round-trips its immutable binding.
+    const delivered = !primaryHostKey && typeof request.mobilePageId === 'string'
       ? this.deps.sendToMobile?.(request.mobilePageId, draft) : this.deps.sendToWindow(draft);
     if (!delivered) {
       return fail('HOST_NOT_READY', '当前没有可用的宿主窗口');

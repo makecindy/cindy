@@ -3,6 +3,8 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   SHARED_TASK_CAPABILITY,
@@ -24,10 +26,20 @@ vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: (pro
 const peerSession = vi.hoisted(() => ({ current: null as null | {
   closedReason: null; open: ReturnType<typeof vi.fn>; request: ReturnType<typeof vi.fn>;
 } }));
-vi.mock('../device-link/agentNetRuntime', async original => ({
-  ...await original<typeof import('../device-link/agentNetRuntime')>(),
-  mobileAgentNetSession: (peer: string) => peer === 'host' ? peerSession.current : null,
-}));
+// A native Agent-Net socket for the Provider's main connection (the network-change case below); null keeps the real runtime.
+const agentNetPrimary = vi.hoisted(() => ({ socket: null as null | object }));
+const agentNetNetworkChanged = vi.hoisted(() => vi.fn());
+vi.mock('../device-link/agentNetRuntime', async original => {
+  const actual = await original<typeof import('../device-link/agentNetRuntime')>();
+  return {
+    ...actual,
+    mobileAgentNetSession: (peer: string) => peer === 'host' ? peerSession.current : null,
+    notifyMobileAgentNetNetworkChanged: agentNetNetworkChanged,
+    isMobileAgentNetActive: () => agentNetPrimary.socket !== null || actual.isMobileAgentNetActive(),
+    openMobileAgentNetSocket: (...args: Parameters<typeof actual.openMobileAgentNetSocket>) =>
+      agentNetPrimary.socket ? Promise.resolve(agentNetPrimary.socket) : actual.openMobileAgentNetSocket(...args),
+  };
+});
 // The existing V1 provider path has no Agent-Net binary or OS notification bridge.
 vi.mock('../../modules/cindy-agent-net/src', () => ({ agentNetNative: null }));
 vi.mock('@/notifications/nativeNotifications', () => ({ default: {} }));
@@ -43,6 +55,7 @@ import { useRemoteAgentCatalogs } from '../session/useRemoteAgentCatalogs';
 
 const auth = vi.hoisted(() => ({
   isAuthenticated: true,
+  deviceId: undefined as string | undefined,
   accountGeneration: 1,
   user: { id: 'test-account' },
   getAccessToken: vi.fn(async () => 'test-token'),
@@ -148,14 +161,17 @@ const transport = vi.hoisted(() => {
     peekOfflineDirectPath = (deviceId: string) => this.retainedPeers.has(deviceId);
     crossAccountConnection() { return this.separate ?? this; }
     connectAllNow(...args: unknown[]) { (this.connectNow as (...input: unknown[]) => void)(...args); }
-    restartConnections(...args: unknown[]) { (this.restartConnection as (...input: unknown[]) => void)(...args); }
+    // Records what the Provider asked for; what `keepPrimary` keeps is RoutedDeviceLinkClient's (routedClient.test.ts).
+    restartConnections = vi.fn((reason?: string, _options?: { keepPrimary?: boolean }) => { this.restartConnection(reason); });
+    /** The Provider's main-connection options (its socket factory opens the Agent-Net socket). */
+    options: unknown;
   }
   return { Client, clients: [] as Client[] };
 });
 vi.mock('@cindy/device-link', async (importOriginal) => ({
   ...await importOriginal<typeof import('@cindy/device-link')>(),
   RoutedDeviceLinkClient: class extends transport.Client {
-    constructor() { super(); transport.clients.push(this); }
+    constructor(options?: unknown) { super(); this.options = options; transport.clients.push(this); }
   },
 }));
 
@@ -1020,10 +1036,12 @@ describe('Provider pre-send link recovery', () => {
     });
     expect(await home).toBeUndefined();
     expect(await page).toBeUndefined();
-    const subscribed = sentOn(client, 'device-link:subscribe')
-      .map(([, payload]) => (payload.args[0] as { topics: string[] }).topics);
-    expect(subscribed).toContainEqual(['sessions']);
-    expect(subscribed.flat()).not.toContain('session:abc');
+    const subscriptions = sentOn(client, 'device-link:subscribe')
+      .map(([, payload]) => payload.args[0] as { topics: string[]; capabilities: string[] });
+    expect(subscriptions).toContainEqual(expect.objectContaining({
+      topics: ['sessions'], capabilities: expect.arrayContaining([CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2]),
+    }));
+    expect(subscriptions.flatMap(s => s.topics)).not.toContain('session:abc');
   });
 
   it('does not send the recovery handshake once no waiting request still needs it', async () => {
@@ -1165,7 +1183,11 @@ describe('pending catalog recovery', () => {
         } else unresponsiveDevicesStore.clearUnresponsive('host');
         await vi.advanceTimersByTimeAsync(50);
       });
-      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:provider:list' }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
+      // A refresh must request the same filtered catalog and full provider logos as the picker.
+      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({
+        channel: 'maker:provider:list',
+        args: [{ capabilities: expect.arrayContaining([CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1]) }],
+      }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
       expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:get-capabilities' }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
     } finally { unresponsiveDevicesStore.clearAll(); vi.useRealTimers(); }
   });
@@ -1491,6 +1513,33 @@ describe('Provider network recovery priority', () => {
     expect(client.restartConnection.mock.calls).toEqual([
       ['network-path-changed'], ['network-path-changed'],
     ]);
+  });
+
+  // 2026-11-20 on a phone: the Agent-Net main connection was rebuilt on Wi-Fi/5G switches too, closing every session; they
+  // came back after about 12 s (Device Link 1.8 s). Failure: the route change asks to rebuild the main connection as well.
+  it.each([true, false])('keeps an Agent-Net main connection on a physical route change (Agent-Net=%s)', async (agentNet) => {
+    auth.deviceId = 'phone';
+    agentNetPrimary.socket = agentNet ? {} : null;
+    agentNetNetworkChanged.mockClear();
+    try {
+      await act(async () => { await setMobileAgentNetPreferences({ enabled: agentNet }); });
+      const client = transport.clients.at(-1)!;
+      const { createWebSocket } = client.options as { createWebSocket: (url: string, headers: Record<string, string>) => Promise<unknown> };
+      if (agentNet) await expect(createWebSocket('wss://relay.example/ws', {})).resolves.toBe(agentNetPrimary.socket);
+      await act(async () => {
+        networkEvents.network(wifi);
+        networkEvents.network({ type: 'NONE', isConnected: false, isInternetReachable: false });
+        networkEvents.network(wifi);
+      });
+      expect(client.restartConnections).toHaveBeenCalledExactlyOnceWith('network-path-changed', { keepPrimary: agentNet });
+      // Its relay connection, which may sit half-open on the old route, is replaced instead (portableSocket.test.ts).
+      if (agentNet) expect(agentNetNetworkChanged).toHaveBeenLastCalledWith({ routeChanged: true });
+      else expect(agentNetNetworkChanged).not.toHaveBeenCalled();
+    } finally {
+      agentNetPrimary.socket = null;
+      auth.deviceId = undefined;
+      await act(async () => { await setMobileAgentNetPreferences({ enabled: false }); });
+    }
   });
 
   it('does not replace a slow socket for reachability changes or repeated network capabilities', async () => {

@@ -415,7 +415,9 @@ export default {
           command: vitestBin('run', '--maxWorkers=2'),
           include: [
             'src/main/local-agent/__tests__/*.integration.test.ts',
+            'src/main/device-link/__tests__/linkTraffic.integration.test.ts',
             'src/main/bot-import/__tests__/skillArchive.integration.test.ts',
+            'src/main/maker-host/__tests__/codexSmartNamespace.integration.test.ts',
             'src/main/maker-host/__tests__/hostPiPackagesParity.integration.test.ts',
           ],
         },

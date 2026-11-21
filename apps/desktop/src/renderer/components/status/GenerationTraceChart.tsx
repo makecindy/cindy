@@ -22,20 +22,7 @@ export interface TraceChartPoint {
   /** Position on the generation-time axis, in ms. */
   at: number;
   rate: number;
-}
-
-/** Speed at `at`, between the two readings around it. */
-function rateAt(points: readonly TraceChartPoint[], at: number): number {
-  if (at <= points[0].at) return points[0].rate;
-  for (let i = 1; i < points.length; i += 1) {
-    const previous = points[i - 1];
-    const next = points[i];
-    if (at <= next.at) {
-      const between = next.at - previous.at;
-      return between > 0 ? previous.rate + ((at - previous.at) / between) * (next.rate - previous.rate) : next.rate;
-    }
-  }
-  return points[points.length - 1].rate;
+  settled?: boolean;
 }
 
 function formatClock(ms: number): string {
@@ -64,7 +51,7 @@ export function GenerationTraceChart({
   width,
   speedHeight: fullSpeedHeight,
   strokeHeight,
-  liveDot = false,
+  keepSpeedHeight = false,
   fixedSize = false,
   label,
   className,
@@ -77,8 +64,8 @@ export function GenerationTraceChart({
   width: number;
   speedHeight: number;
   strokeHeight: number;
-  /** Mark the newest reading, as the live chart does. */
-  liveDot?: boolean;
+  /** Reserve room for the live trace before its first sample arrives. */
+  keepSpeedHeight?: boolean;
   /** Render at exactly the viewBox size instead of scaling to the CSS box. */
   fixedSize?: boolean;
   label: string;
@@ -111,7 +98,7 @@ export function GenerationTraceChart({
   const showThinking = columns.some((column) => column.thinkingTokens !== null);
   // A finished turn too short for a curve keeps only its strokes, not an empty band above them.
   // The live chart holds its height: its curve is still to come.
-  const speedHeight = liveDot || points.length > 1 || !showThinking ? fullSpeedHeight : STROKE_GAP;
+  const speedHeight = keepSpeedHeight || points.some(point => point.settled) || points.length > 1 || !showThinking ? fullSpeedHeight : STROKE_GAP;
   const height = speedHeight + (showThinking ? STROKE_GAP + strokeHeight + 1 : 4);
   const ceiling = Math.max(1, ...points.map((point) => point.rate));
   const yOf = (rate: number) => speedHeight - (rate / ceiling) * (speedHeight - SPEED_TOP);
@@ -120,7 +107,6 @@ export function GenerationTraceChart({
     y: yOf(point.rate),
   }));
   const line = xy.map((point, index) => `${index ? 'L' : 'M'}${point.x},${point.y}`).join(' ');
-  const last = xy.at(-1);
   const pitch = plotWidth / THINKING_COLUMNS;
   const strokeWidth = Math.max(1.5, Math.min(5, pitch * 0.45));
   const columnX = (column: number) => PAD_LEFT + (column + 0.5) * pitch;
@@ -129,17 +115,26 @@ export function GenerationTraceChart({
     strokeTop + thinkingStrokeLength(tokens, maxThinking, strokeHeight, STROKE_FLOOR);
 
   // There is a moment to pick once the curve exists.
-  const pickable = xy.length > 1 && span > 0;
+  const pickable = xy.length > 0;
   const picked = pickable && pick ? pick.column : null;
-  const pickedAt = picked === null ? 0 : fromMs + ((picked + 0.5) / THINKING_COLUMNS) * span;
-  const pickedRate = picked === null ? 0 : rateAt(points, pickedAt);
+  const cursorTime = picked === null ? 0 : fromMs + ((picked + 0.5) / THINKING_COLUMNS) * span;
+  // Pick a reading that was actually measured. A line between two settled requests
+  // is only a visual guide; intermediate times have no measured speed.
+  const sample = picked === null ? undefined : points.reduce((nearest, point) =>
+    Math.abs(point.at - cursorTime) < Math.abs(nearest.at - cursorTime) ? point : nearest);
+  const pickedAt = sample?.at ?? 0;
+  const pickedRate = sample?.rate ?? 0;
+  const pickedX = span > 0 ? PAD_LEFT + ((pickedAt - fromMs) / span) * plotWidth : PAD_LEFT + plotWidth;
   const pickedThinking = picked === null
     ? null : columns.find((column) => column.column === picked)?.thinkingTokens ?? null;
   const onPick = (event: PointerEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
     if (box.width <= 0) return;
     const x = ((event.clientX - box.left) / box.width) * width;
-    const column = Math.min(THINKING_COLUMNS - 1, Math.max(0, Math.floor(((x - PAD_LEFT) / plotWidth) * THINKING_COLUMNS)));
+    const fraction = points.length === 1
+      ? (span > 0 ? (points[0].at - fromMs) / span : 1)
+      : (x - PAD_LEFT) / plotWidth;
+    const column = Math.min(THINKING_COLUMNS - 1, Math.max(0, Math.floor(fraction * THINKING_COLUMNS)));
     if (pick?.column === column) return;
     setPick({ column });
   };
@@ -191,9 +186,6 @@ export function GenerationTraceChart({
             <path d={line} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
           </>
         )}
-        {liveDot && last && (
-          <circle cx={last.x} cy={last.y} r="2.5" fill="currentColor" opacity={picked === null ? 1 : 0.35} />
-        )}
         {showThinking && columns.map((column) => {
           if (column.thinkingTokens === null) return null;
           const x = columnX(column.column);
@@ -209,24 +201,13 @@ export function GenerationTraceChart({
           );
         })}
         {picked !== null && (
-          <g data-testid="trace-pick">
-            {/* Only between the two values it ties together: from the speed at that moment down to
-                the end of that slice's stroke, or to the baseline when the slice has none. */}
-            <path
-              d={`M${columnX(picked)} ${yOf(pickedRate)}V${pickedThinking === null ? speedHeight : strokeEnd(pickedThinking)}`}
-              stroke="currentColor"
-              strokeWidth="0.75"
-              opacity="0.55"
-            />
-            <circle
-              cx={columnX(picked)}
-              cy={yOf(pickedRate)}
-              r="3.2"
-              fill="var(--surface-elevated)"
-              stroke="currentColor"
-              strokeWidth="1.5"
-            />
-          </g>
+          <circle
+            data-testid="trace-pick"
+            cx={pickedX}
+            cy={yOf(pickedRate)}
+            r="2"
+            fill="currentColor"
+          />
         )}
       </svg>
       {picked !== null && pick && createPortal(
@@ -240,8 +221,10 @@ export function GenerationTraceChart({
           style={floatingStyles}
         >
           <div className="flex justify-between gap-3">
-            <span>{t('usageDetails.performanceRateLine', { rate: Math.round(pickedRate) })}</span>
-            <span className="opacity-60">{formatClock(pickedAt - fromMs)}</span>
+            <span>{sample?.settled
+              ? `${t('chat.runningStatus.lastRequestRate')} · ${t('chat.runningStatus.tokenRate', { rate: Math.round(pickedRate * 10) / 10 })}`
+              : t('usageDetails.performanceRateLine', { rate: Math.round(pickedRate * 10) / 10 })}</span>
+            <span className="opacity-60">{formatClock(span > 0 ? pickedAt - fromMs : pickedAt)}</span>
           </div>
           {/* Only a real amount is worth a line: nothing finished in the slice, nothing reported,
               or no reasoning at all says nothing more than the missing line does. */}

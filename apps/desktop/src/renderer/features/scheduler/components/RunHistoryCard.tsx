@@ -23,7 +23,7 @@ import { toast } from '@/lib/toast';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { isScheduleActionExpired, scheduleFailureDetails } from '@cindy/maker-shared/schedule-model';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
-import type { AgentKind, RunStatus, ScheduleRun } from '@cindy/maker-scheduler';
+import type { RunStatus, ScheduleAgentKind, ScheduleRun } from '@cindy/maker-scheduler';
 import type { SessionReference } from '../../../../shared/sessionReference';
 import {
   DropdownMenu,
@@ -83,7 +83,7 @@ function PreRunHookResultDetails({ result }: { result: NonNullable<ScheduleRun['
   return (
     <details
       open={defaultOpen}
-      className="group/precheck rounded-[8px] bg-[hsl(var(--content-area))] text-[var(--settings-section-desc)]"
+      className="group/precheck rounded-lg bg-[hsl(var(--content-area))] text-[var(--settings-section-desc)]"
     >
       <summary
         className={cn(
@@ -129,7 +129,7 @@ function PreRunHookResultDetails({ result }: { result: NonNullable<ScheduleRun['
 
 interface Props {
   run: ScheduleRun;
-  agentKind: AgentKind;
+  agentKind: ScheduleAgentKind;
   /** 删除单条历史 run 的回调；省略则不渲染删除按钮（向后兼容）。 */
   onDelete?: (run: ScheduleRun) => void | Promise<void>;
   /**
@@ -246,7 +246,7 @@ export function RunHistoryCard({
       onClick={handleCardClick}
       title={canMarkRead ? t('scheduler.runs.markReadTitle') : undefined}
       className={cn(
-        'group flex flex-col gap-2 rounded-xl border p-[14px_16px]',
+        'group flex flex-col gap-2 rounded-xl border py-3.5 px-4',
         'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
         canMarkRead && 'cursor-pointer',
       )}
@@ -384,7 +384,7 @@ export function RunHistoryCard({
       ) : (
         <p
           className={cn(
-            'rounded-[8px] border px-2 py-1.5 font-mono text-11 break-words',
+            'rounded-lg border px-2 py-1.5 font-mono text-11 break-words',
             'border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))] text-[var(--settings-section-desc)]',
           )}
         >
@@ -396,13 +396,18 @@ export function RunHistoryCard({
           "为什么这轮没跑"在历史里可追溯,与调度器故障区分。 */}
       {run.preRunHookResult && <PreRunHookResultDetails result={run.preRunHookResult} />}
 
-      {run.status === 'skipped' && !run.preRunHookResult && run.resultText && (
+      {run.status === 'skipped' && run.preRunHookResult?.status !== 'skipped' && run.resultText && (
         <p
           className={cn(
-            'rounded-[8px] px-2 py-1.5 font-mono text-11 break-words',
+            'rounded-lg px-2 py-1.5 font-mono text-11 break-words',
             'bg-[hsl(var(--content-area))] text-[var(--cmd-palette-item-meta)]',
           )}
         >
+          {run.resultText.startsWith('[QUEUE_WAIT_TIMEOUT] ') && (
+            <span className="mb-1 block font-sans">
+              {t('scheduler.runs.queueWaitTimeoutRecovery', { action: t('scheduler.button.runNow') })}
+            </span>
+          )}
           {run.resultText}
         </p>
       )}

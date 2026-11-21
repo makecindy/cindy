@@ -223,7 +223,8 @@ describe('cross-agent committed model projection', () => {
       displays.push(resolveComposerModelSelection({
         current: { ...snapshot, agentKind: dbToMakerAgentKind(snapshot.agentKind) },
         effective: snapshot.runtimeEffective,
-        intent: intent ? { ...intent, target: intent.targetAgentKind, effort: intent.effort as SessionRuntimeProfile['effort'] } : null,
+        // This harness only stages built-in selections.
+        intent: intent ? { ...intent, target: intent.targetAgentKind as SessionRuntimeProfile['agentKind'], effort: intent.effort as SessionRuntimeProfile['effort'] } : null,
       }));
       buffer.acknowledgeCommitted(id, snapshot);
     });
@@ -579,6 +580,60 @@ describe('persistSessionFields(远程 set-* 回流:字段白名单 + 广播)', (
     >);
     expect(h.updateSetCalls).toHaveLength(0);
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  // 生产入口与可观察结果：persistSessionFields + applyAgentSwitchToSessionRow；插件引擎任务切到无思考档位模型时，
+  // 真实持久化入口必须把 sessions.effort 写回 '' 并广播 effort=''，而内置引擎仍省略空 effort 保留记忆。
+  // 规则依据：acp-plugin-bridge(插件引擎无档位模型以 '' 落库和回显)与内置引擎固定档位保留记忆不变量。
+  // 覆盖缺口：此前 persistSessionFieldsWith / applyAgentSwitchToSessionRow 经 persistableSessionEffort('') 得到 undefined，
+  // 丢弃了空串，导致数据库和广播仍保留上一个模型的旧思考档位。
+  // 最小失败输入与 tier：unit；传 { model: 'fixed', effort: '' } 时插件引擎未写库或广播漏掉 effort: ''。
+  it('插件引擎切到无思考档位模型时显式清空 effort 并广播，内置引擎保持省略', async () => {
+    await persistSessionFields('sess-builtin', { model: 'fixed-builtin', effort: '' });
+    expect(h.updateSetCalls).toHaveLength(1);
+    expect(h.updateSetCalls[0]).not.toHaveProperty('effort');
+    expect(lastTapPatch()!.patch).toEqual({ model: 'fixed-builtin' });
+
+    h.updateSetCalls.length = 0;
+    h.tapWindowBroadcast.mockClear();
+    await persistSessionFields(
+      'sess-acp',
+      { model: 'fixed-plugin', effort: '' },
+      { allowEmptyEffort: true },
+    );
+    expect(h.updateSetCalls).toHaveLength(1);
+    expect(h.updateSetCalls[0]).toMatchObject({ model: 'fixed-plugin', effort: '' });
+    expect(lastTapPatch()!.patch).toEqual({ model: 'fixed-plugin', effort: '' });
+
+    h.updateSetCalls.length = 0;
+    h.tapWindowBroadcast.mockClear();
+    h.route.row = {
+      id: 'sess-acp-switch',
+      agentKind: 'acp',
+      model: 'fixed-plugin',
+      providerId: 'acp-plugin:dsh-plugin:dsh',
+      effort: '',
+      fastMode: false,
+      scheduledModelBaseline: null,
+    };
+    await applyAgentSwitchToSessionRow('sess-acp-switch', {
+      agentKind: 'acp',
+      model: 'fixed-plugin',
+      providerId: 'acp-plugin:dsh-plugin:dsh',
+      effort: '',
+      fastMode: false,
+    });
+    expect(h.updateSetCalls).toHaveLength(1);
+    expect(h.updateSetCalls[0]).toMatchObject({
+      agentKind: 'acp',
+      model: 'fixed-plugin',
+      effort: '',
+    });
+    expect(lastTapPatch()!.patch).toMatchObject({
+      agentKind: 'acp',
+      model: 'fixed-plugin',
+      effort: '',
+    });
   });
 });
 

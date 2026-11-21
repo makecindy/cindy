@@ -735,6 +735,18 @@ describe('session runtime fallback selection', () => {
     ).toEqual({ effort: null, fastMode: false });
   });
 
+  it('tracks the route already tried when a companion falls back onto a plugin engine', () => {
+    const sessionId = 'companion';
+    const engine = { ...current, agentKind: 'acp' as const, providerId: 'acp-plugin:sample:engine', model: 'default', fastMode: false };
+    const generation = acceptSessionRuntimeMutation({
+      sessionId, source: 'fallback', previousProfile: current, profile: engine, deferred: false,
+    });
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation, effectiveOverride: null, pending: null, fallbackHop: 1,
+      visitedRoutes: ['codex\u0000openai\u0000gpt-main', 'acp\u0000acp-plugin:sample:engine\u0000default'],
+    });
+    expect(recordFailedSessionRuntimeFallbackCandidate(sessionId, generation - 1, current)).toBe(false);
+  });
   it('skips a failed candidate without consuming a fallback hop or generation', () => {
     const sessionId = 'runtime-failed-candidate';
     const candidate = { ...current, providerId: 'xd' };
