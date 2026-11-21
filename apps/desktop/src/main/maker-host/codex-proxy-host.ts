@@ -93,6 +93,7 @@ import {
   type ChatBridgeCapabilities,
 } from '@cindy/responses-chat-bridge';
 import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
+import { responsesCallIdLengthRule, shortenCodexCallIds, shortenOpenAiReplayCallIds } from './codex-call-id-length.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -422,6 +423,7 @@ const CODEX_BODY_RECOVERY_RULES = [
   imageGenerationIdRecoveryRule,
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
+  responsesCallIdLengthRule,
   responsesReasoningContentRecoveryRule,
   responsesToolAudioRecoveryRule,
   duplicateResponsesToolCallRecoveryRule,
@@ -3787,7 +3789,7 @@ async function createCodexProxyHandle(
         );
       }
       return reconciled;
-    }, { errorMode: 'reject-request' as const })),
+    }, { errorMode: 'reject-request' as const }), shortenOpenAiReplayCallIds),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);
@@ -3817,7 +3819,8 @@ async function createCodexProxyHandle(
       // A subsequent WebSocket sample also supersedes any HTTP compaction denial.
       downshiftByThread.delete(selectedThreadIdFromHeaders(ctx.headers));
       const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
-      const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
+      const restricted = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
+      const next = shortenCodexCallIds(restricted ?? body) ?? restricted;
       const request = next ? Buffer.from(JSON.stringify(next)) : message;
       const fullReplay = isFullCodexWebSocketReplay(body);
       return fitWebSocketRequest(request, next ?? body, fullReplay, ctx, signal);

@@ -3586,6 +3586,7 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
           expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), // #11278: route-scoped tool audio recovery
+          expect.any(Function), // #11867: final Responses call_id projection
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -3618,7 +3619,7 @@ describe('codex proxy host', () => {
     );
     expect(requestScopedTransforms).toHaveLength(2);
     expect(requestScopedTransforms[0]?.errorMode).toBe('reject-request');
-    const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-3);
+    const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-4);
     const body = { model: 'gpt-5', input: [] };
     strip(body, { url: '/responses' });
     expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
@@ -3676,6 +3677,41 @@ describe('codex proxy host', () => {
     }
   });
 
+  it('pairs colliding tool IDs across resumed OpenAI requests and preserves the source history (#11867)', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn() });
+    await host.ensureCodexProxyReady();
+    const config = mockState.createAnthropicCompatProxy.mock.calls[0][0];
+    const transform = config.transformRequest.at(-1);
+    const ctx = { url: '/v1/responses', upstreamBase: 'https://api.openai.com/v1', headers: {}, method: 'POST' };
+    const long = 'x'.repeat(85) + '1';
+    const other = 'x'.repeat(85) + '2';
+    const call = (call_id: string) => ({ type: 'function_call', call_id, name: 'probe', arguments: '{}' });
+    const result = (call_id: string) => ({ type: 'function_call_output', call_id, output: call_id });
+    const reserved = transform({ input: [call(long)] }, ctx).input[0].call_id;
+    const boundary = 'y'.repeat(64);
+    const history = [call(long), call(other), result(other), result(long), call(reserved), result(reserved), call(boundary), result(boundary)];
+    const snapshot = structuredClone(history);
+    const project = (input: unknown[]) => transform({ input }, ctx).input;
+    const projected = project(history);
+    const ids = projected.map((item: { call_id: string }) => item.call_id);
+    expect(new Set(ids).size).toBe(4);
+    expect(ids.every((id: string) => id.length <= 64)).toBe(true);
+    expect(ids).toEqual([ids[0], ids[1], ids[1], ids[0], reserved, reserved, boundary, boundary]);
+    expect(projected[3].output).toBe(long);
+    expect(project([...history, { role: 'user', content: 'Continue.' }]).slice(0, history.length)).toEqual(projected);
+    expect(history).toEqual(snapshot);
+    expect(transform({ input: projected }, ctx)).toBeNull();
+    expect(transform({ input: history }, { ...ctx, upstreamBase: 'https://api.openai.com.example/v1' })).toBeNull();
+    expect(transform({ input: history }, { ...ctx, url: '/v1/responses/compact' }).input).toEqual(projected);
+    const rule = config.recoveryRules.find((r: { id: string }) => r.id === 'responses_call_id_length');
+    const error = "Invalid 'input[45].call_id': string too long. Expected a string with maximum length 64, but got a string with length 86 instead.";
+    expect(rule.matches(error)).toBe(true);
+    expect(rule.matches(error.replace('call_id', 'id'))).toBe(false);
+    expect(rule.matches(error.replace('length 64', 'length 32'))).toBe(false);
+    expect(JSON.parse(rule.strip(Buffer.from(JSON.stringify({ input: history }))).toString()).input).toEqual(projected);
+  });
+
   // #7055: ChatGPT closes WebSocket messages over ~16 MiB with 1009. A reconnect resends the
   // whole image-heavy history, so every retry was rejected until the turn timed out.
   it('fits an oversized WebSocket request under the upstream message limit before forwarding', async () => {
@@ -3705,6 +3741,13 @@ describe('codex proxy host', () => {
       return message;
     };
     const image = { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(3 << 20, 1).toString('base64')}` };
+
+    const long = 'x'.repeat(86);
+    const exchange = [{ type: 'custom_tool_call', call_id: long }, { type: 'custom_tool_call_output', call_id: long }];
+    const replay = JSON.parse((await send(exchange)).toString()).input;
+    expect(replay[0].call_id.length).toBeLessThanOrEqual(64);
+    expect(replay[1].call_id).toBe(replay[0].call_id);
+    expect(JSON.parse((await send([exchange[1]], 'previous')).toString()).input).toEqual([exchange[1]]);
 
     const ordinary = await send([image, image]);
     expect(JSON.parse(ordinary.toString()).input).toEqual([image, image]);
@@ -8800,7 +8843,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(32); // ordinary transforms + dump + frozen custom-provider effort + tool audio recovery
+    expect(transforms).toHaveLength(33); // Includes the dump and final call_id projection.
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
