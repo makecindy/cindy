@@ -2721,6 +2721,12 @@ interface ResolvedMcpGatewayCall {
   qualifiedName: string;
   args: Record<string, unknown>;
   tool: ConnectedMcpTool;
+  /** 归一化时从顶层折进 args 的键(模型把参数平铺在顶层)。 */
+  folded?: string[];
+  /** 顶层有、但工具 schema 不认、因而没有转发的键。 */
+  unmapped?: string[];
+  /** args 以 JSON 字符串形态给出, 已被解析成对象。 */
+  parsedFromString?: boolean;
 }
 
 class McpBridgeError extends Error {
@@ -3263,6 +3269,109 @@ function schemaHint(schema: Record<string, unknown>): string {
 }
 
 /**
+ * 网关自身的键。模型给网关的调用里, 这些键属于网关, 不属于所选工具的参数:
+ * server/tool 是选哪个工具, args/arguments 是工具参数放在哪。折进 args 时不能碰它们 ——
+ * 工具真有一个叫 tool 的参数时(如插件的 ghost_call), 平铺形态本身就说不清, 只能报错。
+ */
+const GATEWAY_OWN_KEYS = new Set(['server', 'tool', 'args', 'arguments']);
+
+/** 网关入参归一化的结果: 真正发给服务端的参数 + 归一化过程中的动作与残留。 */
+interface GatewayArgsResolution {
+  /** 归位后的工具参数(真正会随 tools/call 发出)。 */
+  args: Record<string, unknown>;
+  /** 模型是否给了 args 或 arguments。 */
+  provided: boolean;
+  /** 给了但形态不可用: 数组、null、或解析不了的 JSON 字符串。 */
+  malformed: boolean;
+  /** 从顶层折进 args 的键(模型把参数平铺在顶层)。 */
+  folded: string[];
+  /** 顶层有、但这个工具的 schema 不认、因而没有转发的键。 */
+  unmapped: string[];
+  /** args 以 JSON 字符串形态给出, 已被解析成对象。 */
+  parsedFromString: boolean;
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 工具 schema 明确声明的参数名。返回 null 表示「schema 没声明」——
+ * 调用方按「不按名字猜」处理, 宁漏不误转。
+ */
+function schemaParameterNames(schema: Record<string, unknown> | undefined): Set<string> | null {
+  const properties = schema?.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return null;
+  const names = Object.keys(properties as Record<string, unknown>);
+  return names.length > 0 ? new Set(names) : null;
+}
+
+/**
+ * 把模型给出的网关调用还原成「所选工具自己的参数」。
+ *
+ * 弱模型有两种常见偏差(实测 MiniMax-M3.1 / deepseek-v4.1-flash / step-5 都会犯):
+ * 把工具参数平铺在顶层({server, tool, row: 10}), 或把 args 写成一段 JSON 字符串。
+ * 只取 args 的实现会把其余参数静默丢掉 —— 服务端于是按缺省值执行(表格类服务写回 A1)
+ * 并返回成功, 链路看起来完全正常, 用户只会以为服务端忽略了参数。
+ *
+ * 这里按工具自己的 schema 把参数归位: schema 声明过的顶层键折进 args(同名以 args 为准),
+ * 声明之外的顶层键不转发(那是模型的私货, 转过去只会让服务端多一条校验错误), 但记下来。
+ *
+ * args/arguments 只有两种形态可用: 对象, 或能解析成对象的 JSON 字符串。
+ * 「没传这个键」与「显式传 null」必须分开: 后者是模型给了一个用不了的形态,
+ * 静默发 arguments: {} 只会让服务端按缺省值兜底并返回成功。
+ */
+function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMcpTool): GatewayArgsResolution {
+  const provided = record.args !== undefined || record.arguments !== undefined;
+  const raw = record.args !== undefined ? record.args : record.arguments;
+  let args: Record<string, unknown> = {};
+  let malformed = false;
+  let parsedFromString = false;
+  if (raw === null) {
+    malformed = true;
+  } else if (raw !== undefined) {
+    if (typeof raw === 'object' && !Array.isArray(raw)) {
+      // 复制一份: 归一化不能改写模型给的那个对象(它同时是审批提示与回执的凭据)。
+      args = { ...raw as Record<string, unknown> };
+    } else if (typeof raw === 'string') {
+      const parsed = parseJsonObject(raw);
+      if (parsed) {
+        args = parsed;
+        parsedFromString = true;
+      } else {
+        malformed = true;
+      }
+    } else {
+      malformed = true;
+    }
+  }
+  const declared = schemaParameterNames(tool.inputSchema);
+  // schema 没声明参数名时, 只有明确禁止额外字段才不转发 —— JSON Schema 默认允许额外字段,
+  // 这类工具(如只声明类型不声明 properties 的)把顶层键折进去才是服务端能接住的那一份。
+  const foldAll = !declared && tool.inputSchema?.additionalProperties !== false;
+  const folded: string[] = [];
+  const unmapped: string[] = [];
+  for (const [key, value] of Object.entries(record)) {
+    if (GATEWAY_OWN_KEYS.has(key)) continue;
+    if (Object.prototype.hasOwnProperty.call(args, key)) continue;
+    if (!foldAll && !(declared?.has(key) ?? false)) {
+      unmapped.push(key);
+      continue;
+    }
+    args[key] = value;
+    folded.push(key);
+  }
+  return { args, provided, malformed, folded, unmapped, parsedFromString };
+}
+
+/**
  * 判断工具 schema 是否声明了名为 args 的参数。返回:
  * - true/false  properties 明确声明/未声明 args
  * - null        无法判定 — properties 缺失/为空(参数可能靠 $ref/allOf 组合声明),
@@ -3458,26 +3567,52 @@ class CindyMcpGateway {
     });
   }
 
-  // Share deterministic input errors with the approval hook. Never unwrap or
-  // guess parameters: ghost_call and third-party tools legitimately accept args.
+  // Share deterministic input errors with the approval hook. The gateway input is
+  // normalized first, so a model that flattens its parameters onto the top level is
+  // repaired instead of silently losing them.
   private callInputError(input: unknown): string | null {
     const record = recordInput(input);
     const server = typeof record.server === 'string' ? this.resolveServerName(record.server) : null;
     const tool = server && typeof record.tool === 'string'
       ? this.tools.get(mcpGatewayKey(server, record.tool)) : undefined;
+    if (!tool) return null;
+    const resolution = normalizeGatewayArgs(record, tool);
+    if (resolution.malformed) {
+      // 参数放在一个用不了的地方: 原样转发只会让服务端按缺省值静默兜底。
+      // 显式传 null 与「没传这个键」不是一回事, 所以单独点名, 让模型知道要省略这个键。
+      const sent = record.args === null || record.arguments === null
+        ? 'null (omit the key entirely — null is not an empty argument object)'
+        : 'something else';
+      return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: args must be a JSON object'
+        + ' (the model sent ' + sent + '). Put the selected tool parameters directly in gateway args.'
+        + ' Expected args schema: ' + schemaHint(tool.inputSchema);
+    }
     // Only the host plugin gateway is in scope. Other MCP tools retain their
-    // server-owned validation and the generic call_tool envelope diagnostics.
-    if (!tool || tool.serverName !== 'cindy' || !tool.name.startsWith('ghost_')) return null;
-    const schema = tool.inputSchema;
-    const required = Array.isArray(schema.required)
-      ? schema.required.filter((key): key is string => typeof key === 'string') : [];
-    const args = recordInput(record.args);
-    const missing = required.filter(key => !Object.prototype.hasOwnProperty.call(args, key));
+    // server-owned validation and the generic call_tool envelope diagnostics:
+    // 桥不替第三方工具判必填, 只保证它发出的参数不被改写、不被丢掉。
+    if (tool.serverName !== 'cindy' || !tool.name.startsWith('ghost_')) return null;
+    const missing = this.missingRequiredArgs(tool, resolution.args);
     if (missing.length === 0) return null;
     return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: missing '
       + missing.map(key => 'args.' + key).join(', ')
       + '. Put the selected tool parameters directly in gateway args, without an extra wrapping args.'
-      + ' Expected args schema: ' + schemaHint(schema);
+      + ' Expected args schema: ' + schemaHint(tool.inputSchema);
+  }
+
+  /**
+   * 工具 schema 声明了必填参数时, 缺一个就不能发出去。组合 schema
+   * (allOf/anyOf/oneOf/$ref)的必填项可能藏在里面, 判定不了就不拦。
+   */
+  private missingRequiredArgs(tool: ConnectedMcpTool, args: Record<string, unknown>): string[] {
+    const schema = tool.inputSchema;
+    if (!schema || typeof schema !== 'object') return [];
+    if (schema.allOf !== undefined || schema.anyOf !== undefined
+      || schema.oneOf !== undefined || schema.$ref !== undefined) return [];
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter((key): key is string => typeof key === 'string')
+      : [];
+    if (required.length === 0) return [];
+    return required.filter(key => !Object.prototype.hasOwnProperty.call(args, key));
   }
 
   resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
@@ -3490,10 +3625,14 @@ class CindyMcpGateway {
     if (!serverName || (this.botMemoryFacadeEnabled && serverName === 'cindy_memory')) return null;
     const tool = this.tools.get(mcpGatewayKey(serverName, toolName));
     if (!tool) return null;
+    const resolution = normalizeGatewayArgs(record, tool);
     return {
       qualifiedName: 'mcp__' + serverName + '__' + toolName,
-      args: recordInput(record.args),
+      args: resolution.args,
       tool,
+      ...(resolution.folded.length > 0 ? { folded: resolution.folded } : {}),
+      ...(resolution.unmapped.length > 0 ? { unmapped: resolution.unmapped } : {}),
+      ...(resolution.parsedFromString ? { parsedFromString: true } : {}),
     };
   }
 
@@ -3927,6 +4066,46 @@ class CindyMcpGateway {
       JSON.stringify(this.unavailable()).slice(0, 4_000);
   }
 
+  /**
+   * 归一化确实动过手时, 把真正发出去的参数回显出来。
+   *
+   * 「参数没生效还返回成功」这类问题只有看得见出站参数才查得动 —— 用户与模型据此
+   * 就能分清是链路丢参还是服务端行为(表格类服务收到坐标却仍写回 A1, 那是服务端的
+   * 字段契约问题, 不是链路问题)。
+   */
+  private normalizationNote(call: ResolvedMcpGatewayCall): string | null {
+    const folded = call.folded ?? [];
+    const unmapped = call.unmapped ?? [];
+    const parsedFromString = call.parsedFromString === true;
+    if (folded.length === 0 && unmapped.length === 0 && !parsedFromString) return null;
+    const parts: string[] = [];
+    if (parsedFromString) {
+      // 字符串形态也是一种归一化动作: 参数被解析成了对象, 用户与模型看到的必须
+      // 是真正发出去的那一份, 否则「参数没生效」时就没有可对照的依据。
+      parts.push('Cindy parsed the JSON string in args before forwarding.');
+    }
+    if (folded.length > 0) {
+      parts.push('Cindy moved these top-level parameters into args before forwarding: '
+        + folded.join(', ') + '.');
+    }
+    if (unmapped.length > 0) {
+      parts.push('These top-level parameters were not forwarded because the tool schema does '
+        + 'not declare them: ' + unmapped.join(', ') + '.');
+    }
+    parts.push('Forwarded arguments: ' + this.renderForwardedArgs(call.args));
+    return parts.join(' ');
+  }
+
+  private renderForwardedArgs(args: Record<string, unknown>): string {
+    let rendered: string;
+    try {
+      rendered = JSON.stringify(args) ?? '{}';
+    } catch {
+      rendered = '{}';
+    }
+    return rendered.length <= 2_000 ? rendered : rendered.slice(0, 1_999) + '…';
+  }
+
   private async executeResolvedCall(resolved: ResolvedMcpGatewayCall, signal?: AbortSignal, approvedDefinition?: string): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
@@ -3959,6 +4138,10 @@ class CindyMcpGateway {
       );
     }
     const content = mcpContentToPi(result?.content, result?.structuredContent);
+    // 归一化确实动过手时, 把真正发出去的参数回显出来: 「参数没生效还返回成功」
+    // 这类问题只有看得见出站参数才查得动(用户分得清是链路丢参还是服务端行为)。
+    const note = this.normalizationNote(resolved);
+    if (note) content.push({ type: 'text', text: note });
     const details = result?.structuredContent ?? {};
     if (result?.isError) {
       const failure = { content, details };
@@ -4328,9 +4511,15 @@ class CindyMcpGateway {
           // MiniMax-M3.1 / deepseek-v4.1-flash / step-5 三会话均复现), 服务端只报 expected
           // string/name。故把信封形状作为**无类型约束**的提示属性挂出来: 声明结构给模型看,
           // 不约束任何值, 避免误伤参数名恰好叫 args 或 name 的直调工具。
+          //
+          // 类型放开成 object|string: 弱模型有时把 args 写成一段 JSON 字符串
+          // (实测 MiniMax-M3.1 / deepseek-v4.1-flash / step-5)。schema 只认 object 时,
+          // pi 的 schema 校验会先把这个调用判成非法并丢掉, 网关的「字符串→对象」解析分支
+          // 永远走不到 —— 字符串形态必须真的能到达网关, 才谈得上「解析后原样转发」。
           args: {
-            type: 'object',
-            description: 'Arguments for the selected tool as a JSON object; omit when the selected tool takes none.',
+            type: ['object', 'string'],
+            description: 'Arguments for the selected tool as a JSON object, or the same object encoded as a JSON '
+              + 'string; omit when the selected tool takes none.',
             properties: {
               name: { description: 'Generic call_tool envelope only: the target tool name.' },
               args: { description: 'Generic call_tool envelope only: the target tool parameters.' },
@@ -4339,7 +4528,12 @@ class CindyMcpGateway {
           },
         },
         required: ['server', 'tool'],
-        additionalProperties: false,
+        // 顶层放开额外字段: 弱模型会把工具参数平铺在顶层(实测 MiniMax-M3.1 会把
+        // file_id 放进 args、把 row/col 平铺在外层, 2026-10-15 三会话复现)。顶层一旦
+        // additionalProperties: false, pi 的 schema 校验会先把这些参数判成非法并丢掉,
+        // 网关根本看不到它们 —— 表格类服务于是按缺省值写回 A1 并返回成功。放开之后
+        // 这些键能到达网关, 由 normalizeGatewayArgs 按工具 schema 归位。
+        additionalProperties: true,
       },
       execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => this.executeCall(params, signal, _toolCallId),
     });

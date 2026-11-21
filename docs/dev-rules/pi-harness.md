@@ -461,6 +461,17 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    dispose 未确认 runner 退出必须失败；Host 观察到的退出要能通过控制协议通知前台等待，不能只靠 status.json。
    Windows 上 SIGTERM 不得带 taskkill /F；前台若已读到终态必须先返回，不得被 Host 退出通知盖成失败。
 
+12. **MCP 网关入参归位（2026-11-16, #10818）**:`cindy_mcp_call_tool` 收到的入参必须
+  按所选工具自己的 inputSchema 归位后再发出 —— 模型把参数平铺在顶层(弱模型实测会犯)时,
+  schema 声明过的顶层键折进 `args`(同名以 args 为准), 顶层放开 `additionalProperties: true`
+  让这类调用能到达网关; 让 pi-schema 先判「unknown field」拒掉, 等于把用户要的操作静默
+  丢掉(表格类服务收到缺坐标就写回 A1 并返回成功)。参数读不出来(args 是数组/null/解析不了的
+  JSON 字符串)必须显式报错, 不得静默发 `arguments: {}`。归一化动过手就把**真正发出的
+  arguments** 回显进工具结果(用户与模型据此分清链路丢参还是服务端行为); 审批框显示的
+  必须是归位后的那一份。归一化不得改写模型给的入参对象(它同时是审批与回执的凭据)。
+  插件工具(`cindy`/`ghost_*`)保持必填前置校验, 第三方工具仍由服务端校验, 出站参数不改写。
+  由 `cindyBridgeSource.test.ts` 与 `pi-mcp-bridge.integration.test.ts` 的坐标用例守。
+
 ### 4.1 包变更与执行终态
 
 - 工具或原生包命令的回执写入队列、`extension_ui_response` 发出，只表示发送，不能据此
