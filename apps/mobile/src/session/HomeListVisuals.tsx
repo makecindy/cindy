@@ -131,10 +131,10 @@ function isClaudeCodeAgentKind(agentKind: string): boolean {
   return agentKind === 'cc' || agentKind === 'claude-code';
 }
 
-export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
+export const homeListStyles = (colors: ThemeColors, listSurface: string = colors.surface) => StyleSheet.create({
   sessionListRow: {
     alignItems: 'stretch',
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     flexDirection: 'row',
     gap: spacing.md,
     height: HOME_SESSION_ROW_HEIGHT,
@@ -246,7 +246,7 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   projectRow: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     flexDirection: 'row',
     gap: spacing.sm,
     minHeight: 56,
