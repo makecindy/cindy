@@ -1282,7 +1282,12 @@ async function runPipeline(task: InternalTask): Promise<void> {
     });
     // Subscription intents are registered synchronously. Their ACK is not a
     // prerequisite for an authorized invoke or for durably accepting the input.
-    void subscribe(`new-session:${params.deviceId}`, params.deviceId, ['sessions']).catch(() => undefined);
+    void withTransientRemoteRetry(async () => {
+      // Keep the existing bounded recovery for rejected subscriptions in the
+      // background, and never re-register the old owner's intent after sign-out.
+      assertTaskOwnerCurrent(task);
+      await subscribe(`new-session:${params.deviceId}`, params.deviceId, ['sessions']);
+    }).catch(() => undefined);
     // 建链完成、订阅意图登记后再启动鉴权 fresh revalidate。无需等待订阅 ACK，
     // 但不能与建链并行：listProviders 可能在建链完成
     // 前就返回旧目录快照(来源 A),而建链期间工作站已替换为 B,后续拿旧 A 快照

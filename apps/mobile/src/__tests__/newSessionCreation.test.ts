@@ -751,6 +751,37 @@ describe('newSessionCreation pipeline', () => {
     expect(remoteSessionStore.getSessions().find(s => s.id === 's11')?.pendingLocalCreation).toBe(false);
   });
 
+  // Unit regression for review r4648673906: a transient subscribe rejection
+  // must recover without holding up enqueue. Existing pending-ACK tests never
+  // rejected a subscription; fake time exposes the missing retry at 250ms.
+  it.each(['BACKPRESSURE', 'DEVICE_LINK_BUSY', 'PRECONDITION_FAILED', 'owner-changed'])(
+    'recovers the background subscription without blocking the first message: %s', async (code) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const maker = makeMaker();
+        const params = makeParams('s11', maker);
+        const subscribe = vi.fn(async (_owner: string, _device: string, _topics: string[]) => {});
+        let attempts = 0;
+        subscribe.mockImplementation(async owner => {
+          if (!owner.startsWith('new-session:')) return;
+          attempts += 1;
+          if (attempts === 1) throw new Error(code === 'owner-changed' ? 'BACKPRESSURE' : code);
+        });
+        params.transport.subscribe = subscribe;
+        startNewSessionCreation(params);
+        await flushPipeline();
+        expect(maker.input.enqueue).toHaveBeenCalledOnce();
+        expect(getNewSessionCreationTask('s11')).toBeNull();
+        expect(attempts).toBe(1);
+        if (code === 'owner-changed') setMobileAuthOwner('owner-b');
+        await vi.advanceTimersByTimeAsync(250);
+        expect(attempts).toBe(['BACKPRESSURE', 'DEVICE_LINK_BUSY'].includes(code) ? 2 : 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('acknowledges a new dialogue within four 200ms round trips, independently of Agent startup', async () => {
     // Deterministic unit latency budget, not a real-network benchmark. No sleeps
     // or native runtime: each required RPC costs 200ms; optional reads never settle.
