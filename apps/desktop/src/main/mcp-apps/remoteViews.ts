@@ -1,3 +1,4 @@
+import { confirmsMcpAppViewGone, McpAppWindowLimitError } from '@cindy/maker-shared/mcp-app-controller';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -26,6 +27,7 @@ const documentSchema = z.object({
   }).optional(),
 });
 interface RemoteViewDeps {
+  released?(owner: object, caller: string, peer: string | undefined, window?: 'mounted' | 'pending'): void;
   owner(): object | null | undefined;
   closeEpoch(deviceId: string): number;
   invoke(deviceId: string, sessionId: string, input: Record<string, unknown>, preSend: () => void, options?: { noResultCache?: boolean }): Promise<unknown>;
@@ -88,7 +90,7 @@ export class RemoteMcpAppViews {
     }
   }
 
-  async control(caller: string, deviceId: unknown, sessionId: string, raw: unknown): Promise<unknown> {
+  async control(caller: string, deviceId: unknown, sessionId: string, raw: unknown, allocated?: (limit?: 'pending') => void): Promise<unknown> {
     if (!id.safeParse(deviceId).success || !id.safeParse(sessionId).success ||
         !raw || Buffer.byteLength(JSON.stringify(raw)) > MCP_APPS_MAX_BYTES)
       throw new Error('MCP_APP_INVALID_REQUEST');
@@ -97,7 +99,7 @@ export class RemoteMcpAppViews {
     const parsed = mcpAppOperationSchema.safeParse(raw);
     if (!parsed.success) throw new Error('MCP_APP_INVALID_REQUEST');
     const input = parsed.data;
-    if (input.op === 'open') return this.open(caller, device, sessionId, input);
+    if (input.op === 'open') return this.open(caller, device, sessionId, input, allocated);
     if (input.op === 'cancel-open') {
       await Promise.all([...this.opening].filter((entry) => entry.caller === caller &&
         entry.deviceId === device && entry.sessionId === sessionId && entry.openId === input.openId &&
@@ -123,15 +125,19 @@ export class RemoteMcpAppViews {
   private async open(
     caller: string, deviceId: string, sessionId: string,
     input: Extract<z.infer<typeof mcpAppOperationSchema>, { op: 'open' }>,
+    allocated?: (limit?: 'pending') => void,
   ): Promise<McpAppSandboxView> {
     const owner = this.deps.owner();
     if (!owner) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
     const count = [...this.opening, ...this.views.values()].filter((entry) => entry.caller === caller && entry.owner === owner).length;
-    if (count >= 16) throw new Error('MCP_APP_VIEW_LIMIT');
+    if (count >= 16) throw new McpAppWindowLimitError('pending');
     const entry: Opening = { owner, caller, deviceId, sessionId, openId: input.openId,
       remoteOpenId: randomUUID(), cancelled: false, closeEpoch: this.deps.closeEpoch(deviceId) };
     this.opening.add(entry);
+    allocated?.('pending');
+    let mounted = false;
     let remoteId: string | undefined;
+    let releasedRemote = false;
     try {
       const assertCurrent = () => {
         this.assertLink(entry);
@@ -145,23 +151,38 @@ export class RemoteMcpAppViews {
         }
         const parsed = documentSchema.parse(raw);
         remoteId = parsed.viewId;
+        allocated?.();
         if (Buffer.byteLength(JSON.stringify(parsed)) > MCP_APPS_MAX_REMOTE_BYTES)
           throw new Error('MCP_APP_DOCUMENT_TOO_LARGE');
         return parsed;
-      }, assertCurrent);
+      }, assertCurrent, () => {
+        // A rejected document which already allocated a replacement is closed below.
+        releasedRemote = !remoteId;
+      });
       assertCurrent();
       remoteId = document.viewId;
       // Only Main's remote result is supplied. There is no Renderer-controlled HTML/RPC rebinding.
       const view: RemoteView = { ...entry, localId: '', remoteId, links: new Map(), linkEpoch: 0 };
       view.localId = mountRemoteAppDocument(document, caller, (raw) => this.frame(view, raw), () => this.dispose(view), input.context);
       this.views.set(view.localId, view);
+      mounted = true;
       return { viewId: view.localId, transport: 'sandbox', prefersBorder: document.prefersBorder };
     } catch (error) {
       // No writes are replayed. An old Host may reject cancel-open; its idle lease remains the fallback.
-      await this.call(entry, remoteId ? { op: 'teardown', viewId: remoteId } :
-        { op: 'cancel-open', openId: entry.remoteOpenId }).catch(() => {});
+      // A definitive quota refusal did not allocate a remote View. Deliver it immediately so
+      // the viewer queues this page in refusal order, without a second device request.
+      if (remoteId) {
+        releasedRemote = await this.call(entry, { op: 'teardown', viewId: remoteId }).then(() => true, confirmsMcpAppViewGone);
+      } else if (!/\bMCP_APP_VIEW_LIMIT\b/.test(String(error))) {
+        await this.call(entry, { op: 'cancel-open', openId: entry.remoteOpenId }).catch(() => {});
+      }
       throw error;
-    } finally { this.opening.delete(entry); }
+    } finally {
+      // Retiring an open attempt releases its reservation, but is not a viewer page closing.
+      const freedLocal = this.opening.delete(entry) && !mounted;
+      if (freedLocal || releasedRemote)
+        this.deps.released?.(owner, caller, releasedRemote ? deviceId : undefined, freedLocal ? 'pending' : undefined);
+    }
   }
 
   /** Called exclusively by the protocol after verifying Chromium's actual sandbox frame. */
@@ -215,20 +236,31 @@ export class RemoteMcpAppViews {
 
   private cancel(entry: Opening): Promise<unknown> {
     entry.cancelled = true;
-    this.opening.delete(entry);
+    if (this.opening.delete(entry)) this.deps.released?.(entry.owner, entry.caller, undefined, 'pending');
     return this.call(entry, { op: 'cancel-open', openId: entry.remoteOpenId });
   }
   private close(view: RemoteView): Promise<void> {
     view.closing ??= (async () => {
-      try { await this.call(view, { op: 'teardown', viewId: view.remoteId }); }
-      finally { if (this.views.get(view.localId) === view) unmountRemoteAppDocument(view.localId, view.caller); }
+      let peer: string | undefined;
+      try {
+        await this.call(view, { op: 'teardown', viewId: view.remoteId });
+        peer = view.deviceId;
+      } catch (error) {
+        if (confirmsMcpAppViewGone(error)) peer = view.deviceId;
+        throw error;
+      } finally {
+        if (this.views.get(view.localId) === view) unmountRemoteAppDocument(view.localId, view.caller);
+        this.deps.released?.(view.owner, view.caller, peer, 'mounted');
+      }
     })();
     return view.closing;
   }
   private dispose(view: RemoteView): void {
     this.views.delete(view.localId);
     view.links.clear();
-    if (!view.closing) void this.call(view, { op: 'teardown', viewId: view.remoteId }).catch(() => {});
+    if (!view.closing) void this.call(view, { op: 'teardown', viewId: view.remoteId })
+      .then(() => view.deviceId, error => confirmsMcpAppViewGone(error) ? view.deviceId : undefined)
+      .then(peer => this.deps.released?.(view.owner, view.caller, peer, 'mounted'));
   }
   async releaseCaller(caller: string): Promise<void> {
     const pending = [...this.opening].filter((entry) => entry.caller === caller).map((entry) => this.cancel(entry));

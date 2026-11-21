@@ -1,3 +1,4 @@
+import { McpAppWindowLimitError } from '@cindy/maker-shared/mcp-app-controller';
 import { withHostAppSdk } from '@cindy/maker-shared/mcp-app-sdk';
 import { app, protocol, session, type WebContents, type WebFrameMain } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
@@ -171,7 +172,7 @@ export function mountRemoteAppDocument(
   )
     throw new Error('MCP_APP_INVALID_DOCUMENT');
   if ([...documents.values()].filter((item) => item.caller === caller).length >= 16)
-    throw new Error('MCP_APP_VIEW_LIMIT');
+    throw new McpAppWindowLimitError('document');
   const policy = appCsp({ csp: document.policy });
   const id = randomUUID();
   supplyMcpAppDocument({ ...document, viewId: id, csp: policy.header, policy: policy.csp }, caller, invoke, dispose, hostContext);

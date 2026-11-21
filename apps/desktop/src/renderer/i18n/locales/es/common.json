@@ -21741,6 +21741,7 @@
       "reviewed": "Revisado",
       "verified-publisher": "Editor verificado"
     },
+    "viewLimit": "Hay demasiadas páginas abiertas. Desplaza otra página fuera de la vista o ciérrala para que esta se abra automáticamente.",
     "pluginRevoked": "El complemento se desactivó o cambió. Esta página ya no está disponible.",
     "pluginCspRejected": "La página solicitó un dominio no declarado y se bloqueó.",
     "filesOnExecutionComputer": "Ver el contenido del archivo en la computadora de ejecución",

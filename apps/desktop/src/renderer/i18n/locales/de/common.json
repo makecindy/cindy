@@ -21543,6 +21543,7 @@
       "reviewed": "Geprüft",
       "verified-publisher": "Verifizierter Herausgeber"
     },
+    "viewLimit": "Zu viele Seiten sind geöffnet. Scrolle eine andere Seite aus dem sichtbaren Bereich oder klappe sie ein. Diese Seite öffnet sich dann automatisch.",
     "pluginRevoked": "Das Plugin wurde deaktiviert oder geändert. Diese Seite ist nicht mehr verfügbar.",
     "pluginCspRejected": "Die Seite hat eine nicht deklarierte Domain angefordert und wurde blockiert.",
     "filesOnExecutionComputer": "Dateiinhalt auf dem ausführenden Computer anzeigen",

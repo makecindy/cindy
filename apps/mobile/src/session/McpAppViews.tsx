@@ -10,7 +10,7 @@ import { McpAppView } from './mcpAppView';
 
 const Context = createContext<{
   foreground: boolean;
-  open(deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>): McpAppView;
+  open(deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean, quotaVisible: () => boolean): McpAppView;
 } | null>(null);
 export const useMcpAppViews = () => useContext(Context);
 export { NativeMcpAppSlot, mcpAppSurfaceAvailable };
@@ -18,25 +18,25 @@ export { NativeMcpAppSlot, mcpAppSurfaceAvailable };
 /** Hosts stay at the app root; native slots place their content inline inside
  * the real navigation screen. No root overlay, coordinates or touch interception. */
 export function McpAppViewsProvider({ children }: { children: ReactNode }) {
-  const { invoke } = useDeviceLink();
+  const { invoke, getUserCloseEpoch, onUserClose } = useDeviceLink();
   const views = useRef(new Set<McpAppView>());
   const mounted = useRef(true);
   const [, refresh] = useState(0);
   const [foreground, setForeground] = useState(AppState.currentState !== 'background' && AppState.currentState !== 'inactive');
   const changed = useCallback(() => { if (mounted.current) refresh((n) => n + 1); }, []);
-  const open = useCallback((deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>) => {
+  const open = useCallback((deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean, quotaVisible: () => boolean) => {
     const view = new McpAppView(invoke, deviceId, sessionId, clientId, changed,
       () => { views.current.delete(view); changed(); }, async (url) => {
         const parsed = new URL(url);
         if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password)
           throw new Error('MCP_APP_INVALID_LINK');
         await Linking.openURL(parsed.href);
-      }, getMobileAuthOwner().generation);
+      }, getMobileAuthOwner().generation, isPlugin, getUserCloseEpoch, onUserClose);
     views.current.add(view);
     changed();
-    void view.open(context);
+    void view.open(context, () => mounted.current && AppState.currentState !== 'background' && AppState.currentState !== 'inactive' && quotaVisible());
     return view;
-  }, [invoke, changed]);
+  }, [invoke, changed, getUserCloseEpoch, onUserClose]);
   useEffect(() => {
     mounted.current = true;
     const subscription = AppState.addEventListener('change', (state) => {

@@ -1,3 +1,4 @@
+import { McpAppViewSlots } from '@cindy/maker-shared/mcp-app-controller';
 import { createMcpAppsService } from './service.js';
 import { extractIpcError } from '../../shared/ipcError.js';
 import { pagePermissionGrants, onPagePermissionSessionChanged } from './pagePermissions.js';
@@ -36,7 +37,7 @@ import { createLogger } from '../logger.js';
 import { getMcpAppRevisionKey } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
-import { getRemoteLinkCloseEpoch, remoteInvoke } from '../device-link/index.js';
+import { getRemoteLinkCloseEpoch, onRemoteLinkClosed, remoteInvoke } from '../device-link/index.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { McpAppsHost, appServerRevision, type McpAppsHostDeps } from './host.js';
 import { readAppServer, setMcpAppsHost } from './runtime.js';
@@ -69,6 +70,7 @@ export function registerMcpAppsIpc(
   allowPendingPage?: (sessionId: string, requestId: string) => void,
 ): void {
   let saving = false;
+  const slots = new McpAppViewSlots();
   const providerCalls = new Map<string, Map<string, AbortController>>();
   const currentOwner = () => getCurrentDbClientSnapshot() ?? undefined;
   const pluginFiles = configurePluginAppearanceFiles(createPluginFileAccess({
@@ -111,6 +113,7 @@ export function registerMcpAppsIpc(
   setMcpAppsHost(host);
   setMcpAppFileReader((id, token, request) => host.readPluginFile(id, token, request));
   const remoteViews = new RemoteMcpAppViews({
+    released: (owner, caller, peer, window) => slots.released(owner, caller, peer, window),
     owner: currentOwner,
     closeEpoch: getRemoteLinkCloseEpoch,
     invoke: async (deviceId, sessionId, input, preSend, options) => {
@@ -124,6 +127,7 @@ export function registerMcpAppsIpc(
     openLink: (url) => shell.openExternal(url),
   });
   setMcpAppCallerCleanup(async (caller) => {
+    slots.cancelCaller(caller);
     for (const call of providerCalls.get(caller)?.values() ?? []) call.abort();
     providerCalls.delete(caller);
     nativePluginUi.release(caller);
@@ -252,45 +256,56 @@ export function registerMcpAppsIpc(
         finishPluginUiAction(caller, reply.requestId, reply.result, reply.error as string | undefined);
         return {};
       }
-      if (raw && typeof raw === 'object' && 'deviceId' in raw) {
-        // Incoming device-link calls cannot use this local-only route to pivot to another computer.
-        if (remote) throw new Error('MCP_APP_INVALID_REQUEST');
-        if (sessionId === null) throw new Error('MCP_APP_INVALID_SCOPE');
-        return await remoteViews.control(caller, raw.deviceId, sessionId, raw);
-      }
-      return await handleMcpAppOperation(
-        host,
-        caller,
-        sessionId,
-        raw,
-        remote
-          ? undefined
-          : {
-              resource: async (source) => {
-                const scope = sessionId === null ? undefined : await assertSession(sessionId);
-                if (scope?.session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
-                return bindPluginUiResource(caller, sessionId, source.instanceId, source.viewId, config => host.serverRevision(config), async () => {
-                  if (!scope || sessionId === null) return;
-                  const latest = await assertSession(sessionId);
-                  if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt || latest.session.remoteHostId)
-                    throw new Error('MCP_APP_SESSION_UNAVAILABLE');
-                }, scope ? { title: scope.session.title, workingDir: scope.session.workingDir, model: scope.session.model } : undefined);
+      const owner = currentOwner();
+      const dispatch = async (allocated?: (limit?: 'pending' | 'document') => void) => {
+        if (raw && typeof raw === 'object' && 'deviceId' in raw) {
+          // Incoming device-link calls cannot use this local-only route to pivot to another computer.
+          if (remote) throw new Error('MCP_APP_INVALID_REQUEST');
+          if (sessionId === null) throw new Error('MCP_APP_INVALID_SCOPE');
+          return await remoteViews.control(caller, raw.deviceId, sessionId, raw, allocated);
+        }
+        return await handleMcpAppOperation(
+          host,
+          caller,
+          sessionId,
+          raw,
+          remote
+            ? undefined
+            : {
+                resource: async (source) => {
+                  const scope = sessionId === null ? undefined : await assertSession(sessionId);
+                  if (scope?.session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
+                  return bindPluginUiResource(caller, sessionId, source.instanceId, source.viewId, config => host.serverRevision(config), async () => {
+                    if (!scope || sessionId === null) return;
+                    const latest = await assertSession(sessionId);
+                    if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt || latest.session.remoteHostId)
+                      throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+                  }, scope ? { title: scope.session.title, workingDir: scope.session.workingDir, model: scope.session.model } : undefined);
+                },
+                supply: (document, boundCaller, hostContext) =>
+                  supplyMcpAppDocument(document, boundCaller, (input) =>
+                    handleMcpAppFrameOperation(
+                      host,
+                      boundCaller,
+                      sessionId,
+                      document.viewId,
+                      input,
+                      async (url) => {
+                        assertMcpAppDocumentCaller(document.viewId, boundCaller);
+                        await shell.openExternal(url);
+                      },
+                    ), () => slots.released(owner, boundCaller, boundCaller, 'document'), hostContext),
               },
-              supply: (document, boundCaller, hostContext) =>
-                supplyMcpAppDocument(document, boundCaller, (input) =>
-                  handleMcpAppFrameOperation(
-                    host,
-                    boundCaller,
-                    sessionId,
-                    document.viewId,
-                    input,
-                    async (url) => {
-                      assertMcpAppDocumentCaller(document.viewId, boundCaller);
-                      await shell.openExternal(url);
-                    },
-                  ), undefined, hostContext),
-            },
-      );
+        );
+      };
+      // Slot waits belong to the viewer's process, including detached windows.
+      // Remote callers only have access to the existing MCP Apps wire operations.
+      if (remote || !raw || typeof raw !== 'object') return await dispatch();
+      const input = raw as Record<string, unknown>;
+      const peer = typeof input.deviceId === 'string' ? input.deviceId : caller;
+      const remoteOpen = typeof input.deviceId === 'string' && typeof input.openId === 'string';
+      return await slots.control(owner, caller, peer, input, dispatch, remoteOpen ? getRemoteLinkCloseEpoch(peer) : 0,
+        remoteOpen ? closed => onRemoteLinkClosed(peer, closed) : undefined);
     } catch (error) {
       // device-link serializes the execution Host's IPC prefix. Unwrap that
       // envelope before applying the same public-code boundary on the viewer.

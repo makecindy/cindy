@@ -416,11 +416,52 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     const initialContext = readContext();
     lastContext = JSON.stringify(initialContext);
     let opened = false;
+    // Keep the existing preload margin for ordinary opens. A quota waiter needs a real
+    // viewport intersection so a nearby offscreen card cannot take the available slot.
+    let waitingObserver: IntersectionObserver | undefined;
+    let reopenOnEntry = false;
+    let firstIntersection: ((visible: boolean) => void) | undefined;
+    const checkWaitingCard = () => new Promise<boolean>(resolve => {
+      firstIntersection = resolve;
+      // Ask Chromium for a fresh intersection on admission too. A scroll can
+      // precede the last observer notification in the frame that freed a slot.
+      waitingObserver?.disconnect();
+      const observer = new IntersectionObserver(([entry]) => {
+        if (disposed || observer !== waitingObserver) return;
+        const waitingVisible = entry.isIntersecting && visibleRef.current;
+        if (!waitingVisible) {
+          reopenOnEntry = true;
+          void controller.close().catch(() => {});
+        } else if (reopenOnEntry) {
+          reopenOnEntry = false;
+          setAttempt(value => value + 1);
+        }
+        firstIntersection?.(waitingVisible);
+        firstIntersection = undefined;
+      });
+      waitingObserver = observer;
+      observer.observe(card.current!);
+    });
     void controller
-      .open(initialContext)
+      .open(initialContext, async waiting => {
+        if (disposed || !visibleRef.current) return false;
+        clearTimeout(loadingTimer);
+        if (!waiting) {
+          // Measure the compact waiting card before expanding the loading placeholder.
+          if (!await checkWaitingCard() || disposed || !visibleRef.current) return false;
+          const latest = readContext();
+          lastContext = JSON.stringify(latest);
+          pendingContext = undefined;
+          void controller.context(latest);
+        }
+        setError(waiting ? 'mcpApps.viewLimit' : undefined);
+        setLoading(!waiting);
+        return waiting ? checkWaitingCard() : true;
+      })
       .then(async (document) => {
         if (!document || disposed) return;
         opened = true;
+        waitingObserver?.disconnect();
         void flush();
         phase = 'sandbox';
         localViewId = document.viewId;
@@ -455,6 +496,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     function dispose() {
       if (disposed) return;
       disposed = true;
+      waitingObserver?.disconnect();
+      firstIntersection?.(false);
       forgetRetainedLocalView(retentionKey);
       updateContextRef.current = undefined;
       clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer); clearTimeout(heightFallbackTimer);
@@ -516,8 +559,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   }, [enabled, retained, visible, deviceId, retentionKey]);
 
   useEffect(() => {
-    if (root.current && visibleRef.current)
-      void controllerRef.current?.context(hostContext(locale, root.current, fixedRef.current)).catch(() => {});
+    if (visibleRef.current) updateContextRef.current?.();
   }, [locale]);
   useLayoutEffect(() => {
     if (mode !== 'fullscreen') return;

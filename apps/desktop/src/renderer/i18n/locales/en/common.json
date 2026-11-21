@@ -21543,6 +21543,7 @@
       "reviewed": "Reviewed",
       "verified-publisher": "Verified publisher"
     },
+    "viewLimit": "Too many pages are open. Scroll another page out of view or collapse it, and this page will open automatically.",
     "pluginRevoked": "The plugin was disabled or changed. This page is no longer available.",
     "pluginCspRejected": "The page requested an undeclared domain and was blocked.",
     "filesOnExecutionComputer": "View file contents on the execution computer",
