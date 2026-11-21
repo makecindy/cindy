@@ -419,6 +419,26 @@ describe('voice input global shortcut registration', () => {
     setTimeoutSpy = null;
   });
 
+  // PR #10218：旧 owner 原生组合释放后通知离开键接手，不要求再次修改已保存配置。
+  it('notifies other shortcuts only after a successful voice registration has released its old key', async () => {
+    setPlatform('darwin');
+    const { registerGlobalVoiceInputIpc } = await import('../global.js');
+    const { onVoiceShortcutRegistrationChanged } = await import('../shortcutRegistrationEvents');
+    registerGlobalVoiceInputIpc(mocks.ipcDeps);
+    const setShortcut = mocks.handlers.get('voice-input:global-shortcut:set');
+    const shortcut: VoiceInputShortcut = { code: 'KeyL', key: 'l', modifiers: { meta: false, ctrl: true, shift: true, alt: false, fn: false } };
+    mocks.setStoredShortcut(shortcut);
+    await setShortcut?.({}, shortcut);
+    expect(mocks.registeredShortcuts.size).toBe(1);
+    const released = vi.fn(() => expect(mocks.registeredShortcuts.size).toBe(0));
+    const unsubscribe = onVoiceShortcutRegistrationChanged(released);
+    try {
+      mocks.setStoredShortcut(null);
+      await setShortcut?.({}, null);
+      expect(released).toHaveBeenCalledTimes(1);
+    } finally { unsubscribe(); }
+  });
+
   it('uses the macOS native listener for F16 phases and Electron only to reserve the key', async () => {
     setPlatform('darwin');
     const { registerGlobalVoiceInputIpc } = await import('../global.js');

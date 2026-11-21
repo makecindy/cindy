@@ -256,6 +256,65 @@ describe('AwayGuardController', () => {
     expect(state.awake).toBe(false);
   });
 
+  // 主动离开必须持续遮屏，不能复用两分钟后会露出桌面的试用路径。
+  it('manually covers with auto-away off until the owner returns, without changing the preference', async () => {
+    const { state, guard, away } = setup();
+    state.enabled = false;
+    await guard.activate();
+    await guard.activate();
+    await away(AWAY_GUARD_PREVIEW_MS * 3);
+    expect(state.events).toEqual(['show']);
+    expect(state.awake).toBe(true);
+    expect(state.enabled).toBe(false);
+    guard.masksEnded();
+    await guard.tick();
+    expect(state.awake).toBe(false);
+    expect(guard.masked).toBe(false);
+  });
+
+  it('does not manually cover a locked screen and releases the display if covering fails', async () => {
+    const { state, guard } = setup();
+    state.locked = true;
+    await guard.activate();
+    expect(state.events).toEqual([]);
+    state.locked = false;
+    state.showFails = true;
+    await expect(guard.activate()).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+    expect(state.awake).toBe(false);
+    expect(guard.masked).toBe(false);
+  });
+
+  it('locks a manual cover when a display is added and does not re-cover with auto-away off', async () => {
+    const { state, guard, away } = setup();
+    state.enabled = false;
+    await guard.activate();
+    await guard.displaysChanged();
+    expect(state.events).toEqual(['show', 'lock']);
+    state.locked = false;
+    await away(AWAY_MS * 3);
+    expect(guard.masked).toBe(false);
+    expect(state.awake).toBe(false);
+  });
+
+  // 合并 main 的隐私屏策略：主动盖屏同样只在 AI 需要显示器时常亮，系统锁屏立即撤罩。
+  it('shares display demand and immediate system-lock cleanup with persistent manual covers', async () => {
+    const { state, guard, away } = setup();
+    state.enabled = false;
+    state.working = false;
+    await guard.activate();
+    expect(guard.inputShielded).toBe(true);
+    expect(state.awake).toBe(false);
+    state.working = true;
+    await away(AWAY_GUARD_PREVIEW_MS * 3);
+    expect(state.awake).toBe(true);
+    expect(guard.inputShielded).toBe(true);
+    guard.screenLockedNow();
+    expect(guard.masked).toBe(false);
+    expect(state.awake).toBe(false);
+    await away(AWAY_MS);
+    expect(guard.masked).toBe(false);
+  });
+
   // 2026-11-11: remote exits must cover even with the automatic setting off.
   // Existing idle/preview tests did not cover a persistent remote-exit cover (unit).
   // Standalone vitest duration: 1.60 s on 2026-11-11.

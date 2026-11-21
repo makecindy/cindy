@@ -116,6 +116,25 @@ describe('VoiceInputDataStore persistence', () => {
     }
   });
 
+  // PR #10218：主进程需在 renderer 注册语音前放弃冲突的默认键。
+  // 通过持久化入口验证已写盘的新绑定先通知仲裁，普通设置/历史变化不触发；tier: unit。
+  it('notifies shortcut subscribers after persistence and before renderer broadcast', () => {
+    const store = new VoiceInputDataStore();
+    const original = store.getSettings().shortcut;
+    const changed = vi.fn(() => {
+      expect(new VoiceInputDataStore().getSettings().shortcut).toBeNull();
+      expect(mocks.window.webContents.send).not.toHaveBeenCalled();
+    });
+    const unsubscribe = store.subscribeShortcut(changed);
+    store.updateSettings({ shortcut: null });
+    expect(changed).toHaveBeenCalledTimes(1);
+    store.updateSettings({ language: 'ja' });
+    expect(changed).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    store.updateSettings({ shortcut: original });
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+
   it('writes the candidate before committing state and broadcasting it', () => {
     const store = new VoiceInputDataStore();
 
@@ -142,6 +161,8 @@ describe('VoiceInputDataStore persistence', () => {
     store.updateSettings({ language: 'en' });
     mocks.window.webContents.send.mockClear();
     const before = store.getSnapshot();
+    const shortcutChanged = vi.fn();
+    store.subscribeShortcut(shortcutChanged);
     const failure = new Error(message);
 
     const method = _operation === 'writeFileSync' ? 'writeFileSync' : 'renameSync';
@@ -149,9 +170,10 @@ describe('VoiceInputDataStore persistence', () => {
       throw failure;
     });
 
-    expect(() => store.updateSettings({ language: 'ja' })).toThrow(
+    expect(() => store.updateSettings({ language: 'ja', shortcut: null })).toThrow(
       `voice input data write failed: ${message}`,
     );
+    expect(shortcutChanged).not.toHaveBeenCalled();
     expect(store.getSnapshot()).toEqual(before);
     expect(mocks.window.webContents.send).not.toHaveBeenCalled();
     const persisted = JSON.parse(

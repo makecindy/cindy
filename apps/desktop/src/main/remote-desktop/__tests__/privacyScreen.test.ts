@@ -12,6 +12,10 @@ const away = vi.hoisted(() => ({
   lock: vi.fn<() => Promise<void>>(),
   helperLock: vi.fn<() => Promise<boolean>>(),
 }));
+// 此窗口 fixture 验证锁屏失败恢复；全局按键与用户设置由 awayGuardShortcut.test.ts 独立验证。
+vi.mock('../awayGuardShortcut', () => ({ installAwayGuardShortcut: () => () => {} }));
+// 集成用例模拟 macOS 15；内核版本也应属于模拟平台，而非运行测试的宿主。
+vi.mock('node:os', async (original) => ({ ...await original<typeof import('node:os')>(), release: () => '24.0.0' }));
 vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() }),

@@ -41,7 +41,7 @@ function readGlobalFailures(raw: unknown): AppShortcutId[] {
 }
 
 function recomputeEffective(): void {
-  effective = getEffectiveAppShortcuts(overridesSnapshot, platform, voiceYieldCombos);
+  effective = getEffectiveAppShortcuts(overridesSnapshot, platform, voiceYieldCombos, window.electronAPI?.osRelease);
 }
 
 function readVoiceYieldCombos(): AppShortcutCombo[] {
@@ -75,12 +75,15 @@ function ensureInitialized(): void {
       listeners.forEach((cb) => cb());
     });
     voiceYieldCombos = readVoiceYieldCombos();
+    const refreshVoiceYieldCombos = () => {
+      voiceYieldCombos = readVoiceYieldCombos();
+      recomputeEffective();
+      listeners.forEach((cb) => cb());
+    };
+    // preload 先刷新新 owner 的同步快照，renderer 再更新设置展示与冲突判定。
+    window.electronAPI?.onAuthStateChange?.(refreshVoiceYieldCombos);
     try {
-      window.electronAPI?.voiceInput?.onDataChanged(() => {
-        voiceYieldCombos = readVoiceYieldCombos();
-        recomputeEffective();
-        listeners.forEach((cb) => cb());
-      });
+      window.electronAPI?.voiceInput?.onDataChanged(refreshVoiceYieldCombos);
     } catch {
       // 语音订阅不可用时保持启动快照, 不影响其余快捷键。
     }

@@ -24,3 +24,8 @@ export const AWAY_GUARD_PREVIEW_CHANNEL = 'away-guard:preview';
 export const AWAY_GUARD_PREVIEW_DELAY_MS = 3_000;
 
 export type AwayGuardPreviewResult = { ok: true } | { ok: false; reason: 'permission' | 'unavailable' };
+
+/** macOS 14 使用 Darwin 23；preload 与 main 共用内核版本，避免两端可用性漂移。 */
+export function isAwayGuardSupportedPlatform(platform: string, osRelease: string): boolean {
+  return platform === 'darwin' && Number(osRelease.split('.')[0]) >= 23;
+}

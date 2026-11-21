@@ -132,6 +132,17 @@ export class AwayGuardController {
     this.deps.log('preview shown');
   }
 
+  /** 主人主动离开：复用持续隐私屏，不等待空闲、不受试用时限影响，也不改变自动偏好。 */
+  async activate(): Promise<void> {
+    try {
+      await this.coverRemoteExit();
+      if (this.inputShielded) this.deps.log('manual cover shown');
+    } catch (error) {
+      this.deps.keepDisplayAwake(false);
+      throw error;
+    }
+  }
+
   /** Protect a remote exit even when automatic away protection is disabled. */
   async coverRemoteExit(): Promise<void> {
     if (this.deps.screenLocked()) return;

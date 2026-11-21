@@ -24,7 +24,6 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { voiceDictionarySyncStore } from './VoiceDictionarySyncStore.js';
 import {
-  DEFAULT_DICTIONARY_SYNC_ENABLED,
   MAX_VOICE_INPUT_DICTIONARY_ALIASES,
   MAX_VOICE_INPUT_DICTIONARY_ENTRIES,
   MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS,
@@ -76,6 +75,13 @@ type DataChangedPayload = {
 export class VoiceInputDataStore {
   private state: StoredVoiceInputData | null = null;
   private stateOwnerId: string | null = null;
+  private readonly shortcutListeners = new Set<() => void>();
+
+  /** 主进程快捷键仲裁在持久化成功后、renderer 收到广播前同步让位。 */
+  subscribeShortcut(listener: () => void): () => void {
+    this.shortcutListeners.add(listener);
+    return () => this.shortcutListeners.delete(listener);
+  }
 
   getSnapshot(): VoiceInputDataSnapshot {
     return cloneSnapshot(this.load());
@@ -634,7 +640,9 @@ export class VoiceInputDataStore {
     };
     // 只有文件替换成功后才能提交内存状态和广播，避免 UI 显示未持久化的数据。
     this.save(normalizedState);
+    const shortcutChanged = JSON.stringify(this.state?.settings.shortcut) !== JSON.stringify(normalizedState.settings.shortcut);
     this.state = normalizedState;
+    if (shortcutChanged) this.shortcutListeners.forEach((listener) => listener());
     broadcastVoiceInputDataChanged({
       settings: normalizedState.settings,
       history: normalizedState.history,
