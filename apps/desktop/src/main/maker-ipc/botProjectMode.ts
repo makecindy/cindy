@@ -435,10 +435,11 @@ function broadcastProjectRegistered(workingDir: string): void {
 export const BOT_PROJECT_MEMORY_REVIEW_ID = 'teammate-memory-review';
 
 const MEMORY_REVIEW_INSTRUCTIONS = `. Keep only durable, useful knowledge in this project's memory and reusable, proven procedures in its skills. Search existing files first: update a related record or skill instead of adding a duplicate. Review related existing material for duplication, contradictions, obsolete status and unnecessary detail; keep concise facts and actionable steps, not conversation logs or one-off task progress. Preserve the owner's rules and intent. Before merging or removing content, verify the evidence and keep a recoverable copy or a targeted Git commit; leave uncertain items intact. Read .cindy/memory/README.md before memory maintenance. Skills live in .agents/skills; keep SKILL.md focused and move detailed examples to on-demand references when useful. Do not invent a skill just because a review ran. If no meaningful improvement is justified, finish quietly.`;
-/** The supplied prompt before its check counted since the last review instead of the last day. */
-function isLastDayReviewPrompt(prompt: string | undefined, botId: string): boolean {
-  return !!prompt?.startsWith('Review ')
-    && prompt.endsWith(`'s conversations from the last day (teammate id ${botId})${MEMORY_REVIEW_INSTRUCTIONS}`);
+/** Exactly the supplied prompt from before its check counted since the last review. Any edit,
+ * including the review's scope or a name from before a rename, keeps the owner's text. */
+function isLastDayReviewPrompt(prompt: string | undefined, input: { botId: string; displayName: string }): boolean {
+  const name = input.displayName.trim() || input.botId;
+  return prompt === `Review ${name}'s conversations from the last day (teammate id ${input.botId})${MEMORY_REVIEW_INSTRUCTIONS}`;
 }
 
 export function botProjectMemoryReview(input: {
@@ -491,7 +492,7 @@ export async function ensureBotProjectAutomations(input: {
   const databasePath = getDbPathForUser(userId);
   const { bundledCheck, ...preRunHook } = await ensureMemoryReviewHook({ ...input, databasePath, previousCommand: current?.preRunHook?.command });
   // The supplied check now counts since the last review; its untouched last-day prompt follows.
-  const upgradePrompt = bundledCheck && isLastDayReviewPrompt(current?.prompt, input.botId);
+  const upgradePrompt = bundledCheck && isLastDayReviewPrompt(current?.prompt, input);
   if ((suppliedHook || (legacyHook && preRunHook.command === current?.preRunHook?.command)) && !upgradePrompt) return false;
   // An existing file that cannot be read whole is kept: the upgrade fails and retries next start.
   const defaults = botProjectMemoryReview({

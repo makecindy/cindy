@@ -278,11 +278,13 @@ describe('ensureBotProjectAutomations', () => {
     expect(loader.upsertSchedule).toHaveBeenLastCalledWith(workingDir, expect.objectContaining({
       cronExpr: '0 5 * * *', prompt: fresh.prompt, preRunHook: lastDay.preRunHook,
     }), { keepUnreadable: true });
-    // Owner-edited prompt: the check still upgrades, the prompt stays.
-    await fs.writeFile(checkFile, installed);
-    loader.loadProjectSchedules.mockResolvedValueOnce([{ ...lastDay, prompt: `${lastDay.prompt} Also tidy notes.` }]);
-    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
-    expect(await run()).toBe(0);
+    // Owner-edited prompt (scope at either end): the check still upgrades, the prompt stays.
+    for (const prompt of [`${lastDay.prompt} Also tidy notes.`, lastDay.prompt.replace('Review Mimi', 'Review only work-related parts of Mimi')]) {
+      await fs.writeFile(checkFile, installed);
+      loader.loadProjectSchedules.mockResolvedValueOnce([{ ...lastDay, prompt }]);
+      await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
+      expect(await run()).toBe(0);
+    }
     // Owner-edited check: neither the check nor the prompt changes.
     await fs.writeFile(checkFile, `${installed}\n// Owner customization\n`);
     loader.loadProjectSchedules.mockResolvedValueOnce([lastDay]);
