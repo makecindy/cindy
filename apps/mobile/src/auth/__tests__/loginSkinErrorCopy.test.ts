@@ -25,6 +25,7 @@ import { setManualLocaleOverride } from "@/i18n/appLanguage";
 
 /** locale → 代表性系统 languageTag(catalog 解析规则全路径过一遍)。 */
 const LOCALE_TAGS: Record<LoginLocale, string> = {
+  ru: "ru-RU",
   "zh-CN": "zh-Hans-CN",
   "zh-TW": "zh-Hant-TW",
   en: "en-US",

@@ -10,7 +10,7 @@
  */
 
 /** UI 支持的具体语言。 */
-export const SUPPORTED_LOCALES = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR", "zh-Hant-x-lzh", "zh-Hans-x-lzh"] as const;
+export const SUPPORTED_LOCALES = ["ru", "zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR", "zh-Hant-x-lzh", "zh-Hans-x-lzh"] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 /** 文言等古典版本:只能手动选择;日期格式、服务端 locale 与内容语言按其现代底本(与 desktop 一致)。 */

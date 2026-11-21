@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n';
+import { formatLocalizedDuration } from '@/session/sessionDurationFormat';
 import { formatPresentationDate, formatPresentationTime } from './dateFormatters';
 import { memoizedTranslation } from './translationMemo';
 import type {
@@ -13,4 +14,5 @@ export const mobilePresentationLocalizer: PresentationLocalizer = {
   translate: mobilePresentationTranslate,
   formatDate: (date) => formatPresentationDate(date, i18n.resolvedLanguage || i18n.language),
   formatTime: (date) => formatPresentationTime(date, i18n.resolvedLanguage || i18n.language),
+  formatDuration: formatLocalizedDuration,
 };

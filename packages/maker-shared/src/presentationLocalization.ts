@@ -10,6 +10,7 @@ export interface PresentationLocalizer {
   translate: PresentationTranslator;
   formatDate?: (date: Date) => string;
   formatTime?: (date: Date) => string;
+  formatDuration?: (milliseconds: number) => string;
 }
 
 export function presentationText(

@@ -10,6 +10,7 @@
  * - 不接 LanguageDetector backend,偏好全部走 languagePreferenceStore(AsyncStorage)。
  */
 
+import ruCommon from "./locales/ru";
 import esCommon from "./locales/es";
 import frCommon from "./locales/fr";
 import deCommon from "./locales/de";
@@ -40,6 +41,7 @@ export type { LocalePreference, SupportedLocale } from "./locale";
 export { detectSystemLocale } from "./systemLocale";
 
 const resources = {
+  ru: { common: ruCommon },
   "es": { common: esCommon },
   "fr": { common: frCommon },
   "de": { common: deCommon },

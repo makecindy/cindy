@@ -9,6 +9,7 @@
  *
  * 影子 catalog 门禁 src/__tests__/shadowCatalogGlossary.test.ts 仍覆盖这份投影。
  */
+import ruInteraction from "@/i18n/locales/ru/interaction.json";
 import esInteraction from "@/i18n/locales/es/interaction.json";
 import frInteraction from "@/i18n/locales/fr/interaction.json";
 import deInteraction from "@/i18n/locales/de/interaction.json";
@@ -55,6 +56,7 @@ export const FULL_ACCESS_CONFIRMATION_COPY: Record<
   "de": project(deInteraction),
   "pt-PT": project(ptPTInteraction),
   "pt-BR": project(ptBRInteraction),
+  ru: project(ruInteraction),
   en: project(enInteraction),
   ja: project(jaInteraction),
   ko: project(koInteraction),
