@@ -3813,6 +3813,69 @@ describe('codex proxy host', () => {
       }
     });
 
+  it('learns a terminal call_id rejection after the sole attachment retry (#11867)', async () => {
+    const host = await freshCodexProxyHost(true);
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    const attempts: Array<{ image: boolean; callId: string }> = [];
+    const long = 'x'.repeat(86);
+    const error = { error: { message: "Invalid 'input[0].call_id': maximum length 64." } };
+    const upstream = createServer(async (req, res) => {
+      let raw = '';
+      for await (const chunk of req) raw += chunk;
+      const callId = JSON.parse(raw).input[0].call_id as string;
+      const image = raw.includes('data:image/png;base64,');
+      attempts.push({ image, callId });
+      const status = image ? 413 : callId.length > 64 ? 400 : 200;
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(status === 400 ? error : {}));
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamBase = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    mockState.createAnthropicCompatProxy.mockImplementationOnce((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({
+        upstream: upstreamBase,
+        resolveOutboundProxy: () => null,
+        transformRequest: opts.transformRequest,
+        oversizedRequestRecovery: opts.oversizedRequestRecovery,
+        recoveryRules: opts.recoveryRules,
+      }));
+    try {
+      await host.ensureCodexProxyReady();
+      const proxy = await mockState.createAnthropicCompatProxy.mock.results[0].value as { url: string };
+      const history = { model: 'custom-model', input: [
+        { type: 'function_call', call_id: long, name: 'probe', arguments: '{}' },
+        { type: 'function_call_output', call_id: long, output: 'ok' },
+        { type: 'message', role: 'user', content: [{
+          type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(8000, 2).toString('base64')}`,
+        }] },
+      ] };
+      const post = (threadId: string) => fetch(`${proxy.url}/responses`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': threadId },
+        body: JSON.stringify(history),
+      });
+      const rejected = await post('limited-thread');
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toEqual(error);
+      expect(attempts).toEqual([{ image: true, callId: long }, { image: false, callId: long }]);
+
+      const next = await post('limited-thread');
+      expect(next.status).toBe(200);
+      await next.text();
+      const shortId = attempts[2]!.callId;
+      expect(shortId.length).toBeLessThanOrEqual(64);
+      expect(attempts.slice(2)).toEqual([{ image: true, callId: shortId }, { image: false, callId: shortId }]);
+
+      const unrelated = await post('different-thread');
+      expect(unrelated.status).toBe(400);
+      expect(await unrelated.json()).toEqual(error);
+      expect(attempts.slice(4)).toEqual([{ image: true, callId: long }, { image: false, callId: long }]);
+    } finally {
+      await host.disposeCodexProxy();
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+
   // #7055: ChatGPT closes WebSocket messages over ~16 MiB with 1009. A reconnect resends the
   // whole image-heavy history, so every retry was rejected until the turn timed out.
   it('fits an oversized WebSocket request under the upstream message limit before forwarding', async () => {

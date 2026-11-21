@@ -429,6 +429,9 @@ const CODEX_BODY_RECOVERY_RULES = [
     onRetry: (threadId: string, model: string, upstreamBase?: string) => {
       if (upstreamBase) responsesCallIdLengthStripController.markActive(threadId, model, upstreamBase);
     },
+    onTerminalRejection: (body: Buffer, threadId: string, model: string, upstreamBase: string) => {
+      if (responsesCallIdLengthRule.strip(body)) responsesCallIdLengthStripController.markActive(threadId, model, upstreamBase);
+    },
   },
   responsesReasoningContentRecoveryRule,
   responsesToolAudioRecoveryRule,
