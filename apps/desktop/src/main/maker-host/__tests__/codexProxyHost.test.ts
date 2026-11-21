@@ -143,15 +143,16 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
     }),
     stripEncryptedContentFromBody: () => null,
     stripImageGenerationItemsWithoutIdFromBody: () => null,
-    createResponsesItemIdLengthRecoveryRule: () => ({
+    createResponsesItemIdLengthRecoveryRule: (opts?: Parameters<typeof actual.createResponsesItemIdLengthRecoveryRule>[0]) => ({
       id: 'responses_item_id_length',
+      onRetry: opts?.onRetry,
       enabled: () => true,
       matches: (text: string) =>
         /input\[\d+\]\.id[\s\S]{0,120}?(?:string too long|string_above_max_length)|string_above_max_length[\s\S]{0,120}?input\[\d+\]\.id/i.test(text),
       strip: () => null,
     }),
     stripNonCanonicalResponsesItemIdsFromBody: () => null,
-    shortenOversizedResponsesItemIdsFromBody: () => null,
+    shortenOversizedResponsesItemIdsFromBody: (body: Buffer) => mockState.realStripTransforms ? actual.shortenOversizedResponsesItemIdsFromBody(body) : null,
     stripNonAnthropicFields: mockState.stripNonAnthropicFields,
     createInstructionsRegistry: () => {
       const map = new Map<string, string>();
@@ -3710,6 +3711,67 @@ describe('codex proxy host', () => {
     expect(rule.matches(error.replace('call_id', 'id'))).toBe(false);
     expect(rule.matches(error.replace('length 64', 'length 32'))).toBe(false);
     expect(JSON.parse(rule.strip(Buffer.from(JSON.stringify({ input: history }))).toString()).input).toEqual(projected);
+  });
+
+  it('recovers both overlong IDs in one custom Responses retry and remembers the limit for the next turn (#11867)', async () => {
+    const host = await freshCodexProxyHost();
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    const long = 'x'.repeat(86);
+    const history = { model: 'custom-model', input: [
+      { type: 'function_call', id: 'fc_' + long, call_id: long, name: 'probe', arguments: '{}' },
+      { type: 'function_call_output', call_id: long, output: 'ok' },
+    ] };
+    const received: typeof history[] = [];
+    const upstream = createServer(async (req, res) => {
+      let raw = '';
+      for await (const chunk of req) raw += chunk;
+      const body = JSON.parse(raw) as typeof history;
+      received.push(body);
+      const item = body.input[0];
+      const invalid = item.call_id.length > 64 ? 'call_id' : item.id!.length > 64 ? 'id' : null;
+      res.writeHead(invalid ? 400 : 200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(invalid ? { error: { message: `Invalid 'input[0].${invalid}': string too long. Expected a string with maximum length 64.` } } : {}));
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamBase = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    mockState.realStripTransforms = true;
+    mockState.createAnthropicCompatProxy.mockImplementationOnce((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({
+        upstream: upstreamBase,
+        resolveOutboundProxy: () => null,
+        transformRequest: opts.transformRequest,
+        recoveryRules: opts.recoveryRules?.map(rule => rule.id === 'responses_item_id_length'
+          ? actual.createResponsesItemIdLengthRecoveryRule({ onRetry: rule.onRetry }) : rule),
+      }));
+    try {
+      await host.ensureCodexProxyReady();
+      const proxy = await mockState.createAnthropicCompatProxy.mock.results[0].value as { url: string };
+      const post = async (threadId: string) => {
+        const response = await fetch(`${proxy.url}/responses`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'thread-id': threadId },
+          body: JSON.stringify(history),
+        });
+        await response.text();
+        expect(response.status).toBe(200);
+      };
+      await post('oversized-call-thread');
+      expect(received).toHaveLength(2);
+      expect(received[0].input[0].call_id).toBe(long);
+      expect(received[1].input[0].id!.length).toBeLessThanOrEqual(64);
+      expect(received[1].input[0].call_id).toBe(received[1].input[1].call_id);
+      await post('oversized-call-thread');
+      expect(received[2].input).toEqual(received[1].input);
+      expect(received).toHaveLength(3);
+      await post('another-thread');
+      expect(received).toHaveLength(5);
+      expect(received[3].input[0].call_id).toBe(long);
+    } finally {
+      await host.disposeCodexProxy();
+      mockState.realStripTransforms = false;
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
   });
 
   // #7055: ChatGPT closes WebSocket messages over ~16 MiB with 1009. A reconnect resends the

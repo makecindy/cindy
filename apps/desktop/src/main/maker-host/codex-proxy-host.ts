@@ -93,7 +93,7 @@ import {
   type ChatBridgeCapabilities,
 } from '@cindy/responses-chat-bridge';
 import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
-import { responsesCallIdLengthRule, shortenCodexCallIds, shortenOpenAiReplayCallIds } from './codex-call-id-length.js';
+import { isResponsesReplayPath, responsesCallIdLengthRule, shortenCodexCallIds, shortenOpenAiReplayCallIds } from './codex-call-id-length.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -355,6 +355,7 @@ const httpRecoveryReasonByThread = new Map<string, string>();
 const pendingHttpRecoveryStripByThread = new Map<string, string>();
 // Kept inside this host instance: another Host/proxy must not inherit its marker.
 let responsesToolAudioStripController = createThreadStripController();
+let responsesCallIdLengthStripController = createThreadStripController();
 
 const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
 const CODEX_GUARDIAN_SUBAGENT = 'guardian';
@@ -423,7 +424,12 @@ const CODEX_BODY_RECOVERY_RULES = [
   imageGenerationIdRecoveryRule,
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
-  responsesCallIdLengthRule,
+  {
+    ...responsesCallIdLengthRule,
+    onRetry: (threadId: string, model: string, upstreamBase?: string) => {
+      if (upstreamBase) responsesCallIdLengthStripController.markActive(threadId, model, upstreamBase);
+    },
+  },
   responsesReasoningContentRecoveryRule,
   responsesToolAudioRecoveryRule,
   duplicateResponsesToolCallRecoveryRule,
@@ -525,12 +531,12 @@ function isRepairableToolItemIdError(errorText: string): boolean {
  * 必须排在各 active strip transform 之前，同一请求即生效。使用最终模型的规则
  * 在 provider model rewrite 后激活，避免 Guardian 等固定别名掩盖真实模型切换。
  */
-function createArmedHttpRecoveryStripTransform(useUpstreamModel = false): RequestTransform {
+function createArmedHttpRecoveryStripTransform(useUpstreamModel = false, onlyReason?: string): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body) || typeof body.model !== 'string' || !body.model) return null;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const reason = pendingHttpRecoveryStripByThread.get(threadId);
-    if (!reason) return null;
+    if (!reason || (onlyReason && reason !== onlyReason)) return null;
     const rule = CODEX_BODY_RECOVERY_RULES.find((candidate) => candidate.id === reason);
     if (Boolean(rule?.useUpstreamModel) !== useUpstreamModel) return null;
     pendingHttpRecoveryStripByThread.delete(threadId);
@@ -3670,6 +3676,18 @@ async function createCodexProxyHandle(
   // identity marker cannot be forged by header values or leak into the next request;
   // it also needs no settlement bookkeeping for cancelled/local-handler requests.
   const crossProviderRequests = new WeakSet<Readonly<Record<string, string>>>();
+  const activateCallIdRecovery = createArmedHttpRecoveryStripTransform(true, responsesCallIdLengthRule.id);
+  const applyConfirmedCallIdLimit = createActiveStripTransform({
+    controller: responsesCallIdLengthStripController,
+    enabled: responsesCallIdLengthRule.enabled,
+    strip: responsesCallIdLengthRule.strip,
+    scopeByUpstream: true,
+  });
+  const normalizeReplayCallIds: RequestTransform = (body, ctx) => {
+    if (!ctx.upstreamBase || !isResponsesReplayPath(ctx.url)) return null;
+    activateCallIdRecovery(body, ctx);
+    return shortenOpenAiReplayCallIds(body, ctx) ?? applyConfirmedCallIdLimit(body, ctx);
+  };
   const modelRoute = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, () => alive,
     ctx => { crossProviderRequests.add(ctx.headers); }, guestSessionId);
   // 供应商分享受邀者的任务：先过受邀者守门，只经分享的那一个供应商出站。
@@ -3789,7 +3807,7 @@ async function createCodexProxyHandle(
         );
       }
       return reconciled;
-    }, { errorMode: 'reject-request' as const }), shortenOpenAiReplayCallIds),
+    }, { errorMode: 'reject-request' as const }), normalizeReplayCallIds),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);
@@ -4304,6 +4322,7 @@ function clearSessionThreads(sessionId: string): string[] {
       responsesReasoningContentStripController.clear(threadId);
       responsesToolCallHistoryStripController.clear(threadId);
       responsesToolAudioStripController.clear(threadId);
+      responsesCallIdLengthStripController.clear(threadId);
     }
   }
   return threadIds;
@@ -4339,6 +4358,7 @@ function clearSessionThreads(sessionId: string): string[] {
   httpRecoveryReasonByThread.clear();
   pendingHttpRecoveryStripByThread.clear();
   responsesToolAudioStripController = createThreadStripController();
+  responsesCallIdLengthStripController = createThreadStripController();
 
   if (_startPromise) {
     await _startPromise.catch(() => undefined);

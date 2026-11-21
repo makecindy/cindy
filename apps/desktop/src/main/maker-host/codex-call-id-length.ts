@@ -41,8 +41,12 @@ export function shortenCodexCallIds(body: unknown): Record<string, unknown> | nu
   }) };
 }
 
+export function isResponsesReplayPath(url: string): boolean {
+  return /\/responses(?:\/compact)?\/?(?:\?.*)?$/.test(url);
+}
+
 export const shortenOpenAiReplayCallIds: RequestTransform = (body, ctx) => {
-  if (!ctx.upstreamBase || !/\/responses(?:\/compact)?\/?(?:\?.*)?$/.test(ctx.url)) return null;
+  if (!ctx.upstreamBase || !isResponsesReplayPath(ctx.url)) return null;
   const profile = resolveProviderCompatibilityProfile({
     harness: 'codex', protocol: 'openai-responses', upstreamBase: ctx.upstreamBase, model: '',
   });
@@ -61,5 +65,5 @@ export const responsesCallIdLengthRule: RecoveryRule = {
     return next ? Buffer.from(JSON.stringify(next)) : null;
   },
   applyOnUnmatchedRetry: false,
-  allowExtraRules: false,
+  useUpstreamModel: true,
 };
