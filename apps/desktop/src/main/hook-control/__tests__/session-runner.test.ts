@@ -150,6 +150,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
     isAutoReviewNoAvailableModelNotice: actual.isAutoReviewNoAvailableModelNotice,
+    isAutoReviewQuotaExhaustedNotice: actual.isAutoReviewQuotaExhaustedNotice,
     isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
     autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
     AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
@@ -2928,6 +2929,34 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
   async function flush(times = 30): Promise<void> {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
+
+  // #8706 unit: the Hook observer has its own maker-core mock. Existing overload
+  // cases missed quota notices; one nonterminal event must show safe guidance
+  // through the real observer/presenter without ending the running turn.
+  it('配额故障通过官方 Hook 过程区显示安全提示，不收口', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const pending = runner.run(baseReq({ onProgress: (text: string) => emitted.push(text) }));
+      await vi.waitFor(() => expect(h.eventCbs.get('sess-new')).toBeDefined());
+      const cb = h.eventCbs.get('sess-new')!;
+      cb({ type: 'error', data: {
+        message: '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_UPSTREAM_BODY', isTerminal: false,
+      } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted.join('\n')).toContain('配额已耗尽');
+      expect(emitted.join('\n')).not.toMatch(/PRIVATE_UPSTREAM_BODY|完全访问/);
+      cb({ type: 'done', data: null });
+      expect((await pending).status).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   /**
    * 本 describe 的核心回归: 过载重投只在**零产出**时发生, 那时过程区与正文都是

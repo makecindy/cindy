@@ -169,7 +169,6 @@ interface CodexModelSnapshot {
   accountKey?: string;
   models: CatalogModel[];
   confirmedAt?: number;
-  pendingMembership?: string;
   failedAt?: number;
   needsSave?: true;
 }
@@ -489,15 +488,19 @@ function persistCooling(state: OwnerRuntime): void {
   }
   void writeSubscriptionAccountCooling(cooling);
 }
-function accountCooling(state: OwnerRuntime, provider: SubscriptionProvider, id: string, model?: string): boolean {
+function accountCooling(state: OwnerRuntime, provider: SubscriptionProvider, id: string, model?: string) {
   const scope = coolingScope(provider === 'openai' ? model?.replace(/^chatgpt\//, '') : model);
-  return accountProfilePeers(state, provider, id).some(accountId => {
+  let until = 0;
+  let modelLimited = false;
+  for (const accountId of accountProfilePeers(state, provider, id)) {
     const key = keyOf(provider, accountId);
     const scopes = currentCooling(state.quotaCooling.get(key), Date.now());
     if (Object.keys(scopes).length) state.quotaCooling.set(key, scopes);
     else state.quotaCooling.delete(key);
-    return Boolean(scopes[''] || scopes[scope]);
-  });
+    until = Math.max(until, scopes[''] ?? 0, scopes[scope] ?? 0);
+    if (scope && scopes[scope]) modelLimited = true;
+  }
+  return until ? { until, modelLimited } : undefined;
 }
 function legacyCodexDefault(provider: SubscriptionProvider): boolean {
   if (provider !== 'openai') return false;
@@ -1362,6 +1365,15 @@ export async function refreshSubscriptionPoolCodexModels(
     };
     const readModels = async () => {
       try {
+        // Publish only an owner/workspace-bound successful snapshot while the native
+        // probe is pending. A CLI cache alone cannot establish this account's membership.
+        const restored = await lastVerified();
+        if (!isCurrent()) return;
+        if (restored && (!sameAccount || previous?.confirmedAt === undefined)) {
+          state.codexModels.set(id, { auth, accountKey: info.accountKey, models: restored.models,
+            confirmedAt: restored.confirmedAt, failedAt: startedAt });
+          publishCodexCatalogChange(state, refreshId);
+        }
         const models: CodexModelListItem[] = [];
         const cursors = new Set<string>();
         let pages = 0;
@@ -1402,28 +1414,22 @@ export async function refreshSubscriptionPoolCodexModels(
           };
         });
         const confirmedAt = Date.now();
-        // The CLI can answer model/list from its fallback directory after an upstream
-        // timeout. If models still in the native cache vanished from a verified list,
-        // corroborate a nonempty contraction once. Disk-only ids never grant access.
+        // Repeated fallback RPC replies are not independent proof of removal.
+        // Keep the last account-bound success while the native cache contradicts
+        // a nonempty response; a later consistent response can confirm contraction.
+        // An explicit empty RPC list retains its authoritative empty semantics.
         const reported = new Set(mapped.map(model => model.id));
         const differsFromDisk = mapped.length > 0 && [...cached.keys()].some(model => !reported.has(model));
-        const verified = differsFromDisk ? await lastVerified() : undefined;
-        if (differsFromDisk && !isCurrent()) return;
-        // With no verified list (first launch after upgrade), the native file is only
-        // a reason to recheck. Expose solely what this authenticated RPC actually returned.
-        const needsConfirmation = verified
-          ? verified.models.some(model => cached.has(model.id) && !reported.has(model.id))
-          : differsFromDisk && Number.isFinite(Date.parse(nativeCache?.fetched_at));
+        const needsConfirmation = differsFromDisk && (restored
+          ? restored.models.some(model => cached.has(model.id) && !reported.has(model.id))
+          : Number.isFinite(Date.parse(nativeCache?.fetched_at)));
         if (needsConfirmation) {
-          const membership = JSON.stringify([...reported].sort());
-          if (!sameAccount || previous?.pendingMembership !== membership) {
-            const visible = verified?.models ?? mapped;
-            state.codexModels.set(id, { auth, accountKey: info.accountKey, models: visible,
-              confirmedAt: verified?.confirmedAt, pendingMembership: membership, failedAt: confirmedAt });
-            log.info('Codex model list differs from cached membership; awaiting confirmation', { refreshId,
-              reportedCount: mapped.length, publishedCount: visible.length, confirmedAt: verified?.confirmedAt });
-            return;
-          }
+          const visible = restored?.models ?? mapped;
+          state.codexModels.set(id, { auth, accountKey: info.accountKey, models: visible,
+            confirmedAt: restored?.confirmedAt, failedAt: confirmedAt });
+          log.info('Codex model list differs from cached membership; awaiting confirmation', { refreshId,
+            reportedCount: mapped.length, publishedCount: visible.length, confirmedAt: restored?.confirmedAt });
+          return;
         }
         const snapshot: CodexModelSnapshot = { auth, accountKey: info.accountKey, models: mapped, confirmedAt };
         state.codexModels.set(id, snapshot);
@@ -2567,8 +2573,11 @@ export async function acquireSubscriptionAccount(
       const loggingIn = [...state.logins].some(
         ([key, login]) => key.startsWith(provider + ':') && login.accountId === a.id,
       );
+      const cooling = !control && info?.auth.authenticated && (!binding || rebind) && distinctAccounts >= 2
+        ? accountCooling(state, provider, a.id, model) : undefined;
       return {
         ...a,
+        cooling,
         paused: control ? false : a.paused,
         key: a.id,
         accountKey: known?.auth.authenticated && !known.unavailable ? known.accountKey : undefined,
@@ -2579,7 +2588,7 @@ export async function acquireSubscriptionAccount(
         // Like goal continuation, ChatGPT admission belongs to upstream: cached windows and
         // credits cannot establish whether this request can run. Keep quota ranking and real cooling.
         usable: !loggingIn && info?.auth.authenticated === true && (control || ((provider === 'openai' || !usage.limited)
-          && ((Boolean(binding) && !rebind) || distinctAccounts < 2 || !accountCooling(state, provider, a.id, model))))
+          && !cooling))
           && (!needsModelMembership || codexAccountSupportsModel(state, a.id, model))
           && (control || !imported || legacyCodexAccountCanRun(imported, model, {
             remote: options.remote === true, ownComputer: options.ownComputer === true,
@@ -2646,7 +2655,25 @@ export async function acquireSubscriptionAccount(
     if (!selected && !pinned && providerGroupMembersFull(grouped.candidates, grouped))
       throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
     if (!selected || !member || !member.usable || (!control && member.paused)) {
-      if (!pinned) throw new Error('No subscription account is available');
+      if (!pinned) {
+        // Only describe reasons proven for this request. Shared/remote callers retain
+        // their opaque failure and must not learn about the owner's other accounts.
+        if (provider === 'anthropic' && !control && !options.remote) {
+          const active = grouped.candidates.filter(a => !a.paused && !grouped.exclude.has(a.id));
+          const signedOut = active.filter(a => !a.loggingIn && !a.unavailable && a.auth?.authenticated === false && !a.auth.errorReason);
+          const limited = active.filter(a => !a.loggingIn && !a.unavailable && a.auth?.authenticated
+            && (a.usage.limited || a.cooling?.modelLimited));
+          if (limited.length && limited.length + signedOut.length === active.length) {
+            const retries = limited.map(a => a.usage.limited && !a.usage.resetAtMs ? Infinity
+              : Math.max(a.cooling?.until ?? 0, a.usage.resetAtMs ?? 0));
+            const retryAt = Math.min(...retries);
+            throw new Error('[SUBSCRIPTION_POOL_MODEL_LIMITED] Subscription usage limit for this model'
+              + (Number.isFinite(retryAt) ? `\nresetAtMs=${retryAt}` : '')
+              + (signedOut.length ? '\notherAccountSignedOut=true' : ''));
+          }
+        }
+        throw new Error('No subscription account is available');
+      }
       // Keep account affinity and admission unchanged; report the actual reason.
       // Do not include identity or configDir: errors also reach shared viewers.
       if (!member || member.unavailable || !member.auth || member.auth.errorReason === 'codex_provider_managed_auth')

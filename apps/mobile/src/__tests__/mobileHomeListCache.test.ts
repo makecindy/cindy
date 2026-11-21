@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cacheHomeListSnapshot, getCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import type { RemoteSession } from '@/session/types';
 
 // 内存版 AsyncStorage:覆盖 getItem/setItem/removeItem,贴近真实 RN API(与 mobileSessionMessageCache.test 同套路)。
@@ -68,6 +69,20 @@ describe('mobileHomeListCache', () => {
     await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3) })]);
     const [cached] = await getCachedHomeListSnapshot(USER_ID);
     expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3) });
+  });
+
+  // Unit: opening a cold-start list row must still identify the history cutoff
+  // before the detail sync arrives. Only the linked follow-up has the flag.
+  it('retains linked follow-up history metadata in cached task rows', async () => {
+    await cacheHomeListSnapshot(USER_ID, [
+      makeSession('follow-up', 'mac', { source: 'desktop', sideChatPromoted: true }),
+      makeSession('ordinary', 'mac', { source: 'desktop' }),
+    ]);
+    const [{ sessions }] = await getCachedHomeListSnapshot(USER_ID);
+    expect(sessions.find(row => row.id === 'follow-up')).toMatchObject({
+      source: 'desktop', sideChatPromoted: true, createdAt: isoAt(1),
+    });
+    expect(sessions.find(row => row.id === 'ordinary')).not.toHaveProperty('sideChatPromoted');
   });
 
   it('round-trips a grouped device snapshot from a flat stamped session list', async () => {

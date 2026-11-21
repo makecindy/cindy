@@ -97,6 +97,7 @@ import {
   isSamePluginEngineChoice,
   pluginEngineModelName,
   resolvePluginEngineEffort,
+  visiblePluginEngineChoices,
   type PluginEngineChoice,
 } from '@/lib/pluginEngineSelection';
 import type { PluginEngineEffort } from '../../../shared/pluginEngines';
@@ -778,6 +779,7 @@ export type ModelSelectorProps = ModelSelectorBaseProps & ModelSelectorSource;
 export interface ModelSelectorBaseProps {
   /** Nonzero request from a terminal-error recovery action; selection still uses the normal transaction. */
   openRequest?: number;
+  draftModelPending?: boolean;
   onOpenRequestConsumed?: (nonce: number) => void;
   'data-setting-id'?: string;
   /** 语义同 ModelSelectorContentProps.pluginModels。 */
@@ -1289,13 +1291,6 @@ export function ModelSelectorContent(props: ModelSelectorContentProps) {
   const gatewayPricing = useGatewayModelPricing();
   const referencePricing = useReferenceModelPricing();
   const { accountTier } = useModelAccessStatus();
-  // 面板打开时请插件引擎刷新模型列表，与供应商模型在同一时机自动刷新(冷却由 main 控制)。
-  const hasPluginEngines = (props.pluginEngines?.engines.length ?? 0) > 0;
-  const readCatalogue = props.pluginEngines?.readCatalogue
-    ?? (hasPluginEngines ? requestPluginEnginesRefresh : undefined);
-  useEffect(() => {
-    readCatalogue?.();
-  }, [readCatalogue]);
   return (
     <ModelSelectorContentView
       {...props}
@@ -1370,6 +1365,20 @@ function ModelSelectorContentView({
   modelAccessAccountTier: ModelAccessAccountTier | null;
 }) {
   const confirmDialog = useOptionalConfirmDialog();
+  // 面板打开时请插件引擎刷新模型列表(或读取同账号其他电脑开放的插件引擎)，与供应商模型在同一时机自动刷新(冷却由 main 控制)。
+  const hasPluginEngines = (pluginEngines?.engines.length ?? 0) > 0;
+  const readCatalogue = pluginEngines?.readCatalogue
+    ?? (hasPluginEngines ? requestPluginEnginesRefresh : undefined);
+  useEffect(() => {
+    readCatalogue?.();
+  }, [readCatalogue]);
+  // 已装但未登录 / 未就绪的插件引擎不在选择器里占位；仅当前任务正选着该引擎时保留以便识别状态。
+  const visiblePluginEngines = useMemo(
+    () => pluginEngines
+      ? { ...pluginEngines, engines: visiblePluginEngineChoices(pluginEngines.engines, pluginEngines.active) }
+      : undefined,
+    [pluginEngines],
+  );
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t, i18n } = useTranslation();
@@ -1381,26 +1390,28 @@ function ModelSelectorContentView({
   // 打开时停在草稿当前的落点(Agent 在哪台电脑就先列哪台);左侧栏点到另一台电脑的供应商时,
   // 下面整套目录(能力 / 供应商 / 可见性 / 用量 / 收藏)都随 deviceId 换成那台电脑的。
   const remoteAgentDeviceId = remoteAgent?.selectedDeviceId ?? null;
+  // 插件引擎在独立的来源格。浏览从任务所在电脑的目录开始，换内置模型时照常按实际运行位置判断是否要换电脑。
+  const preferredBrowseDeviceId = pluginEngines?.active ? null : remoteAgentDeviceId;
   const [remoteBrowse, setRemoteBrowse] = useState<{
     deviceId: string;
     /** null = 还不知道该落在哪个供应商格(等那台的目录到了再按当前来源 / 首个供应商定)。 */
     providerId: string | null;
   } | null>(() =>
-    remoteAgentDeviceId ? { deviceId: remoteAgentDeviceId, providerId: currentProviderId ?? null } : null,
+    preferredBrowseDeviceId ? { deviceId: preferredBrowseDeviceId, providerId: currentProviderId ?? null } : null,
   );
   // 落点在面板之外变了(那台电脑被解除配对而回到本机等):跟到新落点,不停在旧目录上。
-  const lastRemoteAgentDeviceIdRef = useRef(remoteAgentDeviceId);
+  const lastPreferredBrowseDeviceIdRef = useRef(preferredBrowseDeviceId);
   useEffect(() => {
-    if (lastRemoteAgentDeviceIdRef.current === remoteAgentDeviceId) return;
-    lastRemoteAgentDeviceIdRef.current = remoteAgentDeviceId;
+    if (lastPreferredBrowseDeviceIdRef.current === preferredBrowseDeviceId) return;
+    lastPreferredBrowseDeviceIdRef.current = preferredBrowseDeviceId;
     setRemoteBrowse((current) =>
-      (current?.deviceId ?? null) === remoteAgentDeviceId
+      (current?.deviceId ?? null) === preferredBrowseDeviceId
         ? current
-        : remoteAgentDeviceId
-          ? { deviceId: remoteAgentDeviceId, providerId: null }
+        : preferredBrowseDeviceId
+          ? { deviceId: preferredBrowseDeviceId, providerId: null }
           : null,
     );
-  }, [remoteAgentDeviceId]);
+  }, [preferredBrowseDeviceId]);
   // 没在浏览其他电脑时列任务所在电脑的目录:本机任务是本机,被控电脑上的任务是那台。
   const homeDeviceId = remoteAgent?.homeDeviceId;
   const deviceId = remoteAgent ? (remoteBrowse?.deviceId ?? homeDeviceId) : deviceIdProp;
@@ -3788,7 +3799,7 @@ function ModelSelectorContentView({
                   ),
                 }
               : {})}
-            {...(pluginModels || modelGroups || pluginEngines ? {
+            {...(pluginModels || modelGroups || (visiblePluginEngines && visiblePluginEngines.engines.length > 0) ? {
               // 模型组在「全部」最上方：不搜索时整段列出(用户建好就天天要用)，搜索时只列命中的。
               // 插件引擎是独立的一组(不混进供应商目录)，排在它们之后、内置模型之前。
               pinnedTop: (
@@ -3798,17 +3809,17 @@ function ModelSelectorContentView({
                     <ModelGroupsPickerSection picker={modelGroups} query={query} onPicked={() => onDismiss?.()}
                       variant={query.trim() ? 'search' : 'all'} />
                   )}
-                  {pluginEngines && (
-                    <PluginEnginesSection picker={pluginEngines} query={query} onPicked={() => onDismiss?.()} />
+                  {visiblePluginEngines && visiblePluginEngines.engines.length > 0 && (
+                    <PluginEnginesSection picker={visiblePluginEngines} query={query} onPicked={() => onDismiss?.()} />
                   )}
                 </>
               ),
               pinnedTopHasRows: (pluginModels ? matchPluginModels(pluginModels.models, query).length > 0 : false)
                 || (!!modelGroups && matchModelGroupRows(modelGroupRows, query) > 0)
-                || (!!pluginEngines && matchPluginEngineRows(
-                  pluginEngines.engines,
+                || (!!visiblePluginEngines && matchPluginEngineRows(
+                  visiblePluginEngines.engines,
                   query,
-                  (engine) => activePluginEngineModelId(pluginEngines.active, engine),
+                  (engine) => activePluginEngineModelId(visiblePluginEngines.active, engine),
                   t('newChat.pluginEngines.defaultModel').toLowerCase(),
                 ) > 0),
             } : {})}
@@ -3817,11 +3828,11 @@ function ModelSelectorContentView({
               favoritesPinned: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />,
               favoritesPinnedHasRows: favoriteModelGroupCount > 0,
             } : {})}
-            {...(pluginEngines && pluginEngines.engines.length > 0 ? {
+            {...(visiblePluginEngines && visiblePluginEngines.engines.length > 0 ? {
               // 和供应商一样每个引擎在左侧栏单独一格(插件自己的图标)，点开只列这个引擎的模型；
               // 「全部」最上方照旧列出全部引擎。
               // 自己另一台电脑上的引擎带着电脑名，格位排进那台电脑那一段(见 UnifiedModelPanel)。
-              pluginEngineTabs: pluginEngines.engines.map((engine) => ({
+              pluginEngineTabs: visiblePluginEngines.engines.map((engine) => ({
                 providerId: engine.providerId,
                 ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
                 name: pluginEngineChoiceLabel(engine),
@@ -3830,8 +3841,8 @@ function ModelSelectorContentView({
               renderPluginEngine: (providerId: string, engineDeviceId?: string) => (
                 <PluginEnginesSection
                   picker={{
-                    ...pluginEngines,
-                    engines: pluginEngines.engines.filter((engine) =>
+                    ...visiblePluginEngines,
+                    engines: visiblePluginEngines.engines.filter((engine) =>
                       isSamePluginEngineChoice(engine, { providerId, deviceId: engineDeviceId })),
                   }}
                   query=""
@@ -4396,7 +4407,8 @@ export function ModelSelector({
   providersOverrideState,
   taskSourceProvider,
   sshCodex,
-  modelId,
+  modelId: selectedModelId,
+  draftModelPending = false,
   currentSelection,
   onReconnectSource,
   effort,
@@ -4455,6 +4467,7 @@ export function ModelSelector({
   onNavigateToProviders,
   agentSwitch,
 }: ModelSelectorProps) {
+  const modelId = draftModelPending ? '' : selectedModelId;
   const { t, i18n } = useTranslation();
   // 插件引擎的显示名：在自己另一台电脑上的带电脑名。
   const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
@@ -4625,7 +4638,7 @@ export function ModelSelector({
     pi,
     providers: remoteProviders,
   });
-  const remoteModelLoading = providersOverrideState?.status === 'loading' ||
+  const remoteModelLoading = draftModelPending || providersOverrideState?.status === 'loading' ||
     (sshCodexCurrent && sshCodex?.status === 'loading') || (!!deviceId && remoteModelListStatus === 'loading');
   const localModelLoading = !deviceId && !providersOverride && !sshCodexCurrent && !localProviders.loadFailed && (
     localProviders.loading ||
@@ -4952,8 +4965,13 @@ export function ModelSelector({
     : (() => {
         const active = pluginEngines?.active;
         const engine = active ? pluginEngines?.engines.find((item) => isSamePluginEngineChoice(item, active)) : undefined;
-        return active && engine
-          ? { name: pluginEngineChoiceLabel(engine), engine, modelId: active.modelId, effort: resolvePluginEngineEffort(engine, active.modelId, active.effort) }
+        return active
+          ? {
+              name: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
+              engine: engine ?? null,
+              modelId: active.modelId,
+              effort: resolvePluginEngineEffort(engine, active.modelId, active.effort),
+            }
           : null;
       })();
   // The engine's level reads like a built-in task's: compact name after the model, full name in the title.

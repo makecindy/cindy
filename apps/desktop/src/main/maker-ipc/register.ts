@@ -246,7 +246,12 @@ import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, r
 import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
 import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
 import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
-import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
+import {
+  isPluginEngineKind,
+  parseOfferedPluginEngines,
+  PLUGIN_ENGINES_INVOKE,
+  pluginEngineKeyFromProviderId,
+} from '../../shared/pluginEngines.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, PluginEngineUnsupportedError, requireBuiltinAgentKind } from '../maker-host/engineKind.js';
 import type {
   AgentEvent,
@@ -632,6 +637,7 @@ import {
   applyAgentSwitchToSessionRow,
   applyAgentSwitchResumeFallbackAtomically,
   broadcastSessionPatched,
+  promoteSideChatLeadInDb,
   setSessionStatusPatchedListener,
   setSessionSnoozePatchedListener,
   touchSessionActivityInDb,
@@ -1490,7 +1496,7 @@ import {
 import {
   refreshActiveModelContextSettings,
 } from './runtimeSetModel.js';
-import { patchSessionMetaInDb, updateSessionInDb } from '../localDb/ipc/sessions.js';
+import { patchSessionMetaInDb, setSideChatArchiveCleanup, updateSessionInDb } from '../localDb/ipc/sessions.js';
 import {
   codexCustomProviderConfigSignature,
   hasCodexAppliedCustomProviderCapability,
@@ -1608,7 +1614,6 @@ import {
   type MainOwnedInputBoundaryStamp,
 } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote, readWireSourceDevice } from './messageSourceNote.js';
-import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.desktop.js';
 import {
   buildUiLanguageErrorNote,
@@ -11298,6 +11303,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     describeAgentDevice,
     // 任务中换到插件引擎(docs/plans/acp-plugin-bridge.md)：按本机此刻提供的引擎准入。
     admitPluginEngineTarget: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
+    admitRemotePluginEngineTarget: async (deviceId, target) => {
+      const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+      if (!reply.ok) {
+        throwIpcError(isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : 'REMOTE_AGENT_DEVICE_UNREACHABLE',
+          'could not check the plugin engines on the selected computer');
+      }
+      return admitPluginEngineSwitchTarget(target, parseOfferedPluginEngines(reply.result));
+    },
     describePluginEngine: (providerId) => {
       const key = pluginEngineKeyFromProviderId(providerId);
       return key ? getPluginHarnessRegistry().list().find((harness) => harness.key === key)?.name ?? null : null;
@@ -15802,9 +15815,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 清 knownNonOrca cache、在线时清空 vendorOptions。抽出来给 disableOrcaInternal 的「正常关闭」
    * 和「悬空 lead 兜底」两条路径共用,避免两份漂移。
    */
-  async function clearLeadOrcaRoleState(leadSessionId: string, assertCurrent?: () => Promise<void>): Promise<void> {
+  async function clearLeadOrcaRoleState(leadSessionId: string, assertCurrent?: () => Promise<void>, persistRole = true): Promise<void> {
     await assertCurrent?.();
-    await setSessionOrcaRole(leadSessionId, null);
+    if (persistRole) await setSessionOrcaRole(leadSessionId, null);
     knownNonOrcaSessionIds.delete(leadSessionId);
 
     const leadSess = maker.getSession(leadSessionId);
@@ -15842,7 +15855,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    *   - SESSION_DISABLE_ORCA IPC handler (renderer 手动 toggle)
    *   - cindy_helper end_team MCP tool (Lead agent 自动调)
    */
-  async function disableOrcaInternal(leadSessionId: string, assertCurrent?: () => Promise<void>): Promise<{ ok: true }> {
+  async function disableOrcaInternal(leadSessionId: string, assertCurrent?: () => Promise<void>,
+    requireWorkerClosed = false): Promise<{ ok: true }> {
     const team = await getActiveTeamByLead(leadSessionId);
     await assertCurrent?.();
     if (!team) {
@@ -15875,7 +15889,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             count: orphanedWorkerSessionIds.length,
           });
         }
-        await clearLeadOrcaRoleState(leadSessionId, assertCurrent);
+        await clearLeadOrcaRoleState(leadSessionId, assertCurrent, !requireWorkerClosed);
       } else {
         log.info('disableOrca: no active team, no-op', { leadSessionId });
       }
@@ -15889,44 +15903,57 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     for (const w of workers) {
       orcaWorkerResumeScheduler.cancel(w.sessionId);
     }
-    for (const w of activeWorkers) {
-      await assertCurrent?.();
-      orcaTeamService.clearAutoBridgeState(w.sessionId);
-      await assertCurrent?.();
-      const sess = maker.getSession(w.sessionId);
-      if (sess) {
-        try {
-          if (sess.isTurnRunning?.()) {
-            await sess.abort();
+    const stopWorkers = async () => {
+      for (const w of activeWorkers) {
+        await assertCurrent?.();
+        orcaTeamService.clearAutoBridgeState(w.sessionId);
+        await assertCurrent?.();
+        const sess = maker.getSession(w.sessionId);
+        if (sess) {
+          try {
+            if (sess.isTurnRunning?.()) {
+              await sess.abort();
+            }
+          } catch (err) {
+            log.warn('disableOrca: abort failed (continuing to close)', {
+              sessionId: w.sessionId,
+              err: err instanceof Error ? err.message : String(err),
+            });
           }
-        } catch (err) {
-          log.warn('disableOrca: abort failed (continuing to close)', {
-            sessionId: w.sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
+          await assertCurrent?.();
+          try {
+            await maker.closeSession(w.sessionId);
+          } catch (err) {
+            if (requireWorkerClosed) throw err;
+            log.warn('disableOrca: closeSession failed', {
+              sessionId: w.sessionId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         await assertCurrent?.();
-        try {
-          await maker.closeSession(w.sessionId);
-        } catch (err) {
-          log.warn('disableOrca: closeSession failed', {
-            sessionId: w.sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
+        cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
+        forgetKnownOrcaWorkerSession(w.sessionId);
       }
+    };
+    const endTeam = async () => {
       await assertCurrent?.();
-      cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
-      forgetKnownOrcaWorkerSession(w.sessionId);
+      await markTeamEnded(team.id, 'completed');
+      await assertCurrent?.();
+      await markWorkersStatusByTeam(team.id, 'done');
+      await assertCurrent?.();
+    };
+    if (!requireWorkerClosed) {
+      await stopWorkers();
+      await endTeam();
     }
-
-    await assertCurrent?.();
-    await markTeamEnded(team.id, 'completed');
-    await assertCurrent?.();
-    await markWorkersStatusByTeam(team.id, 'done');
-    await assertCurrent?.();
     const workerRecycleScope = captureSessionRecycleScope();
-    const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id, assertCurrent);
+    const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id, requireWorkerClosed ? async () => {
+      // Drain deliveries that passed admission before the durable archive.
+      // The Worker locks stay held from closing their handles through the DB write.
+      await stopWorkers();
+      await endTeam();
+    } : assertCurrent);
     // 远端 Worker：停止那台的当前一轮并通知结束协同(任务与文件保留)；不可达的留待重连后补发。
     void orcaRemoteWorkers.releaseEnded(archivedWorkerSessionIds);
     await Promise.all(
@@ -15936,7 +15963,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }),
     );
 
-    await clearLeadOrcaRoleState(leadSessionId, assertCurrent);
+    // The confirmed archive clears its marker and role together before publishing.
+    await clearLeadOrcaRoleState(leadSessionId, assertCurrent, !requireWorkerClosed);
 
     log.info('disableOrca done', {
       leadSessionId,
@@ -15950,6 +15978,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof leadSessionId !== 'string')
       throwIpcError('INVALID_PARAMS', 'leadSessionId required');
     return disableOrcaInternal(leadSessionId);
+  });
+
+  setSideChatArchiveCleanup(async (sessionId, assertCurrent) => {
+    await maker.closeSession(sessionId);
+    await assertCurrent();
+    await disableOrcaInternal(sessionId, assertCurrent, true);
+    broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId: sessionId });
   });
 
   // Local-only reads: intentionally absent from the device-link allowlist.
@@ -16455,6 +16490,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .select({
           status: sessions.status,
           clearedAt: sessions.clearedAt,
+          sideChatClosePending: sessions.sideChatClosePending,
           permissionMode: sessions.permissionMode,
           planModeEnabled: sessions.planModeEnabled,
         })
@@ -16631,6 +16667,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const orcaUiAssignmentDispatchClaims = createOrcaUiAssignmentDispatchClaims();
 
   const orcaLifecycleService = createOrcaLifecycleService({
+    promoteSideChatLead: async (sessionId, teamId, workerId, assertCurrent) => {
+      try {
+        await assertCurrent?.();
+        await promoteSideChatLeadInDb(sessionId, teamId, workerId);
+      } catch (err) {
+        // Worker creation has already committed. A display write must not report it as failed.
+        log.warn('Could not promote side-chat lead', { err });
+      }
+    },
     getActiveTeamByLead,
     isOrphanedTeamInit,
     createActiveTeam: async (leadSessionId) => createActiveTeam({ leadSessionId }),

@@ -30,6 +30,17 @@ const REDIAL_TAKEOVER_MS = 10_000;
  */
 const REDIAL_FIRST_MS = 1_000;
 const REDIAL_MAX_MS = 30_000;
+/**
+ * The side that does not dial from the directory (the higher id) dials after all when the other side's dial has not
+ * arrived this long after it was due, doubling like the redial. The other side dials within a moment of seeing this device
+ * online, unless it still holds its end of a connection this device no longer has: this device was killed or restarted
+ * without its close reaching the peer, the peer believes it is connected, and a core older than 2026-11-21 never declares
+ * an idle connection dead (a newer one does after 30 s of unanswered probes). It then never dials, and neither did this side. The dial from here is what tells it: it takes the new connection over once
+ * its own is older than REDIAL_TAKEOVER_MS (`adopt`), and until then drops it, which schedules the next try here.
+ * 2026-11-21, a phone killed and started again: the relay-only computer with the lower id stayed offline on the phone for
+ * 20 seconds to 15 minutes; the computers with higher ids, which the phone dials, were back at once.
+ */
+const LATE_DIAL_MS = 1_000;
 /** Declared with session support between devices of one account: presence travels on the session (`presence` message). */
 const SESSION_PRESENCE_FEATURE = 'presence-v1';
 /**
@@ -362,13 +373,17 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.dialing.set(deviceId, dialing);
     try { await dialing; } finally { if (this.dialing.get(deviceId) === dialing) this.dialing.delete(deviceId); }
   }
-  /** See REDIAL_FIRST_MS. Only devices of this account the directory has online; delegations dial on demand. */
+  /**
+   * See REDIAL_FIRST_MS and LATE_DIAL_MS: the dialing side (the lower id) dials again, the other side dials when that dial
+   * does not come. Only devices of this account the directory has online; delegations dial on demand.
+   */
   private scheduleRedial(deviceId: string): void {
-    if (this.closed || this.redials.has(deviceId) || this.deviceId >= deviceId) return;
+    if (this.closed || this.redials.has(deviceId) || this.deviceId === deviceId) return;
     if (!this.roster.get(deviceId)?.online || !this.authorized(deviceId)) return;
     const step = this.redialSteps.get(deviceId) ?? 0;
     this.redialSteps.set(deviceId, step + 1);
-    const delay = Math.min(REDIAL_MAX_MS, REDIAL_FIRST_MS * 2 ** step) * (0.8 + Math.random() * 0.4);
+    const first = this.deviceId < deviceId ? REDIAL_FIRST_MS : LATE_DIAL_MS;
+    const delay = Math.min(REDIAL_MAX_MS, first * 2 ** step) * (0.8 + Math.random() * 0.4);
     const timer = setTimeout(() => {
       this.redials.delete(deviceId);
       if (this.closed || this.peers.has(deviceId) || !this.roster.get(deviceId)?.online || !this.authorized(deviceId)) return;
@@ -477,6 +492,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         deviceName: view.name, selfName: view.selfName ?? peer.info.selfName };
       if (this.ready) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });
     }
+    this.transport?.admissionChanged?.();
     this.dropUnauthorizedPeers();
     if (live) this.options.onDirectory?.([...next.values()]);
     this.dialRoster();
@@ -496,8 +512,14 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private dialRoster(): void {
     if (this.ready) for (const [id, view] of this.roster) if (!this.peers.has(id)) {
       this.presence(id, false);
-      if (view.online && this.deviceId < id && this.memberAccepted(id)) void this.dial(id).catch(() => undefined);
+      this.dialOnline(id, view);
     }
+  }
+  /** A device the directory has online and this side is not connected to: the lower id dials now, the other side if that dial does not come (LATE_DIAL_MS). */
+  private dialOnline(id: string, view: DeviceView): void {
+    if (!view.online || id === this.deviceId || !this.memberAccepted(id)) return;
+    if (this.deviceId < id) void this.dial(id).catch(() => undefined);
+    else this.scheduleRedial(id);
   }
   private memberAccepted(deviceId: string): boolean {
     return !this.peerRule.refused.has(deviceId) && (this.peerRule.allowed === null || this.peerRule.allowed.has(deviceId));
@@ -557,6 +579,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     // Admission changed: the transport forgets handshakes it refused under the old rule (admissionVersion), so a member
     // let back in connects now instead of after the remembered refusal expires.
     this.directoryRevision++;
+    this.transport?.admissionChanged?.();
     this.dropUnauthorizedPeers();
     this.dialRoster();
   }
@@ -622,7 +645,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       this.acknowledgeHello();
       for (const [id, view] of this.roster) if (id !== this.deviceId) {
         this.presence(id, false);
-        if (view.online && this.deviceId < id) void this.dial(id).catch(() => undefined);
+        this.dialOnline(id, view);
       }
       for (const peer of this.peers.values()) {
         if (peer.info) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });

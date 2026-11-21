@@ -1362,6 +1362,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
     "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
+    "MODEL_CATALOG_UNCONFIRMED": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
     "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
     "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
     "INVALID_PARAMS": "Ungültige Eingabe. Überprüfe sie und versuch es erneut.",
@@ -13095,6 +13096,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "Das Kontingent eines Modells für die automatische Prüfung ist aufgebraucht. Prüfe Nutzung oder Abrechnung oder passe die Hilfsmodelle in den Einstellungen des Computers an, auf dem der Agent läuft. Prüfpflichtige Aktionen erfordern weiterhin deine Bestätigung.",
           "autoReviewNoAvailableModel": "Kein Modell für die automatische Prüfung verfügbar. Aktiviere und verbinde auf dem Computer, auf dem der Agent läuft, einen Prüfanbieter unter Modellanbieter oder konfiguriere Hilfsmodelle in den Einstellungen. Prüfpflichtige Aktionen benötigen weiterhin deine Bestätigung.",
           "autoReviewUnavailable": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Stelle diese Aufgabe auf Vollzugriff um, wenn du nicht unterbrochen werden möchtest. Dieser Modus birgt höhere Risiken.",
           "autoReviewUnavailableWechat": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Persönliches WeChat kann keinen Vollzugriff nutzen. Bestätige diese Aktion direkt.",
@@ -15089,6 +15091,9 @@
       "usageLimitAutoContinueTitle": "Wenn du bis zum Zurücksetzen des Nutzungslimits nichts unternommen hast, wird diese Aufgabe automatisch fortgesetzt",
       "usageLimitAutoContinueCancel": "Abbrechen",
       "usageLimitAutoContinueCancelTitle": "Automatische Fortsetzung abbrechen. Der Fehler und „Erneut versuchen“ bleiben verfügbar.",
+      "usageLimitReached": "Das Modellkonto hat sein Nutzungslimit erreicht",
+      "usageLimitReachedWithReset": "Das Modellkonto hat sein Nutzungslimit erreicht. Die Nutzung wird voraussichtlich um {{resetAt}} zurückgesetzt.",
+      "usageLimitReachedNoReset": "Das Modellkonto hat sein Nutzungslimit erreicht. Warte, bis das Limit zurückgesetzt wird, oder wechsle vor dem erneuten Versuch zu einem anderen Modell.",
       "codexOrganizationUsageLimitWithReset": "Das verbundene Codex-Konto wird von deiner Organisation verwaltet und hat sein Nutzungslimit erreicht. Die Nutzung wird voraussichtlich um {{resetAt}} zurückgesetzt.",
       "codexOrganizationUsageLimit": "Das verbundene Codex-Konto wird von deiner Organisation verwaltet und hat sein Nutzungslimit erreicht. Warte, bis das Limit zurückgesetzt wird, oder wechsle vor dem erneuten Versuch zu einem anderen verfügbaren Konto.",
       "codexUsageLimitWithReset": "Das verbundene Codex-Konto hat sein Nutzungslimit erreicht. Die Nutzung wird voraussichtlich um {{resetAt}} zurückgesetzt.",
@@ -15107,7 +15112,7 @@
       "switchClaudeSubscriptionTitle": "Diese Sitzung auf das Claude.ai-Abonnement umstellen und erneut versuchen",
       "switchingClaudeSubscription": "Wechsel zu Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Wechsel zu Claude.ai oder erneuter Versuch dieser Sitzung fehlgeschlagen: {{msg}}",
-      "codexAppServerRetired": "Der Codex-Dienst wurde neu gestartet oder ersetzt. Die aktuelle Anfrage wurde unterbrochen; führe sie erneut aus.",
+      "codexAppServerRetired": "Die Verbindung zu Codex wurde getrennt. Die laufende Anfrage wurde unterbrochen. Du kannst in dieser Sitzung fortfahren.",
       "codexAuthMissing": "Remote-Codex ist noch nicht angemeldet (401 Unauthorized). Klicke auf „Authentifizierung synchronisieren“, um deine lokalen Codex-Zugangsdaten in das entfernte Cindy-Codex-Home-Verzeichnis zu übertragen, und versuch es dann erneut.",
       "codexAuthMissingLocal": "Die Verbindung „{{provider}}“ auf diesem Computer konnte nicht authentifiziert werden. Prüfe ihren Anmeldestatus in den Einstellungen und kehre nach der Wiederherstellung zu dieser Sitzung zurück.",
       "codexSessionExpired": "Die OpenAI-Verbindung muss aktualisiert werden. Verbinde ChatGPT erneut, um fortzufahren. {{appName}} meldet deine systemweite Codex CLI nicht ab und fordert dich nicht auf, andere Modellquellen erneut zu verbinden.",
@@ -15195,6 +15200,7 @@
       "continueFailed_other": "{{count}} Sitzungen konnten nicht fortgesetzt werden. Öffne sie, um es erneut zu versuchen."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
       "actionScheduled": "Die Berechtigung für diese Aktion ist abgelaufen. Der nächste Lauf ist weiterhin geplant.",
       "actionExpired": "Die Sitzungsberechtigung für diese Aktion ist abgelaufen. Prüfe den letzten Lauf der Automatisierung.",
       "actionRecovered": "Die Berechtigung für diese Aktion ist abgelaufen. Dieselbe Automatisierung wurde später erfolgreich ausgeführt.",
@@ -15867,10 +15873,12 @@
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Der Kontext konnte beim Modellwechsel nicht komprimiert werden, da das vorherige Modell über diese Verbindung nicht verfügbar ist.",
       "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
+      "MODEL_CATALOG_UNCONFIRMED": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
       "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
       "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
       "REMOTE_DAEMON_CLOSED": "Die Remote-Verbindung wurde unterbrochen, möglicherweise während eines Updates. Diese Runde wurde beendet. Sende die Nachricht erneut.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Lokale Datei-/Bildanhänge sind in Remote-Sitzungen nicht zugänglich. Füge stattdessen den Inhalt direkt ein.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "Das Kontingent eines Modells für die automatische Prüfung ist aufgebraucht. Prüfe Nutzung oder Abrechnung oder passe die Hilfsmodelle in den Einstellungen des Computers an, auf dem der Agent läuft. Prüfpflichtige Aktionen erfordern weiterhin deine Bestätigung.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Kein Modell für die automatische Prüfung verfügbar. Aktiviere und verbinde auf dem Computer, auf dem der Agent läuft, einen Prüfanbieter unter Modellanbieter oder konfiguriere Hilfsmodelle in den Einstellungen. Prüfpflichtige Aktionen benötigen weiterhin deine Bestätigung.",
       "AUTO_REVIEW_UNAVAILABLE": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Stelle diese Aufgabe auf Vollzugriff um, wenn du nicht unterbrochen werden möchtest. Dieser Modus birgt höhere Risiken.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Persönliches WeChat kann keinen Vollzugriff nutzen. Bestätige diese Aktion direkt.",
@@ -16095,7 +16103,6 @@
       "opened": "Vorschauseite geöffnet"
     },
     "sideChat": {
-      "openPage": "Vollständige Aufgabenseite öffnen",
       "returnMain": "Zurück zur Hauptaufgabe",
       "new": "Neuer Nebenchat",
       "mainWindowDescription": "Nebenchats laufen derzeit im Hauptfenster. Deine Unterhaltung ist gespeichert.",
@@ -16103,6 +16110,14 @@
       "commandDescription": "Öffne einen Nebenchat mit dem Kontext dieser Aufgabe. Optionaler Text wird als Frageentwurf übernommen.",
       "title": "Nebenchat",
       "context": "Nutzt den beim Öffnen abgeschlossenen Kontext. Die Hauptaufgabe läuft weiter. Der Verlauf bleibt erhalten, bis du diesen Tab schließt.",
+      "viewCollaboration": "Zusammenarbeit anzeigen",
+      "openConversation": "Unterhaltung öffnen",
+      "openFromTaskList": "Auch links in der Aufgabenliste verfügbar.",
+      "returnToSideChat": "Zurück zur Rückfrage",
+      "reopenSideChat": "Rückfrage erneut öffnen",
+      "origin": "Dieses Gespräch begann als Rückfrage.",
+      "originNamed": "Dieses Gespräch begann als Rückfrage zu „{{title}}“.",
+      "originUnavailable": "Dieses Gespräch begann als Rückfrage. Die ursprüngliche Aufgabe ist nicht verfügbar.",
       "opening": "Wird geöffnet…",
       "notReady": "Warte, bis die Hauptaufgabe ihre erste Antwort abgeschlossen hat.",
       "unsupported": "Der Agent dieser Aufgabe läuft in einer anderen Ausführungsumgebung. Nebenchats sind hier noch nicht verfügbar.",
@@ -16111,9 +16126,10 @@
       "mainTaskOnly": "Öffne einen Nebenchat aus der Hauptaufgabe.",
       "sharedTaskUnavailable": "Nebenchats sind in geteilten Aufgaben nicht verfügbar.",
       "archivedTask": "Hebe die Archivierung dieser Aufgabe auf, um einen Nebenchat zu öffnen.",
-      "closeTitle": "Nebenchat schließen?",
-      "closeDescription": "Diese Folgeunterhaltung wird beendet und ihr Verlauf gelöscht. Die Hauptaufgabe läuft weiter.",
-      "closeConfirm": "Schließen und löschen",
+      "closeTitle": "Diese Nachfrage schließen und archivieren?",
+      "closeDescription": "Die zugehörige Aufgabe in der linken Seitenleiste wird ebenfalls archiviert.",
+      "closeDescriptionRunning": "Die zugehörige Aufgabe in der linken Seitenleiste wird ebenfalls archiviert und ihre Worker werden angehalten.",
+      "closeConfirm": "Schließen und archivieren",
       "closeFailed": "Der Nebenchat konnte nicht geschlossen werden. Versuch es erneut."
     },
     "teammateProcess": {
@@ -16173,6 +16189,10 @@
       "retryIn": "Automatischer Versuch in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "Das Nutzungslimit des Abos für dieses Modell ist erreicht. Sie können das Modell wechseln.",
+      "poolRetryUntil": "Versuchen Sie es nach {{resetAt}} erneut.",
+      "poolOtherSignedOut": "Ein weiteres Abo-Konto ist abgemeldet. Melden Sie es auf dem Computer an, der die Aufgabe ausführt, und versuchen Sie es erneut.",
+      "poolUnavailable": "Für dieses Modell ist kein Abo-Konto verfügbar. Wechseln Sie das Modell oder prüfen Sie die Konten auf dem Computer, der die Aufgabe ausführt.",
       "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle.",
       "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle.",
       "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
@@ -17037,7 +17057,41 @@
             "token": "Fallback-Token wird verwendet",
             "recheck": "Verbindung prüfen",
             "summary": "Verwalte GitHub-Repositories, Issues, Pull Requests und Actions.",
-            "otherMethods": "Andere Verbindungsmethoden"
+            "otherMethods": "Andere Verbindungsmethoden",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub-App-Zugriff",
+            "all": "Alle Repositorys",
+            "selected": "Ausgewählte Repositorys",
+            "visible": "Sichtbare Repositorys: {{count}}",
+            "unknownCount": "Anzahl nicht verfügbar",
+            "permissions": "Berechtigungen",
+            "read": "Nur lesen",
+            "write": "Lesen und schreiben",
+            "admin": "Verwalten",
+            "loading": "Zugriff wird geladen…",
+            "missing": "Verbinde die GitHub-App auf diesem Computer, um den Zugriff zu sehen.",
+            "unavailable": "Zugriffsdetails nicht verfügbar.",
+            "empty": "Für dieses Konto sind keine Installationen sichtbar.",
+            "suspended": "Installation angehalten",
+            "events": "Repositorys mit Ereignisabo auf diesem Computer: {{count}}",
+            "manage": "Repository-Zugriff verwalten",
+            "names": {
+              "actions": "Actions",
+              "administration": "Repository-Verwaltung",
+              "checks": "Prüfungen",
+              "contents": "Repository-Inhalte",
+              "deployments": "Deployments",
+              "issues": "Issues",
+              "members": "Organisationsmitglieder",
+              "metadata": "Metadaten",
+              "organization_events": "Organisationsereignisse",
+              "pull_requests": "Pull Requests",
+              "repository_hooks": "Repository-Webhooks",
+              "statuses": "Commit-Status",
+              "workflows": "Workflow-Dateien"
+            }
           },
           "app": {
             "title": "Repository-Ereignisse",
@@ -17050,6 +17104,21 @@
             "repositories": "Repositorys auswählen",
             "disconnect": "Ereignisse trennen",
             "connect": "GitHub App verbinden"
+          },
+          "connection": {
+            "operations": "Repository-Aktionen",
+            "operationsMissing": "Repository-Zugriff noch nicht autorisiert",
+            "checking": "GitHub-Verbindung wird geprüft…",
+            "mismatch": "Aktionen und Benachrichtigungen verwenden verschiedene Konten. Bitte prüfen und erneut verbinden.",
+            "ready": "GitHub-Konto verbunden.",
+            "close": "Schließen",
+            "incomplete": "Konto verknüpft. Autorisiere jetzt Aktionen auf diesem Computer.",
+            "eventsOnly": "Dieses Konto empfängt Repository-Ereignisse. Der Name bestätigt keine Autorisierung auf diesem Computer.",
+            "connect": "GitHub verbinden",
+            "alternative": "Lokale GitHub-Anmeldung verwenden",
+            "cliDescription": "Die lokale Anmeldung bleibt nutzbar. Persönliche Benachrichtigungen und andere von GitHub Apps nicht unterstützte Funktionen benötigen sie weiterhin.",
+            "disconnect": "GitHub App trennen",
+            "repositories": "Beobachtete Repositorys: {{count}}"
           }
         },
         "unresolved": "Ungelöste Review-Threads: {{count}}",

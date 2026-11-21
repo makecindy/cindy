@@ -1251,9 +1251,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const pluginEnginesAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca';
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed);
   const rememberedPluginEngineDeviceId = pluginEnginesAllowed ? draft.pluginEngine?.deviceId : undefined;
+  // 本机装了对应插件才列出同账号其他电脑开放的插件引擎；本机没有任何插件引擎时不向其他电脑请求目录。
   // 设备列表随在线状态刷新会换新数组：按「哪几台、叫什么」取一个键，内容没变就沿用同一份，
   // 不让模型选择器跟着每次在线状态刷新重算。
-  const pluginEngineDevicesKey = pluginEnginesAllowed
+  const pluginEngineDevicesKey = pluginEnginesAllowed && pluginEngineList.length > 0
     ? JSON.stringify(selectableDevices
       .filter((device) => !isProviderShareAgentDeviceId(device.deviceId)
         && (device.online || device.deviceId === rememberedPluginEngineDeviceId))
@@ -1266,7 +1267,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const pluginEngineDeviceIds = useMemo(() => pluginEngineDevices.map((device) => device.deviceId), [pluginEngineDevices]);
   const { catalogues: devicePluginEngines, read: readDevicePluginEngines } = useDevicesPluginEngines(pluginEngineDeviceIds);
   const pluginEngineChoices = useMemo<readonly PluginEngineChoice[]>(() => {
-    const remote = remotePluginEngineChoices(pluginEngineDevices, devicePluginEngines, deviceDisplayName);
+    const remote = remotePluginEngineChoices(pluginEngineDevices, devicePluginEngines, deviceDisplayName, pluginEngineList);
     return remote.length ? [...pluginEngineList, ...remote] : pluginEngineList;
   }, [pluginEngineList, pluginEngineDevices, devicePluginEngines]);
   // 记住的是另一台电脑上的引擎：进入草稿时先读取那台电脑的列表。
@@ -2091,15 +2092,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     }
   }, [isAgentDeviceDraft, effectiveAgentDeviceId, capabilityAgentKind, dlSel]);
 
-  // 远程草稿展示用:已 seed 用 dlSel;seed 完成前(等隧道 / 能力)先用 capabilities 默认占位,
-  // 绝不回落控制端本地(仅 capabilities 未就绪的极早期暂为 null,此时与改造前行为一致)。
+  // Use the same host defaults for the first render and subsequent selection.
   const deviceLinkInitial = useMemo<DeviceLinkDraftSelection | null>(() => {
     if (!usesDeviceCatalog) return null;
     if (dlSel) return dlSel;
-    if (capabilities) {
+    if (capabilities && deviceDraftDefaultsReady) {
       return resolveDeviceLinkDraftDefaults(
         capabilities,
-        null,
+        deviceDraftDefaults,
         undefined,
         capabilityAgentKind,
         agentCatalogProviders,
@@ -2109,6 +2109,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   }, [
     usesDeviceCatalog,
     dlSel,
+    deviceDraftDefaultsReady,
+    deviceDraftDefaults,
     capabilities,
     capabilityAgentKind,
     agentCatalogProviders,
@@ -2142,8 +2144,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   }, [dlSel, deviceDraftDefaults]);
 
   // 选中模型 + effort:device-link 用镜像 holder(deviceLinkInitial,被控端草稿值已按 capabilities
-  // 校准);本地草稿用 chatPrefs(逐字节不变)。device-link 在 holder seed 完成前(等隧道 / 能力)
-  // 极早期暂用 chatPrefs,随后被 deviceLinkInitial 取代。
+  // 校准)。首次等待远端默认值时，模型选择器显示读取状态。
   // 播种出来的模型与档位:被控端给的原样用(目录还在读 / 老被控端只有拍平 capabilities 时)。
   const draftSeedSelection = useMemo(() => {
     // 播种出来的模型可能是空串(那份目录没给出可用型号,见 resolveDeviceLinkDraftDefaults 的
@@ -7558,6 +7559,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     remoteAgentDevices={remoteAgentDevices}
                     catalogHostDeviceId={controlledModelRoute.catalogHostDeviceId}
                     modelMemoryOverride={deviceLinkDraftMemory}
+                    draftModelPending={isDeviceLinkDraft && !dlSel && !activePluginEngine &&
+                      remoteDraftState.status !== 'error' && remoteModelListStatus !== 'error' &&
+                      (!deviceDraftDefaultsReady || !capabilities)}
                     initialModel={draftInitialModel}
                     initialEffort={draftInitialEffort}
                     initialPermissionMode={activePluginEngine ? activePluginEngine.permissionMode : chatInitialPermissionMode}
