@@ -429,7 +429,7 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     });
 
     fireEvent.click(screen.getByText('产品决策巡检'));
-    expect(onSessionClick).toHaveBeenCalledWith('run-3');
+    expect(onSessionClick).toHaveBeenCalledWith('run-3', undefined, expect.objectContaining({ id: 'run-3' }));
     expect(onSessionClick).not.toHaveBeenCalledWith('run-0');
   });
 
@@ -442,7 +442,7 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     });
     expect(childRunIds(container)).toEqual(['run-7']);
     fireEvent.click(screen.getByText('产品决策巡检'));
-    expect(onSessionClick).toHaveBeenLastCalledWith('run-0');
+    expect(onSessionClick).toHaveBeenLastCalledWith('run-0', undefined, expect.objectContaining({ id: 'run-0' }));
     fireEvent.click(screen.getByLabelText('ccAgent.sidebar.automationGroup.expand'));
     expect(childRunIds(container)).toEqual(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-7']);
     fireEvent.click(screen.getByText('产品决策巡检'));
