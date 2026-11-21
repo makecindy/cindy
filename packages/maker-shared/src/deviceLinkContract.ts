@@ -475,6 +475,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:fork',
   'maker:side-chat:v1',
   'maker:side-chat:list:v1',
+  'maker:side-chat:promote:v1',
   'maker:fork-strip-encrypted',
   'maker:get-session-tree',
   'maker:navigate-session-tree',

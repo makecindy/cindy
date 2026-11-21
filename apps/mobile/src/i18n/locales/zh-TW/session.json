@@ -39,6 +39,9 @@
     "hint": "左右拖動可調整兩欄寬度"
   },
   "sideChat": {
+    "promote": "轉為主任務",
+    "promoting": "正在轉換…",
+    "promoteFailed": "未能將這則追問轉為主任務。",
     "collapse": "收起追問",
     "resume": "繼續追問",
     "list": "追問列表",

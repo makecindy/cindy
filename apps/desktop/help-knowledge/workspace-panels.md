@@ -52,9 +52,10 @@ The **right sidebar** sits next to an open task. It holds tabs ("panels") that h
 **Side chat:**
 
 - Ask a separate question with the main task's context without interrupting it. Open one with **New side chat** in the + menu, with `/side` (text after it becomes the draft question), or by selecting text in a reply and clicking **Side chat**.
-- It uses the context completed when you opened it; the main task keeps running. **Open full task page** shows it full-size; **Back to main task** returns.
+- Choose **Make main task** at the top of the side chat to keep the same conversation and context as a task in the task list. On mobile, this action is in the top-right **…** menu; **Back to main task** stays above the composer. Older execution computers need an update to support conversion.
+- It uses the context completed when you opened it; the original main task keeps running. **Make main task** opens the converted conversation as a full task page.
 - Wait until the main task has its first reply. Not available in shared tasks you joined, in IM bot chats, or in tasks whose agent runs in another environment.
-- Closing the tab asks **Close side chat?** — it stops the side chat and deletes its history (**Close and delete**).
+- Closing an ordinary side chat tab stops it and deletes its history. After it becomes a main task (manually or through Collaboration), closing its tab asks to archive the task and keeps its history.
 
 **Plugin panels:**
 

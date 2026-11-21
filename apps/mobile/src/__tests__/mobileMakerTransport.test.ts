@@ -99,13 +99,14 @@ describe("mobile maker transport", () => {
     const calls: string[] = [];
     const maker = createMobileMakerTransport({ deviceId: 'side-host', invoke: (async (_device, channel, args) => {
       calls.push(channel);
-      expect(args).toEqual(['main']);
+      expect(args).toEqual(channel === 'maker:side-chat:promote:v1' ? ['child', 'main'] : ['main']);
       if (channel === 'maker:side-chat:list:v1') return [{ id: 'child' }];
       throw new Error('CHANNEL_NOT_ALLOWED');
     }) as RemoteInvoke });
     expect(await maker.listSideChats('main')).toEqual([{ id: 'child' }]);
     await expect(maker.createSideChat('main')).rejects.toThrow('CHANNEL_NOT_ALLOWED');
-    expect(calls).toEqual(['maker:side-chat:list:v1', 'maker:side-chat:v1']);
+    await expect(maker.promoteSideChat('child', 'main')).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+    expect(calls).toEqual(['maker:side-chat:list:v1', 'maker:side-chat:v1', 'maker:side-chat:promote:v1']);
   });
   it('writes reset preferences to the execution device and rejects a different account response', async () => {
     const invoke = vi.fn(async () => ({ providerId: 'openai-b', autoUse: { accountKey: 'bound-account' } }));
@@ -544,6 +545,7 @@ describe("mobile maker transport", () => {
       "maker:fork",
       "maker:side-chat:v1",
       "maker:side-chat:list:v1",
+      "maker:side-chat:promote:v1",
       "maker:fork-strip-encrypted",
       "maker:get-session-tree",
       "maker:navigate-session-tree",

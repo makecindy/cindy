@@ -39,6 +39,9 @@
     "hint": "左右拖之，可調兩欄之寬"
   },
   "sideChat": {
+    "promote": "轉為主任務",
+    "promoting": "轉換中…",
+    "promoteFailed": "未能將此追問轉為主任務。",
     "collapse": "收旁問",
     "resume": "續旁問",
     "list": "旁問錄",

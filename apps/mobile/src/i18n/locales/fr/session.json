@@ -39,6 +39,9 @@
     "hint": "Faites glisser vers la gauche ou la droite pour ajuster la largeur des colonnes"
   },
   "sideChat": {
+    "promote": "Convertir en tâche principale",
+    "promoting": "Conversion en cours…",
+    "promoteFailed": "Impossible de convertir cette conversation latérale en tâche principale.",
     "collapse": "Réduire la conversation annexe",
     "resume": "Reprendre la conversation annexe",
     "list": "Liste des conversations annexes",

@@ -62,6 +62,7 @@ vi.mock("lucide-react-native", () =>
     [
       "Archive",
       "ArchiveRestore",
+      "ArrowUpRight",
       "ChevronRight",
       "Copy",
       "Folder",
@@ -161,6 +162,22 @@ it("opening at rename goes straight to the editor and cancel closes the sheet", 
   } finally {
     await act(async () => root.unmount());
   }
+});
+
+// Unit: promotion moved out of the composer into the existing task menu. Other
+// menu tests never supply this action; a visible side-chat menu is the minimal input.
+it('offers side-chat promotion as an ordinary menu action', async () => {
+  const onPress = vi.fn();
+  const props = baseProps({ initialView: 'menu',
+    sideChatPromotion: { onPress, busy: false, disabled: false, error: null } });
+  const { host, root, click } = await renderSheet(props);
+  try {
+    expect(host.querySelector('[data-testid="session.sideChat.promote"]')?.textContent)
+      .toBe(i18n.t('session.sideChat.promote'));
+    await click('session.sideChat.promote');
+    expect(onPress).toHaveBeenCalledOnce();
+    expect(props.onClose).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); }
 });
 
 // Unit: a slow archive preflight used to hold the menu open. The actual menu

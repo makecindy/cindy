@@ -195,6 +195,7 @@ import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { findRemoteHistoryView, useRemoteHistoryView } from '@/session/remoteHistoryView';
 import { HistoryViewHandoff, historyAfter, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { SideChatsSheet } from '@/session/SideChatsSheet';
+import { useSideChatPromotion } from '@/session/useSideChatPromotion';
 import { useSideChatCount } from '@/session/useSideChatCount';
 import { SessionTaskLayout, type SessionTaskChrome } from '@/session/SessionTaskLayout';
 import { buildMobileSessionRenderWindow, mobileSessionHistoryBoundary } from '@/session/mobileHistoryRender';
@@ -5642,6 +5643,16 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const canUseSideChats = !!currentSession && !sessionManagedByHost && !currentSession.remoteHostId
     && !isSharedTaskPeer(deviceId) && !['bot', 'review'].includes(currentSession.source ?? '')
     && !currentSession.pendingLocalCreation;
+  const canPromoteSideChat = currentSession?.source === 'side-chat' && !!currentSession.parentSessionId
+    && currentSession.status === 'active' && !isSharedTaskPeer(deviceId);
+  const sideChatPromotion = useSideChatPromotion({
+    deviceId, sessionId, parentSessionId: currentSession?.parentSessionId, maker,
+    canPromote: canPromoteSideChat, disabled: !canUseRemoteSessionControls,
+    onPromoted: () => {
+      remoteSessionStore.applySessionPatch(deviceId, sessionId, { source: 'desktop', sideChatPromoted: true });
+      setSettingsOpen(false);
+    },
+  });
   const sideChatCount = useSideChatCount({ deviceId, sessionId, maker, owner: outboxOwner,
     enabled: canUseSideChats && currentSession?.source !== 'side-chat' && remoteHistoryAvailable,
     refreshKey: `${connectionEpoch}:${sideChatsOpen}`,
@@ -10818,6 +10829,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             onOpenSideChats={canUseSideChats ? () => {
               setSideChatsPendingOpen(true);
               setSettingsOpen(false);
+            } : undefined}
+            sideChatPromotion={canPromoteSideChat ? {
+              onPress: () => void sideChatPromotion.promote(),
+              busy: sideChatPromotion.busy,
+              disabled: !canUseRemoteSessionControls || sideChatPromotion.busy,
+              error: sideChatPromotion.error,
             } : undefined}
             tagDeviceId={deviceId}
             onLeaveSharing={() => void sharedTaskExit.leave()}

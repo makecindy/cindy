@@ -16255,6 +16255,9 @@
       "opened": "Foi aberta uma página de pré-visualização"
     },
     "sideChat": {
+      "promote": "Converter em tarefa principal",
+      "promoting": "A converter…",
+      "promoteFailed": "Não foi possível converter esta conversa lateral numa tarefa principal.",
       "returnMain": "Voltar à tarefa principal",
       "new": "Nova conversa paralela",
       "mainWindowDescription": "As conversas paralelas decorrem atualmente na janela principal. A sua conversa está guardada.",

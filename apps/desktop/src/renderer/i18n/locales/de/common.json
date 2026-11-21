@@ -16105,6 +16105,9 @@
       "opened": "Vorschauseite geöffnet"
     },
     "sideChat": {
+      "promote": "Zur Hauptaufgabe machen",
+      "promoting": "Wird umgewandelt…",
+      "promoteFailed": "Dieser Seitenchat konnte nicht in eine Hauptaufgabe umgewandelt werden.",
       "returnMain": "Zurück zur Hauptaufgabe",
       "new": "Neuer Nebenchat",
       "mainWindowDescription": "Nebenchats laufen derzeit im Hauptfenster. Deine Unterhaltung ist gespeichert.",

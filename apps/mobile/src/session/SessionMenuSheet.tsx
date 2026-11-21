@@ -32,6 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   Archive,
   ArchiveRestore,
+  ArrowUpRight,
   Copy,
   Folder,
   Link2,
@@ -61,6 +62,7 @@ import { useTranslation } from 'react-i18next';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowActionGroup } from '@/components/MobilePrimitives';
+import { ErrorNotice } from '@/components/ErrorNotice';
 import type { MobileMakerTransport, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import type { CodexResetAutoUseSettings, MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
@@ -146,6 +148,7 @@ export interface SessionMenuSheetProps {
   messageOnly?: boolean;
   onOpenSearch?: () => void;
   onOpenSideChats?: () => void;
+  sideChatPromotion?: { onPress(): void; busy: boolean; disabled: boolean; error: string | null };
   accountProvider?: OpenAiAccountProvider;
   usageReader: SessionMenuUsageReader & Pick<MobileMakerTransport, 'getContextUsage'>;
   /**
@@ -208,6 +211,7 @@ export function SessionMenuSheet({
   messageOnly = false,
   onOpenSearch,
   onOpenSideChats,
+  sideChatPromotion,
   usageReader,
   accountUsageReader = usageReader,
   accountProvider,
@@ -786,13 +790,24 @@ export function SessionMenuSheet({
             </View>
           ) : null}
           {Platform.OS === 'ios' ? (
-            <SessionDetailsNativeActions actions={listedActions.map(action => ({
-              label: action.id === 'copyLink' ? copyLabel(action.label, 'copyLink', t('session.menu.linkCopied')) : action.label,
-              disabled: action.disabled,
-              testID: action.testID,
-              onPress: () => handleAction(action),
-            }))} />
+            <SessionDetailsNativeActions actions={[
+              ...(sideChatPromotion ? [{
+                label: t(sideChatPromotion.busy ? 'session.sideChat.promoting' : 'session.sideChat.promote'),
+                disabled: sideChatPromotion.disabled,
+                testID: 'session.sideChat.promote',
+                onPress: sideChatPromotion.onPress,
+              }] : []),
+              ...listedActions.map(action => ({
+                label: action.id === 'copyLink' ? copyLabel(action.label, 'copyLink', t('session.menu.linkCopied')) : action.label,
+                disabled: action.disabled,
+                testID: action.testID,
+                onPress: () => handleAction(action),
+              }))]} />
           ) : <View style={styles.actionGroup}>
+            {sideChatPromotion ? <MenuActionRow icon={ArrowUpRight}
+              label={t(sideChatPromotion.busy ? 'session.sideChat.promoting' : 'session.sideChat.promote')}
+              disabled={sideChatPromotion.disabled} onPress={sideChatPromotion.onPress}
+              testID="session.sideChat.promote" /> : null}
             {listedActions.map((action) => (
               <MenuActionRow
                 key={action.id}
@@ -806,6 +821,7 @@ export function SessionMenuSheet({
               />
             ))}
           </View>}
+          {sideChatPromotion?.error ? <ErrorNotice message={sideChatPromotion.error} /> : null}
 
           {!messageOnly && sessionAllowsProjectMove(session) ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{

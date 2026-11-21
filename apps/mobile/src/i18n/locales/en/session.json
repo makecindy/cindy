@@ -39,6 +39,9 @@
     "hint": "Drag left or right to adjust the column widths"
   },
   "sideChat": {
+    "promote": "Make main task",
+    "promoting": "Converting…",
+    "promoteFailed": "Could not convert this side chat to a main task.",
     "collapse": "Collapse side chat",
     "resume": "Continue side chat",
     "list": "Side chat list",

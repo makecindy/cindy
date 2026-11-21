@@ -174,7 +174,38 @@ export function setSideChatArchiveCleanup(cleanup: typeof finishSideChatArchive)
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
 
-/** Only a committed worker for this lead can make the side chat independently visible. */
+/** Explicit owner action; keep the native conversation and provenance intact. */
+export async function promoteSideChatInDb(sessionId: string, parentSessionId: string): Promise<void> {
+  const dbClient = getDbClient();
+  const ownerScope = captureOwnerScope();
+  const assertCurrent = () => {
+    if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) {
+      throwIpcError('PRECONDITION_FAILED', 'Task owner changed');
+    }
+  };
+  return withSessionRouteLock(sessionId, async () => {
+    assertCurrent();
+    const row = await dbClient.drizzle.select({ source: sessions.source, status: sessions.status,
+      parentSessionId: sessions.parentSessionId, promoted: sessions.sideChatPromoted,
+      closing: sessions.sideChatClosePending }).from(sessions).where(eq(sessions.id, sessionId)).get();
+    assertCurrent();
+    if (!row) throwIpcError('NOT_FOUND', 'Side chat is unavailable');
+    if (row.source !== 'side-chat' || row.parentSessionId !== parentSessionId || row.status !== 'active' || row.closing) {
+      throwIpcError('PRECONDITION_FAILED', 'Only an active side chat can become a main task');
+    }
+    if (row.promoted) return;
+    const changed = await dbClient.drizzle.update(sessions).set({ sideChatPromoted: true })
+      .where(and(eq(sessions.id, sessionId), eq(sessions.source, 'side-chat'),
+        eq(sessions.parentSessionId, parentSessionId), eq(sessions.status, 'active'),
+        eq(sessions.sideChatClosePending, false), eq(sessions.sideChatPromoted, false)))
+      .returning({ id: sessions.id });
+    assertCurrent();
+    if (!changed.length) throwIpcError('PRECONDITION_FAILED', 'Side chat changed');
+    broadcastSessionPatched(sessionId, { source: 'desktop', sideChatPromoted: true, parentSessionId }, ownerScope);
+  });
+}
+
+/** A committed worker also makes the side chat independently visible. */
 export async function promoteSideChatLeadInDb(sessionId: string, teamId: string, workerId: string): Promise<void> {
   const dbClient = getDbClient();
   const ownerScope = captureOwnerScope();

@@ -16060,6 +16060,9 @@
     },
     "sessionLoading": "差事方载",
     "sideChat": {
+      "promote": "转为主任务",
+      "promoting": "转换中…",
+      "promoteFailed": "未能将此追问转为主任务。",
       "returnMain": "归主差事",
       "new": "增旁问",
       "mainWindowDescription": "旁问今于主窗中用之。所问之录犹存。",

@@ -7,14 +7,14 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { SideChatTabBody } from '../SideChatTabBody';
 
 const m = vi.hoisted(() => ({
-  get: vi.fn(), close: vi.fn(), confirm: vi.fn(), setStatus: vi.fn(),
+  get: vi.fn(), promote: vi.fn(), navigate: vi.fn(), close: vi.fn(), confirm: vi.fn(), setStatus: vi.fn(),
   t: (key: string) => key,
   local: new Set<(payload: any, stamp?: any) => void>(),
   remote: new Set<(push: any, stamp?: any) => void>(),
 }));
-vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('react-router-dom', () => ({ useNavigate: () => m.navigate }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: m.t }) }));
-vi.mock('@/components/ui/button', () => ({ Button: ({ children, onClick }: any) => <button onClick={onClick}>{children}</button> }));
+vi.mock('@/components/ui/button', () => ({ Button: ({ children, onClick, disabled }: any) => <button disabled={disabled} onClick={onClick}>{children}</button> }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: m.confirm }) }));
 vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({ CCAgentSessionView: () => <textarea aria-label="Side chat composer" /> }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: { pinSessionOrigin: vi.fn(), mergeDeviceSessions: vi.fn(), getDeviceName: () => 'Host' } }));
@@ -45,9 +45,10 @@ beforeEach(() => {
   m.get.mockResolvedValue(child);
   m.close.mockResolvedValue(undefined);
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
-    localDb: { sessionsPush: { onPatched: (fn: any) => { m.local.add(fn); return () => m.local.delete(fn); } } },
+    maker: { promoteSideChat: m.promote },
+    localDb: { sessions: { get: m.get }, sessionsPush: { onPatched: (fn: any) => { m.local.add(fn); return () => m.local.delete(fn); } } },
     deviceLink: {
-      invoke: m.get,
+      invoke: (device: string, channel: string, args: unknown[]) => channel === 'maker:side-chat:promote:v1' ? m.promote(device, ...args) : m.get(device, channel, args),
       onRemotePush: (fn: any) => { m.remote.add(fn); return () => m.remote.delete(fn); },
     },
   } });
@@ -102,5 +103,33 @@ it('keeps a transient read failure retryable instead of removing the tab', async
   mount('host');
   await act(async () => {});
   expect(screen.queryByRole('button', { name: 'commonUi.retry' })).not.toBeNull();
+  expect(m.close).not.toHaveBeenCalled();
+});
+
+// Unit: manual promotion is absent from the existing deletion-only cases. Render
+// the real action and check one receipt, origin-preserving navigation and failure.
+it.each([null, 'host'])('promotes the existing conversation on its execution host (%s)', async deviceId => {
+  let finish!: () => void;
+  m.promote.mockReturnValue(new Promise<void>(resolve => { finish = resolve; }));
+  mount(deviceId);
+  await act(async () => {});
+  const button = screen.getByRole('button', { name: 'chat.sideChat.promote' });
+  await act(async () => { button.click(); button.click(); });
+  expect(m.promote).toHaveBeenCalledTimes(1);
+  expect(m.promote).toHaveBeenCalledWith(...(deviceId ? [deviceId, 'child', 'parent'] : ['child', 'parent']));
+  expect(m.navigate).not.toHaveBeenCalled();
+  await act(async () => finish());
+  expect(m.navigate).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('button', { name: 'chat.sideChat.promote' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'chat.sideChat.openConversation' })).not.toBeNull();
+  expect(m.setStatus).not.toHaveBeenCalled();
+});
+
+it('keeps an unsupported host side chat open without navigating', async () => {
+  m.promote.mockRejectedValue(new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] Unsupported'));
+  mount('host'); await act(async () => {});
+  await act(async () => screen.getByRole('button', { name: 'chat.sideChat.promote' }).click());
+  expect(m.navigate).not.toHaveBeenCalled();
+  expect(screen.getByRole('textbox', { name: 'Side chat composer' })).not.toBeNull();
   expect(m.close).not.toHaveBeenCalled();
 });

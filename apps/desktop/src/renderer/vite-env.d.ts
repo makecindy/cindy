@@ -7289,6 +7289,7 @@ interface ElectronAPI {
      * SQLite 镜像 + agentMeta uuid remap。错误码:
      *   NOT_FOUND / INVALID_PARAMS / SOURCE_NEVER_RAN / NO_PRIOR_ASSISTANT
      */
+    promoteSideChat: (sessionId: string, parentSessionId: string) => Promise<void>;
     createSideChat: (sourceSessionId: string) => Promise<import('./lib/ccAgent.types').Session>;
     listSideChats: (sourceSessionId: string) => Promise<Array<{ id: string }>>;
     fork: (

@@ -16068,6 +16068,9 @@
     },
     "sessionLoading": "載入任務中",
     "sideChat": {
+      "promote": "轉為主任務",
+      "promoting": "正在轉換…",
+      "promoteFailed": "未能將這則追問轉為主任務。",
       "returnMain": "返回主任務",
       "new": "新增側邊追問",
       "mainWindowDescription": "側邊追問目前在主視窗中使用。追問記錄仍然保留。",

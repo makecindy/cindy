@@ -16255,6 +16255,9 @@
       "opened": "Page d'aperçu ouverte"
     },
     "sideChat": {
+      "promote": "Convertir en tâche principale",
+      "promoting": "Conversion en cours…",
+      "promoteFailed": "Impossible de convertir cette conversation latérale en tâche principale.",
       "returnMain": "Retour à la tâche principale",
       "new": "Nouvelle conversation annexe",
       "mainWindowDescription": "Les conversations annexes s'exécutent actuellement dans la fenêtre principale. Votre conversation est enregistrée.",

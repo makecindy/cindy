@@ -16255,6 +16255,9 @@
       "opened": "Se abrió una página de vista previa"
     },
     "sideChat": {
+      "promote": "Convertir en tarea principal",
+      "promoting": "Convirtiendo…",
+      "promoteFailed": "No se pudo convertir esta conversación lateral en una tarea principal.",
       "returnMain": "Volver a la tarea principal",
       "new": "Nuevo chat secundario",
       "mainWindowDescription": "Los chats secundarios se ejecutan actualmente en la ventana principal. Tu conversación está guardada.",
