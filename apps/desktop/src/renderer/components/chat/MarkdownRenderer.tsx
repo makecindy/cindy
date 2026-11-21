@@ -315,8 +315,21 @@ const MARKDOWN_LINK_CLASS = 'underline underline-offset-2 cursor-pointer [overfl
  *
  * 移动端**刻意不同形态**(零底色 + 文字压暗):那边聊天流是 RN 嵌套 Text,不认
  * borderRadius,淡底只能是直角方块。这里是 CSS,按 GitHub 原样实现。
+ *
+ * 折行(#11312):行内 code 默认 `white-space: normal`,有空格时本来就会断行;但**无空格
+ * 的超长 token**(长路径、长类名、base64 片段)没有任何断点,会把气泡顶宽、溢出气泡
+ * 边界(见 issue 截图里的 `JudgeAttributeField.tsx` 一行)。这里显式声明
+ * `[overflow-wrap:anywhere]`,允许在任意字符间断行,与 MARKDOWN_LINK_CLASS 的既有
+ * 做法一致;`overflow-wrap` 可继承,但链接、行内 code 各自声明一份,不依赖外层容器。
+ *
+ * 不用 `text-ellipsis`/`truncate` 而是让它折行:行内 code 是路径、标识符这类
+ * **逐字符都有意义**的内容,中段省略会截掉用户真正要看的部分(哪个文件、哪个字段),
+ * 而折行后全文仍在,复制也不受影响。气泡自身的 `max-w` 已经限住上限,无需再写
+ * `max-w-full`——它用在 inline 元素上本就不生效。
  */
-const INLINE_CODE_CLASS = 'font-mono text-14 rounded-[6px] px-[0.4em] py-[0.2em] bg-[var(--msg-md-inline-code-bg)]';
+const INLINE_CODE_CLASS =
+  'font-mono text-14 rounded-[6px] px-[0.4em] py-[0.2em] bg-[var(--msg-md-inline-code-bg)]' +
+  ' [overflow-wrap:anywhere]';
 
 const WINDOWS_ABSOLUTE_HREF_RE = /^[A-Za-z]:[\\/]/;
 
