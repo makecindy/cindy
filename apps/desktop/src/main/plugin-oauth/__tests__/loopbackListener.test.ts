@@ -6,6 +6,9 @@ import { listenForOauthCallback } from '../loopbackListener.js';
 
 import { ephemeralCallbackPorts } from './ephemeralCallbackPorts.js';
 
+// 回归：已有状态码用例没有检查失败正文，品牌常量改名后不能残留旧名。
+vi.mock('@cindy/maker-shared/branding', () => ({ BRAND_NAME: 'ExampleApp' }));
+
 let sockets: ReturnType<typeof ephemeralCallbackPorts>;
 beforeEach(() => {
   sockets = ephemeralCallbackPorts();
@@ -36,7 +39,7 @@ function offer(port: number, hostname = 'localhost'): PluginOauthOffer {
   };
 }
 
-function request(host: string, port: number, options: { path?: string; authority?: string } = {}) {
+function request(host: string, port: number, options: { path?: string; authority?: string; onBody?: (body: string) => void } = {}) {
   return new Promise<number>((resolve, reject) => {
     const req = http.get(
       {
@@ -47,8 +50,13 @@ function request(host: string, port: number, options: { path?: string; authority
         headers: { Host: options.authority ?? `localhost:${port}` },
       },
       (res) => {
-        res.resume();
-        res.once('end', () => resolve(res.statusCode!));
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { body += chunk; });
+        res.once('end', () => {
+          options.onBody?.(body);
+          resolve(res.statusCode!);
+        });
       },
     );
     req.setTimeout(2_000, () => req.destroy(new Error('request timed out')));
@@ -65,11 +73,21 @@ it.each(['127.0.0.1', '::1'])(
     resources.push(listener);
     for (const host of ['127.0.0.1', '::1']) {
       expect(await request(host, port, { authority: `evil.example:${port}` })).toBe(400);
-      expect(await request(host, port, { path: '/callback?state=wrong&code=synthetic' })).toBe(400);
+      let rejectedHtml = '';
+      expect(await request(host, port, {
+        path: '/callback?state=wrong&code=synthetic',
+        onBody: (body) => { rejectedHtml = body; },
+      })).toBe(400);
+      expect(rejectedHtml).toContain('The callback is incomplete or failed validation. Please return to ExampleApp and try again.');
       expect(await request(host, port, { path: '/wrong-path' })).toBe(404);
     }
     expect(deliver).not.toHaveBeenCalled();
-    expect(await request(first, port)).toBe(200);
+    let acceptedHtml = '';
+    expect(await request(first, port, {
+      onBody: (body) => { acceptedHtml = body; },
+    })).toBe(200);
+    expect(acceptedHtml).toContain('Return to ExampleApp to check the authorization result on the remote device.');
+    expect(acceptedHtml).toContain('<title>Authorization callback received · ExampleApp</title>');
     const other = first === '::1' ? '127.0.0.1' : '::1';
     expect(await request(other, port)).toBe(409);
     expect(deliver).toHaveBeenCalledExactlyOnceWith({ state, error: 'access_denied' });

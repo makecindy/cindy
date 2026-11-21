@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { LOGIN_CALLBACK_CHIBI } from '../assets/loginCallbackAssets';
 
@@ -7,11 +7,15 @@ import {
   getGhostOAuthResultCopy,
   getOAuthNeutralResultCopy,
   getProviderOAuthResultCopy,
+  getRemoteOAuthCallbackCopy,
   OAUTH_RESULT_HTML_LANG,
   pickOAuthResultPageLang,
   renderOAuthResultPage,
   type OAuthResultPageLang,
 } from '../oauthResultPage';
+
+// 回归：品牌改名后，远程回调的各语言正文及两种页壳的标题都要跟随并正确转义。
+vi.mock('@cindy/maker-shared/branding', () => ({ BRAND_NAME: 'Example & Co' }));
 
 const ALL_OAUTH_LANGS: OAuthResultPageLang[] = ['zh', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR'];
 
@@ -82,6 +86,14 @@ describe('OAuth result page language and copy', () => {
       label: 'Return to Cindy',
     });
   });
+
+  it('uses the shared brand or explicit override in remote callback copy for every language', () => {
+    for (const lang of Object.keys(OAUTH_RESULT_HTML_LANG) as OAuthResultPageLang[]) {
+      expect(getRemoteOAuthCallbackCopy(lang).body).toContain('Example & Co');
+      expect(getRemoteOAuthCallbackCopy(lang, 'CustomApp').body).toContain('CustomApp');
+    }
+    expect(getRemoteOAuthCallbackCopy('ko', 'ExampleApp').body).toBe('ExampleApp(으)로 돌아가 원격 기기의 인증 결과를 확인하세요.');
+  });
 });
 
 describe('shared ghost OAuth callback copy (生产/preview 合一)', () => {
@@ -140,6 +152,7 @@ describe('renderOAuthResultPage', () => {
         body: 'Result body',
       });
       expect(html).toContain(`data-cindy-oauth-result="${variant}"`);
+      expect(html).toContain('<title>Result · Example &amp; Co</title>');
       expect(html).toContain('<svg');
     },
   );
@@ -170,12 +183,14 @@ describe('renderOAuthResultPage', () => {
       htmlLang: 'en"><script>',
       variant: 'error',
       title: '<Title>',
+      brandName: '<Brand>',
       body: '<Body>',
       detail: '<script>alert(1)</script>',
       action: { href: 'cindy://focus/test" onclick="bad()', label: '<Return>' },
     });
     expect(html).toContain('lang="en&quot;&gt;&lt;script&gt;"');
     expect(html).toContain('&lt;Title&gt;');
+    expect(html).toContain('<title>&lt;Title&gt; · &lt;Brand&gt;</title>');
     expect(html).toContain('&lt;Body&gt;');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(html).toContain('href="cindy://focus/test&quot; onclick=&quot;bad()"');
@@ -215,6 +230,7 @@ describe('wave4 brand login callback card (pageKind=desktop-login)', () => {
       pageKind: 'desktop-login',
     });
     // 成功态移除 CTA 后使用紧凑流式卡,避免沿用失败态卡片的底部空白。
+    expect(html).toContain('<title>登录成功 · Example &amp; Co</title>');
     expect(html).toContain('data-cindy-oauth-layout="compact"');
     expect(html).toContain('data-card-width="560" data-card-height="500"');
     expect(html).toContain('.card.success{width:560px;height:500px;display:flex;flex-direction:column;align-items:center;padding:48px 40px 44px}');
@@ -353,6 +369,7 @@ describe('wave4 brand login callback card (pageKind=desktop-login)', () => {
       pageKind: 'desktop-login',
       copyKind: '"><img src=x onerror=alert(2)>',
       title: '<Title>',
+      brandName: '<Brand>',
       body: '<Body>',
       detail: '<script>alert(1)</script>',
       action: { href: 'cindy://focus/login" onclick="bad()', label: '<Return>' },
@@ -360,6 +377,7 @@ describe('wave4 brand login callback card (pageKind=desktop-login)', () => {
     expect(html).toContain('lang="zh&quot;&gt;&lt;script&gt;"');
     expect(html).toContain('data-cindy-oauth-copy="&quot;&gt;&lt;img src=x onerror=alert(2)&gt;"');
     expect(html).toContain('&lt;Title&gt;');
+    expect(html).toContain('<title>&lt;Title&gt; · &lt;Brand&gt;</title>');
     expect(html).toContain('&lt;Body&gt;');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(html).toContain('href="cindy://focus/login&quot; onclick=&quot;bad()"');
