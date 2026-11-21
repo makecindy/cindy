@@ -1286,6 +1286,9 @@ function ExpandedView({
       // 插件后台隐藏任务不单独通知;显示到任务列表后恢复。
       if (session && isBackgroundTaskNotificationTarget(session)) return;
       if (session) {
+        // Listed group/IM lanes must stay silent just like the hidden-lane fallback.
+        // Main independently owns their Island errors and interaction requests.
+        if (session.companion?.role === 'group' || session.companion?.role === 'channel') return;
         const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
         sendSessionEventNotification(sessionId, title, kind, {
           remoteDevice: !!session.deviceLinkDeviceId,
