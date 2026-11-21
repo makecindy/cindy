@@ -22184,6 +22184,7 @@
     "picker": {
       "empty": "尚無模型組。於設定合數源為一模式，即可於此擇之。",
       "manage": "理模型組",
+      "deviceTitle": "模型組 · {{device}}",
       "switched": "「{{name}}」已將此差事易為 {{model}}",
       "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。",
       "chooseUnavailable": "「{{name}}」今無可用之源，未取之。"
