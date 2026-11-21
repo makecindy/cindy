@@ -38,6 +38,7 @@ import {
   VERSION_ID,
   ORIGINAL_DEV_ENV_KEYS,
   ORIGINAL_DEV_ENVIRONMENT_OVERRIDES,
+  supportsDevEnvironmentOverrides,
   withVersionStore,
   writeVersionJson,
   type OriginalVersion,
@@ -442,6 +443,13 @@ export async function startVersionHandoff(
   const original =
     currentId === 'original' ? describeOriginalVersion() : readOriginalVersion(profile.userData);
   if (!original) throw versionError('unavailable');
+  if (
+    targetId === 'original' &&
+    currentId !== 'original' &&
+    app.isPackaged &&
+    !supportsDevEnvironmentOverrides(process.resourcesPath, original)
+  )
+    throw versionError('incompatible');
   if (targetId !== 'original') await verifyPersonalVersion(profile.userData, targetId, original);
   else if (
     !fs.existsSync(original.executable) ||

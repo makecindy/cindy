@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEV_ENVIRONMENT_OVERRIDES_CAPABILITY,
   listPersonalVersions,
   personalVersionId,
   hasPublishedPersonalVersionCommit,
@@ -323,6 +324,32 @@ describe('local Cindy version snapshots', () => {
       code: 'incompatible',
     });
     expect(listPersonalVersions(h.userData, h.original)[0].compatible).toBe(false);
+  });
+  it('rejects retained helpers without the Dev override capability', async () => {
+    const h = await fixture();
+    h.original.development = {
+      root: h.root,
+      node: process.execPath,
+      mode: 'remote',
+      environment: {},
+      environmentOverrides: { XDT_DISABLE_GLOBAL_SHORTCUTS: '1' },
+    };
+    const id = (await h.retain())!;
+    publishPersonalVersion(h.userData, id);
+    expect(listPersonalVersions(h.userData, h.original)[0].compatible).toBe(false);
+    await expect(verifyPersonalVersion(h.userData, id, h.original)).rejects.toMatchObject({
+      code: 'incompatible',
+    });
+
+    const item = readPersonalVersion(h.userData, id);
+    await writeFile(
+      path.join(versionDirectory(h.userData, id), item.resources, 'cindy-version-protocol.json'),
+      JSON.stringify({
+        version: 1,
+        capabilities: [DEV_ENVIRONMENT_OVERRIDES_CAPABILITY],
+      }),
+    );
+    expect(await verifyPersonalVersion(h.userData, id, h.original)).toMatchObject({ id });
   });
   it('verifies synchronously for the pre-ready startup path with the same outcome', async () => {
     const h = await fixture();

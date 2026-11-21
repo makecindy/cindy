@@ -29,6 +29,7 @@ export const ORIGINAL_DEV_ENV_KEYS = [
 ];
 /** Dev-only switches live outside `environment` so older readers ignore them safely. */
 export const ORIGINAL_DEV_ENVIRONMENT_OVERRIDES = ['XDT_DISABLE_GLOBAL_SHORTCUTS'] as const;
+export const DEV_ENVIRONMENT_OVERRIDES_CAPABILITY = 'dev-environment-overrides';
 export interface VersionProfile {
   userData: string;
   appName: string;
@@ -137,7 +138,8 @@ export function readOriginalVersion(profile: string): OriginalVersion | null {
         (!value.development.environmentOverrides ||
           Object.entries(value.development.environmentOverrides).some(
             ([key, entry]) =>
-              !ORIGINAL_DEV_ENVIRONMENT_OVERRIDES.includes(key) || typeof entry !== 'string',
+              !ORIGINAL_DEV_ENVIRONMENT_OVERRIDES.some((allowed) => allowed === key) ||
+              typeof entry !== 'string',
           ))))
   )
     throw versionError('unavailable');
@@ -315,11 +317,12 @@ function personalVersionVerification(profile: string, id: string, original: Orig
   )
     throw versionError('incompatible');
   const resources = path.join(root, item.resources);
-  if (
-    readVersionJson<{ version: number }>(path.join(resources, 'cindy-version-protocol.json'))
-      ?.version !== CINDY_VERSION_PROTOCOL
-  )
-    throw versionError('unavailable');
+  const protocol = readVersionJson<{
+    version: number;
+    capabilities?: unknown;
+  }>(path.join(resources, 'cindy-version-protocol.json'));
+  if (protocol?.version !== CINDY_VERSION_PROTOCOL) throw versionError('unavailable');
+  if (!supportsDevEnvironmentOverrides(resources, original)) throw versionError('incompatible');
   return {
     executable: path.join(root, item.executable),
     application: path.join(resources, 'app.asar'),
@@ -394,6 +397,20 @@ export function listPersonalVersions(
   return id ? [describePersonalVersion(profile, id, original)] : [];
 }
 
+export function supportsDevEnvironmentOverrides(
+  resources: string,
+  original: OriginalVersion,
+): boolean {
+  if (Object.keys(original.development?.environmentOverrides ?? {}).length === 0) return true;
+  const protocol = readVersionJson<{ capabilities?: unknown }>(
+    path.join(resources, 'cindy-version-protocol.json'),
+  );
+  return (
+    Array.isArray(protocol?.capabilities) &&
+    protocol.capabilities.includes(DEV_ENVIRONMENT_OVERRIDES_CAPABILITY)
+  );
+}
+
 /** Old registries have no slot yet; adopt their newest runnable generation on read. */
 export function personalVersionId(profile: string): string | undefined {
   const slot = readVersionJson<{ id: string | null }>(
@@ -434,6 +451,7 @@ export function describePersonalVersion(
   } catch {}
   try {
     const item = readPersonalVersion(profile, id);
+    const resources = path.join(versionDirectory(profile, id), item.resources);
     return {
       id,
       kind: 'personal',
@@ -441,7 +459,10 @@ export function describePersonalVersion(
       builtAt: item.builtAt,
       available: true,
       compatible:
-        item.migrationHash === fingerprint && item.profile.region === original?.profile.region,
+        item.migrationHash === fingerprint &&
+        item.profile.region === original?.profile.region &&
+        !!original &&
+        supportsDevEnvironmentOverrides(resources, original),
     };
   } catch {
     return { id, kind: 'personal', available: false, compatible: false };

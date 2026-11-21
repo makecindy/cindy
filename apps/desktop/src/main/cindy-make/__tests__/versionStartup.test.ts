@@ -451,6 +451,38 @@ describe('one original version type for Dev and installed Cindy', () => {
     expect(h.exit).toHaveBeenCalledWith(0);
     expect(kill).not.toHaveBeenCalled();
   });
+  it('rejects a packaged helper that cannot forward recorded Dev overrides', async () => {
+    h.packaged = true;
+    original.development = {
+      root: path.join(root, 'checkout'),
+      node: originalExec,
+      mode: 'remote',
+      environment: {},
+      environmentOverrides: { XDT_DISABLE_GLOBAL_SHORTCUTS: '1' },
+    };
+    saveOriginal();
+    const personal = await savePersonalVersion();
+    const item = store.readPersonalVersion(h.profile, personal.id);
+    Object.defineProperty(process, 'execPath', {
+      value: personal.executable,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(process, 'resourcesPath', {
+      value: path.join(store.versionDirectory(h.profile, personal.id), item.resources),
+      configurable: true,
+    });
+    const value = launchRequest({ targetId: personal.id });
+    process.argv.push(
+      '--cindy-version-profile=' + h.profile,
+      '--cindy-version-launch=' + value.id,
+    );
+    startup.prepareCindyVersionStartup();
+    await expect(startup.startVersionHandoff('original')).rejects.toMatchObject({
+      code: 'incompatible',
+    });
+    expect(h.spawn).not.toHaveBeenCalled();
+  });
 });
 
 // bootstrap-electron is loaded right after the dispatcher returns false and registers
