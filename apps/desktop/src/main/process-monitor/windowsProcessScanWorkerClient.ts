@@ -56,6 +56,24 @@ export async function runWindowsProcessScanWorker(
   }
 }
 
+/**
+ * 用同一个一次性 worker 跑另一段只读 PowerShell（本机常驻清单扫计划任务）。
+ * 脚本由 main 侧常量提供，renderer 永远不参与；workerData 在 worker 启动前注入，
+ * 不需要消息握手，现有进程扫描路径的行为与耗时不变。
+ */
+export async function runWindowsScriptWorker(
+  script: string,
+  options: { timeoutMs?: number } = {},
+): Promise<string> {
+  return runWindowsProcessScanWorker({
+    createWorker: () =>
+      new Worker(path.join(__dirname, 'windowsProcessScanWorker.js'), {
+        workerData: { script },
+      }),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+  });
+}
+
 export function disposeWindowsProcessScanWorkers(): void {
   for (const scan of activeWindowsProcessScans) {
     void cleanupWindowsProcessScan(scan);
