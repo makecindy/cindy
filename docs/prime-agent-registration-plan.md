@@ -438,3 +438,5 @@ b0c217c Merge pull request #7714 from makecindy/cindy/quirky-bohr        ← 上
 - PR #7884：open / mergeable / DCO pass / 9 files / 4810 additions / Greptile pending
 - 工作区干净，`cindy-dev` 与 `fork` 同步（`b544df1`）
 - L1 完成；**L2 方案已定，待 §6 五项拍板后开工**
+
+- 2026-11-21：追加 DCO Remediation Commit。`d4e47b2` 漏了 `Signed-off-by`，DCO check 由 `success` 转为 `action_required`；按 DCO app 模板在其 commit message 中补签，不改写分支历史。本文件此次更新即该 commit 的载体——app 明确不建议用空提交做 remediation（rebase 时会被丢弃）。
