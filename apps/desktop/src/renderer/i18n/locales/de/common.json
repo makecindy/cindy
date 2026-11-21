@@ -1150,6 +1150,8 @@
     "windowsmissing": "Steuerung des Sperrbildschirms und von Administratorabfragen erlauben. Eine Administratorautorisierung ist erforderlich.",
     "windowsinstallRequired": "Cindy konnte sein Installationsverzeichnis nicht finden. Starte Cindy neu und versuche es erneut.",
     "windowsunavailable": "Der Systemdienst ist nicht verfügbar. Installiere Cindy neu und versuche es erneut.",
+    "windowsstopped": "Der Bildschirmsperrdienst läuft nicht oder antwortet nicht (nach einem Neustart üblich). Sie können ihn erneut starten.",
+    "windowsStart": "Dienst starten",
     "windowsEnable": "Autorisieren",
     "windowsDisable": "Dienst entfernen",
     "windowsError": "Die Autorisierung wurde nicht abgeschlossen. Versuche es auf diesem Computer erneut.",

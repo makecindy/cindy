@@ -1150,6 +1150,8 @@
     "windowsmissing": "Allow control of the lock screen and administrator prompts. Administrator authorization is required.",
     "windowsinstallRequired": "Cindy could not find its installation directory. Restart Cindy and try again.",
     "windowsunavailable": "The system service is unavailable. Reinstall Cindy and try again.",
+    "windowsstopped": "The lock-screen service is not running or not responding (common after a reboot). You can start it again.",
+    "windowsStart": "Start service",
     "windowsEnable": "Authorize",
     "windowsDisable": "Remove service",
     "windowsError": "Authorization was not completed. Try again on this computer.",

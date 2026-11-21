@@ -1167,6 +1167,8 @@
     "windowsmissing": "Autoriser le contrôle de l'écran de verrouillage et des invites administrateur. L'autorisation administrateur est requise.",
     "windowsinstallRequired": "Cindy n'a pas trouvé son répertoire d'installation. Redémarrez Cindy et réessayez.",
     "windowsunavailable": "Le service système est indisponible. Réinstallez Cindy et réessayez.",
+    "windowsstopped": "Le service de verrouillage de l'écran ne fonctionne pas ou ne répond pas (fréquent après un redémarrage). Vous pouvez le redémarrer.",
+    "windowsStart": "Démarrer le service",
     "windowsEnable": "Autoriser",
     "windowsDisable": "Supprimer le service",
     "windowsError": "L'autorisation n'a pas abouti. Réessayez sur cet ordinateur.",

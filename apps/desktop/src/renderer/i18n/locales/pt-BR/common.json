@@ -1167,6 +1167,8 @@
     "windowsmissing": "Permita o controle da tela de bloqueio e dos avisos de administrador. É necessária autorização de administrador.",
     "windowsinstallRequired": "Cindy não encontrou seu diretório de instalação. Reinicie Cindy e tente novamente.",
     "windowsunavailable": "O serviço do sistema está indisponível. Reinstale Cindy e tente novamente.",
+    "windowsstopped": "O serviço de controle de tela bloqueada não está em execução ou não responde (comum após reiniciar). Você pode iniciá-lo novamente.",
+    "windowsStart": "Iniciar serviço",
     "windowsEnable": "Autorizar",
     "windowsDisable": "Remover serviço",
     "windowsError": "A autorização não foi concluída. Tente novamente neste computador.",

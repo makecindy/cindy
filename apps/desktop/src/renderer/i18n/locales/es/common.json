@@ -1167,6 +1167,8 @@
     "windowsmissing": "Permitir el control de la pantalla de bloqueo y las indicaciones del administrador. Se requiere autorización del administrador.",
     "windowsinstallRequired": "Cindy no pudo encontrar su directorio de instalación. Reinicia Cindy y vuelve a intentarlo.",
     "windowsunavailable": "El servicio del sistema no está disponible. Reinstala Cindy y vuelve a intentarlo.",
+    "windowsstopped": "El servicio de bloqueo de pantalla no está en ejecución o no responde (habitual tras reiniciar). Puede volver a iniciarlo.",
+    "windowsStart": "Iniciar servicio",
     "windowsEnable": "Autorizar",
     "windowsDisable": "Quitar servicio",
     "windowsError": "La autorización no se completó. Inténtalo de nuevo en esta computadora.",

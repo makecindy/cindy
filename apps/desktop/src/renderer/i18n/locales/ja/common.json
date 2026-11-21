@@ -1138,6 +1138,8 @@
     "windowsmissing": "ロック画面と管理者の確認画面を操作するには管理者の承認が必要です。",
     "windowsinstallRequired": "Cindy のインストール場所を確認できません。Cindy を再起動してもう一度お試しください。",
     "windowsunavailable": "システムサービスを利用できません。Cindy を再インストールしてください。",
+    "windowsstopped": "ロック画面制御サービスが実行されていないか、応答していません（再起動後によく起きます）。再度開始できます。",
+    "windowsStart": "サービスを開始",
     "windowsEnable": "承認して有効化",
     "windowsDisable": "サービスを削除",
     "windowsError": "承認が完了していません。このコンピューターで再試行してください。",
