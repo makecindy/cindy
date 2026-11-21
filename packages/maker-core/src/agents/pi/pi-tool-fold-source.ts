@@ -283,7 +283,7 @@ export default function (pi) {
       var dropChars = chars - calls.length * RECORD_ESTIMATE_CHARS;
       for (var c4 = 0; c4 < calls.length; c4++) {
         var plan = folds[calls[c4].id];
-        plan.foldArgs = ARG_FOLD_CHARS > 0 && plan.args > ARG_FOLD_CHARS;
+        plan.foldArgs = ARG_FOLD_CHARS > 0 && plan.args > ARG_FOLD_CHARS && callPointerShorter(calls[c4]);
         plan.foldResult = plan.result > RECORD_ESTIMATE_CHARS;
         removable += (plan.foldArgs ? plan.args : 0) + (plan.foldResult ? plan.result : 0);
         if (plan.foldArgs || plan.foldResult) removableCalls += 1;
@@ -313,6 +313,15 @@ export default function (pi) {
       name: block.name,
       arguments: { __folded: true, call: String(block.id) },
     };
+  }
+
+  /**
+   * The pointer repeats the call id, so a provider whose ids are nearly as long as the
+   * arguments would end up with a larger block. Same rule as foldedResult: compare
+   * exactly, never trade payload for a longer marker.
+   */
+  function callPointerShorter(block) {
+    try { return JSON.stringify(foldedCall(block)).length < JSON.stringify(block).length; } catch (error) { return false; }
   }
 
   /** Summary record, or null when the record would not be shorter than the payload. */

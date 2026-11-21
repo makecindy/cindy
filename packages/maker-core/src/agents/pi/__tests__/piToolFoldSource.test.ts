@@ -193,6 +193,20 @@ describe('cindy-tool-fold extension source', () => {
     expect(out![1]).toBe(messages[1]);
   });
 
+  it('leaves arguments alone when the pointer repeats an id longer than they are', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
+    const longId = `call_${'x'.repeat(2000)}`;
+    const args = { command: 'y'.repeat(240) };
+    const messages: Message[] = [
+      call(longId, 'bash', args),
+      result(longId, 'bash', 'ok'),
+      ...pairs(40),
+    ];
+    const out = projection(context, messages);
+    // The pointer would carry the 2 KB id twice, so this block stays verbatim.
+    expect(out![0].content![0].arguments).toEqual(args);
+  });
+
   it('keeps a record inside a turn when the next message is already a user turn', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const messages: Message[] = [];
