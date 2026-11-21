@@ -59,6 +59,13 @@ export interface SessionContextWindowBounds {
    * `contextWindow` 夹一次（实测：200K 的路由，远程菜单却给出 800K 档）。
    */
   effectiveWindowsReported: boolean;
+  /**
+   * 该任务在这条路由上**实际会用**的窗口（= main 的 `resolveConfiguredContextWindow`，带当前
+   * 任务预算与模型级上限）。切模的窗口确认必须用它：发送边界 main 按同一口径校验
+   * `confirmedContextWindow`，拿目录窗口去确认会在设过上限/预算时永远对不上。
+   * null = 未知或老被控端未申报，调用方退回自己的目录估值。
+   */
+  effectiveWindow: number | null;
 }
 
 /** 被控端/主进程返回值的形状收敛：缺字段或非法值一律按「未知」处理（不猜上限）。 */
@@ -83,6 +90,7 @@ export function normalizeSessionContextWindowBounds(
     maxEffectiveWindow: positive(raw.maxEffectiveWindow),
     effectiveWindowsReported:
       'defaultEffectiveWindow' in raw || 'maxEffectiveWindow' in raw,
+    effectiveWindow: positive(raw.effectiveWindow),
   };
 }
 
