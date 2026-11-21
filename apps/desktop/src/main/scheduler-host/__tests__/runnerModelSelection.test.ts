@@ -279,6 +279,7 @@ function createRunnerHarness(
     >[0]['resolveDefaultModelRoute'];
     getSessionMeta?: () => Promise<typeof meta>;
     admitPluginEngine?: ConstructorParameters<typeof MakerScheduleRunner>[0]['admitPluginEngine'];
+    pickScheduleModelGroup?: ConstructorParameters<typeof MakerScheduleRunner>[0]['pickScheduleModelGroup'];
   } = {},
 ): RunnerHarness {
   const createSession = vi.fn(async () => h.session);
@@ -318,6 +319,7 @@ function createRunnerHarness(
     resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
     ...(opts.admitPluginEngine ? { admitPluginEngine: opts.admitPluginEngine } : {}),
+    ...(opts.pickScheduleModelGroup ? { pickScheduleModelGroup: opts.pickScheduleModelGroup } : {}),
   });
   return { runner, createSession, closeSession };
 }
@@ -356,6 +358,66 @@ describe('MakerScheduleRunner model selection', () => {
   // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19), unit through runner.fire. A fresh
   // run on a plugin engine must start that engine with its own model and level, never be checked
   // against or rerouted through the built-in catalog, and fail plainly when the plugin is turned off.
+  // model-groups.md §6.3, unit through runner.fire: a schedule with a mode re-picks its source on every run
+  // and the picked model is what the new task starts with; the pick is recorded only once the run started.
+  // Gap: scheduled runs only knew the saved model. Minimal input: a fresh Codex schedule saved on one model
+  // whose mode picks another. Failure: the task starts on the saved model, or the pick is recorded before or
+  // without a task.
+  describe('model group schedules', () => {
+    it('starts the new task on the model the mode picked and records it after the run started', async () => {
+      const h = createSessionHarness();
+      const started = vi.fn();
+      const pickScheduleModelGroup = vi.fn(async () => ({
+        route: { modelAgentKind: 'codex' as const, model: 'gpt-picked', providerId: '', effort: undefined, modelAgentDeviceId: '' },
+        started,
+      }));
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
+        pickScheduleModelGroup, resolveModelSelection: async (choice) => choice,
+      });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
+      }));
+      expect(pickScheduleModelGroup).toHaveBeenCalledOnce();
+      expect(opts.model).toBe('gpt-picked');
+      expect(started).toHaveBeenCalledWith(h.session.id);
+    });
+
+    // PR #11881 review r4651177672: the pick was recorded only after the whole reply, so a failed run was
+    // never recorded and a long run's decision had expired. It must be recorded once the message is dispatched.
+    it('records the pick when the message is dispatched, before the reply, even if the run then fails', async () => {
+      const h = createSessionHarness();
+      const started = vi.fn();
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
+        pickScheduleModelGroup: async () => ({
+          route: { modelAgentKind: 'codex' as const, model: 'gpt-picked', providerId: '', effort: undefined, modelAgentDeviceId: '' },
+          started,
+        }),
+        resolveModelSelection: async (choice) => choice,
+      });
+      const firing = harness.runner.fire(baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
+      }), createFireContext()).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(h.send).toHaveBeenCalled());
+      await vi.waitFor(() => expect(started).toHaveBeenCalledWith(h.session.id));
+      h.emit({ type: 'error', data: { message: 'upstream failed' } });
+      await firing;
+      expect(started).toHaveBeenCalledOnce();
+    });
+
+    it('keeps the saved model when the mode has nothing to pick', async () => {
+      const h = createSessionHarness();
+      const started = vi.fn();
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
+        pickScheduleModelGroup: async () => ({ started }), resolveModelSelection: async (choice) => choice,
+      });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
+      }));
+      expect(opts.model).toBe('gpt-saved');
+      expect(started).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('plugin engine schedules', () => {
     const ENGINE = 'acp-plugin:_ns__local__dsh-acp:dsh';
     const pluginSchedule = () => baseSchedule({ agentKind: 'acp', modelAgentKind: 'acp', providerId: ENGINE,

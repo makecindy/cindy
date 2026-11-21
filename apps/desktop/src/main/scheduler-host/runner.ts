@@ -307,8 +307,23 @@ export interface SchedulerQueueDeps {
   cancelAutoResume?: (sessionId: string, runId: string) => void;
 }
 
+/**
+ * 设了模式的定时任务这一次运行的选路结果(model-groups.md §6.3)。`route` 覆盖 schedule 里存的具体模型，
+ * 只用于这一次运行；模式里都用不了、沿用存下的具体模型时为 undefined。
+ */
+export interface ScheduleModelGroupPick {
+  route?: Pick<Schedule, 'modelAgentKind' | 'model' | 'providerId' | 'effort' | 'modelAgentDeviceId'>;
+  /** 这一轮消息派发出去时调用一次(不等回复结束)：提交选路记录、记下任务用着哪个来源、在任务里写说明。 */
+  started(sessionId: string): void;
+}
+
 export interface MakerScheduleRunnerDeps {
   projectForNewTask?: ScheduleProjectLookup;
+  /**
+   * 模型组：每次运行前按模式的规则重新选一个来源(额度与时段按这一刻算)。模式已删除或拿不到结果时
+   * 返回 null，这次按存下的具体模型运行，与没选模式时一致。
+   */
+  pickScheduleModelGroup?: (schedule: Schedule) => Promise<ScheduleModelGroupPick | null>;
   maker: Maker;
   /** Use the ordinary task startup funnel, including provider-group allocation.
    * The funnel may update the options to the member it actually selected. */
@@ -1007,7 +1022,30 @@ export class MakerScheduleRunner implements ScheduleRunner {
         fastMode: undefined, modelAgentKind: undefined,
       };
     }
+    // 模型组：续跑沿用任务现在的来源；脚本与插件引擎任务不按模式选。
+    let modelGroupPick: ScheduleModelGroupPick | null = null;
+    if (!ctx.resumeSessionId && schedule.modelGroup && (schedule.executionMode ?? 'agent') !== 'script'
+      && schedule.agentKind !== 'acp' && this.deps.pickScheduleModelGroup) {
+      modelGroupPick = await this.deps.pickScheduleModelGroup(schedule).catch((error: unknown) => {
+        this.deps.logger.warn?.('[runner] model group pick failed; using the saved model', {
+          scheduleId: schedule.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      });
+      throwIfFireAborted(ctx.signal, 'runner entry');
+      if (modelGroupPick?.route) schedule = { ...schedule, ...modelGroupPick.route, fastMode: false };
+    }
     const holder: EphemeralSessionHolder = { assertOwner: ctx.assertFireContext };
+    if (modelGroupPick) {
+      const pick = modelGroupPick;
+      let recorded = false;
+      holder.runDispatched = (sessionId) => {
+        if (recorded) return;
+        recorded = true;
+        pick.started(sessionId);
+      };
+    }
     const closeQuietOutput = hidesScheduledTranscript(schedule)
       ? beginQuietScheduledOutput(schedule.id, ctx.runId)
       : undefined;
@@ -2417,6 +2455,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (acceptedMessageClientId) {
             this.deps.onModelDispatched?.(session.id, acceptedMessageClientId);
           }
+          holder.runDispatched?.(session.id);
         },
         planMode: routinePermissions?.planMode ?? heartbeatPermissions?.planMode ?? false,
         onAccepted: async (signal) => {
@@ -2914,6 +2953,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // turn is headless; marking the whole queue wait would suppress setup
         // cards in that unrelated interactive turn.
         markHeadlessTurnDispatched();
+        if (!ctx.signal.aborted) holder.runDispatched?.(sessionId);
         const live = this.deps.maker.getSession(sessionId);
         // abort 撞上"项已转 activeTurn、尚未 accept"的派发窗口时,removeQueuedPrompt
         // 是 no-op、coordinator 会继续把 turn 发出去 —— 这里在 accept 时刻补杀:
@@ -4390,6 +4430,11 @@ function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
  */
 interface EphemeralSessionHolder {
   assertOwner?: () => void;
+  /**
+   * 这一轮定时消息真的派发出去时调用一次(直发在 onDispatching，排队在 onAccepted)。
+   * 模型组的选路记录、任务绑定与说明挂在这里：运行开始就记，不等回复结束、失败也算用过。
+   */
+  runDispatched?: (sessionId: string) => void;
   preRunHookOutput?: string;
   /** 与引擎写进 run 记录的同一份放行结果；本轮之后的失败通知要带上它，去重才对得上。 */
   preRunHookResult?: ScheduleRun['preRunHookResult'];

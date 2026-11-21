@@ -828,6 +828,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     providerId: row.providerId ?? undefined,
     agentDeviceId: row.agentDeviceId ?? undefined,
     effort: row.effort ?? undefined,
+    modelGroup: row.modelGroup ?? undefined,
     fastMode: (row.fastMode ?? false),
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
     inheritedProjectDir: row.inheritedProjectDir ?? undefined,
@@ -892,6 +893,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     providerId: s.providerId ?? null,
     agentDeviceId: s.agentDeviceId ?? null,
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
+    modelGroup: s.modelGroup ?? null,
     fastMode: (s.fastMode ?? false),
     workspaceKind: s.workspaceKind ?? 'project',
     inheritedProjectDir: s.inheritedProjectDir ?? null,
@@ -955,6 +957,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
   if (hasKey(patch, 'agentDeviceId')) out.agentDeviceId = patch.agentDeviceId ?? null;
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
+  if (hasKey(patch, 'modelGroup')) out.modelGroup = patch.modelGroup ?? null;
   if (hasKey(patch, 'fastMode')) out.fastMode = (patch.fastMode ?? false);
   if (hasKey(patch, 'workspaceKind')) out.workspaceKind = patch.workspaceKind ?? 'project';
   if (hasKey(patch, 'inheritedProjectDir')) out.inheritedProjectDir = patch.inheritedProjectDir ?? null;

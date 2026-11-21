@@ -17927,7 +17927,8 @@
         "modelSelectorAria": "擇模型",
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "思之深淺",
-        "boundLocationLocked": "所繫差事仍於原機行之，請擇彼機之模型。"
+        "boundLocationLocked": "所繫差事仍於原機行之，請擇彼機之模型。",
+        "modelGroupTitle": "模型組「{{name}}」：每行則依式擇源"
       }
     },
     "toast": {

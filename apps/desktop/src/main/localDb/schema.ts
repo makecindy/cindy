@@ -1543,6 +1543,11 @@ export const schedules = sqliteTable(
       enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     }),
     /**
+     * 模型组(模式)id：设了时每次运行按模式重新选来源，上面的具体模型是选不出来时沿用的
+     * (model-groups.md §6.3)。NULL = 没选模式，与原来一致。
+     */
+    modelGroup: text('model_group'),
+    /**
      * 速度档位沿用整数列：0 标准、1 快速、2 超快。超快仅用于获授权的 Codex 模型。
      */
     fastMode: speedSetting('fast_mode').notNull().default(false),

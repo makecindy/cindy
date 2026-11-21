@@ -18167,7 +18167,8 @@
         "modelSelectorAria": "Sélecteur de modèle",
         "categoryListAria": "Modèles {{category}}",
         "effortListAria": "Effort de raisonnement",
-        "boundLocationLocked": "Les tâches liées continuent de s'exécuter là où elles se trouvent. Choisissez un modèle de cet ordinateur."
+        "boundLocationLocked": "Les tâches liées continuent de s'exécuter là où elles se trouvent. Choisissez un modèle de cet ordinateur.",
+        "modelGroupTitle": "Groupe de modèles « {{name}} » : choisit une source à chaque exécution"
       }
     },
     "toast": {

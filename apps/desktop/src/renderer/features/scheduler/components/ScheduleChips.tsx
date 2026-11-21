@@ -24,6 +24,7 @@ import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import type { PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
+import { ModelGroupIcon, type ModelGroupsPickerProps } from '@/components/new-chat/ModelGroupsPickerSection';
 import { pluginEngineModelName, resolvePluginEngineEffort, PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
@@ -1047,6 +1048,7 @@ export function ModelEffortChip({
   fastMode,
   onChangeFast,
   pluginEngines,
+  modelGroups,
 }: {
   onSelect: NonNullable<React.ComponentProps<typeof ModelRouteSelectorContent>['onUnifiedSelect']>;
   onFollowSession: () => void;
@@ -1074,6 +1076,8 @@ export function ModelEffortChip({
    * active 有值时触发器显示「引擎 · 模型 · 思考深度」。
    */
   pluginEngines?: PluginEnginesPickerProps;
+  /** 模型组(model-groups.md §6.3)：选着模式时触发器写模式名，来源在每次运行时按模式选。 */
+  modelGroups?: ModelGroupsPickerProps;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -1185,9 +1189,23 @@ export function ModelEffortChip({
       ].filter(Boolean).join(' · ')
     : null;
 
+  const activeModelGroupName = modelGroups?.active
+    ? modelGroups.config.routes.find((route) => route.id === modelGroups.active?.id)?.name ?? null
+    : null;
+
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
+        {activeModelGroupName ? (
+          <ChipButton
+            icon={<ModelGroupIcon size={14} />}
+            label={activeModelGroupName}
+            title={t('scheduler.chips.model.modelGroupTitle', { name: activeModelGroupName })}
+            active={open}
+            disabled={disabled}
+            className="max-w-[240px] px-2"
+          />
+        ) : (
         <ChipButton
           icon={engineDisplay
             ? <PluginEngineIcon size={14} iconDataUrl={activeEngine?.iconDataUrl} className='text-current' />
@@ -1198,6 +1216,7 @@ export function ModelEffortChip({
           disabled={disabled}
           className="[&>span:last-of-type]:min-w-[106px] max-w-[240px] px-2"
         />
+        )}
       </PopoverTrigger>
       <PopoverContent
         align="end"
@@ -1219,6 +1238,7 @@ export function ModelEffortChip({
           hostOnly={hostOnly}
           agentDeviceId={agentDeviceId || null}
           fastModeConfigurable={['codex', 'pi']}
+          {...(modelGroups ? { modelGroups } : {})}
           unifiedAgents={pickerAgents}
           onUnifiedSelect={onSelect}
           vendorKey={vendorKey}

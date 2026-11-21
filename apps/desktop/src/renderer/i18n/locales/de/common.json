@@ -18001,7 +18001,8 @@
         "modelSelectorAria": "Modellauswahl",
         "categoryListAria": "{{category}}-Modelle",
         "effortListAria": "Denkintensität",
-        "boundLocationLocked": "Gebundene Aufgaben laufen weiterhin auf ihrem bisherigen Computer. Wähle ein Modell von diesem Computer."
+        "boundLocationLocked": "Gebundene Aufgaben laufen weiterhin auf ihrem bisherigen Computer. Wähle ein Modell von diesem Computer.",
+        "modelGroupTitle": "Modellgruppe „{{name}}“: wählt bei jedem Lauf eine Quelle"
       }
     },
     "toast": {
