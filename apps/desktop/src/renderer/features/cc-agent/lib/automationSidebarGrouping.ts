@@ -227,11 +227,11 @@ export function groupAutomationSidebarEntries(
 export interface AutomationGroupChildView {
   /** 组头底下实际要渲染的子运行(收起 / 展开 / 冻结三态统一出口)。 */
   visibleSessions: Session[];
-  /** 收起态是否还有被折叠的子运行 —— 决定是否显示「显示全部 N 个」。 */
+  /** 展开的历史预览是否还有被隐藏的运行，决定是否显示「显示全部 N 个」。 */
   isOverflowing: boolean;
   /** 组内子运行总数(「显示全部 N 个」里的 N)。 */
   totalCount: number;
-  /** 收起态被折叠隐藏的子运行数量。 */
+  /** 被当前显示方式隐藏的子运行数量。 */
   hiddenCount: number;
 }
 
@@ -239,22 +239,14 @@ export interface AutomationGroupChildViewOptions {
   notifications: ReadonlySet<string>;
   runningSessionIds?: ReadonlySet<string>;
   showAll: boolean;
-  /** 组头实际打开的任务，仅在收起态从未读子行中排除；展开态仍列出。 */
-  headerSessionId?: string;
   activeSessionId?: string;
   frozenVisibleSessionIds?: readonly string[] | null;
   /** 传入当前时间 ms 即启用「最近 24h 内有活动不折叠」豁免(和普通对话一致);不传走纯硬上限。 */
   nowMs?: number;
   /** 展开组内的历史列表默认展示条数，默认 5（和普通对话一致）。 */
   minVisibleCount?: number;
-  /** 轴 1(文件夹开/关)的收起态。收起时只渲染 collapsedAttentionSessionIds 命中的运行。 */
+  /** 收起时只保留组头，所有运行均在显式展开后展示。 */
   collapsed?: boolean;
-  /**
-   * 收起态仍要保留可见的非静默未读、错误告警与待回复运行 id。错误来源是
-   * `sidebar/projectCollapsedAttention.ts` 的 `resolveCollapsedAttention().errorSessionIds`
-   * —— 与组头红点、项目折叠头红点同一份判据;待回复由组件按本地/远程活动补入。
-   */
-  collapsedAttentionSessionIds?: ReadonlySet<string>;
   /**
    * 展开态折叠的追加豁免集合(只影响折叠),语义同 SessionEntryList 的同名 prop:
    * 父层把 device-link 远程活动镜像并进来,保证项目行 / 对话组 / 设备段头聚合灯
@@ -268,12 +260,7 @@ export interface AutomationGroupChildViewOptions {
  *
  * 展开态列出全部运行，包含组头代表的那条，并复用普通任务列表的前 N 条、
  * 最近 24h、未读／运行中和当前任务豁免；冻结布局和「显示全部」也保留它。
- * 只有收起态排除组头实际代表的任务，避免未读子行与组头重复。
- *
- * 收起态仍展示全部非静默未读及待处理运行，不受前 N 条上限影响。
- * 组件把未读、远程 completed、错误和待回复统一传入 collapsedAttentionSessionIds；
- * 静默成功不产生未读，已读且无待处理状态的历史仍隐藏。
- * 收起态不套 24h / active 豁免，避免普通历史或当前打开的已读运行撑开列表。
+ * 收起态不展示子运行；未读、异常和待回复由组头汇总，历史通过展开查看。
  */
 export function getAutomationGroupChildView(
   group: AutomationSessionGroup,
@@ -287,24 +274,20 @@ export function getAutomationGroupChildView(
     hiddenCount: 0,
   });
 
-  // 收起态先于冻结布局和 showAll，只显示未读及待处理运行。
+  // 收起始终只占一个入口，不能被未读、当前任务或残留展开状态撑开。
   if (options.collapsed) {
-    const attentionIds = options.collapsedAttentionSessionIds;
-    const visibleSessions = attentionIds?.size
-      ? allRuns.filter((session) => session.id !== options.headerSessionId && attentionIds.has(session.id))
-      : [];
     return {
-      visibleSessions,
+      visibleSessions: [],
       isOverflowing: false,
-      totalCount: visibleSessions.length,
-      hiddenCount: 0,
+      totalCount: allRuns.length,
+      hiddenCount: allRuns.length,
     };
   }
 
   // 展开:全量子运行。
   if (options.showAll) return withoutOverflow(allRuns);
 
-  // 冻结:用户在收起态点进某条子运行后,锁定点击瞬间的可见布局,避免列表跳动。
+  // 冻结:用户在历史预览点进某条运行后,锁定点击瞬间的可见布局,避免列表跳动。
   if (options.frozenVisibleSessionIds) {
     const byId = new Map(allRuns.map((session) => [session.id, session]));
     const frozenSessions = options.frozenVisibleSessionIds
@@ -314,13 +297,21 @@ export function getAutomationGroupChildView(
     const visibleIds = new Set(frozenSessions.map((session) => session.id));
     const visibleSessions = [
       ...frozenSessions,
-      ...allRuns.filter((session) => !visibleIds.has(session.id) &&
-        (options.notifications.has(session.id) ||
-          options.runningSessionIds?.has(session.id) ||
-          options.foldExemptSessionIds?.has(session.id))),
+      ...allRuns.filter(
+        (session) =>
+          !visibleIds.has(session.id) &&
+          (options.notifications.has(session.id) ||
+            options.runningSessionIds?.has(session.id) ||
+            options.foldExemptSessionIds?.has(session.id)),
+      ),
     ];
     const hiddenCount = allRuns.length - visibleSessions.length;
-    return { visibleSessions, isOverflowing: hiddenCount > 0, totalCount: allRuns.length, hiddenCount };
+    return {
+      visibleSessions,
+      isOverflowing: hiddenCount > 0,
+      totalCount: allRuns.length,
+      hiddenCount,
+    };
   }
 
   // 默认展开态：全部运行套用普通任务同款折叠，包含组头代表的任务。

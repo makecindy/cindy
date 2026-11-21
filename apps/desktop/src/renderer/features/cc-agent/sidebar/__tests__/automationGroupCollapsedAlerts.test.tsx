@@ -10,8 +10,8 @@
  *
  * 本测试钉住修复后的两条:
  *   1. 收起态组头按整组汇总点红(不是只看最新一条);
- *   2. 收起态的未读及告警可由组头或独立子行打开，同一任务不重复显示。
- * 都从同一份判据(resolveCollapsedAttention)出发,所以不可能再「汇总说有、列表没有」。
+ *   2. 收起态只显示一个入口，未读数量和待处理状态汇总到组头，展开后能查看历史。
+ * 通过真实组件验证入口导航、展开往返与未读清除，避免历史运行再次撑满侧边栏。
  */
 
 import { createElement, useState } from 'react';
@@ -96,8 +96,13 @@ vi.mock('../AutomationTimerIcon', () => ({
   AutomationTimerIcon: () => null,
 }));
 
+const localPhases = vi.hoisted(() => new Map<string, 'needs-interaction' | 'running' | 'error'>());
 vi.mock('@/state/agentIslandActivity', () => ({
-  useAgentIslandActivity: () => undefined,
+  useAgentIslandActivity: (sessionId: string) => {
+    const phase = localPhases.get(sessionId);
+    return phase ? { phase } : undefined;
+  },
+  useAgentIslandSessionsPhaseMap: () => localPhases,
 }));
 
 vi.mock('@/features/scheduler/lib/scheduleSessionBinding', () => ({
@@ -224,6 +229,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  localPhases.clear();
   for (const id of ALL_IDS) clearSessionAttention(id, { intent: 'explicit' });
 });
 
@@ -371,18 +377,19 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     expect(childRunIds(container)).toEqual([]);
   });
 
-  it('完成未读时组头补绿点且运行单独成行', () => {
+  it('完成未读时只在组头汇总绿点和数量', () => {
     addSessionAttention('run-2', 'done');
     const { container } = renderGroup({ notifications: ['run-2'] });
 
     expect(screen.getByLabelText('Completed — click to view')).toBeTruthy();
     expect(screen.queryByLabelText('Failed — click to view')).toBeNull();
-    expect(childRunIds(container)).toEqual(['run-2']);
+    expect(childRunIds(container)).toEqual([]);
+    expect(screen.getByLabelText('ccAgent.sidebar.automationGroup.unreadRunCount').textContent).toBe('1');
   });
 
-  // 用户规则（unit）：非静默未读全部露出；最小缺口是没有 chat attention kind 的
-  // scheduler 未读，以及超过五条的情况。通过真实组件验证已读后收回和远程镜像。
-  it.each(['local', 'remote'] as const)('所有完成未读可见,已读或静默成功隐藏 (%s)', (kind) => {
+  // 用户规则（unit）：六条未读也只占一个入口。通过真实组件验证本机/远程
+  // 数量汇总及已读后清除；纯函数测试无法覆盖实际组头与子行的联动。
+  it.each(['local', 'remote'] as const)('多个完成未读只汇总到入口,已读后清除数量 (%s)', (kind) => {
     const sessions = MANY_RUNS.map((run) => ({
       ...run,
       deviceLinkDeviceId: kind === 'remote' ? 'remote' : undefined,
@@ -398,7 +405,8 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
         });
     }
     const { container, rerender } = renderGroup({ sessions, notifications: unreadIds });
-    expect(childRunIds(container)).toEqual(unreadIds);
+    expect(childRunIds(container)).toEqual([]);
+    expect(screen.getByLabelText('ccAgent.sidebar.automationGroup.unreadRunCount').textContent).toBe('6');
     // 无未读的 run-0 / run-7（已读或静默成功）不因最近活动而显示。
     if (kind === 'remote')
       act(() => {
@@ -419,6 +427,7 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
       }),
     );
     expect(childRunIds(container)).toEqual([]);
+    expect(screen.queryByLabelText('ccAgent.sidebar.automationGroup.unreadRunCount')).toBeNull();
   });
 
   it('收起且整组是红时,点组头打开告警那条而不是最新一条', () => {
@@ -433,33 +442,39 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     expect(onSessionClick).not.toHaveBeenCalledWith('run-0');
   });
 
-  // 用户规则（unit）：只在折叠时排除组头任务；展开后无论已读未读都保留子行。
+  // 用户规则（unit）：折叠时只有组头；展开后无论已读未读都保留历史子行。
   // 从真实组头点击、冻结与显示全部验证，覆盖展开／收起往返。
   it.each([true, false])('组头任务展开时有子行,折叠时不重复 (未读=%s)', (unread) => {
     const onSessionClick = vi.fn();
     const { container } = renderGroup({
       sessions: MANY_RUNS, notifications: unread ? ['run-0', 'run-7'] : ['run-7'], onSessionClick,
     });
-    expect(childRunIds(container)).toEqual(['run-7']);
+    expect(childRunIds(container)).toEqual([]);
     fireEvent.click(screen.getByText('产品决策巡检'));
-    expect(onSessionClick).toHaveBeenLastCalledWith('run-0');
+    expect(onSessionClick).toHaveBeenLastCalledWith(unread ? 'run-0' : 'run-7');
     fireEvent.click(screen.getByLabelText('ccAgent.sidebar.automationGroup.expand'));
     expect(childRunIds(container)).toEqual(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-7']);
     fireEvent.click(screen.getByText('产品决策巡检'));
+    expect(onSessionClick).toHaveBeenLastCalledWith('run-0');
     expect(childRunIds(container)).toContain('run-0');
     fireEvent.click(screen.getByText(/ccAgent\.sidebar\.showAllSessions/));
     expect(childRunIds(container)).toEqual(ALL_IDS);
     fireEvent.click(screen.getByLabelText('ccAgent.sidebar.automationGroup.collapse'));
-    expect(childRunIds(container)).toEqual(['run-7']);
+    expect(childRunIds(container)).toEqual([]);
   });
 
-  it('等待回复的旧运行单独成行,组头仍代表最新运行', () => {
+  it('等待回复的旧运行由唯一入口提示并直接打开,已读后等待状态仍保留', () => {
+    const onSessionClick = vi.fn();
     addSessionAttention('run-2', 'awaiting');
-    const { container, rerender } = renderGroup({ notifications: ['run-2'] });
+    localPhases.set('run-2', 'needs-interaction');
+    const { container, rerender } = renderGroup({ notifications: ['run-2'], onSessionClick });
 
     expect(screen.queryByLabelText('Failed — click to view')).toBeNull();
-    expect(screen.queryByLabelText('Awaiting your input')).toBeNull();
-    expect(childRunIds(container)).toEqual(['run-2']);
+    expect(screen.getByLabelText('Awaiting your input')).toBeTruthy();
+    expect(childRunIds(container)).toEqual([]);
+    fireEvent.click(screen.getByText('产品决策巡检'));
+    expect(onSessionClick).toHaveBeenLastCalledWith('run-2');
+    act(() => clearSessionAttention('run-2', { intent: 'explicit' }));
     act(() => clearSessionAttention('run-2', { intent: 'explicit' }));
     rerender(
       createElement(GroupHarness, {
@@ -467,12 +482,17 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
         notifications: [],
         urgentSessionIds: new Set<string>(),
         initialCollapsed: true,
+        onSessionClick,
       }),
     );
     expect(childRunIds(container)).toEqual([]);
+    expect(screen.getByLabelText('Awaiting your input')).toBeTruthy();
+    fireEvent.click(screen.getByText('产品决策巡检'));
+    expect(onSessionClick).toHaveBeenLastCalledWith('run-2');
   });
 
-  it('远程旧运行等待回复时也成行,远程运行态压过本地残留的待回复', () => {
+  it('远程旧运行也由入口打开,远程运行态压过本地残留的待回复', () => {
+    const onSessionClick = vi.fn();
     const sessions = RUNS.map((run) => ({ ...run, deviceLinkDeviceId: 'remote' }));
     addSessionAttention('run-2', 'awaiting');
     applyRemoteSessionActivity('remote', {
@@ -481,9 +501,11 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
       attention: true,
       compactDetail: '',
     });
-    const { container, rerender } = renderGroup({ sessions });
-    expect(childRunIds(container)).toEqual(['run-2']);
-    expect(screen.queryByLabelText('Awaiting your input')).toBeNull();
+    const { container, rerender } = renderGroup({ sessions, onSessionClick });
+    expect(childRunIds(container)).toEqual([]);
+    expect(screen.getByLabelText('Awaiting your input')).toBeTruthy();
+    fireEvent.click(screen.getByText('产品决策巡检'));
+    expect(onSessionClick).toHaveBeenLastCalledWith('run-2');
     act(() =>
       applyRemoteSessionActivity('remote', {
         sessionId: 'run-2',
@@ -498,13 +520,18 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
         notifications: ['run-2'],
         urgentSessionIds: new Set<string>(),
         initialCollapsed: true,
+        onSessionClick,
       }),
     );
     expect(childRunIds(container)).toEqual([]);
+    expect(screen.queryByLabelText('Awaiting your input')).toBeNull();
+    expect(screen.getByLabelText('Running')).toBeTruthy();
+    fireEvent.click(screen.getByText('产品决策巡检'));
+    expect(onSessionClick).toHaveBeenLastCalledWith('run-2');
   });
 
-  it('收起态显示全部待处理运行,展开后仍按普通历史上限折叠', () => {
-    // 收起态的六条待处理运行全部可见；展开后普通旧历史仍保留前五条上限。
+  it('收起态只汇总待处理运行,展开后可逐步查看完整历史', () => {
+    // 六条失败也不会撑开侧栏；展开保留前五条上限，并可显示全部历史。
     const staleRuns = Array.from({ length: 8 }, (_, index) => {
       const iso = new Date(
         Date.parse('2026-08-10T12:00:00.000Z') - index * 3_600_000,
@@ -517,11 +544,14 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
       urgentSessionIds: new Set(alerts),
     });
 
-    expect(childRunIds(container)).toEqual(alerts.slice(1));
+    expect(childRunIds(container)).toEqual([]);
+    expect(screen.getByLabelText('ccAgent.sidebar.automationGroup.unreadRunCount').textContent).toBe('6');
 
     fireEvent.click(screen.getByLabelText('ccAgent.sidebar.automationGroup.expand'));
     const expandedIds = childRunIds(container);
     expect(expandedIds).toEqual(['run-0', 'run-1', 'run-2', 'run-3', 'run-4']);
     expect(expandedIds).not.toContain('run-7');
+    fireEvent.click(screen.getByText(/ccAgent\.sidebar\.showAllSessions/));
+    expect(childRunIds(container)).toEqual(ALL_IDS);
   });
 });

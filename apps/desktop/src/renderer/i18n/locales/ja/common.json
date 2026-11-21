@@ -16550,6 +16550,7 @@
         "pausedSuffix": "（一時停止中）"
       },
       "automationGroup": {
+        "unreadRunCount": "未読の実行結果：{{count}}",
         "runCount": "{{count}} 回実行",
         "attentionCount": "{{count}} 件対応待ち",
         "hiddenCount": "{{count}} 件折りたたみ",

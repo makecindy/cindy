@@ -16550,6 +16550,7 @@
         "pausedSuffix": "(일시중지됨)"
       },
       "automationGroup": {
+        "unreadRunCount": "읽지 않은 실행 결과: {{count}}",
         "runCount": "{{count}}회 실행",
         "attentionCount": "{{count}}개 대기",
         "hiddenCount": "{{count}}개 접힘",

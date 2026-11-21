@@ -5,8 +5,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
 import type { RemoteSessionActivityPhase } from '@/features/device-link/remoteSessionActivityStore';
+import type { SessionRightStatus } from '@cindy/maker-shared/session-activity';
 import {
   resolveCollapsedAttention,
+  resolveCollapsedAutomationGroupState,
   resolveCollapsedGroupHeaderSessionId,
   resolveCollapsedGroupRightStatus,
   resolveCollapsedProjectAttentionTone,
@@ -40,6 +42,8 @@ interface ResolveOptions {
   attentionKinds?: [string, AttentionKind][];
   urgent?: string[];
   remotePhases?: [string, RemoteSessionActivityPhase][];
+  localPhases?: [string, RemoteSessionActivityPhase][];
+  remoteIds?: string[];
 }
 
 function inputFor({
@@ -49,15 +53,21 @@ function inputFor({
   attentionKinds = [],
   urgent = [],
   remotePhases = [],
+  localPhases = [],
+  remoteIds = [],
 }: ResolveOptions = {}) {
   const phases = new Map(remotePhases);
+  const localPhaseMap = new Map(localPhases);
   return {
-    sessions: sessions(ids),
+    sessions: sessions(ids).map((session) => remoteIds.includes(session.id)
+      ? { ...session, deviceLinkDeviceId: 'remote-device' }
+      : session),
     runningSessionIds: new Set(running),
     notifications: new Set(notifications),
     attentionKinds: new Map(attentionKinds),
     urgentSessionIds: new Set(urgent),
     remotePhaseOf: (sessionId: string) => phases.get(sessionId),
+    localPhaseOf: (sessionId: string) => localPhaseMap.get(sessionId),
   };
 }
 
@@ -206,6 +216,121 @@ describe('collapsed automation group right status', () => {
   });
 });
 
+// Test value: the collapsed automation entry must expose an older waiting/running
+// run after all child rows are hidden. Existing project tests intentionally omit
+// those states. Minimal regression: latest idle run + older awaiting run; unit tier.
+describe('single collapsed automation entry', () => {
+  const groupState = (options: ResolveOptions = {}) =>
+    resolveCollapsedAutomationGroupState({ ...inputFor(options), latestSessionId: 'latest' });
+
+  it.each([
+    {
+      options: {
+        ids: ['latest', 'older-awaiting'],
+        notifications: ['older-awaiting'],
+        attentionKinds: [['older-awaiting', 'awaiting']] as [string, AttentionKind][],
+      },
+      expected: { kind: 'awaiting', sessionId: 'older-awaiting', unreadCount: 0 },
+    },
+    {
+      options: { ids: ['latest', 'older-running'], running: ['older-running'] },
+      expected: { kind: 'running', sessionId: 'older-running', unreadCount: 0 },
+    },
+    {
+      options: { ids: ['latest', 'older-done'], notifications: ['older-done'] },
+      expected: { kind: 'done', sessionId: 'older-done', unreadCount: 1 },
+    },
+    {
+      options: { ids: ['latest', 'older-idle'] },
+      expected: { kind: 'time', sessionId: 'latest', unreadCount: 0 },
+    },
+  ])('opens the run contributing $expected.kind', ({ options, expected }) => {
+    expect(groupState(options)).toEqual(expected);
+  });
+
+  it('prioritizes error, awaiting, running, then unread completion with matching destinations', () => {
+    const options: ResolveOptions = {
+      ids: ['latest', 'done', 'running', 'awaiting', 'error'],
+      notifications: ['done', 'awaiting', 'error'],
+      attentionKinds: [['awaiting', 'awaiting'], ['error', 'error']],
+      running: ['running'],
+    };
+    expect(groupState(options)).toEqual({ kind: 'error', sessionId: 'error', unreadCount: 2 });
+    expect(groupState({ ...options, ids: options.ids!.filter((id) => id !== 'error') })).toEqual({
+      kind: 'awaiting', sessionId: 'awaiting', unreadCount: 1,
+    });
+    expect(groupState({ ...options, ids: ['latest', 'done', 'running'] })).toEqual({
+      kind: 'running', sessionId: 'running', unreadCount: 1,
+    });
+  });
+
+  it('uses remote phases over stale local attention and opens remote waiting runs', () => {
+    const options: ResolveOptions = {
+      ids: ['latest', 'remote-waiting', 'remote-running', 'remote-done'],
+      notifications: ['remote-waiting', 'remote-running'],
+      attentionKinds: [['remote-waiting', 'error'], ['remote-running', 'error']],
+      remotePhases: [
+        ['remote-waiting', 'needs-interaction'],
+        ['remote-running', 'running'],
+        ['remote-done', 'completed'],
+      ],
+    };
+    expect(groupState(options)).toEqual({ kind: 'awaiting', sessionId: 'remote-waiting', unreadCount: 1 });
+    expect(groupState({ ...options, ids: ['latest', 'remote-running', 'remote-done'] })).toEqual({
+      kind: 'running', sessionId: 'remote-running', unreadCount: 1,
+    });
+    expect(groupState({ ...options, remotePhases: [['remote-done', 'error']], notifications: [] })).toEqual({
+      kind: 'error', sessionId: 'remote-done', unreadCount: 1,
+    });
+  });
+
+  it.each(['error', 'awaiting', 'running'] as SessionRightStatus[])(
+    'preserves live latest %s after its unread marker is cleared', (latestKind) => {
+      expect(resolveCollapsedAutomationGroupState({
+        ...inputFor({ ids: ['latest', 'older-done'], notifications: ['older-done'] }),
+        latestSessionId: 'latest', latestKind,
+      })).toEqual({ kind: latestKind, sessionId: 'latest', unreadCount: 1 });
+    },
+  );
+
+  it('keeps an older error above the latest live waiting state', () => {
+    expect(resolveCollapsedAutomationGroupState({
+      ...inputFor({ ids: ['latest', 'older-error'], urgent: ['older-error'] }),
+      latestSessionId: 'latest', latestKind: 'awaiting',
+    })).toEqual({ kind: 'error', sessionId: 'older-error', unreadCount: 1 });
+  });
+
+  it.each([false, true])('counts urgent-only failures once, with notification=%s', (hasNotification) => {
+    expect(groupState({
+      ids: ['latest', 'urgent-failure'], urgent: ['urgent-failure'],
+      notifications: hasNotification ? ['urgent-failure'] : [],
+    })).toEqual({ kind: 'error', sessionId: 'urgent-failure', unreadCount: 1 });
+  });
+
+  it.each([
+    ['needs-interaction', 'awaiting'], ['running', 'running'], ['error', 'error'],
+  ] as [RemoteSessionActivityPhase, SessionRightStatus][])(
+    'exposes older local %s even after its notification is cleared', (phase, kind) => {
+      expect(groupState({
+        ids: ['latest', 'older-live'], localPhases: [['older-live', phase]],
+      })).toEqual({ kind, sessionId: 'older-live', unreadCount: 0 });
+    },
+  );
+
+  it('does not treat a remote row as local when its remote mirror is absent', () => {
+    expect(groupState({
+      ids: ['latest', 'remote'], remoteIds: ['remote'], localPhases: [['remote', 'error']],
+    })).toEqual({ kind: 'time', sessionId: 'latest', unreadCount: 0 });
+  });
+
+  it('uses a local live running phase over a stale local error notification', () => {
+    expect(groupState({
+      ids: ['latest', 'older-live'], localPhases: [['older-live', 'running']],
+      notifications: ['older-live'], attentionKinds: [['older-live', 'error']],
+    })).toEqual({ kind: 'running', sessionId: 'older-live', unreadCount: 0 });
+  });
+});
+
 describe('collapsed project attention wiring', () => {
   it('renders the aggregate status on the trailing slot while the project is collapsed', () => {
     const slotChrome = 'group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end';
@@ -229,20 +354,6 @@ describe('collapsed project attention wiring', () => {
     expect(nameSpan).toBeGreaterThan(0);
     expect(trailingSlot).toBeGreaterThan(nameSpan);
     expect(indicator).toBeGreaterThan(trailingSlot);
-  });
-
-  it('feeds the automation group header and its collapsed rows from the same summary', () => {
-    // 组头红点与收起态提上来的告警行必须同源 —— 判据分家就会重演「项目行有红点、
-    // 展开后哪一行都没有」。
-    expect(automationGroupSource).toContain('resolveCollapsedAttention({');
-    expect(automationGroupSource).toContain('resolveCollapsedGroupRightStatus({');
-    expect(automationGroupSource).toContain('resolveCollapsedGroupHeaderSessionId({');
-    expect(automationGroupSource).toMatch(/tone:\s*collapsedAttention\.tone/);
-    expect(automationGroupSource).toMatch(/new Set\(collapsedAttention\.errorSessionIds\)/);
-    expect(automationGroupSource).toContain('collapsedAttentionSessionIds,');
-    // 收起态不再是"空列表",子行的取舍统一由 getAutomationGroupChildView 决定。
-    expect(automationGroupSource).toContain('const visibleSessions = childView.visibleSessions;');
-    expect(automationGroupSource).not.toMatch(/collapsed\s*\?\s*\[\]\s*:/);
   });
 
   it('aggregates the group header without falling back to whole-table subscriptions', () => {
