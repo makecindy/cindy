@@ -78,4 +78,58 @@ describe('buildDeliveryReceipt', () => {
     expect(receipt.outputs.items).toEqual([{ path: '/repo/out/report.pdf', name: 'report.pdf' }]);
     expect(receipt.changes.items).toHaveLength(4);
   });
+
+  it('keeps Codex exec and Pi bash commands, including a failed exit code', () => {
+    const receipt = buildDeliveryReceipt({
+      title: 'Run checks',
+      messages: [
+        {
+          role: 'tool_use',
+          toolUseId: 'pi',
+          content: { toolName: 'bash', toolUseId: 'pi', input: { command: 'pnpm test' } },
+        },
+        { role: 'tool_result', toolUseId: 'pi', content: 'exit code 1' },
+        {
+          role: 'tool_use',
+          toolUseId: 'codex',
+          content: { toolName: 'exec', toolUseId: 'codex', input: { command: 'git status' } },
+        },
+        { role: 'tool_result', toolUseId: 'codex', content: { exitCode: 0 } },
+      ],
+    });
+    expect(receipt.verification.items).toEqual([
+      { command: 'pnpm test', outcome: 'exit 1', failed: true },
+      { command: 'git status', outcome: 'exit 0', failed: false },
+    ]);
+  });
+
+  it('keeps a created file in outputs after a later edit, and drops it after deletion', () => {
+    const kept = buildDeliveryReceipt({
+      title: 'Report',
+      workingDir: '/repo',
+      changedFiles: [
+        { path: '/repo/out/report.pdf', status: 'added' },
+        { path: '/repo/out/report.pdf', status: 'modified' },
+      ],
+    });
+    expect(kept.outputs.items).toEqual([{ path: '/repo/out/report.pdf', name: 'report.pdf' }]);
+    const removed = buildDeliveryReceipt({
+      title: 'Report',
+      workingDir: '/repo',
+      changedFiles: [
+        { path: '/repo/out/report.pdf', status: 'added' },
+        { path: '/repo/out/report.pdf', status: 'deleted' },
+      ],
+    });
+    expect(removed.outputs.shown).toBe(false);
+  });
+
+  it('does not describe an unread pull-request list as none or passed', () => {
+    const receipt = buildDeliveryReceipt({
+      title: 'PR',
+      pullRequestsUnavailable: true,
+    });
+    expect(receipt.ci).toBe('unknown');
+    expect(receipt.prUrl).toBeNull();
+  });
 });

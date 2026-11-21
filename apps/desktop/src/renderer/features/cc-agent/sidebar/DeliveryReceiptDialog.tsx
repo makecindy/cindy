@@ -46,13 +46,25 @@ async function readReceiptFacts(session: Session): Promise<ReceiptFacts> {
       worktreePath: session.worktreePath ?? null,
       remoteHostId: session.remoteHostId,
     }).catch(() => null),
-    window.electronAPI.gitContext.listPrRefs(session.id).catch(() => []),
+    window.electronAPI.gitContext.listPrRefs(session.id).catch(() => null),
   ]);
   const changedFiles: DeliveryReceiptFileInput[] = [];
   let unlistedChangeCount = 0;
   for (const set of [...sets].sort((a, b) => a.createdAt - b.createdAt)) {
     unlistedChangeCount += Math.max(0, set.fileCount - set.files.length);
     for (const file of set.files) changedFiles.push({ path: file.path, status: file.status });
+  }
+  if (!refs) {
+    return {
+      title: session.title,
+      workingDir: git?.workdir ?? session.workingDir,
+      branch: git?.head?.kind === 'branch' ? git.head.branch : git?.head?.shortSha ?? null,
+      changedFiles,
+      unlistedChangeCount,
+      messages: messageInputs(messages),
+      pullRequests: [],
+      pullRequestsUnavailable: true,
+    };
   }
   const activeRefs = refs.filter((ref) => ref.removedAt == null);
   let pullRequests: DeliveryReceiptPullRequest[] = [];
@@ -66,45 +78,57 @@ async function readReceiptFacts(session: Session): Promise<ReceiptFacts> {
       return { url: status.htmlUrl || ref.url, status: 'ok', checks: status.checks ?? null };
     });
   }
-  const listed = Array.isArray(messages) ? (messages as ListedMessage[]) : [];
   return {
     title: session.title,
     workingDir: git?.workdir ?? session.workingDir,
     branch: git?.head?.kind === 'branch' ? git.head.branch : git?.head?.shortSha ?? null,
     changedFiles,
     unlistedChangeCount,
-    messages: [...listed].reverse().map((message) => ({
-      role: message.role ?? '',
-      content: message.content,
-      toolUseId: message.toolUseId,
-    })),
+    messages: messageInputs(messages),
     pullRequests,
   };
+}
+
+function messageInputs(messages: unknown) {
+  const listed = Array.isArray(messages) ? (messages as ListedMessage[]) : [];
+  return [...listed].reverse().map((message) => ({
+    role: message.role ?? '',
+    content: message.content,
+    toolUseId: message.toolUseId,
+  }));
 }
 
 function ReceiptFiles({
   items,
   omitted,
   workingDir,
+  remote,
 }: {
   items: Array<{ path: string; name?: string }>;
   omitted: number;
   workingDir: string | null;
+  remote: boolean;
 }) {
   const { t } = useTranslation();
   return (
     <ul className="mt-1 flex flex-col">
       {items.map((file) => (
         <li key={file.path}>
-          <button
-            type="button"
-            className="min-h-8 w-full truncate rounded-md px-1 text-left text-sm text-[var(--text-primary)] hover:bg-titlebar-button-hover"
-            onClick={() => {
-              void window.electronAPI.openPath(resolveReceiptPath(file.path, workingDir));
-            }}
-          >
-            {file.name || file.path}
-          </button>
+          {remote ? (
+            <span className="block min-h-8 truncate px-1 text-left text-sm text-[var(--text-primary)]">
+              {file.name || file.path}
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="min-h-8 w-full truncate rounded-md px-1 text-left text-sm text-[var(--text-primary)] hover:bg-titlebar-button-hover"
+              onClick={() => {
+                void window.electronAPI.openPath(resolveReceiptPath(file.path, workingDir));
+              }}
+            >
+              {file.name || file.path}
+            </button>
+          )}
         </li>
       ))}
       {omitted > 0 && (
@@ -145,7 +169,8 @@ export function DeliveryReceiptDialog({
       .then(async (next) => {
         if (disposed) return;
         setSession(next);
-        setFacts(await readReceiptFacts(next));
+        const nextFacts = await readReceiptFacts(next);
+        if (!disposed) setFacts(nextFacts);
       })
       .catch(() => {
         if (!disposed) setFailed(true);
@@ -202,6 +227,7 @@ export function DeliveryReceiptDialog({
         <Dialog.Content
           className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto p-4 text-[var(--text-primary)]"
           onClick={(event) => event.stopPropagation()}
+          onPointerDownOutside={(event) => event.preventDefault()}
         >
           <Dialog.Title className="text-lg font-medium">{t('deliveryReceipt.title')}</Dialog.Title>
           <Dialog.Description className="mt-1 text-sm text-[var(--text-secondary)]">
@@ -234,7 +260,7 @@ export function DeliveryReceiptDialog({
               {receipt.changes.shown && (
                 <section>
                   <h2 className="font-medium">{t('deliveryReceipt.changes')}</h2>
-                  <ReceiptFiles items={receipt.changes.items} omitted={receipt.changes.omitted} workingDir={receipt.workingDir} />
+                  <ReceiptFiles items={receipt.changes.items} omitted={receipt.changes.omitted} workingDir={receipt.workingDir} remote={Boolean(session?.remoteHostId)} />
                 </section>
               )}
               {receipt.verification.shown && (
@@ -258,12 +284,12 @@ export function DeliveryReceiptDialog({
               {receipt.outputs.shown && (
                 <section>
                   <h2 className="font-medium">{t('deliveryReceipt.outputs')}</h2>
-                  <ReceiptFiles items={receipt.outputs.items} omitted={receipt.outputs.omitted} workingDir={receipt.workingDir} />
+                  <ReceiptFiles items={receipt.outputs.items} omitted={receipt.outputs.omitted} workingDir={receipt.workingDir} remote={Boolean(session?.remoteHostId)} />
                 </section>
               )}
               <p className="break-all">
                 <span className="text-[var(--text-secondary)]">{t('deliveryReceipt.pullRequest')} </span>
-                {receipt.prUrl ?? t('deliveryReceipt.ciNone')}
+                {receipt.prUrl ?? (receipt.ci === 'unknown' ? t('deliveryReceipt.unknown') : t('deliveryReceipt.ciNone'))}
               </p>
               <p>
                 <span className="text-[var(--text-secondary)]">{t('deliveryReceipt.ci')} </span>
