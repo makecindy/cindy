@@ -5,10 +5,11 @@
  * - 规则：并存方案 A（审核方 2026-11-17 定）。开库的桌面挡住 Host：没有 `runtime` 字段的旧记录按开库处理，
  *   只放行 `runtime: 'client'`；`passive: true` 的开发实例也开库，照样挡（审核方 2026-11-17 定）；只在 SingletonLock
  *   里出现的 PID 也挡；进程已结束的残留和
- *   PID 被复用的记录不挡。同一份记录只问一次进程身份。闸门遇到桌面立刻关，连续两次干净扫描才报可开，
+ *   PID 被复用的记录不挡。同一份记录的有效身份只问一次，未知身份继续重查。闸门遇到桌面立刻关，连续两次干净扫描才报可开，
  *   扫描失败按有桌面处理。
  * - 现有覆盖缺口：桌面的 ownerNamespaceMigration.test.ts 只测这个扫描在迁移里的用法，不测 runtime 的放行与
- *   passive 的阻挡，也没有重扫和闸门状态。
+ *   passive 的阻挡，也没有重扫和闸门状态。#11925 的计数断言依赖真实 OS 首次查询成功，未区分未知身份重试；
+ *   缓存用例只控制已有查询端口的返回，保留真实扫描器、活 PID 和注册文件，其他 OS 查询用例不变。
  * - 最小失败输入：一个空转子进程的 PID 加一份记录；监听回调与定时器手动触发。tier：unit（子进程按 PID 结束，
  *   没有 100ms 以上的真实等待）。
  */
@@ -43,12 +44,12 @@ function profile(t) {
   return { dir, write };
 }
 
-/** The real ports, counting the OS identity queries. */
-function countingPorts() {
+/** Count identity queries; use the real OS unless a cache scenario supplies its results. */
+function countingPorts(readIdentities = pids => nodeProfileScanPorts.readProcessIdentities(pids)) {
   const asked = [];
   return { asked, ports: { ...nodeProfileScanPorts, readProcessIdentities: async pids => {
     asked.push([...pids]);
-    return nodeProfileScanPorts.readProcessIdentities(pids);
+    return readIdentities(pids);
   } } };
 }
 
@@ -79,20 +80,36 @@ test('an out-of-range registered PID does not block the profile', async t => {
   assert.deepEqual(await createDesktopScanner(p.dir)(), []);
 });
 
-test('the same record asks the OS for its identity once; a changed record asks again', async t => {
+test('the same record reuses a known identity; a changed record asks again', async t => {
   const child = await liveChild(t);
   const p = profile(t);
-  const { asked, ports } = countingPorts();
-  const scan = createDesktopScanner(p.dir, ports);
   const startedAtMs = Date.now();
+  const identity = { startedAtMs, command: process.execPath };
+  const { asked, ports } = countingPorts(async pids => new Map(pids.map(pid => [pid, identity])));
+  const scan = createDesktopScanner(p.dir, ports);
   p.write(child.pid, { startedAtMs });
-  assert.deepEqual(await scan(), [child.pid]);
-  assert.deepEqual(await scan(), [child.pid]);
-  assert.deepEqual(await scan(), [child.pid]);
-  assert.equal(asked.length, 1, 'three scans of the same record ask once');
+  for (let round = 1; round <= 3; round++) {
+    assert.deepEqual(await scan(), [child.pid]);
+    assert.equal(asked.length, 1, `scan ${round} reuses the known identity`);
+  }
   p.write(child.pid, { startedAtMs, state: 'starting' });
-  await scan();
+  assert.deepEqual(await scan(), [child.pid]);
   assert.equal(asked.length, 2);
+});
+
+test('an unknown identity is retried without unblocking the profile, then cached when known', async t => {
+  const child = await liveChild(t);
+  const p = profile(t);
+  const startedAtMs = Date.now();
+  const identity = { startedAtMs, command: process.execPath };
+  const { asked, ports } = countingPorts(async pids =>
+    asked.length === 1 ? new Map() : new Map(pids.map(pid => [pid, identity])));
+  const scan = createDesktopScanner(p.dir, ports);
+  p.write(child.pid, { startedAtMs });
+  for (const count of [1, 2, 2]) {
+    assert.deepEqual(await scan(), [child.pid], 'unknown provenance must still block the Host');
+    assert.equal(asked.length, count);
+  }
 });
 
 test('a record whose process ended, or whose PID now belongs to another program, does not block', async t => {
