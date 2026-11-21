@@ -72,7 +72,7 @@ export function GhostCardModelSelect({
         sideOffset={4}
         collisionPadding={8}
         className={cn(
-          'flex min-h-0 w-auto max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
+          'flex min-h-0 w-auto max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-xl p-0',
           'border border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
           inDialog && 'z-[10001]',
         )}

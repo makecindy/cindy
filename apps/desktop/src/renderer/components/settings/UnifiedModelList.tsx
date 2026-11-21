@@ -1332,7 +1332,7 @@ export function UnifiedModelList({
                   {/* 能力模型组:不进对话选择器;图像/视频开关控制对应功能清单。 */}
                   {wholeGroupCapability && !collapsed && (
                     <span
-                      className={cn('pb-1 text-11 leading-snug', showGroupHeaders && 'pl-[24px]')}
+                      className={cn('pb-1 text-11 leading-snug', showGroupHeaders && 'pl-6')}
                       style={{ color: 'var(--text-tertiary)' }}
                     >
                       {t('settings.providers.models.capabilityGroupHint')}

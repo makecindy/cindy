@@ -6636,7 +6636,7 @@ function CCAgentSessionContent({
             />
 
             <div
-              className="relative mx-auto flex flex-col items-center gap-[10px]"
+              className="relative mx-auto flex flex-col items-center gap-2.5"
               style={{ width: inputWidth }}
               data-chat-composer-stack
             >
@@ -7315,7 +7315,7 @@ function HandoffSourcePill({
   return (
     <div
       className={cn(
-        'flex h-10 w-full items-center rounded-[12px] border border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))]',
+        'flex h-10 w-full items-center rounded-xl border border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))]',
         'text-13 leading-none text-muted-foreground',
       )}
     >
@@ -7337,7 +7337,7 @@ function HandoffSourcePill({
         onClick={onDismiss}
         aria-label={t('ccAgent.handoff.pill.dismissAria')}
         className={cn(
-          'mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px]',
+          'mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
           'text-muted-foreground transition-colors hover:bg-[var(--cmd-palette-bg)] hover:text-foreground',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground',
         )}
@@ -7635,7 +7635,7 @@ export function RunningStatusBar({
   return (
     <div
       className={cn(
-        'mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-[6px]',
+        'mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-1.5',
         className,
       )}
       style={{ width: inputWidth }}
@@ -7648,7 +7648,7 @@ export function RunningStatusBar({
         className={cn(
           // min-w-0(非 shrink-0):让内部 status span 的 truncate 真正生效 —— status 可变长
           // (turn-start 带用户名 / tool 进度长串),窄宽时左段截断而非把右段顶出界。
-          'flex min-w-0 items-center gap-[6px]',
+          'flex min-w-0 items-center gap-1.5',
           reconnecting && 'text-[var(--status-bar-accent)]',
           // 隐藏时一律摘所有动画类:动画即便 visibility:hidden 不画也照算样式/合成层，
           // 长期累积会复刻 0f8fa84 那次 breathing 在 :root 的内存泄漏。
@@ -7697,7 +7697,7 @@ export function RunningStatusBar({
         {(!suppressContent && (!preparing || backgroundTasksRunning) && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
-            className="flex min-w-0 items-center gap-[6px]"
+            className="flex min-w-0 items-center gap-1.5"
             style={ratePanelPinned ? undefined : fadeStyle}
             aria-hidden={isHidden && !ratePanelPinned}
           >

@@ -438,7 +438,7 @@ function PresetDropdown({
           'bg-[var(--cmd-palette-bg)] shadow-[shadow:var(--shadow-menu)]',
         )}
       >
-        <div className="flex flex-col gap-[2px]" role="listbox" aria-label={label}>
+        <div className="flex flex-col gap-0.5" role="listbox" aria-label={label}>
           {presets.map((p) => {
             const isSelected = appliedPreset === p.id;
             return (
@@ -453,7 +453,7 @@ function PresetDropdown({
                 }}
                 className={cn(
                   // 菜单项 hover 不加 transition——渐变会让高亮拖尾跟不上指针,菜单应瞬时切换
-                  'flex w-full items-center justify-between rounded-[8px] px-3 py-2 text-left',
+                  'flex w-full items-center justify-between rounded-lg px-3 py-2 text-left',
                   'hover:bg-[var(--cmd-palette-item-hover)]',
                   isSelected && 'bg-[var(--cmd-palette-item-hover)]',
                 )}
@@ -2690,7 +2690,7 @@ export function ProviderConnectionDialog({
 
           {/* 当前 Tab 的独立配置面板 */}
           <div
-            className="flex flex-col gap-4 rounded-[12px] p-4"
+            className="flex flex-col gap-4 rounded-xl p-4"
             style={{
               backgroundColor: 'var(--surface)',
               border: '1px solid var(--settings-theme-card-border)',
@@ -3653,7 +3653,7 @@ export function ModelPickerOverlay({
                     role="checkbox"
                     aria-checked={isSelected}
                     onClick={() => toggle(m.id)}
-                    className="flex w-full items-center gap-2.5 rounded-[8px] px-3 py-2 text-left hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                   >
                     <span
                       className={cn(
