@@ -9,9 +9,11 @@ const keyFor = (r: DurableOutboxRecord) =>
 export function isPendingPlainText(record: DurableOutboxRecord): boolean {
   return !record.creation && !record.chat && !record.resourceRef && !record.suspended
     && !record.cancelRequested && !record.cleanupOutcome && !record.historyConfirmed
-    && (record.state === 'queued' || record.state === 'sending')
+    && (record.state === 'queued' || record.state === 'sending' || record.state === 'confirming')
     && !record.uploads.length && !record.item.attachmentSlots.length
-    && !record.item.sessionRefs?.length && !record.item.text.trimStart().startsWith('/');
+    // Local and desktop commands are routed before the outbox. For agent
+    // commands use the composer's parsed ranges; a leading slash can be a path.
+    && !record.item.sessionRefs?.length && !record.item.slashCommandRanges?.length;
 }
 
 /** Only a newly submitted online message may use the connection after leaving the app. */
@@ -44,8 +46,7 @@ export function beginOutboxBackgroundSend(record: DurableOutboxRecord, hold: () 
 
 export function hasOutboxBackgroundSend(record: DurableOutboxRecord): boolean {
   const entry = pending.get(keyFor(record));
-  return !!entry && entry.until > Date.now() && !record.cancelRequested
-    && (record.state === 'queued' || record.state === 'sending');
+  return !!entry && entry.until > Date.now() && isPendingPlainText(record);
 }
 
 export function endOutboxBackgroundSend(record: DurableOutboxRecord) {

@@ -314,6 +314,8 @@ export function MobileOutboxBridge() {
           guard();
         }
       },
+      // A later projection can confirm delivery even if the enqueue reply was lost.
+      accepted: async (record) => { endOutboxBackgroundSend(record); },
       enqueue: async (r) => {
         const projection = await maker(r).input.enqueue(
           r.item.sessionId,

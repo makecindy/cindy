@@ -3,13 +3,13 @@ import type { DurableOutboxRecord } from '@/session/durableOutbox';
 import { canConnectOutboxPeer, createOutboxSessionAccess } from '@/session/mobileOutboxSessionAdapter';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 
-import { beginOutboxBackgroundSend, endOutboxBackgroundSend, hasOutboxBackgroundSend } from '@/session/outboxBackgroundSend';
+import { beginOutboxBackgroundSend, endOutboxBackgroundSend, hasOutboxBackgroundSend, isPendingPlainText } from '@/session/outboxBackgroundSend';
 
 const requestWork = async () => ({ budgetMs: 8_000, end: () => {} });
 
 function harness(sessions: Array<{ id: string; source?: string; deviceLinkDeviceId: string }>) {
   const record = { deviceId: 'desktop', state: 'queued', uploads: [],
-    item: { sessionId: 'session', clientId: 'client', attachmentSlots: [] } } as unknown as DurableOutboxRecord;
+    item: { sessionId: 'session', clientId: 'client', text: '/tmp/report.txt', slashCommandRanges: [], attachmentSlots: [] } } as unknown as DurableOutboxRecord;
   const invoke = vi.fn(async (_device: string, _channel: string, _args: unknown[] | undefined, options: { preSend(): void }): Promise<{ id: string; source: string; workingDir?: string }> => {
     options.preSend(); return { id: 'session', source: 'cc', workingDir: '/repo' };
   });
@@ -44,6 +44,11 @@ describe('Cindy Make outbox bridge guards', () => {
     try {
       const { record, callbacks, owner } = harness([]);
       const release = vi.fn();
+      // #11930: a typed path must reach the same handoff as ordinary text.
+      expect(isPendingPlainText(record)).toBe(true);
+      expect(isPendingPlainText({ ...record, item: {
+        ...record.item, text: '/review', slashCommandRanges: [{ start: 0, end: 7 }],
+      } })).toBe(false);
       beginOutboxBackgroundSend(record, () => release, requestWork);
       await Promise.resolve();
       owner.foreground = false;
