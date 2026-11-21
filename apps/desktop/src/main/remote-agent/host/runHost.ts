@@ -1,3 +1,5 @@
+import { recordCompanyPiRoots } from '../../usage/companyPiReceipts.js';
+import { companyExecutionReporting, companyModelTokens, type CaptureCompanyUsage } from '../../usage/companyTokenFacts.js';
 import { bindHostedAttachmentPreservation } from '../../maker-host/attachmentPreservation.js';
 import { remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../attachmentPreservation.js';
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
@@ -479,6 +481,9 @@ interface PendingReverse {
 }
 
 interface Run {
+  reportingReceipt?: string;
+  authorizedUsage?: CaptureCompanyUsage;
+  turnUsage?: CaptureCompanyUsage;
   groupProviderId?: string;
   id: string;
   sessionId?: string;
@@ -744,6 +749,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   const now = deps.now ?? Date.now;
   const sharedImageJobs = createSharedImageJobs();
   const runs = new Map<string, Run>();
+  // The authenticated controller negotiates reporting while the (much slower) model runtime starts.
+  // Credentials only cross the control channel. Ownership and expiry are checked again at attachment.
+  const reportingHandshakes = new Map<string, { nonce?: string; expires: number; owner: unknown;
+    authorization?: { receipt: string; record: CaptureCompanyUsage } }>();
   // A close can finish before native startup returns its handle. Keep that
   // reservation until startup has disposed any resources that arrived late.
   const startingRuns = new WeakSet<Run>();
@@ -1930,7 +1939,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (run.closing) break;
         if (startsRemoteProductTurn(event)) {
           run.nativeHistoryCheckpoint = undefined;
-          if (!run.abortRequested) run.activeTurn = true;
+          if (!run.abortRequested) {
+            if (!run.activeTurn) bindCompanyUsage(run);
+            run.activeTurn = true;
+          }
         }
         const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
         if (currentTerminal) {
@@ -1938,6 +1950,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           run.abortRequested = false;
         }
         meterRunUsage(run, handle.model, event);
+        if (currentTerminal) run.turnUsage = undefined;
         const failure = currentTerminal ? relayRunFailureOf(event) : null;
         if (failure && isAccountFailure(failure)) {
           groupTurnFailed = true;
@@ -2012,15 +2025,30 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     await finishRun(run, 'ended', 'navigation', false);
   }
 
+  function bindCompanyUsage(run: Run) {
+    run.turnUsage = run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && run.authorizedUsage && !run.relay && (run.guestRoute || run.ownerRoute) &&
+      run.providerId && companyExecutionReporting()?.direct(run.providerId, run.kind) ? run.authorizedUsage : undefined;
+  }
+
   function meterRunUsage(run: Run, model: string | undefined, event: AgentEvent): void {
     const record = run.trust === 'guest' ? deps.recordGuestUsage : deps.recordOwnerUsage;
     // 换了账号之后迟到的这一轮不记：用量账本按账号存放，记进去会落到新账号名下。
-    if (!record || (event.type !== 'done' && event.type !== 'status') || !deps.isOwnerCurrent(run.owner)) return;
+    if ((!record && !run.turnUsage) || (event.type !== 'done' && event.type !== 'status') || !deps.isOwnerCurrent(run.owner)) return;
     // 插件引擎用它自己的账号直连厂商，Cindy 不经手它的模型请求，本机的任务也不记用量。
     if (run.kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND) return;
     run.usageMeter ??= createGuestUsageMeter(run.kind);
     try {
       const observed = run.usageMeter.observe(event, model ?? '');
+      if (!run.relay && run.turnUsage && run.providerId && companyExecutionReporting()?.direct(run.providerId, run.kind)) {
+        if (run.kind === 'pi') {
+          if (event.type === 'done' && event.source === 'pi') {
+            const usage = (event.data as { usage?: { receipts?: unknown; segments?: unknown; segmentsComplete?: boolean } } | undefined)?.usage;
+            recordCompanyPiRoots(run.turnUsage, usage?.receipts ?? (usage?.segmentsComplete ? usage.segments : undefined));
+          }
+        } else if (observed.length) {
+          run.turnUsage(observed.map(sample => companyModelTokens(sample.model, sample)));
+        }
+      }
       // Native proxy receipts already include root and child tokens. Terminal events only count turns.
       const samples = run.guestRoute?.receiptMetering ? observed.filter(sample => sample.turns > 0).map(sample => ({
         ...sample, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0,
@@ -2028,7 +2056,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (samples.length === 0) return;
       // 转给组内电脑的记在那台名下；在本机运行的(含组里选回本机)记为本机。
       const memberKey = run.relay?.member.memberKey ?? PROVIDER_GROUP_LOCAL_MEMBER_KEY;
-      record(run.controller, { kind: run.kind, providerId: run.providerId ?? null, memberKey, samples }, run.sessionId);
+      record?.(run.controller, { kind: run.kind, providerId: run.providerId ?? null, memberKey, samples }, run.sessionId);
     } catch (error) {
       deps.log?.warn('remote agent usage record failed', { runId: run.id, error: String(error) });
     }
@@ -2920,6 +2948,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       // 供应商授权：新一轮对话前复核(关掉后不再开始新的一轮，进行中的这一轮照常结束)；
       // 换模型时显式换来源(含 null = 默认)要落到开放的供应商上，只换模型则沿用当前来源。
       // 受邀者每次换模型都复核：来源钉在分享的供应商上(没带来源也显式带上)，且它要提供这个模型。
+      if (method === 'send') bindCompanyUsage(run);
       let nextProviderId: string | undefined;
       const pluginEngineRun = run.kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND;
       // 插件引擎：来源就是引擎本身，不能换来源；关掉「允许被远程调用」或插件停用后不再开始新的一轮，也不再换模型。
@@ -3661,11 +3690,45 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         return result;
       }
+      case 'company-reporting-challenge': {
+        const k = key(controller, request.runId);
+        const run = runs.get(k);
+        const service = companyExecutionReporting();
+        if (!service?.available() || run?.closing || run?.relay) return null;
+        for (const [id, value] of reportingHandshakes) {
+          if (value.expires <= now() || !deps.isOwnerCurrent(value.owner)) reportingHandshakes.delete(id);
+        }
+        if (reportingHandshakes.size >= 128) return null;
+        const nonce = randomUUID();
+        reportingHandshakes.set(k, { nonce, expires: now() + 60000, owner: deps.captureOwner() });
+        return service.challenge(nonce);
+      }
+      case 'company-reporting-grant': {
+        const k = key(controller, request.runId);
+        const pending = reportingHandshakes.get(k);
+        const nonce = pending?.nonce;
+        if (!pending || !nonce || pending.expires <= now() || !deps.isOwnerCurrent(pending.owner)) return {};
+        pending.nonce = undefined;
+        const record = await companyExecutionReporting()?.redeem(nonce, request.grant);
+        if (!record || reportingHandshakes.get(k) !== pending || pending.expires <= now() ||
+            !deps.isOwnerCurrent(pending.owner) || !deps.isControllerAuthorized(controller)) return {};
+        const run = runs.get(k);
+        if (!run) { pending.authorization = record; return { authorized: true }; }
+        reportingHandshakes.delete(k);
+        if (!run.closing && !run.relay && deps.isOwnerCurrent(run.owner)) {
+          if (run.turnUsage && run.reportingReceipt === record.receipt) run.turnUsage = record.record;
+          run.authorizedUsage = record.record;
+          run.reportingReceipt = record.receipt;
+          return { authorized: true };
+        }
+        return {};
+      }
       case 'caps': {
         const guest = trustOf(controller) === 'guest';
         const managedSkillDigests = await ownManagedSkillDigests(guest);
         const limits = deps.readLimits?.() ?? DEFAULT_REMOTE_AGENT_LIMITS;
         const caps: RemoteAgentCaps = {
+          ...(companyExecutionReporting()?.available() && { companyTokenReporting: true as const }),
           ...(deps.fastPolicy ? { subscriptionFastPolicy: true as const, subscriptionFastPolicyCache: true as const } : {}),
           version: REMOTE_AGENT_VERSION,
           agents: (['claude-code', 'codex', 'pi'] as const).map((kind) => ({
@@ -3961,7 +4024,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           reserved?.release();
           throw error;
         }
+        const pending = reportingHandshakes.get(key(controller, request.runId));
+        const reporting = pending && now() < pending.expires && deps.isOwnerCurrent(pending.owner) ? pending.authorization : undefined;
+        if (reporting) reportingHandshakes.delete(key(controller, request.runId));
         const run: Run = {
+          reportingReceipt: reporting?.receipt, authorizedUsage: reporting?.record,
           // Routing hints prevent group loops; they are not permission to skip
           // this executor's policy. Direct and relayed guests inherit its local
           // group restriction even when the caller says it was already assigned.

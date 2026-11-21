@@ -89,7 +89,7 @@ vi.mock('../analytics-settings-store', () => ({
   migrateExistingLoginAsConsented: (signedIn: boolean) => migrateExistingLoginAsConsented(signedIn),
   closeLegacyConsentMigration: () => closeLegacyConsentMigration(),
   acceptPrivacyConsent: vi.fn(),
-  setAnalyticsEnabled: vi.fn(),
+  setAnalyticsEnabled: (enabled: boolean) => { fakeSettings.analyticsEnabled = enabled; },
   clearAnalyticsEnabledOverride: vi.fn(),
   // store 侧的真实语义(构建闸在真实实现里另算,这里按已同意 && 开关开启放行),
   // 这样「本地模式闸」是否生效可以被独立断言。
@@ -380,6 +380,27 @@ describe('local-mode reporting gate', () => {
     authStateListener?.();
 
     expect(broadcasts.at(-1)).toMatchObject({ allowed: false, privacyConsentAccepted: true });
+  });
+
+  // 真实设置入口必须区分用户主动打开与登录态重播，避免把旧的企业退出偏好覆盖。
+  it('distinguishes an explicit switch change from an auth-state refresh', async () => {
+    fakeSettings.privacyConsentAccepted = true;
+    const service = await importService();
+    service.initAnalyticsSettingsService();
+    const onChange = vi.fn();
+    const unsubscribe = service.onAnalyticsPermissionChange(onChange);
+    const { ipcMain } = await import('electron');
+    const setter = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === 'analytics:settings-set-enabled')![1];
+    const event = {} as Electron.IpcMainInvokeEvent;
+
+    setter(event, false);
+    setter(event, true);
+    authStateListener?.();
+    expect(onChange.mock.calls).toEqual([[false, false], [true, true], [true, undefined]]);
+
+    unsubscribe();
+    setter(event, false);
+    expect(onChange).toHaveBeenCalledTimes(3);
   });
 
   it('unsubscribes from auth state on quit teardown', async () => {
