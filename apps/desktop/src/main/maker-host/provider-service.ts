@@ -119,6 +119,7 @@ export interface ProviderServiceDeps {
   subscriptionPoolConnected?: (providerId: string, options?: SubscriptionConnectionOptions) => boolean;
   subscriptionAccountConnected?: (providerId: string) => boolean;
   subscriptionReadUnavailable?: (providerId: string) => boolean;
+  subscriptionReadUnreachable?: (providerId: string) => boolean;
   subscriptionModelsConfirmedAt?: (providerId: string) => number | undefined;
   subscriptionAccountInfo?: (providerId: string) => Promise<ProviderView['subscriptionAccount']>;
   openAiAccountInfo?: (providerId: string) => Promise<ProviderView['openAiAccount']>;
@@ -350,7 +351,8 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       // restoring display preferences failed after authentication was committed.
       ...(provider.connected ? { removed: false } : {}),
       ...(unavailableSubscriptions.has(provider.id)
-        ? { subscriptionReadUnavailable: true as const, subscriptionModelsConfirmedAt: unavailableSubscriptions.get(provider.id) } : {}),
+        ? { subscriptionReadUnavailable: true as const, subscriptionModelsConfirmedAt: unavailableSubscriptions.get(provider.id),
+          ...(deps.subscriptionReadUnreachable?.(provider.id) ? { subscriptionReadUnreachable: true as const } : {}) } : {}),
       ...(displayModels.has(provider.id) ? { subscriptionDisplayModels: displayModels.get(provider.id) } : {}),
     })).map(
       (provider) =>

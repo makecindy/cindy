@@ -99,6 +99,8 @@ export interface ProviderView extends Provider {
   subscriptionAccountKeys?: string[];
   /** Host observed a transient native-account read failure. Optional on older hosts; no credential data. */
   subscriptionReadUnavailable?: true;
+  /** With subscriptionReadUnavailable: the failed reads could not reach the provider's service (network, DNS, proxy). */
+  subscriptionReadUnreachable?: true;
   /** Time of the last verified account model list retained during a failed refresh. */
   subscriptionModelsConfirmedAt?: number;
   /** Local UI only: display projection when a subscription account cannot be read. */

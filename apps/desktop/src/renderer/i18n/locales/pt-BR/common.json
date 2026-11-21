@@ -14263,6 +14263,8 @@
       "source": {
         "lastConfirmed": "Última atualização: {{time}}",
         "unconfirmed": "Lista de modelos desatualizada",
+        "unreachable": "Não foi possível conectar a {{source}}",
+        "unreachableDetail": "Sem conexão. Verifique sua rede.",
         "unavailable": "Modelo indisponível",
         "reconnect": "Reconectar",
         "manage": "Gerenciar fonte",

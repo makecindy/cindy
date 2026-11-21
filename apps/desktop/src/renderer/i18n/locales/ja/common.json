@@ -14094,6 +14094,8 @@
       "source": {
         "lastConfirmed": "最終更新：{{time}}",
         "unconfirmed": "モデル一覧を更新できません",
+        "unreachable": "{{source}} に接続できません",
+        "unreachableDetail": "接続できません。ネットワークを確認してください",
         "unavailable": "モデルを利用できません",
         "reconnect": "再接続",
         "manage": "接続先を管理",
