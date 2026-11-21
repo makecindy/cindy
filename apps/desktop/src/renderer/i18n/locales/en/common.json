@@ -7051,7 +7051,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Included in the privacy screen: this computer won't sleep."
+      "keepAwakeIncluded": "Included in the privacy screen: this computer won't sleep.",
+      "localNetwork": {
+        "label": "Local network",
+        "deniedHint": "Without this permission, computers and phones on the same network can't connect to this computer directly. They go through the relay, which is slower.",
+        "settingsHint": "Turn on Cindy in System Settings › Privacy & Security › Local Network. It takes effect as soon as you come back."
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -10947,6 +10952,13 @@
         "enabled": "Enabled"
       },
       "close": "Close Download Dialog"
+    },
+    "localNetwork": {
+      "title": "Allow local network access",
+      "relayOnly": "Your other devices can only reach this computer through the relay, which is slower. Allow access so devices on the same network connect directly.",
+      "controlEnabled": "Devices on the same network can control this computer directly only with local network access. Otherwise they go through the relay.",
+      "allow": "Allow",
+      "dismiss": "Not now"
     }
   },
   "bots": {

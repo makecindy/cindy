@@ -672,6 +672,7 @@ import {
   setAwayCaptureExcludedWindows,
   startLinuxAwayCover,
 } from './remote-desktop';
+import { registerLocalNetworkIpc } from './local-network/index.js';
 import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
 import { DisplayDemand } from './remote-desktop/displayDemand';
 import {
@@ -10914,6 +10915,7 @@ app.on('ready', async () => {
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();
+  registerLocalNetworkIpc();
   registerRemoteDesktopIpc(
     isGlobalVoiceInputOverlaySender,
     { name: getControllerName, revoke: revokeController },
