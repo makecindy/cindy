@@ -921,6 +921,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         onPiManagedPackageMutationSettled: piPackages.deps.onPiManagedPackageMutationSettled,
         resolvePiGatewayModelApi: resolvePiCindyGatewayModelApi,
         resolvePiGatewayModelSpec: resolvePiCindyGatewayModelSpec,
+        // Live compact runs in the desktop only; the Host never enables it, so no shadow dir either.
+        resolvePiLiveCompactEnabled: undefined,
+        resolvePiLiveCompactShadowDir: undefined,
         ...piModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
         capabilityAdditions: availableModels('pi'),
