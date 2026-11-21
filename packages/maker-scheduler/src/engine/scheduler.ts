@@ -636,11 +636,16 @@ export class Scheduler extends EventEmitter {
    */
   private readonly pendingExpireReads = new Map<string, Promise<Schedule | null>>();
   /**
-   * 在途的排期补偿（key = scheduleId）。补排卡死时(预闸门超时只放弃「等」,活儿还在
-   * 跑),后续 tick 不能再对同一条任务重入 —— 条目要等这次补排 settle 才摘掉,否则每
-   * tick 都会再起一份,堆出无界的存储调用,反而饿死 due-fire(Codex P1 on #11577)。
+   * 在途的排期补偿（key = scheduleId，值带**这一轮 run** 的 runId）。补排卡死时
+   * (预闸门超时只放弃「等」,活儿还在跑),后续 tick 不能再对同一条任务重入 ——
+   * 条目要等这次补排 settle 才摘掉,否则每 tick 都会再起一份,堆出无界的存储调用,
+   * 反而饿死 due-fire(Codex P1 on #11577)。
+   *
+   * 压制只对**同一轮 run** 生效:任务被编辑重新触发又跑挂了新一轮时,新 run 的凭据
+   * 顶替了旧条目,旧那一轮还挂在存储里的补排不能继续把新 run 的补排挡掉
+   * (Codex P1 on #11577)。
    */
-  private readonly inFlightReplans = new Map<string, Promise<void>>();
+  private readonly inFlightReplans = new Map<string, { startedAt: number; attempt: Promise<void> }>();
   /**
    * 在途的派发守卫回读(key = scheduleId)。批量 listActive 超时后每条守卫都要
    * 回读一次(Codex P2 on #11577),而读同样可能挂死:不登记在途读的话,之后每个
@@ -989,31 +994,29 @@ export class Scheduler extends EventEmitter {
             // DB sync 块都把同样的读再发一遍,存储故障期间未完成的 RPC 工作无界
             // 增长,把认领和过期写入也挤掉。
             const readPromise = this.getGuardFallbackRead(previous.id);
+            const remaining = preGateRemaining(preGateDeadline);
+            if (remaining <= 0) {
+              // 共享预算已经耗尽(批量 listActive 自己就吃光了,或本轮前面的过期
+              // 写入吃光了):不再逐条等。排队中的自动 attempt 不计入
+              // maxConcurrentRuns,条数可以是几十条 —— 每条再等一个 1ms 定时器、
+              // 再发一次读,这一轮 advertised 的硬上限就变成 timeout + O(排队 run
+              // 数),存储楔住时反而把预闸门本该让位的 due-fire 又推迟下去。改成只
+              // 挂迟到收口、不当场等:读一旦落地由收口应用(单飞保证不重复发),本轮
+              // 立刻往下走。
+              this.armGuardLateApply(runId, previous, readPromise);
+              dispatchReadTimeout ??= new StorageAwaitTimeoutError('dispatchSnapshotGet');
+              continue;
+            }
             try {
               current = await withStorageTimeout(
                 readPromise,
-                Math.max(1, preGateRemaining(preGateDeadline)),
+                Math.max(1, remaining),
                 'dispatchSnapshotGet',
               );
             } catch (err) {
               if (err instanceof StorageAwaitTimeoutError) {
                 dispatchReadTimeout = err;
-                void readPromise.then(
-                  (value) => {
-                    if (!value) return;
-                    if (this.automaticDispatchSchedules.get(runId) !== previous) return;
-                    // 单飞复用在途读时,它可能发端于本地快照前进之前:读发起后用户
-                    // 改短了截止时间,update() 已把守卫换成新版(updatedAt 更晚),
-                    // 而这一次读要回来的是改期前那一行(更长的 expireAt)。旧回包
-                    // 会通过身份 guard 把派发快照退回长截止时间,canDispatch 因而
-                    // 在用户新截止时间之后仍放行(Codex P2 on #11577)。判据只比
-                    // 版本,不带 expireAt:这里要收到的本就是「别处改过之后的那
-                    // 一行」,拿 expireAt 判旧会把合法的新版一起拒掉。
-                    if (this.isSupersededSnapshot(value)) return;
-                    this.automaticDispatchSchedules.set(runId, value);
-                  },
-                  () => undefined,
-                );
+                this.armGuardLateApply(runId, previous, readPromise);
                 if (this.tickHandle !== tickHandle) return;
                 continue;
               }
@@ -1340,6 +1343,29 @@ export class Scheduler extends EventEmitter {
     };
     void read.then(clear, clear);
     return read;
+  }
+
+  /**
+   * 给一条守卫回读挂迟到收口:超时路径与「本轮预算已耗尽、不再逐条等」路径共用。
+   *
+   * 后者同样不能丢结果:排队中的 run 一直拿着旧 deadline,而要等下一次 30 秒同步才
+   * 恢复,期间别的实例改短了截止时间的 run 仍会被放行(Codex P2 on #11577)。
+   *
+   * 收口过两道闸:身份 guard(`automaticDispatchSchedules` 里仍是**原来那一版**)
+   * 与版本判旧。后者见 isSupersededSnapshot —— 单飞复用在途读时,读可能发端于
+   * 本地快照前进之前,回包里是改期前那一行,直接应用会把派发快照退回更长的
+   * expireAt,canDispatch 在用户新截止时间之后仍放行(Codex P2 on #11577)。
+   */
+  private armGuardLateApply(runId: string, previous: Schedule, read: Promise<Schedule | null>): void {
+    void read.then(
+      (value) => {
+        if (!value) return;
+        if (this.automaticDispatchSchedules.get(runId) !== previous) return;
+        if (this.isSupersededSnapshot(value)) return;
+        this.automaticDispatchSchedules.set(runId, value);
+      },
+      () => undefined,
+    );
   }
 
   /**
@@ -3830,21 +3856,43 @@ export class Scheduler extends EventEmitter {
       // nextFireAt 又被清空时,重叠的 tick 会把这条陈旧重试再应用一次,凭空排出一次
       // 触发,与正在跑的那一轮重叠(第十八轮 P1:上一版只在 try 尾部 delete,函数体里
       // 每一个早退分支都绕过了它)。
-      this.pendingReplans.delete(scheduleId);
+      // 只摘**自己这一轮**的凭据:等待期间任务被重新触发又跑挂了新一轮,凭据已经
+      // 顶替,旧一轮迟到的成功不能把新 run 待补的排期凭据一起删掉。
+      if (this.ownsPendingReplan(scheduleId, attempt)) this.pendingReplans.delete(scheduleId);
     } catch (err) {
       // 只有"这次没做成"才保留/上膛,由后续 tick 重试(见 retryPendingReplans)。
-      this.pendingReplans.set(scheduleId, {
-        scheduleId,
-        runId: attempt.runId,
-        startedAt: attempt.startedAt,
-        source: attempt.source,
-      });
+      // 同样只碰自己这一轮:旧一轮迟到的失败不能把新 run 的凭据换成自己的陈旧副本。
+      if (this.ownsPendingReplan(scheduleId, attempt)) {
+        this.pendingReplans.set(scheduleId, {
+          scheduleId,
+          runId: attempt.runId,
+          startedAt: attempt.startedAt,
+          source: attempt.source,
+        });
+      }
       this.logger?.warn?.('scheduler: replan after stalled run failed — queued for retry', {
         scheduleId,
         runId: attempt.runId,
         error: String(err),
       });
     }
+  }
+
+  /**
+   * 这一轮的补排结论能不能写这条任务的重试凭据。
+   *
+   * 补排可能在途很久(存储挂死),期间任务仍可能被编辑重新触发、又跑挂新一轮,
+   * 凭据按 scheduleId 单条登记于是被顶替。尺子是**登记时刻**:队列里那一凭据不比
+   * 本轮更新,才允许本轮结论落笔。
+   *
+   * 反过来旧一轮迟到的结论不能碰新凭据:删掉它,新 run 认领过的任务就再没有
+   * nextFireAt;换回旧副本,新 run 的补排又要被旧那一轮的在途登记挡掉
+   * (Codex P1 on #11577)。而新的一轮**必须**能顶替旧凭据 —— 否则任务重新触发后
+   * 补排就再没有重试的机会了(同一条 finding 的反面)。
+   */
+  private ownsPendingReplan(scheduleId: string, attempt: StalledClaimPlan): boolean {
+    const tracked = this.pendingReplans.get(scheduleId);
+    return !tracked || tracked.startedAt <= attempt.startedAt;
   }
 
   /** replanAfterStalledClaim 的函数体;抛错即"本次没做成",由调用方决定重试。 */
@@ -3918,17 +3966,30 @@ export class Scheduler extends EventEmitter {
    * 返回的 storage 调用上)。条目要等这次补排 settle 才摘掉,所以后续 tick 若再对
    * 同一条任务起一份,存储故障期间就会每 tick 堆一次调用,把 due-fire 饿死
    * (Codex P1 on #11577)。
+   *
+   * 压制按 **runId** 判定,不只看 scheduleId:凭据是单条的,上一轮的补排永久挂死
+   * 时,任务仍可能被编辑重新触发、又跑挂新一轮,新 run 的凭据顶替旧条目。此时旧
+   * 那一轮的在途登记还在,只看 scheduleId 会让后续每个 tick 都跳过,新 run 的补排
+   * 永远发不出去 —— 它认领过的任务没有 nextFireAt,直到进程重启才恢复
+   * (Codex P1 on #11577)。换了 run 就放行新补排,旧那一轮的迟到结论由
+   * ownsPendingReplan 拦在凭据外面。
    */
   private async retryPendingReplans(now: number): Promise<void> {
     if (this.pendingReplans.size === 0) return;
     for (const pending of [...this.pendingReplans.values()]) {
-      if (this.inFlightReplans.has(pending.scheduleId)) continue; // 上一轮还在途
+      const inFlight = this.inFlightReplans.get(pending.scheduleId);
+      // 在途的那一次属于**同一轮或更新的一轮**才压制重试。更旧的在途不能继续挡:
+      // 任务被编辑重新触发又跑挂了新一轮,凭据已经换成新的,旧那一轮还挂在存储里
+      // 的补排若还算数,新凭据的补排永远发不出去(Codex P1 on #11577)。尺子与
+      // ownsPendingReplan 同一条 —— 按登记时刻比,不按 scheduleId 一棍子打死。
+      if (inFlight && inFlight.startedAt >= pending.startedAt) continue;
       const attempt = this.replanAfterStalledClaim(pending, now);
-      this.inFlightReplans.set(pending.scheduleId, attempt);
+      this.inFlightReplans.set(pending.scheduleId, { startedAt: pending.startedAt, attempt });
       try {
         await attempt;
       } finally {
-        if (this.inFlightReplans.get(pending.scheduleId) === attempt) {
+        const tracked = this.inFlightReplans.get(pending.scheduleId);
+        if (tracked && tracked.attempt === attempt) {
           this.inFlightReplans.delete(pending.scheduleId);
         }
       }
