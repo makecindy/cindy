@@ -233,8 +233,9 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
         <DropdownMenuItem disabled className="whitespace-normal">
           {t('bots.cloud.homeUnresponsive', { name: bot.name, device: state.homeName })}
         </DropdownMenuItem>
+        {/* May lose what that computer has not synced: a destructive row (DESIGN.md §4 Destructive actions). */}
         {choices.targets.filter((target) => target.isSelf).map((target) => (
-          <DropdownMenuItem key={target.deviceId} onSelect={() => { state.setError(null); state.setForceTarget(target); }}>
+          <DropdownMenuItem key={target.deviceId} variant="danger" onSelect={() => { state.setError(null); state.setForceTarget(target); }}>
             <span className="min-w-0 truncate">{t('bots.cloud.forceHere')}</span>
           </DropdownMenuItem>
         ))}
