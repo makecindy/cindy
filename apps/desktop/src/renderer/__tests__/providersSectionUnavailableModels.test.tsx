@@ -644,6 +644,102 @@ describe('ProvidersSection — 双栏管理', () => {
   const answerRemoval = (removed: { agent: 'codex' | 'pi'; modelId: string }[], gone: string[]) =>
     vi.mocked(updateCustomProvider).mockImplementation(async (_config, _keys, options) =>
       options?.removeWithdrawnModels ? { ok: true, withdrawnRemoved: removed, withdrawnGoneIds: gone } : { ok: true });
+
+  // #6601 PRRT_kwDOTgdRUs66cozt: unit, real page -> withdrawal review ->
+  // still-open drawer. Existing refresh/removal cases never rename through a
+  // delayed removal readback. A stale full-config alias save must not resurrect
+  // a confirmed removal, including a failed or superseded catalog read.
+  it.each(['success', 'failed', 'superseded', 'owner-changed'] as const)('preserves confirmed removals across a %s alias readback', async outcome => {
+    let stored = withdrawnConfig();
+    providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+    providerSnapshotState.order = [stored.id];
+    let finishRemoval!: () => void;
+    const removal = new Promise<void>(resolve => { finishRemoval = resolve; });
+    let finishReadback!: () => void;
+    const readback = new Promise<void>(resolve => { finishReadback = resolve; });
+    const persist = vi.fn<typeof window.electronAPI.maker.updateCustomProvider>(async (config, _keys, options) => {
+      if (options?.removeWithdrawnModels) {
+        await removal;
+        // Main's committed response; normal saves below replace the full config.
+        stored = { ...stored, runtimes: { codex: { ...stored.runtimes.codex!,
+          models: stored.runtimes.codex!.models.filter(model => model.id !== 'old-a'),
+        } } };
+        return { ok: true, withdrawnRemoved: [{ agent: 'codex', modelId: 'old-a' }], withdrawnGoneIds: ['old-a'] };
+      }
+      stored = structuredClone(config);
+      return { ok: true };
+    });
+    Object.assign(window.electronAPI.maker, {
+      updateCustomProvider: persist,
+      fetchProviderModels: vi.fn(async () => ({ ok: true, models: current, complete: true })),
+      getModelContextLimit: async () => ({ limit: null, isCustomized: false }),
+      getModelImageInputOverride: async () => ({ value: null, mixed: false }),
+      setModelDisable: vi.fn(async () => ({ ok: true })),
+    });
+    const actual = await vi.importActual<typeof import('@/lib/customProviders')>('@/lib/customProviders');
+    vi.mocked(updateCustomProvider).mockImplementation(actual.updateCustomProvider);
+    const page = () => <MemoryRouter><ProvidersSection /></MemoryRouter>;
+    const view = render(page());
+    const publish = () => {
+      providerSnapshotState.error = null;
+      providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+      view.rerender(page());
+      return true;
+    };
+    refetchProvidersSpy.mockImplementation(async () => publish());
+    try {
+      await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+      const row = screen.getByText('keep-1').parentElement!;
+      fireEvent.click(within(row).getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work Alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      await act(async () => { vi.mocked(toast.info).mock.lastCall![1]!.action!.onClick(); });
+      refetchProvidersSpy.mockImplementation(async () => {
+        await readback;
+        if (outcome === 'success') return publish();
+        if (outcome === 'failed') providerSnapshotState.error = { reason: 'catalog-unavailable' };
+        view.rerender(page());
+        return false;
+      });
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'settings.providers.models.withdrawn.confirm' }));
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(2));
+      await act(async () => { finishRemoval(); });
+      await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledTimes(2));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      await act(async () => { fireEvent.click(save); });
+      expect(persist).toHaveBeenCalledTimes(2);
+      expect(save.disabled).toBe(true);
+      expect(stored.runtimes.codex!.models.some(model => model.id === 'old-a')).toBe(false);
+      if (outcome === 'owner-changed') {
+        setDataOwnerGeneration('owner-2');
+        await act(async () => { finishReadback(); });
+        expect(resetModelVisibilities).not.toHaveBeenCalled();
+        expect(window.electronAPI.maker.setModelDisable).not.toHaveBeenCalled();
+        return;
+      }
+      await act(async () => { finishReadback(); });
+      if (outcome !== 'success') {
+        await act(async () => { fireEvent.click(save); });
+        expect(persist).toHaveBeenCalledTimes(2);
+        expect(save.disabled).toBe(true);
+        // A later successful shared catalog publication, without another removal.
+        await act(async () => { publish(); });
+      }
+      expect(input.value).toBe('Work Alias');
+      await waitFor(() => expect(save.disabled).toBe(false));
+      const removedConfig = structuredClone(stored);
+      refetchProvidersSpy.mockImplementation(async () => publish());
+      await act(async () => { fireEvent.click(save); });
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(3));
+      removedConfig.runtimes.codex!.models.find(model => model.id === 'keep-1')!.name = 'Work Alias';
+      removedConfig.runtimes.codex!.models.find(model => model.id === 'keep-1')!.nameExplicit = true;
+      expect(stored).toEqual(removedConfig);
+    } finally {
+      finishRemoval(); finishReadback();
+      vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset();
+    }
+  });
   it.each([
     ['incomplete catalog', { ok: true, models: current, complete: false }],
     ['catalog without completeness', { ok: true, models: current }],

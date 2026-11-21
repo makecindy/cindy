@@ -2674,6 +2674,8 @@ export function ProvidersSection() {
   const confirmProviderChange = useProviderChangeConfirmation();
   const { providers: currentProviders, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
   const providers = useMemo(() => currentProviders.map(withSubscriptionDisplayModels), [currentProviders]);
+  const latestProvidersRef = useRef(providers);
+  latestProvidersRef.current = providers;
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
@@ -2793,6 +2795,11 @@ export function ProvidersSection() {
   // #11298: models a complete refresh no longer found upstream, awaiting the user's choice.
   const [withdrawnReview, setWithdrawnReview] = useState<WithdrawnModelsOwnedReview | null>(null);
   const [removingWithdrawn, setRemovingWithdrawn] = useState(false);
+  // A failed/superseded removal readback cannot release whole-config writers
+  // against that same catalog snapshot. A new publication releases the guard.
+  const [unconfirmedRemovalSnapshot, setUnconfirmedRemovalSnapshot] = useState<ProviderView | null>(null);
+  const unconfirmedRemovalProviderId = unconfirmedRemovalSnapshot && providers.includes(unconfirmedRemovalSnapshot)
+    ? unconfirmedRemovalSnapshot.id : null;
   // A newer refresh supersedes the previous prompt; its list may already be stale.
   const withdrawnToastIdRef = useRef<string | null>(null);
 
@@ -3389,6 +3396,7 @@ export function ProvidersSection() {
         toast.error(t('settings.providers.models.withdrawn.removeFailed'));
         return;
       }
+      if (!beginProviderRefresh(provider.id)) return;
       setRemovingWithdrawn(true);
       // Preference cleanup must stay with the account that performed the removal.
       const owner = getDataOwnerGeneration();
@@ -3416,7 +3424,12 @@ export function ProvidersSection() {
           withdrawnLog.warn('withdrawn model cleanup skipped after account change', { count: removed.length });
           return;
         }
-        refetch();
+        const readbackConfirmed = await refetch();
+        // The readback may cross an account switch; preference cleanup must not.
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        if (!readbackConfirmed) {
+          setUnconfirmedRemovalSnapshot(latestProvidersRef.current.find(candidate => candidate.id === provider.id) ?? null);
+        }
         if (removed.length === 0) {
           toast.info(t('settings.providers.models.withdrawn.stale'));
           return;
@@ -3445,10 +3458,11 @@ export function ProvidersSection() {
         withdrawnLog.warn('withdrawn model removal failed', { error: error instanceof Error ? error.name : 'unknown' });
         toast.error(t('settings.providers.models.withdrawn.removeFailed'));
       } finally {
+        finishProviderRefresh(review.providerId);
         setRemovingWithdrawn(false);
       }
     },
-    [confirmProviderChange, dataOwnerId, ownerGeneration, providers, refetch, removingWithdrawn, t, withdrawnReview],
+    [beginProviderRefresh, confirmProviderChange, dataOwnerId, finishProviderRefresh, ownerGeneration, providers, refetch, removingWithdrawn, t, withdrawnReview],
   );
 
   /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
@@ -4084,14 +4098,14 @@ export function ProvidersSection() {
                           {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
                             ? {
                                 onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
-                                refreshing: refreshingProviderId === effectiveSelected.id,
+                                refreshing: refreshingProviderId === effectiveSelected.id || unconfirmedRemovalProviderId === effectiveSelected.id,
                                 refreshDisabled: refreshingProviderId !== null,
                                 refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                               }
                             : effectiveSelected.source === 'user' && effectiveSelected.id !== MANAGED_LLAMACPP_PROVIDER_ID
                               ? {
                                   onRefresh: () => void handleRefreshModels(effectiveSelected),
-                                  refreshing: refreshingProviderId === effectiveSelected.id,
+                                  refreshing: refreshingProviderId === effectiveSelected.id || unconfirmedRemovalProviderId === effectiveSelected.id,
                                   refreshDisabled: refreshingProviderId !== null,
                                 }
                               : {})}
