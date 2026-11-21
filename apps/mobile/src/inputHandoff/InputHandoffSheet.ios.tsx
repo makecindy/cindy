@@ -268,8 +268,8 @@ function SheetHeader({ snapshot, compact }: { snapshot: InputHandoffSnapshot; co
         color={colors.textPrimary}
         modifiers={[frame({ width: 60, height: 60 }), ...sheetRow(colors, radius.container)]}
       /> : null}
-      {/* Wraps in full: when the sheet is short, the fields scroll instead of the purpose being cut. */}
-      <Text modifiers={[font({ textStyle: "title3", weight: "semibold" }), multilineTextAlignment("center"), fixedSize({ horizontal: false, vertical: true }), padding({ top: spacing.xs })]}>
+      {/* Up to three full lines, never squeezed to one: the header stays bounded so the fields keep room to scroll. */}
+      <Text modifiers={[font({ textStyle: "title3", weight: "semibold" }), multilineTextAlignment("center"), lineLimit(3), fixedSize({ horizontal: false, vertical: true }), padding({ top: spacing.xs })]}>
         {snapshot.purpose}
       </Text>
       <HStack spacing={4}>
