@@ -49,8 +49,8 @@ export async function scanAtBuddyFiles(
       eq(botProfiles.status, 'active'),
       eq(sessions.source, 'bot'),
       eq(sessions.status, 'active'),
+      // The workspace stays local even when the model runs on another computer.
       isNull(sessions.remoteHostId),
-      isNull(sessions.agentDeviceId),
     ))
     .limit(1);
   if (!session?.workingDir || !isCurrent()) return empty;

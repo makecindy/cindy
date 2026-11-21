@@ -94,9 +94,11 @@ describe('scanAtBuddyFiles', () => {
     session([reference]);
     expect(await search(reference)).toEqual({ items: [], truncated: false });
     expect(await search(workspace, 'other-session')).toEqual({ items: [], truncated: false });
-    sqlite.exec(`UPDATE sessions SET agent_device_id = 'other-device'`);
+    sqlite.exec(`UPDATE sessions SET remote_host_id = 'ssh-host'`);
     expect(await search()).toEqual({ items: [], truncated: false });
-    sqlite.exec(`UPDATE sessions SET agent_device_id = NULL`);
+    // The model runs elsewhere but the task and its saved reference files remain local.
+    sqlite.exec(`UPDATE sessions SET remote_host_id = NULL, agent_device_id = 'other-device'`);
+    expect((await search()).items.map(item => item.relPath)).toEqual([path.join(reference, 'report.md')]);
     fixture.pending = true;
     expect(await search()).toEqual({ items: [], truncated: false });
   });
