@@ -642,6 +642,14 @@ export class Scheduler extends EventEmitter {
    */
   private readonly inFlightReplans = new Map<string, Promise<void>>();
   /**
+   * 在途的派发守卫回读(key = scheduleId)。批量 listActive 超时后每条守卫都要
+   * 回读一次(Codex P2 on #11577),而读同样可能挂死:不登记在途读的话,之后每个
+   * 30 秒的 DB sync 块都会把同样的读再发一遍,存储故障期间未完成的 RPC 工作无界
+   * 增长,把认领和过期写入也挤掉(Codex P1 on #11577)。同一任务只保留一份在途读,
+   * settle 后清位;每条守卫仍各自挂上身份 guard 的迟到收口,迟到结果不丢。
+   */
+  private readonly inFlightGuardReads = new Map<string, Promise<Schedule | null>>();
+  /**
    * 在途的僵尸清扫。与 inFlightReplans 同一类问题:markRunningAsInterrupted 永不
    * settle 时,预闸门超时只放弃「等」,活儿还在跑 —— 而清扫挂在每个 30 秒的 DB sync
    * 块里,之后每一轮都会再起一份,存储故障期间挂起的 DB/RPC 工作无界增长,把认领和
@@ -879,6 +887,9 @@ export class Scheduler extends EventEmitter {
     this.inFlightReplans.clear();
     // 在途清扫同理:挂死的那一份不能把新主人的清扫一直挡在门外。
     this.inFlightSweep = undefined;
+    // 在途的守卫回读同理:挂死的读不能跨生命周期留着,否则新主人一直复用上一段
+    // 生命周期那一份永远不 settle 的读。
+    this.inFlightGuardReads.clear();
     this.emitRuntimeState();
     await Promise.all(interrupted.map(async (run) => {
       await this.storage.updateRun(run.runId, {
@@ -973,7 +984,11 @@ export class Scheduler extends EventEmitter {
             // 结果:超时之后再另起一次读,那次读更慢或失败时,排队中的 dispatch
             // 会一直拿着旧 deadline 放行 —— 别的实例已经过期掉的任务仍会被
             // 派发出去。身份 guard 兜底后仍要应用迟到结果。
-            const readPromise = this.storage.get(previous.id);
+            // 读本身也要 single-flight(Codex P1 on #11577):批量读超时后每条守卫
+            // 都会走到这里,而读同样可能挂死 —— 不登记在途读的话,之后每个 30 秒的
+            // DB sync 块都把同样的读再发一遍,存储故障期间未完成的 RPC 工作无界
+            // 增长,把认领和过期写入也挤掉。
+            const readPromise = this.getGuardFallbackRead(previous.id);
             try {
               current = await withStorageTimeout(
                 readPromise,
@@ -1296,6 +1311,24 @@ export class Scheduler extends EventEmitter {
       if (this.pendingExpireReads.get(scheduleId) === read) this.pendingExpireReads.delete(scheduleId);
     };
     // 两个分支都挂 clear:拒绝的 promise 不能变成未处理的 rejection。
+    void read.then(clear, clear);
+    return read;
+  }
+
+  /**
+   * 取一条任务在途的派发守卫回读(见 inFlightGuardReads)。与
+   * getExpiryFallbackRead 同一形状:同一任务只保留一份在途读,settle 后清位;
+   * 读挂死时后续 tick 复用它,既不丢它最终的结果,也不堆出无界的读
+   * (Codex P1 on #11577)。每条守卫仍各自挂上自己的迟到收口。
+   */
+  private getGuardFallbackRead(scheduleId: string): Promise<Schedule | null> {
+    const existing = this.inFlightGuardReads.get(scheduleId);
+    if (existing) return existing;
+    const read = this.storage.get(scheduleId);
+    this.inFlightGuardReads.set(scheduleId, read);
+    const clear = () => {
+      if (this.inFlightGuardReads.get(scheduleId) === read) this.inFlightGuardReads.delete(scheduleId);
+    };
     void read.then(clear, clear);
     return read;
   }

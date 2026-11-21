@@ -1514,6 +1514,50 @@ describe('Scheduler', () => {
     expect(expireWrites).toBe(2);
   });
 
+  // Codex P1 on #11577:批量 listActive 超时后,每条守卫的回读也要 single-flight。
+  // 读同样挂死时,之后每个 30 秒的 DB sync 块都会把同样的读再发一遍 —— 存储故障
+  // 期间未完成的 RPC 工作无界增长,把认领和过期写入也挤掉,due-fire 重新被压制。
+  it('keeps fallback guard reads single-flight across bulk timeouts', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 30,
+      logger: { warn: vi.fn() },
+      // 派发停在途中:守卫快照留在 automaticDispatchSchedules。
+      runnerImpl: async () => new Promise<FireResult>(() => {}),
+    });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    const schedule = await local.scheduler.create({
+      ...baseInput, intervalMs: 15_000, expireAt: createdAt + 60_000,
+    });
+
+    local.clock.setTo(schedule.nextFireAt!);
+    void local.scheduler.tick().catch(() => undefined);
+    for (let i = 0; i < 100 && local.fireCalls.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(local.fireCalls).toHaveLength(1);
+
+    // 批量读和单条回读都挂死(存储/worker 持续故障的形态)。
+    let reads = 0;
+    vi.spyOn(local.storage, 'listActive').mockImplementation(() => new Promise<Schedule[]>(() => {}));
+    vi.spyOn(local.storage, 'get').mockImplementation((id: string) => {
+      if (id !== schedule.id) return Promise.resolve(null);
+      reads += 1;
+      return new Promise<Schedule | null>(() => {});
+    });
+
+    // 之后每一轮都到 DB sync 块:在途的那一次回读不能再发一遍。
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(reads).toBe(1);
+
+    await local.scheduler.stop();
+  });
+
 
   it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
     const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';
