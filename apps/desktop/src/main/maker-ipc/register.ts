@@ -11265,13 +11265,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   /**
    * The send_to_session route projected into model input before the send transaction runs (queued
    * dispatch, steer, context-rollover replay): the live session's host-reconciled route. Nothing while
-   * an engine switch is pending, because the transaction applies the switch first and the live session
-   * is then not the one receiving the message (message-source.md「发给模型的说明」).
+   * a switch to another engine is pending, because the transaction applies it first and the live
+   * session is then not the one receiving the message. A same-engine model/provider selection keeps
+   * the route, which depends only on the engine (message-source.md「发给模型的说明」).
    */
   function confirmedSendToSessionHint(sessionId: string): AgentSendToSessionHint | undefined {
-    if (agentSwitchPending.get(sessionId)) return undefined;
-    return (maker.getSession(sessionId) as { sendToSessionHint?: AgentSendToSessionHint } | null | undefined)
+    const hint = (maker.getSession(sessionId) as { sendToSessionHint?: AgentSendToSessionHint } | null | undefined)
       ?.sendToSessionHint;
+    const pending = agentSwitchPending.get(sessionId);
+    return pending && pending.targetAgentKind !== hint?.agentKind ? undefined : hint;
   }
   // User send intent owns the next route boundary, including automatic requests
   // that read the runtime generation after the picker accepted that intent.

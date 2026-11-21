@@ -1969,6 +1969,11 @@ describe('Desktop recovery assembly ordering and fences', () => {
     // at the wrong or a missing tool. Queued dispatch reads the same predicate.
     h.pendingSwitch.set('s', { targetAgentKind: 'acp' });
     expect(deps.sendToSessionHint('s')).toBeUndefined();
+    h.pendingSwitch.set('s', { targetAgentKind: 'pi' });
+    expect(deps.sendToSessionHint('s')).toBeUndefined();
+    // A same-engine model/provider selection (SET_MODEL) keeps the identical helper route.
+    h.pendingSwitch.set('s', { targetAgentKind: 'claude-code', sameAgentSelection: true });
+    expect(deps.sendToSessionHint('s')).toBe(hint);
     expect(registerSource).toMatch(/new AgentInputCoordinator\(\{\s*sendToSessionHint: confirmedSendToSessionHint,/);
   });
 
