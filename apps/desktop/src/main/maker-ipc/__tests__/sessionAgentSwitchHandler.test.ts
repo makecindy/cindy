@@ -93,6 +93,7 @@ const validParams = {
 // the real transaction with an observable persisted route and bootstrap input.
 it.each([
   { agentDeviceId: null, resolved: false },
+  { agentDeviceId: null, resolved: true },
   { agentDeviceId: 'mini', resolved: false },
   { agentDeviceId: 'mini', resolved: true },
 ])('rebuilds a same-device group route for the selected subscription ($agentDeviceId, resolved=$resolved)', async ({ agentDeviceId, resolved }) => {

@@ -1015,7 +1015,8 @@ export async function performSessionAgentSwitch(
     builtinTarget &&
     params.applyNow === true &&
     params.providerGroupRelocation !== true &&
-    targetAgentDeviceId !== currentAgentDeviceId &&
+    (targetAgentDeviceId !== currentAgentDeviceId ||
+      (typeof normalizedProviderId === 'string' && normalizedProviderId !== row.providerId)) &&
     deps.resolveProviderGroupTarget
   ) {
     const chosen = await deps.resolveProviderGroupTarget(sessionId, {
