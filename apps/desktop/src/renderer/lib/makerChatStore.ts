@@ -11627,7 +11627,9 @@ function beginInputProjectionOperation(
   const routedDeviceId = pinnedDeviceId === undefined ? getStickySessionDeviceId(sessionId) : pinnedDeviceId ?? undefined;
   const origin = routedDeviceId;
   return {
-    api: routedDeviceId ? makerApiForDevice(routedDeviceId) : window.electronAPI.maker,
+    api: pinnedDeviceId === null
+      ? window.electronAPI.maker
+      : routedDeviceId ? makerApiForDevice(routedDeviceId) : makerApiFor(sessionId),
     origin,
     ...(pinnedDeviceId ? { pinnedDeviceId } : {}),
     dataOwner: getDataOwnerGeneration(),
