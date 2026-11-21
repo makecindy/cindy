@@ -1354,9 +1354,9 @@ function requiresOrcaReportPersistence(item: AgentInputQueuedMessage): boolean {
     || item.mergedDeliveryClientIds?.length);
 }
 
-/** A trusted desktop Pi command is still the user's own UI send; every other origin is automatic or channel-owned. */
+/** Trusted desktop and scheduler inputs may recover a stopped shared start. */
 function isManualUiOrigin(origin: AgentInputQueuedMessage['origin']): boolean {
-  return !origin || (origin as { kind?: unknown }).kind === 'desktop';
+  return !origin || ['desktop', 'scheduler'].includes((origin as { kind?: unknown }).kind as string);
 }
 
 export class AgentInputCoordinator {
@@ -7562,6 +7562,15 @@ export class AgentInputCoordinator {
    */
   isAutoResumePending(sessionId: string): boolean {
     return this.getState(sessionId).autoResumePending !== null;
+  }
+
+  /** A scheduler send is awaiting the same-id replacement opened by shared reconnect recovery. */
+  isSharedReconnectPending(sessionId: string, runId: string): boolean {
+    const active = this.states.get(sessionId)?.activeTurn;
+    return active?.item?.origin?.kind === 'scheduler'
+      && active.item.origin.runId === runId
+      && active.reconnectRecovery !== undefined
+      && !active.reconnectRecovery.signal.aborted;
   }
 
   getAutoResumeAttemptToken(sessionId: string): number | null {

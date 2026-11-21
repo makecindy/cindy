@@ -296,7 +296,7 @@ export interface SchedulerQueueDeps {
    * active-turn recovery、清会话等),不探测的话 run 会永久挂在等待派发上。
    */
   isPromptTracked(sessionId: string, clientId: string): boolean;
-  /** 普通聊天自动续跑是否已接管当前 scheduler run。 */
+  /** 当前 scheduler run 是否由普通自动续跑或共享重连替代会话接管。 */
   isAutoResumePending?: (sessionId: string, runId: string) => boolean;
   /** 已接管的续跑最终仍失败（含补发未 dispatch / Stop / clear）。 */
   onAutoResumeFailed?: (

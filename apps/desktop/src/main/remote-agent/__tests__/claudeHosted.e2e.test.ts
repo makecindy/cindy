@@ -848,6 +848,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             ? undefined : wiring.captureSharedReconnectRecovery,
           getSession: () => live,
           readScheduledPermissions: async () => ({ permissionMode: 'bypassPermissions', planModeEnabled: false }),
+          readAutoReviewHistory: async () => [{ clientId: 'schedule-history', role: 'user', content: continuation, agentMeta: null }],
           reconcileCreateOptsWithDb: async (_id, opts) => {
             opts.agentDeviceId = shareRoute;
             opts.providerId = published;
@@ -870,16 +871,17 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           emitProjection: () => {},
         });
         coordinator.enqueue(task, {
-          clientId, text: continuation, persistedContent: continuation, model: MODEL, effort: 'medium',
+          clientId, text: continuation,
+          persistedContent: continuation, model: MODEL, effort: 'medium',
           permissionMode: 'bypassPermissions', workingDir: project,
           createOpts: { agentKind: 'claude-code', workingDir: project, model: MODEL, permissionMode: 'bypassPermissions' },
           chatMessage: { clientId, role: 'user', content: continuation, isStreaming: false, createdAt: new Date().toISOString() },
           ...(failure === 'scheduled-reconnect' ? {
             origin: { kind: 'scheduler', scheduleId: 'fixture-schedule', scheduleName: 'Fixture', runId: 'fixture-run' },
           } : {}),
-        }, { manualUiSend: failure === 'reconnect' });
+        }, { manualUiSend: failure === 'reconnect' || failure === 'scheduled-reconnect' });
         await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
-        if (failure === 'scheduled-reconnect') {
+        if (failure === 'scheduled-reconnect' && process.env.CINDY_TEST_DISABLE_SHARED_RECONNECT === '1') {
           await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
           expect(guestSwitch.hasOffer(task)).toBe(true);
           expect(order.filter(event => event === 'token')).toHaveLength(1);
@@ -888,6 +890,20 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           expect(oldRequestsWithContinuation()).toBe(0);
           expect(await pending.peek(task)).toBeNull();
           expect(fs.existsSync(remaining)).toBe(false);
+          return;
+        }
+        if (failure === 'scheduled-reconnect') {
+          await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
+          expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+          expect(opens).toHaveLength(3);
+          expect(opens[2].groupSwitchToken).toEqual(expect.any(String));
+          expect(opens[2].options.resumeSessionId).toBeUndefined();
+          expect(sends).toBe(2);
+          expect(order.filter(event => event === 'token')).toHaveLength(1);
+          expect(oldRequestsWithContinuation()).toBe(0);
+          expect(await pending.peek(task)).toBeNull();
+          await vi.waitFor(() => expect(events.filter(event => event.type === 'done').length).toBeGreaterThanOrEqual(2), { timeout: 30_000, interval: 20 });
+          expect(fs.readFileSync(remaining, 'utf8')).toBe(marker);
           return;
         }
         await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
@@ -1013,7 +1029,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
   it('continues the original input once after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
     await exercise('a', 'reconnect');
   });
-  it('keeps scheduled inputs on the existing failure path after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
+  it('recovers scheduled input once after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
     await exercise('a', 'scheduled-reconnect');
   });
   it('switches accounts when an existing idle run rejects the next send', { timeout: 90_000 }, async () => {

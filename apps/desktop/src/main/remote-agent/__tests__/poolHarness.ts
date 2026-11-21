@@ -36,7 +36,8 @@ import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 /** Main's send transaction with in-memory persistence and startup composition. */
 export function sharedAccountSendTransaction(ports: Pick<MakerSendTransactionDeps,
   'getSession' | 'captureSharedReconnectRecovery' | 'bootstrapSession' | 'peekPendingHandoff'
-  | 'consumePendingHandoff' | 'createDbMessage' | 'reconcileCreateOptsWithDb' | 'readScheduledPermissions'>) {
+  | 'consumePendingHandoff' | 'createDbMessage' | 'reconcileCreateOptsWithDb' | 'readScheduledPermissions'>
+  & Partial<Pick<MakerSendTransactionDeps, 'readAutoReviewHistory'>>) {
   const noop = () => {};
   return createMakerSendTransaction({
     getResolvedMainLocale: () => null,

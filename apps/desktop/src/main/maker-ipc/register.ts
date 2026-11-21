@@ -2123,7 +2123,8 @@ function finishSchedulerUsageLimitWait(sessionId: string, token: number): void {
 }
 
 export function isSchedulerAutoResumePending(sessionId: string, runId: string): boolean {
-  return pendingSchedulerAutoResumeRunBySession.get(sessionId)?.runId === runId;
+  return pendingSchedulerAutoResumeRunBySession.get(sessionId)?.runId === runId
+    || agentInputCoordinatorHolder?.isSharedReconnectPending(sessionId, runId) === true;
 }
 
 export function onSchedulerAutoResumeFailed(
@@ -2148,8 +2149,11 @@ export function onSchedulerAutoResumeFailed(
 
 /** Schedule pause/delete：只撤销仍属于该 run 的普通聊天自动续跑。 */
 export function cancelSchedulerAutoResume(sessionId: string, runId: string): boolean {
-  if (!isSchedulerAutoResumePending(sessionId, runId)) return false;
   const pending = pendingSchedulerAutoResumeRunBySession.get(sessionId);
+  // Shared reconnect recovery uses the same runner wait predicate, but its
+  // lifetime belongs to the coordinator's active turn and must not be torn
+  // down through the ordinary auto-resume bookkeeping.
+  if (pending?.runId !== runId) return false;
   if (pending?.usageLimitToken !== undefined) {
     finishSchedulerUsageLimitWait(sessionId, pending.usageLimitToken);
     return true;
@@ -21014,7 +21018,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             // 远端 Orca 派活也经此 IPC。来源盖章会剥掉 wire 的 origin，因此从规范化远控载荷
             // 读取自动投递意图，只用于收紧恢复暂停，不授予来源身份或权限；本机仍按显式输入处理。
             resumeRestorePausedQueue: !(deviceLinkInvoke && isAutomaticInputOriginKind(parsed.origin?.kind)),
-            manualUiSend: !isAutomaticInputOriginKind(parsed.origin?.kind),
+            manualUiSend: parsed.origin?.kind === 'scheduler' || !isAutomaticInputOriginKind(parsed.origin?.kind),
             onDuplicate: () => {
               duplicate = true;
             },
