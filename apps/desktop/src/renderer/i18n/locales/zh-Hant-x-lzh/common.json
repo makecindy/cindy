@@ -12067,46 +12067,15 @@
     },
     "guided": {
       "title": "立同伴",
-      "reviewTitle": "君之新同伴",
-      "question": "略述君之所期",
-      "placeholder": "如：伴吾習英語，可話家常，亦能認真糾吾措辭。",
       "generate": "造同伴",
-      "generating": "方構思同伴…",
-      "generationFailed": "暫不能成，君之所想已留，請再試。",
       "modelRequired": "請於上方擇可用模型，乃續。",
       "modelFollowsDefault": "從同伴預設模型。",
       "modelForThisBot": "此擇僅用於此同伴。",
-      "cindyDescription": "吾可助君用 Cindy、接器具，亦與君共成其事。",
-      "cindySummary": "掌 Cindy，接器具，成其事。",
-      "openCindy": "啟 Cindy",
-      "addCindy": "納 Cindy",
-      "done": "畢",
-      "editName": "修名",
       "duplicateName": "已有同名同伴，易一易辨之名可也。",
-      "introduction": "自述",
-      "editIntroduction": "修自述",
-      "refine": "調同伴",
-      "refinePlaceholder": "尚欲改何處？如：少些客套，多些詼諧。",
-      "back": "歸",
-      "invite": "邀同伴",
       "portrait": "像 {{number}}",
       "upload": "上呈圖",
       "generateAvatar": "造像",
-      "useAvatar": "用此",
-      "examples": {
-        "english": {
-          "label": "習英語",
-          "prompt": "伴吾習英語，自日常話題始，耐心而不敷衍，認真糾不自然之措辭。"
-        },
-        "ideas": {
-          "label": "共思妙策",
-          "prompt": "一富想像亦有主見之創作同伴，伴吾論文章與產品之思，助吾化想法為實策。"
-        },
-        "life": {
-          "label": "閒話生活",
-          "prompt": "一溫厚詼諧之同伴，願聽吾生活瑣事，不急於獻策。"
-        }
-      }
+      "useAvatar": "用此"
     },
     "import": {
       "title": "納同伴",
