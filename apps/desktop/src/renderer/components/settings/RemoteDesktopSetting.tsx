@@ -19,34 +19,37 @@ export function RemoteDesktopSetting() {
   const [error, setError] = useState(false);
   const revision = useRef(0);
   const changing = useRef(false);
+  const refreshStatus = useRef<() => void>(undefined);
+  const isWindows = window.electronAPI?.platform === 'win32';
   useEffect(() => {
     const api = window.electronAPI?.remoteDesktop;
     if (!api) return;
-    let active = true;
-    let reading = false;
+    let reading: number | undefined;
     const refresh = () => {
-      if (reading || changing.current) return;
-      reading = true;
       const current = revision.current;
+      if (reading === current || changing.current) return;
+      reading = current;
       void api
         .state(true)
         .then((state) => {
-          if (active && current === revision.current) {
+          if (current === revision.current) {
             setEnabled(state.enabled);
             setWindowsSupport(state.windowsSupport);
           }
         })
         .catch(() => {
-          if (active) setError(true);
+          if (current === revision.current) setError(true);
         })
         .finally(() => {
-          reading = false;
+          if (reading === current) reading = undefined;
         });
     };
+    refreshStatus.current = refresh;
     refresh();
     const timer = setInterval(refresh, 2000);
     return () => {
-      active = false;
+      revision.current++;
+      refreshStatus.current = undefined;
       clearInterval(timer);
     };
   }, []);
@@ -73,18 +76,23 @@ export function RemoteDesktopSetting() {
           disabled={busy}
           checked={enabled}
           onCheckedChange={(next) => {
-            revision.current++;
+            const current = ++revision.current;
             changing.current = true;
             setBusy(true);
             setError(false);
             void window.electronAPI.remoteDesktop
               .enable(next)
-              .then(() => setEnabled(next))
-              .catch(() => setError(true))
               .finally(() => {
                 changing.current = false;
                 setBusy(false);
-              });
+              })
+              .then(() => {
+                if (revision.current !== current) return;
+                setEnabled(next);
+                if (!next) setWindowsSupport(undefined);
+                else if (isWindows) refreshStatus.current?.();
+              })
+              .catch(() => setError(true));
           }}
         />
       </div>
@@ -114,15 +122,18 @@ export function RemoteDesktopSetting() {
               busy || windowsSupport === 'installRequired' || windowsSupport === 'unavailable'
             }
             onClick={() => {
-              revision.current++;
+              const current = ++revision.current;
               changing.current = true;
               setBusy(true);
               setServiceError(false);
               setServiceErrorDetail(undefined);
               void window.electronAPI.remoteDesktop
                 .windowsSupport(windowsSupport !== 'ready')
-                .then(() => window.electronAPI.remoteDesktop.state(true))
-                .then((state) => setWindowsSupport(state.windowsSupport))
+                .then(async () => {
+                  if (revision.current !== current) return;
+                  const state = await window.electronAPI.remoteDesktop.state(true);
+                  if (revision.current === current) setWindowsSupport(state.windowsSupport);
+                })
                 .catch((err: unknown) => {
                   const message = extractIpcError(err)?.message;
                   setServiceErrorDetail(
@@ -144,7 +155,7 @@ export function RemoteDesktopSetting() {
           </Button>
         </div>
       )}
-      {enabled && !windowsSupport && <RemoteDesktopPermissions />}
+      {enabled && !isWindows && !windowsSupport && <RemoteDesktopPermissions />}
     </section>
   );
 }
