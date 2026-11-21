@@ -123,7 +123,9 @@ export class MemoryFts {
     // filename, 保证 fallback 里只剩 MATCH 永远命不中的 true LIKE-only
     const top = this.searchMatch(parsed.matchQuery, opts, limit);
     const seen = new Set(this.searchMatchFilenames(parsed.matchQuery, opts));
-    const phraseHits = this.searchLike([parsed.matchQuery], opts).filter((h) => !seen.has(h.filename));
+    // seen 交给 LIKE 臂在截断前排除: 先按 limit 截断再过滤时, 排在前面的重复行会占满
+    // 名额, 真正的 LIKE-only 子串命中反而被丢掉, 下面预留的那个名额也就失效了。
+    const phraseHits = this.searchLike([parsed.matchQuery], opts, seen);
     if (top.length > 0 || phraseHits.length > 0) {
       if (limit > 1 && top.length >= limit && phraseHits.length > 0) {
         // MATCH 已满 limit: 预留 1 个名额给 LIKE-only 子串命中, 避免中文子串结果
@@ -135,7 +137,7 @@ export class MemoryFts {
     // 短语零命中才拆词: 单词 query 拆了还是同一条, 不需要再扫一遍;
     // 但重复词(「缓存 缓存」)去重后只剩一个词, 与整串不同, 仍要走这条兜底。
     if (parsed.terms.length === 1 && parsed.terms[0] === parsed.matchQuery) return [];
-    return this.searchLike(parsed.terms, opts).slice(0, limit);
+    return this.searchLike(parsed.terms, opts);
   }
 
   /** FTS5 MATCH 路径; query 语法错静默返空(让 LIKE 兜底接管) */
@@ -211,8 +213,15 @@ export class MemoryFts {
    * JS 里按正文密度/长度精确打分 — 不再把所有命中行的 body 拉回主进程。
    * 候选之外的高密度文档会被放弃; 覆盖词数优先做第一排序键, 让全词文档不会被
    * 大量部分命中挤出候选。
+   *
+   * `exclude` 是要在截断前排除的 filename (MATCH 臂已覆盖的行) — 排除发生在截取前,
+   * 免得重复行占满 limit 名额。
    */
-  private searchLike(terms: readonly string[], opts: SearchOptions): SearchHit[] {
+  private searchLike(
+    terms: readonly string[],
+    opts: SearchOptions,
+    exclude?: ReadonlySet<string>,
+  ): SearchHit[] {
     const clauses = terms.map(
       () => `(title LIKE ? ESCAPE '!' OR description LIKE ? ESCAPE '!' OR body LIKE ? ESCAPE '!')`,
     );
@@ -279,23 +288,27 @@ export class MemoryFts {
         const topScore = Math.max(...scored.map((hit) => hit.score));
         qualified = qualified.filter((hit) => hit.matched >= 2 || hit.score >= topScore * 0.5);
       }
-      return (qualified.length > 0 ? qualified : scored)
-        .sort(
-          (a, b) =>
-            b.matched - a.matched ||
-            b.score - a.score ||
-            a.row.filename.localeCompare(b.row.filename),
-        )
-        .slice(0, limit)
-        // 只为最终返回的少数命中构建片段, 不在上千条命中上跑正则标记
-        .map((hit): SearchHit => ({
+      const ordered = (qualified.length > 0 ? qualified : scored).sort(
+        (a, b) =>
+          b.matched - a.matched ||
+          b.score - a.score ||
+          a.row.filename.localeCompare(b.row.filename),
+      );
+      // 只为最终返回的少数命中构建片段, 不在上千条命中上跑正则标记
+      const hits: SearchHit[] = [];
+      for (const hit of ordered) {
+        if (exclude?.has(hit.row.filename)) continue;
+        hits.push({
           filename: hit.row.filename,
           type: hit.row.type as MemoryType,
           title: hit.row.title,
           snippet: buildLikeSnippet(hit.row, terms, hit.bodyHits),
           // 越小越相关: 基准 - 质量分, 仍排在 MATCH 命中之后、LIKE 臂内部有序
           score: LIKE_SCORE_BASE - Math.round(hit.score * 1000),
-        }));
+        });
+        if (hits.length >= limit) break;
+      }
+      return hits;
     } catch (e) {
       throw new MemoryError('io-error', `fts like-fallback failed: ${(e as Error).message}`);
     }
@@ -359,7 +372,18 @@ function escapeLikePattern(q: string): string {
  */
 function parseQuery(query: string): { matchQuery: string; terms: string[] } {
   const matchQuery = query.trim().slice(0, MAX_QUERY_CHARS);
-  const terms = [...new Set(matchQuery.split(/\s+/).filter(Boolean))].slice(0, MAX_QUERY_TERMS);
+  // 打分与 LIKE 都大小写不敏感, 去重也用同一口径: 「cache CACHE logs」是 3 个词而不是
+  // 重复计数, 否则大小写变体会把覆盖率门槛虚高一倍。保留首次出现的大小写供 markTerms。
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const raw of matchQuery.split(/\s+/)) {
+    if (!raw) continue;
+    const key = raw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (terms.length >= MAX_QUERY_TERMS) continue;
+    terms.push(raw);
+  }
   return { matchQuery, terms };
 }
 
@@ -440,20 +464,22 @@ function buildSingleWindowSnippet(body: string, hitAt: number, terms: readonly s
 }
 
 function buildMultiWindowSnippet(body: string, bodyHits: readonly BodyHit[], terms: readonly string[]): string {
-  type Window = { start: number; end: number; hitAt: number };
+  type Window = { start: number; end: number; hits: BodyHit[] };
   const windows: Window[] = bodyHits
     .map((hit) => ({
       start: Math.max(0, hit.at - MULTI_WINDOW_BEFORE),
       end: Math.min(body.length, hit.at + hit.term.length + MULTI_WINDOW_AFTER),
-      hitAt: hit.at,
+      hits: [hit],
     }))
-    .sort((a, b) => a.start - b.start);
+    .sort((a, b) => a.start - b.start || a.hits[0]!.at - b.hits[0]!.at);
 
   const merged: Window[] = [];
   for (const w of windows) {
     const last = merged[merged.length - 1];
     if (last && w.start - last.end < MULTI_WINDOW_MERGE_GAP) {
+      // 合并后保留段内全部命中: 缩预算时靠它们保证关键词不被裁掉
       last.end = Math.max(last.end, w.end);
+      last.hits = [...last.hits, ...w.hits];
     } else {
       merged.push({ ...w });
     }
@@ -479,17 +505,30 @@ function buildMultiWindowSnippet(body: string, bodyHits: readonly BodyHit[], ter
   }
 }
 
-/** 超预算时以命中词为中心截断, 避免把关键词本身切掉; 返回实际切片边界供省略号判断 */
+/** 超预算时以段内命中范围为中心截断, 避免把关键词本身切掉; 返回实际切片边界供省略号判断 */
 function sliceWindow(
   body: string,
-  seg: { start: number; end: number; hitAt: number },
+  seg: { start: number; end: number; hits: readonly BodyHit[] },
   budget: number,
 ): { text: string; start: number; end: number } {
   let start = seg.start;
   let end = seg.end;
   if (end - start > budget) {
-    start = Math.max(seg.start, Math.min(seg.hitAt - Math.floor(budget / 3), end - budget));
-    end = Math.min(end, start + budget);
+    const hitStart = Math.min(...seg.hits.map((hit) => hit.at));
+    const hitEnd = Math.max(...seg.hits.map((hit) => hit.at + hit.term.length));
+    if (hitEnd - hitStart >= budget) {
+      // 极端: 命中跨度本身超预算, 至少从首个命中开始, 让第一个关键词可见
+      start = hitStart;
+      end = Math.min(seg.end, hitStart + budget);
+    } else {
+      // 合并段可能有多个命中词: 先完整覆盖「首个命中 → 末个命中」的跨度, 余量再补上下文。
+      // budget ≥ 跨度, 所以 start ∈ [lower, upper] 一定存在。
+      const spare = budget - (hitEnd - hitStart);
+      const lower = Math.max(seg.start, hitEnd - budget);
+      const upper = Math.min(hitStart, seg.end - budget);
+      start = Math.max(lower, Math.min(upper, hitStart - Math.floor(spare / 2)));
+      end = start + budget;
+    }
   }
   return { text: body.slice(start, end).replace(/\s+/g, ' ').trim(), start, end };
 }

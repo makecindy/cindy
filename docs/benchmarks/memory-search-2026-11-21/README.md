@@ -21,6 +21,15 @@
   原文不超过 200 字，含 `<mark>` 不超过 240 字；单词/短语保持原来的 ±60/120 单窗口。
 - 去掉 `score *= matched`：命中词数已是独立的第一排序键。
 
+以上数据在 `7ef85bfe57` 测得。同 PR 内随后修掉三处边界，不改变召回架构，未重跑基准：
+
+- LIKE 臂先排除 MATCH 已覆盖的行再按 `limit` 截断：否则靠前的重复行会占满名额，
+  LIKE-only 子串命中拿不到「MATCH 满额时预留 1 个名额」。
+- 合并窗口保留段内全部命中：缩预算时先压缩上下文，不再以首个命中为锚点截断而切掉
+  已合并的关键词。
+- 重复词按小写去重后再算覆盖率：`cache CACHE logs` 是 3 个词，不再是 5 个，大小写
+  变体不抬高门槛。
+
 实现位置：[`fts.ts`](../../../packages/maker-core/src/memory/fts.ts)、
 [`search.ts`](../../../packages/lizi-mcps/src/memory/search.ts)；
 回归入口：[`fts.test.ts`](../../../packages/maker-core/src/memory/__tests__/fts.test.ts)。
@@ -124,5 +133,5 @@
 ../../node_modules/.bin/eslint src/memory/fts.ts src/memory/__tests__/fts.test.ts
 ```
 
-结果：`fts.test.ts` 55 通过，`src/memory` 154 通过 / 1 跳过（排除既有的 git 集成用例），
+结果：`fts.test.ts` 58 通过，`src/memory` 157 通过 / 1 跳过（排除既有的 git 集成用例），
 `tsc` 与 `eslint` 通过。

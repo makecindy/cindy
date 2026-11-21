@@ -132,6 +132,24 @@ describe('MemoryFts', () => {
     }
   });
 
+  it('MATCH 满额时 LIKE 臂先排除重复再截断, 子串命中不被挤出', () => {
+    // 3 条整 token 命中在 LIKE 臂质量分更高 (title + description + body 全命中),
+    // 加上自身已满 limit 3 — 若 LIKE 臂先截断再排除重复, 它们占满名额又把自身全部剥掉,
+    // 只有子串命中的 LinkedIn 就一起消失了。
+    for (let i = 0; i < 3; i++) {
+      const dense = record(`project_dense_${i}.md`, 'link link link');
+      fts.upsert({
+        ...dense,
+        frontmatter: { ...dense.frontmatter, title: 'link 速查', description: 'link 速查' },
+      });
+    }
+    fts.upsert(record('project_linkedin.md', 'LinkedIn 社交平台'));
+
+    const hits = fts.search('link', { limit: 3 });
+    expect(hits.length).toBe(3);
+    expect(hits.map((h) => h.filename)).toContain('project_linkedin.md');
+  });
+
   it('limit=1 且 MATCH 满额时不预留 (保住唯一最佳 MATCH)', () => {
     fts.upsert(record('project_a.md', 'link 内容'));
     fts.upsert(record('project_linkedin.md', 'LinkedIn 社交平台'));
@@ -144,9 +162,13 @@ describe('MemoryFts', () => {
   // - 生产入口与可观察结果: MemoryFts.search → memory_search 的命中数、顺序、snippet。
   // - Bug 依据: 短语零命中时旧实现直接返回 0; 真实记忆库上 5/10 条查询零命中。
   // - 现有覆盖缺口: 原用例只覆盖单词中文子串与 MATCH 合并; 本块补多词覆盖率门槛、
-  //   覆盖优先排序、候选池大小写与多窗口片段 (原片段只围绕一个命中词)。
-  // - 最小失败输入: 「登录 缓存」两条正文分别只含一个词 → 旧实现 0 命中;
-  //   「登录 失败 缓存」只命中 1/3 → 旧实现会返回低覆盖结果。
+  //   覆盖优先排序、候选池大小写与多窗口片段 (原片段只围绕一个命中词), 以及 PR review
+  //   指出的三个边界 (去重与截断顺序、合并窗口缩预算、大小写重复词)。
+  // - 最小失败输入 (修复前均先红后绿): 「登录 缓存」两条正文分别只含一个词 → 旧实现 0 命中;
+  //   「登录 失败 缓存」只命中 1/3 → 旧实现会返回低覆盖结果;
+  //   3 条高密度 link 记录 + LinkedIn (limit 3) → 子串命中被重复行挤掉;
+  //   「甲×24 登录 乙×74 缓存 丙×198 日志」合并窗口缩到 99 → 「缓存」被切掉;
+  //   「cache CACHE CaChE logs auth」 → 单 cache 记录靠大小写变体凑满覆盖率门槛。
   // - tier: unit (真 better-sqlite3 内存库, 无真实 I/O; 整文件约 1.5s)。
   it('短语零命中时多词按 OR 兜底, 覆盖更多词的排前面', () => {
     // 旧实现把整条 query 当一个 LIKE 子串: 「登录 缓存」只有在原文出现
@@ -339,6 +361,21 @@ describe('MemoryFts', () => {
     expect(hit?.snippet).toBe('<mark>登录</mark>成功后写入本地<mark>缓存</mark>');
   });
 
+  it('多词片段: 合并段缩预算时先压缩上下文, 不切掉已合并的关键词', () => {
+    // 「登录」「缓存」相隔 74 字 → 两窗口按 < 20 间隔合并成 [0,138), 命中跨度 78 字。
+    // 预算 99 的居中窗口若以首个命中为锚点截断, 就会把位于 100 的「缓存」切掉。
+    fts.upsert(
+      record(
+        'project_merged.md',
+        `${'甲'.repeat(24)}登录${'乙'.repeat(74)}缓存${'丙'.repeat(198)}日志${'丁'.repeat(36)}`,
+      ),
+    );
+    const [hit] = fts.search('登录 缓存 日志');
+    const snippet = hit?.snippet ?? '';
+    for (const term of ['登录', '缓存', '日志']) expect(snippet).toContain(`<mark>${term}</mark>`);
+    expect(snippet.length).toBeLessThanOrEqual(240);
+  });
+
   it('多词片段: 三个分离的词各取一段, 总长不超过 240', () => {
     fts.upsert(
       record('project_three_windows.md', `登录${'甲'.repeat(90)}缓存${'乙'.repeat(90)}日志${'丙'.repeat(90)}`),
@@ -445,6 +482,17 @@ describe('MemoryFts', () => {
 
     const dup = fts.search('缓存 缓存');
     expect(dup[0]?.score).toBe(fts.search('缓存')[0]?.score);
+  });
+
+  it('重复词按大小写不敏感去重, 不抬高覆盖率门槛', () => {
+    // 按原大小写去重会算成 5 个词 → 门槛 3: 只含小写 cache 的记录靠 3 个大小写变体
+    // 凑满命中数, 与真正同时含 cache/logs/auth 的记录一同通过门槛。
+    // 按小写去重后是 3 个词 → 门槛 2, 低覆盖记录被丢掉。
+    fts.upsert(record('project_cache_only.md', 'cache 说明'));
+    fts.upsert(record('project_all_terms.md', 'cache logs auth 说明'));
+
+    const hits = fts.search('cache CACHE CaChE logs auth');
+    expect(hits.map((h) => h.filename)).toEqual(['project_all_terms.md']);
   });
 
   it('超过 8 个词只取前 8 个', () => {
