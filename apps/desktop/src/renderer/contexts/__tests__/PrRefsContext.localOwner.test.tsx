@@ -232,6 +232,9 @@ function statusClock() {
   let now = 1_000_000;
   const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
   return {
+    advance: (ms: number) => {
+      now += ms;
+    },
     later: () => {
       now += PR_STATUS_REFRESH_INTERVAL_MS;
     },
@@ -261,15 +264,18 @@ function StatusProbe({ later }: { later?: () => void }) {
 // - 生产入口与可观察结果:PrRefsProvider 的远程会话状态读取;对方电脑收到的 git-context:pr-status 次数。
 // - Bug／规则依据:2026-11-21 MacBook ↔ Mac Studio 联调日志,行挂载、悬停、聚焦每次都经中转重查,
 //   三小时约 800 次,688/795 个间隔不到 30 秒。
-// - 现有覆盖缺口:相邻用例只验证串行与丢弃,没有覆盖同一组 PR 在一个刷新周期内的重复触发。
-// - 最小失败输入:一个远程会话一个 PR,读到结果后立刻再触发一次(修复前会发第二次)。
+// - 现有覆盖缺口:相邻用例未覆盖重复触发、或慢查询完成后恰逢定时刷新。
+// - 最小失败输入:读完立即再触发一次；第一次定时刷新前 80 秒收到上一轮结果（#11857）。
 // - tier:unit(进程内 fake invoke + 假时钟)。
-it('asks a remote computer for the same PRs at most once per refresh interval', async () => {
+it('coalesces repeat PR reads and refreshes on the next tick after a slow read', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
   const clock = statusClock();
   const ref = (prNumber: number) => ({ id: `pr-${prNumber}`, sessionId: 'remote-child', owner: 'a',
     repo: 'b', prNumber, url: `https://github.com/a/b/pull/${prNumber}`, firstSeenAt: 1, lastSeenAt: prNumber });
   let refs = [ref(1)];
   const statusQueries: number[][] = [];
+  let finishSecondRead!: () => void;
+  const secondRead = new Promise<void>((resolve) => { finishSecondRead = resolve; });
   mocks.listAllPrRefs.mockResolvedValue([]);
   type StatusArgs = [{ queries: Array<{ prNumber: number }> }];
   window.electronAPI = {
@@ -277,6 +283,7 @@ it('asks a remote computer for the same PRs at most once per refresh interval', 
     deviceLink: { invoke: vi.fn(async (_device: string, channel: string, args: StatusArgs) => {
       if (channel === 'git-context:pr-refs:list') return refs;
       statusQueries.push(args[0].queries.map((q) => q.prNumber));
+      if (statusQueries.length === 2) await secondRead;
       return args[0].queries.map((q) => ({ ...ref(q.prNumber), ok: true, status: 'open' }));
     }) },
   } as unknown as typeof window.electronAPI;
@@ -291,20 +298,26 @@ it('asks a remote computer for the same PRs at most once per refresh interval', 
   const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
   const { unmount } = render(<PrRefsProvider><Probe /></PrRefsProvider>);
   try {
-    await waitFor(() => expect(statusQueries).toEqual([[1]]));
+    await act(async () => {});
+    expect(statusQueries).toEqual([[1]]);
     await act(async () => fireEvent.click(screen.getByText('again')));
     await act(async () => window.dispatchEvent(new Event('focus')));
     expect(statusQueries).toEqual([[1]]);
     refs = [ref(2), ref(1)];
     await act(async () => fireEvent.click(screen.getByText('refs')));
-    await waitFor(() => expect(statusQueries).toEqual([[1], [2, 1]]));
-    clock.later();
-    await act(async () => fireEvent.click(screen.getByText('again')));
+    expect(statusQueries).toEqual([[1], [2, 1]]);
+    clock.advance(10_000);
+    await act(async () => finishSecondRead());
+    clock.advance(PR_STATUS_REFRESH_INTERVAL_MS - 10_000);
+    await act(async () => { await vi.advanceTimersByTimeAsync(PR_STATUS_REFRESH_INTERVAL_MS); });
     expect(statusQueries).toEqual([[1], [2, 1], [2, 1]]);
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(statusQueries).toHaveLength(3);
   } finally {
     unmount();
     focus.mockRestore();
     clock.restore();
+    vi.useRealTimers();
   }
 });
 

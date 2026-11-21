@@ -18,10 +18,10 @@ export interface StartupExecServerStats {
  * 等了 65 秒(占总时长 94%)，日志却看不出是资料太大还是线路太慢。
  */
 export interface StartupPayloadStats {
-  /** 分段上传的 gzip 字节数；内联发送时为 0。 */
-  uploadBytes: number;
-  /** 分段数；内联发送时为 0。 */
-  chunks: number;
+  /** 计划上传的 gzip 字节数；内联为 0，未完成准备时省略。 */
+  uploadBytes?: number;
+  /** 计划分段数；内联为 0，未完成准备时省略。 */
+  chunks?: number;
   /** 打开载荷里几个大字段各自序列化后的 UTF-8 字节数(未压缩)。 */
   fieldBytes?: Record<string, number>;
 }
@@ -40,10 +40,10 @@ export function openPayloadFieldBytes(value: unknown): Record<string, number> | 
   if (!value || typeof value !== 'object') return undefined;
   const sizes: Record<string, number> = {};
   for (const key of OPEN_PAYLOAD_SIZE_FIELDS) {
-    const field = (value as Record<string, unknown>)[key];
-    if (field === undefined) continue;
     try {
-      sizes[key] = Buffer.byteLength(JSON.stringify(field) ?? '', 'utf8');
+      const field = (value as Record<string, unknown>)[key];
+      const json = field === undefined ? undefined : JSON.stringify(field);
+      if (json !== undefined) sizes[key] = Buffer.byteLength(json, 'utf8');
     } catch {
       /* diagnostic only */
     }

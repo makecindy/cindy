@@ -1636,8 +1636,11 @@ userData 的 `logs/`。按 `sessionRef`（任务 ID 前 8 位）与 `runRef`（r
 每阶段先输出 `status=started`，结束输出 `ok` / `failed`、`durationMs` 和 `elapsedMs`；
 `stage=total` 汇总本端总耗时与 `stagesMs`。使用各端自己的单调时钟，不相减不同电脑的
 墙钟；`remote-open` 包含 transport 与 host 的等待，不能把三侧耗时相加。配置收集仍为
-best-effort，因此某项失败而总启动成功是合法结果。只记录固定阶段名、关联标识、结果和
-耗时，不记录配置正文、路径、消息、凭证或错误正文，不改变日志上报白名单。
+best-effort，因此某项失败而总启动成功是合法结果。只记录固定阶段名、关联标识、结果、
+耗时及下列固定诊断计数，不记录配置正文、路径、消息、凭证或错误正文，不改变日志上报白名单。
+控制端 `side=transport` 的 `stage=total` 可带 `payload`。其中 `uploadBytes` 和 `chunks` 是
+计划上传的 gzip 字节数与分段数，分段准备完成后，即使上传失败也会记录。内联载荷两项均为
+零，分段准备失败时省略未知的值。`fieldBytes` 记录固定载荷字段各自序列化后的 UTF-8 字节数。
 运行端 `stage=total` 另带 `execServer`：`shortcutEnabled`、`ancestorLevels`（收到的祖先快照层数）、
 `connections`（识别到的执行环境连接数）、`answered`（本地回答数）、`forwarded`（转发消息数）。
 计数仅覆盖创建至 started/失败，不含首轮消息及后续工具调用；只含布尔值和计数，无路径与 RPC 内容。
