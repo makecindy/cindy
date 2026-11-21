@@ -332,6 +332,23 @@ describe('the Host reconciles with the system Codex login as the installed deskt
     ]);
   });
 
+  it.skipIf(!canLinkFile)('an explicit disconnect before migration detaches a legacy hardlink on both sides', async () => {
+    const d = fixture({ local: 'hardlink', binding: 'shared' });
+    const hst = fixture({ local: 'hardlink', binding: 'shared' });
+    d.enter(); await new DesktopCodexAuthAdapter().logout();
+    hst.enter(); await hostLogout(hst);
+    const desktop = await desktopRead(d);
+    const host = await hostRead(hst);
+    expect(host).toEqual(desktop);
+    expect(desktop).toMatchObject({
+      state: { authenticated: false, errorReason: 'no_oauth' },
+      link: 'missing',
+      systemUntouched: true,
+    });
+    expect(fs.statSync(d.systemAuth, { bigint: true }).nlink).toBe(1n);
+    expect(fs.statSync(hst.systemAuth, { bigint: true }).nlink).toBe(1n);
+  });
+
   it('a login in progress is not reconciled', async () => {
     const d = fixture({ local: 'missing', binding: 'none' });
     const adapter = new DesktopCodexAuthAdapter() as unknown as { pendingLogin: unknown; getState(o: unknown): Promise<AuthState> };
