@@ -153,15 +153,16 @@ export interface RunMarkerStoreDeps {
 
 function defaultProcessStartedAt(now: Date): Date {
   try {
-    const getCreationTime = (process as NodeJS.Process & { getCreationTime?: () => Date | null })
-      .getCreationTime;
-    const creationTime = getCreationTime?.call(process);
+    const getCreationTime = (
+      process as NodeJS.Process & { getCreationTime?: () => number | null }
+    ).getCreationTime;
+    const creationTimeMs = getCreationTime?.call(process);
     if (
-      creationTime instanceof Date &&
-      Number.isFinite(creationTime.getTime()) &&
-      creationTime.getTime() <= now.getTime()
+      typeof creationTimeMs === 'number' &&
+      Number.isFinite(creationTimeMs) &&
+      creationTimeMs <= now.getTime()
     ) {
-      return creationTime;
+      return new Date(creationTimeMs);
     }
   } catch {
     // Electron may omit getCreationTime on an older runtime; uptime remains deterministic.

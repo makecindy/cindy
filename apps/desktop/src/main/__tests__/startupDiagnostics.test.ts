@@ -41,7 +41,7 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-run-markers-'));
 });
 
-type ProcessWithCreationTime = NodeJS.Process & { getCreationTime?: () => Date | null };
+type ProcessWithCreationTime = NodeJS.Process & { getCreationTime?: () => number | null };
 
 const originalProcessCreationTimeDescriptor = Object.getOwnPropertyDescriptor(
   process,
@@ -144,7 +144,7 @@ describe('RunMarkerStore state machine', () => {
     const now = new Date('2026-07-07T12:00:21.000Z');
     Object.defineProperty(process, 'getCreationTime', {
       configurable: true,
-      value: () => processStartedAt,
+      value: () => processStartedAt.getTime(),
     });
     const store = makeStoreWithDefaultProcessStart({ pid: 43, now: () => now });
 
