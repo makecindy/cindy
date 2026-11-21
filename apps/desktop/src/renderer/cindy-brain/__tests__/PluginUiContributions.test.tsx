@@ -299,3 +299,22 @@ it.each([100, 1000])('subscribes only visible native controls among %i mounted h
   expect(elements.size).toBe(0);
   expect(disconnect).toHaveBeenCalledTimes(1);
 });
+
+// Composer package icons must remain decorative: same accessible label and original action.
+// Covers both sidebar-view and popover actions without changing the contribution protocol.
+it.each([undefined, 'popover'] as const)('shows the approved package icon in composer (%s)', presentation => {
+  const iconDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
+  installed.ghosts = [{ enabled: true, dir: '/fixture', iconDataUrl,
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'sketchpad', name: 'Sketchpad',
+      kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
+        ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} },
+        host: { views: [{ id: 'view', title: 'View', resourceUri: 'ui://view', scope: 'task' }],
+          contributions: [{ id: 'open', title: 'Canvas', position: 'composer.toolbar', view: 'view', ...(presentation ? { presentation } : {}) }] },
+      } } }];
+  render(<PluginUiProvider><PluginUiSlot position="composer.toolbar" sessionId="task-a" /></PluginUiProvider>);
+  const button = screen.getByRole('button', { name: 'Canvas' });
+  expect(button.querySelector('img')?.getAttribute('src')).toBe(iconDataUrl);
+  expect(button.querySelector('img')?.closest('[aria-hidden="true"]')).toBeTruthy();
+  expect(page.mounted).not.toHaveBeenCalled();
+  installed.ghosts = [];
+});

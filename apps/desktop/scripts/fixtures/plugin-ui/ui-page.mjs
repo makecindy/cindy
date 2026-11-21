@@ -15,6 +15,9 @@ export default {
   async ready(page) { await page.getByText('示例已就绪', { exact: true }).waitFor(); },
   async check(page, ui) {
     assert.equal(await page.locator('iframe').count(), 0);
+    const icons = page.locator('[data-plugin-composer] button img');
+    assert.ok(await icons.count() > 0);
+    for (const icon of await icons.all()) assert.ok(await icon.isVisible());
     assert.equal(await page.getByRole('combobox').count(), 2);
     await page.getByRole('button', { name: '同步示例状态', exact: true }).click();
     await page.getByText('最近同步已完成', { exact: true }).waitFor();
