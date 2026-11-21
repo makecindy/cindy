@@ -75,6 +75,8 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
     guestToolGate: null,
     // 生产源码里这两处常量定义在本用例切片之外；按真实取值注入。
     TRANSCRIPT_ONLY_BUILTINS: new Set(['cindy_toolfold_read']),
+    toolFoldExtensionLoaded: () => true,
+    isTranscriptOnlyExempt: () => false,
     READONLY_BUILTINS: new Set(),
     currentPermissionState: () => { permissionReads++; return { reviewOnly: false, mode: 'bypassPermissions' }; },
     pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
@@ -3029,14 +3031,15 @@ it('leaves a direct tool alone when its required name is not the Cindy envelope'
 it('lets the transcript-only fold reader through Ask and Review without a prompt', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const setStart = source.indexOf('const TRANSCRIPT_ONLY_BUILTINS');
-  const setEnd = source.indexOf('\n', source.indexOf(']);', setStart)) + 1;
+  const guardStart = source.indexOf('function toolFoldExtensionLoaded', setStart);
+  const sliceEnd = source.indexOf('\n}\n', source.indexOf('function isTranscriptOnlyExempt', guardStart)) + 3;
   const handlerStart = source.indexOf("  pi.on('tool_call', async");
   const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
   expect(setStart).toBeGreaterThan(-1);
-  expect(setEnd).toBeGreaterThan(setStart);
+  expect(sliceEnd).toBeGreaterThan(setStart);
   expect(handlerEnd).toBeGreaterThan(handlerStart);
   const compiled = ts.transpileModule(
-    source.slice(setStart, setEnd) + source.slice(handlerStart, handlerEnd),
+    source.slice(setStart, sliceEnd) + source.slice(handlerStart, handlerEnd),
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   const handlers = new Map<string, (event: any, ctx: any) => any>();
@@ -3053,6 +3056,7 @@ it('lets the transcript-only fold reader through Ask and Review without a prompt
     const sandbox: Record<string, unknown> = {
       process: { env: {} },
       guestToolGate: null,
+      [Symbol.for('cindy.pi.toolFold')]: true,
       currentPermissionState: () => permission,
       permissionReads: 0,
       pi: { on: (event: string, cb: (event: any, ctx: any) => any) => { handlers.set(event, cb); } },
@@ -3072,7 +3076,15 @@ it('lets the transcript-only fold reader through Ask and Review without a prompt
     expect(await tool({ toolName: 'cindy_toolfold_read', input: { call_id: 'x' }, toolCallId: 't1' }, ctx)).toBeUndefined();
     expect(promptCount).toBe(before);
   }
-
+  // 折叠没开时同名工具只能是外部注册的：判据必须不豁免，名字不构成信任。
+  const guard = (foldLoaded: boolean) => runInNewContext(
+    ts.transpileModule(source.slice(setStart, sliceEnd), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+      + '\nisTranscriptOnlyExempt',
+    { [Symbol.for('cindy.pi.toolFold')]: foldLoaded },
+  );
+  expect(guard(true)('cindy_toolfold_read')).toBe(true);
+  expect(guard(false)('cindy_toolfold_read')).toBe(false);
+  expect(guard(true)('bash')).toBe(false);
 });
 
 

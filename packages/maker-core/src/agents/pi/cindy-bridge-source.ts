@@ -174,6 +174,15 @@ const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
 // 只对「折叠扩展真的在跑」的会话豁免：该扩展启用后会在进程内立 cindy.pi.toolFold。
 // 折叠关闭时同名工具只能是外部注册的（原生扩展也可以叫这个名字），照常走审批。
 const TRANSCRIPT_ONLY_BUILTINS = new Set(['cindy_toolfold_read']);
+// 折叠扩展加载时会在进程内立 cindy.pi.toolFold。Pi 扩展本来就是进程内可信代码，
+// 同名伪造拿不到额外能力；这道判据防的是「折叠关闭时同名工具白拿免审批」。
+function toolFoldExtensionLoaded(): boolean {
+  try { return (globalThis as any)[Symbol.for('cindy.pi.toolFold')] === true; } catch (error) { return false; }
+}
+// 名字只有在折叠扩展真的加载过时才换算豁免；这就是该门的全部判据。
+function isTranscriptOnlyExempt(toolName: unknown): boolean {
+  return TRANSCRIPT_ONLY_BUILTINS.has(toolName as string) && toolFoldExtensionLoaded();
+}
 const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
 function isCindyShellTool(toolName: unknown): boolean {
   return toolName === 'bash' || toolName === 'powershell';
@@ -5285,7 +5294,8 @@ export default async function cindyBridge(piApi: any) {
     }
     const permission = currentPermissionState();
     // 只读本会话的 transcript 记录：不读写文件、不执行命令，两种权限档都不必打扰用户。
-    if (TRANSCRIPT_ONLY_BUILTINS.has(event.toolName)) return;
+    // 名字不构成信任：折叠没开时同名工具只能是外部注册的，照常走审批。
+    if (isTranscriptOnlyExempt(event.toolName)) return;
     if (permission.reviewOnly) {
       if (
         READONLY_BUILTINS.has(event.toolName)
