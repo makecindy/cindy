@@ -37,6 +37,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import { toast } from '@/lib/toast';
+import { collectUpdateConsent } from '../lib/updateAllConsent';
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import type { GhostInstallApproval, GhostManifest } from '../../../../shared/ghost';
 import type { PluginMarketDetail, PluginMarketItem } from '../../../../shared/pluginMarket';
@@ -157,6 +158,7 @@ describe('updateAllController', () => {
           expectedManifest: manifest(),
           expectedInstalledApproval: DEFAULT_APPROVAL_TOKEN,
           allowSourceReplacement: false,
+          batchRowId: expect.any(String),
         },
       ],
       [
@@ -166,6 +168,7 @@ describe('updateAllController', () => {
           expectedManifest: manifest({ id: 'ghost-b', version: '2.1.0' }),
           expectedInstalledApproval: DEFAULT_APPROVAL_TOKEN,
           allowSourceReplacement: false,
+          batchRowId: expect.any(String),
         },
       ],
     ]);
@@ -362,6 +365,7 @@ describe('updateAllController', () => {
         expectedManifest: manifest({ version: '9.1.0' }),
         expectedInstalledApproval: 'approved:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
         allowSourceReplacement: false,
+        batchRowId: expect.any(String),
       },
     ]);
   });
@@ -446,10 +450,27 @@ describe('updateAllController', () => {
       onGithubReleaseProgress: () => () => undefined,
     };
 
+    // A mixed batch must settle the market permission review before starting a release update.
+    let approve!: (ids: Set<string>) => void;
+    const review = vi.fn(() => new Promise<Set<string>>(resolve => { approve = resolve; }));
+    installMock.mockImplementationOnce(async (_pluginId, { batchRowId }) => {
+      const accepted = await collectUpdateConsent({
+        requestId: 'market-request', batchRowId, initiator: 'user', origin: 'market',
+        facts: {
+          kind: 'update', ghostId: 'ghost-a', name: 'Ghost A', previousVersion: '1.0.0', version: '1.1.0',
+          added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: true,
+        },
+      }, new AbortController().signal, review);
+      expect(accepted).toBe(true);
+    });
+
     startUpdateAllBatch(
       [marketItem()],
       [{ instanceId, ghostId: 'zcode', name: 'ZCode', fromVersion: '0.1.0', version: '0.1.1', assetId: 7 }],
     );
+    await vi.waitFor(() => expect(review).toHaveBeenCalledTimes(1));
+    expect(githubRelease).not.toHaveBeenCalled();
+    approve(new Set(['market-request']));
     await waitForFinishedBatch();
 
     expect(githubRelease.mock.calls).toEqual(assets.map((asset) => ['update', instanceId, asset]));

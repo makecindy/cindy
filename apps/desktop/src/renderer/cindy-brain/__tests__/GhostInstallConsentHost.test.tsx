@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { HOST_UI_POSITIONS, type GhostHostUi, type GhostHostUiSetting } from '@cindy/plugin-protocol';
 
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent';
 import { GhostInstallConsentContent, GhostInstallConsentHost } from '../GhostInstallConsentHost';
+import { UpdateAllConsent } from '../../features/plugin/lib/updateAllConsent';
 import { GhostConfirmDialogHost } from '../GhostConfirmDialogHost';
 import { ghostPermissionProjectionKey, ghostHostUiPermissionItems, type GhostManifest } from '../../../shared/ghost';
 
@@ -84,6 +85,70 @@ describe('GhostInstallConsentHost', () => {
   afterEach(() => {
     cleanup();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  it.each(['confirm', 'dismiss'] as const)('groups real update prompts and answers each request separately on %s', async action => {
+    render(<GhostInstallConsentHost />);
+    const batch = new UpdateAllConsent();
+    for (const name of ['One', 'Two']) {
+      const row = batch.track(async batchRowId => {
+        push?.({ requestId: name, batchRowId, initiator: 'user', origin: 'market',
+          facts: { kind: 'update', ghostId: name, name, version: '2', previousVersion: '1',
+            added: [HOST], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } });
+      });
+      await row.ready;
+    }
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    mocks.confirm.mockImplementationOnce(async ({ content }) => {
+      render(<>{content}</>);
+      const first = screen.getByRole('checkbox', { name: 'One' }) as HTMLInputElement;
+      expect(first.checked).toBe(false);
+      fireEvent.click(first);
+      if (action === 'dismiss') act(() => dismiss?.({ requestId: 'Two' }));
+      return true;
+    });
+    await batch.finish();
+    expect(mocks.confirm).toHaveBeenCalledOnce();
+    await waitFor(() => expect(resolveInstallConsent).toHaveBeenCalledTimes(2));
+    expect(resolveInstallConsent).toHaveBeenCalledWith('One', true);
+    expect(resolveInstallConsent).toHaveBeenCalledWith('Two', false);
+  });
+
+  it('opens review during a slow batch and adds later verified rows to the open list', async () => {
+    vi.useFakeTimers();
+    try {
+      render(<GhostInstallConsentHost />);
+      const batch = new UpdateAllConsent();
+      let accept!: (yes: boolean) => void;
+      mocks.confirm.mockImplementation(({ content }) => {
+        render(<>{content}</>);
+        return new Promise<boolean>(resolve => { accept = resolve; });
+      });
+      async function verified(name: string) {
+        const row = batch.track(async batchRowId => {
+          push?.({ requestId: name, batchRowId, initiator: 'user', origin: 'market',
+            facts: { kind: 'update', ghostId: name, name, version: '2', previousVersion: '1',
+              added: [HOST], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } });
+        });
+        await row.ready;
+      }
+      await verified('Early');
+      // No finish(): later packages are still downloading.
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Early' }));
+      await act(async () => verified('Late'));
+      expect((screen.getByRole('checkbox', { name: 'Early' }) as HTMLInputElement).checked).toBe(true);
+      expect((screen.getByRole('checkbox', { name: 'Late' }) as HTMLInputElement).checked).toBe(false);
+      act(() => dismiss?.({ requestId: 'Early' }));
+      expect(screen.queryByRole('checkbox', { name: 'Early' })).toBeNull();
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Late' }));
+      await act(async () => { accept(true); await batch.finish(); });
+      expect(mocks.confirm).toHaveBeenCalledOnce();
+      expect(resolveInstallConsent).toHaveBeenCalledWith('Early', false);
+      expect(resolveInstallConsent).toHaveBeenCalledWith('Late', true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // Node Host can retract a dialog when its controller disconnects or plugin

@@ -1,5 +1,6 @@
 import { mountPage, subscription } from '../../ui-page/harness';
 import { GhostInstallConsentHost } from '../../../src/renderer/cindy-brain/GhostInstallConsentHost';
+import { UpdateAllConsent } from '../../../src/renderer/features/plugin/lib/updateAllConsent';
 import { PermissionSummary } from '../../../src/renderer/features/plugin/GhostPluginDetailView';
 import { ghostHostUiPermissionItems, ghostPermissionItems, type GhostManifest } from '../../../src/shared/ghost';
 import type { GhostInstallConsentRequest } from '../../../src/shared/ghostInstallConsent';
@@ -18,14 +19,27 @@ const permissions = [...ghostHostUiPermissionItems(manifest),
   ...ghostPermissionItems(manifest).filter(item => item.key === 'agent:host-tools:usage')];
 void mountPage({
   host: { ghosts: {
-    onInstallConsentRequest: (callback: (request: GhostInstallConsentRequest) => void) => subscription('hostConsent')(() => callback({
-      requestId: 'fixture-host-permissions', initiator: 'user', origin: 'local-file',
-      facts: { kind: 'install', ghostId: manifest.id, name: manifest.name, version: manifest.version, permissions },
-    })),
+    onInstallConsentRequest: (callback: (request: GhostInstallConsentRequest) => void) => subscription('hostConsent')(async event => {
+      if (event && typeof event === 'object' && 'batch' in event && event.batch) {
+        const batch = new UpdateAllConsent();
+        for (const name of ['Task Board', 'Notes']) {
+          const row = batch.track(async batchRowId => {
+            callback({ batchRowId, initiator: 'user', origin: 'market', requestId: name,
+              facts: { kind: 'update', name, ghostId: name, version: '1.1.0', previousVersion: '1.0.0',
+                added: permissions.slice(-1), removed: [], unchangedCount: 1, builtinOauthClientChanged: false } });
+          });
+          await row.ready;
+        }
+        void batch.finish();
+        return;
+      }
+      callback({ requestId: 'fixture-host-permissions', initiator: 'user', origin: 'local-file',
+        facts: { kind: 'install', ghostId: manifest.id, name: manifest.name, version: manifest.version, permissions } });
+    }),
     onInstallConsentDismissed: subscription('hostDismissed'),
     resolveInstallConsent: async () => ({ handled: true }),
   } },
-  render: ctx => ctx.case === 'default'
+  render: ctx => ctx.case !== 'details'
     ? <GhostInstallConsentHost />
     : <main className="mx-auto max-w-2xl p-5"><PermissionSummary items={permissions} /></main>,
 });

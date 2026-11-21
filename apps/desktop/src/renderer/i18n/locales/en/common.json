@@ -8817,7 +8817,8 @@
       "updateAll": {
         "title": "Update all · {{count}} plugins",
         "collapseDiff": "Collapse",
-        "description": "Updates that don’t add permissions normally run silently; updates that need more permissions ask you one by one. Use this dialog to retry updates that were skipped or failed.",
+        "description": "Routine updates run automatically. Plugins requesting additional permissions are listed together.",
+        "chooseUpdates": "Select the plugins to grant the displayed permissions, then confirm. Unselected updates will be skipped.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "Queued",
         "statusInstalling": "Updating…",

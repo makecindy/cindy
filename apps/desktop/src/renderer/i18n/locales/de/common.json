@@ -8817,7 +8817,8 @@
       "updateAll": {
         "title": "Alle aktualisieren · {{count}} Plugins",
         "collapseDiff": "Einklappen",
-        "description": "Updates ohne zusätzliche Berechtigungen werden normalerweise im Hintergrund ausgeführt. Updates mit zusätzlichen Berechtigungen fragen dich einzeln. In diesem Dialog kannst du übersprungene oder fehlgeschlagene Updates erneut versuchen.",
+        "description": "Normale Updates erfolgen automatisch. Zusätzliche Berechtigungen werden gemeinsam angezeigt.",
+        "chooseUpdates": "Wähle die Plugins aus, denen du die angezeigten Berechtigungen erteilen möchtest. Andere Updates werden übersprungen.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "In der Warteschlange",
         "statusInstalling": "Wird aktualisiert…",

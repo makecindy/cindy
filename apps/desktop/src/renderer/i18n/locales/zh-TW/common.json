@@ -8774,7 +8774,8 @@
       "updateAll": {
         "title": "全部更新 · {{count}} 個插件",
         "collapseDiff": "收起",
-        "description": "權限沒變多的更新通常會靜默完成；新版本權限變多時會逐一請你確認。這裡也可重試因忙碌跳過或執行失敗的更新。",
+        "description": "一般更新會自動完成。需要新增權限的外掛會一併列出。",
+        "chooseUpdates": "勾選允許新增權限的外掛，再確認更新。未勾選的外掛將略過。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "排隊中",
         "statusInstalling": "更新中…",

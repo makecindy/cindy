@@ -8889,7 +8889,8 @@
       "updateAll": {
         "title": "Atualizar todos · {{count}} plugins",
         "collapseDiff": "Recolher",
-        "description": "As atualizações que não adicionam permissões decorrem normalmente sem avisos; as que precisam de mais permissões pedem autorização individualmente. Use esta caixa de diálogo para repetir atualizações ignoradas ou falhadas.",
+        "description": "As atualizações normais são automáticas. Os pedidos de permissões adicionais são apresentados em conjunto.",
+        "chooseUpdates": "Selecione os plugins aos quais pretende conceder as permissões indicadas e confirme. Os restantes serão ignorados.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "Em fila",
         "statusInstalling": "A atualizar…",

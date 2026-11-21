@@ -8889,7 +8889,8 @@
       "updateAll": {
         "title": "Actualizar todos · {{count}} complementos",
         "collapseDiff": "Contraer",
-        "description": "Las actualizaciones que no agregan permisos normalmente se ejecutan sin avisos; las que necesitan más permisos te piden confirmación una por una. Usa este diálogo para reintentar las actualizaciones omitidas o fallidas.",
+        "description": "Las actualizaciones habituales son automáticas. Los permisos adicionales se muestran juntos.",
+        "chooseUpdates": "Selecciona los plugins a los que concedes los permisos indicados y confirma. Se omitirán los demás.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "En cola",
         "statusInstalling": "Actualizando…",
