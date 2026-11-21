@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   BrowserWindow,
   nativeTheme,
@@ -29,12 +30,20 @@ const VIEWER_POINTER_REST_MS = 1000;
 const CONFIRM_WIDTH = 400;
 const CONFIRM_MEASURE_SCRIPT =
   "Math.ceil(document.querySelector('main').getBoundingClientRect().height)";
-// The confirmation's answers, recognized by will-navigate like the Disconnect link:
-// its script-free form submits the revoke checkbox as `?revoke=1` when ticked.
+// Every choice, including checkbox toggles, is authorized by Main via will-navigate.
 const CHOICE_URL = {
   disconnect: 'https://cindy-overlay.invalid/choose/disconnect',
   cancel: 'https://cindy-overlay.invalid/choose/cancel',
+  toggleRevoke: 'https://cindy-overlay.invalid/choose/toggle-revoke',
 } as const;
+// Prevent the native checkbox from keeping a racing injected click. Only Main may
+// set checked after authorizing the toggle. CSP permits this fixed script alone;
+// no labels, device names, or other runtime data are interpolated into it.
+const CONFIRM_SCRIPT = `document.querySelector('input[name="revoke"]').addEventListener('click', (event) => {
+  event.preventDefault();
+  location.href = '${CHOICE_URL.toggleRevoke}';
+});`;
+const CONFIRM_SCRIPT_HASH = createHash('sha256').update(CONFIRM_SCRIPT).digest('base64');
 /** Ending only this session, or also blocking the device until restored in Settings. */
 type DisconnectChoice = 'disconnect' | 'revoke';
 
@@ -81,7 +90,7 @@ function confirmHtml(
   dark: boolean,
 ): string {
   return `<!doctype html><html${dark ? ' class="dark"' : ''}><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${CONFIRM_SCRIPT_HASH}'">
 <style>
 :root{color-scheme:light;--surface:#ffffff;--border:#d7d7d4;--text-primary:#262626;--text-secondary:#737373;--focus:#417cdd}
 :root.dark{color-scheme:dark;--surface:#2c2c2a;--border:#3c3c3a;--text-primary:#d4d4d4;--text-secondary:#a3a3a3}
@@ -103,7 +112,7 @@ a:hover,button:hover{opacity:.85}
 form:has(input:checked) .primary{background:#ef4444;color:#ffffff}
 </style></head><body><main><h1>${escapeHtml(copy.title)}</h1><p>${escapeHtml(copy.detail)}</p>
 <form action="${CHOICE_URL.disconnect}" method="get"><label><input type="checkbox" name="revoke" value="1"><span><b>${escapeHtml(copy.revoke)}</b><small>${escapeHtml(copy.revokeHint)}</small></span></label>
-<nav><a class="cancel" href="${CHOICE_URL.cancel}" draggable="false">${escapeHtml(copy.cancel)}</a><button class="primary" type="submit">${escapeHtml(copy.disconnect)}</button></nav></form></main></body></html>`;
+<nav><a class="cancel" href="${CHOICE_URL.cancel}" draggable="false">${escapeHtml(copy.cancel)}</a><button class="primary" type="submit">${escapeHtml(copy.disconnect)}</button></nav></form></main><script>${CONFIRM_SCRIPT}</script></body></html>`;
 }
 
 /** The device named on the page whose Disconnect link was clicked. */
@@ -163,6 +172,8 @@ export class ControlledOverlay {
   /** Viewer pointer batches currently being injected, and those of them over a local-only window. */
   private injecting = 0;
   private injectingOver = 0;
+  /** Geometry became visible/changed while a batch was already in flight. */
+  private geometryChangedDuringInjection = false;
   /** When the viewer's pointer was last over a local-only window (start or end of its batch). */
   private viewerOverAt = 0;
   /** Bumped when the overlay stops, so a late completion cannot affect the next lease. */
@@ -211,7 +222,7 @@ export class ControlledOverlay {
    * never gets its later events through to the hidden windows. */
   viewerPointer(points: { x: number; y: number }[]): () => void {
     const windows = this.localOnlyWindows();
-    if (!windows.length) return () => {};
+    if (!this.target) return () => {};
     const over = points.some((point) =>
       windows.some((window) => {
         const { x, y, width, height } = window.getBounds();
@@ -220,7 +231,7 @@ export class ControlledOverlay {
     );
     if (this.restTimer) clearTimeout(this.restTimer);
     this.restTimer = null;
-    this.setPassThrough(over);
+    this.setPassThrough(over || this.geometryChangedDuringInjection);
     this.injecting++;
     if (over) {
       this.injectingOver++;
@@ -235,7 +246,10 @@ export class ControlledOverlay {
         this.injectingOver--;
         this.viewerOverAt = Date.now();
       }
-      if (--this.injecting > 0 || !this.passThrough) return;
+      if (this.geometryChangedDuringInjection) this.viewerOverAt = Date.now();
+      if (--this.injecting > 0) return;
+      this.geometryChangedDuringInjection = false;
+      if (!this.passThrough) return;
       this.restTimer = setTimeout(() => this.setPassThrough(false), VIEWER_POINTER_REST_MS);
     };
   }
@@ -255,10 +269,25 @@ export class ControlledOverlay {
    * right as it turns on, and a later batch clear of the windows turns it off before the
    * click's navigation reaches Main. Such a click is dropped; the local user clicks again. */
   private viewerMayHaveClicked(): boolean {
-    if (this.injectingOver === 0 && Date.now() - this.viewerOverAt >= VIEWER_POINTER_REST_MS)
+    if (
+      this.injectingOver === 0 &&
+      !this.geometryChangedDuringInjection &&
+      Date.now() - this.viewerOverAt >= VIEWER_POINTER_REST_MS
+    )
       return false;
     log.debug('ignored a click on the overlay while the viewer pointer was over it');
     return true;
+  }
+
+  /** A newly visible/repositioned surface was not part of the batch's original hit
+   * test. Conservatively protect it until that batch finishes plus the rest delay. */
+  private protectChangedWindow(window: BrowserWindow): void {
+    if (this.injecting > 0) {
+      this.geometryChangedDuringInjection = true;
+      this.viewerOverAt = Date.now();
+      this.setPassThrough(true);
+    }
+    window.setIgnoreMouseEvents(this.passThrough);
   }
 
   private setPassThrough(on: boolean): void {
@@ -279,6 +308,7 @@ export class ControlledOverlay {
     this.passThrough = false;
     this.injecting = 0;
     this.injectingOver = 0;
+    this.geometryChangedDuringInjection = false;
     this.viewerOverAt = 0;
     this.injectEpoch++;
     // An unanswered confirmation never outlives its lease: closing it cancels.
@@ -338,8 +368,10 @@ export class ControlledOverlay {
       next.y !== current.y ||
       next.width !== current.width ||
       next.height !== current.height
-    )
+    ) {
       window.setBounds(next, false);
+      this.protectChangedWindow(window);
+    }
   }
 
   /** Loads the page for the current target. Throws on real failure; a load
@@ -438,6 +470,8 @@ export class ControlledOverlay {
       }
       this.confirmWindow = window;
       let settled = false;
+      // Main owns the choice; the form query/DOM checked state is never trusted.
+      let revokeSelected = false;
       const finish = (choice: DisconnectChoice | null) => {
         if (settled) return;
         settled = true;
@@ -455,10 +489,21 @@ export class ControlledOverlay {
       window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       window.webContents.on('will-navigate', (event) => {
         event.preventDefault();
+        if (settled) return;
         if (event.url === CHOICE_URL.cancel) return finish(null);
-        const [base, query = ''] = event.url.split('?', 2);
-        if (base !== CHOICE_URL.disconnect || this.viewerMayHaveClicked()) return;
-        finish(new URLSearchParams(query).get('revoke') === '1' ? 'revoke' : 'disconnect');
+        const [base] = event.url.split('?', 2);
+        if (base !== CHOICE_URL.disconnect && event.url !== CHOICE_URL.toggleRevoke) return;
+        if (this.viewerMayHaveClicked()) return;
+        if (event.url === CHOICE_URL.toggleRevoke) {
+          revokeSelected = !revokeSelected;
+          void window.webContents
+            .executeJavaScript(
+              `document.querySelector('input[name="revoke"]').checked = ${revokeSelected}`,
+            )
+            .catch(() => finish(null));
+          return;
+        }
+        finish(revokeSelected ? 'revoke' : 'disconnect');
       });
       window.webContents.on('render-process-gone', () => finish(null));
       void (async () => {
@@ -504,7 +549,7 @@ export class ControlledOverlay {
         // Install the capture filter before the first visible frame.
         this.confirmId = id;
         this.publishExcluded();
-        if (this.passThrough) window.setIgnoreMouseEvents(true);
+        this.protectChangedWindow(window);
         window.showInactive();
       })().catch((error) => {
         log.warn('disconnect choice unavailable', error);
@@ -513,7 +558,7 @@ export class ControlledOverlay {
     });
   }
 
-  /** The isolated, script-free partition shared by the overlay and its confirmation. */
+  /** Isolated partition: no remote resources or privileges; confirmation has one hash-pinned script. */
   private webPreferences(): Electron.WebPreferences {
     const partition = session.fromPartition('cindy-desktop-overlay', { cache: false });
     if (!this.partitionConfigured) {
@@ -622,6 +667,7 @@ export class ControlledOverlay {
       // Install the capture filter before the first visible frame.
       this.overlayId = id;
       this.publishExcluded();
+      this.protectChangedWindow(window);
       window.showInactive();
       this.shown = true;
     } catch (error) {
