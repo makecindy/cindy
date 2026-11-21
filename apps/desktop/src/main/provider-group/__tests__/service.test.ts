@@ -808,6 +808,22 @@ describe('onTurnError (automatic switch)', () => {
     expect(none.deps.continueSession).not.toHaveBeenCalled();
   });
 
+  it('checks the subscription pool before model fallback in a single-member group', () => {
+    const h = harness({ members: [LOCAL] });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    const service = createProviderGroupService({ ...h.deps, readAccountSwitch: vi.fn(async () => null) });
+    expect(service.mayHandleTurnError('s1', { sdkError: 'rate_limit' })).toBe(true);
+  });
+
+  it('keeps the local binding when its implicit provider becomes explicit', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    expect(await h.service.resolveSwitchTarget('s1', {
+      agentKind: 'pi', model: MODEL, providerId: 'anthropic', agentDeviceId: null,
+      current: { agentDeviceId: null, providerId: null },
+    })).toBeNull();
+  });
+
   it('offers configured model recovery after exhausting same-model accounts', async () => {
     const h = harness({ members: [LOCAL, MINI] });
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });

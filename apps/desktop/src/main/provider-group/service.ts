@@ -2118,6 +2118,10 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     async resolveSwitchTarget(sessionId, target) {
       const { providerId, agentDeviceId } = target;
       if (!providerId) return null;
+      const currentBinding = deps.readBinding(sessionId);
+      if (target.current.agentDeviceId === agentDeviceId && target.current.providerId === null &&
+          currentBinding?.providerId === providerId && currentBinding.memberKey === 'local' &&
+          (currentBinding.groupDeviceId ?? null) === agentDeviceId) return null;
       const source = agentDeviceId === null
         ? (deps.readGroup(providerId) ? localSource : null)
         : (deps.remote && !isProviderShareAgentDeviceId(agentDeviceId) ? remoteSource(agentDeviceId) : null);
@@ -2163,7 +2167,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
 
     mayHandleTurnError(sessionId, signals) {
       if (signals.reason === 'remote_agent_restarted') return true;
-      if (decideProviderGroupFailure(signals, 'run').action !== 'switch') return false;
+      const decision = decideProviderGroupFailure(signals, 'run');
+      if (decision.action !== 'switch') return false;
       const binding = deps.readBinding(sessionId);
       if (!binding) return deps.guestSwitch?.hasOffer(sessionId) === true
         || !!deps.directGuestSession?.(sessionId);
@@ -2172,7 +2177,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const current = config?.members.find((m) => m.key === binding.memberKey);
       // 同机其他连接也能接替；只有当前成员时仍交回原有错误处理。
       return Boolean(
-        config?.autoSwitch && current && config.members.some((m) => m.key !== current.key),
+        config?.autoSwitch && current && (config.members.some((m) => m.key !== current.key) ||
+          (decision.cause === 'usage-limit' && deps.readAccountSwitch !== undefined)),
       );
     },
 
