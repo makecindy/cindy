@@ -55,6 +55,10 @@ const messages = {
     "showHiddenDirectories": "Mostrar pastas ocultas",
     "emptyDirectory": "Não há pastas para exibir."
   },
+  "id": {
+    "showHiddenDirectories": "Tampilkan folder tersembunyi",
+    "emptyDirectory": "Tidak ada folder untuk ditampilkan."
+  },
 } as const;
 
 export type NewSessionMessageKey = keyof (typeof messages)["zh-CN"];

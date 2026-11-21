@@ -19,6 +19,7 @@ const INTERFACE_LANGUAGE_NAME: Record<SupportedLocale, string> = {
   "de": "Deutsch",
   "pt-PT": "Português (Portugal)",
   "pt-BR": "Português (Brasil)",
+  "id": "Bahasa Indonesia",
   "zh-Hant-x-lzh": "文言（繁體）",
   "zh-Hans-x-lzh": "文言（简体）",
 };

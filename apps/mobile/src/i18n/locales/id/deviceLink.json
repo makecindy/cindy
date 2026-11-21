@@ -1,0 +1,89 @@
+{
+  "cachedHistory": {
+    "title": "Komputer tidak terhubung",
+    "hint": "Konten yang sudah di-cache bisa dilihat; konten lainnya dimuat setelah komputer online."
+  },
+  "recovery": {
+    "syncing": "Menyinkronkan…",
+    "recovered": "Dipulihkan",
+    "syncingHint": "Memperbarui konten dari komputer."
+  },
+  "syncFailed": "Sinkronisasi gagal",
+  "resync": "Sinkronkan ulang",
+  "resyncing": "Menyinkronkan ulang",
+  "syncShort": "Sinkronkan",
+  "deviceUnresponsiveTitle": "Koneksi belum merespons",
+  "deviceUnresponsiveHint": "Belum ada balasan. Mencoba lagi otomatis.",
+  "localNetwork": {
+    "title": "Jaringan ponsel tidak tersedia",
+    "hint": "Periksa jaringan ponsel. Koneksi pulih otomatis setelah jaringan kembali."
+  },
+  "serviceConnection": {
+    "title": "Layanan tidak bisa dihubungi",
+    "hint": "Ponsel belum bisa menghubungi layanan. Menyambung ulang otomatis."
+  },
+  "connectStep1": "Pasang dan buka {{appName}} di komputer",
+  "connectStep2": "Masuk dengan akun yang sama seperti di ponsel",
+  "connectStep3": "Di Pengaturan → Koneksi jarak jauh, aktifkan “Izinkan perangkat dengan akun sama mengendalikan komputer ini”",
+  "brandEyebrow": "Cindy Mobile",
+  "cloudTeaserTitle": "{{appName}} di Cloud, Segera Hadir",
+  "cloudTeaserCopy": "Setelah diluncurkan, aplikasi ponsel bisa dipakai langsung tanpa komputer.",
+  "sectionFirstRun": "Mulai",
+  "sectionOffline": "Perangkat yang pernah terhubung",
+  "sectionRemoteDisabled": "Di komputer",
+  "sectionAccessRevoked": "Perlu izin ulang",
+  "retryAccess": "Coba akses lagi",
+  "recheck": "Periksa ulang",
+  "deviceRemovedTitle": "Perangkat dihapus",
+  "deviceRemovedHint": "Keluar lalu masuk lagi untuk bergabung kembali ke daftar perangkat.",
+  "authFailedTitle": "Login tidak berlaku",
+  "authFailedHint": "Status login sudah kedaluwarsa. Keluar lalu masuk lagi.",
+  "replacedTitle": "Koneksi digantikan",
+  "replacedHint": "Koneksi perangkat ini digantikan dari tempat lain. Menyambung ulang.",
+  "tooManyConnectionsTitle": "Koneksi mencapai batas",
+  "tooManyConnectionsHint": "Terlalu banyak perangkat online untuk akun ini. Putuskan perangkat lain lalu coba lagi.",
+  "versionMismatchTitle": "Versi tidak cocok",
+  "versionMismatchHint": "Versi aplikasi ini tidak kompatibel dengan layanan. Perbarui ke versi terbaru lalu coba lagi.",
+  "unstableTitle": "Koneksi terus terputus",
+  "unstableHint": "Koneksi tidak stabil. Periksa jaringan dan tunggu sampai koneksi pulih.",
+  "relay": {
+    "label": {
+      "online": "Relay terhubung",
+      "connecting": "Menghubungkan ke Relay",
+      "stopped": "Relay tidak terhubung"
+    },
+    "hint": {
+      "online": "Tugas jarak jauh bisa disinkronkan.",
+      "lastSynced": "Terakhir disinkronkan {{time}}",
+      "connecting": "Tugas jarak jauh akan dilanggan ulang otomatis saat jaringan pulih.",
+      "stopped": "Koneksi pulih saat kamu kembali ke aplikasi atau masuk lagi."
+    }
+  },
+  "agentAuth": {
+    "noKey": "{{agent}} tidak bisa dipakai karena belum ada API key yang dikonfigurasi di komputer. Konfigurasikan di {{appName}} pada komputer lewat Pengaturan → Penyedia model, lalu coba lagi.",
+    "noOauth": "{{agent}} tidak bisa dipakai karena otorisasi akun di komputer belum selesai. Hubungkan lagi akun di {{appName}} pada komputer lewat Pengaturan → Penyedia model, lalu coba lagi.",
+    "noCredentials": "{{agent}} tidak bisa dipakai karena belum masuk di komputer. Masuk lewat {{appName}} pada komputer di Pengaturan → Penyedia model, lalu coba lagi.",
+    "noEncryption": "{{agent}} tidak bisa dipakai karena penyimpanan aman sistem di komputer tidak tersedia. Periksa Keychain (macOS) atau enkripsi akun (Windows), lalu mulai ulang {{appName}} di komputer.",
+    "proxyNotReady": "{{agent}} belum siap di komputer. Coba lagi sebentar; jika terus terjadi, mulai ulang {{appName}} di komputer.",
+    "sharedLinkUnavailable": "{{agent}} sementara tidak tersedia: Codex di komputer sudah login, tetapi {{appName}} tidak dapat membaca login tersebut (tautan ke sana tidak bisa dibuat; di Windows biasanya karena izin biasa). Pastikan {{appName}} di komputer memiliki izin membuat tautan (di Windows bisa dijalankan sekali sebagai administrator atau aktifkan developer mode), lalu coba lagi.",
+    "default": "{{agent}} tidak bisa dipakai karena kredensial login komputer tidak tersedia. Masuk lagi lewat {{appName}} pada komputer di Pengaturan → Penyedia model. ({{reason}})"
+  },
+  "remoteError": {
+    "remoteDisabled": "Komputer jarak jauh sudah mematikan kontrol jarak jauh.",
+    "channelNotAllowed": "Versi desktop saat ini tidak mendukung kemampuan jarak jauh ini.",
+    "accessRevoked": "Komputer ini sudah mencabut akses ponsel.",
+    "deviceUnresponsive": "Belum ada balasan. Mencoba lagi otomatis.",
+    "versionMismatch": "Versi protokol layanan tidak cocok. Perbarui aplikasi lalu coba lagi.",
+    "payloadTooLarge": "Transfer ini terlalu besar. Pecah menjadi beberapa bagian lalu coba lagi.",
+    "mediaFetchFailed": "Gagal mengambil berkas dari komputer. Coba lagi nanti.",
+    "voiceTranscribeFailed": "Transkripsi suara gagal. Coba lagi atau pakai keyboard.",
+    "linkNotOpen": "Koneksi ke komputer jarak jauh terputus dan sedang menyambung ulang.",
+    "accountChanged": "Akun atau workspace Codex berubah. Muat ulang kuota lalu konfirmasi lagi.",
+    "offerExpired": "Kredensial reset Codex sudah tidak berlaku. Muat ulang kuota lalu konfirmasi lagi.",
+    "preconditionFailed": "Kondisi operasi berubah. Muat ulang lalu konfirmasi lagi.",
+    "transient": "Jaringan atau komputer jarak jauh sementara tidak tersedia. Sinkronkan lagi nanti.",
+    "callFailed": "Panggilan jarak jauh tidak selesai. Coba lagi nanti.",
+    "unclassified": "Tindakan ini tidak selesai. Coba lagi nanti.",
+    "notFound": "Item itu sudah tidak ada. Kembali ke daftar dan muat ulang sebelum mencoba lagi."
+  }
+}

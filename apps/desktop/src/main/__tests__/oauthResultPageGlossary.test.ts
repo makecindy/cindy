@@ -76,7 +76,7 @@ const KNOWN_ENGLISH_COPY_ISSUES: readonly string[] = [
 ];
 
 /** 该模块用 'zh' 作语言键,术语表用 'zh-CN';不映射的话 zh 分支整段扫不到。 */
-const LANGS: OAuthResultPageLang[] = ['zh', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh'];
+const LANGS: OAuthResultPageLang[] = ['zh', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'id', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh'];
 const toLocale = (lang: OAuthResultPageLang) => (lang === 'zh' ? 'zh-CN' : lang);
 
 /** 占位实参:不含 CJK 与标点,避免实参本身影响判定。 */

@@ -78,6 +78,10 @@ const LOCALE_LOADERS: Record<LazyLocale, Record<Namespace, () => Promise<JsonMod
     common: () => import('./locales/pt-BR/common.json'),
     aiRename: () => import('./locales/pt-BR/aiRename.json'),
   },
+  'id': {
+    common: () => import('./locales/id/common.json'),
+    aiRename: () => import('./locales/id/aiRename.json'),
+  },
   'zh-Hant-x-lzh': {
     common: () => import('./locales/zh-Hant-x-lzh/common.json'),
     aiRename: () => import('./locales/zh-Hant-x-lzh/aiRename.json'),

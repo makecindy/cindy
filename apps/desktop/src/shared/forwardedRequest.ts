@@ -3,6 +3,7 @@ import fr from '../renderer/i18n/locales/fr/common.json';
 import de from '../renderer/i18n/locales/de/common.json';
 import ptPT from '../renderer/i18n/locales/pt-PT/common.json';
 import ptBR from '../renderer/i18n/locales/pt-BR/common.json';
+import idLocale from '../renderer/i18n/locales/id/common.json';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale.js';
 import en from '../renderer/i18n/locales/en/common.json';
 import zhCN from '../renderer/i18n/locales/zh-CN/common.json';
@@ -20,6 +21,7 @@ const FORWARDED_REQUEST_COPY = {
   'de': de.forwardedRequest,
   'pt-PT': ptPT.forwardedRequest,
   'pt-BR': ptBR.forwardedRequest,
+  id: idLocale.forwardedRequest,
   en: en.forwardedRequest,
   'zh-CN': zhCN.forwardedRequest,
   'zh-TW': zhTW.forwardedRequest,

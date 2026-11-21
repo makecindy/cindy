@@ -632,6 +632,18 @@ enum WidgetText {
       "durationShort.daysHours": "{{d}}d {{h}}h", "durationShort.days": "{{d}}d", "durationShort.hoursMinutes": "{{h}}h {{m}}m",
       "durationShort.hours": "{{h}}h", "durationShort.minutes": "{{m}}m",
     ],
+    "id": [
+      "quotaName": "Kuota langganan", "quotaDescription": "Sisa kuota tiap langganan dan waktu pengisian ulangnya.", "usageName": "Penggunaan harian", "usageDescription": "Penggunaan hari ini dan tren beberapa hari terakhir.",
+      "emptyTitle": "Belum ada kuota", "emptyBody": "Buka Cindy dan hubungkan komputer untuk melihat sisa kuota tiap langganan.", "emptyUsageTitle": "Belum ada penggunaan", "emptyUsageBody": "Buka Cindy dan hubungkan komputer untuk melihat penggunaan harian Anda.",
+      "updateTitle": "Perbarui Cindy di komputer Anda", "updateBody": "Kuota dan penggunaan harian akan muncul di sini setelah pembaruan.", "noSources": "Belum ada akun dengan kuota", "valueBasis": "Nilai langganan",
+      "valueBasisLong": "Perkiraan nilai langganan", "reset": "Reset", "todayNone": "Belum ada penggunaan hari ini", "resetsIn": "Direset dalam {{duration}}",
+      "other": "Lainnya", "today": "Hari ini", "dailyAverage": "Rerata harian", "paid": "Dibayar",
+      "tokenUnit": "token", "monthScopeAll": "30 hari terakhir · Semua perangkat", "monthScopeLocal": "30 hari terakhir · Komputer ini", "scopeAll": "Semua perangkat",
+      "scopeLocal": "Komputer ini", "harness.claude-code": "Claude Code", "harness.codex": "Codex", "harness.pi": "Pi",
+      "updatedJustNow": "Baru saja diperbarui", "updatedMinutes": "Diperbarui {{n}} mnt lalu", "updatedHours": "Diperbarui {{n}} jam lalu", "updatedDays": "Diperbarui {{n}} hari lalu",
+      "durationShort.daysHours": "{{d}} hr {{h}} jam", "durationShort.days": "{{d}} hr", "durationShort.hoursMinutes": "{{h}} jam {{m}} mnt", "durationShort.hours": "{{h}} jam",
+      "durationShort.minutes": "{{m}} mnt",
+    ],
   ]
 
   static func language(_ locale: Locale) -> String {
@@ -643,6 +655,7 @@ enum WidgetText {
     if id.hasPrefix("es") { return "es" }
     if id.hasPrefix("fr") { return "fr" }
     if id.hasPrefix("pt") { return id.contains("PT") ? "pt-PT" : "pt-BR" }
+    if id.hasPrefix("id") { return "id" }
     return "en"
   }
 

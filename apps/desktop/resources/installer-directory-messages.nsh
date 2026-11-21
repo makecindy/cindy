@@ -31,6 +31,9 @@
     ${Case} 1046 ; pt-BR
       StrCpy $cindyDirectoryMessage "${${KEY}_pt_BR}"
       ${Break}
+    ${Case} 1057 ; id
+      StrCpy $cindyDirectoryMessage "${${KEY}_id}"
+      ${Break}
     ${Default}
       StrCpy $cindyDirectoryMessage "${${KEY}_en}"
       ${Break}
@@ -54,8 +57,10 @@
 !define cindyDirectoryNotWritable_de "Cindy kann nicht in dieses Installationsverzeichnis schreiben. Wähle ein anderes Verzeichnis oder schließe Apps, die auf dessen Dateien zugreifen, und überprüfe deine Sicherheitssoftware, bevor du es erneut versuchst."
 !define cindyDirectoryNotWritable_pt_PT "O Cindy não consegue escrever neste diretório de instalação. Escolha outro diretório ou feche as aplicações que utilizam os respetivos ficheiros e verifique o seu software de segurança antes de tentar novamente."
 !define cindyDirectoryNotWritable_pt_BR "O Cindy não pode gravar neste diretório de instalação. Escolha outro diretório ou feche os aplicativos que usam os arquivos dele e verifique seu software de segurança antes de tentar novamente."
+!define cindyDirectoryNotWritable_id "Cindy tidak bisa menulis ke direktori pemasangan ini. Pilih direktori lain, atau tutup aplikasi yang memakai berkasnya dan periksa perangkat keamananmu, lalu coba lagi."
 !define cindyDirectoryDifferentUser_es "La autorización de Windows usó una cuenta diferente. Para mantener Cindy instalado en tu cuenta, elige un directorio en el que puedas escribir. Para instalarlo para todos los usuarios, vuelve atrás y selecciona esa opción."
 !define cindyDirectoryDifferentUser_fr "L’autorisation Windows a utilisé un autre compte. Pour que Cindy reste installé pour votre compte, choisissez un dossier dans lequel vous pouvez écrire. Pour l’installer pour tous les utilisateurs, revenez en arrière et sélectionnez cette option."
 !define cindyDirectoryDifferentUser_de "Bei der Windows-Autorisierung wurde ein anderes Konto verwendet. Damit Cindy für dein Konto installiert bleibt, wähle ein Verzeichnis, in das du schreiben kannst. Um die Installation für alle Benutzer durchzuführen, gehe zurück und wähle diese Option."
 !define cindyDirectoryDifferentUser_pt_PT "A autorização do Windows utilizou uma conta diferente. Para manter o Cindy instalado na sua conta, escolha um diretório no qual possa escrever. Para instalar para todos os utilizadores, volte atrás e selecione essa opção."
 !define cindyDirectoryDifferentUser_pt_BR "A autorização do Windows usou uma conta diferente. Para manter o Cindy instalado na sua conta, escolha um diretório no qual você tenha permissão de gravação. Para instalar para todos os usuários, volte e selecione essa opção."
+!define cindyDirectoryDifferentUser_id "Otorisasi Windows memakai akun lain. Agar Cindy tetap terpasang untuk akunmu, pilih direktori yang bisa kamu tulis. Untuk memasang bagi semua pengguna, kembali dan pilih opsi itu."

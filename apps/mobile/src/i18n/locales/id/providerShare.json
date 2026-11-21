@@ -1,0 +1,16 @@
+{
+  "picker": {
+    "shareName": "Dibagikan oleh {{owner}}",
+    "numbered": "{{name}} ({{index}})",
+    "unavailable": "Berbagi yang sudah tidak tersedia"
+  },
+  "link": {
+    "title": "Berbagi penyedia",
+    "heading": "Buka tautan ini di komputer",
+    "body": "Berbagi penyedia hanya bisa diminta dan dipakai di {{appName}} pada komputer. Kirim tautan ke komputermu lalu buka di sana, atau tempel di “Pengaturan → Penyedia model → Penyedia yang dibagikan kepadaku”.",
+    "note": "Tautan berbagi berlaku 5 menit setelah dibuat dan hanya bisa dipakai sekali.",
+    "copy": "Salin tautan berbagi",
+    "copied": "Tautan berbagi disalin",
+    "copyFailed": "Gagal menyalin tautan berbagi. Coba lagi nanti."
+  }
+}
