@@ -137,7 +137,7 @@ import {
 } from '../providerShareCrossRegion';
 import { DeviceLinkError, PROVIDER_METADATA_TRUST_MS, providerShareHostPeer } from '@cindy/device-link';
 import { sha256Hex } from '../providerShareApi';
-import { captureProviderShareGroupRecovery, getConfirmedReceivedShareIds, getReceivedSharesSnapshot, onProviderShareReceivedChanged, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
+import { captureProviderShareGroupRecovery, getConfirmedReceivedShareIds, getReceivedSharesSnapshot, onProviderShareReceivedChanged, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTarget, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
 import { createProviderGroupRemoteClient } from '../../provider-group/remoteClient';
 
 const share = {
@@ -1118,6 +1118,7 @@ describe('cross-region provider share', () => {
     expect(getCrossRegionReceived()).toEqual([]);
     expect(getConfirmedCrossRegionReceivedRegions()).toEqual(['global']);
     expect(events.changed).toHaveBeenCalled();
+    expect(() => resolveRemoteAgentTarget('share:share-x')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
 
     // A later authoritative list is a real new confirmation, not a revival.
     state.responses.set('/session', { credential: CREDENTIAL,

@@ -1300,10 +1300,12 @@ describe('provider share guest routing', () => {
     expect(denied.received).toEqual([]);
     expect(denied.confirmedRegions).toContain('global');
     expect(changed).toHaveBeenCalled();
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
 
     state.receivedDenied = false;
     await refreshReceivedShares('recovered');
     expect(getReceivedSharesSnapshot().received.map(item => item.shareId)).toEqual(['share-1']);
+    expect(resolveRemoteAgentTarget('share:share-1')).toBe(providerShareHostPeer('share-1', 'owner-mac'));
   });
 
   it('keeps the local directory budget from the list request start and does not renew it after a failure', async () => {

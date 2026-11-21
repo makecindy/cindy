@@ -80,6 +80,9 @@ interface RegionState {
   failures: number;
   loaded: boolean;
   listConfirmed: boolean;
+  listUnavailable: boolean;
+  /** Share IDs seen in successful responses, retained to classify a later denial. */
+  knownShareIds: Set<string>;
   /** Request start of the last successful authoritative list for this region. */
   viewAnchor: ViewAnchor | null;
   requestRevision: number;
@@ -463,7 +466,7 @@ function scheduleRefresh(rt: Runtime, state: RegionState): void {
 
 function initialRegionState(region: Region, loaded = false): RegionState {
   return { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, refreshingRevision: 0, timer: null, failures: 0, loaded, viewAnchor: null, requestRevision: 0,
-    listConfirmed: false };
+    listConfirmed: false, listUnavailable: false, knownShareIds: new Set() };
 }
 
 /** 用新名片换取这台电脑在对方区域的分享列表与连接凭证。 */
@@ -512,7 +515,9 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       state.expiresAt = expiresAt;
       const previousShares = state.shares;
       state.shares = preserveNewerHostOnline(previousShares, shares, requestedHostOnlineSequence);
+      for (const share of shares) state.knownShareIds.add(share.shareId);
       state.listConfirmed = true;
+      state.listUnavailable = false;
       noteSharePermissions(previousShares, state.shares);
       state.loaded = true;
       if (shares.length === 0 || !credential) {
@@ -540,14 +545,17 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
           // count as a successful membership response for preference cleanup.
           target.shares = [];
           target.loaded = true;
+          target.listUnavailable = true;
           target.client?.stop();
           target.client = null;
           target.credential = null;
           target.expiresAt = 0;
           rt.events.changed();
         } else if (wasConfirmed) {
+          target.listUnavailable = true;
           rt.events.changed();
         }
+        if (!isAuthoritativeShareListDenial(error)) target.listUnavailable = true;
         // 退避重试：1 → 2 → 4 … 最多 30 分钟；关闭跨区开关等确定性错误同样按退避慢慢重试。
         target.failures += 1;
         if (target.timer) clearTimeout(target.timer);
@@ -667,13 +675,13 @@ export function getMembershipConfirmedCrossRegionReceivedRegions(): Region[] {
 }
 
 export function isCrossRegionShareListUnavailable(shareId: string): boolean {
-  return stateForShare(shareId)?.listConfirmed === false;
+  return [...(runtime?.regions.values() ?? [])].some(state => state.listUnavailable && state.knownShareIds.has(shareId));
 }
 
 export function getUnavailableCrossRegionShareIds(): string[] {
   const rt = runtime;
   if (!rt || !current(rt)) return [];
-  return [...rt.regions.values()].flatMap(state => state.listConfirmed ? [] : state.shares.map(share => share.shareId));
+  return [...rt.regions.values()].flatMap(state => state.listUnavailable ? [...state.knownShareIds] : []);
 }
 
 /** Per-region display budgets from successful cross-region list requests.
