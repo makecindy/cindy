@@ -157,6 +157,7 @@ export default function (pi) {
   function textOf(content) {
     if (typeof content === 'string') return content;
     if (!Array.isArray(content)) return '';
+    if (content.length === 1 && content[0] && content[0].type === 'text' && typeof content[0].text === 'string') return content[0].text;
     var parts = [];
     for (var i = 0; i < content.length; i++) {
       var block = content[i];
@@ -165,20 +166,33 @@ export default function (pi) {
     return parts.join('\n');
   }
 
+  // Scan lines in place: a multi-megabyte payload split into an array of lines per folded
+  // result per turn costs more than everything else in this hook put together.
+  function countLines(text) {
+    var count = 1;
+    for (var at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) count += 1;
+    return count;
+  }
+
   function firstLine(text) {
-    var lines = text.split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      var line = oneLine(lines[i]);
+    var start = 0;
+    while (start <= text.length) {
+      var end = text.indexOf('\n', start);
+      if (end === -1) end = text.length;
+      var line = oneLine(text.slice(start, end));
       if (line) return line;
+      start = end + 1;
     }
     return '';
   }
 
   function lastLine(text) {
-    var lines = text.split('\n');
-    for (var i = lines.length - 1; i >= 0; i--) {
-      var line = oneLine(lines[i]);
+    var end = text.length;
+    while (end > 0) {
+      var start = text.lastIndexOf('\n', end - 1) + 1;
+      var line = oneLine(text.slice(start, end));
       if (line) return line;
+      end = start - 1;
     }
     return '';
   }
@@ -290,9 +304,10 @@ export default function (pi) {
     };
   }
 
+  /** Summary record, or null when the record would not be shorter than the payload. */
   function foldedResult(result, call, argsFolded) {
     var text = textOf(result.content);
-    var lines = text ? text.split('\n').length : 0;
+    var lines = text ? countLines(text) : 0;
     var summary = '[folded] ' + (result.isError === true ? 'error' : 'ok');
     if (call && call.name) summary += ' \u00b7 ' + String(call.name);
     if (argsFolded && call) {
@@ -309,6 +324,9 @@ export default function (pi) {
     if (typeof result.toolCallId === 'string' && result.toolCallId) {
       summary += ' \u00b7 full: toolfold_read("' + result.toolCallId + '")';
     }
+    // Never trade content for a longer summary. Estimating this was wrong once already
+    // (a batch of "ok" results grew); the text is in hand here, so compare exactly.
+    if (summary.length >= text.length) return null;
     return { role: 'toolResult', toolCallId: result.toolCallId, toolName: result.toolName, isError: result.isError, content: [{ type: 'text', text: summary }] };
   }
 
@@ -621,8 +639,7 @@ export default function (pi) {
         var entry = callsById[String(result.toolCallId)];
         if (!entry || !entry.foldResult) continue;
         var record = foldedResult(result, entry.call, entry.argsFolded);
-        // Never trade content for a longer summary: the estimate above is rough, this is exact.
-        if (textOf(record.content).length >= textOf(result.content).length) continue;
+        if (!record) continue;
         if (out === null) out = messages.slice();
         out[unit.indexes[r]] = record;
       }
