@@ -13,6 +13,7 @@ import {
   lookupVerifiedContextWindow,
   isContextOverflowErrorData,
   isOversizedHistoryErrorData,
+  isPiRequestBodyTooLargeErrorData,
   isPiPromptRpcTimeoutError,
   persistedUserContentToWireMessage,
   planContextOverflowRollover,
@@ -187,6 +188,13 @@ describe('shouldRebuildPiNativeSession', () => {
     ).toBe(false);
   });
 
+  it('admits a raw Pi request-body 413 into native-session recovery', () => {
+    const error = { message: '413 length limit exceeded' };
+    expect(isPiRequestBodyTooLargeErrorData(error)).toBe(true);
+    expect(shouldRebuildPiNativeSession(error)).toBe(true);
+    expect(isPiRequestBodyTooLargeErrorData({ message: '413 unauthorized' })).toBe(false);
+  });
+
   it('finds a trailing prompt-timeout error as the reason to skip resume', () => {
     expect(
       findLatestRebuildableError([
@@ -194,6 +202,12 @@ describe('shouldRebuildPiNativeSession', () => {
         msg('error', { message: 'pi rpc timeout after 30000ms: prompt' }, 'e1'),
       ]),
     ).toEqual({ message: 'pi rpc timeout after 30000ms: prompt' });
+    expect(
+      findLatestRebuildableError([
+        msg('user', '继续', 'u1'),
+        msg('error', { message: '413 length limit exceeded' }, 'e1'),
+      ]),
+    ).toEqual({ message: '413 length limit exceeded' });
     expect(
       findLatestRebuildableError([
         msg('user', '还有建议吗', 'u1'),
@@ -1925,6 +1939,23 @@ describe('createContextOverflowRollover', () => {
     const deps = makeDeps([
       msg('user', 'Continue', 'u1'),
       msg('error', JSON.stringify({ message: `PI_REQUEST_BODY_RECOVERY_EXHAUSTED: ${error}` }), 'e1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active', agentKind: 'pi', remoteHostId: null, clearedAt: null,
+      sdkSessionId: '/tmp/pi-session', contextTokens: 0, contextWindow: 1_000_000,
+      model: 'test-model', providerId: 'local-test',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds before the next send after a raw Pi request-body 413', async () => {
+    const deps = makeDeps([
+      msg('user', 'Continue', 'u1'),
+      msg('error', JSON.stringify({ message: '413 length limit exceeded' }), 'e1'),
     ]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active', agentKind: 'pi', remoteHostId: null, clearedAt: null,

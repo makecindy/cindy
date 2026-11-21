@@ -166,9 +166,23 @@ function isPiRequestBodyRecoveryExhausted(data: unknown): boolean {
     typeof value === 'string' && value.includes(PI_REQUEST_BODY_RECOVERY_EXHAUSTED));
 }
 
+/** A native Pi prompt can fail with a raw HTTP 413 before the one-shot compact
+ * recovery has a chance to persist PI_REQUEST_BODY_RECOVERY_EXHAUSTED. Keep
+ * this classifier narrow: only request-body size errors are admission evidence.
+ */
+export function isPiRequestBodyTooLargeErrorData(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const rec = data as { message?: unknown; sdkError?: unknown; errorMessage?: unknown };
+  return [rec.message, rec.sdkError, rec.errorMessage].some(value =>
+    typeof value === 'string' &&
+      /(?:\b413\b[^\n]*(?:length|body|too\s+large)|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(value),
+  );
+}
+
 /** PI 原生会话已经无法继续：超限，或 prompt RPC 超时（巨大 jsonl resume 卡死）。 */
 export function shouldRebuildPiNativeSession(data: unknown): boolean {
-  return isContextOverflowErrorData(data, 'pi') || isPiPromptRpcTimeoutError(data) || isPiRequestBodyRecoveryExhausted(data);
+  return isContextOverflowErrorData(data, 'pi') || isPiPromptRpcTimeoutError(data)
+    || isPiRequestBodyRecoveryExhausted(data) || isPiRequestBodyTooLargeErrorData(data);
 }
 
 const GROK_4_CONTEXT_CAP = 500_000;
@@ -424,6 +438,7 @@ export function findLatestRebuildableError(
       if (isContextOverflowErrorData(data)) return data;
       if (allowPiPromptTimeout && isPiPromptRpcTimeoutError(data)) return data;
       if (allowPiPromptTimeout && isPiRequestBodyRecoveryExhausted(data)) return data;
+      if (allowPiPromptTimeout && isPiRequestBodyTooLargeErrorData(data)) return data;
       if (isOversizedHistoryErrorData(data)) return data;
       if (allowCompanionCompactFailure && isCompanionCompactFailure(data)) return data;
       return null;
@@ -716,13 +731,15 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const oversized = isOversizedHistoryErrorData(errorData);
     const checkExternalOwner = oversized || isCompactionModelUnavailable(errorData);
     const unsupportedOption = isUnsupportedRequestOptionErrorData(errorData);
-    if (!isContextOverflowErrorData(errorData) && !oversized && !unsupportedOption) return false;
+    const rawPiRequestTooLarge = isPiRequestBodyTooLargeErrorData(errorData);
+    if (!isContextOverflowErrorData(errorData) && !oversized && !unsupportedOption && !rawPiRequestTooLarge) return false;
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     signal?.throwIfAborted();
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     // SSH only. device-link 会话落在被控桌面本地库,没有 remoteHostId,必须继续换窗。
     if (sessionRow.remoteHostId) return false;
+    if (rawPiRequestTooLarge && sessionRow.agentKind !== 'pi') return false;
     // compat 自愈只服务本机桌面会话（与 replayUserMessage 的 continueFromHistory 一致）：
     // 外部派单方有自己的重试语义，canonical bot 的派单走 owner 路径，不在这里代播。
     if (unsupportedOption && (sessionRow.source !== 'desktop' || sessionRow.agentKind !== 'pi')) return false;
@@ -1187,7 +1204,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // recovery guard shared with ordinary Sessions (Codex manages its own limit).
     const pressure = sessionRow.agentKind !== 'codex' && shouldRebuildForContextPressure(usedTokens, window);
     const compactFailed = liveUsage?.needsRollover === true;
-    const piByteRecoveryFailed = sessionRow.agentKind === 'pi' && isPiRequestBodyRecoveryExhausted(lastError);
+    const piByteRecoveryFailed = sessionRow.agentKind === 'pi'
+      && (isPiRequestBodyRecoveryExhausted(lastError) || isPiRequestBodyTooLargeErrorData(lastError));
     const tokenViolated =
       isContextOverflowErrorData(lastError, sessionRow.agentKind) ||
       isPiPromptRpcTimeoutError(lastError) ||
