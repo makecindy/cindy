@@ -3681,6 +3681,7 @@ async function createCodexProxyHandle(
     controller: responsesCallIdLengthStripController,
     enabled: responsesCallIdLengthRule.enabled,
     strip: responsesCallIdLengthRule.strip,
+    threadIdHeaders: responsesCallIdLengthRule.threadIdHeaders,
     scopeByUpstream: true,
   });
   const normalizeReplayCallIds: RequestTransform = (body, ctx) => {

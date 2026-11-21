@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { RecoveryRule, RequestTransform } from '@cindy/anthropic-compat-proxy';
+import { shortenResponsesItemId, type RecoveryRule, type RequestTransform } from '@cindy/anthropic-compat-proxy';
 import { resolveProviderCompatibilityProfile } from '@cindy/model-compat';
 
 function callId(item: unknown): string | undefined {
@@ -62,8 +62,20 @@ export const responsesCallIdLengthRule: RecoveryRule = {
     let parsed: unknown;
     try { parsed = JSON.parse(body.toString('utf8')); } catch { return null; }
     const next = shortenCodexCallIds(parsed);
-    return next ? Buffer.from(JSON.stringify(next)) : null;
+    if (!next || !Array.isArray(next.input)) return null;
+    // Recover both local identifier fields on the sole retry. Stored references
+    // still address upstream items and cannot be renamed by this replay.
+    const referencedIds = new Set<unknown>();
+    for (const item of next.input) {
+      if (item?.type === 'item_reference') referencedIds.add(item.id);
+    }
+    const input = next.input.map(item => typeof item?.id === 'string' && item.id.length > 64 && !referencedIds.has(item.id)
+      ? { ...item, id: shortenResponsesItemId(item.id) }
+      : item);
+    return Buffer.from(JSON.stringify({ ...next, input }));
   },
   applyOnUnmatchedRetry: false,
+  allowExtraRules: false,
+  threadIdHeaders: ['thread-id'],
   useUpstreamModel: true,
 };
