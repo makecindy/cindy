@@ -18497,7 +18497,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           scheduledQuotaInputs.add(args[2]);
         } else scheduledQuotaInputs.delete(args[2]);
         const groupFallback = origin?.kind !== 'scheduler' && !ownsQuotaRoute() && botInput?.source === 'desktop' && !botInput.remoteHostId && !botInput.agentDeviceId &&
-          !botInput.orcaRole && readSessionRuntimeFallbackSettings().enabled && !!(await activeModelGroupBinding(sessionId, botInput)) && !isSessionSharedTaskActive(sessionId);
+          (!botInput.orcaRole || botInput.orcaRole === 'worker') && readSessionRuntimeFallbackSettings().enabled && !!(await activeModelGroupBinding(sessionId, botInput)) && !isSessionSharedTaskActive(sessionId);
         if (groupFallback) modelGroupInputs.add(args[2]);
         else modelGroupInputs.delete(args[2]);
         if (botInput?.source === 'bot' && ['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(botInput.role ?? '')) {
@@ -19666,16 +19666,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
         // 协同 Worker 的终态与 error 行按同一次登记结算：换成了不回报这次异常终止，没换成才回报给 Lead。
         const recoveryOwner = activeOwnerScopeKey();
-        hooks = {
-          notHandled: () => recoveryOwner === activeOwnerScopeKey() && inputCoordinator.resumeAfterProviderGroupDeclined(
-            sessionId, candidateToken, signals, (attemptToken) => {
+        const transferRecovery = (token: number) => recoveryOwner === activeOwnerScopeKey() && inputCoordinator.resumeAfterProviderGroupDeclined(
+            sessionId, token, signals, (attemptToken) => {
               const detail = providerGroupHeldErrors.takeForRecovery(sessionId, holdId);
               if (detail) autoResumeBookkeeping.stashSuppressedError(sessionId, detail, attemptToken);
               const terminal = providerGroupHeldTerminals.takeForRecovery(sessionId, holdId);
               if (terminal?.orcaTerminal) autoResumeBookkeeping.stashOrcaSuppressedTerminal(sessionId, terminal.orcaTerminal);
               if (terminal?.groupTerminal) autoResumeBookkeeping.stashBotGroupSuppressedTerminal(sessionId, terminal.groupTerminal);
             },
-          ),
+          );
+        hooks = {
+          notHandled: transferRecovery,
+          accountsExhausted: token => modelGroupInputs.has(item.createOpts) && transferRecovery(token),
           beforeFallback: () => releaseProviderGroupHeld(sessionId, holdId),
           resumed: () => discardProviderGroupHeld(sessionId, holdId),
           // 先等原电脑恢复时进行中行显示「重新连接中 n/5」，开始换电脑时改回「正在换一台电脑继续」。

@@ -180,7 +180,7 @@ export function buildWorkerFailureRecoveryNote(workerSessionId: string): string 
   return (
     '(Host note: this Worker is kept as it is: its conversation, working directory and uncommitted changes ' +
     `are intact, and its status is now error. To retry or continue, send_to_worker to the same worker (session_id: ${workerSessionId}). ` +
-    'For a usage limit, keep the selected model and let its provider group try another account. If no account can continue, report the limit. Change models only when the user requests it. ' +
+    'For a usage limit, keep the selected model and let its provider group try another account. Once those accounts are exhausted, continue this Worker using its configured model fallback order. Report the limit if no configured candidate can continue. ' +
     'For a requested route change use set_worker_runtime (models and sources from list_available_models; local Workers only), ' +
     'then send_to_worker: the new route starts with this conversation. ' +
     'Archiving it and creating a replacement starts over without this context.)'
@@ -205,7 +205,7 @@ export function workerRouteFailureHint(message: string): string | null {
       : 'its subscription account is unavailable';
   return (
     `The message was not delivered: the Worker's current route cannot start because ${reason}. ` +
-    'Its conversation, working directory and changes are kept. Keep the selected model when changing accounts. Change models only when the user requests it. To choose another source use ' +
+    'Its conversation, working directory and changes are kept. Keep the selected model when changing accounts. After those accounts are exhausted, follow the configured model fallback order. To choose another source use ' +
     'set_worker_runtime (list_available_models lists models and sources; the same subscription source can move ' +
     'it to another of its accounts that has quota), then send_to_worker again; or wait and send then.'
   );

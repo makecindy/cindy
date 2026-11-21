@@ -808,6 +808,17 @@ describe('onTurnError (automatic switch)', () => {
     expect(none.deps.continueSession).not.toHaveBeenCalled();
   });
 
+  it('offers configured model recovery after exhausting same-model accounts', async () => {
+    const h = harness({ members: [LOCAL, MINI] });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    h.deps.switchAgentLocation.mockRejectedValue(new Error('[REMOTE_AGENT_MODEL_UNAVAILABLE]'));
+    const accountsExhausted = vi.fn(() => true);
+    await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { accountsExhausted });
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    expect(accountsExhausted).toHaveBeenCalledWith(1);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
   it('stops without blaming the target when the handoff fails for an unrelated reason', async () => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
