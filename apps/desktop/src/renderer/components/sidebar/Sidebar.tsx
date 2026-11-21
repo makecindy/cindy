@@ -311,7 +311,7 @@ export function Sidebar({
           不提供 resize。 */}
       {!isCollapsed && !isPeek && (
         <div
-          className="absolute right-0 top-0 z-10 h-full w-[4px] cursor-col-resize group/handle"
+          className="absolute right-0 top-0 z-raised h-full w-[4px] cursor-col-resize group/handle"
           onPointerDown={onDragStart}
           onDoubleClick={onResetWidth}
         >
