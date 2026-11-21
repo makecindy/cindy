@@ -41,8 +41,6 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-run-markers-'));
 });
 
-type ProcessWithCreationTime = NodeJS.Process & { getCreationTime?: () => number | null };
-
 const originalProcessCreationTimeDescriptor = Object.getOwnPropertyDescriptor(
   process,
   'getCreationTime',
@@ -52,7 +50,7 @@ afterEach(() => {
   if (originalProcessCreationTimeDescriptor) {
     Object.defineProperty(process, 'getCreationTime', originalProcessCreationTimeDescriptor);
   } else {
-    delete (process as ProcessWithCreationTime).getCreationTime;
+    Reflect.deleteProperty(process, 'getCreationTime');
   }
   vi.restoreAllMocks();
   fs.rmSync(tmpDir, { recursive: true, force: true });
