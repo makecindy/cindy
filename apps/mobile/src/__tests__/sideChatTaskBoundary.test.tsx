@@ -50,6 +50,7 @@ vi.mock('../session/remoteSessionStore', () => ({
       return () => { state.listeners.delete(listener); };
     },
   },
+  useRemoteSessions: () => [],
   useRemoteSessionDetail: () => ({ source: state.source }),
 }));
 vi.mock('../session/CindyMakeSessionGate', () => ({

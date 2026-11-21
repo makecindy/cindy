@@ -15,7 +15,7 @@ import { SessionTaskDrawerProvider } from './SessionTaskDrawer';
 import { buildWideSessionNavLayout } from './wideSessionNav';
 import { sharedStatusRowTrailingReserve } from '@/platform/windowGeometry';
 import { useSessionPaneLayout, useSessionSidebarWidthPreference } from './ResidentHomeList';
-import { remoteSessionStore, useRemoteSessionDetail } from './remoteSessionStore';
+import { remoteSessionStore, useRemoteSessionDetail, useRemoteSessions } from './remoteSessionStore';
 import { SessionListDrawer } from './SessionListDrawer';
 import { switchDrawerSessionInPlace, taskListSessionTarget, type SessionRouteParamsNavigation } from './sessionDrawerNavigation';
 import type { RemoteSessionListItem } from './sessionList';
@@ -36,7 +36,8 @@ export function SessionTaskLayout({ children }: {
   const params = useLocalSearchParams<{ sessionId: string; deviceId?: string; deviceName?: string; resourceHistorySessionId?: string; resourceId?: string; focusClientId?: string; taskListEntry?: string }>();
   const sessionId = readRouteParam(params.sessionId) ?? '';
   const linkedDeviceId = readRouteParam(params.deviceId);
-  const listedSession = remoteSessionStore.getSessions?.()?.find((item) => item.id === sessionId);
+  const sessions = useRemoteSessions();
+  const listedSession = sessions.find((item) => item.id === sessionId);
   const deviceId = resolveSessionLinkDeviceId({
     listedDeviceId: listedSession?.canonicalDeviceId ?? listedSession?.deviceLinkDeviceId,
     linkedDeviceId,
