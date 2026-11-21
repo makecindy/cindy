@@ -124,7 +124,7 @@ export function getStreamingMarkdownThrottleInterval(markdown: string): number {
  * 缩进、列表和引用的续行不会被拆开。这样已封口块可由 React.memo 永久复用，
  * 后续 token 只会让最后一个块重新走 Markdown 解析。
  */
-export function splitStreamingMarkdownChunks(markdown: string): StreamingMarkdownChunk[] {
+export function splitStreamingMarkdownChunks(markdown: string, keepLinkContext = false): StreamingMarkdownChunk[] {
   if (
     (!markdown.includes('\n\n') && !markdown.includes('\r\n\r\n')) ||
     needsWholeDocumentContext(markdown)
@@ -194,5 +194,17 @@ export function splitStreamingMarkdownChunks(markdown: string): StreamingMarkdow
     start = boundary;
   }
   chunks.push({ start, content: markdown.slice(start) });
+  // Inline links in different chunks may share a filename. Keep one parse
+  // tree for those snapshots so the renderer can compare their labels.
+  // This is a cheap syntax hint; the Markdown parser still decides what is a
+  // link. Link definitions already take the whole-document path above.
+  if (keepLinkContext) {
+    let sawLinkChunk = false;
+    for (const chunk of chunks) {
+      if (!chunk.content.includes('](')) continue;
+      if (sawLinkChunk) return [{ start: 0, content: markdown }];
+      sawLinkChunk = true;
+    }
+  }
   return chunks;
 }

@@ -41,10 +41,10 @@ const events = new Map<string, Set<(value: any) => void>>();
 const eventNames = ['onPresenceChanged', 'onStatusChanged', 'onPeerLinkReopened', 'onResponsivenessChanged'];
 const emit = (name: string, value: unknown) => events.get(name)?.forEach(listener => listener(value));
 
-function reply(content = '`' + href + '`', deviceId = 'remote-a', workingDir = '/remote/project', origin?: SessionFileOrigin) {
+function reply(content = '`' + href + '`', deviceId = 'remote-a', workingDir = '/remote/project', origin?: SessionFileOrigin, isStreaming = false) {
   return <MemoryRouter><Tooltip.Provider>
     <ChatSessionFileProvider value={{ sessionId: 'session', workingDir, origin: origin ?? { kind: 'device', deviceId } }}>
-      <MarkdownRenderer content={content} workingDir={workingDir} currentSessionId="session" />
+      <MarkdownRenderer content={content} workingDir={workingDir} currentSessionId="session" isStreaming={isStreaming} />
     </ChatSessionFileProvider>
   </Tooltip.Provider></MemoryRouter>;
 }
@@ -300,13 +300,13 @@ describe('remote home references', () => {
     );
   });
 
-  it('shows enough parent directories to distinguish same-name file links without moving their targets', async () => {
+  it.each([false, true])('distinguishes same-name links across paragraphs without moving their targets (streaming=%s)', async isStreaming => {
     const local = { kind: 'local' } as const;
     const view = render(reply([
       '[guide.html](/workspace/A/docs/guide.html)',
       '[guide.html](/workspace/B/docs/guide.html)',
       '[intro.html](/workspace/A/docs/intro.html)',
-    ].join(' '), 'unused', '/workspace/A', local));
+    ].join('\n\n'), 'unused', '/workspace/A', local, isStreaming));
     await act(async () => {});
     const links = view.getAllByRole('link');
     expect(links.map(link => link.textContent)).toEqual(['A/docs/guide.html', 'B/docs/guide.html', 'intro.html']);

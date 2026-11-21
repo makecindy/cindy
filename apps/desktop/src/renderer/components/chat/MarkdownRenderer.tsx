@@ -1878,9 +1878,9 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   const streamingChunks = useMemo(
     () =>
       isStreaming && !emitSourceLines
-        ? splitStreamingMarkdownChunks(renderedContent)
+        ? splitStreamingMarkdownChunks(renderedContent, allowPrivilegedLinks)
         : [{ start: 0, content: renderedContent }],
-    [emitSourceLines, isStreaming, renderedContent],
+    [allowPrivilegedLinks, emitSourceLines, isStreaming, renderedContent],
   );
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
