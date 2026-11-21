@@ -629,6 +629,14 @@ export class Scheduler extends EventEmitter {
    */
   private readonly pendingReplans = new Map<string, StalledClaimPlan>();
   /**
+   * 每条任务最近一次**落地**的补排结论的登记时刻(见 ownsPendingReplan)。
+   *
+   * 补排可能在途很久(存储挂死):新一轮补排已经结论并摘掉凭据之后,旧一轮迟到的
+   * 失败不能因为「队列里没有凭据」就把陈旧计划重新上膛 —— 那会给已经重新认领、
+   * 正在跑的新一轮又排一次触发(共享 DB 下就是重叠执行)。
+   */
+  private readonly replanWatermark = new Map<string, number>();
+  /**
    * 在途的过期回读（key = scheduleId）。CAS 败者后要回读真实行,这一读也可能超上限;
    * 超时后迟到收口必须用**原来那次**读的结果 —— 另起一次读,那次更慢(或失败)时
    * 这一行就丢了,缓存一直停在旧的(已过期)截止时间。同一任务只保留一份在途读,
@@ -890,6 +898,7 @@ export class Scheduler extends EventEmitter {
     // 在途补排同理:上一段生命周期的补排可能永远不 settle,不能让它把新主人的
     // 补排挡在门外。
     this.inFlightReplans.clear();
+    this.replanWatermark.clear();
     // 在途清扫同理:挂死的那一份不能把新主人的清扫一直挡在门外。
     this.inFlightSweep = undefined;
     // 在途的守卫回读同理:挂死的读不能跨生命周期留着,否则新主人一直复用上一段
@@ -2623,6 +2632,8 @@ export class Scheduler extends EventEmitter {
       : undefined;
     await this.storage.delete(id);
     this.invalidScheduleIds.delete(id);
+    this.pendingReplans.delete(id);
+    this.replanWatermark.delete(id);
     this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
     return previousFailure;
@@ -3858,7 +3869,10 @@ export class Scheduler extends EventEmitter {
       // 每一个早退分支都绕过了它)。
       // 只摘**自己这一轮**的凭据:等待期间任务被重新触发又跑挂了新一轮,凭据已经
       // 顶替,旧一轮迟到的成功不能把新 run 待补的排期凭据一起删掉。
-      if (this.ownsPendingReplan(scheduleId, attempt)) this.pendingReplans.delete(scheduleId);
+      if (this.ownsPendingReplan(scheduleId, attempt)) {
+        this.pendingReplans.delete(scheduleId);
+        this.replanWatermark.set(scheduleId, attempt.startedAt);
+      }
     } catch (err) {
       // 只有"这次没做成"才保留/上膛,由后续 tick 重试(见 retryPendingReplans)。
       // 同样只碰自己这一轮:旧一轮迟到的失败不能把新 run 的凭据换成自己的陈旧副本。
@@ -3869,6 +3883,7 @@ export class Scheduler extends EventEmitter {
           startedAt: attempt.startedAt,
           source: attempt.source,
         });
+        this.replanWatermark.set(scheduleId, attempt.startedAt);
       }
       this.logger?.warn?.('scheduler: replan after stalled run failed — queued for retry', {
         scheduleId,
@@ -3892,7 +3907,15 @@ export class Scheduler extends EventEmitter {
    */
   private ownsPendingReplan(scheduleId: string, attempt: StalledClaimPlan): boolean {
     const tracked = this.pendingReplans.get(scheduleId);
-    return !tracked || tracked.startedAt <= attempt.startedAt;
+    // 队列里已经放着更新的一轮凭据 → 本轮结论不能碰它。
+    if (tracked && tracked.startedAt > attempt.startedAt) return false;
+    // 已经有过更新的一轮结论落地(凭据因此被摘掉)→ 「队列里没有凭据」不代表本轮
+    // 还能上膛。少这一道,旧一轮迟到的失败会把陈旧计划重新上膛,之后每个 tick 都
+    // 重试它;任务那时已被重新认领,这次重试会再排一次触发(或把一次性任务标过期),
+    // 与正在跑的新一轮重叠(Codex P1 on #11577)。
+    const watermark = this.replanWatermark.get(scheduleId);
+    if (watermark !== undefined && attempt.startedAt < watermark) return false;
+    return true;
   }
 
   /** replanAfterStalledClaim 的函数体;抛错即"本次没做成",由调用方决定重试。 */
