@@ -108,6 +108,8 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     resetWireNotes: id => runtime.resetWireNotes(id),
   });
   return createContextOverflowRollover(explicitPorts<Parameters<typeof createContextOverflowRollover>[0]>({
+    // The headless Host does not inject Desktop historyRemote/sendToRemoteSession.
+    supportsRemoteSessionHandoff: false,
     // Plugin-owned and headless plugin setup turns: the Host refuses both inputs today.
     hasExternalRecoveryOwner: () => false,
     // Ports the Host leaves unbound, each written out (explicit-ports.ts):

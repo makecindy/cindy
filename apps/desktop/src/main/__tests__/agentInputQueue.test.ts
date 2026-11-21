@@ -47,6 +47,31 @@ function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueue
 }
 
 describe('agentInputQueue', () => {
+  it('projects the send_to_session path only for a host-authorized referenced task', () => {
+    const href = 'cindy://session/target';
+    const queued = {
+      ...queuedMessage([]),
+      text: href,
+      persistedContent: href,
+      agentReferences: [{
+        kind: 'session' as const,
+        start: 0,
+        end: href.length,
+        href,
+        sessionId: 'target',
+        title: 'Target',
+      }],
+    };
+    expect(buildMakerUserMessage(queued)).toMatchObject({ content: expect.stringContaining('cindy_helper\'s call_tool') });
+    expect(buildMakerUserMessage({ ...queued, createOpts: { ...queued.createOpts, orcaRole: 'lead' } }))
+      .toMatchObject({ content: expect.stringContaining('send_to_session') });
+    expect(buildMakerUserMessage({ ...queued, createOpts: { ...queued.createOpts, remoteHostId: 'ssh-1' } }))
+      .toMatchObject({ content: expect.not.stringContaining('send_to_session') });
+    // message-source.md「发给模型的说明」: auto titles and Ghost hooks share this projection,
+    // so the send route must stay out of it.
+    expect(getAgentFacingText(queued)).not.toContain('send_to_session');
+  });
+
   it.each([false, true])('keeps synthetic text on disk and strips only host text-only model input (%s)', (toolsDisabled) => {
     const text = '[UI_ACTION_TRIGGER]Say hello with cached usage hints.';
     const queued = {

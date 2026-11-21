@@ -27,6 +27,7 @@ import {
 import {
   describeAgentInputReference,
   projectAgentFacingText,
+  resolveAgentSendToSessionHint,
   projectLiteralUserText,
   readAgentInputReferences,
   type AgentInputReference,
@@ -181,6 +182,8 @@ export interface AgentInputCreateOpts {
   displayReasoning?: 'off' | 'summarized' | 'full';
   vendorOptions?: Record<string, unknown>;
   remoteHostId?: string;
+  /** Host-stamped availability of the remote-session handoff callback. */
+  supportsRemoteSession?: boolean;
   resumeSessionId?: string;
 }
 
@@ -966,11 +969,21 @@ export function serializeSessionReferencePayload(
 }
 
 /** Immutable semantic projection shared by Ghost, titles, turn and steer. */
-export function getAgentFacingText(queued: AgentInputQueuedMessage): string {
+export function getAgentFacingText(
+  queued: AgentInputQueuedMessage,
+  options: { includeSendToSessionHint?: boolean } = {},
+): string {
+  const sendToSession = options.includeSendToSessionHint !== true || queued.toolsDisabled === true || !queued.createOpts
+    ? undefined
+    : resolveAgentSendToSessionHint({
+        ...queued.createOpts,
+        supportsRemote: queued.createOpts.supportsRemoteSession,
+      });
   const text = projectAgentFacingText({
     text: queued.text,
     quotesEncoded: queued.chatMessage.quotesEncoded === true,
     agentReferences: queued.agentReferences,
+    sendToSession,
   });
   // Host text-only welcomes stay synthetic in queue/history projections, not in model input.
   return queued.toolsDisabled === true && text.startsWith(UI_ACTION_TRIGGER_PREFIX)
@@ -1221,7 +1234,7 @@ export function buildMakerUserMessage(
   sessionReferenceContexts: AgentInputSessionReferenceContext[] = [],
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
-  const facingText = getAgentFacingText(queued);
+  const facingText = getAgentFacingText(queued, { includeSendToSessionHint: true });
   // 主机内部消息只在排队行 / 历史里需要隐藏前缀;发给模型的正文不带它。
   const authoredText = queued.agentOmitsTriggerPrefix === true && facingText.startsWith(UI_ACTION_TRIGGER_PREFIX)
     ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)

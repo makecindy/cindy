@@ -2588,6 +2588,14 @@ describe('withReplaySourceNotes', () => {
     expect(typeof withNote).toBe('object');
   });
 
+  it('rebuilds the live reply hint with the same session capability on replay', () => {
+    const replayed = withReplaySourceNotes('reply body', {
+      origin: { kind: 'session', senderSessionId: 'studio::source', senderSessionTitle: 'Source' },
+    }, { agentKind: 'pi', supportsRemote: true });
+    expect(JSON.stringify(replayed)).toContain('cindy_mcp_call_tool');
+    expect(JSON.stringify(replayed)).toContain('studio::source');
+  });
+
   it('adds no source note to hidden host instructions or auto-resume rows', () => {
     expect(
       withReplaySourceNotes('继续', { sourcePlugin: { pluginId: 'p' }, autoResume: true }),

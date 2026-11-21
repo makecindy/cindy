@@ -1614,6 +1614,7 @@ import {
   type MainOwnedInputBoundaryStamp,
 } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote, readWireSourceDevice } from './messageSourceNote.js';
+import { resolveAgentSendToSessionHint, type AgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.desktop.js';
 import {
   buildUiLanguageErrorNote,
@@ -6421,6 +6422,7 @@ type SendToSessionDispatchSession = {
   agentKind: EngineKind;
   workDir: string;
   remoteHostId: string | null;
+  sendToSessionHint?: AgentSendToSessionHint;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 };
 
@@ -6438,6 +6440,8 @@ async function confirmReviewExternalArtifacts(
 }
 
 export interface RegisterMakerIpcOptions {
+  /** Whether createDesktopMcpProviders injected sendToRemoteSession from historyRemote. */
+  supportsRemoteSessionHandoff?: boolean;
   /** Reuse the normal settings save notifications, including credential-generation invalidation. */
   builtinApiKeyDeps: BuiltinApiKeyBridgeDeps;
   onAnySessionTurnKeepaliveChange?: (isRunning: boolean) => void;
@@ -9242,6 +9246,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await reconnectHandoff.commit();
       reconnectHandoff = undefined;
     }
+    Object.assign(session, {
+      sendToSessionHint: resolveAgentSendToSessionHint({
+        agentKind: o.agentKind,
+        remoteHostId: o.remoteHostId,
+        reviewMode: o.reviewMode,
+        supportsRemote: options.supportsRemoteSessionHandoff === true,
+      }),
+    });
     wireSessionToIpc(session);
     markOrcaMcpHydratedIfNeeded(session.id, o);
     try {
@@ -9375,6 +9387,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               permissionMode: 'ask',
             });
             assertLocalAppOwner();
+            Object.assign(session, {
+              sendToSessionHint: resolveAgentSendToSessionHint({
+                agentKind: opts.agentKind,
+                remoteHostId: opts.remoteHostId,
+                reviewMode: opts.reviewMode,
+                supportsRemote: options.supportsRemoteSessionHandoff === true,
+              }),
+            });
             wireSessionToIpc(session);
             if (opts.resumeSessionId) agentHandoffPending.consume(session.id);
             broadcastSessionCreated(session.id);
@@ -12000,7 +12020,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const sourceNote = source && shouldPrependMobileClientPromptNote(message, session.agentKind)
         ? buildWireMessageSourceNote(
             { origin: source.origin, sourcePlugin: source.sourcePlugin, autoReviewUserText: source.autoReviewUserText },
-            { visibleText: source.persistedText ?? message },
+            {
+              visibleText: source.persistedText ?? message,
+              sendToSession: session.sendToSessionHint,
+            },
           )
         : null;
       const outgoingMessage: UserMessage = sourceNote
@@ -15361,6 +15384,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       remoteHostId: createOpts.remoteHostId,
       resumeSessionId: createOpts.resumeSessionId,
       orcaRole: createOpts.orcaRole,
+      supportsRemoteSession: options.supportsRemoteSessionHandoff === true,
     };
   }
 
@@ -18558,6 +18582,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       eq: (left, right) => eq(left, right),
     }, sessionId);
   contextOverflowRolloverHolder = createContextOverflowRollover({
+    supportsRemoteSessionHandoff: options.supportsRemoteSessionHandoff === true,
     hasExternalRecoveryOwner: (sessionId) =>
       isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: readContextRecoverySession,
@@ -20492,6 +20517,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
+    normalized.createOpts = {
+      ...normalized.createOpts,
+      supportsRemoteSession: options.supportsRemoteSessionHandoff === true,
+    };
     if (normalized.origin?.kind === 'orca') {
       // 系统兜底合批标记只由 main 的 auto-bridge 入口盖章；wire 自报一律剥掉。
       const origin = { ...normalized.origin };

@@ -22,6 +22,7 @@ export async function readContextRecoverySessionWithPorts(ports: ReadContextReco
         botStatus: ports.botProfiles.status,
         botHiddenAt: ports.botProfiles.hiddenAt,
         agentKind: ports.sessions.agentKind,
+        orcaRole: ports.sessions.orcaRole,
         remoteHostId: ports.sessions.remoteHostId,
         agentDeviceId: ports.sessions.agentDeviceId,
         clearedAt: ports.sessions.clearedAt,
