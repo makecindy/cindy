@@ -21,6 +21,15 @@ function harness() {
 }
 
 describe('permanent Bot model selection', () => {
+  it('hands an existing chat from its current model to the model saved in the companion settings', async () => {
+    const h = harness();
+    const plugin = { harness: 'acp' as const, model: 'chosen', providerId: 'acp-plugin:sample:engine', effort: 'high', fastMode: false };
+    h.state.chain = [plugin];
+    await h.reconcile.profileChanged('canonical');
+    expect(h.apply).toHaveBeenCalledWith('canonical',
+      { agentKind: 'acp', providerId: plugin.providerId, model: 'chosen', effort: 'high', fastMode: false }, h.state.current);
+  });
+
   // 依据：用户反馈（2026-11-20）「模型组设置好，伙伴还是不能用」；model-groups.md §6.2。
   // 生产入口：reconcile / preview。可观察结果：首选是模型组时套用的是组挑出的来源，套用成功后才记一次选择；
   // 预览只看不记；组用不了时按存下的具体模型。最小失败输入：首选带 modelGroup 的链。tier：unit。
@@ -479,7 +488,8 @@ function automationHarness() {
   const original = { ...h.state.current, model: 'runtime-fallback' };
   let baseline: string | null = JSON.stringify({ ...original, scopeId: 'automation' });
   h.apply.mockImplementation(async (_id, route) => {
-    h.state.current = { ...route, effort: route.effort as SessionRuntimeProfile['effort'] };
+    if (route.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
+    h.state.current = { ...route, agentKind: route.agentKind, effort: route.effort as SessionRuntimeProfile['effort'] };
   });
   h.onSelectionAccepted.mockImplementation(async () => { baseline = null; });
   const scope = createScheduledModelScope({
@@ -645,7 +655,8 @@ it('rereads a newer durable save when acceptance loses its database compare-and-
     ownerEpoch: () => 'owner', read: async () => ({ ...h.state, scheduledModelBaseline: baseline }),
     onSelectionAccepted: accepted,
     apply: async (_id, route) => {
-      h.state.current = { ...route, effort: route.effort as SessionRuntimeProfile['effort'] };
+      if (route.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
+      h.state.current = { ...route, agentKind: route.agentKind, effort: route.effort as SessionRuntimeProfile['effort'] };
       if (route.model === 'luna') {
         h.state.chain = [{ ...h.state.chain[0]!, model: 'newest-model' }];
         baseline = JSON.stringify({ ...h.state.current, scopeId: 'automation', pendingBotProfileVersion: 3 });
@@ -671,7 +682,8 @@ it.each(['same-engine', 'cross-engine'] as const)('keeps accepted recovery until
   let effective = current;
   const apply = createBotModelRouteApplier({
     stage: async (_id, route) => {
-      const profile: SessionRuntimeProfile = { ...route, effort: 'medium' };
+      if (route.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
+      const profile: SessionRuntimeProfile = { ...route, agentKind: route.agentKind, effort: 'medium' };
       if (kind === 'same-engine') acceptSessionRuntimeMutation({ sessionId, source: 'agent', profile, deferred });
       else harnessPending = deferred;
       if (!deferred) effective = profile;

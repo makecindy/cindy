@@ -2,12 +2,12 @@ import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline
 import { ScheduledModelSelectionBusyError } from './scheduledModelSelection';
 import { getSessionRuntimeControlSnapshot } from './sessionRuntimeControl';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 
 interface RuntimeRoute {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
   effort: string | null;

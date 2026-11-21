@@ -178,3 +178,16 @@ it('round trips remote forms without exposing a same-named local source to older
   delete wire[0].agentDeviceId; // old editors keep providerId but strip unknown fields
   expect(normalizeBotModelChain(wire)).toEqual([route]);
 });
+
+// Companion settings round-trip a plugin's exact identity; an unreadable origin must never become a built-in route.
+it('round-trips a host plugin model and rejects a foreign or damaged source', () => {
+  const plugin = { harness: 'acp' as const, model: 'sample-model', providerId: 'acp-plugin:sample:engine', effort: 'high', fastMode: false };
+  const fallback = { harness: 'pi' as const, model: 'other', providerId: 'source', effort: '', fastMode: false };
+  const wire = JSON.parse(serializeModelRoutes([plugin, fallback]));
+  expect(normalizeBotModelChain(wire)).toEqual([plugin, fallback]);
+  expect(nextBotModelRoute(wire, plugin)).toEqual(fallback);
+  expect(normalizeBotModelChain([
+    { ...plugin, agentDeviceId: 'other-device' }, { ...plugin, agentDeviceId: 'share:friend' },
+    { ...plugin, harness: 'claude' }, { ...plugin, providerId: 'source' },
+  ])).toEqual([]);
+});

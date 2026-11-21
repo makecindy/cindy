@@ -882,7 +882,7 @@ describe('AcpAgent (the acp engine)', () => {
       endpoints: { connect: async () => createFakeAgent().transport },
       preparePiExtraSpawnConfig: async (_providers, ctx) => { contexts.push(ctx as unknown as Record<string, unknown>); return null; },
     });
-    await agent.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', ...(trusted ? { pluginEngineTrustedCaller: true } : {}) });
+    await agent.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', botProfilePrompt: 'Prompt text alone cannot grant task privileges.', ...(trusted ? { pluginEngineTrustedCaller: true } : {}) });
     expect(contexts).toHaveLength(1);
     expect(contexts[0]).toMatchObject({ mcpCallerKind: kind, mcpCallerAttested: attested });
   });
@@ -976,5 +976,67 @@ describe('AcpAgent (the acp engine)', () => {
     await error.whenStopped;
     expect(close).toHaveBeenCalledTimes(2);
     expect(stopped).toHaveBeenCalledOnce();
+  });
+
+  // 生产入口与可观察结果：AcpAgent.startSession 在伙伴会话中把身份/上下文/记忆快照/用户画像拼入新会话首轮 briefing，并按伙伴的工具允许列表挂载工具桥。
+  // 依据：docs/product-rules/cindy-bots-runtime.md §5，不改动内置引擎提示词，ACP 走首轮 briefing。
+  // 覆盖缺口：此前 AcpAgent 只转发 pluginEngineBriefing 与 pluginEngineTrustedCaller，忽略 botProfile* 字段。
+  // 最小失败输入与 tier：unit，带 botProfilePrompt / botProfileContextPrompt / makerMemoryIndexSnapshot / botUserProfilePrompt 启动并发送首条消息。
+  it('sends as the companion with its selected plugin model and receives the reply', async () => {
+    const offered = { id: 'model', category: 'model', name: 'Model', type: 'select', currentValue: 'first',
+      options: [{ value: 'first', name: 'First' }, { value: 'chosen', name: 'Chosen' }] };
+    const fake = createFakeAgent({ configOptions: [offered], handlers: {
+      'session/set_config_option': ({ value }) => ({ configOptions: [{ ...offered, currentValue: value }] }),
+    } });
+    const connect = vi.fn(async (_key: string) => fake.transport);
+    const contexts: Array<Record<string, unknown>> = [];
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger, clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => { contexts.push(ctx as unknown as Record<string, unknown>); return null; },
+    });
+    const handle = await engine.startSession({
+      workingDir: '/w',
+      model: 'chosen',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      botProfilePrompt: 'You are Mika, a calm research buddy.',
+      botRuntimeProfile: {
+        botId: 'research', profileVersion: 1,
+        skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        mcpPolicy: { mode: 'allowlist', configured: ['notes'], catalog: [{ name: 'notes', source: 'custom' }] },
+      },
+      botProfileContextPrompt: 'Teammate rules and capabilities.',
+      makerMemoryEnabled: true,
+      makerMemoryIndexSnapshot: 'Memory index: prefers concise tables.',
+      botUserProfilePrompt: 'The user prefers weekly summaries.',
+    });
+    expect(connect).toHaveBeenCalledWith('dsh-acp:dsh');
+    expect(handle.model).toBe('chosen');
+    expect(fake.sent).toContainEqual(expect.objectContaining({ method: 'session/set_config_option',
+      params: expect.objectContaining({ configId: 'model', value: 'chosen' }) }));
+    const events: Array<{ type: string; data: unknown }> = [];
+    const readReply = (async () => {
+      for await (const event of handle.events()) {
+        events.push(event);
+        if (event.type === 'done') break;
+      }
+    })();
+    expect(contexts).toEqual([expect.objectContaining({ mcpCallerKind: 'unknown', mcpCallerAttested: false, memoryEnabled: true,
+      botMcpPolicy: { mode: 'allowlist', configured: ['notes'], catalog: [{ name: 'notes', source: 'custom' }] } })]);
+    await handle.send({ type: 'user', content: 'hello' });
+    await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+    const [brief, userMsg] = fake.prompts[0]!.params.prompt as Array<{ text: string }>;
+    expect(brief!.text).toContain('You are Mika, a calm research buddy.');
+    expect(brief!.text).toContain('Teammate rules and capabilities.');
+    expect(brief!.text).toContain('Memory index: prefers concise tables.');
+    expect(brief!.text).toContain('The user prefers weekly summaries.');
+    expect(userMsg).toEqual({ type: 'text', text: 'hello' });
+    fake.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hello from the chosen model.' } });
+    fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await readReply;
+    expect(events).toContainEqual(expect.objectContaining({ type: 'text', data: expect.objectContaining({ text: 'Hello from the chosen model.' }) }));
+    await handle.close();
   });
 });
