@@ -20,11 +20,6 @@ import type { ExistingRemoteProject } from '@/components/new-chat/remoteExisting
 const loadMock = vi.fn<(deviceId: string) => Promise<ExistingRemoteProject[]>>();
 const removeMock = vi.fn<(deviceId: string, path: string) => Promise<void>>();
 
-vi.mock('@/components/new-chat/remoteExistingProjects', () => ({
-  loadDeviceLinkExistingProjects: (deviceId: string) => loadMock(deviceId),
-  removeDeviceLinkExistingProject: (deviceId: string, path: string) => removeMock(deviceId, path),
-}));
-
 /** 手动控制 resolve/reject 时机的 promise。 */
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -92,9 +87,10 @@ function mountHook() {
     return null;
   }
 
-  render(<Probe initialDevice="dev-a" />);
+  const { unmount } = render(<Probe initialDevice="dev-a" />);
   return {
     seen,
+    unmount,
     setDevice: (id: string) => setDevice(id),
     setEnabled: (v: boolean) => setEnabled(v),
   };
@@ -107,10 +103,35 @@ beforeEach(async () => {
   vi.resetModules();
   loadMock.mockReset();
   removeMock.mockReset();
+  Object.assign(window, { electronAPI: { deviceLink: {
+    invoke: async (id: string, channel: string, args: { path: string }[]) => {
+      if (channel === 'local-db:recent-workdirs:remove') return removeMock(id, args[0].path);
+      return (await loadMock(id)).map(project => ({ ...project, lastUsedAt: '2026-01-01' }));
+    },
+  } } });
   hookModule = await import('@/hooks/useDeviceLinkProjects');
 });
 
 describe('useDeviceLinkProjects 取数 / 删除并发', () => {
+  it('新草稿第一帧复用同设备项目，后台失败保留列表，切换设备只展示目标的项目', async () => {
+    loadMock.mockResolvedValueOnce([row('/a/project')]);
+    const first = mountHook();
+    await act(async () => {});
+    first.unmount();
+
+    const refresh = deferred<ExistingRemoteProject[]>();
+    loadMock.mockReturnValueOnce(refresh.promise);
+    const second = mountHook();
+    expect(second.seen.frames[0]).toEqual([{ path: '/a/project', deviceId: 'dev-a' }]);
+    expect(second.seen.status).toBe('ready');
+    await act(async () => refresh.reject(new Error('DEVICE_LINK_TIMEOUT')));
+    expect(second.seen.status).toBe('error');
+    expect(second.seen.projects).toHaveLength(1);
+    loadMock.mockResolvedValueOnce([row('/b/project')]);
+    await act(async () => second.setDevice('dev-b'));
+    expect(second.seen.projects).toEqual([{ path: '/b/project', deviceId: 'dev-b' }]);
+  });
+
   it('删除失败的兜底回读不得作废「新设备」的取数(否则 picker 永久 loading 且列表为空)', async () => {
     // 设备 A:先加载出两个项目。
     const aLoad = deferred<ExistingRemoteProject[]>();

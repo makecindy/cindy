@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import {
   loadDeviceLinkExistingProjects,
+  recentProjectsSnapshot,
   removeDeviceLinkExistingProject,
   type ExistingRemoteProject,
 } from '@/components/new-chat/remoteExistingProjects';
@@ -55,6 +57,10 @@ export function useDeviceLinkProjects(
   retry: () => void;
   removeProject: (option: FolderPickerOption) => Promise<void>;
 } {
+  const snapshot = useSyncExternalStore(
+    remoteProjectsStore.subscribe,
+    () => deviceId ? recentProjectsSnapshot(deviceId) : undefined,
+  );
   /**
    * 行**连同它属于哪台设备**一起存(Greptile review)。只存 rows 会留下一个结构性漏洞:
    * `deviceId` 变成 B 的那一帧先于清空 rows 的 effect 渲染(passive effect 在 paint 之后才跑),
@@ -65,6 +71,7 @@ export function useDeviceLinkProjects(
   const [loaded, setLoaded] = useState<{
     deviceId: string | null;
     rows: ExistingRemoteProject[];
+    scope?: typeof snapshot;
   }>({ deviceId: null, rows: [] });
   const [requestState, setRequestState] = useState<{
     deviceId: string | null;
@@ -81,13 +88,14 @@ export function useDeviceLinkProjects(
    * 所有写入都经 commitRows,镜像与状态同步推进,这条路径不再依赖 React 的调度时机;
    * 顺带让并发删除各自读到「前一次删除之后」的列表,插回位置也不会错位。
    */
-  const loadedRef = useRef<{ deviceId: string | null; rows: ExistingRemoteProject[] }>({
+  const loadedRef = useRef<typeof loaded>({
     deviceId: null,
     rows: [],
   });
   /** 写行必须同时申明归属设备 —— 没有「只改 rows 不改归属」这种调用形态。 */
   const commitRows = useCallback((ownerDeviceId: string | null, next: ExistingRemoteProject[]) => {
-    loadedRef.current = { deviceId: ownerDeviceId, rows: next };
+    const scope = ownerDeviceId ? recentProjectsSnapshot(ownerDeviceId) : undefined;
+    loadedRef.current = { deviceId: ownerDeviceId, rows: next, scope };
     setLoaded(loadedRef.current);
   }, []);
   /**
@@ -192,7 +200,7 @@ export function useDeviceLinkProjects(
     currentDeviceIdRef.current = deviceId;
     // 本机(deviceId=null)不走隧道;picker 没打开时不取数,避免常驻首页时白拉。
     if (!enabled || !deviceId) {
-      commitRows(deviceId, []);
+      commitRows(null, []);
       setRequestState({ deviceId, status: 'idle', error: null });
       return;
     }
@@ -200,14 +208,13 @@ export function useDeviceLinkProjects(
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     const issueSeq = ++fetchSeqRef.current;
-    // 立刻清空上一台设备的行(#807 review):projects memo 依赖 [deviceId, deviceName, rows],
-    // deviceId 已经变成 B 而 rows 还是 A 的,于是加载窗口里会渲染出「标着 B 的 A 的项目」——
-    // 用户此时选中就把 A 的路径发给 B,撞 path guard 或打开 B 上同名的无关目录。
-    commitRows(deviceId, []);
-    setRequestState({ deviceId, status: 'loading', error: null });
+    const pending = pendingRemovalsRef.current.get(deviceId);
+    const previous = snapshot?.rows?.filter(row => !pending?.has(row.path));
+    commitRows(deviceId, previous ?? []);
+    setRequestState({ deviceId, status: previous ? 'ready' : 'loading', error: null });
     void loadDeviceLinkExistingProjects(deviceId)
       .then((list) => {
-        if (cancelled || requestIdRef.current !== requestId) return;
+        if (cancelled || requestIdRef.current !== requestId || snapshot !== recentProjectsSnapshot(deviceId)) return;
         // 减去这台设备上仍在飞的乐观删除:取数可能在某次删除进行中回来,原样落库会把用户刚
         // 点掉的行贴回去。以前靠删除路径自增 requestIdRef 作废取数来避免,但那个共享版本号会
         // 顺带把**别的设备**的取数误判成过期(见 requestIdRef 的说明),所以改成在这里过滤。
@@ -223,13 +230,8 @@ export function useDeviceLinkProjects(
       .catch((error: unknown) => {
         // 被控端离线、超时或老版本没这个 channel 都是读取失败；UI 显示错误与重试，
         // 不得把它们当成对端权威返回的「没有项目」。
-        if (cancelled || requestIdRef.current !== requestId) return;
-        // **刻意不 commitRows([])**(Codex review 第 33 轮 P1)。这个 effect 开头已经把行设成了
-        // 「(这台设备, 空)」，失败由 requestState 单独表达；再提交空行是冗余的，
-        // 而且会踩掉一个真实窗口:删除失败的兜底回读**在 effect 开头那次清空之后**才 apply,
-        // 于是「回读刚带回一份好数据」与「本次取数瞬时失败(隧道抖动 / 超时)」可以同时成立。
-        // 无条件清空会把那份刚被证明存在的列表抹成「没有项目」,直到用户再成功重开一次才恢复。
-        // 归属正确性不依赖这里:effect 开头的清空已经保证当前行属于这台设备。
+        if (cancelled || requestIdRef.current !== requestId || snapshot !== recentProjectsSnapshot(deviceId)) return;
+        if (previous && !snapshot?.rows) commitRows(deviceId, []);
         setRequestState({
           deviceId,
           status: 'error',
@@ -239,11 +241,12 @@ export function useDeviceLinkProjects(
     return () => {
       cancelled = true;
     };
-  }, [deviceId, enabled, retryNonce]);
+  }, [deviceId, enabled, retryNonce, snapshot]);
 
   const removeProject = useCallback(async (option: FolderPickerOption) => {
     const target = option.remoteDevice;
     if (!target) return;
+    const removalScope = recentProjectsSnapshot(target.deviceId);
 
     // 刻意**不动** requestIdRef(Greptile review):在途取数不会把刚乐观移除的行贴回来 ——
     // 它落库前会减去下面这个 pending 集合。作废取数反而会误伤别的设备的取数,见 requestIdRef。
@@ -291,6 +294,7 @@ export function useDeviceLinkProjects(
       // toDeviceProjectOptions 标成属于 B —— 选中它就把 A 的路径发给 B 了。这与「并发删除不能
       // 互相取消」不冲突:设备身份只排除「已切走」,不排除同设备内的并发。
       if (currentDeviceIdRef.current !== target.deviceId) return;
+      if (recentProjectsSnapshot(target.deviceId) !== removalScope) return;
       if (loadedRef.current.deviceId !== target.deviceId) return;
       // 已有**更新**的权威快照,且它的原始列表里没有这一行 → 对端确实没有,不恢复。
       if (readbackSeq !== undefined) {
@@ -309,6 +313,7 @@ export function useDeviceLinkProjects(
 
     try {
       await removeDeviceLinkExistingProject(target.deviceId, option.path);
+      if (recentProjectsSnapshot(target.deviceId) !== removalScope) return;
       // 删成了 → 立墓碑。此刻可能已有一次「A 还在」的旧回读在飞,它落库会把这一行显示回来,
       // 而成功路径本身不再更新列表(行早就被乐观移除了)—— 墓碑就是那道防线,见 tombstonesRef。
       const deviceTombstones =
@@ -320,12 +325,14 @@ export function useDeviceLinkProjects(
       // 而不是留下一个「本地看着删了、对端其实还在」的幻影删除。
       // 同样不动 requestIdRef:晚到的 effect 取数即使覆盖这次回读也无害 —— 两者都是被控端
       // 真相,且都会减去仍在飞的乐观删除,结果一致。作废它只会误伤新设备的取数。
+      if (recentProjectsSnapshot(target.deviceId) !== removalScope) return;
       const readbackSeq = ++fetchSeqRef.current;
       try {
         const list = await loadDeviceLinkExistingProjects(target.deviceId);
         // gate 用**设备身份**:只要设备没切走,这份回读就是被控端真相,该应用。不用版本号 ——
         // 并发删除会互相把对方的回读判成过期,那一行既没在对端删成、又没被恢复,会一直消失。
         if (currentDeviceIdRef.current !== target.deviceId) return;
+        if (recentProjectsSnapshot(target.deviceId) !== removalScope) return;
         // 只减**这台设备上**其它仍在飞的乐观删除;不含自己 —— 这次删除失败了,真相里有它就该
         // 显示回来。跨设备的 pending 不参与,否则同名路径会互相误伤。
         const othersPending = new Set(
@@ -355,12 +362,11 @@ export function useDeviceLinkProjects(
    * 归属必须相符才输出选项 —— 这是上面把 deviceId 绑进状态的唯一目的:切设备的那一帧
    * `loaded` 仍描述上一台,此时输出空列表,绝不把 A 的路径标成 B 的。
    */
+  const rows = deviceId && loaded.deviceId === deviceId && loaded.scope === snapshot
+    ? loaded.rows : snapshot?.rows;
   const projects = useMemo<FolderPickerOption[]>(
-    () =>
-      deviceId && loaded.deviceId === deviceId
-        ? toDeviceProjectOptions(deviceId, deviceName, loaded.rows)
-        : [],
-    [deviceId, deviceName, loaded],
+    () => deviceId && rows ? toDeviceProjectOptions(deviceId, deviceName, rows) : [],
+    [deviceId, deviceName, rows],
   );
 
   // 归属还没对上 / picker 刚打开、effect 尚未执行时仍算「加载中」:否则切设备或首次打开
@@ -369,7 +375,7 @@ export function useDeviceLinkProjects(
     !enabled || !deviceId
       ? 'idle'
       : requestState.deviceId !== deviceId || requestState.status === 'idle'
-        ? 'loading'
+        ? snapshot?.rows ? 'ready' : 'loading'
         : requestState.status;
   const error = status === 'error' ? requestState.error : null;
   const retry = useCallback(() => {

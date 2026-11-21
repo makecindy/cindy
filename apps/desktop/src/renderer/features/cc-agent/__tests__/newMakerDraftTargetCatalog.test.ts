@@ -830,6 +830,19 @@ describe('new task model falls back when the seeded model is empty', () => {
     };
   }
 
+  it('shows the saved host selection on the first render and waits for unknown defaults', () => {
+    const preview = (ready: boolean) => callback<() => DeviceLinkDraftSelection | null>('deviceLinkInitial', {
+      usesDeviceCatalog: true, dlSel: null, deviceDraftDefaultsReady: ready,
+      capabilities: { availableModels: ['first', 'saved'].map(id => ({
+        id, displayName: id, efforts: [], defaultEffort: null,
+      })), permissionModes: [], effortLevels: [] },
+      capabilityAgentKind: 'codex', agentCatalogProviders: [], resolveDeviceLinkDraftDefaults,
+      deviceDraftDefaults: { model: 'saved', modelChosenByUser: true },
+    })();
+    expect(preview(false)).toBeNull();
+    expect(preview(true)?.model).toBe('saved');
+  });
+
   it('uses the seeded model when the catalog offers one', () => {
     // 种子档位是**请求值**:它来自被控端 capabilities 的跨来源并集,最终路由落到的来源
     // 只支持 medium —— 原样显示 high 会让 pill 与发送时 reconcile 出来的值不一致
