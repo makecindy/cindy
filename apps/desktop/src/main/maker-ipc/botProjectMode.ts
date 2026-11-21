@@ -434,6 +434,13 @@ function broadcastProjectRegistered(workingDir: string): void {
 /** The project's own nightly review: an ordinary project automation, not a host job. */
 export const BOT_PROJECT_MEMORY_REVIEW_ID = 'teammate-memory-review';
 
+const MEMORY_REVIEW_INSTRUCTIONS = `. Keep only durable, useful knowledge in this project's memory and reusable, proven procedures in its skills. Search existing files first: update a related record or skill instead of adding a duplicate. Review related existing material for duplication, contradictions, obsolete status and unnecessary detail; keep concise facts and actionable steps, not conversation logs or one-off task progress. Preserve the owner's rules and intent. Before merging or removing content, verify the evidence and keep a recoverable copy or a targeted Git commit; leave uncertain items intact. Read .cindy/memory/README.md before memory maintenance. Skills live in .agents/skills; keep SKILL.md focused and move detailed examples to on-demand references when useful. Do not invent a skill just because a review ran. If no meaningful improvement is justified, finish quietly.`;
+/** The supplied prompt before its check counted since the last review instead of the last day. */
+function isLastDayReviewPrompt(prompt: string | undefined, botId: string): boolean {
+  return !!prompt?.startsWith('Review ')
+    && prompt.endsWith(`'s conversations from the last day (teammate id ${botId})${MEMORY_REVIEW_INSTRUCTIONS}`);
+}
+
 export function botProjectMemoryReview(input: {
   botId: string;
   displayName: string;
@@ -448,7 +455,7 @@ export function botProjectMemoryReview(input: {
   return {
     id: BOT_PROJECT_MEMORY_REVIEW_ID,
     name: input.title.replace('{{name}}', name),
-    prompt: `Review ${name}'s conversations from the last day (teammate id ${input.botId}). Keep only durable, useful knowledge in this project's memory and reusable, proven procedures in its skills. Search existing files first: update a related record or skill instead of adding a duplicate. Review related existing material for duplication, contradictions, obsolete status and unnecessary detail; keep concise facts and actionable steps, not conversation logs or one-off task progress. Preserve the owner's rules and intent. Before merging or removing content, verify the evidence and keep a recoverable copy or a targeted Git commit; leave uncertain items intact. Read .cindy/memory/README.md before memory maintenance. Skills live in .agents/skills; keep SKILL.md focused and move detailed examples to on-demand references when useful. Do not invent a skill just because a review ran. If no meaningful improvement is justified, finish quietly.`,
+    prompt: `Review ${name}'s conversations since the last completed review (teammate id ${input.botId})${MEMORY_REVIEW_INSTRUCTIONS}`,
     cronExpr: '30 3 * * *',
     timezone: input.timezone,
     recurring: true,
@@ -482,8 +489,10 @@ export async function ensureBotProjectAutomations(input: {
   const userId = getCurrentDbClientUserId();
   if (!userId) throw new Error('Memory review requires the active account database');
   const databasePath = getDbPathForUser(userId);
-  const preRunHook = await ensureMemoryReviewHook({ ...input, databasePath, previousCommand: current?.preRunHook?.command });
-  if (suppliedHook || (legacyHook && preRunHook.command === current?.preRunHook?.command)) return false;
+  const { bundledCheck, ...preRunHook } = await ensureMemoryReviewHook({ ...input, databasePath, previousCommand: current?.preRunHook?.command });
+  // The supplied check now counts since the last review; its untouched last-day prompt follows.
+  const upgradePrompt = bundledCheck && isLastDayReviewPrompt(current?.prompt, input.botId);
+  if ((suppliedHook || (legacyHook && preRunHook.command === current?.preRunHook?.command)) && !upgradePrompt) return false;
   // An existing file that cannot be read whole is kept: the upgrade fails and retries next start.
   const defaults = botProjectMemoryReview({
     ...input,
@@ -491,7 +500,7 @@ export async function ensureBotProjectAutomations(input: {
     title: t('bots.homeFolder.projectMode.memoryReviewName'),
   });
   await loader.upsertSchedule(input.workingDir, {
-    ...defaults, ...current, prompt: legacyHook ? current!.prompt : defaults.prompt,
+    ...defaults, ...current, prompt: legacyHook && !upgradePrompt ? current!.prompt : defaults.prompt,
     preRunHook: { ...preRunHook, ...current?.preRunHook, command: preRunHook.command },
   }, { keepUnreadable: true });
   return true;

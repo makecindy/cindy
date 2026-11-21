@@ -44,7 +44,7 @@ import { OWN_RULES_HEADING } from '../botProjectTemplate.js';
 // Evaluate the actual generated check with real SQLite, in-process. The hook
 // protocol has its own process tests; retain one real spawn below. Repeated
 // cold Node startups made the activity matrix exceed 60s on CI (#10413).
-async function runMemoryCheck(workingDir: string, firedAt: number): Promise<number> {
+async function runMemoryCheck(workingDir: string, firedAt: number, scheduleId?: string): Promise<number> {
   let exitCode = 0;
   const output = { write: (_text: string, done?: () => void) => { done?.(); } };
   const script = await fs.readFile(path.join(workingDir, '..', '.memory-review-check-v1.cjs'), 'utf8');
@@ -55,7 +55,7 @@ async function runMemoryCheck(workingDir: string, firedAt: number): Promise<numb
     },
     console: { log() {}, error() {} },
     process: {
-      stdin: Readable.from([JSON.stringify({ event: 'schedule-pre-run', firedAt })]),
+      stdin: Readable.from([JSON.stringify({ event: 'schedule-pre-run', firedAt, scheduleId })]),
       stdout: output, stderr: output,
       get exitCode() { return exitCode; },
       set exitCode(value: number) { exitCode = value; },
@@ -110,6 +110,8 @@ describe('ensureBotProjectAutomations', () => {
     try {
       db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
         CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT DEFAULT '');
+        CREATE TABLE schedules(id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+        CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, fired_at INTEGER NOT NULL, status TEXT NOT NULL);
         INSERT INTO bot_session_links VALUES ('bot-1','chat'), ('other','other-chat');`);
       const firedAt = Date.now();
       const insert = db.prepare('INSERT INTO messages(session_id,role,rewind_at,created_at,agent_meta) VALUES (?, ?, ?, ?, ?)');
@@ -206,6 +208,87 @@ describe('ensureBotProjectAutomations', () => {
       await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
       expect(await fs.readFile(checkFile, 'utf8')).toBe(edited);
     } finally { db.close(); }
+  });
+
+  // Real data 2026-11-21: 9 teammates skipped 6 nights in a row; one had 58 owner messages a
+  // month and could never reach 20 in a day. Unit, real generated check + SQLite with the
+  // production schedules / schedule_runs columns it reads.
+  it('counts human messages since the last completed review, not only the last day', async () => {
+    loader.loadProjectSchedules.mockResolvedValueOnce(null);
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const db = new DatabaseSync(database.path);
+    try {
+      db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+        CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+        CREATE TABLE schedules(id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+        CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, fired_at INTEGER NOT NULL, status TEXT NOT NULL);
+        INSERT INTO bot_session_links VALUES ('bot-1','chat');`);
+      const day = 86_400_000;
+      const firedAt = Date.now();
+      db.prepare('INSERT INTO schedules VALUES (?, ?)').run('review', firedAt - 30 * day);
+      const message = db.prepare("INSERT INTO messages VALUES ('chat', 'user', NULL, ?, NULL, 'Human request')");
+      const runRecord = db.prepare('INSERT INTO schedule_runs VALUES (?, ?, ?, ?)');
+      const run = () => runMemoryCheck(workingDir, firedAt, 'review');
+      message.run(firedAt - 31 * day); // Before this automation existed here.
+      for (let daysAgo = 2; daysAgo <= 20; daysAgo++) message.run(firedAt - daysAgo * day);
+      expect(await run()).toBe(2); // Never reviewed: 19 since setup.
+      message.run(firedAt - 5 * day);
+      expect(await run()).toBe(0); // 20 accumulated, although none in the last day.
+      runRecord.run('ok', 'review', firedAt - 10 * day, 'success');
+      runRecord.run('skip', 'review', firedAt - day, 'skipped');
+      runRecord.run('fail', 'review', firedAt - day / 2, 'failed');
+      expect(await run()).toBe(2); // 9 since the last success; skipped / failed nights do not reset.
+      db.exec("DELETE FROM schedule_runs WHERE id = 'ok'");
+      runRecord.run('ahead', 'review', firedAt + day, 'success'); // Clock moved back.
+      expect(await run()).toBe(0); // Falls back to setup time instead of an empty window.
+      // A test run has no local record of the automation: the last day only.
+      expect(await runMemoryCheck(workingDir, firedAt, 'test')).toBe(2);
+    } finally { db.close(); }
+  });
+
+  // Installed last-day check (dff1c6e5) + its untouched prompt upgrade together; an owner's
+  // edited prompt or check is kept. Unit, real generated hook + SQLite.
+  it('upgrades the installed last-day check and its untouched prompt, keeping owner edits', async () => {
+    loader.loadProjectSchedules.mockResolvedValueOnce(null);
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const fresh = loader.upsertSchedule.mock.calls[0]![1];
+    const lastDay = { ...fresh, cronExpr: '0 5 * * *',
+      prompt: fresh.prompt.replace('since the last completed review', 'from the last day') };
+    const checkFile = path.join(root, '.memory-review-check-v1.cjs');
+    const old = await fs.readFile(new URL('./fixtures/memory-review-last-day-dff1c6e5.cjs.txt', import.meta.url), 'utf8');
+    const installed = `const source = ${JSON.stringify({ databasePath: database.path,
+      botId: 'bot-1', syntheticPrefix: '[UI_ACTION_TRIGGER]' })};\n${old.slice(old.indexOf('\n') + 1)}`;
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      CREATE TABLE schedules(id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+      CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, fired_at INTEGER NOT NULL, status TEXT NOT NULL);
+      INSERT INTO bot_session_links VALUES ('bot-1','chat');`);
+    const firedAt = Date.now();
+    db.prepare('INSERT INTO schedules VALUES (?, ?)').run('review', firedAt - 30 * 86_400_000);
+    const message = db.prepare("INSERT INTO messages VALUES ('chat', 'user', NULL, ?, NULL, 'Human request')");
+    for (let i = 0; i < 20; i++) message.run(firedAt - (i + 2) * 86_400_000);
+    db.close();
+    const run = () => runMemoryCheck(workingDir, firedAt, 'review');
+    await fs.writeFile(checkFile, installed);
+    expect(await run()).toBe(2); // Actual predecessor behavior.
+    loader.loadProjectSchedules.mockResolvedValueOnce([lastDay]);
+    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(true);
+    expect(await run()).toBe(0);
+    expect(loader.upsertSchedule).toHaveBeenLastCalledWith(workingDir, expect.objectContaining({
+      cronExpr: '0 5 * * *', prompt: fresh.prompt, preRunHook: lastDay.preRunHook,
+    }), { keepUnreadable: true });
+    // Owner-edited prompt: the check still upgrades, the prompt stays.
+    await fs.writeFile(checkFile, installed);
+    loader.loadProjectSchedules.mockResolvedValueOnce([{ ...lastDay, prompt: `${lastDay.prompt} Also tidy notes.` }]);
+    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
+    expect(await run()).toBe(0);
+    // Owner-edited check: neither the check nor the prompt changes.
+    await fs.writeFile(checkFile, `${installed}\n// Owner customization\n`);
+    loader.loadProjectSchedules.mockResolvedValueOnce([lastDay]);
+    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
+    expect(await run()).toBe(2);
+    expect(loader.upsertSchedule).toHaveBeenCalledTimes(2);
   });
 
   it('upgrades the supplied review while retaining choices, custom checks and removal', async () => {

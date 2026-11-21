@@ -8,13 +8,14 @@ export const MEMORY_REVIEW_HOOK_COMMAND = 'cindy-node-script "../.memory-review-
 
 /** The bundled check lives beside the workspace, not in its Git history: its database path is
  * local account data. Memory itself remains ordinary portable project files. No model or new
- * scheduler setting is needed to decide whether yesterday had anything to review. */
+ * scheduler setting is needed to decide whether enough was said since the last review.
+ * `bundledCheck` is false when the owner edited the check; it is not part of the hook config. */
 export async function ensureMemoryReviewHook(input: {
   workingDir: string;
   botId: string;
   databasePath: string;
   previousCommand?: string;
-}): Promise<{ command: string; timeoutMs: number }> {
+}): Promise<{ command: string; timeoutMs: number; bundledCheck: boolean }> {
   const filename = '.memory-review-check-v1.cjs';
   const check = String.raw`
 (async () => {
@@ -47,20 +48,36 @@ try {
     return !origin?.kind || (origin.kind === 'scheduler'
       && typeof origin.scheduleId === 'string' && origin.scheduleId.startsWith('hook:'));
   }
+  // Count since the last completed review (its start), else since this automation was set up
+  // on this computer: skipped and failed nights do not reset the count. A review dated after
+  // this fire (clock moved back) is ignored; without this automation's local record (a test
+  // run) or with a setup time after this fire, fall back to the last day.
+  let since = event.firedAt - 24 * 60 * 60 * 1000;
+  const schedule = typeof event.scheduleId === 'string'
+    ? db.prepare('SELECT created_at FROM schedules WHERE id = ?').get(event.scheduleId) : undefined;
+  if (schedule) {
+    const review = db.prepare(
+      "SELECT MAX(fired_at) AS at FROM schedule_runs WHERE schedule_id = ? AND status = 'success' AND fired_at < ?"
+    ).get(event.scheduleId, event.firedAt);
+    const start = Number.isFinite(review?.at) ? review.at : schedule.created_at;
+    if (Number.isFinite(start) && start < event.firedAt) since = start;
+  }
   // Stop once the bundled minimum is met; synthetic messages never contribute.
   const rows = db.prepare(
     "SELECT m.content, m.agent_meta FROM bot_session_links l JOIN messages m ON m.session_id = l.session_id " +
     "WHERE l.bot_id = ? AND m.role = 'user' AND m.rewind_at IS NULL " +
     "AND m.created_at > ? AND m.created_at <= ?"
-  ).iterate(source.botId, event.firedAt - 24 * 60 * 60 * 1000, event.firedAt);
+  ).iterate(source.botId, since, event.firedAt);
   const minimumHumanMessages = 20;
   let humanMessages = 0;
   for (const row of rows) {
     if (humanInput(row) && ++humanMessages >= minimumHumanMessages) break;
   }
   if (humanMessages < minimumHumanMessages) {
-    console.log('Only ' + humanMessages + '/' + minimumHumanMessages + ' human messages in the last day; memory and skills review skipped.');
+    console.log('Only ' + humanMessages + '/' + minimumHumanMessages + ' human messages since ' + new Date(since).toISOString() + '; memory and skills review skipped.');
     process.exitCode = 2;
+  } else {
+    console.log('Review conversations since ' + new Date(since).toISOString() + '.');
   }
 } finally {
   db.close();
@@ -90,15 +107,21 @@ process.stdout.write('', () => process.exit(process.exitCode || 0));
       || createHash('sha256').update(oldCheck).digest('hex')
         === '8d85213bf0d533c2cf1bf9376a21f5994aa2fe73a1257f9e49096fa1fb8418cb'
       || createHash('sha256').update(oldCheck).digest('hex')
-        === '8e97ec8f8733954427efb43d81b9cd58d5940baa2d4f238737727a3903e6dd65';
+        === '8e97ec8f8733954427efb43d81b9cd58d5940baa2d4f238737727a3903e6dd65'
+      // Last-day window (before the count accumulated since the last review).
+      || createHash('sha256').update(oldCheck).digest('hex')
+        === 'dff1c6e5c4b697265735fb990b878cf6ef97b6810e9e4612ccf35a7da579f9d3';
     if (oldCheck !== check && !previousBundled && input.previousCommand) {
-      return { command: input.previousCommand, timeoutMs: 10_000 };
+      return { command: input.previousCommand, timeoutMs: 10_000, bundledCheck: false };
     }
-    if (old !== source && old.startsWith('const source = {') && (oldCheck === check || previousBundled)) {
+    if (!old.startsWith('const source = {') || (oldCheck !== check && !previousBundled)) {
+      return { command: MEMORY_REVIEW_HOOK_COMMAND, timeoutMs: 10_000, bundledCheck: false };
+    }
+    if (old !== source) {
       const temp = `${file}.${process.pid}.tmp`;
       await fs.writeFile(temp, source, { flag: 'wx' });
       await fs.rename(temp, file);
     }
   }
-  return { command: MEMORY_REVIEW_HOOK_COMMAND, timeoutMs: 10_000 };
+  return { command: MEMORY_REVIEW_HOOK_COMMAND, timeoutMs: 10_000, bundledCheck: true };
 }
