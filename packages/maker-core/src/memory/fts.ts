@@ -33,8 +33,24 @@ const TABLE = 'memory_fts';
 const SNIPPET_TOKEN_RADIUS = 8; // snippet() 命中前后各取 N tokens
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
-/** LIKE 兜底没有 snippet() 高亮, 用 body 前 N 字符顶替 (防 UI 展示超长原文) */
-const SNIPPET_FALLBACK_LEN = 160;
+/** query 上限 — 防病态输入把 LIKE 臂与 MATCH 表达式一起放大 */
+const MAX_QUERY_CHARS = 200;
+const MAX_QUERY_TERMS = 8;
+/**
+ * LIKE 臂分数基准: 远大于 bm25 的量级, 合并后仍排在 MATCH 命中之后;
+ * 基准减去质量分, 让 LIKE 臂内部也按相关度排序 (score 越小越相关)。
+ */
+const LIKE_SCORE_BASE = 1_000_000_000;
+/**
+ * LIKE 臂候选池上限: 命中行数超过时先按字段命中/覆盖词数粗排, 只取前 N 条做精确
+ * 打分 — 避免上千条命中时把所有 body 拉回主进程。候选之外的高密度文档会被放弃;
+ * 500 是在 bounded latency 与召回之间取的平衡。
+ */
+const LIKE_CANDIDATE_LIMIT = 500;
+/** 命中窗口: 命中位置前 60 / 后 120 字符 */
+const SNIPPET_BEFORE = 60;
+const SNIPPET_AFTER = 120;
+const SNIPPET_MAX_LEN = 200;
 
 export class MemoryFts {
   constructor(private readonly db: Database.Database) {}
@@ -78,29 +94,37 @@ export class MemoryFts {
   }
 
   /**
-   * 全文检索. query 经 escapeFtsQuery 转义为 phrase 后走 FTS5 MATCH
-   * (AND/OR/NOT 等高级语法会被转义吞掉, 见 escapeFtsQuery 说明)。
-   * 返回按 bm25 排序 (越小越相关) 的命中, 含 snippet() 高亮片段。
-   *
-   * CJK 兜底: unicode61 把连续 CJK 文本当一个 token, MATCH 只能覆盖整 token 命中;
-   * 中文子串(如「边界」在「边界索引配置说明」中) 只有 LIKE 扫描捞得到 —
-   * 始终合并 LIKE 兜底结果并按 filename 去重; MATCH 已满 limit 时为 LIKE-only
-   * 子串命中预留 1 个名额, 避免其被整 token 命中完全遮蔽。
+   * 全文检索. 召回顺序是兼容优先的三层:
+   *  1. query 经 escapeFtsQuery 收成 phrase 走 FTS5 MATCH (AND/OR/NOT 被吞,
+   *     见 escapeFtsQuery 说明), bm25 排序, snippet() 高亮;
+   *  2. 整串 LIKE — 与改动前同一召回口径, 中文子串(如「边界」在「边界索引
+   *     配置说明」中) 由它捞回;
+   *  3. 前两层都为空时, 才按空白拆词做 OR 召回 (「登录 失败」不再直接归零),
+   *     按字段权重 + 覆盖词数 + 正文密度打分。
+   * 前两层有任何命中时结果集与改动前一致, 只改排序与片段; OR 只在零命中时兜底。
+   * MATCH 已满 limit 时为 LIKE-only 子串命中预留 1 个名额, 避免其被整 token 命中遮蔽。
    */
   search(query: string, opts: SearchOptions = {}): SearchHit[] {
-    if (!query || query.trim().length === 0) return [];
+    const parsed = parseQuery(query);
+    if (parsed.terms.length === 0) return [];
     const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
     // top = bm25 最佳 limit 条 (完整列); seen 用轻量查询取全部 MATCH 命中
     // filename, 保证 fallback 里只剩 MATCH 永远命不中的 true LIKE-only
-    const top = this.searchMatch(query, opts, limit);
-    const seen = new Set(this.searchMatchFilenames(query, opts));
-    const fallback = this.searchLike(query, opts).filter((h) => !seen.has(h.filename));
-    if (limit > 1 && top.length >= limit && fallback.length > 0) {
-      // MATCH 已满 limit: 预留 1 个名额给 LIKE-only 子串命中, 避免中文子串结果
-      // 被整 token 命中完全遮蔽 (limit=1 时不预留, 保住唯一最佳 MATCH)
-      return [...top.slice(0, limit - 1), fallback[0]];
+    const top = this.searchMatch(parsed.matchQuery, opts, limit);
+    const seen = new Set(this.searchMatchFilenames(parsed.matchQuery, opts));
+    const phraseHits = this.searchLike([parsed.matchQuery], opts).filter((h) => !seen.has(h.filename));
+    if (top.length > 0 || phraseHits.length > 0) {
+      if (limit > 1 && top.length >= limit && phraseHits.length > 0) {
+        // MATCH 已满 limit: 预留 1 个名额给 LIKE-only 子串命中, 避免中文子串结果
+        // 被整 token 命中完全遮蔽 (limit=1 时不预留, 保住唯一最佳 MATCH)
+        return [...top.slice(0, limit - 1), phraseHits[0]];
+      }
+      return [...top, ...phraseHits].slice(0, limit);
     }
-    return [...top, ...fallback].slice(0, limit);
+    // 短语零命中才拆词: 单词 query 拆了还是同一条, 不需要再扫一遍;
+    // 但重复词(「缓存 缓存」)去重后只剩一个词, 与整串不同, 仍要走这条兜底。
+    if (parsed.terms.length === 1 && parsed.terms[0] === parsed.matchQuery) return [];
+    return this.searchLike(parsed.terms, opts).slice(0, limit);
   }
 
   /** FTS5 MATCH 路径; query 语法错静默返空(让 LIKE 兜底接管) */
@@ -168,21 +192,46 @@ export class MemoryFts {
   }
 
   /**
-   * LIKE 子串兜底: 大小写不敏感(LIKE 默认 ASCII 不敏感, CJK 逐字节精确), 无 bm25/snippet。
-   * 不做 SQL LIMIT — 由调用方去重后再截断: 否则 LIKE-only 命中排在 MATCH 双命中行
-   * 之后时会被先截掉, 预留名额失效 (memory 量级小, 全扫可接受)。
+   * LIKE 臂: 每个词各一组 (title/description/body) 条件, OR 召回 — 多词查询不再
+   * 要求原文出现同一字面串 (「登录 失败」命中「登录…失败」)。
+   * 大小写不敏感(LIKE 默认 ASCII 不敏感, CJK 逐字节精确)。
+   *
+   * SQL 先按字段命中 + 覆盖词数粗排, 只取前 LIKE_CANDIDATE_LIMIT 条候选, 再在
+   * JS 里按正文密度/长度精确打分 — 不再把所有命中行的 body 拉回主进程。
+   * 候选之外的高密度文档会被放弃; 同分时短正文优先, 作为密度的一个廉价近似。
    */
-  private searchLike(query: string, opts: SearchOptions): SearchHit[] {
-    const pattern = `%${escapeLikePattern(query.trim())}%`;
-    let sql = `SELECT filename, type, title, description, body
+  private searchLike(terms: readonly string[], opts: SearchOptions): SearchHit[] {
+    const clauses = terms.map(
+      () => `(title LIKE ? ESCAPE '!' OR description LIKE ? ESCAPE '!' OR body LIKE ? ESCAPE '!')`,
+    );
+    const whereParams: unknown[] = terms.flatMap((term) => {
+      const pattern = `%${escapeLikePattern(term)}%`;
+      return [pattern, pattern, pattern];
+    });
+    // 粗排与最终权重同源(字段 12/6/6, 覆盖词数做乘数), 只少密度与长度归一。
+    const coarseParts = terms.map(
+      () =>
+        `(CASE WHEN instr(title, ?) > 0 THEN 12 ELSE 0 END` +
+        ` + CASE WHEN instr(description, ?) > 0 THEN 6 ELSE 0 END` +
+        ` + CASE WHEN instr(body, ?) > 0 THEN 6 ELSE 0 END)`,
+    );
+    const matchedParts = terms.map(
+      () =>
+        `(CASE WHEN instr(title, ?) > 0 OR instr(description, ?) > 0 OR instr(body, ?) > 0` +
+        ` THEN 1 ELSE 0 END)`,
+    );
+    const coarseParams: unknown[] = terms.flatMap((term) => [term, term, term]);
+    const params: unknown[] = [...coarseParams, ...coarseParams, ...whereParams];
+    let sql = `SELECT filename, type, title, description, body,
+                      (${coarseParts.join(' + ')}) * (${matchedParts.join(' + ')}) AS coarse
                FROM ${TABLE}
-               WHERE (title LIKE ? ESCAPE '!' OR description LIKE ? ESCAPE '!' OR body LIKE ? ESCAPE '!')`;
-    const params: unknown[] = [pattern, pattern, pattern];
+               WHERE (${clauses.join(' OR ')})`;
     if (opts.type) {
       sql += ` AND type = ?`;
       params.push(opts.type);
     }
-    sql += ` ORDER BY filename`;
+    // 候选池截断: 同分时正文短的优先 (密度高的文档更像精确命中)。
+    sql += ` ORDER BY coarse DESC, length(body) ASC, filename ASC LIMIT ${LIKE_CANDIDATE_LIMIT}`;
 
     try {
       const rows = this.db.prepare(sql).all(...params) as Array<{
@@ -192,15 +241,28 @@ export class MemoryFts {
         description: string;
         body: string;
       }>;
-      return rows.map((r) => ({
-        filename: r.filename,
-        type: r.type as MemoryType,
-        title: r.title,
-        // snippet 优先取实际命中的字段 (title/description/body), 保证与命中原因相关
-        snippet: truncate(hitField(r, query) ?? r.title, SNIPPET_FALLBACK_LEN),
-        // LIKE 兜底无 bm25: 用大值表示"未排名", 排在所有 MATCH 命中之后 (score 越小越相关)
-        score: Number.MAX_SAFE_INTEGER,
-      }));
+      const lowered = terms.map((term) => term.toLowerCase());
+      const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
+      type Row = (typeof rows)[number];
+      type ScoredRow = { row: Row; score: number; bodyHitAt: number };
+      return rows
+        .map((r): ScoredRow | null => {
+          const scored = scoreLikeHit(r, lowered);
+          if (scored.score <= 0) return null;
+          return { row: r, score: scored.score, bodyHitAt: scored.bodyHitAt };
+        })
+        .filter((hit): hit is ScoredRow => hit !== null)
+        .sort((a, b) => b.score - a.score || a.row.filename.localeCompare(b.row.filename))
+        .slice(0, limit)
+        // 只为最终返回的少数命中构建片段, 不在上千条命中上跑正则标记
+        .map((hit): SearchHit => ({
+          filename: hit.row.filename,
+          type: hit.row.type as MemoryType,
+          title: hit.row.title,
+          snippet: buildLikeSnippet(hit.row, terms, hit.bodyHitAt),
+          // 越小越相关: 基准 - 质量分, 仍排在 MATCH 命中之后、LIKE 臂内部有序
+          score: LIKE_SCORE_BASE - Math.round(hit.score * 1000),
+        }));
     } catch (e) {
       throw new MemoryError('io-error', `fts like-fallback failed: ${(e as Error).message}`);
     }
@@ -257,10 +319,107 @@ function escapeLikePattern(q: string): string {
   return q.replace(/[!%_]/g, (c) => `!${c}`);
 }
 
-/** LIKE 命中字段优先: title/description/body 中第一个包含 query 子串的字段 (ASCII 大小写不敏感) */
-function hitField(r: { title: string; description: string; body: string }, query: string): string | undefined {
-  const ql = query.trim().toLowerCase();
-  return [r.title, r.description, r.body].find((f) => f && f.toLowerCase().includes(ql));
+/**
+ * 把 query 收成 MATCH 用的原文与 LIKE 用的词表。
+ * MATCH 仍是整句 phrase (精度优先); 只有 phrase 与整串 LIKE 都零命中时,
+ * 才用词表做 OR 兜底。
+ */
+function parseQuery(query: string): { matchQuery: string; terms: string[] } {
+  const matchQuery = query.trim().slice(0, MAX_QUERY_CHARS);
+  const terms = [...new Set(matchQuery.split(/\s+/).filter(Boolean))].slice(0, MAX_QUERY_TERMS);
+  return { matchQuery, terms };
+}
+
+/**
+ * LIKE 臂打分: title 12 / description 6 / body 6 (出现次数加成, 按正文长度开方归一),
+ * 多词 OR 兜底再乘覆盖词数。分数只用于 LIKE 臂内部排序。
+ */
+function scoreLikeHit(
+  r: { title: string; description: string; body: string },
+  terms: readonly string[],
+): { score: number; bodyHitAt: number } {
+  const title = r.title.toLowerCase();
+  const description = r.description.toLowerCase();
+  const body = r.body.toLowerCase();
+  let score = 0;
+  let matched = 0;
+  let bodyHitAt = -1;
+
+  for (const term of terms) {
+    let hit = false;
+    if (title.includes(term)) {
+      score += 12;
+      hit = true;
+    }
+    if (description.includes(term)) {
+      score += 6;
+      hit = true;
+    }
+    const pos = body.indexOf(term);
+    if (pos >= 0) {
+      hit = true;
+      const count = countOccurrences(body, term, 6);
+      const density = 1 + Math.min(count - 1, 4) * 0.5;
+      score += (density * 6) / Math.sqrt(Math.max(1, body.length / 1000));
+      if (bodyHitAt < 0 || pos < bodyHitAt) bodyHitAt = pos;
+    }
+    if (hit) matched += 1;
+  }
+  if (matched === 0) return { score: 0, bodyHitAt: -1 };
+
+  if (terms.length > 1) {
+    // 命中更多查询词更相关: 覆盖词数做乘数, 避免「一个词落在标题」压过
+    // 「两个词都在正文」(如「缓存 日志」两个词都在正文的文档应排在只有日志的文档前)
+    score *= matched;
+  }
+
+  return { score, bodyHitAt };
+}
+
+/** 命中窗口片段: body 优先, 没有 body 命中时退回 description/title, 关键词打 <mark> */
+function buildLikeSnippet(
+  r: { title: string; description: string; body: string },
+  terms: readonly string[],
+  bodyHitAt: number,
+): string {
+  if (bodyHitAt >= 0) {
+    const start = Math.max(0, bodyHitAt - SNIPPET_BEFORE);
+    const end = Math.min(r.body.length, bodyHitAt + SNIPPET_AFTER);
+    const head = start > 0 ? '…' : '';
+    const tail = end < r.body.length ? '…' : '';
+    const text = `${head}${r.body.slice(start, end).replace(/\s+/g, ' ').trim()}${tail}`;
+    return markTerms(truncate(text, SNIPPET_MAX_LEN), terms);
+  }
+  const source = [r.description, r.title].find((f) => f && containsAnyTerm(f, terms)) ?? r.title;
+  return markTerms(truncate(source, SNIPPET_MAX_LEN), terms);
+}
+
+/** 单次替换 + 长词优先, 避免「登录」与「登录失败」互相嵌套 <mark> */
+function markTerms(text: string, terms: readonly string[]): string {
+  const ordered = [...terms].sort((a, b) => b.length - a.length);
+  const re = new RegExp(ordered.map(escapeRegExp).join('|'), 'gi');
+  return text.replace(re, (m) => `<mark>${m}</mark>`);
+}
+
+function countOccurrences(haystack: string, needle: string, cap: number): number {
+  let count = 0;
+  let from = 0;
+  while (count < cap) {
+    const i = haystack.indexOf(needle, from);
+    if (i < 0) break;
+    count += 1;
+    from = i + needle.length;
+  }
+  return count;
+}
+
+function containsAnyTerm(text: string, terms: readonly string[]): boolean {
+  const lower = text.toLowerCase();
+  return terms.some((term) => lower.includes(term));
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function truncate(s: string, maxLen: number): string {

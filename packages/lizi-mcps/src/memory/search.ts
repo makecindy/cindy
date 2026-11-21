@@ -1,9 +1,9 @@
 /**
  * memory/search.ts — memory_search tool
  *
- * SQLite FTS5 全文检索 (Hermes 风格)。query 当前走 phrase 精确匹配 (storage 层
- * escapeFtsQuery 包了双引号), 不支持 AND/OR/NOT advanced 语法 — 后续如果 LLM
- * 表达需求强再开 raw mode 选项。
+ * SQLite FTS5 全文检索 (Hermes 风格)。召回分三层: 短语 MATCH → 整串 LIKE →
+ * 前两层都为空时按空白拆词 OR (escapeFtsQuery 仍把 MATCH 收成 phrase, 不支持
+ * AND/OR/NOT advanced 语法), 保证已有短语命中的结果集不变。
  *
  * 适用场景: LLM 知道想找的内容大概是什么 (关键词), 但不知道哪个文件; 用 search
  * 拿候选 + snippet, 再走 memory_read 拿全文。
@@ -20,12 +20,13 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
     name: 'memory_search',
     category: 'search',
     description:
-      'FTS5 全文检索当前 workdir 的 memory (按 title/description/body)。返回按相关度排序的命中列表 ' +
-      '(filename / type / title / snippet 高亮 / score)。query 当前走精确短语匹配, ' +
-      '可选 type 限定类目, limit 默认 10 (上限 50)。' +
+      '关键词检索当前 workdir 的 memory (按 title/description/body)。优先短语精确匹配; ' +
+      '短语无命中时按空格拆词召回, 覆盖关键词越多排得越前; 返回按相关度排序的命中列表 ' +
+      '(filename / type / title / snippet 命中窗口与 <mark> 标记 / score)。' +
+      ' 可选 type 限定类目, limit 默认 10 (上限 50)。' +
       ' 拿到候选后走 memory_read 拉全文。',
     inputShape: {
-      query: z.string().min(1).describe('搜索关键词 (短语精确匹配)'),
+      query: z.string().min(1).max(200).describe('搜索关键词, 短语优先; 多词用空格分隔 (最多 8 个词)'),
       type: z
         .enum(['user', 'feedback', 'project', 'reference'])
         .optional()
