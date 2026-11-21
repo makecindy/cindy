@@ -326,6 +326,8 @@ export class GhostBrowserExtensionSlot {
     clearTimeout(entry.nativeRetryTimer);
     entry.nativeRetryTimer = undefined;
     if (result.ok) {
+      if (entry.nativeFailureReason)
+        this.deps.log?.info('browser extension native binding restored', { instanceId: entry.instanceId });
       entry.nativeFailures = 0;
       entry.nativeRetryAt = undefined;
       entry.nativeRetryBlocked = false;

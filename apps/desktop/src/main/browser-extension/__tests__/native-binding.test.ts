@@ -162,7 +162,8 @@ describe('native-binding', () => {
 
   it.each([
     { input: 'access-denied', reason: 'EACCES' },
-    { input: 'malformed', reason: 'INSTALL_FAILED' },
+    { input: 'timeout', reason: 'REGISTRY_READ_TIMEOUT' },
+    { input: 'malformed', reason: 'REGISTRY_READ_FAILED' },
     { input: 'missing-manifest', reason: 'ENOENT' },
   ])('does not overwrite Windows registrations when the query is $input', async ({ input, reason }) => {
     const { dir, binaryDir, root } = await fixture();
@@ -170,6 +171,7 @@ describe('native-binding', () => {
     await fs.writeFile(path.join(binaryDir, 'win32-x64', 'cindy-browser-native.exe'), 'fixture');
     const run = vi.fn(async () => {
       if (input === 'access-denied') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      if (input === 'timeout') throw Object.assign(new Error('deadline'), { killed: true });
       return { stdout: input === 'malformed' ? 'invalid JSON' : JSON.stringify([path.join(dir, 'absent.json')]) };
     });
     const n = createNativeBinding({ hostName: 'com.example.browser', binaryDir, root,
@@ -348,7 +350,11 @@ describe('native-binding', () => {
     const { dir, binaryDir } = await fixture();
     await fs.mkdir(path.join(binaryDir, 'win32-x64'), { recursive: true });
     await fs.writeFile(path.join(binaryDir, 'win32-x64', 'cindy-browser-native.exe'), 'fixture');
-    const run = vi.fn(async (_file: string, _args: string[]) => ({ stdout: '[]' }));
+    // #11579: the native reader must let an install finish even on a machine
+    // where the portable PowerShell reader times out on every invocation.
+    const run = vi.fn(async (file: string, _args: string[]) => {
+      if (file.endsWith('powershell.exe')) throw Object.assign(new Error('deadline'), { killed: true });
+    });
     const n = createNativeBinding({
       hostName: 'com.example.browser',
       binaryDir,
@@ -356,6 +362,7 @@ describe('native-binding', () => {
       platform: 'win32',
       arch: 'x64',
       env: { SystemRoot: 'C:\\Windows' },
+      readWindowsManifests: async () => [],
       run,
     });
     expect((await n.install(18819, [EXT])).ok).toBe(true);
@@ -375,7 +382,7 @@ describe('native-binding', () => {
   it('fails closed when the executable is absent or the registration directory is a symlink', async () => {
     const { dir, binaryDir, profile } = await fixture();
     const link = path.join(dir, 'link');
-    await fs.symlink(profile, link);
+    await fs.symlink(profile, link, process.platform === 'win32' ? 'junction' : 'dir');
     const linked = createNativeBinding({
       hostName: 'com.example.browser',
       binaryDir,
