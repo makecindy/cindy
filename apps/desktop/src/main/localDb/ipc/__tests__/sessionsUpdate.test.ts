@@ -1,3 +1,4 @@
+import { closeIdleDesktopSessionForMove } from '../sessionWorkingDirMove.desktop.js';
 import { configureUserDataDir } from '../../../userDataPath.js';
 import { configureOwnerContext } from '../../../ownerContext.js';
 import { _setStoreForTests } from '../../../worktree/worktreeStore.js';
@@ -2099,6 +2100,28 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.relocate).not.toHaveBeenCalled();
   });
 
+  // L338, unit: use the bootstrap port through the real move. A cold runtime has no
+  // live agentKind, but only Claude defers closing until transcript relocation.
+  it.each(['cc', 'pi', 'codex'])('uses the stored %s engine for cold and idle task moves', async kind => {
+    const id = kind + '-local';
+    for (const live of [false, true]) {
+      const maker = { isSessionAlive: () => live, closeSession: h.closeSession,
+        getSession: () => live ? { agentKind: kind === 'cc' ? 'claude-code' : kind, isTurnRunning: () => false } : null };
+      h.getMakerIfReady.mockReturnValue(maker);
+      h.closeSession.mockClear();
+      const dir = '/new/' + (live ? 'idle' : 'cold');
+      const row = await updateSessionInDb(id, { workingDir: dir }, { closeIdleSessionForMove: closeIdleDesktopSessionForMove });
+      expect(row.workingDir).toBe(dir);
+      expect(h.closeSession).toHaveBeenCalledTimes(kind === 'cc' ? 0 : 1);
+    }
+    const running = { isSessionAlive: () => true, closeSession: h.closeSession, getSession: () => ({ isTurnRunning: () => true }) };
+    h.getMakerIfReady.mockReturnValue(running);
+    h.closeSession.mockClear();
+    await expect(updateSessionInDb(id, { workingDir: '/new/busy' }, { closeIdleSessionForMove: closeIdleDesktopSessionForMove }))
+      .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(h.closeSession).not.toHaveBeenCalled();
+  });
+
   it('does nothing for codex sessions', async () => {
     await invokeUpdate('codex-local', { workingDir: '/new/dir' });
     expect(h.relocate).not.toHaveBeenCalled();
@@ -2113,7 +2136,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
       const updated = await updateSessionInDb(sessionId, { workingDir });
 
-      expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith(sessionId);
+      expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith(sessionId, sessionId.split('-')[0]);
       expect(updated.workingDir).toBe(storedWorkingDir);
       expect(
         h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get(sessionId),
@@ -2128,7 +2151,7 @@ describe('local-db:sessions:update handler wiring', () => {
       updateSessionInDb('codex-local', { workingDir: path.join(os.tmpdir(), 'moved-session') }),
     ).rejects.toThrow('[PRECONDITION_FAILED]');
 
-    expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith('codex-local');
+    expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith('codex-local', 'codex');
     expect(
       h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
     ).toEqual({ working_dir: '/old/dir' });
@@ -2146,16 +2169,17 @@ describe('local-db:sessions:update handler wiring', () => {
     );
   });
 
-  it('rejects moving a local Pi/Codex session whose turn became active', async () => {
+  it.each(['cc-local', 'pi-local', 'codex-local'])('rejects moving a running %s task', async sessionId => {
     h.closeIdleSessionForMove.mockResolvedValueOnce(false);
 
-    await expect(invokeUpdate('codex-local', { workingDir: '/new/dir' })).rejects.toThrow(
+    await expect(invokeUpdate(sessionId, { workingDir: '/new/dir' })).rejects.toThrow(
       '[PRECONDITION_FAILED]',
     );
 
     expect(
-      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
+      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get(sessionId),
     ).toEqual({ working_dir: '/old/dir' });
+    expect(h.relocate).not.toHaveBeenCalled();
     expect(h.closeSession).not.toHaveBeenCalled();
   });
 

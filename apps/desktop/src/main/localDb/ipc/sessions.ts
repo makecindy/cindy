@@ -231,8 +231,8 @@ export interface RegisterSessionIpcOpts {
   isBusyForProjectArchive?: (sessionId: string) => boolean;
   /** Use the same live catalog as runtime usage, without writing during reads. */
   resolveContextWindow?: (session: ContextWindowSession) => number | null;
-  /** Close a local Pi/Codex runtime only if its current turn is idle. */
-  closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+  /** Refuse a local move during a turn; the transcript mover handles closing an idle Claude runtime. */
+  closeIdleSessionForMove?: (sessionId: string, storedAgentKind: string) => Promise<boolean>;
   /**
    * 任务级上下文窗口预算（tokens）变化后，把新值应用到**活着的**运行实例上
    * （空闲关 handle 冷重建；回合中登记 pending，回合结束后生效）。
