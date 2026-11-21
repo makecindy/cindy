@@ -227,6 +227,7 @@ import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, cre
   agentNetPeerRoute, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute } from './agentNetRuntime.js';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery, requiresSessionLink } from './linkRecovery';
+import { noteLocalNetworkControlEnabled, noteLocalNetworkRelayOnlyPeers, onLocalNetworkGranted } from '../local-network/index.js';
 import { invalidatePluginOauth } from '../plugin-oauth/runtime.js';
 import {
   createResponsivenessTracker,
@@ -2009,6 +2010,17 @@ const peerLinksPush = createPeerLinksPushScheduler({
 // Agent-Net 的路径变化（直连 ↔ 中转、连上、断开）与中转连接的变化不经过 Device Link 的事件：同样触发拓扑页刷新（原来只有 5 秒轮询）。
 onAgentNetPathChange(() => peerLinksPush.schedule());
 onAgentNetRelayChange(() => peerLinksPush.schedule());
+// macOS「本地网络」权限：同账号设备已连上却只走中转，是缺许可真正拖慢用户的时刻（local-network/reminder.ts）。
+// 只看 Agent-Net 的实时路径；旧式连接的路径事件在对端下线后不会撤回，会留下过时的提醒。
+onAgentNetPathChange(() => {
+  noteLocalNetworkRelayOnlyPeers(agentNetPeerRoutes().filter((route) => route.path === 'relay').map((route) => route.deviceId));
+});
+// 用户刚给了许可：和网卡变化一样立即重试直连，不等退避到期。
+onLocalNetworkGranted(() => {
+  if (linkTornDown || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;
+  client?.notifyNetworkChanged();
+  agentNetNetworkChanged();
+});
 
 export function isSharedTaskAvailable(): boolean {
   const connection = client?.crossAccountConnection();
@@ -2104,6 +2116,7 @@ export async function setRemoteControlEnabled(enabled: boolean, assertCurrent?: 
   pollExternalSettingsChange();
   broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled: readDeviceLinkSettings().remoteControlEnabled });
   log.info(`remote control ${enabled ? 'enabled' : 'disabled'}`);
+  if (enabled) noteLocalNetworkControlEnabled();
 }
 
 /**

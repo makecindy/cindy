@@ -7001,7 +7001,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "已含于隐私画面：此机不眠。"
+      "keepAwakeIncluded": "已含于隐私画面：此机不眠。",
+      "localNetwork": {
+        "label": "本地网络",
+        "deniedHint": "无此权，同网之电脑与手机不得直连此机，唯经中继，其速迟矣。",
+        "settingsHint": "请于「系统设置 › 隐私与安全性 › 本地网络」启 Cindy，归此即自生效。"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -10897,6 +10902,13 @@
         "enabled": "已启"
       },
       "close": "阖"
+    },
+    "localNetwork": {
+      "title": "启本地网络之权",
+      "relayOnly": "汝他设备今唯经中继连此机，其速迟。启之，则同网可直连。",
+      "controlEnabled": "同网设备欲直控此机，须本地网络之权，否则唯经中继。",
+      "allow": "启之",
+      "dismiss": "暂不启"
     }
   },
   "bots": {

@@ -7001,7 +7001,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "已包含在隱私畫面中：電腦不會進入睡眠。"
+      "keepAwakeIncluded": "已包含在隱私畫面中：電腦不會進入睡眠。",
+      "localNetwork": {
+        "label": "區域網路",
+        "deniedHint": "沒有這個權限時，同一網路下的電腦和手機無法直接連線這台電腦，只能經中繼，速度會變慢。",
+        "settingsHint": "請在「系統設定 › 隱私權與安全性 › 區域網路」裡開啟 Cindy，回到這裡會自動生效。"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -10897,6 +10902,13 @@
         "enabled": "已開啟"
       },
       "close": "關閉"
+    },
+    "localNetwork": {
+      "title": "開啟區域網路權限",
+      "relayOnly": "你的其他裝置現在只能經中繼連線這台電腦，速度較慢。開啟後，同一網路下可以直接連線。",
+      "controlEnabled": "同一網路下的裝置要直接控制這台電腦，需要區域網路權限，否則只能經中繼。",
+      "allow": "開啟",
+      "dismiss": "暫不開啟"
     }
   },
   "bots": {
