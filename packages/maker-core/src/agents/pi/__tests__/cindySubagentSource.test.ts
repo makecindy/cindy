@@ -612,6 +612,23 @@ describe('cindy-subagent extension source', () => {
     expect(spawnCall).toBeGreaterThan(writeBack);
   });
 
+  it('exposes the workflow graph the runner already schedules on', () => {
+    // The runner owns dependency ordering (step ids, failure propagation, prior
+    // results appended to the dependent task) but the extension used to hard-code
+    // an empty list, which made that path unreachable from the model.
+    const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+    expect(src).not.toContain('dependsOn: [],');
+    expect(src).toContain('dependsOn: dependsOn,');
+    expect(src).toContain("dependsOn: {\n                type: 'array',");
+    expect(src).toContain('dependsOn must be an array of task ids');
+    expect(src).toContain('depends on unknown task');
+    expect(src).toContain('dependency cycle through task');
+    // Both the launch config and the invocation report must agree on the label.
+    expect(src.match(/mode: workflowMode\(tasks\)/g)?.length).toBe(2);
+    expect(src).toContain("return branches ? 'workflow' : 'chain'");
+    expect(src).toContain('run them as an ordered workflow');
+  });
+
   it('points durable children at a private staged ripgrep, not the parent configHome', () => {
     const src = CINDY_SUBAGENT_RUNNER_SOURCE;
     expect(src).toContain("childEnv.CINDY_PI_MANAGED_RG_PATH = childRg");
