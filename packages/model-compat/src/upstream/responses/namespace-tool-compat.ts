@@ -102,10 +102,59 @@ type NamespaceRewritePlan = {
   bareWireNames: Set<string>;
   identities: Map<string, string>;
   selectors: Map<string, string | null>;
+  /**
+   * Preferred wire name -> allocated name, for children displaced by a bare declaration. The
+   * custom-tool layer records wire names before this pass runs, so a displaced custom child has to
+   * move its record too: the preferred name now belongs to the bare declaration, and leaving it in
+   * that set would restore the bare tool's ordinary call as a custom-tool call.
+   */
+  renamedWireNames: Map<string, string>;
+  /** Displaced children with the declaration type the flattening pass actually saw. */
+  renamedChildren: { preferred: string; declaredType: unknown }[];
 };
 
 /** Two distinct logical tools would occupy one wire name; the caller maps this to a 400. */
 export class NamespaceToolCollisionError extends Error {}
+
+/**
+ * Upper bound for the disambiguating suffix. A catalog still colliding after this many candidates
+ * is malformed rather than merely unlucky, and the request keeps failing closed.
+ */
+const MAX_WIRE_NAME_SUFFIX = 64;
+
+/**
+ * Pick a wire name for a namespace child whose flattened form a bare declaration already claims.
+ *
+ * Codex emits both shapes when one of its own code-mode tools is spelled like a namespace child:
+ * the flat declaration `collaboration__followup_task` alongside the group `collaboration` holding
+ * `followup_task`. These are distinct logical tools, so one of them has to move. Failing the
+ * request costs the entire turn — the strict gateway rejects the request, not the single tool —
+ * while renaming the child keeps both reachable.
+ *
+ * Renaming stays request-local: `aliases` maps the new wire name back to `{namespace, name}`, so
+ * replay and response restoration are unchanged, and the renamed entry is authorized by
+ * `tool_choice` through exactly the same path as an unrenamed one.
+ */
+function allocateLoweredWireName(
+  wireOwners: ReadonlyMap<string, string>,
+  preferred: string,
+): string {
+  for (let suffix = 2; suffix <= MAX_WIRE_NAME_SUFFIX; suffix += 1) {
+    const candidate = `${preferred}_${suffix}`;
+    if (!wireOwners.has(candidate)) return candidate;
+  }
+  throw new NamespaceToolCollisionError(
+    `namespace tool wire-name collision for "${preferred}"; no free disambiguated name`,
+  );
+}
+
+type LoweredNamespaceChild = {
+  namespace: string;
+  child: Record<string, unknown>;
+  childName: string;
+  identity: string;
+  preferred: string;
+};
 
 function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
   const aliases = new Map<string, RoutedNamespaceToolIdentity>();
@@ -113,6 +162,8 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
   const identities = new Map<string, string>();
   const selectors = new Map<string, string | null>();
   const wireOwners = new Map<string, string>();
+  const renamedWireNames = new Map<string, string>();
+  const renamedChildren: { preferred: string; declaredType: unknown }[] = [];
 
   for (const group of groups) {
     for (const tool of group) {
@@ -127,6 +178,10 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
     }
   }
 
+  const children: LoweredNamespaceChild[] = [];
+  // Which identities want each preferred wire name. The same logical tool may be declared in
+  // several containers, so identity — not declaration — is what makes a name contested.
+  const wantedBy = new Map<string, Set<string>>();
   for (const group of groups) {
     for (const tool of group) {
       const parsed = parseNamespaceGroup(tool);
@@ -134,29 +189,61 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
       for (const child of parsed.children) {
         const childName = child.name as string;
         const identity = loweredIdentity(parsed.namespace, childName);
-        const wireName = loweredWireName(parsed.namespace, childName);
-        const owner = wireOwners.get(wireName);
-        if (owner !== undefined && owner !== identity) {
-          throw new NamespaceToolCollisionError(
-            `namespace tool wire-name collision for "${wireName}"; rename one of the colliding tools`,
-          );
-        }
-        wireOwners.set(wireName, identity);
-        identities.set(identity, wireName);
-        addSelector(selectors, wireName, wireName);
-        addSelector(selectors, `${parsed.namespace}.${childName}`, wireName);
-        addSelector(selectors, childName, wireName);
-        if (parsed.namespace !== BUILTIN_FUNCTIONS_NAMESPACE) {
-          // A child declared `custom` stays custom; everything else lowers to a
-          // function, which is how `buildTools` flattens it upstream.
-          const kind = child.type === "custom" ? "custom" : "function";
-          aliases.set(wireName, { namespace: parsed.namespace, name: childName, kind });
-        }
+        const preferred = loweredWireName(parsed.namespace, childName);
+        children.push({ namespace: parsed.namespace, child, childName, identity, preferred });
+        const wanted = wantedBy.get(preferred);
+        if (wanted) wanted.add(identity);
+        else wantedBy.set(preferred, new Set([identity]));
       }
     }
   }
 
-  return { aliases, bareWireNames, identities, selectors };
+  // Two different logical tools that both want one wire name are a declaration ambiguity: their
+  // dotted spellings alias each other, so restoration would depend on which container happened to
+  // be rewritten first. Reject it before any suffix is handed out.
+  for (const [preferred, wanted] of wantedBy) {
+    if (wanted.size > 1) {
+      throw new NamespaceToolCollisionError(
+        `namespace tool wire-name collision for "${preferred}"; rename one of the colliding tools`,
+      );
+    }
+  }
+
+  // Reserve every name a child legitimately owns before allocating any suffix. Deciding this in a
+  // second pass keeps a disambiguated name from stealing a sibling's real name: given a bare
+  // `workspace__read` plus children `read` and `read_2`, `read` must not take `workspace__read_2`.
+  for (const entry of children) {
+    if (identities.has(entry.identity)) continue;
+    const owner = wireOwners.get(entry.preferred);
+    if (owner !== undefined && owner !== entry.identity) continue;
+    identities.set(entry.identity, entry.preferred);
+    wireOwners.set(entry.preferred, entry.identity);
+  }
+
+  // Only a bare declaration displaces a child; every remaining child takes the first free suffix
+  // after all real names are reserved.
+  for (const entry of children) {
+    if (identities.has(entry.identity)) continue;
+    const allocated = allocateLoweredWireName(wireOwners, entry.preferred);
+    identities.set(entry.identity, allocated);
+    wireOwners.set(allocated, entry.identity);
+    renamedWireNames.set(entry.preferred, allocated);
+    renamedChildren.push({ preferred: entry.preferred, declaredType: entry.child.type });
+  }
+
+  for (const entry of children) {
+    const wireName = identities.get(entry.identity)!;
+    addSelector(selectors, wireName, wireName);
+    addSelector(selectors, `${entry.namespace}.${entry.childName}`, wireName);
+    addSelector(selectors, entry.childName, wireName);
+    if (entry.namespace === BUILTIN_FUNCTIONS_NAMESPACE) continue;
+    // A child declared `custom` stays custom; everything else lowers to a function, which is how
+    // `buildTools` flattens it upstream.
+    const kind = entry.child.type === "custom" ? "custom" : "function";
+    aliases.set(wireName, { namespace: entry.namespace, name: entry.childName, kind });
+  }
+
+  return { aliases, bareWireNames, identities, selectors, renamedWireNames, renamedChildren };
 }
 
 /**
@@ -344,11 +431,23 @@ function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Se
 export function rewriteRoutedNamespaceToolsForUpstream(
   body: unknown,
   convertedCustomToolNames?: ReadonlySet<string>,
+  bareCustomNames?: ReadonlySet<string>,
+  namespaceCustomToolNames?: ReadonlySet<string>,
 ): {
   body: unknown;
   aliases: Map<string, RoutedNamespaceToolIdentity>;
+  /** Preferred wire name -> allocated name, for children a bare declaration displaced. */
+  renamedWireNames: Map<string, string>;
+  /**
+   * Preferred wire name -> declared kind for every displaced child. Derived from the whole rename
+   * set rather than the authorized aliases: `tool_choice` can narrow aliases down to the bare
+   * declaration, and the custom restore still has to know what the displaced child was.
+   */
+  renamedKinds: Map<string, "function" | "custom">;
 } {
-  if (!isPlainObject(body)) return { body, aliases: new Map() };
+  if (!isPlainObject(body)) {
+    return { body, aliases: new Map(), renamedWireNames: new Map(), renamedKinds: new Map() };
+  }
   const groups = collectResponsesToolGroups(body);
   const plan = buildRewritePlan(groups);
 
@@ -379,10 +478,30 @@ export function rewriteRoutedNamespaceToolsForUpstream(
       && !ambiguousDotted.has(dotted) && !plan.bareWireNames.has(dotted)
       && !aliases.has(dotted)) aliases.set(dotted, identity);
   }
-  // The adapter lowers custom tools before namespaces. Preserve their declared
-  // kind only in already-authorized response aliases; wire selectors remain lowered.
-  for (const identity of aliases.values()) {
-    if (convertedCustomToolNames?.has(namespacedToolName(identity.namespace, identity.name))) identity.kind = "custom";
+  // The adapter lowers custom tools before namespaces, which rewrites a `custom` child declaration
+  // into a `function` one, so the declaration type left in the body no longer says what this child
+  // was. `namespaceCustomToolNames` carries that knowledge from before the lowering pass; it also
+  // keeps a custom child custom when a bare custom tool happens to share its wire name.
+  const renamedKinds = new Map<string, "function" | "custom">();
+  for (const entry of plan.renamedChildren) {
+    const custom = entry.declaredType === "custom"
+      || namespaceCustomToolNames?.has(entry.preferred) === true
+      || (
+        convertedCustomToolNames?.has(entry.preferred) === true
+        && bareCustomNames?.has(entry.preferred) !== true
+      );
+    renamedKinds.set(entry.preferred, custom ? "custom" : "function");
+  }
+  for (const [wireName, identity] of aliases) {
+    const preferred = namespacedToolName(identity.namespace, identity.name);
+    if (wireName !== preferred) {
+      const displacedKind = renamedKinds.get(preferred);
+      if (displacedKind) identity.kind = displacedKind;
+      continue;
+    }
+    if (!convertedCustomToolNames?.has(preferred)) continue;
+    if (bareCustomNames?.has(preferred)) continue;
+    identity.kind = "custom";
   }
   return {
     body: {
@@ -392,6 +511,8 @@ export function rewriteRoutedNamespaceToolsForUpstream(
       ...(toolChoice !== body.tool_choice ? { tool_choice: toolChoice } : {}),
     },
     aliases,
+    renamedWireNames: plan.renamedWireNames,
+    renamedKinds,
   };
 }
 

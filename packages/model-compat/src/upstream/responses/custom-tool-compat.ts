@@ -67,14 +67,45 @@ export function routedCustomToolWireName(value: unknown): string | undefined {
 }
 
 /** Resolve a provider-emitted wire name to the routed custom tool the client declared. */
+/**
+ * Wire names a namespace flattening pass moved away from their preferred spelling.
+ *
+ * `bareCustomNames` separates a bare declaration that genuinely is a custom tool from a name that
+ * only looks custom because a displaced child used to own it; `displacedKinds` says what the child
+ * itself was declared as. Together they keep the custom restore from claiming a call that belongs
+ * to the bare declaration or from turning an ordinary function into a custom-tool call.
+ */
+export interface CustomRestoreDisplacement {
+  bareCustomNames: ReadonlySet<string>;
+  displacedKinds: ReadonlyMap<string, "function" | "custom">;
+}
+
 export function routedCustomToolTargetName(
   value: unknown,
   names: ReadonlySet<string>,
   declaredNames?: ReadonlySet<string>,
+  displacement?: CustomRestoreDisplacement,
 ): string | undefined {
   const wireName = routedCustomToolWireName(value);
   if (wireName === undefined) return undefined;
-  if (names.has(wireName)) return wireName;
+  if (names.has(wireName)) {
+    if (displacement) {
+      const carriesNamespace = isPlainObject(value) && typeof value.namespace === "string";
+      if (carriesNamespace) {
+        // Restoring the child is what puts the namespace on the item; an ordinary function child
+        // must stay a function call rather than come back as a custom-tool call.
+        if (displacement.displacedKinds.get(wireName) === "function") return undefined;
+      } else if (
+        displacement.displacedKinds.has(wireName)
+        && !displacement.bareCustomNames.has(wireName)
+      ) {
+        // The bare declaration that claimed this name is not a custom tool, so its own call is not
+        // a custom-tool call.
+        return undefined;
+      }
+    }
+    return wireName;
+  }
   if (!isPlainObject(value) || typeof value.namespace === "string") return undefined;
   const normalized = normalizeDeclaredToolName(wireName, declaredNames);
   return normalized !== wireName && names.has(normalized) ? normalized : undefined;
@@ -269,13 +300,14 @@ export function restoreRoutedCustomCalls(
   names: ReadonlySet<string>,
   repairNames: ReadonlySet<string> = new Set(),
   declaredNames?: ReadonlySet<string>,
+  displacement?: CustomRestoreDisplacement,
 ): { value: unknown; changed: boolean } {
   if (!isPlainObject(value)) return { value, changed: false };
 
   const restoreItem = (item: unknown): { value: unknown; changed: boolean } => {
     if (!isPlainObject(item)) return { value: item, changed: false };
     const wireName = routedCustomToolWireName(item);
-    const targetName = routedCustomToolTargetName(item, names, declaredNames);
+    const targetName = routedCustomToolTargetName(item, names, declaredNames, displacement);
     if (
       (item.type === "function_call" || item.type === "custom_tool_call")
       && typeof item.name === "string"
@@ -365,7 +397,7 @@ export function restoreRoutedCustomCalls(
     && value.type.startsWith("response.")
     && isPlainObject(value.response)
   ) {
-    const response = restoreRoutedCustomCalls(value.response, names, repairNames, declaredNames);
+    const response = restoreRoutedCustomCalls(value.response, names, repairNames, declaredNames, displacement);
     if (response.changed) {
       restored.response = response.value;
       changed = true;
@@ -380,6 +412,7 @@ export function restoreRoutedCustomCallsInJson(
   names: ReadonlySet<string>,
   repairNames: ReadonlySet<string> = new Set(),
   declaredNames?: ReadonlySet<string>,
+  displacement?: CustomRestoreDisplacement,
 ): string {
   if (names.size === 0 && repairNames.size === 0) return text;
   let payload: unknown;
@@ -388,7 +421,7 @@ export function restoreRoutedCustomCallsInJson(
   } catch {
     return text;
   }
-  const restored = restoreRoutedCustomCalls(payload, names, repairNames, declaredNames);
+  const restored = restoreRoutedCustomCalls(payload, names, repairNames, declaredNames, displacement);
   return restored.changed ? JSON.stringify(restored.value) : text;
 }
 
