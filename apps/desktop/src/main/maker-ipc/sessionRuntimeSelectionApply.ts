@@ -815,6 +815,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         (getSessionDbAgentKind(sessionId)
           ? dbToMakerAgentKind(getSessionDbAgentKind(sessionId))
           : persistedSessionMeta?.agentKind);
+      const configuredCredentialSelection = internalOptions.source === 'user' &&
+        internalOptions.configStaged === true &&
+        (runtimeAgentKind === 'claude-code' || runtimeAgentKind === 'codex');
       const targetRouteProviderId = targetProviderId;
       let currentRuntimeModel = liveSessionBeforeRouteChange?.model ??
         internalOptions.previousPiRoute?.model ?? persistedSessionMeta?.model;
@@ -1385,6 +1388,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         };
         assertRuntimeOwnerCurrent();
         const deferredSelection: PendingCredentialSwitch['deferredSelection'] = internalOptions.source === 'user' &&
+          !configuredCredentialSelection &&
           (runtimeAgentKind === 'claude-code' || runtimeAgentKind === 'codex') &&
           dbToMakerAgentKind(runtimeStatus.agentKind) === runtimeAgentKind
           ? {
@@ -1392,10 +1396,8 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               explicitAxes: credentialSelectionAxes,
               effort: atomicSelection ? atomicSelection.effort : currentEffort ?? runtimeStatus.effort,
               fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode ?? false,
-              clearScheduledBaseline: internalOptions.configStaged !== true,
-              ...(internalOptions.configStaged !== true
-                ? { onCommitted: () => reconcileBotModelRoute.acceptTaskChoice(sessionId) }
-                : {}),
+              clearScheduledBaseline: true,
+              onCommitted: () => reconcileBotModelRoute.acceptTaskChoice(sessionId),
             }
           : undefined;
         const result: Awaited<ReturnType<typeof applyRuntimeSetModelChange>> = routeExplicit
@@ -1455,6 +1457,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
                 : {}),
               isSessionInTurn,
               registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
+              ...(configuredCredentialSelection ? { deferBusyCredentialSwitch: false } : {}),
               deferredSelection,
               clearPendingCredentialSwitch: internalOptions.applyingPiCredentialPending
                 ? () => {}
@@ -1895,6 +1898,8 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           wakeSessionInputAfterCredentialSwitch(sessionId);
         }
         if (err instanceof CredentialModeSwitchBusyError) {
+          // The send coordinator retains this configured route and its queue head.
+          if (configuredCredentialSelection) throw err;
           // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
           // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
           throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);

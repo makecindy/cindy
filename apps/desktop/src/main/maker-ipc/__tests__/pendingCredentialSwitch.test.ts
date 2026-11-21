@@ -1,4 +1,4 @@
-import { registerPendingCredentialSwitchWith } from '../pendingCredentialSwitchAccess.js';
+import { getPendingCredentialSwitchTargetWith, registerPendingCredentialSwitchWith } from '../pendingCredentialSwitchAccess.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -26,6 +26,8 @@ import {
   type PendingCredentialSwitchDeps,
 } from '../pendingCredentialSwitch.js';
 import { createPendingCredentialSwitchRouteReader, createPendingCredentialSwitchService } from '../pendingCredentialSwitchAssembly.js';
+import { applyRuntimeSetModelChange } from '../runtimeSetModel.js';
+import { withSendToSessionLock } from '../sendToSessionLock.js';
 
 const touchedSessions = new Set<string>();
 
@@ -837,6 +839,78 @@ describe('the desktop pending switch service on a migrated database', () => {
     } finally {
       pendingService?.clear(sessionId);
       setSessionEffort(sessionId, null);
+      clearCurrentDbClient(client);
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // L342 N4. A failed replacement restores the original registration. A
+  // committed same-value effort edit is visible only in that registration.
+  it.each(['native close', 'hot setModel'])('keeps the same-value effort edit across failed %s', async failure => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'restore-pending-credential-'));
+    const file = path.join(dir, 'cindy.db');
+    configureMigrationRuntime({ drizzleDir: fileURLToPath(new URL('../../../../drizzle', import.meta.url)), isPackaged: true });
+    configureSqliteVecExtPath(fileURLToPath(new URL(`../../../../native/sqlite-vec/${process.platform}-${process.arch}/vec0.${vec}`, import.meta.url)));
+    const db = createBetterSqliteDatabase(file);
+    expect(loadSqliteVec(db).loaded).toBe(true);
+    await runMigrations(db, file);
+    const client = createDbClientForHandle({ db, drizzle: drizzle(db, { schema }) });
+    setCurrentDbClient(client, 'restore-pending-credential');
+    const id = rememberSession('restore-original-registration');
+    const failureError = new Error(`fixture ${failure} failed`);
+    const live = { id, agentKind: 'claude-code' as const, model: 'claude-opus-4-7',
+      setModel: async () => { throw failureError; } };
+    const liveMaker = { getSession: () => live, listActiveSessions: () => [live],
+      closeSession: async () => { throw failureError; } };
+    const wakeSession = vi.fn();
+    const service = createPendingCredentialSwitchService({
+      maker: { listActiveSessions: () => [], closeSession: async () => {} },
+      isSessionInTurn: () => false,
+      applyPiPendingSelection: vi.fn(),
+      broadcastToAllWindows: vi.fn(),
+      inputCoordinator: { wakeSession },
+      resolveLenientSessionRoute: async (_agent, model, providerId) => ({ model, providerId, degraded: false }),
+      getSessionDbAgentKind: () => 'cc',
+      getDesktopProviderService: () => ({ listProviders: async () => [{
+        id: 'anthropic', source: 'user', connected: true, agents: ['claude-code'],
+        models: { 'claude-code': [{ id: 'claude-haiku-4-5', efforts: ['medium', 'high'], defaultEffort: 'medium' }] },
+      }] }) as never,
+      resolveConfiguredContextWindow: () => null,
+      agentInputCoordinatorHolder: null,
+      broadcastSessionPatched: vi.fn(),
+      log: { debug() {}, info() {}, warn() {}, error() {} } as never,
+    });
+    const access = { pendingCredentialSwitchHolder: service, agentInputCoordinatorHolder: { wakeSession },
+      getSessionDbAgentKind: () => 'cc' as const, getMaker: () => liveMaker as never };
+    const register = (sessionId: string, target: Parameters<typeof registerPendingCredentialSwitchWith>[2]) =>
+      registerPendingCredentialSwitchWith(access, sessionId, target);
+    try {
+      const now = Date.now();
+      await client.drizzle.insert(schema.sessions).values({ id, model: live.model, agentKind: 'cc',
+        providerId: 'anthropic', effort: 'high', createdAt: now, updatedAt: now });
+      setSessionProvider(id, 'anthropic');
+      setSessionEffort(id, 'high');
+      await withSendToSessionLock(id, async () => {
+        await register(id, { model: 'claude-haiku-4-5', providerId: 'anthropic',
+          deferredSelection: { agentKind: 'claude-code', effort: 'medium', fastMode: false, clearScheduledBaseline: false } });
+        await client.exec('UPDATE sessions SET effort = ? WHERE id = ?', ['high', id]);
+        service.noteCommittedAxis(id, { effort: true });
+        await expect(applyRuntimeSetModelChange({
+          maker: liveMaker, sessionId: id, model: live.model,
+          forceSessionRebuild: failure === 'native close',
+          getPendingCredentialSwitch: sessionId => getPendingCredentialSwitchTargetWith(access, sessionId),
+          clearPendingCredentialSwitch: sessionId => service.clear(sessionId),
+          registerPendingCredentialSwitch: register,
+        })).rejects.toBe(failureError);
+      });
+      await service.onTurnSettled(id);
+      expect(db.prepare('SELECT model, effort FROM sessions WHERE id = ?').get(id))
+        .toEqual({ model: 'claude-haiku-4-5', effort: 'high' });
+      expect(wakeSession).toHaveBeenCalledOnce();
+    } finally {
+      service.clear(id);
+      setSessionEffort(id, null);
       clearCurrentDbClient(client);
       db.close();
       rmSync(dir, { recursive: true, force: true });

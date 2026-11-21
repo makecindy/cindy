@@ -49,7 +49,8 @@ import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
 import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
 import { revokedDevicesStore } from '../device-link/revokedDevicesStore';
 import { localNetworkStore, type NetworkState } from '../device-link/localNetworkStatus';
-import { remoteSessionStore } from '../session/remoteSessionStore';
+import { remoteSessionStore, sessionPendingWrites } from '../session/remoteSessionStore';
+import type { RemoteSession } from '../session/types';
 import { getDeviceFetchEpoch, subscribeDeviceProvidersGen } from '../device-link/deviceProvidersCache';
 import { useRemoteAgentCatalogs } from '../session/useRemoteAgentCatalogs';
 import { subscribeSessionCredentialSwitchNotices } from '../session/credentialSwitchOutcome';
@@ -264,6 +265,45 @@ it('keeps the legacy mobile credential alert unless the host confirms the previo
     off();
   }
 });
+
+// L342, unit/jsdom. The real push receiver must reconcile all optimistic route
+// fields after the first SET_MODEL finishes, and preserve a later in-flight pick.
+it.each(['after the first selection', 'during a newer selection'])(
+  'routes an authoritative credential-failure patch %s',
+  async (when) => {
+    const prior = { model: 'original', providerId: 'source-a', effort: 'low', fastMode: true } as const;
+    const picked = { model: 'selected', providerId: 'source-b', effort: 'high', fastMode: false } as const;
+    const newer = { model: 'newer', providerId: 'source-c', effort: 'medium', fastMode: false } as const;
+    const id = 'credential-settings-task';
+    const deviceId = 'controlled';
+    const row: RemoteSession = {
+      id, userId: 'test-account', title: 'Credential settings task', status: 'active', agentKind: 'cc',
+      workingDir: '/fixture', workspaceKind: 'project', permissionMode: 'default', userSendAt: null,
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', ...prior,
+    };
+    remoteSessionStore.upsertDeviceSession(deviceId, 'Fixture computer', row);
+    const read = () => remoteSessionStore.getSessions().find(session => session.id === id);
+    const firstWrite = sessionPendingWrites.track(id, Object.keys(picked));
+    remoteSessionStore.applySessionPatch(deviceId, id, picked);
+    expect(read()).toMatchObject(picked);
+    firstWrite(); // The initial SET_MODEL already acknowledged the pending selection.
+    const inFlight = when === 'during a newer selection';
+    const finishNewer = inFlight ? sessionPendingWrites.track(id, Object.keys(newer)) : undefined;
+    if (inFlight) remoteSessionStore.applySessionPatch(deviceId, id, newer);
+    try {
+      const client = transport.clients[0];
+      await act(async () => client.frame({
+        v: 1, kind: 'push', src: deviceId, dst: 'mobile', payload: {
+          channel: 'local-db:sessions:patched', payload: { sessionId: id, patch: { ...prior, agentSwitchIntent: null } },
+        },
+      } as Parameters<typeof client.frame>[0]));
+      expect(read()).toMatchObject(inFlight ? newer : { ...prior, agentSwitchIntent: null });
+    } finally {
+      finishNewer?.();
+      remoteSessionStore.clear();
+    }
+  },
+);
 
 describe('Provider device roster reads', () => {
   /** 测试价值：render/read getter 用 peek 证明 direct path，不调用可能 detach/emit 的

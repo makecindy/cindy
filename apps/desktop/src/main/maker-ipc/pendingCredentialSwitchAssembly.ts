@@ -17,7 +17,7 @@
 import { effectiveSourceIdForModel, findCatalogModel } from '@cindy/model-providers';
 import { and, eq } from 'drizzle-orm';
 import { dbToMakerAgentKind, makerToDbAgentKind, type DbEngineKind } from '../../shared/agentKindConversion.js';
-import { createDbTransportError, DB_TRANSPORT_NOT_SENT, DB_TRANSPORT_OUTCOME_UNKNOWN } from '../localDb/client/DbTransport.js';
+import { createDbTransportError, DB_TRANSPORT_OUTCOME_UNKNOWN } from '../localDb/client/DbTransport.js';
 import { getCurrentDbClientSnapshot, getDbClient } from '../localDb/client/current.js';
 import { persistableSessionEffort } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
@@ -34,7 +34,7 @@ import {
   PendingCredentialSwitchService,
   type PendingCredentialSwitchDeps,
 } from './pendingCredentialSwitch.js';
-import { readCredentialTaskSettings, readEffectiveCredentialSettings } from './pendingCredentialSwitchAccess.js';
+import { readCredentialTaskSettings, readEffectiveCredentialSettings, type CredentialTaskRow } from './pendingCredentialSwitchAccess.js';
 import { isSupportedRuntimeEffort } from './runtimeSelectionAxes.js';
 import { withSendToSessionLock } from './sendToSessionLock.js';
 import {
@@ -42,6 +42,10 @@ import {
   sessionRuntimeControlOwnerEpochMatches,
 } from './sessionRuntimeControl.js';
 import type { createHandleSetModel } from './sessionRuntimeSelectionApply.js';
+
+function matchesTaskRow(row: CredentialTaskRow, expected: CredentialTaskRow): boolean {
+  return Object.entries(expected).every(([key, value]) => row[key as keyof CredentialTaskRow] === value);
+}
 
 export interface PendingCredentialSwitchAssemblyPorts {
   settlementPermit?: PendingCredentialSwitchDeps['settlementPermit'];
@@ -95,13 +99,14 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
       }
       broadcastSessionPatched(sessionId, patch);
     },
-    readDeferredFailure: async (sessionId, target) => {
+    readDeferredFailure: async (sessionId, target, verifiedSettings) => {
       const state = target.deferredState;
       if (!state) return {};
       const db = getCurrentDbClientSnapshot();
       if (!db || db.userId !== state.db.userId) return { scopeChanged: true };
+      if (verifiedSettings && db !== verifiedSettings.db) return { scopeChanged: true };
       try {
-        const row = await readCredentialTaskSettings(db.client, sessionId);
+        const row = verifiedSettings?.row ?? await readCredentialTaskSettings(db.client, sessionId);
         if (db !== getCurrentDbClientSnapshot()) return { scopeChanged: true };
         if (!row || row.status !== 'active' || row.createdAt !== state.createdAt) return { taskRetired: true };
         const effective = readEffectiveCredentialSettings(sessionId, row);
@@ -210,7 +215,7 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
             }
           }
         }
-        const patch: Record<string, unknown> = {
+        const patch: Partial<CredentialTaskRow> = {
           providerId: route.providerId,
           fastMode: finalFastMode,
           ...(staged?.clearScheduledBaseline ? { scheduledModelBaseline: null } : {}),
@@ -254,22 +259,23 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
         const result = ports.settlementPermit ? update.run() : await update.run();
         if (staged && result.changes === 0) throw new CredentialRouteNotCommittedError('credential route did not update its task');
       } catch (error) {
-        if (!staged || error instanceof CredentialRouteNotCommittedError) throw error;
-        const code = (error as { code?: unknown } | null)?.code;
-        if (code === DB_TRANSPORT_NOT_SENT) {
-          throw new CredentialRouteNotCommittedError('credential route write was not sent', { cause: error });
-        }
-        if (desiredRow && typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
-          // A trigger may use FAIL instead of ABORT. Verify every column this
-          // statement could change before treating the SQLite refusal as a rollback.
-          const readback = await readCredentialTaskSettings(pendingDb, sessionId);
+        if (!staged || !desiredRow || !db || error instanceof CredentialRouteNotCommittedError) throw error;
+        const readback = await (async () => {
           assertPendingOwner();
-          if (readback && Object.entries(desiredRow).every(([key, value]) =>
-            readback[key as keyof typeof readback] === value)) {
-            throw new CredentialRouteNotCommittedError('SQLite rejected the credential route update', { cause: error });
+          const row = await readCredentialTaskSettings(pendingDb, sessionId);
+          assertPendingOwner();
+          return row;
+        })().catch(cause => {
+          throw createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'credential route write could not be verified', cause);
+        });
+        // The row decides the outcome even if the write returned an error.
+        if (!readback || !matchesTaskRow(readback, { ...desiredRow, ...patch })) {
+          if (readback && matchesTaskRow(readback, desiredRow)) {
+            throw new CredentialRouteNotCommittedError('credential route update left the task unchanged',
+              { cause: error }, { db, row: readback });
           }
+          throw new Error('credential route readback matches neither the original nor the candidate task settings', { cause: error });
         }
-        throw error;
       }
       try {
         assertPendingOwner();

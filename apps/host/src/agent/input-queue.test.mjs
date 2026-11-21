@@ -2,6 +2,7 @@ import { bindHostProfileServices } from './profile-services.ts';
 import { profileReleaseFixture } from '../test-support/profile-release-fixture.mjs';
 import { runDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { test, after } from 'node:test';
+import { createInterface } from 'node:readline';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import os from 'node:os';
@@ -3370,7 +3371,7 @@ const SWITCH_WINDOWS = { big: 200_000, small: 100_000, 'big-alternate': 300_000,
 const switchModel = id => ({ id, efforts: [], defaultEffort: null, supportsFastMode: false });
 const switchViews = agent => [{ id: 'prov-a', connected: true, agents: [agent], source: 'user',
   routing: { [agent]: {} }, models: { [agent]: ['big', 'small'].map(switchModel) } }];
-async function modelChangeRuntime(t, { agent = 'claude-code', queue = {} } = {}) {
+async function modelChangeRuntime(t, { agent = 'claude-code', queue = {}, log = {} } = {}) {
   // The queue's owner is the account's database (as main.ts): close the queue before the database.
   t = lifoCleanup(t);
   const SWITCH_VIEWS = switchViews(agent);
@@ -3417,7 +3418,7 @@ async function modelChangeRuntime(t, { agent = 'claude-code', queue = {} } = {})
     contextWindowBudgetChangesEffectiveWindow: ({ previous, next }) => previous !== next,
     codexProxyAuthInjectionState: () => null,
     inputQueue: h.queue,
-    log: { debug() {}, info() {}, warn() {}, error() {} },
+    log: { debug() {}, info() {}, warn() {}, error() {}, ...log },
   });
   const createTask = id => new OwnerSessionStorage({ db: () => getCurrentDbClientSnapshot().client }).create({
     id, title: 'Model change fixture', agentKind: agent, model: 'big', providerId: 'prov-a', workDir: db.root });
@@ -3794,6 +3795,49 @@ test('L342 the send that discovers busy credential deferral resumes after a roll
   assert.equal(r.h.maker.getSession(id).options.providerId, 'prov-a');
   assert.equal(r.row(id).model, 'big');
   assert.equal(r.userRows(id).length, 2);
+});
+
+// L342 N6, DB tier. The real send must keep a config-follow intent in its
+// original registry when the target requires a busy native runtime to close.
+test('L342 N6 config-follow waits for the send without registering a user credential notice', async t => {
+  const diagnostics = [];
+  const r = await modelChangeRuntime(t, { log: { warn: (message, details) => diagnostics.push([message, details]) } });
+  const id = 'l342-config-follow';
+  const models = ['big', 'small'].map(model => ({ ...switchModel(model), efforts: ['medium', 'high'], defaultEffort: 'medium' }));
+  r.views.current = ['prov-a', 'prov-b'].map(id => ({ ...switchViews('claude-code')[0], id, models: { 'claude-code': models } }));
+  await r.createTask(id);
+  await r.selection.setEffort(id, 'high');
+  const live = await r.runTurn(id, 'initial');
+  const configured = { sameAgentSelection: true, configStaged: true,
+    targetAgentKind: 'claude-code', model: 'small', providerId: 'prov-b', effort: 'medium', fastMode: false };
+  r.selection.pendingSwitches.set(id, configured);
+  live.requiresModelSwitchRebuild = async () => { live.running = true; return true; };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await r.h.queue.enqueue(id, { clientId: 'next', text: 'next' });
+  await settleUntil(() => r.selection.hasPendingCredentialSwitch(id) ||
+    r.h.queue.projection(id).credentialSwitchWait || r.h.queue.projection(id).error || r.userRows(id).length > 1,
+    'the real send attempts to land the configured route');
+  assert.equal(r.selection.hasPendingCredentialSwitch(id), false,
+    'a followed setting is not a credential registration');
+  assert.equal(r.h.queue.projection(id).credentialSwitchWait?.clientId, 'next', JSON.stringify(diagnostics));
+  assert.deepEqual(r.selection.pendingSwitches.get(id), configured);
+  assert.equal(r.row(id).provider_id, 'prov-a');
+  assert.equal(r.userRows(id).length, 1);
+
+  live.requiresModelSwitchRebuild = async () => true;
+  live.running = false;
+  await r.selection.onTurnSettled(id);
+  // This fixture changes the live busy predicate without a new terminal
+  // event. Advance the coordinator's existing credential-wait retry clock.
+  t.mock.timers.tick(10_000);
+  const projection = () => r.h.queue.projection(id);
+  await settleUntil(() => r.h.maker.getSession(id)?.sent.includes('next') || projection().error,
+    'the next send lands the original config intent');
+  assert.deepEqual(projection().error ?? null, null, JSON.stringify(diagnostics));
+  assert.equal(r.row(id).provider_id, 'prov-b');
+  assert.equal(r.selection.projectIntent(id), null);
+  assert.equal(r.userRows(id).length, 2);
+  assert.deepEqual(r.h.events.filter(e => e.channel?.startsWith('maker:session-credential-switch-')), []);
 });
 
 
@@ -5961,11 +6005,18 @@ for (const boundary of [
   'SQLite rollback', 'close failure', 'no available route', 'reroute', 'newer choice', 'owner changed',
   'split effort failure', 'split Fast failure', 'another window effort failure',
   'late effort success', 'late Fast success', 'independent axes without an atomic payload',
-  'explicit default effort and Fast off', 'write outcome not established', 'archive',
+  'explicit default effort and Fast off', 'archive',
+  'N3 SQLITE_FULL', 'N3 SQLITE_READONLY', 'N3 SQLITE_BUSY', 'N3 committed then threw',
+  'N3 mixed readback', 'N3 unreadable then refused', 'N5 refusal readback temporarily unavailable',
 ]) {
   test(`deferred credential choice keeps the Host route until settlement: ${boundary}`, async t => {
     const agent = boundary.includes('Fast') || boundary === 'independent axes without an atomic payload' ? 'codex' : 'claude-code';
-    const r = await modelChangeRuntime(t, { agent });
+    const logs = [];
+    const r = await modelChangeRuntime(t, { agent, log: {
+      info: (message, details) => logs.push([message, details]),
+      warn: (message, details) => logs.push([message, details]),
+      error: (message, details) => logs.push([message, details]),
+    } });
     const id = 'deferred-credential-route';
     const models = ['big', 'small'].map(model => ({ ...switchModel(model),
       efforts: ['medium', 'high'], defaultEffort: 'medium', supportsFastMode: true }));
@@ -6060,9 +6111,66 @@ for (const boundary of [
         throw new Error('fixture native close failed before any SQLite write');
       };
     }
-    const unknown = boundary === 'write outcome not established';
-    if (unknown) r.db.db.exec(`CREATE TEMP TRIGGER reject_after_updating_route AFTER UPDATE OF provider_id ON sessions
-      WHEN NEW.provider_id = 'prov-b' BEGIN SELECT RAISE(FAIL, 'fixture may have already changed the row'); END`);
+    const db = r.db.db;
+    const mixed = boundary === 'N3 mixed readback';
+    if (mixed || boundary === 'N3 committed then threw') {
+      db.exec(`CREATE TEMP TRIGGER reject_after_updating_route AFTER UPDATE OF provider_id ON sessions
+        WHEN NEW.provider_id = 'prov-b' AND OLD.provider_id IS NOT NEW.provider_id BEGIN
+        ${mixed ? "UPDATE sessions SET effort = 'low' WHERE id = NEW.id;" : ''}
+        SELECT RAISE(FAIL, 'fixture throws after the row update'); END`);
+    }
+    const sqliteCode = boundary.startsWith('N3 SQLITE_') ? boundary.slice(3) :
+      boundary === 'N3 unreadable then refused' ? 'SQLITE_READONLY' : undefined;
+    const readbackUnavailable = boundary === 'N5 refusal readback temporarily unavailable';
+    if (readbackUnavailable) r.views.current = [];
+    const faults = [];
+    let denyReadback = boundary === 'N3 unreadable then refused' || readbackUnavailable;
+    if (sqliteCode || readbackUnavailable) {
+      const busyConnection = sqliteCode === 'SQLITE_BUSY' ? new Database(db.name, { timeout: 0 }) : null;
+      if (sqliteCode === 'SQLITE_FULL') {
+        db.exec(`CREATE TABLE fixture_capacity (value BLOB);
+          CREATE TEMP TRIGGER exhaust_capacity BEFORE UPDATE OF provider_id ON sessions
+          WHEN NEW.provider_id = 'prov-b' BEGIN INSERT INTO fixture_capacity VALUES (zeroblob(4194304)); END`);
+      }
+      const prepare = db.prepare.bind(db);
+      db.prepare = sql => {
+        if (denyReadback && (readbackUnavailable || faults.length) &&
+            /^select "created_at", "status", "model".*"scheduled_model_baseline"/i.test(sql)) {
+          faults.push('readback unavailable');
+          throw new Error('fixture cannot read back the task settings');
+        }
+        const statement = prepare(sql);
+        if (sqliteCode && /^update "sessions" set /i.test(sql) &&
+            sql.includes('"provider_id" = ?') && sql.includes('"sessions"."created_at" = ?')) {
+          const run = statement.run.bind(statement);
+          statement.run = (...args) => {
+            const priorCapacity = db.pragma('max_page_count', { simple: true });
+            const priorTimeout = db.pragma('busy_timeout', { simple: true });
+            if (sqliteCode === 'SQLITE_FULL') db.pragma(`max_page_count = ${db.pragma('page_count', { simple: true })}`);
+            if (sqliteCode === 'SQLITE_READONLY') db.pragma('query_only = ON');
+            if (busyConnection) {
+              busyConnection.exec('BEGIN IMMEDIATE');
+              db.pragma('busy_timeout = 0');
+            }
+            try {
+              return run(...args);
+            } catch (error) {
+              faults.push(error.code);
+              throw error;
+            } finally {
+              if (busyConnection) {
+                busyConnection.exec('ROLLBACK');
+                db.pragma(`busy_timeout = ${priorTimeout}`);
+              }
+              if (sqliteCode === 'SQLITE_READONLY') db.pragma('query_only = OFF');
+              if (sqliteCode === 'SQLITE_FULL') db.pragma(`max_page_count = ${priorCapacity}`);
+            }
+          };
+        }
+        return statement;
+      };
+      t.after(() => { db.prepare = prepare; busyConnection?.close(); });
+    }
     const rollback = (boundary.endsWith(' failure') && boundary !== 'close failure') || boundary === 'SQLite rollback';
     if (rollback) r.db.db.exec(`CREATE TEMP TRIGGER reject_deferred_route BEFORE UPDATE OF provider_id ON sessions
       WHEN NEW.provider_id = 'prov-b' BEGIN SELECT RAISE(ABORT, 'fixture write rolled back'); END`);
@@ -6079,9 +6187,9 @@ for (const boundary of [
       assert.deepEqual([events('failed').length, events('applied').length], [0, 0]);
       return;
     }
-    if (unknown) {
-      await settleUntil(() => r.row(id).provider_id === 'prov-b', 'SQLite changed the row before rejecting the write');
-      assert.equal(getSessionProvider(id), 'prov-a', 'a throw is not a successful receipt');
+    if (mixed) {
+      await settleUntil(() => r.row(id).effort === 'low', 'SQLite wrote a mixed row before rejecting the statement');
+      assert.equal(getSessionProvider(id), 'prov-a', 'a mixed row cannot publish the candidate');
       r.views.current = [];
       await r.selection.onTurnSettled(id);
       assert.equal(r.selection.hasPendingCredentialSwitch(id), true);
@@ -6093,7 +6201,21 @@ for (const boundary of [
       assert.equal(r.row(id).provider_id, 'prov-b', 'disposal leaves the disk outcome intact');
       return;
     }
-    if (rollback || boundary === 'close failure' || boundary === 'no available route') {
+    if (sqliteCode) {
+      await settleUntil(() => faults.includes(sqliteCode), `SQLite itself throws ${sqliteCode}`);
+      await r.selection.onTurnSettled(id);
+      if (!denyReadback) assert.equal(events('failed').length, 1, JSON.stringify({ logs, settings: read(), faults }));
+    }
+    if (denyReadback) {
+      await settleUntil(() => faults.includes('readback unavailable'), 'the authoritative settings read fails');
+      await r.selection.onTurnSettled(id);
+      assert.equal(r.selection.hasPendingCredentialSwitch(id), true, 'without a readback the queue must stay gated');
+      assert.equal(r.userRows(id).length, 1);
+      assert.deepEqual([events('failed').length, events('applied').length], [0, 0]);
+      denyReadback = false;
+      await r.selection.onTurnSettled(id);
+    }
+    if (rollback || sqliteCode || readbackUnavailable || boundary === 'close failure' || boundary === 'no available route') {
       await settleUntil(() => events('failed').length > 0, 'the deferred failure is published');
       assert.equal(r.selection.hasPendingCredentialSwitch(id), false, 'the queue gate was already released when notified');
       assert.equal(r.selection.projectIntent(id), null);
@@ -6109,6 +6231,7 @@ for (const boundary of [
       assert.equal(events('applied').length, 0);
       await settleUntil(() => r.h.maker.getSession(id)?.sent.includes('followup'), 'the queued input discovers the current route');
       const after = r.h.maker.getSession(id);
+      assert.equal(after.sent.filter(text => text === 'followup').length, 1);
       assert.equal(after.model, beforeSettlement.model);
       assert.equal(after.options.providerId, beforeSettlement.providerId);
       if (after !== live) {
@@ -6119,7 +6242,7 @@ for (const boundary of [
       assert.equal(events('failed').length, 1, 'a later settlement tick cannot retry this failure');
       return;
     }
-    await settleUntil(() => !r.selection.hasPendingCredentialSwitch(id), 'the latest credential choice settles');
+    await settleUntil(() => !r.selection.hasPendingCredentialSwitch(id), 'the latest credential choice settles after verified commit');
     const provider = boundary === 'newer choice' ? 'prov-c' : boundary === 'reroute' ? null : 'prov-b';
     const effort = boundary === 'late effort success' || !explicit ? 'high' : 'medium';
     const fastMode = boundary !== 'late Fast success' && !defaults;
@@ -9041,3 +9164,80 @@ for (const [boundary, enter] of [
     assert.equal(h.queue.projection('waiter').credentialSwitchWait?.clientId, 'b1');
   });
 }
+
+// The cross-version desktop integration test drives this Host fixture over stdio.
+test('L342 controller bridge fixture', { timeout: 60_000, skip: process.env.CINDY_L342_TEST_BRIDGE !== '1' }, async t => {
+  const agent = 'codex';
+  const r = await modelChangeRuntime(t, { agent });
+  const id = 'bridge-task';
+  const models = ['big', 'big-alternate'].map(id => ({ ...switchModel(id), efforts: ['medium', 'high'],
+    defaultEffort: id === 'big' ? 'high' : 'medium', supportsFastMode: true }));
+  r.views.current = ['prov-a', 'prov-b'].map(id => ({ ...switchViews(agent)[0], id, models: { [agent]: models } }));
+  await r.createTask(id);
+  await r.selection.setEffort(id, 'high');
+  const unknown = process.env.L342_FIXTURE_UNKNOWN === '1';
+  await r.selection.setFastMode(id, unknown);
+  await enqueue(r.h, id, { clientId: 'initial', text: 'work initial' });
+  const live = r.h.maker.getSession(id);
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await settleUntil(() => !r.h.queue.projection(id).active, 'the synthetic previous turn ends');
+  const read = () => {
+    const row = r.row(id);
+    return { model: row.model, providerId: row.provider_id, effort: row.effort, fastMode: row.fast_mode === 1 };
+  };
+  const readEvents = () => r.h.events.filter(event => String(event.channel).startsWith('maker:session-credential-switch'));
+  const rpc = createHostService({
+    capabilities: async () => ({ supportsSessionAgentSwitch: true, supportsSessionAgentSwitchCas: true,
+      hasFastMode: true, availableModels: models }),
+    setSessionModel: (...args) => r.selection.setModel(...args),
+    setSessionEffort: (...args) => r.selection.setEffort(...args),
+    setSessionFastMode: (...args) => r.selection.setFastMode(...args),
+  });
+  const routes = {
+    'maker:set-model': ['/api/sessions/set-model', ['sessionId','model','providerId','revision','selection']],
+    'maker:set-effort': ['/api/sessions/set-effort', ['sessionId','effort']],
+    'maker:set-fast-mode': ['/api/sessions/set-fast-mode', ['sessionId','fastMode']],
+  };
+  const snapshot = () => ({ row: read(), provider: getSessionProvider(id), intent: r.selection.projectIntent(id),
+    pending: r.selection.hasPendingCredentialSwitch(id), events: readEvents(),
+    sent: r.h.maker.getSession(id)?.sent ?? [], patches: r.h.events.filter(e => e.type === 'session_changed' && e.sessionId === id) });
+  const write = body => process.stdout.write('L342_REPLY ' + JSON.stringify(body) + '\n');
+  const lines = createInterface({ input: process.stdin });
+  write({ seq: 0, result: snapshot() });
+  for await (const line of lines) {
+    const { seq, channel, args } = JSON.parse(line);
+    try {
+      if (channel === 'stop') { write({ seq, result:true }); break; }
+      let result;
+      if (channel === 'maker:get-capabilities') result = (await rpc('/api/capabilities', { agentKind: agent })).body;
+      else if (channel === 'inspect') result = snapshot();
+      else if (channel === 'settle') {
+        if (args[0]) r.db.db.exec(`CREATE TEMP TRIGGER reject_deferred_route BEFORE UPDATE OF provider_id ON sessions
+          WHEN NEW.provider_id = 'prov-b' BEGIN SELECT RAISE(ABORT, 'fixture write rolled back'); END`);
+        live.running = false;
+        await r.selection.onTurnSettled(id);
+        await settleUntil(() => r.h.maker.getSession(id)?.sent.includes('next'), 'the actual blocked send resumes');
+        result = snapshot();
+      } else if (channel === 'maker:get-session-agent-switch-intent') result = r.selection.projectIntent(id);
+      else {
+        const [route, keys] = routes[channel];
+        const body = Object.fromEntries(keys.map((key, index) => [key, args[index]]));
+        if (body.revision === null) delete body.revision; // Host's actual IPC dispatcher normalizes the wire placeholder.
+        const answer = await runDeviceLinkInvokeContext({ controllerDeviceId: 'fixture-desktop',
+          controllerPlatform: 'darwin', channel }, () => rpc(route, body));
+        if (answer.status !== 200) throw new Error(JSON.stringify(answer));
+        if (channel === 'maker:set-model') {
+          assert.equal(answer.body.pendingUntilSend, true);
+          live.requiresModelSwitchRebuild = async () => { live.running = true; return true; };
+          await r.h.queue.enqueue(id, { clientId: 'bridge-send', text: 'next' });
+          await settleUntil(() => r.selection.hasPendingCredentialSwitch(id) || r.h.queue.projection(id).error, 'accepted send hits real busy deferral');
+          assert.equal(r.selection.hasPendingCredentialSwitch(id), true, JSON.stringify({ landings: r.landings,
+            error: r.h.queue.projection(id).error, profile: live.options.providerId, model: live.model }));
+        }
+        result = answer.body;
+      }
+      write({ seq, result });
+    } catch (error) { write({ seq, error: String(error?.stack ?? error) }); }
+  }
+  lines.close();
+});

@@ -34,6 +34,8 @@ export async function readCredentialTaskSettings(db: DbClient, sessionId: string
   return rows.at(0);
 }
 
+export type CredentialTaskRow = NonNullable<Awaited<ReturnType<typeof readCredentialTaskSettings>>>;
+
 export function readEffectiveCredentialSettings(sessionId: string, row: CredentialTaskSettings) {
   const override = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
   return {
@@ -91,12 +93,17 @@ export async function registerPendingCredentialSwitchWith(
         !sessionRuntimeControlOwnerEpochMatches(ownerEpoch) || db !== getCurrentDbClientSnapshot())) {
     throw new Error('Task changed during deferred credential selection');
   }
+  const restored = target.deferredState;
+  if (restored && (target.ownerEpoch !== ownerEpoch || restored.db.userId !== db?.userId ||
+      restored.createdAt !== prevRow?.createdAt || service.has(sessionId))) {
+    throw new Error('Task or pending selection changed before credential switch restoration');
+  }
   const prevModel = live?.model ?? prevRow?.model ?? null;
   service.register(sessionId, {
     ...target,
     ownerEpoch,
     ...(target.deferredSelection && db && prevRow
-      ? { deferredState: {
+      ? { deferredState: restored ?? {
           db,
           createdAt: prevRow.createdAt,
           before: prevRow,
@@ -154,7 +161,8 @@ export function getPendingCredentialSwitchTargetWith(
   return pending ? { model: pending.model, providerId: pending.providerId,
     ...(pending.forceSessionRebuild ? { forceSessionRebuild: true } : {}),
     ...(pending.selectionSource ? { selectionSource: pending.selectionSource } : {}),
-    ...(pending.deferredSelection ? { deferredSelection: pending.deferredSelection } : {}) } : undefined;
+    ...(pending.deferredSelection ? { deferredSelection: pending.deferredSelection } : {}),
+    ...(pending.deferredState ? { deferredState: pending.deferredState, ownerEpoch: pending.ownerEpoch } : {}) } : undefined;
 }
 
 /** register.ts's settlePendingCredentialSwitch (a task's turn settled), with its holder and logger. */

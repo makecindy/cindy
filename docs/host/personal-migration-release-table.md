@@ -351,6 +351,12 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 
 同一轮由审核方定（非用户问题）：个人版 Host 自带一份内置 Skill（问题单第 2 条）。
 
+### 非 Pi 凭据延期切换的边界
+
+- SSH 任务只在处理函数的忙碌判断与原生运行时判断不一致、真实进入凭据延期时，仍可能走现有的 `handleModelDidChange → resetFastMode`。切换失败后保留旧模型，Fast 已关。该场景的设置与登记快照不同，不带 `previousSettingsRetained`，显示原提示。独立关闭 Fast 的行为留作后续。
+- SQLite 回执报错后，以同一会话锁内的实际任务行为准。完整候选已经落库时继续发布，行与写前相同则清登记、不重试。读回暂不可用时保持队列闸门，直到能够安全校准队首。没有可用的读回或读回介于两种结果之间的情况下仍可能继续等待。
+- 直发调用经过 `register.ts` 的发送锁桥。Goal 的 `resumeOnOpen` 和 `fireTurn` 收到 `CREDENTIAL_SWITCH_BUSY` 时走现有恢复或派发失败处理，阻塞目标。IM 的 `turnRunner` 走发送前失败处理，回报本条失败。定时任务 `runner` 只对 `ScheduledModelSelectionBusyError` 走普通撞忙顺延，凭据忙碌从直发入口按现有运行失败处理。这三条是源码核对。普通输入协调器接收带阻塞任务的凭据忙碌回执，保留并唤醒队首。
+
 ### 第 3 条的附件准入和验证范围
 
 - 除下述执行位置不明的裸路径图片外，桌面直发的附件块循环、入队和直接物化的来源预检、缓存地址解析、临时写入、图片及其引用账本入库、远端对象下载和落地失败，统一返回 `DEVICE_LINK_MEDIA_TRANSFER_FAILED`。读取任务行保留原始错误。确认本机任务读取来源时，EACCES／EPERM 保留 `DEVICE_LINK_MEDIA_ACCESS_DENIED` 和另存副本的提示。后台服务沿用自身的账号校验和错误分类。

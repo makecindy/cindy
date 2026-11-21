@@ -1,6 +1,7 @@
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import type { PublicAgentSwitchIntent } from './sessionAgentSwitchHandler.js';
+import type { CredentialTaskRow } from './pendingCredentialSwitchAccess.js';
 
 import {
   isCredentialModeSwitchBusyError,
@@ -52,8 +53,17 @@ export interface DeferredCredentialState {
   written: { effort?: true; fastMode?: boolean | 'ultrafast' };
 }
 
-/** The write was never sent or SQLite confirmed that it changed no task settings. */
-export class CredentialRouteNotCommittedError extends Error {}
+interface VerifiedCredentialTaskRow {
+  db: CurrentDbClientSnapshot;
+  row: CredentialTaskRow;
+}
+
+/** The write was never sent or an authoritative read confirmed the unchanged task row. */
+export class CredentialRouteNotCommittedError extends Error {
+  constructor(message: string, options?: ErrorOptions, readonly verifiedSettings?: VerifiedCredentialTaskRow) {
+    super(message, options);
+  }
+}
 
 /** A transient owner or permit check stopped this attempt before the write. */
 export class CredentialSettlementDeferredError extends Error {}
@@ -90,7 +100,7 @@ export interface PendingCredentialSwitch {
 }
 
 export type PendingCredentialSwitchTarget = Pick<PendingCredentialSwitch,
-  'model' | 'providerId' | 'forceSessionRebuild' | 'selectionSource' | 'deferredSelection'>;
+  'model' | 'providerId' | 'forceSessionRebuild' | 'selectionSource' | 'deferredSelection' | 'deferredState' | 'ownerEpoch'>;
 
 /** Reuse the picker projection without re-registering a send-time route change. */
 export function projectDeferredCredentialSwitchIntent(
@@ -157,7 +167,7 @@ export interface PendingCredentialSwitchDeps {
     previousSettingsRetained?: boolean;
   }) => void;
   onDeferredSelectionCleared?: (sessionId: string, settings?: CredentialTaskSettings) => void;
-  readDeferredFailure?: (sessionId: string, target: PendingCredentialSwitch) => Promise<{
+  readDeferredFailure?: (sessionId: string, target: PendingCredentialSwitch, verifiedSettings?: VerifiedCredentialTaskRow) => Promise<{
     settings?: CredentialTaskSettings;
     retained?: boolean;
     taskRetired?: boolean;
@@ -222,8 +232,6 @@ export class PendingCredentialSwitchService {
     target: PendingCredentialSwitchTarget & {
       agentKind?: AgentKind;
       previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean | 'ultrafast' };
-      ownerEpoch?: string;
-      deferredState?: DeferredCredentialState;
     },
   ): void {
     const registered: PendingCredentialSwitch = {
@@ -689,7 +697,7 @@ export class PendingCredentialSwitchService {
             error: err instanceof Error ? err.message : String(err),
           });
           if (target.deferredSelection && err instanceof CredentialRouteNotCommittedError) {
-            await this.failDeferredSelection(sessionId, target);
+            await this.failDeferredSelection(sessionId, target, err.verifiedSettings);
           } else {
             if (target.deferredSelection && !(err instanceof CredentialSettlementDeferredError)) {
               this.unconfirmedWrites.add(target);
@@ -728,17 +736,26 @@ export class PendingCredentialSwitchService {
     }
   }
 
-  private async failDeferredSelection(sessionId: string, target: PendingCredentialSwitch): Promise<void> {
+  private async failDeferredSelection(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+    verifiedSettings?: VerifiedCredentialTaskRow,
+  ): Promise<void> {
     if (!this.isCurrent(sessionId, target)) return;
-    if (this.unconfirmedWrites.has(target)) {
+    if (this.unconfirmedWrites.has(target) && !verifiedSettings) {
       this.scheduleRetry(sessionId);
       return;
     }
-    const failure = await this.deps.readDeferredFailure?.(sessionId, target);
+    const failure = await this.deps.readDeferredFailure?.(sessionId, target, verifiedSettings);
     if (!this.isCurrent(sessionId, target) || failure?.scopeChanged) return;
     if (failure?.taskRetired) {
       this.pending.delete(sessionId);
       this.clearRetry(sessionId);
+      return;
+    }
+    if (this.deps.readDeferredFailure && !failure?.settings) {
+      // The queued head must be rebased to the actual settings before it can run.
+      this.scheduleRetry(sessionId);
       return;
     }
     this.clear(sessionId, failure?.settings);
