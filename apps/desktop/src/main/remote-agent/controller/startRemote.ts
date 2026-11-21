@@ -1,3 +1,5 @@
+import { createCompanyReportingRenewal } from './companyReportingRenewal.js';
+import { companyExecutionReporting } from '../../usage/companyTokenFacts.js';
 import { createAttachmentPreservationReceiver } from '../attachmentPreservation.js';
 import type { PreserveAttachmentBatch } from '../../maker-host/attachmentPreservation.js';
 import { currentSessionCreationSignal } from '../../localDb/sessionRuntimeCleanup.js';
@@ -705,8 +707,11 @@ async function prepareAndStartRemoteAgentSession(
   };
   const leavePool = deps.pool?.add(member);
 
+  let reportingTimer: ReturnType<typeof setInterval> | undefined;
+  const syncReporting = createCompanyReportingRenewal(deps.invoke);
   let localDisposal: Promise<void> | null = null;
   const disposeLocal = (): Promise<void> => {
+    clearInterval(reportingTimer);
     if (localDisposal) return localDisposal;
     linkState = 'closed';
     // Attempt every cleanup even if one fails. Preserve the settled result so
@@ -732,6 +737,8 @@ async function prepareAndStartRemoteAgentSession(
     payload: RemoteAgentOpenPayload,
     reconnect: boolean,
     onOpened: (started: RemoteStartedInfo) => void,
+    reporting: boolean,
+    runId: string,
   ): Promise<RemoteAgentRunClient> {
     let projectionReady = false;
     let opened = false;
@@ -761,7 +768,8 @@ async function prepareAndStartRemoteAgentSession(
         workspace.addAliases(Object.entries(attachmentRoots).map(([name, to]) => ({ from: native.join(virtualRoot, 'additional', 'attachments', name), to })));
       }
     };
-    const client: RemoteAgentRunClient = new RemoteAgentRunClient(deps.newId(), poller, {
+    const client: RemoteAgentRunClient = new RemoteAgentRunClient(runId, poller, {
+      onSend: reporting ? () => { void syncReporting(runId, isCurrent); } : undefined,
       onEvent: (event) => {
         if (!isCurrent()) return;
         touch();
@@ -924,6 +932,11 @@ async function prepareAndStartRemoteAgentSession(
       linkState = 'connected';
       lastStarted = started;
       onOpened(started);
+      clearInterval(reportingTimer);
+      if (reporting && companyExecutionReporting()?.available()) {
+        reportingTimer = setInterval(() => { if (isCurrent() && !isIdle()) syncReporting(client.runId, isCurrent); }, 120000);
+        reportingTimer.unref();
+      }
       for (const item of early.splice(0)) {
         if (item.type === 'event') controller?.onEvent(item.value);
         else controller?.onState(item.value as Record<string, unknown>);
@@ -1140,18 +1153,25 @@ async function prepareAndStartRemoteAgentSession(
       deps.pool?.noteIdleReclaimMinutes(caps.idleReclaimMinutes);
       await timing.measure('connection-slot', async () => deps.pool?.beforeOpen(member));
       requireOpen();
+      const reporting = caps.companyTokenReporting === true && companyExecutionReporting()?.available() === true;
+      const reserveRun = () => {
+        const id = deps.newId();
+        if (reporting) syncReporting(id, () => stateNow() !== 'closed');
+        return id;
+      };
+      const firstRun = reserveRun();
       const payload = await buildPayload(reconnect, timing, caps);
       requireOpen();
       try {
         const client = await timing.measure('remote-open', () =>
-          openRun(payload, reconnect, onOpened),
+          openRun(payload, reconnect, onOpened, reporting, firstRun),
         );
         status = 'ok';
         return client;
       } catch (error) {
         if (!deps.pool || linkState === 'closed' || !isRemoteRunLimitError(error) || !await deps.pool.releaseForRetry(member)) throw error;
         const client = await timing.measure('remote-open', () =>
-          openRun(payload, reconnect, onOpened),
+          openRun(payload, reconnect, onOpened, reporting, reserveRun()),
         );
         status = 'ok';
         return client;
