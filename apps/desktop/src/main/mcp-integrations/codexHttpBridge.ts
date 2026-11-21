@@ -269,9 +269,6 @@ function countLiveBridgeMcpSessions(): number {
   return n;
 }
 
-function closeLiveBridgeMcpSessionInstance(sessionInstanceId: string): void {
-  for (const bridge of liveBridges) bridge.closeSessionInstance(sessionInstanceId);
-}
 
 async function startCodexHttpBridge(
   opts: StartCodexHttpBridgeOptions,
@@ -1212,5 +1209,5 @@ function extractCodexThreadIdFromMessage(message: unknown): string | undefined {
 function prefixId(value: string | undefined): string | null {
   return value ? value.slice(0, 8) : null;
 }
-return { selectRemoteInjectableServerNames, computeRemoteMcpFingerprint, withMcpRouteIdentity, countLiveBridgeMcpSessions, closeLiveBridgeMcpSessionInstance, startCodexHttpBridge };
+return { selectRemoteInjectableServerNames, computeRemoteMcpFingerprint, withMcpRouteIdentity, countLiveBridgeMcpSessions, startCodexHttpBridge };
 }
