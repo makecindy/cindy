@@ -701,8 +701,9 @@ export function ErrorBanner({
     // the final fallback uses the stable reason map, so auth/network/overload
     // recovery behavior keeps its existing priority while generic maker-core
     // English fallbacks are localized in both the live and tail banner.
-    displayError = localizedReasonError ?? preconditionMessage ?? t('chat.errorBanner.replyFailed');
-    hasSpecialGuidance = !localizedReasonError && !!preconditionMessage;
+    displayError = localizedReasonError ?? t(preconditionMessage === undefined
+      ? 'chat.errorBanner.replyFailed' : 'ipcError.PRECONDITION_FAILED');
+    hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
   // Keep the share's route-choice action without replacing the more specific
@@ -873,7 +874,7 @@ export function ErrorBanner({
             ? t('chat.errorBanner.readableHistoryRecoveryDescription')
             : renderProviderErrorExplanation(error, displayError, t)
       }
-      details={canShowErrorDetails ? error : undefined}
+      details={canShowErrorDetails && preconditionMessage !== displayError ? preconditionMessage ?? error : undefined}
       onDiagnose={
         onDiagnose
           ? () => onDiagnose({ message: displayError, details: error, reason: errorReason })

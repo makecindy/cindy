@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render as renderView, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement, type ReactElement } from 'react';
+import { i18n as applicationI18n } from '@/i18n';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
 function LocationProbe() {
@@ -24,7 +25,7 @@ vi.mock('react-i18next', () => ({
     i18n: { exists: () => true },
     // 插值参数拼进返回值，让进度类文案能断言实际传入的 attempt/maxAttempts。
     t: (key: string, options?: { attempt?: number; maxAttempts?: number }) =>
-      options?.attempt && options.maxAttempts
+      key === 'ipcError.PRECONDITION_FAILED' ? applicationI18n.t(key) : options?.attempt && options.maxAttempts
         ? `${key}:${options.attempt}/${options.maxAttempts}`
         : key,
   }),
