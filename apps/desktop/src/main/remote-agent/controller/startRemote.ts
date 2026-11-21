@@ -294,14 +294,28 @@ const sharedGitCredentials = new GitCredentialHistory();
 
 /** 凭证类操作的确认卡：用与 Agent 自带工具同名的工具显示本机路径或命令。 */
 export function credentialConfirmation(action: ExecutorAction, description: string): LocalConfirmation {
-  const base = {
+  return confirmationFor(action, {
     description,
     metadata: { hostOwnedConfirmation: 'shared_provider_credential' },
     suggestions: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL],
-  };
+  });
+}
+
+/**
+ * 权限上限拦下的普通操作的确认卡：与本机任务里 Agent 发来的同名工具确认卡一样(只允许这一次，不带
+ * 会话级规则)。Agent 所在电脑没有先问本机用户时(如它的自动审查已放行)，由这张卡补问。
+ */
+export function approvalConfirmation(action: ExecutorAction): LocalConfirmation {
+  return confirmationFor(action, { metadata: { permissionScope: 'once' } });
+}
+
+function confirmationFor(
+  action: ExecutorAction,
+  base: Omit<LocalConfirmation, 'toolName' | 'input'>,
+): LocalConfirmation {
   switch (action.kind) {
     case 'exec':
-      return { ...base, toolName: 'Bash', input: { command: action.command } };
+      return { ...base, toolName: 'Bash', input: { command: action.command, cwd: action.cwd } };
     case 'write':
       return { ...base, toolName: 'Write', input: { file_path: action.path } };
     case 'fetch':
@@ -502,10 +516,13 @@ async function prepareAndStartRemoteAgentSession(
     ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
     // 只有 Claude Code 经 cindy_exec 使用这组工具。
     ...(kind === 'claude-code' && deps.webFetch ? { webFetch: deps.webFetch } : {}),
+    // 权限上限拦下的操作都在本机补问(凭证类用分享凭证卡)，不在没有卡的情况下拒绝。
+    confirm: async (action, signal, credential) =>
+      controller?.confirm(credentialConsent && credential
+        ? credentialConfirmation(action, credentialConsent.description)
+        : approvalConfirmation(action), signal) ?? false,
     ...(credentialConsent
       ? {
-          confirm: async (action: ExecutorAction, signal: AbortSignal) =>
-            controller?.confirm(credentialConfirmation(action, credentialConsent.description), signal) ?? false,
           gitCredentials: sharedGitCredentials,
           ...(grant
             ? {
@@ -619,7 +636,7 @@ async function prepareAndStartRemoteAgentSession(
         cwd: workspace.workingDir,
         workspace,
         authorize: (action) => executor.check(action),
-        ...(credentialConsent ? { confirm: (action: ExecutorAction) => executor.confirm(action) } : {}),
+        confirm: (action: ExecutorAction) => executor.confirm(action),
         push: async (frames) => {
           await active?.push(frames);
         },
