@@ -173,6 +173,16 @@ it('rechecks the waiting computer once, backs off, and never resubmits the messa
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+// Unit: only a locally persisted text still awaiting its receipt offers delivery details.
+it('reveals the pending delivery explanation and drops it after acknowledgement', () => {
+  const awaiting = { actions: null, phase: 'sending' as const, queueIndex: null, pendingDelivery: true };
+  show(awaiting);
+  expect(host.textContent).toContain('message.queue.pendingDelivery');
+  show(awaiting, 'a');
+  expect(host.textContent).toContain('message.queue.pendingDeliveryHint');
+  show({ ...awaiting, pendingDelivery: false }, 'a');
+  expect(host.textContent).not.toContain('message.queue.pendingDelivery');
+});
 it('lets an in-flight local outbox message open its cancel action', () => {
   show({ actions: null, phase: 'sending', queueIndex: null });
   touch('Start'); touch('End'); flush();

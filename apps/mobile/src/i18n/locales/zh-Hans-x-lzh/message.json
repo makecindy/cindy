@@ -263,6 +263,8 @@
     "imagesNotUploaded_other": "{{count}} 图未能上呈",
     "waitingForNamedComputer": "俟{{name}}连通即发",
     "reconnectComputer": "重连",
+    "pendingDelivery": "待达",
+    "pendingDeliveryHint": "此讯已存于机，复联即发。",
     "waitingForComputer": "候机归来，即遣之",
     "waitingForNetwork": "待网络重通，即遣之",
     "queued": "方候",

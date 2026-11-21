@@ -268,16 +268,16 @@ function AttachmentThumbStrip({
  * 本机刚发出的条目延后 LOCAL_SEND_STATUS_DELAY_MS 才显示状态:false = 还在延迟内,
  * 'revealed' = 延迟后才出现(淡入),true = 一开始就该显示(别处来的条目 / 早已过了延迟)。
  */
-function useLocalSendStatusShown(key: string): boolean | 'revealed' {
+function useLocalSendStatusShown(key: string, delayMs: number): boolean | 'revealed' {
   const sentAt = localSendStartedAt(key);
-  const remaining = sentAt === null ? 0 : sentAt + LOCAL_SEND_STATUS_DELAY_MS - Date.now();
+  const remaining = sentAt === null ? 0 : sentAt + delayMs - Date.now();
   const waiting = remaining > 0;
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
   useEffect(() => {
     if (!waiting || sentAt === null) return undefined;
-    const timer = setTimeout(() => setRevealedKey(key), Math.max(0, sentAt + LOCAL_SEND_STATUS_DELAY_MS - Date.now()));
+    const timer = setTimeout(() => setRevealedKey(key), Math.max(0, sentAt + delayMs - Date.now()));
     return () => clearTimeout(timer);
-  }, [key, sentAt, waiting]);
+  }, [key, sentAt, waiting, delayMs]);
   if (revealedKey === key) return 'revealed';
   return !waiting;
 }
@@ -343,8 +343,9 @@ export function PendingSendBubble({
   const selected = isPendingSendItemSelected(item, actions.selectedClientId);
   const bubbleLabel = item.text || t('message.queue.attachmentMessage');
   const uploadsPending = item.phase === 'uploading';
-  const statusShown = useLocalSendStatusShown(item.key);
+  const statusShown = useLocalSendStatusShown(item.key, item.pendingDelivery ? 1_000 : LOCAL_SEND_STATUS_DELAY_MS);
   const waiting = item.phase === 'waiting';
+  const pendingText = item.pendingDelivery && item.phase === 'sending';
   const queued = item.phase === 'queued' && !!item.actions;
   const failedImages = item.thumbs.filter((thumb) => thumb.failed).length;
   // 只有「正在下方输入框编辑」时淡化:那一刻气泡确实在被改写。
@@ -652,6 +653,16 @@ export function PendingSendBubble({
               ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })
               : statusLabel} />
           </CompanionFadeIn>
+        ) : pendingText && statusShown ? (
+          <View style={styles.statusActions}>
+            <Text accessibilityRole="button" style={styles.statusText} onPress={() => actions.onSelect(selected ? null : item.clientId)}>
+              {t('message.queue.pendingDelivery')}
+            </Text>
+            {selected && item.canCancel !== false ? (
+              <StatusAction busy={actions.busy} label={t('message.queue.cancel')}
+                onPress={() => actions.onRemoveOutbox(item.clientId)} testID={`pendingSend.outboxRemove.${item.clientId}`} />
+            ) : null}
+          </View>
         ) : selected && outbox && item.canCancel !== false ? (
           // 还在上传 / 发出途中:轻点气泡才露出「取消」,平时这一行留空,只有左侧图标。
           <View style={styles.statusActions} testID={`pendingSend.outboxActions.${item.clientId}`}>
@@ -666,6 +677,9 @@ export function PendingSendBubble({
         <Text style={styles.errorReason} testID={`pendingSend.error.${item.clientId}`}>{item.errorText}</Text>
       ) : null}
       {/* 轻点气泡看排队操作为什么不可用。 */}
+      {selected && pendingText && statusShown ? (
+        <Text style={styles.rowHint}>{t('message.queue.pendingDeliveryHint')}</Text>
+      ) : null}
       {selected && item.hint ? (
         <Text style={styles.rowHint} testID={`pendingSend.hint.${item.clientId}`}>{item.hint}</Text>
       ) : null}

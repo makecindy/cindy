@@ -263,6 +263,8 @@
     "imagesNotUploaded_other": "{{count}} 张图片没传上去",
     "waitingForNamedComputer": "连上{{name}}后自动发送",
     "reconnectComputer": "立即重连",
+    "pendingDelivery": "待送达",
+    "pendingDeliveryHint": "消息已保存在手机上，连接恢复后会继续发送。",
     "waitingForComputer": "等电脑连上后发送",
     "waitingForNetwork": "等网络恢复后发送",
     "queued": "排队中",

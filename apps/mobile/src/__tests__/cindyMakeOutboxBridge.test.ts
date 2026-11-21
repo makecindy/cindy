@@ -3,6 +3,10 @@ import type { DurableOutboxRecord } from '@/session/durableOutbox';
 import { canConnectOutboxPeer, createOutboxSessionAccess } from '@/session/mobileOutboxSessionAdapter';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 
+import { beginOutboxBackgroundSend, endOutboxBackgroundSend, hasOutboxBackgroundSend } from '@/session/outboxBackgroundSend';
+
+const requestWork = async () => ({ budgetMs: 8_000, end: () => {} });
+
 function harness(sessions: Array<{ id: string; source?: string; deviceLinkDeviceId: string }>) {
   const record = { deviceId: 'desktop', state: 'queued', uploads: [],
     item: { sessionId: 'session', clientId: 'client', attachmentSlots: [] } } as unknown as DurableOutboxRecord;
@@ -13,14 +17,15 @@ function harness(sessions: Array<{ id: string; source?: string; deviceLinkDevice
   const latest = { current: { link: { status: 'online', getPresenceAvailability: () => true, invoke,
     getConnectionState: (deviceId: string): { status: string } => ({ status: connections.get(deviceId) ?? latest.current.link.status }),
   } } };
-  const owner = { current: true, records: [record], creationHeld: false };
+  const owner = { current: true, records: [record], creationHeld: false, foreground: true };
   const hasCreationTask = vi.fn(() => false);
   const callbacks = createOutboxSessionAccess({
     getSessions: () => sessions,
     getRecords: () => owner.records,
     guard: () => { if (!owner.current) throw new Error('OUTBOX_OWNER_CHANGED'); },
     isCurrent: () => owner.current,
-    isForeground: () => true,
+    isForeground: () => owner.foreground,
+    canContinueInBackground: hasOutboxBackgroundSend,
     canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
     isCreationHeld: () => owner.creationHeld,
     hasCreationTask,
@@ -32,6 +37,32 @@ function harness(sessions: Array<{ id: string; source?: string; deviceLinkDevice
 }
 
 describe('Cindy Make outbox bridge guards', () => {
+  // Unit: leaving during a composer send used to block the final enqueue gate.
+  // A fresh message alone may continue until its acknowledgement or deadline.
+  it('continues only the tapped message in background and releases the connection on receipt or timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { record, callbacks, owner } = harness([]);
+      const release = vi.fn();
+      beginOutboxBackgroundSend(record, () => release, requestWork);
+      await Promise.resolve();
+      owner.foreground = false;
+      expect(callbacks.canRun(record)).toBe(true);
+      expect(callbacks.canRun({ ...record, accountId: 'other' })).toBe(false);
+      expect(callbacks.canRun({ ...record, cancelRequested: true })).toBe(false);
+      endOutboxBackgroundSend(record);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(callbacks.canRun(record)).toBe(false);
+      beginOutboxBackgroundSend(record, () => release, requestWork);
+      await vi.advanceTimersByTimeAsync(8_001);
+      expect(release).toHaveBeenCalledTimes(2);
+      expect(callbacks.canRun(record)).toBe(false);
+      owner.foreground = true;
+      expect(callbacks.canRun(record)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   // PR #8182: an unrelated same-account relay outage must not stall a queued
   // shared-task send. Exercise the production delivery policy, not source text.
   it('admits a shared record on its official connection while the primary relay is offline', () => {
