@@ -372,7 +372,7 @@ export function TelegramPersonaSettings() {
         placeholder={t('settings.telegramBot.persona.namePlaceholder')}
         spellCheck={false}
         className={cn(
-          'h-[42px] w-full rounded-full pl-3.5 pr-3.5',
+          'h-[42px] w-full rounded-full pl-[14px] pr-[14px]',
           'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
           'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
           'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',

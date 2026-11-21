@@ -162,7 +162,7 @@ export function FontFamilyPicker({
             <div className="px-2 pb-1 text-11 font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
               {t('settings.appearance.font.presets')}
             </div>
-            <div className="flex flex-col gap-0.5" role="listbox" aria-label={ariaLabel}>
+            <div className="flex flex-col gap-[2px]" role="listbox" aria-label={ariaLabel}>
               {presetOptions.map((option) => {
                 const isSelected = option.family === value.trim();
                 return (
@@ -177,7 +177,7 @@ export function FontFamilyPicker({
                     onMouseEnter={() => setPreviewFamily(option.family)}
                     onMouseLeave={() => setPreviewFamily(null)}
                     className={cn(
-                      'flex h-[34px] w-full items-center justify-between rounded-lg px-3',
+                      'flex h-[34px] w-full items-center justify-between rounded-[8px] px-3',
                       'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
                       isSelected && 'bg-[var(--settings-menu-bg-hover)]',
                     )}

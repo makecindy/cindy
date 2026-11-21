@@ -308,7 +308,7 @@ function Hit({
         style={boxStyle(box)}
         className={cn(
           'absolute z-[1] border-0 bg-transparent',
-          round ? 'rounded-full' : 'rounded-lg',
+          round ? 'rounded-full' : 'rounded-[8px]',
           !disabled && 'cursor-pointer',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           disabled && 'cursor-not-allowed opacity-60',
