@@ -302,6 +302,14 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   // 与远程 fetchRefsForRemoteSession 对称(2026-08-13 review P1)。
   const localRefsInFlight = useRef(new Map<string, number>());
   const localRefsFetchedAt = useRef(new Map<string, number>());
+  // 远程会话状态:上次**成功**读取(代数、时间、PR 集合)。行挂载、悬停卡片、窗口聚焦和
+  // 周期刷新原来每次都再问一遍对方电脑;走中转时每次是一趟约 1.5 秒的隧道调用加一次
+  // GitHub 查询(2026-11-21 日志:一台 MacBook 三小时向 Mac Studio 发了约 800 次状态读取,
+  // 大多距上次不到 30 秒)。一个刷新周期内同一组 PR 不再重复问;新增 PR、换 owner、上次
+  // 失败照常立即查。本机 / SSH 不设门:main 有自己的缓存,也不经隧道。
+  const remoteStatusesFetched = useRef(
+    new Map<string, { gen: number; at: number; keys: ReadonlySet<string> }>(),
+  );
   const remoteDeviceBySession = useRef(new Map<string, string>());
   // Background PR reads to one remote computer run one at a time (see deviceLane).
   // Recheck owner and consumers inside each queued callback, including provider subreads.
@@ -330,6 +338,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
       remoteRefsFetchedAt.current.clear();
       remoteRefsInvalidated.current.clear();
       localRefsFetchedAt.current.clear();
+      remoteStatusesFetched.current.clear();
       remoteDeviceBySession.current.clear();
     }
     if (dataOwnerId === null) return;
@@ -417,15 +426,27 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     const gen = ownerGenRef.current;
     // 同代在飞才挡;旧代尸体(等超时中)不能挡新 owner 的首查,直接覆盖标记。
     if (inFlightSessions.current.get(sessionId) === gen) return;
+    // 远程路由的 deviceId 兜底顺序:簿记表 → 消费者注册表(owner 切换清簿记后,
+    // 注册表仍保有 deviceId,避免远程会话错落到本机查询)。
+    const deviceId =
+      remoteDeviceBySession.current.get(sessionId) ??
+      prConsumers.current.get(sessionId)?.deviceId;
+    const requestedKeys = new Set(refs.map(prStatusKey));
+    if (deviceId) {
+      // 远程门(见 remoteStatusesFetched):同代、未过一个刷新周期、PR 集合没有新增 → 不再问。
+      const last = remoteStatusesFetched.current.get(sessionId);
+      if (
+        last?.gen === gen &&
+        Date.now() - last.at < PR_STATUS_REFRESH_INTERVAL_MS - 5_000 &&
+        [...requestedKeys].every((key) => last.keys.has(key))
+      ) {
+        return;
+      }
+    }
     inFlightSessions.current.set(sessionId, gen);
     void (async () => {
       try {
         const queries = refs.map(prStatusQuery);
-        // 远程路由的 deviceId 兜底顺序:簿记表 → 消费者注册表(owner 切换清簿记后,
-        // 注册表仍保有 deviceId,避免远程会话错落到本机查询)。
-        const deviceId =
-          remoteDeviceBySession.current.get(sessionId) ??
-          prConsumers.current.get(sessionId)?.deviceId;
         // 设备明确断线时不发注定失败的隧道调用(fail-open:shard 缺失照常尝试)。
         // 不写任何状态,重连后的下一个触发点(周期 / 聚焦 / 引用到位)自然恢复。
         if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return;
@@ -454,6 +475,15 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         if (gen !== ownerGenRef.current) return; // owner 已切换:旧账号结果整体丢弃
         store.applyStatuses(sessionId, results);
         store.setRefreshError(sessionId, 'statuses', false);
+        if (deviceId) {
+          // 只记确定的结果:单个 PR 查失败(无 token、网络等)下一次触发照常重查。
+          const settled = new Set(
+            results
+              .filter((result) => result.ok || result.reason === 'not-found')
+              .map((result) => prStatusKey(result)),
+          );
+          remoteStatusesFetched.current.set(sessionId, { gen, at: Date.now(), keys: settled });
+        }
       } catch (err) {
         if (gen === ownerGenRef.current) store.setRefreshError(sessionId, 'statuses', true);
         log.warn('pr statuses fetch failed', String(err));

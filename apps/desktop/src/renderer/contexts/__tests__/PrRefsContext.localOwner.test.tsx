@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   dataOwnerId: 'local-v1' as string | null,
@@ -20,6 +20,7 @@ vi.mock('@/lib/logger', () => ({
 
 import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatuses, useTaskPrArchiveEligibility } from '../PrRefsContext';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
+import { PR_STATUS_REFRESH_INTERVAL_MS } from '@/lib/prStatus';
 
 function RefCount() {
   return <div>{usePrRefsForSession('session-local').length}</div>;
@@ -225,20 +226,90 @@ describe('remote task association invalidation', () => {
   );
 });
 
-function StatusProbe() {
+/** A remote task's PR set is asked once per refresh interval. The manual refresh buttons in
+ * these tests stand for a later trigger, so each click first steps the clock past that interval. */
+function statusClock() {
+  let now = 1_000_000;
+  const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  return {
+    later: () => {
+      now += PR_STATUS_REFRESH_INTERVAL_MS;
+    },
+    restore: () => spy.mockRestore(),
+  };
+}
+
+function StatusProbe({ later }: { later?: () => void }) {
   const { statuses, successfulStatuses, fetchStatusesForSession } = usePrStatuses('remote-child');
   const { registerPrConsumer } = usePrActions();
   useEffect(() => registerPrConsumer('remote-child', 'home'), [registerPrConsumer]);
   const latest = statuses.get('github:github.com/a/b#1');
   const confirmed = successfulStatuses.get('github:github.com/a/b#1');
   return (
-    <button onClick={() => fetchStatusesForSession('remote-child')}>
+    <button
+      onClick={() => {
+        later?.();
+        fetchStatusesForSession('remote-child');
+      }}
+    >
       {confirmed?.ok ? confirmed.status : 'unknown'}:{latest?.ok === false ? 'stale' : 'fresh'}
     </button>
   );
 }
 
+// 测试价值
+// - 生产入口与可观察结果:PrRefsProvider 的远程会话状态读取;对方电脑收到的 git-context:pr-status 次数。
+// - Bug／规则依据:2026-11-21 MacBook ↔ Mac Studio 联调日志,行挂载、悬停、聚焦每次都经中转重查,
+//   三小时约 800 次,688/795 个间隔不到 30 秒。
+// - 现有覆盖缺口:相邻用例只验证串行与丢弃,没有覆盖同一组 PR 在一个刷新周期内的重复触发。
+// - 最小失败输入:一个远程会话一个 PR,读到结果后立刻再触发一次(修复前会发第二次)。
+// - tier:unit(进程内 fake invoke + 假时钟)。
+it('asks a remote computer for the same PRs at most once per refresh interval', async () => {
+  const clock = statusClock();
+  const ref = (prNumber: number) => ({ id: `pr-${prNumber}`, sessionId: 'remote-child', owner: 'a',
+    repo: 'b', prNumber, url: `https://github.com/a/b/pull/${prNumber}`, firstSeenAt: 1, lastSeenAt: prNumber });
+  let refs = [ref(1)];
+  const statusQueries: number[][] = [];
+  mocks.listAllPrRefs.mockResolvedValue([]);
+  type StatusArgs = [{ queries: Array<{ prNumber: number }> }];
+  window.electronAPI = {
+    gitContext: { listAllPrRefs: mocks.listAllPrRefs, onPrRefsChanged: mocks.onPrRefsChanged },
+    deviceLink: { invoke: vi.fn(async (_device: string, channel: string, args: StatusArgs) => {
+      if (channel === 'git-context:pr-refs:list') return refs;
+      statusQueries.push(args[0].queries.map((q) => q.prNumber));
+      return args[0].queries.map((q) => ({ ...ref(q.prNumber), ok: true, status: 'open' }));
+    }) },
+  } as unknown as typeof window.electronAPI;
+  function Probe() {
+    const { registerPrConsumer, fetchStatusesForSession, invalidateRemotePrRefs } = usePrActions();
+    useEffect(() => registerPrConsumer('remote-child', 'home'), [registerPrConsumer]);
+    return <div>
+      <button onClick={() => fetchStatusesForSession('remote-child')}>again</button>
+      <button onClick={() => invalidateRemotePrRefs('remote-child')}>refs</button>
+    </div>;
+  }
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  const { unmount } = render(<PrRefsProvider><Probe /></PrRefsProvider>);
+  try {
+    await waitFor(() => expect(statusQueries).toEqual([[1]]));
+    await act(async () => fireEvent.click(screen.getByText('again')));
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(statusQueries).toEqual([[1]]);
+    refs = [ref(2), ref(1)];
+    await act(async () => fireEvent.click(screen.getByText('refs')));
+    await waitFor(() => expect(statusQueries).toEqual([[1], [2, 1]]));
+    clock.later();
+    await act(async () => fireEvent.click(screen.getByText('again')));
+    expect(statusQueries).toEqual([[1], [2, 1], [2, 1]]);
+  } finally {
+    unmount();
+    focus.mockRestore();
+    clock.restore();
+  }
+});
+
 it('retains successful session status when a failure arrives while its consumer is unmounted', async () => {
+  const clock = statusClock();
   let fail!: (value: unknown) => void;
   let statusReads = 0;
   const ref = {
@@ -267,9 +338,10 @@ it('retains successful session status when a failure arrives while its consumer 
     deviceLink: { invoke },
   } as any;
   const view = (visible: boolean) => (
-    <PrRefsProvider>{visible ? <StatusProbe /> : null}</PrRefsProvider>
+    <PrRefsProvider>{visible ? <StatusProbe later={clock.later} /> : null}</PrRefsProvider>
   );
   const { rerender, unmount } = render(view(true));
+  onTestFinished(clock.restore);
   fireEvent.click(await screen.findByRole('button', { name: 'merged:fresh' }));
   await waitFor(() => expect(statusReads).toBe(2));
   rerender(view(false));
@@ -366,9 +438,11 @@ it('keeps cached PR data stale until both rejected query channels recover, then 
       <span>{refs.length}:{successfulStatuses.size}:{refreshError ? 'stale' : 'fresh'}</span>
       <span>other:{String(other.refreshError)}</span>
       <button onClick={() => invalidateRemotePrRefs('remote-child')}>refs</button>
-      <button onClick={() => fetchStatusesForSession('remote-child')}>statuses</button>
+      <button onClick={() => { clock.later(); fetchStatusesForSession('remote-child'); }}>statuses</button>
     </div>;
   }
+  const clock = statusClock();
+  onTestFinished(clock.restore);
   const view = () => <PrRefsProvider><Probe /></PrRefsProvider>;
   const { rerender, unmount } = render(view());
   await screen.findByText('1:1:fresh');
@@ -446,7 +520,11 @@ it('invalidates confirmed PR status on not-found across remounts and later trans
     deviceLink: { invoke: vi.fn(async (_device: string, channel: string) =>
       channel === 'git-context:pr-refs:list' ? [ref] : [status]) },
   } as any;
-  const view = (visible: boolean) => <PrRefsProvider>{visible ? <StatusProbe /> : null}</PrRefsProvider>;
+  const clock = statusClock();
+  onTestFinished(clock.restore);
+  const view = (visible: boolean) => (
+    <PrRefsProvider>{visible ? <StatusProbe later={clock.later} /> : null}</PrRefsProvider>
+  );
   const { rerender, unmount } = render(view(true));
   await screen.findByRole('button', { name: 'merged:fresh' });
   for (const reason of ['not-found', 'fetch-failed', 'no-token']) {
