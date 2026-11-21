@@ -14,6 +14,7 @@
 import type { Maker } from '@cindy/maker-core';
 import { eq } from 'drizzle-orm';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
@@ -76,7 +77,8 @@ export function createReadSessionRuntimeProfiles(ports: {
   const { maker, agentSwitchPending, log } = ports;
   const readSessionRuntimeProfiles = async (sessionId: string) => {
     const meta = await maker.getSessionMeta(sessionId);
-    if (!meta) return null;
+    // Plugin-engine tasks have no catalog runtime profile; their model lives on the task row.
+    if (!meta || !hasBuiltinAgentKind(meta)) return null;
     let baseline: SessionRuntimeProfile = {
       agentKind: meta.agentKind,
       model: meta.model,
@@ -117,7 +119,7 @@ export function createReadSessionRuntimeProfiles(ports: {
     const live = maker.getSession(sessionId);
     const effective: SessionRuntimeProfile = control.effectiveOverride ?? {
       agentDeviceId: baseline.agentDeviceId,
-      agentKind: live?.agentKind ?? meta.agentKind,
+      agentKind: live && hasBuiltinAgentKind(live) ? live.agentKind : meta.agentKind,
       model: live?.model ?? meta.model,
       providerId: hasSessionProvider(sessionId)
         ? getSessionProvider(sessionId)

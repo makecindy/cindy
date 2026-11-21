@@ -134,6 +134,7 @@ export function projectSessionRuntimeFields(session: SessionRuntimeFields): Part
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  orcaLeadSessionId?: string | null;
   companion?: Session['companion'];
   tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
@@ -305,7 +306,9 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     userSendAt: msToIso(row.userSendAt),
     lastActivityAt: msToIso(row.lastActivityAt),
     agentKind: row.agentKind as AgentKind,
-    source: normalizeSessionSource(row.source),
+    source: row.source === 'side-chat' && row.sideChatPromoted ? 'desktop' : normalizeSessionSource(row.source),
+    ...(row.source === 'side-chat' && row.sideChatPromoted && { sideChatPromoted: true as const }),
+    ...(row.orcaLeadSessionId ? { orcaLeadSessionId: row.orcaLeadSessionId } : {}),
     orcaRole: row.orcaRole as OrcaRole | null,
     parentSessionId: row.parentSessionId,
     forkedAtMessageId: row.forkedAtMessageId,
@@ -593,7 +596,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | 'acp' | null;
     createdAt?: number;
   },
   now: number,
@@ -840,6 +843,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
           timeoutMs: row.preRunHookTimeoutMs ?? undefined,
         }
       : undefined,
+    primaryHostKey: row.primaryHostKey ?? undefined,
     preRunPlugin: row.preRunPluginId
       ? {
           pluginId: row.preRunPluginId,
@@ -898,6 +902,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     silentWhenIdle: !!s.silentWhenIdle,
     preRunHookCommand: s.preRunHook?.command ?? null,
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
+    primaryHostKey: s.primaryHostKey ?? null,
     preRunPluginId: s.preRunPlugin?.pluginId ?? null,
     preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? null,
     notifyDesktop: s.notify.desktop,

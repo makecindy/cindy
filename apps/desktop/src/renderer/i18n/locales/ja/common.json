@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
     "MODEL_SELECTION_UNAVAILABLE": "選択したモデルは、そのプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
+    "MODEL_CATALOG_UNCONFIRMED": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
     "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
     "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
     "INVALID_PARAMS": "入力内容が無効です。確認して再試行してください。",
@@ -1412,6 +1413,7 @@
     "UPSTREAM_ERROR": "上流サーバーエラー（5xx）です。しばらくしてから再試行してください",
     "UPSTREAM_UNREACHABLE": "エンドポイントに接続できません。ネットワークとベース URL を確認してください",
     "TIMEOUT": "接続がタイムアウトしました。ネットワークとベース URL を確認してください",
+    "CERT_ERROR": "証明書の検証に失敗しました。ベース URL のホスト名と証明書が一致するか、証明書チェーンと組織の CA 信頼設定を確認してください。",
     "UNKNOWN": "不明なエラーです。詳細はログを確認してください",
     "upstreamToast": "プロバイダー「{{provider}}」のリクエストに失敗しました：{{message}}"
   },
@@ -1423,6 +1425,10 @@
     "details": "エラー詳細"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "ローカルデータベースの破損",
+      "description": "データベースの破損を検出したため、データを保護するためにアクセスを停止しました。ローカルデータを開き直せます。失敗する場合は、技術情報をコピーしてサポートにお問い合わせください。データベースファイルを上書き・削除しないでください。"
+    },
     "schemaLease": {
       "title": "ローカルデータをまだ開けません",
       "retry": "ローカルデータを開き直す",
@@ -2771,9 +2777,7 @@
       "autoUpdateDisabledToast": "アイドル時の更新インストールを無効にしました",
       "autoUpdateSaveFailed": "自動更新設定を保存できませんでした",
       "analyticsLabel": "利用統計",
-      "analyticsDescription": "Cindy の起動状況や継続利用状況の把握に使います。送信するのはデバイスの機種名、OS バージョン、アプリバージョン、デバイス識別子などのデバイス・利用環境情報と、ログイン後はアカウント ID で、会話内容・ファイル・プロンプトは一切含みません。オフにすると送信は直ちに停止します。",
-      "productTokenUsage": "モデル使用量の統計に参加",
-      "productTokenUsageHint": "この端末のアカウントで新たに使ったトークン数を地域内で接続元・モデル別に集計し、TapDB に送信します。",
+      "analyticsDescription": "オンにすると、アカウント ID と端末 ID の代わりに仮名を使います。再訪の状況とモデルごとの使用量の集計を、製品の改善に役立てます。会話、ファイル、プロンプトは統計に含まれません。",
       "analyticsEnabledToast": "利用統計を有効にしました",
       "analyticsDisabledToast": "利用統計を無効にしました",
       "analyticsSaveFailed": "利用統計の設定を保存できませんでした",
@@ -3676,6 +3680,8 @@
           "edit": "編集",
           "editFailed": "URL、プロトコル、キーを確認して再試行してください。",
           "editNote": "キーを空欄にすると読み取り済みの認証情報を保持します。URL やプロトコルを変更すると新しいキーが必要です。",
+          "useSavedCredential": "保存済みの認証情報を使用",
+          "confirmDestination": "この URL で保存済みの Claude Code 認証情報を使用しますか？",
           "name": "表示名",
           "baseUrl": "ベース URL",
           "protocol": "API プロトコル",
@@ -4077,6 +4083,25 @@
         "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください",
         "refreshReconnect": "モデル一覧を更新できませんでした。このプロバイダーに再接続してから、もう一度お試しください。",
         "refreshFetchDisabled": "モデルカタログのリモート取得が無効のため、更新をスキップしました",
+        "withdrawn": {
+          "refreshFound": "提供元で提供終了したモデル：{{count}} 件",
+          "refreshAdded": "新しいモデル {{added}} 件、提供終了したモデル {{count}} 件",
+          "refreshSuspicious": "今回 {{count}} 件のモデルが返されませんでした。一覧が一時的に不完全な可能性があります",
+          "refreshAddedSuspicious": "新しいモデル {{added}} 件。今回 {{count}} 件が返されませんでした。一覧が一時的に不完全な可能性があります",
+          "review": "モデルを確認",
+          "heading": "提供が終了したモデル",
+          "intro": "「{{provider}}」を更新したところ、次のモデルが返されませんでした。削除するモデルを選択してください。引き続き返しているエンジンには影響しません。",
+          "suspicious": "返されなかったモデルが異常に多くなっています。一時的に一覧が不完全だった可能性があります。しばらくしてからもう一度更新して確認するか、提供終了が確実なモデルだけを選択してください。",
+          "selectAll": "すべて選択",
+          "selected": "{{total}} 件中 {{count}} 件を選択",
+          "consequence": "削除したモデルはモデル選択に表示されなくなり、使用中の箇所では利用不可と表示されます。再び提供された場合は、更新すると追加し直されます。",
+          "confirm": "モデルを削除（{{count}} 件）",
+          "cancel": "削除しない",
+          "removed": "モデルを {{count}} 件削除しました",
+          "cleanupIncomplete": "モデルを {{count}} 件削除しましたが、一部の表示・無効化の設定を消去できませんでした",
+          "stale": "接続設定が変更されたため、削除できるモデルはありません。もう一度更新してから確認してください",
+          "removeFailed": "モデルを削除できませんでした"
+        },
         "disableModel": "このモデルを無効にする",
         "paymentRequired": "有料",
         "paymentUnlock": "有料で解放",
@@ -4365,6 +4390,7 @@
         "authorizedToast": "{{name}} にログインしました",
         "authorizeFailed": "{{name}} にログインできませんでした。再試行してください。",
         "nameLabel": "表示名",
+        "geminiImageKeyNote": "保存すると、このキーが新しい接続でのチャットと今後の Gemini 画像生成に使われます。画像生成のみの場合は、チャットモデルの選択をすべて外してください。",
         "onlyAgentNote": "このプロバイダーは {{agent}} のみ対応です",
         "endpointLabel": "{{agent}} ベース URL",
         "noAuthNote": "このプロキシにクライアントキーは不要です。Cindy は転送前に CLI のサブスクリプション認証情報を削除します。",
@@ -6758,6 +6784,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "このコンピューターの通信量",
+          "range": "集計期間",
+          "last5m": "直近5分",
+          "lastHour": "直近1時間",
+          "lastDay": "直近24時間",
+          "sent": "送信",
+          "received": "受信",
+          "total": "合計",
+          "scope": "直接接続とリレー接続の通信量の概算です。ファイルの直接転送を含みます。デバイス検出用のブロードキャストと、別経路の音声・映像・HTTP 通信は対象外です。"
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -7908,6 +7945,7 @@
           "accessDenied": "このプラグイン操作は許可されていないか、キャンセルされました。",
           "notConfigured": "この環境ではプラグインマーケットを利用できません。",
           "invalidPackage": "プラグインパッケージに問題があるため、インストールできません。発行元にお問い合わせください。",
+          "downloadAuthorizationExpired": "プラグインのダウンロード認可の有効期限が切れたため、インストールを続行できません。システムの日付と時刻を確認してから、インストールをやり直してください。",
           "downloadTimeout": "プラグインのダウンロードがタイムアウトしました。しばらくしてからもう一度お試しください。",
           "downloadFailed": "プラグインのダウンロードに失敗しました。接続を確認して、もう一度お試しください。",
           "brokerRedirectPortRequired": "このプラグインは認可 broker を宣言していますが、同じ OAuth 設定に redirectPort がないため、プラグインマーケットからインストールできません。発行元にこのフィールドを追加して新しいバージョンを公開するよう連絡してください。",
@@ -8224,10 +8262,12 @@
         "agentHiddenTasksDetail": "このプラグインが作成したセッションを、セッションリスト・検索・通知に表示しないようにできます。プラグイン詳細の「バックグラウンドセッション」からいつでも確認したり開いたり、セッションリストに表示したりできます。プラグインをアンインストールすると再び表示されます。",
         "agentModelPreferences": "モデルのお気に入りの読み取りと編集、最近使用したモデルの読み取り",
         "agentModelPreferencesDetail": "このコンピュータのモデルのお気に入りと最近使用したモデル（推論強度と Fast の設定を含む）を読み取り、お気に入りを追加・変更・削除できます。変更は Cindy のモデル選択にも反映されます。プラグインで選んだモデルは最近使用に記録されません。ほかのコンピュータのモデルや共有されたモデルは含まれず、認証情報も渡されません。",
+        "harnesses": "実行エンジンを提供: {{names}}",
+        "harnessesDetail": "あなたのタスクで作業ディレクトリの読み書きやコマンドの実行を行い、組み込みの Pi と同じ範囲の Cindy のツールを使用できます。",
         "agentErrand": "タスクを作成し、作業を実行して結果を取得できます",
         "agentErrandDetail": "作成したタスクは Cindy のタスク一覧に表示され、進行状況を確認して会話を続けられます。",
         "agentSchedule": "自動化の新規作成をあなたに依頼できます",
-        "agentScheduleDetail": "できるのは内容が入力済みの新規自動化パネルを開くことだけで、作成するかどうかはあなたがモデルを選んで自分で保存して決めます。作成後は Cindy があなたの設定した時間に実行します。モデル料金が発生する場合があります。",
+        "agentScheduleDetail": "できるのは内容が入力済みの新規自動化パネルを開くことだけで、作成するかどうかはあなたがモデルを選んで自分で保存して決めます。作成後は Cindy があなたの設定した時間に実行します。モデル料金が発生する場合があります。デバイス同期に対応したプラグインでは、自動化を実行するコンピュータも確認できます。",
         "nodeRuntime": "同梱された Node プログラムをこのコンピューターで実行できます",
         "nodeMcp": "同梱された stdio MCP をこのコンピューターで実行できます",
         "nodeRuntimeDetail": "高リスク:あなたのユーザーアカウントと同じ権限で、ローカルファイルの読み書き、ネットワークアクセス、他のプログラムの起動ができます。Cindy のブラウザーサンドボックスでは隔離できません。",
@@ -8471,6 +8511,13 @@
         "openInSidebar": "サイドバーで開く",
         "panelPageHosted": "プラグインページから開く · 離れると自動的に閉じます",
         "panelNone": "このプラグインにパネルはありません",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: リモート利用を許可",
+          "description": "オンにすると、あなたの他のパソコンがこのエンジンでタスクを実行できます。Agent はこのパソコン上で、このパソコンのログインとクォータを使って実行されます。ファイルとコマンドはタスクのあるパソコンに残ります。",
+          "unsupported": "このプラグインは、他のパソコンからのエンジンの利用にまだ対応していません。",
+          "remoteControlOff": "このパソコンはまだリモート操作を許可していないため、他のパソコンはこのエンジンを利用できません。",
+          "ariaLabel": "他のパソコンに {{engine}} の利用を許可"
+        },
         "githubRelease": {
           "title": "プラグインの更新",
           "installed": "インストール済み {{version}}",
@@ -8539,6 +8586,8 @@
         "browserUse": "このブラウザー拡張機能を使用",
         "browserActivated": "ブラウザー拡張機能を選択しました",
         "browserActivationFailed": "選択できませんでした。プラグインを有効にし、接続の切り替えを確認してください。",
+        "automationHostSelect": "このコンピュータで「{{name}}」の自動タスクを実行しますか？",
+        "automationHostClear": "「{{name}}」の自動タスク用コンピュータの指定を解除しますか？",
         "browserSwitchTitle": "ブラウザー拡張機能の接続を切り替えますか？",
         "browserSwitchMessage": "この接続で「{{name}}」を使用しますか？",
         "browserSwitchDetail": "インスタンス: {{instance}}\n登録名: {{host}}\n現在の登録を置き換え、拡張機能をこのプラグインに接続します。",
@@ -12994,6 +13043,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "自動承認モデルの利用枠を使い切りました。Agent を実行しているコンピューターで使用量や請求を確認するか、設定で補助モデルをカスタマイズしてください。承認が必要な操作は引き続きあなたの確認が必要です。",
           "autoReviewNoAvailableModel": "利用できる自動レビュー用モデルがありません。Agent を実行するコンピューターで「モデルプロバイダー」からレビュー用プロバイダーを有効にして接続するか、設定で「補助モデル」をカスタマイズしてください。レビューが必要な操作は引き続きご自身で確認できます。",
           "autoReviewUnavailable": "自動レビューが判断できませんでした。レビューが必要な操作は、ご自身で確認する形に切り替わりました。中断を減らしたい場合は、このタスクを「フルアクセス」に切り替えてください。リスクはより高くなります。",
           "autoReviewUnavailableWechat": "自動レビューが判断できませんでした。レビューが必要な操作は、ご自身で確認する形に切り替わりました。個人 WeChat ではフルアクセスを使えません。この操作を直接確認してください。",
@@ -13003,6 +13053,7 @@
           "overloadRetryingNoCount": "モデルサービスが混雑しています。自動で再試行しています…",
           "overloadFailed": "⚠️ モデルサービスが混雑しています。上流に空き容量がありません。ここでこのメッセージを再送して再試行するか、Cindy で別のモデルに切り替えてください。（デスクトップ版で「再試行」を押してもタスクは続行できますが、結果はこのメッセージには戻りません。）"
         },
+        "audioInputUnavailable": "現在のモデル接続では音声を直接読み取れません。先に音声を文字に起こしてから続けるよう Cindy に依頼してください。",
         "toolLoop": {
           "generic": "モデルがツールを繰り返し呼び出した回数が多すぎるため、無限ループを避けるために Cindy はこのターンを停止しました。新しいメッセージを送ると続行できます。",
           "consecutive": "モデルが同じツールを {{n}} 回繰り返し呼び出したため、無限ループを避けるために Cindy はこのターンを停止しました。新しいメッセージを送ると続行できます。",
@@ -14041,6 +14092,8 @@
         "fastBadge": "高速"
       },
       "source": {
+        "lastConfirmed": "最終更新：{{time}}",
+        "unconfirmed": "モデル一覧を更新できません",
         "unavailable": "モデルを利用できません",
         "reconnect": "再接続",
         "manage": "接続先を管理",
@@ -14149,6 +14202,32 @@
           "bypassPermissions": {
             "label": "フルアクセス",
             "description": "通常の操作はそのまま許可し、ワークスペース外のファイルやネットワークを使うコマンドも利用できます。"
+          }
+        },
+        "acp": {
+          "ask": {
+            "label": "その都度確認",
+            "description": "Agent が権限を求めたときにあなたが確認します。Agent が確認を求めない操作は Cindy では止められません。"
+          },
+          "default": {
+            "label": "デフォルト",
+            "description": "Agent の既定の動作で進めます。権限の要求はあなたが確認します。"
+          },
+          "acceptEdits": {
+            "label": "編集を自動承認",
+            "description": "Agent はファイルを直接編集します。その他の権限の要求はあなたが確認します。"
+          },
+          "auto": {
+            "label": "自動",
+            "description": "確認が必要な操作は Agent が判断します。要求された権限はあなたが確認します。"
+          },
+          "plan": {
+            "label": "計画のみ",
+            "description": "Agent は分析と計画だけを行い、ファイルは編集しません。"
+          },
+          "bypassPermissions": {
+            "label": "すべて許可",
+            "description": "Agent が求める権限はすべて自動で許可されます。"
           }
         }
       }
@@ -14611,6 +14690,16 @@
       "nowDefault": "デフォルトにしました",
       "switchToSteer": "デフォルトを割り込みにする",
       "switchToQueue": "デフォルトをキューに追加にする"
+    },
+    "pluginEngines": {
+      "group": "プラグインエンジン",
+      "genericName": "プラグインエンジン",
+      "defaultModel": "デフォルトモデル",
+      "defaultModelHint": "エンジン側のデフォルト設定を使います",
+      "unavailable": "利用できません",
+      "engineMissing": "このエンジンを提供するプラグインは無効化されたか、アンインストールされています。",
+      "worktreeUnsupported": "プラグインエンジンはまだ worktree でタスクを開始できません。worktree をオフにしてから送信してください",
+      "modelChangeFailed": "モデルを切り替えられませんでした"
     }
   },
   "onboarding": {
@@ -14932,6 +15021,8 @@
     },
     "runningStatus": {
       "currentRate": "直近の速度",
+      "lastRequestRate": "直近のリクエストの平均",
+      "recentTokenRate": "直近 {{rate}} tok/s",
       "waitingSample": "計測中",
       "averageRate": "このターンの平均",
       "rateHistory": "生成速度の推移",
@@ -14972,6 +15063,9 @@
       "usageLimitAutoContinueTitle": "使用量の上限がリセットされるまでに操作がなければ、このタスクを自動で続行します",
       "usageLimitAutoContinueCancel": "キャンセル",
       "usageLimitAutoContinueCancelTitle": "自動続行をキャンセル（エラーと再試行は残ります）",
+      "usageLimitReached": "モデルのアカウントは利用上限に達しました",
+      "usageLimitReachedWithReset": "モデルのアカウントは利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
+      "usageLimitReachedNoReset": "モデルのアカウントは利用上限に達しました。上限のリセットを待つか、別のモデルに切り替えてから再試行してください。",
       "codexOrganizationUsageLimitWithReset": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
       "codexOrganizationUsageLimit": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。上限のリセットを待つか、別の利用可能なアカウントに切り替えてから再試行してください。",
       "codexUsageLimitWithReset": "接続中の Codex アカウントは利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
@@ -14990,7 +15084,7 @@
       "switchClaudeSubscriptionTitle": "このセッションを Claude.ai サブスクリプションに切り替えて再試行",
       "switchingClaudeSubscription": "Claude.ai に切り替え中…",
       "claudeSubscriptionSwitchFailed": "Claude.ai への切り替えまたはこのセッションの再試行に失敗しました：{{msg}}",
-      "codexAppServerRetired": "Codex サービスが再起動または交換されました。現在のリクエストは中断されたため、もう一度実行してください。",
+      "codexAppServerRetired": "Codex との接続が切れ、実行中のリクエストは中断されました。このセッションで続けられます。",
       "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",
       "codexAuthMissingLocal": "このコンピューターの「{{provider}}」接続を認証できませんでした。設定でこの接続のログイン状態を確認し、接続を復旧してからこのセッションに戻って続行してください。",
       "codexSessionExpired": "OpenAI 接続の更新が必要です。ChatGPT に再接続すると続行できます。{{appName}} がシステムの Codex CLI からサインアウトしたり、他のモデルソースへの再接続を求めたりすることはありません。",
@@ -15043,6 +15137,7 @@
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
+      "pluginEngineStatus": "バックグラウンドで作業を続けています…",
       "bashWorkStatus_one": "バックグラウンドで作業中（コマンド {{count}} 件）…",
       "bashServiceStatus_one": "バックグラウンドサービス実行中（{{count}} 件）",
       "bashWorkStatus_other": "バックグラウンドで作業中（コマンド {{count}} 件）…",
@@ -15077,10 +15172,16 @@
       "continueFailed_other": "{{count}} 件のセッションを再開できませんでした。セッションを開いて再試行してください。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
       "actionScheduled": "この操作に対するセッションの許可が失効しました。次の実行は予定されています。",
       "actionExpired": "この操作に対するセッションの許可が失効しました。自動化の直近の実行結果を確認してください。",
       "actionRecovered": "この操作の許可は失効しましたが、その後、同じ自動化が正常に実行されました。",
       "text": "自動実行に失敗した記録があります。",
+      "prCheck_dns": "{{device}} で {{host}} を名前解決できません。問題が続く場合は、この端末のネットワークか DNS を確認してください。連続失敗回数は {{failures}} 回です。次回の自動確認は {{retry}} です。",
+      "prCheck_timeout": "{{device}} から GitHub への接続がタイムアウトしました。連続失敗回数は {{failures}} 回です。次回の自動確認は {{retry}} です。",
+      "prCheck_auth": "{{device}} で GitHub に再度サインインしてください。連続失敗回数は {{failures}} 回です。次回の自動確認は {{retry}} です。",
+      "prCheck_rate-limit": "GitHub が {{device}} からのリクエストを制限しました。連続失敗回数は {{failures}} 回です。次回の自動確認は {{retry}} です。",
+      "prCheck_unknown": "{{device}} で PR の確認に失敗しました。実行の詳細を確認してください。連続失敗回数は {{failures}} 回です。次回の自動確認は {{retry}} です。",
       "precheck": "自動チェックが一時的に停止しています。",
       "rateLimited": "リクエスト制限により自動チェックが一時的に停止しています。",
       "pluginMissing": "自動チェックが停止しています：「{{name}}」プラグインがインストールされていません。インストールすると自動で再開します。",
@@ -15742,11 +15843,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "この接続では以前のモデルを使用できないため、モデル切り替え時にコンテキストを圧縮できませんでした。",
       "MODEL_SELECTION_UNAVAILABLE": "選択したモデルはプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
+      "MODEL_CATALOG_UNCONFIRMED": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
       "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
       "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
       "REMOTE_DAEMON_CLOSED": "リモート接続が切れました。更新中の可能性があります。このターンは終了したので、もう一度送信してください。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自動承認モデルの利用枠を使い切りました。Agent を実行しているコンピューターで使用量や請求を確認するか、設定で補助モデルをカスタマイズしてください。承認が必要な操作は引き続きあなたの確認が必要です。",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "利用できる自動レビュー用モデルがありません。Agent を実行するコンピューターで「モデルプロバイダー」からレビュー用プロバイダーを有効にして接続するか、設定で「補助モデル」をカスタマイズしてください。レビューが必要な操作は引き続きご自身で確認できます。",
       "AUTO_REVIEW_UNAVAILABLE": "自動レビューが判断できませんでした。レビューが必要な操作は、ご自身で確認する形に切り替わりました。中断を減らしたい場合は、このタスクを「フルアクセス」に切り替えてください。リスクはより高くなります。",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自動レビューが判断できませんでした。レビューが必要な操作は、ご自身で確認する形に切り替わりました。個人 WeChat ではフルアクセスを使えません。この操作を直接確認してください。",
@@ -15791,6 +15895,9 @@
       "REMOTE_AGENT_UNSUPPORTED": "相手のパソコンではこの Agent を使えません。そのパソコンでインストールまたはサインインするか、別の Agent を選んでください。",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "このパソコンではセッションの以前の実行状態を復元できません。別のパソコンまたはプロバイダーのモデルを選び、コンテキストを引き継いで続けてください。既存のメッセージは保持されます。",
       "REMOTE_AGENT_INVALID": "Agent を実行しているパソコンとの通信でエラーが発生しました。もう一度お試しください。続く場合は両方のパソコンの Cindy を最新版に更新してください。",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "プラグインエンジンが以前の会話を復元できませんでした。メッセージは保持されています。別のエンジンを選ぶか、新しいタスクを開始してください。",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "このプラグインエンジンはタスクのあるパソコンのツールを使えないため、現在は別のパソコンからこのタスクを実行できません。別のエンジンかモデルを選んでください。",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "このプラグインエンジンはこのパソコンのタスクだけを実行できます。他のパソコンからはまだ利用できません。",
       "REMOTE_AGENT_RESUME_REJECTED": "モデルを実行しているコンピューターでは、このセッションを再開できません。セッション一覧から新しいセッションを作成し、続行に必要な内容をコピーしてください。元のセッションと送信待ちのメッセージは保持されます。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "このモデルは共有者が設定したモデル使用割合の上限に達しました。別の利用可能なモデルで続行してください。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーまたは選択したモデルの利用が許可されていません。自分のパソコンなら、そのパソコンでこのプロバイダーの「リモート利用を許可」をオンにしてください。共有を受けたものなら、所有者に「リモートと共有」で利用範囲を変更してもらってください。別のモデルを選ぶこともできます。",
@@ -15959,7 +16066,6 @@
       "opened": "プレビューページを開きました"
     },
     "sideChat": {
-      "openPage": "タスクページを開く",
       "returnMain": "メインタスクに戻る",
       "new": "新しいサイドチャット",
       "mainWindowDescription": "サイドチャットは現在メインウィンドウで利用できます。内容は保存されています。",
@@ -15967,6 +16073,14 @@
       "commandDescription": "メインタスクをもとにサイドチャットを開きます。コマンドの後の質問は下書きになります。",
       "title": "サイドチャット",
       "context": "開いた時点までの完了済みコンテキストを使います。メインタスクは実行を続けます。履歴はこのタブを閉じるまで保持されます。",
+      "viewCollaboration": "協同を表示",
+      "openConversation": "会話を開く",
+      "openFromTaskList": "左側のタスク一覧からも開けます。",
+      "returnToSideChat": "サイドの追加質問に戻る",
+      "reopenSideChat": "サイドの追加質問を開き直す",
+      "origin": "この会話はサイドの追加質問から始まりました。",
+      "originNamed": "この会話は「{{title}}」のサイドの追加質問から始まりました。",
+      "originUnavailable": "この会話はサイドの追加質問から始まりました。元のタスクは開けません。",
       "opening": "開いています…",
       "notReady": "メインタスクの最初の回答が完了するまでお待ちください。",
       "unsupported": "この Agent のリモートタスクはサイドチャットに未対応です。",
@@ -15975,9 +16089,10 @@
       "mainTaskOnly": "メインタスクからサイドチャットを開いてください。",
       "sharedTaskUnavailable": "共有タスクではサイドチャットを利用できません。",
       "archivedTask": "このタスクのアーカイブを解除してから、サイドチャットを開いてください。",
-      "closeTitle": "サイドチャットを閉じますか？",
-      "closeDescription": "このサイドチャットを停止して削除します。メインタスクには影響しません。",
-      "closeConfirm": "閉じて削除",
+      "closeTitle": "この追加質問を閉じてアーカイブしますか？",
+      "closeDescription": "左側のタスクリストにある対応タスクもアーカイブされます。",
+      "closeDescriptionRunning": "左側のタスクリストにある対応タスクもアーカイブされ、Worker は停止します。",
+      "closeConfirm": "閉じてアーカイブ",
       "closeFailed": "サイドチャットを閉じられませんでした。もう一度お試しください。"
     },
     "botStartedTasks": {
@@ -15993,9 +16108,19 @@
       "toggle": "「{{title}}」からの返信を開閉",
       "openTask": "タスクを開く"
     },
+    "geminiRateLimit": {
+      "retried": "Gemini の指定時間後に自動で再試行しました",
+      "title": "Gemini の 1 分あたりの入力上限に達しました。",
+      "exhausted": "自動で一度再試行しましたが、Gemini の制限が続いています。後で手動で再試行できます。",
+      "retryIn": "{{seconds}} 秒後に自動で再試行"
+    },
     "subscriptionAccountError": {
-      "limited": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。上限のリセットを待って再試行するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。",
-      "limitedUntil": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。リセット予定：{{resetAt}}。リセット後に再試行するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。",
+      "poolModelLimited": "このモデルのサブスクリプション利用枠が上限に達しました。別のモデルに切り替えられます。",
+      "poolRetryUntil": "{{resetAt}} 以降に再試行できます。",
+      "poolOtherSignedOut": "別のサブスクリプションアカウントはログアウトしています。タスクを実行するコンピューターでログインして再試行できます。",
+      "poolUnavailable": "このモデルで利用できるサブスクリプションアカウントがありません。モデルを切り替えるか、タスクを実行するコンピューターでアカウントを確認してください。",
+      "limited": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。上限のリセットを待って再試行するか、別のモデル接続先を選んでください。",
+      "limitedUntil": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。リセット予定：{{resetAt}}。リセット後に再試行するか、別のモデル接続先を選んでください。",
       "loginRequired": "このタスクで使用しているサブスクリプションアカウントへの再ログインが必要です。タスクを実行しているコンピューターで再ログインしてから、再試行してください。",
       "signingIn": "このタスクで使用しているサブスクリプションアカウントにログイン中です。完了後に再試行してください。",
       "unavailable": "このタスクに割り当てられたサブスクリプションアカウントは、このリクエストに使用できません。実行先のコンピューターでモデルプロバイダーのアカウント設定を確認するか、別のモデル接続先を選んでください。",
@@ -16229,6 +16354,14 @@
       "remoteProviderUnsupported": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
       "remoteNativeOauthUnavailable": "リモートタスクでは Claude サブスクリプションを使用できません。ゲートウェイまたは API キーのモデルを選択してください",
       "claudeSubscriptionWorkspaceOverride": "このフォルダーの .claude 設定が Claude の接続先または認証方法を変更しているため、ここでは Claude サブスクリプションを使用できません。該当する設定を削除するか、ゲートウェイまたは API キーのモデルを選択してください",
+      "savedModel": {
+        "loading": "選択したモデルに接続中…",
+        "checkFailed": "選択したモデルを確認できませんでした",
+        "engine": "選択したエンジンは利用できません。このタスクで使うモデルを選択してください。",
+        "source": "選択した接続先は利用できません。このタスクで使うモデルを選択してください。",
+        "model": "選択したモデルは利用できません。このタスクで使うモデルを選択してください。",
+        "thisTaskOnly": "選択したモデルはこのタスクにのみ適用されます"
+      },
       "deviceStillLoading": "リモートデバイスの読み込み中です。しばらくお待ちください",
       "remoteDefaultsLoadFailed": "リモートデバイスの設定を読み込めませんでした。接続を確認してください。Cindy が再試行しています。",
       "branchChanged": "プロジェクトの現在のブランチは {{branch}} になりました。確認してから再送信してください。",
@@ -16850,7 +16983,41 @@
             "token": "予備トークンを使用中",
             "recheck": "接続を確認",
             "summary": "GitHub のリポジトリ、Issue、PR、Actions を管理。",
-            "otherMethods": "その他の接続方法"
+            "otherMethods": "その他の接続方法",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App のアクセス権",
+            "all": "すべてのリポジトリ",
+            "selected": "選択したリポジトリ",
+            "visible": "現在のアカウントで表示可能：{{count}} 件",
+            "unknownCount": "リポジトリ数を取得できません",
+            "permissions": "権限の詳細",
+            "read": "読み取り専用",
+            "write": "読み書き",
+            "admin": "管理",
+            "loading": "アクセス権を取得中…",
+            "missing": "アクセス権を表示するには、このコンピュータで GitHub App に接続してください。",
+            "unavailable": "アクセス権を取得できません。",
+            "empty": "このアカウントに表示できるインストールはありません。",
+            "suspended": "インストールは停止中です",
+            "events": "このコンピュータでイベントを購読中のリポジトリ：{{count}} 件",
+            "manage": "リポジトリのアクセス権を管理",
+            "names": {
+              "actions": "Actions",
+              "administration": "リポジトリ管理",
+              "checks": "チェック",
+              "contents": "リポジトリの内容",
+              "deployments": "デプロイ",
+              "issues": "Issue",
+              "members": "組織のメンバー",
+              "metadata": "メタデータ",
+              "organization_events": "組織のイベント",
+              "pull_requests": "プルリクエスト",
+              "repository_hooks": "リポジトリの Webhook",
+              "statuses": "コミットステータス",
+              "workflows": "ワークフローファイル"
+            }
           },
           "app": {
             "title": "リポジトリのイベント",
@@ -16863,6 +17030,21 @@
             "repositories": "リポジトリを選択",
             "disconnect": "イベント接続を解除",
             "connect": "GitHub App を接続"
+          },
+          "connection": {
+            "operations": "リポジトリの操作",
+            "operationsMissing": "リポジトリの操作は未承認です",
+            "checking": "GitHub 接続を確認中…",
+            "mismatch": "操作と通知でアカウントが異なります。確認して再接続してください。",
+            "ready": "GitHub アカウントに接続済みです。",
+            "close": "閉じる",
+            "incomplete": "アカウントは連携済みです。このコンピューターでの操作を承認してください。",
+            "eventsOnly": "このアカウントはリポジトリ通知用です。名前の表示だけでは、このコンピューターでの操作権限を確認できません。",
+            "connect": "GitHub に接続",
+            "alternative": "このコンピューターの GitHub ログインを使用",
+            "cliDescription": "既存のログインを引き続き使えます。個人通知など GitHub App 非対応の機能には、この方法が必要です。",
+            "disconnect": "GitHub App の接続を解除",
+            "repositories": "通知を受け取るリポジトリ：{{count}}"
           }
         },
         "unresolved": "未解決のレビューコメント: {{count}} 件",
@@ -16918,6 +17100,12 @@
       "unspecifiedDir": "ディレクトリ未指定"
     },
     "workdirBrowse": {
+      "previewFile": "プレビュー",
+      "filterDirectory": "このフォルダーを絞り込み…",
+      "projectTree": "プロジェクトツリー",
+      "systemPreview": "システムプレビュー",
+      "listView": "リスト",
+      "gridView": "サムネイル",
       "backToProjects": "プロジェクトに戻る",
       "switchProject": "プロジェクトを切り替え",
       "activeSessionCount_one": "アクティブなセッション {{count}} 件",
@@ -17284,6 +17472,7 @@
       "promote": {
         "menu": "プロジェクト自動化に昇格",
         "noWorkingDir": "作業ディレクトリのないスケジュールは昇格できません",
+        "pluginEngine": "プラグインエンジンはこのコンピューターでのみ動作するため、プロジェクトの自動化に昇格できません",
         "success": "プロジェクト自動化に昇格しました"
       },
       "editProject": {
@@ -17560,6 +17749,7 @@
         "selectThread": "対象セッションを選択してください",
         "selectProject": "プロジェクトディレクトリを選択してください",
         "modelUnavailable": "モデル {{model}} は利用できません。別のモデルを選択してください",
+        "pluginEngineUnavailable": "選択したプラグインエンジンは現在利用できません。別のモデルを選択してください",
         "reasoningInvalid": "Reasoning は {{values}} のいずれかである必要があります",
         "preRunHookCommandRequired": "事前チェックスクリプトのコマンドを入力してください",
         "preRunPluginRequired": "事前チェックのプラグインを選んでください",
@@ -19280,6 +19470,7 @@
       "permissionLabel": "権限モード",
       "noAvailableModels": "利用可能な {{agent}} モデルがありません。設定でプロバイダーの接続と認証情報を確認してください。",
       "savedModelUnavailable": "前回選択したモデルまたはその接続元を利用できません。",
+      "pluginEngineNoWorktree": "プラグインエンジンの Worker は worktree を使えません。worktree のオプションをオフにしてから作成してください。",
       "reselectModel": "モデルを選び直す",
       "effortLabel": "推論強度",
       "initialTaskLabel": "初期タスク",
@@ -21994,7 +22185,8 @@
       "empty": "モデルグループはまだありません。設定で複数のソースをモードにまとめると、ここで選べます。",
       "manage": "モデルグループを管理",
       "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
-      "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。"
+      "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
+      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"
     },
     "why": {
       "expiringQuota": "残り {{left}}%、{{reset}} にリセットされるため先に使用",

@@ -24,6 +24,7 @@ import {
   buildNewSessionCreatePreview,
   buildRecentWorkspaceOptions,
   applyRemoteAgentPick,
+  applyPluginEnginePick,
   resolveNewSessionSkillDraft,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
@@ -50,6 +51,7 @@ import {
   summarizeNewSessionDraft,
   validateModelProviderId,
   validateNewSessionDraft,
+  isNewSessionDraftMissingPayloadOnly,
   withAgentDefaults,
 } from '@/session/newSession';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
@@ -600,7 +602,7 @@ describe('isNewSessionRuntimePending', () => {
     // 目标模式是独立创建入口:表单禁用 + 函数内兜底。
     const goalStart = source.indexOf('const createGoalSession = useCallback(');
     expect(source.slice(goalStart, goalStart + 400)).toContain('if (runtimePendingRef.current) return;');
-    expect(source).toContain('disabled={worktreeCreateBlocked || runtimePending}');
+    expect(source).toContain('disabled={worktreeCreateBlocked || runtimePending || pluginEngineWorktreeUnsupported}');
   });
 
   it('aborts creation instead of sending an empty model after the submit-time catalog check', () => {
@@ -1600,6 +1602,17 @@ describe('new session model', () => {
       workingDir: '/repo',
       firstMessage: '',
     }, { attachmentCount: 1 })).toBeNull();
+  });
+
+  // Standard regression for PR #11549: a computer can offer only plugin engines.
+  // Use the same draft selection and validation as the form and submit paths.
+  it('accepts the picked plugin model when the computer has no built-in model', () => {
+    const draft = applyPluginEnginePick(
+      { ...DEFAULT_NEW_SESSION_DRAFT, workspaceKind: 'dialogue' },
+      { providerId: 'acp-plugin:test:engine', model: 'default', effort: '', permissionMode: 'ask' },
+    );
+    expect(isNewSessionDraftMissingPayloadOnly(draft)).toBe(true);
+    expect(validateNewSessionDraft({ ...draft, firstMessage: 'Run tests' })).toBeNull();
   });
 
   it('summarizes the mobile create-session draft for the top overview strip', () => {

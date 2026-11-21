@@ -581,7 +581,7 @@ describe('Shared create project picker', () => {
     // fail-open:注册结果没回来之前不隐藏任何引擎;当前引擎恒在列。
     expect(chatInputSource).toContain('if (!runtimeAgentsLoaded) return undefined;');
     expect(chatInputSource).toContain(
-      'kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),',
+      '(!preserveDraftModel && kind === agentKind) || runtimeAvailableVendors.has(agentKindToVendor(kind)),',
     );
   });
 
@@ -775,9 +775,9 @@ describe('Shared create project picker', () => {
   // 的行 —— 从 updater 副作用取值可能读到 undefined(Copilot review),`if (!restored) return`
   // 于是把恢复整个跳过,幻影删除又回来了。改由同步镜像 rowsRef 供数,写入统一走 commitRows。
   it('captures the removed row from a synchronous mirror, not a setState updater side effect', () => {
-    expect(deviceLinkProjectsHookSource).toContain('const loadedRef = useRef<{');
+    expect(deviceLinkProjectsHookSource).toContain('const loadedRef = useRef<typeof loaded>');
     expect(deviceLinkProjectsHookSource).toContain(
-      'loadedRef.current = { deviceId: ownerDeviceId, rows: next };',
+      'loadedRef.current = { deviceId: ownerDeviceId, rows: next, scope };',
     );
     // 读镜像时同时校验归属:归属不符说明当前显示的已是别的设备的行,乐观移除会改错列表。
     expect(deviceLinkProjectsHookSource).toContain(
@@ -1349,10 +1349,9 @@ describe('Shared create project picker', () => {
     const prefetchAt = handler.indexOf('prefetchDeviceCapabilities(target.deviceId)');
     expect(applyAt).toBeGreaterThan(-1);
     expect(prefetchAt).toBeGreaterThan(applyAt);
-    // 侧边栏点远程项目进草稿是**另一个组件**的路径,不经本路由的转移动作,自己 evict + prefetch。
-    // ⚠️ 这里原来只断言那三行 evict 存在 —— 于是它**保护住了**第 32 轮那个 P1(见下一条用例)。
-    expect(sidebarUpperSource).toContain('evictDeviceCapabilities(targetDeviceId);');
-    expect(sidebarUpperSource).toContain('evictDeviceProviders(targetDeviceId);');
+    // 侧边栏新建只预取模型目录，保留同一连接上仍有效的快照。
+    expect(sidebarUpperSource).not.toContain('evictDeviceCapabilities(targetDeviceId);');
+    expect(sidebarUpperSource).not.toContain('evictDeviceProviders(targetDeviceId);');
     expect(sidebarUpperSource).toContain('evictDeviceGitSafetySettings(targetDeviceId);');
   });
 
@@ -1384,8 +1383,8 @@ describe('Shared create project picker', () => {
       expect(body).toContain(call);
     }
     // prefetch 必须在 evict 之后,否则刚取回的又被作废。
-    expect(body.indexOf('prefetchDeviceCapabilities')).toBeGreaterThan(
-      body.indexOf('evictDeviceCapabilities'),
+    expect(body.indexOf('prefetchDeviceGitSafetySettings')).toBeGreaterThan(
+      body.indexOf('evictDeviceGitSafetySettings'),
     );
     // ② 设备域浏览器:同样可能是同一台设备,三个都要 prefetch(gitSafety 少了会让 Rewind 入口隐藏)。
     const added = newMakerDraftRouteSource.slice(
@@ -1470,7 +1469,8 @@ describe('Shared create project picker', () => {
   // 会被静默丢掉、或撞上对端同名的无关目录 —— chip 显示的并不是真实授予的上下文。
   it('hides the reference-directory picker on remote drafts', () => {
     expect(newMakerDraftRouteSource).toContain(
-      'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
+      // 选着插件引擎时同样不给入口：引擎只拿到任务工作目录。
+      'onExtraDirsChange={isDeviceLinkDraft || activePluginEngine ? undefined : handleExtraDirsChange}',
     );
     // The single add entry grants write access only through the local Main picker;
     // legacy read-only directories retain their independent removal callback.
@@ -1505,17 +1505,18 @@ describe('Shared create project picker', () => {
   // the executing side explicitly supports the setter.
   it('hides remote add while preserving capability-gated writable grant revocation', () => {
     expect(newMakerDraftRouteSource).toContain(
-      'isDeviceLinkDraft || isRemoteProjectDraft\n                        ? undefined\n                        : handleWritableDirsChange',
+      'isDeviceLinkDraft || isRemoteProjectDraft || activePluginEngine\n                        ? undefined\n                        : handleWritableDirsChange',
     );
     expect(agentCapabilitiesHookSource).toContain('writableDirs?: CapabilityStatus;');
     expect(ccAgentSessionViewSource).toContain(
       'canExposeWritableDirsChange({\n      capabilities: sessionCaps,',
     );
+    // 插件引擎任务只拿到任务工作目录，不给可写目录入口。
     expect(ccAgentSessionViewSource).toContain(
-      'writableDirsChangeSupported ? handleWritableDirsChange : undefined',
+      'writableDirsChangeSupported && !pluginEngineTask ? handleWritableDirsChange : undefined',
     );
     expect(ccAgentSessionViewSource).toContain(
-      'writableDirsChangeSupported ? handleWritableDirRemove : undefined',
+      'writableDirsChangeSupported && !pluginEngineTask ? handleWritableDirRemove : undefined',
     );
     expect(ccAgentSessionViewSource).toContain(
       'session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true',
@@ -1792,9 +1793,9 @@ describe('New Maker 草稿的 wire model id 口径', () => {
       newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir', handlerStart),
     );
     // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel、远程 Agent 换落点
-    // 时播种那台电脑的 dlSel，以及 SSH 临时草稿 —— 四条都用 selection.modelId(wire id),
+    // 时播种那台电脑的 dlSel，以及 SSH 临时草稿 —— 上述路径和本次替代模型都用 selection.modelId(wire id),
     // 一处都不能换成行 id，否则目标引擎无法解析首条请求。
-    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(4);
+    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(6);
     // 归一化行 id 不进草稿层,连字段都不该出现在写入实参里。
     expect(handler).not.toContain('rowModelId');
   });

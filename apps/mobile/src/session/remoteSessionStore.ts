@@ -1,6 +1,6 @@
 import { isTeammateTask } from './teammateTaskSource';
 import { applyMobileSessionRebalancePreferencePatch } from './sessionRebalanceCache';
-import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { receiveTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import {
@@ -77,6 +77,7 @@ import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { sessionAgentSwitchIntentPatch } from '@/session/sessionAgentSwitch';
 import { clampLiveRowCreatedAt, compareMessageOrder, MESSAGE_PAGE_SIZE } from '@/session/messagePaging';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 import { projectLargeSettledToolInputs } from '@/session/messageToolPayloadProjection';
@@ -1841,6 +1842,7 @@ function preserveSessionRuntimeFields(
     'companion',
     'taskTeammate',
     'agentSwitchIntent',
+    'pluginEngineSwitchIntent',
     'runtimeGeneration',
     'runtimeBaseline',
     'runtimeEffective',
@@ -4813,7 +4815,12 @@ export const remoteSessionStore = {
           localRow as unknown as Record<string, unknown> | undefined,
         );
         if (Object.keys(filtered).length > 0) {
-          this.applySessionPatch(deviceId, sessionId, filtered as Partial<RemoteSession>);
+          // 意图投影拆成内置 / 插件引擎两个字段(sessionAgentSwitchIntentPatch)，既有内置链路
+          // 永远看不到 targetAgentKind = 'acp'。
+          const split = Object.prototype.hasOwnProperty.call(filtered, 'agentSwitchIntent')
+            ? { ...filtered, ...sessionAgentSwitchIntentPatch(filtered.agentSwitchIntent) }
+            : filtered;
+          this.applySessionPatch(deviceId, sessionId, split as Partial<RemoteSession>);
         }
       }
       return;
@@ -5402,7 +5409,7 @@ export const remoteSessionStore = {
         : (isTurnStart ? true : current.generationReliable);
       // 速度属于产生它的那一轮：新一轮清掉，没带字段的帧沿用最近一次（含收尾平均）。
       // 标记不可靠又不带速度的帧，表示电脑端撤回了速度（休眠／时钟异常）。
-      const tokenSpeed = readTokenSpeedSnapshot(data?.tokenSpeed)
+      const tokenSpeed = receiveTokenSpeedSnapshot(data?.tokenSpeed, isTurnStart ? undefined : current.tokenSpeed)
         ?? (isTurnStart || data?.generationReliable === false ? undefined : current.tokenSpeed);
       // maker turn 边界 false→true 时清掉上一轮残留的 live task updates:它们是 turn 级
       // live 状态,残留到下一轮会被渲染层的孤儿兜底当作"仍在运行的子 agent"追加到消息流

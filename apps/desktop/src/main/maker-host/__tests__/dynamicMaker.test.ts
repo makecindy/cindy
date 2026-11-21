@@ -49,7 +49,8 @@ describe('createDynamicMaker', () => {
       ownerEpoch: () => owner,
       read: async (sessionId) => {
         const meta = await facade.getSessionMeta(sessionId);
-        if (!meta) return null;
+        // Bot routes are built-in only; the fixtures below never return a plugin engine.
+        if (!meta || meta.agentKind === 'acp') return null;
         return {
           chain,
           current: { agentKind: meta.agentKind, model: meta.model, providerId: null, effort: null, fastMode: false },

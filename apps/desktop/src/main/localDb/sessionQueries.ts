@@ -20,6 +20,7 @@ const OUTER_SESSION_CLEARED_AT_SQL = sql`${sql.identifier('sessions')}.${sql.ide
 export function ordinaryTaskListFilter(): SQL | undefined {
   return and(
     or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+      and(eq(sessions.source, 'side-chat'), eq(sessions.sideChatPromoted, true)),
       and(eq(sessions.source, 'bot'), sql`EXISTS (
         SELECT 1 FROM bot_session_links task_link
         JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id
@@ -95,6 +96,7 @@ export interface SessionListRow {
   messageCount: number;
   latestMessageExtract: string | null;
   latestMessageRole: string | null;
+  orcaLeadSessionId?: string | null;
   tagsJson?: string;
   companionJson?: string | null;
 }
@@ -115,6 +117,7 @@ function sessionReadSelection() {
 
 export function flattenSessionReadRow(row: SessionListRow): SessionRowWithCount {
   return { ...row.session,
+    ...(row.orcaLeadSessionId ? { orcaLeadSessionId: row.orcaLeadSessionId } : {}),
     companion: parseHistoryCompanion(row.companionJson),
     tags: normalizeTaskTags(JSON.parse(row.tagsJson ?? '[]')), messageCount: row.messageCount,
     latestMessageExtract: row.latestMessageExtract, latestMessageRole: row.latestMessageRole };
@@ -229,7 +232,13 @@ export function selectSessionListRows(
     );
   return db
     .with(picked)
-    .select(sessionReadSelection())
+    .select({
+      ...sessionReadSelection(),
+      orcaLeadSessionId: sql<string | null>`CASE WHEN sessions.orca_role = 'worker' THEN (
+        SELECT t.lead_session_id FROM orca_workers w JOIN orca_teams t ON t.id = w.team_id
+        WHERE w.session_id = ${OUTER_SESSION_ID_SQL} AND t.status = 'active'
+      ) END`.as('orca_lead_session_id'),
+    })
     .from(sessions)
     .innerJoin(picked, eq(picked.id, sessions.id))
     .where(where)

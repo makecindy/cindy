@@ -184,6 +184,7 @@ vi.mock('../../maker-host/claude-session-background-activity.js', async (importO
   ).hasWorkingBackgroundCommand,
   noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
   noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
+  observePluginEngineEvent: effects.fn('observePluginEngineEvent'),
 }));
 vi.mock('../../subagentObservationRewindFence.js', () => ({
   noteSubagentObservationTurnStarted: effects.fn('noteSubagentObservationTurnStarted'),
@@ -1145,6 +1146,22 @@ describe('production Session event pipeline', () => {
     h.emit(event('text', { isFinal: true, text: 'real worker reply' }, { source: 'pi' }));
     expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).toHaveBeenCalledWith('task', 'real worker reply', { isFinal: true });
     await h.dispose();
+  });
+
+  // PR #11776 review: a plugin engine's reply between turns has no done to commit it, so it stayed
+  // in memory and was lost on restart. Its final segment commits it; deltas and turn text do not.
+  it('commits a plugin engine reply written between turns at its final segment only', async () => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: 'acp' });
+    try {
+      h.emit(event('text', { text: 'The content', isFinal: false }, { turnScope: 'background' }));
+      h.emit(event('text', { text: 'In a turn', isFinal: true, isFullText: true }));
+      expect(effects.fn('flushAssistantBlock')).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'The content is `finished`', isFinal: true, isFullText: true }, { turnScope: 'background' }));
+      expect(effects.fn('flushAssistantBlock')).toHaveBeenCalledOnce();
+    } finally {
+      await h.dispose();
+    }
   });
 
   it('preserves ordinary Pi text without the Host recovery marker', async () => {
@@ -2640,7 +2657,7 @@ describe('usage through the production event pipeline', () => {
     await microtasks();
     expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
       model: 'test-model#billing=subscription', inputTokensDelta: 100,
-      attribution: { provider: 'openai', billingSource: 'subscription' },
+      attribution: { provider: 'openai', billingSource: 'subscription', modelUnconfirmed: true },
     }));
     expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
     await h.dispose();
@@ -2910,6 +2927,55 @@ describe('usage through the production event pipeline', () => {
       await h.dispose();
     },
   );
+
+  // #11616 review, unit: the production done entry must not report a selected
+  // model as observed when proxy matching supplies no proof. Existing served-model
+  // tests assert cost only. Minimal input is one fallback segment with execution.model.
+  // Cases cover legacy receipts, failed/missing matches, invalid totals and mixed rows.
+  // Uses the existing event fixture, no network or extra module loads.
+  // Standalone wall-clock 9.72s, including 6.99s shared fixture collection for 290 cases.
+  it.each([
+    ['legacy', undefined, true],
+    ['unmatched', false, true],
+    ['confirmed', true, true],
+    ['inconsistent totals', true, false],
+  ] as const)('keeps Codex actual-model confirmation separate from execution (%s)', async (_name, confirmed, reliable) => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: {
+      promptTokens: reliable ? 100 : 101, completionTokens: 20, cachedTokens: 10,
+      execution: { model: 'selected-model', providerId: 'xd', credentialMode: 'gateway-key' },
+      segments: [{ ...segment, model: 'selected-model', modelConfirmed: confirmed }],
+    } }));
+    await microtasks();
+    const tokenWrite = effects.fn('recordModelTurnUsage').mock.calls.find(([row]) => row.inputTokensDelta > 0)?.[0];
+    expect(tokenWrite.inputTokensDelta).toBe(reliable ? 100 : 101);
+    expect(tokenWrite.attribution.modelUnconfirmed).toBe(confirmed && reliable ? undefined : true);
+    await h.dispose();
+  });
+
+  it('keeps confirmation with each Codex model in a mixed turn', async () => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: {
+      promptTokens: 200, completionTokens: 40, cachedTokens: 20,
+      execution: { model: 'selected-model', providerId: 'xd', credentialMode: 'gateway-key' },
+      segments: [
+        { ...segment, model: 'served-model', modelConfirmed: true },
+        { ...segment, model: 'selected-model', modelConfirmed: false },
+      ],
+    } }));
+    await microtasks();
+    const tokenWrites = effects.fn('recordModelTurnUsage').mock.calls
+      .map(([row]) => row).filter(row => row.inputTokensDelta > 0);
+    expect(tokenWrites).toEqual([
+      expect.objectContaining({ model: 'served-model#billing=api',
+        attribution: expect.not.objectContaining({ modelUnconfirmed: true }) }),
+      expect.objectContaining({ model: 'selected-model#billing=api',
+        attribution: expect.objectContaining({ modelUnconfirmed: true }) }),
+    ]);
+    await h.dispose();
+  });
 
   it.each(['live', 'replay'] as const)('uses reference overrides for direct Pi subscriptions (%s)', async mode => {
     const h = harness();

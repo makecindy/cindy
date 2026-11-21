@@ -5,6 +5,7 @@ import type {
   PluginAuthorizationInput,
 } from '../plugin-oauth/deviceCard.js';
 import { parseDeviceAuthorizationUrl } from '@cindy/device-link';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '@cindy/maker-core';
 import { bindDeviceAuthorizationTarget, bindPluginAuthorizationTarget } from '../plugin-oauth/targetPolicy.js';
 /**
  * nodeRuntimeBroker — 随意识安装的本地 Node 工作进程守门与 stdio 中继。
@@ -39,6 +40,7 @@ import type {
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../shared/pluginAccountReuse.js';
 import {
+  approvedGhostHarnesses,
   GHOST_NODE_CHILD_MODE_FLAG,
   GHOST_NODE_MAX_CHILDREN_PER_GHOST,
   GHOST_NODE_REQUEST_MAX_TOTAL_MS,
@@ -46,6 +48,7 @@ import {
   parseGhostNodeChildToHostMessage,
 } from '../../shared/ghost.js';
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
+import { GHOST_HARNESS_REMOTE_WORKSPACE_ARG } from '@cindy/plugin-protocol';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -320,6 +323,25 @@ interface ChildProcEntry {
   stopping: boolean;
 }
 
+/** Cindy 主进程启动的任务执行引擎进程(harness;不挂在任何 worker 名下)。 */
+interface HarnessProcEntry {
+  ghostId: string;
+  harnessId: string;
+  proc: NodeWorkerProcess;
+  hardKillTimer: NodeJS.Timeout | null;
+  stopping: boolean;
+}
+
+/** 一个任务一个引擎进程;同一插件同时在世的引擎进程上限。 */
+export const GHOST_HARNESS_MAX_PROCESSES_PER_GHOST = 8;
+/** 每个引擎进程写入插件日志的 stderr 字符总量上限。 */
+const HARNESS_STDERR_LOG_CAP = 64 * 1024;
+
+/** 安装身份:目录 + 批准版本。语言切换只换清单视图,不算变化。 */
+function harnessIdentity(ghost: InstalledGhost): string {
+  return `${ghost.dir}\u0000${ghost.approval?.state === 'approved' ? ghost.approval.revision : ''}`;
+}
+
 /** 已 fork 但尚未完成 spawn 握手的代启子进程。 */
 interface StartingChildProcEntry {
   exited: boolean;
@@ -590,6 +612,7 @@ export class GhostNodeRuntimeBroker {
    *  同时也是 stop() 的对称点:上层完成更新/重启后调用此方法,清除停止标记。 */
   async startResident(ghost: InstalledGhost): Promise<void> {
     this.stoppedGhosts.delete(GhostNodeRuntimeBroker.instanceId(ghost));
+    if (ghost.enabled) this.resumeHarnesses(GhostNodeRuntimeBroker.instanceId(ghost));
     if (!ghost.enabled || ghost.manifest.node?.lifecycle !== 'resident') return;
     const ownerScopeSnapshot = this.captureOwnerScope();
     const entry = await this.ensureWorker(ghost, ghost.manifest.node.entry, ownerScopeSnapshot);
@@ -600,6 +623,7 @@ export class GhostNodeRuntimeBroker {
   /** Recovery-only restart for a runtime that was already running on demand. */
   async startForRecovery(ghost: InstalledGhost): Promise<void> {
     this.stoppedGhosts.delete(GhostNodeRuntimeBroker.instanceId(ghost));
+    if (ghost.enabled) this.resumeHarnesses(GhostNodeRuntimeBroker.instanceId(ghost));
     if (!ghost.enabled || !ghost.manifest.node) return;
     const ownerScopeSnapshot = this.captureOwnerScope();
     const entry = await this.ensureWorker(ghost, ghost.manifest.node.entry, ownerScopeSnapshot);
@@ -1373,11 +1397,215 @@ export class GhostNodeRuntimeBroker {
     }
   }
 
+  /* ── 任务执行引擎进程(harnesses,2026-11-18)──────────────────────────── */
+
+  /** 当前在世的执行引擎进程(ghostId → 记账;只认真实 exit 移除)。 */
+  private readonly harnessProcesses = new Map<string, Set<HarnessProcEntry>>();
+  /**
+   * stop()/stopAndWait() 置入的启动闸:停用、更新、卸载开始后不得再起引擎进程,直到上层在
+   * 「该在场了」的统一入口(启用、更新/回滚完成、应用启动)调用 resumeHarnesses。与
+   * stoppedGhosts 分开:后者会被 main.js 的 node-request 清掉,而引擎由 Cindy 主进程发起,
+   * 不能借插件页面的请求越过更新窗口。
+   */
+  private readonly harnessSpawnBlocked = new Set<string>();
+
+  /** 上层确认插件已在场(启用/更新换代/回滚完成)后解除 stop 留下的引擎启动闸。 */
+  resumeHarnesses(ghostId: string): void {
+    this.harnessSpawnBlocked.delete(ghostId);
+  }
+
+  /** 某插件当前在世的执行引擎进程数。 */
+  harnessProcessCount(ghostId: string): number {
+    return this.harnessProcesses.get(ghostId)?.size ?? 0;
+  }
+
+  /**
+   * 以原样 stdio 模式启动插件声明的任务执行引擎入口(Cindy 主进程发起,一个任务一个进程)。
+   *
+   * 与 childSpawn 走同一条 utilityProcess「原样 stdio」通道(`spawnChildProcess`),但不经
+   * main.js、不挂在任何 worker 名下,因此不要求 `node.childSpawn`:能启动的只有 manifest
+   * `harnesses[].entry` 指向、且在 `node.entries` 里申报过的包内 JS,没有命令或参数面。
+   *
+   * 守门(fork 前同步现查,fork 就绪后再核一次):未在停止/更新窗口、owner 代次可用、插件已
+   * 启用且整包批准有效、声明了 node 与该引擎、协议为 `acp`、receipt `approvedHarnesses`
+   * 明确批准、入口逐字命中 node.entries、解析后的路径不越出安装目录、数量不超顶。
+   *
+   * 返回的进程:stdin.write 只收 base64 字节串;stdout 是未消费的原始字节流(调用方挂
+   * 'data' 前自缓冲);stderr 已由 broker 有界写入插件日志,调用方后挂的监听只看到之后的
+   * 片段。插件停用、更新、卸载与账号切换时,broker 在替换安装目录前结束这些进程。
+   */
+  async spawnHarness(
+    ghostId: string,
+    harnessId: string,
+    options?: { remoteWorkspace?: boolean },
+  ): Promise<NodeWorkerProcess> {
+    const logRejection = (reason: string): void => {
+      this.deps.log?.warn('ghost harness spawn rejected', { ghostId, harnessId, reason });
+    };
+    const reject = (reason: string): never => {
+      logRejection(reason);
+      throw new AgentStartupStoppedError(new Error(reason));
+    };
+    if (this.destroyed) reject('Plugin runtime is shutting down');
+    if (this.harnessSpawnBlocked.has(ghostId)) {
+      reject('The plugin is stopping or updating; try again after it is enabled');
+    }
+    const ownerScopeSnapshot = this.captureOwnerScope();
+    if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) reject('Plugin owner boundary changed');
+    const ghost = this.deps.getGhost(ghostId);
+    const resolved = ghost ? this.resolveHarness(ghost, harnessId) : null;
+    if (!ghost || !resolved) {
+      return reject('This task engine is not enabled, approved and declared by the plugin');
+    }
+    if (this.harnessProcessCount(ghostId) >= GHOST_HARNESS_MAX_PROCESSES_PER_GHOST) {
+      reject(`At most ${GHOST_HARNESS_MAX_PROCESSES_PER_GHOST} task engine processes can run per plugin`);
+    }
+    const identity = harnessIdentity(ghost);
+    const generation = this.stopGeneration.get(ghostId) ?? 0;
+
+    let proc: NodeWorkerProcess;
+    try {
+      // 唯一的启动参数由宿主固定给出(任务的文件与命令在另一台电脑),插件仍然没有参数面。
+      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId,
+        options?.remoteWorkspace ? [GHOST_HARNESS_REMOTE_WORKSPACE_ARG] : []);
+    } catch (error) {
+      return reject(error instanceof Error ? error.message : 'Task engine failed to start');
+    }
+    // fork 已产生真实 OS 进程:先记账再等握手,stop/stopAndWait 在启动空窗内也能收掉它。
+    this.trackLiveProcess(ghostId, proc);
+    const entry: HarnessProcEntry = { ghostId, harnessId, proc, hardKillTimer: null, stopping: false };
+    const processes = this.harnessProcesses.get(ghostId) ?? new Set<HarnessProcEntry>();
+    processes.add(entry);
+    this.harnessProcesses.set(ghostId, processes);
+    let exited = false;
+    const whenStopped = new Promise<void>((resolve) => {
+      proc.once('exit', () => {
+        exited = true;
+        this.forgetHarnessProcess(entry);
+        resolve();
+      });
+    });
+    // error 不是退出证明:开始有界停止,记账保留到真实 exit。
+    proc.on('error', () => this.stopHarnessProcess(entry, true));
+    try {
+      this.logHarnessStderr(entry);
+      await new Promise<void>((resolve, fail) => {
+        let settled = false;
+        const settle = (outcome: () => void) => {
+          if (settled) return;
+          settled = true;
+          this.clearTimer(startTimer);
+          outcome();
+        };
+        const startTimer = this.setTimer(() => settle(() => fail(new Error('Task engine start timed out'))), DEFAULT_START_TIMEOUT_MS);
+        startTimer.unref?.();
+        proc.once('spawn', () => settle(resolve));
+        proc.once('error', (error) => settle(() => fail(error)));
+        proc.once('exit', (code) => settle(() => fail(new Error(`Task engine exited before it was ready (code=${code})`))));
+      });
+      // Recheck admission after the handshake, before yielding the process.
+      const current = this.deps.getGhost(ghostId);
+      if (
+        this.destroyed || exited || entry.stopping || this.harnessSpawnBlocked.has(ghostId)
+        || (this.stopGeneration.get(ghostId) ?? 0) !== generation
+        || !this.ownerScopeUsable(ghostId, ownerScopeSnapshot)
+        || !current || harnessIdentity(current) !== identity || !this.resolveHarness(current, harnessId)
+      ) {
+        throw new Error('The plugin changed while the task engine was starting');
+      }
+    } catch (error) {
+      if (!exited) this.stopHarnessProcess(entry, true);
+      const cause = error instanceof Error ? error : new Error('Task engine failed to start');
+      logRejection(cause.message);
+      if (exited) throw new AgentStartupStoppedError(cause);
+      throw new AgentStartupCleanupPendingError(cause.message, {
+        cause,
+        whenStopped,
+        retryCleanup: async () => {
+          if (exited) return;
+          const stopped = this.waitForProcessExit(proc, ghostId);
+          try { proc.kill('SIGKILL'); } catch { /* Wait for the exit event. */ }
+          await stopped;
+        },
+      });
+    }
+    this.deps.log?.info('ghost harness spawned', { ghostId, harnessId, pid: proc.pid });
+    return proc;
+  }
+
+  /** 现查守门:返回可启动的入口绝对路径,任一条件不满足返回 null。 */
+  private resolveHarness(ghost: InstalledGhost, harnessId: string): { entryPath: string; root: string } | null {
+    const node = ghost.manifest.node;
+    if (!ghost.enabled || ghost.approval?.state !== 'approved' || !node) return null;
+    const harness = approvedGhostHarnesses(ghost).find((item) => item.id === harnessId);
+    if (!harness || harness.protocol !== 'acp' || !(node.entries ?? []).includes(harness.entry)) return null;
+    const root = path.resolve(ghost.dir);
+    const entryPath = path.resolve(root, ...harness.entry.split('/'));
+    if (entryPath === root || !entryPath.startsWith(`${root}${path.sep}`)) return null;
+    return { entryPath, root };
+  }
+
+  /**
+   * 引擎 stderr 进插件日志:每段最多 4096 字符;每个进程收到的 stderr 累计到上限后只记一条
+   * 截断说明,之后不再写日志,不给日志灌洪。
+   */
+  private logHarnessStderr(entry: HarnessProcEntry): void {
+    const decoder = new StringDecoder('utf8');
+    let seen = 0;
+    let truncated = false;
+    entry.proc.stderr.on('data', (chunk) => {
+      if (truncated) return;
+      const decoded = decoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+      const remaining = HARNESS_STDERR_LOG_CAP - seen;
+      seen += decoded.length;
+      const text = decoded.trim().slice(0, Math.min(4_096, remaining));
+      if (text) this.deps.log?.warn('ghost harness stderr', { ghostId: entry.ghostId, harnessId: entry.harnessId, text });
+      if (seen >= HARNESS_STDERR_LOG_CAP) {
+        truncated = true;
+        this.deps.log?.warn('ghost harness stderr truncated', { ghostId: entry.ghostId, harnessId: entry.harnessId });
+      }
+    });
+  }
+
+  private forgetHarnessProcess(entry: HarnessProcEntry): void {
+    if (entry.hardKillTimer) {
+      this.clearTimer(entry.hardKillTimer);
+      entry.hardKillTimer = null;
+    }
+    const processes = this.harnessProcesses.get(entry.ghostId);
+    if (!processes) return;
+    processes.delete(entry);
+    if (processes.size === 0) this.harnessProcesses.delete(entry.ghostId);
+  }
+
+  private stopHarnessProcess(entry: HarnessProcEntry, force = false): void {
+    if (entry.stopping) return;
+    entry.stopping = true;
+    try {
+      entry.proc.kill(force ? 'SIGKILL' : 'SIGTERM');
+      entry.hardKillTimer = this.setTimer(() => {
+        entry.hardKillTimer = null;
+        try {
+          entry.proc.kill('SIGKILL');
+        } catch {
+          // already gone
+        }
+      }, PROCESS_STOP_GRACE_MS);
+      entry.hardKillTimer.unref?.();
+    } catch {
+      // 已退出即视为停止成功；stopAndWait 会以 exit 或有界超时收口。
+    }
+  }
+
   /** 停用、更新或卸载一个插件时立即停止其名下**全部** Node 进程。 */
   stop(ghostId: string): void {
     this.stopGeneration.set(ghostId, (this.stopGeneration.get(ghostId) ?? 0) + 1);
     this.stoppedGhosts.add(ghostId);
+    this.harnessSpawnBlocked.add(ghostId);
     this.deps.onStopped?.(ghostId);
+    for (const harness of [...(this.harnessProcesses.get(ghostId) ?? [])]) {
+      this.stopHarnessProcess(harness);
+    }
     for (const starting of [...(this.startingChildren.get(ghostId) ?? [])]) {
       this.stopStartingChild(starting);
     }
@@ -1569,6 +1797,9 @@ export class GhostNodeRuntimeBroker {
   /** Cindy 退出时收掉全部随包 Node 进程。 */
   destroyAll(): void {
     this.destroyed = true;
+    for (const processes of [...this.harnessProcesses.values()]) {
+      for (const harness of [...processes]) this.stopHarnessProcess(harness);
+    }
     for (const [key, entry] of [...this.workers]) this.stopWorker(key, entry);
   }
 
