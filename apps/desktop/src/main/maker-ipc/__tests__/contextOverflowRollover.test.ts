@@ -400,16 +400,17 @@ describe('createContextOverflowRollover', () => {
     };
   }
 
-  // L343 / unit. At the real claim/settle entry a cancelled recovery can own
-  // different error classes. Only the claimed prompt rejection carries notice proof.
+  // L343 / unit. The claim/recovery entry hands the active turn to the recovery
+  // callback for a context-limit rejection. Both the current input and prior
+  // history can fill the context. Other terminal classes leave the turn unset.
   it.each([
-    ['prompt length', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }, true],
+    ['recoverable context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }, true],
     ['oversized Codex history', { reason: CODEX_HISTORY_OVERSIZED_REASON }, false],
     ['remote compact', { reason: 'remote-compact-encrypted-content', message: 'context_length_exceeded' }, false],
     ['unavailable compact model', { reason: CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON }, false],
     ['unsupported option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON }, false],
     ['ordinary failure', { reason: 'provider-timeout' }, false],
-  ] as const)('carries notice proof only for a prompt rejection: %s', async (_kind, errorData, shouldMark) => {
+  ] as const)('classifies claimed recovery failures for notice eligibility: %s', async (_kind, errorData, shouldMark) => {
     const deps = makeDeps([]);
     const getRecoveryAbortSignal = vi.fn(() => AbortSignal.abort());
     const rollover = createContextOverflowRollover({ ...deps, getRecoveryAbortSignal });

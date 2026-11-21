@@ -244,10 +244,11 @@ function noticeSession(id: string, createdAt: string, userSendAt: string): Remot
 }
 
 describe('Provider device roster reads', () => {
-  // L343 / unit: the mounted production routing callback consumes the same
-  // Host row twice, with a newer round in the mirror and a ready history page.
-  // The wire metadata can change without inserting a new visible reply or dot.
-  it('refreshes one older Host user row without changing mobile attention or the newer reply', async () => {
+  // L343 / unit: with a ready history page and a newer reply already visible,
+  // the mounted routing callback tolerates repeat delivery of one older user row.
+  // The reconnect reply-anchoring defect is outside this fixture. See
+  // docs/host/personal-migration-release-table.md, “第 7 条的队列放行和历史提示”.
+  it('tolerates repeat delivery of one older Host row after the newer reply is visible', async () => {
     const sessionId = 'l343-notice-row';
     const device = 'l343-host';
     const client = transport.clients[0];
