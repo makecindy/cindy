@@ -1,5 +1,4 @@
 import {
-  SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
   getSessionListCollapseView,
   type SessionListCollapseView,
   type SessionListCollapseViewInput,
@@ -20,40 +19,19 @@ export function getSidebarSessionCollapseView<T>({
   idleCollapseEnabled = false,
   isContainerEntry,
   nowMs = Date.now(),
+  recentWindowMs,
   ...input
-}: SessionListCollapseViewInput<T> & {
+}: Omit<SessionListCollapseViewInput<T>, 'expandGroupForHiddenActiveEntry'> & {
   idleCollapseEnabled?: boolean;
-  isContainerEntry?: (entry: T) => boolean;
 }): SessionListCollapseView<T> {
-  if (!idleCollapseEnabled) return getSessionListCollapseView({ ...input, nowMs });
+  if (!idleCollapseEnabled) return getSessionListCollapseView({ ...input, nowMs, recentWindowMs });
 
-  const {
-    entries,
-    showAll,
-    disableCollapse,
-    isFiltering,
-    isActiveEntry,
-    hasAttentionEntry,
-    getActivityMs,
-    recentWindowMs = SIDEBAR_INACTIVE_COLLAPSE_MS,
-    minVisibleCount = SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
-  } = input;
-  let containerCount = 0;
-  const visibleHeadCount = Math.max(0, Math.round(minVisibleCount));
-  const visibleEntries = showAll || disableCollapse || isFiltering
-    ? entries
-    : entries.filter((entry) => {
-        const container = isContainerEntry?.(entry) ?? false;
-        // Container headers keep their own limit so an all-idle group can be reopened.
-        const withinHead = container && containerCount++ < visibleHeadCount;
-        return withinHead || isActiveEntry(entry) || hasAttentionEntry(entry) ||
-          (!container && getActivityMs != null && getActivityMs(entry) >= nowMs - recentWindowMs);
-      });
-  const hiddenCount = entries.length - visibleEntries.length;
-  return {
-    visibleEntries,
-    isOverflowing: hiddenCount > 0,
-    totalCount: entries.length,
-    hiddenCount,
-  };
+  return getSessionListCollapseView({
+    ...input,
+    nowMs,
+    recentWindowMs: recentWindowMs ?? SIDEBAR_INACTIVE_COLLAPSE_MS,
+    minVisibleCount: isContainerEntry ? input.minVisibleCount : 0,
+    isContainerEntry,
+    expandGroupForHiddenActiveEntry: false,
+  });
 }

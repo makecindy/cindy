@@ -218,6 +218,7 @@ import {
   holdSidebarViewedPriority,
   ProjectsSection,
   SessionGroupNode,
+  ShowAllEntriesButton,
   viewedPriorityHold,
 } from './sidebar/sections/ProjectsSection';
 import { advanceViewedPriorityHold, partitionCindyMakeSessions, sortSessionsForMainList } from './lib/mainListModel';
@@ -3861,7 +3862,8 @@ function ExpandedView({
                       notifications={sidebarNotifications}
                       scheduleSessionIndex={automationGroupingIndex}
                       selectedSessionIds={selectedSessionIds}
-                      disableSessionCollapse={false}
+                      // 置顶项目在任务列表只跟随状态筛选，收件箱的置顶快捷入口独立于筛选。
+                      disableSessionCollapse={taskListMode === 'tasks' && filter.status !== 'active'}
                       onToggle={collapse.toggle}
                       onSettings={setSettingsProject}
                       onRenameProject={handleProjectAliasChange}
@@ -4313,8 +4315,7 @@ interface RailPanelsProps {
 /**
  * RailPanels — 折叠 rail「项目 / 对话」的二级(+项目三级)面板。
  * 由 ExpandedView 渲染以直连其全套会话 handler(见 railPanelStore 头注);
- * 会话行 = SessionEntryList 原装(SessionItem 全量行为 + 折叠上限 +
- * 「显示全部 N 项」页脚),与展开态零差异:
+ * 会话行复用 SessionEntryList；项目列表与展开态共用「再显示 N 项」页脚。
  *   - 对话面板:collapseLimit = getDialogueCollapseLimit()(默认 10,24h 活动豁免);
  *   - 项目内会话:collapseLimit = getProjectSessionCollapseLimit()(默认 5);
  *   - 项目列表:getProjectCollapseLimit()(默认 20)纯硬性上限 + 同款页脚。
@@ -4375,7 +4376,7 @@ function RailPanels({
   // Lead 的 kind 已并入其 Worker 的出错 / 等待确认(notifications 由 ExpandedView 同口径合并)。
   const attentionKinds = useSessionAttentionKindsWithOrcaLeads();
   const urgentSet = useSessionAttentionUrgencySet();
-  // 项目列表「显示全部」:面板关闭后复位(与 ProjectsSection 的段收起复位同语义)。
+  // 项目列表展开状态在面板关闭后复位，与 ProjectsSection 的段收起一致。
   const [showAllProjects, setShowAllProjects] = useState(false);
   useEffect(() => {
     if (panelState.openSection !== 'projects') {
@@ -4600,7 +4601,7 @@ function RailPanels({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 remoteLampOf 读到的整表内容
   }, [notifications, dialogues, unclassified, projects, cindyMake, remoteActivityRevision]);
 
-  // 项目列表折叠:纯硬性上限(ProjectsSection 同口径,默认 20)+「显示全部 N 项」。
+  // 项目列表默认显示前 20 项，页脚按实际隐藏的项目数计数。
   const projectsView = useMemo(
     () =>
       getSessionListCollapseView({
@@ -4842,17 +4843,10 @@ function RailPanels({
                 );
               })}
               {projectsView.isOverflowing && (
-                <button
-                  type="button"
-                  className={cn(
-                    'flex h-6 w-full items-center justify-center rounded-full px-2 text-xs font-normal',
-                    'text-[var(--cmd-palette-item-meta)] transition-colors hover:bg-sidebar-item-hover hover:text-foreground',
-                    'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
-                  )}
+                <ShowAllEntriesButton
+                  count={projectsView.hiddenCount}
                   onClick={() => setShowAllProjects(true)}
-                >
-                  {t('ccAgent.sidebar.showAllSessions', { count: projectsView.totalCount })}
-                </button>
+                />
               )}
             </div>
           </>

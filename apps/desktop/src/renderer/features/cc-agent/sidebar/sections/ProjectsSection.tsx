@@ -178,8 +178,8 @@ export function holdSidebarViewedPriority(
   holdViewedPriorityRank(viewedPriorityHold, sessionId, ctx);
 }
 
-/** 未归组条目的页脚入口，单段路径和设备分组共用。 */
-function ShowAllEntriesButton({ count, onClick, showAll = false }: {
+/** 侧栏列表的展开页脚，按实际隐藏的条目计数。 */
+export function ShowAllEntriesButton({ count, onClick, showAll = false }: {
   count: number; onClick: () => void; showAll?: boolean;
 }) {
   const { t } = useTranslation();
