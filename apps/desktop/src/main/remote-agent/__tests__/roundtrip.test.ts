@@ -1862,6 +1862,7 @@ describe('shared startup lease budget', () => {
     const runs = new Map<string, Run>();
     const sessions = new Map<string, string>();
     const disposed: string[] = [];
+    let mcpSessionCount = 0;
     const pendingClose = deferred();
     const prepare = deferred();
     const allocation = deferred();
@@ -1925,6 +1926,7 @@ describe('shared startup lease budget', () => {
             message: '[REMOTE_AGENT_INVALID] this shared task is not authorized on this computer' } };
         }
         sessions.set(request.runId!, request.payload!.json!.sessionId);
+        mcpSessionCount = 1;
         if (state.loseOpenAck) return { ok: false, error: { code: 'INVOKE_TIMEOUT', message: 'open acknowledgement lost' } };
       }
       if (request.op === 'close') {
@@ -1948,7 +1950,9 @@ describe('shared startup lease budget', () => {
         state.preparing = true;
         if (state.blockPrepare) await prepare.promise;
         return { mcpBridge: { servers: [{ name: 'fixture', url: 'http://fixture.invalid/' }] },
-          disposeSessionCtx: () => { disposed.push(ctx.sessionId!); } } as never;
+          disposeSessionCtx: () => { disposed.push(ctx.sessionId!); },
+          closeSessionInstance: () => { mcpSessionCount = 0; },
+        } as never;
       },
       makerMemory: () => undefined, captureKnownFileBefore: async () => undefined, noteOpaqueTurnChange() {},
       groupSwitch: guestSwitch,
@@ -1958,7 +1962,7 @@ describe('shared startup lease budget', () => {
     historyOpenLink.mockResolvedValue(undefined);
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
-    return { owner, target, generation, state, calls, runs, disposed, pendingClose, prepare, allocation, emit, started, guestSwitch, renewals,
+    return { owner, target, generation, state, calls, runs, disposed, mcpSessionCount: () => mcpSessionCount, pendingClose, prepare, allocation, emit, started, guestSwitch, renewals,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
@@ -2675,6 +2679,50 @@ describe('shared startup lease budget', () => {
       expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
       expect(f.disposed).toEqual([]);
     } finally { await session.close(); }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 startRemoteAgentSession → runClient closed 事件，
+  //   断言控制端实例级 MCP 会话计数在 idle reclaim 后归零，reconnect 后恢复。
+  // - Bug／规则依据：2a MCP 堆积回归，远程 run 结束必须触发 closeSessionInstance。
+  // - 现有覆盖缺口：此前 roundtrip 只断言 open 次数，没有观察 MCP 实例关闭接线。
+  // - 最小失败输入：一个已打开 run 收到 `closed { idleReclaimed:true }`，随后再次 send。
+  // - tier：integration（真实 remote-agent controller/startRemote/runClient 入口）。
+  it('closes the ended run MCP instance before reconnecting an idle-reclaimed task', async () => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      expect(f.mcpSessionCount()).toBe(1);
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'closed', reason: 'closed', idleReclaimed: true });
+      await flush();
+      expect(f.mcpSessionCount()).toBe(0);
+      await handle.send({ type: 'user', content: 'reconnect after reclaim' });
+      expect(f.mcpSessionCount()).toBe(1);
+    } finally { await handle.close(); }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：同一 startRemoteAgentSession 在 missing /
+  //   controller-disconnected 后保持 MCP 计数，missing 路径可继续 reconnect。
+  // - Bug／规则依据：2a 远程断链兼容红线，链路暂断不能猜进程已结束。
+  // - 现有覆盖缺口：已有 close 事件用例没有覆盖两类可重连 reason 与 MCP 计数。
+  // - 最小失败输入：打开 run 后注入单个 runClient.onLost(reason)，再发送一条消息。
+  // - tier：integration。
+  it.each(['missing', 'controller-disconnected'] as const)('retains MCP instance across %s and reconnects the run', async reason => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      expect(f.mcpSessionCount()).toBe(1);
+      const run = [...f.runs.values()].at(-1)!;
+      run.onLost(reason, { code: 'DEVICE_OFFLINE', message: 'temporary link loss' });
+      await flush();
+      expect(f.mcpSessionCount()).toBe(1);
+      if (reason === 'missing') {
+        await handle.send({ type: 'user', content: 'continue after temporary link loss' });
+        expect(f.mcpSessionCount()).toBe(1);
+      }
+    } finally { await handle.close(); }
   });
 
   it.each([false, true])('preserves a live run close receipt through the real starter (idle reclaim=%s)', async idleReclaimed => {

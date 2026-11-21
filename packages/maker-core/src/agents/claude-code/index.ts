@@ -4624,7 +4624,6 @@ export class ClaudeCodeAgent extends BaseAgent {
                         kind: 'claude',
                         role: 'task-host',
                         sessionId: opts.sessionId ?? null,
-                        ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
                       }),
                     trackDebugFile: process.env.XDT_CC_DEBUG_NET === '1' && ccDebugFile
                       ? () => this.deps.trackCcDebugFile?.(ccDebugFile, opts.sessionId) ?? (() => {})

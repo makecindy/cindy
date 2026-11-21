@@ -13,6 +13,8 @@
  *   各对每个 MCP server 发一次 initialize，旧进程不发 DELETE。
  * - tier：integration。使用真实 loopback socket 和 MCP SDK transport。
  * - 实测耗时：单独运行该文件应低于 5 秒（本机）。
+ * - 说明：普通本地 Claude Code 的 mcpProviders 直接创建 SDK MCP server，不经过此 HTTP bridge。
+ *   本文件的 Claude 场景仅覆盖远程 Claude 的 HTTP bridge 路径。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -235,20 +237,8 @@ describe('MCP bridge lifecycle accumulation probe', () => {
     await Promise.all(bridges.splice(0).map((bridge) => bridge.shutdown()));
   });
 
-  it('records five rounds for Claude Code, remote Agent and Pi without task unregister', async () => {
+  it('records five rounds for remote Claude Agent and Pi without task unregister', async () => {
     const results = await Promise.all([
-      runOwnedReplacementScenario(
-        'claude-code',
-        'idle recycle then wake',
-        'claude-code',
-        'task-claude-idle',
-      ),
-      runOwnedReplacementScenario(
-        'claude-code',
-        'runtime-refresh',
-        'claude-code',
-        'task-claude-refresh',
-      ),
       runOwnedReplacementScenario(
         'claude-code',
         'remote run reclaim then reconnect',

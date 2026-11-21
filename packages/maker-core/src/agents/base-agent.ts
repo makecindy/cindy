@@ -467,7 +467,6 @@ export interface LocalAgentProcessRegistration {
    * 不触发登记,宿主可忽略。
    */
   sessionId?: string | null;
-  sessionInstanceId?: string;
 }
 
 export interface CodexLocalCredentialModeSwitchContext {
