@@ -46,7 +46,7 @@ function isOpenCodeModelsUrl(value: string | undefined): boolean {
 }
 
 /** Keep internal coarse modalities; document MIME types do not imply vision. */
-function openCodeModalities(value: unknown): unknown {
+function openCodeModalities(value: unknown, declaredImageInput: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const normalize = (list: unknown) => {
     if (!Array.isArray(list) || list.length > 16 || !list.every(item => typeof item === 'string')) return list;
@@ -58,7 +58,14 @@ function openCodeModalities(value: unknown): unknown {
     }))];
   };
   const record = value as Record<string, unknown>;
-  return { ...record, input: normalize(record.input), output: normalize(record.output) };
+  const input = normalize(record.input);
+  return {
+    ...record,
+    // Keep every consumer consistent with the winning explicit capability flag.
+    input: declaredImageInput === false && Array.isArray(input)
+      ? input.filter(modality => modality !== 'image') : input,
+    output: normalize(record.output),
+  };
 }
 
 /** Token strings are decimal counts, not abbreviations, units or JS numeric expressions. */
@@ -218,7 +225,8 @@ export function parseModelsListResponse(
     const rawModalities = record.modalities ??
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
         ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
-    const modalities = openCode ? openCodeModalities(rawModalities) : rawModalities;
+    const declaredImageInput = record.supports_image_input ?? info.supports_vision ?? capabilities.vision;
+    const modalities = openCode ? openCodeModalities(rawModalities, declaredImageInput) : rawModalities;
     const inputModalities = (modalities as { input?: unknown } | undefined)?.input ?? record.input_modalities;
     const contextWindowMax = contextTokens(record.max_context_window ?? record.contextWindowMax);
     const serviceTiers = record.service_tiers;
@@ -299,7 +307,7 @@ export function parseModelsListResponse(
           : Array.isArray(additionalSpeedTiers)
             ? additionalSpeedTiers.includes('fast') : undefined),
       supportsImageInput:
-        record.supports_image_input ?? info.supports_vision ?? capabilities.vision ??
+        declaredImageInput ??
         (Array.isArray(inputModalities) && inputModalities.every(value => typeof value === 'string')
           ? inputModalities.includes("image")
           : undefined),

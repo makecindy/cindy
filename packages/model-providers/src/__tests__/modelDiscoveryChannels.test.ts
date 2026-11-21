@@ -79,9 +79,10 @@ describe('shared provider discovery', () => {
     { capabilities: { vision: false } }])('keeps explicit OpenCode image denials ahead of MIME: %j', fields => {
     for (const sourceUrl of ['https://opencode.ai/zen/go/v1/models', 'https://opencode.ai/zen/v1/models']) {
       const [model] = parseModelsListResponse({ data: [{ id: 'private-model', ...fields,
-        modalities: { input: ['text', 'image/jpeg'], output: ['text'] },
+        modalities: { input: ['text', 'image/jpeg', 'audio/wav'], output: ['text', 'image/png'] },
       }] }, sourceUrl)!;
-      expect(model.discoveredMetadata?.supportsImageInput).toBe(false);
+      expect(model.discoveredMetadata).toMatchObject({ supportsImageInput: false,
+        modalities: { input: ['text', 'audio'], output: ['text', 'image'] } });
     }
   });
 
