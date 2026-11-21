@@ -1113,7 +1113,7 @@ export function UnifiedModelList({
       {!compactEmpty && (
         <div
           data-testid="provider-model-toolbar"
-          className="sticky top-0 z-10 flex flex-col gap-2 bg-[var(--settings-theme-card-bg)] px-5 pb-2 pt-2.5"
+          className="sticky top-0 z-raised flex flex-col gap-2 bg-[var(--settings-theme-card-bg)] px-5 pb-2 pt-2.5"
         >
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div className="min-w-0 flex-1">

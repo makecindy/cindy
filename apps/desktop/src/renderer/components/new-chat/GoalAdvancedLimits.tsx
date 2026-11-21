@@ -88,7 +88,7 @@ function LimitSelect({
         <Select.Content
           position="popper"
           sideOffset={4}
-          className="z-[10002] overflow-hidden rounded-[12px] border p-1.5"
+          className="z-modal-nested overflow-hidden rounded-[12px] border p-1.5"
           style={{
             // 宽度严格跟随 trigger(radix popper 暴露的变量),避免 popup 按内容宽度自适应。
             width: 'var(--radix-select-trigger-width)',

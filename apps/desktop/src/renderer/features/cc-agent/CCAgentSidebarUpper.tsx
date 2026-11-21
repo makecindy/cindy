@@ -4272,7 +4272,7 @@ function RailPanelShell({
       className={cn(
         'fixed w-[264px] rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-1.5',
         // 阴影走主题 token(AGENTS.md #16,与菜单同语言);z 必须低于 DropdownMenu
-        // 的 z-50 —— 行内右键/移动菜单要画在面板之上(review P2)。
+        // 的 dropdown 层(10010)—— 行内右键/移动菜单要画在面板之上(review P2)。
         'shadow-[shadow:var(--shadow-menu)]',
         level === 1 ? 'z-[48]' : 'z-[49]',
       )}

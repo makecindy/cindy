@@ -120,7 +120,7 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
       ref={ref}
       role="tooltip"
       className={cn(
-        'pointer-events-none fixed z-[9999] rounded-xl',
+        'pointer-events-none fixed z-fullscreen rounded-xl',
         'bg-[var(--surface-elevated)] border border-sidebar-border',
         'px-3 pb-[11px] pt-[10px]',
       )}

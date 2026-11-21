@@ -3561,7 +3561,7 @@ export function BatchActionPill({
   return (
     <div
       data-review-batch-action-pill="true"
-      className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 overflow-hidden rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_92%,transparent)] p-1 shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm"
+      className="pointer-events-none absolute bottom-3 left-1/2 z-page-overlay flex -translate-x-1/2 items-center gap-1 overflow-hidden rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_92%,transparent)] p-1 shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm"
       style={{ maxWidth: 'calc(100% - 16px)' }}
     >
       {writeAction.sectionDiscardVisible && writeAction.onSectionDiscard && (
@@ -4759,7 +4759,7 @@ function FileRow({
           <span
             data-review-action-reveal="file"
             className={cn(
-              'absolute right-3 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1',
+              'absolute right-3 top-1/2 z-raised flex -translate-y-1/2 items-center gap-1',
               reviewActionRevealClass('file', fileActionsPending),
             )}
           >

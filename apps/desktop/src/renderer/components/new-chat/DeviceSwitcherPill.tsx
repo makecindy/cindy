@@ -140,7 +140,7 @@ export function DeviceSwitcherPill({
           //   下限 200px —— 行内容的实际最小需求(padding 24 + 图标 32 + 副文案约 96 + check 28),
           //     低于它副文案会折行;这个值也正好是 trigger 的宽度上限,短名字时两者基本齐平。
           //   上限 320px —— 超长设备名到此为止,由行内的 truncate 有限展现,不让菜单继续摊宽。
-          'z-[10010] w-auto min-w-[200px] max-w-[320px] rounded-[12px] p-2',
+          'w-auto min-w-[200px] max-w-[320px] rounded-[12px] p-2',
           'bg-[var(--folder-picker-bg)]',
           'border border-[var(--folder-picker-border)]',
         )}

@@ -127,7 +127,7 @@ export function SpeechVoiceMenu(props: Props) {
         align="end"
         collisionPadding={8}
         aria-label={props.label}
-        className="z-[10010] flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col overflow-hidden border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] [-webkit-app-region:no-drag]"
+        className="flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col overflow-hidden border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] [-webkit-app-region:no-drag]"
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const choices = Array.from(

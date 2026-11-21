@@ -89,7 +89,7 @@ function HunkActionPill({
   return (
     <span
       data-review-hunk-action-anchor="true"
-      className="pointer-events-none absolute bottom-[3px] left-0 right-0 z-20 flex justify-end"
+      className="pointer-events-none absolute bottom-[3px] left-0 right-0 z-page-float flex justify-end"
     >
       <span
         data-review-action-reveal="hunk"

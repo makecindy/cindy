@@ -685,7 +685,7 @@ export function FloatingUpdateBanner({
   const { revealRequested, pinnedByUser, dismissed } = useUpdateBannerDismiss();
   if (!enabled || (!revealRequested && (!pinnedByUser || dismissed))) return null;
   return (
-    <div className="fixed bottom-4 left-4 z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-sidebar-border bg-sidebar empty:hidden">
+    <div className="fixed bottom-4 left-4 z-float w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-sidebar-border bg-sidebar empty:hidden">
       <UpdateBanner
         isCollapsed={false}
         onOpenVersionNotice={onOpenVersionNotice}

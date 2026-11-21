@@ -290,11 +290,11 @@ export function InstallTargetPicker({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next && !installingRef.current) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           aria-labelledby={INSTALL_PICKER_TITLE_ID}
           className={cn(
-            'modal-panel fixed inset-0 z-[9000] m-auto flex h-fit max-h-[88vh] w-[min(480px,calc(100vw-32px))] flex-col overflow-y-auto outline-none',
+            'modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[88vh] w-[min(480px,calc(100vw-32px))] flex-col overflow-y-auto outline-none',
             '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-inset [&_button:focus-visible]:ring-[var(--focus-ring-soft)]',
           )}
           onOpenAutoFocus={(event) => {

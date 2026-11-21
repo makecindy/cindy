@@ -412,7 +412,7 @@ export function TodoListCard({
             id={flyoutId}
             data-plan-flyout-positioner="composer"
             className={cn(
-              'absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2',
+              'absolute bottom-full left-1/2 z-raised mb-2 -translate-x-1/2',
               'w-max',
               flyoutMaxWidth === null && 'min-w-[220px] max-w-[min(420px,calc(100vw-32px))]',
             )}
@@ -444,7 +444,7 @@ export function TodoListCard({
                     onClick={onDismiss}
                     aria-label={t('chat.planPill.dismiss')}
                     className={cn(
-                      'absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-full',
+                      'absolute right-2 top-2 z-raised flex h-7 w-7 items-center justify-center rounded-full',
                       'text-[var(--msg-tool-card-chevron)] transition-colors',
                       'hover:bg-[var(--model-item-hover)] hover:text-[var(--msg-tool-card-text)]',
                       'active:scale-[0.98]',

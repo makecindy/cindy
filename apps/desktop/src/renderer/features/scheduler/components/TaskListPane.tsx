@@ -275,7 +275,7 @@ export function TaskListPane({
         role="separator"
         aria-orientation="vertical"
         aria-label={t('scheduler.list.resizeAria')}
-        className="group/handle absolute right-0 top-0 z-10 h-full w-[4px] cursor-col-resize"
+        className="group/handle absolute right-0 top-0 z-raised h-full w-[4px] cursor-col-resize"
         onPointerDown={onResizeStart}
         onDoubleClick={onResizeReset}
       >

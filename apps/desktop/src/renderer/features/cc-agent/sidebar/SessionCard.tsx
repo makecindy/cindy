@@ -935,7 +935,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             <div
               className={cn(
                 // peer:标题行按操作钮自身的 focus-within 让位,与其显隐条件一致。
-                'peer/card-actions absolute right-[6px] top-[6px] z-10 flex items-center gap-0.5',
+                'peer/card-actions absolute right-[6px] top-[6px] z-raised flex items-center gap-0.5',
                 menuPos !== null
                   ? 'opacity-100'
                   : 'opacity-0 group-hover/card:opacity-100 focus-within:opacity-100',
@@ -983,7 +983,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               }}
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => e.stopPropagation()}
-              className={cn('absolute right-[6px] top-[6px] z-20', CARD_ARCHIVE_CONFIRM_CLASS)}
+              className={cn('absolute right-[6px] top-[6px] z-page-float', CARD_ARCHIVE_CONFIRM_CLASS)}
               aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
             >
               {t('ccAgent.sidebar.sessionMenu.archived')}
@@ -1159,7 +1159,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       {!isEditing && !archivePending && ordinalBadgeLabel != null && (
         <span
           className={cn(
-            'pointer-events-none absolute right-2 top-2 z-20 flex',
+            'pointer-events-none absolute right-2 top-2 z-page-float flex',
             isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
           )}
         >
@@ -1326,7 +1326,7 @@ function TimeActionsSlot({
             }}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => e.stopPropagation()}
-            className="absolute right-0 top-1/2 z-20 w-max min-w-14 -translate-y-1/2 whitespace-nowrap"
+            className="absolute right-0 top-1/2 z-page-float w-max min-w-14 -translate-y-1/2 whitespace-nowrap"
             aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
           >
             {t('ccAgent.sidebar.sessionMenu.archived')}

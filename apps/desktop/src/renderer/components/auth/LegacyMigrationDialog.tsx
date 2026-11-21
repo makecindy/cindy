@@ -104,8 +104,8 @@ export function LegacyMigrationDialog() {
       aria-labelledby="legacy-migration-title"
       aria-describedby="legacy-migration-desc"
       tabIndex={-1}
-      // z-[10000] = 本仓模态层约定(confirm-dialog 同层);低于 Toast(10100)。
-      className="fixed inset-0 z-[10000] flex items-center justify-center outline-none"
+      // z-modal = 本仓模态层约定(confirm-dialog 同层);低于 Toast(10100)。
+      className="fixed inset-0 z-modal flex items-center justify-center outline-none"
       style={{ background: 'var(--login-bg-base)' }}
       onKeyDown={onKeyDown}
       onClick={dismissFailed}

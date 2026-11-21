@@ -201,9 +201,9 @@ export function BotMarketDialog({ onClose, initialPackageId, api = window.electr
   return <>
     <Dialog.Root open onOpenChange={open => { if (!open) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[60]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content onPointerDownOutside={event => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[61] flex max-h-[min(760px,calc(100vh-32px))] w-[min(960px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden outline-none">
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[min(760px,calc(100vh-32px))] w-[min(960px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden outline-none">
           <header className={cn('flex shrink-0 items-center justify-between gap-4 px-8 transition-colors', selection
             ? cn('border-b py-3', stuck ? 'border-[var(--border-default)]' : 'border-transparent') : 'pb-2 pt-6')}>
             {selection ? <>
@@ -289,7 +289,7 @@ export function BotMarketDialog({ onClose, initialPackageId, api = window.electr
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-3">
                       <button type="button" data-open-detail onClick={() => setSelectedId(entry.packageId)} className="min-w-0 cursor-pointer text-left text-16 font-medium text-[var(--text-primary)] after:absolute after:inset-0 after:content-[''] focus-visible:outline-none focus-visible:after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-[var(--focus-ring)]">{entry.name}</button>
-                      <div className="relative z-10 shrink-0">{action(entry, false)}</div>
+                      <div className="relative z-raised shrink-0">{action(entry, false)}</div>
                     </div>
                     <p className="mt-2 text-13 leading-5 text-[var(--text-secondary)]">{entry.description}</p>
                   </div>

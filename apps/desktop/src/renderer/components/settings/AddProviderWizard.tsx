@@ -1579,7 +1579,7 @@ export function AddProviderWizard({
   return (
     <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) handleClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE} />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE} />
       <Dialog.Content
         ref={panelRef}
         aria-describedby={undefined}
@@ -1595,7 +1595,7 @@ export function AddProviderWizard({
           if (savingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
         }}
         style={WINDOW_NO_DRAG_STYLE}
-        className="modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
+        className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
       >
         {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
         <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
@@ -1983,7 +1983,6 @@ export function AddProviderWizard({
                   size="md"
                   mono
                   secret
-                  secretTipContentClassName="z-[10001]"
                 />
               </div>
             </div>
@@ -2030,7 +2029,6 @@ export function AddProviderWizard({
                     size="md"
                     mono
                     secret
-                    secretTipContentClassName="z-[10001]"
                   />
                   {bindGeminiImages && <InfoLine text={t('settings.providers.wizard.geminiImageKeyNote')} />}
                   {isMimoTokenPlanPreset(sel.preset) && (

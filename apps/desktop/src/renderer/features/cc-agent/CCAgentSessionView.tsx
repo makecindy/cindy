@@ -6439,7 +6439,7 @@ function CCAgentSessionContent({
           instead of floating over old messages. */}
         {isDragOver && (
           <div
-            className="pointer-events-none absolute inset-0 z-50"
+            className="pointer-events-none absolute inset-0 z-float"
             style={{
               backgroundColor: 'var(--drop-overlay-bg)',
               border: '2px dashed var(--drop-overlay-border)',
@@ -6562,7 +6562,7 @@ function CCAgentSessionContent({
               ) : null}
               <div
                 data-composer-center-group="true"
-                className="pointer-events-none relative z-10 col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
+                className="pointer-events-none relative z-raised col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
               >
                 <PinnedPlanPanel
                   sessionId={sessionId ?? null}
@@ -7273,7 +7273,7 @@ function CCAgentSessionContent({
           onClick={() => navigate('/cc-agent/scheduled')}
           aria-label={t('ccAgent.layout.backToAutomations')}
           className={cn(
-            'absolute left-[14px] top-[14px] z-40 inline-flex items-center justify-center',
+            'absolute left-[14px] top-[14px] z-page-top inline-flex items-center justify-center',
             'text-[var(--settings-section-desc)] transition-colors hover:text-foreground',
           )}
         >
@@ -7287,7 +7287,7 @@ function CCAgentSessionContent({
           aria-label={t('ccAgent.layout.backToReviewSource')}
           title={t('ccAgent.layout.backToReviewSource')}
           className={cn(
-            'absolute left-[14px] top-[14px] z-40 inline-flex items-center justify-center',
+            'absolute left-[14px] top-[14px] z-page-top inline-flex items-center justify-center',
             'text-[var(--settings-section-desc)] transition-colors hover:text-foreground',
           )}
         >

@@ -583,7 +583,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       open
       className={
         mode === 'fullscreen'
-          ? 'mcp-app-fullscreen fixed inset-4 z-50 m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit'
+          ? 'mcp-app-fullscreen fixed inset-4 z-float m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit'
           : chrome === 'panel' ? `static m-0 flex w-full min-h-0 max-w-none flex-col border-0 bg-transparent p-0 text-inherit ${fixed ? 'h-full flex-1' : ''}` : `static mx-0 my-3 w-full max-w-none overflow-hidden rounded-xl bg-transparent p-0 text-inherit ${border ? 'border border-border' : 'border-0'}`
       }
       // The modal's top layer still shares the macOS window controls and drag geometry.
