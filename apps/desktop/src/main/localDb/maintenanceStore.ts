@@ -16,6 +16,9 @@ const RESULT_FILE_NAME = 'db-slimming-result.json';
 const BACKUP_INDEX_FILE_NAME = 'db-slimming-backups.json';
 const REQUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export const DB_SLIMMING_TARGET_STATUSES = ['deleted', 'archived', 'active'] as const;
+export type DbSlimmingTargetStatus = (typeof DB_SLIMMING_TARGET_STATUSES)[number];
+
 export type DbSlimmingRequestPhase =
   | 'scheduled'
   | 'swap-prepared'
@@ -34,6 +37,13 @@ export interface DbSlimmingRequestRecord {
   archiveAgeMonths: DbSlimmingArchiveAge;
   /** Optional so an update can still finish a cleanup scheduled by an older build. */
   includeActiveTasks?: boolean;
+  /**
+   * Exact statuses this request may purge. Optional so a marker written by an
+   * older build keeps its original scope; when present it wins over
+   * `includeActiveTasks`. Automatic runs set `['deleted']` so a retention cutoff
+   * can never reach archived tasks that share the same `archivedBeforeMs`.
+   */
+  targetStatuses?: DbSlimmingTargetStatus[];
   activeTaskCount?: number;
   /** Exact committed active-task targets whose external history sidecars must also be removed. */
   activeTaskIds?: string[];
@@ -246,6 +256,7 @@ function isDbSlimmingRequestRecord(value: unknown): value is DbSlimmingRequestRe
     !isFiniteNumber(value.archivedBeforeMs) ||
     !isArchiveAge(value.archiveAgeMonths) ||
     (value.includeActiveTasks !== undefined && typeof value.includeActiveTasks !== 'boolean') ||
+    !isTargetStatuses(value.targetStatuses) ||
     (value.activeTaskCount !== undefined && !Number.isInteger(value.activeTaskCount)) ||
     (value.activeTaskIds !== undefined &&
       (!Array.isArray(value.activeTaskIds) ||
@@ -321,6 +332,26 @@ function isDbSlimmingBackupIndexRecord(value: unknown): value is DbSlimmingBacku
       (candidate) => typeof candidate === 'string' && isSlimmingBackupPath(candidate),
     );
   });
+}
+
+function isTargetStatuses(value: unknown): value is DbSlimmingTargetStatus[] | undefined {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length === 0) return false;
+  if (!value.every((status) => DB_SLIMMING_TARGET_STATUSES.includes(status))) return false;
+  return new Set(value).size === value.length;
+}
+
+/**
+ * Effective purge scope of a request. Requests written before `targetStatuses`
+ * existed keep the previous deleted + archived (optionally active) behaviour.
+ */
+export function dbSlimmingTargetStatuses(
+  request: Pick<DbSlimmingRequestRecord, 'targetStatuses' | 'includeActiveTasks'>,
+): DbSlimmingTargetStatus[] {
+  if (request.targetStatuses && request.targetStatuses.length > 0) return request.targetStatuses;
+  return request.includeActiveTasks === true
+    ? ['deleted', 'archived', 'active']
+    : ['deleted', 'archived'];
 }
 
 function isFailureReason(value: unknown): value is DbSlimmingFailureReason {

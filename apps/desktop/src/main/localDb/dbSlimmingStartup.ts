@@ -1,11 +1,12 @@
 import type Database from 'better-sqlite3';
 
-import type { DbSlimmingResultRecord } from './maintenanceStore';
+import { recordDbAutoCleanupRun } from '../db-auto-cleanup-settings';
 import type {
   RunDbSlimmingMaintenanceOptions,
   RunDbSlimmingMaintenanceOutcome,
 } from './dbSlimmingMaintenance';
 import { discardCancelledDbSlimmingMaintenance } from './dbSlimmingMaintenance';
+import { prepareDbAutoCleanupRequest } from './dbAutoCleanupGate';
 import {
   DbSlimmingCancelledError,
   DbSlimmingWorkerPreReplacementError,
@@ -17,7 +18,10 @@ import {
   clearDbSlimmingRequest,
   InvalidDbSlimmingRequestMarkerError,
   readDbSlimmingRequest,
+  writeDbSlimmingRequest,
   writeDbSlimmingResult,
+  type DbSlimmingRequestRecord,
+  type DbSlimmingResultRecord,
 } from './maintenanceStore';
 
 interface DbSlimmingStartupLog {
@@ -73,8 +77,13 @@ export async function runPendingDbSlimmingAtStartup(
     return { handled: false, originalDatabaseReady: true };
   }
 
-  if (!request || request.ownerId !== options.ownerId) {
+  if (request && request.ownerId !== options.ownerId) {
     return { handled: false, originalDatabaseReady: true };
+  }
+
+  if (!request) {
+    request = scheduleAutoCleanupIfDue(options);
+    if (!request) return { handled: false, originalDatabaseReady: true };
   }
 
   if (options.leaseKind !== 'writer') {
@@ -198,5 +207,51 @@ export async function runPendingDbSlimmingAtStartup(
     return { handled: true, ...maintenance };
   } finally {
     progressJob.finish();
+  }
+}
+
+/**
+ * Synthesizes the request the Settings card would otherwise have written when
+ * soft-deleted history has aged past its retention window (#8698). The splash,
+ * backup, verification and rollback all stay the existing ones; this only adds
+ * the decision to start them without a user click.
+ */
+function scheduleAutoCleanupIfDue(
+  options: RunPendingDbSlimmingAtStartupOptions,
+): DbSlimmingRequestRecord | null {
+  if (options.leaseKind !== 'writer') return null;
+  const now = (options.now ?? Date.now)();
+  try {
+    const preparation = prepareDbAutoCleanupRequest({
+      userDataDir: options.userDataDir,
+      dbFilePath: options.dbFilePath,
+      ownerId: options.ownerId,
+      now,
+      log: options.log,
+    });
+    if (!preparation.run) {
+      if (preparation.reason !== 'no-targets' && preparation.reason !== 'disabled') {
+        options.log.info('database auto cleanup skipped', { reason: preparation.reason });
+      }
+      return null;
+    }
+    const request = preparation.request;
+    // The marker is the durable record; the cooldown stamp is best-effort and
+    // written after it so a failed stamp cannot delay the run it describes.
+    writeDbSlimmingRequest(options.userDataDir, request);
+    recordDbAutoCleanupRun(options.userDataDir, now, options.log);
+    options.log.info('database auto cleanup scheduled', {
+      requestId: request.id,
+      deletedTasks: request.deletedTaskCount,
+      messages: request.messageCount,
+      beforeBytes: request.beforeBytes,
+    });
+    return request;
+  } catch (error) {
+    // The gate is an optimization; a failure here must never block startup.
+    options.log.warn('database auto cleanup gate failed; startup continues', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
   }
 }
