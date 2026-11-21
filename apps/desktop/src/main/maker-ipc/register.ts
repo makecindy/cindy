@@ -252,6 +252,7 @@ import {
   parseOfferedPluginEngines,
   PLUGIN_ENGINES_INVOKE,
   pluginEngineKeyFromProviderId,
+  PLUGIN_ENGINE_DEFAULT_MODEL,
 } from '../../shared/pluginEngines.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, PluginEngineUnsupportedError, requireBuiltinAgentKind } from '../maker-host/engineKind.js';
 import type {
@@ -17168,7 +17169,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         current: {
           agentDeviceId: row.agentDeviceId,
           agentKind: currentAgentKind,
-          model: live?.model ?? row.model ?? '',
+          // The engine reports its concrete model even when the companion delegated that choice to it.
+          model: isPluginEngine && row.model === PLUGIN_ENGINE_DEFAULT_MODEL ? row.model : live?.model ?? row.model ?? '',
           providerId: !isPluginEngine && live && hasSessionProvider(sessionId)
             ? getSessionProvider(sessionId) ?? null : row.providerId,
           effort: (!isPluginEngine && live ? getSessionEffort(sessionId) : row.effort) ?? null,

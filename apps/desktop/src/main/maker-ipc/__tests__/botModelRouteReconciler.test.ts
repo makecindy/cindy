@@ -30,6 +30,35 @@ describe('permanent Bot model selection', () => {
       { agentKind: 'acp', providerId: plugin.providerId, model: 'chosen', effort: 'high', fastMode: false }, h.state.current);
   });
 
+  // Saving a model during a plugin reply must keep the current prompt and apply the latest choice before the next one.
+  it('waits for a running plugin reply before applying the saved model on the next send', async () => {
+    const providerId = 'acp-plugin:sample:engine';
+    let model = 'first';
+    let idle = false;
+    let saved = 'second';
+    const setModel = vi.fn(async (_id: string, route: { model: string }) => { model = route.model; });
+    const accepted = vi.fn(async () => {});
+    const reconcile = createBotModelRouteReconciler({
+      ownerEpoch: () => 'owner',
+      read: async () => ({
+        current: { agentKind: 'acp', model, providerId, effort: null, fastMode: false },
+        chain: [{ harness: 'acp', model: saved, providerId, effort: '', fastMode: false }], hasRuntimeOverride: false,
+      }),
+      apply: createBotModelRouteApplier({ stage: setModel, isIdle: () => idle,
+        applyPendingSwitch: async () => {}, hasPendingSwitch: () => false, onApplied: accepted }),
+    });
+    await expect(reconcile.profileChanged('companion')).rejects.toThrow('Saved companion route is still pending');
+    saved = 'latest';
+    await expect(reconcile.profileChanged('companion')).rejects.toThrow('Saved companion route is still pending');
+    expect(setModel).not.toHaveBeenCalled();
+    expect(accepted).not.toHaveBeenCalled();
+    idle = true;
+    await reconcile('companion', true);
+    expect(model).toBe('latest');
+    expect(setModel).toHaveBeenCalledOnce();
+    expect(accepted).toHaveBeenCalledOnce();
+  });
+
   // 依据：用户反馈（2026-11-20）「模型组设置好，伙伴还是不能用」；model-groups.md §6.2。
   // 生产入口：reconcile / preview。可观察结果：首选是模型组时套用的是组挑出的来源，套用成功后才记一次选择；
   // 预览只看不记；组用不了时按存下的具体模型。最小失败输入：首选带 modelGroup 的链。tier：unit。

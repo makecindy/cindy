@@ -91,6 +91,11 @@ export function createBotModelRouteApplier(deps: {
   onApplied(sessionId: string): Promise<void>;
 }) {
   return async (sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<RuntimeRoute> => {
+    // A same-plugin model change goes directly to ACP. Keep the saved choice pending until that prompt is finished.
+    if (current.agentKind === 'acp' && route.agentKind === 'acp'
+      && current.providerId === route.providerId && !deps.isIdle(sessionId)) {
+      throw new ScheduledModelSelectionBusyError('Saved companion route is still pending');
+    }
     const resolved = await deps.stage(sessionId, route, current) ?? route;
     if (deps.isIdle(sessionId)) await deps.applyPendingSwitch(sessionId);
     // Same-Harness choices wait in runtime control, not the Harness registry.

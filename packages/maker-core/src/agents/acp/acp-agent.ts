@@ -248,9 +248,11 @@ export class AcpAgent extends BaseAgent {
           ...(hosted ? { requiredMcpServers: [DEVICE_HOSTED_EXEC_MCP_SERVER] } : {}),
           ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
           ...(opts.model ? { model: opts.model } : {}),
+          ...(opts.botRuntimeProfile ? { requireSelectedModel: true } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
           ...(briefing ? { briefing } : {}),
+          ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           logger,
           onEnded: disposeBridge,
         });

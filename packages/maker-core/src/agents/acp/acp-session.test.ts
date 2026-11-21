@@ -982,6 +982,51 @@ describe('AcpAgent (the acp engine)', () => {
   // 依据：docs/product-rules/cindy-bots-runtime.md §5，不改动内置引擎提示词，ACP 走首轮 briefing。
   // 覆盖缺口：此前 AcpAgent 只转发 pluginEngineBriefing 与 pluginEngineTrustedCaller，忽略 botProfile* 字段。
   // 最小失败输入与 tier：unit，带 botProfilePrompt / botProfileContextPrompt / makerMemoryIndexSnapshot / botUserProfilePrompt 启动并发送首条消息。
+  // A plugin may change its catalogue between saving the companion and starting its chat.
+  it.each(['missing', 'refused', 'kept-previous'] as const)('never sends a companion message on a different model: %s', async condition => {
+    const offered = { id: 'model', category: 'model', name: 'Model', type: 'select', currentValue: 'first',
+      options: [{ value: 'first', name: 'First' }, ...(condition === 'missing' ? [] : [{ value: 'chosen', name: 'Chosen' }])] };
+    const fake = createFakeAgent({ configOptions: [offered], handlers: { 'session/set_config_option': () => {
+      if (condition === 'refused') throw new Error('Model selection refused');
+      return { configOptions: [offered] };
+    } } });
+    const engine = createAcpAgent(() => fake.transport);
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    await expect(engine.startSession({ workingDir: '/w', model: 'chosen', providerId: 'acp-plugin:sample:engine',
+      botRuntimeProfile: { botId: 'research', profileVersion: 1, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+    })).rejects.toThrow(/model/i);
+    expect(fake.prompts).toHaveLength(0);
+    expect(fake.closedByClient).toBe(true);
+  });
+
+  // A profile edit rebuilds the runtime around the same native history. Only current companion context is replayable.
+  it.each([
+    { method: 'session/resume', caps: { sessionCapabilities: { resume: {} } } },
+    { method: 'session/load', caps: { loadSession: true } },
+  ])('restores the current companion profile once with $method and keeps the engine default', async ({ method, caps }) => {
+    const fake = createFakeAgent({ agentCapabilities: caps, handlers: { [method]: () => ({}) } });
+    const engine = createAcpAgent(() => fake.transport);
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    const handle = await engine.startSession({
+      workingDir: '/w', model: 'default', providerId: 'acp-plugin:sample:engine', resumeSessionId: 'old-1',
+      botRuntimeProfile: { botId: 'research', profileVersion: 2, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+      botProfilePrompt: 'Your new name is Lantern.', botUserProfilePrompt: 'The user now prefers short answers.',
+      pluginEngineBriefing: 'One-time handoff.',
+    });
+    expect(fake.methods()).toEqual(['initialize', method]);
+    await handle.send({ type: 'user', content: 'name?' });
+    await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+    expect(fake.prompts[0]!.params).toMatchObject({ sessionId: 'old-1', prompt: [
+      { type: 'text', text: 'Your new name is Lantern.\n\nThe user now prefers short answers.' }, { type: 'text', text: 'name?' },
+    ] });
+    fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.send({ type: 'user', content: 'again?' });
+    await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+    expect(fake.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'again?' }]);
+    fake.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.close();
+  });
+
   it('sends as the companion with its selected plugin model and receives the reply', async () => {
     const offered = { id: 'model', category: 'model', name: 'Model', type: 'select', currentValue: 'first',
       options: [{ value: 'first', name: 'First' }, { value: 'chosen', name: 'Chosen' }] };
@@ -1037,6 +1082,8 @@ describe('AcpAgent (the acp engine)', () => {
     fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
     await readReply;
     expect(events).toContainEqual(expect.objectContaining({ type: 'text', data: expect.objectContaining({ text: 'Hello from the chosen model.' }) }));
+    await handle.setModel?.('default');
+    expect(handle.model).toBe('first');
     await handle.close();
   });
 });
