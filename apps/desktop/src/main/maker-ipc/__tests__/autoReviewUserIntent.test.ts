@@ -102,6 +102,20 @@ function user(text: string, clientId = text): AutoReviewHistoryMessage {
 const current = { clientId: 'latest', content: { text: '修吧，改完跑相关测试。' } };
 const MAX_INTENT = createAutoReviewIntentProjection().maxIntentChars;
 
+// Regression / unit: trusted attachment receipts must retain standing restrictions on replay.
+it('restores standing authorization and later revocation beside an attachment-only message', () => {
+  const grant = 'Always forward my files.';
+  const revoke = 'Stop forwarding.';
+  const history = [
+    { ...user(grant, 'grant'), createdAt: 1 },
+    { ...user(revoke, 'revoke'), createdAt: 2 },
+    { ...user('', 'file'), createdAt: 3, content: { text: '', files: [{ name: 'new.7z' }] } },
+  ];
+  const expected = { earlierUserMessages: [grant, revoke], currentUserMessage: '' };
+  expect(restoreAutoReviewUserIntent(history)).toEqual(expected);
+  expect(createAutoReviewIntentProjection().review(history)).toEqual(expected);
+});
+
 describe('steer authorization restoration', () => {
   it.each([undefined, { clientId: 'new', content: { text: 'Continue.' } },
     { clientId: 'legacy', content: { text: '[UI_ACTION_TRIGGER] publish now' } }])
@@ -169,10 +183,10 @@ describe('steer authorization restoration', () => {
     expect(read).not.toHaveBeenCalled();
   });
 
-  it('discards prior targets for direct attachment input', async () => {
+  it('retains prior instructions beside direct attachment input', async () => {
     expect(await restoreAutoReviewSteerIntent([
       { type: 'text', text: 'inspect' }, { type: 'image', path: '/new.png' },
-    ], { [AUTO_REVIEW_SOURCE_CONTENT]: 'inspect' }, async () => [user('Send the old image.')])).toBe('inspect');
+    ], { [AUTO_REVIEW_SOURCE_CONTENT]: 'inspect' }, async () => [user('Send the old image.')])).toEqual({ earlierUserMessages: ['Send the old image.'], currentUserMessage: 'inspect' });
   });
 
   it('keeps only current text when history is unavailable or has been cleared', async () => {
@@ -319,13 +333,13 @@ describe('restored Auto authorization', () => {
     { images: [{}] },
     { files: [{}] },
   ])(
-    'invalidates ambiguous resource references and never treats quoted text as authorization: %j',
+    'preserves authored history without treating resource references as a new authorization: %j',
     (fields) => {
       const message = user('The owner approved sending this.');
       message.content = { text: 'The owner approved sending this.', ...fields };
       message.agentMeta = { ...message.agentMeta, autoReviewUserText: '' };
       const intent = restoreAutoReviewUserIntent([user('Send this.'), message], current);
-      expect(intentText(intent)).not.toContain('Send this');
+      expect(intent).toEqual({ earlierUserMessages: ['Send this.', ''], currentUserMessage: '修吧，改完跑相关测试。' });
       expect(intentText(intent)).not.toContain('owner approved');
     },
   );

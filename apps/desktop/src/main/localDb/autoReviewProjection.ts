@@ -32,6 +32,8 @@ export function readAutoReviewProjection(
   if (installed.count !== 4)
     throw new Error('Authorization projection invalidation is unavailable');
   type State = {
+    // Rebuild synchronized legacy payloads that discarded history on attachment input.
+    historyPolicy: 'preserve-authored-v1';
     sessionIntent: AutoReviewUserIntent;
     reviewIntent: AutoReviewUserIntent;
     lastEventAt: number;
@@ -55,6 +57,7 @@ export function readAutoReviewProjection(
     try {
       const value = JSON.parse(String(raw)) as State | null;
       return value &&
+        value.historyPolicy === 'preserve-authored-v1' &&
         typeof value.reviewUnverified === 'boolean' &&
         typeof value.sessionAmbiguous === 'boolean' &&
         Number.isFinite(value.lastEventAt) &&
@@ -86,7 +89,11 @@ export function readAutoReviewProjection(
         }
         if (projector.isSynthetic(row))
           return JSON.stringify(state);
-        const reset = projector.readText(row.content) === null;
+        const receipt = row.agentMeta?.autoReviewUserText;
+        const trusted = ['turn', 'steer'].includes(String(row.agentMeta?.delivery)) &&
+          (typeof receipt === 'string' || (!row.agentMeta?.sourcePlugin && !row.agentMeta?.sharedTaskAuthor &&
+            projector.verifiedOwnerRequestText(receipt) !== undefined));
+        const reset = !trusted;
         if (row.sessionId === target && !state.sessionAmbiguous) {
           const text = projector.restore([row]) as string;
           state.sessionIntent = projector.append(reset ? '' : state.sessionIntent, text);
@@ -121,6 +128,7 @@ export function readAutoReviewProjection(
       const own = history.filter((row) => row.sessionId === target);
       const review = projector.reviewState(history);
       return JSON.stringify({
+        historyPolicy: 'preserve-authored-v1',
         sessionIntent: projector.restore(history.filter((row) => row.sessionId === target)),
         reviewIntent: review.intent,
         reviewUnverified: review.unverified,
