@@ -34,7 +34,8 @@ const CODED_ERROR = /^\[([A-Z][A-Z0-9_]*)\] ([\s\S]*)$/;
 
 /**
  * A typed error's code and message, or null. Typed means all of: `error.code` is a string, the message
- * is `[CODE] message`, and the two codes are the same. Nothing else is serialised to a client.
+ * is `[CODE] message`, and the two codes are the same. An unfinished profile recovery
+ * also retains its allowlisted reason and replaces diagnostic text with the safe message.
  *
  * @param {unknown} error
  * @returns {{ code: string, message: string, reason?: 'HOST_PROFILE_RELEASE_FAILED' } | null}

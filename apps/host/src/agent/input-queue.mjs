@@ -1,4 +1,4 @@
-import { holdError, holdRefusal, releaseFailure } from './profile-hold.ts';
+import { holdError, releaseFailure } from './profile-hold.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
@@ -762,7 +762,6 @@ export function createInputQueue(deps) {
   };
   api.isHeldForDesktop = () => profileHold !== null;
   api.profileHoldReason = () => profileHold?.reason ?? null;
-  api.profileHoldMessage = () => profileHold ? holdRefusal(profileHold.reason).message : null;
   api.profileHoldGeneration = () => profileHoldGeneration;
   /**
    * The desktop is gone: open again only once no turn runs (false: still held, ask again later). The

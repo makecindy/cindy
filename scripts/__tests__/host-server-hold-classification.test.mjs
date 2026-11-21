@@ -40,3 +40,16 @@ test('every path server.mjs answers itself is classified for a desktop hold', ()
   assert.deepEqual([...found].filter(path => !(path in classified)).sort(), [], 'paths server.mjs answers that are not classified');
   assert.deepEqual(Object.keys(classified).filter(path => !found.has(path)).sort(), [], 'classified paths server.mjs no longer answers');
 });
+
+// Guard tier: the integration cases run the real queue and service factories;
+// moving only one main.ts caller to a boolean hold would leave those cases green.
+test('main binds all four profile writers and the installed memory MCP provider to the live queue', () => {
+  const main = fs.readFileSync(new URL('../../apps/host/src/main.ts', import.meta.url), 'utf8');
+  assert.match(main, /const profileServices = bindHostProfileServices\(\{\s*profileHoldReason: inputQueue\.profileHoldReason,\s*profileHoldGeneration: inputQueue\.profileHoldGeneration,/);
+  assert.match(main, /hostTools = profileServices\.tools\(/, 'host tools');
+  assert.match(main, /const memory = profileServices\.memory\(/, 'memory services');
+  assert.match(main, /makerMemory = memory\.manager;/);
+  assert.match(main, /mcpProviders: await pluginGateway\.prepareMcpProviders\(\[\.\.\.hostTools\.providers, \.\.\.memory\.providers\(/, 'installed memory MCP');
+  assert.match(main, /updateProjectInfo: profileServices\.project\(/, 'project update');
+  assert.match(main, /const runtimePluginSettings = profileServices\.plugins\(/, 'task plugin settings');
+});

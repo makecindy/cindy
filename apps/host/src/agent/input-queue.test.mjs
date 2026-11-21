@@ -7350,7 +7350,7 @@ test('profile hold: a failed release keeps the reply for the next release to sav
   await assert.rejects(h.queue.releaseDesktopHold(), /Failed to drain task persistence/, 'an unsuccessful retry keeps the queue held');
   diskFull = false;
   assert.equal(await h.queue.releaseDesktopHold(), true);
-  assert.equal(h.queue.profileHoldMessage(), null);
+  assert.equal(h.queue.profileHoldReason(), null);
   assert.deepEqual(saved.filter(row => row.role === 'assistant').map(row => row.content), ['the original reply']);
   assert.deepEqual(session.sent, ['run once']);
 });

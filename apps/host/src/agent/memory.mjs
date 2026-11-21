@@ -68,6 +68,7 @@ export function createHostMemoryManager({ userDataDir, ownerId, review, profileH
 /**
  * The cindy_memory MCP server; Codex reaches it through the Host MCP bridge (mcp-runtime codexDeps), checked by codex-runtime.e2e.mjs.
  * The port bag is written out in memory-mcp-ports.ts, where `explicitPorts` is type-checked.
+ * @param {ReturnType<typeof createHostMemoryManager>} manager
  * @param {import('./memory-mcp-ports.ts').HostMemoryMcpPortInput} ports
  */
 export function createHostMemoryMcpProviders(manager, ports) {
