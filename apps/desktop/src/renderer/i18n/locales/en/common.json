@@ -2847,6 +2847,7 @@
         "dialogueDirectoryOpen": "Open directory",
         "dialogueDirectoryChoose": "Change directory",
         "dialogueDirectoryReset": "Restore default location",
+        "dialogueDirectoryUnavailable": "The chat workspace is unavailable. In Storage settings, change the directory or restore the default location.",
         "dialogueDirectoryFailed": "Could not update the chat workspace. Check that the selected folder is writable and try again.",
         "dialogueDirectoryDefault": "Default",
         "dialogueDirectoryFullPath": "Full path",

@@ -2847,6 +2847,7 @@
         "dialogueDirectoryOpen": "Verzeichnis öffnen",
         "dialogueDirectoryChoose": "Verzeichnis ändern",
         "dialogueDirectoryReset": "Standardspeicherort wiederherstellen",
+        "dialogueDirectoryUnavailable": "Der Chat-Arbeitsbereich ist nicht verfügbar. Ändere in den Speichereinstellungen das Verzeichnis oder stelle den Standardspeicherort wieder her.",
         "dialogueDirectoryFailed": "Der Chat-Arbeitsbereich konnte nicht aktualisiert werden. Prüfe, ob der ausgewählte Ordner beschreibbar ist, und versuche es erneut.",
         "dialogueDirectoryDefault": "Standard",
         "dialogueDirectoryFullPath": "Vollständiger Pfad",

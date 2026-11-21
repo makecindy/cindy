@@ -2885,6 +2885,7 @@
         "dialogueDirectoryOpen": "Ouvrir le répertoire",
         "dialogueDirectoryChoose": "Changer de répertoire",
         "dialogueDirectoryReset": "Rétablir l'emplacement par défaut",
+        "dialogueDirectoryUnavailable": "L’espace de travail des conversations est indisponible. Dans les paramètres de stockage, changez de répertoire ou rétablissez l’emplacement par défaut.",
         "dialogueDirectoryFailed": "Impossible de mettre à jour l'espace de travail des conversations. Vérifiez que le dossier sélectionné est accessible en écriture et réessayez.",
         "dialogueDirectoryDefault": "Par défaut",
         "dialogueDirectoryFullPath": "Chemin complet",

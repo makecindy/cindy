@@ -2817,6 +2817,7 @@
         "dialogueDirectoryOpen": "啟目錄",
         "dialogueDirectoryChoose": "易目錄",
         "dialogueDirectoryReset": "復預設處",
+        "dialogueDirectoryUnavailable": "言談工作區不可用。可往儲存空間易目錄，或復預設處",
         "dialogueDirectoryFailed": "言談工作區未能更新，請確認所擇目錄可寫後再試。",
         "dialogueDirectoryDefault": "常例",
         "dialogueDirectoryFullPath": "全路徑",

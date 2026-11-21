@@ -2817,6 +2817,7 @@
         "dialogueDirectoryOpen": "フォルダーを開く",
         "dialogueDirectoryChoose": "フォルダーを変更",
         "dialogueDirectoryReset": "既定の保存先に戻す",
+        "dialogueDirectoryUnavailable": "チャットワークスペースを利用できません。ストレージ設定でフォルダーを変更するか、既定の保存先に戻してください。",
         "dialogueDirectoryFailed": "チャットワークスペースを更新できませんでした。選択したフォルダーに書き込めることを確認して、もう一度お試しください。",
         "dialogueDirectoryDefault": "既定",
         "dialogueDirectoryFullPath": "フルパス",

@@ -2885,6 +2885,7 @@
         "dialogueDirectoryOpen": "Abrir directorio",
         "dialogueDirectoryChoose": "Cambiar directorio",
         "dialogueDirectoryReset": "Restaurar ubicación predeterminada",
+        "dialogueDirectoryUnavailable": "El espacio de conversación no está disponible. Cambia el directorio o restaura la ubicación predeterminada en los ajustes de almacenamiento.",
         "dialogueDirectoryFailed": "No se pudo actualizar el espacio de conversación. Comprueba que se pueda escribir en la carpeta seleccionada y vuelve a intentarlo.",
         "dialogueDirectoryDefault": "Predeterminado",
         "dialogueDirectoryFullPath": "Ruta completa",

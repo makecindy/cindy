@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { DIALOGUE_WORKSPACE_UNAVAILABLE } from '../../shared/dialogueWorkspaceSettings.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { dialogueWorkspaceRoots, readDialogueWorkspaceSettings } from '../dialogue-workspace-settings.js';
 import { matchDialogueWorkspacePath } from './dialogueWorkdirSelfHeal.js';
 
@@ -58,12 +60,20 @@ export function ensureDialogueWorkspaceDir(sessionId: string, nowMs: number): st
   // Custom roots are created by the picker. Never recreate a missing root or its
   // ancestors: an unmounted volume may leave a writable local mount point behind.
   // Non-recursive creation also fails if the root disappears between these steps.
-  for (const child of [dayDir, dir]) {
-    try {
-      fs.mkdirSync(child);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !fs.statSync(child).isDirectory()) throw error;
+  try {
+    for (const child of [dayDir, dir]) {
+      try {
+        fs.mkdirSync(child);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !fs.statSync(child).isDirectory()) throw error;
+      }
     }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      throwIpcError('PRECONDITION_FAILED', DIALOGUE_WORKSPACE_UNAVAILABLE);
+    }
+    throw error;
   }
   return dir;
 }
