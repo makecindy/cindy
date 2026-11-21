@@ -3700,6 +3700,7 @@ async function createCodexProxyHandle(
     }
     : modelRoute;
   const frozenReasoning = createCustomProviderReasoningTransform(frozenCustomProviderRoutes);
+  const lateReplayRequests = new WeakSet<Readonly<Record<string, string>>>();
   const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
     observeDownshiftRequest(body, ctx);
     const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
@@ -3712,6 +3713,17 @@ async function createCodexProxyHandle(
         providerId: customProviderId ?? gatewayProviderIdForRewrittenModel(model) ?? context.providerId ?? guestProviderId
           ?? (gatewayProviderIdForRewrittenModel(model) ? null : (frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : null),
       }, ctx);
+      const rewrite = decision?.transformRequestBody;
+      if (decision && rewrite && !decision.localHandler && isCodexCustomProviderNamespacePath(ctx.url) && isResponsesReplayPath(ctx.url)) {
+        lateReplayRequests.add(ctx.headers);
+        decision = { ...decision, transformRequestBody: async (raw, transformCtx) => {
+          const rewritten = await rewrite(raw, transformCtx);
+          let parsed: unknown;
+          try { parsed = JSON.parse(rewritten.body.toString('utf8')); } catch { return rewritten; }
+          const normalized = normalizeReplayCallIds(parsed, transformCtx);
+          return normalized ? { ...rewritten, body: Buffer.from(JSON.stringify(normalized)) } : rewritten;
+        } };
+      }
       if (!decision?.localHandler && guestProviderId && isOpenAiSubscriptionProviderId(guestProviderId)) return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
       if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
         || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
@@ -3808,7 +3820,7 @@ async function createCodexProxyHandle(
         );
       }
       return reconciled;
-    }, { errorMode: 'reject-request' as const }), normalizeReplayCallIds),
+    }, { errorMode: 'reject-request' as const }), (body, ctx) => lateReplayRequests.has(ctx.headers) ? null : normalizeReplayCallIds(body, ctx)),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);

@@ -10535,10 +10535,13 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       received.push({ path: req.url ?? '', body: JSON.parse(Buffer.concat(chunks).toString()),
         key: String(req.headers.authorization), account: req.headers['chatgpt-account-id'] });
-      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+      const input = received.at(-1)?.body.input as Array<{ call_id?: string }>;
+      const overlong = (input?.[0]?.call_id?.length ?? 0) > 64;
+      res.writeHead(overlong ? 400 : 200, { 'content-type': 'application/json' }).end(JSON.stringify(overlong
+        ? { error: { message: "Invalid 'input[0].call_id': maximum length 64." } } : {}));
     });
     await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
-    const host = await freshCodexProxyHost();
+    const host = await freshCodexProxyHost(true);
     const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
     mockState.createAnthropicCompatProxy.mockImplementationOnce(actual.createAnthropicCompatProxy);
     const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
@@ -10550,7 +10553,10 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
     const providers = ['parent', 'child', 'nested'].map(id => buildUserProvider({
       id: `cprov-${id}`, name: id, runtimes: { codex: {
         baseUrl: `${endpoint}/${id}`, wireProtocol: 'openai-responses', supportsImageGeneration: true,
-        models: [{ id: `${id}-model`, name: id, reasoning: true, reasoningEfforts: ['high'] }],
+        models: [
+          { id: `${id}-model`, name: id, reasoning: true, reasoningEfforts: ['high'] },
+          ...(id === 'parent' ? [{ id: 'second-parent-model', name: 'Second', reasoning: true, reasoningEfforts: ['high'] as Array<'high'> }] : []),
+        ],
       } },
     }));
     const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, ...providers] };
@@ -10570,12 +10576,12 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
     try {
       await host.ensureCodexCustomContextProxyReady('smart-namespace', 'provider-oauth', routes);
       const proxy = host.getCodexCustomContextProxyEndpoint('smart-namespace');
-      const post = async (model: string, thread: string, parentThread?: string, kind = 'collab_spawn', routeId = parent.routeId) => {
+      const post = async (model: string, thread: string, parentThread?: string, kind = 'collab_spawn', routeId = parent.routeId, input: unknown[] = []) => {
         const response = await fetch(`${proxy}/_cindy/custom-provider/${routeId}/responses`, {
           method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': thread,
             'chatgpt-account-id': 'must-not-leak',
             ...(parentThread ? { 'x-codex-parent-thread-id': parentThread, 'x-openai-subagent': kind } : {}) },
-          body: JSON.stringify({ model, input: [], vendor_field: 'retain', reasoning: { effort: 'low', summary: 'auto' } }),
+          body: JSON.stringify({ model, input, vendor_field: 'retain', reasoning: { effort: 'low', summary: 'auto' } }),
         });
         await response.text();
         return response.status;
@@ -10615,6 +10621,21 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       expect(received.at(-1)).toMatchObject({ path: '/child/responses', body: { model: 'child-model', reasoning: { effort: 'high' } } });
       expect(await post('nested-model', 'locked-nested', 'locked')).toBe(200);
       expect(received.at(-1)?.body.model).toBe('child-model');
+      host.unregister('smart-source');
+      host.registerComposed('smart-source', 'root', 'fixture', {
+        subagentRoute: { providerId: 'cprov-parent', catalogModel: 'second-parent-model', reasoningEffort: 'high' },
+      });
+      const long = 'x'.repeat(86);
+      const history = [
+        { type: 'function_call', call_id: long, name: 'probe', arguments: '{}' },
+        { type: 'function_call_output', call_id: long, output: 'ok' },
+      ];
+      const firstHit = received.length;
+      expect(await post('parent-model', 'same-provider-locked', 'root', 'collab_spawn', parent.routeId, history)).toBe(200);
+      expect(received).toHaveLength(firstHit + 2);
+      expect(await post('parent-model', 'same-provider-locked', 'root', 'collab_spawn', parent.routeId, history)).toBe(200);
+      expect(received).toHaveLength(firstHit + 3);
+      expect(received.slice(firstHit).map(entry => entry.body.model)).toEqual(Array(3).fill('second-parent-model'));
       // A credential read is an await boundary in route resolution: neither a
       // committed mutation nor unregister may dispatch the captured old decision.
       for (const change of ['mutation', 'unregister'] as const) {
