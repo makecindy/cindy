@@ -83,6 +83,13 @@ export interface QuotaPanelDeps {
 }
 
 const running = new Set<QuotaPanelController>();
+let panelGlass: Pick<MenubarView, 'liquidGlass' | 'liquidGlassClarity'> = {};
+
+export function updateQuotaPanelsLiquidGlass(enabled: boolean, clarity: number): void {
+  if (panelGlass.liquidGlass === enabled && panelGlass.liquidGlassClarity === clarity) return;
+  panelGlass = { liquidGlass: enabled, liquidGlassClarity: clarity };
+  for (const panel of running) panel.refreshMaterial();
+}
 
 /** Remote-control activity changed; every running panel updates its indicator. */
 export function refreshQuotaPanelsControlState(): void {
@@ -259,8 +266,12 @@ export class QuotaPanelController {
     }
   }
 
+  refreshMaterial(): void {
+    if (this.lastView) this.show(this.lastView);
+  }
+
   private show(view: MenubarView): void {
-    this.lastView = { ...view, presentation: QUOTA_PANEL_DESIGN };
+    this.lastView = { ...view, presentation: QUOTA_PANEL_DESIGN, ...panelGlass };
     this.presenter.publish(this.lastView);
   }
 

@@ -51,7 +51,7 @@ const GRADIENT_REGISTRY: Record<string, { count: number; reason: string }> = {
   'features/right-sidebar/TabBar.tsx': { count: 1, reason: '标签栏横向滚动的边缘渐隐遮罩' },
   'features/right-sidebar/plugins/review/DiffViewer/ImageDiffPreview.tsx': { count: 4, reason: '透明底棋盘格，不是视觉渐变' },
   'styles/quota-tray.css': { count: 4, reason: 'Windows 托盘额度卡片：与 macOS 菜单栏面板相同的液柱玻璃槽，以及代替系统模糊材质的卡片背景（§2；2026-11-18 负责人裁决保留，PR #11277）' },
-  'styles/globals.css': { count: 38, reason: '字标扫光、折扣模型名的预算渐变（§2、§15.4）、列表与输入框的边缘渐隐遮罩（含桌面背景下消息列表底部的渐隐）、单色叠层、输入框停止按钮的 AI 工作发光（§2、§14.4；2026-11-18 负责人确认）' },
+  'styles/globals.css': { count: 40, reason: '字标扫光、折扣模型名的预算渐变（§2、§15.4）、列表与输入框的边缘渐隐遮罩（含桌面背景下消息列表底部的渐隐）、液态玻璃高光与侧栏染色（§15.12）、单色叠层、输入框停止按钮的 AI 工作发光（§2、§14.4；2026-11-18 负责人确认）' },
 };
 
 /** 这些是没有 Button 变体的裸按钮框，`enabled:hover:` 不会输给变体。 */

@@ -5437,6 +5437,14 @@
       "toggleAria": "切換回覆文字漸顯效果"
     },
     "personalization": {
+      "liquidGlass": {
+        "clarity": "通透度",
+        "clarityHint": "數值越高，越能看清玻璃後方的背景。",
+        "section": "介面材質",
+        "label": "液態玻璃",
+        "hint": "為側欄、輸入框、選單和浮層套用玻璃效果。",
+        "saveFailed": "無法儲存液態玻璃設定。"
+      },
       "title": "個人化",
       "subtitle": "自訂提示詞",
       "description": "為你的助手提供額外的指令和上下文。",

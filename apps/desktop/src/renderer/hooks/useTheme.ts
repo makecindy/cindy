@@ -381,7 +381,7 @@ export function ThemeProvider({
       const covered = root.dataset.wallpaperActive === 'true';
       const desktopBlur = root.dataset.desktopBackground === 'true'
         ? Number(root.dataset.desktopBlur ?? 0) : null;
-      const state = `${covered}:${desktopBlur}`;
+      const state = `${covered}:${desktopBlur}:${root.dataset.liquidGlass}:${root.dataset.liquidGlassClarity}`;
       if (state === lastState) return;
       lastState = state;
       window.electronAPI?.theme?.applyVibrancy?.(
@@ -395,7 +395,7 @@ export function ThemeProvider({
     };
     sync();
     const observer = new MutationObserver(sync);
-    observer.observe(root, { attributes: true, attributeFilter: ['data-wallpaper-active', 'data-desktop-background', 'data-desktop-blur'] });
+    observer.observe(root, { attributes: true, attributeFilter: ['data-wallpaper-active', 'data-desktop-background', 'data-desktop-blur', 'data-liquid-glass', 'data-liquid-glass-clarity'] });
     return () => observer.disconnect();
   }, [familyId, localThemeRev, syncWindowVibrancy, theme, systemPrefersDark]);
 

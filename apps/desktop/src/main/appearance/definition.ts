@@ -10,6 +10,7 @@ const resetKeys: Record<string, readonly (keyof AppearanceOverrides)[]> = {
   codeFont: ['codeFamily', 'codeSize', 'codeFontResource', 'codeFontTraits'],
   bodyFont: ['bodyFont', 'bodyFontResource'],
   terminalFont: ['terminalFamily', 'terminalSize', 'terminalFontResource'],
+  interfaceMaterial: ['liquidGlass', 'liquidGlassClarity'],
   wallpaper: ['wallpaperId', 'wallpaperOverlay', 'wallpaperMotion', 'wallpaperVisibility', 'wallpaperBlur'],
   theme: ['themeColors'], reading: ['reading'], contentStyle: ['contentStyle'], density: ['density'], motion: ['motion'],
 };

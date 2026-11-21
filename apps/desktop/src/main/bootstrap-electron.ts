@@ -21,7 +21,7 @@ import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
 import { WindowsQuotaPanel } from './quota-overview/windowsPanel.js';
 import { startDesktopWidgets } from './quota-overview/desktopWidgets.js';
-import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
+import { refreshQuotaPanelsControlState, updateQuotaPanelsLiquidGlass } from './quota-overview/panelController.js';
 import { getQuotaOverviewService, readUsageWidgetSnapshot } from './quota-overview/service.js';
 import {
   createLatestSourceVersionReader,
@@ -1206,6 +1206,7 @@ import {
   applyAppearanceToWindow,
   applyAppearanceToWindows,
   getPersistedWindowZoom,
+  getPersistedGlassMaterial,
   installWindowZoomRestoration,
   registerAppearanceSettingsIpc,
   updatePersistedWindowZoom,
@@ -4611,11 +4612,11 @@ const createWindow = () => {
           persistedTheme?.resolvedIsDark,
         )
       : nativeTheme.shouldUseDarkColors;
-  const bgColor = process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
     isDark,
     process.platform,
+    { liquidGlass: getPersistedGlassMaterial().liquidGlass },
   );
   // Windows: a transparent window flickers under a system backdrop (see vibrancyConfig).
   const windowTransparent =
@@ -4700,7 +4701,8 @@ const createWindow = () => {
       : path.join(__dirname, '../../resources/icon.png'),
     autoHideMenuBar: true,
     show: false,
-    backgroundColor: bgColor,
+    // macOS needs an alpha-capable backing from creation for later backdrop changes.
+    backgroundColor: process.platform === 'darwin' ? '#00000000' : winBackdropConfig.backgroundColor,
     transparent: windowTransparent,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
@@ -4708,7 +4710,7 @@ const createWindow = () => {
           backgroundColor: winBackdropConfig.backgroundColor,
         }
       : {}),
-    ...(process.platform === 'darwin' ? { vibrancy: 'hud' as const } : {}), // 创建期材质与缺省定稿一致(hud);运行时按主题族经 applyWindowVibrancy 修正
+    ...(process.platform === 'darwin' && winBackdropConfig.vibrancy ? { vibrancy: 'hud' as const } : {}),
     acceptFirstMouse: !swallowActivationClick,
     ...platformOptions,
     webPreferences: {
@@ -5316,6 +5318,8 @@ const registerIpcHandlers = () => {
   });
 
   // macOS 菜单栏余量:原生 helper 在 Agent Island 之后启动,复用它的任务活动订阅。
+  const glassMaterial = getPersistedGlassMaterial();
+  updateQuotaPanelsLiquidGlass(glassMaterial.liquidGlass, glassMaterial.clarity);
   initMenubarService({
     openNewTask: () => {
       const win = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
@@ -5487,7 +5491,9 @@ const registerIpcHandlers = () => {
   function applyWindowVibrancy(familyId: string, isDark: boolean): void {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return;
-    const requested = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
+    const { liquidGlass, clarity } = getPersistedGlassMaterial();
+    updateQuotaPanelsLiquidGlass(liquidGlass, clarity);
+    const requested = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform, { liquidGlass });
     const config =
       process.platform === 'win32'
         ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))
@@ -5504,7 +5510,7 @@ const registerIpcHandlers = () => {
     setWindowsWindowDarkMode(win, isDark);
     if (process.platform === 'darwin') applyMacWindowBackdrop(win, config);
     else win.setBackgroundColor(config.backgroundColor);
-    applyVibrancyToSecondaryWindows(familyId, isDark);
+    applyVibrancyToSecondaryWindows(familyId, isDark, liquidGlass);
   }
 
   // Ephemeral local geometry, scoped to the trusted top-level sender's own window.

@@ -6,7 +6,7 @@ export const COMPOSER_CONTENT_CLASS =
   'relative flex min-h-[86px] w-full flex-col justify-between px-[11px] pt-[11px] pb-[6px]';
 
 export function ComposerCard({ framed = true, className, ...props }: ComponentProps<'div'> & { framed?: boolean }) {
-  return <div {...props} className={cn(
+  return <div {...props} data-composer-card={framed ? 'true' : undefined} className={cn(
     framed && 'rounded-xl border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)] transition-colors focus-within:border-[var(--chat-input-border-focus)]',
     className,
   )} />;

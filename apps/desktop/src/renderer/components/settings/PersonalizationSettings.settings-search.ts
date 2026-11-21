@@ -1,3 +1,4 @@
+import { supportsLiquidGlass } from '../../../shared/appearanceSettings';
 import { TAB_LABEL_KEY } from '@/lib/tabLabels';
 import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes';
 
@@ -57,6 +58,28 @@ export const personalizationSettings = defineSettings({
     titleKey: 'settings.sections.terminalShell',
     sectionKey: 'settings.sections.terminalShell',
     aliases: ['terminal', 'shell', '终端'],
+  },
+  liquidGlass: {
+    id: 'settings.personalization.liquidGlass.label',
+    tab: 'personalization',
+    targetId: 'settings-search-target-personalization-liquid-glass',
+    fallbackTargetId: 'settings-panel-personalization',
+    titleKey: 'settings.personalization.liquidGlass.label',
+    descriptionKey: 'settings.personalization.liquidGlass.hint',
+    sectionKey: 'settings.personalization.liquidGlass.section',
+    aliases: ['液体玻璃', '液態玻璃', '液體玻璃', 'Liquid Glass'],
+    isVisible: ({ platform }) => supportsLiquidGlass(platform),
+  },
+  liquidGlassClarity: {
+    id: 'settings.personalization.liquidGlass.clarity',
+    tab: 'personalization',
+    targetId: 'settings-search-target-personalization-liquid-glass-clarity',
+    fallbackTargetId: 'settings-panel-personalization',
+    titleKey: 'settings.personalization.liquidGlass.clarity',
+    descriptionKey: 'settings.personalization.liquidGlass.clarityHint',
+    sectionKey: 'settings.personalization.liquidGlass.section',
+    aliases: ['玻璃透明度', '玻璃通透度', 'glass clarity', 'glass transparency'],
+    isVisible: ({ platform }) => supportsLiquidGlass(platform),
   },
   linkOpen: {
     id: 'personalization.linkOpen',

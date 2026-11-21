@@ -98,6 +98,33 @@ describe('terminal appearance overrides', () => {
     expect(readAppearanceSettingsState().value).toEqual({ ...DEFAULT_APPEARANCE_SETTINGS, ...otherOverrides });
   });
 
+  // Unit: the real appearance store must keep an explicit false across reloads
+  // while an unset value continues to follow the platform default.
+  it('preserves both Liquid Glass choices in the appearance file', async () => {
+    const file = path.join(fixture.userData, 'appearance-settings.json');
+    expect(readAppearanceSettingsState().value.liquidGlass).toBeUndefined();
+    for (const liquidGlass of [true, false]) {
+      await expect(writeAppearanceSettingsPatch({ liquidGlass })).resolves.toMatchObject({ liquidGlass });
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ liquidGlass });
+      expect(readAppearanceSettingsState().value.liquidGlass).toBe(liquidGlass);
+    }
+    await writeAppearanceSettingsPatch({ liquidGlassClarity: 73 });
+    await writeAppearanceSettingsPatch({ liquidGlass: true });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ liquidGlass: true, liquidGlassClarity: 73 });
+    await writeAppearanceSettingsPatch({ liquidGlass: false });
+    expect(readAppearanceSettingsState().value.liquidGlassClarity).toBe(73);
+    await resetAppearanceSettings();
+    expect(readAppearanceSettingsState().value.liquidGlass).toBeUndefined();
+    expect(readAppearanceSettingsState().value.liquidGlassClarity).toBeUndefined();
+  });
+
+  // Unit: a profile that has never customized glass must accept both incoming
+  // fields through the same portable settings entry point as device setup.
+  it('imports liquid glass preferences into a fresh profile', async () => {
+    await appearancePortableSettings.applyPatch(() => ({ liquidGlass: false, liquidGlassClarity: 73 }));
+    expect(readAppearanceSettingsState().value).toMatchObject({ liquidGlass: false, liquidGlassClarity: 73 });
+  });
+
   it('does not persist a defaults snapshot when restoring the only terminal override', async () => {
     const file = path.join(fixture.userData, 'appearance-settings.json');
     await writeAppearanceSettingsPatch({ terminalSize: 20 });

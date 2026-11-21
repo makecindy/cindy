@@ -5474,6 +5474,14 @@
       }
     },
     "personalization": {
+      "liquidGlass": {
+        "clarity": "Transparencia",
+        "clarityHint": "Cuanto más alto sea el valor, más se verá el fondo a través del cristal.",
+        "section": "Material de la interfaz",
+        "label": "Liquid Glass",
+        "hint": "Aplica un acabado de cristal a la barra lateral, el cuadro de mensajes, los menús y las ventanas emergentes.",
+        "saveFailed": "No se pudo guardar el ajuste de Liquid Glass."
+      },
       "title": "Personalización",
       "subtitle": "Instrucciones personalizadas",
       "description": "Da a tus asistentes instrucciones y contexto adicionales.",

@@ -41,6 +41,12 @@ describe('Windows Acrylic resize backing contract', () => {
     );
   });
 
+  it('keeps the macOS creation backing transparent when the resolved material is opaque', () => {
+    const creationBacking = "backgroundColor: process.platform === 'darwin' ? '#00000000' : winBackdropConfig.backgroundColor";
+    expect(bootstrapSource).toContain(creationBacking);
+    expect(secondaryWindowsSource).toContain(creationBacking);
+  });
+
   it('publishes the actual window material to a root data attribute', () => {
     expect(bootstrapSource).toContain(
       "createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none')",
@@ -78,10 +84,10 @@ describe('Windows Acrylic resize backing contract', () => {
     );
     expect(globalsSource).toContain('aside.bg-sidebar:not([data-sidebar-peek-drawer])');
     expect(globalsSource).toMatch(
-      /aside\.bg-sidebar:not\(\[data-sidebar-peek-drawer\]\)[\s\S]*?\{\s*background:\s*transparent;/,
+      /aside\.bg-sidebar:not\(\[data-sidebar-peek-drawer\]\)[\s\S]*?\{\s*background-color:\s*transparent;/,
     );
     expect(globalsSource).toMatch(
-      /aside\.bg-sidebar\[data-sidebar-peek-drawer\][\s\S]*?background:\s*var\(--surface-translucent-sidebar\);[\s\S]*?backdrop-filter:\s*blur\(28px\);/,
+      /aside\.bg-sidebar\[data-sidebar-peek-drawer\][\s\S]*?background-color:\s*var\(--surface-translucent-sidebar\);[\s\S]*?backdrop-filter:\s*blur\(28px\);/,
     );
   });
 });

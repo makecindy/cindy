@@ -2500,7 +2500,7 @@ html:is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(.l
 }
 [data-theme='cindy-light'] aside.bg-sidebar > .sidebar-frost,
 [data-theme='cindy-dark'] aside.bg-sidebar > .sidebar-frost {
-  background: var(--surface-translucent-sidebar);
+  background-color: var(--surface-translucent-sidebar);
 }
 /* Windows Acrylic 的 BrowserWindow backing 已在创建期铺同一份 85% 侧栏染色，确保快速
    扩窗时原生新区域先显示正确颜色。常规侧栏让 backing 直接透出，避免 CSS 再叠一遍导致
@@ -2510,14 +2510,14 @@ html:is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(.l
   aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost,
 [data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']:not([data-desktop-background='true'])
   aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
-  background: transparent;
+  background-color: transparent;
 }
 /* Sidebar peek 抽屉是 fixed overlay,它覆盖的是应用内容而不是窗外壁纸;这里需要
    单独 blur 被覆盖的应用 UI,避免 hover 预览时正文直接透出来。常规展开态仍交给
    原生 vibrancy,非 CINDY family 不命中。 */
 [data-theme='cindy-light'] aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost,
 [data-theme='cindy-dark'] aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost {
-  background: var(--surface-translucent-sidebar);
+  background-color: var(--surface-translucent-sidebar);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
 }
@@ -2537,7 +2537,7 @@ html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowCon
 /* 模式3 浮层卡:blur 6px + surface-translucent-overlay(cmd-palette/popover 类) */
 [data-theme='cindy-light'] .bg-\[var\(--cmd-palette-bg\)\],
 [data-theme='cindy-dark'] .bg-\[var\(--cmd-palette-bg\)\] {
-  background: var(--surface-translucent-overlay);
+  background-color: var(--surface-translucent-overlay);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -2545,9 +2545,9 @@ html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowCon
    backdrop-filter 可能渲染成黑块(§15.12,菜单常在侧栏上方打开),集显 / 软件渲染有性能风险,
    Windows 原生材质也未实机验证。回落 --cmd-palette-bg 本身(CINDY 下即 Card 面板色
    --surface-elevated),1px 描边与阴影不变。 */
-[data-platform='win32'][data-theme='cindy-light'] .bg-\[var\(--cmd-palette-bg\)\],
-[data-platform='win32'][data-theme='cindy-dark'] .bg-\[var\(--cmd-palette-bg\)\] {
-  background: var(--cmd-palette-bg);
+:where([data-platform='win32'])[data-theme='cindy-light'] .bg-\[var\(--cmd-palette-bg\)\],
+:where([data-platform='win32'])[data-theme='cindy-dark'] .bg-\[var\(--cmd-palette-bg\)\] {
+  background-color: var(--cmd-palette-bg);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -2632,8 +2632,8 @@ html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowCon
 [data-theme='cindy-dark'] {
   --menu-panel-surface: var(--surface-translucent-overlay);
 }
-[data-platform='win32'][data-theme='cindy-light'],
-[data-platform='win32'][data-theme='cindy-dark'] {
+:where([data-platform='win32'])[data-theme='cindy-light'],
+:where([data-platform='win32'])[data-theme='cindy-dark'] {
   --menu-panel-surface: var(--cmd-palette-bg);
 }
 [data-theme='cindy-light'] [data-menu-surface],
@@ -2641,8 +2641,8 @@ html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowCon
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
-[data-platform='win32'][data-theme='cindy-light'] [data-menu-surface],
-[data-platform='win32'][data-theme='cindy-dark'] [data-menu-surface] {
+:where([data-platform='win32'])[data-theme='cindy-light'] [data-menu-surface],
+:where([data-platform='win32'])[data-theme='cindy-dark'] [data-menu-surface] {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -2771,6 +2771,87 @@ html.dark:is([data-wallpaper-active='true'], [data-desktop-background='true']) {
   background-color: color-mix(in srgb, var(--wallpaper-glass-fill) var(--wallpaper-glass-opacity), transparent);
 }
 
+/* A single preference controls decorative glass. The wallpaper canvas,
+   desktop transparency, and wallpaper blur retain their own preferences. */
+html[data-liquid-glass='off'] :is(.bg-\[var\(--cmd-palette-bg\)\], [data-menu-surface]) {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html[data-liquid-glass='off'] .bg-\[var\(--cmd-palette-bg\)\] {
+  background: var(--cmd-palette-bg);
+}
+html[data-liquid-glass='off'] {
+  --menu-panel-surface: var(--cmd-palette-bg);
+}
+html[data-liquid-glass='off'] .modal-scrim,
+html[data-liquid-glass='off'] .mcp-app-fullscreen::backdrop {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html[data-liquid-glass='off'] aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost,
+html[data-liquid-glass='off']:not([data-wallpaper-active='true'], [data-desktop-background='true'])
+  aside.bg-sidebar > .sidebar-frost {
+  background-color: hsl(var(--sidebar));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+@media (prefers-reduced-transparency: no-preference) and (forced-colors: none) {
+  html[data-liquid-glass='on'] {
+    --glass-clarity: var(--glass-clarity-preview, var(--glass-clarity-saved, 0.5));
+    --glass-highlight: color-mix(in srgb, var(--text-primary) calc(6% + 10% * var(--glass-clarity)), transparent);
+    --glass-glint: inset 0 1px 0 var(--glass-highlight);
+    --glass-sheen: linear-gradient(155deg, var(--glass-highlight), transparent 38% 72%,
+      color-mix(in srgb, var(--text-primary) 4%, transparent));
+    --glass-floating-fill: color-mix(in srgb, var(--cmd-palette-bg) calc(100% - 12% * var(--glass-clarity)), transparent);
+    --menu-panel-surface: var(--glass-floating-fill);
+  }
+  html[data-liquid-glass='on'] :is([data-composer-card='true'], aside.bg-sidebar > .sidebar-frost,
+    .bg-\[var\(--cmd-palette-bg\)\], [data-menu-surface], .cindy-select-content,
+    [data-glass-popover], .modal-panel) {
+    background-image: var(--glass-sheen);
+  }
+  html[data-liquid-glass='on'] :is(.bg-\[var\(--cmd-palette-bg\)\], .cindy-select-content,
+    [data-glass-popover], .modal-panel) {
+    background-color: var(--glass-floating-fill);
+  }
+  /* The desktop or wallpaper owns the backing. Adjust the sidebar's
+     own tint so the separately selected background remains in place. */
+  html[data-liquid-glass='on'] aside.bg-sidebar > .sidebar-frost {
+    background-image: var(--glass-sheen), linear-gradient(
+      color-mix(in srgb, var(--surface) calc(24% * (1 - var(--glass-clarity))), transparent),
+      color-mix(in srgb, var(--surface) calc(24% * (1 - var(--glass-clarity))), transparent)
+    );
+  }
+  html[data-liquid-glass='on'] [data-composer-card='true'] {
+    background-color: color-mix(in srgb, var(--chat-input-bg) calc(100% - 32% * var(--glass-clarity)), transparent);
+    box-shadow: var(--glass-glint);
+  }
+
+  /* The composer sits over in-app content; floating surfaces can straddle
+     transparent native chrome. On Windows only blur them over an app canvas. */
+  html[data-liquid-glass='on']:not([data-desktop-background='true']) [data-composer-card='true'],
+  html[data-liquid-glass='on']:not([data-desktop-background='true']):is(
+    :not([data-platform='win32']), [data-wallpaper-active='true']
+  ) :is(.bg-\[var\(--cmd-palette-bg\)\], [data-menu-surface], .cindy-select-content,
+    [data-glass-popover], .modal-panel) {
+    backdrop-filter: blur(calc(16px - 12px * var(--glass-clarity))) saturate(1.15);
+  }
+  html[data-liquid-glass='on']:is([data-platform='win32'], [data-desktop-background='true'])
+    :is(.bg-\[var\(--cmd-palette-bg\)\], [data-menu-surface]) {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  html[data-liquid-glass='on'][data-platform='win32'][data-wallpaper-active='true']:not([data-desktop-background='true'])
+    :is(.bg-\[var\(--cmd-palette-bg\)\], [data-menu-surface]) {
+    backdrop-filter: blur(calc(16px - 12px * var(--glass-clarity))) saturate(1.15);
+  }
+  html[data-liquid-glass='on'][data-desktop-background='true'] .modal-scrim,
+  html[data-liquid-glass='on'][data-desktop-background='true'] .mcp-app-fullscreen::backdrop {
+    backdrop-filter: none;
+  }
+}
+
 /* Keep the decoded old canvas above the new one and fade only its opacity.
    Fixed composer copies follow the same transition, preserving the crop and
    theme veil across the entire window without fading text or controls.
@@ -2887,7 +2968,7 @@ html[data-desktop-background='true'] .wallpaper-message-viewport [data-scroll-co
    area's color; only its 1px divider separates it (user decision, 2026-11-10). */
 html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
   aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
-  background: transparent;
+  background-color: transparent;
 }
 /* On the desktop, the docked sidebar has the main area's hue and transparency,
    one step deeper: the same veil on the aside, a fixed shade on its frost layer
@@ -2904,7 +2985,7 @@ html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-back
 }
 html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-background='true']
   aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
-  background: var(--sidebar-desktop-shade);
+  background-color: var(--sidebar-desktop-shade);
 }
 /* The peek drawer covers app content, and CSS backdrop blur does not render in
    the transparent window. The shared veil hides none of that content, so the
@@ -2913,7 +2994,7 @@ html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-back
    blur; its divider and floating-layer elevation stay. */
 html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true'])
   aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost {
-  background: rgb(from var(--surface) r g b /
+  background-color: rgb(from var(--surface) r g b /
     max(0.9, calc(1 - var(--background-visibility, 0))));
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
