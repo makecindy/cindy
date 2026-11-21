@@ -14100,6 +14100,8 @@
       "source": {
         "lastConfirmed": "上次重整：{{time}}",
         "unconfirmed": "模型錄未新",
+        "unreachable": "{{source}} 不能達",
+        "unreachableDetail": "不能達，請察網路",
         "unavailable": "模型不可用",
         "reconnect": "重連",
         "manage": "理來源",
@@ -16122,6 +16124,10 @@
       "retryIn": "{{seconds}} 秒後自試"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "此模型訂閱之額已盡，可先易模型。",
+      "poolRetryUntil": "俟 {{resetAt}} 後可再試。",
+      "poolOtherSignedOut": "另有訂閱帳號已退出，可於行此任務之機重新登入而試。",
+      "poolUnavailable": "此模型無可用訂閱帳號。可易模型，或於行此任務之機查帳號。",
       "limited": "此差事所用訂閱帳號，用量已盡。可待用量重設後再試，或另選模型來源。",
       "limitedUntil": "此差事所用訂閱帳號，用量已盡，預計 {{resetAt}} 重設。可待重設後再試，或另選模型來源。",
       "loginRequired": "此差事所用訂閱帳號需要重新登入。請在執行差事的電腦上重新登入該帳號，再重試。",
@@ -16986,7 +16992,41 @@
             "token": "今用備用 Token",
             "recheck": "察連線",
             "summary": "掌 GitHub 儲存庫、Issues、PR 與 Actions。",
-            "otherMethods": "他種連線之法"
+            "otherMethods": "他種連線之法",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App 存取權限",
+            "all": "所有儲存庫",
+            "selected": "指定儲存庫",
+            "visible": "目前帳號可見 {{count}} 個儲存庫",
+            "unknownCount": "暫時無法讀取儲存庫數量",
+            "permissions": "權限明細",
+            "read": "唯讀",
+            "write": "可讀寫",
+            "admin": "管理",
+            "loading": "正在讀取授權範圍…",
+            "missing": "在這台電腦連接 GitHub App 後即可查看授權範圍。",
+            "unavailable": "暫時無法讀取授權明細。",
+            "empty": "目前帳號沒有可見的安裝紀錄。",
+            "suspended": "此安裝已暫停",
+            "events": "這台電腦訂閱了 {{count}} 個儲存庫的事件",
+            "manage": "管理儲存庫存取權限",
+            "names": {
+              "actions": "Actions",
+              "administration": "儲存庫管理",
+              "checks": "檢查結果",
+              "contents": "儲存庫內容",
+              "deployments": "部署",
+              "issues": "Issue",
+              "members": "組織成員",
+              "metadata": "儲存庫中繼資料",
+              "organization_events": "組織事件",
+              "pull_requests": "提取要求",
+              "repository_hooks": "儲存庫 Webhook",
+              "statuses": "提交狀態",
+              "workflows": "工作流程檔案"
+            }
           },
           "app": {
             "title": "倉庫之變",
@@ -16999,6 +17039,21 @@
             "repositories": "擇倉庫",
             "disconnect": "斷事件之連",
             "connect": "連 GitHub App"
+          },
+          "connection": {
+            "operations": "儲存庫操作",
+            "operationsMissing": "尚未取得儲存庫操作授權",
+            "checking": "正在檢查 GitHub 連線…",
+            "mismatch": "操作帳號與通知帳號不同，請核對後重新連線。",
+            "ready": "GitHub 帳號已連線。",
+            "close": "閉之",
+            "incomplete": "帳號已綁定，請補充此電腦的操作授權。",
+            "eventsOnly": "此帳號用於儲存庫通知；顯示帳號名稱不代表此電腦已取得操作授權。",
+            "connect": "連線 GitHub",
+            "alternative": "使用本機 GitHub 登入",
+            "cliDescription": "可沿用本機登入；個人通知等 GitHub App 不支援的功能仍需要此方式。",
+            "disconnect": "中斷 GitHub App 連線",
+            "repositories": "正在關注 {{count}} 個儲存庫"
           }
         },
         "unresolved": "{{count}} 條未決之 review 評論",
@@ -22138,6 +22193,7 @@
     "picker": {
       "empty": "尚無模型組。於設定合數源為一模式，即可於此擇之。",
       "manage": "理模型組",
+      "deviceTitle": "模型組 · {{device}}",
       "switched": "「{{name}}」已將此差事易為 {{model}}",
       "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。",
       "chooseUnavailable": "「{{name}}」今無可用之源，未取之。"

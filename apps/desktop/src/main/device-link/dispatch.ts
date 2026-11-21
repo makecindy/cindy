@@ -1168,6 +1168,7 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    if (!sameAccountController || p.source !== 'organization') delete rest.customIcon;
     if (!sameAccountController) {
       delete rest.subscriptionPoolTarget;
       delete rest.subscriptionAccountKeys;

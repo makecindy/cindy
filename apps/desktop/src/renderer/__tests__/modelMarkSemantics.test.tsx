@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
@@ -16,6 +16,26 @@ function firstPath(ui: React.ReactNode): string | null {
 }
 
 describe('model mark semantics', () => {
+  // Unit: the picker should show server artwork and immediately restore its
+  // original mark when Chromium rejects the image or the catalog removes it.
+  it('renders the custom icon as an image and restores the original mark', () => {
+    const icon = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1h2v2z"/></svg>';
+    const mark = (customIcon?: string) => (
+      <ProviderMark providerId="byok-test" name="Enterprise Codex" logoKind="openai-spectrum" customIcon={customIcon} />
+    );
+    const view = render(mark(icon));
+    const image = view.container.querySelector('img')!;
+    expect(image.getAttribute('src')).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(icon)}`);
+    expect(view.container.querySelector('svg')).toBeNull();
+    fireEvent.error(image);
+    expect(view.container.querySelector('linearGradient')).toBeTruthy();
+    expect(view.container.querySelector('img')).toBeNull();
+    view.rerender(mark(icon.replace('M1', 'M2')));
+    expect(view.container.querySelector('img')).toBeTruthy();
+    view.rerender(mark());
+    expect(view.container.querySelector('linearGradient')).toBeTruthy();
+  });
+
   // Unit: two visible provider marks must own their paint servers. Removing a
   // hidden selector must not remove the gradient referenced by the composer.
   it('keeps spectrum marks independent when another instance is removed', () => {

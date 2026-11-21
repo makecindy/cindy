@@ -14101,6 +14101,8 @@
       "source": {
         "lastConfirmed": "上次刷新：{{time}}",
         "unconfirmed": "模型列表暂未更新",
+        "unreachable": "连不上 {{source}}",
+        "unreachableDetail": "连不上，请检查网络",
         "unavailable": "模型不可用",
         "reconnect": "重新连接",
         "manage": "管理来源",
@@ -16122,6 +16124,10 @@
       "retryIn": "{{seconds}} 秒后自动重试"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "当前模型的订阅额度已达上限。可以先切换模型。",
+      "poolRetryUntil": "可在 {{resetAt}} 后重试。",
+      "poolOtherSignedOut": "另有订阅账号已登出，可在执行任务的电脑上重新登录后重试。",
+      "poolUnavailable": "当前模型没有可用的订阅账号。请切换模型，或在执行任务的电脑上检查账号状态。",
       "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。",
       "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。",
       "loginRequired": "此任务使用的订阅账号需要重新登录。请在执行任务的电脑上重新登录该账号，再重试。",
@@ -16986,7 +16992,41 @@
             "token": "当前使用备用 Token",
             "recheck": "检查连接",
             "summary": "管理 GitHub 仓库、Issues、PR 和 Actions。",
-            "otherMethods": "其他连接方式"
+            "otherMethods": "其他连接方式",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App 访问权限",
+            "all": "所有仓库",
+            "selected": "指定仓库",
+            "visible": "当前账号可见 {{count}} 个仓库",
+            "unknownCount": "暂时无法读取仓库数",
+            "permissions": "权限明细",
+            "read": "只读",
+            "write": "可读写",
+            "admin": "管理",
+            "loading": "正在读取授权范围…",
+            "missing": "在这台电脑上连接 GitHub App 后即可查看授权范围。",
+            "unavailable": "暂时无法读取授权明细。",
+            "empty": "当前账号没有可见的安装记录。",
+            "suspended": "此安装已暂停",
+            "events": "这台电脑订阅了 {{count}} 个仓库的事件",
+            "manage": "管理仓库访问权限",
+            "names": {
+              "actions": "Actions",
+              "administration": "仓库管理",
+              "checks": "检查结果",
+              "contents": "仓库内容",
+              "deployments": "部署",
+              "issues": "Issue",
+              "members": "组织成员",
+              "metadata": "仓库元数据",
+              "organization_events": "组织事件",
+              "pull_requests": "拉取请求",
+              "repository_hooks": "仓库 Webhook",
+              "statuses": "提交状态",
+              "workflows": "工作流文件"
+            }
           },
           "app": {
             "title": "仓库事件",
@@ -16999,6 +17039,21 @@
             "repositories": "选择仓库",
             "disconnect": "断开事件连接",
             "connect": "连接 GitHub App"
+          },
+          "connection": {
+            "operations": "仓库操作",
+            "operationsMissing": "尚未获得仓库操作授权",
+            "checking": "正在检查 GitHub 连接…",
+            "mismatch": "操作账号与通知账号不同，请核对后重新连接。",
+            "ready": "GitHub 账号已连接。",
+            "close": "关闭",
+            "incomplete": "账号已绑定，请补充此电脑的操作授权。",
+            "eventsOnly": "此账号用于仓库通知；显示账号名字不代表此电脑已获得操作授权。",
+            "connect": "连接 GitHub",
+            "alternative": "使用本机 GitHub 登录",
+            "cliDescription": "可沿用本机登录；个人通知等 GitHub App 不支持的功能仍需要此方式。",
+            "disconnect": "断开 GitHub App 连接",
+            "repositories": "正在关注 {{count}} 个仓库"
           }
         },
         "unresolved": "{{count}} 条未解决的 review 评论",
@@ -22138,6 +22193,7 @@
     "picker": {
       "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
       "manage": "管理模型组",
+      "deviceTitle": "模型组 · {{device}}",
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
       "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
       "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"

@@ -436,6 +436,21 @@ describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => 
   });
 });
 
+// Unit: model switching on mobile can leave a failed send at the queue head.
+// Exercise the visible banner, including its retry time and optional sign-in hint.
+it('explains a mixed subscription pool failure in the mobile queue', async () => {
+  await i18n.changeLanguage('zh-CN');
+  const until = Date.now() + 3_600_000;
+  const error = `LAZY_CREATE_FAILED: [SUBSCRIPTION_POOL_MODEL_LIMITED] diagnostic\nresetAtMs=${until}\notherAccountSignedOut=true`;
+  await act(async () => root.render(<InlineQueueSection
+    projection={{ error, errorRetryText: 'original' } as InputProjection}
+    onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+  expect(host.textContent).toContain('当前模型的订阅额度已达上限');
+  expect(host.textContent).toContain(new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(until));
+  expect(host.textContent).toContain('另有订阅账号已登出');
+  expect(host.textContent).not.toContain('LAZY_CREATE_FAILED');
+});
+
 // Unit regression: both live and historical mobile errors share this presenter.
 it('localizes bound-account exhaustion and old ambiguous startup errors', async () => {
   await i18n.changeLanguage('zh-CN');

@@ -14270,6 +14270,8 @@
       "source": {
         "lastConfirmed": "Última atualização: {{time}}",
         "unconfirmed": "Lista de modelos desatualizada",
+        "unreachable": "Não foi possível conectar a {{source}}",
+        "unreachableDetail": "Sem conexão. Verifique sua rede.",
         "unavailable": "Modelo indisponível",
         "reconnect": "Reconectar",
         "manage": "Gerenciar fonte",
@@ -16347,6 +16349,10 @@
       "retryIn": "Nova tentativa automática em {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "O uso da assinatura para este modelo atingiu o limite. Você pode trocar de modelo.",
+      "poolRetryUntil": "Tente novamente após {{resetAt}}.",
+      "poolOtherSignedOut": "Outra conta de assinatura está desconectada. Entre nessa conta no computador que executa a tarefa e tente novamente.",
+      "poolUnavailable": "Nenhuma conta de assinatura está disponível para este modelo. Troque de modelo ou verifique as contas no computador que executa a tarefa.",
       "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos.",
       "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos.",
       "loginRequired": "A conta de assinatura desta tarefa exige um novo login. Entre novamente no computador que executa a tarefa e tente de novo.",
@@ -17223,7 +17229,41 @@
             "token": "Usando token alternativo",
             "recheck": "Verificar conexão",
             "summary": "Gerencie repositórios, issues, pull requests e Actions do GitHub.",
-            "otherMethods": "Outros métodos de conexão"
+            "otherMethods": "Outros métodos de conexão",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "Acesso do GitHub App",
+            "all": "Todos os repositórios",
+            "selected": "Repositórios selecionados",
+            "visible": "Repositórios visíveis: {{count}}",
+            "unknownCount": "Contagem indisponível",
+            "permissions": "Permissões",
+            "read": "Somente leitura",
+            "write": "Leitura e gravação",
+            "admin": "Administração",
+            "loading": "Carregando acesso…",
+            "missing": "Conecte o GitHub App neste computador para ver o acesso.",
+            "unavailable": "Detalhes de acesso indisponíveis.",
+            "empty": "Nenhuma instalação visível para esta conta.",
+            "suspended": "Instalação suspensa",
+            "events": "Repositórios com eventos assinados neste computador: {{count}}",
+            "manage": "Gerenciar acesso aos repositórios",
+            "names": {
+              "actions": "Actions",
+              "administration": "Administração do repositório",
+              "checks": "Verificações",
+              "contents": "Conteúdo do repositório",
+              "deployments": "Implantações",
+              "issues": "Issues",
+              "members": "Membros da organização",
+              "metadata": "Metadados",
+              "organization_events": "Eventos da organização",
+              "pull_requests": "Pull requests",
+              "repository_hooks": "Webhooks do repositório",
+              "statuses": "Status dos commits",
+              "workflows": "Arquivos de workflow"
+            }
           },
           "app": {
             "title": "Eventos dos repositórios",
@@ -17236,6 +17276,21 @@
             "repositories": "Escolher repositórios",
             "disconnect": "Desconectar eventos",
             "connect": "Conectar GitHub App"
+          },
+          "connection": {
+            "operations": "Operações de repositório",
+            "operationsMissing": "Acesso ao repositório ainda não autorizado",
+            "checking": "Verificando a conexão com o GitHub…",
+            "mismatch": "As operações e notificações usam contas diferentes. Confira as contas e conecte novamente.",
+            "ready": "Conta do GitHub conectada.",
+            "close": "Fechar",
+            "incomplete": "Conta vinculada. Autorize as operações neste computador para concluir.",
+            "eventsOnly": "Esta conta recebe eventos de repositório. Seu nome não confirma a autorização neste computador.",
+            "connect": "Conectar GitHub",
+            "alternative": "Usar o login local do GitHub",
+            "cliDescription": "Você pode continuar usando o login local. Notificações pessoais e funções não suportadas por GitHub Apps ainda precisam dele.",
+            "disconnect": "Desconectar GitHub App",
+            "repositories": "Repositórios acompanhados: {{count}}"
           }
         },
         "unresolved": "Discussões de revisão não resolvidas: {{count}}",
@@ -22441,6 +22496,7 @@
     "picker": {
       "empty": "Ainda não há grupos de modelos. Combine várias fontes em um modo nas Configurações para escolhê-lo aqui.",
       "manage": "Gerenciar grupos de modelos",
+      "deviceTitle": "Grupos de modelos · {{device}}",
       "switched": "“{{name}}” trocou esta tarefa para {{model}}",
       "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
       "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado."

@@ -14101,6 +14101,8 @@
       "source": {
         "lastConfirmed": "마지막 새로고침: {{time}}",
         "unconfirmed": "모델 목록을 갱신하지 못함",
+        "unreachable": "{{source}}에 연결할 수 없음",
+        "unreachableDetail": "연결할 수 없습니다. 네트워크를 확인하세요",
         "unavailable": "모델 사용 불가",
         "reconnect": "다시 연결",
         "manage": "소스 관리",
@@ -16122,6 +16124,10 @@
       "retryIn": "{{seconds}}초 후 자동 재시도"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "이 모델의 구독 사용량이 한도에 도달했습니다. 다른 모델로 전환할 수 있습니다.",
+      "poolRetryUntil": "{{resetAt}} 이후에 다시 시도할 수 있습니다.",
+      "poolOtherSignedOut": "다른 구독 계정이 로그아웃되어 있습니다. 작업을 실행하는 컴퓨터에서 로그인한 후 다시 시도할 수 있습니다.",
+      "poolUnavailable": "이 모델에서 사용할 수 있는 구독 계정이 없습니다. 모델을 바꾸거나 작업을 실행하는 컴퓨터에서 계정을 확인하세요.",
       "limited": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 한도가 초기화된 후 다시 시도하거나 다른 모델 연결을 선택하세요.",
       "limitedUntil": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 초기화 예정: {{resetAt}}. 초기화 후 다시 시도하거나 다른 모델 연결을 선택하세요.",
       "loginRequired": "이 작업에서 사용하는 구독 계정에 다시 로그인해야 합니다. 작업을 실행하는 컴퓨터에서 해당 계정에 다시 로그인한 후 다시 시도하세요.",
@@ -16986,7 +16992,41 @@
             "token": "예비 토큰 사용 중",
             "recheck": "연결 확인",
             "summary": "GitHub 저장소, 이슈, PR 및 Actions를 관리합니다.",
-            "otherMethods": "다른 연결 방법"
+            "otherMethods": "다른 연결 방법",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App 접근 권한",
+            "all": "모든 저장소",
+            "selected": "선택한 저장소",
+            "visible": "현재 계정에 표시되는 저장소: {{count}}개",
+            "unknownCount": "저장소 수를 확인할 수 없음",
+            "permissions": "권한 상세",
+            "read": "읽기 전용",
+            "write": "읽기 및 쓰기",
+            "admin": "관리",
+            "loading": "접근 권한 확인 중…",
+            "missing": "이 컴퓨터에서 GitHub App을 연결하여 접근 권한을 확인하세요.",
+            "unavailable": "권한을 확인할 수 없습니다.",
+            "empty": "현재 계정에 표시되는 설치가 없습니다.",
+            "suspended": "설치가 일시 중지됨",
+            "events": "이 컴퓨터에서 이벤트를 구독하는 저장소: {{count}}개",
+            "manage": "저장소 접근 관리",
+            "names": {
+              "actions": "Actions",
+              "administration": "저장소 관리",
+              "checks": "검사",
+              "contents": "저장소 콘텐츠",
+              "deployments": "배포",
+              "issues": "이슈",
+              "members": "조직 구성원",
+              "metadata": "메타데이터",
+              "organization_events": "조직 이벤트",
+              "pull_requests": "풀 리퀘스트",
+              "repository_hooks": "저장소 웹훅",
+              "statuses": "커밋 상태",
+              "workflows": "워크플로 파일"
+            }
           },
           "app": {
             "title": "저장소 이벤트",
@@ -16999,6 +17039,21 @@
             "repositories": "저장소 선택",
             "disconnect": "이벤트 연결 해제",
             "connect": "GitHub App 연결"
+          },
+          "connection": {
+            "operations": "저장소 작업",
+            "operationsMissing": "아직 저장소 작업 권한이 없습니다",
+            "checking": "GitHub 연결 확인 중…",
+            "mismatch": "작업 계정과 알림 계정이 다릅니다. 확인 후 다시 연결하세요.",
+            "ready": "GitHub 계정이 연결되었습니다.",
+            "close": "닫기",
+            "incomplete": "계정이 연결되었습니다. 이 컴퓨터의 작업 권한을 승인하세요.",
+            "eventsOnly": "이 계정은 저장소 알림용입니다. 계정 이름이 표시되어도 이 컴퓨터의 작업 권한이 승인된 것은 아닙니다.",
+            "connect": "GitHub 연결",
+            "alternative": "로컬 GitHub 로그인 사용",
+            "cliDescription": "기존 로그인을 계속 사용할 수 있습니다. 개인 알림 등 GitHub App이 지원하지 않는 기능에는 이 방식이 필요합니다.",
+            "disconnect": "GitHub App 연결 해제",
+            "repositories": "관심 저장소: {{count}}개"
           }
         },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건",
@@ -22138,6 +22193,7 @@
     "picker": {
       "empty": "아직 모델 그룹이 없습니다. 설정에서 소스 몇 개를 모드로 묶으면 여기서 선택할 수 있습니다.",
       "manage": "모델 그룹 관리",
+      "deviceTitle": "모델 그룹 · {{device}}",
       "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",
       "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
       "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다."

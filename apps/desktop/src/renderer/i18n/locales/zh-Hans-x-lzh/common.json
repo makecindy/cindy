@@ -14100,6 +14100,8 @@
       "source": {
         "lastConfirmed": "上次重整：{{time}}",
         "unconfirmed": "模型录未新",
+        "unreachable": "{{source}} 不能达",
+        "unreachableDetail": "不能达，请察网路",
         "unavailable": "模型不可用",
         "reconnect": "重连",
         "manage": "理来源",
@@ -16122,6 +16124,10 @@
       "retryIn": "{{seconds}} 秒后自试"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "此模型订阅之额已尽，可先易模型。",
+      "poolRetryUntil": "俟 {{resetAt}} 后可再试。",
+      "poolOtherSignedOut": "另有订阅账号已退出，可于行此任务之机重新登录而试。",
+      "poolUnavailable": "此模型无可用订阅账号。可易模型，或于行此任务之机查账号。",
       "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。",
       "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。",
       "loginRequired": "此差事所用订阅账号需要重新登录。请在执行差事的电脑上重新登录该账号，再重试。",
@@ -16986,7 +16992,41 @@
             "token": "今用备用 Token",
             "recheck": "察连接",
             "summary": "掌 GitHub 仓库、Issues、PR 与 Actions。",
-            "otherMethods": "他种连接之法"
+            "otherMethods": "他种连接之法",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App 访问权限",
+            "all": "所有仓库",
+            "selected": "指定仓库",
+            "visible": "当前账号可见 {{count}} 个仓库",
+            "unknownCount": "暂时无法读取仓库数",
+            "permissions": "权限明细",
+            "read": "只读",
+            "write": "可读写",
+            "admin": "管理",
+            "loading": "正在读取授权范围…",
+            "missing": "在这台电脑上连接 GitHub App 后即可查看授权范围。",
+            "unavailable": "暂时无法读取授权明细。",
+            "empty": "当前账号没有可见的安装记录。",
+            "suspended": "此安装已暂停",
+            "events": "这台电脑订阅了 {{count}} 个仓库的事件",
+            "manage": "管理仓库访问权限",
+            "names": {
+              "actions": "Actions",
+              "administration": "仓库管理",
+              "checks": "检查结果",
+              "contents": "仓库内容",
+              "deployments": "部署",
+              "issues": "Issue",
+              "members": "组织成员",
+              "metadata": "仓库元数据",
+              "organization_events": "组织事件",
+              "pull_requests": "拉取请求",
+              "repository_hooks": "仓库 Webhook",
+              "statuses": "提交状态",
+              "workflows": "工作流文件"
+            }
           },
           "app": {
             "title": "仓库之变",
@@ -16999,6 +17039,21 @@
             "repositories": "择仓库",
             "disconnect": "断事件之连",
             "connect": "连 GitHub App"
+          },
+          "connection": {
+            "operations": "仓库操作",
+            "operationsMissing": "尚未获得仓库操作授权",
+            "checking": "正在检查 GitHub 连接…",
+            "mismatch": "操作账号与通知账号不同，请核对后重新连接。",
+            "ready": "GitHub 账号已连接。",
+            "close": "闭之",
+            "incomplete": "账号已绑定，请补充此电脑的操作授权。",
+            "eventsOnly": "此账号用于仓库通知；显示账号名字不代表此电脑已获得操作授权。",
+            "connect": "连接 GitHub",
+            "alternative": "使用本机 GitHub 登录",
+            "cliDescription": "可沿用本机登录；个人通知等 GitHub App 不支持的功能仍需要此方式。",
+            "disconnect": "断开 GitHub App 连接",
+            "repositories": "正在关注 {{count}} 个仓库"
           }
         },
         "unresolved": "{{count}} 条未决之 review 评论",
@@ -22138,6 +22193,7 @@
     "picker": {
       "empty": "尚无模型组。于设定合数源为一模式，即可于此择之。",
       "manage": "理模型组",
+      "deviceTitle": "模型组 · {{device}}",
       "switched": "「{{name}}」已将此差事易为 {{model}}",
       "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
       "chooseUnavailable": "「{{name}}」今无可用之源，未取之。"

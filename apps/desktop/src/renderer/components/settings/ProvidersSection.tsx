@@ -57,6 +57,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
+import { withSubscriptionDisplayModels } from '@/lib/localCatalogSnapshot';
 import { LocalModelCatalogNotice } from '@/components/new-chat/LocalModelCatalogNotice';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { codexRecoveryActionKey, codexRecoveryDescriptionKey } from '@/hooks/codexAuthRecovery';
@@ -142,6 +143,7 @@ import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { CindyMark } from '@/components/icons/CindyMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
@@ -304,10 +306,15 @@ function RemoteProviderAccessRow({
 
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
 function providerIcon(p: ProviderView, size: number): ReactNode {
-  if (isProviderLogoKind(p.logoKind) || hasProviderLogo(p.id, p.routing)) {
-    return <ProviderLogoMark providerId={p.id} routing={p.routing} logoKind={p.logoKind} size={size} />;
-  }
-  return <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>;
+  return (
+    <CustomProviderIcon svg={p.customIcon} size={size}>
+      {isProviderLogoKind(p.logoKind) || hasProviderLogo(p.id, p.routing) ? (
+        <ProviderLogoMark providerId={p.id} routing={p.routing} logoKind={p.logoKind} size={size} />
+      ) : (
+        <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>
+      )}
+    </CustomProviderIcon>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2621,7 +2628,8 @@ export function ProvidersSection() {
   const { dataOwnerId } = useAuth();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
-  const { providers, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
+  const { providers: currentProviders, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
+  const providers = useMemo(() => currentProviders.map(withSubscriptionDisplayModels), [currentProviders]);
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();

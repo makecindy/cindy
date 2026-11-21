@@ -10068,7 +10068,7 @@
         "git-summary": "Résumés des modifications",
         "hook-generation": "Scripts d’automatisation",
         "automation-verification": "Vérification des imports",
-        "plugin-text": "Texte des extensions",
+        "plugin-text": "Texte des plugins",
         "voice-dialogue": "Conversations vocales",
         "voice-exit": "Décisions de fin d’appel",
         "voice-refinement": "Amélioration du texte vocal",
@@ -14270,6 +14270,8 @@
       "source": {
         "lastConfirmed": "Dernière actualisation : {{time}}",
         "unconfirmed": "Liste des modèles non actualisée",
+        "unreachable": "Impossible de joindre {{source}}",
+        "unreachableDetail": "Connexion impossible. Vérifiez le réseau.",
         "unavailable": "Modèle indisponible",
         "reconnect": "Se reconnecter",
         "manage": "Gérer la source",
@@ -16347,6 +16349,10 @@
       "retryIn": "Nouvelle tentative automatique dans {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "La limite d’utilisation de l’abonnement pour ce modèle est atteinte. Vous pouvez changer de modèle.",
+      "poolRetryUntil": "Réessayez après {{resetAt}}.",
+      "poolOtherSignedOut": "Un autre compte d’abonnement est déconnecté. Reconnectez-le sur l’ordinateur qui exécute la tâche, puis réessayez.",
+      "poolUnavailable": "Aucun compte d’abonnement disponible pour ce modèle. Changez de modèle ou vérifiez les comptes sur l’ordinateur qui exécute la tâche.",
       "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles.",
       "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles.",
       "loginRequired": "Le compte avec abonnement utilisé par cette tâche nécessite une nouvelle connexion. Reconnectez-vous sur l’ordinateur qui exécute la tâche, puis réessayez.",
@@ -17223,7 +17229,41 @@
             "token": "Utilisation du jeton de secours",
             "recheck": "Vérifier la connexion",
             "summary": "Gérez les dépôts, issues, pull requests et Actions GitHub.",
-            "otherMethods": "Autres méthodes de connexion"
+            "otherMethods": "Autres méthodes de connexion",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "Accès de la GitHub App",
+            "all": "Tous les dépôts",
+            "selected": "Dépôts sélectionnés",
+            "visible": "Dépôts visibles : {{count}}",
+            "unknownCount": "Nombre de dépôts indisponible",
+            "permissions": "Autorisations",
+            "read": "Lecture seule",
+            "write": "Lecture et écriture",
+            "admin": "Administration",
+            "loading": "Chargement des accès…",
+            "missing": "Connectez la GitHub App sur cet ordinateur pour consulter les accès.",
+            "unavailable": "Autorisations indisponibles.",
+            "empty": "Aucune installation visible pour ce compte.",
+            "suspended": "Installation suspendue",
+            "events": "Dépôts dont les événements sont suivis sur cet ordinateur : {{count}}",
+            "manage": "Gérer l’accès aux dépôts",
+            "names": {
+              "actions": "Actions",
+              "administration": "Administration du dépôt",
+              "checks": "Vérifications",
+              "contents": "Contenu du dépôt",
+              "deployments": "Déploiements",
+              "issues": "Issues",
+              "members": "Membres de l’organisation",
+              "metadata": "Métadonnées",
+              "organization_events": "Événements de l’organisation",
+              "pull_requests": "Pull requests",
+              "repository_hooks": "Webhooks du dépôt",
+              "statuses": "Statuts de commit",
+              "workflows": "Fichiers de workflow"
+            }
           },
           "app": {
             "title": "Événements des dépôts",
@@ -17236,6 +17276,21 @@
             "repositories": "Choisir les dépôts",
             "disconnect": "Déconnecter les événements",
             "connect": "Connecter GitHub App"
+          },
+          "connection": {
+            "operations": "Opérations sur les dépôts",
+            "operationsMissing": "Accès aux dépôts pas encore autorisé",
+            "checking": "Vérification de la connexion GitHub…",
+            "mismatch": "Les opérations et les notifications utilisent des comptes différents. Vérifiez-les et reconnectez-vous.",
+            "ready": "Compte GitHub connecté.",
+            "close": "Fermer",
+            "incomplete": "Compte lié. Autorisez les opérations sur cet ordinateur pour terminer.",
+            "eventsOnly": "Ce compte reçoit les événements des dépôts. Son nom ne confirme pas l’autorisation sur cet ordinateur.",
+            "connect": "Connecter GitHub",
+            "alternative": "Utiliser la connexion GitHub locale",
+            "cliDescription": "Vous pouvez conserver votre connexion locale. Les notifications personnelles et les fonctions non prises en charge par GitHub Apps en ont toujours besoin.",
+            "disconnect": "Déconnecter GitHub App",
+            "repositories": "Dépôts suivis : {{count}}"
           }
         },
         "unresolved": "Fils de revue non résolus : {{count}}",
@@ -22440,6 +22495,7 @@
     "picker": {
       "empty": "Aucun groupe de modèles pour l'instant. Regroupez plusieurs sources en un mode dans les Réglages pour le choisir ici.",
       "manage": "Gérer les groupes de modèles",
+      "deviceTitle": "Groupes de modèles · {{device}}",
       "switched": "« {{name}} » a basculé cette tâche sur {{model}}",
       "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé.",
       "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi."

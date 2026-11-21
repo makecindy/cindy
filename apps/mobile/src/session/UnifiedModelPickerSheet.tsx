@@ -673,6 +673,7 @@ export function UnifiedModelPickerSheet(
         name: provider?.name ?? entry.providerId,
         routing: provider?.routing,
         logoKind: provider?.logoKind,
+        customIcon: provider?.customIcon,
       },
       selected: !favorite && selected && !otherChoiceActive,
       disabled:
@@ -799,6 +800,7 @@ export function UnifiedModelPickerSheet(
         name: provider?.name ?? entry.providerId,
         routing: provider?.routing,
         logoKind: provider?.logoKind,
+        customIcon: provider?.customIcon,
       },
       remoteDevice: { deviceId: catalog.deviceId, name: catalog.name },
       selected: selected && !modelGroupActive,
@@ -1368,6 +1370,7 @@ export function UnifiedModelPickerSheet(
           name: provider.name,
           routing: provider.routing,
           logoKind: provider.logoKind,
+          customIcon: provider.customIcon,
         },
         remote: {
           deviceId: catalog.deviceId,
@@ -1450,6 +1453,7 @@ export function UnifiedModelPickerSheet(
               name: provider.name,
               routing: provider.routing,
               logoKind: provider.logoKind,
+              customIcon: provider.customIcon,
             },
           })),
         ...remoteFilters,

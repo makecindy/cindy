@@ -7975,7 +7975,7 @@
           "loading": "Buscando y descargando…",
           "invalid": "Introduce una URL de un repositorio o una etiqueta de release de GitHub.",
           "not-found": "Esta versión no está disponible. Comprueba el enlace y tu acceso al repositorio.",
-          "ambiguous": "Este enlace contiene varios plugins. Elige una release con un solo paquete o instala el archivo directamente.",
+          "ambiguous": "Este enlace contiene varios complementos. Elige una release con un solo paquete o instala el archivo directamente.",
           "installedAlready": "Este plugin ya está instalado. Puedes actualizarlo en sus ajustes."
         },
         "installedSection": "Instalado",
@@ -12139,7 +12139,7 @@
       "core": {
         "group": "Habilidad principal",
         "name": "Núcleo del amigo",
-        "hint": "Tareas, otros amigos, modelos, herramientas y plugins, memoria. Se actualiza con Cindy.",
+        "hint": "Tareas, otros amigos, modelos, herramientas y complementos, memoria. Se actualiza con Cindy.",
         "meta": "Común a todos los amigos · Siempre activa · Se actualiza con Cindy",
         "note": "La coordinación que tiene cada amigo. No se puede desactivar ni editar. Para que trabaje de otra forma, díselo en el chat y lo guardará como su propia habilidad.",
         "covers": "Incluye",
@@ -14270,6 +14270,8 @@
       "source": {
         "lastConfirmed": "Última actualización: {{time}}",
         "unconfirmed": "Lista de modelos sin actualizar",
+        "unreachable": "No se puede conectar con {{source}}",
+        "unreachableDetail": "Sin conexión. Revisa la red.",
         "unavailable": "Modelo no disponible",
         "reconnect": "Reconectar",
         "manage": "Administrar fuente",
@@ -16347,6 +16349,10 @@
       "retryIn": "Reintento automático en {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "Se ha alcanzado el límite de uso de la suscripción para este modelo. Puedes cambiar de modelo.",
+      "poolRetryUntil": "Vuelve a intentarlo después de {{resetAt}}.",
+      "poolOtherSignedOut": "Otra cuenta de suscripción tiene la sesión cerrada. Inicia sesión en el equipo que ejecuta la tarea y vuelve a intentarlo.",
+      "poolUnavailable": "No hay ninguna cuenta de suscripción disponible para este modelo. Cambia de modelo o revisa las cuentas en el equipo que ejecuta la tarea.",
       "limited": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Espera a que se restablezca o elige otra fuente de modelos.",
       "limitedUntil": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Restablecimiento previsto: {{resetAt}}. Espera hasta entonces o elige otra fuente de modelos.",
       "loginRequired": "La cuenta de suscripción de esta tarea requiere iniciar sesión de nuevo. Hazlo en el ordenador que ejecuta la tarea y vuelve a intentarlo.",
@@ -17223,7 +17229,41 @@
             "token": "Usando token de respaldo",
             "recheck": "Comprobar conexión",
             "summary": "Administra repositorios, incidencias, pull requests y Actions de GitHub.",
-            "otherMethods": "Otros métodos de conexión"
+            "otherMethods": "Otros métodos de conexión",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "Acceso de GitHub App",
+            "all": "Todos los repositorios",
+            "selected": "Repositorios seleccionados",
+            "visible": "Repositorios visibles: {{count}}",
+            "unknownCount": "Cantidad no disponible",
+            "permissions": "Permisos",
+            "read": "Solo lectura",
+            "write": "Lectura y escritura",
+            "admin": "Administración",
+            "loading": "Cargando acceso…",
+            "missing": "Conecta GitHub App en este equipo para ver el acceso.",
+            "unavailable": "Permisos no disponibles.",
+            "empty": "Esta cuenta no tiene instalaciones visibles.",
+            "suspended": "Instalación suspendida",
+            "events": "Repositorios con eventos suscritos en este equipo: {{count}}",
+            "manage": "Gestionar acceso a repositorios",
+            "names": {
+              "actions": "Actions",
+              "administration": "Administración del repositorio",
+              "checks": "Comprobaciones",
+              "contents": "Contenido del repositorio",
+              "deployments": "Despliegues",
+              "issues": "Issues",
+              "members": "Miembros de la organización",
+              "metadata": "Metadatos",
+              "organization_events": "Eventos de la organización",
+              "pull_requests": "Pull requests",
+              "repository_hooks": "Webhooks del repositorio",
+              "statuses": "Estados de commits",
+              "workflows": "Archivos de flujo de trabajo"
+            }
           },
           "app": {
             "title": "Eventos del repositorio",
@@ -17236,6 +17276,21 @@
             "repositories": "Elegir repositorios",
             "disconnect": "Desconectar eventos",
             "connect": "Conectar GitHub App"
+          },
+          "connection": {
+            "operations": "Operaciones del repositorio",
+            "operationsMissing": "Acceso al repositorio aún no autorizado",
+            "checking": "Comprobando conexión con GitHub…",
+            "mismatch": "Las operaciones y las notificaciones usan cuentas diferentes. Revísalas y vuelve a conectar.",
+            "ready": "Cuenta de GitHub conectada.",
+            "close": "Cerrar",
+            "incomplete": "Cuenta vinculada. Autoriza las operaciones en este equipo para terminar.",
+            "eventsOnly": "Esta cuenta recibe eventos del repositorio. Su nombre no confirma la autorización en este equipo.",
+            "connect": "Conectar GitHub",
+            "alternative": "Usar el inicio de sesión local de GitHub",
+            "cliDescription": "Puedes seguir usando tu sesión local. Las notificaciones personales y otras funciones no compatibles con GitHub Apps aún la necesitan.",
+            "disconnect": "Desconectar GitHub App",
+            "repositories": "Repositorios seguidos: {{count}}"
           }
         },
         "unresolved": "Hilos de revisión sin resolver: {{count}}",
@@ -22440,6 +22495,7 @@
     "picker": {
       "empty": "Aún no hay grupos de modelos. Combina varias fuentes en un modo en Ajustes para elegirlo aquí.",
       "manage": "Gestionar grupos de modelos",
+      "deviceTitle": "Grupos de modelos · {{device}}",
       "switched": "«{{name}}» cambió esta tarea a {{model}}",
       "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo.",
       "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó."

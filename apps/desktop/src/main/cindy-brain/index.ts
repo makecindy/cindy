@@ -1,3 +1,4 @@
+import { readGithubAppToken } from '../git-context/githubAppAuthorization.desktop.js';
 import { createDesktopRuntimePluginHost } from './runtimePluginHost.desktop.js';
 import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/runtime.js';
 import { setPluginEnabled } from './pluginEnableService.js';
@@ -6831,6 +6832,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
       resolveSavedCredential: (ghostId, secretKey) => getGhostSavedCredentialManager().resolve(ghostId, secretKey),
       readGhCliToken: () => getSharedGhCliTokenSource().readToken(),
+      readGithubAppToken,
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
       // 用 Node 侧 undici fetch 而非 Electron net.fetch:redirect:'manual' 在 undici
@@ -9577,7 +9579,8 @@ export function registerGhostIpc(): void {
       : [];
     const ghCliAvailable =
       method === 'GET' && pathname === '/secrets' && ghCliSecretDecls.length > 0
-        ? await getSharedGhCliTokenSource().probeAvailability() : false;
+        ? await getSharedGhCliTokenSource().probeAvailability() || Boolean(await readGithubAppToken().catch(() => null))
+        : false;
     return handleGhostSecretsRequest({
       method,
       pathname,

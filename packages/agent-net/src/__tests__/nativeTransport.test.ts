@@ -253,3 +253,143 @@ it('works out the admitted peers again only when the roster changed or a second 
     expect(admitted).toEqual([1, 2]);
   } finally { await transport?.close(); vi.useRealTimers(); }
 });
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机的 NativeTransport 在原生库带 `native-wait` 时怎么驱动引擎。不再用计时器轮询：引擎说有东西可读时
+ *   才 poll；要发数据时立刻 poll，不等引擎；引擎空手回来时只在它镜像的东西（准入版本）变了、或距上次 poll 满 1 秒时才 poll；
+ *   等待失败时退回计时器，连接照常。
+ * - Bug 依据：2026-11-20 真机，手机每个请求比 Device Link 慢 30–60 毫秒、空闲时 JS 线程占 9–22%：React Native 的计时器按屏幕帧走，
+ *   请求交给引擎、取回应答各等一帧，空闲时每 50 毫秒仍要过一次桥。
+ * - 现有覆盖缺口：上面的用例都是没有 `wait` 的引擎，靠推进计时器驱动。
+ * - 最小失败输入：一条已建立的连接；等待先后以「没东西」「有东西」返回，中间发一次数据、改一次准入版本，最后等待失败一次。
+ * - tier：unit，真实 NativeTransport/NativeChannel，引擎用替身；等待由用例手动放行。
+ */
+it('lets a native-wait engine wake it instead of polling on timers', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  const ops: string[] = [];
+  const waits: Array<{ maxMs: number; resolve(work: boolean): void; reject(error: Error): void }> = [];
+  let nextStream = 0, version = 1;
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      ops.push(command.op as string);
+      let value: unknown;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null, features: ['native-wait'] };
+      if (command.op === 'poll') value = { packets: [], connections: [{ id: 1, established: true, dead: false, closedByPeer: false,
+        unacked: false, remoteKey: remote.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 }] };
+      if (command.op === 'openStream') value = ++nextStream;
+      if (command.op === 'write') value = Buffer.from(command.data as string, 'base64url').length;
+      return value as T;
+    },
+    wait: (maxMs) => new Promise<boolean>((resolve, reject) => { waits.push({ maxMs, resolve, reject }); }),
+    async destroy() {},
+  };
+  const channels: PeerChannel[] = [];
+  let transport: NativeTransport | undefined;
+  const polls = () => ops.filter(op => op === 'poll').length;
+  const settle = () => vi.advanceTimersByTimeAsync(0);
+  /** Let the engine's current wait return; the transport then issues the next one. */
+  const finishWait = async (work: boolean) => { waits.shift()!.resolve(work); await settle(); };
+  try {
+    transport = await NativeTransport.create(engine, { admit: () => true, admissionVersion: () => version,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }], relayIdOf: () => remote.deviceId,
+      onIncoming: channel => { channels.push(channel); } });
+    await settle();
+    // The new channel's first bytes go to the engine over a few polls; then it only waits.
+    for (let i = 0; i < 8 && waits[0]?.maxMs === 8; i++) await finishWait(false);
+    expect(channels).toHaveLength(1);
+    expect(waits).toHaveLength(1);
+    expect(waits[0].maxMs).toBe(250);
+    // No timer polls: time passing alone does nothing.
+    const idle = polls();
+    await vi.advanceTimersByTimeAsync(600);
+    expect(polls()).toBe(idle);
+    // The engine comes back empty and nothing changed: no bridge round trip, it just waits again.
+    await finishWait(false);
+    expect(polls()).toBe(idle);
+    expect(waits).toHaveLength(1);
+    // The engine has something to read.
+    await finishWait(true);
+    expect(polls()).toBe(idle + 1);
+    // Something to send goes to the engine at once, without the engine waking JS.
+    const writes = ops.filter(op => op === 'write').length;
+    channels[0].send(Uint8Array.of(1, 2, 3));
+    await settle();
+    expect(ops.filter(op => op === 'write').length).toBe(writes + 1);
+    const afterWrite = polls();
+    expect(afterWrite).toBeGreaterThan(idle + 1);
+    // The wait the write superseded returns empty and is ignored; the current one decides.
+    while (waits.length > 1) await finishWait(false);
+    expect(polls()).toBe(afterWrite);
+    // What JS mirrors into the engine changed: poll, so the engine gets the new admission.
+    version = 2;
+    await finishWait(false);
+    expect(polls()).toBe(afterWrite + 1);
+    // A second without a poll: one full poll for paths, round trips and admission that lapses with time.
+    await vi.advanceTimersByTimeAsync(1_000);
+    await finishWait(false);
+    expect(polls()).toBe(afterWrite + 2);
+    // The binary cannot wait after all: the timers take over.
+    waits.shift()!.reject(new Error('AGENT_NET_COMMAND_FAILED'));
+    await settle();
+    const onTimers = polls();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(polls()).toBeGreaterThan(onTimers);
+    expect(waits).toHaveLength(0);
+  } finally { await transport?.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机的 NativeTransport.connect 经中转拨号。中转发了 UDP 凭据、UDP 通道还没就绪时，
+ *   拨号命令等到就绪才交给引擎；一直不就绪也只等 RELAY_UDP_DIAL_WAIT_MS；中转没发凭据时不等。
+ * - Bug／规则依据：2026-11-21 真机，手机每次启动、每次重连的第一批拨号在 UDP 通道就绪前经 WebSocket 发出握手，
+ *   收不到回应，等核心 200 毫秒后重发，拨号 230–240 毫秒；通道就绪后发出的同一个握手 30–45 毫秒就有回应。
+ * - 现有覆盖缺口：现有用例的引擎替身没有 UDP 端口，也没有中转凭据，走不到中转 UDP 这段。
+ * - 最小失败输入：一个带 `relay-udp-v2` 的引擎替身、一份中转凭据、一次经中转的拨号，以及就绪／不就绪／没有凭据三种情况。
+ * - tier：unit，引擎用替身，计时器用替身推进；三行合计约 30 毫秒。 */
+it.each(['comes up', 'never comes up', 'was not offered', 'was up for the previous credentials'] as const)(
+  'holds a relay dial while the relay UDP path is coming up: the path %s', async (mode) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    const local = generateIdentity('native'), remote = generateIdentity('remote');
+    const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+    const ops: string[] = [];
+    let up = false, nextStream = 0;
+    const engine: NativeEnginePort = {
+      async command<T>(command: Record<string, unknown>): Promise<T> {
+        ops.push(command.op as string);
+        let value: unknown;
+        if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: 40000, features: ['relay-udp-v2'] };
+        if (command.op === 'poll') value = { packets: [], relayUdp: up, connections: ops.includes('connect') ? [{ id: 7, established: true, dead: false,
+          closedByPeer: false, unacked: false, remoteKey: remote.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 }] : [] };
+        if (command.op === 'connect') value = 7;
+        if (command.op === 'openStream') value = ++nextStream;
+        return value as T;
+      }, async destroy() {},
+    };
+    let credentials = mode === 'was not offered' ? null : { session: Uint8Array.of(1), key: Uint8Array.of(2) };
+    const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, send() {}, onDatagram() {}, close() {} });
+    let transport: NativeTransport | undefined;
+    try {
+      transport = await NativeTransport.create(engine, { admit: () => true, admittedPeers: () => [{ id: key, relayId: remote.deviceId }],
+        relayIdOf: () => remote.deviceId, onIncoming: () => undefined,
+        relay: { deviceId: local.deviceId, uplink: uplink as never, udpCredentials: () => credentials as never }, relayUdpServer: 'relay.example.test:3478' }, undefined, true);
+      if (mode === 'was up for the previous credentials') {
+        // The relay reconnected after its UDP path had been up for a while: new credentials, whose path is not up yet.
+        up = true;
+        await vi.advanceTimersByTimeAsync(1_100);
+        credentials = { session: Uint8Array.of(3), key: Uint8Array.of(4) };
+        up = false;
+      }
+      const dial = transport.connect({ id: key, dial: { relayId: remote.deviceId } });
+      await vi.advanceTimersByTimeAsync(20);
+      // The engine has the credentials; the dial itself has not gone to it unless there was nothing to wait for.
+      if (mode !== 'was not offered') expect(ops.includes('relayUdp')).toBe(true);
+      expect(ops.includes('connect')).toBe(mode === 'was not offered');
+      if (mode === 'comes up' || mode === 'was up for the previous credentials') { up = true; await vi.advanceTimersByTimeAsync(60); }
+      else await vi.advanceTimersByTimeAsync(190);
+      expect(ops.includes('connect')).toBe(true);
+      await vi.advanceTimersByTimeAsync(60);
+      await expect(dial).resolves.toBeDefined();
+    } finally { await transport?.close(); vi.useRealTimers(); }
+  });

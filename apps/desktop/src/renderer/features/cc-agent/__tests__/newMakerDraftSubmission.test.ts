@@ -34,6 +34,7 @@ import { sshModel, sshNativeCodexProvider } from './sshModelFixtures';
 import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
 import { createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
 import { checkDraftBranchBeforeStart } from '../newMakerDraftBranchCheck';
+import { modelGroupOwnerDevice } from '../../model-groups/draftModelGroupRouting';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 const remoteProjectsStore = vi.hoisted(() => ({
@@ -322,8 +323,11 @@ async function submit(options: {
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
     activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
-    resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
+    // 远程控制草稿由被控那台选；这里直接给出那台(或本机)的选路结果。
+    modelGroupOwnerDevice, resolveDraftModelGroup: vi.fn(async () => options.modelGroupRoute ?? null), writeModelGroupRouteNote: noop,
     bindModelGroupSession: vi.fn(), commitModelGroupDecision: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
+    bindDeviceModelGroupSession: vi.fn(async () => undefined), commitDeviceModelGroupDecision: vi.fn(),
+    writeDeviceModelGroupRouteNote: vi.fn(), buildModelGroupRouteNote: vi.fn(() => ({ pluginName: 'g', outcome: 'routed', modelName: 'm', source: 'model-group' })),
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     // 这些用例都走内置 Harness；插件引擎的新建路径由 newMakerDraft.test.ts 覆盖。
     activePluginEngine: null,
@@ -977,6 +981,22 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: 'dev-2' });
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+  });
+  // model-groups.md §6.3 / unit：远程控制另一台电脑时由那台的模式选路；那台建成任务后，记录与说明都请那台写，
+  // 不写进本机的撞配额记录。失效后果：本机记下一个不存在的任务，或那台的任务没有说明、撞配额不提议。
+  it.each(['send', 'goal'] as const)('asks the controlled computer to record its model group pick for %s', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'Host', modelName: modelId, sourceName: 'Host source',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'order', quota: null, trace: [], decisionId: 'host-receipt',
+    };
+    const result = await submit({ entry, deviceId: 'host', providers: [provider(providerId, ['medium'])], modelGroupRoute });
+    expect(result.errors).toEqual([]);
+    const env = result.environment;
+    expect(env.resolveDraftModelGroup).toHaveBeenCalledWith({ type: 'route', id: 'r1' }, expect.objectContaining({ draftDeviceId: 'host' }));
+    expect(env.bindDeviceModelGroupSession).toHaveBeenCalledWith('host', expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+    expect(env.writeDeviceModelGroupRouteNote).toHaveBeenCalledWith('host', expect.any(String), expect.objectContaining({ source: 'model-group' }));
+    expect(env.bindModelGroupSession).not.toHaveBeenCalled();
+    expect(env.commitModelGroupDecision).not.toHaveBeenCalled();
   });
   // #10240 / unit: real creation callbacks must not commit a model-group choice
   // after a cancelled auth gate or a rejected create. Success-only coverage missed both.

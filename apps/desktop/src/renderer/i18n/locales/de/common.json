@@ -14155,6 +14155,8 @@
       "source": {
         "lastConfirmed": "Zuletzt aktualisiert: {{time}}",
         "unconfirmed": "Modellliste nicht aktuell",
+        "unreachable": "{{source}} nicht erreichbar",
+        "unreachableDetail": "Keine Verbindung. Netzwerk prüfen.",
         "unavailable": "Modell nicht verfügbar",
         "reconnect": "Erneut verbinden",
         "manage": "Quelle verwalten",
@@ -16196,6 +16198,10 @@
       "retryIn": "Automatischer Versuch in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "Das Nutzungslimit des Abos für dieses Modell ist erreicht. Sie können das Modell wechseln.",
+      "poolRetryUntil": "Versuchen Sie es nach {{resetAt}} erneut.",
+      "poolOtherSignedOut": "Ein weiteres Abo-Konto ist abgemeldet. Melden Sie es auf dem Computer an, der die Aufgabe ausführt, und versuchen Sie es erneut.",
+      "poolUnavailable": "Für dieses Modell ist kein Abo-Konto verfügbar. Wechseln Sie das Modell oder prüfen Sie die Konten auf dem Computer, der die Aufgabe ausführt.",
       "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle.",
       "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle.",
       "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
@@ -17060,7 +17066,41 @@
             "token": "Fallback-Token wird verwendet",
             "recheck": "Verbindung prüfen",
             "summary": "Verwalte GitHub-Repositories, Issues, Pull Requests und Actions.",
-            "otherMethods": "Andere Verbindungsmethoden"
+            "otherMethods": "Andere Verbindungsmethoden",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub-App-Zugriff",
+            "all": "Alle Repositorys",
+            "selected": "Ausgewählte Repositorys",
+            "visible": "Sichtbare Repositorys: {{count}}",
+            "unknownCount": "Anzahl nicht verfügbar",
+            "permissions": "Berechtigungen",
+            "read": "Nur lesen",
+            "write": "Lesen und schreiben",
+            "admin": "Verwalten",
+            "loading": "Zugriff wird geladen…",
+            "missing": "Verbinde die GitHub-App auf diesem Computer, um den Zugriff zu sehen.",
+            "unavailable": "Zugriffsdetails nicht verfügbar.",
+            "empty": "Für dieses Konto sind keine Installationen sichtbar.",
+            "suspended": "Installation angehalten",
+            "events": "Repositorys mit Ereignisabo auf diesem Computer: {{count}}",
+            "manage": "Repository-Zugriff verwalten",
+            "names": {
+              "actions": "Actions",
+              "administration": "Repository-Verwaltung",
+              "checks": "Prüfungen",
+              "contents": "Repository-Inhalte",
+              "deployments": "Deployments",
+              "issues": "Issues",
+              "members": "Organisationsmitglieder",
+              "metadata": "Metadaten",
+              "organization_events": "Organisationsereignisse",
+              "pull_requests": "Pull Requests",
+              "repository_hooks": "Repository-Webhooks",
+              "statuses": "Commit-Status",
+              "workflows": "Workflow-Dateien"
+            }
           },
           "app": {
             "title": "Repository-Ereignisse",
@@ -17073,6 +17113,21 @@
             "repositories": "Repositorys auswählen",
             "disconnect": "Ereignisse trennen",
             "connect": "GitHub App verbinden"
+          },
+          "connection": {
+            "operations": "Repository-Aktionen",
+            "operationsMissing": "Repository-Zugriff noch nicht autorisiert",
+            "checking": "GitHub-Verbindung wird geprüft…",
+            "mismatch": "Aktionen und Benachrichtigungen verwenden verschiedene Konten. Bitte prüfen und erneut verbinden.",
+            "ready": "GitHub-Konto verbunden.",
+            "close": "Schließen",
+            "incomplete": "Konto verknüpft. Autorisiere jetzt Aktionen auf diesem Computer.",
+            "eventsOnly": "Dieses Konto empfängt Repository-Ereignisse. Der Name bestätigt keine Autorisierung auf diesem Computer.",
+            "connect": "GitHub verbinden",
+            "alternative": "Lokale GitHub-Anmeldung verwenden",
+            "cliDescription": "Die lokale Anmeldung bleibt nutzbar. Persönliche Benachrichtigungen und andere von GitHub Apps nicht unterstützte Funktionen benötigen sie weiterhin.",
+            "disconnect": "GitHub App trennen",
+            "repositories": "Beobachtete Repositorys: {{count}}"
           }
         },
         "unresolved": "Ungelöste Review-Threads: {{count}}",
@@ -22227,6 +22282,7 @@
     "picker": {
       "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einem Modus zusammen, um ihn hier auszuwählen.",
       "manage": "Modellgruppen verwalten",
+      "deviceTitle": "Modellgruppen · {{device}}",
       "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
       "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
       "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt."
