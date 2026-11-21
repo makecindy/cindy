@@ -20,7 +20,7 @@ import { AgentStartupStoppedError, ASYNC_QUESTION_ANSWER, AUTO_REVIEW_SOURCE_CON
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
+import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from '../taskActionAuthorization.js';
 import { isBotCandidateUnavailable } from '../botCandidateRecovery.js';
 import { computeModelGroupSwitchOffer } from '../../model-groups/switchOffer.js';
 import { createSessionRuntimeFallback } from '../sessionRuntimeFallback.js';
@@ -1004,6 +1004,48 @@ describe('外部已授权投递解挂崩溃恢复暂停队列', () => {
     expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
     expect(h.sendToAgent).toHaveBeenCalledOnce();
     expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'room message' });
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
+  it('rebinds a live task-action guard onto a JSON-restored duplicate before release', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：enqueue 去重分支；JSON 恢复的 remote-task-action 行只剩
+    //   requires-authorization 标记与 clientId 前缀，授权重试行上的活守卫必须转到存活行，
+    //   drain 才不会按 TASK_ACTION_AUTHORIZATION_REQUIRED 丢弃它。
+    // - Bug／规则依据：#7512 Codex P1（13:27 CST，审查 9f62d0ceff），「Rebind the live
+    //   guard before releasing handoff duplicates」。
+    // - 现有覆盖缺口：既有 duplicate-authorized-release 用例是 chat-direct（两侧都无守卫），
+    //   没有覆盖跨 JSON 丢掉 Symbol 守卫的 handoff 行。
+    // - 最小失败输入：快照恢复 remote-task-action 行（JSON 化，无 Symbol）+ 同 clientId
+    //   授权重试（带刚校验过的守卫）。
+    // - tier：unit；真实 coordinator enqueue + drain，不经 mock 掉的 guard 旁路。
+    // - 实测耗时：本条 -t 单跑 17ms（文件 collect 15.6s 为既有 846 用例的固定成本）；
+    //   与 taskActionAuthorization + sessionHandoffIpc 合跑 WALL 69.7s，991/991 通过。
+    const h = createHarness();
+    const sid = 'remote-task-action-rebind';
+    const clientId = 'remote-task-action:receipt-1';
+    const original = makeItem(clientId, 'handoff body');
+    bindTaskActionInput(sid, original, async () => {});
+    // JSON 往返模拟崩溃快照：Symbol 守卫与 onSettled 消失，requires-authorization 标记留下。
+    const restored = JSON.parse(JSON.stringify(original)) as typeof original;
+    expect(Object.getOwnPropertySymbols(restored)).not.toContain(TASK_ACTION_INPUT_GUARD);
+    expect(restored.taskActionRequiresAuthorization).toBe(true);
+    h.setLoadQueueSnapshot(async () => [restored]);
+
+    const incoming = makeItem(clientId, 'handoff body');
+    let validated = 0;
+    bindTaskActionInput(sid, incoming, async () => {
+      validated += 1;
+    });
+
+    await h.coordinator.enqueue(sid, incoming, { resumeCrashRestoredPausedQueue: true });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    expect(validated).toBeGreaterThan(0);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'handoff body' });
     expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
   });
 

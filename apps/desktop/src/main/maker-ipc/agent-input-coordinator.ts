@@ -4,7 +4,7 @@ import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionAnswerOrigin, inheritTelegram
 import { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization, rebindTaskActionInputGuard, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON } from './botCandidateRecovery.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
@@ -2163,6 +2163,29 @@ export class AgentInputCoordinator {
     );
   }
 
+  /**
+   * 去重命中时把重试行上的活守卫转到存活行(JSON 恢复会剥掉 Symbol 与 onSettled)。
+   * 只在 pendingQueue / activeTurn / active-turn recovery 里找同 clientId 的行;
+   * 仅剩 recent-client 窗口时行已离队,没有可转的对象。
+   */
+  private rebindDuplicateTaskActionGuard(
+    state: SessionInputState,
+    incoming: AgentInputQueuedMessage,
+  ): void {
+    const activeItem = state.activeTurn?.item;
+    const recoveryItem = state.recovery?.kind === 'active-turn' ? state.recovery.item : undefined;
+    const survivors: AgentInputQueuedMessage[] = [
+      ...state.pendingQueue,
+      ...(activeItem ? [activeItem] : []),
+      ...(recoveryItem ? [recoveryItem] : []),
+    ];
+    for (const existing of survivors) {
+      if (existing.clientId === incoming.clientId) {
+        rebindTaskActionInputGuard(incoming, existing);
+      }
+    }
+  }
+
   private rememberEnqueuedClientId(state: SessionInputState, clientId: string): void {
     if (!clientId) return;
     // Treat the bounded list as an MRU window. A queued item may be accepted
@@ -2272,6 +2295,11 @@ export class AgentInputCoordinator {
         sessionId,
         clientId: item.clientId,
       });
+      // JSON 恢复的 remote-task-action 行只剩 taskActionRequiresAuthorization / clientId
+      // 前缀,Symbol 守卫与 onSettled 已被持久化剥掉;重试行带着刚校验过的守卫。
+      // 只放行暂停会丢掉重试行,drain 随后按 TASK_ACTION_AUTHORIZATION_REQUIRED
+      // 丢弃恢复行,收据也不结算(#7512 Codex P1)。先把活守卫转到存活行上。
+      this.rebindDuplicateTaskActionGuard(state, item);
       // 授权投递撞去重也要先解崩溃恢复暂停(#7512 review P1):直连房间的
       // clientId 由 execution+source_message 确定,「已入队落盘、进程未结算」
       // 之间崩溃后,服务器重试同一条会命中这里;若直接 return,放行块永远
