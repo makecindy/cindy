@@ -13,6 +13,9 @@ import { captureNewSessionOwner } from '@/session/newSessionForm';
 import { reconcileNewSessionSubmitDraft } from '@/session/newSessionRuntimeReconciliation';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { deviceDisplayName } from '@/device-link/deviceName';
+import {
+  applyHostModelGroupResult, applyHostModelGroupRoute, buildHostModelGroupRouteNote, resolveHostModelGroup,
+} from '@/session/hostModelGroups';
 
 // Execute the actual page callbacks, excluding unrelated native/network UI.
 function callback(path: string, name: string) {
@@ -45,7 +48,7 @@ if (!readRouteParamSource) throw new Error('Missing SessionScreen.readRouteParam
 // otherwise be caught by send and surface only as a misleading outbox failure.
 const compiledExisting = ts.transpileModule(`${readRouteParamSource}\n${sendSource}\nreturn send;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
-function newHarness(text = '/goal target') {
+function newHarness(text = '/goal target', overrides: (bindings: Record<string, unknown>) => void = () => {}) {
   setMobileAuthOwner('test-user');
   const noop = vi.fn();
   const draft = { agentKind: 'pi', model: 'test-model', providerId: 'test-provider', workspaceKind: 'dialogue', workingDir: '', firstMessage: text, agentDeviceId: 'agent-device' };
@@ -75,7 +78,13 @@ function newHarness(text = '/goal target') {
     isDefaultDraftSessionTitle: () => false, waitForPendingUploads: noop,
     setAttachments: noop, setMediaAssetAttachments: noop, setAttachmentPreviews: noop, composerAnnotationsRef: { current: null },
     patchDraft: vi.fn(), router: { replace: vi.fn() }, humanizeRemoteError,
+    // Model groups (model-groups.md §6.3): none selected unless a test picks one.
+    activeHostModelGroup: null as { id: string; name: string } | null, basePillModelSummary: 'test-model',
+    resolveHostModelGroup, applyHostModelGroupRoute, applyHostModelGroupResult, buildHostModelGroupRouteNote,
+    remoteAgentCatalogs: [], i18nInstance: { language: 'en' },
+    confirmAgentUnauthenticated: vi.fn(async () => ({ unauthenticated: false, fresh: null })),
   };
+  overrides(bindings);
   bindings.createGoalSession = vi.fn(goalCreate(bindings));
   return { bindings, run: newCreate(bindings) as () => Promise<void> };
 }
@@ -138,6 +147,30 @@ describe('new task /goal page callback', () => {
     expect(h.bindings.maker.goal.set).toHaveBeenCalledExactlyOnceWith({ sessionId: 'new-goal-task', objective: 'target' });
     expect(h.bindings.router.replace).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ sessionId: 'new-goal-task' }) }));
     expect(h.bindings.createMessageSession).not.toHaveBeenCalled();
+  });
+  // PR #11866 review r4650525974, unit, real goal callback: a selected mode picks its source before the
+  // sign-in checks. Gap: the goal path checked the draft's own agent first. Minimal input: the draft's agent
+  // is signed out on the host, the mode routes to a signed-in Codex source (on the draft's agent computer, so the
+  // harness's catalog guard is not involved). Failure: the goal is refused
+  // with the old agent's sign-in hint, or the task is created on the draft's model.
+  it('lets a selected mode create the goal on its own source when the draft\'s agent is signed out', async () => {
+    const h = newHarness('/goal target', (bindings) => {
+      Object.assign(bindings, {
+        remoteAgentPick: null,
+        activeHostModelGroup: { id: 'daily', name: 'Daily' },
+        confirmAgentUnauthenticated: vi.fn(async () => ({ unauthenticated: true, fresh: null })),
+      });
+      Object.assign(bindings.maker as object, {
+        resolveModelGroup: vi.fn(async () => ({ outcome: 'routed', groupName: 'Daily', decisionId: 'd1', modelName: 'GPT', sourceName: 'Work',
+          route: { agentKind: 'codex', providerId: 'openai-work', model: 'gpt-6', agentDeviceId: 'agent-device' }, why: 'order', trace: [] })),
+        commitModelGroupDecision: vi.fn(async () => {}), bindModelGroupSession: vi.fn(async () => {}),
+        writeModelGroupRouteNote: vi.fn(async () => {}),
+      });
+    });
+    await h.run();
+    expect(h.bindings.confirmAgentUnauthenticated).not.toHaveBeenCalled();
+    expect(h.bindings.maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', model: 'gpt-6', providerId: 'openai-work' }));
+    expect((h.bindings.maker as unknown as { bindModelGroupSession: () => void }).bindModelGroupSession).toHaveBeenCalledOnce();
   });
   it('opens the existing panel for bare /goal without creating a task', async () => {
     const h = newHarness('/goal'); await h.run();

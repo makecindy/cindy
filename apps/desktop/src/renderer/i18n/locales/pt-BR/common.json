@@ -22487,6 +22487,7 @@
     "picker": {
       "empty": "Ainda não há grupos de modelos. Combine várias fontes em um modo nas Configurações para escolhê-lo aqui.",
       "manage": "Gerenciar grupos de modelos",
+      "deviceTitle": "Grupos de modelos · {{device}}",
       "switched": "“{{name}}” trocou esta tarefa para {{model}}",
       "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
       "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado."

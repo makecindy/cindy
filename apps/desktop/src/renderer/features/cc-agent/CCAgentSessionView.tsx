@@ -126,6 +126,7 @@ import {
   sessionSubscriptionPoolProvider,
 } from '@/components/new-chat/SessionSubscriptionAccount';
 import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, resolveModelGroup, useModelGroups, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
+import { bindDeviceModelGroupSession, resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
 import {
   beginAgentSwitchOperation,
   hasPendingAgentSendDispatch,
@@ -2856,10 +2857,17 @@ function CCAgentSessionContent({
     };
   }, [modelGroupSwitchOffer, sessionId, t]);
   // 进行中的任务里选模式(model-groups.md §5)：只在任务所在的运行位置里按规则当场挑一个，走选择器同一条换模型路径
-  // 换过去；之后不会自己再换。远程控制别的电脑、SSH 与伙伴对话不提供，条件与撞配额的换来源提议相同。
-  const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && !remoteDeviceId && !session?.remoteHostId;
+  // 换过去；之后不会自己再换。远程控制另一台电脑时列那台的模式，由那台选(§6.3)，那台是旧版本时不列；
+  // 分享来的任务、SSH 与伙伴对话不提供。
+  const modelGroupsTaskDeviceId = remoteDeviceId && !isSharedTaskPeer(remoteDeviceId) ? remoteDeviceId : null;
+  const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && (!remoteDeviceId || !!modelGroupsTaskDeviceId)
+    && !session?.remoteHostId;
   // 任务视图挂着但看不见(聊天栏收起)时不读配置，重新看得见时再读。
-  const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask && viewVisible);
+  const localTaskModelGroups = useModelGroups(modelGroupsInTask && viewVisible && !modelGroupsTaskDeviceId);
+  const deviceTaskModelGroups = useDeviceModelGroups(
+    modelGroupsInTask ? modelGroupsTaskDeviceId : null, modelGroupsInTask && viewVisible,
+  );
+  const modelGroupsConfig = modelGroupsTaskDeviceId ? deviceTaskModelGroups.config : localTaskModelGroups.config;
   // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
   const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
     if (!sessionId) return;
@@ -2870,7 +2878,10 @@ function CCAgentSessionContent({
     try {
       // 选路期间切到了别的任务：换模型的入口已属于那个任务，这次作废，不动任何一个。
       const navigationVersion = sessionNavigationVersionRef.current;
-      const result = await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
+      // 远程控制的任务：由任务所在那台按它的模式选，位置是那台眼里的位置。
+      const result = modelGroupsTaskDeviceId
+        ? await resolveDeviceModelGroup(modelGroupsTaskDeviceId, selection, undefined, { agentDeviceId: taskLocation })
+        : await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
       if (sessionNavigationVersionRef.current !== navigationVersion) return;
       if (!result || result.outcome !== 'routed') {
         if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
@@ -2885,20 +2896,22 @@ function CCAgentSessionContent({
       });
       if (!applied) return;
       // 记下是经哪个模式换的：之后撞配额，接着提议这个模式里的下一个来源。
-      bindModelGroupSession(sessionId, selection, result);
+      if (modelGroupsTaskDeviceId) void bindDeviceModelGroupSession(modelGroupsTaskDeviceId, sessionId, selection, result);
+      else bindModelGroupSession(sessionId, selection, result);
       toast.success(t('modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
     } finally {
       finishSwitch();
     }
-  }, [sessionId, taskLocation, t]);
-  const taskModelGroups = useMemo(() => (modelGroupsInTask
+  }, [sessionId, taskLocation, t, modelGroupsTaskDeviceId]);
+  const taskModelGroups = useMemo(() => (modelGroupsInTask && modelGroupsConfig
     ? {
         config: modelGroupsConfig,
         active: null,
         onSelect: (selection: ModelGroupSelection) => { void switchTaskByModelGroup(selection); },
-        onManage: () => navigate('/settings?tab=model-groups'),
+        // 管理入口只在本机：另一台电脑的模式在那台上改。
+        ...(modelGroupsTaskDeviceId ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
       }
-    : undefined), [modelGroupsInTask, modelGroupsConfig, switchTaskByModelGroup, navigate]);
+    : undefined), [modelGroupsInTask, modelGroupsConfig, switchTaskByModelGroup, navigate, modelGroupsTaskDeviceId]);
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以
