@@ -818,6 +818,9 @@ describe('maker SEND transaction', () => {
     )).rejects.toBe(reconnectError);
     expect(close).toHaveBeenCalledOnce();
     expect(offer).not.toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalledWith('send: remote agent switch credential abandoned', {
+      sessionId: session.id, reason: 'close-not-closed',
+    });
   });
 
   // #10559: a quota-looking message alone cannot authorize transparent replay.
