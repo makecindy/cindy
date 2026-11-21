@@ -465,6 +465,41 @@ describe('bot im connection runtime', () => {
     expect(getBotFeishuTransport('bot-mia')).toBeNull();
   });
 
+  // Startup used to await each connection in turn, so one unreachable transport
+  // delayed every later connection. Minimal failing input: the first record's init never settles.
+  it('starts every recorded connection without waiting for a stalled one', async () => {
+    await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'feishu' }, { now: () => 1 });
+    await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'feishu' }, { now: () => 2 });
+    const stalledId = listBotImConnections()[0]!.id;
+    let releaseStalled!: () => void;
+    const connected = new Set<string>();
+    configureBotImConnectionRuntime({
+      removeWechatCompanionBinding: h.drainWechat,
+      create: (record) => ({
+        kind: 'feishu',
+        im: {
+          init: () => record.id === stalledId
+            ? new Promise<void>((resolve) => { releaseStalled = resolve; })
+            : (connected.add(record.id), Promise.resolve()),
+          dispose: async () => undefined,
+          onStatusChange: () => () => undefined,
+          getStatus: () => ({ kind: connected.has(record.id) ? 'connected' : 'connecting' }),
+          getOwnerOpenId: () => 'ou_owner',
+        } as never,
+        orchestrator: fakeOrchestrator() as never,
+      }),
+      settingsIdentity: () => ({ telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null }),
+      listKnownGroups: async () => [],
+    });
+    const starting = startBotImConnections();
+    await vi.waitFor(() => expect(getBotFeishuTransport('bot-mia')).not.toBeNull());
+    expect(connected.size).toBe(1);
+    releaseStalled();
+    await starting;
+    expect(__testing.instances.size).toBe(2);
+    await stopBotImConnections();
+  });
+
   it('lists known groups with their per-connection activation and toggles it live', async () => {
     const added = await addBotImConnection({
       botId: 'bot-mia',

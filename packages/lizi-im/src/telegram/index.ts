@@ -98,6 +98,12 @@ const OFFLINE_SECRET_KEY = 'telegram-bot-offline';
 
 const POLL_TIMEOUT_SEC = 50;
 /**
+ * 建连握手(getMe)上限: 网络不通时这条连接不能无限停在 connecting —— 超时按
+ * 网络失败处理(init 走既有退避重试, 手动保存直接报失败)。只管握手, 长轮询仍按
+ * POLL_TIMEOUT_SEC 由服务端挂起。
+ */
+const CONNECT_HANDSHAKE_TIMEOUT_MS = 15_000;
+/**
  * 相册(media_group)聚合窗: Telegram 把一次多图拆成多条消息, 同组消息通常在
  * 同一批 getUpdates 里到齐; 静默 1s 后合并成单个事件, 不各起一轮 turn。
  */
@@ -1371,10 +1377,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const generation = this.configVersion;
     this.setStatus({ kind: 'connecting' });
     let me: TgUser;
+    const handshake = new AbortController();
+    const handshakeTimer = setTimeout(() => handshake.abort(), CONNECT_HANDSHAKE_TIMEOUT_MS);
     try {
-      me = await api.call<TgUser>('getMe');
+      me = await api.call<TgUser>('getMe', undefined, handshake.signal);
     } catch (err) {
       if (this.configVersion !== generation || this.disposing) return false;
+      if (handshake.signal.aborted) this.log.warn(`getMe timed out after ${CONNECT_HANDSHAKE_TIMEOUT_MS}ms`);
       this.setStatus(mapConnectErrorToStatus(err));
       const retryable = !(err instanceof TelegramApiError)
         || err.errorCode === 429 || err.errorCode >= 500;
@@ -1386,6 +1395,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         }, { minimumDelayMs: err instanceof TelegramApiError ? (err.retryAfterSec ?? 0) * 1_000 : 0 });
       }
       return false;
+    } finally {
+      clearTimeout(handshakeTimer);
     }
     // 世代变了(被下线/登出/换 token)或已 dispose → 本次连接结果作废。offline
     // 标志再查一次是防守: 远程下线写标志与递增世代之间也有窗口。

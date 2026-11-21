@@ -269,18 +269,21 @@ async function releaseInstance(live: LiveInstance): Promise<void> {
   instances.delete(live.record.id);
 }
 
-/** 账号 IM 连接启动: 按记录起全部伙伴连接(各自失败只记日志, 不挡其它)。 */
+/**
+ * 账号 IM 连接启动: 按记录并行起全部伙伴连接, 一条慢或失败不推迟其它(各自失败只记日志)。
+ * 连接之间没有顺序依赖: 同一平台身份添加时已拒绝重复, 凭证与传输层状态按连接前缀隔离。
+ */
 export async function startBotImConnections(): Promise<void> {
   if (!deps) return;
-  for (const record of listBotImConnections()) {
-    if (instances.has(record.id)) continue;
+  await Promise.all(listBotImConnections().map(async (record) => {
+    if (instances.has(record.id)) return;
     try {
       const live = instantiate(record);
       await live.transport.im.init();
     } catch (err) {
       log.error(`bot im connection ${record.id} (${record.channel}) start failed: ${String(err)}`);
     }
-  }
+  }));
 }
 
 /** 账号 IM 连接停止: 释放全部实例, 记录保留。 */

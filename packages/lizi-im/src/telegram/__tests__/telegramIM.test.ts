@@ -304,6 +304,41 @@ describe('TelegramIM', () => {
     }
   });
 
+  // A getMe that never answers used to leave the connection in `connecting` forever
+  // (and held back every companion connection started after it). Only the handshake is
+  // bounded: the 50s long poll must not inherit the short timeout.
+  it('times out a stalled startup handshake, reports a network error and retries', async () => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    const original = api.call.bind(api);
+    let stalled = true;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getMe' && stalled) {
+        stalled = false;
+        api.calls.push({ method, params: params ?? {} });
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      }
+      return original(method, params, signal);
+    }) as typeof api.call;
+    try {
+      const starting = im.init();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(im.getStatus().kind).toBe('connecting');
+      await vi.advanceTimersByTimeAsync(1);
+      await starting;
+      expect(im.getStatus()).toMatchObject({ kind: 'error', code: 'network' });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(im.getStatus().kind).toBe('connected');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(api.calls.filter((call) => call.method === 'getUpdates')).toHaveLength(1);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('无 token 时 init 保持 idle, 不发任何请求', async () => {
     await im.init();
     expect(im.getStatus()).toEqual({ kind: 'idle' });
