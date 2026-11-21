@@ -13,7 +13,25 @@ export const MODEL_GROUPS_IPC = {
   BIND_SESSION: 'model-groups:bind-session',
   /** 撞配额时同一条路线里还能接着用的下一个来源；没有为 null。 */
   SWITCH_OFFER: 'model-groups:switch-offer',
+  /**
+   * 手机或另一台电脑经这台电脑的模式建了任务后，请这台电脑在任务里写那一行说明(model-groups.md §6.3)。
+   * 本机界面自己写库，不走这里；远程不能裸写消息，所以由这台电脑代写。
+   */
+  ROUTE_NOTE: 'model-groups:route-note',
 } as const;
+
+/**
+ * 同账号本人控制的手机与电脑可以远程调用的模型组接口(model-groups.md §6.3)：读模式、按模式选来源、
+ * 提交选路记录、记下任务用着哪个来源、写说明。改模式(SET)只在本机。
+ * 协议约定见 docs/dev-rules/protocol-compatibility/model-groups-remote-pickers.md。
+ */
+export const MODEL_GROUPS_REMOTE_CHANNELS = [
+  MODEL_GROUPS_IPC.GET,
+  MODEL_GROUPS_IPC.RESOLVE,
+  MODEL_GROUPS_IPC.COMMIT,
+  MODEL_GROUPS_IPC.BIND_SESSION,
+  MODEL_GROUPS_IPC.ROUTE_NOTE,
+] as const;
 
 export const MODEL_GROUP_STRATEGIES = ['expiring', 'order', 'rotate', 'cheapest'] as const;
 /**
@@ -70,6 +88,22 @@ export const MODEL_GROUP_LIMITS = { routes: 32, candidates: 16, exceptions: 8, n
 export interface ModelGroupSelection {
   type: 'route';
   id: string;
+  /**
+   * 这个模式属于另一台电脑(在本机选择器「其他电脑」那一段选的)：由那台电脑按自己的规则选，任务在那里运行。
+   * 省略 = 本机(或远程控制时被控的那台)的模式。发给那台电脑时去掉，那边按自己的模式解析。
+   */
+  deviceId?: string;
+}
+
+/** 任务里那一行说明，与插件选路的说明卡同形(source 固定为 model-group)。 */
+export interface ModelGroupRouteNote {
+  pluginName: string;
+  outcome: 'routed' | 'kept';
+  modelName: string;
+  effort?: string;
+  reason?: string;
+  why?: 'unavailable-route';
+  source: 'model-group';
 }
 
 export type ModelGroupTraceState = 'picked' | 'standby' | 'skipped';
@@ -315,5 +349,36 @@ export function sanitizeModelGroupSelection(raw: unknown): ModelGroupSelection |
   if (!raw || typeof raw !== 'object') return null;
   const value = raw as Record<string, unknown>;
   const id = text(value.id, MODEL_GROUP_LIMITS.id);
-  return id && value.type === 'route' ? { type: 'route', id } : null;
+  if (!id || value.type !== 'route') return null;
+  // 位置格式不对时整条作废：不能悄悄变成本机的同名模式。
+  if (value.deviceId === undefined || value.deviceId === null) return { type: 'route', id };
+  const deviceId = modelGroupAgentDeviceId(value.deviceId);
+  return deviceId ? { type: 'route', id, deviceId } : null;
+}
+
+/** 发给模式所在那台电脑的选择：那边只认自己的模式，不带位置。 */
+export function modelGroupSelectionForOwner(selection: ModelGroupSelection): ModelGroupSelection {
+  return { type: 'route', id: selection.id };
+}
+
+const ROUTE_NOTE_LIMITS = { name: MODEL_GROUP_LIMITS.name, text: 512, effort: MODEL_GROUP_LIMITS.effort } as const;
+
+/** 远程送来的说明按不可信数据收：只留说明卡认识的字段，限长；不对就整条不写。 */
+export function sanitizeModelGroupRouteNote(raw: unknown): ModelGroupRouteNote | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const pluginName = text(value.pluginName, ROUTE_NOTE_LIMITS.name);
+  const modelName = text(value.modelName, ROUTE_NOTE_LIMITS.text);
+  if (!pluginName || !modelName || (value.outcome !== 'routed' && value.outcome !== 'kept')) return null;
+  const effort = text(value.effort, ROUTE_NOTE_LIMITS.effort);
+  const reason = text(value.reason, ROUTE_NOTE_LIMITS.text);
+  return {
+    pluginName,
+    outcome: value.outcome,
+    modelName,
+    ...(effort ? { effort } : {}),
+    ...(reason ? { reason } : {}),
+    ...(value.outcome === 'kept' ? { why: 'unavailable-route' as const } : {}),
+    source: 'model-group',
+  };
 }

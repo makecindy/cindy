@@ -601,6 +601,33 @@ it('shows the model-groups rail only while modes exist', async () => {
   expect(document.querySelector('[data-rail-item="all"][aria-pressed="true"]')).not.toBeNull();
 });
 
+// model-groups.md §6.3: another computer's own modes sit in that computer's rail segment and are chosen
+// on that computer. Existing cases only cover this computer's modes. Minimal input: no local modes, one
+// remote computer with one mode; tier: unit, real ModelSelectorContent. Failure: the cell is missing, the
+// pick loses the computer (so the local mode with the same id would run), or the remote modes are never read.
+it('lists another computer\'s modes in its own cell and picks them for that computer', async () => {
+  const onSelect = vi.fn();
+  const readDevices = vi.fn();
+  renderPanel({
+    remoteAgent: { devices: [{ deviceId: 'desk-2', name: 'Studio' }], selectedDeviceId: null },
+    modelGroups: {
+      config: { routes: [] }, active: null, onSelect, onManage: vi.fn(), readDevices,
+      devices: [{ deviceId: 'desk-2', name: 'Studio', config: { routes: [{ id: 'mode', name: 'Studio mode', strategy: 'order', candidates: [] }] } }],
+    },
+  });
+  expect(readDevices).toHaveBeenCalled();
+  // 本机没有模式：本机「模型组」一格不出现；那台电脑的一格照常出现。
+  expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
+  const cell = document.querySelector('[data-rail-item="model-groups:desk-2"]');
+  expect(cell).not.toBeNull();
+  await act(async () => fireEvent.click(cell!));
+  // 另一台电脑的模式不带收藏 ☆，也没有管理入口(那台的模式在那台上改)。
+  expect(document.querySelector('[data-model-group-favorite="mode"]')).toBeNull();
+  expect(document.querySelector('[data-model-groups-manage]')).toBeNull();
+  await act(async () => fireEvent.click(screen.getByText('Studio mode')));
+  expect(onSelect).toHaveBeenCalledWith({ type: 'route', id: 'mode', deviceId: 'desk-2' });
+});
+
 // #10207 / #10235 merge regression: local loading must not label a populated
 // mode section empty. Existing cases cover model favorites, not pinned modes.
 // Minimal input: pending local catalog + one mode; tier: unit, real picker.
