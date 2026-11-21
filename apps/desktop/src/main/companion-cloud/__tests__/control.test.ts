@@ -1167,7 +1167,9 @@ describe('switch home from any computer', () => {
     ['answers on the longer retry', [new Error('[INVOKE_TIMEOUT] caps probe timed out'), 4], 4, [8_000, 15_000]],
     ['link still connecting, then answers', [new Error('[NOT_CONNECTED] link not ready'), 2], 2, [8_000, 15_000]],
     ['an older Cindy without the channel', [new Error('[CHANNEL_NOT_ALLOWED] not allowed')], 0, [8_000]],
-    ['explicitly offline', [new Error('[DEVICE_OFFLINE] offline')], 0, [8_000]],
+    // Also the local offline gate and Agent-Net cancelling queued calls on a dropped session (Greptile P1).
+    ['reported offline while listed online', [new Error('[DEVICE_OFFLINE] Agent-Net session closed'), 4], 4, [8_000, 15_000]],
+    ['with same-account control turned off', [new Error('[REMOTE_DISABLED] control off')], 0, [8_000]],
     ['still silent after the longer wait', [new Error('[INVOKE_TIMEOUT] t'), new Error('[DEVICE_UNRESPONSIVE] u')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
   ] as const)('reads the home version when it is %s', async (_, answers, expected, waits) => {
     const asked: number[] = [];

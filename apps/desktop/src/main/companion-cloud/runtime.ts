@@ -210,8 +210,13 @@ export function hasProfileSnapshot(rows: unknown): boolean {
   return isCompanionProfileSnapshot(row?.value);
 }
 
-/** No answer yet (a slow or still-connecting link), unlike an explicit offline / disabled / older-version answer. */
-const HOME_NO_ANSWER = new Set(['INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE', 'NOT_CONNECTED', 'DEVICE_LINK_NOT_CONNECTED',
+/**
+ * No answer yet (a slow, still-connecting or just-dropped link), unlike the home's explicit answers
+ * (control off, revoked, an older Cindy without the channel). `DEVICE_OFFLINE` is here too: besides the
+ * relay it comes from the local offline gate and from Agent-Net cancelling queued calls when a session
+ * drops, so it does not outweigh the device list showing the home online (only then is it probed).
+ */
+const HOME_NO_ANSWER = new Set(['INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE', 'DEVICE_OFFLINE', 'NOT_CONNECTED', 'DEVICE_LINK_NOT_CONNECTED',
   'LINK_NOT_OPEN', 'LINK_CLOSED', 'BACKPRESSURE', 'PEER_RESET', 'TIMEOUT', 'NETWORK_ERROR']);
 /** First wait, then one longer try: right after start-up the link to an online home can be slow. */
 const HOME_PROBE_WAITS_MS = [8_000, 15_000];
@@ -220,8 +225,9 @@ const HOME_PROBE_WAITS_MS = [8_000, 15_000];
  * The cloud-companion version of a companion's home that the device list shows online
  * (cloud-companions.md §3.1). `probe` rejects with a `[CODE]` error when the home does not answer
  * in time. A slow answer is not «offline»: it is asked once more with a longer wait, and still no
- * answer rejects with `HOME_UNRESPONSIVE`. Explicit failures (offline, control off, an older Cindy
- * without the channel) stay 0, which is the only automatic take-over.
+ * answer rejects with `HOME_UNRESPONSIVE`. Explicit answers (control off, revoked, an older Cindy
+ * without the channel) stay 0: with the device list showing the home offline (not probed), the only
+ * automatic take-over.
  */
 export async function askCompanionHomeVersion(probe: (timeoutMs: number) => Promise<number>): Promise<number> {
   for (const timeoutMs of HOME_PROBE_WAITS_MS) {
