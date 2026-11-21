@@ -1328,6 +1328,7 @@ export function MainLayout() {
       onDetachTab: isSecondaryWindow() ? undefined : handleDetachRightSidebarTab,
       // 左栏完全收起 / rail 态时,窗口左上的红绿灯 / ChromeActions 会压到最左面板顶栏。
       sidebarCollapsed: isSidebarCollapsed,
+      sidebarWidth,
       hasRailChromeActions,
     }),
     [
@@ -1335,6 +1336,7 @@ export function MainLayout() {
       hasRailChromeActions,
       isMac,
       isSidebarCollapsed,
+      sidebarWidth,
       rightSidebarSessionId,
       rightSidebarSubagentsAvailable,
       rightSidebarWorkdirInfo,
@@ -1875,6 +1877,7 @@ export function MainLayout() {
                     headerContent 路由下 ContentHeader 会因 sidebarVisible=true 提前 return null,
                     我们为 rail 浮动 chrome 预留的 spacer 不渲染、按钮悬空。 */}
                 <ContentHeaderSlot
+                  containerRef={mainRef}
                   sidebarVisible={!isSettingsRoute && !isSidebarCollapsed && !isRailMode}
                   showCollapsedActions={!isSettingsRoute && (isSidebarCollapsed || isRailMode)}
                   isSidebarRail={hasRailChromeActions && !rightSidebarOwnsRailChromeActions}

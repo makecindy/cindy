@@ -17,7 +17,7 @@ export const CHROME_ACTIONS_GEOMETRY = {
   clusterWidth: 124,
 } as const;
 
-/** macOS 非全屏时浮动按钮簇的右缘（窗口坐标）。 */
+/** 100% 缩放时，macOS 非全屏按钮簇的右缘（CSS px）。 */
 export const CHROME_ACTIONS_MAC_RIGHT_EDGE =
   CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth;
 
@@ -28,9 +28,13 @@ export const CHROME_ACTIONS_MAC_RIGHT_EDGE =
  * overflow-hidden 按面板宽度裁掉。面板宽度小于簇右缘时（如侧栏拖到 180 的展开
  * 最小宽），簇的右半截就悬在右侧顶栏的拖拽区上 —— 点前进会被当成拖窗口。这里
  * 算出「超出面板右缘的那一截」，由右侧顶栏补挖；面板够宽（>= 簇右缘）或簇整个
- * 落在面板外（rail 宽 78）时退回边界值。
+ * 落在面板外时，洞同时覆盖原生安全区到按钮簇之间的间隙。
  */
-export function chromeActionsHitHoleWidth(panelRightEdge: number): number {
-  const overflow = CHROME_ACTIONS_MAC_RIGHT_EDGE - panelRightEdge;
-  return Math.min(CHROME_ACTIONS_GEOMETRY.clusterWidth, Math.max(0, overflow));
+export function chromeActionsHitHoleWidth(
+  panelRightEdge: number,
+  trafficLightInset: number = CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft,
+): number {
+  // At small zoom the native safe area can extend past the panel edge. Include
+  // that gap too, or the trailing buttons still sit over the native drag region.
+  return Math.max(0, trafficLightInset + CHROME_ACTIONS_GEOMETRY.clusterWidth - panelRightEdge);
 }

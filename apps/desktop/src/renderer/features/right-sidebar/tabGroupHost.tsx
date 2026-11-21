@@ -19,6 +19,8 @@ export interface TabGroupHostValue {
    * 贴着窗口左上角的组要为它们预留 no-drag 空位。
    */
   sidebarCollapsed: boolean;
+  /** 展开侧栏的实际 CSS 宽度；最左工具顶栏据此消费 ChromeActions 的溢出。 */
+  sidebarWidth: number;
   /** 左栏为 rail:ChromeActions 跨到内容区,贴着窗口左上角的组顶栏要挖 no-drag 命中洞。 */
   hasRailChromeActions: boolean;
 }

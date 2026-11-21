@@ -43,6 +43,8 @@ import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginU
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import { useLocale } from '@/hooks/useLocale';
+import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { CHROME_ACTIONS_GEOMETRY } from './chromeActionsGeometry';
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { GhostMediaLightboxHost } from '@/cindy-brain/GhostMediaLightboxHost';
@@ -77,7 +79,11 @@ export function SidebarWindowLayout() {
     // 必须只由主 renderer 执行，避免多个 renderer 对同一远程任务并发重试。
     makerChatStore.initGlobalListeners({ ownsRemoteAuthRetry: false, ownsRemoteListCache: false });
   }, []);
-  const isMac = window.electronAPI?.platform === 'darwin';
+  const {
+    isMac,
+    isFullscreen,
+    trafficLightInset = CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft,
+  } = useMacFullscreen();
   const [ctx, setCtx] = useState<SidebarWindowContext | null>(null);
   const [activeNamedView, setActiveNamedView] = useState(false);
   const handleActiveTabChange = useCallback((id: string | null) => {
@@ -280,7 +286,10 @@ export function SidebarWindowLayout() {
         className="relative flex h-[46px] shrink-0 items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)]"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <div className={isMac ? 'w-20 shrink-0' : 'w-3 shrink-0'} />
+        <div
+          className="shrink-0"
+          style={{ width: isMac && !isFullscreen ? trafficLightInset + 2 : 12 }}
+        />
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <PanelRight size={14} className="shrink-0 text-[var(--text-tertiary)]" />
           <span className="truncate text-13 text-[var(--text-secondary)]">
