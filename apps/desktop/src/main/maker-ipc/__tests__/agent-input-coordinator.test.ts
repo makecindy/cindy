@@ -1438,6 +1438,28 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(h.onOwnerMessage).toHaveBeenCalledTimes(expected ? 1 : 0);
   });
 
+  // Regression (PR #11894 review): a steer reaches the running runtime without the send transaction's
+  // pending-switch step, so it must ask for the live route; a dispatch asks for the post-switch one.
+  // Entry: production coordinator steer and dispatch; observable: the model message content.
+  // Minimum: one referenced conversation per delivery path; tier: unit.
+  it('asks for the live route on steer and the send route on dispatch', async () => {
+    const route = { agentKind: 'claude-code' as const, supportsRemote: false };
+    const sendToSessionHint = vi.fn((_id: string, receiver: 'live' | 'send') => receiver === 'live' ? route : undefined);
+    const h = createHarness({ sendToSessionHint });
+    const href = 'cindy://session/target';
+    const referenced = (clientId: string) => makeItem(clientId, href, {
+      agentReferences: [{ kind: 'session', start: 0, end: href.length, href, sessionId: 'target', title: 'Target' }],
+    });
+    h.setRunning(true);
+    await h.coordinator.steer('route-steer', referenced('route-steer-input'));
+    expect(JSON.stringify(h.steerToAgent.mock.calls[0]?.[1])).toContain('send_to_session');
+    h.setRunning(false);
+    h.coordinator.enqueue('route-send', referenced('route-send-input'));
+    await vi.waitFor(() => expect(h.sendToAgent).toHaveBeenCalledOnce());
+    expect(JSON.stringify(h.sendToAgent.mock.calls[0]?.[1])).not.toContain('send_to_session');
+    expect(sendToSessionHint.mock.calls).toEqual([['route-steer', 'live'], ['route-send', 'send']]);
+  });
+
   it('carries message sources through steer delivery and the steer user row', async () => {
     const h = createHarness();
     const sid = 'source-steer';
@@ -2075,6 +2097,7 @@ function createHarness(opts?: {
   awaitQueuePersistence?: AgentInputCoordinatorDeps['awaitQueuePersistence'];
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
   providerGroupSwitchCandidate?: AgentInputCoordinatorDeps['providerGroupSwitchCandidate'];
+  sendToSessionHint?: AgentInputCoordinatorDeps['sendToSessionHint'];
 }) {
   let running = false;
   let liveRunningOverride: boolean | null | 'unknown' = null;
@@ -2222,6 +2245,7 @@ function createHarness(opts?: {
   >(async () => []);
   const rewindPersistedUserMessageAfterClear = vi.fn(async (_sessionId: string, _clientId: string) => {});
   const coordinator = new AgentInputCoordinator({
+    sendToSessionHint: opts?.sendToSessionHint,
     rewindPersistedUserMessageAfterClear,
     sendToAgent,
     steerToAgent,

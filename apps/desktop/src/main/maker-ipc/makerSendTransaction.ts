@@ -25,7 +25,7 @@ import {
   type SessionSendResult,
   type UserMessage,
 } from '@cindy/maker-core';
-import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE, type AgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
 import { normalizeWorkingDirForStorage, workingDirEquals } from '../../shared/workingDir.js';
@@ -269,6 +269,7 @@ export interface MakerSendTransactionSession {
   readonly agentDeviceId?: string | null;
   readonly stablePermissionModeState?: Session['stablePermissionModeState'];
   readonly stablePlanModeState?: Session['stablePlanModeState'];
+  readonly sendToSessionHint?: AgentSendToSessionHint;
   hostStartupPreferences?: CreateOpts['hostStartupPreferences'];
   id: string;
   /** Exact in-memory incarnation; a reused session id must not inherit turn grants. */
@@ -1634,6 +1635,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             {
               visibleText: reconcilePersistText,
               autoResume: soForReconcile.persistUserMessage?.autoResume === true,
+              sendToSession: sess.sendToSessionHint,
             },
           )
         : null;
