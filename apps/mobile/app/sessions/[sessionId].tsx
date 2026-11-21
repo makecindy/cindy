@@ -1149,7 +1149,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const shareSelectionCount = useShareSelectionCount();
   const shareSelectionRevision = useShareSelectionRevision();
   const linkedDeviceId = readRouteParam(params.deviceId);
-  const listedSession = remoteSessionStore.getSessions().find((item) => item.id === sessionId);
+  const listedSession = remoteSessionStore.getSessions?.()?.find((item) => item.id === sessionId);
   const deviceId = resolveSessionLinkDeviceId({
     listedDeviceId: listedSession?.canonicalDeviceId ?? listedSession?.deviceLinkDeviceId,
     linkedDeviceId,
