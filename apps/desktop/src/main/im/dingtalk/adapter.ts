@@ -111,8 +111,25 @@ export function buildDingTalkAdapter(
       const owner = dingtalkIm.getOwnerUserId();
       return owner && userId === owner ? { kind: 'owner-dm' } : { kind: 'guest-dm', userId };
     },
-    handleTextInteraction: (userId, request, options) =>
-      handleDingTalkTextInteraction(dingtalkIm, userId, request, options),
+    handleTextInteraction: (userId, request, options) => {
+      // Guest-originated permission and plan approvals must be answered by the
+      // bound owner, never by the guest who triggered the turn. Questions remain
+      // in the originating lane so a guest can provide ordinary input.
+      const targetUserId =
+        request.kind === 'ask_user_question'
+          ? userId
+          : dingtalkIm.getOwnerUserId() || userId;
+      return handleDingTalkTextInteraction(
+        {
+          sendText: (target, text) => dingtalkIm.sendText(target, text),
+          requestTextReply: (target, prompt, parse, timeoutMs, shared) =>
+            dingtalkIm.requestTextReply(target, prompt, parse, timeoutMs, shared),
+        },
+        targetUserId,
+        request,
+        options,
+      );
+    },
     // 对齐 Telegram / 飞书的边界：主人私聊完全遵循 session.permissionMode，
     // 因而可以显式选择 bypassPermissions（完全访问）；群聊携带成员可控上下文，
     // 无论谁 @ bot 都附加强确认策略，危险操作仍须主人在群里确认。

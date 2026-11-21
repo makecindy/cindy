@@ -119,6 +119,30 @@ describe('dingtalk turn permission boundary', () => {
     });
   });
 
+  it('routes guest permission replies to the bound owner lane', async () => {
+    const requestTextReply = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' as const }));
+    const sendText = vi.fn(async () => undefined);
+    const im = {
+      getOwnerUserId: () => 'owner-user',
+      requestTextReply,
+      sendText,
+    } as unknown as DingTalkIM;
+    const guestAdapter = buildDingTalkAdapter(im, CONFIG);
+    await guestAdapter.handleTextInteraction?.(
+      'guest-user',
+      { kind: 'permission', requestId: 'request-1', toolName: 'file_change', input: {} },
+      {},
+    );
+    expect(requestTextReply).toHaveBeenCalledWith(
+      'owner-user',
+      expect.any(String),
+      expect.any(Function),
+      undefined,
+      undefined,
+    );
+    expect(sendText).not.toHaveBeenCalledWith('guest-user', expect.any(String));
+  });
+
   it('directs unsupported permission modes to Cindy, not an unsupported chat command', () => {
     const copy = adapter.ui.error!.permissionModeUnsupported;
     const message = typeof copy === 'function' ? copy('bypassPermissions') : copy;
