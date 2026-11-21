@@ -11,6 +11,8 @@ export interface GhostUiResource {
   prefersBorder?: boolean;
   /** Only the Host button; does not limit App requestDisplayMode. */
   hostFullscreenButton?: boolean;
+  /** Optional inline placeholder in CSS pixels; ignored by older Hosts. */
+  initialHeight?: number;
   domain?: string;
   permissions?: { camera?: Record<string, never>; microphone?: Record<string, never>; geolocation?: Record<string, never>; clipboardWrite?: Record<string, never> };
 }
