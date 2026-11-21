@@ -58,7 +58,12 @@ export type CompanionCloudFailureCode =
   /** The companion (one of the copies, for a merge) is paused: resume it first. */
   | 'PAUSED'
   /** The chosen computer runs a Cindy too old for a V2 teammate (a project): update it first. */
-  | 'TARGET_OUTDATED';
+  | 'TARGET_OUTDATED'
+  /**
+   * Local only (never sent to another computer): the home is listed online but did not answer, so it
+   * was not asked to hand over. Taking over anyway needs `CompanionSwitchOptions.force`.
+   */
+  | 'HOME_UNRESPONSIVE';
 
 export type CompanionCloudActionResult =
   | { ok: true }
@@ -83,6 +88,11 @@ export type CompanionProfileRepairResult = { ok: true; draft?: CompanionProfileR
  */
 export interface CompanionSwitchOptions {
   whenBusy?: 'wait' | 'stop';
+  /**
+   * Take the companion over here although its home is listed online but does not answer
+   * (`HOME_UNRESPONSIVE`); what it has not synced yet may stay on that computer. Local UI only.
+   */
+  force?: boolean;
 }
 
 export interface CompanionTranscriptMessage {
@@ -129,7 +139,8 @@ export interface CompanionTransferTarget {
  * Where a companion can move, as seen from this computer (cloud-companions.md §3.1):
  * - `local`: this computer is the home and hands it over itself;
  * - `remote`: the home is another reachable computer, asked to hand it over;
- * - `takeOver`: the home cannot be reached; only this computer can continue it;
+ * - `takeOver`: the home cannot be reached; only this computer can continue it. With `reason:
+ *   'HOME_UNRESPONSIVE'` the home is listed online but did not answer: taking over needs `force`;
  * - `unavailable`: the home cannot be changed from here (`reason`).
  */
 export interface CompanionHomeChoices {
@@ -137,7 +148,7 @@ export interface CompanionHomeChoices {
   /** Device-link name of the home; empty when unknown here. */
   homeName?: string;
   mode: 'local' | 'remote' | 'takeOver' | 'unavailable';
-  reason?: 'HOME_OUTDATED' | 'NOT_ENABLED' | 'NOT_FOUND';
+  reason?: 'HOME_OUTDATED' | 'NOT_ENABLED' | 'NOT_FOUND' | 'HOME_UNRESPONSIVE';
   /** Computers it can move to (never the current home). */
   targets: CompanionTransferTarget[];
   /** Why this computer is not among the targets of a remote home: it has not allowed same-account control. */

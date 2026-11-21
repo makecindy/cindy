@@ -764,7 +764,7 @@ import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
-import { activeCompanionCloud } from '../companion-cloud/runtime.js';
+import { activeCompanionCloud, askCompanionHomeVersion } from '../companion-cloud/runtime.js';
 import { companionCloudView } from '../companion-cloud/view.js';
 import { companionProfileUiMock } from '../companion-cloud/uiMock.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
@@ -3209,17 +3209,23 @@ let unsubscribeCompanionCloudBroadcast: (() => void) | null = null;
 /** What a companion that arrived on this computer could not keep (shown once in its chat). */
 const companionArrivalNotices = (botId: string) => activeCompanionCloud()?.arrivalNotices(botId) ?? [];
 const listCompanionDevices = async () => (await handleListDevices(deviceDirectoryDeps())).devices;
-/** Cloud-companion version of another computer's Cindy; 0 when it is old or cannot be reached. */
-async function companionCloudPeerVersion(deviceId: string): Promise<number> {
+/** Cloud-companion version another computer's Cindy answers within `timeoutMs`; rejects when it does not answer. */
+async function probeCompanionCloudCaps(deviceId: string, timeoutMs: number): Promise<number> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const value = await Promise.race([
       invokeDeviceValue(invokeBotPeer, deviceId, COMPANION_CLOUD_CAPS_CHANNEL, []),
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('[INVOKE_TIMEOUT] caps probe timed out')), 5_000); }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('[INVOKE_TIMEOUT] caps probe timed out')), timeoutMs); }),
     ]);
     return companionCloudCapsVersion(value);
-  } catch { return 0; } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); }
 }
+/** Cloud-companion version of another computer's Cindy; 0 when it is old or cannot be reached. */
+async function companionCloudPeerVersion(deviceId: string): Promise<number> {
+  return probeCompanionCloudCaps(deviceId, 5_000).catch(() => 0);
+}
+/** The companion's home listed online: a slow answer is retried, never read as «offline» (cloud-companions.md §3.1). */
+const companionCloudHomeVersion = (deviceId: string) => askCompanionHomeVersion(timeoutMs => probeCompanionCloudCaps(deviceId, timeoutMs));
 const COMPANION_FAILURE_CODES: ReadonlySet<CompanionCloudFailureCode> = new Set<CompanionCloudFailureCode>(
   ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED']);
 /** Kept and merged Cindy ids from a request (local IPC or another computer). */
@@ -13652,6 +13658,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       selfDeviceId: getSelfDeviceId,
       homeLink: {
         version: companionCloudPeerVersion,
+        homeVersion: companionCloudHomeVersion,
         targets: async (deviceId) =>
           parseCompanionCloudRemoteTargets(await invokeDeviceValue(invokeBotPeer, deviceId, COMPANION_CLOUD_TARGETS_CHANNEL, [])),
         handOver: async (deviceId, botId, targetDeviceId, options) => {
@@ -13991,7 +13998,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const id = companionBotId(botId);
     if (typeof targetDeviceId !== 'string' || !targetDeviceId || targetDeviceId.length > 200) throwIpcError('INVALID_PARAMS', 'targetDeviceId required');
     currentCompanionHomes();
-    return activeCompanionCloud()?.switchHome(id, targetDeviceId, companionSwitchOptions(options)) ?? companionNotEnabled;
+    // `force` (take over a home that looks online but does not answer) only comes from this computer's own UI.
+    const force = !!options && typeof options === 'object' && (options as { force?: unknown }).force === true;
+    const parsed = companionSwitchOptions(options);
+    return activeCompanionCloud()?.switchHome(id, targetDeviceId, force ? { ...parsed, force } : parsed) ?? companionNotEnabled;
   });
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_TRANSCRIPT, async (event, botId: unknown, before: unknown) => {
     assertTrustedAppRendererEvent(event);

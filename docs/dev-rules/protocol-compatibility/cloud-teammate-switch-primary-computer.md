@@ -2,6 +2,13 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+2026-11-21：发起方读主力电脑版本时，`maker:companion-cloud:caps` 的请求与回包不变，只改本机对「没有回包」的解读：
+设备列表显示主力电脑在线、但探测超时或链路未就绪（`INVOKE_TIMEOUT`、`DEVICE_UNRESPONSIVE`、`NOT_CONNECTED` 等）时，
+放宽等待重试一次，仍无回包则给本机界面 `HOME_UNRESPONSIVE`，不再当作版本 0 自动接管；明确回包（`DEVICE_OFFLINE`、
+`CHANNEL_NOT_ALLOWED` 等）仍是 0，旧主力电脑照旧可直接接管。`HOME_UNRESPONSIVE` 与 `CompanionSwitchOptions.force`
+只在同一 Desktop 的 `:home-choices` / `:switch-home` 本机 IPC 中使用；`maker:companion-cloud:hand-over` 仍只转发
+`whenBusy`，`force` 不进 device-link，也不进远程交出的选项解析。不新增 channel、帧或服务端接口，手机与旧版对端不受影响。
+
 2026-11-08：`maker:companion-cloud:caps` 的 `companionCloud` 升至 4，表示接收端能运行伙伴 V2（伙伴 = 项目）。
 V2 主力电脑只交给声明 ≥ 4 的目标，低于 4 返回 `TARGET_OUTDATED`（旧发起方不认识该码，按 `FAILED` 显示）；
 `maker:companion-cloud:targets` 的条目新增可选 `outdated: true`（版本 1–3 的电脑仍列出、不可选），旧发起方忽略。

@@ -468,6 +468,37 @@ describe('BotHomeComputerSetting', () => {
     expect(maker.switchCompanionHome).toHaveBeenCalledWith('mia', 'desk', undefined);
   });
 
+  // cloud-companions.md §3.1 (2026-11-21): a main computer listed online that does not answer is never
+  // taken over silently. Read so from the menu, or found at confirm time after the menu offered a normal
+  // hand-over, the owner sees a separate warning and only an explicit force takes it over.
+  it.each(['menu', 'confirm'] as const)('takes over a main computer that does not answer only when forced (found at %s)', async (found) => {
+    const here = { deviceId: 'desk', name: 'Desk', online: true, isSelf: true };
+    maker.getCompanionHomeChoices.mockResolvedValue(found === 'menu'
+      ? { homeDeviceId: 'laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] }
+      : { homeDeviceId: 'laptop', mode: 'remote', targets: [here] });
+    maker.switchCompanionHome.mockImplementation(async (_bot: string, _target: string, options?: { force?: boolean }) =>
+      options?.force ? { ok: true } : { ok: false, code: 'HOME_UNRESPONSIVE' });
+    show(snapshot('laptop'));
+    openMenu();
+    if (found === 'menu') {
+      expect(await screen.findByText('bots.cloud.homeUnresponsive:{"name":"Mia","device":"Laptop"}')).toBeTruthy();
+      expect(screen.queryByText('bots.cloud.switchHere')).toBeNull();
+      fireEvent.click(screen.getByText('bots.cloud.forceHere'));
+    } else {
+      fireEvent.click(await screen.findByText('bots.cloud.switchHere'));
+      fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.switchAction:{"device":"bots.cloud.thisComputer"}' }));
+    }
+    await screen.findByText('bots.cloud.forceDescription:{"name":"Mia","device":"Laptop"}');
+    expect(maker.switchCompanionHome).not.toHaveBeenCalledWith('mia', 'desk', { force: true });
+    h.ensureLoaded.mockImplementation(async () => {
+      resetCompanionCloudStoreForTests(snapshot('desk'));
+      return [{ id: 'mia', status: 'active' }];
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.forceAction' }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
+    expect(maker.switchCompanionHome).toHaveBeenLastCalledWith('mia', 'desk', { force: true });
+  });
+
   it('explains when the main computer runs an older Cindy', async () => {
     maker.getCompanionHomeChoices.mockResolvedValue({ homeDeviceId: 'laptop', mode: 'unavailable', reason: 'HOME_OUTDATED', targets: [] });
     show(snapshot('laptop'));

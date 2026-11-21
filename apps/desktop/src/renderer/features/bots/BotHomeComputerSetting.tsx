@@ -47,6 +47,8 @@ const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
   HOME_OUTDATED: 'bots.cloud.homeOutdated',
   PAUSED: 'bots.cloud.resumeToMove',
   TARGET_OUTDATED: 'bots.cloud.targetOutdated',
+  // Answered with the force-take-over dialog instead (`forceTarget`); kept for completeness.
+  HOME_UNRESPONSIVE: 'bots.cloud.switchOffline',
 };
 
 /** How long a companion moved here from its online home may take to be built on this computer. */
@@ -94,6 +96,8 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const [pending, setPending] = useState<CompanionTransferTarget | null>(null);
   /** The companion was still working when asked to move there: wait for it, or stop it. */
   const [busyTarget, setBusyTarget] = useState<CompanionTransferTarget | null>(null);
+  /** The home is listed online but did not answer: the owner may take it over here anyway. */
+  const [forceTarget, setForceTarget] = useState<CompanionTransferTarget | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repairOpen, setRepairOpen] = useState(false);
@@ -141,6 +145,12 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       if (!current()) return;
       setPending(null);
       setBusyTarget(null);
+      setForceTarget(null);
+      // The home did not answer (not offline): never a silent take-over, the owner decides.
+      if (!result.ok && result.code === 'HOME_UNRESPONSIVE' && !options?.force) {
+        setForceTarget({ deviceId: cloud.selfDeviceId ?? target.deviceId, name: '', online: true, isSelf: true });
+        return;
+      }
       // Still working and nothing chosen yet: offer to wait for the turn or stop it.
       if (!result.ok && result.code === 'BUSY' && !options?.whenBusy) {
         setBusyTarget(target);
@@ -159,8 +169,9 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
         navigate(`/bots/remote/${encodeURIComponent(target.deviceId)}/${encodeURIComponent(bot.id)}`);
         return;
       }
-      // Asked from another computer: this one builds the companion once the move reaches it.
-      if (choices?.mode === 'remote') {
+      // Asked from another computer (or forced while it may have answered meanwhile): this one
+      // builds the companion once the move reaches it.
+      if (choices?.mode === 'remote' || options?.force) {
         toast.info(t('bots.cloud.takingOver', { name: bot.name }));
         const arrival = await waitForArrival(bot.id, current);
         if (!current()) return;
@@ -183,6 +194,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       if (!current()) return;
       setPending(null);
       setBusyTarget(null);
+      setForceTarget(null);
       report(t('bots.cloud.switchFailed', { name: bot.name, device }));
     } finally {
       inFlight.current = false;
@@ -193,7 +205,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const homeName = homeHere
     ? t('bots.cloud.thisComputer')
     : actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
-  return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget, busy,
+  return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget, forceTarget, setForceTarget, busy,
     error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action, repairOpen, setRepairOpen, repairAvailable };
 }
 
@@ -213,6 +225,20 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
           ? t('bots.cloud.homeOutdated', { name: bot.name, device: state.homeName })
           : t('bots.cloud.notEnabled')}
       </DropdownMenuItem>
+    );
+  // Listed online but not answering: say so, and only offer an explicit forced take-over here.
+  if (choices.reason === 'HOME_UNRESPONSIVE')
+    return (
+      <>
+        <DropdownMenuItem disabled className="whitespace-normal">
+          {t('bots.cloud.homeUnresponsive', { name: bot.name, device: state.homeName })}
+        </DropdownMenuItem>
+        {choices.targets.filter((target) => target.isSelf).map((target) => (
+          <DropdownMenuItem key={target.deviceId} onSelect={() => { state.setError(null); state.setForceTarget(target); }}>
+            <span className="min-w-0 truncate">{t('bots.cloud.forceHere')}</span>
+          </DropdownMenuItem>
+        ))}
+      </>
     );
   const hereOff = choices.thisComputer === 'REMOTE_CONTROL_OFF'
     ? <DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.hereControlOff')}</DropdownMenuItem> : null;
@@ -252,6 +278,17 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       loading={state.busy}
       onConfirm={() => void state.confirm(state.busyTarget, { whenBusy: 'wait' })}
       onTertiary={() => void state.confirm(state.busyTarget, { whenBusy: 'stop' })}
+    />
+    <ConfirmDialog
+      open={state.forceTarget !== null}
+      onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setForceTarget(null); }}
+      title={t('bots.cloud.forceTitle', { device: state.homeName })}
+      description={t('bots.cloud.forceDescription', { name: bot.name, device: state.homeName })}
+      confirmText={t('bots.cloud.forceAction')}
+      confirmVariant="destructive"
+      cancelText={t('bots.cloud.forceLater')}
+      loading={state.busy}
+      onConfirm={() => void state.confirm(state.forceTarget, { force: true })}
     />
     <ConfirmDialog
       open={state.pending !== null}

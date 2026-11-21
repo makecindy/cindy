@@ -74,6 +74,11 @@ export interface CompanionCloudHost {
    */
   homeLink?: {
     version: (deviceId: string) => Promise<number>;
+    /**
+     * `version` for the companion's own home that the device list shows online: waits longer and
+     * rejects with `HOME_UNRESPONSIVE` when it still does not answer (a slow link is not «offline»).
+     */
+    homeVersion?: (deviceId: string) => Promise<number>;
     targets: (deviceId: string) => Promise<CompanionTransferTarget[]>;
     handOver: (deviceId: string, botId: string, targetDeviceId: string, options?: CompanionSwitchOptions) => Promise<CompanionCloudActionResult>;
     /** Ask the kept Cindy's home to merge the other copies into it. */
@@ -203,6 +208,30 @@ const BUSY_POLL_MS = 2_000;
 export function hasProfileSnapshot(rows: unknown): boolean {
   const row = (Array.isArray(rows) ? rows : []).find((candidate: { key?: unknown }) => candidate?.key === COMPANION_PROFILE_KEY) as { value?: unknown } | undefined;
   return isCompanionProfileSnapshot(row?.value);
+}
+
+/** No answer yet (a slow or still-connecting link), unlike an explicit offline / disabled / older-version answer. */
+const HOME_NO_ANSWER = new Set(['INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE', 'NOT_CONNECTED', 'DEVICE_LINK_NOT_CONNECTED',
+  'LINK_NOT_OPEN', 'LINK_CLOSED', 'BACKPRESSURE', 'PEER_RESET', 'TIMEOUT', 'NETWORK_ERROR']);
+/** First wait, then one longer try: right after start-up the link to an online home can be slow. */
+const HOME_PROBE_WAITS_MS = [8_000, 15_000];
+
+/**
+ * The cloud-companion version of a companion's home that the device list shows online
+ * (cloud-companions.md §3.1). `probe` rejects with a `[CODE]` error when the home does not answer
+ * in time. A slow answer is not «offline»: it is asked once more with a longer wait, and still no
+ * answer rejects with `HOME_UNRESPONSIVE`. Explicit failures (offline, control off, an older Cindy
+ * without the channel) stay 0, which is the only automatic take-over.
+ */
+export async function askCompanionHomeVersion(probe: (timeoutMs: number) => Promise<number>): Promise<number> {
+  for (const timeoutMs of HOME_PROBE_WAITS_MS) {
+    try { return await probe(timeoutMs); }
+    catch (error) {
+      const code = /^\[([A-Z_]+)\]/.exec(error instanceof Error ? error.message : '')?.[1];
+      if (!code || !HOME_NO_ANSWER.has(code)) return 0;
+    }
+  }
+  throw new Error('HOME_UNRESPONSIVE');
 }
 
 /** Same computers Orca may run work on (orcaRemoteWorkers.isExecutionDeviceCandidate). */
@@ -1105,8 +1134,11 @@ export function startCompanionCloud(input: {
       const here: CompanionTransferTarget = { deviceId: self, name: selfDevice?.name ?? '', online: true, isSelf: true };
       const homeDevice = home ? devices.find(device => device.deviceId === home) : undefined;
       // Unreachable home (offline, or not controllable from here): only this computer can continue it.
-      const version = home && homeDevice?.online && input.host.homeLink
-        ? await input.host.homeLink.version(home).catch(() => 0) : 0;
+      // Listed online but not answering is not offline: the owner decides whether to take it over anyway.
+      const link = input.host.homeLink;
+      const version = home && homeDevice?.online && link
+        ? await (link.homeVersion ?? link.version)(home).catch((error: unknown) => errorCode(error) === 'HOME_UNRESPONSIVE' ? -1 : 0) : 0;
+      if (version === -1) return { homeDeviceId: home, homeName, mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] };
       if (!home || version === 0) return { homeDeviceId: home, homeName, mode: 'takeOver', targets: [here] };
       if (version < REMOTE_HAND_OVER_VERSION) return { homeDeviceId: home, homeName, mode: 'unavailable', reason: 'HOME_OUTDATED', targets: [] };
       // The home's own view: it decides which computers can receive the companion (this one included).
@@ -1125,6 +1157,8 @@ export function startCompanionCloud(input: {
       const choices = await runtime.homeChoices(botId);
       if (choices.homeDeviceId === targetDeviceId) return { ok: true };
       if (choices.mode === 'unavailable') return { ok: false, code: choices.reason === 'HOME_OUTDATED' ? 'HOME_OUTDATED' : 'FAILED' };
+      // Never a silent take-over of a home that may still be running and syncing: only on the owner's explicit choice.
+      if (choices.reason === 'HOME_UNRESPONSIVE' && !(options?.force && targetDeviceId === self)) return { ok: false, code: 'HOME_UNRESPONSIVE' };
       const chosen = choices.targets.find(target => target.deviceId === targetDeviceId);
       if (!chosen) return { ok: false, code: 'TARGET_UNAVAILABLE' };
       if (choices.mode === 'local') return runtime.transfer(botId, targetDeviceId, options);

@@ -1349,7 +1349,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
           const result = await runtime.switchHome(teammateId, targetDeviceId, whenBusy ? { whenBusy } : undefined);
           return result.ok ? { ok: true, teammateId, homeDeviceId: targetDeviceId }
-            : { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
+            : { ok: false, errorCode: result.code, message: result.code === 'HOME_UNRESPONSIVE'
+              // Never forced from a tool: what the home has not synced yet could be lost (cloud-companions.md §3.1).
+              ? 'The buddy did not move: its main computer is listed online but did not answer. Try again later; only the user can force a take-over, from the buddy\'s settings'
+              : `The buddy did not move (${result.code})` };
         },
       },
       botProfiles: {

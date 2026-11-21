@@ -220,6 +220,8 @@ function CloudComputers({
     // 每次打开只读一次可以换去的电脑。
   }, [open]);
   const targets = state.choices && state.choices.mode !== 'unavailable' ? state.choices.targets : [];
+  // Listed online but not answering: only an explicit, forced take-over here (with its own warning).
+  const unresponsive = state.choices?.reason === 'HOME_UNRESPONSIVE';
   const rows: ComputerRowModel[] = [
     { key: `home:${state.home ?? ''}`, name: state.homeName, current: true, online: true },
     ...targets
@@ -233,7 +235,8 @@ function CloudComputers({
         onSelect: () => {
           onClose();
           state.setError(null);
-          state.setPending(target);
+          if (unresponsive) state.setForceTarget(target);
+          else state.setPending(target);
         },
       })),
   ];
@@ -244,6 +247,8 @@ function CloudComputers({
         <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.devicesFailed')}</p>
       ) : !state.movable ? (
         <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.resumeToMove', { name: bot.name })}</p>
+      ) : unresponsive ? (
+        <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.homeUnresponsive', { name: bot.name, device: state.homeName })}</p>
       ) : null}
     </>
   );

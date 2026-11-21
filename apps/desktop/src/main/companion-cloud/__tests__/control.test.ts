@@ -4,7 +4,7 @@ import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import { createCompanionHomeRegistry } from '../homes.js';
 import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
-import { startCompanionCloud, type CompanionCloudHost, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
+import { askCompanionHomeVersion, startCompanionCloud, type CompanionCloudHost, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
 import type { CompanionApi } from '../types.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
 
@@ -1145,6 +1145,41 @@ describe('switch home from any computer', () => {
     expect(await offline.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: true });
     expect(offline.calls.find(call => call.method === 'PATCH')).toMatchObject({ data: { homeDeviceId: 'desk', expectedHomeDeviceId: 'laptop' } });
     expect(homeLink.handOver).not.toHaveBeenCalled();
+  });
+
+  // cloud-companions.md §3.1 (2026-11-21): a home listed online that does not answer in time is not
+  // «offline». Before, the 5 s probe answered 0 and the move silently became a forced take-over.
+  it('never takes over a home listed online that does not answer, unless the owner forces it', async () => {
+    const homeLink = { ...link(2), homeVersion: vi.fn(async (): Promise<number> => { throw new Error('HOME_UNRESPONSIVE'); }) };
+    const t = setup({ home: 'laptop', devices: [device('laptop'), device('desk', { isSelf: true, name: 'Desk' })], homeLink });
+    expect(await t.runtime.homeChoices('bot_mia')).toEqual({ homeDeviceId: 'laptop', homeName: 'laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE',
+      targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] });
+    // Chosen from a menu read while the home still answered (here or another computer): not moved, not taken over.
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE' });
+    expect(await t.runtime.switchHome('bot_mia', 'tablet', { force: true })).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE' });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+    expect(await t.runtime.switchHome('bot_mia', 'desk', { force: true })).toEqual({ ok: true });
+    expect(t.calls.find(call => call.method === 'PATCH')).toMatchObject({ data: { homeDeviceId: 'desk', expectedHomeDeviceId: 'laptop' } });
+    expect(homeLink.handOver).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['answers on the longer retry', [new Error('[INVOKE_TIMEOUT] caps probe timed out'), 4], 4, [8_000, 15_000]],
+    ['link still connecting, then answers', [new Error('[NOT_CONNECTED] link not ready'), 2], 2, [8_000, 15_000]],
+    ['an older Cindy without the channel', [new Error('[CHANNEL_NOT_ALLOWED] not allowed')], 0, [8_000]],
+    ['explicitly offline', [new Error('[DEVICE_OFFLINE] offline')], 0, [8_000]],
+    ['still silent after the longer wait', [new Error('[INVOKE_TIMEOUT] t'), new Error('[DEVICE_UNRESPONSIVE] u')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
+  ] as const)('reads the home version when it is %s', async (_, answers, expected, waits) => {
+    const asked: number[] = [];
+    const probe = async (timeoutMs: number) => {
+      const answer = answers[asked.push(timeoutMs) - 1];
+      if (answer instanceof Error) throw answer;
+      return answer as number;
+    };
+    const result = askCompanionHomeVersion(probe);
+    if (typeof expected === 'number') await expect(result).resolves.toBe(expected);
+    else await expect(result).rejects.toThrow(expected);
+    expect(asked).toEqual(waits);
   });
 
   it('does not offer a move when the home runs an older Cindy', async () => {
