@@ -175,8 +175,8 @@ export function isPiRequestBodyTooLargeErrorData(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   const rec = data as { message?: unknown; sdkError?: unknown; errorMessage?: unknown };
   return [rec.message, rec.sdkError, rec.errorMessage].some(value =>
-    typeof value === 'string' &&
-      /(?:\b413\b[^\n]*(?:length|body|too\s+large)|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(value),
+      typeof value === 'string' &&
+      /(?:\b413\b[^\n]*(?:length|body|too\s+large|payload)|(?:length|body|too\s+large|payload|status(?:\s+code)?|request|response)[^\n]*\b413\b|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(value),
   );
 }
 
@@ -661,7 +661,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     /** 产生该终态错误的 turn 身份：区分「同一轮的重复投递」与「重放后的新一轮失败」。 */
     turnIdentity?: { instanceId?: string; generation?: number },
   ): Promise<boolean>;
-  prepareUnhealthySession(sessionId: string): Promise<boolean>;
+  prepareUnhealthySession(
+    sessionId: string,
+    sendContext?: { hasPendingFollowup?: boolean; isExplicitRetry?: boolean },
+  ): Promise<boolean>;
   prepareNativeSessionRecovery(
     sessionId: string,
     // null is an explicit Bot restart. retain-route carries an ordinary task to a
@@ -1163,7 +1166,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     return 'rebuilt';
   };
 
-  const runPrepare = async (sessionId: string, signal: AbortSignal): Promise<boolean> => {
+  const runPrepare = async (
+    sessionId: string,
+    signal: AbortSignal,
+    sendContext?: { hasPendingFollowup?: boolean; isExplicitRetry?: boolean },
+  ): Promise<boolean> => {
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
@@ -1208,10 +1215,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // An explicit Pi Retry reuses the failed native transcript entry so Pi can
     // perform its one-shot native compact. Only a later, newly persisted user
     // message is the short-follow-up path that needs Cindy's handoff rebuild.
-    const hasFollowupAfterRawPi413 = sessionRow.agentKind === 'pi' && source.some((message, index) =>
-      message.role === 'user' && source.slice(0, index).some(previous =>
-        previous.role === 'error' && isPiRequestBodyTooLargeErrorData(errorContentToData(previous.content))),
-    );
+    const hasFollowupAfterRawPi413 = sendContext?.hasPendingFollowup === true ||
+      (sendContext?.isExplicitRetry !== true && sessionRow.agentKind === 'pi' && source.some((message, index) =>
+        message.role === 'user' && source.slice(0, index).some(previous =>
+          previous.role === 'error' && isPiRequestBodyTooLargeErrorData(errorContentToData(previous.content))),
+      ));
     const piByteRecoveryFailed = sessionRow.agentKind === 'pi'
       && (isPiRequestBodyRecoveryExhausted(lastError)
         || (isPiRequestBodyTooLargeErrorData(lastError) && hasFollowupAfterRawPi413));
@@ -1449,12 +1457,15 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       }
     },
 
-    async prepareUnhealthySession(sessionId: string): Promise<boolean> {
+    async prepareUnhealthySession(
+      sessionId: string,
+      sendContext?: { hasPendingFollowup?: boolean; isExplicitRetry?: boolean },
+    ): Promise<boolean> {
       if (inFlight.has(sessionId)) return false;
       const controller = new AbortController();
       inFlight.set(sessionId, controller);
       try {
-        return await deps.withCloseSuppressed(sessionId, () => runPrepare(sessionId, controller.signal));
+        return await deps.withCloseSuppressed(sessionId, () => runPrepare(sessionId, controller.signal, sendContext));
       } catch (error) {
         deps.log.warn('unhealthy native session prepare failed', {
           sessionId,

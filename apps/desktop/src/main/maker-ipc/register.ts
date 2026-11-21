@@ -5140,7 +5140,10 @@ const subscriptionAccountRecoveryDeps = {
 } satisfies AccountFailoverDeps;
 
 /** 直发路径在 createSession / 重读 live session 之前换掉不能用的订阅账号、关掉不健康原生会话。 */
-export async function prepareUnhealthySessionForSend(sessionId: string): Promise<boolean> {
+export async function prepareUnhealthySessionForSend(
+  sessionId: string,
+  sendContext?: { hasPendingFollowup?: boolean; isExplicitRetry?: boolean },
+): Promise<boolean> {
   const switched = await prepareSubscriptionAccountForSend(sessionId, {
     ...subscriptionAccountRecoveryDeps,
     resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
@@ -5149,7 +5152,7 @@ export async function prepareUnhealthySessionForSend(sessionId: string): Promise
       agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
     },
   }) || await prepareSubscriptionAccountFailover(sessionId, subscriptionAccountRecoveryDeps);
-  return switched || (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? false);
+  return switched || (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId, sendContext) ?? false);
 }
 
 let runtimePluginBudgetClearer: ((sessionId: string) => void) | undefined;

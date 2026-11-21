@@ -194,6 +194,9 @@ describe('shouldRebuildPiNativeSession', () => {
     expect(isPiRequestBodyTooLargeErrorData(error)).toBe(true);
     expect(shouldRebuildPiNativeSession(error)).toBe(true);
     expect(isPiRequestBodyTooLargeErrorData({ message: '413 unauthorized' })).toBe(false);
+    expect(isPiRequestBodyTooLargeErrorData({ message: 'Request failed with status code 413' })).toBe(true);
+    expect(isPiRequestBodyTooLargeErrorData({ message: 'Payload Too Large (413)' })).toBe(true);
+    expect(isPiRequestBodyTooLargeErrorData({ message: 'record 413 items' })).toBe(false);
   });
 
   it('finds a trailing prompt-timeout error as the reason to skip resume', () => {
@@ -1985,6 +1988,22 @@ describe('createContextOverflowRollover', () => {
     const rollover = createContextOverflowRollover(deps);
     await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
     expect(deps.commitRebuild).not.toHaveBeenCalled();
+  });
+
+  it('uses the queued follow-up input to admit recovery before it is persisted', async () => {
+    const deps = makeDeps([
+      msg('user', 'Continue', 'u1'),
+      msg('error', JSON.stringify({ message: '413 length limit exceeded' }), 'e1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active', agentKind: 'pi', remoteHostId: null, clearedAt: null,
+      sdkSessionId: '/tmp/pi-session', contextTokens: 0, contextWindow: 1_000_000,
+      model: 'test-model', providerId: 'local-test',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1', { hasPendingFollowup: true })).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalled();
   });
 
   it('rebuilds before send when host auto-compact has latched a deterministic failure', async () => {

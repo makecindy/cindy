@@ -468,7 +468,10 @@ export interface MakerSendTransactionDeps {
    * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
    * 随后本事务按空 session 走 lazy-create,避免 peek 之后对已关闭对象 send。
    */
-  prepareUnhealthySession?(sessionId: string): Promise<boolean | void>;
+  prepareUnhealthySession?(sessionId: string, sendContext?: {
+    hasPendingFollowup?: boolean;
+    isExplicitRetry?: boolean;
+  }): Promise<boolean | void>;
   /** Retire external ownership before selecting a runtime or applying a route. */
   prepareExternalInput?(sessionId: string): Promise<void>;
   /** Restore durable task status before route changes or native session resume. */
@@ -1244,7 +1247,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ),
         );
       }
-      await deps.prepareUnhealthySession?.(sessionId);
+      await deps.prepareUnhealthySession?.(sessionId, {
+        hasPendingFollowup: nextInputChars > 0 && typeof requestedSendOpts.retryUserClientId !== 'string',
+        isExplicitRetry: typeof requestedSendOpts.retryUserClientId === 'string',
+      });
       let sess = deps.getSession(sessionId);
       // Maker keeps a failed Session registered until its real handle cleanup
       // succeeds. It is not a reusable send target: route it through the
