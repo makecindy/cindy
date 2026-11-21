@@ -1,10 +1,10 @@
 import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
-import { useWindowWidth } from '@/platform/windowDimension';
+import { fullSwipeDistance, useTaskRowSwipeWidth } from './useTaskRowSwipeWidth';
 /**
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
  * 交互契约(2026-07-07 与产品确认):
- *  - 右滑露出「置顶/取消置顶」和「已读」,全滑(超过屏宽 55%)松手标为已读;
+ *  - 右滑露出「置顶/取消置顶」和「已读」,全滑(达到任务行宽的 55%)松手标为已读;
  *  - 左滑露出「选项」+「归档」,全滑=归档(归档按钮越过阈值时扩展盖满,预告松手即触发);
  *  - 删除不做滑动直达,只在「选项」菜单里(带系统 Alert 确认),由页面层承接;
  *  - 同一时间只允许一行滑开:互斥由页面级 SwipeRowRegistry 驱动(开新关旧、滚动关行)。
@@ -47,8 +47,6 @@ const BUTTON_GAP = spacing.md;
 /** 两侧面板都放两个按钮:gap + 圆 + gap + 圆 + gap。 */
 const LEFT_PANEL_WIDTH = BUTTON_GAP * 3 + BUTTON_SIZE * 2;
 const RIGHT_PANEL_WIDTH = BUTTON_GAP * 3 + BUTTON_SIZE * 2;
-/** 全滑触发阈值:位移超过屏宽的这个比例,松手即执行(iOS Mail 惯例的 50-60% 区间)。 */
-const FULL_SWIPE_RATIO = 0.55;
 /** 「归档」按钮越过全滑阈值时扩展盖满右侧面板的过渡时长。 */
 const ARM_ANIMATION_MS = 150;
 const ICON_SIZE = iconSize.swipeAction;
@@ -59,10 +57,10 @@ const LABEL_ICON_OVERLAP = spacing.sm;
  * 平移(native driver 只能驱动 transform / opacity,不能跟着胶囊改宽度),所以按阈值时的宽度定死,
  * 保证文字一出现就整段落在胶囊内;放不下的长文案省略。
  */
-function actionLabelWidth(windowWidth: number): number {
+function actionLabelWidth(rowWidth: number): number {
   return Math.max(
     0,
-    windowWidth * FULL_SWIPE_RATIO - BUTTON_GAP * 2 - BUTTON_SIZE + LABEL_ICON_OVERLAP - spacing.lg,
+    fullSwipeDistance(rowWidth) - BUTTON_GAP * 2 - BUTTON_SIZE + LABEL_ICON_OVERLAP - spacing.lg,
   );
 }
 /**
@@ -155,8 +153,7 @@ function SwipeableSessionRowInner({
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const windowWidth = useWindowWidth();
-  const fullSwipeThreshold = windowWidth * FULL_SWIPE_RATIO;
+  const { rowWidth, fullSwipeThreshold, onRowLayout } = useTaskRowSwipeWidth();
 
   const methodsRef = useRef<ClassicSwipeableMethods | null>(null);
   // Leave the pane edge's drag band to resizing (see usePaneEdgeInset).
@@ -310,7 +307,7 @@ function SwipeableSessionRowInner({
               styles={styles}
               testID={testID}
               translation={translation}
-              windowWidth={windowWidth}
+              rowWidth={rowWidth}
             />
           ) : null}
         </View>
@@ -327,7 +324,7 @@ function SwipeableSessionRowInner({
       pinned,
       styles,
       testID,
-      windowWidth,
+      rowWidth,
     ],
   );
 
@@ -354,7 +351,7 @@ function SwipeableSessionRowInner({
               styles={styles}
               testID={testID}
               translation={translation}
-              windowWidth={windowWidth}
+              rowWidth={rowWidth}
             />
           ) : null}
         </View>
@@ -370,7 +367,7 @@ function SwipeableSessionRowInner({
       statusToggle,
       styles,
       testID,
-      windowWidth,
+      rowWidth,
     ],
   );
 
@@ -387,7 +384,7 @@ function SwipeableSessionRowInner({
       renderRightActions={renderRightActions}
       testID={testID}
     >
-      {children}
+      <View onLayout={onRowLayout}>{children}</View>
     </Swipeable>
   );
 }
@@ -404,7 +401,7 @@ function LeftActionsContent({
   styles,
   testID,
   translation,
-  windowWidth,
+  rowWidth,
 }: {
   armedProgress: Animated.Value;
   readLabel: string;
@@ -416,7 +413,7 @@ function LeftActionsContent({
   styles: SwipeStyles;
   testID?: string;
   translation: SwipeTranslation;
-  windowWidth: number;
+  rowWidth: number;
 }) {
   const { colors } = useTheme();
   // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
@@ -438,8 +435,8 @@ function LeftActionsContent({
   });
   const pinExtension = revealed.interpolate({
     extrapolate: 'clamp',
-    inputRange: [LEFT_PANEL_WIDTH, Math.max(LEFT_PANEL_WIDTH + 1, windowWidth)],
-    outputRange: [0, Math.max(0, windowWidth - LEFT_PANEL_WIDTH)],
+    inputRange: [LEFT_PANEL_WIDTH, Math.max(LEFT_PANEL_WIDTH + 1, rowWidth)],
+    outputRange: [0, Math.max(0, rowWidth - LEFT_PANEL_WIDTH)],
   });
   const readOpacity = revealed.interpolate({
     extrapolate: 'clamp',
@@ -454,8 +451,8 @@ function LeftActionsContent({
   const readStretchStart = BUTTON_GAP * 2 + BUTTON_SIZE;
   const availableReadExtension = revealed.interpolate({
     extrapolate: 'clamp',
-    inputRange: [readStretchStart, Math.max(readStretchStart + 1, windowWidth)],
-    outputRange: [0, Math.max(0, windowWidth - readStretchStart)],
+    inputRange: [readStretchStart, Math.max(readStretchStart + 1, rowWidth)],
+    outputRange: [0, Math.max(0, rowWidth - readStretchStart)],
   });
   // 拉过面板宽度后跟着「置顶」一起外扩(pinExtension),补满两者之间的空白(2026-11-20 用户要求:
   // 中间态不留空);armed 时再盖过「置顶」铺满整个露出区。
@@ -465,7 +462,7 @@ function LeftActionsContent({
   );
   const readScaleX = Animated.add(1, Animated.divide(readExtension, BUTTON_SIZE));
   const halfReadExtension = Animated.divide(readExtension, 2);
-  const labelWidth = actionLabelWidth(windowWidth);
+  const labelWidth = actionLabelWidth(rowWidth);
 
   return (
     <>
@@ -540,7 +537,7 @@ function RightActionsContent({
   styles,
   testID,
   translation,
-  windowWidth,
+  rowWidth,
 }: {
   armedProgress: Animated.Value;
   archiveLabel: string;
@@ -557,7 +554,7 @@ function RightActionsContent({
   styles: SwipeStyles;
   testID?: string;
   translation: SwipeTranslation;
-  windowWidth: number;
+  rowWidth: number;
 }) {
   const { colors } = useTheme();
   const SecondaryIcon = snoozeAction ? Clock : Ellipsis;
@@ -581,8 +578,8 @@ function RightActionsContent({
   });
   const optionsExtension = revealed.interpolate({
     extrapolate: 'clamp',
-    inputRange: [RIGHT_PANEL_WIDTH, Math.max(RIGHT_PANEL_WIDTH + 1, windowWidth)],
-    outputRange: [0, Math.max(0, windowWidth - RIGHT_PANEL_WIDTH)],
+    inputRange: [RIGHT_PANEL_WIDTH, Math.max(RIGHT_PANEL_WIDTH + 1, rowWidth)],
+    outputRange: [0, Math.max(0, rowWidth - RIGHT_PANEL_WIDTH)],
   });
   const archiveOpacity = revealed.interpolate({
     extrapolate: 'clamp',
@@ -597,8 +594,8 @@ function RightActionsContent({
   const archiveStretchStart = BUTTON_GAP * 2 + BUTTON_SIZE;
   const availableArchiveExtension = revealed.interpolate({
     extrapolate: 'clamp',
-    inputRange: [archiveStretchStart, Math.max(archiveStretchStart + 1, windowWidth)],
-    outputRange: [0, Math.max(0, windowWidth - archiveStretchStart)],
+    inputRange: [archiveStretchStart, Math.max(archiveStretchStart + 1, rowWidth)],
+    outputRange: [0, Math.max(0, rowWidth - archiveStretchStart)],
   });
   // 拉过面板宽度后跟着「选项」一起外扩(optionsExtension),补满两者之间的空白(2026-11-20 用户要求:
   // 中间态不留空);armed 时再盖过「选项」铺满整个露出区。
@@ -610,7 +607,7 @@ function RightActionsContent({
   const negativeOptionsExtension = Animated.multiply(optionsExtension, -1);
   const negativeArchiveExtension = Animated.multiply(archiveExtension, -1);
   const negativeHalfArchiveExtension = Animated.divide(negativeArchiveExtension, 2);
-  const labelWidth = actionLabelWidth(windowWidth);
+  const labelWidth = actionLabelWidth(rowWidth);
 
   return (
     <>
