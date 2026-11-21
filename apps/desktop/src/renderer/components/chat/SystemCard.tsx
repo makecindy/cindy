@@ -1,7 +1,6 @@
 import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
 import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
 import { isImportSourceId } from '../../../shared/sessionImport';
-import { ORCA_DISPATCH_CLAIM_QUOTE_MAX } from '../../../shared/orcaDispatchReceipt';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
@@ -1394,33 +1393,21 @@ function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
 }
 
 function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
-  const { t, i18n } = useTranslation();
-  // 正常派单不落卡：Lead 的正文就是记录，宿主只在主张对不上凭据时落这张升级卡。
+  const { t } = useTranslation();
+  // 正常派单不落卡：宿主只在声明与凭据对不上、补交一轮后仍不一致时落这张升级卡。
   if (data?.state !== 'unverified') return null;
   const label = t('chat.systemCard.orcaDispatch.unverified');
-  // 正文按查看者当前语言拼：同一行记录会在手机、英文桌面上重读。
-  const labels = Array.isArray(data?.targets)
-      ? data.targets.filter((target): target is string => typeof target === 'string' && target !== '')
-      : [];
-    const detail = typeof data?.detail === 'string' ? data.detail : '';
-    const rawQuote = typeof data?.quote === 'string' ? data.quote : '';
-    const target = labels.length
-      ? new Intl.ListFormat(i18n.language || 'en', { style: 'long', type: 'conjunction' }).format(labels)
-      : '';
-    const claim = target
-      ? t('chat.systemCard.orcaDispatch.notice.claimTarget', { target })
-      : t('chat.systemCard.orcaDispatch.notice.claim');
-    const reason =
-      data?.reason === 'target-not-dispatched'
-        ? t('chat.systemCard.orcaDispatch.notice.notDispatched', { target: detail })
-        : data?.reason === 'unknown-message-id'
-          ? t('chat.systemCard.orcaDispatch.notice.unknownId', { id: detail })
-          : t('chat.systemCard.orcaDispatch.notice.noDispatch');
-    const quote =
-      rawQuote.length > ORCA_DISPATCH_CLAIM_QUOTE_MAX
-        ? `${rawQuote.slice(0, ORCA_DISPATCH_CLAIM_QUOTE_MAX - 1)}…`
-        : rawQuote;
-    const body = t('chat.systemCard.orcaDispatch.notice.body', { claim, reason, quote });
+  // 正文按查看者当前语言拼：同一条记录会在手机、英文桌面上重读。
+  const detail = typeof data?.detail === 'string' ? data.detail : '';
+  const reason =
+    data?.reason === 'no-declaration'
+      ? t('chat.systemCard.orcaDispatch.notice.noDeclaration')
+      : data?.reason === 'declared-not-dispatched'
+        ? t('chat.systemCard.orcaDispatch.notice.declaredNotDispatched', { target: detail })
+        : data?.reason === 'dispatched-not-declared'
+          ? t('chat.systemCard.orcaDispatch.notice.dispatchedNotDeclared', { target: detail })
+          : t('chat.systemCard.orcaDispatch.notice.unknownId', { id: detail });
+  const body = t('chat.systemCard.orcaDispatch.notice.body', { reason });
     return (
       <div
         className="flex w-full items-start gap-1.5 px-2 py-[3px]"

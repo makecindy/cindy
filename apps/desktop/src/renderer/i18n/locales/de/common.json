@@ -15281,12 +15281,11 @@
       "orcaDispatch": {
         "unverified": "Übergabe nicht bestätigt",
         "notice": {
-          "claim": "Laut Lead wurde übergeben",
-          "claimTarget": "Laut Lead wurde an {{target}} übergeben",
-          "noDispatch": "Der Host hat in diesem Turn keine Übergabe angenommen",
-          "notDispatched": "Der Host hat in diesem Turn keine Übergabe an {{target}} verzeichnet",
-          "unknownId": "Die zitierte Queue-ID {{id}} gehört zu keiner Übergabe",
-          "body": "{{claim}}. {{reason}}. Zitat aus der Antwort dieses Turns: „{{quote}}“. Der Lead wurde um eine erneute Übergabe gebeten."
+          "noDeclaration": "Für diesen Turn liegt keine Übergabe-Erklärung vor",
+          "declaredNotDispatched": "Die Erklärung nennt eine Übergabe an {{target}}, die der Host nie angenommen hat",
+          "dispatchedNotDeclared": "Der Host hat in diesem Turn an {{target}} übergeben, die Erklärung führt es nicht auf",
+          "unknownId": "Die zitierte Warteschlangen-ID {{id}} gehört zu keiner Übergabe",
+          "body": "{{reason}}. Lead wurde gebeten, die Erklärung zu korrigieren."
         }
       },
       "help": {

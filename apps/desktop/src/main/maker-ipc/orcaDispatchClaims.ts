@@ -1,322 +1,311 @@
 /**
- * Lead 派单主张对账：宿主只认派发凭据（send_to_worker / 初始派活成功返回），
- * 不认 Lead 文本里的「已派给 X」。判定发生在 turn 收口，误报只多问一轮，不会动派发本身。
+ * Lead 回合声明的宿主侧对账。
  *
- * 三个概念分开，互不共享状态：
- * - 凭据（fact）：一次真实被接受的本轮派发，带目标 Worker、投递形态与队列编号；
- * - 主张（reading）：从收口文本里取出的「已派」句、句中声明的目标与带标签的队列编号；
- * - 处置（action）：一条 Lead 至多唤醒一次、升级一次，且在真派发出现前保持静默。
+ * Lead 每轮收口必须在 report_turn 里交两本账：assignments（本轮想让谁做什么）
+ * 与 dispatched（本轮真正被宿主接受的派发），派不出去的在 pending 里写明在等什么。
+ * 宿主用自己的派发凭据对账：任一侧差集非空即不一致。
+ *
+ * 取舍：不读 Lead 的散文。词表永远补不完；对账只认字段，误报只多问一轮，
+ * 不会动派发本身，连续不一致才升级成卡。
  */
+import type {
+  OrcaDispatchClaimFailure,
+  OrcaDispatchClaimNotice,
+} from '../../shared/orcaDispatchReceipt';
 
-import type { OrcaDispatchClaimFailure } from '../../shared/orcaDispatchReceipt.js';
-
+/** 投递方式：direct = 本轮直接唤醒/立即执行，queued = 进队列等 Worker 自己取。 */
 export type OrcaDispatchDelivery = 'direct' | 'queued';
 
+/** 宿主自己的一个派发凭据：只由真实派发写下，不来自模型输出。 */
 export interface LeadDispatchFact {
-  /** 底层 dispatcher 为该消息生成的 clientId：同轮并行派发也互不相同。 */
-  dispatchId: string;
   workerId: string;
   workerLabel: string;
+  dispatchId: string;
+  turnGeneration: number;
   delivery: OrcaDispatchDelivery;
-  /** 仅 queued 投递有：队列内寻址句柄，可与主张里的 queued_message_id 对照。 */
   queuedMessageId?: string;
+  at: number;
+}
+
+/** Lead 声明的一条指派：想让哪个 Worker 做什么。 */
+export interface LeadTurnAssignment {
+  workerId: string;
+  taskSummary: string;
+}
+
+/** Lead 声明的一条已完成派发。messageId 只在进队列时有值，可直接抄 dispatch 结果。 */
+export interface LeadTurnDispatched {
+  workerId: string;
+  messageId?: string;
+}
+
+/** Lead 声明的一条未派出去的指派，以及它在等什么。 */
+export interface LeadTurnPending {
+  workerId: string;
+  waitingFor: string;
+}
+
+/** 一轮的声明。turnGeneration 取提交时的轮次，用于和同一轮的凭据对齐。 */
+export interface LeadTurnDeclaration {
+  assignments: LeadTurnAssignment[];
+  dispatched: LeadTurnDispatched[];
+  pending: LeadTurnPending[];
   turnGeneration: number;
   at: number;
 }
 
-/** 一个协同成员：主张里的目标名按这张表解析，避免把任意词当 Worker。 */
-export interface OrcaDispatchRosterEntry {
-  id: string;
-  label: string;
-}
-
-export interface DispatchClaimReading {
-  claimed: boolean;
-  /** 主张句里点名、且能在花名册里解析到的成员。 */
-  targets: OrcaDispatchRosterEntry[];
-  /** 主张句里显式标为队列编号的值（queued_message_id / queue id / 队列编号）。 */
-  messageIds: string[];
-  /** 唤醒文案引用的原句，附指针用。 */
-  quote: string;
-}
-
-export type DispatchClaimVerdict =
+export type DeclarationVerdict =
   | { consistent: true }
   | {
       consistent: false;
       reason: OrcaDispatchClaimFailure;
-      /** 出问题的目标名或编号，用于文案与日志。 */
+      targets: string[];
       detail: string;
     };
 
-/** 一次收口该做什么：唤醒补派一次，或升级，或什么都不做。 */
+/** wake = 首次不一致，叫它补交一轮；escalate = 补交后仍不一致，落卡。 */
 export type DispatchClaimAction = 'wake' | 'escalate' | null;
 
 interface LeadLedger {
-  /** Session 实例代次：同一个任务重建 Session 后 turnGeneration 会从 0 重来，靠它作废旧凭据。 */
-  epoch: number;
-  lastGeneration: number | null;
+  /** 最近一次收口看到的轮次；变小说明换了会话实例，账本整体作废。 */
+  turnGeneration: number;
+  /**
+   * 本轮声明。只在「对账一致」后清空：不一致时保留，让下一次收口看到同一处矛盾，
+   * 而不是逼模型重交一遍才升级。
+   */
+  declaration: LeadTurnDeclaration | null;
   facts: LeadDispatchFact[];
-  /** 已经唤醒过一次补派。 */
+  /** 是否已就当前矛盾唤醒过；真实派发会清掉它，避免同一动作反复打扰。 */
   woke: boolean;
-  /** 已经升级过；真派发出现前不再唤醒，避免同一主张反复刷。 */
+  /** 已升级成卡：同一矛盾不再重复落卡，等真实派发或一致声明解除。 */
   escalated: boolean;
+  escalatedAt: number | null;
 }
 
-const MAX_FACTS_PER_LEAD = 40;
 const ledgers = new Map<string, LeadLedger>();
-
-/** 主张识别只取「过去完成态 + 派动词」；计划、将来说明、读完文件后的推断都不算。 */
-const DISPATCH_CLAIM_PATTERNS: readonly RegExp[] = [
-  /(?:已|已经)(?:把|将)?[^。！？\n]{0,40}?(?:派给|派发给|派发|派出|分派给|交给|转给)/,
-  /(?:已|已经)(?:派|分派|发出)/,
-  /\b(?:dispatched|assigned|sent|handed off)\b[^.\n]{0,30}\bworker\b/i,
-  /\bI(?:'ve| have)?\s+(?:already\s+)?(?:dispatched|assigned|sent)\b/i,
-];
-
-/** 否认、假设、引用与待办同样带派动词，必须在主张判定前排除。 */
-const NEGATION_PATTERNS: readonly RegExp[] = [
-  /(?:尚未|还没|还没有|没有|未|并未|不能|不可|不该|不要|无法)(?:[^。！？\n]{0,12})?(?:派给|派发|派出|分派给|交给|转给)/,
-  /(?:尚未|还没|还没有|没有|未|并未)(?:派|分派|发出)/,
-  /(?:如果|假如|若|要是|将会|将要|准备|打算|计划)(?:[^。！？\n]{0,20})?(?:派给|派发|派出|分派给|交给|转给)/,
-  /\b(?:not|never|n't|didn't|did not|haven't|have not|hasn't|has not|no longer|without)\b[^.\n]{0,30}\b(?:dispatched|assigned|sent|handed off)\b/i,
-  /\b(?:will|would|plan(?:ning)? to|going to|about to|should|must|need to)\b[^.\n]{0,30}\b(?:dispatch|assign|send|hand off)\b/i,
-  /\b(?:if|whether)\b[^.\n]{0,30}\b(?:dispatch|assign|send|hand off)\b/i,
-];
-
-/** 只认显式标注的队列编号；散落在别处的 UUID（Worker/任务 ID）不参与核对。 */
-const LABELED_MESSAGE_ID_PATTERN =
-  /(?:queued_message_id|queue[_ ](?:message[_ ])?id|队列编号|排队编号|排队号)\s*[:：=]?\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
-
-const FENCED_CODE_PATTERN = /```[\s\S]*?```/g;
-const BLOCKQUOTE_LINE_PATTERN = /^\s*>.*$/gm;
-
-function emptyLedger(): LeadLedger {
-  return { epoch: 0, lastGeneration: null, facts: [], woke: false, escalated: false };
-}
+/** 派发凭据只在本轮有用，留一天足够覆盖跨重启的收口。 */
+const FACT_RETENTION_MS = 24 * 60 * 60 * 1000;
+const MAX_FACTS = 200;
 
 function ledgerFor(leadSessionId: string): LeadLedger {
-  const existing = ledgers.get(leadSessionId);
-  if (existing) return existing;
-  const created = emptyLedger();
-  ledgers.set(leadSessionId, created);
-  return created;
-}
-
-/** 观察到更小的 turnGeneration = 同一任务换了 Session 实例：作废旧凭据与节流状态。 */
-function observeGeneration(ledger: LeadLedger, turnGeneration: number): void {
-  if (ledger.lastGeneration !== null && turnGeneration < ledger.lastGeneration) {
-    ledger.epoch += 1;
-    ledger.facts = [];
-    ledger.woke = false;
-    ledger.escalated = false;
+  let ledger = ledgers.get(leadSessionId);
+  if (!ledger) {
+    ledger = {
+      turnGeneration: 0,
+      declaration: null,
+      facts: [],
+      woke: false,
+      escalated: false,
+      escalatedAt: null,
+    };
+    ledgers.set(leadSessionId, ledger);
   }
-  ledger.lastGeneration = turnGeneration;
+  return ledger;
 }
 
+/** 轮次回退 = 换了会话实例，旧账本不能继续用（否则上一实例的卡会压住新实例）。 */
+function observeGeneration(ledger: LeadLedger, turnGeneration: number): void {
+  if (turnGeneration >= ledger.turnGeneration) {
+    ledger.turnGeneration = turnGeneration;
+    return;
+  }
+  ledgersReset(ledger);
+  ledger.turnGeneration = turnGeneration;
+}
+
+function ledgersReset(ledger: LeadLedger): void {
+  ledger.declaration = null;
+  ledger.facts = [];
+  ledger.woke = false;
+  ledger.escalated = false;
+  ledger.escalatedAt = null;
+}
+
+/** 记一条宿主派发凭据。真实派发重置抑制状态：同一个动作值得重新判定。 */
 export function noteLeadDispatchFact(leadSessionId: string, fact: LeadDispatchFact): void {
   const ledger = ledgerFor(leadSessionId);
   observeGeneration(ledger, fact.turnGeneration);
   ledger.facts.push(fact);
-  if (ledger.facts.length > MAX_FACTS_PER_LEAD) {
-    ledger.facts.splice(0, ledger.facts.length - MAX_FACTS_PER_LEAD);
-  }
-  // 真派发出现即视为恢复：撤回补派额度与升级抑制，新的无据主张重新获得一次补派机会。
+  if (ledger.facts.length > MAX_FACTS) ledger.facts.splice(0, ledger.facts.length - MAX_FACTS);
   ledger.woke = false;
   ledger.escalated = false;
+  ledger.escalatedAt = null;
 }
 
-/** 撤回未派发的排队消息时同步撤掉凭据，否则对账会把它当成真实派发。 */
-export function dropLeadDispatchFact(leadSessionId: string, queuedMessageId: string): void {
+/** 派发被撤回（恢复草稿）时扣掉凭据：它没真正交到 Worker 手上。 */
+export function dropLeadDispatchFact(leadSessionId: string, dispatchId: string): void {
   const ledger = ledgers.get(leadSessionId);
   if (!ledger) return;
-  ledger.facts = ledger.facts.filter((fact) => fact.queuedMessageId !== queuedMessageId);
+  ledger.facts = ledger.facts.filter((fact) => fact.dispatchId !== dispatchId);
 }
 
-/** 只取当前 Session 实例、本轮（含自动续跑推进过的代次）的凭据。 */
+/** 本轮（含同轮后续续跑）的派发凭据。窗口是生成号，不是墙钟。 */
 export function dispatchFactsForTurn(
   leadSessionId: string,
   turnGeneration: number,
-): readonly LeadDispatchFact[] {
+): LeadDispatchFact[] {
   const ledger = ledgerFor(leadSessionId);
   observeGeneration(ledger, turnGeneration);
+  const cutoff = Date.now() - FACT_RETENTION_MS;
+  ledger.facts = ledger.facts.filter((fact) => fact.at >= cutoff);
   return ledger.facts.filter((fact) => fact.turnGeneration >= turnGeneration);
 }
 
-/** 句级切分：中文句号与英文句点都算边界；换行不切——跨行的编号引用和引文必须留在同一句里。 */
-function splitSentences(body: string): string[] {
-  return body
-    .split(/(?<=[。！？.!?])\s*/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
-/** 引号里的转述是别人的话（含旧编号），主张视图和编号视图都不采信。 */
-function blankQuotedSpans(sentence: string): string {
-  return sentence
-    .replace(/["“”][^"“”]{0,200}["“”]/g, ' ')
-    .replace(/「[^」]{0,200}」/g, ' ')
-    .replace(/『[^』]{0,200}』/g, ' ');
-}
-
-/** 主张视图：行内代码是引用示例，不算 Lead 自己的主张。 */
-function blankInlineCode(sentence: string): string {
-  return sentence.replace(/`[^`]*`/g, ' ');
-}
-
-/** 编号视图：编号常被写成行内代码，去掉反引号才能读出来。 */
-function readMessageIdText(sentence: string): string {
-  return sentence.replace(/`/g, '');
-}
-
-function hasClaimWord(sentence: string): boolean {
-  return DISPATCH_CLAIM_PATTERNS.some((pattern) => pattern.test(sentence));
-}
-
-function hasNegation(sentence: string): boolean {
-  return NEGATION_PATTERNS.some((pattern) => pattern.test(sentence));
-}
-
-function resolveTargets(sentence: string, roster: readonly OrcaDispatchRosterEntry[]): OrcaDispatchRosterEntry[] {
-  const matched: OrcaDispatchRosterEntry[] = [];
-  for (const entry of roster) {
-    const label = entry.label.trim();
-    // 单字标签太容易撞词，只按多字标签解析。
-    if (label.length < 2 || !sentence.includes(label)) continue;
-    if (matched.some((item) => item.id === entry.id)) continue;
-    matched.push(entry);
-  }
-  return matched;
-}
-
-function extractLabeledMessageIds(sentence: string): string[] {
-  const ids: string[] = [];
-  for (const match of sentence.matchAll(LABELED_MESSAGE_ID_PATTERN)) {
-    const id = match[1]?.toLowerCase();
-    if (id && !ids.includes(id)) ids.push(id);
-  }
-  return ids;
-}
-
-export function readDispatchClaim(
-  text: string,
-  roster: readonly OrcaDispatchRosterEntry[] = [],
-): DispatchClaimReading {
-  const cleaned = (text ?? '')
-    .replace(FENCED_CODE_PATTERN, ' ')
-    .replace(BLOCKQUOTE_LINE_PATTERN, ' ');
-  // 标题行自成一段：既不与正文粘连，也不靠全局换行分句——那样会拆散跨行的编号引用和引文。
-  const segments: string[] = [];
-  let plain: string[] = [];
-  for (const line of cleaned.split('\n')) {
-    if (/^\s*#{1,6}\s+/.test(line)) {
-      if (plain.length) segments.push(plain.join('\n'));
-      plain = [];
-      segments.push(line.replace(/^\s*#{1,6}\s+/, ''));
-    } else {
-      plain.push(line);
-    }
-  }
-  if (plain.length) segments.push(plain.join('\n'));
-  const targets: OrcaDispatchRosterEntry[] = [];
-  const messageIds: string[] = [];
-  let quote = '';
-
-  for (const segment of segments) {
-    for (const sentence of splitSentences(segment)) {
-      const quoted = blankQuotedSpans(sentence);
-      const own = blankInlineCode(quoted);
-      if (!hasClaimWord(own) || hasNegation(own)) continue;
-      for (const entry of resolveTargets(own, roster)) {
-        if (!targets.some((item) => item.id === entry.id)) targets.push(entry);
-      }
-      for (const id of extractLabeledMessageIds(readMessageIdText(quoted))) {
-        if (!messageIds.includes(id)) messageIds.push(id);
-      }
-      // 判定用抹掉行内代码的视图，回显保留原文：编号常写成 `queued_message_id: xxx`，
-      // 抹掉后通知里只会剩一对空括号，看起来像误报。
-      if (!quote) quote = quoted;
-    }
-  }
-
-  const claimed = quote.length > 0;
-  return {
-    claimed,
-    targets,
-    messageIds,
-    quote: claimed ? clip(quote, 160) : '',
+/**
+ * 记一轮的声明（report_turn 工具入口）。
+ * 只登记不判定：对账发生在收口，凭据由宿主自己写下，两者不在同一时刻产生。
+ */
+export function noteLeadTurnDeclaration(
+  leadSessionId: string,
+  declaration: Omit<LeadTurnDeclaration, 'at' | 'pending'> & { pending?: LeadTurnPending[] },
+): void {
+  const ledger = ledgerFor(leadSessionId);
+  ledger.declaration = {
+    assignments: declaration.assignments,
+    dispatched: declaration.dispatched,
+    pending: declaration.pending ?? [],
+    turnGeneration: declaration.turnGeneration,
+    at: Date.now(),
   };
 }
 
-function clip(text: string, limit: number): string {
-  const body = text.replace(/\s+/g, ' ').trim();
-  return body.length > limit ? `${body.slice(0, limit - 1)}…` : body;
-}
-
-export function verifyDispatchClaim(
-  reading: DispatchClaimReading,
+/**
+ * 对账：声明里的每一条派发都必须有宿主凭据，宿主的每一条凭据都必须写进声明。
+ * 声明了但故意没派的，必须出现在 pending 里并写明在等什么，否则视为「光说不做」。
+ * 一致后清空声明：下一轮必须重新交，不允许上一轮的声明替这一轮背书。
+ */
+export function reconcileLeadTurnDeclaration(
+  leadSessionId: string,
   facts: readonly LeadDispatchFact[],
-): DispatchClaimVerdict {
-  if (!reading.claimed) return { consistent: true };
+): DeclarationVerdict {
+  const ledger = ledgerFor(leadSessionId);
+  const declaration = ledger.declaration;
 
-  // 本轮没有任何派发时，一切主张都归为「没派」——不再细分目标或编号。
-  if (facts.length === 0) return { consistent: false, reason: 'no-dispatch', detail: '' };
-
-  const queuedIds = new Set(
-    facts.flatMap((fact) => (fact.queuedMessageId ? [fact.queuedMessageId.toLowerCase()] : [])),
-  );
-  const unknownId = reading.messageIds.find((id) => !queuedIds.has(id));
-  if (unknownId) {
-    return { consistent: false, reason: 'unknown-message-id', detail: unknownId };
+  if (!declaration) {
+    // 没有派发就没有可对账的对象：普通问答不该被逼着交声明。
+    if (facts.length === 0) return { consistent: true };
+    return {
+      consistent: false,
+      reason: 'no-declaration',
+      targets: facts.map((fact) => fact.workerLabel),
+      detail: facts.map((fact) => fact.workerLabel).join(', '),
+    };
   }
 
-  const dispatchedWorkerIds = new Set(facts.map((fact) => fact.workerId));
-  const missingTarget = reading.targets.find((target) => !dispatchedWorkerIds.has(target.id));
-  if (missingTarget) {
-    return { consistent: false, reason: 'target-not-dispatched', detail: missingTarget.label };
+  const factByWorker = new Map(facts.map((fact) => [fact.workerId, fact]));
+  const labelOf = (workerId: string): string =>
+    factByWorker.get(workerId)?.workerLabel ??
+    declaration.assignments.find((entry) => entry.workerId === workerId)?.workerId ??
+    workerId;
+
+  for (const entry of declaration.dispatched) {
+    const fact = factByWorker.get(entry.workerId);
+    if (!fact) {
+      return {
+        consistent: false,
+        reason: 'declared-not-dispatched',
+        targets: [labelOf(entry.workerId)],
+        detail: labelOf(entry.workerId),
+      };
+    }
+    if (entry.messageId && entry.messageId !== fact.dispatchId && entry.messageId !== fact.queuedMessageId) {
+      return {
+        consistent: false,
+        reason: 'unknown-message-id',
+        targets: [fact.workerLabel],
+        detail: entry.messageId,
+      };
+    }
   }
 
+  const declaredWorkers = new Set(declaration.dispatched.map((entry) => entry.workerId));
+  for (const assignment of declaration.assignments) {
+    if (declaredWorkers.has(assignment.workerId)) continue;
+    if (declaration.pending.some((entry) => entry.workerId === assignment.workerId)) continue;
+    return {
+      consistent: false,
+      reason: 'declared-not-dispatched',
+      targets: [labelOf(assignment.workerId)],
+      detail: labelOf(assignment.workerId),
+    };
+  }
+
+  for (const fact of facts) {
+    if (declaredWorkers.has(fact.workerId)) continue;
+    return {
+      consistent: false,
+      reason: 'dispatched-not-declared',
+      targets: [fact.workerLabel],
+      detail: fact.workerLabel,
+    };
+  }
+
+  ledger.declaration = null;
   return { consistent: true };
 }
 
-/** 唤醒文本用的短原因；卡片正文走 i18n，不再复用这句英文。 */
-export function describeDispatchClaimVerdict(verdict: DispatchClaimVerdict): string {
-  if (verdict.consistent) return '';
+/** 一句人话，用作唤醒文本里的原因行。 */
+export function describeDeclarationVerdict(verdict: {
+  reason: OrcaDispatchClaimFailure;
+  detail: string;
+}): string {
   switch (verdict.reason) {
-    case 'no-dispatch':
-      return 'this turn has no accepted dispatch';
-    case 'target-not-dispatched':
-      return `no dispatch to ${verdict.detail}`;
+    case 'no-declaration':
+      return 'You dispatched this turn but submitted no report_turn declaration';
+    case 'declared-not-dispatched':
+      return `You declared a dispatch to ${verdict.detail} that the host never accepted`;
+    case 'dispatched-not-declared':
+      return `The host dispatched to ${verdict.detail} this turn, but your declaration leaves it out`;
     case 'unknown-message-id':
-      return `queue id ${verdict.detail} matches no dispatch`;
+      return `The queued message id ${verdict.detail} matches no dispatch of this turn`;
   }
 }
 
-/**
- * 一次收口的处置：
- * - 一致 → 清状态，返回 null；
- * - 首次不一致 → wake（只唤醒一次）；
- * - 补派轮仍不一致 → escalate，并抑制该 Lead 的后续唤醒直到真派发出现；
- * - 已升级过 → null（不重复刷）。
- */
-export function settleDispatchClaimIncident(leadSessionId: string, consistent: boolean): DispatchClaimAction {
+/** 升级卡的载荷。只带字段，不带原话：卡片正文由渲染层按语言拼。 */
+export function toDispatchClaimNotice(verdict: {
+  reason: OrcaDispatchClaimFailure;
+  targets: string[];
+  detail: string;
+}): OrcaDispatchClaimNotice {
+  return {
+    version: 1,
+    state: 'unverified',
+    targets: verdict.targets,
+    reason: verdict.reason,
+    detail: verdict.detail,
+    at: Date.now(),
+  };
+}
+
+/** 一致就清账；不一致先唤醒一次，仍不一致才升级。返回本轮该做的动作。 */
+export function settleDispatchClaimIncident(
+  leadSessionId: string,
+  consistent: boolean,
+): DispatchClaimAction {
   const ledger = ledgerFor(leadSessionId);
+
   if (consistent) {
     ledger.woke = false;
     ledger.escalated = false;
+    ledger.escalatedAt = null;
     return null;
   }
+
+  // 已经落过卡：同一处矛盾不再唤醒、不再重复落卡，等真实派发或一致声明解除。
   if (ledger.escalated) return null;
+
   if (ledger.woke) {
-    ledger.woke = false;
     ledger.escalated = true;
+    ledger.escalatedAt = Date.now();
     return 'escalate';
   }
+
   ledger.woke = true;
   return 'wake';
 }
 
-export function resetDispatchClaimState(): void {
-  ledgers.clear();
+/** 测试与会话销毁用：清掉一个 Lead 的账本。 */
+export function resetDispatchClaimState(leadSessionId?: string): void {
+  if (leadSessionId) ledgers.delete(leadSessionId);
+  else ledgers.clear();
 }
-

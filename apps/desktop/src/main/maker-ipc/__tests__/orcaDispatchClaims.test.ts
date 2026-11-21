@@ -1,210 +1,204 @@
-/**
- * Lead 派单主张对账：宿主只认派发凭据，不认 Lead 文本里的「已派给 X」。
- * 判据集中在 orcaDispatchClaims，服务层只按 wake / escalate 动作执行。
- */
-import { beforeEach, describe, expect, it } from 'vitest';
-
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   dispatchFactsForTurn,
   dropLeadDispatchFact,
   noteLeadDispatchFact,
-  readDispatchClaim,
+  noteLeadTurnDeclaration,
+  reconcileLeadTurnDeclaration,
   resetDispatchClaimState,
   settleDispatchClaimIncident,
-  verifyDispatchClaim,
+  toDispatchClaimNotice,
   type LeadDispatchFact,
-} from '../orcaDispatchClaims.js';
-
-const LEAD = 'lead-1';
-const ROSTER = [
-  { id: 'worker-1', label: '研究员' },
-  { id: 'worker-2', label: '执行员' },
-];
-const QUEUE_ID = '11111111-2222-3333-4444-555555555555';
+} from '../orcaDispatchClaims';
 
 function fact(overrides: Partial<LeadDispatchFact> = {}): LeadDispatchFact {
   return {
-    dispatchId: `d-${Math.random().toString(16).slice(2)}`,
     workerId: 'worker-1',
-    workerLabel: '研究员',
-    delivery: 'direct',
-    turnGeneration: 3,
-    at: 1,
+    workerLabel: 'research',
+    dispatchId: 'mq-1',
+    turnGeneration: 0,
+    delivery: 'queued',
+    at: Date.now(),
     ...overrides,
   };
 }
 
-describe('lead dispatch claim reading', () => {
-  beforeEach(() => resetDispatchClaimState());
-
-  it('reads a past-tense dispatch claim and resolves the named worker', () => {
-    const reading = readDispatchClaim('已派给研究员，正在等回报。', ROSTER);
-    expect(reading.claimed).toBe(true);
-    expect(reading.targets.map((entry) => entry.id)).toEqual(['worker-1']);
-    expect(reading.quote).toContain('已派给研究员');
-  });
-
-  it('keeps the cited identifier and drops heading lines when quoting the claim', () => {
-    const reading = readDispatchClaim('## 排期\n\n已派小修批（`wake_kind=already-active`）。', ROSTER);
-    expect(reading.claimed).toBe(true);
-    expect(reading.quote).toContain('wake_kind=already-active');
-    expect(reading.quote).not.toContain('##');
-  });
-
-  it('still verifies a claim written only in a heading', () => {
-    const reading = readDispatchClaim('## 已派给研究员\n\n等待回报。', ROSTER);
-    expect(reading.claimed).toBe(true);
-    expect(reading.targets.map((entry) => entry.id)).toEqual(['worker-1']);
-    expect(reading.quote).toContain('已派给研究员');
-    expect(reading.quote).not.toContain('#');
-  });
-
-  it('keeps a labelled id on the next line inside the claim sentence for verification', () => {
-    const fake = '99999999-8888-7777-6666-555555555555';
-    const reading = readDispatchClaim('已派给研究员，\nqueued_message_id: ' + fake + '。', ROSTER);
-    expect(reading.claimed).toBe(true);
-    expect(reading.messageIds).toContain(fake);
-  });
-
-  it('does not treat quoted speech spanning a newline as the lead own claim', () => {
-    const reading = readDispatchClaim('原文是「已派给研究员，\n等待回报」。', ROSTER);
-    expect(reading.claimed).toBe(false);
-  });
-
-  it('does not treat plans, negations, or quoted text as a claim', () => {
-    for (const text of [
-      '我准备派给研究员，先确认一下。',
-      '这一轮还没有派给研究员。',
-      '尚未派给研究员。',
-      '用户说「已派给研究员」，但那只是一句转述。',
-      '```\n已派给研究员\n```',
-    ]) {
-      expect(readDispatchClaim(text, ROSTER).claimed).toBe(false);
-    }
-  });
-
-  it('ignores identifiers that are not labelled as a queue id', () => {
-    const reading = readDispatchClaim(`已派给研究员，参考 commit ${QUEUE_ID}。`, ROSTER);
-    expect(reading.claimed).toBe(true);
-    expect(reading.messageIds).toEqual([]);
-
-    const labelled = readDispatchClaim(`已派给研究员，queued_message_id: ${QUEUE_ID}`, ROSTER);
-    expect(labelled.messageIds).toEqual([QUEUE_ID]);
-  });
-
-  it('ignores an old queue id the lead is quoting back', () => {
-    noteLeadDispatchFact(LEAD, fact({ delivery: 'direct', turnGeneration: 3 }));
-    const reading = readDispatchClaim(
-      `已派给研究员，之前的错误记录是「queued_message_id: ${QUEUE_ID}」`,
-      ROSTER,
-    );
-    expect(reading.messageIds).toEqual([]);
-    expect(verifyDispatchClaim(reading, dispatchFactsForTurn(LEAD, 3))).toEqual({ consistent: true });
-  });
-
-  it('keeps a labelled queue id that is written as inline code', () => {
-    const reading = readDispatchClaim(
-      `已派给研究员，queued_message_id: \`${QUEUE_ID}\``,
-      ROSTER,
-    );
-    expect(reading.messageIds).toEqual([QUEUE_ID]);
-  });
+afterEach(() => {
+  resetDispatchClaimState();
 });
 
-describe('lead dispatch claim verification', () => {
-  beforeEach(() => resetDispatchClaimState());
+describe('lead turn declaration reconciliation', () => {
+  it('accepts a declaration that matches the host dispatch records', () => {
+    noteLeadDispatchFact('lead-1', fact());
 
-  it('accepts a claim backed by a dispatch in the same turn', () => {
-    noteLeadDispatchFact(LEAD, fact());
-    const reading = readDispatchClaim('已派给研究员。', ROSTER);
-    expect(verifyDispatchClaim(reading, dispatchFactsForTurn(LEAD, 3))).toEqual({
-      consistent: true,
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
+      dispatched: [{ workerId: 'worker-1', messageId: 'mq-1' }],
+      pending: [],
+      turnGeneration: 0,
     });
+
+    expect(
+      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
+    ).toEqual({ consistent: true });
   });
 
-  it('rejects a claim naming a worker that this turn did not dispatch to', () => {
-    noteLeadDispatchFact(LEAD, fact());
-    const reading = readDispatchClaim('已派给执行员。', ROSTER);
-    expect(verifyDispatchClaim(reading, dispatchFactsForTurn(LEAD, 3))).toEqual({
+  it('catches an assignment the lead declared but never dispatched', () => {
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [{ workerId: 'worker-1', taskSummary: 'Classify the 199 cases.' }],
+      dispatched: [],
+      pending: [],
+      turnGeneration: 0,
+    });
+
+    expect(reconcileLeadTurnDeclaration('lead-1', [])).toEqual({
       consistent: false,
-      reason: 'target-not-dispatched',
-      detail: '执行员',
+      reason: 'declared-not-dispatched',
+      targets: ['worker-1'],
+      detail: 'worker-1',
     });
   });
 
-  it('rejects a claim when nothing was dispatched this turn', () => {
-    const reading = readDispatchClaim('已派给研究员。', ROSTER);
-    expect(verifyDispatchClaim(reading, dispatchFactsForTurn(LEAD, 3))).toMatchObject({
+  it('accepts an assignment the lead parked as pending', () => {
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [{ workerId: 'worker-1', taskSummary: 'Classify the 199 cases.' }],
+      dispatched: [],
+      pending: [{ workerId: 'worker-1', waitingFor: 'the owner to confirm the scope' }],
+      turnGeneration: 0,
+    });
+
+    expect(reconcileLeadTurnDeclaration('lead-1', [])).toEqual({ consistent: true });
+  });
+
+  it('catches a dispatch the declaration leaves out', () => {
+    noteLeadDispatchFact('lead-1', fact());
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [],
+      dispatched: [],
+      pending: [],
+      turnGeneration: 0,
+    });
+
+    expect(
+      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
+    ).toEqual({
       consistent: false,
-      reason: 'no-dispatch',
+      reason: 'dispatched-not-declared',
+      targets: ['research'],
+      detail: 'research',
     });
   });
 
-  it('rejects a fabricated queue id even when it is written as inline code', () => {
-    noteLeadDispatchFact(LEAD, fact({ turnGeneration: 3 }));
-    const reading = readDispatchClaim(
-      `已派给研究员，queued_message_id: \`${QUEUE_ID}\``,
-      ROSTER,
-    );
-    expect(verifyDispatchClaim(reading, dispatchFactsForTurn(LEAD, 3))).toMatchObject({
+  it('catches a queued message id that matches no dispatch', () => {
+    noteLeadDispatchFact('lead-1', fact());
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [],
+      dispatched: [{ workerId: 'worker-1', messageId: 'mq-404' }],
+      pending: [],
+      turnGeneration: 0,
+    });
+
+    expect(
+      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
+    ).toEqual({
       consistent: false,
       reason: 'unknown-message-id',
+      targets: ['research'],
+      detail: 'mq-404',
     });
   });
 
-  it('matches a queued identifier only against queued deliveries', () => {
-    noteLeadDispatchFact(LEAD, fact({ delivery: 'direct' }));
-    const claimingQueued = readDispatchClaim(
-      `已派给研究员，queued_message_id: ${QUEUE_ID}`,
-      ROSTER,
-    );
-    expect(verifyDispatchClaim(claimingQueued, dispatchFactsForTurn(LEAD, 3))).toMatchObject({
+  it('catches a turn that dispatched without declaring anything', () => {
+    noteLeadDispatchFact('lead-1', fact());
+
+    expect(
+      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
+    ).toEqual({
       consistent: false,
-      reason: 'unknown-message-id',
-    });
-
-    noteLeadDispatchFact(
-      LEAD,
-      fact({ delivery: 'queued', queuedMessageId: QUEUE_ID, turnGeneration: 3 }),
-    );
-    expect(verifyDispatchClaim(claimingQueued, dispatchFactsForTurn(LEAD, 3))).toEqual({
-      consistent: true,
+      reason: 'no-declaration',
+      targets: ['research'],
+      detail: 'research',
     });
   });
 
-  it('drops a fact when the queued message is withdrawn before the worker reads it', () => {
-    noteLeadDispatchFact(LEAD, fact({ delivery: 'queued', queuedMessageId: QUEUE_ID }));
-    dropLeadDispatchFact(LEAD, QUEUE_ID);
-    const reading = readDispatchClaim(`已派给研究员，queued_message_id: ${QUEUE_ID}`, ROSTER);
-    expect(verifyDispatchClaim(reading, dispatchFactsForTurn(LEAD, 3))).toMatchObject({
+  it('stays silent on a turn that dispatched nothing and declared nothing', () => {
+    expect(reconcileLeadTurnDeclaration('lead-1', [])).toEqual({ consistent: true });
+  });
+
+  it('clears the declaration once it reconciles so the next turn must declare again', () => {
+    noteLeadDispatchFact('lead-1', fact());
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [],
+      dispatched: [{ workerId: 'worker-1' }],
+      pending: [],
+      turnGeneration: 0,
+    });
+
+    expect(
+      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
+    ).toEqual({ consistent: true });
+
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-2', turnGeneration: 1 }));
+
+    expect(
+      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 1)),
+    ).toEqual({
       consistent: false,
-      reason: 'no-dispatch',
+      reason: 'no-declaration',
+      targets: ['research'],
+      detail: 'research',
     });
   });
 
-  it('invalidates stale facts when a rebuilt session restarts turn generations', () => {
-    noteLeadDispatchFact(LEAD, fact({ turnGeneration: 9 }));
-    expect(dispatchFactsForTurn(LEAD, 9)).toHaveLength(1);
-
-    // 重建 Session 后 generation 从 0 重来：旧凭据不能再给新一轮作证。
-    const reading = readDispatchClaim('已派给研究员。', ROSTER);
-    expect(verifyDispatchClaim(reading, dispatchFactsForTurn(LEAD, 0))).toMatchObject({
-      consistent: false,
-      reason: 'no-dispatch',
+  it('forgets a declaration when the session instance restarts', () => {
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
+      dispatched: [],
+      pending: [],
+      turnGeneration: 8,
     });
+
+    // 先把账本推进到第 8 轮，再让收口看到回退的生成号：会话实例变了，旧声明不能跨实例继续算账。
+    dispatchFactsForTurn('lead-1', 8);
+    dispatchFactsForTurn('lead-1', 0);
+
+    expect(reconcileLeadTurnDeclaration('lead-1', [])).toEqual({ consistent: true });
   });
-});
 
-describe('lead dispatch claim incident', () => {
-  beforeEach(() => resetDispatchClaimState());
+  it('asks once, then escalates, then stays quiet until a real dispatch resets it', () => {
+    expect(settleDispatchClaimIncident('lead-1', false)).toBe('wake');
+    expect(settleDispatchClaimIncident('lead-1', false)).toBe('escalate');
+    expect(settleDispatchClaimIncident('lead-1', false)).toBeNull();
 
-  it('wakes once, escalates on the next unbacked claim, then stays quiet until a real dispatch', () => {
-    expect(settleDispatchClaimIncident(LEAD, false)).toBe('wake');
-    expect(settleDispatchClaimIncident(LEAD, false)).toBe('escalate');
-    expect(settleDispatchClaimIncident(LEAD, false)).toBeNull();
+    noteLeadDispatchFact('lead-1', fact());
+    expect(settleDispatchClaimIncident('lead-1', false)).toBe('wake');
+  });
 
-    noteLeadDispatchFact(LEAD, fact());
-    expect(settleDispatchClaimIncident(LEAD, true)).toBeNull();
-    expect(settleDispatchClaimIncident(LEAD, false)).toBe('wake');
+  it('drops a fact once the dispatch is retracted', () => {
+    noteLeadDispatchFact('lead-1', fact());
+    expect(dispatchFactsForTurn('lead-1', 0)).toHaveLength(1);
+
+    dropLeadDispatchFact('lead-1', 'mq-1');
+    expect(dispatchFactsForTurn('lead-1', 0)).toHaveLength(0);
+  });
+
+  it('builds the escalation notice from the reconciliation verdict', () => {
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [],
+      dispatched: [{ workerId: 'worker-1', messageId: 'mq-404' }],
+      pending: [],
+      turnGeneration: 0,
+    });
+    const verdict = reconcileLeadTurnDeclaration('lead-1', []);
+    if (verdict.consistent) throw new Error('expected an inconsistent verdict');
+
+    expect(toDispatchClaimNotice(verdict)).toEqual({
+      version: 1,
+      state: 'unverified',
+      targets: ['worker-1'],
+      reason: 'declared-not-dispatched',
+      detail: 'worker-1',
+      at: expect.any(Number),
+    });
   });
 });

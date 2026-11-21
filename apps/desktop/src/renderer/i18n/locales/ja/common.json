@@ -15253,12 +15253,11 @@
       "orcaDispatch": {
         "unverified": "派遣を確認できません",
         "notice": {
-          "claim": "Lead は派遣済みと述べました",
-          "claimTarget": "Lead は {{target}} に派遣したと述べました",
-          "noDispatch": "しかしホストはこのターンで派遣を受け付けていません",
-          "notDispatched": "しかしホストにはこのターン {{target}} への派遣記録がありません",
-          "unknownId": "しかし引用されたキュー ID {{id}} に一致する派遣はありません",
-          "body": "{{claim}}。{{reason}}。引用元はこのターンの返信:「{{quote}}」。Lead に再派遣を依頼しました。"
+          "noDeclaration": "このターンの宣言が提出されていません",
+          "declaredNotDispatched": "{{target}} への派遣を宣言していますが、ホストは受理していません",
+          "dispatchedNotDeclared": "ホストはこのターン {{target}} へ派遣しましたが、宣言に含まれていません",
+          "unknownId": "引用されたキュー ID {{id}} に一致する派遣はありません",
+          "body": "{{reason}}。Lead に宣言の修正を求めました。"
         }
       },
       "help": {

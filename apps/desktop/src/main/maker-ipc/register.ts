@@ -2721,6 +2721,16 @@ type SendToSessionResult = SendToSessionInternalResult;
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
+  /** Lead 回合声明：report_turn 落账，收口时与宿主派发凭据对账。 */
+  reportLeadTurn: (params: {
+    callerLeadSessionId: string;
+    assignments: Array<{ workerId: string; taskSummary: string }>;
+    dispatched: Array<{ workerId: string; messageId?: string }>;
+    pending: Array<{ workerId: string; waitingFor: string }>;
+  }) => Promise<
+    | { ok: true; workers: number }
+    | { ok: false; errorCode: 'NOT_FOUND'; message: string }
+  >;
   listSessionQueue: (
     sessionId: string,
   ) => Promise<
@@ -17751,6 +17761,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 公开错误码映射都与 IPC handler WORKER_SEND_TO 保持同一套状态机。
     sendToWorker: (params) => orcaTeamService.sendToWorker(params),
     interruptWorker: (params) => orcaTeamService.interruptWorker(params),
+    // 回合声明：Lead 收口前交的账，与宿主派发凭据对账。
+    reportLeadTurn: async (params) => {
+      const result = await orcaTeamService.recordLeadTurnDeclaration({
+        leadSessionId: params.callerLeadSessionId,
+        assignments: params.assignments,
+        dispatched: params.dispatched,
+        pending: params.pending,
+      });
+      return result.ok
+        ? result
+        : {
+            ok: false as const,
+            errorCode: 'NOT_FOUND' as const,
+            message: '当前 session 不是 Orca Lead, 不能提交回合声明。',
+          };
+    },
     // 排队消息控制统一走 OrcaTeamService,复用 resolveWorkerRef 归属校验与
     // coordinator 的 remove/replace 原语(cancel 经 remove 触发 discard settle)。
     listWorkerQueuedMessages: (params) => orcaTeamService.listWorkerQueuedMessages(params),

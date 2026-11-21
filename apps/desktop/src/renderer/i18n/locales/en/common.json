@@ -15318,12 +15318,11 @@
       "orcaDispatch": {
         "unverified": "Dispatch not verified",
         "notice": {
-          "claim": "Lead said it dispatched",
-          "claimTarget": "Lead said it dispatched to {{target}}",
-          "noDispatch": "The host accepted no dispatch this turn",
-          "notDispatched": "The host has no record of dispatching to {{target}} this turn",
+          "noDeclaration": "This turn carried no report_turn declaration",
+          "declaredNotDispatched": "The declaration claims a dispatch to {{target}} that the host never accepted",
+          "dispatchedNotDeclared": "The host dispatched to {{target}} this turn, but the declaration leaves it out",
           "unknownId": "The queued message id {{id}} matches no dispatch",
-          "body": "{{claim}}. {{reason}}. Quoted from its reply this turn: “{{quote}}”. Lead has been asked to re-dispatch."
+          "body": "{{reason}}. Lead has been asked to correct its declaration."
         }
       },
       "help": {

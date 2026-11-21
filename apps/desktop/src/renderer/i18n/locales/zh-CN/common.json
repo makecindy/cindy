@@ -15253,12 +15253,11 @@
       "orcaDispatch": {
         "unverified": "派发未经核实",
         "notice": {
-          "claim": "Lead 称已派发",
-          "claimTarget": "Lead 称已派给 {{target}}",
-          "noDispatch": "宿主这一轮没有接受任何派发",
-          "notDispatched": "宿主这一轮没有派往 {{target}} 的记录",
+          "noDeclaration": "这一轮没有交回合声明",
+          "declaredNotDispatched": "声明称已派给 {{target}}，宿主这一轮没有接受",
+          "dispatchedNotDeclared": "宿主这一轮已派给 {{target}}，声明里没写",
           "unknownId": "引用的队列编号 {{id}} 不对应任何派发",
-          "body": "{{claim}}。{{reason}}。引文取自它这轮回复：「{{quote}}」。已要求 Lead 重派。"
+          "body": "{{reason}}。已要求 Lead 补齐声明。"
         }
       },
       "help": {

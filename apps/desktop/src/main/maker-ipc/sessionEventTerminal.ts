@@ -671,7 +671,6 @@ export function finishSessionTerminalEvent(
             await deps.orcaTeamServiceForEvents?.handleLeadTurnSettled({
               leadSessionId: session.id,
               turnGeneration: event.sessionTurnGeneration ?? 0,
-              finalText: workerTerminalFinalText,
             });
           } catch {
             /* non-fatal */

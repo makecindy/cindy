@@ -15252,12 +15252,11 @@
       "orcaDispatch": {
         "unverified": "派發未經核實",
         "notice": {
-          "claim": "Lead 稱已派發",
-          "claimTarget": "Lead 稱已派給 {{target}}",
-          "noDispatch": "宿主這一輪沒有接受任何派發",
-          "notDispatched": "宿主這一輪沒有派往 {{target}} 的記錄",
+          "noDeclaration": "這一輪沒有交回合聲明",
+          "declaredNotDispatched": "聲明稱已派給 {{target}}，宿主這一輪沒有接受",
+          "dispatchedNotDeclared": "宿主這一輪已派給 {{target}}，聲明裡沒寫",
           "unknownId": "引用的排隊編號 {{id}} 不對應任何派發",
-          "body": "{{claim}}。{{reason}}。引文取自它這輪回覆：「{{quote}}」。已要求 Lead 重派。"
+          "body": "{{reason}}。已要求 Lead 補齊聲明。"
         }
       },
       "help": {

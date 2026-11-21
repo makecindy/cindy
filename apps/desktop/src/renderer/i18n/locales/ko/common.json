@@ -15253,12 +15253,11 @@
       "orcaDispatch": {
         "unverified": "파견이 확인되지 않았습니다",
         "notice": {
-          "claim": "Lead가 파견했다고 밝혔습니다",
-          "claimTarget": "Lead가 {{target}}에 파견했다고 밝혔습니다",
-          "noDispatch": "하지만 호스트는 이번 턴에 어떤 파견도 받지 않았습니다",
-          "notDispatched": "하지만 호스트에는 이번 턴 {{target}}에 대한 파견 기록이 없습니다",
-          "unknownId": "하지만 인용한 대기열 ID {{id}}와 맞는 파견이 없습니다",
-          "body": "{{claim}}. {{reason}}. 인용 출처는 이번 턴의 답변입니다: “{{quote}}”. Lead에 재파견을 요청했습니다."
+          "noDeclaration": "이번 턴의 보고 선언이 제출되지 않았습니다",
+          "declaredNotDispatched": "{{target}}에게 파견했다고 선언했지만 호스트가 접수하지 않았습니다",
+          "dispatchedNotDeclared": "호스트는 이번 턴 {{target}}에게 파견했지만 선언에 없습니다",
+          "unknownId": "인용한 대기열 ID {{id}}에 해당하는 파견이 없습니다",
+          "body": "{{reason}}. Lead에게 선언 보완을 요청했습니다."
         }
       },
       "help": {

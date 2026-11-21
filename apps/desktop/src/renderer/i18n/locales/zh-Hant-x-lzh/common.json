@@ -15244,12 +15244,11 @@
       "orcaDispatch": {
         "unverified": "遣單無據，待核",
         "notice": {
-          "claim": "Lead 稱已遣單",
-          "claimTarget": "Lead 稱已遣往 {{target}}",
-          "noDispatch": "然宿未納一單",
-          "notDispatched": "然宿無遣往 {{target}} 之記",
-          "unknownId": "然所引隊號 {{id}} 無對應之單",
-          "body": "{{claim}}。{{reason}}。引文取自其此輪之覆：「{{quote}}」。已命 Lead 重遣。"
+          "noDeclaration": "此輪未有回合之陳",
+          "declaredNotDispatched": "陳稱已遣往 {{target}}，然宿未納",
+          "dispatchedNotDeclared": "宿於此輪已遣 {{target}}，陳中未載",
+          "unknownId": "所引隊號 {{id}} 無對應之單",
+          "body": "{{reason}}。已命 Lead 補陳。"
         }
       },
       "help": {

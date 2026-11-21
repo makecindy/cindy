@@ -15422,12 +15422,11 @@
       "orcaDispatch": {
         "unverified": "Envio não verificado",
         "notice": {
-          "claim": "O Lead diz ter enviado",
-          "claimTarget": "O Lead diz ter enviado para {{target}}",
-          "noDispatch": "Mas o host não aceitou nenhum envio neste turno",
-          "notDispatched": "Mas o host não tem envio para {{target}} registado neste turno",
-          "unknownId": "Mas o id de fila citado {{id}} não corresponde a nenhum envio",
-          "body": "{{claim}}. {{reason}}. Citação da resposta deste turno: “{{quote}}”. O Lead foi solicitado a reenviar."
+          "noDeclaration": "Este turno não apresentou declaração de envio",
+          "declaredNotDispatched": "A declaração afirma um envio para {{target}} que o host nunca aceitou",
+          "dispatchedNotDeclared": "O host enviou para {{target}} neste turno, mas a declaração omite-o",
+          "unknownId": "O id de fila {{id}} não corresponde a nenhum envio",
+          "body": "{{reason}}. Foi pedido ao Lead que corrija a declaração."
         }
       },
       "help": {
