@@ -7412,9 +7412,9 @@ interface ElectronAPI {
           day: string;
           money: import('../shared/regionalMoney').RegionalMoney;
           costUsd?: number;
-        }) => void,
+        }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
       ) => () => void;
-      onTodayTokensChanged: (cb: (p: CodexUsageSnapshot) => void) => () => void;
+      onTodayTokensChanged: (cb: (p: CodexUsageSnapshot, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
       onClaudeAccountChanged: (
         cb: (p: {
           spend: number;
