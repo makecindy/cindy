@@ -366,8 +366,10 @@ describe('Pi MCP request lifecycle', () => {
   });
 
   // 测试价值：客户端替换不能截断仍在途的 MCP 工具调用。最小失败输入是旧客户端
-  // 在 tools/call 等待响应时被新连接替换，tier unit，使用生成扩展的真实 HTTP client。
-  it('waits for an in-flight call before deleting a replaced session', async () => {
+  // 在 tools/call 等待响应时被新连接替换。Tier unit，真实扩展客户端 + 注入 fetch，
+  // 用虚拟时钟越过旧清理期限，覆盖之前只验证短调用的缺口。
+  it('waits for a long in-flight call before deleting a replaced session', async () => {
+    vi.useFakeTimers();
     let finishCall!: (response: Response) => void;
     const methods: string[] = [];
     const fetchImpl = vi.fn(async (_url: unknown, options?: RequestInit) => {
@@ -392,6 +394,7 @@ describe('Pi MCP request lifecycle', () => {
     await vi.waitFor(() => expect(methods).toContain('tools/call'));
     const second = await h.connect();
     h.gateway.add('cindy', second.client, second.tools, second.displayName);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(methods).not.toContain('DELETE');
     finishCall(Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } }));
     await expect(call).resolves.toMatchObject({ content: [{ text: 'ok' }] });

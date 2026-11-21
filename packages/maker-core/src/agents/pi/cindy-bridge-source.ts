@@ -3047,22 +3047,9 @@ class McpHttpClient {
     }
   }
 
-  private async waitForIdle(timeoutMs: number): Promise<void> {
+  private async waitForIdle(): Promise<void> {
     if (this.inFlight === 0) return;
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        resolve();
-      }, timeoutMs);
-      this.idleWaiters.push(() => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve();
-      });
-    });
+    await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
   }
 
   /** 按 SSE event 增量取当前 JSON-RPC response；server 保持流打开也不阻塞。 */
@@ -3163,7 +3150,7 @@ class McpHttpClient {
   /** Best-effort bounded DELETE for a transport whose owning Pi client is gone. */
   async close(timeoutMs = 1_000): Promise<void> {
     if (!this.sessionId) return;
-    await this.waitForIdle(timeoutMs);
+    await this.waitForIdle();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
