@@ -1242,6 +1242,96 @@ describe('Scheduler', () => {
     }
   });
 
+  // Codex P1 on #11577:凭据判旧只比「队列里那一凭据」不够 —— 摘掉凭据之后,旧一轮
+  // 迟到的失败会因为「队列里没有凭据」而把陈旧计划重新上膛。任务那时已被重新认领、
+  // 正在跑新一轮,这次重试会再排一次触发(共享 DB 下就是重叠执行)。
+  it('keeps a wedged replan from re-arming after a newer one concluded', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        preGateStorageTimeoutMs: 30,
+        logger: { warn: vi.fn(), error: vi.fn() },
+        runnerImpl: (_s, ctx) => new Promise<FireResult>(() => {
+          ctx.signal.addEventListener('abort', () => {});
+        }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      const realGet = h.storage.get.bind(h.storage);
+      const realUpdate = h.storage.update.bind(h.storage);
+      let rejectWedged!: (reason: Error) => void;
+      // 补排读的剧本:'fail' 这次没做成(凭据上膛)、'wedge' 永久挂死、'real' 照常。
+      let mode: 'fail' | 'wedge' | 'real' = 'real';
+      // 补排写(认领之外的 nextFireAt 写入)逐个记下来:陈旧计划重新上膛后,重试它会
+      // 再写一次排期 —— 那就是共享 DB 下的重叠执行。
+      const replanWrites: (number | undefined)[] = [];
+      vi.spyOn(h.storage, 'update').mockImplementation((id, patch, expected) => {
+        if (patch.nextFireAt !== undefined) replanWrites.push(patch.nextFireAt);
+        return realUpdate(id, patch, expected);
+      });
+      vi.spyOn(h.storage, 'get').mockImplementation((id: string) => {
+        if (id !== sch.id) return realGet(id);
+        if (mode === 'wedge') {
+          return new Promise<Schedule | null>((_resolve, reject) => { rejectWedged = reject; });
+        }
+        if (mode === 'fail') return Promise.reject(new Error('storage unavailable'));
+        return realGet(id);
+      });
+
+      // 第一轮 run:跑挂 → 强制收口那次的补排失败(凭据上膛)→ 重试挂死。
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      mode = 'fail';
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBeUndefined();
+      mode = 'wedge';
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBeUndefined();
+
+      // 用户编辑让任务重新触发,新一轮 run 又跑挂 → 它的补排**成功**,凭据被摘掉。
+      mode = 'real';
+      await h.scheduler.update(sch.id, { intervalMs: 1_800_000 });
+      h.clock.advance(1_800_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toEqual(expect.any(Number));
+
+      // 任务再次被认领(第三轮 run 在跑,nextFireAt 已清空)。
+      replanWrites.length = 0;
+      h.clock.advance(1_800_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBeUndefined();
+
+      // 挂死的旧那一轮补排终于失败:不能把陈旧计划重新上膛。
+      rejectWedged(new Error('storage unavailable'));
+      await vi.advanceTimersByTimeAsync(100);
+      for (let i = 0; i < 3; i += 1) {
+        void h.scheduler.tick();
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      // 没有新的补排写,也没有在第三轮 run 在跑时又排一次触发。
+      expect(replanWrites).toEqual([]);
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBeUndefined();
+
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Codex P1 on #11577:预算内回来的过期写入同样要过代次栅栏。等待期间宿主
   // stop()(切账号 / 重启)把 lifecycleGeneration 推进了,这次 UPDATE 属于上一段生命
   // 周期;不走超时分支就不会经过 armExpireLateApply 的栅栏,它的 CAS 结果会被写回
