@@ -47,7 +47,7 @@ function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueue
 }
 
 describe('agentInputQueue', () => {
-  it('projects the send_to_session path only for a host-authorized referenced task', () => {
+  it('projects the send_to_session path only from the host-reconciled live session route', () => {
     const href = 'cindy://session/target';
     const queued = {
       ...queuedMessage([]),
@@ -62,14 +62,26 @@ describe('agentInputQueue', () => {
         title: 'Target',
       }],
     };
-    expect(buildMakerUserMessage(queued)).toMatchObject({ content: expect.stringContaining('cindy_helper\'s call_tool') });
-    expect(buildMakerUserMessage({ ...queued, createOpts: { ...queued.createOpts, orcaRole: 'lead' } }))
-      .toMatchObject({ content: expect.stringContaining('send_to_session') });
-    expect(buildMakerUserMessage({ ...queued, createOpts: { ...queued.createOpts, remoteHostId: 'ssh-1' } }))
-      .toMatchObject({ content: expect.not.stringContaining('send_to_session') });
+    // Review and plugin-engine tasks are queued as built-in claude-code and reconciled only at start
+    // (PR #11894 review). The queued snapshot alone must never advertise a tool the engine lacks.
+    expect(buildMakerUserMessage(queued)).toMatchObject({ content: expect.not.stringContaining('send_to_session') });
+    const local = { agentKind: 'claude-code' as const, supportsRemote: false };
+    expect(buildMakerUserMessage(queued, [], { sendToSession: local }))
+      .toMatchObject({ content: expect.stringContaining('cindy_helper\'s call_tool') });
     // message-source.md「发给模型的说明」: auto titles and Ghost hooks share this projection,
     // so the send route must stay out of it.
     expect(getAgentFacingText(queued)).not.toContain('send_to_session');
+    const remoteHref = 'cindy://session/target?device=studio';
+    const remote = {
+      ...queued,
+      text: remoteHref,
+      persistedContent: remoteHref,
+      agentReferences: [{ ...queued.agentReferences[0], end: remoteHref.length, href: remoteHref }],
+    };
+    expect(buildMakerUserMessage(remote, [], { sendToSession: { ...local, supportsRemote: true } }))
+      .toMatchObject({ content: expect.stringContaining('target_session_id="studio::target"') });
+    expect(buildMakerUserMessage(remote, [], { sendToSession: local }))
+      .toMatchObject({ content: expect.stringContaining('cannot send messages to it directly') });
   });
 
   it.each([false, true])('keeps synthetic text on disk and strips only host text-only model input (%s)', (toolsDisabled) => {

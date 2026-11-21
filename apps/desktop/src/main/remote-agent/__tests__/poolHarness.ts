@@ -28,6 +28,7 @@ import { isProviderShareAgentDeviceId, providerShareIdOfAgentDeviceId } from '..
 import { RuntimePluginControlError } from '../../cindy-brain/runtimeControl';
 import { SessionCreationCleanupPendingError } from '@cindy/maker-core';
 
+import { resolveAgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 import { RemoteConnectionPool } from '../controller/connectionPool';
 import { hostRewritesResumeId, startRemoteAgentSession, takeStoppedSharedReconnectOffer, withSharedReconnectHandoff, withSharedReconnectOfferCapture, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
@@ -106,6 +107,8 @@ export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
     worktreeManager: { assertPrecreatedSessionNotCancelled: noop },
     workingDirectoryRecovery: { resolve: (_id: string, dir: string) => dir, observe: async () => {}, isFallback: () => false },
     options: { waitForAccountProviderModelsReady: noop },
+    // bootstrapSession stamps the model-facing send_to_session route from the real resolver.
+    resolveAgentSendToSessionHint,
     applySessionRuntimeOverrideForStart: noop,
     applyPersistedReviewMode: noop,
     applyOrcaInstructions: () => false,

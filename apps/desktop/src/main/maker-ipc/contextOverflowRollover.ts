@@ -21,7 +21,6 @@ import {
 } from '@cindy/maker-core';
 import {
   projectAgentFacingText,
-  resolveAgentSendToSessionHint,
   readAgentInputReferences,
   type AgentSendToSessionHint,
 } from '@cindy/maker-shared/agent-input-projection';
@@ -441,14 +440,11 @@ export function findLatestRebuildableError(
 }
 
 export interface ContextOverflowRolloverDeps {
-  /** Mirrors the host's injected sendToRemoteSession callback. */
-  supportsRemoteSessionHandoff?: boolean;
   getSessionRow(sessionId: string): Promise<{
     status: string;
     source?: string | null;
     /** Resolved from the active, unarchived Bot link and Profile, never from UI hints. */
     botRole?: string | null;
-    orcaRole?: string | null;
     agentKind: string;
     remoteHostId: string | null;
     agentDeviceId?: string | null;
@@ -493,6 +489,8 @@ export interface ContextOverflowRolloverDeps {
   ): Promise<{ reason?: string; sourceUserClientId?: string | null } | null>;
   getLiveSession(sessionId: string): {
     readonly instanceId?: string;
+    /** Host-reconciled send_to_session route stamped at bootstrap; captured before close. */
+    readonly sendToSessionHint?: AgentSendToSessionHint;
     getTurnGeneration?(): number;
     isTurnRunning(): boolean;
     listBackgroundTasks?(): ReadonlyArray<unknown>;
@@ -845,10 +843,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         const replay = await deps.replayUserMessage(
           sessionId,
           plan.sourceUserContent,
-          replayWireWithSourceNotes(sourceWire, plan, resolveAgentSendToSessionHint({
-            ...sessionRow,
-            supportsRemote: deps.supportsRemoteSessionHandoff,
-          })),
+          replayWireWithSourceNotes(sourceWire, plan, live?.sendToSessionHint),
           {
             signal,
             // 保留同一 Pi 会话历史：失败轮的 error assistant 会被 pi-ai 序列化时
@@ -962,10 +957,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       const replay = await deps.replayUserMessage(
         sessionId,
         oversized ? CODEX_HISTORY_CONTINUE_MESSAGE : plan.sourceUserContent,
-        oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan, resolveAgentSendToSessionHint({
-          ...sessionRow,
-          supportsRemote: deps.supportsRemoteSessionHandoff,
-        })),
+        oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan, live?.sendToSessionHint),
         oversized ? {
           signal,
           continueFromHistory: true,

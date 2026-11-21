@@ -68,9 +68,11 @@
 - 其他任务发来的消息：实时 `[消息来源]` 后追加一句回复方式，并说明只在用户要求或确实需要时回复，
   不主动只为说「收到」「好的」回复。群聊来源（`groupThread` / `groupRequest`）不加，群里的回复走最终答复。
 - 只在当前任务实际能调用 `send_to_session` 时出现，判据与 `cindy_helper` 的挂载一致（Review、SSH 上的
-  Claude/Codex 没有）；跨电脑写法跟随宿主是否注入跨电脑投递。
-- 同样只进当次发给模型的输入，不进 `getAgentFacingText` 的默认投影、落库正文和交接摘要；上下文重建时按当前
-  宿主能力重新生成。
+  Claude/Codex、插件引擎没有）；跨电脑写法跟随宿主是否注入跨电脑投递。判据只取运行中任务在启动时由宿主核实的身份，
+  不读排队快照：Review 与插件引擎在排队时都记成内置引擎，启动时才恢复。任务还没启动时（例如重启后的第一条消息）不加，
+  宁可少给，不给不存在的工具。
+- 同样只进当次发给模型的输入，不进 `getAgentFacingText` 的默认投影、落库正文和交接摘要；上下文重建时沿用重建前
+  运行中任务的同一份判据。
 - 实现：`agentInputProjection.ts`（`resolveAgentSendToSessionHint`）、`messageSource.ts`
   （`buildMessageSourceReplyHint`）、`messageSourceNote.ts`；回归见 `agentInputProjection.test.ts`、
   `messageSourceNote.test.ts`、`contextOverflowRollover.test.ts`、`agentInputQueue.test.ts` 与

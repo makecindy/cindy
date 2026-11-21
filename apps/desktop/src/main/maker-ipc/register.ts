@@ -15384,7 +15384,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       remoteHostId: createOpts.remoteHostId,
       resumeSessionId: createOpts.resumeSessionId,
       orcaRole: createOpts.orcaRole,
-      supportsRemoteSession: options.supportsRemoteSessionHandoff === true,
     };
   }
 
@@ -18582,7 +18581,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       eq: (left, right) => eq(left, right),
     }, sessionId);
   contextOverflowRolloverHolder = createContextOverflowRollover({
-    supportsRemoteSessionHandoff: options.supportsRemoteSessionHandoff === true,
     hasExternalRecoveryOwner: (sessionId) =>
       isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: readContextRecoverySession,
@@ -19591,6 +19589,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
+    sendToSessionHint: (sessionId) =>
+      (maker.getSession(sessionId) as { sendToSessionHint?: AgentSendToSessionHint } | null | undefined)?.sendToSessionHint,
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
         let runtimePreparationStarted = false;
@@ -20517,10 +20517,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
-    normalized.createOpts = {
-      ...normalized.createOpts,
-      supportsRemoteSession: options.supportsRemoteSessionHandoff === true,
-    };
     if (normalized.origin?.kind === 'orca') {
       // 系统兜底合批标记只由 main 的 auto-bridge 入口盖章；wire 自报一律剥掉。
       const origin = { ...normalized.origin };
