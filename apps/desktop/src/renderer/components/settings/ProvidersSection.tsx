@@ -3306,7 +3306,7 @@ export function ProvidersSection() {
         } else {
           toast.success(t('settings.providers.models.refreshNoNew'));
         }
-        refetch();
+        await refetch();
       } catch {
         toast.error(t('settings.providers.models.refreshFailed'));
       } finally {

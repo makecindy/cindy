@@ -2,6 +2,7 @@ import { modelImageInputDefault } from '../../../shared/modelImageInputOverride'
 import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
+import { FormField } from '@/components/ui/form-field';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
@@ -40,6 +41,7 @@ import { Switch } from '@/components/ui/switch';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
+import { useProviders } from '@/hooks/useProviders';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { useModelImageInputOverride } from '@/hooks/useModelImageInputOverride';
 import { parseContextTokenInput } from '../../../shared/modelContextLimit';
@@ -83,7 +85,9 @@ import { isLocalRuntimeBetaProviderId, isManagedSidecarProviderId, MANAGED_OLLAM
 import { MANAGED_LLAMACPP_PROVIDER_ID, supportsLlamaCppMillionContext, llamaCppMaxContextSize } from '../../../shared/llamaCpp';
 import { modelBrand } from './modelManagementPresentation';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
+import { SettingsTextInput } from './SettingsTextInput';
 import type { UnionModelRow } from './UnifiedModelList';
+import { providersSettings } from './ProvidersSection.settings-search';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -177,7 +181,7 @@ function Section({
         <h4 className="text-12 font-medium text-[var(--text-secondary)]">{title}</h4>
         {hint && (
           <Tip text={hint} contentClassName="z-[10002]">
-            <button
+            <button data-setting-id={providersSettings.providers.id}
               type="button"
               aria-label={hint}
               className="rounded-full p-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
@@ -202,13 +206,15 @@ interface Props {
   /** 该行的报价展示（与列表同一份派生结果，避免抽屉自己再算一遍算出别的）。 */
   pricePresentationOf: (agent: AgentKind, model: CatalogModel) => ModelPricePresentation | null;
   /** 准入轴:停用此模型（main 侧 model-disable-store）。 */
-  onDisable: (row: UnionModelRow) => void;
+  onDisable: (row: UnionModelRow) => void | Promise<void>;
   /** 本机 Ollama 专有:删除磁盘上的模型文件。 */
   onDeleteLocal?: (row: UnionModelRow) => void;
   /** 该行当前是否已被停用（用于底部动作区的方向）。 */
   disabled: boolean;
   /** 付费锁定行不给写入入口（与列表行同一判定）。 */
   paymentRequired: boolean;
+  /** Parent discovery owns a full-config snapshot until its readback finishes. */
+  refreshing?: boolean;
 }
 
 export function ModelAdvancedDrawer({
@@ -223,6 +229,7 @@ export function ModelAdvancedDrawer({
   onDeleteLocal,
   disabled,
   paymentRequired,
+  refreshing = false,
 }: Props) {
   const row = groupRow?.aliasRows?.find((member) => member.id === selectedMemberId)
     ?? groupRow?.aliasRows?.find((member) => member.id === groupRow.id) ?? groupRow;
@@ -232,11 +239,30 @@ export function ModelAdvancedDrawer({
     return model ? [{ agent, modelId: model.id, model }] : [];
   }));
   const { t, i18n } = useTranslation();
+  const { refetch, error: catalogError } = useProviders();
+  const latestProviderRef = useRef(provider);
+  latestProviderRef.current = provider;
+  const [unconfirmedProvider, setUnconfirmedProvider] = useState<ProviderView | null>(null);
+  const configurationBlocked = refreshing || !!catalogError || unconfirmedProvider === provider;
+  // IPC success precedes the provider-change broadcast's asynchronous catalog
+  // read. Keep every whole-config writer locked until that read completes. A
+  // failed/superseded read stays blocked until a new snapshot replaces the prop.
+  const readBackConfig = async () => {
+    if (!await refetch()) setUnconfirmedProvider(latestProviderRef.current);
+  };
   const selectionAvailable = provider.connected && !provider.suspended;
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
   const pricePendingRef = useRef(false);
+  const [priceSaving, setPriceSaving] = useState(false);
   const [protocolSaving, setProtocolSaving] = useState(false);
   const [imageCapabilitySaving, setImageCapabilitySaving] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [nameSaving, setNameSaving] = useState(false);
+  const nameSavingRef = useRef(false);
+  const [toggleSaving, setToggleSaving] = useState(false);
+  const toggleSavingRef = useRef(false);
+  const nameDirtyRef = useRef(false);
+  const nameEditorVersionRef = useRef(0);
   const titleRef = useRef<HTMLHeadingElement>(null);
   // 开关/档位写的是 renderer 本地存储，订阅 version 才能在写后重渲染。
   useModelVisibilityVersion();
@@ -308,6 +334,66 @@ export function ModelAdvancedDrawer({
   const ctx = useModelContextLimit(open ? contextTarget : null);
   const imageInputOverride = useModelImageInputOverride(open ? contextTarget : null);
   const canEditProtocol = provider.source === 'user' && !provider.auth?.native && !isManagedSidecarProviderId(provider.id);
+  const canEditName = canEditProtocol && !isOrganizationManagedProvider(provider) &&
+    !!row?.avail.length && row.avail.every(agent =>
+      provider.models[agent]?.some(model => model.id === row.byAgent[agent]?.id));
+  // Discovery can add a preferred engine to this same model row. That is not
+  // a new editing target and must not discard an alias typed during refresh.
+  useEffect(() => {
+    nameEditorVersionRef.current += 1;
+    nameDirtyRef.current = false;
+    setNameDraft(primaryModel?.name ?? '');
+    return () => { nameEditorVersionRef.current += 1; };
+  }, [open, provider.id, row?.id]);
+  useEffect(() => {
+    if (!nameDirtyRef.current) setNameDraft(primaryModel?.name ?? '');
+  }, [primaryModel?.name]);
+  const toggleModel = async () => {
+    if (!row || nameSavingRef.current || toggleSavingRef.current || pricePendingRef.current) return;
+    if (!canEditName) { void onDisable(groupRow ?? row); return; }
+    // The parent may close the drawer after its admission IPC settles. A new
+    // rename must not start while that earlier close request is still pending.
+    toggleSavingRef.current = true;
+    setToggleSaving(true);
+    try { await onDisable(groupRow ?? row); }
+    finally { toggleSavingRef.current = false; setToggleSaving(false); }
+  };
+  const saveModelName = async () => {
+    const name = nameDraft.trim();
+    if (!canEditName || !row || !name || name.length > 256 || !nameDirtyRef.current ||
+        configurationBlocked || nameSavingRef.current || toggleSavingRef.current || pricePendingRef.current || protocolSaving || imageCapabilitySaving) return;
+    const config = providerViewToCustomProviderConfig(provider);
+    // A union row can contain different IDs on each engine. Never match by its
+    // canonical ID or display name, and preserve the original per-model config.
+    const targets = row.avail.map(agent => config.runtimes[agent]?.models.find(
+      model => model.id === row.byAgent[agent]?.id,
+    ));
+    if (targets.some(model => !model)) return;
+    for (const model of targets) {
+      model!.name = name;
+      model!.nameExplicit = true;
+    }
+    nameSavingRef.current = true;
+    setNameSaving(true);
+    const editorVersion = nameEditorVersionRef.current;
+    try {
+      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
+      if (result.ok) await readBackConfig();
+      // The parent can replace/close the drawer while persistence is pending.
+      if (editorVersion !== nameEditorVersionRef.current) return;
+      if (result.ok) {
+        nameDirtyRef.current = false;
+        setNameDraft(name);
+      } else {
+        toast.error(t('settings.providers.models.advanced.nameSaveFailed'));
+      }
+    } catch {
+      if (editorVersion === nameEditorVersionRef.current) {
+        toast.error(t('settings.providers.models.advanced.nameSaveFailed'));
+      }
+    }
+    finally { nameSavingRef.current = false; setNameSaving(false); }
+  };
   const imageAgents = canEditProtocol
     ? provider.agents.filter(agent => provider.routing?.[agent]?.imageApi === 'openai-images')
     : [];
@@ -325,7 +411,7 @@ export function ModelAdvancedDrawer({
   const setImageCapability = async (value: string, kind: 'image' | 'video' = 'image') => {
     const agent = kind === 'image' ? imageAgent : videoAgent;
     const sourceModel = kind === 'image' ? imageModel : videoModel;
-    if (imageCapabilitySaving || !agent || !sourceModel || !['default', 'generate', 'edit'].includes(value)) return;
+    if (configurationBlocked || nameSavingRef.current || protocolSaving || imageCapabilitySaving || !agent || !sourceModel || !['default', 'generate', 'edit'].includes(value)) return;
     const config = providerViewToCustomProviderConfig(provider);
     const model = config.runtimes[agent]?.models.find(item => item.id === sourceModel.id);
     if (!model) return;
@@ -339,12 +425,13 @@ export function ModelAdvancedDrawer({
     setImageCapabilitySaving(true);
     try {
       const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
-      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
+      if (result.ok) await readBackConfig();
+      else toast.error(t('settings.providers.custom.toast.saveFailed'));
     } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
     finally { setImageCapabilitySaving(false); }
   };
   const setModelApi = async (agent: AgentKind, api: string) => {
-    if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
+    if (configurationBlocked || nameSavingRef.current || protocolSaving || imageCapabilitySaving || !canEditProtocol || !row?.byAgent[agent]) return;
     const config = providerViewToCustomProviderConfig(provider);
     const runtime = config.runtimes[agent];
     const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
@@ -380,7 +467,8 @@ export function ModelAdvancedDrawer({
     setProtocolSaving(true);
     try {
       const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
-      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
+      if (result.ok) await readBackConfig();
+      else toast.error(t('settings.providers.custom.toast.saveFailed'));
     }
     catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
     finally { setProtocolSaving(false); }
@@ -683,7 +771,7 @@ export function ModelAdvancedDrawer({
   return (
     <>
       <Dialog.Root open={open} onOpenChange={(next) => {
-        if (!next && pricePendingRef.current) return;
+        if (nameSavingRef.current || (!next && pricePendingRef.current)) return;
         onOpenChange(next);
       }}>
         <Dialog.Portal>
@@ -718,9 +806,9 @@ export function ModelAdvancedDrawer({
                     className="mb-2"
                     truncateOptions
                     value={row.id}
-                    disabled={ctx.loading || protocolSaving}
+                    disabled={nameSaving || ctx.loading || protocolSaving}
                     onValueChange={(id) => {
-                      if (ctx.loading || ctxDirtyRef.current || protocolSaving || pricePendingRef.current) return;
+                      if (nameSavingRef.current || ctx.loading || ctxDirtyRef.current || protocolSaving || pricePendingRef.current) return;
                       const member = memberRows.find((candidate) => candidate.id === id);
                       if (member) onSelectMember?.(member);
                     }}
@@ -739,6 +827,7 @@ export function ModelAdvancedDrawer({
                 </p>
               </div>
               <Dialog.Close
+                disabled={nameSaving}
                 className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 text-[var(--text-secondary)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] hover:text-[var(--text-primary)]"
                 aria-label={t('settings.providers.models.advanced.close')}
               >
@@ -845,7 +934,7 @@ export function ModelAdvancedDrawer({
                                           className="mt-1"
                                           value={field.value}
                                           options={field.options}
-                                          disabled={protocolSaving}
+                                          disabled={configurationBlocked || protocolSaving || imageCapabilitySaving || nameSaving}
                                           // Automatic keeps showing the protocol it resolves to.
                                           triggerAdornment={field.value === 'auto' ? (
                                             <span className="shrink-0 text-[var(--text-tertiary)]">{protocolLabel(protocol.outbound)}</span>
@@ -874,7 +963,7 @@ export function ModelAdvancedDrawer({
                                   contentClassName="z-[10002]"
                                   text={t('settings.providers.models.advanced.engineNotConfigured')}
                                 >
-                                  <button
+                                  <button data-setting-id={providersSettings.providers.id}
                                     type="button"
                                     aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.models.advanced.engineNotConfigured')}`}
                                     className="inline-flex rounded-full p-1"
@@ -885,7 +974,7 @@ export function ModelAdvancedDrawer({
                               )}
                             </span>
                             <span className="inline-flex shrink-0 rounded-full border border-transparent p-0.5">
-                              <Switch
+                              <Switch data-setting-id={providersSettings.providers.id}
                                 aria-describedby={protocol ? protocolId : undefined}
                                 data-compatibility={compatibility || undefined}
                                 checked={
@@ -913,7 +1002,7 @@ export function ModelAdvancedDrawer({
                         );
                       })}
                       {visibilityCustomized && !paymentRequired && selectionAvailable && (
-                        <Button
+                        <Button data-setting-id={providersSettings.providers.id}
                           variant="secondary"
                           size="sm"
                           tone="quiet"
@@ -936,7 +1025,7 @@ export function ModelAdvancedDrawer({
                       title={t('settings.providers.models.advanced.defaultEffort')}
                       hint={t('settings.providers.models.advanced.defaultEffortHint')}
                     >
-                      <SegmentedControl
+                      <SegmentedControl data-setting-id={providersSettings.providers.id}
                         className="mt-1"
                         fullWidth
                         // Six translated labels exceed a details column. Keep every
@@ -968,7 +1057,7 @@ export function ModelAdvancedDrawer({
                         (a) =>
                           rememberedEffort(a, row.byAgent[a]!.id) !== undefined,
                       ) && (
-                        <Button
+                        <Button data-setting-id={providersSettings.providers.id}
                           variant="secondary"
                           size="sm"
                           tone="quiet"
@@ -1005,7 +1094,7 @@ export function ModelAdvancedDrawer({
                           {supportsMillionContext && (
                             <div className="mt-2 flex gap-2">
                               {[{ label: '256K', tokens: 262144 }, { label: '1M', tokens: 1_000_000 }].map((preset) => (
-                                <Button key={preset.tokens} variant={effectiveLimit === preset.tokens ? 'primary' : 'secondary'} compact
+                                <Button data-setting-id={providersSettings.providers.id} key={preset.tokens} variant={effectiveLimit === preset.tokens ? 'primary' : 'secondary'} compact
                                   aria-pressed={effectiveLimit === preset.tokens}
                                   disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                   onClick={() => {
@@ -1026,7 +1115,7 @@ export function ModelAdvancedDrawer({
                                   : 'border-[var(--settings-theme-card-border)]',
                               )}
                             >
-                              <input
+                              <input data-setting-id={providersSettings.providers.id}
                                 value={ctxDraft}
                                 onChange={(event) => {
                                   ctxDirtyRef.current = true;
@@ -1134,7 +1223,7 @@ export function ModelAdvancedDrawer({
                             size="compact"
                             width="sm"
                             value={imageCapability}
-                            disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                            disabled={configurationBlocked || nameSaving || protocolSaving || imageCapabilitySaving || !selectionAvailable || paymentRequired}
                             onValueChange={value => void setImageCapability(value)}
                             options={(['default', 'generate', 'edit'] as const).map(value => ({
                               value, label: t(`settings.providers.models.advanced.imageCapability.${value}`),
@@ -1154,7 +1243,7 @@ export function ModelAdvancedDrawer({
                             size="compact"
                             width="sm"
                             value={videoCapability}
-                            disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                            disabled={configurationBlocked || nameSaving || protocolSaving || imageCapabilitySaving || !selectionAvailable || paymentRequired}
                             onValueChange={value => void setImageCapability(value, 'video')}
                             options={(['default', 'generate', 'edit'] as const).map(value => ({
                               value, label: t(`settings.providers.models.advanced.videoCapability.${value}`),
@@ -1260,14 +1349,32 @@ export function ModelAdvancedDrawer({
                   </Section>
 
                   {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && priceRow ? (
-                    <ModelPriceOverrideDialog provider={provider} row={priceRow} open={open} onOpenChange={onOpenChange}
-                      presentation="inline" referenceDetails={(agent) => {
-                        const model = priceRow.byAgent[agent];
-                        return model ? referencePricing(model, agent) : null;
-                      }}
-                      onPendingChange={(pending) => { pricePendingRef.current = pending; }} />
+                    <fieldset disabled={nameSaving} className="m-0 min-w-0 border-0 p-0">
+                      <ModelPriceOverrideDialog provider={provider} row={priceRow} open={open} onOpenChange={onOpenChange}
+                        presentation="inline" referenceDetails={(agent) => {
+                          const model = priceRow.byAgent[agent];
+                          return model ? referencePricing(model, agent) : null;
+                        }}
+                        onPendingChange={(pending) => { pricePendingRef.current = pending; setPriceSaving(pending); }} />
+                    </fieldset>
                   ) : referencePricing(primaryModel, primaryAgent)}
                   <Section title={t('settings.providers.models.advanced.identity')}>
+                    {canEditName && (
+                      <FormField id="model-display-name" label={t('settings.providers.models.advanced.displayName')} className="mb-3">
+                        {(control) => (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <SettingsTextInput data-setting-id={providersSettings.providers.id} {...control} size="sm" className="min-w-[120px] flex-1"
+                              value={nameDraft} disabled={nameSaving || toggleSaving || priceSaving} maxLength={256}
+                              onChange={(value) => { nameDirtyRef.current = true; setNameDraft(value); }} />
+                            <Button data-setting-id={providersSettings.providers.id} type="button" variant="secondary" size="md" compact loading={nameSaving}
+                              disabled={configurationBlocked || toggleSaving || priceSaving || nameDraft.trim().length > 256 || !nameDraft.trim() || !nameDirtyRef.current || protocolSaving || imageCapabilitySaving}
+                              onClick={() => void saveModelName()}>
+                              {t('settings.providers.models.advanced.saveName')}
+                            </Button>
+                          </div>
+                        )}
+                      </FormField>
+                    )}
                     {description && (
                       <p className="mb-2 text-12 leading-relaxed text-[var(--text-secondary)]">{description}</p>
                     )}
@@ -1294,21 +1401,21 @@ export function ModelAdvancedDrawer({
                 the manufacturer reference when one is declared. */}
             {!paymentRequired && (
               <div className="flex shrink-0 flex-col gap-2 border-t border-[var(--settings-theme-card-border)] px-5 py-3">
-                <Button
+                <Button data-setting-id={providersSettings.providers.id}
                   variant="secondary"
                   size="md"
                   compact
                   type="button"
-                  disabled={disabled && !selectionAvailable}
-                  data-settings-search-action="Enable or disable the displayed model group"
-                  onClick={() => { if (!pricePendingRef.current) onDisable(groupRow ?? row); }}
+                  loading={toggleSaving}
+                  disabled={nameSaving || toggleSaving || (disabled && !selectionAvailable)}
+                  onClick={() => void toggleModel()}
                 >
                   {disabled
                     ? t('settings.providers.models.enableModel')
                     : t('settings.providers.models.disableModel')}
                 </Button>
                 {isLocalOllama && onDeleteLocal && (
-                  <Button
+                  <Button data-setting-id={providersSettings.providers.id}
                     variant="secondary"
                     size="md"
                     tone="danger"
