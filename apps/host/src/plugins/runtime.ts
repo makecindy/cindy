@@ -130,7 +130,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const assertCurrent = () => { if (!current()) throw new Error('PLUGIN_OWNER_CHANGED'); };
   // Keep external tool admission closed while reconcile restores resident runtimes.
   let restoring: Pause | null = null;
-  const uninstallRecovery = new AsyncLocalStorage<{ pause: Pause; unfinished: Set<string> }>();
+  const uninstallRecovery = new AsyncLocalStorage<Pause>();
   const pausedReason = () => desktopPause?.reason ?? restoring?.reason;
   const profileHoldMessage = () => {
     const held = pausedReason();
@@ -576,12 +576,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       desktopPause = null;
       try {
         if (options.manager.hasPendingMutationRecovery()) {
-          const attempt = { pause, unfinished: new Set<string>() };
-          await uninstallRecovery.run(attempt, () => options.manager.retryInterruptedMutationsAfterDbReady());
+          await uninstallRecovery.run(pause, () => options.manager.retryInterruptedMutationsAfterDbReady());
           assertCurrent();
-          // A different quarantined install may remain unavailable. Only an
-          // unfinished cleanup attempted by this resume keeps this pause closed.
-          if (attempt.unfinished.size) throw holdError(releaseFailure());
+          if (options.manager.hasPendingUninstallRecovery()) throw holdError(releaseFailure());
         }
         // Preserve the browser partition and the gateway fuses. The usual
         // resident policy starts residents; on-demand plugins wait for a call.
@@ -668,20 +665,18 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     listManagedSkills: () => managedSkills.listCindyManagedSkills(),
     identity,
     async cleanupUninstalledSource(part: string) {
-      const attempt = uninstallRecovery.getStore();
-      attempt?.unfinished.add(part);
+      const pause = uninstallRecovery.getStore();
       const check = () => {
-        if (!attempt) return assertPluginAvailable();
+        if (!pause) return assertPluginAvailable();
         assertCurrent();
         if (desktopPause) throw holdError(desktopPause.reason);
-        if (attempt.pause !== restoring || options.isProfileHeld?.()) throw new Error('Plugin recovery was superseded');
+        if (pause !== restoring || options.isProfileHeld?.()) throw new Error('Plugin recovery was superseded');
       };
       check();
       const release = mutation.acquire();
       try {
         await authorization.cleanupSourceReferences(part, check);
         check();
-        attempt?.unfinished.delete(part);
       } finally { release(); }
     },
     captureMutationOwner() { assertPluginAvailable(); return getActiveAppSession(); },

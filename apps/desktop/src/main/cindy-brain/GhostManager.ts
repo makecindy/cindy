@@ -1495,6 +1495,18 @@ export class GhostManager {
       this.pendingRecoverySideEffects.size > 0;
   }
 
+  /** Called after a Host recovery retry. A quarantined update can stay isolated
+   * while other approved plugins resume. A retained uninstall still needs cleanup. */
+  hasPendingUninstallRecovery(): boolean {
+    if (!this.hasPendingMutationRecovery()) return false;
+    const pending = this.receiptStore.listPendingMutationIdsSync();
+    if (pending.state === 'unreadable') return true;
+    return pending.ids.some(id => {
+      const marker = this.receiptStore.readPendingMutationSync(id);
+      return marker.state === 'valid' && marker.mutation.kind === 'uninstall';
+    });
+  }
+
   private currentOwnerContextKey(): string {
     return `${this.options.getOwnerContextKey?.() ?? ''}\u0000${this.resolveContentRoot()}\u0000${this.resolveStateRoot()}`;
   }
