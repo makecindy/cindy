@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createTwoFilesPatch } from 'diff';
+import { canonicalJson, COMPANION_VALUE_MAX_BYTES } from '../companion-cloud/uploader.js';
 import { BOT_SKILL_MAX_BODY_BYTES, parseBotSkillFile } from './botSkillStore.js';
 import { GROUP_REQUEST_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
@@ -135,7 +136,13 @@ function layeredContent(rawCurrent: string, rawPrevious: string | null, next: st
   if (leftover.length) carried.push(`${HEADER_NOTE}\n\n${fenced('yaml', leftover.join('\n'))}`);
   // The new standard's own section brings its intro; an earlier copy of it is not an own rule.
   const nextOwn = new Set(next.slice(standardPart(next).standard.length).split('\n').map(line => line.trim()).filter(Boolean));
-  const ownRules = own.split('\n').filter(line => !nextOwn.has(line.trim())).join('\n').trim();
+  // Only the intro the standard puts at the top of the section goes; the rest of the teammate's
+  // section stays exactly as it was (a fenced example may repeat the heading).
+  nextOwn.delete(OWN_RULES_HEADING);
+  const ownLines = own.split('\n');
+  let first = 0;
+  while (first < ownLines.length && (!ownLines[first].trim() || nextOwn.has(ownLines[first].trim()))) first++;
+  const ownRules = ownLines.slice(first).join('\n').trim();
   // Kept inside the skill: its text reaches every computer with the skill, unlike a side file.
   const sections = [ownRules, ...carried].filter(Boolean);
   return sections.length ? `${header.trimEnd()}\n\n${sections.join('\n\n')}\n` : header;
@@ -341,9 +348,13 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
       if (await throughLink(workspace, path.join(STANDARD_DIR, relative))) continue;
       const written = current === null ? content
         : layeredContent(current, await previousStandard(workspace, relative, current, base, readPrevious), content);
-      // A skill over the body size every editor and cloud restore accepts would be unusable: leave
-      // that rare file as it is and offer the new standard beside it, as for any changed file.
-      if (Buffer.byteLength(parseBotSkillFile(written).body, 'utf8') > BOT_SKILL_MAX_BODY_BYTES) {
+      // A skill over the body size every editor and cloud restore accepts, or over what the cloud
+      // sync carries without a file store (the whole skill as one preference value), would be
+      // unusable or would block a move to another computer: leave that rare file as it is and offer
+      // the new standard beside it, as for any changed file.
+      const slug = path.basename(path.dirname(relative));
+      if (Buffer.byteLength(parseBotSkillFile(written).body, 'utf8') > BOT_SKILL_MAX_BODY_BYTES
+        || Buffer.byteLength(canonicalJson({ slug, content: written, enabled: false })) > COMPANION_VALUE_MAX_BYTES) {
         await write(path.join(workspace, PENDING_DIR, relative), content);
         // Still compared with the standard it started from; an untracked own skill stays untracked.
         if (base !== undefined) next.files[relative] = base;

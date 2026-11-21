@@ -173,6 +173,29 @@ describe('applyTeammateTemplate', () => {
       });
     });
 
+    // Review r4653328718: only the standard's intro at the top of the own section goes; a fenced
+    // example in the teammate's own rules that repeats the heading stays as it was.
+    it('keeps the own section exactly, apart from the standard intro at its top', async () => {
+      const own = `- Never deploy production.\n\n\`\`\`markdown\n${OWN_RULES_HEADING}\n- An example rule.\n\`\`\``;
+      await setUp(oldStandard, true);
+      await upgrade(2, newStandard());
+      await fs.appendFile(path.join(dir, skill), `${own}\n`);
+      await upgrade(3, newStandard());
+      const text = await read();
+      expect(ownOf(text)).toBe(`${OWN_RULES_HEADING}\n\nRules go here.\n\n${own}\n`);
+    });
+
+    // Review r4653328714: the cloud sync carries the whole skill as one value (60 KiB without a file
+    // store); an upgrade that would push it past that also leaves the skill as it is.
+    it('leaves a skill alone when the kept changes would exceed what the cloud sync carries', async () => {
+      const filler = `- ${'x'.repeat(200)}\n`.repeat(300);
+      const mine = `${oldStandard}\n## Notes\n\n${filler}`;
+      await setUp(mine, true);
+      await upgrade(2, newStandard());
+      expect(await read()).toBe(mine);
+      await expect(fs.readFile(path.join(dir, '.cindy/template', skill), 'utf8')).resolves.toBe(newStandard());
+    });
+
     it('keeps an own skill that predates the template whole, for the teammate to tidy', async () => {
       const mine = '---\nname: hand-off\n---\n\n# Hand-off\n\n- Design reviews go straight to the owner.\n';
       await setUp(mine, false);
