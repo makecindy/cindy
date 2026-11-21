@@ -8,6 +8,7 @@ import { ContextSheet } from '@/session/ContextSheet.ios';
 import { ContextSheetMediaAddButton, useContextSheetMediaSelection } from '@/session/ContextSheetMediaSelection';
 import { RecentPhotosStrip } from '@/session/ContextSheetMediaViews';
 import { contextSheetMediaUploadCandidates } from '@/session/contextSheetMediaUpload';
+import { restoreComposerFocusAfterAttachment } from '@/session/restoreComposerFocusAfterAttachment';
 
 // Regression: selecting a recent photo focused the composer while the native
 // sheet was dismissing, leaving a focused WebView without a working keyboard.
@@ -60,7 +61,10 @@ vi.mock('@/session/useContextSheetMediaAssets', () => ({
 }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const cleanups: (() => void)[] = [];
-afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); });
+afterEach(() => {
+  cleanups.splice(0).forEach(cleanup => cleanup());
+  vi.unstubAllGlobals();
+});
 
 type AddAssets = React.ComponentProps<typeof ContextSheetMediaAddButton>['onAddAssets'];
 
@@ -105,34 +109,40 @@ function mount(addAssets: AddAssets, remainingSlots: () => number, onLimitReache
 // without importing the entire network/native task screen. The focus double models
 // the observed iOS state: an already focused editor cannot reopen its hidden keyboard.
 const page = ts.createSourceFile('session.tsx', readFileSync('app/sessions/[sessionId].tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let selectPhotoCode = '';
-function findSelection(node: ts.Node) {
-  if (ts.isVariableDeclaration(node) && node.name.getText(page) === 'addMediaAssetAttachments'
-    && node.initializer && ts.isCallExpression(node.initializer)) {
-    selectPhotoCode = ts.transpileModule('const select = ' + node.initializer.arguments[0].getText(page), {
-      compilerOptions: { target: ts.ScriptTarget.ES2022 },
-    }).outputText;
+const photoCallbacks: string[] = [];
+function findPhotoCallbacks(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
+    const name = node.name.getText(page);
+    if (name === 'restoreAttachmentEditing' || name === 'addMediaAssetAttachments') {
+      photoCallbacks.push('const ' + name + ' = ' + node.initializer.arguments[0].getText(page) + ';');
+    }
   }
-  ts.forEachChild(node, findSelection);
+  ts.forEachChild(node, findPhotoCallbacks);
 }
-findSelection(page);
+findPhotoCallbacks(page);
+const selectPhotoCode = ts.transpileModule(photoCallbacks.join('\n'), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022 },
+}).outputText;
 
 function setup(pendingCount = 0) {
   let focused = true;
   let keyboardVisible = false;
   const frames: (() => void)[] = [];
+  const sessionId = 'test-session';
+  vi.stubGlobal('requestAnimationFrame', (callback: () => void) => frames.push(callback));
   const bindings = {
+    sessionId, outboxSessionAliveRef: { current: sessionId }, restoreComposerFocusAfterAttachment,
     mediaTapAcceptedRef: { current: false }, mediaAssetAttachments: {}, uploadingMediaAssetIds: new Set(),
     attachments: [], getPendingUploadCount: () => pendingCount, MOBILE_MAX_ATTACHMENTS: 20, t: (key: string) => key,
     contextSheetMediaUploadCandidates,
     setAttachmentError: vi.fn(), enqueueUploads: vi.fn(), auth: { getAccessToken: () => 'mock' },
-    setContextSheetOpen: vi.fn(), requestAnimationFrame: (callback: () => void) => frames.push(callback),
+    setContextSheetOpen: vi.fn(),
     composerInputRef: { current: {
       blur: vi.fn(() => { focused = false; }),
       focus: () => { if (!focused) keyboardVisible = true; focused = true; },
     } },
   };
-  const select = new Function(...Object.keys(bindings), selectPhotoCode + '\nreturn select;')(...Object.values(bindings));
+  const select = new Function(...Object.keys(bindings), selectPhotoCode + '\nreturn addMediaAssetAttachments;')(...Object.values(bindings));
   const limit = () => bindings.setAttachmentError(bindings.t('session.common.maxAttachments'));
   return { ...mount(select, () => bindings.MOBILE_MAX_ATTACHMENTS - pendingCount, limit),
     bindings, frames, keyboardVisible: () => keyboardVisible,
@@ -148,6 +158,7 @@ it('enqueues immediately and restores typing only after native dismissal, cleari
   screen.render(false);
   expect(screen.bindings.composerInputRef.current.blur).not.toHaveBeenCalled();
   act(() => native.onClosed?.());
+  expect(screen.keyboardVisible()).toBe(false);
   screen.finishFrame();
   expect(screen.keyboardVisible()).toBe(true);
   act(() => native.onClosed?.());
