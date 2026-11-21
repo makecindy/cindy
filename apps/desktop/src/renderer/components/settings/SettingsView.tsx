@@ -19,7 +19,7 @@ import { imBotSettings } from './ImBotSection.settings-search';
 import { helpSettings } from './HelpSection.settings-search';
 import { aboutSettings } from './AboutSection.settings-search';
 import { storageManagementCardSettings } from './StorageManagementCard.settings-search';
-import { lazy, Suspense, useTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Activity, lazy, Suspense, useTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSyncExternalStore } from 'react';
@@ -476,11 +476,12 @@ function SettingsViewContent() {
             右侧贴 46px 标题栏起排，不跟随左侧页头高度下移。
             scrollbar-gutter:stable —— 所有分区都预留同一滚动条槽位；即使
             Session Import 自身不滚动，也要保持与普通滚动页相同的内容宽度。 */}
+        {/* Preserve drafts and scroll position while stopping hidden panel effects. */}
+        <Activity mode={compact && menuOpen ? 'hidden' : 'visible'}>
         <div
           ref={contentScrollRef}
           className={cn(
-            'h-full min-h-0 min-w-0 flex-1 flex-col [scrollbar-gutter:stable]',
-            compact && menuOpen ? 'hidden' : 'flex',
+            'flex h-full min-h-0 min-w-0 flex-1 flex-col [scrollbar-gutter:stable]',
             compact ? 'px-3' : 'pl-4 pr-6',
             // providers 与 import / ghosts 同属「内部自己滚」:模型列表要贴着窗口底,
             // 外层再滚一层会让卡片高度只能靠猜(原先卡片写 calc(100vh-14rem),
@@ -921,6 +922,7 @@ function SettingsViewContent() {
           </div>
           </Suspense>
         </div>
+        </Activity>
       </div>
       <HelpAssistantPanel open={helpAssistantOpen} onClose={() => setHelpAssistantOpen(false)} />
     </div>

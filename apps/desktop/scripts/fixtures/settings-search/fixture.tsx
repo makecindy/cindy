@@ -6,6 +6,8 @@ import { SUBAGENT_MODEL_SETTINGS_DEFAULTS } from '../../../src/shared/subagentMo
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../../src/shared/appearanceSettings';
 
+const settingsFixtureReads = { relay: 0, remoteDesktop: 0 };
+Object.assign(window, { settingsFixtureReads });
 const read = <T,>(value: T) => async () => value;
 const state = <T extends object>(defaults: T) => ({ ...defaults, defaults, isCustomized: false, customizedKeys: [] });
 const voiceSettings = getDefaultVoiceInputSettings(ctx.platform);
@@ -93,10 +95,10 @@ void mountPage({
     ghosts: { listSync: () => ({ ghosts: [] }), recentUsageSync: () => ({ ids: [] }), onChanged: subscription('ghosts'), onRecentUsageChanged: subscription('ghost-usage') },
     pluginMarket: { snapshot: read({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] }), onUpdateConsentHoldsChanged: subscription('plugin-consent') },
     deviceLink: { getState: read({ remoteControlEnabled: Boolean(ctx.data.cloud), linkStatus: ctx.data.cloud ? 'online' : 'disconnected', controlledBy: [] }), onControlTargetChanged: subscription('control-target'), onOwnershipChanged: subscription('ownership'), onControlledState: subscription('controlled'), onConnectionIssue: subscription('connection-issue'), getSettings: read({}), getStatus: read({ connected: false }), listDevices: read({ devices: ctx.data.cloud ? [{ deviceId: 'fixture-pc', name: 'Preview PC', isSelf: true, online: true, platform: 'win32', remoteControlEnabled: true, controlEnabled: true }] : [] }), onPresenceChanged: subscription('presence'), onStatusChanged: subscription('device-status') },
-    remoteDesktop: { state: read({ enabled: false }) },
+    remoteDesktop: { state: async () => { settingsFixtureReads.remoteDesktop++; return { enabled: false }; } },
     remoteSsh: { list: read({ hosts: [] }), onStatusChanged: subscription('ssh') },
     sidebarSettings: { loadSnapshot: () => ({ hiddenMainViewGhostIds: [], dataOwnerId: null, ownerGeneration: 0 }), onHiddenMainViewGhostIdsChanged: subscription('sidebar') },
-    selfHostedRelay: { command: read({ state: relayState }), getState: read(relayState), onChanged: subscription('relay') },
+    selfHostedRelay: { command: async () => { settingsFixtureReads.relay++; return { state: relayState }; }, getState: read(relayState), onChanged: subscription('relay') },
     localAgent: { connections: read([]), developerConnection: read({ state: 'stopped' }), onConnectionsChanged: subscription('local-agent') },
     terminal: { listAvailableShells: read([]), getDefaultShellPref: read('auto') },
     worktreeRecycle: { list: read([]) },

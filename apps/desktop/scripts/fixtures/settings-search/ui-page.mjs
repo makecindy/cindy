@@ -62,6 +62,32 @@ export default {
         return;
       }
       const menu = page.getByRole('button', { name: await ui.t('settings.title'), exact: true });
+      await page.clock.install();
+      // Re-enter through real navigation so the pollers register on the installed clock.
+      // Installing a clock after an interval starts cannot control that existing timer.
+      await menu.click();
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.general'), exact: true }).click();
+      await page.locator('#settings-panel-general').waitFor({ state: 'visible' });
+      await menu.click();
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.remoteControl'), exact: true }).click();
+      await page.locator('#settings-panel-remote-control').waitFor({ state: 'visible' });
+      const activeReads = await page.evaluate(() => ({ ...window.settingsFixtureReads }));
+      await page.clock.fastForward(3100);
+      const polledReads = await page.evaluate(() => ({ ...window.settingsFixtureReads }));
+      assert.ok(polledReads.relay > activeReads.relay && polledReads.remoteDesktop > activeReads.remoteDesktop, 'both visible panel timers are controlled by the clock');
+      const scrollTop = await column.evaluate(el => { el.scrollTop = 40; return el.scrollTop; });
+      await menu.click();
+      const hiddenReads = await page.evaluate(() => ({ ...window.settingsFixtureReads }));
+      await page.clock.fastForward(6000);
+      assert.deepEqual(await page.evaluate(() => window.settingsFixtureReads), hiddenReads, 'hidden panels must stop polling');
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.remoteControl'), exact: true }).click();
+      await panel.waitFor({ state: 'visible' });
+      assert.equal(await column.evaluate(el => el.scrollTop), scrollTop, 'navigation must retain content scroll position');
+      await page.waitForFunction(before => window.settingsFixtureReads.relay > before.relay, hiddenReads);
+      const restoredReads = await page.evaluate(() => ({ ...window.settingsFixtureReads }));
+      await page.clock.fastForward(3100);
+      assert.ok((await page.evaluate(() => window.settingsFixtureReads.relay)) > restoredReads.relay, 'visible panel polling resumes');
+      await page.clock.resume();
       await menu.click();
       await page.getByRole('tab', { name: await ui.t('settings.tabs.general'), exact: true }).click();
       await page.locator('#settings-panel-general').waitFor({ state: 'visible' });
