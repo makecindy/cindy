@@ -15,6 +15,7 @@ function loadExtension(env: Record<string, string> = {}) {
   // Budget tests must not leak into the rest of the suite: reset what they switch off.
   process.env.CINDY_PI_TOOL_FOLD_ARG_CHARS = env.CINDY_PI_TOOL_FOLD_ARG_CHARS ?? '200';
   process.env.CINDY_PI_TOOL_FOLD_RECOVERY_CHARS = env.CINDY_PI_TOOL_FOLD_RECOVERY_CHARS ?? '120000';
+  process.env.CINDY_PI_TOOL_FOLD_PIN_BUDGET = env.CINDY_PI_TOOL_FOLD_PIN_BUDGET ?? '64000';
   const body = CINDY_TOOL_FOLD_EXTENSION_SOURCE.replace(/^export default /m, '');
   const handlers: Record<string, Handler> = {};
   const tools: Record<string, Tool> = {};
@@ -103,7 +104,10 @@ describe('cindy-tool-fold extension source', () => {
     expect((resident.content as Block[]).find((block) => block.type === 'toolCall')).toEqual((messages[64].content as Block[])[0]);
     expect(out.slice(out.length - 14)).toEqual(messages.slice(66));
     const first = foldedText.slice(foldedText.indexOf('[folded]'));
-    expect(first).toContain('[folded] ok \u00b7 bash');
+    expect(first).toContain('[folded] bash');
+    // The status trails the subject so the line never opens like a result the model can continue.
+    expect(first).not.toMatch(/^\[folded\] (ok|error)/);
+    expect(first).toContain('\u00b7 ok \u00b7 ');
     expect(first).toContain('cindy_toolfold_read("call-0")');
     expect(first).toContain('run step 0');
     expect(first).toContain('step 0 ok');
@@ -130,7 +134,8 @@ describe('cindy-tool-fold extension source', () => {
     messages[0] = call('call-0', 'read', args);
     const out = projection(context, messages);
     const record = records(out)[0];
-    expect(record).toContain('[folded] ok \u00b7 read');
+    expect(record).toContain('[folded] read');
+    expect(record).toContain('\u00b7 ok \u00b7 ');
     // The path moved into the record; there is no call block left to show it.
     expect(record).toContain(args.path);
     expect(callIds(out)).not.toContain('call-0');
@@ -289,6 +294,41 @@ describe('cindy-tool-fold extension source', () => {
     const text = String(recovered.content![0].text);
     expect(text.length).toBeLessThan(1200);
     expect(text).toContain('Call cindy_toolfold_read again with offset');
+  });
+
+  // Bug: 超过 pin 预算的记录存进 giants 时存的是“调用说明 + 参数 + 结果”整段，
+  // 下次 findOriginal 又拼一次头部，续读的 offset 于是偏移，全文里出现两份参数。
+  it('keeps continuation stable when a large record is re-admitted instead of pinned', async () => {
+    const { context, tool } = loadExtension({
+      CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000',
+      CINDY_PI_TOOL_FOLD_PIN_BUDGET: '2000',
+    });
+    const messages = pairs(40);
+    const body = 'y'.repeat(3600);
+    messages[22] = call('big-one', 'bash', { command: 'cat big.txt' });
+    messages[23] = result('big-one', 'bash', body);
+    projection(context, messages);
+
+    const readAt = async (offset?: number) => {
+      const read = await tool.execute('t-continue', offset === undefined ? { call_id: 'big-one' } : { call_id: 'big-one', offset });
+      return String(read.content![0].text);
+    };
+    const first = await readAt();
+    const next = Number(/with offset: (\d+)/.exec(first)![1]);
+    const second = await readAt(next);
+    const again = await readAt();
+    // 同一个 id 再读一次必须得到同样的开头：重拼是稳定的（旧写法把整段又塞进 giants，
+    // 第二次拼出的开头带着第二份“调用说明 + 参数”）。
+    expect(again).toBe(first);
+    // 续读从断点接著走：全长里头部只出现一次，结果体连续。
+    const strip = (text: string) => text.replace(/\n\n\[truncated:[\s\S]*$/, '');
+    const joined = strip(first) + strip(second);
+    expect(joined.match(/arguments:/g)).toHaveLength(1);
+    expect(joined.match(/result:/g)).toHaveLength(1);
+    const bodyAt = joined.indexOf(body.slice(0, 64));
+    expect(bodyAt).toBeGreaterThan(0);
+    expect(joined.slice(bodyAt)).toBe(body.slice(0, joined.length - bodyAt));
+    expect(joined.length).toBeGreaterThan(next);
   });
 
   it('recovers a folded result that merely quotes the truncation marker text', async () => {

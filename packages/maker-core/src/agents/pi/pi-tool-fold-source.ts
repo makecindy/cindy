@@ -127,6 +127,10 @@ export default function (pi) {
   // count only payload that actually disappears.
   var RECORD_ESTIMATE_CHARS = 160;
 
+  // 权限门按名字给 cindy_toolfold_read 免审批；立一个进程内标记，让桥只对「本轮真的加载了
+  // 折叠扩展」的会话豁免。折叠关闭时同名工具只能是外部注册的，必须照常走审批。
+  try { globalThis[Symbol.for('cindy.pi.toolFold')] = true; } catch (markerError) { /* ignore */ }
+
   // Sticky fold marks: toolCallId -> payload chars. Survives requests in this process;
   // a restart simply re-folds on the next batch.
   var foldedIds = Object.create(null);
@@ -328,13 +332,16 @@ export default function (pi) {
   function foldedResult(result, call, argsFolded) {
     var text = textOf(result.content);
     var lines = text ? countLines(text) : 0;
-    var summary = '[folded] ' + (result.isError === true ? 'error' : 'ok');
-    if (call && call.name) summary += ' \u00b7 ' + String(call.name);
+    var status = result.isError === true ? 'error' : 'ok';
+    // Name first, status later: a line that opens with "ok" reads like a result the model
+    // can go on writing, and one model did exactly that (fake "ok" records, no call behind
+    // them). Same byte length as the old prefix, so fold decisions and savings do not move.
+    var summary = '[folded] ' + String((call && call.name) || '?');
     if (argsFolded && call) {
       var subject = callSubject(call);
       if (subject) summary += ' \u00b7 ' + subject;
     }
-    summary += ' \u00b7 ' + lines + ' lines/' + text.length + ' chars';
+    summary += ' \u00b7 ' + status + ' \u00b7 ' + lines + ' lines/' + text.length + ' chars';
     var head = firstLine(text);
     if (head) summary += ' \u00b7 ' + head;
     if (result.isError === true) {
@@ -529,9 +536,17 @@ export default function (pi) {
       bits.push('call: ' + callSummary(callBlock));
       try { bits.push('arguments: ' + JSON.stringify(callBlock.arguments || {})); } catch (error) { /* ignore */ }
     }
-    if (giant !== null) bits.push('result:\n' + giant);
-    else if (resultMsg) bits.push('result (' + (resultMsg.isError === true ? 'error' : 'ok') + '):\n' + textOf(resultMsg.content));
-    return { ok: true, text: bits.join('\n') };
+    // Two halves kept apart: the caller may re-admit only the result (the half that can be
+    // absent from the transcript) while still returning call + arguments above.
+    var resultText = '';
+    if (giant !== null) {
+      resultText = giant;
+      bits.push('result:\n' + giant);
+    } else if (resultMsg) {
+      resultText = textOf(resultMsg.content);
+      bits.push('result:\n' + resultText);
+    }
+    return { ok: true, text: bits.join('\n'), result: resultText };
   }
 
   function readSlice(id, raw, params) {
@@ -608,9 +623,11 @@ export default function (pi) {
         // 不超过 pin 预算的记录照旧钉住：下一次请求里看得到原文，这是既有契约。
         // 超过预算则只转存 giant 注册表、不钉；否则 pinOriginal 会自占一条超出预算的
         // 名额（“至少保留一条”），同一段文本在下一次请求里就出现两份：恢复结果与钉回的原调用。
+        // 只存结果那半：giants 是「结果」的注册表，存整段会在下次 findOriginal 里
+        // 再拼一次调用说明与参数（续读的 offset 随之失真）。
         if (raw.length <= PIN_BUDGET_CHARS) {
           pinOriginal(id);
-        } else if (!admitGiant(String(id), raw)) {
+        } else if (!admitGiant(String(id), String(original.result || ''))) {
           pinOriginal(id);
         }
       }
