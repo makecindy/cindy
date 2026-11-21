@@ -194,31 +194,32 @@ describe('renderOrcaLeadSystemPrompt', () => {
   it('routes user follow-ups by the worker latest settling report state', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
-    expect(prompt).toContain('2a. A user follow-up message that belongs to a worker');
+    expect(prompt).toContain('2a. A follow-up on a worker');
     expect(prompt).toContain('[Orca Worker report: <state>]');
-    expect(prompt).toContain('is normally the worker');
+    expect(prompt).toContain("is the worker's to handle, not yours");
     // 状态驱动：任务仍开着才转发；终态任务的后续归 Lead 自己处理。
     expect(prompt).toContain('waiting, blocked, or no settling report yet');
-    expect(prompt).toContain('the follow-up is the worker');
     expect(prompt).toContain('ready, failed, or dropped');
-    expect(prompt).toContain('the follow-up is yours');
-    expect(prompt).toContain('a closed task is not a running one');
+    expect(prompt).toContain('closed, and the report is its final word');
     // 标记由结构化回报产生，旧会话可能没有：必须有可用的降级判据，不能只看标记。
-    expect(prompt).toContain('A worker that never sent a [Orca Worker report: ...] line');
-    expect(prompt).toContain('fall back to its most recent message');
+    expect(prompt).toContain('No report line (older session): use its latest message');
     // 终态分支不得再给转发指令，否则两条分支互相抵消。
     const closedBranch = prompt.slice(
       prompt.indexOf('- ready, failed, or dropped'),
-      prompt.indexOf('If you cannot uniquely tell which worker'),
+      prompt.indexOf('No report line (older session)'),
     );
     expect(closedBranch).not.toContain('forward it with send_to_worker');
     // 开着的任务仍走既有修正/中断/队列纪律，不新增第二条修正通道。
     expect(prompt).toContain('original wording');
-    expect(prompt).toContain('delivered per the correction, interruption, and queue rules above');
-    expect(prompt).toContain('interrupt_worker only when the task must stop and be replaced');
-    expect(prompt).toContain('reconcile other_queued_messages before you end');
-    expect(prompt).toContain('then end the turn per rule 5');
-    expect(prompt).toContain('If you cannot uniquely tell which worker the message belongs to, ask the user');
+    expect(prompt).toContain('delivered per the correction, interruption, and queue rules below');
+    // 投递细节由既有规则说明，2a 不得重复列举（篇幅预算）。
+    const openBranch = prompt.slice(
+      prompt.indexOf('- waiting, blocked, or no settling report yet'),
+      prompt.indexOf('- ready, failed, or dropped'),
+    );
+    expect(openBranch).not.toContain('interrupt_worker');
+    expect(openBranch).not.toContain('other_queued_messages');
+    expect(prompt).toContain('if that or the target worker is unclear, ask the user');
     expect(prompt).not.toContain('you may explicitly choose delivery=steer');
     expect(prompt).not.toContain('otherwise send it plainly and let it queue');
     // 敌对口径：不许退回“有任务在跑就无条件转发”。
@@ -229,9 +230,9 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain('3. Send the task, essential context and requested outcome in one short message.');
     expect(prompt).toContain('4. If a worker explicitly asks you to reply via send_to_worker, do so.');
     expect(prompt.indexOf('2. For a multi-role request')).toBeLessThan(
-      prompt.indexOf('2a. A user follow-up message'),
+      prompt.indexOf('2a. A follow-up on a worker'),
     );
-    expect(prompt.indexOf('2a. A user follow-up message')).toBeLessThan(
+    expect(prompt.indexOf('2a. A follow-up that belongs to a worker')).toBeLessThan(
       prompt.indexOf('3. Send the task, essential context'),
     );
   });
@@ -310,12 +311,11 @@ describe('renderOrcaWorkerSystemPrompt', () => {
       'Messages from the lead arrive prefixed with [From Orca Lead]. Treat them as tasks or instructions from the lead, not user messages.',
     );
     expect(prompt).toContain(
-      "When the lead forwards the user's original wording, treat it as the user speaking — it carries the same authority as a direct user instruction.",
+      "When the lead forwards the user's original wording, treat it as the user speaking",
     );
     expect(prompt).toContain(
-      'When the forwarded message depends on recent Lead-side discussion',
+      'read_lead_history first when it depends on recent Lead-side discussion.',
     );
-    expect(prompt).toContain('read that context with read_lead_history before acting.');
   });
 
   it('keeps the Worker rule concise without the unreachable fallback', () => {
