@@ -407,9 +407,9 @@ describe('createModelGroupResolver with sources on other computers', () => {
   // 只能用允许被远程调用的连接。失效后果：选到不开放的连接，那台建任务时被这台拒绝。
   it('uses only remote-callable connections when another computer runs the agent here', async () => {
     const local = { agentKind: 'codex', providerId: 'b', model: 'gpt' } as const;
-    const open = { ...view('a', 'ChatGPT Pro'), remoteInvocationEnabled: true } as ProviderView;
+    // 主进程的供应商列表不带开关，由注入的判断给出(与设置里那个开关同一份)。
     const { resolver } = make(groups('order', [local, { agentKind: 'codex', providerId: 'a', model: 'gpt' }]),
-      { views: async () => [open, view('b', 'API')] });
+      { remoteInvocable: (providerId: string) => providerId === 'a' });
     const plain = await resolver.resolve({ selection, location: { agentDeviceId: null } });
     expect(plain).toMatchObject({ outcome: 'routed', route: { providerId: 'b' } });
     const forRemote = await resolver.resolve({ selection, location: { agentDeviceId: null }, remoteInvocableOnly: true });

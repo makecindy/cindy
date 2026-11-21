@@ -30,6 +30,11 @@ export interface ModelGroupResolverDeps {
   config(): ModelGroupsConfig;
   /** 本机供应商目录的快照(不触发发现或登录)。 */
   views(): Promise<ProviderView[]>;
+  /**
+   * 这台电脑的连接是否开了「允许被远程调用」。主进程的供应商列表不带这个开关(它在下发界面时才合进去)，
+   * 由调用方注入；不注入时看列表自带的字段。
+   */
+  remoteInvocable?(providerId: string): boolean;
   /** 本机可用的引擎。 */
   agents(): readonly string[];
   /**
@@ -260,7 +265,8 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');
     const allViews = await deps.views();
     // 为另一台电脑跑 Agent 时只认允许被远程调用的连接：别的连接在这次选路里按没有连接处理。
-    const views = request.remoteInvocableOnly ? allViews.filter((view) => view.remoteInvocationEnabled === true) : allViews;
+    const remoteInvocable = (view: ProviderView) => (deps.remoteInvocable ? deps.remoteInvocable(view.id) : view.remoteInvocationEnabled === true);
+    const views = request.remoteInvocableOnly ? allViews.filter(remoteInvocable) : allViews;
     const facts = await inspect(route, views);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
