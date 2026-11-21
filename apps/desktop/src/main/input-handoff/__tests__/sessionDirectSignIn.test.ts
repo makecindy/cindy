@@ -168,6 +168,67 @@ describe('a sign-in step', () => {
     }
   });
 
+  // #8640, unit: the existing rename/close cases had no concurrent auxiliary window.
+  // Exercise the full session and observed result, with native window-server identity;
+  // index/title/frame alone can all be reused after a window actually closes.
+  it('follows the same native window through a rename, reindex and auxiliary window, then hands back', async () => {
+    const { driver, state } = desktop();
+    let navigated = false;
+    const windows = driver.windows;
+    driver.windows = async () => {
+      const list = await windows();
+      list.apps[0].windows = list.apps[0].windows.map((w) => ({ ...w, windowId: w.index === 1 ? 71 : 70 }));
+      if (navigated) {
+        list.apps[0].windows = [
+          { index: 0, title: 'Save password', frame: [30, 30, 250, 100], focused: true, minimized: false, windowId: 72 },
+          ...list.apps[0].windows.map((w) => ({ ...w, index: w.index + 1 })),
+        ];
+      }
+      return list;
+    };
+    const run = start(driver);
+    try {
+      await run.session.start();
+      navigated = true;
+      state.screen = 'signedIn';
+      state.windowTitle = 'Inbox';
+      await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+      expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0, finalWindow: 'Inbox' });
+      expect(run.guarded).toContain('https://login.example.com/');
+    } finally {
+      run.session.cancel();
+    }
+  });
+
+  it.each(['replacement', 'duplicate identity', 'missing identity'] as const)('does not follow a %s even with the same index, title and frame', async (change) => {
+    const { driver } = desktop();
+    const windows = driver.windows;
+    let changed = false;
+    driver.windows = async () => {
+      const list = await windows();
+      list.apps[0].windows = list.apps[0].windows.map((w) => ({ ...w, windowId: w.index === 1 ? (changed && change === 'replacement' ? 99 : 71) : 70 }));
+      if (changed && change === 'duplicate identity') {
+        list.apps[0].windows.push({ ...list.apps[0].windows[1], index: 2 });
+      }
+      if (changed && change === 'missing identity') {
+        list.apps[0].windows = list.apps[0].windows.map(({ windowId: _id, ...w }) => w);
+      }
+      return list;
+    };
+    const snapshot = vi.spyOn(driver, 'snapshot');
+    const run = start(driver);
+    try {
+      await run.session.start();
+      const reads = snapshot.mock.calls.length;
+      changed = true;
+      await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+      expect(run.finished[0]).toMatchObject({ status: 'failed', failure: 'target_gone', steps: 0 });
+      expect(snapshot).toHaveBeenCalledTimes(reads);
+    } finally {
+      run.session.cancel();
+    }
+  });
+
   it('is done on the window: it comes forward, and the form stays for clients without a live view', async () => {
     const { driver, state } = desktop();
     const run = start(driver);

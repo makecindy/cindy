@@ -73,6 +73,24 @@ do {
   precondition(confined(["kind": "wheel"], absent) == nil)
   keys = []
 }
+// #8640 native/guard: real production AX/CG association, no OS reads or input.
+// Existing confinement cases did not cover concurrent auxiliary windows or equal frames.
+do {
+  let main: [Double] = [0, 0, 800, 600]
+  let bubble: [Double] = [10, 10, 250, 100]
+  func info(_ id: Int, _ frame: [Double], _ pid: Int32 = 20) -> [String: Any] {
+    [kCGWindowOwnerPID as String: pid, kCGWindowNumber as String: id,
+     kCGWindowBounds as String: CGRect(x: frame[0], y: frame[1], width: frame[2], height: frame[3]).dictionaryRepresentation]
+  }
+  let original = info(71, main)
+  let auxiliary = info(72, bubble)
+  precondition(handoffWindowIdentities(20, [main, bubble], [auxiliary, original]) == [71, 72], "New auxiliary windows cannot replace the main window's identity")
+  precondition(handoffWindowIdentities(20, [main], [info(99, main)]) == [99], "A same-frame replacement has a different identity")
+  precondition(handoffWindowIdentities(20, [main, main], [original]) == [nil, nil], "Two AX windows at the same frame are ambiguous")
+  precondition(handoffWindowIdentities(20, [main], [original, info(99, main)]) == [nil], "Two server windows at the same frame are ambiguous")
+  precondition(handoffWindowIdentities(20, [main], [info(71, main, 21)]) == [nil], "Another process is never the target")
+  precondition(handoffWindowIdentities(20, [[], [0, 0, 0, 0]], [original]) == [nil, nil], "Invalid frames provide no identity")
+}
 print("native window confinement passed")
 
 // 代输入 scan-to-sign-in: a code drawn into a larger picture is found, with its content and place.

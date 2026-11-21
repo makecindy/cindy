@@ -14,7 +14,7 @@ type Stage = 'qr' | 'confirm' | 'code' | 'home' | 'closed';
  * A generic scan-to-sign-in window: a QR code with a button (nothing to type),
  * then "confirm on your phone" once scanned, then the app's main window.
  */
-function qrDesktop(options: { web?: boolean } = {}) {
+function qrDesktop(options: { web?: boolean; windowId?: number } = {}) {
   let stage: Stage = 'qr';
   let code = 'https://login.example.com/qr?token=first';
   let front = 10;
@@ -25,16 +25,17 @@ function qrDesktop(options: { web?: boolean } = {}) {
     ? { pid: 10, app: 'Google Chrome', bundleId: 'com.google.Chrome' }
     : { pid: 10, app: 'Chat', bundleId: 'com.example.chat' };
   const frame = [100, 50, 400, 500];
+  const identity = options.windowId === undefined ? {} : { windowId: options.windowId };
   const title = () => titled ?? (stage === 'home' ? 'Chat' : 'Sign in');
   const windows = (): NativeWindowList => ({
     frontmost: front,
     apps: [
-      { ...app, windows: stage === 'closed' ? [] : [{ index: 0, title: title(), frame, focused: true, minimized: false }] },
+      { ...app, windows: stage === 'closed' ? [] : [{ ...identity, index: 0, title: title(), frame, focused: true, minimized: false }] },
       { pid: 30, app: 'Notes', bundleId: 'com.example.notes', windows: [{ index: 0, title: 'Notes', frame, focused: true, minimized: false }] },
     ],
   });
   const snapshot = (): NativeAxSnapshot => {
-    const base = { ...app, frontmost: true, window: { index: 0, title: title(), frame } };
+    const base = { ...app, frontmost: true, window: { ...identity, index: 0, title: title(), frame } };
     const page = (url: string, nodes: NativeAxNode[]) =>
       options.web ? [node('9', 'AXWebArea', { url, frame }), ...nodes.map((n) => ({ ...n, ref: `9.${n.ref}` }))] : nodes;
     if (stage === 'code')
@@ -186,15 +187,15 @@ describe('代输入 scan-to-sign-in', () => {
     session.cancel();
   });
 
-  it('does not take a title change for a sign-in while the code still shows', async () => {
-    const desktop = qrDesktop();
+  it.each([undefined, 101])('keeps following a renamed QR window with identity %s', async (windowId) => {
+    const desktop = qrDesktop({ windowId });
     const { session, published, finished } = harness(desktop.driver);
     await session.start();
     desktop.title = '(1) Sign in';
     await watch();
     expect(published[published.length - 1]).toMatchObject({ phase: 'ready', qr: 'scan' });
     // The flow then really moves on.
-    desktop.title = null;
+    desktop.title = 'Home';
     desktop.stage = 'home';
     await watch();
     expect(published[published.length - 1]).toMatchObject({ phase: 'finishing' });
@@ -225,11 +226,12 @@ describe('代输入 scan-to-sign-in', () => {
     session.cancel();
   });
 
-  it('asks for what comes next when the scan leads to something to type', async () => {
-    const desktop = qrDesktop({ web: true });
+  it.each([undefined, 101])('shows the next form after a QR window rename with identity %s', async (windowId) => {
+    const desktop = qrDesktop({ web: true, windowId });
     const { session, latest } = harness(desktop.driver, 'Google Chrome');
     await session.start();
     expect(latest()).toMatchObject({ qr: 'scan', source: { origin: 'https://login.example.com' } });
+    desktop.title = 'Verification';
     desktop.stage = 'code';
     await watch();
     expect(latest()).toMatchObject({ phase: 'ready', controls: [expect.objectContaining({ kind: 'text', label: 'Code' })] });

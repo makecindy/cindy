@@ -46,6 +46,8 @@ export interface NativeAxNode {
 }
 
 export interface NativeWindowRef {
+  /** Window-server identity, only when uniquely associated with this AX window. Main/native only. */
+  windowId?: number;
   index: number;
   title: string;
 }
