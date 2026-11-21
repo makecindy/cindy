@@ -626,7 +626,7 @@ export function isIpcError(err: unknown): err is Error & { code: IpcErrorCode } 
   return err instanceof Error && isIpcErrorCode((err as { code?: unknown }).code);
 }
 
-/** Optional detail on structured precondition refusals. Electron invoke carries only the message. */
+/** The profile has not finished recovering after desktop use (queue or plugins). Optional on structured precondition refusals. Electron invoke carries only the message. */
 export function isProfileReleaseFailure(value: unknown): value is {
   code: 'PRECONDITION_FAILED'; reason: 'HOST_PROFILE_RELEASE_FAILED';
 } {

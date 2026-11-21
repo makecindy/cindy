@@ -374,3 +374,30 @@ describe('ErrorBanner terminal rate-limit retry guidance', () => {
     expect(screen.getByText(RATE_LIMIT)).toBeTruthy();
   });
 });
+
+// Integration: Electron rejects invoke with a wrapped string. The visible banner
+// must retain the safe Host guidance after the real send failure reaches the store.
+it.each([
+  ['恢复', '当前状态下无法执行此操作，请稍后重试。'],
+  ['占用', 'HOST_PROFILE_IN_USE_BY_DESKTOP: occupied'],
+])('renders the final Host refusal after a rejected enqueue (%s)', async (kind, detail) => {
+  const { makerChatStore } = await import('@/lib/makerChatStore');
+  const { i18n } = await import('@/i18n');
+  const previous = i18n.language;
+  await i18n.changeLanguage('zh-CN');
+  const raw = "Error invoking remote method 'maker:input:enqueue': Error: [PRECONDITION_FAILED] " + detail;
+  const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+  const api = window.electronAPI;
+  vi.stubGlobal('electronAPI', { ...api, maker: { ...api?.maker, input: { enqueue }, autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } });
+  try {
+    const id = 'release-banner-' + kind;
+    expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+    expect(enqueue).toHaveBeenCalledOnce();
+    const error = makerChatStore.getSnapshot(id).error!;
+    const view = render(createElement(ErrorBanner, { error, onRetry: vi.fn() }));
+    const expected = kind === '恢复' ? detail : i18n.t('logic.errors.hostProfileInUseByDesktop');
+    if (kind === '占用') fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(view.container.textContent).toContain(expected);
+    expect(view.container.textContent).not.toMatch(/Error invoking remote method|\[PRECONDITION_FAILED\]|HOST_PROFILE_IN_USE_BY_DESKTOP/);
+  } finally { vi.unstubAllGlobals(); await i18n.changeLanguage(previous); }
+});

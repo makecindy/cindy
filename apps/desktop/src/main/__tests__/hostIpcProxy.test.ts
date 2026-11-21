@@ -32,7 +32,7 @@ type Reply = { status: number; body: unknown };
 type Call = { headers: Record<string, string>; body: { args: unknown[]; owner: unknown }; signal: AbortSignal };
 
 /** In-process Host: answers the four paths the proxy uses and records every call. */
-function fakeHost() {
+function fakeHost(preconditionMessage?: () => string) {
   const host = {
     instanceId: 'host-a',
     ready: true,
@@ -74,6 +74,7 @@ function fakeHost() {
   const proxy = (pinned: string | null = 'host-a') => createHostIpcProxy({
     baseUrl: 'http://127.0.0.1:1', token: 'tok', instanceId: pinned ?? undefined, fetch: fetch as unknown as typeof globalThis.fetch,
     readOwner: () => view,
+    preconditionMessage,
     applyAuthState: (state) => { applied.push(state); view = state as HostIpcOwnerView; },
     log: (message) => { logs.push(message); },
   });
@@ -354,4 +355,13 @@ it('old window projects an optional release reason onto the generic precondition
     expect(refused).not.toHaveProperty('reason');
     expect(mapIpcErrorToI18nKey(new Error(refused.message))).toBe('ipcError.PRECONDITION_FAILED');
   }
+});
+
+// The desktop proxy uses the application's selected locale even when Host and OS differ.
+it('formats a structured release refusal using the supplied application language', async () => {
+  const { host, proxy } = fakeHost(() => 'App locale precondition');
+  host.replies.push(() => ({ status: 409, body: { ok: false, error: {
+    code: 'PRECONDITION_FAILED', reason: 'HOST_PROFILE_RELEASE_FAILED', message: '/private/example',
+  } } }));
+  await expect(proxy().invoke(ENTRY, ['parent'])).rejects.toThrow('[PRECONDITION_FAILED] App locale precondition');
 });

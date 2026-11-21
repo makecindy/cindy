@@ -411,7 +411,7 @@ export function remoteErrorMessageForBanner(error: unknown): string {
   const msg = error instanceof Error ? error.message : String(error);
   // A Host refusal while a Cindy desktop app uses its data: the banner reads no key from it, so
   // say why and what to do here, in the window's language (the Host's own sentence is not shown).
-  const held = hostProfileHoldI18nKey(error, 'send');
+  const held = hostProfileHoldI18nKey(msg, 'send');
   if (held) return i18n.t(held);
   // Subscription guidance has its own keys and reset metadata. Keep the raw
   // error so live/tail banners can translate it after locale changes.

@@ -1,4 +1,4 @@
-import { isProfileReleaseFailure, isIpcError, isIpcErrorCode, type IpcError } from './ipc-errors';
+import { isIpcError, isIpcErrorCode, type IpcError } from './ipc-errors';
 
 const IPC_ERROR_MESSAGE_RE = /(?:^|: Error: )\[([A-Z0-9_]+)\]\s*([\s\S]*)$/;
 
@@ -28,7 +28,6 @@ const HOST_PROFILE_IN_USE_RE = /^(?:\[PRECONDITION_FAILED\]\s*)?HOST_PROFILE_IN_
  */
 export function hostProfileHoldI18nKey(err: unknown, use: 'send' | 'other' = 'other'): string | null {
   const ipcError = extractIpcError(typeof err === 'string' ? new Error(err) : err);
-  if (isProfileReleaseFailure(err)) return 'ipcError.PRECONDITION_FAILED';
   if (ipcError?.code !== 'PRECONDITION_FAILED') return null;
   const match = HOST_PROFILE_IN_USE_RE.exec(ipcError.message);
   if (!match) return null;

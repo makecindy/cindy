@@ -170,15 +170,11 @@ it('preserves rejected shared history and exposes context handoff recovery', asy
 // sendMessage 失败投影；不带这个标记的错误，横幅文本与之前逐字相同。
 describe('a send refused while a desktop app uses the Host data', () => {
   it.each([
-    ['release', '/private/fixture.db', 'ipcError.PRECONDITION_FAILED'],
     ['running', 'HOST_PROFILE_IN_USE_BY_DESKTOP: In use by the desktop app.', 'logic.errors.hostProfileInUseByDesktop'],
     ['at start', 'HOST_PROFILE_IN_USE_BY_DESKTOP_AT_START: Quit that app, then restart the Host.', 'logic.errors.hostProfileInUseByDesktopAtStart'],
   ])('says why and what to do (%s)', async (_label, detail, key) => {
     const raw = `Error invoking remote method 'maker:input:enqueue': Error: [PRECONDITION_FAILED] ${detail}`;
-    const failure = _label === 'release' ? Object.assign(new Error(detail), {
-      code: 'PRECONDITION_FAILED', reason: 'HOST_PROFILE_RELEASE_FAILED',
-    }) : new Error(raw);
-    const enqueue = vi.fn().mockRejectedValue(failure);
+    const enqueue = vi.fn().mockRejectedValue(new Error(raw));
     vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
       autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
     try {
@@ -186,7 +182,7 @@ describe('a send refused while a desktop app uses the Host data', () => {
       expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
       expect(makerChatStore.getSnapshot(id).error).toBe(i18n.t(key));
       expect(i18n.t(key)).not.toBe(key);
-      if (_label !== 'release') expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t(key));
+      expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t(key));
       expect(enqueue).toHaveBeenCalledOnce();
       enqueue.mockResolvedValue({ sessionId: id, pendingQueue: [], queuePaused: false, error: null });
       expect(await makerChatStore.sendMessage(id, 'retry', 'test-model', 'medium', 'auto', '/test')).toBe(true);
