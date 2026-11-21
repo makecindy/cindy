@@ -1357,6 +1357,13 @@ describe('provider share guest routing', () => {
     state.receivedError = true;
     await leaveProviderShare('m1');
     expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+    // An explicit exit stays ahead of the encrypted-only answer (Codex review): switching it off cannot restore a left share.
+    state.legacyHidden.add('share-1');
+    try {
+      expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+    } finally {
+      state.legacyHidden.clear();
+    }
   });
 
   // 测试价值

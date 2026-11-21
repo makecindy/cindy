@@ -354,16 +354,17 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
   if (!shareId) return agentDeviceId;
   const share = findReceivedShare(shareId);
   if (!share) {
-    // A local setting that hides this older share is a definite answer, whatever the list state.
+    const removed = () => new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
+    // Definite answers first: the user left it on this computer, or a local setting hides this older share.
+    if (runtime?.leftShareIds.has(shareId)) throw removed();
     let hidden = false;
     try { hidden = providerShareHiddenByEncryptedOnly(shareId); } catch { /* unreadable settings/vault: keep the removed verdict */ }
     if (hidden) throw new Error('[REMOTE_AGENT_SHARE_LEGACY_DISABLED] encrypted-only connections block this older share');
-    if (!runtime?.leftShareIds.has(shareId)
-      && ((!runtime || !current(runtime) || !runtime.listConfirmed || runtime.unavailable.has(shareId))
-        || hasUnconfirmedCrossRegionReceivedList())) {
+    if (!runtime || !current(runtime) || !runtime.listConfirmed || runtime.unavailable.has(shareId)
+      || hasUnconfirmedCrossRegionReceivedList()) {
       throw new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE);
     }
-    throw new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
+    throw removed();
   }
   if (share.status !== 'active') throw new Error('[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share');
   return providerShareHostPeer(share.shareId, share.hostDeviceId);
