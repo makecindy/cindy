@@ -2235,11 +2235,35 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         }
         if (reconnect && reconnectInput && sess.agentDeviceId && !sendAccepted && userMessagePersisted && persistUserMessage) {
           const offer = reconnect.takeOffer(err);
-          if (!offer) throw err;
+          if (!offer) {
+            deps.log.warn('send: remote agent switch credential abandoned', {
+              sessionId, reason: 'no-credential',
+            });
+            throw err;
+          }
           // The stopped open and its offer prove nothing was sent. If a new
           // input already took over, retire this input without blocking it.
-          reconnectInput.signal.throwIfAborted();
-          if (requestedSendOpts.signal?.aborted || !reconnectInput.isCurrent() || !reconnect.isCurrent()) throw err;
+          try {
+            reconnectInput.signal.throwIfAborted();
+            if (requestedSendOpts.signal?.aborted) {
+              deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'stop' });
+              throw err;
+            }
+            if (!reconnectInput.isCurrent()) {
+              deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'new-input' });
+              throw err;
+            }
+            if (!reconnect.isCurrent()) {
+              deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'share-unavailable' });
+              throw err;
+            }
+          } catch (error) {
+            if (error === err) throw error;
+            deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'stop' });
+            throw error;
+          }
+          offer();
+          deps.log.info('send: remote agent switch credential taken over', { sessionId });
           const assertCurrent = () => {
             requestedSendOpts.signal?.throwIfAborted();
             if (!reconnectInput.isCurrent() || !reconnect.isCurrent()) throw err;

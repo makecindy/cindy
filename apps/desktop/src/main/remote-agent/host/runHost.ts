@@ -644,6 +644,16 @@ export function remoteAgentErrorInfo(error: unknown): RemoteAgentErrorInfo {
   return { code: code.slice(0, 128), message: err.message.slice(0, 2048), name: err.name };
 }
 
+/** 只给诊断日志使用的稳定错误码，不记录错误原文、账号或令牌。 */
+function switchDiagnosticCode(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const failure = error as { usageLimit?: unknown; sdkError?: unknown };
+    if (failure.usageLimit === true) return 'SUBSCRIPTION_ACCOUNT_LIMITED';
+    if (failure.sdkError === 'authentication_failed') return 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED';
+  }
+  return remoteAgentErrorInfo(error).code;
+}
+
 /** Native terminal events prove the attempt ended; share the existing failure policy. */
 function isAccountFailure(failure: RelayRunFailure): boolean {
   const decision = decideProviderGroupFailure(failure, 'run');
@@ -2169,12 +2179,25 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     localAccountRecovery = true,
   ): Promise<string | null> {
     const relayDeps = deps.groupRelay;
-    if (!relayDeps || !run.providerId || !run.hostSessionId) return null;
+    const failureCode = switchDiagnosticCode(failure);
+    const logDecision = (outcome: 'issued' | 'not-issued', reason: string): void => {
+      deps.log?.warn('remote agent group switch decision', {
+        runId: run.id, phase, failureCode, outcome, reason,
+      });
+    };
+    if (!relayDeps || !run.providerId || !run.hostSessionId) {
+      logDecision('not-issued', 'not-group-routed');
+      return null;
+    }
     // An ordinary shared provider can grow into a local account pool without becoming a
     // computer group. Its old native sessions still need a handoff before selecting again.
     // Reuse the guest/task switch token and round budget; never move an old native ID.
     const round = groupSwitchRounds.get(key(run.controller, run.hostSessionId));
     const decision = decideProviderGroupFailure(failure, phase);
+    let unavailableReason: string | undefined;
+    if (!run.acceptsGroupSwitch) unavailableReason = 'not-accepted';
+    else if (member.memberKey === PROVIDER_GROUP_LOCAL_MEMBER_KEY && !deps.canSwitchLocalAccount) unavailableReason = 'blocked';
+    else if (round && now() - round.at <= GROUP_SWITCH_ROUND_MS && round.tried.has(member.memberKey)) unavailableReason = 'already-tried';
     if (localAccountRecovery && member.memberKey === PROVIDER_GROUP_LOCAL_MEMBER_KEY && run.acceptsGroupSwitch
       && deps.canSwitchLocalAccount && decision.action === 'switch'
       && (decision.cause === 'usage-limit' || decision.cause === 'auth')
@@ -2183,11 +2206,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const authorizedModel = run.authorizedModel;
       const providerId = run.providerId;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let probeTimedOut = false;
       let available = false;
       try {
         available = await Promise.race([
           deps.canSwitchLocalAccount({ providerId: run.providerId, hostSessionId: run.hostSessionId, model }),
-          new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 2_000); }),
+          new Promise<false>(resolve => {
+            timer = setTimeout(() => { probeTimedOut = true; resolve(false); }, 2_000);
+          }),
         ]);
       } catch { /* An optional probe cannot replace the original failure. */ }
       finally { if (timer) clearTimeout(timer); }
@@ -2196,19 +2222,30 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (run.closing || run.abortRequested || run.lastSendCallId !== sendCallId
         || run.authorizedModel !== authorizedModel || run.providerId !== providerId
         || !deps.isOwnerCurrent(run.owner) || !deps.isControllerAuthorized(run.controller)
-        || !deps.providerAccess?.isAllowed(run.providerId, run.controller, model, run.sessionId)) return null;
+        || !deps.providerAccess?.isAllowed(run.providerId, run.controller, model, run.sessionId)) {
+        logDecision('not-issued', 'probe-invalidated');
+        return null;
+      }
       if (available) {
         const exclude = noteGroupSwitchTried(run, member);
         exclude.delete(member.memberKey);
+        logDecision('issued', 'switchAvailable');
         return issueGroupSwitchToken(run, exclude);
       }
+      unavailableReason = probeTimedOut ? 'probe-timeout' : 'blocked';
     }
     const canSwitch = phase === 'start'
       ? relayDeps.noteStartFailure(run.providerId, member, failure.message ?? '', model)
       : relayDeps.noteRunFailure(run.providerId, member, failure, model);
-    if (!canSwitch) return null;
+    if (!canSwitch) {
+      logDecision('not-issued', unavailableReason ?? 'group-auto-switch-off');
+      return null;
+    }
     // 旧版受邀者不认识这个状态：照旧只转出原来的错误。
-    if (!run.acceptsGroupSwitch) return null;
+    if (!run.acceptsGroupSwitch) {
+      logDecision('not-issued', unavailableReason ?? 'not-accepted');
+      return null;
+    }
     const exclude = noteGroupSwitchTried(run, member);
     const next = await relayDeps.plan({
       kind: builtinKindOf(run.kind),
@@ -2218,12 +2255,16 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       reshareKey: reshareKeyForGuest(run.controller),
     }).catch(() => null);
     const canMove = next?.kind === 'member' || (next?.kind === 'local' && deps.isAgentAvailable(builtinKindOf(run.kind)));
-    if (!canMove || run.closing) return null;
+    if (!canMove || run.closing) {
+      logDecision('not-issued', unavailableReason ?? 'no-replacement');
+      return null;
+    }
     deps.log?.info('remote agent: offered the shared user another computer in the provider group', {
       runId: run.id,
       from: member.memberKey,
       tried: exclude.size,
     });
+    logDecision('issued', unavailableReason ?? 'replacement-available');
     return issueGroupSwitchToken(run, exclude);
   }
 

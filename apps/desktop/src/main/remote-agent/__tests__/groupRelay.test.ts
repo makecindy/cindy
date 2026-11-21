@@ -83,6 +83,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
   modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
   bindGuestProviderRoute?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
+  log?: Parameters<typeof createRemoteAgentHost>[0]['log'];
 }) {
   return createRemoteAgentHost({
     ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
@@ -161,6 +162,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
     ...(options.groupRelay ? { groupRelay: options.groupRelay } : {}),
     ...(options.directGuestExecution ? { directGuestExecution: options.directGuestExecution } : {}),
     ...(options.reshare ? { reshare: options.reshare } : {}),
+    ...(options.log ? { log: options.log } : {}),
     captureOwner: options.captureOwner ?? (() => 'owner'),
     isOwnerCurrent: () => true,
     runsRoot: path.join(root, name),
@@ -264,6 +266,7 @@ function setup(options: {
   mini?: { failStart?: boolean; endImmediately?: boolean; onSend?: (record: Started) => void | Promise<void>;
     validateSendOptions?: AgentSessionHandle['validateSendOptions'];
     isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
+    log?: Parameters<typeof createRemoteAgentHost>[0]['log'];
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
@@ -275,7 +278,8 @@ function setup(options: {
     prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
     modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
     directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
-    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
+    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'];
+    log?: Parameters<typeof createRemoteAgentHost>[0]['log'] };
   /** 截住组所在电脑发给组内电脑的请求(模拟回包丢失、应答慢)。 */
   intercept?: (agentDeviceId: string, request: Record<string, unknown>, forward: () => Promise<unknown>) => Promise<unknown>;
 } = {}) {
@@ -322,6 +326,7 @@ function setup(options: {
     trust: (controller) => (controller.startsWith('share-') || isProviderSharePeer(controller) ? 'guest' : 'owner'),
     purge: async () => undefined,
     groupRelay: relay,
+    ...(options.owner?.log ? { log: options.owner.log } : {}),
     ...options.owner,
   });
   return { owner, members, memberStarted, ownerStarted, relay };
@@ -2168,6 +2173,39 @@ describe('provider group "switch to another computer" for shared users', () => {
     expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
     expect(env.memberStarted.studio).toHaveLength(1);
     await reopened.client.close('close', 'navigation');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Host → relay → guest 事件流；失败时日志能说明稳定错误码和凭证是否发出。
+  // - Bug／规则依据：任务 A 的远程换号诊断；现场只有 start-failed，无法判断是否收到换号凭证。
+  // - 现有覆盖缺口：相邻用例只断言事件顺序和凭证值，不检查结构化日志或敏感字段边界。
+  // - 最小失败输入：一台组内电脑产生一次 usage-limit 终态并有可用替代电脑。
+  // - tier：unit；单进程 fake transport 仍走生产 Host/relay 入口。
+  it('records a stable switch decision without token or account details', async () => {
+    const logs: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }],
+      owner: { log: {
+        debug: () => undefined,
+        info: (message, meta) => logs.push({ message, meta }),
+        warn: (message, meta) => logs.push({ message, meta }),
+      } },
+    });
+    const task = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      env.memberStarted.mini[0].emit(USAGE_LIMIT_ERROR);
+      await waitFor(() => switchTokenIn(task.stream) !== undefined);
+      const decision = logs.find(item => item.message === 'remote agent group switch decision');
+      expect(decision?.meta).toMatchObject({ failureCode: 'SUBSCRIPTION_ACCOUNT_LIMITED', outcome: 'issued', reason: 'replacement-available' });
+      const serialized = JSON.stringify(logs);
+      expect(serialized).not.toContain('usage limit');
+      expect(serialized).not.toContain('providerId');
+      expect(serialized).not.toContain('token');
+    } finally {
+      await task.client.close('close', 'navigation');
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
   });
 
   it.each([
