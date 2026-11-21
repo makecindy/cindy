@@ -1,13 +1,22 @@
 import {
   projectSessionActivity,
+  resolveSessionRightStatus,
   type SessionActivitySnapshot,
   type SessionInterruptionState,
+  type SessionRightStatus,
 } from '@cindy/maker-shared/session-activity';
 
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
 
 export { resolveSessionRightStatus as resolveSidebarRightStatus } from '@cindy/maker-shared/session-activity';
-export type { SessionRightStatus as SidebarRightStatusKind } from '@cindy/maker-shared/session-activity';
+
+/**
+ * 会话行右侧状态档位：共享的五档之外，桌面端本地多一档「排队中」。
+ *
+ * 这一档不进共享协议：它只描述本机输入队列（队列里还有没派发的消息），
+ * 不是跨电脑的会话活动相位。
+ */
+export type SidebarRightStatusKind = SessionRightStatus | 'queued';
 
 export interface SidebarRightStatusInput {
   interruption?: SessionInterruptionState;
@@ -72,4 +81,19 @@ export function projectSidebarSessionActivity({
     // restart/expiry/acknowledgement cannot erase the existing red error state.
     attention: liveActivity?.attention === true || hasAttentionNotification || isUrgentFromContext,
   });
+}
+
+/**
+ * 会话行右侧状态：共享五档之外，闲置(空闲)且队列里还有没派发的输入时显示「排队中」。
+ *
+ * 只覆盖 `time`(空闲)一档：出错红点、待处理蓝点、运行中 spinner、完成绿点各自
+ * 已经是"有事发生"的信号，压过排队提示；空闲才是「气泡说排队、会话说空闲」的那一处
+ * 矛盾(#11299)。
+ */
+export function resolveSessionRowRightStatus(
+  activity: Pick<SessionActivitySnapshot, 'phase' | 'attention'>,
+  hasQueuedInput: boolean,
+): SidebarRightStatusKind {
+  const kind = resolveSessionRightStatus(activity);
+  return kind === 'time' && hasQueuedInput ? 'queued' : kind;
 }
