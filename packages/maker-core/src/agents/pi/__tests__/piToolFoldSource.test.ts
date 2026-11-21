@@ -50,6 +50,27 @@ function isFolded(message: Message): boolean {
   return args?.__folded === true;
 }
 
+function recordText(message: Message): string {
+  return (message.content ?? []).map((block) => String(block.text ?? '')).join('\n');
+}
+
+function isRecord(message: Message): boolean {
+  return message.role === 'assistant' && recordText(message).startsWith('[folded] ');
+}
+
+function callIds(messages: Message[]): string[] {
+  const ids: string[] = [];
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    for (const block of message.content ?? []) if (block.type === 'toolCall') ids.push(String(block.id));
+  }
+  return ids;
+}
+
+function records(messages: Message[]): string[] {
+  return messages.filter(isRecord).map(recordText);
+}
+
 function projection(handler: Handler, messages: Message[]): Message[] {
   const changed = handler({ messages }) as { messages: Message[] } | undefined;
   return changed ? changed.messages : messages;
@@ -62,19 +83,31 @@ describe('cindy-tool-fold extension source', () => {
     expect(context({ messages: pairs(10) })).toBeUndefined();
   });
 
-  it('folds the whole backlog at once, keeps the newest 8 pairs verbatim and names the recovery id', () => {
+  it('collapses the whole backlog into assistant records and keeps the newest 8 pairs verbatim', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const messages = pairs(40);
     const out = projection(context, messages);
-    expect(out).toHaveLength(messages.length);
-    const residentFrom = messages.length - 16;
-    for (let index = 0; index < residentFrom; index += 1) {
-      if (messages[index].role === 'assistant') expect(isFolded(out[index])).toBe(true);
-    }
-    for (let index = residentFrom; index < messages.length; index += 1) {
-      expect(out[index]).toBe(messages[index]);
-    }
-    // Protocol shape survives: every result still answers an existing call, ids unchanged.
+    // Each folded trip loses both halves; the records merge into the next assistant
+    // message so two assistant messages never sit next to each other.
+    expect(out).toHaveLength(16);
+    expect(callIds(out)).toEqual(Array.from({ length: 8 }, (_, index) => `call-${index + 32}`));
+    const foldedText = records(out).join('\n');
+    expect(foldedText.match(/cindy_toolfold_read/g)).toHaveLength(32);
+    // The records ride on the next assistant message, so the resident pair keeps its
+    // original call block while the tail of the window is untouched.
+    // Records ride on the next assistant message, so no two assistant messages end up
+    // adjacent, which providers reject.
+    for (let index = 1; index < out.length; index += 1) {
+      expect([out[index - 1].role, out[index].role]).not.toEqual(['assistant', 'assistant']);
+    }    const resident = out[out.length - 16];
+    expect((resident.content as Block[]).find((block) => block.type === 'toolCall')).toEqual((messages[64].content as Block[])[0]);
+    expect(out.slice(out.length - 14)).toEqual(messages.slice(66));
+    const first = foldedText.slice(foldedText.indexOf('[folded]'));
+    expect(first).toContain('[folded] ok \u00b7 bash');
+    expect(first).toContain('cindy_toolfold_read("call-0")');
+    expect(first).toContain('run step 0');
+    expect(first).toContain('step 0 ok');
+    // Protocol shape survives: every remaining result still answers an existing call.
     const ids = new Set<string>();
     for (const message of out) {
       if (message.role === 'assistant') {
@@ -83,49 +116,55 @@ describe('cindy-tool-fold extension source', () => {
         expect(ids.has(String(message.toolCallId))).toBe(true);
       }
     }
-    const foldedText = String(out[1].content![0].text);
-    expect(foldedText).toContain('[folded] ok');
-    expect(foldedText).toContain('cindy_toolfold_read("call-0")');
-    expect(foldedText).toContain('step 0 ok');
-    // Large arguments are replaced by an id-only pointer; what they said moves to the record.
-    expect(out[0].content![0].arguments).toEqual({ __folded: true, call: 'call-0' });
-    expect(foldedText).toContain('run step 0');
+    // Two assistant messages must never end up next to each other.
+    for (let index = 1; index < out.length; index += 1) {
+      expect(out[index].role === 'assistant' && out[index - 1].role === 'assistant').toBe(false);
+    }
   });
 
-  it('keeps a small-argument call verbatim and does not repeat it in the record', () => {
+  it('names the subject in the record because the call block carrying it is gone', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const messages = pairs(40);
-    // A `read`-sized argument object: smaller than the pointer that would replace it.
+    // A `read`-sized argument object: smaller than any pointer that would replace it.
     const args = { path: 'packages/maker-core/src/agents/pi/pi-tool-fold-source.ts', offset: 1, limit: 40 };
     messages[0] = call('call-0', 'read', args);
     const out = projection(context, messages);
-    expect(out[0]).toBe(messages[0]);
-    const record = String(out[1].content![0].text);
+    const record = records(out)[0];
     expect(record).toContain('[folded] ok \u00b7 read');
-    // The call block already shows the path; the record stays on the result side.
-    expect(record).not.toContain(args.path);
-    expect(record).toContain('cindy_toolfold_read("call-0")');
+    // The path moved into the record; there is no call block left to show it.
+    expect(record).toContain(args.path);
+    expect(callIds(out)).not.toContain('call-0');
   });
 
-  it('never rewrites arguments when the argument budget is switched off', () => {
+  it('collapses a trip even when the argument budget is switched off', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8', CINDY_PI_TOOL_FOLD_ARG_CHARS: '0' });
     const messages = pairs(40);
     const out = projection(context, messages);
-    expect(out[0]).toBe(messages[0]);
-    expect(out[1]).not.toBe(messages[1]);
-    const record = String(out[1].content![0].text);
-    expect(record).toContain('[folded] ok \u00b7 bash');
-    // No duplication: the call block still shows the command.
-    expect(record).not.toContain('run step 0');
+    // ARG_CHARS only governs the fallback shape; a collapsed trip drops its arguments too.
+    expect(callIds(out)).not.toContain('call-0');
+    expect(records(out)[0]).toContain('run step 0');
   });
 
-  it('leaves no command text in the pointer of a folded large-argument call', () => {
-    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
-    const messages = pairs(40);
+  it('leaves no command text in the pointer when a pinned sibling forces the pair shape', async () => {
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [];
+    for (let index = 0; index < 40; index += 1) {
+      messages.push({ role: 'assistant', content: [
+        { type: 'toolCall', id: `par-${index}a`, name: 'bash', arguments: { command: `first ${index} ${'c'.repeat(420)}` } },
+        { type: 'toolCall', id: `par-${index}b`, name: 'bash', arguments: { command: `second ${index} ${'c'.repeat(420)}` } },
+      ] as Block[] });
+      messages.push(result(`par-${index}a`, 'bash', `a ok ${'x'.repeat(2000)}`));
+      messages.push(result(`par-${index}b`, 'bash', `b ok ${'x'.repeat(2000)}`));
+    }
+    projection(context, messages);
+    // Pinning one call of a parallel trip keeps the trip: the sibling falls back to a pointer.
+    await tool.execute('t1', { call_id: 'par-0a' });
     const out = projection(context, messages);
-    const pointer = out[0].content![0].arguments as Record<string, unknown>;
-    expect(pointer).toEqual({ __folded: true, call: 'call-0' });
-    expect(JSON.stringify(pointer)).not.toContain('run step 0');
+    const pointer = callIds(out).includes('par-0b')
+      ? (out.find((message) => callIds([message]).includes('par-0b'))!.content!.find((block) => block.type === 'toolCall' && block.id === 'par-0b')!.arguments as Record<string, unknown>)
+      : undefined;
+    expect(pointer).toEqual({ __folded: true, call: 'par-0b' });
+    expect(JSON.stringify(pointer)).not.toContain('second 0');
   });
 
   it('leaves a batch alone when none of it would actually disappear', () => {
@@ -154,16 +193,35 @@ describe('cindy-tool-fold extension source', () => {
     expect(out![1]).toBe(messages[1]);
   });
 
+  it('keeps a record inside a turn when the next message is already a user turn', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
+    const messages: Message[] = [];
+    for (let index = 0; index < 40; index += 1) {
+      messages.push(call(`call-${index}`, 'bash', { command: `run step ${index}` }));
+      messages.push(result(`call-${index}`, 'bash', `step ${index} ok ${'x'.repeat(2000)}`));
+      if (index === 20) messages.push({ role: 'user', content: [{ type: 'text', text: 'next turn' }] });
+    }
+    const out = projection(context, messages);
+    // The folded trip that ends a turn cannot merge forward into an assistant message:
+    // it stays a record of its own, followed by the user message.
+    const at = out.findIndex((message) => message.role === 'user');
+    expect(at).toBeGreaterThan(0);
+    expect(out[at - 1].role).toBe('assistant');
+    expect(isRecord(out[at - 1])).toBe(true);
+    expect(callIds(out)).toContain('call-32');
+  });
+
   it('keeps folds sticky and does not rewrite them again until the next batch', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const first = projection(context, pairs(40));
-    const firstPointer = JSON.stringify(first[0].content![0].arguments);
     const firstSavings = JSON.stringify(first).length;
     const again = projection(context, pairs(40));
-    expect(JSON.stringify(again[0].content![0].arguments)).toBe(firstPointer);
+    expect(JSON.stringify(again)).toBe(JSON.stringify(first));
     expect(JSON.stringify(again).length).toBe(firstSavings);
     const grown = projection(context, pairs(41));
-    expect(JSON.stringify(grown[0].content![0].arguments)).toBe(firstPointer);
+    // One more pair is not a new batch: the earlier marks stay, the new pair joins the
+    // resident window instead of being folded on its own.
+    expect(callIds(grown)).toEqual(Array.from({ length: 9 }, (_, index) => `call-${index + 32}`));
     expect(isFolded(grown[grown.length - 4])).toBe(false);
   });
 
@@ -195,25 +253,28 @@ describe('cindy-tool-fold extension source', () => {
     expect(text).toContain('step 5 ok');
     // Pinned: the pair projects as originals again while everything else stays folded.
     const pinnedView = projection(context, messages);
-    expect(isFolded(pinnedView[10])).toBe(false);
-    expect(pinnedView[11]).toBe(messages[11]);
-    expect(isFolded(pinnedView[0])).toBe(true);
-    // Turn boundary: a new user message releases the pin and the pair re-folds.
+    const pinnedAt = pinnedView.findIndex((message) => callIds([message]).includes('call-5'));
+    expect(pinnedAt).toBeGreaterThan(-1);
+    expect(pinnedView[pinnedAt + 1]).toBe(messages[11]);
+    expect(records(pinnedView).join('\n')).not.toContain('call-5');
+    expect(records(pinnedView).join('\n')).toContain('call-0');
+    // Turn boundary: a new user message releases the pin and the trip collapses again.
     const nextTurn = [...messages, { role: 'user', content: [{ type: 'text', text: 'next turn' }] }];
     const released = projection(context, nextTurn);
-    expect(isFolded(released[10])).toBe(true);
+    expect(callIds(released)).not.toContain('call-5');
+    expect(records(released).join('\n')).toContain('call-5');
   });
 
   it('slices a large folded record without pinning the whole history back in', async () => {
-    const { context, tool, toolResult } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
-    const big = 'w'.repeat(30000);
-    const messages = [
-      call('huge-write', 'write', { path: 'a.txt', content: big }),
-      toolResult({ toolName: 'write', toolCallId: 'huge-write', content: [{ type: 'text', text: 'wrote 30000 bytes' }] }),
-      ...pairs(3),
-    ];
-    const afterRead = projection(context, messages);
-    expect(afterRead.length).toBeGreaterThan(0);
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const messages = pairs(40);
+    messages[0] = call('huge-write', 'write', { path: 'a.txt', content: 'w'.repeat(30000) });
+    messages[1] = result('huge-write', 'write', 'wrote 30000 bytes');
+    projection(context, messages);
+    const recovered = await tool.execute('t-slice', { call_id: 'huge-write' });
+    const text = String(recovered.content![0].text);
+    expect(text.length).toBeLessThan(1200);
+    expect(text).toContain('Call cindy_toolfold_read again with offset');
   });
 
   it('recovers a folded result that merely quotes the truncation marker text', async () => {
@@ -254,15 +315,15 @@ describe('cindy-tool-fold extension source', () => {
     const flag = Symbol.for('cindy.pi.textOnlyTurn');
     const { context } = loadExtension();
     const messages = pairs(40);
-    expect(projection(context, messages).some(isFolded)).toBe(true);
+    expect(records(projection(context, messages)).length).toBeGreaterThan(0);
     (globalThis as Record<symbol, unknown>)[flag] = true;
     try {
       // Every tool is blocked on these turns, so the summary must not replace the result.
-      expect(projection(context, messages).some(isFolded)).toBe(false);
+      expect(records(projection(context, messages))).toHaveLength(0);
     } finally {
       delete (globalThis as Record<symbol, unknown>)[flag];
     }
-    expect(projection(context, messages).some(isFolded)).toBe(true);
+    expect(records(projection(context, messages)).length).toBeGreaterThan(0);
   });
 
   it('keeps a pinned call verbatim while its parallel siblings stay folded', async () => {
@@ -377,7 +438,10 @@ describe('cindy-tool-fold extension source', () => {
     projection(context, messages);
     await tool.execute('t1', { call_id: 'call-2' });
     const view = projection(context, messages);
-    expect(isFolded(view[4])).toBe(true);
+    // The recovery was over the per-read budget, so it is not pinned back in: the trip
+    // stays collapsed instead of paying twice for the same text.
+    expect(callIds(view)).not.toContain('call-2');
+    expect(records(view).join('\n')).toContain('call-2');
   });
 
   it('bounds retained giant payloads by aggregate characters, not just entry count', async () => {
@@ -456,7 +520,7 @@ describe('cindy-tool-fold extension source', () => {
     const messages = pairs(40);
     messages[1] = { role: 'toolResult', toolCallId: 'call-0', toolName: 'bash', content: [{ type: 'text', text: kept }] };
     const out = projection(context, messages);
-    expect(isFolded(out[0])).toBe(true);
+    expect(isRecord(out[0])).toBe(true);
   });
 
   it('counts parallel calls, not messages, toward the pairs gate', () => {
@@ -472,8 +536,10 @@ describe('cindy-tool-fold extension source', () => {
       result('tail-1', 'bash', 'tail ok'),
     ];
     const out = projection(context, messages);
-    expect(isFolded(out[0])).toBe(true);
-    expect(out[1]).not.toBe(messages[1]); // result folded to a one-liner
+    expect(isRecord(out[0])).toBe(true);
+    // The whole parallel trip is gone: no pointer left behind for any of its 32 calls.
+    expect(callIds(out)).toEqual(['tail-1']);
+    expect(records(out).join('\n')).toContain('parallel 0 ok');
   });
 
   it('keeps live fold marks when the registry cap is pruned', () => {
@@ -482,15 +548,16 @@ describe('cindy-tool-fold extension source', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '512', CINDY_PI_TOOL_FOLD_MIN_CHARS: '240000', CINDY_PI_TOOL_FOLD_KEEP: '1', CINDY_PI_TOOL_FOLD_MAX_FOLDED: '100' });
     // First pass: one large batch folds 120 pairs -> registry 120 > cap 100.
     const first = projection(context, pairs(120));
-    expect(isFolded(first[0])).toBe(true);
+    expect(records(first).join('\n')).toContain('call-0');
     // Second pass doubles the backlog: the 120 new pairs form a new batch, the prune
     // path runs with 121 live marks against cap 100, and every old id stays live.
     const grown = pairs(240);
     const second = projection(context, grown);
-    expect(isFolded(second[0])).toBe(true);   // old marks survive the prune: no full-text rebound
-    expect(isFolded(second[100])).toBe(true); // mid-history marks survive too
-    expect(isFolded(second[236])).toBe(true); // newly foldable backlog folds too
-    expect(second[478]).toBe(grown[478]);     // newest 1 pair stays verbatim (KEEP=1)
+    // Old marks survive the prune: no full-text rebound for any of the first batch.
+    expect(records(second).join('\n')).toContain('call-0');
+    expect(records(second).join('\n')).toContain('call-119');
+    // The newer backlog folds too, and the newest 1 pair stays verbatim (KEEP=1).
+    expect(callIds(second)).toEqual(['call-239']);
   });
 
   it('rejects recovery of an evicted giant instead of serving the transcript preview', async () => {

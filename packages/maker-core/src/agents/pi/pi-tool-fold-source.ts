@@ -278,6 +278,9 @@ export default function (pi) {
       }
       var removable = 0;
       var removableCalls = 0;
+      // Route 2 replaces the whole trip with one record text: arguments disappear too, so
+      // a trip whose arguments are cheap can still be worth dropping.
+      var dropChars = chars - calls.length * RECORD_ESTIMATE_CHARS;
       for (var c4 = 0; c4 < calls.length; c4++) {
         var plan = folds[calls[c4].id];
         plan.foldArgs = ARG_FOLD_CHARS > 0 && plan.args > ARG_FOLD_CHARS;
@@ -285,6 +288,8 @@ export default function (pi) {
         removable += (plan.foldArgs ? plan.args : 0) + (plan.foldResult ? plan.result : 0);
         if (plan.foldArgs || plan.foldResult) removableCalls += 1;
       }
+      if (dropChars > removable) removable = dropChars;
+      if (dropChars >= 80) removableCalls = calls.length;
       var sizes = Object.create(null);
       for (var c3 = 0; c3 < calls.length; c3++) {
         try { sizes[calls[c3].id] = JSON.stringify(calls[c3].arguments || {}).length; } catch (error) { sizes[calls[c3].id] = 0; }
@@ -298,8 +303,9 @@ export default function (pi) {
     return trips;
   }
 
-  // The pointer must not look runnable: it carries the id and nothing that reads like
-  // an argument, because the model replays the nearest call-shaped example it sees.
+  // Fallback for trips that cannot be dropped whole (a pinned sibling, an image): the
+  // pointer must not look runnable. It carries the id and nothing that reads like an
+  // argument, because the model replays the nearest call-shaped example it sees.
   function foldedCall(block) {
     return {
       type: 'toolCall',
@@ -333,6 +339,43 @@ export default function (pi) {
     // (a batch of "ok" results grew); the text is in hand here, so compare exactly.
     if (summary.length >= text.length) return null;
     return { role: 'toolResult', toolCallId: result.toolCallId, toolName: result.toolName, isError: result.isError, content: [{ type: 'text', text: summary }] };
+  }
+
+  /**
+   * Route 2: the whole round-trip becomes one assistant text record — no call block and no
+   * result message. Nothing in the history then reads like a callable example, which is
+   * what the model kept re-sending (795 validation failures, 121 of them in one day).
+   * Returns null when this trip must keep its pair.
+   */
+  function tripRecordMessage(unit, assistant) {
+    var lines = [];
+    var recordChars = 0;
+    for (var k = 0; k < assistant.content.length; k++) {
+      var block = assistant.content[k];
+      if (!block || block.type !== 'toolCall') continue;
+      var id = String(block.id);
+      if (!foldable(id)) return null;
+      var res = null;
+      for (var r = 0; r < unit.results.length; r++) {
+        if (String(unit.results[r].toolCallId) === id) res = unit.results[r];
+      }
+      if (!res) return null;
+      var record = foldedResult(res, block, true);
+      if (!record) return null;
+      var line = record.content[0].text;
+      lines.push(line);
+      recordChars += line.length + 1;
+    }
+    // Arguments disappear as well, so the record competes with the whole trip, not one result.
+    if (lines.length === 0 || recordChars >= unit.chars) return null;
+    var kept = [];
+    for (var b = 0; b < assistant.content.length; b++) {
+      var other = assistant.content[b];
+      if (other && other.type === 'toolCall') continue;
+      kept.push(other);
+    }
+    kept.push({ type: 'text', text: lines.join('\n') });
+    return Object.assign({}, assistant, { content: kept });
   }
 
   function allFolded(trip) {
@@ -635,11 +678,23 @@ export default function (pi) {
       }
     }
 
-    var out = null;
+    var replaced = Object.create(null);
+    var dropped = Object.create(null);
+    var synthetic = new Set();
+    var dirty = false;
     for (var g = 0; g < trips.length; g++) {
       var unit = trips[g];
       if (unit.hasImage || unit.removable < 80) continue;
       var assistant = messages[unit.start];
+      if (!assistant || !Array.isArray(assistant.content)) continue;
+      var tripRecord = tripRecordMessage(unit, assistant);
+      if (tripRecord) {
+        replaced[unit.start] = tripRecord;
+        synthetic.add(tripRecord);
+        for (var d = 0; d < unit.indexes.length; d++) dropped[unit.indexes[d]] = true;
+        dirty = true;
+        continue;
+      }
       var blocks = assistant.content;
       var nextContent = [];
       var callsById = Object.create(null);
@@ -665,8 +720,8 @@ export default function (pi) {
       // Fold per call, not per trip: a pinned call keeps its own payload verbatim while
       // its parallel siblings stay folded.
       if (argsReplaced) {
-        if (out === null) out = messages.slice();
-        out[unit.start] = Object.assign({}, assistant, { content: nextContent });
+        replaced[unit.start] = Object.assign({}, assistant, { content: nextContent });
+        dirty = true;
       }
       for (var r = 0; r < unit.results.length; r++) {
         var result = unit.results[r];
@@ -674,12 +729,33 @@ export default function (pi) {
         if (!entry || !entry.foldResult) continue;
         var record = foldedResult(result, entry.call, entry.argsFolded);
         if (!record) continue;
-        if (out === null) out = messages.slice();
-        out[unit.indexes[r]] = record;
+        replaced[unit.indexes[r]] = record;
+        dirty = true;
       }
     }
 
-    return out === null ? undefined : { messages: out };
+    if (!dirty) return undefined;
+    var final = [];
+    for (var fi = 0; fi < messages.length; fi++) {
+      if (dropped[fi]) continue;
+      final.push(replaced[fi] || messages[fi]);
+    }
+    // Dropping a trip removes the messages between two assistant turns, so two assistant
+    // messages can land next to each other. Providers reject that: fold the older record
+    // into the newer message instead of keeping both.
+    var merged = [];
+    for (var mj = 0; mj < final.length; mj++) {
+      var current = final[mj];
+      var previous = merged.length > 0 ? merged[merged.length - 1] : null;
+      if (previous && previous.role === 'assistant' && current.role === 'assistant' && (synthetic.has(previous) || synthetic.has(current))) {
+        var joined = Object.assign({}, current, { content: (previous.content || []).concat(current.content || []) });
+        merged[merged.length - 1] = joined;
+        synthetic.add(joined);
+        continue;
+      }
+      merged.push(current);
+    }
+    return { messages: merged };
   });
 }
 `;
