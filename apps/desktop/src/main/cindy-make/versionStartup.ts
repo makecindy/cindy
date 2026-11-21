@@ -342,7 +342,7 @@ export function describeOriginalVersion(node?: string): OriginalVersion {
   const previous = readOriginalVersion(profile.userData);
   const environmentOverrides = Object.fromEntries(
     ORIGINAL_DEV_ENVIRONMENT_OVERRIDES.flatMap((key) =>
-      process.env[key] !== undefined ? [[key, process.env[key]!]] : [],
+      process.env[key] === '1' ? [[key, process.env[key]]] : [],
     ),
   );
   const original: OriginalVersion = {

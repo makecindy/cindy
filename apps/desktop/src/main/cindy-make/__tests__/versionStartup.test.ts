@@ -269,6 +269,14 @@ describe('one original version type for Dev and installed Cindy', () => {
     expect(await startup.dispatchCindyVersionStartup()).toBe(false);
     expect(h.spawn).not.toHaveBeenCalled();
   });
+  it('does not persist an inactive shortcut override', async () => {
+    vi.stubEnv('XDT_DISABLE_GLOBAL_SHORTCUTS', '0');
+    const value = await startup.rememberOriginalVersion(originalExec);
+    expect(value.development?.environmentOverrides).toBeUndefined();
+    expect(
+      store.readOriginalVersion(h.profile)?.development?.environmentOverrides,
+    ).toBeUndefined();
+  });
   it('rejects a declared endpoint realm that differs from the running original', async () => {
     await writeFile(
       path.join(root, 'checkout/config/endpoint.json'),

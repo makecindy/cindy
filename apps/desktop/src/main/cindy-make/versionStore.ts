@@ -401,7 +401,10 @@ export function supportsDevEnvironmentOverrides(
   resources: string,
   original: OriginalVersion,
 ): boolean {
-  if (Object.keys(original.development?.environmentOverrides ?? {}).length === 0) return true;
+  const requiresCapability = Object.values(original.development?.environmentOverrides ?? {}).some(
+    (value) => value === '1',
+  );
+  if (!requiresCapability) return true;
   const protocol = readVersionJson<{ capabilities?: unknown }>(
     path.join(resources, 'cindy-version-protocol.json'),
   );
