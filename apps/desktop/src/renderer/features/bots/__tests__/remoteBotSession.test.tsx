@@ -18,10 +18,12 @@ const h = vi.hoisted(() => ({
   lastReplyAt: 0,
   devices: null as Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> | null,
   deviceListStatus: 'ready' as 'loading' | 'ready' | 'error',
+  profileLoadState: 'ready' as 'pending' | 'ready' | 'error',
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
   cloudView: vi.fn(),
 }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => h.cloud }));
+vi.mock('../botStore', () => ({ useBotProfilesLoadState: () => h.profileLoadState }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => h.devices,
   useDeviceLinkDeviceListRequestState: () => ({ status: h.deviceListStatus, error: null }),
@@ -78,6 +80,7 @@ beforeEach(() => {
   h.cloud = { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] };
   h.devices = null;
   h.deviceListStatus = 'ready';
+  h.profileLoadState = 'ready';
   h.cloudView.mockReset();
   h.pin.mockReset();
   h.merge.mockReset();
@@ -172,6 +175,23 @@ it.each([true, false])('opens read-only local installation recovery with a stale
   expect(h.invoke).not.toHaveBeenCalled();
   expect(h.navigate).not.toHaveBeenCalled();
   h.cloud = { ...h.cloud, demotedBotIds: [] };
+  view.rerender(<RemoteBotSessionView />);
+  expect(h.navigate).toHaveBeenLastCalledWith({ to: '/bots/writer', replace: true });
+});
+
+it('keeps the recovered buddy mounted until local profiles are hydrated', async () => {
+  h.profileLoadState = 'pending';
+  h.cloud = { enabled: true, selfDeviceId: 'home', humanActorId: 'human', demotedBotIds: ['writer'], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  const view = render(<RemoteBotSessionView />);
+  await screen.findByText('cloud-offline-view');
+
+  h.cloud = { ...h.cloud, demotedBotIds: [] };
+  view.rerender(<RemoteBotSessionView />);
+  expect(h.navigate).not.toHaveBeenCalled();
+  expect(screen.getByText('cloud-offline-view')).toBeTruthy();
+
+  h.profileLoadState = 'ready';
   view.rerender(<RemoteBotSessionView />);
   expect(h.navigate).toHaveBeenLastCalledWith({ to: '/bots/writer', replace: true });
 });
