@@ -370,6 +370,38 @@ describe('Claude Code style file tools', () => {
     expect(notebook.cells[0].outputs).toEqual([]);
   });
 
+  // PR #11758 / unit: prior coverage changed either the path or access mode.
+  // Two Write calls to the same sensitive file require separate fallback decisions.
+  it('does not reuse a local Write approval for a second call on the same file', async () => {
+    const confirm = vi.fn<NonNullable<RemoteExecutorOptions['confirm']>>()
+      .mockResolvedValueOnce(true).mockResolvedValue(false);
+    const { executor } = makeExecutor('normal', { confirm });
+    const file = path.join(project, '.env');
+    try {
+      expect((await executor.callTool('Write', { file_path: file, content: 'VALUE=first' })).isError).not.toBe(true);
+      expect((await executor.callTool('Write', { file_path: file, content: 'VALUE=second' })).isError).toBe(true);
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(fs.readFileSync(file, 'utf8')).toBe('VALUE=first');
+    } finally {
+      await executor.close();
+    }
+  });
+
+  // PR #11758 / unit: confirm and check mirror the relay handoff before dispatch.
+  // A distinct request for the same file cannot use a pending approval checked first.
+  it('binds a fallback file approval to the relay action that asked', async () => {
+    const { executor } = makeExecutor('normal', { confirm: async () => true });
+    const action: ExecutorAction = { kind: 'write', path: path.join(project, '.env') };
+    try {
+      expect(await executor.confirm(action)).toBe(true);
+      expect(executor.check({ ...action }).ok).toBe(false);
+      expect(executor.check(action).ok).toBe(true);
+      expect(executor.check(action).ok).toBe(false);
+    } finally {
+      await executor.close();
+    }
+  });
+
   it('refuses credential files until confirmed on this computer', async () => {
     const { executor, gate } = makeExecutor();
     const env = path.join(project, '.env');
@@ -1407,6 +1439,7 @@ describe('shared provider credentials', () => {
       try {
         expect(executor.check(action).ok).toBe(false);
         expect(await executor.confirm(action, abort.signal)).toBe(allowed);
+        expect(executor.check({ ...action }).ok).toBe(false);
         expect(executor.check(action).ok).toBe(allowed);
         expect(executor.check(action).ok).toBe(false);
         expect(asked.mock.calls.map(([, , credential]) => credential)).toEqual(

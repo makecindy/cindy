@@ -66,6 +66,7 @@ interface Approval {
   expiresAt: number;
   credential: boolean;
   pathAccess?: PathAccess;
+  oneShotAction?: ExecutorAction;
 }
 
 export function executorGateModeFor(
@@ -129,8 +130,8 @@ export class ExecutorGate {
   setMode(mode: ExecutorGateMode): void {
     this.credentialsAllowedForSession = false;
     this.credentialExemptions = [];
-    // 同一路径的临时批准也必须撤销，否则它会在 TTL 内绕过恢复后的凭证确认。
-    this.approvals = this.approvals.filter((approval) => !approval.credential);
+    // 权限变化使待执行的补弹批准与临时凭证批准失效。
+    this.approvals = this.approvals.filter((approval) => !approval.credential && !approval.oneShotAction);
     this.mode = mode;
   }
 
@@ -158,21 +159,27 @@ export class ExecutorGate {
 
   /** 本机用户在确认卡上允许了一个操作后调用。 */
   recordApproval(action: ExecutorAction): void {
-    this.addApproval(action, this.isCredentialAction(action), action.kind === 'read' && action.exactFileApproval ? 'read' : undefined);
+    this.addApproval(action, this.isCredentialAction(action), {
+      pathAccess: action.kind === 'read' && action.exactFileApproval ? 'read' : undefined,
+    });
   }
 
-  /** 补弹卡只批准展示过的访问方式和凭证范围。 */
+  /** 补弹卡只批准本次调用；执行器和中继在复查时传回同一个 action。 */
   recordLocalConfirmation(action: ExecutorAction, credential: boolean): void {
-    this.addApproval(action, credential, pathAccess(action));
+    this.addApproval(action, credential, { pathAccess: pathAccess(action), oneShotAction: action });
   }
 
-  private addApproval(action: ExecutorAction, credential: boolean, access?: PathAccess): void {
+  private addApproval(
+    action: ExecutorAction,
+    credential: boolean,
+    scope: Pick<Approval, 'pathAccess' | 'oneShotAction'>,
+  ): void {
     this.prune();
     this.approvals.push({
       ...approvalOf(action),
       expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS,
       credential,
-      pathAccess: access,
+      ...scope,
     });
     if (this.approvals.length > MAX_APPROVALS) this.approvals.splice(0, this.approvals.length - MAX_APPROVALS);
   }
@@ -184,6 +191,7 @@ export class ExecutorGate {
       ...approvalOf(action),
       expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS,
       credential: true,
+      oneShotAction: action,
     });
     if (this.credentialExemptions.length > MAX_APPROVALS) {
       this.credentialExemptions.splice(0, this.credentialExemptions.length - MAX_APPROVALS);
@@ -282,17 +290,19 @@ export class ExecutorGate {
     this.prune();
     const { kind, key } = approvalOf(action);
     const index = this.approvals.findIndex((approval) => approval.kind === kind && approval.key === key
+      && (!approval.oneShotAction || approval.oneShotAction === action)
       && (!approval.pathAccess || approval.pathAccess === pathAccess(action))
       && (!credential || approval.credential));
     if (index < 0) return false;
-    if (take && kind !== 'path') this.approvals.splice(index, 1);
+    if (take && (kind !== 'path' || this.approvals[index].oneShotAction)) this.approvals.splice(index, 1);
     return true;
   }
 
   private consumeCredentialExemption(action: ExecutorAction, take = true): boolean {
     this.prune();
     const { kind, key } = approvalOf(action);
-    const index = this.credentialExemptions.findIndex((approval) => approval.kind === kind && approval.key === key);
+    const index = this.credentialExemptions.findIndex((approval) => approval.oneShotAction === action
+      && approval.kind === kind && approval.key === key);
     if (index < 0) return false;
     if (take) this.credentialExemptions.splice(index, 1);
     return true;
