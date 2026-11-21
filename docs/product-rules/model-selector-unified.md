@@ -295,6 +295,8 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 | 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |
 | 远程任务 | SSH / device-link 不套用控制端本机登录态；继续由执行端能力与来源快照决定，避免把本机授权强塞给远端 |
 
+桌面本机新建任务恢复手动保存的引擎、来源和模型。可用性检查期间保留这组选择并提示连接中。检查发现引擎、来源或模型不可用时，提示对应原因，允许从模型选择器为当前任务选择替代项。替代项只随当前草稿提交，既有默认在下次新建时恢复。
+
 ---
 
 ## 3. 实施地图(单 Draft PR 内的逻辑 commit 序)

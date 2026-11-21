@@ -21,7 +21,12 @@ const SEND_BUFFER_BYTES: usize = 24 << 20;
 const MAX_REPORTED_STREAMS: usize = 16;
 /// What this build adds over the first native release; JS checks it before using any of them (an older
 /// installed binary keeps working with newer JS, without these).
-const FEATURES: [&str; 3] = ["stream-buffered", "stun", "relay-udp-v2"];
+const FEATURES: [&str; 4] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait"];
+/// Relayed datagrams the application still has to carry over its relay WebSocket; beyond this the oldest go (the
+/// transport resends them). Only fills while the application does not poll.
+const MAX_OUTBOX: usize = 1024;
+/// `pump` asks to be called again at least this often: the relay UDP registration and STUN keep their own timers.
+const MAX_PUMP_WAKE_MS: u64 = 250;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Address { Udp(SocketAddr), Link(u32) }
@@ -67,6 +72,12 @@ pub struct NativeEngine {
     streams: BTreeMap<u32, BTreeSet<u32>>,
     finishing: BTreeMap<u32, BTreeSet<u32>>,
     poisoned: bool,
+    /// Datagrams for relay links that did not go over relay UDP, until the next `collect`.
+    outbox: Vec<Value>,
+    /// What `pump` collected for the application and `poll` has not handed over yet.
+    stash: Option<Value>,
+    /// The connection states the application last saw (`signature`).
+    reported: String,
     media: crate::media::MediaCrypto,
     media_http: Option<crate::media_http::MediaHttp>,
 }
@@ -90,7 +101,8 @@ impl NativeEngine {
         } else { None };
         Ok(Self { crypto, device_id, enhanced_transport, endpoint, admitted, relay_tags: BTreeMap::new(), relay_links: BTreeMap::new(), relay_udp: None,
             stun: None, local_streams: BTreeMap::new(), udp, clock: Instant::now(), now: 0,
-            streams: BTreeMap::new(), finishing: BTreeMap::new(), poisoned: false, media: Default::default(), media_http: None })
+            streams: BTreeMap::new(), finishing: BTreeMap::new(), poisoned: false, outbox: Vec::new(), stash: None, reported: String::new(),
+            media: Default::default(), media_http: None })
     }
     fn config(enhanced_transport: bool) -> Config {
         if !enhanced_transport { return Config { max_packet_size: MAX_PACKET_SIZE, ..Config::default() }; }
@@ -140,6 +152,7 @@ impl NativeEngine {
                 drop(admitted);
                 let id = self.endpoint.connect(self.now, self.crypto.clone(), Self::config(self.enhanced_transport), PROLOGUE,
                     &remote, &[], to).map_err(|_| "CONNECT_FAILED")?;
+                self.send_now();
                 Ok(json!(id))
             },
             "datagram" => {
@@ -171,7 +184,9 @@ impl NativeEngine {
                 let data = bytes(&command["data"])?;
                 if data.len() > IO_SIZE { return Err("WRITE_TOO_LARGE"); }
                 let connection = self.endpoint.connection_mut(number(command, "id")?).ok_or("CONNECTION_CLOSED")?;
-                Ok(json!(connection.send_stream(self.now, number(command, "stream")?, &data)))
+                let written = connection.send_stream(self.now, number(command, "stream")?, &data);
+                self.send_now();
+                Ok(json!(written))
             },
             "finish" => {
                 let connection = self.endpoint.connection_mut(number(command, "id")?).ok_or("CONNECTION_CLOSED")?;
@@ -248,7 +263,35 @@ impl NativeEngine {
         Ok(Value::Null)
     }
     pub(crate) fn poison(&mut self) { self.poisoned = true; }
+    /// Everything the application reads: the state now, with what `pump` already collected in front of it.
     fn poll(&mut self) -> Result<Value, &'static str> {
+        self.network();
+        let mut result = self.collect();
+        if let Some(stash) = self.stash.take() { merge(&mut result, stash); }
+        self.reported = signature(&result);
+        Ok(result)
+    }
+    /// The engine's own turn, without the application (`native-wait` builds; lib.rs `cindy_agent_net_pump`): read the socket,
+    /// run the timers, send what is due. Acknowledgements, retransmissions and keepalives no longer wait for the JS thread.
+    /// Returns whether the application has something to read with `poll` (stream data or events, a new or changed
+    /// connection, a datagram for its relay WebSocket) and in how many milliseconds to call again when nothing arrives.
+    pub fn pump(&mut self) -> Result<(bool, u64), &'static str> {
+        if self.poisoned { return Err("NATIVE_ENGINE_FAILURE"); }
+        self.update_clock();
+        self.network();
+        if self.stash.is_none() {
+            // Nothing is taken from the core unless there is something to hand over: an idle `collect` reads no stream.
+            let result = self.collect();
+            if has_work(&result) || signature(&result) != self.reported { self.stash = Some(result); }
+        }
+        let wake = self.endpoint.next_wake().map_or(MAX_PUMP_WAKE_MS, |at| (at.saturating_sub(self.now) / 1000).min(MAX_PUMP_WAKE_MS));
+        Ok((self.stash.is_some(), wake))
+    }
+    /// A second handle on the UDP socket, to wait for a datagram on another thread while this engine stays usable.
+    pub fn waiter(&self) -> Waiter {
+        Waiter { socket: self.udp.as_ref().and_then(|socket| socket.try_clone().ok()) }
+    }
+    fn network(&mut self) {
         let mut io = [0u8; IO_SIZE];
         let now = self.now;
         if let Some(socket) = &self.udp {
@@ -279,9 +322,13 @@ impl NativeEngine {
             if let Some(stun) = &mut self.stun { stun.tick(now, socket, NativeCrypto::random::<12>); }
         }
         self.endpoint.tick(now);
-        let mut packets = Vec::new();
+        self.transmit(&mut io);
+    }
+    /// Sends what the core has due now: directly, over relay UDP, or into the outbox for the application's relay WebSocket.
+    fn transmit(&mut self, io: &mut [u8; IO_SIZE]) {
+        let now = self.now;
         for _ in 0..128 {
-            let Some((len, to)) = self.endpoint.poll_transmit(now, &mut io) else { break; };
+            let Some((len, to)) = self.endpoint.poll_transmit(now, io) else { break; };
             match to {
                 Address::Udp(to) => { if let Some(socket) = &self.udp { let _ = socket.send_to(&io[..len], to); } },
                 Address::Link(link) => {
@@ -289,10 +336,24 @@ impl NativeEngine {
                         (Some(relay), Some(socket), Some(tag)) => relay.send(now, socket, tag, &io[..len]),
                         _ => false,
                     };
-                    if !over_udp { packets.push(json!({"link":link,"data":encoded(&io[..len])})); }
+                    if !over_udp {
+                        if self.outbox.len() >= MAX_OUTBOX { self.outbox.remove(0); }
+                        self.outbox.push(json!({"link":link,"data":encoded(&io[..len])}));
+                    }
                 },
             }
         }
+    }
+    /// After the application handed the core something to send: it goes out now, not at the next poll. A request written
+    /// from JS used to wait in the core for one more poll, on a phone a display frame or more (2026-11-21).
+    fn send_now(&mut self) {
+        let mut io = [0u8; IO_SIZE];
+        self.transmit(&mut io);
+    }
+    fn collect(&mut self) -> Value {
+        let mut io = [0u8; IO_SIZE];
+        let now = self.now;
+        let packets = std::mem::take(&mut self.outbox);
         let mut accepted = Vec::new();
         while accepted.len() < 32 {
             let Some(id) = self.endpoint.accept() else { break; };
@@ -356,7 +417,78 @@ impl NativeEngine {
         self.local_streams.retain(|id,_| live.contains(id));
         let mapped: Vec<Value> = self.stun.as_ref().map(Stun::mapped).unwrap_or_default().into_iter()
             .map(|address| json!({"address":address.ip().to_string(),"port":address.port()})).collect();
-        Ok(json!({"packets":packets,"accepted":accepted,"connections":connections,"mapped":mapped,
-            "relayUdp":self.relay_udp.as_ref().is_some_and(|relay| relay.up(now))}))
+        json!({"packets":packets,"accepted":accepted,"connections":connections,"mapped":mapped,
+            "relayUdp":self.relay_udp.as_ref().is_some_and(|relay| relay.up(now))})
     }
+}
+
+/// Puts what `pump` collected earlier in front of the state read now: its datagrams, accepted connections, stream data and
+/// events are handed over once, in the order they came. Which connections exist and how each is doing is always the state
+/// now: the application takes a connection missing from the list for gone, and one it dialled after `pump` collected was
+/// missing from the earlier list (PR #11816 review). What was collected for a connection that is gone since is dropped,
+/// as the application drops the data of a connection reported dead.
+fn merge(result: &mut Value, mut stash: Value) {
+    let front = |earlier: &mut Value, now: &mut Value| {
+        if let (Some(before), Some(after)) = (earlier.as_array_mut().map(std::mem::take), now.as_array_mut()) {
+            let later = std::mem::replace(after, before);
+            after.extend(later);
+        }
+    };
+    for key in ["packets", "accepted"] { front(&mut stash[key], &mut result[key]); }
+    let earlier = stash["connections"].as_array_mut().map(std::mem::take).unwrap_or_default();
+    let Some(connections) = result["connections"].as_array_mut() else { return; };
+    for mut old in earlier {
+        let Some(current) = connections.iter_mut().find(|current| current["id"] == old["id"]) else { continue; };
+        for key in ["events", "data"] { front(&mut old[key], &mut current[key]); }
+    }
+}
+/// Something the application must read now: a datagram to relay, a new connection, stream data or events.
+fn has_work(result: &Value) -> bool {
+    let filled = |value: &Value| value.as_array().is_some_and(|items| !items.is_empty());
+    filled(&result["packets"]) || filled(&result["accepted"])
+        || result["connections"].as_array().is_some_and(|all| all.iter().any(|c| filled(&c["events"]) || filled(&c["data"])))
+}
+/// The part of a result the application acts on without any data arriving: which connections exist, whether each is
+/// established or gone and over which path, relay UDP and the mapped addresses. Counters and round trips are left out.
+fn signature(result: &Value) -> String {
+    let mut text = format!("{}|{}", result["relayUdp"], result["mapped"]);
+    for c in result["connections"].as_array().into_iter().flatten() {
+        text.push_str(&format!("|{}:{}:{}:{}:{}", c["id"], c["established"], c["dead"], c["closedByPeer"], c["path"]));
+    }
+    text
+}
+
+/// Waits for a datagram on the engine's UDP socket from any thread; holds no engine state (lib.rs `cindy_agent_net_wait`).
+pub struct Waiter { socket: Option<UdpSocket> }
+impl Waiter {
+    /// True when a datagram is waiting to be read; false after `timeout_ms` without one (or at once without UDP: the
+    /// caller then only has its timers).
+    pub fn wait(&self, timeout_ms: u32) -> bool {
+        match &self.socket {
+            Some(socket) => readable(socket, timeout_ms),
+            None => { std::thread::sleep(std::time::Duration::from_millis(timeout_ms as u64)); false },
+        }
+    }
+}
+#[cfg(unix)]
+fn readable(socket: &UdpSocket, timeout_ms: u32) -> bool {
+    use std::os::fd::AsRawFd;
+    #[repr(C)] struct PollFd { fd: i32, events: i16, revents: i16 }
+    #[cfg(target_vendor = "apple")] type Count = std::ffi::c_uint;
+    #[cfg(not(target_vendor = "apple"))] type Count = std::ffi::c_ulong;
+    const POLLIN: i16 = 0x0001;
+    unsafe extern "C" { fn poll(fds: *mut PollFd, count: Count, timeout: i32) -> i32; }
+    let mut fd = PollFd { fd: socket.as_raw_fd(), events: POLLIN, revents: 0 };
+    // SAFETY: one initialized pollfd that outlives the call; the descriptor is this socket's.
+    unsafe { poll(&mut fd, 1, timeout_ms.min(i32::MAX as u32) as i32) > 0 && fd.revents & POLLIN != 0 }
+}
+#[cfg(windows)]
+fn readable(socket: &UdpSocket, timeout_ms: u32) -> bool {
+    use std::os::windows::io::AsRawSocket;
+    #[repr(C)] struct PollFd { fd: usize, events: i16, revents: i16 }
+    const POLLRDNORM: i16 = 0x0100;
+    #[link(name = "ws2_32")] unsafe extern "system" { fn WSAPoll(fds: *mut PollFd, count: u32, timeout: i32) -> i32; }
+    let mut fd = PollFd { fd: socket.as_raw_socket() as usize, events: POLLRDNORM, revents: 0 };
+    // SAFETY: one initialized WSAPOLLFD that outlives the call; the socket is this engine's.
+    unsafe { WSAPoll(&mut fd, 1, timeout_ms.min(i32::MAX as u32) as i32) > 0 && fd.revents & POLLRDNORM != 0 }
 }

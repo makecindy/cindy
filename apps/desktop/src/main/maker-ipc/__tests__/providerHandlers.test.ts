@@ -3724,6 +3724,249 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(removeCustomProviderHeaders).not.toHaveBeenCalled();
   });
 
+  // 回归:旧密文对当前 safeStorage 主密钥解不开时,用户仍能正常删除/断开供应商;
+  // 不可解密的旧 blob 推迟到 DB 删除提交后清理,避免删除中途失败回滚时误删旧密文。
+  it('deletes a custom provider with undecryptable API keys and headers, removing them after DB deletion', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const headers = new Map<AgentKind, Record<string, string> | UnrecoverableProviderCredential>();
+    const events: string[] = [];
+    const removeCustomProviderKey = vi.fn((_providerId, agent: AgentKind) => {
+      events.push(`remove-key:${agent}`);
+      keys.delete(agent);
+      return { success: true };
+    });
+    const removeCustomProviderHeaders = vi.fn((_providerId, agent: AgentKind) => {
+      events.push(`remove-headers:${agent}`);
+      headers.delete(agent);
+      return { success: true };
+    });
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey,
+      readCustomProviderHeadersForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
+      ),
+      storeCustomProviderHeaders: vi.fn(
+        (_providerId, agent: AgentKind, value: Record<string, string>) => {
+          headers.set(agent, { ...value });
+          return true;
+        },
+      ),
+      removeCustomProviderHeaders,
+      refreshCatalog: vi.fn(async () => {
+        events.push('refresh-catalog');
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'delete-undecryptable',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          headers: { 'x-token': 'old-token' },
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      codex: 'valid-codex-key',
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    headers.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    events.length = 0;
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id),
+    ).resolves.toEqual({ ok: true });
+
+    expect(await listCustomProviders()).toEqual([]);
+    expect(keys.size).toBe(0);
+    expect(headers.size).toBe(0);
+    // 可恢复凭据在删除前清理,不可恢复密文在 DB 删除后、刷新目录前清理。
+    expect(events.indexOf('remove-key:claude-code')).toBeGreaterThan(events.indexOf('remove-key:codex'));
+    expect(events.indexOf('remove-key:claude-code')).toBeLessThan(events.indexOf('refresh-catalog'));
+    expect(events.indexOf('remove-headers:claude-code')).toBeLessThan(events.indexOf('refresh-catalog'));
+  });
+
+  it('preserves undecryptable credentials when provider deletion fails before commit', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const headers = new Map<AgentKind, Record<string, string> | UnrecoverableProviderCredential>();
+    const deps = makeDeps({
+      removeOAuthCredentials: vi.fn(() => null),
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent: AgentKind) => {
+        keys.delete(agent);
+        return { success: true };
+      }),
+      readCustomProviderHeadersForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
+      ),
+      storeCustomProviderHeaders: vi.fn(
+        (_providerId, agent: AgentKind, value: Record<string, string>) => {
+          headers.set(agent, { ...value });
+          return true;
+        },
+      ),
+      removeCustomProviderHeaders: vi.fn((_providerId, agent: AgentKind) => {
+        headers.delete(agent);
+        return { success: true };
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'delete-undecryptable-rollback',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          headers: { 'x-token': 'old-token' },
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      codex: 'must-survive',
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    headers.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id),
+    ).rejects.toThrow(/INTERNAL.*failed to remove existing OAuth credentials/);
+
+    expect(await listCustomProviders()).toHaveLength(1);
+    expect(keys.get('codex')).toBe('must-survive');
+    expect(keys.get('claude-code')).toBe(UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    expect(headers.get('claude-code')).toBe(UNRECOVERABLE_PROVIDER_CREDENTIAL);
+  });
+
+  it('still refreshes catalog after deletion if post-commit cleanup of an undecryptable blob fails', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent: AgentKind) => {
+        if (agent === 'claude-code') return { success: false, error: 'remove_failed' };
+        keys.delete(agent);
+        return { success: true };
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'delete-undecryptable-post-cleanup-fail',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    vi.mocked(deps.refreshCatalog).mockClear();
+    vi.mocked(deps.broadcastChanged).mockClear();
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id),
+    ).resolves.toEqual({ ok: true });
+
+    expect(await listCustomProviders()).toEqual([]);
+    expect(deps.refreshCatalog).toHaveBeenCalledOnce();
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
+
+  it('disconnects a custom provider even when one runtime has undecryptable credentials', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const headers = new Map<AgentKind, Record<string, string> | UnrecoverableProviderCredential>();
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent: AgentKind) => {
+        keys.delete(agent);
+        return { success: true };
+      }),
+      readCustomProviderHeadersForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
+      ),
+      storeCustomProviderHeaders: vi.fn(
+        (_providerId, agent: AgentKind, value: Record<string, string>) => {
+          headers.set(agent, { ...value });
+          return true;
+        },
+      ),
+      removeCustomProviderHeaders: vi.fn((_providerId, agent: AgentKind) => {
+        headers.delete(agent);
+        return { success: true };
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'disconnect-undecryptable',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          headers: { 'x-token': 'old-token' },
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      codex: 'valid-codex-key',
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    headers.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, config.id),
+    ).resolves.toEqual({ ok: true });
+
+    expect(await getCustomProvider(config.id)).not.toBeNull();
+    expect(keys.size).toBe(0);
+    expect(headers.size).toBe(0);
+  });
+
   it('serializes create key staging with a later cross-window update', async () => {
     mountDb();
     const harness = new IpcHarness();

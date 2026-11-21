@@ -45,8 +45,8 @@ export function McpAppPermissionPrompt({
             <p className="break-words text-12 text-[var(--text-secondary)]">
               {permission.mcpApp.serverId}
             </p>
-            {permission.autoReviewReason && (
-              <p className="text-12 text-[var(--text-secondary)]">{permission.autoReviewReason}</p>
+            {(permission.autoReviewQuotaExhausted || permission.autoReviewReason) && (
+              <p className="text-12 text-[var(--text-secondary)]">{permission.autoReviewQuotaExhausted ? t('chat.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA') : permission.autoReviewReason}</p>
             )}
             <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-12 text-[var(--text-secondary)]">
               {JSON.stringify(permission.input, null, 2)}

@@ -8,7 +8,9 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { translateResponsesRequest } from '@cindy/responses-chat-bridge';
+import { createResponsesChatHandler, translateResponsesRequest } from '@cindy/responses-chat-bridge';
+import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
+import { createPiProviderFetch, handlePiProviderRequest } from '../pi-provider-transport.js';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -4162,6 +4164,81 @@ describe('codex proxy host', () => {
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       mockState.realStripTransforms = false;
     }
+  });
+
+  // #9183 / #9220: real host request adaptation followed by actual proxy HTTP
+  // delivery, including its final guard after namespace restoration.
+  it.each(['collaboration', 'multi_agent_v1', 'multi_agent_v2'])('marks restored %s collaboration calls after namespace lowering (#9183)', async namespace => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('marker-session', 'marker-thread', 'PRODUCT_PROMPT');
+    setSessionProvider('marker-session', 'xd');
+    try {
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+      const names = ['spawn_agent', 'send_message', 'followup_task'];
+      let current: any = { model, tools: [{ type: 'namespace', name: namespace, tools: names.map(name => ({
+        type: 'function', name, parameters: { type: 'object', properties: { message: { type: 'string' } } },
+      })) }] };
+      const ctx = { reqId: 1, method: 'POST', url: '/responses', upstreamBase: XD_GATEWAY_BASE_URL + '/v1', headers: { 'thread-id': 'marker-thread' } };
+      for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+      expect(current.tools.map((tool: any) => tool.name)).toEqual(names.map(name => `${namespace}__${name}`));
+      const calls = names.map((name, i) => ({ type: 'function_call', name: `${namespace}__${name}`, call_id: `c${i}`, arguments: '{"message":"task"}' }));
+      const events = calls.flatMap(item => [
+        { type: 'response.output_item.added', item }, { type: 'response.output_item.done', item },
+      ]).concat([{ type: 'response.completed', response: { output: calls } }] as any);
+      const upstream = createServer(async (req, res) => {
+        await new Promise<void>(resolve => { req.once('end', resolve); req.resume(); });
+        res.writeHead(200, { 'content-type': 'text/event-stream' }).end(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+      });
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+      const { createAnthropicCompatProxy } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      let delivery: Awaited<ReturnType<typeof createAnthropicCompatProxy>> | undefined;
+      let wire = '';
+      try {
+        delivery = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, transformResponse: config.transformResponse, requestGuard: config.requestGuard });
+        const response = await fetch(`${delivery.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': 'marker-thread' }, body: JSON.stringify(current) });
+        expect(response.ok).toBe(true);
+        wire = await response.text();
+      } finally {
+        await delivery?.dispose(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
+      }
+      const output = wire.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+      const restored = output.flatMap(event => event.item ? [event.item] : event.response?.output ?? []);
+      expect(restored).toHaveLength(9);
+      for (const call of restored) {
+        expect(call).toMatchObject({ namespace, name: expect.stringMatching(/^(spawn_agent|send_message|followup_task)$/), encrypted_function_args: [], arguments: '{"message":"task"}' });
+      }
+    } finally {
+      host.unregister('marker-session'); clearSessionProvider('marker-session'); setXdGatewayModels([]);
+    }
+  });
+
+  it('keeps text-only enforcement frozen while normalizing collaboration replies (#9183)', async () => {
+    const host = await freshCodexProxyHost();
+    const { registerCodexTextOnlyPolicy } = await import('../codex-text-only-policy.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    const config = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+    const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'marker-text-only' } };
+    let disabled = false;
+    const release = registerCodexTextOnlyPolicy('marker-text-only', () => disabled);
+    try {
+      expect(config.requestGuard({ ...ctx, url: '/images/generations' })).toBeNull();
+      disabled = true;
+      const guard = config.requestGuard(ctx);
+      const request = { model: 'synthetic', tools: [{ type: 'function', name: 'spawn_agent' }] };
+      expect(JSON.parse(guard.transformBody(Buffer.from(JSON.stringify(request))).toString())).toMatchObject({ tools: [], tool_choice: 'none' });
+      disabled = false; // A later permissive turn cannot relax this admitted response.
+      const stream = guard.response({ 'content-type': 'text/event-stream' });
+      const read = (async () => { for await (const chunk of stream) void chunk; })();
+      stream.end(`data: ${JSON.stringify({ type: 'response.output_item.done', item: { type: 'function_call', namespace: 'collaboration', name: 'spawn_agent', arguments: '{"message":"task"}' } })}\n\n`);
+      await expect(read).rejects.toThrow('text-only');
+    } finally { disabled = false; release(); }
   });
 
   it('repairs null array fields in passthrough Responses SSE before Codex parses them (#4251)', async () => {
@@ -8749,6 +8826,144 @@ describe('codex proxy host', () => {
       body: transformedBody,
     });
   });
+
+  // Routing and response observation must identify the same rejected pre-turn request.
+  // A later sample on the root or a manual/child compaction cannot authorize handoff.
+  it('attributes a downshift denial only to the latest rejected root request', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn() });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session', 'root', '');
+    host.registerChildThread('root', 'child');
+    const proxy = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+    const request = async (thread: string, kind = 'compaction', trigger = 'auto') => {
+      const headers = { 'thread-id': thread, 'x-codex-turn-metadata': JSON.stringify({
+        thread_id: thread, turn_id: 'turn', request_kind: kind,
+        compaction: { trigger, reason: 'model_downshift', phase: 'pre_turn' },
+      }) };
+      await proxy.routingTransform({ model: 'old/large' }, { url: '/v1/responses', method: 'POST', reqId: 1, headers });
+      return (status: number) => proxy.responseObserver({ status, reqId: 1, method: 'POST', url: '/v1/responses',
+        requestHeaders: headers, responseHeaders: {}, requestBody: Buffer.from('{"model":"wire-alias"}'), upstreamBase: 'https://example.invalid' });
+    };
+    const observed = () => host.getRejectedCodexDownshiftModel('session', 'root', 'turn');
+    const compact = await request('root');
+    expect(observed()).toBeUndefined();
+    compact(403);
+    expect(observed()).toEqual({ model: 'old/large', transport: 'http' });
+    expect(host.getRejectedCodexDownshiftModel('session', 'root', 'other-turn')).toBeUndefined();
+    expect(host.getRejectedCodexDownshiftModel('other-session', 'root', 'turn')).toBeUndefined();
+    (await request('child'))(403);
+    expect(host.getRejectedCodexDownshiftModel('session', 'child', 'turn')).toBeUndefined();
+    expect(observed()).toEqual({ model: 'old/large', transport: 'http' });
+    (await request('root', 'turn'))(403);
+    compact(403); // a delayed response from the earlier HTTP request
+    expect(observed()).toBeUndefined();
+    (await request('root', 'compaction', 'manual'))(403);
+    expect(observed()).toBeUndefined();
+    for (const status of [200, 401, 407, 503]) {
+      (await request('root'))(status);
+      expect(observed()).toBeUndefined();
+    }
+    const pending = await request('root');
+    host.unregister('session');
+    host.registerComposed('session', 'root', '');
+    pending(403);
+    expect(observed()).toBeUndefined();
+  });
+
+  // Run the loopback proxy through its actual bridge and upstream error response.
+  // The transparent observer alone misses local handlers.
+  it.each(['openai-chat', 'anthropic-messages', 'native-chat'] as const)(
+    'attributes only an explicit model rejection through the %s bridge',
+    async protocol => {
+      const host = await freshCodexProxyHost();
+      const proxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      const chat = await vi.importActual<typeof import('@cindy/responses-chat-bridge')>('@cindy/responses-chat-bridge');
+      const anthropic = await vi.importActual<typeof import('@cindy/responses-anthropic-bridge')>('@cindy/responses-anthropic-bridge');
+      const native = await vi.importActual<typeof import('../pi-provider-transport.js')>('../pi-provider-transport.js');
+      const { buildUserProvider } = await import('@cindy/model-providers');
+      const { setCustomProviders } = await import('../active-catalog.js');
+      const { setCustomProviderKeyReader } = await import('../provider-route.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      const upstreamPaths: string[] = [];
+      const errors = [
+        { code: 'user_model_access_denied', message: 'user not allowed to access model' },
+        { code: 'permission_error', message: 'generic permission failure'.repeat(1_000) },
+      ];
+      const upstream = createServer(async (req, res) => {
+        for await (const chunk of req) void chunk;
+        const error = errors[upstreamPaths.length];
+        upstreamPaths.push(req.url ?? '');
+        res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error }));
+      });
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+      try {
+        const wireProtocol = protocol === 'anthropic-messages' ? protocol : 'openai-chat';
+        const provider = buildUserProvider({
+          id: 'downshift-bridge', name: 'Bridge',
+          runtimes: { codex: {
+            wireProtocol, baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
+            models: [{ id: 'old/large', name: 'Old model' }],
+          } },
+        });
+        if (protocol === 'openai-chat') provider.routing.codex!.requestPath = '/custom-chat';
+        if (protocol === 'native-chat') provider.models.codex![0]!.api = 'openai-completions';
+        setCustomProviders([provider]);
+        setCustomProviderKeyReader(() => 'fixture-key');
+        setSessionProvider('bridge-session', provider.id);
+        host.registerComposed('bridge-session', 'bridge-root', '');
+        host.setCodexProxyAuthInjection('env-key');
+        mockState.createAnthropicCompatProxy.mockImplementationOnce(proxy.createAnthropicCompatProxy);
+        if (protocol === 'anthropic-messages') {
+          vi.mocked(createResponsesAnthropicHandler).mockImplementation(anthropic.createResponsesAnthropicHandler);
+        } else {
+          vi.mocked(createResponsesChatHandler).mockImplementation(chat.createResponsesChatHandler);
+        }
+        if (protocol === 'native-chat') {
+          vi.mocked(createPiProviderFetch).mockImplementation(native.createPiProviderFetch);
+          vi.mocked(handlePiProviderRequest).mockImplementation(native.handlePiProviderRequest);
+        }
+        await host.ensureCodexProxyReady();
+        const send = async (turn: string) => {
+          const response = await fetch(`${host.getCodexProxyEndpoint()}/responses`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json', 'thread-id': 'bridge-root',
+              'x-codex-turn-metadata': JSON.stringify({
+                thread_id: 'bridge-root', turn_id: turn, request_kind: 'compaction',
+                compaction: { trigger: 'auto', reason: 'model_downshift', phase: 'pre_turn' },
+              }),
+            },
+            body: JSON.stringify({ model: 'old/large', input: [{ role: 'user', content: 'continue' }], stream: false }),
+          });
+          return { status: response.status, body: await response.text() };
+        };
+        const first = await send('denied');
+        expect(first.body).toContain(protocol === 'native-chat' ? 'HTTP 403' : 'user_model_access_denied');
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'denied'))
+          .toMatchObject({ model: 'old/large', transport: 'bridge' });
+        const second = await send('generic');
+        expect(second.status).toBe(protocol === 'native-chat' ? 200 : 403);
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'generic')).toBeUndefined();
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'denied')).toBeUndefined();
+        const upstreamPath = {
+          'openai-chat': '/v1/custom-chat', 'anthropic-messages': '/v1/messages', 'native-chat': '/v1/chat/completions',
+        }[protocol];
+        expect(upstreamPaths).toEqual([upstreamPath, upstreamPath]);
+      } finally {
+        vi.mocked(createResponsesChatHandler).mockReset();
+        vi.mocked(createResponsesAnthropicHandler).mockReset();
+        vi.mocked(createPiProviderFetch).mockReset();
+        vi.mocked(handlePiProviderRequest).mockReset();
+        clearSessionProvider('bridge-session');
+        setCustomProviders([]);
+        setCustomProviderKeyReader(() => null);
+        await host.disposeCodexProxy();
+        upstream.closeAllConnections();
+        await new Promise<void>(resolve => upstream.close(() => resolve()));
+      }
+    },
+  );
 
   it('observes non-streaming provider service_tier from upstream responses', async () => {
     const host = await freshCodexProxyHost();

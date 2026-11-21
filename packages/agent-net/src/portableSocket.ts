@@ -30,6 +30,17 @@ const REDIAL_TAKEOVER_MS = 10_000;
  */
 const REDIAL_FIRST_MS = 1_000;
 const REDIAL_MAX_MS = 30_000;
+/**
+ * The side that does not dial from the directory (the higher id) dials after all when the other side's dial has not
+ * arrived this long after it was due, doubling like the redial. The other side dials within a moment of seeing this device
+ * online, unless it still holds its end of a connection this device no longer has: this device was killed or restarted
+ * without its close reaching the peer, the peer believes it is connected, and a core older than 2026-11-21 never declares
+ * an idle connection dead (a newer one does after 30 s of unanswered probes). It then never dials, and neither did this side. The dial from here is what tells it: it takes the new connection over once
+ * its own is older than REDIAL_TAKEOVER_MS (`adopt`), and until then drops it, which schedules the next try here.
+ * 2026-11-21, a phone killed and started again: the relay-only computer with the lower id stayed offline on the phone for
+ * 20 seconds to 15 minutes; the computers with higher ids, which the phone dials, were back at once.
+ */
+const LATE_DIAL_MS = 1_000;
 /** Declared with session support between devices of one account: presence travels on the session (`presence` message). */
 const SESSION_PRESENCE_FEATURE = 'presence-v1';
 /**
@@ -146,7 +157,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         admissionVersion: () => socket.directoryRevision,
         relayIdOf: (key) => socket.deviceForKey(key),
         admittedPeers: () => socket.peerIds().filter(id => socket.authorized(id))
-          .map(id => ({ id: keyHex(socket.transportKey(id)!), relayId: id })),
+          .map(id => ({ id: socket.transportKeyHex(id)!, relayId: id })),
         onIncoming: (channel) => socket.adopt(channel, false),
       });
       socket.uplink?.onDatagram((id, data) => socket.receiveDatagram?.(id, data));
@@ -362,13 +373,17 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.dialing.set(deviceId, dialing);
     try { await dialing; } finally { if (this.dialing.get(deviceId) === dialing) this.dialing.delete(deviceId); }
   }
-  /** See REDIAL_FIRST_MS. Only devices of this account the directory has online; delegations dial on demand. */
+  /**
+   * See REDIAL_FIRST_MS and LATE_DIAL_MS: the dialing side (the lower id) dials again, the other side dials when that dial
+   * does not come. Only devices of this account the directory has online; delegations dial on demand.
+   */
   private scheduleRedial(deviceId: string): void {
-    if (this.closed || this.redials.has(deviceId) || this.deviceId >= deviceId) return;
+    if (this.closed || this.redials.has(deviceId) || this.deviceId === deviceId) return;
     if (!this.roster.get(deviceId)?.online || !this.authorized(deviceId)) return;
     const step = this.redialSteps.get(deviceId) ?? 0;
     this.redialSteps.set(deviceId, step + 1);
-    const delay = Math.min(REDIAL_MAX_MS, REDIAL_FIRST_MS * 2 ** step) * (0.8 + Math.random() * 0.4);
+    const first = this.deviceId < deviceId ? REDIAL_FIRST_MS : LATE_DIAL_MS;
+    const delay = Math.min(REDIAL_MAX_MS, first * 2 ** step) * (0.8 + Math.random() * 0.4);
     const timer = setTimeout(() => {
       this.redials.delete(deviceId);
       if (this.closed || this.peers.has(deviceId) || !this.roster.get(deviceId)?.online || !this.authorized(deviceId)) return;
@@ -407,10 +422,34 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     return this.verifiedUntil(d, () => !!this.options.bindings.verifyDelegation?.(this.options.client.rootPublicKey, d),
       () => Math.min(d.expiresAt, d.issuerCertificate.expiresAt));
   }
+  /**
+   * Transport key (hex) → the ids carrying it, in `peerIds` order, and each id's key. The phone's engine asks for every
+   * connection on every poll and once per admitted peer: going through the directory and converting every key each time
+   * was O(N²) per poll, most of a poll's cost with a few dozen devices (2026-11-20 on a phone, polls every 8 ms took
+   * 55–60% of the JS thread before, 22–33% after). Rebuilt whenever the directory changes; who is authorized is still
+   * checked on every lookup.
+   */
+  private keyIndex: { roster: Map<string, DeviceView>; delegations: number; byKey: Map<string, string[]>; byId: Map<string, string> } | null = null;
+  private keys(): NonNullable<AgentNetSocket['keyIndex']> {
+    const cached = this.keyIndex;
+    if (cached && cached.roster === this.roster && cached.delegations === this.delegations.size) return cached;
+    const byKey = new Map<string, string[]>(), byId = new Map<string, string>();
+    for (const id of this.peerIds()) {
+      const key = this.transportKey(id);
+      if (!key) continue;
+      const hex = keyHex(key);
+      byId.set(id, hex);
+      const ids = byKey.get(hex);
+      if (ids) ids.push(id); else byKey.set(hex, [id]);
+    }
+    return this.keyIndex = { roster: this.roster, delegations: this.delegations.size, byKey, byId };
+  }
   private deviceForKey(hex: string): string | undefined {
-    for (const id of this.peerIds()) if (this.authorized(id) && keyHex(this.transportKey(id)!) === hex) return id;
+    for (const id of this.keys().byKey.get(hex) ?? []) if (this.authorized(id)) return id;
     return undefined;
   }
+  /** This peer's transport key in hex (see `keys`). */
+  private transportKeyHex(id: string): string | undefined { return this.keys().byId.get(id); }
   private peerIds(): string[] { return [...this.roster.keys(), ...this.delegations.keys()]; }
   private transportKey(id: string): string | undefined {
     return this.delegations.get(id)?.guestTransportKey ?? this.roster.get(id)?.certificate.transportKey;
@@ -428,6 +467,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       this.knownV2.add(c.deviceId);
     }
     this.roster = next;
+    this.keyIndex = null;
     if (grants) {
       this.delegations.clear();
       if (this.options.client.delegation) this.ownDelegation = grants.find(d => d.scope
@@ -443,6 +483,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       const keys = new Map<string, string[]>();
       for (const id of this.peerIds()) { const k = this.transportKey(id)!; keys.set(k, [...(keys.get(k) ?? []), id]); }
       for (const ids of keys.values()) if (ids.length > 1) for (const id of ids) this.delegations.delete(id);
+      this.keyIndex = null;
       this.options.onDelegations?.(this.options.client.delegation ? this.ownDelegation ? [this.ownDelegation] : [] : [...this.delegations.values()]);
     }
     for (const [id, peer] of this.peers) if (peer.info && next.has(id)) {
@@ -451,6 +492,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         deviceName: view.name, selfName: view.selfName ?? peer.info.selfName };
       if (this.ready) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });
     }
+    this.transport?.admissionChanged?.();
     this.dropUnauthorizedPeers();
     if (live) this.options.onDirectory?.([...next.values()]);
     this.dialRoster();
@@ -470,14 +512,55 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private dialRoster(): void {
     if (this.ready) for (const [id, view] of this.roster) if (!this.peers.has(id)) {
       this.presence(id, false);
-      if (view.online && this.deviceId < id && this.memberAccepted(id)) void this.dial(id).catch(() => undefined);
+      this.dialOnline(id, view);
     }
+  }
+  /** A device the directory has online and this side is not connected to: the lower id dials now, the other side if that dial does not come (LATE_DIAL_MS). */
+  private dialOnline(id: string, view: DeviceView): void {
+    if (!view.online || id === this.deviceId || !this.memberAccepted(id)) return;
+    if (this.deviceId < id) void this.dial(id).catch(() => undefined);
+    else this.scheduleRedial(id);
   }
   private memberAccepted(deviceId: string): boolean {
     return !this.peerRule.refused.has(deviceId) && (this.peerRule.allowed === null || this.peerRule.allowed.has(deviceId));
   }
-  /** See Transport.networkChanged (the Desktop's network watcher, through the worker). */
-  networkChanged(): void { if (!this.closed) this.transport?.networkChanged?.(); }
+  /**
+   * See Transport.networkChanged (the Desktop's network watcher, through the worker; the phone's network events). Without a
+   * relay connection, the reconnect may be waiting out a backoff that grew while the old network went away (0.5 s doubling
+   * to 15 s): it starts now, as Device Link's client does on a network hint, and an attempt already in flight is kept.
+   * Once the relay is back the transport is told again, so what it sent while the relay was down goes out at once.
+   */
+  networkChanged(): void {
+    if (this.closed) return;
+    this.transport?.networkChanged?.();
+    if (!this.uplink) this.reconnectRelayNow(false);
+  }
+  /**
+   * This device's own route changed (the phone: Wi-Fi ↔ cellular, lost and back). Besides `networkChanged`, the relay
+   * connection is replaced: it may sit half-open on the old route without ever erroring (React Native's WebSocket cannot
+   * ping, and this socket answers Device Link's pings itself), while the encrypted connections and their sessions move by
+   * themselves and stay. Device Link replaces its own connections on the same evidence. An attempt in flight is kept.
+   */
+  replaceRelayConnection(): void {
+    if (this.closed) return;
+    this.transport?.networkChanged?.();
+    const old = this.uplink;
+    if (old) {
+      this.uplink = null; old.close();
+      if (this.ready) this.acknowledgeHello();
+    }
+    this.reconnectRelayNow(!!old);
+  }
+  private resendWhenRelayBack = false;
+  /** Connects the relay now instead of after the backoff; without `force` an attempt already in flight is kept. */
+  private reconnectRelayNow(force: boolean): void {
+    this.resendWhenRelayBack = true;
+    if (!force && !this.reconnect) return;
+    if (this.reconnect) { clearTimeout(this.reconnect); this.reconnect = null; }
+    const attempt = this.connectRelay(), generation = this.generation;
+    // A newer attempt (another network change) takes over from this one, failures included.
+    void attempt.catch(() => { if (generation === this.generation && !this.uplink) this.scheduleReconnect(); });
+  }
   /** See Transport.relayRoute (the worker reports it to the Desktop with each status snapshot). */
   relayRoute(): RelayRoute | null { return this.closed ? null : this.transport?.relayRoute?.() ?? null; }
   /**
@@ -496,6 +579,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     // Admission changed: the transport forgets handshakes it refused under the old rule (admissionVersion), so a member
     // let back in connects now instead of after the remembered refusal expires.
     this.directoryRevision++;
+    this.transport?.admissionChanged?.();
     this.dropUnauthorizedPeers();
     this.dialRoster();
   }
@@ -509,6 +593,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
     if (this.closed || generation !== this.generation) { uplink.close(); return; }
     this.uplink = uplink; this.retryMs = 500;
+    if (this.resendWhenRelayBack) { this.resendWhenRelayBack = false; this.transport?.networkChanged?.(); }
     this.updateDirectory(uplink.devices, true, uplink.delegations ?? []);
     this.options.onDelegationRequests?.(uplink.delegationRequests ?? []);
     uplink.onDatagram((id, data) => this.receiveDatagram?.(id, data));
@@ -539,9 +624,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     } });
   }
   private scheduleReconnect(): void {
-    if (this.closed || this.reconnect) return;
+    if (this.closed || this.reconnect || this.uplink) return;
     this.reconnect = setTimeout(() => {
       this.reconnect = null;
+      // Another attempt (a network change) may have connected meanwhile.
+      if (this.uplink) return;
       void this.connectRelay().catch(() => this.scheduleReconnect());
     }, this.retryMs);
     unrefTimer(this.reconnect); this.retryMs = Math.min(15_000, this.retryMs * 2);
@@ -558,7 +645,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       this.acknowledgeHello();
       for (const [id, view] of this.roster) if (id !== this.deviceId) {
         this.presence(id, false);
-        if (view.online && this.deviceId < id) void this.dial(id).catch(() => undefined);
+        this.dialOnline(id, view);
       }
       for (const peer of this.peers.values()) {
         if (peer.info) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });

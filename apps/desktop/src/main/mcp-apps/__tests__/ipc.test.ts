@@ -526,6 +526,19 @@ it.each(['allow', 'block', 'ask'] as const)('routes page approval through Auto (
   if (verdict === 'ask') expect(request).toHaveBeenCalledWith('task', expect.objectContaining({ metadata: expect.objectContaining({ mcpApp: { clientId: 'card', serverId: 'custom', title: 'Planner', scope: 'once' } }) }), expect.any(AbortSignal));
 });
 
+// #8706 unit: this page-specific approval path builds its own metadata.
+it('retains a safe quota cause while requiring page confirmation', async () => {
+  state.session.permissionMode = 'auto';
+  const review = vi.fn(async () => ({ verdict: 'ask' as const, unavailable: true,
+    unavailableReason: 'quota_exhausted' as const, reason: 'Safe host guidance' }));
+  registerMcpAppsIpc(async () => {}, request, review);
+  await state.deps!.authorizeTool('task', record.tool, {}, new AbortController().signal,
+    { clientId: 'card', serverId: 'custom', title: 'Planner' });
+  expect(request).toHaveBeenCalledExactlyOnceWith('task', expect.objectContaining({
+    metadata: expect.objectContaining({ autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' }),
+  }), expect.any(AbortSignal));
+});
+
 // unit: page-only task grants were absent. Minimum input is two page calls with one
 // session-scoped answer, then change one authority boundary. Model stores are never involved.
 describe('page-only task permission lifetime', () => {

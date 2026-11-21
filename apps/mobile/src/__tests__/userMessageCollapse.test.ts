@@ -226,6 +226,7 @@ function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
   const bubbleBody = body;
   const hasPluginInvocations = false;
   const userBubbleColors = undefined;
+  const wallpaper = 'none';
   const actions = {};
   const colors = {};
   const presentation = {};

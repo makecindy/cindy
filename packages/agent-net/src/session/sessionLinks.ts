@@ -324,7 +324,10 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       connected = await Promise.race([this.options.connect(deviceId),
-        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), CONNECT_WAIT_MS); timer.unref?.(); })]);
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), CONNECT_WAIT_MS);
+          (timer as { unref?: () => void }).unref?.();
+        })]);
     } catch { return; } finally { clearTimeout(timer); }
     if (!connected || this.stopped || this.available(deviceId)) return;
     const wait = this.sessionPendingMs(deviceId);

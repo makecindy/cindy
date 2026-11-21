@@ -1853,6 +1853,51 @@ describe('background tool_result persistence', () => {
     );
   });
 
+  // PR #11776 review: a plugin engine (Antigravity) keeps a call it has not finished open past
+  // `end_turn` and reports the result between turns. Only collab calls kept their context, so the
+  // late result of an ordinary call (its `git commit`) was dropped and gone after reopening the task.
+  it('keeps a plugin engine call left running at the end of its answer, so its later result is saved', async () => {
+    const meta = { uuid: 'acp-turn' };
+    noteSessionAgentKind(SESSION, 'acp');
+    noteAgentMeta(SESSION, meta);
+    onToolUseEvent(SESSION, { toolUseId: 'commit', toolName: 'git commit', input: {} }, meta);
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+
+    const fullResult = onToolResultFullEvent(SESSION, { toolUseId: 'commit', fullText: FULL }, null, 'background');
+    const result = onToolResultEvent(SESSION, { summary: SUMMARY, toolUseIds: ['commit'] }, null, 'background');
+    await flushWrites();
+
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'tool_result', content: FULL, agentMeta: meta }),
+      broadcastGuard(),
+    );
+  });
+
+  // Same review: a reply a plugin engine writes between turns has no done to commit it. Once its
+  // final segment is committed (sessionEventStreamCore) the whole reply is written as one row.
+  it('saves a plugin engine reply written between turns when its final segment is committed', async () => {
+    noteSessionAgentKind(SESSION, 'acp');
+    onAssistantTextEvent(SESSION, { text: 'The content is ', isFinal: false }, null, 'background');
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'The content is `finished`', isFinal: true, isFullText: true },
+      null,
+      'background',
+    );
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', content: 'The content is `finished`' }),
+      broadcastGuard(),
+    );
+  });
+
   it('retains an in-flight background context beyond four later turns', async () => {
     const oldMeta = { uuid: 'old-in-flight-turn' };
     noteAgentMeta(SESSION, oldMeta);

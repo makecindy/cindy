@@ -85,6 +85,7 @@ import { resolveSessionCardBody } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import {
   mergeOrcaLeadAttentionKind,
+  pendingOrcaWorkerQuestion,
   useOrcaLeadWorkerAttentionKind,
 } from '../lib/orcaLeadWorkerAttention';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
@@ -268,7 +269,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   );
   const awaitingKind =
     (islandActivity?.phase === 'needs-interaction' ? islandActivity.interactionKind : null) ??
-    (neutralAwaitingKind || null);
+    (neutralAwaitingKind || (orcaWorkerAttentionKind === 'awaiting' && pendingOrcaWorkerQuestion(session.id) ? 'ask_user' : null));
   const awaitingText =
     awaitingKind == null
       ? null

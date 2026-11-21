@@ -29,6 +29,7 @@ import {
   engineOfAgentKind,
   railItemDeviceId,
   railItemKey,
+  type DeviceModelGroupsRailTab,
   type PluginEngineRailTab,
   type UnifiedRailFilter,
   type UnifiedRailItem,
@@ -55,9 +56,12 @@ export function UnifiedModelRail({
   providerGroupUsage,
   remoteSources,
   pluginEngineTabs,
+  modelGroupDeviceTabs,
 }: {
   /** 插件引擎格的名字与图标，按 providerId (与所在电脑)对应 `plugin-engine` 格。 */
   pluginEngineTabs?: readonly PluginEngineRailTab[];
+  /** 另一台电脑的「模型组」格的名字(悬停与读屏)。 */
+  modelGroupDeviceTabs?: readonly DeviceModelGroupsRailTab[];
   items: readonly UnifiedRailItem[];
   active: UnifiedRailFilter;
   onSelect: (item: UnifiedRailItem) => void;
@@ -162,6 +166,10 @@ export function UnifiedModelRail({
                   })
                 : item.kind === 'all'
                   ? t('newChat.modelSelector.unified.railAll')
+                  : item.kind === 'model-groups' && item.deviceId
+                    ? t('modelGroups.picker.deviceTitle', {
+                        device: modelGroupDeviceTabs?.find((tab) => tab.deviceId === item.deviceId)?.name ?? '',
+                      })
                   : item.kind === 'model-groups'
                     ? t('modelGroups.title')
                   : item.kind === 'plugin-engine'
@@ -212,6 +220,11 @@ export function UnifiedModelRail({
                 <engineOption.Mark size={14} className="shrink-0" />
               ) : item.kind === 'all' ? (
                 <LayoutGrid size={16} />
+              ) : item.kind === 'model-groups' && item.deviceId ? (
+                // 另一台电脑的模式：与远程供应商格同一个信号波纹。
+                <RemoteSourceMark markSize={16}>
+                  <Waypoints size={16} />
+                </RemoteSourceMark>
               ) : item.kind === 'model-groups' ? (
                 <Waypoints size={16} />
               ) : item.kind === 'plugin-engine' && item.deviceId ? (
