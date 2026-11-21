@@ -1558,6 +1558,65 @@ describe('Scheduler', () => {
     await local.scheduler.stop();
   });
 
+  // Codex P2 on #11577:守卫回读按任务单飞之后,在途的那一次读可能发端于本地快照
+  // 前进之前。用户改短截止时间,update() 换掉 automaticDispatchSchedules 里的那一版
+  // (updatedAt 前进),而单飞复用的旧读回来的是改期前那一行(更长的 expireAt);
+  // 旧回包通过身份 guard 会把派发快照退回长截止时间,canDispatch 因而在用户新截止
+  // 时间之后仍放行 —— 排队中的 run 超过用户设定的期限继续跑。
+  it('drops a dispatch guard read that predates the local snapshot', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 30,
+      logger: { warn: vi.fn() },
+      // 派发停在途中:守卫快照留在 automaticDispatchSchedules。
+      runnerImpl: async () => new Promise<FireResult>(() => {}),
+    });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    const schedule = await local.scheduler.create({
+      ...baseInput, intervalMs: 15_000, expireAt: createdAt + 90_000,
+    });
+
+    local.clock.setTo(schedule.nextFireAt!);
+    void local.scheduler.tick().catch(() => undefined);
+    for (let i = 0; i < 100 && local.fireCalls.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(local.fireCalls).toHaveLength(1);
+
+    // 一次守卫回读进入在途(单飞登记):批量读挂死,这一条也迟迟不回来。
+    let releaseRead!: (value: Schedule | null) => void;
+    let hangGet = true;
+    const realGet = local.storage.get.bind(local.storage);
+    vi.spyOn(local.storage, 'listActive').mockImplementation(() => new Promise<Schedule[]>(() => {}));
+    vi.spyOn(local.storage, 'get').mockImplementation((id: string) => {
+      if (id !== schedule.id || !hangGet) return realGet(id);
+      return new Promise<Schedule | null>((resolve) => { releaseRead = resolve; });
+    });
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(true);
+
+    // 用户把截止时间改短(update 走真实存储读,先让 get 恢复正常):守卫换成新版,
+    // 而在途的那一次读仍挂着 —— 它发端于改期之前。
+    hangGet = false;
+    await local.scheduler.update(schedule.id, { expireAt: createdAt + 60_000 });
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(true);
+
+    // 走过新的截止时间:这一行到期离开 listActive,下一轮同步又走回读分支,
+    // 复用在途的那一次读。
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(false);
+
+    // 在途的那一次读终于回来,带的是改期前那一行(更长的 expireAt、更旧的版本)。
+    releaseRead({ ...schedule, status: 'active', expireAt: createdAt + 90_000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 旧回包不得把守卫退回长截止时间。
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(false);
+
+    await local.scheduler.stop();
+  });
 
   it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
     const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';
