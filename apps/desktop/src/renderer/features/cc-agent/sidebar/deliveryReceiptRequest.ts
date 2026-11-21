@@ -7,7 +7,11 @@ let pendingSessionId: string | null = null;
 
 export function requestOpenDeliveryReceipt(sessionId: string): void {
   if (!sessionId) return;
-  pendingSessionId = sessionId;
+  if (listeners.size === 0) {
+    pendingSessionId = sessionId;
+    return;
+  }
+  pendingSessionId = null;
   for (const listener of listeners) listener(sessionId);
 }
 

@@ -289,8 +289,8 @@ function ActiveSessionTaskMenu({
             {separator}
           </>
         )}
-        {!guest && !empty && item('deliveryReceipt', () => requestOpenDeliveryReceipt(session.id))}
         {copy}
+        {!guest && !empty && item('deliveryReceipt', () => requestOpenDeliveryReceipt(session.id))}
         {session.status === 'active' &&
           (hosted && !guest ? (
             <DropdownMenuSub>

@@ -3,6 +3,7 @@
  * 命令成败与 apps/desktop agentHandoff 的 extractCommandOutcome 共用 judgeCommandOutcome。
  */
 import { isBotDeliverableFile, type BotDeliverableFile } from './botDeliverable.js';
+import { describeToolUse } from './toolUseDescriptor.js';
 
 export const DELIVERY_RECEIPT_FILE_CAP = 20;
 export const DELIVERY_RECEIPT_OUTPUT_CAP = 10;
@@ -86,6 +87,8 @@ export interface DeliveryReceiptInput {
   /** 按时间从旧到新。命令结果走 judgeCommandOutcome。 */
   messages?: DeliveryReceiptCommandMessage[];
   pullRequests?: DeliveryReceiptPullRequest[];
+  /** 关联列表没读到。不能当成没有 PR，也不能把 CI 写成通过或未跑。 */
+  pullRequestsUnavailable?: boolean;
 }
 
 export function judgeCommandOutcome(input: {
@@ -233,9 +236,13 @@ export function recordedCommandsFromMessages(
     if (message.role === 'tool_use') {
       if (!content) continue;
       const name = typeof content.toolName === 'string' ? content.toolName : '';
-      if (!DELIVERY_COMMAND_TOOL_NAMES.has(name)) continue;
       const input = asRecord(content.input) ?? {};
-      const command = commandTextOf(input);
+      const described = name ? describeToolUse(name, input) : null;
+      const command = described?.kind === 'command'
+        ? described.command
+        : DELIVERY_COMMAND_TOOL_NAMES.has(name)
+          ? commandTextOf(input)
+          : '';
       if (!command) continue;
       const index = commands.push({ command: clipCommand(command) }) - 1;
       const toolUseId = toolUseIdOf(message, content);
@@ -265,7 +272,11 @@ function section<T>(items: T[], cap: number, extraOmitted = 0): DeliveryReceiptS
   return { items: shownItems, omitted, shown: shownItems.length > 0 || omitted > 0 };
 }
 
-function receiptCi(pullRequests: DeliveryReceiptPullRequest[]): DeliveryReceiptCi {
+function receiptCi(
+  pullRequests: DeliveryReceiptPullRequest[],
+  unavailable: boolean,
+): DeliveryReceiptCi {
+  if (unavailable) return 'unknown';
   if (pullRequests.length === 0) return 'none';
   let unknown = false;
   let pending = false;
@@ -298,17 +309,27 @@ export function buildDeliveryReceipt(input: DeliveryReceiptInput): DeliveryRecei
   });
   const changed = input.changedFiles ?? [];
   const order: string[] = [];
-  const byPath = new Map<string, DeliveryReceiptFileInput>();
+  const byPath = new Map<string, DeliveryReceiptFileInput & { created: boolean; removed: boolean }>();
   for (const file of changed) {
     if (!file.path) continue;
-    if (!byPath.has(file.path)) order.push(file.path);
-    byPath.set(file.path, file);
+    const previous = byPath.get(file.path);
+    if (!previous) order.push(file.path);
+    const created = file.status && NEW_FILE_STATUSES.has(file.status)
+      ? true
+      : file.status === 'deleted'
+        ? false
+        : previous?.created ?? false;
+    byPath.set(file.path, {
+      ...file,
+      created,
+      removed: file.status === 'deleted',
+    });
   }
   const changeItems = order.map((path) => ({ path }));
   const outputFiles: BotDeliverableFile[] = [];
   for (const path of order) {
     const file = byPath.get(path)!;
-    if (file.status && NEW_FILE_STATUSES.has(file.status)) {
+    if (file.created && !file.removed) {
       outputFiles.push({ path: file.path, name: file.name, artifact: file.artifact });
     }
   }
@@ -338,7 +359,7 @@ export function buildDeliveryReceipt(input: DeliveryReceiptInput): DeliveryRecei
     verification,
     outputs: outputSection,
     prUrl: pullRequests.find((pr) => pr.url)?.url ?? null,
-    ci: receiptCi(pullRequests),
+    ci: receiptCi(pullRequests, input.pullRequestsUnavailable === true),
     nextStep: deliveryNextStep({
       phase,
       interactionKind: input.interactionKind,
