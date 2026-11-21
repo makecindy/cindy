@@ -384,6 +384,7 @@ export class LibraryVault {
   private usageDirectory: { dev: number; ino: number } | null = null;
   private usageNeedsRescan = false;
   private readonly sqliteUsage = new Map<string, { target: string; size: number | null }>();
+  private sqliteUsageIgnoreCase: boolean | undefined;
   private usageDirtyOnDisk = false;
   private usageChanged = false;
   private usagePrepareFailed = false;
@@ -1006,8 +1007,24 @@ export class LibraryVault {
     }
   }
 
+  private async detectUsageCaseAliasing(): Promise<boolean> {
+    if (process.platform === 'win32') return true;
+    try {
+      const alternate = await fs.promises.lstat(path.join(this.root, META_DIR.toUpperCase()));
+      return alternate.isDirectory() && alternate.ino !== 0
+        && alternate.dev === this.usageDirectory?.dev && alternate.ino === this.usageDirectory.ino;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
+  }
+
+  private usagePathKey(target: string): string {
+    return this.sqliteUsageIgnoreCase ? target.toLowerCase() : foldCase(target);
+  }
+
   private accountFileUsageChange(target: string, priorSize: number | null, nextSize: number | null): void {
-    const tracked = this.sqliteUsage.get(foldCase(target));
+    const tracked = this.sqliteUsage.get(this.usagePathKey(target));
     const before = tracked ? tracked.size : priorSize;
     this.usage.bytes = Math.max(0, this.usage.bytes + (nextSize ?? 0) - (before ?? 0));
     this.usage.files = Math.max(0, this.usage.files + Number(nextSize !== null) - Number(before !== null));
@@ -1072,7 +1089,7 @@ export class LibraryVault {
             const size = (await fs.promises.stat(full)).size;
             bytes += size;
             if (this.sqliteUsage.size > 0) {
-              const key = foldCase(full);
+              const key = this.usagePathKey(full);
               if (this.sqliteUsage.has(key)) trackedSizes.set(key, size);
             }
             files += 1;
@@ -1659,8 +1676,8 @@ export class LibraryVault {
           }
           removedBytes = usage.bytes;
           removedFiles = usage.files;
-          for (const { target } of this.sqliteUsage.values()) {
-            if (isInsideDir(resolved.usageTarget, target)) this.accountFileUsageChange(target, null, null);
+          for (const [key, { target }] of this.sqliteUsage) {
+            if (isInsideDir(this.usagePathKey(resolved.usageTarget), key)) this.accountFileUsageChange(target, null, null);
           }
         } else {
           try {
@@ -1718,7 +1735,7 @@ export class LibraryVault {
         if (isLibraryPublishTempName(entry.name)) continue;
         const full = path.join(cur, entry.name);
         if (entry.isDirectory()) stack.push(full);
-        else if (entry.isFile() && !this.sqliteUsage.has(foldCase(full))) {
+        else if (entry.isFile() && !this.sqliteUsage.has(this.usagePathKey(full))) {
           try {
             bytes += (await fs.promises.stat(full)).size;
             files += 1;
@@ -1923,9 +1940,10 @@ export class LibraryVault {
       if (gate) return gate;
       const pending: { key: string; target: string; size: number | null }[] = [];
       try {
+        this.sqliteUsageIgnoreCase ??= await this.detectUsageCaseAliasing();
         for (const suffix of ['', '-wal', '-shm', '-journal']) {
           const target = databasePath + suffix;
-          const key = foldCase(target);
+          const key = this.usagePathKey(target);
           if (!this.sqliteUsage.has(key)) {
             pending.push({ key, target, size: await this.fileUsageSize(target) });
           }

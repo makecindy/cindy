@@ -802,6 +802,27 @@ describe('LibraryVault', () => {
       });
     });
 
+    it('SQLite 用量按卷的大小写规则归并文件名', async () => {
+      const vault = makeVault();
+      await vault.open();
+      await vault.write({ path: 'db.sqlite', content: 'database' });
+      await vault.write({ path: 'keep.txt', content: 'yes' });
+      const aliases = fs.existsSync(path.join(libraryRoot, 'DB.sqlite'));
+      if (!aliases) await vault.write({ path: 'DB.sqlite', content: 'separate' });
+      const database = await vault.resolveDbTarget('DB.sqlite');
+      if (!database) throw new Error('无法定位数据库');
+      expect(await vault.prepareExternalMutation(database)).toBeNull();
+      expect(await vault.delete({ path: 'db.sqlite' })).toMatchObject({ ok: true, existed: true });
+      const pending = await vault.resolveDbTarget('FUTURE.sqlite');
+      if (!pending) throw new Error('无法定位待创建的数据库');
+      expect(await vault.prepareExternalMutation(pending)).toBeNull();
+      expect(await vault.write({ path: 'future.sqlite', content: 'future' })).toMatchObject({ ok: true });
+      await vault.invalidate();
+      expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
+        ok: true, state: 'ready', fileCount: aliases ? 2 : 3, usedBytes: aliases ? 9 : 17,
+      });
+    });
+
     it('悬空目录别名不能登记 SQLite 用量', async () => {
       const vault = makeVault();
       await vault.open();
