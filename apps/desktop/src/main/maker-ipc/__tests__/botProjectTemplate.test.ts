@@ -94,6 +94,16 @@ describe('applyTeammateTemplate', () => {
       expect(own).not.toContain('Do not ask a task to send its result back');
     });
 
+    // Review r4652356427: a heading the owner added scopes the rules under it; dropping it changes them.
+    it('keeps a heading the teammate added, with the rules under it', async () => {
+      await setUp(`${oldStandard}\n## Before starting work\n\n- Ask the owner first.\n`, true);
+      await upgrade(2, newStandard(), async (_relative, hash) => hash === sha(oldStandard) ? oldStandard : null);
+      const text = await read();
+      const own = text.slice(text.indexOf(OWN_RULES_HEADING));
+      expect(own).toContain('### Before starting work\n- Ask the owner first.');
+      expect(text.match(/^## Before starting work$/m)).toBeNull();
+    });
+
     it('keeps an own skill that predates the template, for the teammate to tidy', async () => {
       await setUp('---\nname: hand-off\n---\n\n# Hand-off\n\n- Pick the project.\n- Design reviews go straight to the owner.\n', false);
       await upgrade(2, newStandard());

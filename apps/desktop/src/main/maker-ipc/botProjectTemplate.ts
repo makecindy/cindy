@@ -58,7 +58,10 @@ function layeredContent(current: string, previousStandard: string | null, next: 
   const { standard, own } = standardPart(current);
   const known = new Set(contentLines(standardPart(next).standard).map(line => line.trim()));
   if (previousStandard !== null) for (const line of contentLines(standardPart(previousStandard).standard)) known.add(line.trim());
-  const kept = contentLines(standard).filter(line => !known.has(line.trim()) && !/^#+\s/.test(line.trim()));
+  // A heading the teammate added stays with the rules under it (it may scope them); nested under
+  // the own section, so it does not read as a section of the standard.
+  const kept = contentLines(standard).filter(line => !known.has(line.trim()))
+    .map(line => line.replace(/^\s*#{1,2}(?=\s)/, '###'));
   // A standard line the teammate removed, still in the new standard: keep the removal.
   const removed = previousStandard === null ? [] : contentLines(standardPart(previousStandard).standard)
     .filter(line => /^\s*(?:[-*]|\d+\.)\s/.test(line) && !contentLines(standard).some(mine => mine.trim() === line.trim())
