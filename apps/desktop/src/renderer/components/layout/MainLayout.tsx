@@ -167,6 +167,16 @@ import {
 } from '@/lib/agentIslandVisibleSessionRoute';
 
 const SIDEBAR_RAIL_KEY = 'sidebar-rail';
+const RIGHT_SIDEBAR_DEFAULT_OPEN_KEY = 'right-sidebar-default-open';
+
+/** Mac 上「进入任务时右侧面板默认展开」偏好；缺省视为展开。 */
+function readDefaultRightSidebarOpen(): boolean {
+  try {
+    return localStorage.getItem(RIGHT_SIDEBAR_DEFAULT_OPEN_KEY) !== 'false';
+  } catch {
+    return true;
+  }
+}
 
 /**
  * RSB 交互领地:aside 本体(data-panel-drag-root="right-tabs")+ portal 到 body 的
@@ -182,9 +192,15 @@ const RSB_TERRITORY_SELECTOR = '[data-panel-drag-root="right-tabs"], [data-rsb-t
  * 不主动占地)。B2a 起读写统一走 collapsePrefs(按注册表 collapseMemory 声明分发),
  * 存储位置与键不变,这两个包装只固化 right-tabs 的默认值与空 sessionId 短路。
  */
-function readCollapsedFor(sessionId: string | null): boolean {
+function readCollapsedFor(sessionId: string | null, defaultOpen: boolean): boolean {
   if (!sessionId) return true;
-  return readPanelCollapsed('right-tabs', { sessionId }, true);
+  const stored = readPanelCollapsed('right-tabs', { sessionId }, true);
+  // Mac 主窗按「默认展开」偏好决定，但**显式展开过**的任务（例如跨任务唤起审查面板
+  // 时先写入了展开记录）必须优先，否则打开请求会被默认值盖掉。
+  if (window.electronAPI?.platform === 'darwin' && !isSecondaryWindow()) {
+    return stored === false ? false : !defaultOpen;
+  }
+  return stored;
 }
 
 function writeCollapsedFor(sessionId: string | null, collapsed: boolean): void {
@@ -325,6 +341,9 @@ export function MainLayout() {
   );
   // 右侧边栏(第三块布局,与左栏对称)：折叠态 + 宽度各自持久化。
   const [isRightSidebarCollapsed, setIsRightSidebarCollapsed] = useState(getInitialRightCollapsed);
+  const [defaultRightSidebarOpen, setDefaultRightSidebarOpen] = useState(readDefaultRightSidebarOpen);
+  const defaultRightSidebarOpenRef = useRef(defaultRightSidebarOpen);
+  defaultRightSidebarOpenRef.current = defaultRightSidebarOpen;
   // 「侧边栏在新窗口中显示」偏好 + 子窗口开闭(main 权威,广播镜像)。
   // 副窗(会话多开窗)不参与 detach:内嵌行为保持不变,只有主窗联动子窗口
   // (main 侧 SET_CONTEXT 也只信主窗 sender,双保险)。
@@ -362,13 +381,16 @@ export function MainLayout() {
         detachedHostSessionIdRef.current,
         sessionId,
       );
+      const sameSession = rightSidebarSessionIdRef.current === sessionId;
       setRightSidebarSessionId(sessionId);
       setRightSidebarSubagentsAvailable(sessionId ? opts.subagentsAvailable : undefined);
       if (!sessionId || !rsbWindow.loaded || rsbDetached) return;
       const hasInitialCollapsed = typeof opts.initialCollapsed === 'boolean';
+      // 同一任务的再次声明（subagentsAvailable 变化等）不能把用户刚手动开关的状态重置回默认。
+      if (sameSession && !hasInitialCollapsed) return;
       const nextCollapsed = hasInitialCollapsed
         ? opts.initialCollapsed === true
-        : readCollapsedFor(sessionId);
+        : readCollapsedFor(sessionId, defaultRightSidebarOpenRef.current);
       setIsRightSidebarCollapsed(nextCollapsed);
       if (hasInitialCollapsed && opts.writeInitialCollapsedRecord === true) {
         writeCollapsedFor(sessionId, nextCollapsed);
@@ -1019,10 +1041,12 @@ export function MainLayout() {
     if (rsbDetached) return;
     const sessionId = rightSidebarSessionIdRef.current;
     if (sessionId == null) return;
+    // 常驻模式下关掉最后一个页签回到空状态,让用户继续从「开始一个面板」添加。
+    if (isMac && defaultRightSidebarOpenRef.current) return;
     rightSidebarRef.current?.requestAnimateNextChange();
     setIsRightSidebarCollapsed(true);
     writeCollapsedFor(sessionId, true);
-  }, [rsbDetached]);
+  }, [isMac, rsbDetached]);
 
   // 分离侧栏合并回主窗时，main 先转发不可持久化 session 的 tab 快照，
   // 再广播 detached=false 让这里重挂内嵌 Shell。快照必须在 cache invalidation
@@ -1034,11 +1058,29 @@ export function MainLayout() {
     });
   }, []);
 
-  // sessionId 切换时按新 session 的存档刷新折叠态。无需 prime 动画 —— RightSidebar 默认
+  const toggleDefaultRightSidebarOpen = useCallback(() => {
+    const next = !defaultRightSidebarOpenRef.current;
+    try {
+      if (next) localStorage.removeItem(RIGHT_SIDEBAR_DEFAULT_OPEN_KEY);
+      else localStorage.setItem(RIGHT_SIDEBAR_DEFAULT_OPEN_KEY, 'false');
+    } catch {
+      log.warn('persist default right sidebar visibility failed');
+    }
+    defaultRightSidebarOpenRef.current = next;
+    setDefaultRightSidebarOpen(next);
+    if (next && !rsbDetached) {
+      rightSidebarRef.current?.requestAnimateNextChange();
+      setIsRightSidebarCollapsed(false);
+    }
+  }, [rsbDetached]);
+
+  // sessionId 切换时按平台偏好刷新折叠态。无需 prime 动画 —— RightSidebar 默认
   // 直接同步,切 session "瞬间生效"(用户体感:不应看着一栏慢慢展开/收起)。
   useLayoutEffect(() => {
     if (!rsbWindow.loaded || !rightSidebarSessionId || rsbDetached) return;
-    setIsRightSidebarCollapsed(readCollapsedFor(rightSidebarSessionId));
+    setIsRightSidebarCollapsed(
+      readCollapsedFor(rightSidebarSessionId, defaultRightSidebarOpenRef.current),
+    );
   }, [rightSidebarSessionId, rsbDetached, rsbWindow.loaded]);
 
   // 监听"右侧栏可见性"信号 —— Phase 5 RsbWebviewBackend 触发(rsbBrowserBridge
@@ -1057,6 +1099,15 @@ export function MainLayout() {
       const targetSessionId = opts.sessionId ?? currentSessionId;
       const targetCollapsed = visibility === 'close';
       const windowState = getRsbWindowUiState();
+      // 常驻模式下关掉最后一个页签（含浏览器关页）不收起面板，回到空状态。
+      if (
+        targetCollapsed &&
+        !isSecondaryWindow() &&
+        window.electronAPI?.platform === 'darwin' &&
+        defaultRightSidebarOpenRef.current
+      ) {
+        return;
+      }
       if (!windowState.loaded) return;
       const detachedNow = !isSecondaryWindow() && windowState.detached;
       // detached 模式:可见性 = 子窗口开闭。呼起必须跟发起方 session,不能只认
@@ -1984,6 +2035,8 @@ export function MainLayout() {
                       collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
                       onToggle={handleToggleRightSidebar}
                       side={rightSidebarSide}
+                      onLongPress={isSecondaryWindow() ? undefined : toggleDefaultRightSidebarOpen}
+                      persistent={defaultRightSidebarOpen}
                     />
                   </div>
                 )}
