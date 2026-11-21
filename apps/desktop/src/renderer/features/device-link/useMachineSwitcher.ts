@@ -31,7 +31,11 @@ import {
   type RemoteDeviceSummary,
 } from './remoteProjectsStore';
 import { revokedDevicesStore } from './revokedDevicesStore';
-import { useDeviceLinkDeviceList, useDeviceLinkDeviceListSettled } from './useDeviceLinkDeviceList';
+import {
+  useDeviceLinkDeviceList,
+  useDeviceLinkDeviceListSettled,
+  useRegisteredDeviceIds,
+} from './useDeviceLinkDeviceList';
 import { buildSwitcherDevices, selectableDeviceIds, type SwitcherDevice } from './switcherDevices';
 import {
   MACHINE_ALL,
@@ -176,14 +180,15 @@ export function shouldShowSelectedMachineConnectingPlaceholder({
 /** 三态设备列表(已连接 / 连接中 / 被拒,已排序)。综合共享设备列表 + 已同步集 + 被拒集。 */
 export function useSwitcherDevices(): SwitcherDevice[] {
   const fullList = useDeviceLinkDeviceList();
+  const registeredDeviceIds = useRegisteredDeviceIds();
   const synced = useRemoteDevices();
   const revoked = useSyncExternalStore(
     revokedDevicesStore.subscribe,
     revokedDevicesStore.getSnapshot,
   );
   return useMemo(
-    () => buildSwitcherDevices({ fullList, syncedDevices: synced, revoked }),
-    [fullList, synced, revoked],
+    () => buildSwitcherDevices({ fullList, registeredDeviceIds, syncedDevices: synced, revoked }),
+    [fullList, registeredDeviceIds, synced, revoked],
   );
 }
 
