@@ -93,6 +93,11 @@ try {
             const baselinePixel = pixelAt(baseline, 110, 90);
             assert.deepEqual(baselinePixel.slice(0, 3), [255, 255, 255], theme + ' baseline must expose the simulated missing-frame white backing');
             await window.webContents.executeJavaScript('window.paintMcpAppBackdrop(); new Promise(resolve => requestAnimationFrame(() => resolve()))');
+            // Wait for the outer iframe compositor surface to consume the style
+            // mutation before capturing.  The conformance suite runs several
+            // Electron fixtures back-to-back, where one animation frame can
+            // precede the surface commit even though the DOM style is updated.
+            await wait(50);
             const fixed = await window.webContents.capturePage({x:0,y:0,width:220,height:180});
             const fixedPixel = pixelAt(fixed, 110, 90);
             const expected = theme === 'light' ? [245, 245, 245] : [31, 31, 30];
