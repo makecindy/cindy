@@ -3369,6 +3369,14 @@ export class ClaudeCodeAgent extends BaseAgent {
     let activeRemoteQuery: { close: () => Promise<void>; detach?: () => Promise<void> } | null = null;
     // 跨消息累积:一个 turn 内 SDK 会发多个 assistant message,这里把 text 拼起来,
     // 在 result 缺少正文时作为 finalText 兜底。
+    let workerDispatchInputEpoch = 0;
+    const workerDispatchInputUuids = new Map<string, number>();
+    const rememberDispatchInput = (uuid: string | undefined): void => {
+      if (!uuid) return;
+      workerDispatchInputUuids.set(uuid, workerDispatchInputEpoch);
+      if (workerDispatchInputUuids.size > 64) workerDispatchInputUuids.delete(workerDispatchInputUuids.keys().next().value!);
+    };
+    let workerDispatchRequest: { inputEpoch: number; pending: boolean; retryFromResponse?: number } = { inputEpoch: 0, pending: false };
     const turnState: TurnState = {
       text: '',
       toolUses: 0,
@@ -3396,6 +3404,14 @@ export class ClaudeCodeAgent extends BaseAgent {
       turnState.nextRequestPriceVariant = priceVariant;
       turnState.text = '';
       turnState.toolUses = 0;
+      // Worker 派发标记必须跟着 turn 走：派发成功后上游超时被 watchdog 中断时，
+      // 旧 result 会被代际检查直接丢弃、不经过 translator 的 resetTurnState，
+      // 残留的 true 会让下一条普通任务真正的 thinking-only 收口失去 silent-stop 恢复。
+      turnState.completedWorkerDispatch = false;
+      turnState.workerDispatchNeedsReport = false;
+      turnState.workerDispatchBatchReportPending = false;
+      turnState.workerDispatchPendingPromotions?.clear();
+      turnState.workerDispatchTurnToolUseIds?.clear();
       turnState.apiCalls = 0;
       turnState.sawCompactBoundary = false;
       turnState.hasEmittedText = false;
@@ -5933,7 +5949,15 @@ export class ClaudeCodeAgent extends BaseAgent {
       terminalBackgroundTaskIds.clear();
       void (async () => {
         try {
-          for await (const rawMsg of currentQ) {
+          // Each Query owns its request phase; a late event from a replaced
+          // Query must not change the active Query's input ownership.
+          const requestOwnership: typeof workerDispatchRequest = { inputEpoch: workerDispatchInputEpoch, pending: turnInFlight };
+          workerDispatchRequest = requestOwnership;
+          const sdkInput = observeSdkInputEpoch(currentQ, () => workerDispatchInputEpoch, requestOwnership,
+            () => Boolean(turnState.interruptRequested && turnState.generation !== turnState.interruptGeneration),
+            uuid => workerDispatchInputUuids.get(uuid));
+          for await (const rawMsg of sdkInput.messages) {
+            const inputEpoch = sdkInput.inputEpoch(rawMsg);
             if (closed) break;
             const rawType = (rawMsg as { type?: string } | null)?.type;
             const rawSubtype = (rawMsg as { subtype?: string } | null)?.subtype;
@@ -5968,44 +5992,49 @@ export class ClaudeCodeAgent extends BaseAgent {
               continue;
             }
             if (noteSdkInitMcpServerNames(rawMsg)) {
-              // User/project/local settings MCPs are only revealed by the SDK init
-              // payload, after the query has already started. Native OAuth Auto skips
-              // canUseTool, so immediately hand later turns back to Cindy when that
-              // payload reports any connected MCP server. Do this before the optional
-              // provenance RPC below: a slow status call must not prolong native Auto.
-              if (
-                mutablePermissionMode === 'auto'
-                && !mutablePlanMode
-                && !planTurnActive
-                && mutableAutoReviewCredentialMode === 'oauth-bearer'
-                && !usesNativeClaudeAutoReview()
-                && nativeAutoQueries.has(currentQ)
-              ) {
-                try {
-                  await currentQ.setPermissionMode(effectiveSdkPermissionMode());
-                  nativeAutoQueries.delete(currentQ);
-                } catch (error) {
-                  // Keeping this query alive would leave connected MCP tools under the
-                  // native classifier, which bypasses Cindy's canUseTool policy. Close
-                  // and surface a terminal stream failure instead of failing open.
-                  log.error('failed to downgrade native Auto after SDK settings MCP init', {
-                    error: String(error),
-                  });
+              sdkInput.prefetch();
+              try {
+                // User/project/local settings MCPs are only revealed by the SDK init
+                // payload, after the query has already started. Native OAuth Auto skips
+                // canUseTool, so immediately hand later turns back to Cindy when that
+                // payload reports any connected MCP server. Do this before the optional
+                // provenance RPC below: a slow status call must not prolong native Auto.
+                if (
+                  mutablePermissionMode === 'auto'
+                  && !mutablePlanMode
+                  && !planTurnActive
+                  && mutableAutoReviewCredentialMode === 'oauth-bearer'
+                  && !usesNativeClaudeAutoReview()
+                  && nativeAutoQueries.has(currentQ)
+                ) {
                   try {
-                    await currentQ.close();
-                  } catch (closeError) {
-                    log.warn('failed to close query after native Auto downgrade failure', {
-                      error: String(closeError),
+                    await currentQ.setPermissionMode(effectiveSdkPermissionMode());
+                    nativeAutoQueries.delete(currentQ);
+                  } catch (error) {
+                    // Keeping this query alive would leave connected MCP tools under the
+                    // native classifier, which bypasses Cindy's canUseTool policy. Close
+                    // and surface a terminal stream failure instead of failing open.
+                    log.error('failed to downgrade native Auto after SDK settings MCP init', {
+                      error: String(error),
                     });
+                    try {
+                      await currentQ.close();
+                    } catch (closeError) {
+                      log.warn('failed to close query after native Auto downgrade failure', {
+                        error: String(closeError),
+                      });
+                    }
+                    throw new Error(
+                      `[MCP_APPROVAL_MODE_DOWNGRADE_FAILED] ${
+                        error instanceof Error ? error.message : String(error)
+                      }`,
+                    );
                   }
-                  throw new Error(
-                    `[MCP_APPROVAL_MODE_DOWNGRADE_FAILED] ${
-                      error instanceof Error ? error.message : String(error)
-                    }`,
-                  );
                 }
+                await refreshSdkMcpProvenance(currentQ);
+              } finally {
+                sdkInput.stopPrefetch();
               }
-              await refreshSdkMcpProvenance(currentQ);
             }
             const expectedResumeSessionId = resumeValidationPending ? configuredResumeSessionId : undefined;
             const inBandInvalidConversationId =
@@ -6101,6 +6130,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             translateSdkMessage(rawMsg, forwardEventSink, {
               rt: runtimeState,
               turn: turnState,
+              workerDispatchWorkIsCurrent: inputEpoch === workerDispatchInputEpoch,
               log,
               getModel: () => mutableModel,
               getProviderId: () => mutableProviderId,
@@ -7249,6 +7279,19 @@ export class ClaudeCodeAgent extends BaseAgent {
             // get persisted and removed even though Claude never received them.
             throw new Error('Claude input queue is closed');
           }
+          workerDispatchInputEpoch += 1;
+          rememberDispatchInput(sendOpts?.messageUuid);
+          workerDispatchRequest.inputEpoch = workerDispatchInputEpoch;
+          workerDispatchRequest.pending = true;
+          workerDispatchRequest.retryFromResponse = undefined;
+          // Old SDK work can arrive during asynchronous content preparation,
+          // after beginNewTurn cleared these fields. Acceptance owns the new
+          // input, so discard that speculative dispatch state once more.
+          turnState.completedWorkerDispatch = false;
+          turnState.workerDispatchNeedsReport = false;
+          turnState.workerDispatchBatchReportPending = false;
+          turnState.workerDispatchPendingPromotions?.clear();
+          turnState.workerDispatchTurnToolUseIds?.clear();
           userInputAccepted = true;
           rollbackUnacceptedFork = undefined;
           if (unacceptedForks.delete(q) && sdkSessionId) {
@@ -7343,6 +7386,21 @@ export class ClaudeCodeAgent extends BaseAgent {
           // received it.
           throw new Error('No active Claude turn to steer: input queue is closed');
         }
+        // Accepted input adds work after the handoff. Keep usage/generation in
+        // this turn, but neither its old dispatch nor a late receipt may exempt
+        // the steered response from silent-stop recovery. Rejected steers above
+        // leave the existing handoff untouched.
+        workerDispatchInputEpoch += 1;
+        rememberDispatchInput(sendOpts?.messageUuid);
+        if (!workerDispatchRequest.pending) {
+          workerDispatchRequest.inputEpoch = workerDispatchInputEpoch;
+          workerDispatchRequest.pending = true;
+        }
+        turnState.completedWorkerDispatch = false;
+        turnState.workerDispatchNeedsReport = false;
+        turnState.workerDispatchBatchReportPending = false;
+        turnState.workerDispatchPendingPromotions?.clear();
+        turnState.workerDispatchTurnToolUseIds?.clear();
         const awaitingClaim = activeContinuationClaim();
         if (awaitingClaim?.state === 'awaiting') {
           // This input belongs to the already claimed next segment, not another
@@ -8704,6 +8762,165 @@ export class ClaudeCodeAgent extends BaseAgent {
         : {}),
     };
   }
+}
+
+/** Observe ownership without adding an async hop to the normal SDK stream. */
+function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpoch: () => number,
+  providerRequest: { inputEpoch: number; pending: boolean; retryFromResponse?: number }, isInterruptedResultStale: () => boolean,
+  inputUuidEpoch: (uuid: string) => number | undefined) {
+  const iterator = source[Symbol.asyncIterator]();
+  const receivedEpochs = new WeakMap<T, number>();
+  let pending: Promise<IteratorResult<T>> | undefined;
+  // While processing is suspended these replace the SDK's own pending events;
+  // no event is translated before the provenance/permission barrier completes.
+  const buffered: IteratorResult<T>[] = [];
+  let prefetching = false;
+  const read = async () => {
+    const result = await iterator.next();
+    if (!result.done) receivedEpochs.set(result.value, observeOwnership(result.value));
+    return result;
+  };
+  const pump = () => {
+    const next = pending ??= read();
+    void next.then((result) => {
+      if (!prefetching || pending !== next) return;
+      pending = undefined;
+      buffered.push(result);
+      if (result.done) prefetching = false;
+      else pump();
+    }, () => { prefetching = false; });
+  };
+  let request: { id: string; inputEpoch: number } | undefined;
+  const toolOwners = new Map<string, number>();
+  const responseOwners = new Map<string, number>();
+  let nativeInputEpoch: number | undefined;
+  const observeOwnership = (message: T): number => {
+    const raw = message as { type?: string; subtype?: string; error?: unknown; is_error?: unknown; parent_tool_use_id?: unknown;
+      user_message_uuid?: unknown; user_message_uuids?: unknown;
+      message?: { id?: unknown; content?: unknown; stop_reason?: unknown }; event?: { type?: string; message?: { id?: unknown } } };
+    if (typeof raw.parent_tool_use_id === 'string' && raw.parent_tool_use_id.length > 0) return getEpoch();
+    let epoch = providerRequest.pending ? providerRequest.inputEpoch : getEpoch();
+    // Native echoes identify consumed inputs, unlike the arrival of a tool
+    // result. Older producers omit them and keep the lifecycle fallback.
+    const echoes = [raw.user_message_uuid, ...(Array.isArray(raw.user_message_uuids) ? raw.user_message_uuids : [])];
+    const owners = echoes.flatMap(uuid => typeof uuid === 'string' && inputUuidEpoch(uuid) !== undefined
+      ? [inputUuidEpoch(uuid)!] : []);
+    const responseId = raw.type === 'assistant' ? raw.message?.id : raw.event?.message?.id;
+    if (owners.length > 0) {
+      epoch = Math.max(...owners);
+      nativeInputEpoch = Math.max(nativeInputEpoch ?? epoch, epoch);
+      // A full-only producer may never send message_start. Native consumption
+      // evidence can correct speculative send ownership, but never a newer
+      // input already confirmed by the producer.
+      if (epoch >= nativeInputEpoch) {
+        providerRequest.inputEpoch = epoch;
+        providerRequest.pending = true;
+        providerRequest.retryFromResponse = undefined;
+      }
+    }
+    else if (typeof responseId === 'string') epoch = responseOwners.get(responseId) ?? epoch;
+    if (typeof responseId === 'string' && (raw.type === 'assistant' || raw.event?.type === 'message_start')) {
+      responseOwners.set(responseId, epoch);
+      if (responseOwners.size > 64) responseOwners.delete(responseOwners.keys().next().value!);
+    }
+    if ((raw.type === 'assistant' && typeof raw.error === 'string')
+      || (raw.type === 'system' && raw.subtype === 'api_retry')) {
+      // SDK error envelopes are provisional. Even after message_stop, retry
+      // belongs to that failed response, not a steer accepted in the gap.
+      epoch = owners.length > 0 ? epoch : (providerRequest.retryFromResponse ?? providerRequest.inputEpoch);
+      if (nativeInputEpoch === undefined || epoch >= nativeInputEpoch) {
+        providerRequest.inputEpoch = epoch;
+        providerRequest.pending = true;
+        providerRequest.retryFromResponse = undefined;
+      }
+      return epoch;
+    }
+    if (raw.type === 'stream_event' && raw.event?.type === 'message_start') {
+      if (nativeInputEpoch === undefined || epoch >= nativeInputEpoch) {
+        providerRequest.retryFromResponse = undefined;
+        providerRequest.inputEpoch = epoch;
+        providerRequest.pending = true;
+      }
+      if (typeof raw.event.message?.id === 'string') request = { id: raw.event.message.id, inputEpoch: epoch };
+    } else if (raw.type === 'assistant') {
+      if (request && raw.message?.id === request.id && owners.length === 0) epoch = request.inputEpoch;
+      if (typeof raw.message?.id === 'string') request = { id: raw.message.id, inputEpoch: epoch };
+      if (Array.isArray(raw.message?.content)) for (const block of raw.message.content) {
+        if (block?.type === 'tool_use' && typeof block.id === 'string') toolOwners.set(block.id, epoch);
+      }
+      // One assistant frame may contain just a completed content block.
+      // Only an explicit stop reason proves this is a completed response.
+      if (typeof raw.message?.stop_reason === 'string' && raw.message.stop_reason.length > 0) {
+        if (epoch >= providerRequest.inputEpoch) providerRequest.pending = false;
+        if (providerRequest.retryFromResponse === epoch) providerRequest.retryFromResponse = undefined;
+      }
+    } else if (raw.type === 'stream_event' && raw.event?.type === 'message_stop') {
+      const responseEpoch = request?.inputEpoch ?? epoch;
+      if (responseEpoch >= providerRequest.inputEpoch) {
+        providerRequest.pending = false;
+        providerRequest.retryFromResponse = responseEpoch;
+      }
+    } else if (raw.type === 'user' && Array.isArray(raw.message?.content)
+      && raw.message.content.some((block: { type?: string }) => block?.type === 'tool_result')) {
+      // Tool completion initiates the next provider request before its first
+      // token arrives. A later accepted steer does not own that request.
+      const owners = raw.message.content.flatMap((block: { type?: string; tool_use_id?: string }) => {
+        const owner = block?.type === 'tool_result' && block.tool_use_id ? toolOwners.get(block.tool_use_id) : undefined;
+        if (block.tool_use_id) toolOwners.delete(block.tool_use_id);
+        return owner === undefined ? [] : [owner];
+      });
+      const owner = owners.length > 0 ? Math.max(...owners) : undefined;
+      if (owner !== undefined) epoch = owner;
+      if (owner !== undefined && owner >= providerRequest.inputEpoch) {
+        // Native-confirmed old work remains old across every tool round.
+        // Arrival alone cannot prove that a queued replacement was consumed.
+        epoch = nativeInputEpoch !== undefined && owner <= nativeInputEpoch ? owner : getEpoch();
+        providerRequest.inputEpoch = epoch;
+        providerRequest.pending = true;
+        providerRequest.retryFromResponse = undefined;
+      }
+    } else if (raw.type === 'result' && !(raw.is_error && isInterruptedResultStale())) {
+      providerRequest.pending = false;
+      providerRequest.retryFromResponse = undefined;
+      request = undefined;
+      toolOwners.clear();
+      responseOwners.clear();
+    }
+    return epoch;
+  };
+  return {
+    messages: {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            const first = buffered.shift();
+            if (first) return Promise.resolve(first);
+            if (!pending) return iterator.next();
+            const next = pending;
+            pending = undefined;
+            return next;
+          },
+          return: iterator.return ? () => {
+            prefetching = false;
+            buffered.length = 0;
+            return iterator.return!();
+          } : undefined,
+        };
+      },
+    },
+    prefetch() {
+      prefetching = true;
+      pump();
+    },
+    stopPrefetch() {
+      // Keep at most one unresolved next() for the normal consumer. A race
+      // with its resolution cannot enqueue it twice: pump checks identity.
+      prefetching = false;
+    },
+    inputEpoch(message: T) {
+      return receivedEpochs.get(message) ?? observeOwnership(message);
+    },
+  };
 }
 
 // SDKMessage → AgentEvent 翻译已搬到 ./translator.ts (translateSdkMessage)。

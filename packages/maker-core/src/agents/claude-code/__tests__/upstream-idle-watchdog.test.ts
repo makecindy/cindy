@@ -32,6 +32,15 @@ const sdkMock = vi.hoisted(() => ({
   query: vi.fn(),
 }));
 
+const imageResizerMock = vi.hoisted(() => ({
+  process: vi.fn(async (p: string) => p),
+  validateBuffer: vi.fn(async () => true),
+}));
+
+vi.mock('../../shared/image-resizer.js', () => ({
+  getDefaultImageResizer: () => imageResizerMock,
+}));
+
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   forkSession: sdkMock.forkSession,
   query: sdkMock.query,
@@ -653,6 +662,318 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
       expect(session.acceptedInputs).toHaveLength(2);
     } finally {
       await session.cleanup();
+    }
+  });
+
+  // #9221: start/send/abort/send through the real adapter. A Stop may never
+  // receive the old SDK result before the next send. Its late error is dropped
+  // by the generation guard without resetting turn state, so reset at the next
+  // send is essential. Unit tier, controlled SDK only.
+  it.each(['before-stop', 'after-next-send'] as const)('clears Worker dispatch when its receipt arrives %s and the old result is dropped', async (receiptTiming) => {
+    const session = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await session.handle.send({ type: 'user', content: 'delegate a task' });
+      session.stream.emit({ type: 'assistant', message: { content: [{
+        type: 'tool_use', id: 'dispatch-before-stop', name: 'mcp__cindy_orca__send_to_worker', input: {},
+      }] } });
+      if (receiptTiming === 'before-stop') {
+        session.stream.emit(userToolResult('dispatch-before-stop', '{"ok":true,"wake_kind":"resumed"}'));
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_result_full'), 'dispatch receipt processed');
+      } else {
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_use'), 'dispatch tool use processed');
+      }
+      await session.handle.abort();
+      await session.handle.send({ type: 'user', content: 'ordinary follow-up' });
+      if (receiptTiming === 'after-next-send') {
+        session.stream.emit(userToolResult('dispatch-before-stop', '{"ok":true,"wake_kind":"resumed"}'));
+      }
+      // The real generation guard consumes the old interrupt marker but must
+      // not reset the new turn or accidentally be the dispatch-state cleanup.
+      session.stream.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      session.stream.emit({ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: '', signature: 'next-turn' },
+      ] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'
+        && (e.data as { silentStop?: boolean }).silentStop === true), 'next turn retains silent-stop recovery');
+    } finally {
+      session.stream.end();
+      await session.handle.close();
+      await session.collected;
+      vi.useRealTimers();
+    }
+  });
+
+  // #9221: old tool events may arrive after beginNewTurn while attachment
+  // preparation suspends send. Verify successful input acceptance clears them,
+  // while a genuinely fresh handoff after acceptance still ends normally.
+  it.each(['during-preparation', 'after-acceptance'] as const)('owns dispatch state at send acceptance (%s)', async (timing) => {
+    const session = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let releaseResize!: (value: string) => void;
+    let sending: Promise<void> | undefined;
+    const emitDispatch = () => {
+      session.stream.emit({ type: 'assistant', message: { content: [{
+        type: 'tool_use', id: 'send-preparation-dispatch', name: 'mcp__cindy_orca__send_to_worker', input: {},
+      }] } });
+      session.stream.emit(userToolResult('send-preparation-dispatch', '{"ok":true,"wake_kind":"resumed"}'));
+    };
+    try {
+      await session.handle.send({ type: 'user', content: 'old task' });
+      await session.handle.abort();
+      imageResizerMock.process.mockImplementationOnce(() => new Promise<string>(resolve => { releaseResize = resolve; }));
+      const image = path.join(os.tmpdir(), 'nonexistent-9221-send-input.png');
+      sending = session.handle.send({ type: 'user', content: [{ type: 'image', path: image }] });
+      await pumpUntil(() => typeof releaseResize === 'function', 'new send content preparation pending');
+      if (timing === 'during-preparation') {
+        emitDispatch();
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_result_full'), 'old dispatch repopulated during preparation');
+      }
+      releaseResize(image);
+      await sending;
+      session.stream.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      if (timing === 'after-acceptance') emitDispatch();
+      session.stream.emit({ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: '', signature: 'accepted-send' },
+      ] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'), 'accepted send ended');
+      const done = session.events.find(e => e.type === 'done');
+      expect((done?.data as { silentStop?: boolean }).silentStop).toBe(timing === 'during-preparation' ? true : undefined);
+    } finally {
+      releaseResize?.(path.join(os.tmpdir(), 'nonexistent-9221-send-input.png'));
+      await sending?.catch(() => undefined);
+      session.stream.end();
+      await session.handle.close();
+      await session.collected;
+    }
+  });
+
+  // #9221 review: accepted same-turn input supersedes a prior handoff even
+  // without beginNewTurn. Observe real adapter done, including a late receipt
+  // and a cancelled-steer control; no live SDK, Worker or network. Unit tier.
+  it.each(['before-steer', 'after-steer', 'cancelled'] as const)('keeps recovery after a same-turn steer (%s dispatch receipt)', async (receiptTiming) => {
+    const session = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await session.handle.send({ type: 'user', content: 'delegate a task' });
+      session.stream.emit({ type: 'assistant', message: { content: [{
+        type: 'tool_use', id: 'dispatch-before-steer', name: 'mcp__cindy_orca__send_to_worker', input: {},
+      }] } });
+      if (receiptTiming !== 'after-steer') {
+        session.stream.emit(userToolResult('dispatch-before-steer', '{"ok":true,"wake_kind":"resumed"}'));
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_result_full'), 'dispatch receipt processed');
+      } else {
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_use'), 'dispatch tool use processed');
+      }
+      const steer = { type: 'user' as const, content: 'answer this new question first' };
+      if (receiptTiming === 'cancelled') {
+        const controller = new AbortController();
+        controller.abort();
+        await expect(session.handle.steer!(steer, { signal: controller.signal })).rejects.toThrow('cancelled before acceptance');
+      } else {
+        await session.handle.steer!(steer);
+      }
+      if (receiptTiming === 'after-steer') {
+        session.stream.emit(userToolResult('dispatch-before-steer', '{"ok":true,"wake_kind":"resumed"}'));
+      }
+      session.stream.emit({ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: '', signature: 'steered-work' },
+      ] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'), 'steered turn ended');
+      const done = session.events.find(e => e.type === 'done');
+      expect((done?.data as { silentStop?: boolean }).silentStop).toBe(receiptTiming === 'cancelled' ? undefined : true);
+    } finally {
+      session.stream.end();
+      await session.handle.close();
+      await session.collected;
+      vi.useRealTimers();
+    }
+  });
+
+  // #9221: send starts a provider request before its first SDK event exists.
+  // An accepted steer must not transfer ownership of that running request.
+  it.each(['old-request', 'new-request', 'superseded-error', 'late-old-tool-result', 'retry-in-flight', 'retry-before-marker', 'retry-after-steer-envelope', 'retry-new-request'] as const)('preserves initiated request ownership before its first event (%s)', async (kind) => {
+    const session = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await session.handle.send({ type: 'user', content: 'initial work' });
+      if (kind === 'late-old-tool-result') {
+        session.stream.emit({ type: 'assistant', message: { id: 'old-tool-request', content: [{
+          type: 'tool_use', id: 'old-unfinished-tool', name: 'Read', input: {},
+        }] } });
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      if (kind === 'superseded-error' || kind === 'late-old-tool-result') {
+        await session.handle.abort();
+        await session.handle.send({ type: 'user', content: 'next request' });
+      }
+      if (kind === 'superseded-error' || kind === 'late-old-tool-result') {
+        session.stream.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+          total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      if (kind === 'new-request' || kind === 'retry-new-request') {
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'old-request' } } });
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_stop' } });
+        session.stream.emit({ type: 'assistant', message: { id: 'old-request', stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '', signature: 'old' }] } });
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      if (kind.startsWith('retry-') && kind !== 'retry-new-request') {
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'failed-request' } } });
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_stop' } });
+        if (kind !== 'retry-after-steer-envelope') session.stream.emit({ type: 'assistant', error: 'unknown', uuid: 'retry-error-envelope',
+          message: { model: 'claude-opus-4-6', content: [{ type: 'text', text: 'API Error: The operation timed out.' }] } });
+        if (kind === 'retry-in-flight') session.stream.emit({ type: 'system', subtype: 'api_retry',
+          attempt: 1, max_retries: 3, retry_delay_ms: 1000, error_status: null, error: 'unknown' });
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await session.handle.steer!({ type: 'user', content: 'new work' });
+      if (kind === 'retry-after-steer-envelope' || kind === 'retry-new-request') session.stream.emit({ type: 'assistant', error: 'unknown', uuid: 'late-retry-error',
+        message: { model: 'claude-opus-4-6', content: [{ type: 'text', text: 'API Error: The operation timed out.' }] } });
+      if (kind === 'retry-before-marker' || kind === 'retry-after-steer-envelope' || kind === 'retry-new-request') session.stream.emit({ type: 'system', subtype: 'api_retry',
+        attempt: 1, max_retries: 3, retry_delay_ms: 1000, error_status: null, error: 'unknown' });
+      if (kind === 'late-old-tool-result') session.stream.emit(userToolResult('old-unfinished-tool'));
+      session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'dispatch-request' } } });
+      session.stream.emit({ type: 'assistant', message: { id: 'dispatch-request', content: [{
+        type: 'tool_use', id: 'late-first-dispatch', name: 'mcp__cindy_orca__send_to_worker', input: {},
+      }] } });
+      session.stream.emit(userToolResult('late-first-dispatch', '{"ok":true,"wake_kind":"resumed"}'));
+      session.stream.emit({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '', signature: 'new-ending' }] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn', total_cost_usd: 0,
+        usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'), 'request ended');
+      expect((session.events.find(e => e.type === 'done')?.data as { silentStop?: boolean }).silentStop)
+        .toBe(kind === 'new-request' || kind === 'retry-new-request' ? undefined : true);
+    } finally { session.stream.end(); await session.handle.close(); await session.collected; }
+  });
+
+  // #9221: SDK assistant frames can be completed content blocks, not
+  // completed responses. Native input UUID echoes are authoritative when
+  // available; a late old tool result alone proves no new request ownership.
+  // Real adapter/done; unit tier, no live CLI/model request.
+  it.each(['partial-block', 'old-input-echo', 'replacement-input-echo', 'batched-input-echo', 'old-error-echo', 'replacement-error-echo', 'full-only-old-echo', 'full-only-replacement-echo', 'full-only-old-two-rounds', 'replacement-then-late-old-full'] as const)('preserves native response ownership (%s)', async (kind) => {
+    const session = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await session.handle.send({ type: 'user', content: 'initial work' }, { messageUuid: '11111111-1111-4111-8111-111111111111' });
+      if (kind === 'partial-block') {
+        // Partial messages may be disabled: full block frames still share an ID.
+        session.stream.emit({ type: 'assistant', message: { id: 'owned-response', stop_reason: null, content: [
+          { type: 'thinking', thinking: 'still generating', signature: 'partial-block' },
+        ] } });
+        await vi.advanceTimersByTimeAsync(1);
+        await session.handle.steer!({ type: 'user', content: 'new work' });
+      } else {
+        session.stream.emit({ type: 'assistant', message: { id: 'old-response', content: [
+          { type: 'tool_use', id: 'unfinished-read', name: 'Read', input: {} },
+        ] } });
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_use'), 'old tool observed');
+        await session.handle.abort();
+        await session.handle.send({ type: 'user', content: 'replacement work' }, { messageUuid: '22222222-2222-4222-8222-222222222222' });
+        session.stream.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+          total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+        session.stream.emit(userToolResult('unfinished-read'));
+        const echo = kind.includes('old') && kind !== 'replacement-then-late-old-full' ? '11111111-1111-4111-8111-111111111111'
+          : '22222222-2222-4222-8222-222222222222';
+        if (kind.includes('error-echo')) session.stream.emit({ type: 'assistant', error: 'unknown',
+          user_message_uuid: echo, message: { content: [{ type: 'text', text: 'API Error: timed out' }] } });
+        if (kind.startsWith('full-only')) session.stream.emit({ type: 'assistant', user_message_uuid: echo,
+          message: { id: 'owned-response', stop_reason: null, content: [{ type: 'thinking', thinking: 'working', signature: 'first-block' }] } });
+        else session.stream.emit({ type: 'stream_event',
+          ...(!kind.includes('error-echo') ? { user_message_uuid: echo } : {}),
+          ...(kind === 'batched-input-echo' ? { user_message_uuids: [
+            '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222',
+          ] } : {}), event: { type: 'message_start', message: { id: 'owned-response' } } });
+      }
+      if (kind === 'replacement-then-late-old-full') session.stream.emit({ type: 'assistant',
+        user_message_uuid: '11111111-1111-4111-8111-111111111111', message: { id: 'old-response',
+          stop_reason: null, content: [{ type: 'thinking', thinking: 'late old block', signature: 'old' }] } });
+      session.stream.emit({ type: 'assistant', message: { id: 'owned-response', stop_reason: null, content: [
+        { type: 'tool_use', id: 'owned-dispatch', name: 'mcp__cindy_orca__send_to_worker', input: {} },
+      ] } });
+      session.stream.emit(userToolResult('owned-dispatch', '{"ok":true,"wake_kind":"resumed"}'));
+      if (kind === 'full-only-old-two-rounds') {
+        // The CLI stamps the consumed input once per frame kind, not once
+        // for each provider/tool round in that same input's turn.
+        session.stream.emit({ type: 'assistant', message: { id: 'next-old-response', stop_reason: null, content: [
+          { type: 'tool_use', id: 'next-old-dispatch', name: 'mcp__cindy_orca__send_to_worker', input: {} },
+        ] } });
+        session.stream.emit(userToolResult('next-old-dispatch', '{"ok":true,"wake_kind":"resumed"}'));
+      }
+
+      session.stream.emit({ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: '', signature: 'replacement-ending' },
+      ] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'), 'replacement ended');
+      expect((session.events.find(e => e.type === 'done')?.data as { silentStop?: boolean }).silentStop)
+        .toBe(kind === 'partial-block' || (kind.includes('old') && kind !== 'replacement-then-late-old-full') ? true : undefined);
+    } finally { session.stream.end(); await session.handle.close(); await session.collected; }
+  });
+
+  // #9221: init provenance can await while SDK events keep arriving. Preserve
+  // which work accepted the entire tool event, not just an already-seen ID.
+  // Compare a pre-steer queued handoff with a genuinely post-steer handoff.
+  it.each(['queued-before-steer', 'queued-after-status', 'started-before-steer', 'after-steer'] as const)('keeps dispatch ownership across deferred SDK processing (%s)', async (timing) => {
+    const session = await startSessionWithStream();
+    let releaseStatus!: (value: []) => void;
+    const status = vi.fn(() => new Promise<[]>((resolve) => { releaseStatus = resolve; }));
+    Object.assign(session.fakeQuery, { mcpServerStatus: status });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const emitDispatch = () => {
+      session.stream.emit({ type: 'assistant', message: { id: 'deferred-request', content: [{
+        type: 'tool_use', id: 'deferred-dispatch', name: 'mcp__cindy_orca__send_to_worker', input: {},
+      }] } });
+      session.stream.emit(userToolResult('deferred-dispatch', '{"ok":true,"wake_kind":"resumed"}'));
+    };
+    try {
+      await session.handle.send({ type: 'user', content: 'delegate a task' });
+      session.stream.emit({ type: 'system', subtype: 'init', mcp_servers: [] });
+      await pumpUntil(() => status.mock.calls.length === 1, 'init provenance in flight');
+      if (timing === 'queued-before-steer' || timing === 'queued-after-status') {
+        if (timing === 'queued-after-status') session.stream.emit({ type: 'system', subtype: 'status', status: null });
+        emitDispatch();
+        await vi.advanceTimersByTimeAsync(1);
+      } else if (timing === 'started-before-steer') {
+        session.stream.emit({ type: 'stream_event', event: {
+          type: 'message_start', message: { id: 'deferred-request', model: 'claude-opus-4-6', usage: { input_tokens: 1000 } },
+        } });
+        await vi.advanceTimersByTimeAsync(1);
+      } else {
+        // A genuinely new provider request needs the previous response to end;
+        // mere post-steer arrival was not evidence of a new request.
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'completed-old-request' } } });
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_stop' } });
+        session.stream.emit({ type: 'assistant', message: { id: 'completed-old-request', content: [] } });
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await session.handle.steer!({ type: 'user', content: 'new work' });
+      if (timing !== 'queued-before-steer' && timing !== 'queued-after-status') emitDispatch();
+      await vi.advanceTimersByTimeAsync(1);
+      releaseStatus([]);
+      session.stream.emit({ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: '', signature: 'deferred-work' },
+      ] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'), 'deferred turn ended');
+      const done = session.events.find(e => e.type === 'done');
+      expect((done?.data as { silentStop?: boolean }).silentStop).toBe(timing === 'after-steer' ? undefined : true);
+    } finally {
+      releaseStatus?.([]);
+      session.stream.end();
+      await session.handle.close();
+      await session.collected;
+      vi.useRealTimers();
     }
   });
 
