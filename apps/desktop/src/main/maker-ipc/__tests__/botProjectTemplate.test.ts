@@ -104,6 +104,15 @@ describe('applyTeammateTemplate', () => {
       expect(text.match(/^## Before starting work$/m)).toBeNull();
     });
 
+    // Review r4652379039: renaming a standard heading to carry a constraint is itself an own rule.
+    it('keeps a standard heading the teammate reworded to add a constraint', async () => {
+      const standard = oldStandard.replace('# Hand-off\n', '# Hand-off\n\n## Start a task\n');
+      await setUp(standard.replace('## Start a task', '## Start a task only after the owner explicitly approves'), true);
+      await upgrade(2, newStandard('\n## Start a task\n'), async (_relative, hash) => hash === sha(oldStandard) ? standard : null);
+      const text = await read();
+      expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain('### Start a task only after the owner explicitly approves');
+    });
+
     it('keeps an own skill that predates the template, for the teammate to tidy', async () => {
       await setUp('---\nname: hand-off\n---\n\n# Hand-off\n\n- Pick the project.\n- Design reviews go straight to the owner.\n', false);
       await upgrade(2, newStandard());
