@@ -330,6 +330,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   supports(deviceId: string): boolean { return this.authorized(deviceId) && (this.peers.has(deviceId) || this.roster.get(deviceId)?.online === true); }
   /** A previously certified V2 peer must not silently downgrade when its relay session disappears. */
   knowsPeer(deviceId: string): boolean { return this.knownV2.has(deviceId); }
+  /**
+   * Every device `knowsPeer` is true for. The worker mirrors it to the thread that asks (`worker.ts` `snapshot`): a device
+   * left out of the directory for sharing a transport key (`supersedes`) reaches that thread in no directory or path event.
+   */
+  knownPeers(): string[] { return [...this.knownV2]; }
   certificateFor(deviceId: string) { return this.roster.get(deviceId)?.certificate; }
   scopedPeerTarget(peer: string): ScopedPeerTarget | null {
     if (this.options.client.delegation) {
@@ -470,8 +475,9 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     // certificate stays in the directory: the same device twice. Only the certificate that supersedes the others is this
     // account's device; the rest are left out here, as a device no longer listed is: not admitted, not dialed, shown
     // offline. They stay in `knownV2` like any device this socket has seen on Agent-Net, so being left out opens no way
-    // around it over Device Link (2026-11-21 review: `worker.ts` and `AgentNetWorkerSocket` keep their own add-only copy
-    // of that set). Kept in the directory, a connection made with that key was filed under whichever id came first, and
+    // around it over Device Link; `worker.ts` and `AgentNetWorkerSocket` keep their own add-only copy of that set, filled
+    // from the directory they are handed, so the worker also copies this one over (`knownPeers`; 2026-11-21 reviews).
+    // Kept in the directory, a connection made with that key was filed under whichever id came first, and
     // the phone's engine, which admits by key, refused the whole list (DUPLICATE_PEER): on 2026-11-21 one such pair in
     // an account of 26 devices kept every phone of the account from opening Agent-Net at all.
     // This device's own key under another device id is this device as it was: never a peer. (The key of `identity`: a
