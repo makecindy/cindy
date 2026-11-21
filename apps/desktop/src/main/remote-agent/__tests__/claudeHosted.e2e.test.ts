@@ -59,7 +59,7 @@ import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
 import { MakerScheduleRunner, type SchedulerRunnerRuntime } from '../../scheduler-host/runner';
-import { createSchedulerQueueBridge } from '../../maker-ipc/schedulerQueueBridge';
+import { createSchedulerQueueBridge, type SchedulerQueueBridge } from '../../maker-ipc/schedulerQueueBridge';
 import { createQueuedAcceptedCallbacks } from '../../maker-ipc/queuedAcceptedCallbacks';
 import { SnapshotOperationDeadlineError } from '../../utils/operationBudget';
 import type { Maker } from '@cindy/maker-core';
@@ -572,7 +572,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         stopRecoveryAt?: 'close-busy' | 'close-stopped' | 'close-throws' | 'startup' | 'send-throws' | 'send-rejected'
           | 'replacement-closed' | 'replacement-runtime-closed' | 'replacement-accepted-then-closed'
           | 'unconfirmed' | 'send-stopped' | 'stopped-before-open' | 'mode-changed'
-          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale';
+          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted';
       } = {}) {
     const reconnect = failure === 'reconnect' || failure === 'scheduled-reconnect';
     const continuation = 'Continue the remaining work.';
@@ -829,6 +829,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         let shareIsActive = true;
         let planModeEnabled = false;
         const cancelledInput = new AbortController();
+        const fireAbort = new AbortController();
         const accepted = createQueuedAcceptedCallbacks();
         const wiring = sharedAccountRegisterWiring({
           maker: {
@@ -839,6 +840,10 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
               if (stopRecoveryAt === 'close-throws') throw new Error('fixture close failed');
               if (live !== current || !await current.closeIfIdle()) return 'busy';
               live = undefined;
+              if (stopRecoveryAt === 'schedule-aborted') {
+                expect(coordinator.isSharedReconnectPending(task, schedule.runId)).toBe(true);
+                fireAbort.abort();
+              }
               if (stopRecoveryAt === 'cancelled') cancelledInput.abort();
               if (stopRecoveryAt === 'stopped-before-open') coordinator.stop(task);
               if (stopRecoveryAt === 'stale') shareIsActive = false;
@@ -919,7 +924,13 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           },
         });
         let coordinator!: AgentInputCoordinator;
+        let schedulerBridge: SchedulerQueueBridge | undefined;
         let recoveryFailure: string | undefined;
+        const onSharedReconnectFailed = vi.fn((sessionId: string, runId: string, error: unknown, stopped?: true) => {
+          expect([sessionId, runId]).toEqual([task, schedule.runId]);
+          recoveryFailure = stopped ? undefined : (error as Error).message;
+          for (const notify of failureListeners) notify(recoveryFailure, stopped);
+        });
         const { sendToAgentAccepted } = sharedAccountSendTransaction({
           ...wiring,
           captureSharedReconnectRecovery: process.env.CINDY_TEST_DISABLE_SHARED_RECONNECT === '1'
@@ -942,11 +953,8 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           consumePendingHandoff: id => pending.consume(id),
           onSharedReconnectClaimed: (sessionId, reconnectClientId) => coordinator.markSharedReconnectPending(sessionId, reconnectClientId),
           onSharedReconnectFinished: (sessionId, reconnectClientId) => coordinator.clearSharedReconnectPending(sessionId, reconnectClientId),
-          onSharedReconnectFailed: process.env.CINDY_TEST_DISABLE_SCHEDULER_RECONNECT_FAILURE === '1' ? undefined : (sessionId, runId, error, stopped) => {
-            expect([sessionId, runId]).toEqual([task, schedule.runId]);
-            recoveryFailure = stopped ? undefined : (error as Error).message;
-            for (const notify of failureListeners) notify(recoveryFailure, stopped);
-          },
+          onSharedReconnectFailed: process.env.CINDY_TEST_DISABLE_SCHEDULER_RECONNECT_FAILURE === '1'
+            ? undefined : onSharedReconnectFailed,
         });
         const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) => {
           const [id, message, createOpts, options] = args;
@@ -965,7 +973,9 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           }
         });
         const attemptAutomaticResume = vi.fn(() => null);
+        const persistTerminalSendError = vi.fn();
         coordinator = new AgentInputCoordinator({
+          persistTerminalSendError,
           beforeDispatchUserTurn: async () => {
             if (stopRecoveryAt === 'snapshot-deadline' && live !== originalSession) {
               throw new SnapshotOperationDeadlineError();
@@ -974,6 +984,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           isResumableTurnErrorCandidate: signals => signals.reason === 'scheduler-snapshot-preparation',
           onResumableTurnError: attemptAutomaticResume,
           sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
+          getSchedulerRunSignal: (id, item) => schedulerBridge?.runSignalFor(id, item),
           onAcceptedQueuedMessage: (id, item) => accepted.run(id, item),
           touchUserSend: async () => {}, createUserMessage: vi.fn(),
           isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
@@ -995,7 +1006,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             providerId: row.providerId, agentDeviceId: row.agentDeviceId, remoteHostId: null,
             title: null, userSendAt: null, workingDir: project, workspaceKind: 'project',
           });
-          const bridge = createSchedulerQueueBridge({
+          const bridge = schedulerBridge = createSchedulerQueueBridge({
             coordinator, isSessionBusy: () => coordinator.shouldQueueNewTurn(task),
             getSessionMeta: async () => ({ ...row, agentKind: 'claude-code' as const, workDir: project }),
             getSessionRowSnapshot, createId: () => clientId, discardWatchers: new Map(), preparations: new Map(),
@@ -1042,7 +1053,6 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             restoreScheduledTarget: vi.fn(),
           });
           expect(bridge.isSessionBusy(task)).toBe(false);
-          const fireAbort = new AbortController();
           let settled: { resultText?: string; skipped?: boolean; error?: unknown } | undefined;
           const run = runner.fire({
             id: schedule.id, name: 'Fixture', prompt: continuation, targetSessionId: task,
@@ -1058,6 +1068,28 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             await vi.waitFor(() => expect(settled, 'runner must settle without a watchdog').toBeDefined(), { timeout: 10_000 });
             expect(turnActive).toHaveBeenCalledExactlyOnceWith(task);
             expect(makerListeners.size).toBe(0);
+            if (stopRecoveryAt === 'schedule-aborted') {
+              await send.mock.results[0].value.catch(() => undefined);
+              expect(opens.filter(open => open.groupSwitchToken), 'replacement open after scheduler abort').toHaveLength(0);
+              expect(opens).toHaveLength(2);
+              // The stopped open supplied a credential (asserted at claim),
+              // but it never reached the default offer store for a new open.
+              expect(order).not.toContain('token');
+              expect(guestSwitch.hasOffer(task)).toBe(false);
+              expect(await pending.peek(task)).toBeNull();
+              expect(live).toBeUndefined();
+              expect(row.sdkSessionId).toBe(oldNative);
+              expect(readAccountBinding(`task:${hostTask}`, 'anthropic')?.accountId).toBe(accounts[original]);
+              expect(settled?.error).toMatchObject({ message: 'queued heartbeat aborted by schedule pause/delete' });
+              expect(markResult).toHaveBeenCalledExactlyOnceWith('failure');
+              expect(onSharedReconnectFailed).not.toHaveBeenCalled();
+              await vi.waitFor(() => expect(bridge.isPromptTracked(task, clientId)).toBe(false));
+              expect(coordinator.getProjection(task).error).toBeNull();
+              expect(persistTerminalSendError).not.toHaveBeenCalled();
+              expect(sends).toBe(1);
+              expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+              return;
+            }
             if (stopRecoveryAt) {
               if (stopRecoveryAt === 'send-stopped' || stopRecoveryAt === 'stopped-before-open' || stopRecoveryAt === 'close-stopped'
                 || stopRecoveryAt === 'mode-changed' || stopRecoveryAt === 'mode-changed-with-stop') {
@@ -1221,6 +1253,12 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
   // to the real controller, host and CLI. Disabling capture must break success.
   it('recovers scheduled input once after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
     await exercise('a', 'scheduled-reconnect');
+  });
+  // #11895 / e2e: pause or delete after the original Session closes. The
+  // real runner has already accepted the input and has no live Session to
+  // cancel. Its run signal must prevent the credentialed open and handoff.
+  it('cancels scheduled reconnect after the original session closes', { timeout: 90_000 }, async () => {
+    await exercise('a', 'scheduled-reconnect', { stopRecoveryAt: 'schedule-aborted' });
   });
   // #11895 / e2e: after claiming the token, each pre-dispatch exit must
   // settle the same runner with the quota cause and without a second send.

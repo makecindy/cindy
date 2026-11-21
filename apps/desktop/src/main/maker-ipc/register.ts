@@ -19848,6 +19848,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       void settleTaskActionInput(item).catch(() => undefined);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
     },
+    getSchedulerRunSignal: (sessionId, item) => schedulerQueueBridgeHolder?.runSignalFor(sessionId, item),
     onAcceptedQueuedMessage: async (sessionId, item, restoredFromSnapshot): Promise<void> => {
       if (item.clientId.startsWith('plugin-target:')) {
         try { await assertPluginTargetQueuedDelivery(sessionId, item.clientId); }

@@ -234,7 +234,12 @@ export interface AgentInputSendOpts {
   /** Host-proven non-dispatch: retain this input while preparation is retried. */
   onUndispatchedRetry?: () => void;
   /** Main-owned boundary for recovering a send that never reached the supplier. */
-  reconnectRecovery?: { signal: AbortSignal; isCurrent(): boolean; wasStopped(): boolean };
+  reconnectRecovery?: {
+    signal: AbortSignal;
+    schedulerRunSignal?: AbortSignal;
+    isCurrent(): boolean;
+    wasStopped(): boolean;
+  };
   readonly [ASYNC_QUESTION_ANSWER]?: true;
   readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
   /** Main-only authorization recheck after async steer preparation, before provider dispatch. */
@@ -618,6 +623,8 @@ export interface AgentInputCoordinatorDeps {
    * 且不得恢复原 recovery、不得再入队。
    */
   onUnconfirmedAutoResumeTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  /** In-memory cancellation owned by the matching scheduler run, before acceptance. */
+  getSchedulerRunSignal?: (sessionId: string, item: AgentInputQueuedMessage) => AbortSignal | undefined;
   onAcceptedQueuedMessage?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -5859,6 +5866,11 @@ export class AgentInputCoordinator {
       const appMessageGuard = queuedAppMessageGuard(head);
       const reconnectRecovery = this.manualUiInputs.has(head) ? new AbortController() : undefined;
       active.reconnectRecovery = reconnectRecovery;
+      // Acceptance releases the queue bridge's registration. Capture the run
+      // signal now so a later cancellation can still fence the replacement.
+      const schedulerRunSignal = reconnectRecovery && head.origin?.kind === 'scheduler'
+        ? this.deps.getSchedulerRunSignal?.(sessionId, head)
+        : undefined;
       const result = await this.deps.sendToAgent(sessionId, wireUserMessage, head.createOpts, {
         ...(appMessageGuard || taskActionGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
           try {
@@ -5895,8 +5907,10 @@ export class AgentInputCoordinator {
           this.captureReservedVendorGeneration(sessionId, active, generation),
         ...(reconnectRecovery ? { reconnectRecovery: {
           signal: reconnectRecovery.signal,
+          schedulerRunSignal,
           wasStopped: () => active.stopped === true,
-          isCurrent: () => !reconnectRecovery.signal.aborted && this.isActiveTurnCurrent(sessionId, active),
+          isCurrent: () => !reconnectRecovery.signal.aborted && !schedulerRunSignal?.aborted
+            && this.isActiveTurnCurrent(sessionId, active),
         } } : {}),
         onUndispatchedRetry: () => {
           if (!this.isActiveTurnCurrent(sessionId, active)) return;
@@ -6000,7 +6014,7 @@ export class AgentInputCoordinator {
         }
         const rewound = await this.rewindSchedulerPreparationFailure(sessionId, active, head, result);
         if (this.discardOnStaleActiveTurn(sessionId, active)) return;
-        this.handleSendNotDispatched(sessionId, active, head, result, rewound);
+        this.handleSendNotDispatched(sessionId, active, head, result, rewound, schedulerRunSignal?.aborted);
         return;
       }
       this.markActiveTurnDispatched(sessionId, active);
@@ -6244,6 +6258,7 @@ export class AgentInputCoordinator {
     item: AgentInputQueuedMessage,
     result: AgentInputSendFailure,
     rewoundScheduler = false,
+    schedulerRunCancelled = false,
   ): void {
     if (!this.isActiveTurnCurrent(sessionId, active)) return;
     // 这条 turn 没派出去 → 暂存的 error 候选不会再有接管决策(settle 只挂在已派发那条路上),
@@ -6344,16 +6359,15 @@ export class AgentInputCoordinator {
       return;
     }
 
+    const cancelledBeforeDispatch = result.kind === 'session-dispatch' && result.reason === 'cancelled-before-dispatch';
+    const cancelledScheduledRun = schedulerRunCancelled && cancelledBeforeDispatch;
     latest.activeTurn = null;
-    latest.error = rewoundScheduler ? null : message;
+    latest.error = rewoundScheduler || cancelledScheduledRun ? null : message;
     clearErrorProjectionSignals(latest);
     latest.stickyError = null;
     // Closed scheduler runs cannot retain a manual replay target. A granted
     // pre-dispatch recovery below keeps the original run and callback instead.
-    const cancelledByUserBoundary =
-      latest.queueAbortPending &&
-      result.kind === 'session-dispatch' &&
-      result.reason === 'cancelled-before-dispatch';
+    const cancelledByUserBoundary = (latest.queueAbortPending || schedulerRunCancelled) && cancelledBeforeDispatch;
     const schedulerOrigin = this.setActiveTurnRecovery(latest, item, {
       persistedFailure: !rewoundScheduler && !cancelledByUserBoundary,
     }) === 'dropped-scheduler';
@@ -6366,11 +6380,7 @@ export class AgentInputCoordinator {
       cancelledByUserBoundary ? 'cancelled' : 'failed',
       cancelledByUserBoundary ? undefined : message,
     );
-    if (
-      latest.queueAbortPending &&
-      result.kind === 'session-dispatch' &&
-      result.reason === 'cancelled-before-dispatch'
-    ) {
+    if (latest.queueAbortPending && cancelledBeforeDispatch) {
       latest.queueAbortPending = false;
     }
     log.warn(
