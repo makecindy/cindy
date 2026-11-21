@@ -305,7 +305,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
         <div
           ref={cardRef}
           className={cn(
-            'rounded-[12px] border border-[var(--msg-code-block-border)]',
+            'rounded-xl border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-6',
             // Force the inner mermaid <svg> (which comes with intrinsic

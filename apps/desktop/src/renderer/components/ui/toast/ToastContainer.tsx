@@ -110,7 +110,7 @@ export function ToastContainer() {
       ref={containerRef}
       aria-label={t('commonUi.toastContainer.ariaLabel')}
       // z-toast(10100): 高于所有弹窗(modal 层 10000 起),避免 toast 被打开的对话框遮挡
-      className="pointer-events-none fixed inset-x-0 top-5 z-toast flex flex-col items-center gap-[10px]"
+      className="pointer-events-none fixed inset-x-0 top-5 z-toast flex flex-col items-center gap-2.5"
     >
       <DownloadToast items={transfers} />
       {items.filter(item => item.placement !== 'top-right').map((item) => (
@@ -121,7 +121,7 @@ export function ToastContainer() {
     </div>
     {/* Anchored invitations keep their corner through loading and success updates.
         They do not participate in the top-center stack's FLIP animation. */}
-    <div className="pointer-events-none fixed right-6 top-16 z-toast flex w-96 max-w-[calc(100vw_-_48px)] flex-col items-end gap-[10px] [&>div]:max-w-full">
+    <div className="pointer-events-none fixed right-6 top-16 z-toast flex w-96 max-w-[calc(100vw_-_48px)] flex-col items-end gap-2.5 [&>div]:max-w-full">
       {items.filter(item => item.placement === 'top-right').map(item => (
         <ToastFadeWrapper key={item.id} item={item} toastId={item.id}>
           <Toast item={item} />

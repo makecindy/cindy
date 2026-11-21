@@ -9735,7 +9735,7 @@ export function ChatInput({
                   'pointer-events-none absolute inset-0 z-raised',
                   // 输入框卡片圆角与对话页统一为 12px(用户定稿 2026-07-22);create-agent
                   // 不再用 Figma 的 6px,避免新建/对话两个框圆角不一致。
-                  'rounded-[12px]',
+                  'rounded-xl',
                 )}
                 style={{
                   backgroundColor: 'var(--drop-overlay-bg)',
@@ -9777,7 +9777,7 @@ export function ChatInput({
                   {/* hover 预览:逐条评论(截图缩略 + 标签 + 文字),行内可单删。
                   与 quotes 预览不同,这里是可交互面板(pointer-events 开)。 */}
                   <div
-                    className="absolute bottom-full left-0 z-page-overlay mb-2 hidden max-h-72 w-80 max-w-[70vw] flex-col gap-2 overflow-y-auto rounded-[12px] border p-3 group-hover/bcomment:flex"
+                    className="absolute bottom-full left-0 z-page-overlay mb-2 hidden max-h-72 w-80 max-w-[70vw] flex-col gap-2 overflow-y-auto rounded-xl border p-3 group-hover/bcomment:flex"
                     style={{
                       backgroundColor: 'var(--surface-elevated)',
                       borderColor: 'var(--border-default)',
@@ -9965,7 +9965,7 @@ export function ChatInput({
                 // select-none 挂容器而非逐按钮:Chromium 的 user-select:none 只挡
                 // "在元素上起选",从相邻可选区起拖再划入时按钮文字仍会被刷蓝
                 // (同 sortable.css 侧栏行修过的 selection bleed),容器级禁选才挡得住。
-                'mt-[2px] flex select-none items-center',
+                'mt-0.5 flex select-none items-center',
                 allowToolbarWrap
                   ? 'min-w-0 flex-wrap justify-between gap-x-1 gap-y-1'
                   : useNarrowToolbar
@@ -10647,7 +10647,7 @@ export function ChatInput({
                 <button
                   type="button"
                   className={cn(
-                    'flex h-[46px] items-center gap-[10px] rounded-full',
+                    'flex h-[46px] items-center gap-2.5 rounded-full',
                     'border px-5',
                     'bg-[var(--folder-btn-bg)]',
                     'border-[var(--folder-btn-border)]',

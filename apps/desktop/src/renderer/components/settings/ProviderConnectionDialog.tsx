@@ -2689,7 +2689,7 @@ export function ProviderConnectionDialog({
 
           {/* 当前 Tab 的独立配置面板 */}
           <div
-            className="flex flex-col gap-4 rounded-[12px] p-4"
+            className="flex flex-col gap-4 rounded-xl p-4"
             style={{
               backgroundColor: 'var(--surface)',
               border: '1px solid var(--settings-theme-card-border)',

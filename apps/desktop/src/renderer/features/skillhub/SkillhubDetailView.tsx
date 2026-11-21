@@ -2058,7 +2058,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
                       </Button>
               ) : (
                 <span className={cn(
-                  'inline-flex h-9 items-center gap-1.5 rounded-full border px-[14px]',
+                  'inline-flex h-9 items-center gap-1.5 rounded-full border px-3.5',
                   'text-13 text-[var(--cmd-palette-item-meta)]',
                   'border-[var(--confirm-btn-secondary-border)]',
                 )}>
@@ -2070,7 +2070,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
             {/* Local registry fallback / foreign installed skill. */}
             {detailAction?.kind === 'installed-tag' && (
               <span className={cn(
-                'inline-flex h-9 items-center gap-1.5 rounded-full border px-[14px]',
+                'inline-flex h-9 items-center gap-1.5 rounded-full border px-3.5',
                 'text-13 text-[var(--cmd-palette-item-meta)]',
                 'border-[var(--confirm-btn-secondary-border)]',
               )}>
@@ -2311,7 +2311,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
                 // gap-[2px] adds a hairline rhythm between rows so the
                 // selected/hover backgrounds don't visually merge into
                 // a single block.
-                <div className="flex flex-col gap-[2px]">
+                <div className="flex flex-col gap-0.5">
                   {files.map((f) => (
                     <FileTreeRow
                       key={f.name}

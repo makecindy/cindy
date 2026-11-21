@@ -96,7 +96,7 @@ export function CredentialSwitchWaitBanner({
       )}
       style={style}
     >
-      <Spinner size={14} className="mt-[2px] text-[var(--upgrade-banner-fg)]" />
+      <Spinner size={14} className="mt-0.5 text-[var(--upgrade-banner-fg)]" />
       <span className="flex-1 min-w-0 text-xs text-[var(--upgrade-banner-fg)] break-all">
         {message}
       </span>

@@ -322,7 +322,7 @@ export function InstallTargetPicker({
           className="flex items-start justify-between gap-3"
           style={{ padding: '20px 18px 12px 18px' }}
         >
-          <div className="flex min-w-0 flex-col" style={{ gap: '6px' }}>
+          <div className="flex min-w-0 flex-col" style={{ gap: 'var(--space-1_5)' }}>
             <Dialog.Title
               id={INSTALL_PICKER_TITLE_ID}
               className="text-[var(--msg-assistant-text)]"
@@ -359,7 +359,7 @@ export function InstallTargetPicker({
           </div>
         )}
 
-        <div className="flex flex-col" style={{ padding: '4px 12px 12px 12px' }}>
+        <div className="flex flex-col" style={{ padding: 'var(--space-1) var(--space-3) var(--space-3) var(--space-3)' }}>
           <button
             type="button"
             disabled={installing || !!globalInstalledVersion || (!!target && !target.writable)}
@@ -373,7 +373,7 @@ export function InstallTargetPicker({
                 ? 'opacity-50 cursor-default'
                 : 'enabled:hover:bg-[var(--settings-menu-bg-hover)] disabled:opacity-60 disabled:cursor-default',
             )}
-            style={{ height: `${PROJECT_ROW_H}px`, padding: '0 12px' }}
+            style={{ height: `${PROJECT_ROW_H}px`, padding: '0 var(--space-3)' }}
           >
             <div
               className="flex shrink-0 items-center justify-center rounded-full bg-[var(--chat-input-chip-bg)]"
@@ -381,7 +381,7 @@ export function InstallTargetPicker({
             >
               <Globe size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
             </div>
-            <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '2px' }}>
+            <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 'var(--space-0_5)' }}>
               <span className="text-[var(--msg-assistant-text)]" style={{ fontSize: 'var(--text-13)', fontWeight: 500 }}>
                 {t('skillhub.installPicker.global')}{target ? ` · ${target.name}` : ''}
               </span>
@@ -401,7 +401,7 @@ export function InstallTargetPicker({
             )}
           </button>
 
-          <div className="flex items-center gap-[10px]" style={{ padding: '10px 8px 6px 8px' }}>
+          <div className="flex items-center gap-2.5" style={{ padding: 'var(--space-2_5) var(--space-2) var(--space-1_5) var(--space-2)' }}>
             <span
               className="shrink-0 text-[var(--settings-theme-icon)]"
               style={{ fontSize: 'var(--text-10)', fontWeight: 500, letterSpacing: '0.5px' }}
@@ -430,7 +430,7 @@ export function InstallTargetPicker({
               className="flex flex-col overflow-y-auto"
               style={{
                 maxHeight: `${MAX_VISIBLE_PROJECTS * PROJECT_ROW_H + (MAX_VISIBLE_PROJECTS - 1) * 2}px`,
-                gap: '2px',
+                gap: 'var(--space-0_5)',
               }}
             >
               {projects.map((p) => {
@@ -452,7 +452,7 @@ export function InstallTargetPicker({
                         ? 'opacity-50 cursor-default'
                         : 'enabled:hover:bg-[var(--settings-menu-bg-hover)] disabled:opacity-60 disabled:cursor-default',
                     )}
-                    style={{ height: `${PROJECT_ROW_H}px`, padding: '0 12px' }}
+                    style={{ height: `${PROJECT_ROW_H}px`, padding: '0 var(--space-3)' }}
                   >
                     <div
                       className="flex shrink-0 items-center justify-center rounded-full bg-[var(--chat-input-chip-bg)]"
@@ -460,7 +460,7 @@ export function InstallTargetPicker({
                     >
                       <FolderOpen size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
                     </div>
-                    <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '2px' }}>
+                    <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 'var(--space-0_5)' }}>
                       <span
                         className="truncate text-[var(--msg-assistant-text)]"
                         style={{ fontSize: 'var(--text-13)', fontWeight: 500 }}

@@ -406,7 +406,7 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
               pointerEvents: 'none',
               display: 'flex',
               alignItems: 'center',
-              gap: 8,
+              gap: 'var(--space-2)',
               fontSize: 13,
             }}
           >

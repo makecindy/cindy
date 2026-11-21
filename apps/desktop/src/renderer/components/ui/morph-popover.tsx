@@ -516,7 +516,7 @@ export function MorphPopover({
         panel.style.width = `${m.w}px`;
         panel.style.height = `${m.h}px`;
         panel.style[dock.prop] = `${dock.value}px`;
-        panel.style.borderRadius = '12px';
+        panel.style.borderRadius = 'var(--radius-xl)';
         panel.style.backgroundColor = endBg;
         panel.style.borderColor = endBorderColor;
         panel.style.boxShadow = 'var(--shadow-menu)';

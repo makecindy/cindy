@@ -281,7 +281,7 @@ export const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
 function InfoLine({ text }: { text: string }) {
   return (
     <div className="flex items-start gap-2 text-12" style={{ color: 'var(--text-tertiary)' }}>
-      <Info size={13} className="mt-[1px] shrink-0" />
+      <Info size={13} className="mt-px shrink-0" />
       <span>{text}</span>
     </div>
   );

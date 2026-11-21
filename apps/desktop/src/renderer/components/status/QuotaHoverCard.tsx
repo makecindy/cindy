@@ -523,7 +523,7 @@ export function QuotaHoverCard({
         tabIndex={embedded ? undefined : 0}
         className={cn(
           'min-h-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
-          !embedded && 'overflow-y-auto pt-[6px]',
+          !embedded && 'overflow-y-auto pt-1.5',
           subgrid && SUBGRID_LAYER,
         )}
       >
