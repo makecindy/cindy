@@ -1,3 +1,4 @@
+import { ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
 import { handoffPreviewText } from './agentHandoff.js';
 import type { ContextOverflowRolloverDeps } from './contextOverflowRollover.js';
 import type { MakerSessionCreateOpts as CreateOpts } from './sessionRequest.js';
@@ -256,18 +257,19 @@ export async function replayContextRecoveryWithPorts(ports: ReplayContextRecover
         sessionId,
         ports.persistedUserContentToWireMessage(agentFacingWireContent ?? content),
         createOpts,
-        recovery?.continueFromHistory
-          ? {
-              signal: recovery.signal,
-              [ports.PI_CACHE_RECOVERY_EXPECTATION]: recovery.piCacheCompatibility,
-              ...(recovery.piCacheCompatibility ? { retryUserClientId: recovery.sourceUserClientId } : {}),
-              [ports.INHERITED_CAPABILITY_SELECTION]: recovery.sourceCapabilitySelectionText,
-              // The internal continuation is not fresh user authorization. Restore
-              // intent from authored history, never attachment/quote projections.
-              [ports.AUTO_REVIEW_SOURCE_CONTENT]: ports.readAutoReviewUserText(recovery.sourceUserContent) ?? '',
-              [ports.AUTO_REVIEW_USER_INTENT]: recoveryIntent,
-            }
-          : { signal: recovery?.signal },
+        {
+          signal: recovery?.signal,
+          [ACCEPTED_ATTACHMENT_REPLAY]: true,
+          ...(recovery?.continueFromHistory && {
+            [ports.PI_CACHE_RECOVERY_EXPECTATION]: recovery.piCacheCompatibility,
+            ...(recovery.piCacheCompatibility ? { retryUserClientId: recovery.sourceUserClientId } : {}),
+            [ports.INHERITED_CAPABILITY_SELECTION]: recovery.sourceCapabilitySelectionText,
+            // The internal continuation is not fresh user authorization. Restore
+            // intent from authored history, never attachment/quote projections.
+            [ports.AUTO_REVIEW_SOURCE_CONTENT]: ports.readAutoReviewUserText(recovery.sourceUserContent) ?? '',
+            [ports.AUTO_REVIEW_USER_INTENT]: recoveryIntent,
+          }),
+        },
       );
       const result = row.remoteHostId ? await sendReplay()
         : await ports.withCindyMakeProjectUse(ports.app.getPath('userData'), row.workingDir, sendReplay);

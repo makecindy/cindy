@@ -1,3 +1,6 @@
+import { acceptedAttachmentReplay } from '../attachmentReplay.js';
+import { replayContextRecoveryWithPorts, type ReplayContextRecoveryPorts } from '../contextRecoveryAssembly.js';
+import { normalizeUserMessage } from '../normalizeAttachments.desktop.js';
 import { describe, expect, it, vi } from 'vitest';
 import { CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON, CODEX_HISTORY_OVERSIZED_REASON, CONTEXT_OVERFLOW_REASON, UNSUPPORTED_REQUEST_OPTION_REASON } from '@cindy/maker-core';
 
@@ -1279,6 +1282,44 @@ describe('createContextOverflowRollover', () => {
     );
   });
 
+  function recoveryReplayPorts(engine: ReturnType<typeof vi.fn>, pi = false) {
+    const restoredIntent = { text: 'previously authored intent' };
+    const replayPorts = {
+      getDbClient: () => ({ drizzle: { select: () => ({ from: () => ({ where: () => ({
+        limit: async () => [{ workingDir: '/fixture', agentKind: pi ? 'pi' : 'cc' }],
+      }) }) }) } }),
+      sessions: {}, eq: vi.fn(), dbToMakerAgentKind: () => pi ? 'pi' : 'claude-code',
+      buildCreateOptsWithStderr: () => ({ extraDirs: [], writableDirs: [] }),
+      withCindyMakeProjectUse: (_home: string, _dir: string, run: () => Promise<unknown>) => run(),
+      app: { getPath: () => '/fixture' }, persistedUserContentToWireMessage,
+      readAutoReviewHistory: vi.fn(async () => []), restoreAutoReviewUserIntent: vi.fn(() => restoredIntent),
+      readContextRecoverySession: async () => ({ status: 'active' }), canContinueContextRecovery: () => true,
+      isHeadlessGhostSetupTurn: () => false, bindingStore: { findByTarget: () => null },
+      PI_CACHE_RECOVERY_EXPECTATION: Symbol(), INHERITED_CAPABILITY_SELECTION: Symbol(),
+      AUTO_REVIEW_SOURCE_CONTENT: Symbol(), AUTO_REVIEW_USER_INTENT: Symbol(),
+      readAutoReviewUserText: () => 'retained text',
+      sendToAgentAcceptedUnlocked: vi.fn(async (id: string, wire: Parameters<typeof normalizeUserMessage>[1], _create: unknown, opts: unknown) => {
+        engine(await normalizeUserMessage(id, wire, acceptedAttachmentReplay(opts)));
+        return { accepted: true };
+      }),
+    };
+    return { replayPorts, restoredIntent };
+  }
+
+  // L337 / unit: handoff has committed; dropping the entire accepted turn strands recovery.
+  it('replays surviving text once after a cached history image has been cleaned', async () => {
+    const url = 'cindy-media://blobs/' + 'a'.repeat(64) + '.png';
+    const deps = makeDeps([msg('user', JSON.stringify({ text: 'retained text', images: [{ url }] }), 'accepted')]);
+    const engine = vi.fn();
+    const { replayPorts } = recoveryReplayPorts(engine);
+    const rollover = createContextOverflowRollover({ ...deps, replayUserMessage: (...args) =>
+      replayContextRecoveryWithPorts(replayPorts as unknown as ReplayContextRecoveryPorts, ...args) });
+    expect(rollover.claim('s1')).toBe('claimed');
+    await expect(rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' })).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalledOnce();
+    expect(engine).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: [{ type: 'text', text: 'retained text' }] });
+  });
+
   it('keeps coordinator recovery when replay is rejected', async () => {
     const deps = makeDeps([msg('user', '再做 B', 'u2')]);
     deps.replayUserMessage.mockResolvedValue({ accepted: false });
@@ -1314,6 +1355,26 @@ describe('createContextOverflowRollover', () => {
       });
       return deps;
     }
+
+    // L337 / unit: Pi retains its input and history permissions after cache compatibility repair.
+    it('replays accepted Pi history with a cleaned image after a provider compatibility repair', async () => {
+      const source = JSON.stringify({ text: 'retained text', images: [{ url: 'cindy-media://blobs/' + 'd'.repeat(64) + '.png' }] });
+      const deps = makePiDeps([msg('user', source, 'accepted', 1)]);
+      const engine = vi.fn();
+      const { replayPorts, restoredIntent } = recoveryReplayPorts(engine, true);
+      const rollover = createContextOverflowRollover({ ...deps, replayUserMessage: (...args) =>
+        replayContextRecoveryWithPorts(replayPorts as unknown as ReplayContextRecoveryPorts, ...args) });
+      expect(rollover.claim('s1')).toBe('claimed');
+      await expect(rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection })).resolves.toBe(true);
+      expect(engine).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: [{ type: 'text', text: 'retained text' }] });
+      expect(replayPorts.restoreAutoReviewUserIntent).toHaveBeenCalledExactlyOnceWith([], { clientId: 'accepted', content: source });
+      expect(replayPorts.sendToAgentAcceptedUnlocked.mock.calls[0][3]).toMatchObject({
+        [replayPorts.PI_CACHE_RECOVERY_EXPECTATION]: receipt.piCacheCompatibility, retryUserClientId: 'accepted',
+        [replayPorts.INHERITED_CAPABILITY_SELECTION]: 'retained text', [replayPorts.AUTO_REVIEW_USER_INTENT]: restoredIntent,
+        [replayPorts.AUTO_REVIEW_SOURCE_CONTENT]: 'retained text',
+      });
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+    });
 
     it('does not stack legacy rebuild or learning on a native cache recovery decision', async () => {
       const deps = makePiDeps([msg('user', 'Reply OK', 'u1', 1)]);

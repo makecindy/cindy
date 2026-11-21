@@ -1523,6 +1523,68 @@ function attachmentHarness(t, queueOverrides = {}) {
     owner: () => owner, switchOwner: () => (owner = newOwner('attachment-owner-b')) };
 }
 
+// L337 / db: real overflow and interrupted-turn owners must pass surviving blocks
+// through the shared send transaction; a new input with the same lost cache file is rejected.
+for (const recovery of ['overflow', 'interrupted']) {
+  test(`accepted history replays once after cache cleanup: ${recovery}`, async t => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-history-image-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const images = createImageCacheStore(() => root);
+    const url = 'xdt-image://fixture/source.png';
+    const { absPath } = images.resolveSafe(url);
+    mkdirSync(path.dirname(absPath), { recursive: true });
+    writeFileSync(absPath, attachmentPng);
+    const runtime = await modelChangeRuntime(t, { queue: {
+      hasAssistantProgressAfter: async () => false,
+      createAttachments: ({ assertCurrent }) => createHostAttachments({ getOwner: getCurrentDbClientSnapshot, assertCurrent,
+        imageCacheStore: images, getTempDir: () => root }),
+    } });
+    const { h } = runtime;
+    const id = 'history-image';
+    await runtime.createTask(id);
+    const group = recovery === 'interrupted';
+    const text = group ? '[UI_ACTION_TRIGGER]Group request: <untrusted-data>{"currentRequest":{"text":"retained text"}}</untrusted-data>' : 'retained text';
+    const clientId = group ? 'bot-group:room:execution:bot' : 'user-1';
+    const item = { clientId, text, agentOmitsTriggerPrefix: group,
+      chatMessage: { clientId, role: 'user', content: text },
+      files: [{ id: 'pic', name: 'source.png', path: url, ext: '.png', category: 'image', mimeType: 'image/png' }],
+      persistedContent: JSON.stringify({ text, images: [{ url }] }) };
+    await enqueue(h, id, item);
+    const first = h.maker.getSession(id);
+    assert.ok(first.sent[0].some(block => block.type === 'image' && block.path === absPath));
+    rmSync(absPath);
+    await assert.rejects(h.queue.enqueue(id, { ...item, clientId: 'external', autoResume: true, acceptedHistoryReplay: true }), { code: 'ENOENT' });
+    if (group) { t.mock.timers.enable({ apis: ['setTimeout'] }); t.after(() => t.mock.timers.reset()); }
+    first.emit({ type: 'error', data: group ? INTERRUPTION : OVERFLOW, sessionTurnGeneration: first.generation,
+      sessionInstanceId: first.instanceId });
+    const replayed = () => {
+      const now = h.maker.getSession(id);
+      return now && now.sent.length > (now === first ? 1 : 0);
+    };
+    if (group) for (let i = 0; i < 200 && !replayed(); i++) { t.mock.timers.tick(500); await settle(); }
+    await settleUntil(replayed, 'surviving text reached the engine');
+    await settle();
+    const now = h.maker.getSession(id);
+    assert.equal(now.sent.length, now === first ? 2 : 1);
+    assert.match(JSON.stringify(now.sent.at(-1)), /retained text/);
+    assert.doesNotMatch(JSON.stringify(now.sent.at(-1)), /xdt-image|source.png/);
+  });
+}
+
+// L337 / db: the fallback bytes are the selected resource; the expired browser
+// path is not another file to open. F6 inline images do not have a durable ImageRef.
+test('Host sends inline bytes with an expired absolute path on direct and queued inputs', async t => {
+  const h = attachmentHarness(t);
+  const block = { type: 'image', category: 'image', ext: '.png', mimeType: 'image/png',
+    path: path.join(h.root, 'expired.png'), base64: attachmentPng.toString('base64') };
+  await enqueue(h, 'inline', { clientId: 'inline-1', text: 'with image', files: [block] });
+  const session = h.maker.getSession('inline');
+  assert.equal(session.sent.length, 1);
+  assert.deepEqual(readFileSync(session.sent[0].find(part => part.type === 'image').path), attachmentPng);
+  const direct = await h.services[0].prepareUserMessage('inline', { type: 'user', content: [block] });
+  assert.deepEqual(readFileSync(direct.content[0].path), attachmentPng);
+});
+
 test('Host sends managed local images and files and steers through the same normalizer', async t => {
   const h = attachmentHarness(t);
   const item = h.attached('first');
@@ -1608,11 +1670,26 @@ test('Host account runtimes with the same task id do not remove each others temp
 
 test('Host rejects unsupported or missing attachments before queue acceptance and does not hide ingest errors', async t => {
   const h = attachmentHarness(t);
-  for (const source of ['oss://not-connected', path.join(h.root, 'missing.png')]) {
-    await assert.rejects(h.queue.enqueue('attachments', h.attached('rejected', source)));
+  for (const [source, code] of [['oss://not-connected', 'UNSUPPORTED_CAPABILITY'], [path.join(h.root, 'missing.png'), 'ENOENT']]) {
+    await assert.rejects(h.queue.enqueue('attachments', h.attached('rejected', source)), { code });
     assert.equal(h.queue.projection('attachments').pendingQueue.length, 0);
     assert.equal(h.maker.getSession('attachments'), null);
   }
+  const prepare = block => h.services[0].prepareUserMessage('attachments', {
+    type: 'user', content: [{ type: 'text', text: 'with attachment' }, block],
+  });
+  const inline = { type: 'image', base64: attachmentPng.toString('base64'), mimeType: 'image/png' };
+  await assert.rejects(prepare({ ...inline, path: 'cindy-oss-attach://unavailable' }), { code: 'UNSUPPORTED_CAPABILITY' });
+  const { default: disk } = await import('node:fs/promises');
+  const writeFile = disk.writeFile.bind(disk);
+  const fault = t.mock.method(disk, 'writeFile', async (file, data, options) => {
+    if (typeof file === 'string' && file.endsWith('.png')) throw Object.assign(new Error('full disk'), { code: 'ENOSPC' });
+    return writeFile(file, data, options);
+  });
+  try { await assert.rejects(prepare(inline), { code: 'INTERNAL' }); }
+  finally { fault.mock.restore(); }
+  assert.equal(h.persisted.length, 0);
+  assert.equal(h.maker.getSession('attachments'), null);
   h.owner().sqlite.exec("CREATE TRIGGER fail_media BEFORE INSERT ON media_refs BEGIN SELECT RAISE(ABORT, 'media write failed'); END");
   await assert.rejects(h.queue.enqueue('attachments', h.attached('rejected')), /media write failed/);
   assert.equal(h.refs().length, 0);
@@ -1620,6 +1697,7 @@ test('Host rejects unsupported or missing attachments before queue acceptance an
   h.owner().sqlite.exec('DROP TRIGGER fail_media');
   await enqueue(h, 'attachments', h.attached('retry'));
   assert.equal(h.refs().length, 1);
+  assert.equal(h.maker.getSession('attachments').sent.length, 1);
 });
 
 test('stopping Host during image ingest rejects the preparation and compensates staged refs', async t => {

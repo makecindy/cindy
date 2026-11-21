@@ -1156,7 +1156,7 @@ it('restores text, attachments and strokes after an aborted annotated send', asy
     removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles, restoreFiles,
   };
   // makerChatStore 在烧录失败时返回 false(见 pendingQueueDefer 的中止用例)。
-  const onSend = vi.fn().mockResolvedValue(false);
+  const onSend = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
   const view = render(
     <ChatInput sessionId="ssh-annotated" initialWorkingDir="/workspace" runtimeAgentKind="codex"
       vendorKey="codex" deviceLinkDeviceId={null} remoteHostId="builder" attachmentState={attachmentState}
@@ -1179,6 +1179,12 @@ it('restores text, attachments and strokes after an aborted annotated send', asy
   expect(clearFiles).toHaveBeenCalled();
   const restored = restoreFiles.mock.calls.at(-1)?.[0] ?? [];
   expect(restored).toEqual([expect.objectContaining({ id: 'tray-annotated', annotationStrokes: strokes })]);
+  expect(h.editor!.isEditable).toBe(true);
+  await act(async () => { h.editor!.commands.setContent('<p>Edited before retry</p>'); });
+  await act(async () => { fireEvent.click(send); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+  expect(onSend.mock.calls[1][0]).toBe('Edited before retry');
+  expect(onSend.mock.calls[1][4]).toEqual([expect.objectContaining({ id: 'tray-annotated' })]);
 });
 
 // PR #6433 / unit: retry a recovered creator draft through the real existing-task

@@ -1,3 +1,13 @@
+import { createHash } from 'node:crypto';
+import * as logger from '../../logger.js';
+import { createImageCacheStore } from '../../imageCacheStore.js';
+import { createBlobStore } from '../../cindy-media/blobStore.js';
+import { isRemoteAttachmentRef, parseRemoteAttachmentRef } from '../../device-link/remoteAttachment.js';
+import { buildAttachmentOssRef } from '../../../shared/attachmentOssRef.js';
+import { createAttachmentNormalizer } from '../normalizeAttachments.js';
+import { ACCEPTED_ATTACHMENT_REPLAY } from '../attachmentReplay.js';
+import { promises as attachmentFs } from 'node:fs';
+import { cleanupSessionTempAttachments, normalizeUserMessage } from '../normalizeAttachments.desktop.js';
 import { createChannelTurnObserver, onChannelTurn } from '../channelTurnSignal';
 import { withSharedSessionResumeRecovery, type SharedSessionResumeRecoveryDeps } from '../sharedSessionResumeRecovery.js';
 import { createAgentHandoffPendingRegistry } from '../agentHandoff.js';
@@ -1737,6 +1747,144 @@ describe('maker SEND transaction', () => {
       snapshots.onSessionClosed('session-1');
       vi.useRealTimers();
     }
+  });
+
+  // L337: a failed attachment rejects the whole send. The existing transaction tests inject a
+  // rejection, missing the normalizer that can silently discard a clipboard placeholder. Unit.
+  it('rejects text with an unresolved attachment before writing history or sending to the agent', async ({ onTestFinished }) => {
+    const { deps, session } = createDeps({
+      prepareSendUserMessage: (id, message) =>
+        normalizeUserMessage(id, message as Parameters<typeof normalizeUserMessage>[1]),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const send = (filePath: string) => transaction.sendToAgentAccepted(session.id, {
+      type: 'user',
+      content: [{ type: 'text', text: 'read this' }, { type: 'file', path: filePath }],
+    }, undefined, { persistUserMessage: { clientId: 'attachment-input', content: 'read this' } });
+
+    for (const brokenPath of ['', 'clipboard://paste-1', 'xdt-image://private', 'cindy-media://private']) {
+      await expect(send(brokenPath)).rejects.toMatchObject({
+        code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+        message: '[DEVICE_LINK_MEDIA_TRANSFER_FAILED] Attachment transfer failed',
+      });
+    }
+    const sessionRows = await import('../../localDb/sessionDispatchSnapshot.js');
+    const localRow = vi.spyOn(sessionRows, 'getSessionRowSnapshotStrict').mockResolvedValue({
+      remoteHostId: null, agentDeviceId: null, source: 'desktop', workingDir: '/fixture',
+    } as Awaited<ReturnType<typeof sessionRows.getSessionRowSnapshotStrict>>);
+    onTestFinished(() => { localRow.mockRestore(); });
+    const removed = await attachmentFs.mkdtemp(path.join(os.tmpdir(), 'cindy-l337-source-'));
+    try {
+      const missing = path.join(removed, 'deleted.txt');
+      await expect(send(missing)).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' });
+    } finally { await attachmentFs.rmdir(removed); }
+
+    // Fail after a partial write inside the real normalizer, before onAccepted writes history.
+    const writeFile = attachmentFs.writeFile.bind(attachmentFs);
+    let partial = '';
+    const diskFull = vi.spyOn(attachmentFs, 'writeFile').mockImplementation(async (file, data, options) => {
+      if (typeof file === 'string' && file.endsWith('.png')) {
+        partial = file;
+        await writeFile(file, Buffer.from('partial'), options);
+        throw Object.assign(new Error('ENOSPC at ' + file), { code: 'ENOSPC' });
+      }
+      return writeFile(file, data, options);
+    });
+    try {
+      await expect(transaction.sendToAgentAccepted(session.id, { type: 'user', content: [
+        { type: 'text', text: 'read this' }, { type: 'image', base64: 'aGk=', mimeType: 'image/png' },
+      ] }, undefined, { persistUserMessage: { clientId: 'attachment-input', content: 'read this' } }))
+        .rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', message: '[DEVICE_LINK_MEDIA_TRANSFER_FAILED] Attachment transfer failed' });
+      expect(partial).not.toBe('');
+      await expect(attachmentFs.stat(partial)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      diskFull.mockRestore();
+      await cleanupSessionTempAttachments(session.id);
+    }
+    expect(deps.createDbMessage).not.toHaveBeenCalled();
+    expect(session.send).not.toHaveBeenCalled();
+
+    const filePath = path.resolve('package.json');
+    await expect(send(filePath)).resolves.toMatchObject({ accepted: true });
+    expect(deps.createDbMessage).toHaveBeenCalledTimes(1);
+    expect(session.send).toHaveBeenCalledTimes(1);
+    expect(session.send).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.arrayContaining([{ type: 'file', path: filePath }]),
+    }), expect.anything());
+  });
+
+  // L337 / unit: a remote file activates preflight before final normalization. Both must
+  // recognize the same accepted replay without relaxing permission or URI checks on new input.
+  it('sends surviving text and remote bytes once when accepted history lost its managed image', async ({ onTestFinished }) => {
+    const root = await attachmentFs.mkdtemp(path.join(os.tmpdir(), 'cindy-mixed-replay-'));
+    onTestFinished(() => attachmentFs.rm(root, { recursive: true, force: true }));
+    const blobs = createBlobStore({ getUserDataDir: () => root });
+    const bytes = Buffer.from('%PDF-1.4 fixture');
+    const ref = buildAttachmentOssRef({ ossKey: 'fixture/still-here', originalName: 'report.pdf', mimeType: 'application/pdf',
+      size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+    const fetchFile = vi.fn(async (_ref: unknown, dest: string) => { await attachmentFs.writeFile(dest, bytes); });
+    const release = vi.fn(async () => {});
+    const probe = logger.createLogger('test');
+    const warn = vi.spyOn(probe, 'warn');
+    const factory = vi.spyOn(logger, 'createLogger').mockReturnValueOnce(probe);
+    onTestFinished(() => factory.mockRestore());
+    const normalizer = createAttachmentNormalizer({
+      getTempDir: () => root, getTaskLocation: async () => 'local', imageCacheStore: createImageCacheStore(() => root),
+      cindyMediaBlobStore: blobs, cindyMediaLedger: { removeRefById: vi.fn(), deleteZeroRefBlobRecord: vi.fn() },
+      ingestMedia: vi.fn(), isRemoteAttachmentRef, parseRemoteAttachmentRef, materializeRemoteAttachment: fetchFile, removeRemote: release,
+    });
+    const { deps, session } = createDeps({ materializeDirectSendOssAttachments: normalizer.materializeDirectSendOssAttachments,
+      prepareSendUserMessage: (id, message, replay) => normalizer.normalizeUserMessage(id, message as Parameters<typeof normalizeUserMessage>[1], replay) });
+    // The transaction releases its local copy after acceptance. Read where the engine consumes it.
+    const send = vi.mocked(session.send);
+    const accept = send.getMockImplementation()!;
+    const receivedFiles: Buffer[] = [];
+    send.mockImplementation(async (message, options) => {
+      if (typeof message !== 'string' && Array.isArray(message.content)) {
+        for (const block of message.content) {
+          if (block.type === 'file') receivedFiles.push(await attachmentFs.readFile(block.path));
+        }
+      }
+      return accept(message, options);
+    });
+    const tx = createMakerSendTransaction(deps);
+    const image = { type: 'image', path: 'cindy-media://blobs/' + 'b'.repeat(64) + '.png' };
+    const text = { type: 'text', text: 'retain this text' };
+    const pdf = { type: 'file', path: ref };
+    const message = { type: 'user', content: [text, image, pdf] };
+    const replay = { [ACCEPTED_ATTACHMENT_REPLAY]: true };
+    const transfer = { code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' };
+    await expect(tx.sendToAgentAccepted(session.id, message, undefined, { acceptedAttachmentReplay: true })).rejects.toMatchObject(transfer);
+    await expect(normalizer.materializeQueuedOssAttachmentsDeferred(session.id, { files: [image, pdf], ...replay })).rejects.toMatchObject(transfer);
+
+    const access = attachmentFs.access.bind(attachmentFs);
+    const denied = blobs.resolveSafe(image.path).absPath;
+    const fault = vi.spyOn(attachmentFs, 'access').mockImplementation(async (file, mode) => {
+      if (file === denied) throw Object.assign(new Error('source access denied'), { code: 'EACCES' });
+      return access(file, mode);
+    });
+    try {
+      await expect(tx.sendToAgentAccepted(session.id, message, undefined, replay)).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED' });
+    } finally { fault.mockRestore(); }
+    await expect(tx.sendToAgentAccepted(session.id, { ...message, content: [text, image, { ...pdf, path: 'cindy-oss-attach://%' }] },
+      undefined, replay)).rejects.toMatchObject(transfer);
+    expect(session.send).not.toHaveBeenCalled();
+    expect(fetchFile).not.toHaveBeenCalled();
+
+    await expect(tx.sendToAgentAccepted(session.id, message, undefined, replay)).resolves.toMatchObject({ accepted: true });
+    expect(session.send).toHaveBeenCalledTimes(1);
+    const [sent] = vi.mocked(session.send).mock.calls[0];
+    const content = typeof sent === 'string' ? sent : sent.content;
+    expect(content).toEqual(expect.arrayContaining([text, expect.objectContaining({ type: 'file' })]));
+    if (!Array.isArray(content)) throw new Error('Expected an attachment in the model input');
+    expect(content.some(block => block.type === 'image')).toBe(false);
+    const files = content.filter(block => block.type === 'file');
+    expect(files).toHaveLength(1);
+    expect(receivedFiles).toEqual([bytes]);
+    expect(fetchFile).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledExactlyOnceWith('fixture/still-here');
+    expect(warn.mock.calls.filter(([event]) => event === 'skipped cleaned cache images during accepted input replay'))
+      .toEqual([['skipped cleaned cache images during accepted input replay', { sessionId: session.id, count: 1 }]]);
   });
 
   it('materializes direct OSS attachments after session/workdir preflight', async () => {
