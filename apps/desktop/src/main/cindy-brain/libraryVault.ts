@@ -279,8 +279,16 @@ async function resolvePathThroughAncestor(realBase: string, target: string): Pro
     try {
       const real = await fs.promises.realpath(parent);
       return isInsideDir(realBase, real) ? path.join(real, path.relative(parent, target)) : null;
-    } catch {
+    } catch (err) {
       if (parent === probe) return null;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+      try {
+        if ((await fs.promises.lstat(parent)).isSymbolicLink()) return null;
+      } catch (statError) {
+        const statCode = (statError as NodeJS.ErrnoException).code;
+        if (statCode !== 'ENOENT' && statCode !== 'ENOTDIR') return null;
+      }
       probe = parent;
     }
   }
@@ -992,7 +1000,8 @@ export class LibraryVault {
       const entry = await fs.promises.lstat(target);
       return entry.isFile() ? entry.size : null;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return null;
       throw err;
     }
   }
@@ -1910,19 +1919,21 @@ export class LibraryVault {
     return this.runSerialized(async () => {
       const gate = this.requireWritable(false);
       if (gate) return gate;
-      const checkpoint = await this.prepareUsageMutationUnlocked();
-      if (checkpoint) return checkpoint;
+      const pending: { key: string; target: string; size: number | null }[] = [];
       try {
         for (const suffix of ['', '-wal', '-shm', '-journal']) {
           const target = databasePath + suffix;
           const key = foldCase(target);
           if (!this.sqliteUsage.has(key)) {
-            this.sqliteUsage.set(key, { target, size: await this.fileUsageSize(target) });
+            pending.push({ key, target, size: await this.fileUsageSize(target) });
           }
         }
-      } catch {
-        this.usageNeedsRescan = true;
+      } catch (err) {
+        return this.tmpFailure(err, '无法读取 SQLite 用量基线');
       }
+      const checkpoint = await this.prepareUsageMutationUnlocked();
+      if (checkpoint) return checkpoint;
+      for (const { key, target, size } of pending) this.sqliteUsage.set(key, { target, size });
       return null;
     });
   }

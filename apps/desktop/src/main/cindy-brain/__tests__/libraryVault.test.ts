@@ -802,6 +802,54 @@ describe('LibraryVault', () => {
       });
     });
 
+    it('悬空目录别名不能登记 SQLite 用量', async () => {
+      const vault = makeVault();
+      await vault.open();
+      await fs.promises.symlink(path.join(libraryRoot, 'missing'), path.join(libraryRoot, 'alias'),
+        process.platform === 'win32' ? 'junction' : 'dir');
+      expect(await vault.resolveDbTarget('alias/db.sqlite')).toBeNull();
+    });
+
+    it('SQLite 用量基线读失败不破坏旧账本', async () => {
+      const initial = makeVault();
+      await initial.open();
+      await fs.promises.writeFile(path.join(libraryRoot, 'keep.txt'), 'yes');
+      const ledgerPath = path.join(libraryRoot, '.cindy-library', 'usage.json');
+      const legacy = JSON.stringify({ files: 1, bytes: 3, updatedAt: 1, mutations: 1 });
+      await fs.promises.writeFile(ledgerPath, legacy);
+      const vault = makeVault({ limits: { usageScanFuse: 0 } });
+      await vault.open();
+      const target = path.join(libraryRoot, 'blocked.sqlite');
+      const lstat = fs.promises.lstat;
+      const spy = vi.spyOn(fs.promises, 'lstat').mockImplementation(((...args: Parameters<typeof lstat>) => {
+        if (args[0] === target + '-wal') throw Object.assign(new Error('access denied'), { code: 'EACCES' });
+        return lstat(...args);
+      }) as typeof lstat);
+      try {
+        expect(await vault.prepareExternalMutation(target)).toMatchObject({ ok: false });
+      } finally {
+        spy.mockRestore();
+      }
+      await vault.invalidate();
+      expect(await fs.promises.readFile(ledgerPath, 'utf8')).toBe(legacy);
+      expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
+        ok: true, state: 'ready', fileCount: 1, usedBytes: 3,
+      });
+    });
+
+    it('SQLite 父路径改为普通文件时不存在数据库用量', async () => {
+      const vault = makeVault();
+      await vault.open();
+      const database = await vault.resolveDbTarget('folder/db.sqlite');
+      if (!database) throw new Error('应允许解析尚未创建的数据库');
+      expect(await vault.prepareExternalMutation(database)).toBeNull();
+      expect(await vault.write({ path: 'folder', content: 'yes' })).toMatchObject({ ok: true });
+      await vault.invalidate();
+      expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
+        ok: true, state: 'ready', fileCount: 1, usedBytes: 3,
+      });
+    });
+
     it('超限的旧版合法账本可读写，新版首次变更先持久写下未收尾状态', async () => {
       const initial = makeVault();
       await initial.open();
