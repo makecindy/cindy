@@ -16191,6 +16191,10 @@
       "retryIn": "Automatischer Versuch in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "Das Nutzungslimit des Abos für dieses Modell ist erreicht. Sie können das Modell wechseln.",
+      "poolRetryUntil": "Versuchen Sie es nach {{resetAt}} erneut.",
+      "poolOtherSignedOut": "Ein weiteres Abo-Konto ist abgemeldet. Melden Sie es auf dem Computer an, der die Aufgabe ausführt, und versuchen Sie es erneut.",
+      "poolUnavailable": "Für dieses Modell ist kein Abo-Konto verfügbar. Wechseln Sie das Modell oder prüfen Sie die Konten auf dem Computer, der die Aufgabe ausführt.",
       "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle.",
       "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle.",
       "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
@@ -22271,6 +22275,7 @@
     "picker": {
       "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einem Modus zusammen, um ihn hier auszuwählen.",
       "manage": "Modellgruppen verwalten",
+      "deviceTitle": "Modellgruppen · {{device}}",
       "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
       "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
       "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt."

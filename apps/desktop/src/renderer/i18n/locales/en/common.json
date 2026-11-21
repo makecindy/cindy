@@ -16191,6 +16191,10 @@
       "retryIn": "Retrying automatically in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "Subscription usage for this model has reached its limit. You can switch models now.",
+      "poolRetryUntil": "Retry after {{resetAt}}.",
+      "poolOtherSignedOut": "Another subscription account is signed out. You can sign in on the computer running the task and retry.",
+      "poolUnavailable": "No subscription account is available for this model. Switch models or check the accounts on the computer running the task.",
       "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source.",
       "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source.",
       "loginRequired": "The subscription account used by this task needs sign-in. Sign in again on the computer running the task, then retry.",
@@ -22271,6 +22275,7 @@
     "picker": {
       "empty": "No model groups yet. Combine a few sources into a mode in Settings to pick it here.",
       "manage": "Manage model groups",
+      "deviceTitle": "Model groups · {{device}}",
       "switched": "“{{name}}” switched this task to {{model}}",
       "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
       "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected."
