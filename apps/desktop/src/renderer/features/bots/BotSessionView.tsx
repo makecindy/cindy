@@ -158,11 +158,15 @@ function BotSessionGateView() {
       }),
       // Unread count and @ candidates come from the shared roster projection
       // (same read positions as the sidebar badge) instead of a second full
-      // `bots.list`; an unloaded roster is read once, shared with the sidebar.
-      ensureBotProfilesLoaded().then((profiles) => {
-        if (!hasLoadedBotProfiles()) throw new Error('Bot roster is not loaded');
-        return profiles;
-      }),
+      // `bots.list`. A loaded roster is used as is: waiting for in-flight
+      // refreshes could keep the gate unverified while notifications keep
+      // queueing them. Only an unloaded roster is read, shared with the sidebar.
+      hasLoadedBotProfiles()
+        ? Promise.resolve(getBotProfiles())
+        : ensureBotProfilesLoaded().then((profiles) => {
+          if (!hasLoadedBotProfiles()) throw new Error('Bot roster is not loaded');
+          return profiles;
+        }),
     ])
       .then(([bot, bots]) => {
         if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;

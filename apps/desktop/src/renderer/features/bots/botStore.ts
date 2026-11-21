@@ -795,12 +795,11 @@ async function hydrateFromDatabase(): Promise<void> {
   const owner = getDataOwnerGeneration();
   const generation = ++hydrationGeneration;
   const isCurrent = () => isDataOwnerGenerationCurrent(owner) && generation === hydrationGeneration;
-  // A refresh over a loaded snapshot stays 'ready': flipping to 'pending' and
-  // back on every change notification re-rendered every load-state subscriber.
-  if (profileLoadState !== 'ready') {
-    profileLoadState = 'pending';
-    emit();
-  }
+  // Stays a per-refresh 'pending': RemoteBotSessionView's local-recovery hand-off
+  // waits for it as "the roster caught up". keepUnchangedProfiles keeps this
+  // emit from re-rendering useBotProfiles() subscribers.
+  profileLoadState = 'pending';
+  emit();
   try {
     if (typeof api.getModelChainSettings === 'function') {
       try {

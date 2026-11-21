@@ -21,7 +21,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../botStore', () => ({
   useBotProfiles: () => mocks.cached,
   getBotProfiles: () => mocks.cached,
-  ensureBotProfilesLoaded: async () => mocks.cached,
+  // A loaded roster stays usable while refreshes are queued; the gate must not wait on them.
+  ensureBotProfilesLoaded: () => new Promise(() => {}),
   hasLoadedBotProfiles: () => true,
   getBotUnreadCounts: () => mocks.unread,
 }));

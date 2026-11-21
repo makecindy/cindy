@@ -946,6 +946,9 @@ export function BotsHomeView() {
   });
   const selectedBotId = selectedBot?.id;
   const selectedBotStatus = selectedBot?.status;
+  // A profile save (version bump) still re-runs it, so creation that lost its
+  // version check to a concurrent save retries with the new version.
+  const selectedBotVersion = selectedBot?.currentVersion;
   const selectedInvitationPending =
     !!selectedBot?.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId;
 
@@ -1058,6 +1061,7 @@ export function BotsHomeView() {
     createCanonicalSession,
     selectedBotId,
     selectedBotStatus,
+    selectedBotVersion,
     currentCanonicalId,
     selectedInvitationPending,
     sessionId,
