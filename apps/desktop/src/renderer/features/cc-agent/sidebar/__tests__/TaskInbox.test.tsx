@@ -320,6 +320,28 @@ it('places teammate conversations with the tasks and removes a read one even whi
 
 // Unit: task-inbox.md. Row placement tests cannot see the closed inbox's indicator.
 // A snoozed remote result wakes on time and clears on read despite the open row's held rank.
+it('keeps the entry green dot off for remote failures and on for a different device’s unread completion', () => {
+  const id = 'scheduled';
+  const sessions = ['studio', 'other'].map(deviceLinkDeviceId => ({ id, status: 'active', deviceLinkDeviceId } as Session));
+  for (const device of ['studio', 'other']) remoteProjectsStore.setDeviceSessions(device, device, []);
+  remoteProjectsStore.setDeviceScheduleIndex('studio', new Map([[id, {
+    scheduleId: 'schedule', scheduleName: 'Scheduled', hasUnreadRun: true,
+    unreadRunIds: ['run'], hasUnreadFailedRun: true, unreadFailedRunIds: ['run'],
+  }]]));
+  const view = renderHook(() => useInboxUnread(sessions, [], {
+    runningSessionIds: new Set(), attentionSessionIds: new Set([id]),
+    remoteUnreadScheduleRows: useRemoteUnreadScheduleRows(), remoteWaitingRows: useRemoteSidebarWaitingRows(),
+  }, () => false));
+  expect(view.result.current.hasUnread).toBe(false);
+  const complete = (device: string, attention: boolean) => act(() => applyRemoteSessionActivity(device, {
+    sessionId: id, phase: 'completed', attention,
+  }));
+  complete('other', true);
+  expect(view.result.current.hasUnread).toBe(true);
+  complete('other', false);
+  expect(view.result.current.hasUnread).toBe(false);
+});
+
 it('lights for a due remote result and clears as soon as the host acknowledges it', () => {
   vi.useFakeTimers();
   try {

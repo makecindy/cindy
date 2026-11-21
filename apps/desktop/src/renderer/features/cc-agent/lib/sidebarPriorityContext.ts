@@ -14,6 +14,21 @@ export function useRemoteSidebarWaitingRows(): ReadonlySet<string> {
   return useMemo(() => new Set([...failedRuns, ...pendingQuestions]), [failedRuns, pendingQuestions]);
 }
 
+export function remoteSidebarPriorityRank(
+  session: Session,
+  phase: RemoteSessionActivityPhase | undefined,
+  ctx: MainListPriorityContext,
+  starting: ReadonlySet<string>,
+) {
+  const rowKey = sessionRowKey(session);
+  return liveTaskPriorityRank({
+    // Preserve a new send before its first host push; terminal evidence still ends the old turn.
+    running: phase === 'running' || (!phase && starting.has(session.id)),
+    waiting: phase === 'needs-interaction' || phase === 'error' || ctx.remoteWaitingRows?.has(rowKey) === true,
+    unread: phase === 'completed' || ctx.remoteUnreadScheduleRows?.has(rowKey) === true,
+  });
+}
+
 /** Click capture and list sorting must see the same local and remote activity. */
 export function sidebarPriorityContext(
   ctx: MainListPriorityContext,
@@ -28,13 +43,7 @@ export function sidebarPriorityContext(
   for (const session of sessions) {
     const phase = remotePhaseOf(session);
     if (session.deviceLinkDeviceId) {
-      const rowKey = sessionRowKey(session);
-      // Preserve a new send before its first host push; terminal evidence still ends the old turn.
-      remotePriorityByRow.set(rowKey, liveTaskPriorityRank({
-        running: phase === 'running' || (!phase && starting.has(session.id)),
-        waiting: phase === 'needs-interaction' || phase === 'error' || ctx.remoteWaitingRows?.has(rowKey) === true,
-        unread: phase === 'completed' || ctx.remoteUnreadScheduleRows?.has(rowKey) === true,
-      }));
+      remotePriorityByRow.set(sessionRowKey(session), remoteSidebarPriorityRank(session, phase, ctx, starting));
     }
     if (!phase) continue;
     if (phase === 'running') {

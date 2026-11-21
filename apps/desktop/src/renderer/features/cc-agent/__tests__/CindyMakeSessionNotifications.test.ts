@@ -82,6 +82,7 @@ function attentionSidebar() {
     setSelectionAnchorSessionId: vi.fn(), urgentSetRef: { current: new Set<string>() },
     attentionKindsRef: { current: new Map() }, sessionsByIdRef: { current: new Map() },
     runningSessionIdsRef: { current: new Set() }, sidebarNotificationsRef: { current: new Set() },
+    remoteWaitingRowsRef: { current: new Set<string>() },
     holdSidebarViewedPriority: vi.fn(), sidebarPriorityContext: (context: unknown) => context,
     clearNotification: vi.fn(), activeSessionIdRef: { current: 'shown' },
     navigate: vi.fn(), resolveSessionRoute: async () => '/cc-agent/clicked',
