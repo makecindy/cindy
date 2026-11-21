@@ -1,0 +1,116 @@
+name: package-linux-arm64
+
+# Manual, versionless trial packages on a native aarch64 host.
+# Official releases and CDN manifests are published by the private release CI.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-linux-arm64-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Linux arm64 ${{ matrix.region }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        region: [cn, global]
+    env:
+      NODE_OPTIONS: '--max-old-space-size=8192'
+      CINDY_REGION: ${{ matrix.region }}
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Install native packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            dpkg-dev \
+            fakeroot \
+            pkg-config \
+            libjson-c-dev \
+            libpng-dev \
+            libturbojpeg0-dev \
+            libwayland-dev \
+            libxkbcommon-dev
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Package versionless Linux arm64
+        run: |
+          set -eu
+          node apps/desktop/scripts/package-desktop.mjs \
+            --platform linux \
+            --arch arm64 \
+            --region "$CINDY_REGION" \
+            --skip-smoke \
+            --no-sign
+
+      - name: Validate package and build info
+        id: validate
+        run: |
+          set -eu
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { artifactRelDir } from './apps/desktop/scripts/ci/package-lib.mjs';
+
+          const region = process.env.CINDY_REGION;
+          const dir = path.resolve('apps/desktop/release', artifactRelDir({
+            region, versionless: true, platformKey: 'linux-arm64',
+          }));
+          const info = JSON.parse(fs.readFileSync(path.join(dir, 'build-info.json'), 'utf8'));
+          assert.equal(info.region, region);
+          assert.equal(info.platformKey, 'linux-arm64');
+          assert.equal(info.versionless, true);
+          assert.equal(info.version, null);
+          assert.equal(info.commitSha, process.env.GITHUB_SHA);
+          const installers = info.files.filter(file => file.role === 'installer');
+          assert.equal(installers.length, 1);
+          const installer = installers[0];
+          assert.equal(path.basename(installer.name), installer.name);
+          assert.ok(installer.name.endsWith('.deb'));
+          const deb = path.join(dir, installer.name);
+          const bytes = fs.readFileSync(deb);
+          assert.equal(bytes.length, installer.size);
+          assert.equal(createHash('sha256').update(bytes).digest('hex'), installer.sha256);
+          assert.equal(execFileSync('dpkg-deb', ['--field', deb, 'Architecture'], { encoding: 'utf8' }).trim(), 'arm64');
+          fs.writeFileSync(`${deb}.sha256`, `${installer.sha256}  ${installer.name}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `artifact_dir=${dir}\n`);
+          NODE
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cindy-linux-arm64-${{ matrix.region }}
+          path: ${{ steps.validate.outputs.artifact_dir }}
+          if-no-files-found: error
+          retention-days: 7
