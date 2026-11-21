@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createTwoFilesPatch } from 'diff';
+import { BOT_SKILL_MAX_BODY_BYTES, parseBotSkillFile } from './botSkillStore.js';
 import { GROUP_REQUEST_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
 export const TEAMMATE_TEMPLATE_VERSION = 9;
@@ -28,17 +29,10 @@ const PENDING_DIR = path.join('.cindy', 'template');
  */
 export const OWN_RULES_HEADING = '## Your own rules';
 const OWN_RULES_INTRO = 'Rules the owner asked for, or that you settled with the owner, go in this section. They take precedence over the standard text above. Cindy replaces everything above this section when it updates the standard and keeps this section as it is.';
-const CHANGES_NOTE = 'Changes made to an earlier version of this skill\'s standard, kept when Cindy updated it. Lines starting with + were added and lines starting with - removed; the other lines are that earlier standard, showing where each change was made. Keep the intent of these changes, in the section they were made in, as rules in the skill\'s "Your own rules" section.';
-const HEADER_NOTE = 'Frontmatter lines from the earlier version of this skill that the updated header does not have (for example a changed standard field). Decide whether to put them back in the skill\'s header.';
-const EARLIER_NOTE = 'This skill\'s earlier version, kept when Cindy took over its standard. Keep in the skill\'s "Your own rules" section, as plain rules, only what the owner asked for that the standard does not already say.';
+const CHANGES_NOTE = 'Changes made to an earlier version of this skill\'s standard, kept when Cindy updated it. Lines starting with + were added and lines starting with - removed; the other lines are that earlier standard, showing where each change was made. Keep the intent of these changes, in the section they were made in, together with the standard above. You may rewrite what still applies as plain rules in this section and then remove this block.';
+const HEADER_NOTE = 'Frontmatter lines from the earlier version of this skill that the updated header does not have (for example a changed standard field). Decide whether to put them back in the header above, then remove this block.';
+const EARLIER_NOTE = 'This skill\'s earlier version, kept when Cindy took over its standard. Keep in this section, as plain rules, only what the owner asked for that the standard above does not already say, then remove this block.';
 const LAYERED_FILES = new Set(['.agents/skills/hand-off/SKILL.md']);
-/**
- * What an upgrade keeps from the earlier version goes beside the skill, not into it: the skill
- * stays within the size every editor and cloud restore accepts, and the material reaches other
- * computers with the skill's files.
- */
-export const EARLIER_VERSION_FILE = 'earlier-version.md';
-const EARLIER_POINTER = `Cindy kept what this skill's earlier version had changed in \`${EARLIER_VERSION_FILE}\` next to this file. Fold what still applies into this section, then delete that file.`;
 /** The standard text last written to a layered file: what a later change is compared with. */
 const STANDARD_DIR = path.join('.cindy', 'template-standard');
 /** Finds an earlier template file by the hash the record kept (from the project's Git history). */
@@ -112,7 +106,7 @@ function mergedHeader(next: string, current: string, previousStandard: string | 
  * guessed difference loses scope, nesting or moves): as a diff against the standard it started
  * from, or, without a known starting point, its whole earlier text. The teammate folds them in.
  */
-function layeredContent(rawCurrent: string, rawPrevious: string | null, next: string): { skill: string; carried: string } {
+function layeredContent(rawCurrent: string, rawPrevious: string | null, next: string): string {
   const current = lf(rawCurrent);
   const previousStandard = rawPrevious === null ? null : lf(rawPrevious);
   const { standard, own } = standardPart(current);
@@ -141,11 +135,10 @@ function layeredContent(rawCurrent: string, rawPrevious: string | null, next: st
   if (leftover.length) carried.push(`${HEADER_NOTE}\n\n${fenced('yaml', leftover.join('\n'))}`);
   // The new standard's own section brings its intro; an earlier copy of it is not an own rule.
   const nextOwn = new Set(next.slice(standardPart(next).standard.length).split('\n').map(line => line.trim()).filter(Boolean));
-  const ownLines = own.split('\n').filter(line => !nextOwn.has(line.trim()));
-  if (carried.length && !ownLines.some(line => line.trim() === EARLIER_POINTER)) ownLines.push('', EARLIER_POINTER);
-  const ownRules = ownLines.join('\n').trim();
-  const skill = ownRules ? `${header.trimEnd()}\n\n${ownRules}\n` : header;
-  return { skill, carried: carried.join('\n\n') };
+  const ownRules = own.split('\n').filter(line => !nextOwn.has(line.trim())).join('\n').trim();
+  // Kept inside the skill: its text reaches every computer with the skill, unlike a side file.
+  const sections = [ownRules, ...carried].filter(Boolean);
+  return sections.length ? `${header.trimEnd()}\n\n${sections.join('\n\n')}\n` : header;
 }
 
 const MEMORY_ROUTE = [
@@ -346,16 +339,18 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
     const base = record?.files[relative];
     if (LAYERED_FILES.has(relative)) {
       if (await throughLink(workspace, path.join(STANDARD_DIR, relative))) continue;
-      const layered = current === null ? { skill: content, carried: '' }
+      const written = current === null ? content
         : layeredContent(current, await previousStandard(workspace, relative, current, base, readPrevious), content);
-      if (layered.carried) {
-        const carriedPath = path.join(path.dirname(relative), EARLIER_VERSION_FILE);
-        if (await throughLink(workspace, carriedPath)) continue;
-        // A later upgrade adds to what an earlier one kept, it never replaces it.
-        const earlier = await readText(path.join(workspace, carriedPath));
-        await write(path.join(workspace, carriedPath), `${earlier ? `${earlier.trimEnd()}\n\n` : ''}${layered.carried}\n`);
+      // A skill over the body size every editor and cloud restore accepts would be unusable: leave
+      // that rare file as it is and offer the new standard beside it, as for any changed file.
+      if (Buffer.byteLength(parseBotSkillFile(written).body, 'utf8') > BOT_SKILL_MAX_BODY_BYTES) {
+        await write(path.join(workspace, PENDING_DIR, relative), content);
+        // Still compared with the standard it started from; an untracked own skill stays untracked.
+        if (base !== undefined) next.files[relative] = base;
+        next.pending!.push(relative);
+        continue;
       }
-      if (layered.skill !== current) await write(target, layered.skill);
+      if (written !== current) await write(target, written);
       await write(path.join(workspace, STANDARD_DIR, relative), content);
       // The new standard replaces any copy an earlier version left waiting to be merged.
       await fs.rm(path.join(workspace, PENDING_DIR, relative), { force: true });

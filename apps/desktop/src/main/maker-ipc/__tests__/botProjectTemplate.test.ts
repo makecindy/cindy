@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createHash } from 'node:crypto';
 
-import { EARLIER_VERSION_FILE, OWN_RULES_HEADING, TEAMMATE_TEMPLATE_RECORD, TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate, teammateTemplateFiles } from '../botProjectTemplate.js';
+import { OWN_RULES_HEADING, TEAMMATE_TEMPLATE_RECORD, TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate, teammateTemplateFiles } from '../botProjectTemplate.js';
 
 // 2026-11-09: every teammate starts from a clean template it then owns. A newer template
 // must never overwrite what the owner or the teammate changed, nor an upgraded teammate's own rules.
@@ -76,7 +76,8 @@ describe('applyTeammateTemplate', () => {
     const upgrade = (version: number, standard: string) => applyTeammateTemplate(dir, 'Mimi', version, { [skill]: standard }, fromHistory);
     const read = () => fs.readFile(path.join(dir, skill), 'utf8');
     const ownOf = (text: string) => text.slice(text.indexOf(OWN_RULES_HEADING));
-    const carried = () => fs.readFile(path.join(dir, '.agents/skills/hand-off', EARLIER_VERSION_FILE), 'utf8');
+    // What the upgrade kept stays in the skill's own section: it syncs with the skill text (r4653236761).
+    const carried = async () => ownOf(await read());
 
     it('replaces an untouched copy with the new standard', async () => {
       await setUp(oldStandard, true);
@@ -95,7 +96,6 @@ describe('applyTeammateTemplate', () => {
       await upgrade(2, newStandard());
       const text = await read();
       expect(text.startsWith(newStandard().trimEnd())).toBe(true);
-      expect(ownOf(text)).toContain(EARLIER_VERSION_FILE);
       const own = await carried();
       expect(own).toContain('````diff\n');
       // Every change, with the earlier standard around it as context, in file order (a removal is
@@ -142,21 +142,35 @@ describe('applyTeammateTemplate', () => {
       await expect(carried()).resolves.toContain('````yaml\nname: handover\n````');
     });
 
-    // Reviews r4653079186, r4653079196, r4653079206: an own-rules heading inside a fenced example is
-    // not the boundary; a hunk line like `+++ attempts;` is content; the skill stays within the body
-    // size editors and cloud restore accept, because the kept material lives beside it.
-    it('keeps fenced examples and diff content intact, and the skill small', async () => {
+    // Reviews r4653079186, r4653079196: an own-rules heading inside a fenced example is not the
+    // boundary, and a hunk line like `+++ attempts;` is content.
+    it('keeps fenced examples and diff content intact', async () => {
       const example = `\`\`\`markdown\n${OWN_RULES_HEADING}\n- An example rule.\n\`\`\``;
       const cpp = '```cpp\n++ attempts;\n```';
-      const filler = `- ${'x'.repeat(200)}\n`.repeat(300);
-      await setUp(`${oldStandard}\n## Examples\n\n${example}\n\n${cpp}\n\n${filler}`, true);
+      await setUp(`${oldStandard}\n## Examples\n\n${example}\n\n${cpp}\n`, true);
       await upgrade(2, newStandard());
       const text = await read();
+      expect(text.match(new RegExp(`^${OWN_RULES_HEADING}$`, 'gm'))).toHaveLength(1);
       const kept = await carried();
       expect(kept).toContain(`+${OWN_RULES_HEADING}\n+- An example rule.`);
       expect(kept).toContain('\n+++ attempts;\n');
-      expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(Buffer.byteLength(newStandard(), 'utf8') + 1024);
-      expect(text.match(new RegExp(`^${OWN_RULES_HEADING}$`, 'gm'))).toHaveLength(1);
+    });
+
+    // Reviews r4653079206, r4653236761: kept material stays in the skill (a side file may not reach
+    // another computer), and an upgrade that would push the body past the size editors and cloud
+    // restore accept leaves the skill as it is and offers the new standard beside it instead.
+    it('leaves a skill alone when keeping its changes would exceed the body size limit', async () => {
+      // Just under the 64 KiB body limit before the upgrade, over it once the changes are kept.
+      const filler = `- ${'x'.repeat(200)}\n`.repeat(319);
+      const mine = `${oldStandard}\n## Notes\n\n${filler}`;
+      expect(Buffer.byteLength(mine, 'utf8')).toBeLessThan(64 * 1024);
+      await setUp(mine, true);
+      await upgrade(2, newStandard());
+      expect(await read()).toBe(mine);
+      await expect(fs.readFile(path.join(dir, '.cindy/template', skill), 'utf8')).resolves.toBe(newStandard());
+      expect(JSON.parse(await fs.readFile(path.join(dir, TEAMMATE_TEMPLATE_RECORD), 'utf8'))).toMatchObject({
+        files: { [skill]: sha(oldStandard) }, pending: [skill],
+      });
     });
 
     it('keeps an own skill that predates the template whole, for the teammate to tidy', async () => {
@@ -177,7 +191,6 @@ describe('applyTeammateTemplate', () => {
       expect(text).toContain('- Check the task digest when asked.');
       expect(text.match(/Weekly summaries on Fridays/g)).toHaveLength(1);
       expect((await carried()).match(/\+- Never create a task\./g)).toHaveLength(1);
-      expect(text.match(new RegExp(EARLIER_VERSION_FILE.replace('.', '\\.'), 'g'))).toHaveLength(1);
       expect(text.match(new RegExp(OWN_RULES_HEADING, 'g'))).toHaveLength(1);
       expect(text.match(/Rules go here\./g)).toHaveLength(1);
     });

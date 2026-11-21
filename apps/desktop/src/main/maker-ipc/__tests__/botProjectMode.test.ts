@@ -39,7 +39,7 @@ vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ 
 
 import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
-import { EARLIER_VERSION_FILE, OWN_RULES_HEADING } from '../botProjectTemplate.js';
+import { OWN_RULES_HEADING } from '../botProjectTemplate.js';
 
 // Evaluate the actual generated check with real SQLite, in-process. The hook
 // protocol has its own process tests; retain one real spawn below. Repeated
@@ -336,8 +336,7 @@ describe('prepareBotProjectWorkspace', () => {
     const { workingDir } = await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
     const skill = path.join(workingDir, '.agents', 'skills', 'hand-off');
     const text = await fs.readFile(path.join(skill, 'SKILL.md'), 'utf8');
-    expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain(EARLIER_VERSION_FILE);
-    await expect(fs.readFile(path.join(skill, EARLIER_VERSION_FILE), 'utf8')).resolves.toContain('Owner-specific handover');
+    expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain('Owner-specific handover');
     await expect(fs.readFile(path.join(skill, 'checklist.md'), 'utf8')).resolves.toBe('company checklist');
   });
 
