@@ -58,7 +58,7 @@ describe('search_chat_history tool', () => {
     const { registry } = setup(makeResult({
       hits: [{ messageId: 'm1', sessionId: 's1', role: 'user', createdAt: 1000, snippet: null,
         score: 1, ftsRank: null, vectorRank: null, vectorDistance: null, context: [{
-          id: 'm1', sessionId: 's1', role: 'user', content: 'cindy-media://blobs/' + 'b'.repeat(64) + '.jpg',
+          id: 'm1', sessionId: 's1', role: 'user', content: 'cindy-media://blobs/' + 'b'.repeat(64) + '.jpg xdt-image://s1/legacy-cache',
           toolUseId: null, agentMeta: null, createdAt: 1000, rewindAt: null, isHit: true,
         }] }],
     }));

@@ -46,7 +46,7 @@ describe('get_chat_history cursor pagination', () => {
       listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
       getMessages: vi.fn(async () => ({ ok: true as const, page: {
         items: [{ id: 'm1', sessionId: 'task', sessionWorkingDir: null, sessionAgentKind: 'cc', sessionTitle: 'Task',
-          role: 'user', content: { text: 'see cindy-media://blobs/' + 'a'.repeat(64) + '.png' }, toolUseId: null,
+          role: 'user', content: { text: 'see cindy-media://blobs/' + 'a'.repeat(64) + '.png and xdt-image://task/cache-entry' }, toolUseId: null,
           agentMeta: null, createdAt: 1000, rewindAt: null }], nextCursor: null, hasMore: false,
       } })),
     } satisfies XdtHelperHistoryDeps;
@@ -55,6 +55,27 @@ describe('get_chat_history cursor pagination', () => {
     const result = parseText(await registry.call('get_chat_history', { session_ids: ['task'] })) as Record<string, unknown>;
     expect(result.image_view_hint).toContain('resolve_local_path');
     expect(result.image_view_hint).toContain('重发');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 get_chat_history 工具输出走受管媒体地址识别。
+  // - Bug／规则依据：文档附件也使用 cindy-media://，不能把非图片误提示为可查看图片。
+  // - 现有覆盖缺口：图片正例没有覆盖带 .pdf 的受管文件地址。
+  // - 最小失败输入：一条只含 cindy-media://blobs/<hash>.pdf 的用户消息。
+  // - tier：unit；覆盖工具注册、历史读取和可选提示字段。
+  it('does not add an image viewing hint for a managed PDF attachment', async () => {
+    const history = {
+      listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
+      getMessages: vi.fn(async () => ({ ok: true as const, page: {
+        items: [{ id: 'm-pdf', sessionId: 'task', sessionWorkingDir: null, sessionAgentKind: 'cc', sessionTitle: 'Task',
+          role: 'user', content: { text: 'see cindy-media://blobs/' + 'd'.repeat(64) + '.pdf' }, toolUseId: null,
+          agentMeta: null, createdAt: 1000, rewindAt: null }], nextCursor: null, hasMore: false,
+      } })),
+    } satisfies XdtHelperHistoryDeps;
+    const registry = new XdtHelperToolRegistry();
+    registerGetChatHistoryTool(registry, { history });
+    const result = parseText(await registry.call('get_chat_history', { session_ids: ['task'] }));
+    expect(result).not.toHaveProperty('image_view_hint');
   });
 
   // Unit, lifecycle #15: the storage row id differs from the UI/native anchor.
