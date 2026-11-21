@@ -14,10 +14,63 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { GROUP_REQUEST_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
-export const TEAMMATE_TEMPLATE_VERSION = 8;
+export const TEAMMATE_TEMPLATE_VERSION = 9;
 /** What the project started from and which template files it still has untouched. */
 export const TEAMMATE_TEMPLATE_RECORD = path.join('.cindy', 'template.json');
 const PENDING_DIR = path.join('.cindy', 'template');
+
+/**
+ * Standard skills keep two layers in one file (2026-11-22 owner decision): Cindy's standard text,
+ * replaced whole on every template version, and the teammate's own rules below this heading, which
+ * a version never touches. Changes made to the standard text before this layering are moved into
+ * the own rules, so an older teammate gets the new standard without losing what it was told.
+ */
+export const OWN_RULES_HEADING = '## Your own rules';
+const OWN_RULES_INTRO = 'Rules the owner asked for, or that you settled with the owner, go in this section. They take precedence over the standard text above. Cindy replaces everything above this section when it updates the standard and keeps this section as it is.';
+const KEPT_NOTE = 'Kept from the earlier version of this skill when Cindy updated its standard. Remove anything the standard above already covers:';
+const LAYERED_FILES = new Set(['.agents/skills/hand-off/SKILL.md']);
+/** The standard text last written to a layered file: what a later change is compared with. */
+const STANDARD_DIR = path.join('.cindy', 'template-standard');
+/** Finds an earlier template file by the hash the record kept (from the project's Git history). */
+export type ReadPreviousTemplate = (relative: string, sha256: string) => Promise<string | null>;
+
+function standardPart(text: string): { standard: string; own: string } {
+  const at = text.search(new RegExp(`^${OWN_RULES_HEADING}\\s*$`, 'm'));
+  if (at < 0) return { standard: text, own: '' };
+  const own = text.slice(at).replace(/^.*\n?/, '').split('\n')
+    .filter(line => line.trim() !== OWN_RULES_INTRO && line.trim() !== KEPT_NOTE).join('\n').trim();
+  return { standard: text.slice(0, at), own };
+}
+
+/** Lines that are content, not structure: no blanks, no frontmatter fences or keys. */
+function contentLines(text: string): string[] {
+  const body = text.replace(/^---\n[\s\S]*?\n---\n/, '');
+  return body.split('\n').map(line => line.trimEnd()).filter(line => line.trim() !== '');
+}
+
+/**
+ * The new file for a layered template: the new standard, then the own rules it already had, then
+ * whatever the earlier standard text had that neither the standard it started from nor the new
+ * standard says (the changes made to it). Without a known starting point, every line the new
+ * standard does not have is kept, for the teammate to tidy.
+ */
+function layeredContent(current: string, previousStandard: string | null, next: string): string {
+  const { standard, own } = standardPart(current);
+  const known = new Set(contentLines(standardPart(next).standard).map(line => line.trim()));
+  if (previousStandard !== null) for (const line of contentLines(standardPart(previousStandard).standard)) known.add(line.trim());
+  const kept = contentLines(standard).filter(line => !known.has(line.trim()) && !/^#+\s/.test(line.trim()));
+  // A standard line the teammate removed, still in the new standard: keep the removal.
+  const removed = previousStandard === null ? [] : contentLines(standardPart(previousStandard).standard)
+    .filter(line => /^\s*(?:[-*]|\d+\.)\s/.test(line) && !contentLines(standard).some(mine => mine.trim() === line.trim())
+      && contentLines(standardPart(next).standard).some(theirs => theirs.trim() === line.trim()))
+    .map(line => `- Leave out from the standard above: ${line.trim().replace(/^(?:[-*]|\d+\.)\s+/, '')}`);
+  const additions = [...kept, ...removed];
+  // The new standard's own section brings its intro; an earlier copy of it is not an own rule.
+  const nextOwn = new Set(contentLines(next.slice(standardPart(next).standard.length)).map(line => line.trim()));
+  const ownRules = own.split('\n').filter(line => !nextOwn.has(line.trim())).join('\n').trim();
+  const sections = [ownRules, additions.length ? `${KEPT_NOTE}\n\n${additions.join('\n')}` : ''].filter(Boolean);
+  return sections.length ? `${next.trimEnd()}\n\n${sections.join('\n\n')}\n` : next;
+}
 
 const MEMORY_ROUTE = [
   '<!-- project-memory -->',
@@ -95,6 +148,7 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
       '',
       `- Write down how ${name} should work: steps, conventions, checklists, things to avoid.`,
       `- ${name} may edit this file and the skills in \`.agents/skills/\` to improve its own way of working. Changes apply to the next task; versions are kept, so any edit can be reviewed and undone.`,
+      `- In a skill that has a "${OWN_RULES_HEADING.replace(/^#+\s*/, '')}" section (such as hand-off), put changes in that section: Cindy replaces the rest of the skill when it updates its standard, and keeps that section.`,
       '- Who the buddy is (name, personality, relationship) stays in its profile, not here.',
       '',
       MEMORY_ROUTE,
@@ -134,6 +188,10 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
       '',
       '- When asked how things are going, read `get_task_digest` for each task; open the full history only when needed. Do not wait in a loop.',
       '',
+      OWN_RULES_HEADING,
+      '',
+      OWN_RULES_INTRO,
+      '',
     ].join('\n'),
   };
 }
@@ -166,12 +224,25 @@ async function throughLink(workspace: string, relative: string): Promise<boolean
   return false;
 }
 
+/** The standard a layered file was last written from, or null when it is not known. */
+async function previousStandard(workspace: string, relative: string, current: string, base: string | undefined,
+  readPrevious?: ReadPreviousTemplate): Promise<string | null> {
+  const saved = await readText(path.join(workspace, STANDARD_DIR, relative));
+  if (saved !== null) return saved;
+  if (base === undefined) return null;
+  if (hash(current) === base) return current;
+  return readPrevious ? readPrevious(relative, base).catch(() => null) : null;
+}
+
 /**
  * Brings the project up to the current template. Never overwrites a file the project changed or
- * a file it had before the template (an upgraded teammate's own rules). Returns true when it wrote.
+ * a file it had before the template (an upgraded teammate's own rules), except a layered standard
+ * skill: its standard text is replaced and the teammate's rules and changes are kept in its own
+ * section. Returns true when it wrote.
  */
 export async function applyTeammateTemplate(workspace: string, displayName: string,
-  version = TEAMMATE_TEMPLATE_VERSION, files = teammateTemplateFiles(displayName)): Promise<boolean> {
+  version = TEAMMATE_TEMPLATE_VERSION, files = teammateTemplateFiles(displayName),
+  readPrevious?: ReadPreviousTemplate): Promise<boolean> {
   const recordPath = path.join(workspace, TEAMMATE_TEMPLATE_RECORD);
   const recordText = await readText(recordPath);
   let record: TeammateTemplateRecord | null = null;
@@ -197,6 +268,17 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
     if (await throughLink(workspace, relative) || await throughLink(workspace, path.join(PENDING_DIR, relative))) continue;
     const current = await readText(target);
     const base = record?.files[relative];
+    if (LAYERED_FILES.has(relative)) {
+      if (await throughLink(workspace, path.join(STANDARD_DIR, relative))) continue;
+      const written = current === null ? content
+        : layeredContent(current, await previousStandard(workspace, relative, current, base, readPrevious), content);
+      if (written !== current) await write(target, written);
+      await write(path.join(workspace, STANDARD_DIR, relative), content);
+      // The new standard replaces any copy an earlier version left waiting to be merged.
+      await fs.rm(path.join(workspace, PENDING_DIR, relative), { force: true });
+      next.files[relative] = hash(content);
+      continue;
+    }
     if (current === null || current === content || (base !== undefined && hash(current) === base)) {
       // Missing, already this version, or still exactly what an earlier template wrote.
       if (current !== content) await write(target, content);
