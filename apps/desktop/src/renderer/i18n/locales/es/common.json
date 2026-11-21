@@ -7968,7 +7968,7 @@
           "loading": "Buscando y descargando…",
           "invalid": "Introduce una URL de un repositorio o una etiqueta de release de GitHub.",
           "not-found": "Esta versión no está disponible. Comprueba el enlace y tu acceso al repositorio.",
-          "ambiguous": "Este enlace contiene varios plugins. Elige una release con un solo paquete o instala el archivo directamente.",
+          "ambiguous": "Este enlace contiene varios complementos. Elige una release con un solo paquete o instala el archivo directamente.",
           "installedAlready": "Este plugin ya está instalado. Puedes actualizarlo en sus ajustes."
         },
         "installedSection": "Instalado",
@@ -12132,7 +12132,7 @@
       "core": {
         "group": "Habilidad principal",
         "name": "Núcleo del amigo",
-        "hint": "Tareas, otros amigos, modelos, herramientas y plugins, memoria. Se actualiza con Cindy.",
+        "hint": "Tareas, otros amigos, modelos, herramientas y complementos, memoria. Se actualiza con Cindy.",
         "meta": "Común a todos los amigos · Siempre activa · Se actualiza con Cindy",
         "note": "La coordinación que tiene cada amigo. No se puede desactivar ni editar. Para que trabaje de otra forma, díselo en el chat y lo guardará como su propia habilidad.",
         "covers": "Incluye",
