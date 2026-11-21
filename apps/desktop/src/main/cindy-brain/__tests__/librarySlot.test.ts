@@ -156,6 +156,36 @@ describe('GhostLibrarySlot', () => {
     expect(createVault).toHaveBeenCalledTimes(1);
   });
 
+  it('文件用量重扫超限时仍可查询已有 SQLite 数据', async () => {
+    const root = path.join(defaultRootBase, GHOST_ID);
+    await fs.promises.mkdir(path.join(root, '.cindy-library'), { recursive: true });
+    const dbPath = 'library.sqlite';
+    const db = new Database(path.join(root, dbPath));
+    try {
+      db.exec("CREATE TABLE works (title TEXT); INSERT INTO works VALUES ('draft')");
+    } finally {
+      db.close();
+    }
+    const ledgerPath = path.join(root, '.cindy-library', 'usage.json');
+    const ledger = JSON.stringify({ files: 1, bytes: 8192, checkpoint: 'dirty' });
+    await fs.promises.writeFile(ledgerPath, ledger);
+    createVault.mockImplementationOnce((deps: LibraryVaultDeps) => new LibraryVault({
+      ...deps, limits: { usageScanFuse: 0 },
+    }));
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'open' })).toMatchObject({
+      ok: true, state: 'readonly', reason: 'usage-scan-limit',
+    });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'blocked.txt', content: 'no' }))
+      .toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath })).toMatchObject({ ok: true });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.check', dbPath }))
+      .toMatchObject({ ok: true, healthy: true });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.exec', dbPath, sql: 'SELECT title FROM works' }))
+      .toMatchObject({ ok: true, rows: [{ title: 'draft' }] });
+    await slot.disposeAll();
+    expect(await fs.promises.readFile(ledgerPath, 'utf8')).toBe(ledger);
+  });
+
   function pauseNextLibraryRootResolution() {
     let resume!: () => void;
     let entered!: () => void;

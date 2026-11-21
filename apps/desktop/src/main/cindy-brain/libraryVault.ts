@@ -785,15 +785,18 @@ export class LibraryVault {
 
   /* ── 写前公共闸 ─────────────────────────────────────────────────── */
 
-  private requireWritable(): LibraryFailure | null {
+  private requireWritable(checkUsage = true): LibraryFailure | null {
     if (this.state === 'unavailable') {
       return fail('LIBRARY_UNAVAILABLE', `Library 不可用(${this.unavailableReason ?? 'io'});不会当作空库处理`);
     }
     if (this.readonlyReason !== null) {
       return fail('LIBRARY_READONLY', `Library 只读(${this.readonlyReason})`);
     }
-    if (this.usageTripped || this.usageScanIncomplete) {
+    if (checkUsage && this.usageTripped) {
       return fail('LIBRARY_UNAVAILABLE', 'Library 结构过大,无法核算占用;请清理后重试');
+    }
+    if (checkUsage && this.usageScanIncomplete) {
+      return fail('LIBRARY_UNAVAILABLE', 'Library 部分条目无法读取,暂时无法核算占用');
     }
     return null;
   }
@@ -1863,7 +1866,7 @@ export class LibraryVault {
 
   async prepareExternalMutation(): Promise<LibraryFailure | null> {
     return this.runSerialized(async () => {
-      const gate = this.requireWritable();
+      const gate = this.requireWritable(false);
       if (gate) return gate;
       const checkpoint = await this.prepareUsageMutationUnlocked();
       if (!checkpoint) this.usageNeedsRescan = true;
