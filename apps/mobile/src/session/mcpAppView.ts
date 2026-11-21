@@ -87,8 +87,12 @@ export class McpAppView {
             throw error;
           });
         };
-        return viewSlots.control(sdkOwner, deviceId, deviceId, input, async () => {
-          if (input.op === 'open') return sdkCache.open(sdkOwner, deviceId, input, send, () => {
+        return viewSlots.control(sdkOwner, deviceId, deviceId, input, async allocated => {
+          if (input.op === 'open') return sdkCache.open(sdkOwner, deviceId, input, async request => {
+            const reply = await send(request);
+            if (request.op === 'open') allocated?.();
+            return reply;
+          }, () => {
             if (!isMobileAuthOwnerCurrent(sdkOwner)) throw new Error('MCP_APP_OWNER_CHANGED');
           }, released);
           const result = await send(input);

@@ -27,7 +27,7 @@ const documentSchema = z.object({
   }).optional(),
 });
 interface RemoteViewDeps {
-  released?(owner: object, caller: string, peer: string | undefined, window: 'mounted' | 'pending'): void;
+  released?(owner: object, caller: string, peer: string | undefined, window?: 'mounted' | 'pending'): void;
   owner(): object | null | undefined;
   closeEpoch(deviceId: string): number;
   invoke(deviceId: string, sessionId: string, input: Record<string, unknown>, preSend: () => void, options?: { noResultCache?: boolean }): Promise<unknown>;
@@ -90,7 +90,7 @@ export class RemoteMcpAppViews {
     }
   }
 
-  async control(caller: string, deviceId: unknown, sessionId: string, raw: unknown): Promise<unknown> {
+  async control(caller: string, deviceId: unknown, sessionId: string, raw: unknown, allocated?: (limit?: 'pending') => void): Promise<unknown> {
     if (!id.safeParse(deviceId).success || !id.safeParse(sessionId).success ||
         !raw || Buffer.byteLength(JSON.stringify(raw)) > MCP_APPS_MAX_BYTES)
       throw new Error('MCP_APP_INVALID_REQUEST');
@@ -99,7 +99,7 @@ export class RemoteMcpAppViews {
     const parsed = mcpAppOperationSchema.safeParse(raw);
     if (!parsed.success) throw new Error('MCP_APP_INVALID_REQUEST');
     const input = parsed.data;
-    if (input.op === 'open') return this.open(caller, device, sessionId, input);
+    if (input.op === 'open') return this.open(caller, device, sessionId, input, allocated);
     if (input.op === 'cancel-open') {
       await Promise.all([...this.opening].filter((entry) => entry.caller === caller &&
         entry.deviceId === device && entry.sessionId === sessionId && entry.openId === input.openId &&
@@ -125,6 +125,7 @@ export class RemoteMcpAppViews {
   private async open(
     caller: string, deviceId: string, sessionId: string,
     input: Extract<z.infer<typeof mcpAppOperationSchema>, { op: 'open' }>,
+    allocated?: (limit?: 'pending') => void,
   ): Promise<McpAppSandboxView> {
     const owner = this.deps.owner();
     if (!owner) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
@@ -133,6 +134,8 @@ export class RemoteMcpAppViews {
     const entry: Opening = { owner, caller, deviceId, sessionId, openId: input.openId,
       remoteOpenId: randomUUID(), cancelled: false, closeEpoch: this.deps.closeEpoch(deviceId) };
     this.opening.add(entry);
+    allocated?.('pending');
+    let mounted = false;
     let remoteId: string | undefined;
     let releasedRemote = false;
     try {
@@ -148,6 +151,7 @@ export class RemoteMcpAppViews {
         }
         const parsed = documentSchema.parse(raw);
         remoteId = parsed.viewId;
+        allocated?.();
         if (Buffer.byteLength(JSON.stringify(parsed)) > MCP_APPS_MAX_REMOTE_BYTES)
           throw new Error('MCP_APP_DOCUMENT_TOO_LARGE');
         return parsed;
@@ -161,6 +165,7 @@ export class RemoteMcpAppViews {
       const view: RemoteView = { ...entry, localId: '', remoteId, links: new Map(), linkEpoch: 0 };
       view.localId = mountRemoteAppDocument(document, caller, (raw) => this.frame(view, raw), () => this.dispose(view), input.context);
       this.views.set(view.localId, view);
+      mounted = true;
       return { viewId: view.localId, transport: 'sandbox', prefersBorder: document.prefersBorder };
     } catch (error) {
       // No writes are replayed. An old Host may reject cancel-open; its idle lease remains the fallback.
@@ -174,8 +179,9 @@ export class RemoteMcpAppViews {
       throw error;
     } finally {
       // Retiring an open attempt releases its reservation, but is not a viewer page closing.
-      this.opening.delete(entry);
-      if (releasedRemote) this.deps.released?.(owner, caller, deviceId, 'pending');
+      const freedLocal = this.opening.delete(entry) && !mounted;
+      if (freedLocal || releasedRemote)
+        this.deps.released?.(owner, caller, releasedRemote ? deviceId : undefined, freedLocal ? 'pending' : undefined);
     }
   }
 
@@ -230,7 +236,7 @@ export class RemoteMcpAppViews {
 
   private cancel(entry: Opening): Promise<unknown> {
     entry.cancelled = true;
-    this.opening.delete(entry);
+    if (this.opening.delete(entry)) this.deps.released?.(entry.owner, entry.caller, undefined, 'pending');
     return this.call(entry, { op: 'cancel-open', openId: entry.remoteOpenId });
   }
   private close(view: RemoteView): Promise<void> {

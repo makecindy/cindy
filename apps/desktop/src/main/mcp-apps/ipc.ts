@@ -257,12 +257,12 @@ export function registerMcpAppsIpc(
         return {};
       }
       const owner = currentOwner();
-      const dispatch = async () => {
+      const dispatch = async (allocated?: (limit?: 'pending' | 'document') => void) => {
         if (raw && typeof raw === 'object' && 'deviceId' in raw) {
           // Incoming device-link calls cannot use this local-only route to pivot to another computer.
           if (remote) throw new Error('MCP_APP_INVALID_REQUEST');
           if (sessionId === null) throw new Error('MCP_APP_INVALID_SCOPE');
-          return await remoteViews.control(caller, raw.deviceId, sessionId, raw);
+          return await remoteViews.control(caller, raw.deviceId, sessionId, raw, allocated);
         }
         return await handleMcpAppOperation(
           host,

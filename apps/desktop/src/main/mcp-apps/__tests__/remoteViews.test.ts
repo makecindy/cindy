@@ -304,6 +304,21 @@ describe('Main-bound remote MCP App Views', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(f.invoke).toHaveBeenCalledOnce();
   });
+  // Unit, PR #11917: failure before receiving a remote id frees the local
+  // in-flight reservation, without promising remote capacity on an ambiguous reply.
+  it('releases a local pending reservation when the executor rejects the open', async () => {
+    const f = fixture();
+    const pending: Array<(error: Error) => void> = [];
+    f.invoke.mockImplementation(async (_device, _session, input) => input.op === 'open'
+      ? new Promise((_resolve, reject) => pending.push(reject)) : {});
+    const opens = Array.from({ length: 16 }, () => expect(f.open()).rejects.toThrow('MCP_APP_SERVER_CHANGED'));
+    await expect(f.open()).rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    pending[0](new Error('MCP_APP_SERVER_CHANGED'));
+    await opens[0];
+    expect(f.released).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'renderer:1', undefined, 'pending');
+    for (const reject of pending.slice(1)) reject(new Error('MCP_APP_SERVER_CHANGED'));
+    await Promise.all(opens);
+  });
   it('releases the caller pending-open quota immediately and discards each late View', async () => {
     const f = fixture();
     const finishes: Array<(result: unknown) => void> = [];
@@ -320,9 +335,12 @@ describe('Main-bound remote MCP App Views', () => {
     finishes.forEach((finish) => finish(document));
     await Promise.all(pending);
     expect(state.mounts.size).toBe(1);
-    // Cancelling a pending attempt is not a release. Each late, actually allocated remote
-    // View frees one slot only when its teardown is confirmed by the executor.
-    expect(f.released.mock.calls).toEqual(Array(16).fill([expect.any(Object), 'renderer:1', 'device-a', 'pending']));
+    // Cancellation frees the local reservations immediately. A late remote allocation
+    // frees executor capacity only after the executor confirms its teardown.
+    expect(f.released.mock.calls).toEqual([
+      ...Array(16).fill([expect.any(Object), 'renderer:1', undefined, 'pending']),
+      ...Array(16).fill([expect.any(Object), 'renderer:1', 'device-a', undefined]),
+    ]);
     f.released.mockClear();
     await f.control({ op: 'teardown', viewId: mounted.viewId });
     expect(f.released).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'renderer:1', 'device-a', 'mounted');

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { McpAppController, McpAppViewSlots, type AppRpc } from '../mcpAppController.js';
+import { McpAppController, McpAppViewSlots, McpAppWindowLimitError, type AppRpc } from '../mcpAppController.js';
 const document = {
   viewId: 'view',
   html: '<html></html>',
@@ -66,6 +66,99 @@ describe('MCP App transport lifecycle', () => {
       { card: 'next', context: { theme: 'dark' } }]);
     expect(await nextOpen).toMatchObject({ viewId: 'next' });
     await Promise.all([first.close(), next.close()]);
+  });
+
+  // PR #11917, unit: observe real queued open results and executor calls. A grant
+  // that did not create a View may serve only cards refused before that release.
+  it.each(['MCP_APP_SERVER_CHANGED', 'MCP_APP_TOOL_UNAVAILABLE', 'MCP_APP_RESOURCE_MISSING', 'MCP_APP_OPEN_TIMEOUT'])('returns a grant after definitive open failure %s', async reason => {
+    const slots = new McpAppViewSlots();
+    let full = true;
+    const attempts: string[] = [];
+    const control = (card: string, op: string) => slots.control('owner', 'window', 'peer', { op, openId: card }, async () => {
+      attempts.push(card);
+      if (full) throw new Error('MCP_APP_VIEW_LIMIT');
+      if (card === 'first') throw new Error(reason);
+      return { viewId: card };
+    });
+    for (const card of ['first', 'second']) await expect(control(card, 'open')).rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    const first = control('first', 'wait-for-view-slot');
+    const second = control('second', 'wait-for-view-slot').then(() => control('second', 'open'));
+    full = false;
+    slots.released('owner', 'window', 'peer');
+    await first;
+    await expect(control('first', 'open')).rejects.toThrow(reason);
+    await flush();
+    expect(attempts).toEqual(['first', 'second', 'first', 'second']);
+    expect(await second).toEqual({ viewId: 'second' });
+  });
+
+  it('preserves executor capacity when an open only gets as far as a local reservation', async () => {
+    const slots = new McpAppViewSlots();
+    const control = (card: string, op: string, send: Parameters<McpAppViewSlots['control']>[4]) =>
+      slots.control('owner', 'window', 'peer', { op, openId: card }, send);
+    await expect(control('first', 'open', async () => { throw new McpAppWindowLimitError('pending'); }))
+      .rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    await expect(control('second', 'open', async () => { throw new Error('MCP_APP_VIEW_LIMIT'); }))
+      .rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    const first = control('first', 'wait-for-view-slot', never);
+    const openSecond = vi.fn(async () => document);
+    const second = control('second', 'wait-for-view-slot', never).then(() => control('second', 'open', openSecond));
+    slots.released('owner', 'window', 'peer', 'mounted');
+    await first;
+    await expect(control('first', 'open', async allocated => {
+      allocated?.('pending');
+      throw new Error('MCP_APP_SERVER_CHANGED');
+    })).rejects.toThrow('MCP_APP_SERVER_CHANGED');
+    await flush();
+    expect(openSecond).toHaveBeenCalledOnce();
+    await expect(second).resolves.toBe(document);
+  });
+
+  // Unit: window capacity is shared by its peers, and executor capacity by its windows.
+  it.each([
+    { name: 'executor is full before mounting the document', first: ['window', 'peer1'], second: ['window', 'peer2'],
+      firstError: new McpAppWindowLimitError('document'), secondError: new McpAppWindowLimitError('document'),
+      retryError: new Error('MCP_APP_VIEW_LIMIT'), releasedWindow: 'document' as const },
+    { name: 'a different window is full before reaching the executor', first: ['other', 'peer'], second: ['window', 'peer'],
+      firstError: new Error('MCP_APP_VIEW_LIMIT'), secondError: new McpAppWindowLimitError('pending'),
+      retryError: new McpAppWindowLimitError('pending'), releasedWindow: 'mounted' as const },
+  ])('preserves the unused window capacity when $name', async ({ first, second, firstError, secondError, retryError, releasedWindow }) => {
+    const slots = new McpAppViewSlots();
+    const control = ([caller, peer]: string[], op: string, send: () => Promise<unknown>) =>
+      slots.control('owner', caller, peer, { op, openId: peer }, send);
+    await expect(control(first, 'open', async () => { throw firstError; })).rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    await expect(control(second, 'open', async () => { throw secondError; })).rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    const firstWait = control(first, 'wait-for-view-slot', never);
+    const openSecond = vi.fn(async () => document);
+    const secondOpen = control(second, 'wait-for-view-slot', never).then(() => control(second, 'open', openSecond));
+    slots.released('owner', second[0], second[1], releasedWindow);
+    await firstWait;
+    await expect(control(first, 'open', async () => { throw retryError; })).rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    await flush();
+    expect(openSecond).toHaveBeenCalledOnce();
+    await expect(secondOpen).resolves.toBe(document);
+  });
+
+  it('does not spend stale releases on a card refused after the release', async () => {
+    const slots = new McpAppViewSlots();
+    const open = (card: string) => slots.control('owner', 'window', 'peer', { op: 'open', openId: card },
+      async () => { throw new Error('MCP_APP_VIEW_LIMIT'); });
+    const wait = (card: string) => slots.control('owner', 'window', 'peer',
+      { op: 'wait-for-view-slot', openId: card }, async () => {});
+    await expect(open('old')).rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    const grant = wait('old');
+    slots.released('owner', 'window', 'peer');
+    await grant;
+    slots.released('owner', 'window', 'peer');
+    await slots.control('owner', 'window', 'peer', { op: 'open', openId: 'old' }, async () => ({ viewId: 'old' }));
+    await expect(open('new')).rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    const resumed = vi.fn();
+    const pending = wait('new').then(resumed);
+    await flush();
+    expect(resumed).not.toHaveBeenCalled();
+    slots.released('owner', 'window', 'peer');
+    await pending;
+    expect(resumed).toHaveBeenCalledWith(true);
   });
 
   // Regression: a slot can close after refusal but before the controller registers its wait.

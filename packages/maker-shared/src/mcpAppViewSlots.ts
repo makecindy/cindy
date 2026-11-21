@@ -12,8 +12,7 @@ interface SlotTicket {
   owner: unknown;
   peer: string;
   limit?: WindowLimit;
-  refused?: boolean;
-  waitingSince?: number;
+  refusedAt?: number;
   granted?: Release;
   grant: (available: boolean) => void;
   ready: Promise<boolean>;
@@ -34,10 +33,26 @@ function matches(ticket: SlotTicket, release: Release): boolean {
     : ticket.peer === release.peer;
 }
 
+// A mounted page can free both a viewer window and an executor. Exclude a
+// capacity once this attempt has used it, or learned it is still full.
+function withoutCapacity(release: Release, caller: string, peer: string, limit?: WindowLimit): Release {
+  if (!limit) return release.peer === peer ? { ...release, peer: undefined } : release;
+  if (release.caller !== caller) return release;
+  if (release.window === limit) return { ...release, window: undefined };
+  if (release.window !== 'mounted') return release;
+  return { ...release, window: limit === 'pending' ? 'document' : 'pending' };
+}
+
+// These rejections precede publication of the requested View. A transport timeout
+// or a disconnected executor may have lost the reply after allocation.
+function rejectedBeforeAllocation(error: unknown): boolean {
+  return /\bMCP_APP_(?:SERVER_CHANGED|TOOL_(?:UNAVAILABLE|NOT_VISIBLE)|OPEN_(?:TIMEOUT|CANCELLED)|CARD_(?:UNAVAILABLE|TOO_LARGE)|(?:SOURCE|VIEW|SESSION)_UNAVAILABLE|RESOURCE_(?:MISSING|NOT_FOUND|TOO_LARGE)|INVALID_RESOURCE|FILES_LOCAL_ONLY|CONNECTION_LIMIT)\b/.test(String(error))
+    || /\bMCP_PLUGIN_(?:UNAVAILABLE|CSP_DOMAIN_NOT_DECLARED)\b/.test(String(error));
+}
+
 export class McpAppViewSlots {
   private readonly tickets = new Map<string, SlotTicket>();
   private nextWaiter = 0;
-  private readonly pendingReleases: Array<{ owner: unknown; release: Release }> = [];
 
   cancelCaller(caller: string): void {
     for (const [id, ticket] of this.tickets) {
@@ -58,31 +73,23 @@ export class McpAppViewSlots {
   }
 
   released(owner: unknown, caller: string, peer?: string, window?: Release['window']): void {
-    const release = { caller, peer, window, through: this.nextWaiter };
-    if (!this.grantNext(owner, release)) {
-      // Preserve an edge that arrives between the refusal and the wait registration.
-      // It is consumed by the first matching ticket that subsequently registers.
-      const hasRefused = [...this.tickets.values()].some(ticket =>
-        ticket.owner === owner && ticket.refused && matches(ticket, release));
-      if (hasRefused) this.pendingReleases.push({ owner, release });
-    }
+    this.grantNext(owner, { caller, peer, window, through: this.nextWaiter });
   }
 
-  private grantNext(owner: unknown, release: Release): boolean {
+  private grantNext(owner: unknown, release: Release): void {
+    // Refusal order is also the queue order. Keep the grant on the refused ticket
+    // even if the card is still checking its visibility before registering its wait.
     for (const ticket of this.tickets.values()) {
-      // A close funds one retry of a card already refused when it occurred. If the recipient
-      // leaves before sending open, only another original waiter can use that same slot.
-      if (ticket.owner !== owner || ticket.granted || ticket.waitingSince === undefined ||
-          ticket.waitingSince > release.through || !matches(ticket, release)) continue;
+      if (ticket.owner !== owner || ticket.granted || ticket.refusedAt === undefined ||
+          ticket.refusedAt > release.through || !matches(ticket, release)) continue;
       ticket.granted = release;
       ticket.grant(true);
-      return true;
+      return;
     }
-    return false;
   }
 
   async control(owner: unknown, caller: string, peer: string, input: Record<string, unknown>,
-    send: () => Promise<unknown>, linkEpoch = 0, watchClose?: (closed: () => void) => () => void): Promise<unknown> {
+    send: (allocated?: (limit?: WindowLimit) => void) => Promise<unknown>, linkEpoch = 0, watchClose?: (closed: () => void) => () => void): Promise<unknown> {
     const { op, openId } = input;
     if (typeof openId !== 'string') return op === 'wait-for-view-slot' ? false : send();
     const id = JSON.stringify([caller, openId]);
@@ -94,19 +101,7 @@ export class McpAppViewSlots {
       }
     }
     if (op === 'wait-for-view-slot') {
-      if (!previous?.refused) return false;
-      if (previous.waitingSince === undefined) {
-        previous.waitingSince = ++this.nextWaiter;
-        this.tickets.delete(id);
-        this.tickets.set(id, previous);
-        const pending = this.pendingReleases.findIndex(item =>
-          item.owner === owner && matches(previous, item.release));
-        if (pending >= 0) {
-          const [{ release }] = this.pendingReleases.splice(pending, 1);
-          previous.granted = release;
-          previous.grant(true);
-        }
-      }
+      if (previous?.refusedAt === undefined) return false;
       const unwatch = watchClose?.(() => {
         if (!previous.granted) this.cancel(id, previous);
       });
@@ -115,25 +110,41 @@ export class McpAppViewSlots {
     }
     if (previous && op === 'cancel-open') {
       this.cancel(id, previous);
-      if (previous.refused) return {};
+      if (previous.refusedAt !== undefined) return {};
     }
     if (op !== 'open' && op !== 'open-resource') return send();
-    if (previous) this.remove(id, previous); // Starting the retry consumes its grant.
+    let retryGrant = previous?.granted;
+    if (previous) this.remove(id, previous);
     let grant!: (available: boolean) => void;
     const ready = new Promise<boolean>(resolve => { grant = resolve; });
     const ticket: SlotTicket = { linkEpoch, caller, owner, peer, ready, grant };
     this.tickets.set(id, ticket);
     try {
-      const result = await send();
+      const result = await send(limit => {
+        // Once allocated, the actual reservation/remote View owns its release.
+        if (retryGrant) retryGrant = withoutCapacity(retryGrant, caller, peer, limit);
+      });
       this.remove(id, ticket);
       return result;
     } catch (error) {
-      if (this.tickets.get(id) === ticket && /\bMCP_APP_VIEW_LIMIT\b/.test(String(error))) {
+      const atLimit = /\bMCP_APP_VIEW_LIMIT\b/.test(String(error));
+      const failedLimit = error instanceof McpAppWindowLimitError ? error.limit : undefined;
+      if (this.tickets.get(id) === ticket && atLimit) {
         // Older and current executors also use this wire error for transient global pressure.
         // They cannot signal its end. Wait for a close on this viewer or the user's manual reload.
-        ticket.refused = true;
-        if (error instanceof McpAppWindowLimitError) ticket.limit = error.limit;
-      } else this.remove(id, ticket);
+        ticket.refusedAt = ++this.nextWaiter;
+        this.tickets.delete(id);
+        this.tickets.set(id, ticket);
+        ticket.limit = failedLimit;
+      } else {
+        this.remove(id, ticket);
+      }
+      if (retryGrant) {
+        // On a lost reply the executor may still have a View. Local document
+        // capacity is known independently, including when the executor is full.
+        if (atLimit || !rejectedBeforeAllocation(error)) retryGrant = withoutCapacity(retryGrant, caller, peer, failedLimit);
+        if (retryGrant.window || retryGrant.peer) this.grantNext(owner, retryGrant);
+      }
       throw error;
     }
   }
