@@ -143,6 +143,17 @@ describe('IM owner-scoped storage', () => {
   // and invalidate old output when the same bot credential is replaced. Existing credential tests
   // do not cover the metadata-only revision or atomic terminal-output file.
   it('persists Discord terminal output under one owner and tracks credential replacement without exposing it', () => {
+    // #11604 Windows CI: real writes can share both filesystem timestamps.
+    // Unit: retain real dev/inode and encrypted payloads; unchanged clock must
+    // still invalidate old output, without sleep or a longer timeout.
+    const realStat = fs.statSync.bind(fs);
+    vi.spyOn(fs, 'statSync').mockImplementation(((file: fs.PathLike, options?: fs.StatSyncOptions) => {
+      const value = realStat(file, options);
+      if (value && typeof options === 'object' && options.bigint && String(file).endsWith('discord-bot-token.enc')) {
+        Object.assign(value, { mtimeNs: 1n, ctimeNs: 1n });
+      }
+      return value;
+    }) as typeof fs.statSync);
     setSession('local', 'local-v1');
     ownerScopedImSecrets.write('discord-bot-token', 'invalid-test-token');
     const revision = ownerScopedImSecretRevision('discord-bot-token');
@@ -166,6 +177,7 @@ describe('IM owner-scoped storage', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     fs.rmSync(mocks.root, { recursive: true, force: true });
   });
 
@@ -232,6 +244,81 @@ describe('IM owner-scoped storage', () => {
     expect(ownerScopedImSecrets.readResult?.('telegram-bot-offline')).toEqual({ kind: 'error' });
     // 旧 read 契约保持兼容：调用方若不需要区分，错误仍折叠为 null。
     expect(ownerScopedImSecrets.read('telegram-bot-offline')).toBeNull();
+  });
+
+  // Unit: actual atomic-file fallback payloads remain readable, but revoked
+  // credentials (including an orphan backup) must never reappear after restart.
+  it.each(['read', 'revision', 'remove'] as const)('handles an interrupted credential replacement before %s', action => {
+    setSession('local', 'local-v1');
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-backup-token')).toBe(true);
+    const target = __testing.scopedSecretPath('discord-bot-token')!;
+    const revision = ownerScopedImSecretRevision('discord-bot-token');
+    fs.renameSync(target, `${target}.bak`);
+    if (action === 'remove') {
+      ownerScopedImSecrets.remove('discord-bot-token');
+      expect(ownerScopedImSecrets.readResult?.('discord-bot-token')).toEqual({ kind: 'missing' });
+      expect(fs.existsSync(`${target}.bak`)).toBe(false);
+    } else {
+      if (action === 'read') expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('invalid-backup-token');
+      expect(ownerScopedImSecretRevision('discord-bot-token')).not.toBe('missing');
+      expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('invalid-backup-token');
+      expect(fs.existsSync(`${target}.bak`)).toBe(false);
+    }
+    expect(revision).not.toContain('invalid-backup-token');
+    setSession('local', 'another-owner');
+    expect(ownerScopedImSecrets.readResult?.('discord-bot-token')).toEqual({ kind: 'missing' });
+  });
+
+  // Unit: an interrupted scoped write is newer than any leftover legacy file.
+  // Removal must retire both claimable old data and the recoverable copy.
+  it.each(['read', 'write', 'remove'] as const)('prefers an owner backup over leftover legacy credentials before %s', action => {
+    setSession('cloud', 'cloud-a');
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-current-token')).toBe(true);
+    const target = __testing.scopedSecretPath('discord-bot-token')!;
+    fs.renameSync(target, `${target}.bak`);
+    const legacy = writeLegacySecret('discord-bot-token', 'invalid-legacy-token');
+    if (action === 'read') expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('invalid-current-token');
+    if (action === 'write') {
+      const rename = fs.renameSync.bind(fs);
+      vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+        if (from === `${target}.bak`) throw Object.assign(new Error('synthetic restore failure'), { code: 'EIO' });
+        return rename(from, to);
+      });
+      expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-new-token')).toBe(false);
+      vi.restoreAllMocks();
+      expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('invalid-current-token');
+    }
+    if (action === 'remove') {
+      const rename = fs.renameSync.bind(fs);
+      vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+        if (from === `${target}.bak`) throw Object.assign(new Error('synthetic restore failure'), { code: 'EIO' });
+        return rename(from, to);
+      });
+      ownerScopedImSecrets.remove('discord-bot-token');
+      vi.restoreAllMocks();
+      expect(ownerScopedImSecrets.readResult?.('discord-bot-token')).toEqual({ kind: 'missing' });
+      expect(fs.existsSync(legacy)).toBe(false);
+      expect(fs.existsSync(`${target}.bak`)).toBe(false);
+    }
+  });
+
+  it.each([false, true])('preserves a credential when atomic replacement or backup recovery fails (backup=%s)', backup => {
+    setSession('local', 'local-v1');
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-original-token')).toBe(true);
+    const target = __testing.scopedSecretPath('discord-bot-token')!;
+    const original = fs.readFileSync(target, 'utf8');
+    if (backup) fs.renameSync(target, `${target}.bak`);
+    const rename = fs.renameSync.bind(fs);
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (to === target) throw Object.assign(new Error('synthetic rename failure'), { code: 'EIO' });
+      return rename(from, to);
+    });
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-new-token')).toBe(false);
+    expect(fs.readFileSync(backup ? `${target}.bak` : target, 'utf8')).toBe(original);
+    if (backup) expect(ownerScopedImSecrets.readResult?.('discord-bot-token')).toEqual({ kind: 'error' });
+    expect(fs.readdirSync(path.dirname(target)).some(name => name.endsWith('.tmp'))).toBe(false);
+    vi.restoreAllMocks();
+    expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('invalid-original-token');
   });
 
   it('claims legacy working directories only for a verified cloud owner', () => {

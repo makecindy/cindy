@@ -16,7 +16,7 @@ import {
   encodeModelSpeedPayload, encodePushTransfer, isEncodedPushPayload, isHistoryViewDeltaMiss, pushDeflateCapabilities,
   isFilePeerStreamRead, isFilePeerStreamTransfer, isPeerResetRetryableInvoke, isRemoteAgentUploadChunk, isScopedPeer, isUnlinkedPushChannel, REMOTE_DESKTOP_CHANNEL, requestSessionTagCatalog, resolveInvokePriority,
   type DeviceLinkErrorCode, type DeviceLinkPeerLinkSnapshot, type DeviceLinkPeerRouteStateChanged, type DeviceLinkTransferCodec,
-  type Envelope, type InvokePayload, type InvokeResultPayload, type LinkAcceptPayload, type LinkCloseReason, type PresenceSnapshot,
+  type Envelope, type InvokePayload, type InvokeResultPayload, type LinkAcceptPayload, type LinkOpenOptions, type PeerLinkAcceptanceProof, type LinkCloseReason, type PresenceSnapshot,
   type PushPayload, diagnosticChannel, invokeIntendedHoldMs, shortDeviceRef,
 } from '@cindy/device-link';
 import { SessionError, newSessionRequestId, type SessionHandle, type SessionHandlers, type SessionRequest, type SessionResult } from './peer.js';
@@ -125,6 +125,9 @@ export interface AgentNetSessionLinksOptions {
 }
 
 interface PeerState {
+  /** Pair only the first reverse open with this exact accepted inbound generation. */
+  lastInboundGeneration?: number;
+  deviceLinkInboundAcceptance?: PeerLinkAcceptanceProof;
   /** 这个对端上次建链、接受时的代次，同一连接内每次建链递增（dispatch 用它丢弃过期的离线事件）。 */
   generation: number;
   outbound: 'idle' | 'opening' | 'open';
@@ -186,6 +189,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   private readonly frameHandlers = new Set<FrameHandler>();
   private readonly routeHandlers = new Set<(change: DeviceLinkPeerRouteStateChanged) => void>();
   private readonly acceptedHandlers = new Set<(peer: string, streamId: string) => void>();
+  private readonly linkAcceptedHandlers = new Set<(peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean, streamAccepted?: boolean) => void>();
   private readonly releasedHandlers = new Set<(peer: string) => void>();
   private readonly remoteControlDisabled = new Set<string>();
   private readonly pushDeflateRejected = new Set<string>();
@@ -242,11 +246,36 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
    * 「断了待恢复」「被本机关过」也作废，控制方向的状态改由 Device Link 报。不清的话（2026-11-17 review）会话断后重开落到 Device Link
    * 时，这个对端一直「待恢复」：每次调用和订阅都先再建一次链，接受后的补订阅又触发重建，循环不止；断开也发不到 Device Link 那条链路上。
    */
-  noteDeviceLinkLink(deviceId: string, direction: 'outbound' | 'inbound'): void {
-    const peer = this.peers.get(deviceId);
+  noteDeviceLinkLink(deviceId: string, direction: 'outbound' | 'inbound', acceptance?: PeerLinkAcceptanceProof): void {
+    const peer = direction === 'inbound' && acceptance ? this.peer(deviceId) : this.peers.get(deviceId);
     if (!peer) return;
     peer.linkOnSession = false;
+    if (direction === 'inbound') {
+      this.retireInboundAcceptance(peer);
+      peer.deviceLinkInboundAcceptance = acceptance?.deviceId === deviceId ? acceptance : undefined;
+    }
     if (direction === 'outbound') { peer.outboundLost = false; peer.outboundClosed = false; this.notifyReopen(deviceId); }
+  }
+
+  private retireInboundAcceptance(peer: PeerState): void {
+    peer.deviceLinkInboundAcceptance?.consume();
+    peer.deviceLinkInboundAcceptance = undefined;
+    peer.lastInboundGeneration = undefined;
+  }
+
+  captureInboundAcceptance(dst: string): PeerLinkAcceptanceProof | undefined {
+    const peer = this.peers.get(dst);
+    if (peer?.deviceLinkInboundAcceptance?.current()) return peer.deviceLinkInboundAcceptance;
+    const generation = peer?.lastInboundGeneration, session = this.live(dst), epoch = this.options.connectionEpoch(dst);
+    if (isScopedPeer(dst) || !peer?.inbound || generation === undefined || generation !== peer.generation || !session) return;
+    const current = () => !this.stopped && this.peers.get(dst) === peer && this.live(dst) === session
+      && this.options.connectionEpoch(dst) === epoch && peer.inbound
+      && peer.lastInboundGeneration === generation && peer.generation === generation;
+    return { deviceId: dst, isSource: source => source === this, current, consume: () => {
+      if (!current()) return false;
+      peer.lastInboundGeneration = undefined;
+      return true;
+    } };
   }
 
   /** 和这个对端的连接刚建好、会话还没到：还值得等多少毫秒（0 = 不等）。 */
@@ -286,7 +315,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
    * 先连上中转，0.7 秒后才上 Agent-Net，控制端恰好在这段时间里重试建链）。关了 Agent-Net 的对端回答「没开」，不会走到这里。
    */
   async openAttested(dst: string, payload: unknown, timeoutMs: number | undefined,
-    primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload> {
+    primary: () => Promise<LinkAcceptPayload>, options?: LinkOpenOptions): Promise<LinkAcceptPayload> {
     if (this.stopped || isScopedPeer(dst)) return primary();
     const deadline = performance.now() + ATTESTED_SESSION_WAIT_MS;
     while (!this.stopped && !this.available(dst) && performance.now() < deadline) {
@@ -296,7 +325,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     }
     if (!this.available(dst)) return primary();
     this.options.log.debug(`agent-net session took the attested re-open peer=${shortDeviceRef(dst)}`);
-    return this.openLink(dst, payload, timeoutMs);
+    return this.openLink(dst, payload, timeoutMs, options);
   }
 
   /**
@@ -378,11 +407,12 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
 
   // ─── 控制端 ────────────────────────────────────────────────────────────────
 
-  async openLink(dst: string, payload: unknown, timeoutMs?: number): Promise<LinkAcceptPayload> {
+  async openLink(dst: string, payload: unknown, timeoutMs?: number, options?: LinkOpenOptions): Promise<LinkAcceptPayload> {
     // 和 Device Link 一样：对方的 presence 说关了远程控制，马上报 REMOTE_DISABLED，不发出去等超时（2026-11-17 审查）。
     if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
     const session = this.requireSession(dst);
     const peer = this.peer(dst);
+    const sourceAcceptance = options?.inboundAcceptance;
     peer.outboundClosed = false;
     peer.outbound = 'opening';
     const openStartedAt = performance.now();
@@ -391,10 +421,13 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     peer.refuseOpen = refuse;
     try {
       const accepted = await Promise.race([session.open(this.withLocalCapabilities(dst, payload), timeoutMs ?? this.requestTimeout()), refused]);
-      if (this.live(dst) !== session || peer.outbound !== 'opening') {
+      if (this.live(dst) !== session || peer.outbound !== 'opening' || peer.refuseOpen !== refuse) {
         throw new DeviceLinkError('LINK_NOT_OPEN', 'session closed while opening the control link');
       }
       const accept = (isRecord(accepted) ? accepted : {}) as unknown as LinkAcceptPayload;
+      const inherited = sourceAcceptance?.deviceId === dst && sourceAcceptance.consume();
+      const inboundContinuation = inherited === true;
+      if (peer.deviceLinkInboundAcceptance === sourceAcceptance) peer.deviceLinkInboundAcceptance = undefined;
       peer.outbound = 'open';
       peer.outboundLost = false;
       peer.generation += 1;
@@ -407,12 +440,15 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       this.notifyReopen(dst);
       peer.receivedAt = performance.now();
       const streamId = this.streamIdFor(session);
+      for (const cb of this.linkAcceptedHandlers) {
+        try { cb(dst, accept, inboundContinuation, true); } catch (error) { this.options.log.error('peer link accepted handler threw', error); }
+      }
       for (const cb of this.acceptedHandlers) {
         try { cb(dst, streamId); } catch (error) { this.options.log.error('peer stream accepted handler threw', error); }
       }
       return accept;
     } catch (error) {
-      if (peer.outbound === 'opening') peer.outbound = 'idle';
+      if (peer.refuseOpen === refuse && peer.outbound === 'opening') peer.outbound = 'idle';
       const failure = error instanceof DeviceLinkError ? error
         : error instanceof SessionError ? toDeviceLinkError(error.code, error.message) : null;
       this.options.log.debug(`agent-net session link open failed dst=${shortDeviceRef(dst)} code=${failure?.code ?? 'UNKNOWN'}`
@@ -426,6 +462,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   closeLink(dst: string, reason: LinkCloseReason, direction: 'outbound' | 'inbound' = 'outbound'): void {
     const peer = this.peers.get(dst);
     if (!peer) return;
+    this.retireInboundAcceptance(peer);
     if (direction === 'inbound') {
       peer.inbound = false;
       peer.offer = null;
@@ -515,7 +552,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
 
   // ─── 被控端 ────────────────────────────────────────────────────────────────
 
-  sendLinkAccept(dst: string, requestId: string, payload: LinkAcceptPayload): void {
+  sendLinkAccept(dst: string, requestId: string, payload: LinkAcceptPayload): PeerLinkAcceptanceProof | undefined {
     const session = this.requireSession(dst);
     const peer = this.peer(dst);
     const offer = peer.offer?.id === requestId ? peer.offer : null;
@@ -524,11 +561,14 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     peer.generation += 1;
     peer.linkOnSession = true;
     peer.inbound = true;
+    this.retireInboundAcceptance(peer);
+    if (offer) peer.lastInboundGeneration = peer.generation;
     peer.offer = null;
     // 推送压缩只认这次 link-open 的声明；对不上（被挤掉、id 不符）时当作不支持，发明文。跨账号和 Device Link 一样不压缩。
     const accepted = offer && !isScopedPeer(dst) && !this.pushDeflateRejected.has(dst) ? acceptedPushDeflateDictionaries(offer.capabilities) : [];
     peer.pushDictionary = accepted.length > 0 ? Math.max(...accepted) : undefined;
     peer.sentAt = performance.now();
+    return this.captureInboundAcceptance(dst);
   }
 
   sendInvokeResult(dst: string, requestId: string, payload: InvokeResultPayload): void {
@@ -562,6 +602,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   onFrame(cb: FrameHandler): () => void { this.frameHandlers.add(cb); return () => this.frameHandlers.delete(cb); }
   onPeerRouteStateChanged(cb: (change: DeviceLinkPeerRouteStateChanged) => void): () => void { this.routeHandlers.add(cb); return () => this.routeHandlers.delete(cb); }
   onPeerStreamAccepted(cb: (peer: string, streamId: string) => void): () => void { this.acceptedHandlers.add(cb); return () => this.acceptedHandlers.delete(cb); }
+  onPeerLinkAccepted(cb: (peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean, streamAccepted?: boolean) => void): () => void { this.linkAcceptedHandlers.add(cb); return () => this.linkAcceptedHandlers.delete(cb); }
   onInboundPeerReleased(cb: (peer: string) => void): () => void { this.releasedHandlers.add(cb); return () => this.releasedHandlers.delete(cb); }
 
   /** 和 Device Link 客户端一样，按在线快照记下「对端关了允许被控」，之后的调用立即报 REMOTE_DISABLED。 */
@@ -660,6 +701,8 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   private receiveClose(src: string, reason: string): void | Promise<void> {
     const peer = this.peers.get(src);
     if (peer) {
+      // Transient close keeps an opening request alive, not its pre-reset proof.
+      this.retireInboundAcceptance(peer);
       peer.offer = null;
       if (reason !== 'transport-timeout') {
         // 和 Device Link 收到 link-close 一样，本机还在等的建链马上失败：撤权报 ACCESS_REVOKED，其余报 LINK_NOT_OPEN
@@ -691,6 +734,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     this.options.log.info(`agent-net session closed peer=${shortDeviceRef(src)} code=${code} hadLink=${hadLink}`);
     if (peer.outbound !== 'idle') peer.outboundLost = !peer.outboundClosed;
     peer.outbound = 'idle';
+    this.retireInboundAcceptance(peer);
     peer.inbound = false;
     peer.offer = null;
     peer.requests.clear();

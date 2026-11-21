@@ -17,6 +17,8 @@ import {
   type DeviceLinkPeerTransportReset,
   type DeviceLinkStatus,
   type InboundFrameHandler,
+  type LinkOpenOptions,
+  type PeerLinkAcceptanceProof,
 } from './client.js';
 import type { DeviceLinkPeerLinkSnapshot } from './directPath.js';
 import {
@@ -67,7 +69,7 @@ export interface LegacyPeerConnectionOptions {
    * `primary` otherwise.
    */
   openOnPrimary?(peer: string, payload: unknown, timeoutMs: number | undefined,
-    primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload>;
+    primary: () => Promise<LinkAcceptPayload>, options?: LinkOpenOptions): Promise<LinkAcceptPayload>;
   options: DeviceLinkClientOptions;
 }
 
@@ -424,7 +426,25 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
 
   override onPeerStreamAccepted(cb: (peer: string, streamId: string) => void): () => void {
     return this.both(super.onPeerStreamAccepted((peer, streamId) => { if (this.acceptsScopedEvent(this, peer)) cb(peer, streamId); }),
-      connection => connection.onPeerStreamAccepted((peer, streamId) => { if (this.acceptsScopedEvent(connection, peer)) cb(peer, streamId); }));
+      connection => connection.onPeerStreamAccepted((peer, streamId, accepted) => {
+        // The compatibility handshake may only probe the peer. Its primary or
+        // session open supplies the final acceptance; do not expose the probe.
+        if (connection === this.legacy && !isScopedPeer(peer)
+          && (this.legacyOptions?.prefersPrimary?.(accepted)
+            ?? (this.legacyOptions?.primaryCapability && accepted?.capabilities?.includes(this.legacyOptions.primaryCapability)))) return;
+        if (this.acceptsScopedEvent(connection, peer)) cb(peer, streamId);
+      }));
+  }
+
+  override onPeerLinkAccepted(cb: (peer: string, accepted?: LinkAcceptPayload, inboundContinuation?: boolean, streamAccepted?: boolean) => void): () => void {
+    return this.both(super.onPeerLinkAccepted((peer, accepted, continuation, streamAccepted) => {
+      if (this.acceptsScopedEvent(this, peer)) cb(peer, accepted, continuation, streamAccepted);
+    }), connection => connection.onPeerLinkAccepted((peer, accepted, continuation, streamAccepted) => {
+      if (connection === this.legacy && !isScopedPeer(peer)
+        && (this.legacyOptions?.prefersPrimary?.(accepted)
+          ?? (this.legacyOptions?.primaryCapability && accepted?.capabilities?.includes(this.legacyOptions.primaryCapability)))) return;
+      if (this.acceptsScopedEvent(connection, peer)) cb(peer, accepted, continuation, streamAccepted);
+    }));
   }
 
   override onPeerRouteStateChanged(cb: (change: DeviceLinkPeerRouteStateChanged) => void): () => void {
@@ -494,26 +514,38 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     return compatible.concat(...this.extraScopedConnections().map(connection => connection.getPeerLinkSnapshots().filter(s => this.routed(s.deviceId) === connection)));
   }
 
-  override openLink(dst: string, payload: unknown, timeoutMs?: number): Promise<LinkAcceptPayload> {
+  override captureInboundAcceptance(dst: string): PeerLinkAcceptanceProof | undefined {
     const route = this.routed(dst);
+    return route?.captureInboundAcceptance(dst) ?? super.captureInboundAcceptance(dst)
+      ?? (!isScopedPeer(dst) ? this.legacy?.captureInboundAcceptance(dst) : undefined);
+  }
+
+  override openLink(dst: string, payload: unknown, timeoutMs?: number, options?: LinkOpenOptions): Promise<LinkAcceptPayload> {
+    const route = this.routed(dst);
+    const local = { ...options };
     if (this.legacyRunning && this.legacy && !isScopedPeer(dst)
       && (route === this.legacy || this.legacyOptions?.probeForPeer?.(dst))) {
-      return this.legacy.openLink(dst, payload, timeoutMs).then((accepted) => {
+      return this.legacy.openLink(dst, payload, timeoutMs, { ...local, continueOnAnotherRoute: accepted =>
+        !!(this.legacyOptions?.prefersPrimary?.(accepted) ?? (this.legacyOptions?.primaryCapability
+          && accepted?.capabilities?.includes(this.legacyOptions.primaryCapability))) }).then((accepted) => {
         if (this.legacyOptions?.prefersPrimary?.(accepted) ?? (this.legacyOptions?.primaryCapability && accepted.capabilities?.includes(this.legacyOptions.primaryCapability))) {
           this.legacyRoutes.delete(dst); this.legacyPrefersPrimary.add(dst);
           this.routePresence(dst);
-          const primary = () => super.openLink(dst, payload, timeoutMs);
-          return this.legacyOptions?.openOnPrimary ? this.legacyOptions.openOnPrimary(dst, payload, timeoutMs, primary) : primary();
+          const final = { ...local, inboundAcceptance: local.inboundAcceptance,
+            continueOnAnotherRoute: undefined };
+          const primary = () => super.openLink(dst, payload, timeoutMs, final);
+          return this.legacyOptions?.openOnPrimary ? this.legacyOptions.openOnPrimary(dst, payload, timeoutMs, primary, final) : primary();
         }
         this.legacyPrefersPrimary.delete(dst); this.legacyRoutes.add(dst);
         this.routePresence(dst);
         return accepted;
       });
     }
-    return route?.openLink(dst, payload, timeoutMs) ?? super.openLink(dst, payload, timeoutMs);
+    return route?.openLink(dst, payload, timeoutMs, local) ?? super.openLink(dst, payload, timeoutMs, local);
   }
 
   override closeLink(dst: string, reason: LinkClosePayload['reason'], direction?: 'outbound' | 'inbound'): void {
+    this.captureInboundAcceptance(dst)?.consume();
     const connection = this.routed(dst);
     if (connection) connection.closeLink(dst, reason, direction);
     else super.closeLink(dst, reason, direction);
@@ -534,10 +566,9 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     else super.sendInvokeResult(dst, requestId, payload);
   }
 
-  override sendLinkAccept(dst: string, requestId: string, payload: LinkAcceptPayload): void {
+  override sendLinkAccept(dst: string, requestId: string, payload: LinkAcceptPayload): PeerLinkAcceptanceProof | undefined {
     const connection = this.legacyReplies.delete(dst + '\0' + requestId) ? this.legacy : this.routed(dst);
-    if (connection) connection.sendLinkAccept(dst, requestId, payload);
-    else super.sendLinkAccept(dst, requestId, payload);
+    return connection ? connection.sendLinkAccept(dst, requestId, payload) : super.sendLinkAccept(dst, requestId, payload);
   }
 
   override sendPush(dst: string, channel: string, payload: unknown, ownerStamp?: PushOwnerStamp): void {

@@ -67,7 +67,8 @@ import {
   type HelloPayload,
   type PresenceSnapshot,
   type InvokeResultPayload,
-  type LinkAcceptPayload,
+  type LinkAcceptPayload, type LinkOpenOptions,
+  type PeerLinkAcceptanceProof,
   type LinkClosePayload,
   type NotifyPayload,
   type Envelope,
@@ -544,13 +545,13 @@ let sharedHostSourceEpoch = 0;
 const transportTimeoutReopen = createTransportTimeoutReopenLoop({
   // Local Main→Renderer projection only; the relay and neighboring peers remain online.
   onReset: (deviceId) => broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId }),
-  onReopened: (deviceId) => broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId }),
+  onReopened: (deviceId) => {
+    replayActiveSubscriptions('link-reopen', deviceId);
+    broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId });
+  },
   reopen: async (deviceId) => {
     await openRemoteLink(deviceId);
-    // link 重建成功后定向补一次订阅重放:transport-timeout 场景被控端保留了
-    // 订阅状态,重放是幂等 no-op;before-link 死锁场景(link-accept 曾丢失)
-    // 被控端可能从未提交过订阅(幽灵订阅防护),不补就只恢复了链路、缺推送流。
-    replayActiveSubscriptions('link-reopen', deviceId);
+    // Callback-free fallback replay belongs to the loop's fenced onReopened.
   },
   // 授权边界见 shouldAbortTransportTimeoutReopen 注释:刻意**不看**
   // revokedControllers——那是「对方不再允许控制本机」,与本机主动控制对方
@@ -665,7 +666,12 @@ let appliedSettingsSnapshot: {
 let appliedKeepAwake: boolean | null = null;
 /** 退出路径的持有权 DELETE 完成信号:sync 阶段发起,async 阶段 disposer await(见 onQuit 注释) */
 let pendingQuitOwnershipRelease: Promise<void> | null = null;
-const openLinkInFlight = new Map<string, Promise<LinkAcceptPayload>>();
+const openLinkInFlight = new Map<string, { promise: Promise<LinkAcceptPayload>; inboundNotified: boolean; inboundSource?: PeerLinkAcceptanceProof }>();
+/** A new recovery boundary retires only this pending open's inbound notification. */
+function retireInFlightInboundNotification(deviceId: string): void {
+  const pending = openLinkInFlight.get(deviceId);
+  if (pending) { pending.inboundNotified = false; pending.inboundSource = undefined; }
+}
 /** 对端已对本机撤权：自动 recover/probe 不得再 openLink；用户显式重试可清掉。 */
 const revokedByRemote = new Set<string>();
 const presenceAvailableByDevice = new Map<string, boolean>();
@@ -1122,7 +1128,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     prefersPrimary: agentNetPrefersPrimary,
     // 对方在中转上签名说自己开着 Agent-Net：它的会话马上就到，在会话上开，不在会话出现之前发 Device Link 的帧（AgentNetSessionLinks.openAttested）。
     openOnPrimary: (peer: string, payload: unknown, timeoutMs: number | undefined,
-      primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload> => sessionLinks.openAttested(peer, payload, timeoutMs, primary),
+      primary: () => Promise<LinkAcceptPayload>, options?: LinkOpenOptions): Promise<LinkAcceptPayload> => sessionLinks.openAttested(peer, payload, timeoutMs, primary, options),
     options: legacyConnectionOptions,
   });
   // Agent-Net 会话层（docs/agent-net-session-plan.md 第 10.1 节）跟着「Agent-Net (Beta)」开关走，没有单独的开关。
@@ -1253,6 +1259,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       const connection = client?.connectionFor(change.deviceId);
       if (!connection || change.connectionEpoch !== connection.getConnectionEpoch()
         || change.linkGeneration < connection.getPeerLinkGeneration(change.deviceId)) return;
+      retireInFlightInboundNotification(change.deviceId);
       presenceOnlineByDevice.set(change.deviceId, false);
       presenceAvailableByDevice.set(change.deviceId, false);
       invalidatePluginOauth(change.deviceId);
@@ -1271,6 +1278,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status: getDeviceLinkStatus(), directDataDeviceIds: getDirectDataDeviceIds(), dataPathChangedDeviceId: deviceId });
   });
   client.onPeerTransportReset(({ deviceId }) => {
+    retireInFlightInboundNotification(deviceId);
     invalidatePluginOauth(deviceId);
     if (hasOutboundControlIntent(deviceId)) {
       transportTimeoutReopen.trigger(deviceId);
@@ -1286,6 +1294,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     lastActivityUpload = undefined;
     taskActivityPublisher.setOnline(status === 'online');
     if (status !== 'online') {
+      for (const [deviceId, pending] of openLinkInFlight) {
+        if ((client?.connectionFor(deviceId) === client || pending.inboundSource?.isSource(routedClient)) && !hasOfflineDirectPath(deviceId)) retireInFlightInboundNotification(deviceId);
+      }
       remoteControlConsent.reset();
       stopFilePeers();
       invalidatePluginOauth();
@@ -1343,6 +1354,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 按对端找承载它的分享连接要问原客户端：分路层对走会话的跨账号对端给的是这条连接的视图，和 connection 比不相等（2026-11-17 review）。
     const carriedBy = (id: string) => routedClient.connectionFor(id) === connection;
     if (status !== 'online') {
+      for (const [deviceId, pending] of openLinkInFlight) {
+        if ((carriedBy(deviceId) || pending.inboundSource?.isSource(connection)) && !hasOfflineDirectPath(deviceId)) retireInFlightInboundNotification(deviceId);
+      }
       deactivateAllControllers('cross-account-relay-disconnected', 'cross-account', id => !carriedBy(id) || hasOfflineDirectPath(id));
       transportTimeoutReopen.disposeWhere(id => isScopedPeer(id) && carriedBy(id));
       return;
@@ -1403,6 +1417,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     const { directOnline, online, available } = resolveControllerPresence(
       snap, hasOfflineDirectPath(snap.deviceId), wasAvailable,
     );
+    if (!available) retireInFlightInboundNotification(snap.deviceId);
     const wasOnline = presenceOnlineByDevice.get(snap.deviceId);
     presenceAvailableByDevice.set(snap.deviceId, available);
     presenceOnlineByDevice.set(snap.deviceId, online);
@@ -1490,9 +1505,14 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
 
   // 被控端:接线入站隧道(link-open / invoke / link-close → 本机 handler dispatch)
   setOrdinaryPeerLinkAcceptedListener((deviceId) => {
+    // Both directions may already be opening. The inbound notification owns
+    // this one logical Main open (including a compatibility probe's handoff).
+    const proof = client?.captureInboundAcceptance(deviceId);
+    const pending = openLinkInFlight.get(deviceId);
+    if (pending) { pending.inboundNotified = true; pending.inboundSource = proof; }
     broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId });
     // 同账号互控共用双向链路；对端先开链也可能恢复本端传输，但不会触发出站 accept。
-    replayActiveSubscriptions(`inbound-link-accepted:${shortDeviceRef(deviceId)}`, deviceId);
+    replayActiveSubscriptions(`inbound-link-accepted:${shortDeviceRef(deviceId)}`, deviceId, proof);
   });
   wireInboundDispatch(client);
   // outbox flush 的 presence 显式离线门禁(运行期接线,模块顶层会撞 import 环 TDZ)
@@ -1500,6 +1520,17 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
 
   // busy presence:每 5s 探一次本机是否有 turn 在跑,变化才上报(dedupe by value)
   startBusyReporting();
+
+  client.onPeerLinkAccepted((peer, _accepted, inboundContinuation, streamAccepted) => {
+    if (isScopedPeer(peer)) return;
+    // A verified final accept completes recovery even during retry backoff.
+    // Cancelling fences the old loop promise and its later duplicate projection.
+    if (transportTimeoutReopen.isActive(peer) && !streamAccepted && !inboundContinuation) {
+      replayActiveSubscriptions(`link-reopened:${shortDeviceRef(peer)}`, peer);
+    }
+    transportTimeoutReopen.cancel(peer);
+    if (!inboundContinuation && !openLinkInFlight.get(peer)?.inboundNotified) broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
+  });
 
   client.onPeerStreamAccepted((peer, streamId) => {
     // Shared routes can reconnect independently of the primary relay. Notify
@@ -1530,6 +1561,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 控制端:被控端撤销访问权限会发 link-close('revoked')。据此移除该被控端的项目/对话 +
     // 标记「已撤销」(presence 不变 —— 被控端仍在线且全局允许被控,故必须靠这条信号)。
     if (env.kind === 'link-close') {
+      retireInFlightInboundNotification(env.src);
       const reason = (env.payload as LinkClosePayload | undefined)?.reason;
       // reason → 重开循环动作统一路由:transport-timeout(可恢复瞬时重置,
       // 可靠层保留 stream/pending,被控端保留订阅与在途回包,link-accept 后
@@ -1946,8 +1978,8 @@ function teardownActiveLink(): void {
   client.stop();
 }
 
-function replayActiveSubscriptions(reason: string, deviceId?: string): void {
-  subscriptionReplayScheduler.replay(reason, deviceId);
+function replayActiveSubscriptions(reason: string, deviceId?: string, inboundAcceptance?: PeerLinkAcceptanceProof): void {
+  subscriptionReplayScheduler.replay(reason, deviceId, inboundAcceptance);
 }
 
 const subscriptionReplayScheduler = createSubscriptionReplayScheduler({
@@ -2369,7 +2401,7 @@ export function onRemoteLinkClosed(deviceId: string, listener: () => void): () =
  */
 export async function openRemoteLink(
   deviceId: string,
-  opts?: { observed?: boolean },
+  opts?: { observed?: boolean; inboundAcceptance?: PeerLinkAcceptanceProof },
 ): Promise<LinkAcceptPayload> {
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
@@ -2377,7 +2409,7 @@ export async function openRemoteLink(
   // 自动 recover/probe 由 recoverLink + isProbeEligible 挡。presence / subscribe
   // 可以在对端重新授权后走这里接回；终态只在成功建链后清除,失败重试不得提前解闩。
   const existing = openLinkInFlight.get(deviceId);
-  if (existing) return existing;
+  if (existing) return existing.promise;
 
   // 取消代次:closeRemoteLink 无法 abort 已在等待上线的 promise,只能翻代;
   // 等待结束后复验代次,把「用户刚关闭的链路被迟到的建链重新建立」挡在发送前
@@ -2401,7 +2433,7 @@ export async function openRemoteLink(
         CONTROLLER_CAPABILITIES,
         snapshotSubscriptions(deviceId).length > 0,
       ),
-    });
+    }, undefined, { inboundAcceptance: opts?.inboundAcceptance });
     revokedByRemote.delete(deviceId);
     return accepted;
   };
@@ -2413,9 +2445,10 @@ export async function openRemoteLink(
     observed && responsivenessTracker
       ? responsivenessTracker.guardInvoke(deviceId, OPEN_LINK_OBSERVATION_CHANNEL, doOpen)
       : doOpen();
-  openLinkInFlight.set(deviceId, request);
+  const pending = { promise: request, inboundNotified: false };
+  openLinkInFlight.set(deviceId, pending);
   const cleanup = (): void => {
-    if (openLinkInFlight.get(deviceId) === request) openLinkInFlight.delete(deviceId);
+    if (openLinkInFlight.get(deviceId) === pending) openLinkInFlight.delete(deviceId);
   };
   void request.then(cleanup, cleanup);
   return request;
@@ -2760,6 +2793,7 @@ async function backgroundInvokeDeviceLive(deviceId: string, channel: string, arg
 export async function remoteSubscribe(
   deviceId: string,
   topics: string[],
+  options?: { inboundAcceptance?: PeerLinkAcceptanceProof },
 ): Promise<InvokeResultPayload> {
   topics = sharedTaskTopics(deviceId, topics);
   assertNotStandby();
@@ -2791,7 +2825,7 @@ export async function remoteSubscribe(
         throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
       }
       // 已在外层 guardInvoke 观测内(remoteSubscribe 整体被 guard):不重复观测。
-      await openRemoteLink(deviceId, { observed: false });
+      await openRemoteLink(deviceId, { observed: false, inboundAcceptance: options?.inboundAcceptance });
       // 建链是新的 await 边界:引用可能又变了,发送前按最新快照重取。
       liveTopics = liveTopicsNow();
       if (liveTopics.length === 0) return { ok: true, result: null };

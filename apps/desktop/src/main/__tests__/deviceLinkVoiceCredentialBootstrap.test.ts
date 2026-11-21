@@ -13,13 +13,16 @@ import { createContext, Script } from 'node:vm';
 
 import {
   DeviceLinkClient,
+  RoutedDeviceLinkClient,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+  DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
   DL_SUBSCRIBE_CHANNEL,
   isProviderSharePeer,
+  isScopedPeer,
   isSharedTaskPeer,
   parseSharedTaskPeer,
   PROTOCOL_VERSION,
@@ -29,17 +32,23 @@ import {
   sharedTaskHostPeer,
   sharedTaskTopics,
   shortDeviceRef,
+  type DeviceLinkClientOptions,
   type Envelope,
   type InvokePayload,
   type InvokeResultPayload,
   type LinkOpenPayload,
+  type LegacyPeerConnectionOptions,
+  type PeerLinkAcceptanceProof,
   type WsLike,
 } from '@cindy/device-link';
 import * as deviceLink from '@cindy/device-link';
+import { AgentNetSessionLinks, SessionPeer, agentNetSessionLane, routeSessionPeers, type PeerLinks, type SessionLane } from '@cindy/agent-net';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
 import { requiresSessionLink } from '../device-link/linkRecovery';
+import { linkOpenCapabilities } from '../device-link/backgroundLink';
+import { createTransportTimeoutReopenLoop } from '../device-link/transportTimeoutReopen';
 import { createSubscriptionReplayScheduler } from '../device-link/subscriptionReplayScheduler';
 import type * as SubscriptionRegistry from '../device-link/subscriptions';
 
@@ -56,11 +65,13 @@ const deviceLinkSource = ts.createSourceFile(
 );
 const acceptedRegistrations: string[] = [];
 const inboundAcceptedRegistrations: string[] = [];
+const frameRegistrations: string[] = [];
+const scopedStatusRegistrations: string[] = [];
 function findAcceptedRegistration(node: ts.Node): void {
   if (ts.isCallExpression(node)
     && ts.isPropertyAccessExpression(node.expression)
     && node.expression.expression.getText(deviceLinkSource) === 'client'
-    && node.expression.name.text === 'onPeerStreamAccepted') {
+    && ['onPeerStreamAccepted', 'onPeerLinkAccepted'].includes(node.expression.name.text)) {
     acceptedRegistrations.push(node.getText(deviceLinkSource));
   }
   if (ts.isCallExpression(node)
@@ -69,21 +80,27 @@ function findAcceptedRegistration(node: ts.Node): void {
     && node.arguments[0] && ts.isArrowFunction(node.arguments[0])) {
     inboundAcceptedRegistrations.push(node.getText(deviceLinkSource));
   }
+  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+    && node.expression.expression.getText(deviceLinkSource) === 'client' && node.expression.name.text === 'onFrame') frameRegistrations.push(node.getText(deviceLinkSource));
+  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+    && node.expression.expression.getText(deviceLinkSource) === 'routedClient' && node.expression.name.text === 'onScopedConnectionStatus') scopedStatusRegistrations.push(node.getText(deviceLinkSource));
   ts.forEachChild(node, findAcceptedRegistration);
 }
 findAcceptedRegistration(deviceLinkSource);
-if (acceptedRegistrations.length !== 1) {
-  throw new Error(`Expected one peer-accept registration, found ${acceptedRegistrations.length}`);
+if (acceptedRegistrations.length !== 2) {
+  throw new Error(`Expected two peer-accept registrations, found ${acceptedRegistrations.length}`);
 }
 if (inboundAcceptedRegistrations.length !== 1) {
   throw new Error(`Expected one inbound peer-accept registration, found ${inboundAcceptedRegistrations.length}`);
 }
-const acceptedRegistration = new Script(ts.transpileModule(acceptedRegistrations[0], {
+const acceptedRegistration = new Script(ts.transpileModule(acceptedRegistrations.join('\n'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText);
 const inboundAcceptedRegistration = new Script(ts.transpileModule(inboundAcceptedRegistrations[0], {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText);
+
+const frameRegistration = new Script(ts.transpileModule(frameRegistrations.join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText);
 
 function productionFunction(source: ts.SourceFile, name: string): string {
   let declaration: ts.FunctionDeclaration | undefined;
@@ -102,6 +119,10 @@ const inboundDispatch = new Script(ts.transpileModule([
   productionFunction(dispatchSource, 'handleLinkOpen'),
   'handleLinkOpen;',
 ].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText);
+const openRemoteLinkEntry = new Script(ts.transpileModule(
+  productionFunction(deviceLinkSource, 'openRemoteLink') + '; openRemoteLink;',
+  { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+).outputText);
 const remoteSubscribeEntry = new Script(ts.transpileModule(
   `${productionFunction(deviceLinkSource, 'remoteSubscribe')}\nremoteSubscribe;`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
@@ -120,10 +141,16 @@ function subscriptionRegistryRequire(id: string): unknown {
 
 /** FIFO relay adapter only: production clients perform handshake, ACK and recovery. */
 class RecoveryRelay {
+  holdConfirmations = false;
+  private readonly heldConfirmations: Array<() => void> = [];
+  releaseConfirmations(): void { this.queue.push(...this.heldConfirmations.splice(0)); this.holdConfirmations = false; }
+  holdAccepts = false;
+  private readonly heldAccepts: Array<() => void> = [];
+  releaseAccepts(): void { this.queue.push(...this.heldAccepts.splice(0)); this.holdAccepts = false; }
   readonly sockets = new Map<string, RecoverySocket>();
   readonly sent: Array<{ sender: string; envelope: Envelope }> = [];
   private readonly queue: Array<() => void> = [];
-  constructor(private readonly confirm: boolean) {}
+  constructor(private readonly confirm: boolean, private readonly reliable = true) {}
 
   connect(id: string): RecoverySocket {
     const socket = new RecoverySocket(this, id);
@@ -145,14 +172,21 @@ class RecoveryRelay {
     if (!this.confirm && envelope.kind === 'link-open') {
       const payload = envelope.payload as LinkOpenPayload;
       envelope = { ...envelope, payload: { ...payload,
-        capabilities: payload.capabilities?.filter((item) => item !== DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM),
+        capabilities: payload.capabilities?.filter((item) => item !== DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM
+          && (this.reliable || item !== DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)),
       } };
     }
     this.sent.push({ sender, envelope });
     const destination = this.sockets.get(envelope.dst!);
-    if (destination) this.queue.push(() => {
-      if (this.sockets.get(envelope.dst!) === destination) destination.push({ ...envelope, src: sender });
-    });
+    if (destination) {
+      const deliver = () => {
+        if (this.sockets.get(envelope.dst!) === destination) destination.push({ ...envelope, src: sender });
+      };
+      const payload = envelope.payload as { channel?: string; payload?: { linkRequestId?: string } };
+      if (this.holdAccepts && envelope.kind === 'link-accept') this.heldAccepts.push(deliver);
+      else if (this.holdConfirmations && payload?.payload?.linkRequestId) this.heldConfirmations.push(deliver);
+      else this.queue.push(deliver);
+    }
   }
   async flush(): Promise<void> {
     for (let steps = 0, idle = 0; steps < 1_000; steps += 1) {
@@ -183,17 +217,22 @@ class RecoverySocket implements WsLike {
   }
 }
 
-function recoveryDesktop(relay: RecoveryRelay, id: string) {
+function recoveryDesktop(relay: RecoveryRelay, id: string, wrap?: (client: DeviceLinkClient) => PeerLinks, primaryRelay?: RecoveryRelay,
+  openOnPrimary?: LegacyPeerConnectionOptions['openOnPrimary']) {
   const exports = {} as typeof SubscriptionRegistry;
   subscriptionRegistry.runInNewContext({ exports, require: subscriptionRegistryRequire });
   const registry = exports;
   const diagnostic = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  const client = new DeviceLinkClient({
+  const options: DeviceLinkClientOptions = {
     getWsUrl: () => 'ws://memory.invalid/device-link', getToken: async () => 'test-token',
     getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: 'test', remoteControlEnabled: true, busy: false }),
     createWebSocket: () => relay.connect(id), logger: diagnostic,
     timing: { reconnectBaseMs: 1, reconnectMaxMs: 1, pingIntervalMs: 60_000, requestTimeoutMs: 2_000 },
-  });
+  };
+  const rawClient = primaryRelay ? new RoutedDeviceLinkClient({ ...options, createWebSocket: () => primaryRelay.connect(id) }, undefined, {
+    active: () => true, useForPeer: () => false, probeForPeer: () => true, primaryCapability: 'agent-net-node-v2', openOnPrimary, options,
+  }) : new DeviceLinkClient(options);
+  const client = wrap ? wrap(rawClient) : rawClient;
   const noOp = () => {};
   const context = createContext({
     client, ports: {}, subscriptions: registry, isProviderSharePeer, isSharedTaskPeer,
@@ -216,7 +255,7 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
     log: diagnostic, shortId: shortDeviceRef, shortDeviceRef,
   });
   const accept = inboundDispatch.runInContext(context) as
-    (client: DeviceLinkClient, src: string, requestId: string, payload: LinkOpenPayload) => void;
+    (client: PeerLinks, src: string, requestId: string, payload: LinkOpenPayload) => void;
   const subscribed = vi.fn();
   const pushes: unknown[] = [];
   client.onFrame((frame) => {
@@ -234,7 +273,7 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
   client.onStatusChange((status) => {
     if (status !== 'online') for (const peer of registry.getControllerIds()) registry.clearController(peer);
   });
-  return { client, context, registry, subscribed, pushes, diagnostic };
+  return { client, rawClient, context, registry, subscribed, pushes, diagnostic };
 }
 
 describe('mobile voice credential sync desktop bootstrap path', () => {
@@ -303,17 +342,23 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     // replay 移出排除条件块后仍通过(#6572 review);这里执行实际注册的回调,
     // 验证恢复事件是否交给该 peer 的调度器。不是双机故障恢复的端到端验收。
     const callbacks: Array<(peer: string, streamId: string) => void> = [];
+    let linkAccepted!: (peer: string) => void;
     const replayActiveSubscriptions = vi.fn();
     const broadcast = vi.fn();
     const sharedHostStreams = new Map<string, { streamId: string; epoch: number }>();
     if (sameStream) sharedHostStreams.set(peer, { streamId: 'accepted-stream', epoch: 1 });
     acceptedRegistration.runInNewContext({
-      client: { onPeerStreamAccepted: (callback: typeof callbacks[number]) => callbacks.push(callback) },
+      client: {
+        onPeerLinkAccepted: (callback: typeof linkAccepted) => { linkAccepted = callback; },
+        onPeerStreamAccepted: (callback: typeof callbacks[number]) => callbacks.push((peer, stream) => { linkAccepted(peer); callback(peer, stream); }),
+      },
       isProviderSharePeer,
+      isScopedPeer,
+      transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
       parseSharedTaskPeer,
       shortDeviceRef,
       replayActiveSubscriptions,
-      sharedHostStreams,
+      openLinkInFlight: new Map(), sharedHostStreams,
       sharedHostSourceEpoch: 1,
       broadcast, DEVICE_LINK_PUSH,
     });
@@ -323,7 +368,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     callbacks[0](peer, 'accepted-stream');
     // #11120: even the same stream can have a gap with a tokenless completion.
     // Run the actual acceptance callback and verify notification precedes replay.
-    if (parseSharedTaskPeer(peer)?.role === 'host') {
+    if (!isScopedPeer(peer) || parseSharedTaskPeer(peer)?.role === 'host') {
       expect(broadcast).toHaveBeenCalledWith(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
       expect(broadcast.mock.invocationCallOrder[0]).toBeLessThan(replayActiveSubscriptions.mock.invocationCallOrder[0]);
     } else expect(broadcast).not.toHaveBeenCalled();
@@ -336,31 +381,378 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     );
   });
 
-  it.each([false, true])('互控设备 B 先反向重连时恢复 A→B 订阅，不扰动健康 C（确认能力=%s）', async (confirm) => {
+  // #8962: execute the real accept registration with the production timeout loop.
+  // One accepted recovery must invalidate one target once, including old Hosts
+  // without a reliable-stream callback. Existing replay-only tests missed this.
+  it.each([false, true])('projects one ordinary timeout recovery (stream callback=%s)', async reliable => {
+    const broadcasts = vi.fn();
+    let accepted!: (peer: string, stream: string) => void;
+    let linkAccepted!: (peer: string) => void;
+    let resolveOpen!: () => void;
+    const opened = new Promise<void>(resolve => { resolveOpen = resolve; });
+    const loop = createTransportTimeoutReopenLoop({
+      onReopened: deviceId => broadcasts(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId }),
+      reopen: () => opened,
+      shouldAbort: () => false,
+    });
+    acceptedRegistration.runInNewContext({
+      client: {
+        onPeerLinkAccepted: (callback: typeof linkAccepted) => { linkAccepted = callback; },
+        onPeerStreamAccepted: (callback: typeof accepted) => { accepted = (peer, stream) => { linkAccepted(peer); callback(peer, stream); }; },
+      },
+      isProviderSharePeer, isScopedPeer, parseSharedTaskPeer, shortDeviceRef,
+      replayActiveSubscriptions: vi.fn(), openLinkInFlight: new Map(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+      transportTimeoutReopen: loop, broadcast: broadcasts, DEVICE_LINK_PUSH,
+    });
+    try {
+      loop.trigger('remote-device');
+      if (reliable) accepted('remote-device', 'retained-stream');
+      resolveOpen();
+      await opened;
+      await Promise.resolve();
+      expect(broadcasts.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'remote-device' }]]);
+      // A later genuine recovery can keep its transport stream: stream-ID-only
+      // deduplication would incorrectly retain a snapshot across this new gap.
+      broadcasts.mockClear();
+      accepted('remote-device', 'retained-stream');
+      expect(broadcasts.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'remote-device' }]]);
+    } finally { loop.dispose(); }
+  });
+
+  it.each(['backoff', 'inflight'])('projects an external verified accept while timeout recovery is %s', async phase => {
+    vi.useFakeTimers();
+    let resolveOpen!: () => void;
+    let intent = true;
+    const pending = new Promise<void>(resolve => { resolveOpen = resolve; });
+    const broadcast = vi.fn();
+    const reopen = vi.fn(() => phase === 'backoff' ? Promise.reject(new Error('busy')) : pending);
+    const loop = createTransportTimeoutReopenLoop({ reopen, shouldAbort: () => !intent,
+      onReopened: peer => broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer }), baseDelayMs: 10 });
+    let accepted!: (peer: string) => void;
+    acceptedRegistration.runInNewContext({
+      client: { onPeerLinkAccepted: (cb: typeof accepted) => { accepted = cb; }, onPeerStreamAccepted: () => {} },
+      isProviderSharePeer, isScopedPeer, parseSharedTaskPeer, shortDeviceRef,
+      replayActiveSubscriptions: vi.fn(), openLinkInFlight: new Map(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+      transportTimeoutReopen: loop, broadcast, DEVICE_LINK_PUSH,
+    });
+    try {
+      loop.trigger('remote-device');
+      await Promise.resolve(); await Promise.resolve();
+      expect(loop.isActive('remote-device')).toBe(true);
+      accepted('remote-device');
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'remote-device' }]]);
+      expect(loop.isActive('remote-device')).toBe(false);
+      intent = false; resolveOpen(); await pending;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(reopen).toHaveBeenCalledTimes(1);
+      expect(broadcast).toHaveBeenCalledTimes(1);
+    } finally { loop.dispose(); vi.useRealTimers(); }
+  });
+
+  // #8962: duplicate wire replies are consumed by the production client's
+  // pending-request pairing, rather than suppressing later real same-stream gaps.
+  it.each([false, true])('duplicate link-accept does not repeat renderer invalidation (confirmation=%s)', async confirm => {
+    vi.useFakeTimers();
+    const relay = new RecoveryRelay(confirm);
+    const a = recoveryDesktop(relay, 'desktop-a');
+    const b = recoveryDesktop(relay, 'desktop-b');
+    const broadcast = vi.fn();
+    Object.assign(a.context, {
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
+      replayActiveSubscriptions: vi.fn(), openLinkInFlight: new Map(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+      broadcast, DEVICE_LINK_PUSH,
+    });
+    acceptedRegistration.runInContext(a.context);
+    try {
+      a.client.start(); b.client.start();
+      await relay.flush();
+      const opened = a.client.openLink('desktop-b', {
+        controllerName: 'A', protocolVersion: PROTOCOL_VERSION, appVersion: 'test', capabilities: [],
+      });
+      await relay.flush(); await opened;
+      const reply = relay.sent.find(({ sender, envelope }) => sender === 'desktop-b' && envelope.kind === 'link-accept')!;
+      expect(reply).toBeDefined();
+      for (let i = 0; i < 3; i++) relay.sockets.get('desktop-a')!.push({ ...reply.envelope, src: 'desktop-b' });
+      await relay.flush();
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
+      expect(a.diagnostic.error).not.toHaveBeenCalled();
+    } finally {
+      for (const desktop of [a, b]) { desktop.client.stop(); desktop.registry.clearAll(); }
+      vi.useRealTimers();
+    }
+  });
+
+  it('invalidates ordinary pre-reliable Host state after a verified accept without a timeout recovery', async () => {
+    vi.useFakeTimers();
+    const relay = new RecoveryRelay(false, false);
+    const a = recoveryDesktop(relay, 'desktop-a'), b = recoveryDesktop(relay, 'desktop-b');
+    const broadcast = vi.fn();
+    Object.assign(a.context, {
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
+      replayActiveSubscriptions: vi.fn(), openLinkInFlight: new Map(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+      broadcast, DEVICE_LINK_PUSH,
+    });
+    acceptedRegistration.runInContext(a.context);
+    try {
+      a.client.start(); b.client.start(); await relay.flush();
+      const opened = a.client.openLink('desktop-b', { controllerName: 'A', protocolVersion: 1, appVersion: 'test' });
+      await relay.flush(); await opened;
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
+    } finally {
+      for (const desktop of [a, b]) { desktop.client.stop(); desktop.registry.clearAll(); }
+      vi.useRealTimers();
+    }
+  });
+
+  // P2: both real Main opens are already pending before either inbound offer.
+  // Unit tier: one bidirectional recovery must invalidate Renderer only once;
+  // a later ordinary open still invalidates, so this is not a peer-wide quota.
+  it.each([[false, false, 'none'], [false, true, 'none'], [true, true, 'none'], [true, true, 'target'], [true, true, 'neighbor']] as const)('coalesces simultaneous reverse opens (confirm=%s reliable=%s reset=%s)', async (confirm, reliable, reset) => {
+    vi.useFakeTimers();
+    const relay = new RecoveryRelay(confirm, reliable);
+    const a = recoveryDesktop(relay, 'desktop-a'), b = recoveryDesktop(relay, 'desktop-b');
+    const broadcast = vi.fn();
+    Object.assign(a.context, {
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
+      replayActiveSubscriptions: vi.fn(), openLinkInFlight: new Map(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+      broadcast, DEVICE_LINK_PUSH, assertNotStandby: () => {}, assertRemoteControlTargetEnabled: () => {},
+      openLinkCloseEpochs: new Map(), ensureOnlineForRequest: async () => {},
+      deviceName: () => 'Desktop A', CONTROLLER_CAPABILITIES: [], snapshotSubscriptions: () => [],
+      responsivenessTracker: null, revokedByRemote: new Set(), linkOpenCapabilities,
+    });
+    const open = openRemoteLinkEntry.runInContext(a.context) as (peer: string) => Promise<unknown>;
+    const scheduler = createSubscriptionReplayScheduler({ snapshotSubscriptions: () => [],
+      remoteSubscribe: async () => ({ ok: true }), isLinkTornDown: () => false,
+      isRelayOnline: () => true, isDeviceUnresponsive: () => false,
+      getPresenceAvailability: () => true, isPermanentError: () => false, log: a.diagnostic });
+    a.context.replayActiveSubscriptions = scheduler.replay;
+    a.context.retireInFlightInboundNotification = new Script(ts.transpileModule(
+      productionFunction(deviceLinkSource, 'retireInFlightInboundNotification') + '; retireInFlightInboundNotification;',
+      { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText).runInContext(a.context);
+    a.context.handleProviderMetadataSourcePush = () => {};
+    a.context.routeLinkCloseForReopen = () => {};
+    frameRegistration.runInContext(a.context);
+    inboundAcceptedRegistration.runInContext(a.context);
+    acceptedRegistration.runInContext(a.context);
+    try {
+      a.client.start(); b.client.start(); await relay.flush();
+      relay.holdAccepts = reset !== 'none';
+      const outgoing = open('desktop-b');
+      await Promise.resolve(); await Promise.resolve();
+      const incoming = b.client.openLink('desktop-a', { controllerName: 'B', protocolVersion: 1, appVersion: 'test' });
+      await relay.flush();
+      if (reset !== 'none') {
+        expect(broadcast).toHaveBeenCalledTimes(1);
+        relay.sockets.get('desktop-a')!.push({ v: PROTOCOL_VERSION, kind: 'link-close', src: reset === 'target' ? 'desktop-b' : 'desktop-c', payload: { reason: 'transport-timeout' } });
+        relay.releaseAccepts(); await relay.flush();
+      }
+      await outgoing; await incoming;
+      expect(broadcast.mock.calls).toEqual(Array(reset === 'target' ? 2 : 1).fill([DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]));
+      broadcast.mockClear();
+      const later = open('desktop-b'); await relay.flush(); await later;
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
+    } finally {
+      scheduler.teardown();
+      for (const desktop of [a, b]) { desktop.client.stop(); desktop.registry.clearAll(); }
+      vi.useRealTimers();
+    }
+  });
+
+  // Unit: legacy probe -> final primary is one logical Main open. Retiring
+  // the actual inbound source during that wait must restore final notification.
+  it.each([false, true])('fences an in-flight notification when its legacy source disconnects during handoff (offline=%s)', async offline => {
+    vi.useFakeTimers();
+    const legacy = new RecoveryRelay(true), primary = new RecoveryRelay(true);
+    let release!: () => void;
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    let probing = false;
+    const a = recoveryDesktop(legacy, 'desktop-a', undefined, primary,
+      async (_peer, _payload, _timeout, open) => { probing = true; await wait; return open(); });
+    const b = recoveryDesktop(legacy, 'desktop-b'), primaryB = recoveryDesktop(primary, 'desktop-b');
+    b.context.ports.sameAccountCapabilities = () => ['agent-net-node-v2'];
+    const broadcast = vi.fn();
+    Object.assign(a.context, {
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false, cancel: () => {}, disposeWhere: () => {} },
+      replayActiveSubscriptions: vi.fn(), openLinkInFlight: new Map(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+      broadcast, DEVICE_LINK_PUSH, assertNotStandby: () => {}, assertRemoteControlTargetEnabled: () => {},
+      openLinkCloseEpochs: new Map(), ensureOnlineForRequest: async () => {},
+      deviceName: () => 'Desktop A', CONTROLLER_CAPABILITIES: [], snapshotSubscriptions: () => [],
+      responsivenessTracker: null, revokedByRemote: new Set(), linkOpenCapabilities,
+      routedClient: a.rawClient, hasOfflineDirectPath: () => false, deactivateAllControllers: () => {},
+      flushMakerEventBatchesOnReconnect: () => {}, flushRemoteInvokeResultOutboxOnReconnect: () => {},
+    });
+    a.context.retireInFlightInboundNotification = new Script(ts.transpileModule(
+      productionFunction(deviceLinkSource, 'retireInFlightInboundNotification') + '; retireInFlightInboundNotification;',
+      { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText).runInContext(a.context);
+    new Script(ts.transpileModule(scopedStatusRegistrations.join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText).runInContext(a.context);
+    const open = openRemoteLinkEntry.runInContext(a.context) as (peer: string) => Promise<unknown>;
+    inboundAcceptedRegistration.runInContext(a.context); acceptedRegistration.runInContext(a.context);
+    try {
+      a.client.start(); b.client.start(); primaryB.client.start(); await legacy.flush(); await primary.flush();
+      const outgoing = open('desktop-b'); await Promise.resolve(); await Promise.resolve();
+      const incoming = b.client.openLink('desktop-a', { controllerName: 'B', protocolVersion: 1, appVersion: 'test' });
+      await legacy.flush();
+      expect(probing).toBe(true);
+      expect(broadcast).toHaveBeenCalledTimes(1);
+      if (offline) legacy.sockets.get('desktop-a')!.close();
+      let completed = false; void outgoing.then(() => { completed = true; }, () => {});
+      release();
+      for (let step = 0; step < 6; step += 1) { await legacy.flush(); await primary.flush(); }
+      expect(completed).toBe(true);
+      await outgoing; await incoming;
+      expect(broadcast.mock.calls).toEqual(Array(offline ? 2 : 1).fill([DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]));
+      expect(a.diagnostic.error).not.toHaveBeenCalled();
+    } finally {
+      release();
+      for (const desktop of [a, b, primaryB]) { desktop.client.stop(); desktop.registry.clearAll(); }
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['direct', 'probe', 'closed'])('coalesces a legacy inbound acceptance with its real reciprocal Session open (%s)', async mode => {
+    vi.useFakeTimers();
+    const relay = new RecoveryRelay(true);
+    let sessionA: SessionPeer | null = null, sessionB: SessionPeer | null = null;
+    const receivers: Array<((lane: SessionLane, data: Uint8Array) => void) | undefined> = [];
+    const wire = (side: number) => ({
+      write: (lane: SessionLane, data: Uint8Array) => { const copy = data.slice(); queueMicrotask(() => receivers[1 - side]?.(lane, copy)); },
+      bufferedAmount: 0,
+      onData: (callback: (lane: SessionLane, data: Uint8Array) => void) => { receivers[side] = callback; },
+    });
+    const quiet = { debug() {}, info() {}, warn() {}, error() {} };
+    const linksA = new AgentNetSessionLinks({ session: () => sessionA, connectionEpoch: () => 1, selfDeviceId: () => 'desktop-a', log: quiet });
+    const linksB = new AgentNetSessionLinks({ session: () => sessionB, connectionEpoch: () => 1, selfDeviceId: () => 'desktop-b', log: quiet });
+    const connectSessions = () => {
+      sessionA = new SessionPeer({ wire: wire(0), laneFor: agentNetSessionLane, ...linksA.handlers('desktop-b') });
+      sessionB = new SessionPeer({ wire: wire(1), laneFor: agentNetSessionLane, ...linksB.handlers('desktop-a') });
+    };
+    const a = recoveryDesktop(relay, 'desktop-a', raw => routeSessionPeers(raw, linksA), new RecoveryRelay(true),
+      (peer, payload, timeoutMs, primary, options) => { connectSessions(); return linksA.openAttested(peer, payload, timeoutMs, primary, options); });
+    const b = recoveryDesktop(relay, 'desktop-b', raw => routeSessionPeers(raw, linksB));
+    b.context.ports.sameAccountCapabilities = () => ['agent-net-node-v2'];
+    if (mode !== 'probe') connectSessions();
+    let reciprocal: Promise<unknown> | undefined;
+    const broadcast = vi.fn();
+    Object.assign(a.context, {
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
+      replayActiveSubscriptions: (_why: string, peer: string, proof?: PeerLinkAcceptanceProof) => {
+        if (!a.client.isLinkReady(peer) && !reciprocal) {
+          if (mode === 'closed') a.client.closeLink(peer, 'user');
+          reciprocal = a.client.openLink(peer, { controllerName: 'A', protocolVersion: 1, appVersion: 'test' }, undefined, { inboundAcceptance: proof });
+        }
+      },
+      openLinkInFlight: new Map(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0, broadcast, DEVICE_LINK_PUSH,
+    });
+    inboundAcceptedRegistration.runInContext(a.context);
+    acceptedRegistration.runInContext(a.context);
+    try {
+      a.client.start(); b.client.start(); await relay.flush(); relay.holdConfirmations = true;
+      const incoming = b.rawClient.openLink('desktop-a', { controllerName: 'B', protocolVersion: 1, appVersion: 'test', capabilities: ['agent-net-node-v2'] });
+      await relay.flush(); await incoming; await reciprocal;
+      expect(linksA.isLinkReady('desktop-b')).toBe(true);
+      expect(broadcast.mock.calls).toEqual(Array(mode === 'closed' ? 2 : 1)
+        .fill([DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]));
+      broadcast.mockClear();
+      await a.client.openLink('desktop-b', { controllerName: 'A later', protocolVersion: 1, appVersion: 'test' });
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
+    } finally {
+      relay.releaseConfirmations();
+      a.client.stop(); b.client.stop(); a.registry.clearAll(); b.registry.clearAll(); vi.useRealTimers();
+    }
+  });
+
+  // P2: a verified external open during backoff must restore an old Host's
+  // lost topic registry, not just invalidate Renderer state. Real Main open /
+  // subscribe functions and clients deliver the final topic-gated push; unit tier.
+  it('restores pre-reliable subscriptions when an external open completes timeout backoff', async () => {
+    vi.useFakeTimers();
+    const relay = new RecoveryRelay(false, false);
+    const a = recoveryDesktop(relay, 'desktop-a'), c = recoveryDesktop(relay, 'desktop-c');
+    let b = recoveryDesktop(relay, 'desktop-b');
+    const refs = [{ deviceId: 'desktop-b', topics: ['session:remote-b'] },
+      { deviceId: 'desktop-c', topics: ['session:healthy-c'] }];
+    Object.assign(a.context, {
+      sharedTaskTopics, assertNotStandby: () => {}, assertRemoteControlTargetEnabled: () => {},
+      assertRemoteControlTargetEnabledAfterReopen: () => {},
+      snapshotSubscriptions: (peer?: string) => refs.filter(ref => !peer || ref.deviceId === peer),
+      openLinkCloseEpochs: new Map(), openLinkInFlight: new Map(), ensureOnlineForRequest: async () => {},
+      requiresSessionLink, DeviceLinkError, DL_SUBSCRIBE_CHANNEL, deviceName: () => 'Desktop A',
+      CONTROLLER_CAPABILITIES: [], responsivenessTracker: null, app: { getVersion: () => 'test' },
+      linkOpenCapabilities, revokedByRemote: new Set(),
+    });
+    const open = openRemoteLinkEntry.runInContext(a.context) as (peer: string) => Promise<unknown>;
+    a.context.openRemoteLink = open;
+    const remoteSubscribe = remoteSubscribeEntry.runInContext(a.context) as
+      (peer: string, topics: string[]) => Promise<InvokeResultPayload>;
+    const scheduler = createSubscriptionReplayScheduler({
+      snapshotSubscriptions: a.context.snapshotSubscriptions, remoteSubscribe,
+      isLinkTornDown: () => false, isRelayOnline: () => true, isDeviceUnresponsive: () => false,
+      getPresenceAvailability: () => true, isPermanentError: () => true, log: a.diagnostic,
+    });
+    const reopen = vi.fn(async () => { throw new Error('first recovery unavailable'); });
+    const loop = createTransportTimeoutReopenLoop({ reopen, shouldAbort: () => false, baseDelayMs: 1_000 });
+    const broadcast = vi.fn();
+    try {
+      a.client.start(); b.client.start(); c.client.start(); await relay.flush();
+      const seed = Promise.all(refs.map(ref => remoteSubscribe(ref.deviceId, ref.topics)));
+      await relay.flush(); await seed;
+      expect(b.registry.getControllersForTopic('session:remote-b')).toEqual(['desktop-a']);
+      relay.sockets.get('desktop-b')!.close();
+      await vi.advanceTimersByTimeAsync(10); await relay.flush(); c.subscribed.mockClear();
+      expect(b.registry.getControllersForTopic('session:remote-b')).toEqual([]);
+      Object.assign(a.context, { transportTimeoutReopen: loop, replayActiveSubscriptions: scheduler.replay,
+        isScopedPeer, parseSharedTaskPeer, openLinkInFlight: new Map(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+        broadcast, DEVICE_LINK_PUSH });
+      acceptedRegistration.runInContext(a.context);
+      loop.trigger('desktop-b'); await Promise.resolve(); await Promise.resolve();
+      expect(loop.isActive('desktop-b')).toBe(true);
+      const opened = open('desktop-b'); await relay.flush(); await opened; await relay.flush();
+      expect(b.registry.getControllersForTopic('session:remote-b')).toEqual(['desktop-a']);
+      expect(c.subscribed).not.toHaveBeenCalled();
+      expect(loop.isActive('desktop-b')).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000); await relay.flush();
+      expect(reopen).toHaveBeenCalledTimes(1);
+      for (const peer of b.registry.getControllersForTopic('session:remote-b')) b.client.sendPush(peer, 'maker:event', { recovered: true });
+      await relay.flush(); expect(a.pushes).toContainEqual({ channel: 'maker:event', payload: { recovered: true } });
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
+    } finally {
+      loop.dispose(); scheduler.teardown();
+      for (const desktop of [a, b, c]) { desktop.client.stop(); desktop.registry.clearAll(); }
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { confirm: false, restart: false, reliable: true },
+    { confirm: true, restart: false, reliable: true },
+    { confirm: true, restart: true, reliable: true },
+    { confirm: false, restart: false, reliable: false },
+    { confirm: false, restart: true, reliable: false },
+  ])('互控设备 B 先反向重连时恢复 A→B 订阅，不扰动健康 C（$confirm/$restart/$reliable）', async ({ confirm, restart, reliable }) => {
     // #6572 Codex review: B relay reconnect drops A's active subscriptions; B's
     // inbound handshake can restore A's bidirectional transport without any A
     // outbound-accept event. Exercise real clients, handleLinkOpen, remoteSubscribe,
     // replay scheduler and registry. This guard isolates Electron side effects;
     // its observable result is a topic-gated push reaching A again, not a spy call.
     vi.useFakeTimers();
-    const relay = new RecoveryRelay(confirm);
+    const relay = new RecoveryRelay(confirm, reliable);
     const a = recoveryDesktop(relay, 'desktop-a');
-    const b = recoveryDesktop(relay, 'desktop-b');
+    let b = recoveryDesktop(relay, 'desktop-b');
     const c = recoveryDesktop(relay, 'desktop-c');
     const refs = [
       { deviceId: 'desktop-b', topics: ['session:remote-b'] },
       { deviceId: 'desktop-c', topics: ['session:healthy-c'] },
     ];
-    const open = (client: DeviceLinkClient, peer: string) => client.openLink(peer, {
+    const open = (client: Pick<DeviceLinkClient, 'openLink'>, peer: string, options?: Parameters<DeviceLinkClient['openLink']>[3]) => client.openLink(peer, {
       controllerName: 'Test desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test',
       capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
-    });
+    }, undefined, options);
     Object.assign(a.context, {
       sharedTaskTopics, assertNotStandby: () => {}, assertRemoteControlTargetEnabled: () => {},
       assertRemoteControlTargetEnabledAfterReopen: () => {},
       snapshotSubscriptions: (peer?: string) => refs.filter((ref) => !peer || ref.deviceId === peer),
       openLinkCloseEpochs: new Map(), ensureOnlineForRequest: async () => {},
-      requiresSessionLink, openRemoteLink: (peer: string) => open(a.client, peer),
+      requiresSessionLink, openRemoteLink: (peer: string, options?: Parameters<DeviceLinkClient['openLink']>[3]) => open(a.client, peer, options),
       DeviceLinkError, DL_SUBSCRIBE_CHANNEL, deviceName: () => 'Desktop A',
       CONTROLLER_CAPABILITIES: [], responsivenessTracker: null,
     });
@@ -391,7 +783,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
 
       Object.assign(a.context, {
         replayActiveSubscriptions: scheduler.replay, DEVICE_LINK_PUSH, broadcast: vi.fn(),
-        parseSharedTaskPeer, sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+        parseSharedTaskPeer, isScopedPeer, transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
+        openLinkInFlight: new Map(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
       });
       inboundAcceptedRegistration.runInContext(a.context);
       acceptedRegistration.runInContext(a.context);
@@ -405,21 +798,29 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       relay.sockets.get('desktop-b')!.close();
       expect(b.registry.getControllersForTopic('session:remote-b')).toEqual([]);
       expect(b.registry.getKnownControllersForTopic('session:remote-b')).toEqual(['desktop-a']);
+      if (restart) {
+        b.client.stop(); b.registry.clearAll();
+        b = recoveryDesktop(relay, 'desktop-b');
+        b.client.start();
+      }
       await vi.advanceTimersByTimeAsync(10); await relay.flush();
+      relay.holdConfirmations = confirm;
       const reopened = open(b.client, 'desktop-a'); // B recovers first; A receives no reconnect/presence trigger.
       await relay.flush(); await reopened;
+      relay.releaseConfirmations(); await relay.flush();
 
-      expect(a.client.isLinkReady('desktop-b')).toBe(true);
+      expect(a.client.isLinkReady('desktop-b')).toBe(reliable);
       // Legacy reliable peer proves the missing edge with no outbound callback at A.
-      // Confirmation-aware peers may need one existing readiness-driven reciprocal open.
-      expect(outboundAccepted.mock.calls.length).toBeLessThanOrEqual(confirm ? 1 : 0);
+      // A restarted confirmation peer or any pre-reliable peer needs a reciprocal open.
+      expect(outboundAccepted.mock.calls.length).toEqual(restart && reliable ? 1 : 0);
+      expect(a.context.broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
       expect(relay.sent.slice(recoveryStart).filter(({ sender, envelope }) =>
-        sender === 'desktop-a' && envelope.kind === 'link-open')).toHaveLength(outboundAccepted.mock.calls.length);
+        sender === 'desktop-a' && envelope.kind === 'link-open')).toHaveLength(restart || !reliable ? 1 : 0);
       expect(b.registry.getControllersForTopic('session:remote-b')).toEqual(['desktop-a']);
       expect(b.subscribed).toHaveBeenCalledWith('desktop-a', ['session:remote-b']);
       expect(c.subscribed).not.toHaveBeenCalled();
       expect(c.registry.getControllersForTopic('session:healthy-c')).toEqual(['desktop-a']);
-      expect(a.client.isLinkReady('desktop-c')).toBe(true);
+      expect(a.client.isLinkReady('desktop-c')).toBe(reliable);
       expect(relay.sockets.get('desktop-c')).toBe(healthySocket);
       expect(relay.sockets.get('desktop-a')).toBe(aSocket);
       expect(relay.sent.slice(recoveryStart).some(({ envelope }) => envelope.dst === 'desktop-c')).toBe(false);
@@ -429,6 +830,10 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       }
       await relay.flush();
       expect(a.pushes).toContainEqual({ channel: 'maker:event', payload: { recovered: true } });
+      a.context.broadcast.mockClear();
+      const later = open(a.client, 'desktop-b');
+      await relay.flush(); await later;
+      expect(a.context.broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
       expect(a.diagnostic.error).not.toHaveBeenCalled();
     } finally {
       scheduler.teardown();
