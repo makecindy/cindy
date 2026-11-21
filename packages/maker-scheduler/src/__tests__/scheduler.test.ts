@@ -1326,6 +1326,147 @@ describe('Scheduler', () => {
     await local.scheduler.stop();
   });
 
+  // Codex P2 on #11577:批量 listActive 超时时,派发守卫的收口不能一起被跳过。
+  // 原实现在那个 await 处直接跳进 catch,dispatchSnapshots 循环整段不执行 ——
+  // 排队中的 run 一直拿着旧 deadline,而 lastDbSyncAt 已经前移,要等下一次 30 秒
+  // 同步才恢复;期间别的实例改短了截止时间的 run 仍会被放行。
+  it('reconciles queued dispatch guards when listActive times out', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 30,
+      logger: { warn: vi.fn() },
+      // 派发停在途中:守卫快照留在 automaticDispatchSchedules。
+      runnerImpl: async () => new Promise<FireResult>(() => {}),
+    });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    const schedule = await local.scheduler.create({
+      ...baseInput, intervalMs: 15_000, expireAt: createdAt + 60_000,
+    });
+
+    local.clock.setTo(schedule.nextFireAt!);
+    void local.scheduler.tick().catch(() => undefined);
+    for (let i = 0; i < 100 && local.fireCalls.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(local.fireCalls).toHaveLength(1);
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(true);
+
+    // 另一实例把这一行过期掉了(行离开 listActive)。
+    const expired: Schedule = {
+      ...schedule, status: 'expired', nextFireAt: undefined, expireAt: createdAt - 1, updatedAt: createdAt + 1,
+    };
+    local.storage.schedules.set(schedule.id, expired);
+
+    // 批量读挂死(超时);单条回读慢但会回来。
+    let releaseRead!: (value: Schedule | null) => void;
+    let reads = 0;
+    const realGet = local.storage.get.bind(local.storage);
+    vi.spyOn(local.storage, 'listActive').mockImplementation(() => new Promise<Schedule[]>(() => {}));
+    vi.spyOn(local.storage, 'get').mockImplementation(async (id: string) => {
+      if (id !== schedule.id) return realGet(id);
+      reads += 1;
+      return await new Promise<Schedule | null>((resolve) => { releaseRead = resolve; });
+    });
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    // 批量读超时之后,守卫的回读仍然必须发出去(迟到结果才有 handler 收口)。
+    expect(reads).toBe(1);
+
+    // 迟到的回读回来:守卫必须用这一版(截止时间已过 → 不再放行)。
+    releaseRead(expired);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(false);
+
+    await local.scheduler.stop();
+  });
+
+  // Codex P2 on #11577:预算内回来的过期写入也要判旧。等待期间截止时间被延长,
+  // 缓存里已经是更新的一版,而这一份是早先那次写入返回的 expired 快照;无条件覆盖
+  // 会把刚恢复的任务又从缓存里抹掉,临近的触发要等到下一次 30 秒 DB sync 才恢复。
+  it('keeps the active row when an in-budget expiry reply is stale', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 5_000 });
+    const createdAt = local.clock.now();
+    const expireAt = createdAt + 20_000;
+    const schedule = await local.scheduler.create({ ...baseInput, intervalMs: 15_000, expireAt });
+
+    // 第一轮:把这一行同步进内存。
+    await local.scheduler.tick();
+
+    // 到点(已过截止时间):过期扫描发起 UPDATE,这一轮卡在等回包上。
+    local.clock.setTo(expireAt + 1);
+    const realUpdate = local.storage.update.bind(local.storage);
+    let releaseExpire!: (value: Schedule | null) => void;
+    let expireLaunched = false;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) => {
+      if (patch.status === 'expired') {
+        expireLaunched = true;
+        return new Promise<Schedule | null>((resolve) => { releaseExpire = resolve; });
+      }
+      return realUpdate(id, patch, expected);
+    });
+    const tickPromise = local.scheduler.tick();
+    for (let i = 0; i < 100 && !expireLaunched; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(expireLaunched).toBe(true);
+
+    // 等待期间用户延长了截止时间:缓存里换成更新的一版(nextFireAt 不变)。
+    const extended = await local.scheduler.update(schedule.id, { expireAt: createdAt + 3_600_000 });
+    expect(extended.expireAt).toBe(createdAt + 3_600_000);
+
+    // 这次 UPDATE 在预算内回来,带回的是**发起时那一版**(已过期)。
+    releaseExpire({ ...schedule, status: 'expired', nextFireAt: undefined, updatedAt: createdAt });
+    await tickPromise;
+
+    // 第三轮(不触发 DB sync):任务必须照常派发 —— 改期后的那一版没被旧快照抹掉。
+    await local.scheduler.tick();
+    expect(local.fireCalls).toHaveLength(1);
+  });
+
+  // Codex P2 on #11577:僵尸清扫也要 single-flight。markRunningAsInterrupted 永不
+  // settle 时,预闸门超时只放弃「等」,活儿还在跑 —— 而清扫挂在每个 30 秒的 DB sync
+  // 块里,之后每一轮都会再起一份,存储故障期间挂起的 DB 工作无界增长,把认领和过期
+  // 写入的调用也挤掉。
+  it('keeps the stale-run sweep single-flight across ticks', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 30,
+      logger: { warn: vi.fn(), info: vi.fn() },
+    });
+    await local.scheduler.start();
+    await local.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+
+    // 清扫的存储调用挂死。
+    let sweepCalls = 0;
+    vi.spyOn(local.storage, 'markRunningAsInterrupted').mockImplementation(
+      () => {
+        sweepCalls += 1;
+        return new Promise<string[]>(() => {});
+      },
+    );
+
+    // start() 把清扫挡到「启动 + 完整过期窗口」之后。先用一轮 30 秒的 tick 把
+    // lastTickAt 推上来(间隔不超过挂起吸收阈值,不会再被挡一次),窗口在下一轮到达。
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(sweepCalls).toBe(0); // 窗口未到,清扫本就还没开始
+
+    // 窗口已过:这一轮清扫发起后卡死,预闸门超时放弃等待,tick 继续走。
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(sweepCalls).toBe(1);
+
+    // 之后每一轮都到 DB sync 块:在途的那一份不能再起一份。
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(sweepCalls).toBe(1);
+
+    await local.scheduler.stop();
+  });
+
 
   it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
     const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';

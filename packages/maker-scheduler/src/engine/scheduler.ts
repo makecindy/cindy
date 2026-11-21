@@ -631,6 +631,13 @@ export class Scheduler extends EventEmitter {
    */
   private readonly inFlightReplans = new Map<string, Promise<void>>();
   /**
+   * 在途的僵尸清扫。与 inFlightReplans 同一类问题:markRunningAsInterrupted 永不
+   * settle 时,预闸门超时只放弃「等」,活儿还在跑 —— 而清扫挂在每个 30 秒的 DB sync
+   * 块里,之后每一轮都会再起一份,存储故障期间挂起的 DB/RPC 工作无界增长,把认领和
+   * 过期写入的调用也挤掉(Codex P2 on #11577)。在途的那一份不再重入,settle 后清位。
+   */
+  private inFlightSweep: Promise<void> | undefined;
+  /**
    * 严格 cron 解析上线前可能落库的畸形 active 任务。清空 nextFireAt 若遇到存储故障，
    * 周期 DB 同步仍会读回旧的到期时间；在用户修正表达式前必须持续把它们隔离在内存里。
    */
@@ -859,6 +866,8 @@ export class Scheduler extends EventEmitter {
     // 在途补排同理:上一段生命周期的补排可能永远不 settle,不能让它把新主人的
     // 补排挡在门外。
     this.inFlightReplans.clear();
+    // 在途清扫同理:挂死的那一份不能把新主人的清扫一直挡在门外。
+    this.inFlightSweep = undefined;
     this.emitRuntimeState();
     await Promise.all(interrupted.map(async (run) => {
       await this.storage.updateRun(run.runId, {
@@ -898,34 +907,48 @@ export class Scheduler extends EventEmitter {
       this.lastDbSyncAt = now;
       try {
         const dispatchSnapshots = new Map(this.automaticDispatchSchedules);
-        // 超时 → StorageAwaitTimeoutError → 走下面 catch 的独立告警,内存里的
-        // activeSchedules 原样保留(due-fire 继续用它,不因同步卡死而停摆)。
-        const actives = await withStorageTimeout(
-          this.storage.listActive(),
-          Math.max(1, preGateRemaining(preGateDeadline)),
-          'listActive',
-        );
-        if (this.tickHandle !== tickHandle) return;
-        const previousSchedules = new Map(this.activeSchedules);
-        this.activeSchedules.clear();
-        const activeIds = new Set(actives.map((sch) => sch.id));
-        for (const scheduleId of this.invalidScheduleIds) {
-          if (!activeIds.has(scheduleId)) this.invalidScheduleIds.delete(scheduleId);
+        // 超时 → StorageAwaitTimeoutError → 记下来继续走,内存里的 activeSchedules
+        // 原样保留(due-fire 继续用它,不因同步卡死而停摆);但**派发守卫仍要收口**
+        // (见下面 dispatchSnapshots 循环)。
+        let actives: Schedule[] | undefined;
+        let listActiveTimeout: StorageAwaitTimeoutError | undefined;
+        try {
+          actives = await withStorageTimeout(
+            this.storage.listActive(),
+            Math.max(1, preGateRemaining(preGateDeadline)),
+            'listActive',
+          );
+        } catch (err) {
+          if (!(err instanceof StorageAwaitTimeoutError)) throw err;
+          listActiveTimeout = err;
         }
-        for (const sch of actives) {
-          const previous = previousSchedules.get(sch.id);
-          const cadenceChanged =
-            !previous ||
-            previous.cronExpr !== sch.cronExpr ||
-            previous.timezone !== sch.timezone ||
-            previous.intervalMs !== sch.intervalMs ||
-            previous.manual !== sch.manual;
-          const current = this.keepInvalidScheduleQuarantined(sch, now, cadenceChanged);
-          this.activeSchedules.set(current.id, current);
+        if (this.tickHandle !== tickHandle) return;
+        if (actives) {
+          const previousSchedules = new Map(this.activeSchedules);
+          this.activeSchedules.clear();
+          const activeIds = new Set(actives.map((sch) => sch.id));
+          for (const scheduleId of this.invalidScheduleIds) {
+            if (!activeIds.has(scheduleId)) this.invalidScheduleIds.delete(scheduleId);
+          }
+          for (const sch of actives) {
+            const previous = previousSchedules.get(sch.id);
+            const cadenceChanged =
+              !previous ||
+              previous.cronExpr !== sch.cronExpr ||
+              previous.timezone !== sch.timezone ||
+              previous.intervalMs !== sch.intervalMs ||
+              previous.manual !== sch.manual;
+            const current = this.keepInvalidScheduleQuarantined(sch, now, cadenceChanged);
+            this.activeSchedules.set(current.id, current);
+          }
         }
         // Other instances can edit the deadline while a claimed run waits in
         // its runner. Include rows that have just left listActive after expiry.
-        const currentById = new Map(actives.map((sch) => [sch.id, sch]));
+        // 批量 listActive 超时也要走这里:那一轮没有任何行信息,等于每条守卫都不在
+        // listActive 里,各自回读一次 —— 否则排队中的 run 一直拿着旧 deadline,而
+        // lastDbSyncAt 已经前移,要等下一次 30 秒同步才恢复,期间别的实例改短了
+        // 截止时间的 run 仍会被放行(Codex P2 on #11577)。
+        const currentById = new Map((actives ?? []).map((sch) => [sch.id, sch]));
         // 一条守卫的回读超时不能带崩整轮:后面几条的读同样必须发出去(迟到结果由
         // 各自的 handler 收口),否则它们的守卫一直停在旧 deadline,而 lastDbSyncAt
         // 已经前移,要等下一次 30 秒同步才恢复 —— 期间别的实例改短了截止时间的
@@ -970,6 +993,9 @@ export class Scheduler extends EventEmitter {
             this.automaticDispatchSchedules.set(runId, current);
           }
         }
+        // 批量读的超时优先上抛:它才是这一轮没拿到行信息的原因,告警里的 phase 也
+        // 该是 listActive。
+        if (listActiveTimeout) throw listActiveTimeout;
         if (dispatchReadTimeout) throw dispatchReadTimeout;
       } catch (err) {
         if (err instanceof StorageAwaitTimeoutError) this.logPreGateTimeout(err.phase);
@@ -979,7 +1005,7 @@ export class Scheduler extends EventEmitter {
       // 本实例在心跳过期后就地改写 interrupted 并广播 'changed' 刷 UI。
       // excludeRunIds 兜底排除本进程 in-flight(即使自家心跳续期停摆也绝不自伤)。
       if (this.tickHandle !== tickHandle) return;
-      await this.runPreGatePhase('sweep', preGateDeadline, () => this.sweepStaleRunningRuns(now));
+      await this.runPreGatePhase('sweep', preGateDeadline, () => this.runSweepSingleFlight(now));
     }
     if (this.tickHandle !== tickHandle) return;
     // 补排重试要排在挑选 due 之前:本次刚补上的 nextFireAt 若已到期,同一个 tick 就能
@@ -1146,9 +1172,24 @@ export class Scheduler extends EventEmitter {
         );
         if (generation !== this.lifecycleGeneration) return true;
       }
-      if (current) this.refreshAutomaticDispatchSchedules(current);
-      if (current?.status === 'active') this.activeSchedules.set(current.id, current);
-      else this.activeSchedules.delete(schedule.id);
+      if (current) {
+        // 在预算内回来同样可能已经是旧版:等待期间截止时间被延长(用户改期 / 别的
+        // 实例),缓存里已经是更新的一版,而这一份是早先那次写入返回的 expired
+        // 快照。无条件覆盖会把刚恢复的任务又从缓存里抹掉、把派发守卫退回旧
+        // deadline,临近的触发要等到下一次 30 秒 DB sync 才恢复(Codex P2 on
+        // #11577)。与迟到收口同一把尺子,判据只比版本 updatedAt;不带上
+        // isStaleExpireResult 的 expireAt 那一项 —— CAS 败者回读回来的正是「别的
+        // 实例改过之后的那一行」,expireAt 天然与缓存不同,拿它判旧会把合法的新版
+        // 一起拒掉(见 getExpiryFallbackRead)。
+        const cached = this.currentScheduleSnapshot(current.id);
+        if (cached && current.updatedAt < cached.updatedAt) return true;
+        this.refreshAutomaticDispatchSchedules(current);
+        if (current.status === 'active') this.activeSchedules.set(current.id, current);
+        else this.activeSchedules.delete(schedule.id);
+      } else {
+        // 回读拿到空(行被删掉):缓存里这一条也要下去。
+        this.activeSchedules.delete(schedule.id);
+      }
       if (updated) this.emitEvent({ type: 'changed', scheduleId: schedule.id });
     } catch (err) {
       if (err instanceof StorageAwaitTimeoutError) {
@@ -2626,10 +2667,27 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
+   * 僵尸清扫的 single-flight 入口(见 inFlightSweep)。上一份还在途时本轮不重复
+   * 发起 —— 预闸门超时只放弃「等」,活儿还在跑,每个 30 秒的 DB sync 块都再起一份
+   * 就是无界的存储调用堆积。刻意**不返回在途那一份**:它可能是已 reject 的
+   * promise,反复 await 同一个失败只会把每个 tick 都拖进同一条错误。
+   */
+  private runSweepSingleFlight(now: number): Promise<void> {
+    if (this.inFlightSweep) return Promise.resolve();
+    const sweep = this.sweepStaleRunningRuns(now);
+    this.inFlightSweep = sweep;
+    const clear = () => {
+      if (this.inFlightSweep === sweep) this.inFlightSweep = undefined;
+    };
+    void sweep.then(clear, clear);
+    return sweep;
+  }
+
+  /**
    * 运行期僵尸清扫:把心跳过期的 'running' 行改写 interrupted,恢复崩溃认领悬置
    * 的排期,并按 schedule 广播 'changed'。清扫窗口受 sweepBlockedUntil 节制
    * (启动暖场 + 挂起唤醒宽限);本进程 in-flight run 无条件排除。
-   * tick 的 DB-sync 块内周期调用。
+   * tick 的 DB-sync 块内周期调用(经 runSweepSingleFlight 单飞)。
    */
   private async sweepStaleRunningRuns(now: number): Promise<void> {
     if (now < this.sweepBlockedUntil) return;
