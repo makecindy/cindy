@@ -466,6 +466,23 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       next.set(c.deviceId, view);
       this.knownV2.add(c.deviceId);
     }
+    // One transport key is one device. A device that enrolled again under another device id keeps its key, and its earlier
+    // certificate stays in the directory: the same device twice. Only the certificate that supersedes the others is this
+    // account's device; the rest are left out here, as if not listed, and reach nothing over Agent-Net (callers that
+    // route by `knowsPeer` use Device Link for them). Kept, a connection made with that key was filed under whichever id
+    // came first, and the phone's engine, which admits by key, refused the whole list (DUPLICATE_PEER): on 2026-11-21
+    // one such pair in an account of 26 devices kept every phone of the account from opening Agent-Net at all.
+    // This device's own key under another device id is this device as it was: never a peer. (The key of `identity`: a
+    // guest's `certificate` is the one of the computer it was let in to.)
+    const holders = new Map<string, DeviceView>(), ownKey = this.options.client.identity.transportKey;
+    for (const view of next.values()) {
+      const held = holders.get(view.certificate.transportKey);
+      if (!held || this.supersedes(view.certificate, held.certificate)) holders.set(view.certificate.transportKey, view);
+    }
+    for (const [id, view] of [...next]) {
+      const c = view.certificate;
+      if (holders.get(c.transportKey) !== view || c.transportKey === ownKey && id !== this.deviceId) { next.delete(id); this.knownV2.delete(id); }
+    }
     this.roster = next;
     this.keyIndex = null;
     if (grants) {
@@ -496,6 +513,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.dropUnauthorizedPeers();
     if (live) this.options.onDirectory?.([...next.values()]);
     this.dialRoster();
+  }
+  /** Of two certificates of this account with one transport key: this device's own, else the one issued later (then the higher device id, so every device picks the same one). */
+  private supersedes(a: DeviceView['certificate'], b: DeviceView['certificate']): boolean {
+    if (a.deviceId === this.deviceId || b.deviceId === this.deviceId) return a.deviceId === this.deviceId;
+    return a.issuedAt !== b.issuedAt ? a.issuedAt > b.issuedAt : a.deviceId > b.deviceId;
   }
   private dropUnauthorizedPeers(): void {
     for (const id of this.lanCandidates.keys()) if (!this.authorized(id)) this.lanCandidates.delete(id);
