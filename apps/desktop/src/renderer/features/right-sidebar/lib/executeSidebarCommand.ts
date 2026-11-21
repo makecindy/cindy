@@ -50,6 +50,8 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
       await openExternalFileInSidebarFileBrowser(command.sessionId, command.absPath);
     } else if (command.targetKind === 'directory') {
       await openDirInSidebarFileBrowser(command.sessionId, command.relPath);
+    } else if (command.line !== undefined) {
+      await openFileInSidebarFileBrowser(command.sessionId, command.relPath, command.line);
     } else {
       await openFileInSidebarFileBrowser(command.sessionId, command.relPath);
     }

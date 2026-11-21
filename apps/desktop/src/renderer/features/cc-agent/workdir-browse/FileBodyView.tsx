@@ -182,6 +182,10 @@ export interface FileBodyViewProps {
   jumpQuery?: string | null;
   /** 来自 URL ?line 参数 — 1-indexed 行号。 */
   jumpLine?: number | null;
+  /** 重复点击同一文件的同一行时也重新锚定(聊天文件链接的 revealFileNonce)。 */
+  jumpLineNonce?: number;
+  /** 行锚定已执行;宿主据此清除一次性行号。 */
+  onJumpLineConsumed?: () => void;
   /** Project-search one-shot jump has been consumed; parent should clear URL params. */
   onSearchJumpConsumed?: () => void;
 }
@@ -212,6 +216,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     autosaveReady = true,
     jumpQuery,
     jumpLine,
+    jumpLineNonce,
+    onJumpLineConsumed,
     onSearchJumpConsumed,
   },
   ref,
@@ -295,6 +301,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   // Project-search 跳转去重 key — 见下方 "Project-search jump" 段落。
   // 放这里是为了在 relPath 变化的 reset effect 里能直接清零。
   const lastJumpKeyRef = useRef<string | null>(null);
+  const lastLineJumpKeyRef = useRef<string | null>(null);
 
   // ── Right-click context menu ────────────────────────────────────────────
   // 编辑态下接管右键。Markdown 只给"插入表格";代码/普通文本保留"保存"。
@@ -346,6 +353,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     // 切文件时重置跳转去重 key —— 否则用户关了文件 tab 又点同样的命中行
     // 应该重新跳, 但 ref 还记着旧 key 会跳过。
     lastJumpKeyRef.current = null;
+    lastLineJumpKeyRef.current = null;
     // 关掉可能还开着的右键菜单 + 清自动进编辑 one-shot key,让新文件能再次
     // 触发自动进入编辑。
     setMenuPos(null);
@@ -783,6 +791,24 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     onSearchJumpConsumed,
   ]);
 
+  // 聊天文件链接会把侧边栏预览锚到某一行。上面 search jump 已经自己负责高亮与
+  // 滚动,这条路径只滚编辑器,两者不叠加。
+  useEffect(() => {
+    if (!relPath || content.kind !== 'text' || jumpLine == null || jumpQuery) return;
+    const line = Math.floor(jumpLine);
+    if (!Number.isFinite(line) || line <= 0) return;
+    const key = `${relPath}|${line}|${jumpLineNonce ?? 0}`;
+    if (lastLineJumpKeyRef.current === key) return;
+    const raf = requestAnimationFrame(() => {
+      // 去重 key 只在真正滚过之后才记：这一帧可能被切 tab / 收起侧栏取消掉，
+      // 提前占住 key 会让用户回来时同一条锚点被当成重复而永久跳过。
+      lastLineJumpKeyRef.current = key;
+      editorRef.current?.scrollToLine(line);
+      onJumpLineConsumed?.();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [relPath, content.kind, jumpLine, jumpLineNonce, jumpQuery, onJumpLineConsumed]);
+
   // ── Non-text render branches (early returns; no edit affordance) ────────
   if (!relPath || content.kind === 'empty') {
     return (
@@ -962,7 +988,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   // scheduled restore frames can pull the viewport back after search.setActive()
   // scrolls the match into view.
   const hasSearchJump = Boolean(jumpQuery && jumpLine !== null);
-  const scrollAnchor = relPath && !hasSearchJump ? loadFileScroll(workdir, relPath) : null;
+  const scrollAnchor =
+    relPath && !hasSearchJump && jumpLine == null ? loadFileScroll(workdir, relPath) : null;
 
   // 所有 text 文件都由 PlaintextEditor 承载:
   //   - code: CodeMirror 代码主题 + 行号 + 语法高亮。

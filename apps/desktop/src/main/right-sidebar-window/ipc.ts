@@ -286,11 +286,18 @@ function parseCommand(raw: unknown): RsbWindowCommand {
         'command.targetKind must be file | directory | external-file',
       );
     }
+    if (
+      r.line !== undefined &&
+      (!Number.isSafeInteger(r.line) || (r.line as number) <= 0)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'command.line must be a positive integer');
+    }
     return {
       type: 'open-file-browser',
       sessionId: r.sessionId,
       relPath: r.relPath,
       targetKind: r.targetKind,
+      ...(r.line !== undefined ? { line: r.line as number } : {}),
     };
   }
   throwIpcError('INVALID_PARAMS', `unknown rsb-window command type: ${String(r.type)}`);
