@@ -7,6 +7,8 @@
  * - 新建任务：模式自己决定这次在哪台运行，与新任务草稿相同。
  * - 模式已删除：按没选模式运行，不写说明；里面都用不了：沿用存下的具体模型，说明写明沿用了它。
  * - 绑定的是 SSH 任务：模式现在不用于 SSH(model-groups.md §6、§9)，按存下的具体模型运行，不选不写。
+ * - 绑定的任务已删除：runner 会新建，按新建任务选(与 runner 的判断一致：只有 deleted 不复用)。
+ * - 只在本机运行的自动化(primaryHostKey)：只在本机的来源里选，选到别的电脑也会被派发前拒绝。
  */
 import type { Schedule } from '@cindy/maker-scheduler';
 
@@ -30,7 +32,7 @@ export interface ScheduleModelGroupPorts {
   bind(sessionId: string, selection: ModelGroupSelection, pickedKey: string): void;
   /**
    * 绑定任务现在在哪里运行：agentDeviceId null = 本机；ssh = 任务在 SSH 主机上。
-   * undefined = 任务已不存在(这次会新建)。
+   * undefined = 任务不存在或已删除(这次会新建)。
    */
   sessionLocation(sessionId: string): Promise<{ agentDeviceId: string | null; ssh: boolean } | undefined>;
   /** 写说明：放在 `sinceMs` 之后这个任务的第一条用户消息下面(就是这次运行发出的那条)。 */
@@ -55,10 +57,9 @@ export function createScheduleModelGroupPicker(ports: ScheduleModelGroupPorts) {
     const boundLocation = boundSessionId ? await ports.sessionLocation(boundSessionId) : undefined;
     if (boundLocation?.ssh) return null;
     const bound = boundLocation !== undefined;
-    const result = await ports.resolve({
-      selection,
-      ...(bound ? { location: { agentDeviceId: boundLocation.agentDeviceId } } : {}),
-    });
+    const hostOnly = !!schedule.primaryHostKey?.trim();
+    const location = bound ? { agentDeviceId: boundLocation.agentDeviceId } : hostOnly ? { agentDeviceId: null } : undefined;
+    const result = await ports.resolve({ selection, ...(location ? { location } : {}) });
     if (result.outcome === 'missing') return null;
     const note = buildModelGroupRouteNote(result, keptModelName(schedule), ports.t, ports.locale(), ports.locationName);
     const started = (sessionId: string) => {

@@ -82,6 +82,24 @@ describe('scheduled runs pick from their model group', () => {
     expect(calls.resolve).toHaveLength(0);
   });
 
+  // PR #11881 review r4651232112: an automation pinned to this computer refused any remote pick before
+  // dispatch, every run. Minimal input: a primaryHostKey schedule; the pick must be asked for local sources.
+  it('an automation pinned to this computer only picks local sources', async () => {
+    const { value, calls } = ports(routed());
+    const pick = await createScheduleModelGroupPicker(value)({ ...schedule, primaryHostKey: 'public/cindy-contacts' } as Schedule);
+    expect(calls.resolve[0]).toEqual({ selection: { type: 'route', id: 'daily' }, location: { agentDeviceId: null } });
+    expect(pick?.route?.modelAgentDeviceId).toBe('');
+  });
+
+  // PR #11881 review r4651232115: a deleted bound task is rebuilt as a new task, so it must be picked as one
+  // and keep the picked computer. The port reports a deleted task as absent (undefined).
+  it('a rebuilt task is picked as a new task and keeps the picked computer', async () => {
+    const { value, calls } = ports(routed('desk-2'), undefined);
+    const pick = await createScheduleModelGroupPicker(value)({ ...schedule, targetSessionId: 'deleted-task', persistentSession: true } as Schedule);
+    expect(calls.resolve[0]).toEqual({ selection: { type: 'route', id: 'daily' } });
+    expect(pick?.route?.modelAgentDeviceId).toBe('desk-2');
+  });
+
   it('a deleted mode runs the saved model and writes nothing', async () => {
     const { value, calls } = ports({ outcome: 'missing', groupName: 'Gone', trace: [] });
     expect(await createScheduleModelGroupPicker(value)(schedule)).toBeNull();

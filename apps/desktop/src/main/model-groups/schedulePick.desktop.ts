@@ -1,13 +1,15 @@
 /**
- * 定时任务按模式选来源的桌面装配：选路用本机的模型组解析器；选路模块在第一次用到时才加载，
- * 不拖慢定时任务的启动。说明写在这次运行发出的那条消息下面。
+ * 定时任务按模式选来源的桌面装配：选路用本机的模型组解析器，说明写在这次运行发出的那条消息下面。
+ * 依赖都是顶层静态导入(architecture-invariants §2)；解析器只在端口函数里读，模块加载时不调用。
  */
 import { and, asc, eq, gte } from 'drizzle-orm';
 
 import { getResolvedMainLocale, t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { createMessage } from '../localDb/ipc/messages.js';
 import { messages, sessions } from '../localDb/schema.js';
+import { resolver } from './desktopResolver.js';
 import { bindModelGroupSession } from './sessionBindings.js';
 import { createScheduleModelGroupPicker } from './schedulePick.js';
 
@@ -17,7 +19,6 @@ const log = createLogger('model-groups:schedule');
 const NOTE_WAIT_ATTEMPTS = 40;
 const NOTE_WAIT_STEP_MS = 250;
 
-const loadResolver = () => import('./desktopResolver.js').then((module) => module.resolver);
 
 async function userMessageAtOrAfter(sessionId: string, sinceMs: number): Promise<number | null> {
   const [row] = await getDbClient().drizzle.select({ createdAt: messages.createdAt }).from(messages)
@@ -30,17 +31,23 @@ async function userMessageAtOrAfter(sessionId: string, sinceMs: number): Promise
 
 export function createDesktopScheduleModelGroupPicker() {
   return createScheduleModelGroupPicker({
-    resolve: async (request) => (await loadResolver()).resolve(request),
+    resolve: (request) => resolver.resolve(request),
     commit: (decisionId) => {
-      void loadResolver().then((resolver) => resolver.commit(decisionId))
-        .catch((error: unknown) => log.warn('schedule model group commit failed', { error: String(error) }));
+      try {
+        resolver.commit(decisionId);
+      } catch (error) {
+        log.warn('schedule model group commit failed', { error: String(error) });
+      }
     },
     bind: bindModelGroupSession,
     sessionLocation: async (sessionId) => {
       const [row] = await getDbClient().drizzle
-        .select({ agentDeviceId: sessions.agentDeviceId, remoteHostId: sessions.remoteHostId }).from(sessions)
-        .where(eq(sessions.id, sessionId)).limit(1);
-      return row ? { agentDeviceId: row.agentDeviceId ?? null, ssh: !!row.remoteHostId } : undefined;
+        .select({ agentDeviceId: sessions.agentDeviceId, remoteHostId: sessions.remoteHostId, status: sessions.status })
+        .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+      // 已删除的任务 runner 不复用(持续任务会新建)：按新建任务选。
+      return row && row.status !== 'deleted'
+        ? { agentDeviceId: row.agentDeviceId ?? null, ssh: !!row.remoteHostId }
+        : undefined;
     },
     writeNote: (sessionId, note, { clientId, sinceMs }) => {
       void (async () => {
@@ -50,7 +57,6 @@ export function createDesktopScheduleModelGroupPicker() {
           if (userAt !== null) createdAt = userAt + 1;
           else await new Promise((resolve) => setTimeout(resolve, NOTE_WAIT_STEP_MS));
         }
-        const { createMessage } = await import('../localDb/ipc/messages.js');
         await createMessage(sessionId, {
           clientId,
           role: 'assistant',

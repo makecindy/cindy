@@ -666,7 +666,8 @@ export function ScheduleFormDialog({
     form.agentKind, form.model, form.providerId, form.effort, setField]);
 
   // 选着插件引擎时内置模型字段只是切回内置时的初值，不参与可用性判断(插件引擎另判，见下)。
-  const modelUnavailable = !isScriptMode && !pluginEngineChoice && modelCatalogReady && (
+  // 选着还在的模式时同理：每次运行由模式选来源，存下的具体模型只在模式被删后才用。
+  const modelUnavailable = !isScriptMode && !pluginEngineChoice && !scheduleModelGroups?.active && modelCatalogReady && (
     (!!form.model.trim() && (
       (agentsLoaded && !availableVendors.has(form.agentKind === 'claude-code' ? 'cc' : form.agentKind))
       || (!legacyRemoteCatalog && !effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind))

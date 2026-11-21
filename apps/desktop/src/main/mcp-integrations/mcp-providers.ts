@@ -186,6 +186,7 @@ import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
 import { resolveSessionTeammate } from '../maker-ipc/sessionTeammate.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
@@ -683,7 +684,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       listModels: wrap(async (s, params) => {
         const result = await s.listAvailableModels(params);
         if (!result.ok || params.agentDeviceId) return result;
-        const { readModelGroupsConfig } = await import('../model-groups/store.js');
         const modelGroups = readModelGroupsConfig().routes.map((route) => ({
           id: route.id,
           name: route.name,
