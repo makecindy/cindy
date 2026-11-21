@@ -108,11 +108,10 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   const hasHost = !!host;
   useEffect(() => {
     const measuredWidth = frame.current?.getBoundingClientRect?.().width ?? width.current;
-    const remembered = deviceId && getMobileHeights()?.get(JSON.stringify([deviceId, sessionId, clientId]), measuredWidth);
-    const placeholder = remembered || declaredHeight;
     setView(undefined);
     if (!surfaceActive || (hasHost && !foreground)) {
-      setState((previous) => ({ height: placeholder, loading: false }));
+      const remembered = deviceId && getMobileHeights().get(JSON.stringify([deviceId, sessionId, clientId]), measuredWidth);
+      setState({ height: remembered || declaredHeight, loading: false });
       return;
     }
     if (!mcpAppSurfaceAvailable || !open) {
@@ -123,7 +122,7 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
       setState((previous) => ({ ...previous, loading: false, error: 'mcpApps.loadFailed' }));
       return;
     }
-    const current = open(deviceId, sessionId, clientId, contextRef.current, placeholder);
+    const current = open(deviceId, sessionId, clientId, contextRef.current, declaredHeight);
     current.setWidth(measuredWidth);
     setView(current);
     const unsubscribe = current.subscribe(setState);

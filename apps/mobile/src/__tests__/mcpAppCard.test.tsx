@@ -91,6 +91,7 @@ const state = vi.hoisted(() => ({
   random: 0,
   foreground: 'active',
   keyboardVisible: false,
+  cardLayout: undefined as ((event: { nativeEvent: { layout: { width: number } } }) => void) | undefined,
   keyboardListeners: new Map<string, () => void>(),
   appStateListeners: new Set<(state: string) => void>(),
   surfaceAvailable: true,
@@ -104,7 +105,8 @@ vi.mock('../session/NativeMcpAppSurface', () => ({
 }));
 vi.mock('../session/mcpAppNativeDocument', () => ({ prepareMcpAppNativeDocument: state.prepare }));
 vi.mock('react-native', () => ({
-  View: ({ children, ref }: any) => {
+  View: ({ children, ref, onLayout }: any) => {
+    if (onLayout) state.cardLayout = onLayout;
     useImperativeHandle(ref, () => ({ getBoundingClientRect: () => ({ width: 380 }), measureInWindow: (callback: any) => callback(0, 100, 380, 320) }));
     return createElement('div', null, children);
   },
@@ -201,6 +203,7 @@ beforeEach(() => {
   setMobileAuthOwner(`mcp-test-${++ownerTestCounter}`);
   state.random = 0;
   state.keyboardVisible = false;
+  state.cardLayout = undefined;
   state.mounts = 0;
   state.webviews = [];
   state.surfaceAvailable = true;
@@ -482,6 +485,20 @@ function pageMessage(method: string, params?: Record<string, unknown>, id?: numb
     message: { jsonrpc: '2.0', method, params, id } }) } });
 }
 const heightStorageKey = () => 'cindy.mobile.mcpAppHeights.v1.' + getMobileAuthOwner().accountKey;
+
+// #11918, unit: a rotation between remount and the first page measurement
+// must discard the old width's cached height through the real card layout event.
+it('returns to the declared height when a reopened card rotates before measurement', async () => {
+  const card = <McpAppCard deviceId="dev" sessionId="task" clientId="rotate" title="App" initialHeight={240} />;
+  await act(async () => render(card));
+  await act(async () => pageMessage('ui/notifications/size-changed', { height: 640 }));
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  await act(async () => render(null));
+  await act(async () => render(card));
+  expect(state.props.style.height).toBe(640);
+  await act(async () => state.cardLayout!({ nativeEvent: { layout: { width: 760 } } }));
+  expect(state.props.style.height).toBe(240);
+});
 
 it('persists a live card measurement after a slow account read without writing into the next account', async () => {
   let loaded!: (value: string | null) => void;
