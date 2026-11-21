@@ -46,7 +46,7 @@ export function ProjectIcon({
     projectKey,
     value,
   ]);
-  const [loaded, setLoaded] = useState<{ identity: string; data: string } | null>(null);
+  const [loaded, setLoaded] = useState<{ identity: string; data: string | null } | null>(null);
   useEffect(() => {
     if (!isProjectImage(value)) return;
     let active = true;
@@ -66,7 +66,7 @@ export function ProjectIcon({
     void read.promise
       .then((data) => {
         if (active && isDataOwnerGenerationCurrent(owner))
-          setLoaded(typeof data === 'string' ? { identity: imageIdentity, data } : null);
+          setLoaded({ identity: imageIdentity, data: typeof data === 'string' ? data : null });
       })
       .catch(() => {});
     return () => {

@@ -113,6 +113,24 @@ beforeEach(async () => {
 });
 
 describe('useDeviceLinkProjects 取数 / 删除并发', () => {
+  // Unit: an open picker recovers on connection state, without a timer or manual reopening.
+  it('连接恢复后重新读取，断线期间不发起注定失败的读取', async () => {
+    const { remoteProjectsStore: store } = await import('@/features/device-link/remoteProjectsStore');
+    store.setDeviceSessions('dev-a', 'Peer', []);
+    loadMock.mockResolvedValueOnce([row('/a/project')]);
+    const { seen, unmount } = mountHook();
+    await act(async () => {});
+    expect(seen.projects).toHaveLength(1);
+    await act(async () => store.markDeviceDisconnected('dev-a'));
+    expect(loadMock).toHaveBeenCalledTimes(1);
+    loadMock.mockResolvedValueOnce([row('/a/reconnected')]);
+    await act(async () => store.setDeviceSessions('dev-a', 'Peer', []));
+    expect(loadMock).toHaveBeenCalledTimes(2);
+    expect(seen.status).toBe('ready');
+    expect(seen.projects.map(p => p.path)).toEqual(['/a/reconnected']);
+    unmount();
+  });
+
   it('新草稿第一帧复用同设备项目，后台失败保留列表，切换设备只展示目标的项目', async () => {
     loadMock.mockResolvedValueOnce([row('/a/project')]);
     const first = mountHook();

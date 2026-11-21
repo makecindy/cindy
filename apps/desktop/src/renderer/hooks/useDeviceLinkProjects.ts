@@ -57,6 +57,11 @@ export function useDeviceLinkProjects(
   retry: () => void;
   removeProject: (option: FolderPickerOption) => Promise<void>;
 } {
+  // Reuse the store's connection signal: a reconnect can keep the same lifecycle epoch.
+  const connected = useSyncExternalStore(
+    remoteProjectsStore.subscribe,
+    () => remoteProjectsStore.getDeviceList().find(device => device.deviceId === deviceId)?.connected !== false,
+  );
   const snapshot = useSyncExternalStore(
     remoteProjectsStore.subscribe,
     () => deviceId ? recentProjectsSnapshot(deviceId) : undefined,
@@ -204,6 +209,8 @@ export function useDeviceLinkProjects(
       setRequestState({ deviceId, status: 'idle', error: null });
       return;
     }
+    // Disconnect invalidates reads; the next connected transition refreshes an open picker.
+    if (!connected) return;
     let cancelled = false;
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
@@ -241,7 +248,7 @@ export function useDeviceLinkProjects(
     return () => {
       cancelled = true;
     };
-  }, [deviceId, enabled, retryNonce, snapshot]);
+  }, [deviceId, enabled, retryNonce, snapshot, connected]);
 
   const removeProject = useCallback(async (option: FolderPickerOption) => {
     const target = option.remoteDevice;
