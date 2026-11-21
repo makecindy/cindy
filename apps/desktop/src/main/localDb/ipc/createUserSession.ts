@@ -14,6 +14,7 @@ import { isRetainableProjectSession } from '../../../shared/sessionSource.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import { consumeWritableDirectoryPickerGrants, WritableDirectoryPickerGrantError } from '../../maker-ipc/writableDirectoryPickerGrant.js';
 import { forgetProvisionalSession, isProvisionalSession, markProvisionalSession } from '../provisionalSessions.js';
@@ -70,14 +71,19 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
     }
     if (bodyObj.agentKind === 'acp') {
-      // Plugin engine tasks (docs/plans/acp-plugin-bridge.md): chosen on this computer only,
-      // through the plugin harness id, and never run remotely.
+      // Plugin engine tasks (docs/plans/acp-plugin-bridge.md): chosen at the computer the task is
+      // on, through the plugin harness id. The engine is this computer's, or one that another
+      // computer of the same account opened for remote use; never an SSH host or a shared provider.
       if (isDeviceLinkInvoke()) throwIpcError('INVALID_PARAMS', 'plugin engine tasks can only be created on this computer');
       if (!pluginEngineKeyFromProviderId(typeof bodyObj.providerId === 'string' ? bodyObj.providerId : null)) {
         throwIpcError('INVALID_PARAMS', 'a plugin engine task needs providerId acp-plugin:<plugin>:<harness>');
       }
-      if (bodyObj.remoteHostId || bodyObj.agentDeviceId) {
-        throwIpcError('INVALID_PARAMS', 'plugin engine tasks run on this computer only');
+      if (bodyObj.remoteHostId) {
+        throwIpcError('INVALID_PARAMS', 'plugin engine tasks do not run in SSH workspaces');
+      }
+      if (bodyObj.agentDeviceId !== undefined && bodyObj.agentDeviceId !== null
+        && (typeof bodyObj.agentDeviceId !== 'string' || isProviderShareAgentDeviceId(bodyObj.agentDeviceId))) {
+        throwIpcError('INVALID_PARAMS', 'plugin engines are only offered by your own computers');
       }
     }
     if (

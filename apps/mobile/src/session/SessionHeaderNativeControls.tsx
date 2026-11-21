@@ -22,7 +22,15 @@ export function SessionHeaderNativeTitle(_props: SessionHeaderNativeTitleProps) 
   return null;
 }
 
-export function SessionHeaderNativeBlur(_props: { height: number; edge?: 'top' | 'bottom'; inset?: number; fadeInside?: number }) {
+export interface SessionHeaderNativeBlurProps {
+  height: number;
+  edge?: 'top' | 'bottom';
+  inset?: number;
+  fadeInside?: number;
+  horizontalOutsets?: { left: number; right: number };
+}
+
+export function SessionHeaderNativeBlur(_props: SessionHeaderNativeBlurProps) {
   return null;
 }
 

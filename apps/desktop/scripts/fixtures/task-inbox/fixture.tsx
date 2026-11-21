@@ -7,6 +7,7 @@ import { useSidebarFilter } from '../../../src/renderer/features/cc-agent/hooks/
 import { filterSidebarTasks } from '../../../src/renderer/features/cc-agent/lib/sidebarTaskFilters';
 import { groupSessions } from '../../../src/renderer/features/cc-agent/lib/projectGrouping';
 import { TaskInbox } from '../../../src/renderer/features/cc-agent/sidebar/TaskInbox';
+import { useInboxUnread } from '../../../src/renderer/features/cc-agent/sidebar/useInboxUnread';
 import { TaskListModeToggle } from '../../../src/renderer/components/sidebar/TaskListModeToggle';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 import type { TeammateInboxEntry } from '../../../src/renderer/features/bots/teammateInbox';
@@ -39,7 +40,7 @@ const sessions = [
   snoozedAt: id === 'later' ? new Date(now).toISOString() : null,
   snoozedUntil: id === 'later' ? new Date(now + 3600000).toISOString() : null,
   agentKind: 'codex',
-  pinnedAt: null,
+  pinnedAt: id === 'waiting' ? new Date(now).toISOString() : null,
   sdkSessionId: null,
   remoteHostId: null,
   deviceLinkDeviceId: null,
@@ -120,7 +121,7 @@ function IntroSpecimen() {
   return (
     <div className="min-h-screen w-[280px] bg-sidebar text-foreground">
       <div className="flex h-[46px] items-center justify-end pr-2">
-        <TaskListModeToggle />
+        <TaskListModeToggle hasUnread={false} />
       </div>
     </div>
   );
@@ -137,6 +138,9 @@ function StructureSpecimen() {
   const teammate: Session = { ...task, id: 'teammate', title: '伙伴的例行整理', source: 'bot',
     companion: { id: 'demo', role: 'routine', taskProjectDir: task.workingDir } };
   const source = [task, report, teammate];
+  const inboxSessions = filterSidebarTasks([task, ...sessions.slice(1), report], filter.inbox, new Map());
+  const inboxPriority = { ...priorityContext, attentionSessionIds: new Set(['report', 'waiting']) };
+  const { hasUnread, now: inboxNow } = useInboxUnread(inboxSessions, [], inboxPriority, () => false);
   const allProjects = groupSessions(source).projects;
   const projects = groupSessions(filterSidebarTasks(source, filter, new Map())).projects;
   const [projectCollapsed, setProjectCollapsed] = useState(true);
@@ -144,22 +148,23 @@ function StructureSpecimen() {
     <div className="min-h-screen w-[320px] bg-sidebar text-foreground p-2">
       {/* Same placement as the sidebar's top chrome row (back / forward), right end. */}
       <div data-fixture-top-row="" className="flex h-[46px] items-center justify-end pr-2">
-        <TaskListModeToggle />
+        <TaskListModeToggle hasUnread={hasUnread} />
       </div>
       <ProjectsSection
         unclassified={[]}
         projects={projects}
         dialogues={[]}
-        inboxSessions={filterSidebarTasks([task, ...sessions.slice(1), report], filter, new Map())}
+        inboxSessions={inboxSessions}
+        inboxNow={inboxNow}
         allKnownProjects={allProjects}
         allProjectKeysForOrder={projects.map((p) => p.projectKey)}
         filter={{ ...filter, groupBy: 'project', groupDevice: true, groupDialogue: true }}
         collapsed={new Set(projectCollapsed ? projects.map((p) => p.projectKey) : [])}
         isAllCollapsed={projectCollapsed}
-        priorityContext={priorityContext}
+        priorityContext={inboxPriority}
         runningSessionIds={runningSessionIds}
         attachedSessionIds={new Set()}
-        notifications={new Set(['ready'])}
+        notifications={inboxPriority.attentionSessionIds}
         scheduleSessionIndex={new Map()}
         onSessionClick={noop}
         onAction={noop}

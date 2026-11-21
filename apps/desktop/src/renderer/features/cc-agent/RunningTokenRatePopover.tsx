@@ -134,7 +134,7 @@ export function RunningTokenRatePopover({
           width={120}
           speedHeight={44}
           strokeHeight={14}
-          liveDot
+          keepSpeedHeight
           fixedSize
           label={t('chat.runningStatus.rateHistory')}
           className="col-start-2 row-start-1 self-center justify-self-center"

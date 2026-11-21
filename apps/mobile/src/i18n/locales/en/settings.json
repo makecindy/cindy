@@ -62,6 +62,28 @@
       "dark": "Dark"
     },
     "saveFailed": "Failed to save appearance mode. The previous setting will return after restart.",
+    "wallpaper": {
+      "title": "Wallpaper",
+      "choose": "Choose photo or video",
+      "replace": "Replace Wallpaper",
+      "remove": "Remove Wallpaper",
+      "importing": "Working…",
+      "tooLarge": "Choose a photo up to 20 MB or a video up to 100 MB.",
+      "importFailed": "Couldn’t import this photo or video.",
+      "saveFailed": "Couldn’t save the wallpaper setting.",
+      "static": "Static",
+      "dynamic": "Dynamic",
+      "motionLabel": "Display",
+      "options": {
+        "none": "None",
+        "custom": "Custom wallpaper",
+        "cindy-whisper": "Whisper",
+        "cindy-night-glance": "Night Glance",
+        "cindy-scarlet-stroll": "Scarlet Stroll",
+        "cindy-neon": "Neon Silhouette",
+        "cindy-prism": "Prism Shards"
+      }
+    },
     "userBubble": {
       "title": "My message bubble color",
       "presets": "Color",

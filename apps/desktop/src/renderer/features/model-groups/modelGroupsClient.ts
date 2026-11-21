@@ -23,6 +23,7 @@ import {
   type ModelGroupCandidate,
   type ModelGroupResolveRequest,
   type ModelGroupResolveResult,
+  type ModelGroupRouteNote,
   type ModelGroupSelection,
   type ModelGroupsConfig,
   type ModelGroupSwitchOffer,
@@ -51,7 +52,9 @@ function publish(owner: string | null, next: ModelGroupsConfig): void {
 export function refreshModelGroups(): Promise<void> {
   const owner = ownerNow();
   if (loading?.owner === owner) return loading.promise;
-  const promise = window.electronAPI.modelGroups.get()
+  // 读不到(含桥接还没有这个接口)只记日志：选择器照常显示其余内容，不让挂载它的页面报错。
+  const promise = Promise.resolve()
+    .then(() => window.electronAPI.modelGroups.get())
     .then((next) => publish(owner, next))
     .catch((err: unknown) => log.warn('model groups unavailable', err))
     .finally(() => { if (loading?.promise === promise) loading = null; });
@@ -97,6 +100,16 @@ export async function resolveModelGroup(
     return await window.electronAPI.modelGroups.resolve({ selection, ...(context ? { context } : {}), ...(location ? { location } : {}) });
   } catch (err) {
     log.warn('model group resolve failed', err);
+    return null;
+  }
+}
+
+/** 只看此刻会选谁：不推进「轮流」，也没有选路凭据(伙伴等保存设置时用，实际选路在主进程)。 */
+export async function previewModelGroup(selection: ModelGroupSelection): Promise<ModelGroupResolveResult | null> {
+  try {
+    return await window.electronAPI.modelGroups.resolve({ selection, dryRun: true });
+  } catch (err) {
+    log.warn('model group preview failed', err);
     return null;
   }
 }
@@ -282,17 +295,17 @@ export function modelGroupExceptionText(exceptions: readonly ModelGroupAppliedEx
 /**
  * 第一条消息下方的一行说明，沿用「让插件选」的说明卡(手机端同样能读)：routed 写用了哪个模型和来源、为什么，
  * 来源在另一台电脑或是分享来的时连同位置一起写；里面没有能用的模型时写明沿用了原来的模型。组已被删除时不写。
+ * locationName 按模式所在那台电脑的视角给位置起名(远程控制时 agentDeviceId 是那台电脑眼里的位置)。
  */
-export function writeModelGroupRouteNote(
-  sessionId: string,
+export function buildModelGroupRouteNote(
   result: ModelGroupResolveResult | null,
   keptModelName: string,
   t: TFunction,
   locale: string,
   locationName: ModelGroupLocationName,
-): void {
-  if (!result || result.outcome === 'missing') return;
-  const note: PluginModelRouteNote = result.outcome === 'routed'
+): ModelGroupRouteNote | null {
+  if (!result || result.outcome === 'missing') return null;
+  return result.outcome === 'routed'
     ? {
         pluginName: result.groupName,
         outcome: 'routed',
@@ -305,6 +318,20 @@ export function writeModelGroupRouteNote(
         source: 'model-group',
       }
     : { pluginName: result.groupName, outcome: 'kept', modelName: keptModelName, why: 'unavailable-route', source: 'model-group' };
+}
+
+/** 本机任务：在本机库里写说明。另一台电脑上的任务用 writeDeviceModelGroupRouteNote 请那台代写。 */
+export function writeModelGroupRouteNote(
+  sessionId: string,
+  result: ModelGroupResolveResult | null,
+  keptModelName: string,
+  t: TFunction,
+  locale: string,
+  locationName: ModelGroupLocationName,
+): void {
+  const built = buildModelGroupRouteNote(result, keptModelName, t, locale, locationName);
+  if (!built) return;
+  const note: PluginModelRouteNote = built;
   const { messages } = window.electronAPI.localDb;
   void (async () => {
     // 首条消息由 main 在开跑时才落库：等到后把说明定在它之后 1ms，排在首条消息下面、回复上面。

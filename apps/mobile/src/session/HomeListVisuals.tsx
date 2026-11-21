@@ -131,10 +131,10 @@ function isClaudeCodeAgentKind(agentKind: string): boolean {
   return agentKind === 'cc' || agentKind === 'claude-code';
 }
 
-export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
+export const homeListStyles = (colors: ThemeColors, listSurface: string = colors.surface) => StyleSheet.create({
   sessionListRow: {
     alignItems: 'stretch',
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     flexDirection: 'row',
     gap: spacing.md,
     height: HOME_SESSION_ROW_HEIGHT,
@@ -142,16 +142,6 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   sessionListRowSingleLine: {
     height: HOME_SESSION_SINGLE_LINE_ROW_HEIGHT,
-  },
-  sessionListRowIndented: {
-    // 项目下属会话向右多缩进一档,让"隶属于该项目"在视觉上更明显
-    // (连同行内分割线一起右移,形成嵌套层级感)。
-    paddingLeft: spacing.md + spacing.lg,
-  },
-  sessionListRowDeepIndented: {
-    // 自动化组子行:比 indented 再深一档(缩进全部收在行内,滑动包装全宽才能贴屏边),
-    // 保证子行始终比组行(无论组行在 chats 还是项目组内)更深一层。
-    paddingLeft: spacing.md + spacing.lg * 2,
   },
   sessionIconCell: {
     alignItems: 'center',
@@ -256,7 +246,7 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   projectRow: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     flexDirection: 'row',
     gap: spacing.sm,
     minHeight: 56,

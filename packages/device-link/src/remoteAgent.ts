@@ -19,6 +19,16 @@ export const REMOTE_AGENT_VERSION = 1;
 
 export const REMOTE_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
 export type RemoteAgentKind = (typeof REMOTE_AGENT_KINDS)[number];
+/**
+ * A plugin-provided engine of the computer that runs the agent (`open.payload.options.providerId`
+ * names it as `acp-plugin:<plugin>:<engine>`). Only `open` accepts it, and only from a computer
+ * of the same account talking to a host that declared `caps.pluginEngines`: group routing, shared
+ * users, fork and standby stay on the built-in kinds. A host that does not know the kind rejects
+ * the request as invalid; it never falls back to a built-in engine.
+ */
+export const REMOTE_AGENT_PLUGIN_ENGINE_KIND = 'acp';
+export const REMOTE_AGENT_ENGINE_KINDS = [...REMOTE_AGENT_KINDS, REMOTE_AGENT_PLUGIN_ENGINE_KIND] as const;
+export type RemoteAgentEngineKind = (typeof REMOTE_AGENT_ENGINE_KINDS)[number];
 
 /** 每段上传的原始字节(gzip 之后)。base64 后约 683KB，远低于单条逻辑消息 4MB 上限。 */
 export const REMOTE_AGENT_UPLOAD_CHUNK_BYTES = 512 * 1024;
@@ -209,7 +219,7 @@ export type RemoteAgentRequest =
   | { op: 'images'; sessionId: string; relay?: string; action: 'read'; imageId: string; offset: number }
   | { op: 'images'; sessionId: string; relay?: string; action: 'release'; imageId: string }
   | { op: 'upload'; uploadId: string; index: number; data: string }
-  | { op: 'open'; runId: string; agentKind: RemoteAgentKind; payload: RemoteAgentPayload }
+  | { op: 'open'; runId: string; agentKind: RemoteAgentEngineKind; payload: RemoteAgentPayload }
   | { op: 'call'; runId: string; callId: string; method: RemoteAgentMethod; payload: RemoteAgentPayload }
   /**
    * waitMs：没有新数据时最多挂起多久(缺省 READ_WAIT_MS)。控制端在已有一个长等待在途时，
@@ -339,6 +349,13 @@ export interface RemoteAgentCaps {
   imageRecovery?: boolean;
   imageRecoveryRelay?: boolean;
   sharedImageGeneration?: boolean;
+  /** The image executor recognizes the built-in OpenAI subscription identity. */
+  sharedBuiltinOpenAiImage?: true;
+  /**
+   * This computer can run its plugin-provided engines for a task of another computer of the
+   * same account (`open` with the plugin engine kind). Never declared to shared users.
+   */
+  pluginEngines?: true;
   version: number;
   agents: Array<{ kind: RemoteAgentKind; available: boolean }>;
   maxRuns: number;
@@ -761,7 +778,7 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       return {
         op: 'open',
         runId: id(v.runId),
-        agentKind: oneOf(v.agentKind, REMOTE_AGENT_KINDS),
+        agentKind: oneOf(v.agentKind, REMOTE_AGENT_ENGINE_KINDS),
         payload: payload(v.payload),
       };
     case 'call':
@@ -940,6 +957,8 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.imageRecovery === true ? { imageRecovery: true } : {}),
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
     ...(v.sharedImageGeneration === true ? { sharedImageGeneration: true } : {}),
+    ...(v.sharedBuiltinOpenAiImage === true ? { sharedBuiltinOpenAiImage: true as const } : {}),
+    ...(v.pluginEngines === true ? { pluginEngines: true as const } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),
     ...(v.directGuestStandby === true ? { directGuestStandby: true as const } : {}),

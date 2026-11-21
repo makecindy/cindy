@@ -223,10 +223,13 @@ describe('shared image authorization and relay', () => {
       if (request.action === 'start') return { accepted: true };
       return { state: 'complete', data: png.toString('base64'), mimeType: image.mimeType, size: png.length };
     });
-    const plan = vi.fn(async () => ({
+    const member = {
       kind: 'member' as const, sameAccount: true, memberKey: 'member-key', agentDeviceId: 'remote',
       providerId: 'openai-independent', imageModelId: 'openai-independent/gpt-image-2',
-    }));
+    };
+    const plan = vi.fn(async () => member).mockResolvedValueOnce({
+      ...member, memberKey: 'older-builtin', providerId: 'openai', imageModelId: 'openai/gpt-image-2',
+    });
     const groupRelay: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['groupRelay']> = {
       plan, connect: () => ({ invoke, poller: {} as never }), noteStartFailure: () => false,
       noteRunFailure: () => false, trackRun: () => ({ setRunning() {}, release() {} }), async forget() {},
@@ -237,6 +240,7 @@ describe('shared image authorization and relay', () => {
       await expect(host.handle(GUEST, start)).resolves.toEqual({ accepted: true });
       await vi.waitFor(async () => expect(await host.handle(GUEST, read)).toMatchObject({ state: 'complete' }));
       expect(plan).toHaveBeenCalledWith(expect.objectContaining({ capability: 'image.generate', reserve: true }));
+      expect(invoke).not.toHaveBeenCalledWith([expect.objectContaining({ action: 'start', providerId: 'openai' })]);
       expect(invoke).toHaveBeenCalledWith([expect.objectContaining({
         action: 'start', providerId: 'openai-independent', model: 'openai-independent/gpt-image-2',
       })]);

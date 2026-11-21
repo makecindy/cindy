@@ -57,6 +57,7 @@ import { withQuietRunArchive } from './quietRunArchive.js';
 import { archiveQuietScheduledTarget, readScheduledTargetStatus } from './quietRunArchive.desktop.js';
 import { createLogger } from '../logger';
 import type { ScheduleRunner } from '@cindy/maker-scheduler';
+import { pluginAutomationAccount } from '../device-link/pluginAutomationHost.desktop.js';
 import { ownTeammateProjectState } from './ownTeammateProject.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
@@ -162,6 +163,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
   },
   // A teammate's project automations run only on its main computer (handed away: skipped here).
   captureFireContext: captureScheduledOwnerGuard,
+  automationAccount: pluginAutomationAccount,
   // Quiet rounds return an archived target to archived (archive-pauses-automations.md).
   wrapRunner: (runner): ScheduleRunner => withQuietRunArchive(
     withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),

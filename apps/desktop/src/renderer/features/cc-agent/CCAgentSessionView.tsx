@@ -57,9 +57,26 @@ import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { isPluginEngineEffort, isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
-import { findPluginEngine, usePluginEngines, useRemotePluginEngines } from '@/hooks/usePluginEngines';
-import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
-import type { PluginEngineSessionPickerProps, PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
+import {
+  findPluginEngine,
+  requestPluginEnginesRefresh,
+  useDevicesPluginEngines,
+  usePluginEngines,
+  useRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isSamePluginEngineChoice,
+  remotePluginEngineChoices,
+  type PluginEngineChoice,
+  type PluginEngineSelection,
+} from '@/lib/pluginEngineSelection';
+import {
+  usePluginEngineChoiceLabel,
+  type PluginEngineSessionPickerProps,
+  type PluginEnginesPickerProps,
+} from '@/components/new-chat/PluginEnginesSection';
 import { useTranslation } from 'react-i18next';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import {
@@ -109,7 +126,12 @@ import {
   sessionSubscriptionPoolProvider,
 } from '@/components/new-chat/SessionSubscriptionAccount';
 import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, resolveModelGroup, useModelGroups, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
-import { beginAgentSwitchOperation, hasPendingAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
+import { bindDeviceModelGroupSession, resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
+import {
+  beginAgentSwitchOperation,
+  hasPendingAgentSendDispatch,
+  hasPendingAgentSwitchOperation,
+} from '@/lib/agentSwitchCoordinator';
 import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
@@ -204,6 +226,7 @@ import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { cleanupRemovedCachedImage, useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { SessionContentHeaderRegistration } from './SessionContentHeader';
+import { LinkedSideChatOrigin } from './LinkedSideChatOrigin';
 import { resolveSessionInterruptCandidate } from './sessionInterruptBannerModel';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
@@ -2271,7 +2294,7 @@ function CCAgentSessionContent({
   );
   const readPluginEngineCatalogue = pluginEngineDeviceId ? remotePluginCatalogue.read : undefined;
   const pluginEngines = remotePluginCatalogue.engines ?? localPluginEngines;
-  const pluginEngine = pluginEngineTask ? findPluginEngine(pluginEngines, session?.providerId) : null;
+  // 任务自己的引擎(pluginEngine)在下面 selectableDevices 之后解析：引擎可能在自己的另一台电脑上。
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
   // 其余 agent 声明 manualCompact.supported(Pi / Codex)→ maker:compact-session;其余无入口。
   // 能力取**真实 agent**(displayAgentKind 在 pending switch 期间可能乐观指向目标 agent,
@@ -2343,8 +2366,97 @@ function CCAgentSessionContent({
   // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
   // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
   const { devices: selectableDevices } = useSelectableDevices();
+  // 插件引擎在自己的另一台电脑上运行的任务(任务、文件与命令留在任务所在电脑，Agent 在那台)：引擎的名称、
+  // 图标、模型、思考深度与权限档都读那台的列表，任务所在电脑没装这个插件也不会显示成「插件已停用或卸载」。
+  // 别人分享的来源不提供插件引擎。Agent 恰好就在正在看的这台电脑上(从另一台建的任务)时读本机的列表。
+  const pluginEngineAgentDeviceId = pluginEngineTask && session?.agentDeviceId
+    && !isProviderShareAgentDeviceId(session.agentDeviceId) ? session.agentDeviceId : undefined;
+  const pluginEngineAgentIsThisComputer = !!pluginEngineAgentDeviceId && pluginEngineAgentDeviceId === selfDeviceId;
+  const thisComputerPluginEngines = usePluginEngines(pluginEngineAgentIsThisComputer);
+  const agentPluginCatalogue = useRemotePluginEngines(
+    pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !readOnly && !remoteSessionUnavailable && !awaitingCreation
+      ? pluginEngineAgentDeviceId : undefined,
+    pluginEngineTask && viewVisible,
+  );
+  /** 那台电脑的引擎列表；undefined = 引擎就在任务所在电脑，null = 那台还没答复(或暂时连不上)。 */
+  const agentDevicePluginEngines = pluginEngineAgentDeviceId
+    ? (pluginEngineAgentIsThisComputer ? thisComputerPluginEngines : agentPluginCatalogue.engines)
+    : undefined;
+  const pluginEngineAgentDeviceName = pluginEngineAgentDeviceId
+    ? selectableDevices.find((device) => device.deviceId === pluginEngineAgentDeviceId)?.name
+    : undefined;
+  const pluginEngine = useMemo<PluginEngineChoice | null>(() => {
+    if (!pluginEngineTask) return null;
+    if (!pluginEngineAgentDeviceId) return findPluginEngine(pluginEngines, session?.providerId);
+    // 只认那台电脑的引擎：任务所在电脑装着同一个插件时，也不拿它的名称与模型顶替。
+    const engine = findPluginEngine(agentDevicePluginEngines ?? [], session?.providerId);
+    return engine
+      ? { ...engine, deviceId: pluginEngineAgentDeviceId, deviceName: deviceDisplayName(pluginEngineAgentDeviceId, pluginEngineAgentDeviceName) }
+      : null;
+  }, [pluginEngineTask, pluginEngineAgentDeviceId, pluginEngineAgentDeviceName, pluginEngines, agentDevicePluginEngines, session?.providerId]);
+  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   // 切到插件引擎的意图同样带位置(Agent 回到任务所在电脑时为 null)。
   const pendingAgentDeviceId = storedAgentSwitchIntent?.agentDeviceId;
+  // 本机普通任务也能切到自己另一台电脑开放的引擎。已选的远程引擎保留回显。
+  const pendingPluginEngineDeviceId = pluginEngineSwitchIntent
+    ? (pluginEngineSwitchIntent.agentDeviceId === undefined
+        ? (session?.agentDeviceId ?? undefined)
+        : (pluginEngineSwitchIntent.agentDeviceId ?? undefined))
+    : undefined;
+  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId
+    && (localPluginEngines.length > 0 || !!pendingPluginEngineDeviceId);
+  const switchPluginEngineDevicesKey = canBrowseRemotePluginEngines
+    ? JSON.stringify(selectableDevices
+      .filter((device) => !isProviderShareAgentDeviceId(device.deviceId) && !isSharedTaskPeer(device.deviceId)
+        && ((localPluginEngines.length > 0 && device.online) || device.deviceId === pendingPluginEngineDeviceId))
+      .map(({ deviceId: id, name }) => [id, name ?? null]))
+    : '[]';
+  const switchPluginEngineDevices = useMemo(
+    () => (JSON.parse(switchPluginEngineDevicesKey) as Array<[string, string | null]>)
+      .map(([id, name]) => ({ deviceId: id, name })),
+    [switchPluginEngineDevicesKey],
+  );
+  const switchPluginEngineDeviceIds = useMemo(
+    () => switchPluginEngineDevices.map((device) => device.deviceId),
+    [switchPluginEngineDevices],
+  );
+  const { catalogues: devicePluginEngines, read: readDevicePluginEngines } = useDevicesPluginEngines(switchPluginEngineDeviceIds);
+  const activePluginEngineInDeviceList = !!pluginEngineAgentDeviceId
+    && switchPluginEngineDeviceIds.includes(pluginEngineAgentDeviceId);
+  const readPendingRemotePluginEngine = viewVisible && !!pendingPluginEngineDeviceId
+    && devicePluginEngines.get(pendingPluginEngineDeviceId) === null;
+  useEffect(() => {
+    if (readPendingRemotePluginEngine) readDevicePluginEngines(pendingPluginEngineDeviceId);
+  }, [readPendingRemotePluginEngine, pendingPluginEngineDeviceId, readDevicePluginEngines]);
+  const switchablePluginEngines = useMemo<readonly PluginEngineChoice[]>(() => {
+    if (pluginEngineDeviceId) {
+      return pluginEngineAgentDeviceId
+        ? [
+            ...pluginEngines.filter((engine) => engine.providerId !== session?.providerId),
+            ...(pluginEngine ? [pluginEngine] : []),
+          ]
+        : pluginEngines;
+    }
+    const remote = remotePluginEngineChoices(switchPluginEngineDevices, devicePluginEngines, deviceDisplayName, localPluginEngines);
+    const combined: PluginEngineChoice[] = [...localPluginEngines, ...remote];
+    if (pluginEngine && !combined.some((item) => isSamePluginEngineChoice(item, pluginEngine))) {
+      combined.push(pluginEngine);
+    }
+    if (pendingPluginEngineDeviceId && pluginEngineSwitchIntent?.providerId
+      && !combined.some((item) => isSamePluginEngineChoice(item, { providerId: pluginEngineSwitchIntent.providerId!, deviceId: pendingPluginEngineDeviceId }))) {
+      const pendingRemote = findPluginEngine(devicePluginEngines.get(pendingPluginEngineDeviceId) ?? [], pluginEngineSwitchIntent.providerId);
+      if (pendingRemote) {
+        const matchedDevice = switchPluginEngineDevices.find((item) => item.deviceId === pendingPluginEngineDeviceId);
+        combined.push({
+          ...pendingRemote,
+          deviceId: pendingPluginEngineDeviceId,
+          deviceName: deviceDisplayName(pendingPluginEngineDeviceId, matchedDevice?.name),
+        });
+      }
+    }
+    return combined;
+  }, [pluginEngineDeviceId, pluginEngineAgentDeviceId, pluginEngines, session?.providerId, pluginEngine,
+    switchPluginEngineDevices, devicePluginEngines, localPluginEngines, pendingPluginEngineDeviceId, pluginEngineSwitchIntent?.providerId]);
   const controlledModelRoute = useModelRouteDevices({
     controlledDeviceId: remoteDeviceId,
     leadAgentDeviceId: session?.agentDeviceId,
@@ -2476,7 +2588,9 @@ function CCAgentSessionContent({
         ? (remoteDeviceId ?? null)
         : null;
   const usageCatalogue = taskAccountDeviceId
-    ? (taskAccountDeviceId === pluginEngineDeviceId ? remotePluginCatalogue.engines : null)
+    ? (taskAccountDeviceId === pluginEngineAgentDeviceId && agentDevicePluginEngines !== undefined
+      ? agentDevicePluginEngines
+      : taskAccountDeviceId === pluginEngineDeviceId ? remotePluginCatalogue.engines : null)
     : localPluginEngines;
   const usageEngine = pluginUsageKey ? usageCatalogue?.find(engine => engine.key === pluginUsageKey) : undefined;
   const catalogDeviceId = modelCatalogKey(
@@ -2590,6 +2704,10 @@ function CCAgentSessionContent({
     !agentStatus.isRunning &&
     !isStreaming &&
     Boolean(sessionId);
+  // 插件引擎回答完仍在自己干活:状态栏用插件引擎文案,消息流按进行中显示
+  // (Agent 还没报完成的工具调用带转圈)。内置引擎的后台子任务 / 命令不走这里。
+  const pluginEngineBackgroundWork =
+    backgroundTasksActive && backgroundModelActive && isPluginEngineKind(session?.agentKind);
   // SSH 与 device-link 镜像的 task 终态都可能在断连窗口丢失，不能用本地事件永久撑住状态栏。
   const runningWorkflow = useMemo(
     () => (isRemoteSession || remoteDeviceId ? null : summarizeRunningWorkflow(taskUpdates)),
@@ -2661,7 +2779,7 @@ function CCAgentSessionContent({
   const markCurrentUnreadFailedScheduleRun = useCallback(async (): Promise<boolean> => {
     if (!currentUnreadFailedRunId) return true;
     const { failed, firstError } = await markScheduleRunsReadAndSync([currentUnreadFailedRunId], remoteDeviceId ?? undefined);
-    if (failed.length === 0) return true;
+    if (failed.length === 0 && firstError === undefined) return true;
     toast.error(
       t('ccAgent.layout.markAllReadFailed', {
         error: firstError ?? failed[0],
@@ -2739,10 +2857,17 @@ function CCAgentSessionContent({
     };
   }, [modelGroupSwitchOffer, sessionId, t]);
   // 进行中的任务里选模式(model-groups.md §5)：只在任务所在的运行位置里按规则当场挑一个，走选择器同一条换模型路径
-  // 换过去；之后不会自己再换。远程控制别的电脑、SSH 与伙伴对话不提供，条件与撞配额的换来源提议相同。
-  const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && !remoteDeviceId && !session?.remoteHostId;
+  // 换过去；之后不会自己再换。远程控制另一台电脑时列那台的模式，由那台选(§6.3)，那台是旧版本时不列；
+  // 分享来的任务、SSH 与伙伴对话不提供。
+  const modelGroupsTaskDeviceId = remoteDeviceId && !isSharedTaskPeer(remoteDeviceId) ? remoteDeviceId : null;
+  const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && (!remoteDeviceId || !!modelGroupsTaskDeviceId)
+    && !session?.remoteHostId;
   // 任务视图挂着但看不见(聊天栏收起)时不读配置，重新看得见时再读。
-  const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask && viewVisible);
+  const localTaskModelGroups = useModelGroups(modelGroupsInTask && viewVisible && !modelGroupsTaskDeviceId);
+  const deviceTaskModelGroups = useDeviceModelGroups(
+    modelGroupsInTask ? modelGroupsTaskDeviceId : null, modelGroupsInTask && viewVisible,
+  );
+  const modelGroupsConfig = modelGroupsTaskDeviceId ? deviceTaskModelGroups.config : localTaskModelGroups.config;
   // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
   const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
     if (!sessionId) return;
@@ -2753,7 +2878,10 @@ function CCAgentSessionContent({
     try {
       // 选路期间切到了别的任务：换模型的入口已属于那个任务，这次作废，不动任何一个。
       const navigationVersion = sessionNavigationVersionRef.current;
-      const result = await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
+      // 远程控制的任务：由任务所在那台按它的模式选，位置是那台眼里的位置。
+      const result = modelGroupsTaskDeviceId
+        ? await resolveDeviceModelGroup(modelGroupsTaskDeviceId, selection, undefined, { agentDeviceId: taskLocation })
+        : await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
       if (sessionNavigationVersionRef.current !== navigationVersion) return;
       if (!result || result.outcome !== 'routed') {
         if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
@@ -2768,20 +2896,22 @@ function CCAgentSessionContent({
       });
       if (!applied) return;
       // 记下是经哪个模式换的：之后撞配额，接着提议这个模式里的下一个来源。
-      bindModelGroupSession(sessionId, selection, result);
+      if (modelGroupsTaskDeviceId) void bindDeviceModelGroupSession(modelGroupsTaskDeviceId, sessionId, selection, result);
+      else bindModelGroupSession(sessionId, selection, result);
       toast.success(t('modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
     } finally {
       finishSwitch();
     }
-  }, [sessionId, taskLocation, t]);
-  const taskModelGroups = useMemo(() => (modelGroupsInTask
+  }, [sessionId, taskLocation, t, modelGroupsTaskDeviceId]);
+  const taskModelGroups = useMemo(() => (modelGroupsInTask && modelGroupsConfig
     ? {
         config: modelGroupsConfig,
         active: null,
         onSelect: (selection: ModelGroupSelection) => { void switchTaskByModelGroup(selection); },
-        onManage: () => navigate('/settings?tab=model-groups'),
+        // 管理入口只在本机：另一台电脑的模式在那台上改。
+        ...(modelGroupsTaskDeviceId ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
       }
-    : undefined), [modelGroupsInTask, modelGroupsConfig, switchTaskByModelGroup, navigate]);
+    : undefined), [modelGroupsInTask, modelGroupsConfig, switchTaskByModelGroup, navigate, modelGroupsTaskDeviceId]);
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以
@@ -3687,87 +3817,124 @@ function CCAgentSessionContent({
         ? {
             providerId: session.providerId ?? '',
             engine: pluginEngine,
-            engineName: pluginEngine?.name ?? t('newChat.pluginEngines.genericName'),
+            // 引擎在另一台电脑上时名字带着电脑名(与模型面板里那台电脑的来源同一写法)。
+            engineName: pluginEngine ? pluginEngineChoiceLabel(pluginEngine) : t('newChat.pluginEngines.genericName'),
             modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
             effort: session.effort,
             onSelectModel: handlePluginEngineModelSelect,
-            readCatalogue: readPluginEngineCatalogue,
-            catalogueUnknown: !!pluginEngineDeviceId && remotePluginCatalogue.engines === null,
+            // 引擎在另一台电脑上：打开模型菜单时重读那台的列表；就在这台时沿用本机的刷新。
+            readCatalogue: pluginEngineAgentDeviceId
+              ? (pluginEngineAgentIsThisComputer ? undefined : agentPluginCatalogue.read)
+              : readPluginEngineCatalogue,
+            catalogueUnknown: pluginEngineAgentDeviceId
+              ? agentDevicePluginEngines === null
+              : !!pluginEngineDeviceId && remotePluginCatalogue.engines === null,
           }
         : undefined,
-    [pluginEngineTask, session, pluginEngine, handlePluginEngineModelSelect, readPluginEngineCatalogue,
-      pluginEngineDeviceId, remotePluginCatalogue.engines, t],
+    [pluginEngineTask, session, pluginEngine, pluginEngineChoiceLabel, handlePluginEngineModelSelect, readPluginEngineCatalogue,
+      pluginEngineDeviceId, remotePluginCatalogue.engines, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
+      agentPluginCatalogue.read, agentDevicePluginEngines, t],
   );
 
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
   // set-model)；换到另一个引擎——从内置引擎或别的插件引擎——与内置引擎之间的切换一样登记意图，
   // 下一条消息发送时带着对话交接过去。和在选择器里点一行同一个顺序保证：已经点了发送就不再换。
-  const handlePluginEngineSwitchSelect = useCallback(async (selection: PluginEngineSelection) => {
-    if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return;
-    if (hasPendingAgentSendDispatch(sessionId)) return;
+  const handlePluginEngineSwitchSelect = useCallback(async (selection: PluginEngineSelection): Promise<boolean> => {
+    if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return false;
+    if (hasPendingAgentSendDispatch(sessionId) || hasPendingAgentSwitchOperation(sessionId)) return false;
     const finishSwitch = beginAgentSwitchOperation(sessionId);
     const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
     const switchTo = () => api.switchSessionAgent(
-      sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false);
+      sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false,
+      pluginEngineDeviceId ? undefined : { agentDeviceId: selection.deviceId ?? null },
+    );
     try {
-      if (pluginEngineTask && selection.providerId === session.providerId) {
+      if (pluginEngineTask && selection.providerId === session.providerId
+        && (selection.deviceId ?? null) === (pluginEngineAgentDeviceId ?? null)) {
         // 选回当前引擎 = 撤销已登记的切换(主进程按同引擎处理，只清意图)，再按普通换模型处理。
         let revision: number | undefined;
         if (makerChatStore.getAgentSwitchIntent(sessionId)) {
           const result = await switchTo();
-          if (result.sameEngineSuperseded) return;
+          if (result.sameEngineSuperseded) return false;
           revision = result.sameEngineRevision;
           if (!pluginEngineDeviceId) makerChatStore.clearAgentSwitchIntent(sessionId);
         }
-        await handlePluginEngineModelSelect(selection.modelId, selection.effort, revision);
-        return;
+        return await handlePluginEngineModelSelect(selection.modelId, selection.effort, revision);
       }
       // 主进程先广播意图(sessions:patched)再回包，选择器随广播显示「下条：」。
       await switchTo();
       if (makerChatStore.getSnapshot(sessionId).agentStatus.isRunning) {
-        const engine = pluginEngines.find((item) => item.providerId === selection.providerId);
+        const engine = switchablePluginEngines.find((item) => isSamePluginEngineChoice(item, selection));
         toast.success(t('newChat.chatInput.agentSwitch.deferred', {
-          agent: engine?.name ?? t('newChat.pluginEngines.genericName'),
+          agent: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
           model: engine?.models.find((item) => item.id === selection.modelId)?.displayName
             ?? t('newChat.pluginEngines.defaultModel'),
         }), { duration: 4000 });
       }
+      return true;
     } catch (err) {
       // 插件停用、卸载或不可用时主进程给出的说明直接展示；带错误码的按既有文案。
       toast.error(extractIpcError(err)
         ? t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.agentSwitch.failed' }))
         : err instanceof Error && err.message ? err.message : t('newChat.chatInput.agentSwitch.failed'));
+      return false;
     } finally {
       finishSwitch();
     }
   }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
-    pluginEngineTask, pluginEngines, handlePluginEngineModelSelect, t]);
-  // 普通任务的选择器列出任务所属电脑的引擎：当前选中的是待切到的引擎，或任务自己的引擎；
-  // 插件引擎任务待切到内置引擎时不选中任何引擎(内置那一行显示为下一条消息的选择)。
+    pluginEngineTask, pluginEngineAgentDeviceId, switchablePluginEngines, pluginEngineChoiceLabel,
+    handlePluginEngineModelSelect, t]);
+  // 打开模型选择器时：本机已装插件引擎请插件重报模型，同时读取同账号其他电脑开放的引擎(与新建任务一致)。
+  // 引用必须稳定——选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。
+  const hasLocalSessionPluginEnginesRef = useRef(false);
+  hasLocalSessionPluginEnginesRef.current = localPluginEngines.length > 0;
+  const readSessionPluginEngines = useCallback(() => {
+    if (pluginEngineDeviceId) {
+      readPluginEngineCatalogue?.();
+      if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer) agentPluginCatalogue.read();
+      return;
+    }
+    if (hasLocalSessionPluginEnginesRef.current) requestPluginEnginesRefresh();
+    readDevicePluginEngines();
+    if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !activePluginEngineInDeviceList) {
+      agentPluginCatalogue.read();
+    }
+  }, [pluginEngineDeviceId, readPluginEngineCatalogue, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
+    agentPluginCatalogue.read, readDevicePluginEngines, activePluginEngineInDeviceList]);
+  // 普通任务的选择器列出本机及同账号其他电脑开放的插件引擎(本机须已装对应插件)：
+  // 当前选中的是待切到的引擎，或任务自己的引擎；待切到内置引擎时不选中任何插件引擎。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {
     if (!pluginEngineSwitchEligible || !session
-      || (!pluginEngineTask && !pluginEngineDeviceId && pluginEngines.length === 0)) return undefined;
+      || (!pluginEngineTask && !pluginEngineDeviceId && switchablePluginEngines.length === 0 && switchPluginEngineDevices.length === 0)) {
+      return undefined;
+    }
+    const intentDeviceId = pluginEngineSwitchIntent
+      ? (pluginEngineSwitchIntent.agentDeviceId === undefined ? (session.agentDeviceId ?? null) : pluginEngineSwitchIntent.agentDeviceId)
+      : null;
     const active = pluginEngineSwitchIntent?.providerId
       ? {
           providerId: pluginEngineSwitchIntent.providerId,
+          ...(intentDeviceId ? { deviceId: intentDeviceId } : {}),
           modelId: pluginEngineSwitchIntent.model,
           ...(isPluginEngineEffort(pluginEngineSwitchIntent.effort) ? { effort: pluginEngineSwitchIntent.effort } : {}),
         }
       : pluginEngineTask && !agentSwitchIntent && session.providerId
         ? {
             providerId: session.providerId,
+            ...(pluginEngineAgentDeviceId ? { deviceId: pluginEngineAgentDeviceId } : {}),
             modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
             ...(isPluginEngineEffort(session.effort) ? { effort: session.effort } : {}),
           }
         : null;
     return {
-      engines: pluginEngines,
+      engines: switchablePluginEngines,
       active,
-      onSelect: (selection) => { void handlePluginEngineSwitchSelect(selection); },
-      readCatalogue: readPluginEngineCatalogue,
+      onSelect: handlePluginEngineSwitchSelect,
+      readCatalogue: readSessionPluginEngines,
     };
-  }, [pluginEngineSwitchEligible, pluginEngineDeviceId, pluginEngines, session, pluginEngineSwitchIntent,
-    pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect, readPluginEngineCatalogue]);
+  }, [pluginEngineSwitchEligible, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
+    session, pluginEngineSwitchIntent, pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect,
+    pluginEngineAgentDeviceId, readSessionPluginEngines]);
 
   // effort 已在 ChatInput 中落库成功；直接 merge 确切值回 SSoT，避免额外 GET
   // 读取到旧快照后把菜单选中态反向覆盖。ChatInput 不维护第二条 local state。
@@ -5723,11 +5890,12 @@ function CCAgentSessionContent({
 
   // MessageStream 提成变量:perf/session-switch 的 <Profiler> 是纯诊断,只在 DEV
   // 包裹(见下方渲染处),生产直接渲染此 el,不引入多余 Profiler fiber。
-  const sideChatMessages = useMemo(() => session?.source === 'side-chat'
-    ? messages.filter(message => new Date(message.createdAt ?? session.createdAt).getTime() >= new Date(session.createdAt).getTime())
+  const sideChatCreatedAt = session?.source === 'side-chat' || session?.sideChatPromoted ? session.createdAt : undefined;
+  const sideChatMessages = useMemo(() => sideChatCreatedAt
+    ? messages.filter(message => new Date(message.createdAt ?? sideChatCreatedAt).getTime() >= new Date(sideChatCreatedAt).getTime())
     : creationPreview && !messages.some(m => m.role === 'user') && pendingQueue.length === 0
       ? [creationPreview.message, ...messages] : messages,
-    [creationPreview, messages, pendingQueue.length, session?.source, session?.createdAt]);
+    [creationPreview, messages, pendingQueue.length, sideChatCreatedAt]);
   const timelineMessages = useMemo(
     () => visibleVoiceCallMessages(sideChatMessages, activeVoiceCallId),
     [sideChatMessages, activeVoiceCallId],
@@ -5982,7 +6150,7 @@ function CCAgentSessionContent({
       messages={timelineMessages}
       activeErrorClientId={bannerErrorClientId}
       activeVoiceCallId={activeVoiceCallId}
-      historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
+      historyVisibleAfter={sideChatCreatedAt ? new Date(sideChatCreatedAt).getTime() : undefined}
       onAskInSideChat={!readOnly && sessionId && !sideChatBlockedKey
         ? (quote) => openSideChatTab(sessionId, { quote }) : undefined}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
@@ -5991,7 +6159,7 @@ function CCAgentSessionContent({
       historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
       subagentRunStatuses={subagentRunStatuses}
-      isSessionStreaming={isStreaming}
+      isSessionStreaming={isStreaming || pluginEngineBackgroundWork}
       continuationTurnClientId={continuationTurnClientId}
       continuationInFlightProjectionCapability={continuationInFlightProjectionCapability}
       onLoadMore={loadOlderMessages}
@@ -6004,7 +6172,7 @@ function CCAgentSessionContent({
       getContentWidth={getMessageWidth}
       focusMessageClientId={focusedMessageTarget?.clientId ?? null}
       focusMessageRequestId={focusedMessageTarget?.requestId ?? 0}
-      forkOrigin={session?.source === 'side-chat' ? undefined : forkOrigin}
+      forkOrigin={sideChatCreatedAt ? undefined : forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
       isLocalUserSend={isLocalUserSend}
       ownsHardwareScrollActions={ownsHardwareTaskActions}
@@ -6028,6 +6196,8 @@ function CCAgentSessionContent({
   const composerRuntimeVisible =
     !pendingPlanReview &&
     (agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
+  const originDeviceId = rightSidebarDeviceLinkDeviceId ?? null;
+  const originAccessAvailable = !readOnly && !remoteSessionUnavailable && !isSharedTaskPeer(originDeviceId ?? '');
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -6177,6 +6347,16 @@ function CCAgentSessionContent({
           }
         }}
       >
+        {ownsRoute && session?.sideChatPromoted && (
+          <LinkedSideChatOrigin
+            key={JSON.stringify([session.id, session.parentSessionId, originDeviceId, originAccessAvailable])}
+            childId={session.id}
+            parentId={session.parentSessionId ?? null}
+            deviceId={originDeviceId}
+            parentAccessAvailable={originAccessAvailable}
+            archived={session.status !== 'active'}
+          />
+        )}
         {showOrcaLeadIdentityBar && (
           <div className="flex h-8 shrink-0 select-none items-center border-b border-border/40 px-3 text-11 font-medium leading-none text-muted-foreground">
             <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
@@ -6316,6 +6496,7 @@ function CCAgentSessionContent({
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
                   backgroundTasksRunning={backgroundTasksActive}
+                  backgroundPluginEngine={pluginEngineBackgroundWork}
                   workflowStatus={runningWorkflow ? composerStatus : undefined}
                   // 仅后台 Bash 在跑(无模型调用)时换专属文案 + 温和停止语义:
                   // 逐任务 stopTask,不关常驻子进程。proxy 信号在时维持原语义
@@ -6984,9 +7165,6 @@ function CCAgentSessionContent({
         <TopRightChipStack>
           {!isMac &&
             (ownsRoute || showRsbToggle) &&
-            (rightSidebarCollapsed ||
-              (rightSidebarDeviceLinkDeviceId &&
-                !isSharedTaskPeer(rightSidebarDeviceLinkDeviceId))) &&
             rightSidebarSide === 'right' && <div aria-hidden className="h-7 w-7 shrink-0" />}
         </TopRightChipStack>
       </section>
@@ -7162,6 +7340,7 @@ export function RunningStatusBar({
   inputWidth,
   sideTaskRunning = false,
   backgroundTasksRunning = false,
+  backgroundPluginEngine = false,
   workflowStatus,
   backgroundBashOnlyCount = 0,
   backgroundBashWorkCount = backgroundBashOnlyCount,
@@ -7204,6 +7383,11 @@ export function RunningStatusBar({
    * 计数在此语义下都是误导信息。替代原独立横幅(2026-07-13 假停止治理)。
    */
   backgroundTasksRunning?: boolean;
+  /**
+   * 后台模式来自插件引擎:Agent 回答完自己接着干活(不是子任务)。左段换成「正在后台继续工作」
+   * 文案,停止语义不变(关闭插件进程,任务可继续)。
+   */
+  backgroundPluginEngine?: boolean;
   /** 本机 Workflow 在运行时的专属状态文案；保留后台停止语义，但优先解释等待进度。 */
   workflowStatus?: string;
   /**
@@ -7288,7 +7472,9 @@ export function RunningStatusBar({
         ? backgroundBashWorkCount > 0
           ? t('chat.backgroundActivity.bashWorkStatus', { count: backgroundBashWorkCount })
           : t('chat.backgroundActivity.bashServiceStatus', { count: backgroundBashOnlyCount })
-        : t('chat.backgroundActivity.status')
+        : backgroundPluginEngine
+          ? t('chat.backgroundActivity.pluginEngineStatus')
+          : t('chat.backgroundActivity.status')
       : localizeAgentStatus(status, t));
   // 只剩长驻服务:任务已经做完,不再呼吸,免得看起来还在干活。
   const backgroundServiceOnly =

@@ -58,6 +58,7 @@ export function TeammateInboxRow({ entry, section }: { entry: TeammateInboxEntry
       aria-label={label}
       aria-current={isActive ? 'page' : undefined}
       data-teammate-inbox-row={entry.key}
+      data-teammate-inbox-route={entry.route}
       // The title marquee listens for hover on a row carrying this marker.
       data-sidebar-navigation-row="true"
       {...companionDragProps(entry.route, entry.name)}

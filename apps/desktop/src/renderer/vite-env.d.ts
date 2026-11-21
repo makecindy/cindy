@@ -176,6 +176,7 @@ interface DeviceLinkPeerLinkView {
   receivedAgoMs: number | null;
 }
 interface DeviceLinkPeerLinksSnapshot {
+  traffic?: import('../shared/deviceLinkIpc').LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
@@ -839,6 +840,7 @@ interface CCAgentPermissionRequestPayload {
   description?: string;
   suggestions?: unknown[];
   autoReviewUnavailable?: boolean;
+  autoReviewQuotaExhausted?: boolean;
   /** Auto-review's reason for asking; shown as the card's "why". */
   autoReviewReason?: string;
 }
@@ -1745,15 +1747,7 @@ interface ElectronAPI {
      * 每个窗口都跳页弹表单)。独立的插件面板窗 / 右侧栏窗收不到本推送。
      */
     onScheduleDraft: (
-      callback: (payload: {
-        requestId: string;
-        ghostId: string;
-        ghostName: string;
-        iconDataUrl?: string;
-        name: string;
-        prompt: string;
-        intervalMs?: number;
-      }) => void,
+      callback: (payload: import('../shared/ghost').GhostScheduleDraftPush) => void,
     ) => () => void;
     /** 运行时状态快照(错误接管态首帧数据源)。 */
     runtimeStates: () => Promise<{ states: Record<string, string> }>;
@@ -4839,6 +4833,7 @@ interface ElectronAPI {
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    githubAppAccess: () => Promise<import('../shared/githubSetup').GithubAppAccess>;
     githubAppStatus: () => Promise<import('../shared/githubSetup').GithubAppConnectionState>;
     connectGithubApp: () => Promise<void>;
     installGithubApp: () => Promise<void>;
@@ -5182,6 +5177,7 @@ interface ElectronAPI {
       }) => Promise<import('@/lib/ccAgent.types').Session>;
       get: (id: string) => Promise<import('@/lib/ccAgent.types').Session>;
       getMany: (ids: string[]) => Promise<import('@/lib/ccAgent.types').Session[]>;
+      archiveLinkedSideChat: (id: string, parentId: string) => Promise<import('@/lib/ccAgent.types').Session>;
       resolveReferences: (
         sessionIds: string[],
       ) => Promise<import('../shared/sessionReference').SessionReference[]>;
@@ -5816,6 +5812,11 @@ interface ElectronAPI {
      * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
      */
     refreshPluginEngines?: () => Promise<void>;
+    /**
+     * Opens or closes one engine of this computer for the owner's other computers
+     * (PluginEngineView.remoteUse). The new state also arrives through onPluginEnginesChanged.
+     */
+    setPluginEngineRemoteUse?: (key: string, enabled: boolean) => Promise<{ supported: boolean; enabled: boolean }>;
     /** Pushes the complete engine list whenever engines, availability or last-seen models change. */
     onPluginEnginesChanged: (
       cb: (engines: import('../shared/pluginEngines').PluginEngineView[]) => void,
