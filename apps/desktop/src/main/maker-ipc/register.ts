@@ -252,6 +252,7 @@ import {
   parseOfferedPluginEngines,
   PLUGIN_ENGINES_INVOKE,
   pluginEngineKeyFromProviderId,
+  PLUGIN_ENGINE_DEFAULT_MODEL,
 } from '../../shared/pluginEngines.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, PluginEngineUnsupportedError, requireBuiltinAgentKind } from '../maker-host/engineKind.js';
 import type {
@@ -1515,6 +1516,7 @@ import {
   remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeEffort,
   sessionRuntimeControlOwnerEpochMatches,
+  type FallbackRouteProfile,
   type SessionRuntimeProfile,
 } from './sessionRuntimeControl.js';
 import {
@@ -4755,6 +4757,8 @@ export interface SessionRouteSelection {
   effort: string | null;
   fastMode: boolean | 'ultrafast';
 }
+type CompanionSessionRouteSelection = Omit<SessionRouteSelection, 'agentKind'> & { agentKind: EngineKind };
+
 let readPendingAgentSwitchRouteHolder:
   ((sessionId: string) => PendingAgentSwitchRouteRead | undefined) | null = null;
 let applySessionRouteUnderSendLockHolder:
@@ -7870,7 +7874,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const route = await reconcileBotModelRoute.preview(sessionId, chain);
       if (!route) return null;
       const meta = await maker.getSessionMeta(sessionId);
-      return meta ? { agentKind: route.agentKind, remoteHostId: meta.remoteHostId } : null;
+      return meta ? { agentKind: route.agentKind === 'acp' ? 'pi' : route.agentKind, remoteHostId: meta.remoteHostId } : null;
     },
     refreshProviders: () => refreshCustomMcpProviders(),
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.MCP_CHANGED, {}),
@@ -9583,7 +9587,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
       const createOpts = buildCreateOptsWithStderr({
         id: expectedSession.id,
-        agentKind: dbToMakerAgentKind(row.agentKind),
+        agentKind: dbToMakerEngineKind(row.agentKind),
         workingDir: row.workingDir,
         workspaceKind: row.workspaceKind,
         model: row.model ?? undefined,
@@ -9713,7 +9717,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       preflight: async (row) => {
         const createOpts = buildCreateOptsWithStderr({
           id: live.id,
-          agentKind: dbToMakerAgentKind(row.agentKind),
+          agentKind: dbToMakerEngineKind(row.agentKind),
           workingDir: row.workingDir,
           workspaceKind: row.workspaceKind,
           model: row.model ?? undefined,
@@ -11626,7 +11630,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ) => applyScheduledModelSelection(await resolveScheduledExecutionSelection(sessionId, selection), {
     getTarget: async () => {
       const row = await agentSwitchDeps.getSessionRow(sessionId);
-      // Plugin-engine tasks cannot switch engines (docs/plans/acp-plugin-bridge.md).
+      if (row?.status === 'active' && row.agentKind === 'acp' && row.source === 'bot') {
+        throwIpcError('UNSUPPORTED_CAPABILITY', '插件引擎伙伴不支持自动任务临时指定其他模型');
+      }
+      // Explicit automation overrides only use built-in engine routes.
       return row && row.agentKind !== 'acp' ? { agentKind: dbToMakerAgentKind(row.agentKind), status: row.status,
         remoteHostId: row.remoteHostId, agentDeviceId: row.agentDeviceId, orcaRole: row.orcaRole } : null;
     },
@@ -11702,7 +11709,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           isNull(botSessionLinks.archivedAt), inArray(botSessionLinks.role, ['canonical', 'group', 'channel', 'thread', 'routine'])))
         .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
         .where(eq(sessions.id, sessionId)).limit(1);
-      return row?.status === 'active' ? { baseline: row.baseline,
+      return row?.status === 'active' && row.agentKind !== 'acp' ? { baseline: row.baseline,
         profileRevision: row.botId ? JSON.stringify([row.botId, row.profileVersion]) : null, profile: {
         agentKind: dbToMakerAgentKind(row.agentKind), model: row.model, providerId: row.providerId,
         agentDeviceId: row.agentDeviceId,
@@ -14072,7 +14079,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * or the saved run location revalidated against that computer's catalog each time.
    */
   const resolvePluginSavedExecution = async (
-    config: Parameters<typeof resolveSessionExecution>[0] & { agentDeviceId?: string | null },
+    config: Parameters<typeof resolveSessionExecution>[0] & Parameters<typeof savedPluginTaskRemoteRoute>[0],
     sourceSessionId?: string,
     existing?: Parameters<typeof resolveSessionExecution>[2],
   ): Promise<Awaited<ReturnType<typeof resolveSessionExecution>> & { agentDeviceId?: string }> => {
@@ -16976,13 +16983,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    */
   const stageSessionRouteSelection = async (
     sessionId: string,
-    route: SessionRouteSelection,
-    currentAgentKind: AgentKind,
-  ): Promise<SessionRouteSelection | void> => {
+    route: CompanionSessionRouteSelection,
+    currentAgentKind: EngineKind,
+    currentProviderId?: string | null,
+  ): Promise<CompanionSessionRouteSelection | void> => {
     // Legacy callers without a location must not move a remote session implicitly.
     const currentDeviceId = await readSessionAgentDeviceId(sessionId);
     if (route.agentDeviceId === undefined && currentDeviceId) return;
-    if (route.agentKind !== currentAgentKind || currentDeviceId !== (route.agentDeviceId ?? null) || currentDeviceId) {
+    const pluginEngineChanges = route.agentKind === 'acp' && currentProviderId !== undefined && currentProviderId !== route.providerId;
+    if (route.agentKind !== currentAgentKind || pluginEngineChanges || currentDeviceId !== (route.agentDeviceId ?? null) || currentDeviceId) {
       await performSessionAgentSwitch(agentSwitchDeps, {
         sessionId, targetAgentKind: route.agentKind, model: route.model,
         providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,
@@ -16990,8 +16999,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         configStaged: true,
       });
       const intent = agentSwitchPending.get(sessionId);
-      // 系统路由只登记内置引擎；插件引擎意图不会出现在这些任务上(切到插件引擎只限普通任务)。
-      return intent && intent.targetAgentKind !== 'acp' ? {
+      return intent ? {
         ...route, agentKind: intent.targetAgentKind, model: intent.model,
         providerId: intent.providerId ?? null,
         agentDeviceId: intent.targetAgentDeviceId === undefined ? currentDeviceId : intent.targetAgentDeviceId,
@@ -17142,14 +17150,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           eq(sessions.source, 'bot'),
           eq(sessions.status, 'active'),
         )).limit(1);
-      // Teammate model chains drive built-in engines only; plugin-engine rows have none.
-      if (!row || row.agentKind === 'acp') return null;
+      if (!row) return null;
       // An old routine lane follows its teammate's model like the other lanes.
       const selection = await readEffectiveBotModelSelection(JSON.parse(row.capabilitiesJson));
       const control = getSessionRuntimeControlSnapshot(sessionId);
       const intent = agentSwitchPending.get(sessionId);
       const live = maker.getSession(sessionId);
       const modelGroupsSignature = botModelGroupsSignature(selection.chain, readModelGroupsConfig());
+      const currentAgentKind = live?.agentKind ?? dbToMakerEngineKind(row.agentKind);
+      const isPluginEngine = currentAgentKind === 'acp';
       return {
         // The saved chain: a model group's own rule picks its source (pickModelGroup), and the
         // saved model stays the fallback. Editing a group it uses re-picks (model-groups.md §6.2).
@@ -17159,17 +17168,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         followsCindyDefault: selection.followsCindyDefault,
         current: {
           agentDeviceId: row.agentDeviceId,
-          agentKind: builtinAgentKindOrNull(live?.agentKind) ?? dbToMakerAgentKind(row.agentKind),
-          model: live?.model ?? row.model ?? '',
-          providerId: live && hasSessionProvider(sessionId)
+          agentKind: currentAgentKind,
+          // The engine reports its concrete model even when the companion delegated that choice to it.
+          model: isPluginEngine && row.model === PLUGIN_ENGINE_DEFAULT_MODEL ? row.model : live?.model ?? row.model ?? '',
+          providerId: !isPluginEngine && live && hasSessionProvider(sessionId)
             ? getSessionProvider(sessionId) ?? null : row.providerId,
-          effort: (live ? getSessionEffort(sessionId) : row.effort) ?? null,
-          fastMode: live ? getSessionFastMode(sessionId) : (row.fastMode ?? false),
+          effort: (!isPluginEngine && live ? getSessionEffort(sessionId) : row.effort) ?? null,
+          fastMode: isPluginEngine ? false : (live ? getSessionFastMode(sessionId) : (row.fastMode ?? false)),
         },
         // The task owns its model: a manual change sticks until the configured route itself changes.
         hasRuntimeOverride: control.effectiveOverride !== null || control.pending !== null || !!intent,
-        // 伙伴任务不能切到插件引擎，这里的意图只会是内置引擎。
-        next: intent && intent.targetAgentKind !== 'acp' ? { agentDeviceId: intent.targetAgentDeviceId === undefined ? row.agentDeviceId : intent.targetAgentDeviceId, agentKind: intent.targetAgentKind, model: intent.model,
+        next: intent ? { agentDeviceId: intent.targetAgentDeviceId === undefined ? row.agentDeviceId : intent.targetAgentDeviceId, agentKind: intent.targetAgentKind, model: intent.model,
           providerId: intent.providerId ?? null, effort: intent.effort ?? null, fastMode: intent.fastMode ?? false }
           : control.pending?.profile ?? control.effectiveOverride ?? undefined,
       };
@@ -17177,7 +17186,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readAppliedGroup: (sessionId) => providerGroupService?.sessionGroup(sessionId) ?? Promise.resolve(null),
     apply: createBotModelRouteApplier({
       stage: (sessionId, route, current) => stageSessionRouteSelection(
-        sessionId, { ...route, agentDeviceId: route.agentDeviceId ?? null }, current.agentKind),
+        sessionId, { ...route, agentDeviceId: route.agentDeviceId ?? null }, current.agentKind, current.providerId),
       isIdle: isSessionIdleForRouteApply,
       applyPendingSwitch: (sessionId) => applyPendingAgentSwitchIfIdle(
         agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true }),
@@ -17285,9 +17294,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const readBotFallbackCandidate = async (
     sessionId: string,
-    current: SessionRuntimeProfile,
+    current: FallbackRouteProfile,
     controlSessionId = sessionId,
-  ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null; routeLocked?: boolean }> => {
+  ): Promise<{ isBot: boolean; candidate: FallbackRouteProfile | null; routeLocked?: boolean }> => {
     const [row] = await getDbClient()
       .drizzle.select({
         capabilitiesJson: botProfileVersions.capabilitiesJson,
@@ -17322,13 +17331,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     // A model group continues through its other sources before the next saved route.
     const chain = expandBotModelGroups(await readEffectiveBotModelChain(config), readModelGroupsConfig(), Date.now());
-    const toAgentKind = (harness: string): AgentKind =>
-      harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
-    const currentHarness = current.agentKind === 'codex'
-      ? 'codex'
-      : current.agentKind === 'pi'
-        ? 'pi'
-        : 'claude';
+    const currentHarness = current.agentKind === 'claude-code' ? 'claude' : current.agentKind;
     const control = getSessionRuntimeControlSnapshot(controlSessionId);
     const [controlSession] = controlSessionId === sessionId ? [{ remoteHostId: row.remoteHostId }]
       : await getDbClient().drizzle.select({ remoteHostId: sessions.remoteHostId })
@@ -17336,7 +17339,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const currentRoute: Pick<BotModelRoute, 'harness' | 'model' | 'providerId' | 'agentDeviceId'> = {
       harness: currentHarness, model: current.model, providerId: current.providerId, agentDeviceId: current.agentDeviceId,
     };
-    const usable = (candidate: BotModelRoute) => !controlSession?.remoteHostId || candidate.harness === currentHarness;
+    const usable = (candidate: BotModelRoute) =>
+      !controlSession?.remoteHostId || (candidate.harness !== 'acp' && candidate.harness === currentHarness);
     const route = nextBotModelRoute(chain, currentRoute, control.visitedRoutes, usable);
     // No other usable route is configured at all: nothing can be exhausted.
     const currentIndex = botModelRouteIndex(chain, currentRoute);
@@ -17346,7 +17350,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       routeLocked,
       candidate: route
         ? {
-            agentKind: toAgentKind(route.harness),
+            agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
             agentDeviceId: route.agentDeviceId ?? null,
             model: route.model,
             providerId: route.providerId,
