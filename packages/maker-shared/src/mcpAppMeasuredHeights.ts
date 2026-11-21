@@ -19,8 +19,21 @@ export class McpAppMeasuredHeights {
   private writing = false;
   private disposed = false;
 
-  constructor(initial: string | null, private readonly write: (snapshot: Measurement[], changes: Measurement[]) => void | Promise<void>) {
-    for (const entry of parseMcpAppMeasurements(initial)) this.entries.set(entry[0], entry);
+  private hydrated = false;
+
+  constructor(initial: string | null | undefined, private readonly write: (snapshot: Measurement[], changes: Measurement[]) => void | Promise<void>) {
+    if (initial !== undefined) this.restore(initial);
+  }
+
+  // Mobile can measure before its account storage is ready. Those newer entries
+  // keep their order and take precedence over the older persisted snapshot.
+  restore(initial: string | null): void {
+    if (this.disposed || this.hydrated) return;
+    const older = parseMcpAppMeasurements(initial).filter(([key]) => !this.entries.has(key));
+    const newest = [...older, ...this.entries.values()].slice(-limit);
+    this.entries = new Map(newest.map(entry => [entry[0], entry]));
+    this.hydrated = true;
+    if (this.changed.size) this.schedule();
   }
 
   get(key: string, width: number): number | undefined {
@@ -51,14 +64,14 @@ export class McpAppMeasuredHeights {
 
   private schedule(): void {
     clearTimeout(this.timer);
-    if (this.writing || this.disposed || this.firstChange === undefined) return;
+    if (!this.hydrated || this.writing || this.disposed || this.firstChange === undefined) return;
     const delay = Math.min(500, Math.max(0, this.firstChange + 2000 - Date.now()));
     this.timer = setTimeout(() => { void this.flush(); }, delay);
   }
 
   async flush(): Promise<void> {
     clearTimeout(this.timer);
-    if (this.disposed || this.writing || !this.changed.size) return;
+    if (!this.hydrated || this.disposed || this.writing || !this.changed.size) return;
     const changes = [...this.changed.values()];
     this.changed.clear();
     this.firstChange = undefined;

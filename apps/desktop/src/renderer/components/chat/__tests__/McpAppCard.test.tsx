@@ -337,6 +337,8 @@ it('restores the measured height before opening a historical card in a fresh ren
     await act(async () => root.render(<McpAppCard {...props} />));
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const page = state.controllers.at(-1)!;
+    // A same-account repair advances the generation while this card stays mounted.
+    setDataOwnerGeneration('layout-account');
     await act(async () => {
       page.message({ method: 'ui/notifications/initialized' });
       page.message({ method: 'ui/notifications/sandbox-result-delivered' });

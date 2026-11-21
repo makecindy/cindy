@@ -34,11 +34,13 @@ export class McpAppView {
   private readonly heightCacheKey: string;
   private readonly heights = getMobileHeights();
   private hasSize = false;
+  // The execution Host sends the tool result only once during a View's lifetime.
   private resultDelivered = false;
-  private handshaking = false;
+  private pagePhase: 'static' | 'initializing' | 'ready' = 'static';
   private fallbackTimer?: ReturnType<typeof setTimeout>;
-  private pendingMeasurement?: { height: number; width: number };
+  private pendingMeasurement?: { height: number; width: number; keyboardVisible: boolean };
   private readonly placeholder: number;
+  private measuringWithKeyboard = false;
   private readonly heightGuard = new McpAppHeightGuard(() => console.warn('[mcp-apps] App height feedback loop bounded'));
   private closePromise?: Promise<void>;
 
@@ -70,34 +72,40 @@ export class McpAppView {
           this.localFilesUnavailable();
           return;
         }
-        if (message.method === 'ui/notifications/tool-result' || message.method === 'ui/notifications/tool-cancelled')
-          {
-            this.resultDelivered = true;
-            if (this.pendingMeasurement && this.fallbackTimer === undefined)
-              this.fallbackTimer = setTimeout(() => this.adoptMeasurement(), 500);
-          }
+        if (message.method === 'ui/notifications/tool-result' || message.method === 'ui/notifications/tool-cancelled') {
+          this.resultDelivered = true;
+          this.scheduleMeasurementFallback();
+        }
         const serialized = JSON.stringify(JSON.stringify(message)).replace(/</g, '\\u003c');
         this.inject?.(`window.dispatchEvent(new MessageEvent('message',{data:JSON.parse(${serialized}),source:window}));true;`);
       },
       (message) => {
         if (this.closing) return;
         if (message.method === 'ui/initialize') {
-          this.handshaking = true;
-          this.resultDelivered = false;
+          this.pagePhase = 'initializing';
+          this.heightGuard.reset();
           this.pendingMeasurement = undefined;
           clearTimeout(this.fallbackTimer);
           this.fallbackTimer = undefined;
         }
-        if (message.method === 'ui/notifications/initialized') this.update({ loading: false });
+        if (message.method === 'ui/notifications/initialized') {
+          this.pagePhase = 'ready';
+          this.update({ loading: false });
+          this.scheduleMeasurementFallback();
+        }
         if (message.method === 'ui/notifications/size-changed' &&
             typeof message.params?.height === 'number' && Number.isFinite(message.params.height) && message.params.height > 0) {
-          const height = this.heightGuard.accept(message.params.height);
-          // A pre-result or static document only acquires a remembered size after settling.
-          if (this.width > 0 && !Keyboard.isVisible?.()) {
-            this.pendingMeasurement = { height, width: this.width };
-            if (!this.state.loading && this.resultDelivered) this.adoptMeasurement();
-            else if ((!this.handshaking || this.resultDelivered) && this.fallbackTimer === undefined) this.fallbackTimer = setTimeout(() => this.adoptMeasurement(), 500);
+          // After result delivery, retain the previous height throughout a new handshake.
+          if (!this.width || (this.pagePhase === 'initializing' && this.resultDelivered)) return;
+          const keyboardVisible = Keyboard.isVisible?.() === true;
+          if (this.measuringWithKeyboard !== keyboardVisible) {
+            this.heightGuard.reset();
+            this.measuringWithKeyboard = keyboardVisible;
           }
+          const height = this.heightGuard.accept(message.params.height);
+          this.pendingMeasurement = { height, width: this.width, keyboardVisible };
+          if (this.pagePhase === 'ready' && this.resultDelivered) this.adoptMeasurement();
+          else this.scheduleMeasurementFallback();
         }
       },
       (error) => this.fail(error), openLink,
@@ -109,21 +117,26 @@ export class McpAppView {
     listener(this.state);
     return () => { this.listeners.delete(listener); };
   }
+  private scheduleMeasurementFallback(): void {
+    if (!this.pendingMeasurement || this.fallbackTimer !== undefined || this.pagePhase === 'initializing') return;
+    if (this.pagePhase === 'static' || this.resultDelivered)
+      this.fallbackTimer = setTimeout(() => this.adoptMeasurement(), 500);
+  }
   private adoptMeasurement(): void {
     clearTimeout(this.fallbackTimer);
     this.fallbackTimer = undefined;
     const sample = this.pendingMeasurement;
     this.pendingMeasurement = undefined;
-    if (!sample || sample.width !== this.width || this.closing || Keyboard.isVisible?.()) return;
+    if (!sample || sample.width !== this.width || this.closing) return;
     this.hasSize = true;
-    this.heights?.remember(this.heightCacheKey, sample.width, sample.height);
+    if (!sample.keyboardVisible && !Keyboard.isVisible?.()) this.heights.remember(this.heightCacheKey, sample.width, sample.height);
     this.update({ height: sample.height });
   }
   setWidth(width: number): void {
     if (Number.isFinite(width) && width > 0 && width !== this.width && !this.disposed) {
       this.width = width;
       this.heightGuard.resize(width);
-      if (!this.hasSize) this.update({ height: this.heights?.get(this.heightCacheKey, width) ?? this.placeholder });
+      if (!this.hasSize) this.update({ height: this.heights.get(this.heightCacheKey, width) ?? this.placeholder });
       else this.changed();
     }
   }

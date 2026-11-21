@@ -1,8 +1,7 @@
 import { McpAppMeasuredHeights, parseMcpAppMeasurements } from '@cindy/maker-shared/mcp-app-controller';
 import { getDataOwnerGeneration, subscribeDataOwnerGeneration } from '../contexts/dataOwnerGeneration';
 
-function openCache(): McpAppMeasuredHeights {
-  const { dataOwnerId } = getDataOwnerGeneration();
+function openCache(dataOwnerId: string | null): McpAppMeasuredHeights {
   const key = dataOwnerId && `cindy.mcpAppHeights.v1.${encodeURIComponent(dataOwnerId)}`;
   let stored: string | null = null;
   try { if (key) stored = localStorage.getItem(key); } catch { /* Memory-only profile. */ }
@@ -28,9 +27,15 @@ function openCache(): McpAppMeasuredHeights {
   return cache;
 }
 
-export let desktopMcpAppHeights = openCache();
-subscribeDataOwnerGeneration(() => {
-  desktopMcpAppHeights.dispose();
-  desktopMcpAppHeights = openCache();
-});
-window.addEventListener('pagehide', () => { void desktopMcpAppHeights.flush(); });
+let ownerId = getDataOwnerGeneration().dataOwnerId;
+export let desktopMcpAppHeights = openCache(ownerId);
+if (typeof window !== 'undefined') {
+  subscribeDataOwnerGeneration(() => {
+    const nextOwnerId = getDataOwnerGeneration().dataOwnerId;
+    if (nextOwnerId === ownerId) return;
+    desktopMcpAppHeights.dispose();
+    ownerId = nextOwnerId;
+    desktopMcpAppHeights = openCache(ownerId);
+  });
+  window.addEventListener('pagehide', () => { void desktopMcpAppHeights.flush(); });
+}

@@ -6,6 +6,7 @@ import { Script } from 'node:vm';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { mcpAppSandboxDocument } from '@cindy/maker-shared/mcp-apps';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { McpAppView } from '../session/mcpAppView';
 import { MessageListRevealContext, MessageListKeepKeyboardContext } from '../session/messageListReveal';
 
@@ -89,6 +90,7 @@ const state = vi.hoisted(() => ({
   prepare: vi.fn(),
   random: 0,
   foreground: 'active',
+  keyboardVisible: false,
   keyboardListeners: new Map<string, () => void>(),
   appStateListeners: new Set<(state: string) => void>(),
   surfaceAvailable: true,
@@ -106,7 +108,7 @@ vi.mock('react-native', () => ({
     useImperativeHandle(ref, () => ({ getBoundingClientRect: () => ({ width: 380 }), measureInWindow: (callback: any) => callback(0, 100, 380, 320) }));
     return createElement('div', null, children);
   },
-  Keyboard: { addListener: (name: string, listener: () => void) => {
+  Keyboard: { isVisible: () => state.keyboardVisible, addListener: (name: string, listener: () => void) => {
     state.keyboardListeners.set(name, listener);
     return { remove: () => state.keyboardListeners.delete(name) };
   } },
@@ -174,7 +176,7 @@ vi.mock('@/theme', () => {
 });
 import { McpAppCard } from '../session/McpAppCard';
 import { McpAppViewsProvider } from '../session/McpAppViews';
-import { __testing as authOwnerTesting, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { __testing as authOwnerTesting, getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 const doc = {
   viewId: 'view',
   html: '<script>window.app=true</script>',
@@ -198,6 +200,7 @@ beforeEach(() => {
   authOwnerTesting.reset();
   setMobileAuthOwner(`mcp-test-${++ownerTestCounter}`);
   state.random = 0;
+  state.keyboardVisible = false;
   state.mounts = 0;
   state.webviews = [];
   state.surfaceAvailable = true;
@@ -470,6 +473,95 @@ it('reuses a measured height on remount without mixing device, task, or card key
   expect(state.props.style.height).toBe(320);
   await act(async () => renderCard('device-a', 'task-a', 'card-b'));
   expect(state.props.style.height).toBe(320);
+});
+
+// #11918 unit: exercise the card's native message callback and its account-scoped
+// persistence. A warm cache and an inactive keyboard miss these lifecycle races.
+function pageMessage(method: string, params?: Record<string, unknown>, id?: number) {
+  state.props.onMessage({ nativeEvent: { data: JSON.stringify({ key: state.prepare.mock.calls.at(-1)![1],
+    message: { jsonrpc: '2.0', method, params, id } }) } });
+}
+const heightStorageKey = () => 'cindy.mobile.mcpAppHeights.v1.' + getMobileAuthOwner().accountKey;
+
+it('persists a live card measurement after a slow account read without writing into the next account', async () => {
+  let loaded!: (value: string | null) => void;
+  const read = vi.spyOn(AsyncStorage, 'getItem').mockImplementationOnce(() => new Promise(resolve => { loaded = resolve; }));
+  try {
+    setMobileAuthOwner('slow-height-read');
+    const first = heightStorageKey();
+    await act(async () => render(<McpAppCard deviceId="dev" sessionId="task" clientId="slow" title="App" />));
+    expect(state.prepare).toHaveBeenCalledOnce();
+    await act(async () => pageMessage('ui/notifications/size-changed', { height: 460 }));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(state.props.style.height).toBe(460);
+    const previous = [JSON.stringify(['dev', 'task', 'older']), 380, 510];
+    const cardKey = JSON.stringify(['dev', 'task', 'slow']);
+    await act(async () => loaded(JSON.stringify([previous, [cardKey, 380, 350]])));
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(JSON.parse(await AsyncStorage.getItem(first) ?? '[]')).toEqual([previous, [cardKey, 380, 460]]);
+    await act(async () => pageMessage('ui/notifications/size-changed', { height: 610 }));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(JSON.parse(await AsyncStorage.getItem(first) ?? '[]')).toContainEqual([JSON.stringify(['dev', 'task', 'slow']), 380, 610]);
+
+    await act(async () => setMobileAuthOwner('other-height-account'));
+    await act(async () => pageMessage('ui/notifications/size-changed', { height: 720 }));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(await AsyncStorage.getItem(heightStorageKey())).toBeNull();
+    expect(state.prepare).toHaveBeenCalledOnce();
+  } finally { read.mockRestore(); }
+});
+
+it('displays a keyboard-time measurement without storing it when the static fallback settles', async () => {
+  await act(async () => render(<McpAppCard deviceId="dev" sessionId="task" clientId="keyboard" title="App" />));
+  state.keyboardVisible = true;
+  await act(async () => pageMessage('ui/notifications/size-changed', { height: 710 }));
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  expect(state.props.style.height).toBe(710);
+  await act(async () => pageMessage('ui/notifications/size-changed', { height: 740 }));
+  state.keyboardVisible = false;
+  await act(() => vi.advanceTimersByTimeAsync(1000));
+  expect(state.props.style.height).toBe(740);
+  expect(await AsyncStorage.getItem(heightStorageKey())).toBeNull();
+
+  state.keyboardVisible = true;
+  await act(async () => {
+    for (let i = 0; i < 8; i++) pageMessage('ui/notifications/size-changed', { height: i % 2 ? 700 : 500 });
+  });
+  state.keyboardVisible = false;
+  await act(async () => pageMessage('ui/notifications/size-changed', { height: 640 }));
+  await act(() => vi.advanceTimersByTimeAsync(1000));
+  expect(state.props.style.height).toBe(640);
+  expect(JSON.parse(await AsyncStorage.getItem(heightStorageKey()) ?? '[]')).toContainEqual([JSON.stringify(['dev', 'task', 'keyboard']), 380, 640]);
+});
+
+it('adopts new heights after a second initialize without replaying the tool result', async () => {
+  let deliver!: (events: unknown[]) => void;
+  state.invoke.mockImplementation(async (_device, _channel, [, input]) =>
+    input.op === 'open' ? doc : input.op === 'poll' ? new Promise(resolve => { deliver = resolve; }) : {});
+  await act(async () => render(<McpAppCard deviceId="dev" sessionId="task" clientId="reinit" title="App" />));
+  await act(async () => {
+    pageMessage('ui/notifications/sandbox-proxy-ready');
+    pageMessage('ui/initialize', {}, 1);
+    pageMessage('ui/notifications/initialized');
+    deliver([{ seq: 1, message: { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { content: [] } } }]);
+  });
+  await act(async () => pageMessage('ui/notifications/size-changed', { height: 420 }));
+  expect(state.props.style.height).toBe(420);
+  await act(async () => {
+    pageMessage('ui/initialize', {}, 2);
+    pageMessage('ui/notifications/size-changed', { height: 180 });
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expect(state.props.style.height).toBe(420);
+  await act(async () => {
+    pageMessage('ui/notifications/initialized');
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expect(state.props.style.height).toBe(420);
+  await act(async () => {
+    pageMessage('ui/notifications/size-changed', { height: 550 });
+  });
+  expect(state.props.style.height).toBe(550);
 });
 
 /* 依据：高度缓存是进程内有界 LRU，不得无限保留页面身份；tier: unit/jsdom。 */

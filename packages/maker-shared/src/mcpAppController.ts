@@ -330,6 +330,9 @@ export class McpAppHeightGuard {
   resize(width: number): void {
     if (this.width === width) return;
     this.width = width;
+    this.reset();
+  }
+  reset(): void {
     this.samples = [];
     this.locked = undefined;
   }

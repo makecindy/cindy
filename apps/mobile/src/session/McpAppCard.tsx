@@ -10,7 +10,7 @@ import { useTheme, textStyles, fontWeight, radius, spacing } from '@/theme';
 import { useMcpAppViews, NativeMcpAppSlot, mcpAppSurfaceAvailable } from './McpAppViews';
 import type { McpAppView, McpAppViewState } from './mcpAppView';
 import { MCP_APP_DEFAULT_HEIGHT } from './mcpAppView';
-import { getMobileHeights, subscribeMobileHeights } from './mcpAppMeasuredHeights';
+import { getLoadedMobileHeights, getMobileHeights, subscribeMobileHeights } from './mcpAppMeasuredHeights';
 
 interface McpAppCardProps {
   initialHeight?: unknown;
@@ -46,7 +46,7 @@ export function McpAppCard(props: McpAppCardProps) {
 function MeasuredMcpAppCard(props: McpAppCardProps) {
   // The cache hydrates asynchronously. Keep the normal 320/declared placeholder
   // visible while it loads, then reuse the hydrated value on the next open.
-  useSyncExternalStore(subscribeMobileHeights, getMobileHeights);
+  useSyncExternalStore(subscribeMobileHeights, getLoadedMobileHeights);
   return <InteractiveMcpAppCard {...props} />;
 }
 
