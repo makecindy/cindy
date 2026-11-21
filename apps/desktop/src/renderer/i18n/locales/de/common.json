@@ -16246,6 +16246,7 @@
       "saveFailed": "Die Kontextfensterstufe konnte nicht gespeichert werden"
     },
     "agentStatus": {
+      "preparingSend": "Senden wird vorbereitet…",
       "waitingRemoteResponse": "Warten auf die Antwort des entfernten Geräts…",
       "readingMemory": "Erinnerungen werden gelesen…",
       "savingMemory": "Erinnerungen werden gespeichert…",

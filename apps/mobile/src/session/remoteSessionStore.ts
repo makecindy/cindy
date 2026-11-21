@@ -4504,10 +4504,11 @@ export const remoteSessionStore = {
     let continuationOwnerCleared = false;
     if (!running) {
       const currentProjection = inputProjections.get(sessionId);
-      if (currentProjection?.continuationTurnClientId) {
+      if (currentProjection?.continuationTurnClientId || currentProjection?.sendPreparationPending) {
         const nextProjection: InputProjection = {
           ...currentProjection,
           continuationTurnClientId: null,
+          sendPreparationPending: false,
         };
         continuationOwnerCleared = !deepValueEqual(currentProjection, nextProjection);
         if (continuationOwnerCleared) inputProjections.set(sessionId, nextProjection);

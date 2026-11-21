@@ -16172,6 +16172,7 @@
       "saveFailed": "컨텍스트 창 저장에 실패했습니다"
     },
     "agentStatus": {
+      "preparingSend": "전송 준비 중…",
       "waitingRemoteResponse": "원격 응답을 기다리는 중…",
       "readingMemory": "기억을 읽고 있어요…",
       "savingMemory": "기억을 저장하고 있어요…",

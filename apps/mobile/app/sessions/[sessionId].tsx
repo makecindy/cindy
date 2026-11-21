@@ -2835,7 +2835,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sessionId,
     idle: status === 'online' && !remoteSessionRunning && !currentTurnStreaming,
   });
-  const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)
+  const preparingSend = inputProjection.sendPreparationPending === true && !remoteSessionRunning && !currentTurnStreaming;
+  const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming || preparingSend)
     && !inputProjection.queueAbortPending;
   const canStopComposer = canStopQueue || canStopCurrentRun;
   const sessionAgentKind: MobileSessionAgentKind = currentSession
@@ -4774,8 +4775,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [hasPendingRefresh, load, loading, deviceId, sessionId]);
 
   const isSessionStreaming = useMemo(
-    () => sending || canStopQueue || remoteSessionRunning || currentTurnStreaming,
-    [canStopQueue, currentTurnStreaming, remoteSessionRunning, sending],
+    () => sending || canStopQueue || remoteSessionRunning || currentTurnStreaming || preparingSend,
+    [canStopQueue, currentTurnStreaming, remoteSessionRunning, sending, preparingSend],
   );
   const {
     begin: beginHistoryRecovery,
@@ -6440,8 +6441,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     openedCompanionSettings.current = sessionId;
     openCompanionSettings('capabilities');
   }, [routeCompanionSettings, sessionId, openCompanionSettings]);
-  const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionDisplay?.ref.id ?? '',
+  const activeCompanionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionDisplay?.ref.id ?? '',
     active: companionChat && showComposerActivity, messages, reconnectAttempt: remoteSessionRunStatus.reconnectAttempt });
+  const companionWorkingLabel = preparingSend ? t('session.new.slowSend.preparing') : activeCompanionWorkingLabel;
   const companionAvatarData = companionDisplay?.display.avatar;
   const companionName = companionDisplay ? resolveRemoteText(companionDisplay.display.title, i18nInstance.language) : '';
   const companionOnline = !remoteUnavailableReason;
@@ -11767,7 +11769,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                       tokenSpeed={remoteSessionRunStatus.tokenSpeed}
                       generationActive={remoteSessionRunStatus.generationActive}
                       visible={showComposerActivity}
-                      slowSendPhase={creationSlowPhase}
+                      slowSendPhase={preparingSend ? 'preparing' : creationSlowPhase}
                     />
                   ) : null}
                 </View>
@@ -13880,7 +13882,7 @@ function ComposerActivityStatus({
   tokenSpeed?: TokenSpeedSnapshot;
   generationActive: boolean;
   visible: boolean;
-  /** Set once a new task's creation has waited past the slow-send delay. */
+  /** Host preparation, or a new task's creation past the slow-send delay. */
   slowSendPhase?: SlowSendPhase | null;
 }) {
   // Host speed counts and times generation itself; usage counters stay the fallback.
@@ -13914,7 +13916,7 @@ function ComposerActivityStatus({
     startedAt: samplerStartedAt,
     outputTokens,
     generationDurationMs,
-    generationReliable: generationReliable && visible && !reconnectAttempt && !sideTaskRunning,
+    generationReliable: generationReliable && visible && !reconnectAttempt && !sideTaskRunning && !slowSendPhase,
     tokenSpeed,
     streaming,
   });
@@ -13943,7 +13945,7 @@ function ComposerActivityStatus({
   const tokenCount = formatComposerActivityTokenCount(tokenUsage);
   const tokenText = t('session.screen.tokenCount', { tokens: tokenCount });
   const tokenA11yText = t('session.screen.tokenCountFull', { tokens: tokenCount });
-  const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt);
+  const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt) || Boolean(slowSendPhase);
   const showLiveRate = !showElapsedOnly && (tokenSpeed?.measurement || !tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0));
   const rateValue = formatComposerActivityRateValue(showLiveRate ? rateHistory.latestRate : null);
   const canShowRateDetails = !showElapsedOnly

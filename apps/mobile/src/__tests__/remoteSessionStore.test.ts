@@ -4724,6 +4724,7 @@ describe('remoteSessionStore', () => {
     const ownerProjection = {
       ...projection('s1'),
       continuationTurnClientId: 'resume-1',
+      sendPreparationPending: true,
     };
     remoteSessionStore.setInputProjection('s1', ownerProjection);
     remoteSessionStore.setSessionRunning('s1', true);
@@ -4736,6 +4737,7 @@ describe('remoteSessionStore', () => {
     });
 
     expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
+    expect(remoteSessionStore.getInputProjection('s1').sendPreparationPending).toBe(false);
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
     expect(remoteSessionStore.setInputProjectionIfCurrent('s1', { ...ownerProjection, pendingQueue: [] }, operationEpoch, operationRemoteEpoch, 'q-1')).toBe(false);
     expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-1');

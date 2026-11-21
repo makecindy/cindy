@@ -233,7 +233,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('outputTokens={remoteSessionRunStatus.outputTokens}');
     expect(source).toContain('generationDurationMs={remoteSessionRunStatus.generationDurationMs}');
     expect(source).toContain('ArrowDown');
-    expect(source).toContain('const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt);');
+    // Preparation/reconnect usage visibility is rendered in runningTokenRatePopover.test.tsx.
     expect(source).toContain('const canShowRateDetails = !showElapsedOnly');
     expect(source).toContain('enabled={canShowRateDetails}');
     expect(source).toContain('generationActive={remoteSessionRunStatus.generationActive}');
@@ -252,7 +252,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('<ComposerActivityPill label={activityText} live={Boolean(slowSendPhase) && !reconnectAttempt}>');
     // A slow new-task send speaks through the same row, then continues in place as "思考中".
     expect(source).toContain('const composerActivitySignal = isSessionStreaming || messageHandoffActive || creationRunning;');
-    expect(source).toContain('slowSendPhase={creationSlowPhase}');
+    // Preparation and creation phases share the rendered activity-row regression above.
     // The creation turn keeps counting from the tap on the new-task page; a later remote start must not rewind it.
     expect(source).toContain('const composerActivityStartedAtMs = creationTurnStartedAt ?? remoteSessionRunStatus.startedAt ?? composerActivityStartedAt;');
     expect(activityPillSource).toContain("accessibilityLiveRegion={live ? 'polite' : 'none'}");
@@ -431,7 +431,6 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('reconcileComposerProjectedText(composerDocumentRef.current, latestDraft)');
     expect(source).toContain('if (options.sendAfterTranscribe && (composerDocumentHasContent(latestDocument) || attachments.length > 0))');
     expect(source).toContain('const currentTurnStreaming = useMemo(');
-    expect(source).toContain('const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)');
     expect(source).toContain('const canStopComposer = canStopQueue || canStopCurrentRun;');
     expect(source).toContain('canStop: canStopComposer,');
     expect(source).toContain(

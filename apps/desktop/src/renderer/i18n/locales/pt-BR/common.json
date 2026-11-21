@@ -16397,6 +16397,7 @@
       "saveFailed": "Falha ao salvar a faixa da janela de contexto"
     },
     "agentStatus": {
+      "preparingSend": "Preparando envio…",
       "waitingRemoteResponse": "Aguardando a resposta remota…",
       "readingMemory": "Lendo a memória…",
       "savingMemory": "Salvando memória…",

@@ -104,6 +104,7 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     queueInteractionLocks: readStringArray(record?.queueInteractionLocks),
     queueEditLocks: readStringArray(record?.queueEditLocks),
     queueAbortPending: record?.queueAbortPending === true,
+    sendPreparationPending: record?.sendPreparationPending === true,
     error: readString(record?.error),
     errorReason: readString(record?.errorReason),
     toolLoop: parseMobileToolLoopErrorDetails(record?.toolLoop),

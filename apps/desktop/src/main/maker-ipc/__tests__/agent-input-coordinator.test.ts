@@ -925,11 +925,13 @@ describe('queued welcome dispatch receipts', () => {
       expect(providerSend).not.toHaveBeenCalled();
       expect(settled).not.toHaveBeenCalled();
       expect(h.coordinator.getProjection('welcome-session').error).toBeNull();
+      expect(h.coordinator.getProjection('welcome-session')).toMatchObject({ sendPreparationPending: true });
       if (action === 'stop') h.coordinator.stop('welcome-session');
       writerGate.resolve();
       await change;
       await expect(result).resolves.toBe(action === 'recover');
       expect(settled).toHaveBeenCalledOnce();
+      expect(h.coordinator.getProjection('welcome-session')).toMatchObject({ sendPreparationPending: false });
       if (action === 'recover') {
         expect(providerSend).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: 'Say hello.' }, expect.objectContaining({ toolsDisabled: true }));
         expect(inputIds).toEqual(['welcome', 'welcome']);

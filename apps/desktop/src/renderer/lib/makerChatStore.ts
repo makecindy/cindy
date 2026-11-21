@@ -2905,6 +2905,8 @@ export interface SessionChatState {
    * decides when dispatch is actually safe.
    */
   queueAbortPending: boolean;
+  /** Host-owned pre-dispatch work; not a claim that the model is running. */
+  sendPreparationPending: boolean;
   /**
    * Pure visual state for queues longer than the inline limit. It only decides
    * whether the tail after the first three rows is visible; it must never gate
@@ -3068,6 +3070,7 @@ export type SessionChatLightState = Pick<
   | 'queueEditLocks'
   | 'queueInteractionLocks'
   | 'queueAbortPending'
+  | 'sendPreparationPending'
   | 'queueExpanded'
   | 'fastMode'
   | 'planModeEnabled'
@@ -3153,6 +3156,7 @@ function createInitialState(): SessionChatState {
     queueInteractionLocks: [],
     queueEditLocks: [],
     queueAbortPending: false,
+    sendPreparationPending: false,
     queueExpanded: false,
     fastMode: false,
     planModeEnabled: false,
@@ -3240,6 +3244,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   queueInteractionLocks: [],
   queueEditLocks: [],
   queueAbortPending: false,
+  sendPreparationPending: false,
   queueExpanded: false,
   fastMode: false,
   planModeEnabled: false,
@@ -5314,6 +5319,7 @@ function applyInputProjection(
       queueInteractionLocks: projection.queueInteractionLocks,
       queueEditLocks: projection.queueEditLocks,
       queueAbortPending: projection.queueAbortPending,
+      sendPreparationPending: projection.sendPreparationPending === true,
       error: projection.error,
       usageLimitRecovery,
       // projection 覆盖 error(dispatch 失败等,无 reason 语义)→ reason 一并清,
@@ -5454,13 +5460,13 @@ function requestInputProjection(
             setState(sessionId, forceFinalizeOnSessionClosed);
           } else if (hostRecovery && projection.turnInProgress === true) {
             setState(sessionId, s => ({
-              ...s, isStreaming: true,
+              ...s, isStreaming: projection.sendPreparationPending !== true,
               agentStatus: {
                 ...s.agentStatus,
-                isRunning: true,
+                isRunning: projection.sendPreparationPending !== true,
                 // 断连期间新起的一轮：这个窗口从没见过它开始，必须铸一个新时钟。
                 // 沿用上一轮的残留会让这一轮的失败看起来是重复告警，主进程按 id 直接吞掉。
-                ...turnClockForRunning(s.agentStatus),
+                ...(projection.sendPreparationPending ? { startedAt: null } : turnClockForRunning(s.agentStatus)),
               },
             }));
           }
@@ -6822,6 +6828,7 @@ export function handleStreamEvent(
         // agent-meta: turn 结束清空，下一 turn 重新累积。
         lastAgentMeta: null,
         queueAbortPending: false,
+        sendPreparationPending: false,
         // cancelled terminal 会广播到同一 session 的所有窗口；把它投影成 session 级
         // Stop 标记，避免非发起窗口把不完整回复误当正常完成并触发付费推荐。
         turnStoppedByUser: state.turnStoppedByUser || terminalCancelled,
@@ -6995,6 +7002,7 @@ export function handleStreamEvent(
         activeTurnRetryText: null,
         continuationTurnClientId: null,
         queueAbortPending: false,
+        sendPreparationPending: false,
         streamingText: '', // MEM-4: finalizeStreamingInState intentionally keeps streamingText for
         // the 'done' path to consume — reset it explicitly on error so the
         // accumulated delta text doesn't linger in memory.
@@ -7472,6 +7480,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     state.pendingRemoteDesktopConfirmationQueue.length === 0 &&
     !state.messages.some((m) => m.isStreaming) &&
     !state.queueAbortPending &&
+    !state.sendPreparationPending &&
     state.steeringQueueClientIds.length === 0 &&
     state.continuationInFlightClientId === null &&
     state.continuationTurnClientId === null &&
@@ -7542,6 +7551,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingRemoteDesktopConfirmation: null,
     pendingRemoteDesktopConfirmationQueue: [],
     queueAbortPending: false,
+    sendPreparationPending: false,
     steeringQueueClientIds: [],
     continuationInFlightClientId: null,
     continuationTurnClientId: null,
@@ -10557,6 +10567,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     queueEditLocks: state.queueEditLocks,
     queueInteractionLocks: state.queueInteractionLocks,
     queueAbortPending: state.queueAbortPending,
+    sendPreparationPending: state.sendPreparationPending,
     queueExpanded: state.queueExpanded,
     fastMode: state.fastMode,
     planModeEnabled: state.planModeEnabled,
@@ -10613,6 +10624,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.queueEditLocks === b.queueEditLocks &&
     a.queueInteractionLocks === b.queueInteractionLocks &&
     a.queueAbortPending === b.queueAbortPending &&
+    a.sendPreparationPending === b.sendPreparationPending &&
     a.queueExpanded === b.queueExpanded &&
     a.fastMode === b.fastMode &&
     a.planModeEnabled === b.planModeEnabled &&
@@ -16937,6 +16949,7 @@ function stopSession(
       streamingClientId: null,
       streamingText: '',
       isStreaming: false,
+      sendPreparationPending: false,
       recoverableError: null,
       activeTurnRetryText: null,
       errorRetryText: null,
@@ -17600,6 +17613,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       steeringQueueClientIds: [],
       queuePaused: false,
       queueAbortPending: false,
+      sendPreparationPending: false,
       queueInteractionLocks: [],
       queueEditLocks: [],
       // F-QUEUE-DEFER: queue panel auto-collapses with the queue.

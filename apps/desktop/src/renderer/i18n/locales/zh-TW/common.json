@@ -16172,6 +16172,7 @@
       "saveFailed": "儲存上下文視窗檔位失敗"
     },
     "agentStatus": {
+      "preparingSend": "正在準備傳送…",
       "waitingRemoteResponse": "正在等待遠端回應…",
       "readingMemory": "正在讀取記憶…",
       "savingMemory": "正在儲存記憶…",

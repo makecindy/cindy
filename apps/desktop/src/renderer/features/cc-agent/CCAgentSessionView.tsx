@@ -1945,6 +1945,7 @@ function CCAgentSessionContent({
     agentStatus,
     isStreaming,
     isAgentBusy,
+    sendPreparationPending,
     sendMessage,
     compactSession,
     steerMessage,
@@ -2753,7 +2754,10 @@ function CCAgentSessionContent({
   const startingSessions = useStartingSessionIds(settledStartingSessions);
   const waitingRemoteStart = Boolean(statusAgentDeviceId && sessionId
     && startingSessions.has(sessionId) && !settledStartingSessions.has(sessionId));
-  const composerStatus = runningWorkflow
+  const preparingSend = sendPreparationPending && !agentStatus.isRunning && !isStreaming;
+  const composerStatus = preparingSend
+    ? t('ccAgent.agentStatus.preparingSend')
+    : runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
       : t('ccAgent.agentStatus.waitingWorkflow')
@@ -6195,7 +6199,7 @@ function CCAgentSessionContent({
 
   const composerRuntimeVisible =
     !pendingPlanReview &&
-    (agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
+    (preparingSend || agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
   const originDeviceId = rightSidebarDeviceLinkDeviceId ?? null;
   const originAccessAvailable = !readOnly && !remoteSessionUnavailable && !isSharedTaskPeer(originDeviceId ?? '');
 
@@ -6485,7 +6489,7 @@ function CCAgentSessionContent({
                   endedAt={session?.id === sessionId ? session?.lastTurnEndedAt ?? null : null}
                   status={composerStatus}
                   reconnectStatus={reconnectStatus}
-                  preparing={waitingRemoteStart}
+                  preparing={preparingSend || waitingRemoteStart}
                   tokenUsage={waitingRemoteStart ? 0 : agentStatus.tokenUsage}
                   outputTokens={waitingRemoteStart ? 0 : agentStatus.outputTokens ?? 0}
                   generationDurationMs={waitingRemoteStart ? 0 : agentStatus.generationDurationMs ?? 0}
@@ -7356,7 +7360,7 @@ export function RunningStatusBar({
   className,
 }: {
   status: string;
-  /** No current runtime metrics exist while a remote send is still being prepared. */
+  /** Pre-dispatch input or remote acceptance wait; not active model generation. */
   preparing?: boolean;
   /** Same pending row / continuation owner as the message stream; overrides stale agent status. */
   reconnectStatus?: string | null;
@@ -7466,6 +7470,7 @@ export function RunningStatusBar({
   // 「模型用量仍在消耗」对不调模型的 bash 任务是错误陈述。
   const displayStatus =
     reconnectStatus ??
+    (preparing ? localizeAgentStatus(status, t) : undefined) ??
     workflowStatus ??
     (backgroundTasksRunning
       ? backgroundBashOnlyCount > 0
