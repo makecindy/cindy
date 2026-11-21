@@ -46,8 +46,9 @@ export interface AtResourceItem {
   relPath: string;
   /** Agent description from YAML frontmatter (agents only). */
   description?: string;
-  /** Plugin display name for plugin rows and Agent projection. */
+  /** Source project or plugin name for candidates outside the current working directory. */
   sourceLabel?: string;
+  sourceRelativePath?: string;
   /** Stable Plugin id. Present on plugin rows only. */
   pluginId?: string;
   /** Installed plugin icon as a validated data URL. Present on plugin rows when declared. */
@@ -90,6 +91,8 @@ export interface AtResourceScanContext {
   sessionId?: string;
   /** False for SSH/device-link so candidates never leak from the controller machine. */
   includeLocalContext?: boolean;
+  /** Let Main resolve linked roots for an explicit local buddy query. */
+  includeBuddyFiles?: boolean;
   /** Historical tasks are read from the execution device's local database. */
   includeTaskHistory?: boolean;
   /** Resolved i18n label used to match and display untitled tasks. */
@@ -165,14 +168,16 @@ function normalizeWorkspaceResources(res: RawWorkspaceScan | null): AtResourceIt
   for (const item of res?.items ?? []) {
     if (item.type === 'file') {
       const bare = item.name.replace(/\.md$/, '');
-      if (agentNames.has(bare)) {
+      if (!item.sourceLabel && agentNames.has(bare)) {
         log.warn(`File "${item.relPath}" conflicts with agent "${bare}"; agent wins.`);
         continue;
       }
       files.push({
         type: 'file', name: item.name, relPath: item.relPath,
+        ...(item.sourceLabel ? { sourceLabel: item.sourceLabel } : {}),
+        ...(item.sourceRelativePath ? { sourceRelativePath: item.sourceRelativePath } : {}),
         _nameLower: item.name.toLowerCase(),
-        _relPathLower: item.relPath.toLowerCase(),
+        _relPathLower: (item.sourceRelativePath ?? item.relPath).toLowerCase(),
       });
     } else if (item.type === 'dir') {
       dirs.push({
@@ -348,13 +353,16 @@ export async function scanAtResources(
   if (!workingDir && !includeLocalContext && !includeTaskHistory) {
     return { success: false, error: 'workingDir not bound', items: [], truncated: false };
   }
+  const localSearchSessionId = context?.includeBuddyFiles && includeLocalContext && query?.trim() ? context.sessionId : undefined;
   const workspacePromise: Promise<RawWorkspaceScan | null> = workingDir
     ? deviceId
       ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:scan-at-resources', [
           agentKind,
           { workingDir, cap, query },
         ]) as Promise<RawWorkspaceScan>)
-      : window.electronAPI.maker.scanAtResources(agentKind, { workingDir, cap, query })
+      : window.electronAPI.maker.scanAtResources(agentKind, {
+          workingDir, cap, query, ...(localSearchSessionId ? { sessionId: localSearchSessionId } : {}),
+        })
     : Promise.resolve(null);
   const contextPromise = includeLocalContext
     ? window.electronAPI.maker.listAtContext({

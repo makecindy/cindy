@@ -7605,12 +7605,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     scanAtResources: (
       agentKind: 'claude-code' | 'codex' | 'pi',
-      params: { workingDir: string; cap?: number; query?: string },
+      params: { workingDir: string; cap?: number; query?: string; sessionId?: string },
     ): Promise<{
       success: boolean;
       error?: string;
       items?: Array<
-        | { type: 'file'; name: string; relPath: string; description?: string }
+        | { type: 'file'; name: string; relPath: string; description?: string; sourceLabel?: string; sourceRelativePath?: string }
         | { type: 'dir'; name: string; relPath: string; description?: string }
         | { type: 'agent'; name: string; relPath: string; description?: string }
       >;

@@ -126,3 +126,5 @@ export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from
 export { VoiceCallContext, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
 
 export { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, isolatedBotProfile } from './agents/base-agent.js';
+
+export { scanWorkspaceFileResources } from './agents/shared/palette-scanner.js';

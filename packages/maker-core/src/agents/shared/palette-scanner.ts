@@ -137,7 +137,14 @@ async function readMarkdownDescription(filePath: string): Promise<string | undef
 export async function scanWorkspaceFileResources(
   workingDir: string,
   cap?: number,
-  opts?: { skipRelDirs?: Iterable<string>; query?: string },
+  opts?: {
+    skipRelDirs?: Iterable<string>;
+    query?: string;
+    maxDirectories?: number;
+    includeDirectories?: boolean;
+    includePath?: (absolutePath: string) => boolean;
+    shouldContinue?: () => boolean;
+  },
 ): Promise<ScanAtResourcesResult> {
   const max = clampCap(cap);
   const query = normalizeQuery(opts?.query);
@@ -150,8 +157,14 @@ export async function scanWorkspaceFileResources(
   const items: AtResourceItem[] = [];
   const queue: string[] = [workingDir];
   let truncated = false;
+  let visited = 0;
 
   while (queue.length > 0 && items.length < max) {
+    if (opts?.shouldContinue?.() === false || visited >= (opts?.maxDirectories ?? Infinity)) {
+      truncated = true;
+      break;
+    }
+    visited += 1;
     const cur = queue.shift()!;
     let entries: import('node:fs').Dirent[];
     try {
@@ -169,10 +182,11 @@ export async function scanWorkspaceFileResources(
       if (ent.name.startsWith('.') && ent.name !== '.claude') continue;
 
       const abs = path.join(cur, ent.name);
+      if (opts?.includePath?.(abs) === false) continue;
       const rel = toPosixRel(workingDir, abs);
       if (ent.isDirectory()) {
         if (IGNORE_DIRS.has(ent.name) || skipRelDirs.has(rel)) continue;
-        if (matchesResourceQuery(ent.name, rel, query)) {
+        if (opts?.includeDirectories !== false && matchesResourceQuery(ent.name, rel, query)) {
           items.push({ type: 'dir', name: ent.name, relPath: rel });
         }
         queue.push(abs);
