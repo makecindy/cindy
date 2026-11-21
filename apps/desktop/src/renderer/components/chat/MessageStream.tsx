@@ -7052,7 +7052,8 @@ export function MessageStream({
                             {shareable && shareSelectionActive ? (
                               <ShareMessageCheckbox clientId={msg.clientId} />
                             ) : null}
-                            {msg.role === 'assistant' && msg.systemCardType === 'mcp-app'
+                            {((msg.role === 'assistant' && msg.systemCardType === 'mcp-app') ||
+                              (msg.role === 'user' && !msg.systemCardType && msg.hookSource))
                               ? withAssistantAvatar(botReplyColumnSpacer, messageNode)
                               : messageNode}
                           </div>

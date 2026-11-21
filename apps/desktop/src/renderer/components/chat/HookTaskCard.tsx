@@ -23,6 +23,7 @@ import {
   type ImMessageOrigin,
   type ImMessageSource,
 } from '../../../shared/imMessageSource';
+import { displayImContext } from './userMessageDisplayText';
 import { mayExceedVisualLineThreshold, useUserMessageAutoCollapse } from './userMessageCollapse';
 
 type ThreadContextEntry = NonNullable<ImMessageSource['threadContext']>[number];
@@ -78,6 +79,8 @@ export function imLabel(im: string, t: TFunction): string {
       return t('settings.feishuBot.services.feishu');
     case 'lark':
       return t('settings.feishuBot.services.lark');
+    case 'imessage':
+      return t('bots.channels.platform.imessage');
     case 'discord':
       return t('settings.about.social.discordLabel');
     case 'wechat':
@@ -242,11 +245,11 @@ export default function HookTaskCard({
                         ? t('chat.threadContext.referencedMessages', { count: replyCount })
                         : t('chat.threadContext.referencedContext')}
                     </h4>
-                    {hasReplyContext && <div className="chat-content-text whitespace-pre-wrap">{replyContext}</div>}
+                    {hasReplyContext && <div className="chat-content-text whitespace-pre-wrap">{displayImContext(im, replyContext, 'reply')}</div>}
                     {entries.map((entry, i) => (
                       // biome-ignore lint/suspicious/noArrayIndexKey: 消息内容不可变,index 稳定。
                       <div key={i} className="chat-content-text whitespace-pre-wrap">
-                        <bdi className="font-semibold">[{entry.author}]</bdi> {entry.text}
+                        <bdi className="font-semibold">[{entry.author}]</bdi> {displayImContext(im, entry.text, 'reply')}
                       </div>
                     ))}
                   </section>
@@ -261,7 +264,7 @@ export default function HookTaskCard({
                         ? t('chat.threadContext.groupBackgroundCount', { count: groupCount })
                         : t('chat.threadContext.groupBackground')}
                     </h4>
-                    <div className="chat-content-text whitespace-pre-wrap">{groupContext}</div>
+                    <div className="chat-content-text whitespace-pre-wrap">{displayImContext(im, groupContext, 'group')}</div>
                   </section>
                 )}
               </div>
