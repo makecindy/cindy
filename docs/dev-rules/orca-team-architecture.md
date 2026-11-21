@@ -450,6 +450,28 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 
 #### 消息派发与 auto-bridge
 
+#### Worker 结构化回报（六态）
+
+`send_to_lead` **必须**携带 `report`：`state`（`waiting` / `ready` / `blocked` / `failed` / `dropped`，五态定义只写在 `state` 字段描述里）+ 单条 `question`、`summary`、`verification`、`risk`。必填约束落在工具 schema 上：能发但字段可选的结果就是没人填（#9818 上线后 184 次调用 0 次使用），所以不靠提示词反复说服。旧运行时（schema 缓存里没有该字段）仍按自由文本降级，宿主留一行 `send_to_lead without report` 日志供统计。
+
+**回报内容是 Lead 要读的东西，不是宿主私货回执**：`report` 与 `message` 一起组成派发正文（`[Orca Worker report: <state>]` + Question / Summary / Verification / Risk），同时进
+Lead 的消息流与历史记录。只放进回执等于没送——Worker 可以写一句 `Done`，但证据与问题必须随正文到达 Lead。
+
+映射与结算规则（映射只有 `applyWorkerReportState` 一处，重复调用是最新一份覆盖）：
+
+- `progress` **不进 `send_to_lead`**：它是遥测不是结论，走独立的 `report_progress` 工具——只经 Worker link 落 `latest_report` 并广播，从工具层就不接触派发、Lead 会话、队列与结算。`send_to_lead` 的 `report.state` 枚举（`ORCA_WORKER_SETTLING_REPORT_STATES`）只收五个终段状态，schema 层拒收 progress，处理器另有 fail-closed 拒绝（防绕过 schema 的直连调用）。远端桥（`orcaRemoteWorkerBridge.handle`）对载有 progress 的成功回执跳过结算——即便旧执行端经旧 schema 送达，派活也不得被遥测退役。本轮若没有终段回报，turn 结束仍走既有文本 auto-bridge。
+- `waiting` 结算欠回报，映射时 worker 置 `idle`（不进完成待确认）。
+- `ready` 结算欠回报，映射时按本轮终态置 `done`/`error`（既有语义）。
+- `blocked` 结算欠回报，置 `done` 并携带 `question`：一轮干净结束、只是在等人回答，不是执行异常；问题随正文到达 Lead 后由 Lead 收口。
+- `failed` 结算欠回报，置 `error` 并携带 `question`。`blocked` 缺 `question` 时 bridge 直接拒绝，不派发。
+- `dropped` 结算欠回报，置 `done`：本轮没有产出任何值得看的结果，不单独提醒。
+
+六态只存在于回报层与 Lead 的消息流，不向宿主面板投射任何标记或徽章：Worker 面板保持上游的 `idle/running/done/error` 与既有红/蓝/绿 attention（出错与等确认仍由 Worker 自己的 attention 汇总），避免宿主为 Lead 侧的工作流状态付出注意力预算。
+
+映射的时序：终态先到时由终态侧映射；**终态先到、回报后到**（在途回执晚于 turn 终止事件）时由回报侧在同一 worker transition 内补映射，否则晚到的 `waiting` / `blocked` 会永久停在 `done`。每份新回报都覆盖 `latest_report`，后续消费者不读旧问题；settling 终段回报入档后迟到的 `progress` 不再覆盖（遥测不得洗掉已结算的结论）。
+
+`worker status` 枚举保持 `idle/running/done/error` 不变——结构化状态属于回报层，不是新的 worker 状态轴（质量裁决与验收仍由 Lead 侧承担）。需人工处理的回报不另开一条 Worker 通知：任务的通知 owner 仍是 Lead（Worker 完成不单独通知的既有裁决），问题随正文到达 Lead 后由那一轮以 Lead 名义统一通知。远端 Worker（运行设备/SSH）第一期维持历史回读 + 文本回报，`latest_report` 由本机回报路径写入。
+
 1. **忙碌目标不丢消息（状态：不变量）**<br>
    Lead/Worker 互发消息时，如果目标 session 正在跑 turn、存在 queue lock，或刚好在派发竞态里返回 `SESSION_RUNNING`，默认进入输入队列。只有发送方显式选择 `delivery='steer'` 时才按 1b 尝试同轮插话；auto-bridge 等系统补报永远不传 `delivery`。已尝试插话后的拒绝不能当成普通忙碌重发。实现指针：`orcaInterAgentDispatcher.ts` 的 `dispatchOrEnqueueOrcaInterAgentMessage`，以及 `register.ts` 的 `AgentInputCoordinator` wiring。
 

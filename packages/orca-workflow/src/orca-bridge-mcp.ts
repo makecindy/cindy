@@ -169,6 +169,15 @@ export interface OrcaBridgeMcpDeps {
     sessionId: string,
   ) => (accepted: boolean, receipt?: OrcaWorkerReportReceipt) => Promise<void>;
   /**
+   * Persist a report-only update (progress) without dispatching it to the Lead and
+   * without settling the assignment: internal progress must cost neither a model turn
+   * nor a queued message.
+   */
+  recordWorkerReport?: (
+    sessionId: string,
+    report: OrcaStructuredWorkerReport,
+  ) => Promise<void>;
+  /**
    * Worker-scoped view and control of the Worker's own reports still waiting in its Lead's
    * queue. The bridge passes the attested Worker link; callers never choose a session id.
    */
@@ -220,6 +229,73 @@ export type OrcaMessageDelivery = 'queue' | 'steer';
 export interface OrcaWorkerReportReceipt {
   delivered: boolean;
   queuedMessageId?: string;
+  /** 本次回报携带的结构化状态;缺省 = 旧的自由文本回报。 */
+  report?: OrcaStructuredWorkerReport;
+}
+
+/**
+ * Worker 结构化回报的六态。
+ * progress 只是内部进度(不结算、不打扰);waiting 是本轮干净结束;
+ * ready 完成有结论;blocked / failed 等人工;dropped 无需处理。
+ */
+export const ORCA_WORKER_REPORT_STATES = [
+  'progress',
+  'waiting',
+  'ready',
+  'blocked',
+  'failed',
+  'dropped',
+] as const;
+export type OrcaWorkerReportState = (typeof ORCA_WORKER_REPORT_STATES)[number];
+
+/**
+ * send_to_lead 只接受五个终段状态。progress 是遥测不是结论：走独立的
+ * report_progress 工具，从结构上与派发/Lead/队列/结算互不相干。
+ */
+export const ORCA_WORKER_SETTLING_REPORT_STATES = [
+  'waiting',
+  'ready',
+  'blocked',
+  'failed',
+  'dropped',
+] as const;
+export type OrcaWorkerSettlingReportState = (typeof ORCA_WORKER_SETTLING_REPORT_STATES)[number];
+
+/**
+ * 结构化回报的 Lead 可见文本。报告是 Lead 要读的内容,不是宿主私货回执:
+ * 证据与问题必须跟 message 一起进入 Lead 的消息和历史记录。
+ */
+export function formatWorkerReportForLead(
+  report: OrcaStructuredWorkerReport,
+  message: string,
+): string {
+  const section = (label: string, value?: string) =>
+    value && value.trim() ? `${label}: ${value.trim()}` : null;
+  const lines = [
+    message.trim(),
+    '',
+    `[Orca Worker report: ${report.state}]`,
+    ...[
+      section('Question', report.question),
+      section('Summary', report.summary),
+      section('Verification', report.verification),
+      section('Risk', report.risk),
+    ].filter((line): line is string => line !== null),
+  ];
+  return lines.join('\n');
+}
+
+/** 结构化回报载荷;缺省时与本变更前完全一致。 */
+export interface OrcaStructuredWorkerReport {
+  state: OrcaWorkerReportState;
+  /** 至多一条、具体可回答的问题;blocked 时必须给出。 */
+  question?: string;
+  /** 本次做了什么、结果是什么。 */
+  summary?: string;
+  /** 实际跑过的验证。 */
+  verification?: string;
+  /** 已知风险或未覆盖项。 */
+  risk?: string;
 }
 
 /** 经 resolveWorkerLink 核实的 Worker 身份。 */
@@ -324,20 +400,36 @@ const ORCA_SEND_OWNER = 'orca-workflow';
 /** Tools that change what the Lead reads; nested agents report to the Worker instead. */
 const ROOT_ONLY_WORKER_TOOLS: ReadonlySet<string> = new Set([
   'send_to_lead',
+  'report_progress',
   'update_queued_report',
   'cancel_queued_report',
   'merge_queued_reports',
 ]);
+/** 远程 Worker 通道白名单；与 @cindy/device-link 的 ORCA_REMOTE_WORKER_BRIDGE_TOOLS 同步维护。 */
+const REMOTE_WORKER_SERVED_TOOLS: ReadonlySet<string> = new Set([
+  'send_to_lead',
+  'read_lead_history',
+  'read_lead',
+  'lead_status',
+]);
 const SAFE_ERROR_NAME_RE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 const SAFE_SEND_ERROR_CODES = new Set(['SESSION_RUNNING']);
 
+export const REPORT_PROGRESS_TOOL_DESCRIPTION = [
+  'Pass the worker_id.',
+  'Internal telemetry only: records progress for the panel without contacting, waking, or queueing anything for the Lead.',
+  'Never carries a question; if a person must answer, that is send_to_lead with state=blocked.',
+  'The assignment keeps running; this tool settles nothing.',
+].join(' ');
+
 export const SEND_TO_LEAD_TOOL_DESCRIPTION = [
   'Pass the worker_id from the latest Lead message.',
-  'This tool is the assigned Orca Worker\'s direct reporting channel to the Lead.',
+  'The assigned Orca Worker\'s direct reporting channel to the Lead.',
   'Native subagents are internal helpers, so they return findings to the Worker instead of calling this tool.',
-  'Call once per turn, only with the final report or one blocking question.',
+  'Call once per turn with the final report or one blocking question; do not send progress, partial findings, or same-turn corrections.',
+  'Set report.state and put the full evidence (summary / verification / risk) there, not in extra messages.',
+  'At most one concrete question; mark drafts unfinished.',
   'After a question, stop and wait for send_to_worker.',
-  'Combine all results; do not send progress, partial findings, or same-turn corrections.',
   'If the Lead is blocked waiting on this report, delivery=steer delivers it into the Lead\'s current turn; otherwise keep the default.',
 ].join(' ');
 
@@ -937,6 +1029,11 @@ interface WorkerBridgeInvokeOptions {
   reportClientId?: string;
   /** Host-only proof that dispatch returned a definite rejection, not an exception. */
   onReportRejected?: () => void;
+  /**
+   * 远端桥专用：来源电脑的版本还没有 `report` 字段，其模型无从填写。
+   * 桥接端已核实同账号身份与会话归属，这里按旧自由文本契约放行，只留一行 warn。
+   */
+  allowLegacyReport?: boolean;
 }
 
 export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
@@ -964,6 +1061,43 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
       }
 
       register(
+        'report_progress',
+        REPORT_PROGRESS_TOOL_DESCRIPTION,
+        {
+          worker_id: z.string().min(1).describe('Required. Your assigned worker_id.'),
+          summary: z.string().min(1).describe('One or two sentences: what is done so far.'),
+        },
+        async ({ worker_id, summary }) => {
+          const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
+          if (!authorization.ok) return text(authorization.error, true);
+          // 结构上不碰 Lead：不 resolveLead、不派发、不结算、不带问题——遥测与结论两条通道
+          // 从工具层分开，send_to_lead 侧的任何进度语义都无从谈起。
+          const workerResolved = await resolveWorkerLink(deps, ctx, worker_id);
+          if (!workerResolved.ok) return text(workerResolved.error, true);
+          if (!deps.recordWorkerReport) {
+            return text({ error: 'progress recording unavailable on this host', worker_id }, true);
+          }
+          try {
+            await deps.recordWorkerReport(workerResolved.link.workerSessionId, {
+              state: 'progress',
+              summary,
+            });
+          } catch (err) {
+            log.warn('record worker progress failed', {
+              err: err instanceof Error ? err.message : String(err),
+              workerId: workerResolved.link.workerId,
+            });
+            return text({ error: 'failed to record progress', worker_id }, true);
+          }
+          return text({
+            ok: true,
+            recorded: 'progress',
+            worker_id: workerResolved.link.workerId,
+          });
+        },
+      );
+
+      register(
         'send_to_lead',
         SEND_TO_LEAD_TOOL_DESCRIPTION,
         {
@@ -973,8 +1107,42 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             .enum(['queue', 'steer'])
             .optional()
             .describe('queue (default) = deliver now or queue behind the Lead\'s current turn; steer = try to enter the Lead\'s current turn.'),
+          report: z
+            .object({
+              state: z.enum(ORCA_WORKER_SETTLING_REPORT_STATES)
+                .describe('waiting = turn ended cleanly with nothing pending; ready = finished and verified; blocked = a person must answer (report.question required); failed = cannot continue; dropped = nothing for a person to act on. progress is NOT accepted here — it belongs to the report_progress tool.'),
+              question: z.string().min(1).optional()
+                .describe('At most one concrete, answerable question. Required when state is blocked.'),
+              summary: z.string().min(1).optional(),
+              verification: z.string().min(1).optional()
+                .describe('Checks actually run, or why none were run.'),
+              risk: z.string().min(1).optional(),
+            })
+            // 五态语义只在 state 上写一次；这里不复制，避免两份说明各自漂移。
+            .describe('Required. The turn\'s conclusion; state carries the five settling states.'),
         },
-        async ({ message, worker_id, delivery }) => {
+        async ({ message, worker_id, delivery, report }) => {
+          // fail-closed 兜底：直连 handler 或旧运行时绕过 schema 时，progress 也绝不
+          // 走派发（更不会走到远端结算），必须改走 report_progress。schema 类型已不含
+          // progress，这里按运行期输入（不可信）放宽判定。
+          const reportState = report?.state as OrcaWorkerReportState | undefined;
+          // 旧运行时带着旧 schema（里面没有 report）时仍走自由文本，不能让它发不出回报；
+          // 但要留一行痕迹：「没人填」和「没有发生」从这里分得开。
+          if (!reportState) log.warn('send_to_lead without report.state', { workerId: worker_id });
+          if (reportState === 'progress') {
+            return text({
+              error: 'progress is telemetry, not a conclusion: report it with the report_progress tool',
+              worker_id,
+            }, true);
+          }
+          if (report?.state === 'blocked' && !report.question?.trim()) {
+            return text({
+              error: 'a blocked report must carry one concrete question in report.question',
+              worker_id,
+            }, true);
+          }
+          // 结构化证据与问题必须跟 message 一起送达 Lead 并进入历史；只放进回执就等于没送。
+          const deliveredText = report ? formatWorkerReportForLead(report, message) : message;
           const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
           if (!authorization.ok) return text(authorization.error, true);
           // The host owns delivery and persistence. Resolving a recipient must
@@ -999,7 +1167,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             let reportReceipt: OrcaWorkerReportReceipt = { delivered: false };
             try {
               const result = await deps.dispatchInterAgentMessage({
-                targetSessionId: link.leadSessionId, rawContent: message, source: 'worker',
+                targetSessionId: link.leadSessionId, rawContent: deliveredText, source: 'worker',
                 senderLabel: link.workerId, workerId: link.workerId,
                 ...(options.reportClientId ? { reportClientId: options.reportClientId } : {}),
                 ...(delivery ? { delivery } : {}),
@@ -1016,9 +1184,11 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
                 return text({ error: 'Lead report was not accepted; the report remains with the Worker',
                   worker_id: link.workerId, lead_session_id: link.leadSessionId }, true);
               }
+              // 宿主派发这条路径是桌面实际走的入口；回执不带 report 会让结算端把它
+              // 当成旧自由文本回报，latestReport 与结论状态映射全部丢失。
               reportReceipt = result.mode === 'queued'
-                ? { delivered: false, queuedMessageId: result.clientId }
-                : { delivered: true };
+                ? { delivered: false, queuedMessageId: result.clientId, ...(report ? { report } : {}) }
+                : { delivered: true, ...(report ? { report } : {}) };
               return text({ ok: true,
                 ...(result.mode === 'queued' ? { queued: true } : {}),
                 ...(result.mode === 'steered' ? { steered: true } : {}),
@@ -1062,9 +1232,9 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               session: liveEntry.session,
               // 宿主派发路径(dispatchInterAgentMessage)会按 workerId 反查 role 再包前缀;
               // 这里是无宿主派发时的直发兜底,link 上没有 role,只带 worker_id。
-              message: { type: 'user', content: formatAgentMessage('worker', message, link.workerId) },
+              message: { type: 'user', content: formatAgentMessage('worker', deliveredText, link.workerId) },
               deps,
-              rawContent: message,
+              rawContent: deliveredText,
               source: 'worker',
               senderLabel: link.workerId,
               ...(delivery ? { delivery } : {}),
@@ -1097,8 +1267,8 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               // Host acceptance includes direct, queued and same-turn steered delivery.
               reportAccepted = true;
               reportReceipt = dispatchError.queued
-                ? { delivered: false, queuedMessageId: dispatchError.clientId }
-                : { delivered: true };
+                ? { delivered: false, queuedMessageId: dispatchError.clientId, ...(report ? { report } : {}) }
+                : { delivered: true, ...(report ? { report } : {}) };
               return text({
                 ok: true,
                 ...(dispatchError.steered ? { steered: true } : {}),
@@ -1122,7 +1292,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             markLeadDispatchAccepted();
             await deps.persistUserMessage(link.leadSessionId, {
               clientId: randomUUID(),
-              content: formatOrcaCommunicationMessage('worker', message),
+              content: formatOrcaCommunicationMessage('worker', deliveredText),
             }).catch((err) => {
               log.warn('persist lead message failed', {
                 err: String(err),
@@ -1131,7 +1301,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               });
             });
             reportAccepted = true;
-            reportReceipt = { delivered: true };
+            reportReceipt = { delivered: true, ...(report ? { report } : {}) };
             return text({
               ok: true,
               worker_id: link.workerId,
@@ -1380,7 +1550,11 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
     ctx: McpProviderContext, register: RegisterWorkerTool,
     options: WorkerBridgeInvokeOptions = {},
   ) => {
+    // 远程 Worker 只注册白名单工具的 schema：其余工具在本通道必然
+    // REMOTE_WORKER_NOT_SUPPORTED，不注册以免描述诱导出必然失败的调用。
+    const remoteWorkerOnly = ctx.vendorOptions?.orcaRemoteWorker === true;
     defineTools(ctx, (name, description, shape, handler) => {
+      if (remoteWorkerOnly && !REMOTE_WORKER_SERVED_TOOLS.has(name)) return;
       register(name, description, shape, async (args) => {
         const runtime = resolveRuntimeMcpContext(ctx);
         if (ROOT_ONLY_WORKER_TOOLS.has(name)) {
@@ -1426,7 +1600,12 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
     ): Promise<OrcaToolResult> {
       let invoke: (() => Promise<OrcaToolResult>) | undefined;
       registerRoutedTools(ctx, (name, _description, shape, handler) => {
-        if (name === tool) invoke = () => handler(z.object(shape).parse(args));
+        if (name !== tool) return;
+        // 必填的 report 只约束能看见新 schema 的模型；旧设备经桥接进来时没有这个字段。
+        const parsed: z.output<z.ZodObject<typeof shape>> = (options.allowLegacyReport && args.report === undefined
+          ? z.object({ ...shape, report: z.optional(shape.report) }).parse(args)
+          : z.object(shape).parse(args)) as z.output<z.ZodObject<typeof shape>>;
+        invoke = () => handler(parsed);
       }, options);
       if (!invoke) return text({ error: 'unknown worker bridge tool' }, true);
       return invoke();

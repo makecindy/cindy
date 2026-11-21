@@ -36,6 +36,7 @@ function worker(overrides: Partial<WorkerInfo> = {}): WorkerInfo {
     status: 'running',
     focused: true,
     idleSince: null,
+    reportState: null,
     ...overrides,
   };
 }

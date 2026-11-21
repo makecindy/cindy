@@ -25,6 +25,8 @@ export interface WorkerInfo {
   status: OrcaWorkerStatus;
   focused: boolean;
   idleSince: string | null;
+  /** 最新结构化回报的六态 state(progress/waiting/ready/blocked/failed/dropped);无回报为 null。 */
+  reportState: string | null;
   /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)；Agent 在任务所在电脑时无此字段。 */
   agentDeviceId?: string;
   /** 在同账号另一台电脑运行的 Worker；本机 Worker 无此字段。 */
@@ -202,6 +204,7 @@ function mapWorkerRecord(raw: Record<string, unknown>): WorkerInfo {
     status: (raw.status as WorkerInfo['status']) ?? 'idle',
     focused: (raw.focused as boolean) ?? false,
     idleSince: (raw.idleSince as string | null) ?? null,
+    reportState: (raw.latestReport as { state?: string } | null)?.state ?? null,
     ...(typeof session?.agentDeviceId === 'string' && session.agentDeviceId
       ? { agentDeviceId: session.agentDeviceId }
       : {}),

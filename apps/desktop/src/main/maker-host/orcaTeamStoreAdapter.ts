@@ -1,10 +1,10 @@
-import type { OrcaBridgeMcpDeps, OrcaWorkerLink } from '@cindy/orca-workflow';
+import type { OrcaBridgeMcpDeps, OrcaStructuredWorkerReport, OrcaWorkerLink } from '@cindy/orca-workflow';
 
 import type { OrcaWorkerLinkRecord, OrcaWorkerStatus } from '../localDb/orcaTeamStore.js';
 
 export interface DesktopOrcaTeamStoreAdapterDeps {
   getWorkerLink(input: { workerId?: string; workerSessionId?: string }): Promise<OrcaWorkerLinkRecord | null>;
-  updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
+  updateWorkerStatus(workerId: string, status: OrcaWorkerStatus, latestReport?: OrcaStructuredWorkerReport | null): Promise<void>;
   markKnownOrcaWorkerSession(workerSessionId: string): void;
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
   logger: { debug(message: string, meta?: Record<string, unknown>): void };
@@ -61,8 +61,11 @@ export function createDesktopOrcaTeamStoreAdapter(
       } satisfies OrcaWorkerLink & { teamId: string };
       return bridgeLink;
     },
-    updateWorkerStatus: async (workerId: string, status: OrcaWorkerStatus) => {
-      await deps.updateWorkerStatus(workerId, status);
+    updateWorkerStatus: async (workerId: string, status: OrcaWorkerStatus, latestReport?: OrcaStructuredWorkerReport | null) => {
+      // 没有结构化回报时保持旧的两参调用形状（既有适配器/监控依赖这个签名）。
+      await (latestReport === undefined
+        ? deps.updateWorkerStatus(workerId, status)
+        : deps.updateWorkerStatus(workerId, status, latestReport));
       const link = await deps.getWorkerLink({ workerId });
       if (link) {
         deps.broadcastOrcaWorkerChanged(link.leadSessionId);

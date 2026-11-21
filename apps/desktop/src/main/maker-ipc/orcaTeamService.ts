@@ -2,6 +2,7 @@ import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-shared/orca-team';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import type { OrcaStructuredWorkerReport } from '@cindy/orca-workflow';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
 import type {
   CollabDispatchFailureOutcome,
@@ -37,6 +38,8 @@ export interface OrcaWorkerRecordSnapshot {
   role: string;
   focused: boolean;
   idleSince: string | null;
+  /** 最新一份结构化回报；缺省/ null = 旧自由文本路径（行为不变）。 */
+  latestReport?: OrcaStructuredWorkerReport | null;
   session: {
     title: string;
     agentKind: EngineKind;
@@ -306,6 +309,8 @@ export type MergeWorkerQueuedMessagesResult =
 export interface WorkerReportReceipt {
   delivered: boolean;
   queuedMessageId?: string;
+  /** 本次回报携带的结构化状态；缺省 = 旧自由文本回报。 */
+  report?: OrcaStructuredWorkerReport;
 }
 
 export type WorkerReportWithdrawalStanding = 'covered' | 'last' | 'other-assignment' | 'untracked';
@@ -451,7 +456,9 @@ export interface OrcaTeamServiceDeps {
   }) => Promise<{ ok: true } | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' }>;
   /** 取消该 worker session 尚未落地的后台唤醒（focus 预热）；释放 runtime 前调用。 */
   cancelWorkerResume?(sessionId: string): void;
-  updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
+  updateWorkerStatus(workerId: string, status: OrcaWorkerStatus, latestReport?: OrcaStructuredWorkerReport | null): Promise<void>;
+  /** 只落最新结构化回报，不改状态（progress 与已映射过的终态用）。 */
+  setWorkerLatestReport(workerId: string, latestReport: OrcaStructuredWorkerReport | null): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
@@ -658,15 +665,46 @@ export interface OrcaTeamService {
   hasPendingWorkerReports(leadSessionId: string): boolean;
   restoreWorkerPendingReport(sessionId: string, input: { workerId: string; leadSessionId: string }): void;
   handleWorkerTurnStarted(sessionId: string): Promise<void>;
+  /** 只落库、不派发、不结算的结构化进度回报。 */
+  recordWorkerReport(sessionId: string, report: OrcaStructuredWorkerReport): Promise<void>;
+  /** 排队回报被改写/撤回/合并后，若投影正来自其中一条，投影必须失效。 */
+  workerReportQueuedContentMutated(sessionId: string, queuedMessageIds: readonly string[]): Promise<void>;
   captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture;
   /** Synchronous product boundary; never call for a suppressed vendor terminal. */
   noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void;
   handleWorkerTerminalTurn(params: WorkerTerminalTurnParams): Promise<void>;
 }
 
+/**
+ * 一轮的结构化回报账：已接受的结论、已映射的结论、真实终态、终态是否已观测。
+ * 派活轮（AutoBridgeState）与直连轮（directTurnOutcomes）共用这一本账、同一组字段、
+ * 同一套结算规则——两套实现各写各的，同一条规则就会在两侧漂移。
+ * 账随轮存活：应用结论不删账（删了同轮迟到的 progress 就能覆盖结论），只在下一轮开始时清。
+ */
+interface WorkerTurnLedger {
+  /** 本轮已接受的结论。非 progress 的状态已在收到回报时结算欠回报。 */
+  structuredReport?: OrcaStructuredWorkerReport;
+  /** 已按六态映射过的那份回报（引用比较）；同轮后续新结论仍要逐条映射。 */
+  appliedReport?: OrcaStructuredWorkerReport;
+  /** 本轮真实终态；晚到回报按它映射，避免覆盖 error。 有值即代表终态已观测。 */
+  terminalStatus?: 'done' | 'error';
+}
+
+/** 结论已入账（且非 progress）：同轮迟到的 progress 只能当遥测，不得覆盖结论。 */
+function ledgerHasConclusion(ledger: WorkerTurnLedger | undefined): boolean {
+  return Boolean(ledger?.structuredReport) && ledger!.structuredReport!.state !== 'progress';
+}
+
+/** 这份结论是否已映射过（引用比较）：映射过一次不再重复映射。 */
+function ledgerConclusionMapped(ledger: WorkerTurnLedger | undefined, report: OrcaStructuredWorkerReport): boolean {
+  return ledger?.appliedReport === report;
+}
+
 /** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
-interface AutoBridgeState {
+interface AutoBridgeState extends WorkerTurnLedger {
   pending: boolean;
+  /** latest_report 投影来自哪条排队回报；该条被改写/撤回/合并时投影必须失效。 */
+  latestReportQueuedId?: string;
   /** Reports of this assignment that reached the Lead directly or by same-turn steer. */
   deliveredReports: number;
   /**
@@ -710,7 +748,24 @@ export function findFocusTargetWorker<
 }
 
 export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamService {
+  // 回报投影的来源追踪：排队消息在 Worker 结束后仍可被改写，而终态处理会清掉
+  // autoBridge 条目；这里独立记录「面板上的 latest_report 来自哪条排队消息」，
+  // 保证改写检测覆盖整个可编辑期间（命中后删除）。
+  const pendingReportSourceBySession = new Map<string, string>();
+
+  /**
+   * 投影写进 worker 行时同步登记来源（没排队来源就是直发/插话回报，清掉旧来源）。
+   * 终态收尾会清掉派活条目，来源只存在这里；丢了就再也没法在队列内容被改写时作废这份投影。
+   */
+  function recordPendingReportSource(sessionId: string, queuedMessageId: string | undefined): void {
+    if (queuedMessageId) pendingReportSourceBySession.set(sessionId, queuedMessageId);
+    else pendingReportSourceBySession.delete(sessionId);
+  }
   const autoBridge = new Map<string, AutoBridgeState>();
+  // 直连轮（无派活）的账本：与派活轮共用 WorkerTurnLedger 的字段与结算规则。
+  // 回报与真实终态谁后到谁补全，按 turnGeneration 归属；保证 error 终态不被 ready 预写洗掉、
+  // 迟到 progress 不覆盖已落库结论。
+  const directTurnOutcomes = new Map<string, WorkerTurnLedger & { turnGeneration?: number }>();
   const queueControl = createSessionQueueControlService({
     getSnapshot: async (sessionId) => {
       const snapshot = await deps.getSessionQueueSnapshot(sessionId);
@@ -778,6 +833,54 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       ?? await deps.captureDeliveryAuthority?.(leadSessionId).catch(() => undefined)
       ?? opts.assertCurrent;
   };
+
+/**
+ * 结构化回报到 worker 状态与持久化的**唯一**映射点。
+ * 必须只由持有该派活的同一临界区调用；两次调用是幂等重放（最新一份回报覆盖旧的一份）。
+ * waiting 不进入完成待确认；dropped 无人工动作；blocked 等人回答但仍属正常终态；
+ * ready 跟随轮次真实终态；failed 才是执行异常。
+ */
+  // 六态映射核心：只依赖 worker 行标识，Lead 派活轮与直连轮都能走。
+  async function applyReportOutcome(
+    workerId: string,
+    leadSessionId: string,
+    report: OrcaStructuredWorkerReport,
+    turnStatus: 'done' | 'error',
+  ): Promise<void> {
+    // progress 只描述进度，不是本轮结论：它不能占用映射名额，否则晚到的 waiting /
+    // blocked / dropped 会因 reportApplied 被跳过，永久停在 done 且面板不更新。
+    if (report.state === 'progress') return;
+    await deps.setWorkerLatestReport(workerId, report);
+    switch (report.state) {
+      case 'waiting':
+        await deps.markWorkerIdle(workerId);
+        break;
+      case 'dropped':
+        await deps.updateWorkerStatus(workerId, 'done', report);
+        break;
+      case 'blocked':
+        // 一轮干净结束、只是在等人回答：不是执行异常。
+        await deps.updateWorkerStatus(workerId, 'done', report);
+        break;
+      case 'failed':
+        await deps.updateWorkerStatus(workerId, 'error', report);
+        break;
+      case 'ready':
+      default:
+        await deps.updateWorkerStatus(workerId, turnStatus, report);
+        break;
+    }
+    deps.broadcastOrcaWorkerChanged(leadSessionId);
+  }
+
+  async function applyWorkerReportState(
+    state: AutoBridgeState,
+    report: OrcaStructuredWorkerReport,
+    turnStatus: 'done' | 'error',
+  ): Promise<void> {
+    await applyReportOutcome(state.workerId, state.leadSessionId, report, turnStatus);
+    state.appliedReport = report;
+  }
 
   async function withWorkerTransition<T>(
     workerId: string,
@@ -1094,6 +1197,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     sessionId: string;
     worker: OrcaWorkerRecordSnapshot;
     previousStatus: OrcaWorkerStatus;
+    previousLatestReport: OrcaStructuredWorkerReport | null;
+    previousPendingReportSource: string | undefined;
     currentPending: AutoBridgeState | undefined;
     previousPending: AutoBridgeState | undefined;
     previousManualInterrupt: OrcaManualInterruptSnapshot | null;
@@ -1116,7 +1221,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     const currentWorker = workers.find((worker) => worker.id === params.worker.id);
     if (currentWorker?.status !== 'running') return true;
 
+    // 恢复状态时一并把派活清掉的旧回报还回去，否则标记与问题会从面板上消失。
     await deps.updateWorkerStatus(params.worker.id, params.previousStatus);
+    await deps.setWorkerLatestReport(params.worker.id, params.previousLatestReport);
+    // 排队回报的来源同样要还回去：否则改写那条排队消息会跳过清理，面板继续显示失效的「等回复」。
+    if (params.previousPendingReportSource) {
+      pendingReportSourceBySession.set(params.sessionId, params.previousPendingReportSource);
+    }
     deps.broadcastOrcaWorkerChanged(params.worker.leadSessionId);
     return true;
   }
@@ -1284,6 +1395,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             previousStatus: OrcaWorkerStatus;
             previousPending: AutoBridgeState | undefined;
             previousManualInterrupt: OrcaManualInterruptSnapshot | null;
+            /** 派活会清空上一轮的回报标记；发送失败回滚时必须把用户看过的结论还回去。 */
+            previousLatestReport: OrcaStructuredWorkerReport | null;
+            /** 派活会作废上一轮排队回报的来源；回滚必须一起还回去，否则改写旧消息会跳过清理。 */
+            previousPendingReportSource: string | undefined;
           }
         | undefined;
       let currentPending: AutoBridgeState | undefined;
@@ -1306,6 +1421,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
                 sessionId: target.sessionId,
                 worker: target,
                 previousStatus: snapshot.previousStatus,
+                previousLatestReport: snapshot.previousLatestReport,
+                previousPendingReportSource: snapshot.previousPendingReportSource,
                 currentPending,
                 previousPending: snapshot.previousPending,
                 previousManualInterrupt: snapshot.previousManualInterrupt,
@@ -1359,6 +1476,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               previousStatus: currentWorker.status,
               previousPending: autoBridge.get(target.sessionId),
               previousManualInterrupt: deps.getManualInterrupt(target.sessionId),
+              previousLatestReport: currentWorker.latestReport ?? null,
+              previousPendingReportSource: pendingReportSourceBySession.get(target.sessionId),
             };
             deps.clearManualInterrupt(target.sessionId);
             currentPending = setPending(target.sessionId, {
@@ -1378,6 +1497,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             };
             provisionalDispatches.set(target.sessionId, currentProvisional);
             await deps.updateWorkerStatus(target.id, 'running');
+            await deps.setWorkerLatestReport(target.id, null);
+            // 新轮接管面板：上一轮排队回报的来源作废，改写旧消息不再误清新轮投影。
+            pendingReportSourceBySession.delete(target.sessionId);
             deps.broadcastOrcaWorkerChanged(link.leadSessionId);
           });
           if (currentPending) await markPendingReady(target.sessionId, currentPending);
@@ -2309,11 +2431,120 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     clearAutoBridgeState(sessionId) {
       clearRuntimeState(sessionId);
     },
+    async workerReportQueuedContentMutated(sessionId, queuedMessageIds) {
+      const state = autoBridge.get(sessionId);
+      const sourceId = state?.latestReportQueuedId ?? pendingReportSourceBySession.get(sessionId);
+      if (!sourceId || !queuedMessageIds.includes(sourceId)) return;
+      const link = await deps.getWorkerLinkBySessionId(sessionId);
+      if (!link) return;
+      await withWorkerTransition(link.workerId, async () => {
+        const current = autoBridge.get(sessionId);
+        // 复核必须无条件：过渡期间更新的回执（含终局已清 AutoBridgeState 的直连轮）
+        // 可能已消费同一来源并写入更新的投影，旧队列改写不得再清它。
+        if ((current?.latestReportQueuedId ?? pendingReportSourceBySession.get(sessionId)) !== sourceId) return;
+        if (current) {
+          current.structuredReport = undefined;
+          current.latestReportQueuedId = undefined;
+        } else {
+          // 直连轮的结论记在同一本账里：来源消息被改写后，旧结论不得被终态分支复活。
+          const direct = directTurnOutcomes.get(sessionId);
+          if (direct) direct.structuredReport = undefined;
+        }
+        pendingReportSourceBySession.delete(sessionId);
+        // 消息内容已变，投影不再声称任何状态；面板回到无标记，通知不再复用旧问题。
+        await deps.setWorkerLatestReport(link.workerId, null);
+      });
+      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+    },
+    async recordWorkerReport(sessionId, report) {
+      // 捕获时的派活身份；await 之后可能已被新派活替换（那会清空 latest_report），
+      // 必须在同一 worker transition 内复核，否则旧进度会写进新一轮甚至挂到它的通知上。
+      const captured = autoBridge.get(sessionId);
+      // 直连轮（无派活）没有 identity 可比：归属必须在捕获时冻结运行实例与轮次代号，
+      // 写入前复核，否则换轮后的迟到 progress 会写进新轮的投影。
+      const capturedLive = deps.getLiveSession(sessionId);
+      const capturedGeneration = capturedLive?.getTurnGeneration?.();
+      const link = await deps.getWorkerLinkBySessionId(sessionId);
+      if (!link) return;
+      await withWorkerTransition(link.workerId, async () => {
+        // 身份复核必须无条件：直连 Worker 轮（无派活）的 captured 为 undefined，
+        // 若新派活恰好装上了新的 identity，旧进度同样不得写进它。
+        const current = autoBridge.get(sessionId);
+        if (current !== captured) return;
+        // 轮次身份复核：捕获到落地之间可能换了轮（直连轮不换派活条目，只把行改回 running）。
+        // 派活条目可能还在，但行已经属于新轮，迟到 progress 不得写进新轮的投影。
+        const live = deps.getLiveSession(sessionId);
+        const turnMovedOn = live !== capturedLive
+          || (live?.getTurnGeneration?.() ?? undefined) !== capturedGeneration;
+        // 直连轮：捕获时没有 live session、之后才出现的也算换轮。
+        // 派活轮：捕获时没有 live session 就无从比对，不据此丢进度。
+        if (turnMovedOn && (!current || capturedLive !== undefined)) return;
+        // 终段回报已被 send_to_lead 接受入档后，迟到的 progress 是遥测：不得覆盖结论，
+        // 否则终端回合会按 progress 跳过结算，把已判定的结论语义退化回 raw 状态。
+        if (ledgerHasConclusion(current)) return;
+        // 直连轮（无派活）：同一本账、同一套规则——结论已入档后，迟到 progress 同样是遥测。
+        if (!current && ledgerHasConclusion(directTurnOutcomes.get(sessionId))) return;
+        if (current) {
+          current.structuredReport = report;
+          // progress 不入队，没有可被队列编辑触碰的来源。
+          current.latestReportQueuedId = undefined;
+        }
+        // 只记最新进度：不结算欠回报、不改 worker 状态，面板与通知读得到即可。
+        // 新进度覆盖 latest_report 后，残留的旧排队来源会让改写误清这份进度。
+        pendingReportSourceBySession.delete(sessionId);
+        await deps.setWorkerLatestReport(link.workerId, report);
+      });
+      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+    },
     captureLocalWorkerReport(sessionId) {
       const state = autoBridge.get(sessionId);
       // Direct user turns have no Lead obligation. In particular, a late callback must
       // not look up and settle a new assignment that did not exist at capture time.
-      if (!state) return async () => {};
+      if (!state) {
+        // 直连轮也有结构化结论：保存并映射自己的结论，但不结算 Lead 的欠回报；
+        // 回调执行时若已有新派活认领该会话，本轮归属检查照旧放弃写入。
+        // 归属在回执创建时冻结：停止旧轮再发新消息会换运行实例并递增轮次代号，
+        // 迟到回执必须仍归属创建时的那一轮，不能靠回执返回后的现场重读。
+        const liveSession = deps.getLiveSession(sessionId);
+        const turnGeneration = liveSession?.getTurnGeneration?.();
+        return async (accepted, receipt) => {
+          const report = accepted ? receipt?.report : undefined;
+          if (!report || report.state === 'progress') return;
+          const link = await deps.getWorkerLinkBySessionId(sessionId);
+          if (!link) return;
+          await withWorkerTransition(link.workerId, async () => {
+            // capture 后有新派活认领该会话：本轮归属检查照旧放弃写入。
+            if (autoBridge.get(sessionId)) return;
+            // 新直连轮换实例或递增代号：旧回执不得写进新轮。
+            const currentLive = deps.getLiveSession(sessionId);
+            if (currentLive !== liveSession) return;
+            if ((currentLive?.getTurnGeneration?.() ?? undefined) !== turnGeneration) return;
+            const entry = directTurnOutcomes.get(sessionId);
+            const sameTurn = Boolean(entry) && entry!.turnGeneration === turnGeneration;
+            const status = sameTurn ? entry!.terminalStatus : undefined;
+            if (entry && !sameTurn) directTurnOutcomes.delete(sessionId);
+            // 入队来源与投影同登记，队列改写/撤回才能复核这份投影（与派活路径同款）。
+            recordPendingReportSource(sessionId, receipt?.queuedMessageId);
+            // 入账而不是覆盖：同一轮里先到的真实终态不能被后来的结论挤掉。
+            const ledger: WorkerTurnLedger & { turnGeneration?: number } = {
+              ...(sameTurn ? entry : undefined),
+              turnGeneration,
+              structuredReport: report,
+            };
+            directTurnOutcomes.set(sessionId, ledger);
+            if (status) {
+              // 终态先到：按真实终态映射（error 终态不得被 ready 预写洗成 done）。
+              // 账不删：它是同轮迟到 progress 的栅栏，随轮存活到下一轮开始。
+              ledger.appliedReport = report;
+              await applyReportOutcome(link.workerId, link.leadSessionId, report, status);
+              return;
+            }
+            // turn 未终：结论先落库保证可见；状态映射等真实终态，避免 ready 预写成 done。
+            await deps.setWorkerLatestReport(link.workerId, report);
+          });
+          deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+        };
+      }
       const runtime = deps.getLiveSession(sessionId);
       const generation = runtime?.getTurnGeneration?.();
       if (state.productTerminal && (
@@ -2331,11 +2562,51 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         finished = true;
         if (accepted && receipt?.delivered) state.deliveredReports += 1;
         else if (accepted && receipt?.queuedMessageId) state.queuedReportIds.add(receipt.queuedMessageId);
+        // progress 只是内部进度：记最新状态但不结算欠回报，也不阻断本轮 Auto-bridge。
+        // 未带 report 的旧自由文本回报照旧结算。
+        const report = accepted ? receipt?.report : undefined;
+        const settlesReport = report === undefined || report.state !== 'progress';
         try {
           await withWorkerTransition(state.workerId, async () => {
             const provisional = provisionalDispatches.get(sessionId);
-            if (accepted && (autoBridge.get(sessionId) === state
-              || provisional?.previousPendingIdentity === state)) settlePendingReport(state);
+            const current = autoBridge.get(sessionId);
+            // 本轮清理删条目后迟到的回执仍归属本轮（终态先到、回报后到的设计内场景）；
+            // 只有新派活的条目真正接管时才让位。
+            const ownsState = current === state
+              || current === undefined
+              || provisional?.previousPendingIdentity === state;
+            // 新一轮派活已认领该行时，旧回执只在旧 state 上记账结算，不再写 worker 行——
+            // 否则迟到的旧回报会把新派活的 running 面板与 structuredReport 洗回旧结论。
+            const supersedesRow = current !== undefined && current !== state;
+            // 捕获之后可能又开了新轮（直连轮不换派活条目，只把 worker 行改回 running）：
+            // 运行实例或轮次代号变了就说明行已属于新轮，旧回执同样只能留档，
+            // 不得按旧轮保存的终态把新轮的 running 覆盖掉。与直连轮回执同款复核。
+            const live = deps.getLiveSession(sessionId);
+            const newerTurnOwnsRow = runtime !== undefined
+              && (live !== runtime || (live?.getTurnGeneration?.() ?? undefined) !== generation);
+            if (report && ownsState) {
+              const isProgress = report.state === 'progress';
+              state.structuredReport = report;
+              // 投影随这份回执更新：入队的记下来源 id，直发的清空（队列改写不再能影响它）。
+              state.latestReportQueuedId = receipt?.queuedMessageId;
+              // 终态先到、回报后到：由回报侧补做映射，否则晚到的 waiting / blocked 会永久停在 done。
+            if (supersedesRow || newerTurnOwnsRow) {
+              // 新轮已接管面板：旧回报只留档，不落盘，也不反向改状态。
+            } else if (state.terminalObserved && state.appliedReport !== report && !isProgress) {
+                // 用真实终态：晚到的 ready 不能把已判 error 的轮次洗成成功。
+                await applyWorkerReportState(state, report, state.terminalStatus ?? 'done');
+                // 投影已经写进 worker 行：来源必须同时登记，否则终态收尾清掉派活条目后，
+                // 队列内容再被改写时就找不到这份投影的来源，没法作废它。
+                recordPendingReportSource(sessionId, receipt?.queuedMessageId);
+              } else if (!state.terminalObserved) {
+                // 终态还没到：至少把最新回报落盘，面板与通知不读旧问题。
+                await deps.setWorkerLatestReport(state.workerId, report);
+                // 记录来源以便终态后改写仍能命中；直发/插话回报无 queued id，
+                // 同时清掉上一轮残留来源，避免改写旧消息误清这份新回报。
+                recordPendingReportSource(sessionId, receipt?.queuedMessageId);
+              }
+            }
+            if (accepted && settlesReport && ownsState) settlePendingReport(state);
           });
         } finally {
           state.reportsInFlight.delete(settled);
@@ -2407,7 +2678,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         const worker = workers.find((item) => item.id === link.workerId);
         if (!worker || worker.status === 'running') return;
 
-        await deps.updateWorkerStatus(link.workerId, 'running');
+        // 新 turn 开始：上一轮的回报不再描述当前状态，面板标记与未读判定都必须作废旧值。
+        await deps.updateWorkerStatus(link.workerId, 'running', null);
+        // 直连结论的账本同样只属于上一轮：残留的旧 report 会把新轮 progress
+        // 当成迟到的遥测拦掉（与 running 结束路径不消费账本的两轮场景）。
+        directTurnOutcomes.delete(sessionId);
         deps.broadcastOrcaWorkerChanged(link.leadSessionId);
       });
       // running 提交后旧 entry 已不可能被重新登记,此时清理才是可靠的。
@@ -2496,6 +2771,34 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
           const state = autoBridge.get(params.sessionId);
           if (worker.status === 'done' || worker.status === 'error' || worker.status === 'idle') {
+            const direct = directTurnOutcomes.get(params.sessionId);
+            if (direct?.structuredReport && (!direct.turnGeneration || direct.turnGeneration === capture.turnGeneration)
+              && !ledgerConclusionMapped(direct, direct.structuredReport)) {
+              // 直连结论先到：按真实终态补映射（error 终态不得被 ready 预写的 done 洗掉）。
+              // 账不删：它是同轮迟到 progress 的栅栏，随轮存活到下一轮开始。
+              direct.appliedReport = direct.structuredReport;
+              await applyReportOutcome(link.workerId, link.leadSessionId, direct.structuredReport, params.status);
+              retryAuthority = deferredDoneAcknowledgements.get(link.workerId)?.assertDeliveryCurrent;
+              retryAcknowledgeDone =
+                worker.status === 'done' && deferredDoneAcknowledgements.delete(link.workerId);
+              clearRuntimeState(params.sessionId);
+              return;
+            }
+            if (direct && direct.turnGeneration !== undefined && direct.turnGeneration !== capture.turnGeneration) {
+              directTurnOutcomes.delete(params.sessionId);
+            }
+            // 只登记直连轮（无派活）的真实终态；派活轮的结算账在 AutoBridgeState 上。
+            if (!state) {
+              const entry = directTurnOutcomes.get(params.sessionId);
+              if (entry && entry.turnGeneration === capture.turnGeneration) {
+                entry.terminalStatus = params.status;
+              } else {
+                directTurnOutcomes.set(params.sessionId, {
+                  turnGeneration: capture.turnGeneration,
+                  terminalStatus: params.status,
+                });
+              }
+            }
             if (state?.pending && (state.terminalObserved || state.retryAfterRejectedDelivery)) {
               completionState = state;
               return;
@@ -2519,7 +2822,40 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             return;
           }
 
-          await deps.updateWorkerStatus(link.workerId, params.status);
+          // 结构化回报的六态映射只在一处做（applyWorkerReportState）；已映射过的
+          // （终态先到、回报后到时由回报侧补映射）不再覆盖。无结构化回报时保持旧路径。
+          if (state) state.terminalStatus = params.status;
+          const structured = state && state.structuredReport && !ledgerConclusionMapped(state, state.structuredReport)
+            && state.structuredReport.state !== 'progress'
+            ? state.structuredReport
+            : undefined;
+          if (state && structured) {
+            await applyWorkerReportState(state, structured, params.status);
+          } else {
+            // 直连轮（无派活）的结论先到、终态后到：按真实终态补映射，
+            // 否则 failed 会被 raw done 洗掉、waiting 也回不到 idle。
+            const direct = directTurnOutcomes.get(params.sessionId);
+            const directMatches = Boolean(direct) && (!direct!.turnGeneration || !capture.turnGeneration || direct!.turnGeneration === capture.turnGeneration);
+            if (!state && directMatches && direct!.structuredReport && !ledgerConclusionMapped(direct, direct!.structuredReport)) {
+              // 应用结论不删账：这本账是同轮迟到 progress 的栅栏，随轮存活到下一轮开始。
+              direct!.appliedReport = direct!.structuredReport;
+              await applyReportOutcome(link.workerId, link.leadSessionId, direct!.structuredReport, params.status);
+            } else {
+              await deps.updateWorkerStatus(link.workerId, params.status);
+              // 只登记直连轮（无派活）的真实终态：回报若在终态之后到达，仍按此终态补映射。
+              if (!state) {
+                const entry = directTurnOutcomes.get(params.sessionId);
+                if (entry && entry.turnGeneration === capture.turnGeneration) {
+                  entry.terminalStatus = params.status;
+                } else {
+                  directTurnOutcomes.set(params.sessionId, {
+                    turnGeneration: capture.turnGeneration,
+                    terminalStatus: params.status,
+                  });
+                }
+              }
+            }
+          }
           if (state) state.terminalObserved = true;
           deps.broadcastOrcaWorkerChanged(link.leadSessionId);
           if (state && !state.pending) clearRuntimeState(params.sessionId);

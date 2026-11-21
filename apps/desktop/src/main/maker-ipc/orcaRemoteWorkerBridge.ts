@@ -26,6 +26,8 @@ export interface OrcaRemoteWorkerBridgeDeps {
     args: Record<string, unknown>,
     reportClientId?: string,
     onReportRejected?: () => void,
+    /** Execution device predates the required `report`: accept the legacy free-text contract. */
+    allowLegacyReport?: boolean,
   ): Promise<OrcaToolResult>;
   deliverReport?(
     proxySessionId: string, inputClientIds: readonly string[],
@@ -197,6 +199,7 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
         request.args,
         reportClientId,
         onReportRejected,
+        request.tool === 'send_to_lead' && request.args.report === undefined,
       );
       let result: OrcaToolResult;
       try {
@@ -212,7 +215,12 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
         throw error;
       }
       assertOwner(owner);
-      if (!result.isError) await settle?.();
+      // progress 是遥测不是结论：即便旧执行端（schema 尚未收窄）经 send_to_lead 送达，
+      // 一次成功回执也不得退役派活，否则终段结果永远不会再 auto-bridge。
+      const reportState = (
+        request.args as { report?: { state?: string } } | undefined
+      )?.report?.state;
+      if (!result.isError && reportState !== 'progress') await settle?.();
       return result;
     },
   };

@@ -10,6 +10,7 @@ import type {
   SessionSendResult,
 } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import {
   authorizeSendToLeadCaller,
@@ -22,12 +23,15 @@ import {
   type OrcaWorkerReportQueueStatus,
   type OrcaWorkerReportReceipt,
 } from '../orca-bridge-mcp';
+import { ORCA_WORKER_REPORT_STATES, ORCA_WORKER_SETTLING_REPORT_STATES } from '../orca-bridge-mcp';
 import { renderOrcaWorkerSystemPrompt } from '../orca-bridge-prompt';
 
 const WORKER_BRIDGE_TOOLS = [
-  'send_to_lead', 'read_lead_history', 'read_lead', 'lead_status',
+  'report_progress', 'send_to_lead', 'read_lead_history', 'read_lead', 'lead_status',
   'get_lead_queue_status', 'update_queued_report', 'cancel_queued_report', 'merge_queued_reports',
 ];
+// 远程通道白名单（与 orca-bridge-mcp 的 REMOTE_WORKER_SERVED_TOOLS 同步）。
+const REMOTE_WORKER_TOOLS = ['send_to_lead', 'read_lead_history', 'read_lead', 'lead_status'];
 
 interface FakeSession {
   id: string;
@@ -68,6 +72,7 @@ interface CreateSessionOpts {
 
 interface FakeTool {
   handler: (args: Record<string, unknown>) => Promise<unknown>;
+  inputSchema?: Record<string, unknown>;
 }
 
 interface FakeMcpServer {
@@ -288,15 +293,15 @@ describe('orca_worker_bridge MCP helpers', () => {
   // the public provider must omit this server for ordinary/Lead Claude sessions,
   // while preserving local/remote Workers and shared Codex/Pi bridge factories.
   it.each<{
-    name: string; agentKind: AgentKind; vendorOptions?: Record<string, unknown>; enabled: boolean;
+    name: string; agentKind: AgentKind; vendorOptions?: Record<string, unknown>; enabled: boolean; tools?: string[];
   }>([
     { name: 'ordinary Claude', agentKind: 'claude-code', enabled: false },
     { name: 'Claude Lead', agentKind: 'claude-code', vendorOptions: { orcaRole: 'lead' }, enabled: false },
-    { name: 'local Claude Worker', agentKind: 'claude-code', vendorOptions: { orcaRole: 'worker' }, enabled: true },
-    { name: 'remote Claude Worker', agentKind: 'claude-code', vendorOptions: { orcaRemoteWorker: true }, enabled: true },
-    { name: 'shared Codex bridge', agentKind: 'codex', enabled: true },
-    { name: 'shared Pi bridge', agentKind: 'pi', enabled: true },
-  ])('mounts Worker tools only where needed: $name', ({ agentKind, vendorOptions, enabled }) => {
+    { name: 'local Claude Worker', agentKind: 'claude-code', vendorOptions: { orcaRole: 'worker' }, enabled: true, tools: WORKER_BRIDGE_TOOLS },
+    { name: 'remote Claude Worker', agentKind: 'claude-code', vendorOptions: { orcaRemoteWorker: true }, enabled: true, tools: REMOTE_WORKER_TOOLS },
+    { name: 'shared Codex bridge', agentKind: 'codex', enabled: true, tools: WORKER_BRIDGE_TOOLS },
+    { name: 'shared Pi bridge', agentKind: 'pi', enabled: true, tools: WORKER_BRIDGE_TOOLS },
+  ])('mounts Worker tools only where needed: $name', ({ agentKind, vendorOptions, enabled, tools }) => {
     const { maker } = makeProvider();
     const provider = createOrcaWorkerBridgeMcpProvider({
       getMaker: () => maker as unknown as Maker, logger: makeLogger(),
@@ -309,7 +314,27 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(provider.isEnabled?.(ctx)).toBe(enabled);
     const config = provider.toClaudeSdkConfig?.(ctx) as { instance: FakeMcpServer } | null;
     if (!enabled) expect(config).toBeNull();
-    else expect(Object.keys(config!.instance._registeredTools)).toEqual(WORKER_BRIDGE_TOOLS);
+    else expect(Object.keys(config!.instance._registeredTools)).toEqual(tools);
+  });
+
+  // 远程 Worker 的 Agent 只看得到白名单工具的 schema：其余五个（report_progress、
+  // 队列改写三件、get_lead_queue_status）在本通道必然 REMOTE_WORKER_NOT_SUPPORTED，
+  // 不注册 schema 才不会诱导必然失败的工具调用。
+  it('registers only the bridge allowlist for remote Workers', () => {
+    const { maker } = makeProvider();
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => maker as unknown as Maker, logger: makeLogger(),
+      persistUserMessage: async () => undefined, wireSession: () => undefined,
+    });
+    const ctx: McpProviderContext = {
+      agentKind: 'pi', workingDir: '', vendorOptions: { orcaRemoteWorker: true },
+    };
+    const config = provider.toClaudeSdkConfig?.(ctx) as { instance: FakeMcpServer };
+    const registered = Object.keys(config.instance._registeredTools);
+    expect(registered).toEqual(REMOTE_WORKER_TOOLS);
+    for (const banned of ['report_progress', 'update_queued_report', 'cancel_queued_report', 'merge_queued_reports', 'get_lead_queue_status']) {
+      expect(registered).not.toContain(banned);
+    }
   });
 
   // The Worker prompt is the only place a model learns these names; a tool the prompt
@@ -320,6 +345,25 @@ describe('orca_worker_bridge MCP helpers', () => {
     });
     const listed = /^Tools: ([^.]+)\./m.exec(prompt)?.[1]?.split(', ');
     expect(listed).toEqual(WORKER_BRIDGE_TOOLS);
+  });
+
+  // 可选的结构化回报等于没有：字段存在但没人填（#9818 上线后 184 次调用 0 次使用）。
+  // 约柬放在 schema 必填上，模型侧无法省略；处理器只对旧 schema 留一行日志兜底。
+  it('marks the structured report as required in the tool schema', () => {
+    const { maker } = makeProvider();
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => maker as unknown as Maker, logger: makeLogger(),
+      persistUserMessage: async () => undefined, wireSession: () => undefined,
+    });
+    const server = getServer(provider, { agentKind: 'codex', workingDir: '/worker' });
+
+    const schema = server._registeredTools.send_to_lead.inputSchema as {
+      safeParse: (value: unknown) => { success: boolean };
+    };
+    expect(schema.safeParse({ worker_id: 'worker-1', message: 'done' }).success).toBe(false);
+    expect(schema.safeParse({
+      worker_id: 'worker-1', message: 'done', report: { state: 'ready' },
+    }).success).toBe(true);
   });
 
   // Live cross-device probe: an authenticated Worker with no local role could see
@@ -553,6 +597,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     lead: FakeSession,
     dispatchInterAgentMessage?: OrcaBridgeMcpDeps['dispatchInterAgentMessage'],
     workerReportQueue?: OrcaWorkerReportQueueBridge,
+    extraDeps: Partial<OrcaBridgeMcpDeps> = {},
   ) {
     const logger = makeLogger();
     const workerLink: OrcaWorkerLink = {
@@ -578,6 +623,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       captureLocalWorkerReport,
       dispatchInterAgentMessage,
       workerReportQueue,
+      ...extraDeps,
       getMaker: () => base.maker as unknown as Maker,
       logger: logger as never,
       persistUserMessage: async (sessionId, message) => {
@@ -606,6 +652,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       ...base,
       finishReport,
       captureLocalWorkerReport,
+      provider: workerProvider,
       seedExistingLeadResult: async () => {
         await server._registeredTools.read_lead.handler({ worker_id: 'worker-1' });
         lead.emit({ type: 'done', data: { result: 'Existing lead result' } } as AgentEvent);
@@ -659,6 +706,181 @@ describe('orca_worker_bridge MCP helpers', () => {
     });
     expect(persisted).toEqual([]);
     expect(statusUpdates).toEqual([]);
+  });
+
+  // 2026-11-10 Super-agent 机制吸收：Worker 回报带六态结构化字段时，Host 拿到的回执必须
+  // 原样带上它（否则 Main 侧无法区分无操作/等人工/完成有结论），而 blocked 缺问题时不能发出。
+  // 生产入口：工具 handler + 注入的 captureLocalWorkerReport 回执；unit tier 同本文件其余用例。
+  it('forwards a structured report into the host receipt', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const report = {
+      state: 'ready' as const,
+      summary: '已修好登录超时',
+      verification: 'vitest 通过',
+      risk: '未覆盖移动端',
+    };
+    const json = parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '已修好登录超时',
+      report,
+    }));
+
+    expect(json).toMatchObject({ ok: true });
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { delivered: true, report },
+    );
+  });
+
+  // 桌面实际走的是宿主派发这条路径：回执漏掉 report，captureLocalWorkerReport 就会把它
+  // 当成旧自由文本回报，latestReport 与结论状态映射全部丢失（Greptile P1）。
+  // 生产入口：send_to_lead handler + dispatchInterAgentMessage；unit tier。
+  it('keeps the structured report in the receipt on the host dispatch path', async () => {
+    const lead = makeSession('lead-1');
+    const dispatch = vi.fn(async (params: { onAccepted?: () => void | Promise<void> }) => {
+      await params.onAccepted?.();
+      return { ok: true as const, mode: 'dispatched' as const, clientId: 'msg-legacy-1' };
+    });
+    const h = makeWorkerBridgeLeadHarness(lead, dispatch);
+    const report = { state: 'ready' as const, summary: '已修好登录超时' };
+
+    const json = parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '已修好登录超时',
+      report,
+    }));
+
+    expect(json).toMatchObject({ ok: true });
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(true, { delivered: true, report });
+  });
+
+  // 旧设备的 schema 里没有 report，模型无从填写；桥接端核实身份后按旧契约放行，
+  // 但只要没带那个标记，缺 report 仍然拒绝（Greptile P1）。
+  // 生产入口：provider.invokeTool（Host 侧桥接入口）；unit tier。
+  it('lets only the attested legacy remote path skip the required report', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const ctx = {
+      agentKind: 'claude-code' as const,
+      workingDir: '/repo',
+      mcpCallerAttested: true,
+      mcpCallerKind: 'root',
+      vendorOptions: {
+        orcaRole: 'worker' as const,
+        orcaWorkerId: 'worker-1',
+        orcaWorkerSessionId: 'worker-session-1',
+      },
+    };
+    const args = { worker_id: 'worker-1', message: '旧端回报' };
+
+    await expect(h.provider.invokeTool(ctx as never, 'send_to_lead', args)).rejects.toThrow(/report/);
+
+    const json = parseToolJson(
+      await h.provider.invokeTool(ctx as never, 'send_to_lead', args, { allowLegacyReport: true }),
+    );
+    expect(json).toMatchObject({ ok: true });
+    expect(h.finishReport).toHaveBeenCalledWith(true, { delivered: true });
+  });
+
+  it('refuses a blocked report without one concrete question', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const result = await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '需要你定方案 A 还是 B',
+      report: { state: 'blocked' },
+    });
+
+    const json = expectToolError(result);
+    expect(json).toMatchObject({ error: expect.stringContaining('report.question') });
+    // 无问题就不派发：Lead 不会收到一条无法回答的“等人工”，也不需要结算任何欠回报。
+    expect(h.finishReport).not.toHaveBeenCalled();
+    expect(lead.sent).toEqual([]);
+  });
+
+  // 2026-11-10 结构化回报的交付语义：report 是 Lead 要读的内容，不是宿主私货回执。
+  // 生产入口：send_to_lead 公开 tool handler；unit tier 同本文件其余用例。
+  it('delivers the structured evidence and question to the Lead, not only to the receipt', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '需要你定方案',
+      report: {
+        state: 'blocked',
+        question: '选方案 A 还是 B',
+        summary: '两条路径都验证过',
+        verification: 'node --test 447 pass',
+      },
+    });
+
+    expect(lead.sent).toHaveLength(1);
+    const delivered = lead.sent[0] as { content?: string } | string;
+    const text = typeof delivered === 'string' ? delivered : String(delivered.content ?? '');
+    expect(text).toContain('需要你定方案');
+    expect(text).toContain('选方案 A 还是 B');
+    expect(text).toContain('node --test 447 pass');
+    expect(text).toContain('blocked');
+  });
+
+  // 遥测与结论从工具层分家：progress 走独立工具，结构上不派发、不 rehydrate、不结算、不带问题。
+  it('records progress via report_progress without touching the Lead', async () => {
+    const lead = makeSession('lead-1');
+    const recordWorkerReport = vi.fn(async () => {});
+    const h = makeWorkerBridgeLeadHarness(lead, undefined, undefined, { recordWorkerReport });
+    const json = parseToolJson(await h.server._registeredTools.report_progress.handler({
+      worker_id: 'worker-1',
+      summary: '已完成一半',
+    }));
+
+    expect(json).toMatchObject({ ok: true, recorded: 'progress' });
+    expect(lead.sent).toEqual([]);
+    expect(recordWorkerReport).toHaveBeenCalledWith('worker-session-1', expect.objectContaining({ state: 'progress' }));
+    expect(h.finishReport).not.toHaveBeenCalled();
+  });
+
+  // 旧提示词/旧模型仍可能把 progress 塞进 send_to_lead：枚举已收窄到五个终段状态，
+  // schema 层拒收 progress（存储侧仍认六态，供 latest_report 面板读旧数据）。
+  it('narrows send_to_lead to the settling states so progress cannot ride it', () => {
+    // 契约：send_to_lead 的枚举 = 五个终段状态；progress 只存在于存储/消费侧六态集合。
+    expect([...ORCA_WORKER_SETTLING_REPORT_STATES]).not.toContain('progress');
+    expect([...ORCA_WORKER_SETTLING_REPORT_STATES]).toEqual(
+      ORCA_WORKER_REPORT_STATES.filter((state) => state !== 'progress'),
+    );
+    // 与生产 schema 同源断言：send_to_lead 的 state 枚举正是 SETTLING 集合。
+    const settlingSchema = z.enum(ORCA_WORKER_SETTLING_REPORT_STATES as unknown as [string, ...string[]]);
+    expect(() => settlingSchema.parse('progress')).toThrow();
+    expect(settlingSchema.parse('waiting')).toBe('waiting');
+  });
+
+  // 2026-11-11 progress 拆独立工具后的通道收口：结论通道 schema 不再接受 progress。
+  it('rejects progress in send_to_lead and points at report_progress', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const json = expectToolError(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '做到一半',
+      report: { state: 'progress', summary: '已完成一半' },
+    }));
+
+    expect(json).toMatchObject({ error: expect.stringContaining('progress is telemetry') });
+    expect(lead.sent).toEqual([]);
+    expect(h.captureLocalWorkerReport).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blocked report without a question before dispatch', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const json = expectToolError(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '卡住了',
+      report: { state: 'blocked' },
+    }));
+
+    expect(json).toMatchObject({ error: expect.stringContaining('blocked report must carry one concrete question') });
+    expect(lead.sent).toEqual([]);
+    expect(h.captureLocalWorkerReport).not.toHaveBeenCalled();
   });
 
   it('persists the report without completing the still-running Worker', async () => {
