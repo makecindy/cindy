@@ -7,9 +7,10 @@ import { collectSelfNamedNamespaceScrubAuthorization, createSelfNamedToolCallNam
 import { Transform, type TransformCallback } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { rewriteRoutedCustomToolsForUpstream, restoreRoutedCustomCallsInJson } from './upstream/responses/custom-tool-compat';
-import { rewriteRoutedNamespaceToolsForUpstream, restoreRoutedNamespaceCallsInJson } from './upstream/responses/namespace-tool-compat';
+import { rewriteRoutedNamespaceToolsForUpstream, restoreRoutedNamespaceCallsInJson, collectBareCustomToolNames } from './upstream/responses/namespace-tool-compat';
+import { collectResponsesToolGroups } from './upstream/responses/tool-groups';
 import { rewriteRoutedToolSearchForUpstream, restoreRoutedToolSearchCallsInJson } from './upstream/responses/tool-search-compat';
-import { collectFunctionCallRepairSchemas, repairFunctionCallsInJson } from './upstream/responses/function-call-compat';
+import { collectFunctionCallRepairSchemas, deriveFunctionCallRepairPlan, repairFunctionCallsInJson } from './upstream/responses/function-call-compat';
 import { createRoutedCustomToolRestoreBlockRewrite } from './upstream/server/responses-custom-tool-repair';
 import { createRoutedToolSearchRestoreBlockRewrite } from './upstream/server/responses-tool-search-repair';
 import { createResponsesFunctionToolRepairBlockRewrite } from './upstream/server/responses-function-tool-repair';
@@ -17,6 +18,27 @@ import { createResponsesFieldBackfillBlockRewrite, backfillResponsesFieldsJson }
 import { createTranslatorBudget } from './upstream/lib/translator-budget';
 import { collectDeclaredWireToolNames } from './upstream/server/responses-undeclared-tool-guard';
 import { composeSseBlockRewrites, payloadRewriteAsBlockRewrite, nextSseBlock, type SseBlockRewrite } from './upstream/server/sse-payload-rewrite';
+
+/** Wire names of custom declarations that live inside a namespace group, before lowering rewrites them. */
+function collectNamespaceCustomToolNames(body: unknown): Set<string> {
+  const names = new Set<string>();
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return names;
+  for (const group of collectResponsesToolGroups(body)) {
+    if (!Array.isArray(group)) continue;
+    for (const tool of group) {
+      if (!tool || typeof tool !== 'object') continue;
+      const { type, name, tools } = tool as { type?: unknown; name?: unknown; tools?: unknown };
+      if (type !== 'namespace' || typeof name !== 'string' || name === 'functions' || !Array.isArray(tools)) continue;
+      for (const child of tools) {
+        if (!child || typeof child !== 'object') continue;
+        const { type: childType, name: childName } = child as { type?: unknown; name?: unknown };
+        if (childType !== 'custom' || typeof childName !== 'string') continue;
+        names.add(`${name}__${childName}`);
+      }
+    }
+  }
+  return names;
+}
 
 /** Selected from the actual route; native OpenAI and non-Responses traffic do not enter this adapter. */
 export interface ResponsesCompatibilityPolicy {
@@ -32,6 +54,7 @@ export interface ResponsesCompatibilityPolicy {
 
 /** One request owns both forward conversion and reverse tool identities. */
 export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCompatibilityPolicy) {
+  const bareCustomNames = collectBareCustomToolNames(body);
   const custom = policy.customTools && policy.customTools !== 'native'
     ? rewriteRoutedCustomToolsForUpstream(body, policy.customTools === 'functions' ? false : undefined)
     : { body, names: new Set<string>(), repairNames: new Set<string>() };
@@ -39,9 +62,27 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
     ? rewriteRoutedToolSearchForUpstream(custom.body)
     : { body: custom.body, names: new Set<string>() };
   const namespace = policy.namespaceTools === 'functions'
-    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names)
-    : { body: search.body, aliases: new Map() };
-  const schemas = policy.repairFunctionArguments ? collectFunctionCallRepairSchemas(body) : new Map();
+    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, collectNamespaceCustomToolNames(body),
+        body && typeof body === 'object' ? (body as { tool_choice?: unknown }).tool_choice : undefined)
+    : { body: search.body, aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>() };
+  // Native requests retain their declarations, but response restoration and schema lookup still
+  // need one collision-safe identity plan, including original kinds and loaded search tools.
+  const repairPlan = policy.repairFunctionArguments && policy.namespaceTools !== 'functions'
+    ? deriveFunctionCallRepairPlan(body)
+    : {
+        renamedWireNames: namespace.renamedWireNames,
+        renamedKinds: namespace.renamedKinds,
+        loweredToolChoice: namespace.body && typeof namespace.body === 'object'
+          ? (namespace.body as { tool_choice?: unknown }).tool_choice
+          : undefined,
+      };
+  const displacedKinds = repairPlan.renamedKinds;
+  const displacement = displacedKinds.size > 0
+    ? { bareCustomNames, displacedKinds }
+    : undefined;
+  const schemas = policy.repairFunctionArguments
+    ? collectFunctionCallRepairSchemas(body, repairPlan)
+    : new Map();
   const declared = collectDeclaredWireToolNames(body);
   const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(body, new Set([...custom.names, ...custom.repairNames]), new Set(schemas.keys()));
   const restoreNamespace = (text: string) => restoreRoutedNamespaceCallsInJson(text, namespace.aliases);
@@ -56,9 +97,9 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
       }
       if (policy.snapshotRepair) next = repairResponsesSnapshotJson(next, body);
       if (policy.contentChannelReasoning) next = rewriteReasoningSummaryInJsonString(next);
-      next = restoreRoutedCustomCallsInJson(next, custom.names, custom.repairNames, declared);
+      next = restoreRoutedCustomCallsInJson(next, custom.names, custom.repairNames, declared, displacement);
       next = restoreRoutedToolSearchCallsInJson(next, search.names);
-      next = repairFunctionCallsInJson(next, schemas);
+      next = repairFunctionCallsInJson(next, schemas, repairPlan.renamedWireNames);
       return policy.backfillResponseFields ? backfillResponsesFieldsJson(next) : next;
     },
     createStreamRewrite() {
@@ -66,9 +107,9 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
       const stages: SseBlockRewrite[] = [
         payloadRewriteAsBlockRewrite(createSelfNamedToolCallNamespaceScrubRewrite(scrubAuthorization)),
         payloadRewriteAsBlockRewrite(restoreNamespace),
-        createRoutedCustomToolRestoreBlockRewrite(custom.names, budget, custom.repairNames, declared),
+        createRoutedCustomToolRestoreBlockRewrite(custom.names, budget, custom.repairNames, declared, displacement),
         createRoutedToolSearchRestoreBlockRewrite(search.names, budget),
-        createResponsesFunctionToolRepairBlockRewrite(schemas, budget),
+        createResponsesFunctionToolRepairBlockRewrite(schemas, budget, repairPlan.renamedWireNames),
       ];
       // Transport/id reconstruction precedes tool completion; all stages share one budget.
       const before: SseBlockRewrite[] = [];
