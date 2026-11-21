@@ -909,6 +909,62 @@ describe('LibraryVault', () => {
       });
     });
 
+    it.each([false, true])('递归删除失败后按实际删除量恢复旧账本（部分删除=%s）', async (partial) => {
+      const initial = makeVault();
+      await initial.open();
+      const dir = path.join(libraryRoot, 'folder');
+      const file = path.join(dir, 'asset.txt');
+      await fs.promises.mkdir(dir);
+      await fs.promises.writeFile(file, 'asset');
+      await fs.promises.writeFile(path.join(libraryRoot, 'keep.txt'), 'yes');
+      await fs.promises.writeFile(path.join(libraryRoot, '.cindy-library', 'usage.json'),
+        JSON.stringify({ files: 2, bytes: 8, mutations: 2, updatedAt: 1 }));
+      const vault = makeVault({ limits: { usageScanFuse: 0 } });
+      await vault.open();
+      const rm = fs.promises.rm;
+      const spy = vi.spyOn(fs.promises, 'rm').mockImplementation(async (target, options) => {
+        if (target !== dir) return rm(target, options);
+        if (partial) await fs.promises.unlink(file);
+        throw Object.assign(new Error('access denied'), { code: 'EACCES' });
+      });
+      try {
+        expect(await vault.delete({ path: 'folder', recursive: true })).toMatchObject({ ok: false });
+      } finally {
+        spy.mockRestore();
+      }
+      await vault.invalidate();
+      expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
+        ok: true, state: 'ready', fileCount: partial ? 1 : 2, usedBytes: partial ? 3 : 8,
+      });
+    });
+
+    it.skipIf(process.platform === 'win32')('目录同步失败后正常关闭可重试可信账本落盘', async () => {
+      const initial = makeVault();
+      await initial.open();
+      await fs.promises.writeFile(path.join(libraryRoot, 'keep.txt'), 'yes');
+      const metadata = path.join(libraryRoot, '.cindy-library');
+      const ledgerPath = path.join(metadata, 'usage.json');
+      await fs.promises.writeFile(ledgerPath, JSON.stringify({ files: 1, bytes: 3, mutations: 1, updatedAt: 1 }));
+      const vault = makeVault({ limits: { usageScanFuse: 0 } });
+      await vault.open();
+      const open = fs.promises.open;
+      const spy = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+        if (args[0] === metadata) throw Object.assign(new Error('access denied'), { code: 'EACCES' });
+        return open(...args);
+      });
+      try {
+        expect(await vault.write({ path: 'blocked.txt', content: 'no' })).toMatchObject({ ok: false });
+        expect(JSON.parse(await fs.promises.readFile(ledgerPath, 'utf8'))).toMatchObject({ checkpoint: 'dirty' });
+      } finally {
+        spy.mockRestore();
+      }
+      await vault.invalidate();
+      expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
+        ok: true, state: 'ready', fileCount: 1, usedBytes: 3,
+      });
+      expect(fs.existsSync(path.join(libraryRoot, 'blocked.txt'))).toBe(false);
+    });
+
     it('标记异常且子目录不可读时保留其他文件，既不放行写入也不覆盖账本', async () => {
       const initial = makeVault();
       await initial.open();

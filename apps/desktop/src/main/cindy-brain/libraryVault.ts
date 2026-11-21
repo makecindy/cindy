@@ -976,6 +976,7 @@ export class LibraryVault {
   }
 
   private async prepareUsageMutationUnlocked(): Promise<LibraryFailure | null> {
+    this.usageChanged = true;
     if (!this.usageDirtyOnDisk) {
       if (!(await this.persistUsageUnlocked('dirty', true))) {
         this.usagePrepareFailed = true;
@@ -984,7 +985,6 @@ export class LibraryVault {
       this.usageDirtyOnDisk = true;
     }
     this.usagePrepareFailed = false;
-    this.usageChanged = true;
     return null;
   }
 
@@ -1652,7 +1652,9 @@ export class LibraryVault {
           try {
             await fs.promises.rm(resolved.target, { recursive: true, force: false });
           } catch (err) {
-            this.usageNeedsRescan = true;
+            const remaining = await this.scanDirUsage(resolved.usageTarget);
+            this.usage.bytes = Math.max(0, this.usage.bytes - usage.bytes + remaining.bytes);
+            this.usage.files = Math.max(0, this.usage.files - usage.files + remaining.files);
             return this.tmpFailure(err, '删除目录失败(主机 IO 错误)');
           }
           removedBytes = usage.bytes;
@@ -1972,7 +1974,7 @@ export class LibraryVault {
       if (this.invalidated) return;
       this.invalidated = true;
       const canCheckpoint = checkpointAllowed && this.opened && this.state !== 'unavailable' && this.usageChanged
-        && !this.usageTripped && !this.usageScanIncomplete && !this.usagePrepareFailed;
+        && !this.usageTripped && !this.usageScanIncomplete;
       this.state = 'unavailable';
       this.unavailableReason = 'io';
       for (const stream of Array.from(this.streams.values())) {
