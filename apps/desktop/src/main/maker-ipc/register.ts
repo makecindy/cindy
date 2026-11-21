@@ -9387,14 +9387,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               permissionMode: 'ask',
             });
             assertLocalAppOwner();
-            Object.assign(session, {
-              sendToSessionHint: resolveAgentSendToSessionHint({
-                agentKind: opts.agentKind,
-                remoteHostId: opts.remoteHostId,
-                reviewMode: opts.reviewMode,
-                supportsRemote: options.supportsRemoteSessionHandoff === true,
-              }),
-            });
+            // No sendToSessionHint: a local-application task mounts only the application's MCP
+            // endpoint (LOCAL_AGENT_CLIENT), never cindy_helper, so there is no route to advertise.
             wireSessionToIpc(session);
             if (opts.resumeSessionId) agentHandoffPending.consume(session.id);
             broadcastSessionCreated(session.id);

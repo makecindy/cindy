@@ -6,6 +6,7 @@ import { createEffortChangeCoordinator, enqueueEffortChange } from '../../render
 import { supportsSubscriptionFastPolicy, type ProviderView } from '@cindy/model-providers';
 import { withFastModePolicy } from '../../../../../packages/maker-core/src/agents/shared/fast-mode-policy';
 import { commitRuntimeAxisAfterPersistence } from '../maker-ipc/runtimeSelectionAxes';
+import { resolveAgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 
 const mainRoot = resolve(__dirname, '..');
 const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8').replace(
@@ -1957,6 +1958,41 @@ function recoveryFixture() {
   };
   return { bindings, row, order, db, coordinator, pendingSwitch, setCurrent: (value: boolean) => { current = value; } };
 }
+
+describe('local-application visible task host', () => {
+  it('opens a local-application task without a send_to_session route', async () => {
+    let call: ts.ExpressionStatement | undefined;
+    const visit = (node: ts.Node): void => {
+      if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
+        && node.expression.expression.getText(registerAst) === 'installLocalAgentVisibleSessionHost') call = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(registerAst);
+    if (!call) throw new Error('local-application host registration is missing');
+    const code = ts.transpileModule(call.getText(registerAst),
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+    let factory: ((localMaker: unknown) => { open(opts: Record<string, unknown>): Promise<Record<string, unknown>> }) | undefined;
+    const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active', sdkSessionId: null }] };
+    const bindings: Record<string, unknown> = {
+      installLocalAgentVisibleSessionHost: (f: typeof factory) => { factory = f; },
+      activeOwnerScopeKey: () => 'owner', throwIpcError: (code: string) => { throw new Error(code); }, t: (key: string) => key,
+      withSendToSessionLock: (_id: string, run: () => unknown) => run(),
+      getDbClient: () => ({ drizzle: { select: () => query } }), sessions: {}, eq: vi.fn(),
+      persistSessionFields: vi.fn(async () => {}), wireSessionToIpc: vi.fn(), broadcastSessionCreated: vi.fn(),
+      agentHandoffPending: { consume: vi.fn() },
+      // Real resolver and host capability: an ordinary claude-code task would get the cindy_helper route.
+      resolveAgentSendToSessionHint, options: { supportsRemoteSessionHandoff: true },
+    };
+    new Function(...Object.keys(bindings), code)(...Object.values(bindings));
+    const session: Record<string, unknown> = { id: 'local', close: vi.fn() };
+    const localMaker = { getSession: () => undefined, createSession: vi.fn(async () => session) };
+    const opened = await factory!(localMaker).open({ id: 'local', agentKind: 'claude-code', providerId: 'p' });
+    // PR #11894 review: LOCAL_AGENT_CLIENT replaces the MCP set with the application's endpoint,
+    // so cindy_helper is never mounted and no route may be projected for this task.
+    expect(opened).toBe(session);
+    expect(opened.sendToSessionHint).toBeUndefined();
+  });
+});
 
 describe('Desktop recovery assembly ordering and fences', () => {
   it('projects a send_to_session route only from the live session that will receive the message', async () => {
