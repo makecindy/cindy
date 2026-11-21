@@ -2179,9 +2179,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       ...(failureDescription.sdkError ? { sdkError: failureDescription.sdkError } : {}),
       ...(failureDescription.errorStatus !== undefined ? { errorStatus: failureDescription.errorStatus } : {}),
     };
-    const logDecision = (outcome: 'issued' | 'not-issued', reason: string, localAccount?: string): void => {
+    const logDecision = (outcome: 'issued' | 'not-issued', reason: string, localSwitch?: string): void => {
       const details = { runId: run.id, phase, outcome, reason, ...failureDetails,
-        ...(localAccount ? { localAccount } : {}) };
+        ...(localSwitch ? { localSwitch } : {}) };
       if (outcome === 'issued') deps.log?.info('remote agent group switch decision', details);
       else deps.log?.warn('remote agent group switch decision', details);
     };
@@ -2228,7 +2228,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (available) {
         const exclude = noteGroupSwitchTried(run, member);
         exclude.delete(member.memberKey);
-        logDecision('issued', 'switchAvailable', 'switchAvailable');
+        logDecision('issued', 'switchAvailable');
         return issueGroupSwitchToken(run, exclude);
       }
       unavailableReason = probeTimedOut ? 'probe-timeout' : 'blocked';
@@ -2256,7 +2256,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     }).catch(() => null);
     const canMove = next?.kind === 'member' || (next?.kind === 'local' && deps.isAgentAvailable(builtinKindOf(run.kind)));
     if (!canMove || run.closing) {
-      logDecision('not-issued', unavailableReason ?? 'no-replacement');
+      logDecision('not-issued', run.closing ? 'run-closing' : 'no-replacement', unavailableReason);
       return null;
     }
     deps.log?.info('remote agent: offered the shared user another computer in the provider group', {
