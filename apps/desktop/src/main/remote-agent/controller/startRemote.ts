@@ -351,6 +351,12 @@ function isNativeSessionId(id: unknown): id is string {
   return typeof id === 'string' && id.length > 0 && id !== '<pending>' && id !== '<failed>';
 }
 
+function isConfirmedRunEnd(reason: string, idleReclaimed?: boolean): boolean {
+  // The executor reports idleReclaimed even if native close fails: only quiet
+  // runs are reclaimed, and the next send starts a new run.
+  return idleReclaimed === true || reason === 'ended' || reason === 'closed';
+}
+
 /**
  * 连接的状态：connecting(第一次打开或连回中)→ connected → releasing(连接池在让出名额)→ released
  * → connecting …；closed 是句柄已关闭或对方意外结束。
@@ -829,16 +835,11 @@ async function prepareAndStartRemoteAgentSession(
       onClosed: (reason, error, idleReclaimed) => {
         // 让出名额或已被换下的连接：不是任务结束。
         if (active !== client || linkState === 'releasing' || linkState === 'closed') return;
+        if (isConfirmedRunEnd(reason, idleReclaimed)) closeRunMcpInstance(client.runId);
         if (!opened) {
           closedEarly = { reason, message: error?.message };
           return;
         }
-        // 'ended' is normal run/event-stream completion; 'closed' is the
-        // executor's explicit run close. Poll failures and other causes leave
-        // cleanup to task disposal. The executor also reports idleReclaimed if
-        // native close fails: it only reclaims quiet runs with no in-flight
-        // tool calls, and the next send starts a new run.
-        if (idleReclaimed || reason === 'ended' || reason === 'closed') closeRunMcpInstance(client.runId);
         deps.onTaskGrantRenewable?.(false);
         // 对方按闲置收回了它的 Agent 进程(它只收回不忙的任务)：与连接池让出名额一样，本机部分与对话都留着，
         // 要它干活时带原来的会话 id 连回。
@@ -908,6 +909,9 @@ async function prepareAndStartRemoteAgentSession(
       }
       const started = parseStartedInfo(raw, kind);
       if (reconnect && restartResumeRequired && (!expectedResume || started.id !== expectedResume)) {
+        // Retire the rejected client before closing it. close() emits a local
+        // 'closed' even on failure, so only its successful receipt can clean up.
+        if (active === client) active = null;
         await closeStartedRun(client).catch(() => undefined);
         throw new Error('[REMOTE_AGENT_UNAVAILABLE] The original conversation could not be resumed after the supplier stopped.');
       }
@@ -932,9 +936,10 @@ async function prepareAndStartRemoteAgentSession(
       return client;
     } catch (error) {
       const token = startupSwitchToken;
+      const startupStopped = !remoteStarted && error instanceof RemoteAgentRemoteError && error.phase === 'start'
+        && error.info.name === 'AgentStartupStoppedError';
       if (!remoteStarted && token && isCurrent()) {
-        if (error instanceof RemoteAgentRemoteError && error.phase === 'start'
-          && error.info.name === 'AgentStartupStoppedError' && error.info.code === 'SUBSCRIPTION_ACCOUNT_LIMITED') {
+        if (startupStopped && error.info.code === 'SUBSCRIPTION_ACCOUNT_LIMITED') {
           stoppedReconnectOffers.set(error, () => {
             deps.log?.info('remote agent switch credential taken over', { sessionId: opts.sessionId, phase: 'reconnect' });
             deps.groupSwitch?.offer(token);
@@ -946,6 +951,9 @@ async function prepareAndStartRemoteAgentSession(
           deps.groupSwitch?.offer(token);
         }
       }
+      // The adapter can initialize MCP before startup returns. This typed
+      // error proves the attempt stopped; a generic start-failed frame does not.
+      if (startupStopped && isCurrent()) closeRunMcpInstance(client.runId);
       if (active === client) active = null;
       if (remoteStarted && !client.isClosed) {
         // An invalid started descriptor or a local bootstrap error can occur
@@ -959,7 +967,7 @@ async function prepareAndStartRemoteAgentSession(
       } else client.abandon('start-failed');
       if (!remoteStarted && (
         (error instanceof Error && 'code' in error && error.code === 'IPC_ERROR')
-        || (error instanceof RemoteAgentRemoteError && error.phase === 'start' && error.info.name === 'AgentStartupStoppedError')
+        || startupStopped
       )) {
         const quota = readRemoteProviderGroupUsageLimit(error);
         if (quota) throw quota;

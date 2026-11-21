@@ -1871,12 +1871,23 @@ describe('shared startup lease budget', () => {
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
     const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
       startFailure: '', startFailureName: 'AgentStartupStoppedError', startedId: undefined as string | undefined, localFailure: '',
+      startupEnd: undefined as { reason: string; idleReclaimed?: true } | undefined,
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
       blockClose: false, failClose: false, maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
       blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false,
       directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false, rejectHandoff: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
-    const started = (run: Run) => emit(run, { t: 'started', handle: { id: state.startedId ?? 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
+    const started = (run: Run) => {
+      const item = { t: 'started', handle: { id: state.startedId ?? 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } };
+      const end = state.startupEnd;
+      if (end && end.reason !== 'missing') {
+        run.onData(Buffer.from(`${JSON.stringify(item)}\n${JSON.stringify({ t: 'closed', ...end })}\n`), true);
+      } else {
+        emit(run, item);
+        // A missing poll result has no stream data. Deliver it before open resumes.
+        if (end) run.onLost('missing', { code: 'REMOTE_AGENT_EXPIRED', message: 'temporary link loss' });
+      }
+    };
     vi.spyOn(RemoteAgentPoller.prototype, 'register').mockImplementation(run => {
       runs.set(run.runId, run);
       if (state.startFailure) {
@@ -2781,6 +2792,64 @@ describe('shared startup lease budget', () => {
       expect(f.calls.filter(call => call.op === 'close').map(call => call.runId)).toEqual([rejectedRun.runId]);
       expect(f.disposed).toEqual([]);
       expect(f.mcpSessionCount()).toBe(failClose ? 1 : 0);
+    } finally { await handle.close(); }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 starter 和 handle.send 重连时，任务仍注册，只有确认终态才清掉 MCP。
+  // - Bug／规则依据：#11905，started 尚未成为 opened 就收到终态，旧行为仍保留连接。
+  // - 现有覆盖缺口：相邻用例在打开之后收到了终态，或靠主动 close 回执清理。
+  // - 最小失败输入：同一 poll 同步交付 started 和 closed 帧，或在 open 恢复前收到 missing。
+  // - tier：integration。只在 poll 交付和 MCP 计数边界用内存夹具。
+  it.each([
+    { reason: 'ended', idleReclaimed: undefined, remaining: 0 },
+    { reason: 'closed', idleReclaimed: undefined, remaining: 0 },
+    { reason: 'ended', idleReclaimed: true, remaining: 0 },
+    { reason: 'missing', idleReclaimed: undefined, remaining: 1 },
+    { reason: 'controller-disconnected', idleReclaimed: undefined, remaining: 1 },
+  ] as const)('handles MCP when started and $reason arrive before open (idle=$idleReclaimed)', async ({ reason, idleReclaimed, remaining }) => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      const firstRun = [...f.runs.values()].at(-1)!;
+      f.emit(firstRun, { t: 'closed', reason: 'ended', idleReclaimed: true });
+      expect(f.mcpSessionCount()).toBe(0);
+      f.state.startupEnd = { reason, idleReclaimed };
+      await expect(handle.send({ type: 'user', content: 'reconnect' })).rejects.toThrow(
+        reason === 'missing' ? 'temporary link loss' : 'The agent stopped right after starting.',
+      );
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+      expect(f.calls.filter(call => call.op === 'close')).toEqual([]);
+      expect(f.disposed).toEqual([]);
+      expect(f.mcpSessionCount()).toBe(remaining);
+    } finally { await handle.close(); }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 starter 重连报原启动错误，只有执行端确认进程已停才清理 MCP。
+  // - Bug／规则依据：#11905，执行端可能在 started 之前建立连接，普通启动错误无法证明进程退出。
+  // - 现有覆盖缺口：started 与终态同批的用例不走 start-failed 帧。
+  // - 最小失败输入：重连建立 MCP 后返回进程已停或清理未确认的启动错误。
+  // - tier：integration。执行端回包和 MCP 计数为内存夹具。
+  it.each([
+    { name: 'AgentStartupStoppedError', remaining: 0 },
+    { name: 'AgentStartupCleanupPendingError', remaining: 1 },
+  ])('uses the remote startup error to decide MCP cleanup ($name)', async ({ name, remaining }) => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      const firstRun = [...f.runs.values()].at(-1)!;
+      f.emit(firstRun, { t: 'closed', reason: 'ended', idleReclaimed: true });
+      expect(f.mcpSessionCount()).toBe(0);
+      f.state.startFailure = 'remote startup failed';
+      f.state.startFailureName = name;
+      await expect(handle.send({ type: 'user', content: 'reconnect' })).rejects.toMatchObject({
+        name, phase: 'start', message: 'remote startup failed',
+      });
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+      expect(f.calls.filter(call => call.op === 'close')).toEqual([]);
+      expect(f.disposed).toEqual([]);
+      expect(f.mcpSessionCount()).toBe(remaining);
     } finally { await handle.close(); }
   });
 
