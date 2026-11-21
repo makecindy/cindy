@@ -294,14 +294,14 @@ export function StorageManagementCard() {
             'border border-[var(--settings-theme-card-border)]',
           )}
         >
-          <div>
+          <div id={storageManagementCardSettings.aboutStorageDatabaseSectionTitle.targetId}>
             <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
               {t('settings.about.storage.overviewTitle')}
             </h3>
             <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.overviewDescription')}
             </p>
-            <div id={storageManagementCardSettings.aboutStorageDatabaseSectionTitle.targetId}
+            <div
               role="progressbar"
               aria-label={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
               aria-valuemin={0}

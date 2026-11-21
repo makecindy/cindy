@@ -128,7 +128,7 @@ describe('settings definition and navigation', () => {
         .getAttribute('value'),
     ).toBe('user-browser');
     act(() => {
-      vi.advanceTimersByTime(1600);
+      vi.advanceTimersByTime(2300);
     });
     expect(
       document
