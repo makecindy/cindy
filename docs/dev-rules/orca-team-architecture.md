@@ -448,6 +448,27 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `renderOrcaLeadSystemPrompt`，以及 `packages/lizi-mcps/src/xdt-helper/create_workers.ts`
    的批量结果契约。
 
+4. **协同期间后续任务消息按 Worker 最新结算状态转派（状态：不变量，prompt 级）**<br>
+   归属先看该 Worker 最近一条 `[Orca Worker report: <state>]`（结构化回报，随 #9818
+   落地；latest_report 落库 `orca_workers.latest_report`）。`waiting` / `blocked` 或尚无
+   结算回报时任务仍开着：用户发给 Lead 的后续消息凡涉及该任务（追加要求、修正、催办、
+   相关反馈）归该 Worker 处理，Lead 不得在会话内自行分析或执行，必须以用户原话经
+   `send_to_worker` 转发（可附路由性背景，不改写成 Lead 自己的任务计划）。怎么发
+   defer 给既有纪律（2026-11-11 review P1 后收口）：修正/追加运行中的单按既有插话规则走
+   `delivery=steer` + supersedes 注记；任务必须停下换新指令时走 `interrupt_worker`；
+   目标空闲时普通发送；转发回执带 other_queued_messages 且新消息补充/替换旧单时，
+   先按既有队列规则对账再按 rule 5 收口本轮。`ready` / `failed` / `dropped` 表示该任务
+   已终结、报告即它的最终结论，后续消息归 Lead 自己处理：判断是直接回答、自己动手，还是
+   当新工作开一张新单；此时再把消息投给同一个 Worker 属未经验证的猜测。归属无法唯一
+   确定时必须先询问用户，不得静默自执行或擅自改派；与任何 Worker 任务无关的问答、汇总
+   仍由 Lead 直接回答。Worker 侧配套：Lead 转发的用户原文等同用户直接指示；转发消息
+   依赖 Lead 近期讨论时，经 `read_lead_history` 自取上下文（工具描述已同步放宽）。
+   程序级按 Thread 归属的直通路由（宿主改道、不经 Lead turn）属独立变更
+   `orca-followup-direct-routing`，不在本契约内。
+   实现指针：`packages/orca-workflow/src/orca-bridge-prompt.ts` 的
+   `renderOrcaLeadSystemPrompt`（rule 2a）、`renderOrcaWorkerSystemPrompt`（转发原文句）
+   与 `orca-bridge-mcp.ts` 的 `read_lead_history` 描述。
+
 #### 消息派发与 auto-bridge
 
 1. **忙碌目标不丢消息（状态：不变量）**<br>
