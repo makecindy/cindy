@@ -823,6 +823,44 @@ describe('LibraryVault', () => {
       });
     });
 
+    it.each(['write', 'writeCommit', 'rename'])('%s 发布前失败不误降超限旧库', async (operation) => {
+      const initial = makeVault();
+      await initial.open();
+      const existing = path.join(libraryRoot, 'existing.txt');
+      const blocked = path.join(libraryRoot, 'blocked.txt');
+      await fs.promises.writeFile(existing, 'yes');
+      await fs.promises.writeFile(path.join(libraryRoot, '.cindy-library', 'usage.json'),
+        JSON.stringify({ files: 1, bytes: 3, updatedAt: 1, mutations: 1 }));
+      const upgraded = makeVault({ limits: { usageScanFuse: 0 } });
+      expect(await upgraded.open()).toMatchObject({ ok: true, state: 'ready' });
+
+      const rename = fs.promises.rename;
+      const renameSpy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (source, destination) => {
+        if (destination === blocked) throw Object.assign(new Error('access denied'), { code: 'EACCES' });
+        await rename(source, destination);
+      });
+      try {
+        if (operation === 'writeCommit') {
+          const stream = await upgraded.writeBegin({ path: 'blocked.txt', totalBytes: 3 });
+          if (!stream.ok) throw new Error(stream.message);
+          await upgraded.writeChunk({ streamId: stream.streamId, seq: 1, content: 'new' });
+          expect(await upgraded.writeCommit({ streamId: stream.streamId })).toMatchObject({ ok: false });
+        } else if (operation === 'rename') {
+          expect(await upgraded.rename({ from: 'existing.txt', to: 'blocked.txt', overwrite: true })).toMatchObject({ ok: false });
+        } else {
+          expect(await upgraded.write({ path: 'blocked.txt', content: 'new' })).toMatchObject({ ok: false });
+        }
+      } finally {
+        renameSpy.mockRestore();
+      }
+      await upgraded.invalidate();
+      expect(await fs.promises.readFile(existing, 'utf8')).toBe('yes');
+      expect(fs.existsSync(blocked)).toBe(false);
+      expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
+        ok: true, state: 'ready', fileCount: 1, usedBytes: 3,
+      });
+    });
+
     it('标记异常且子目录不可读时保留其他文件，既不放行写入也不覆盖账本', async () => {
       const initial = makeVault();
       await initial.open();

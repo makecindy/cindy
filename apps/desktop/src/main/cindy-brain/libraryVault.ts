@@ -885,7 +885,7 @@ export class LibraryVault {
   private async atomicWrite(
     target: string,
     bytes: Buffer,
-    opts: { ifNotExists?: boolean; sync?: boolean; createParent?: boolean } = {},
+    opts: { ifNotExists?: boolean; sync?: boolean; createParent?: boolean; trackUsage?: boolean } = {},
   ): Promise<LibraryResult<{ dev: number; ino: number }>> {
     const tmp = path.join(this.tmpDir, `${randomUUID()}.tmp`);
     let openedStat: fs.Stats | null = null;
@@ -913,6 +913,7 @@ export class LibraryVault {
       }
       const after = await this.lstatTarget(target);
       if (!after || !after.isFile() || after.dev !== openedStat.dev || after.ino !== openedStat.ino) {
+        if (opts.trackUsage) this.usageNeedsRescan = true;
         // 就位后被换(或落到了非预期对象):如实报内部错误,不静默。
         return fail('INTERNAL', '写入就位校验失败(目标 identity 不一致)');
       }
@@ -1154,11 +1155,9 @@ export class LibraryVault {
       if (checkpoint) return checkpoint;
       const w = await this.atomicWrite(resolved.target, decoded.bytes, {
         ifNotExists: req.ifNotExists === true,
+        trackUsage: true,
       });
-      if (!w.ok) {
-        if (w.errorCode !== 'ALREADY_EXISTS') this.usageNeedsRescan = true;
-        return w;
-      }
+      if (!w.ok) return w;
       // 用量增量记账(files/bytes);覆盖写扣除旧体积。
       this.accountFileUsageChange(resolved.usageTarget, st?.isFile() ? st.size : null, decoded.bytes.byteLength);
       await this.recordUsageMutationUnlocked();
@@ -1326,7 +1325,6 @@ export class LibraryVault {
           await fh.close();
         }
       } catch (err) {
-        this.usageNeedsRescan = true;
         await this.abortStreamUnlocked(stream.streamId).catch(() => {});
         return this.tmpFailure(err, '分块提交失败(主机 IO 错误)');
       }
@@ -1337,6 +1335,7 @@ export class LibraryVault {
       }
       const prior = await this.lstatTarget(resolved.target);
       const publishing = path.join(path.dirname(resolved.target), `.cindy-library-publish-${randomUUID()}.tmp`);
+      let published = false;
       try {
         req.assertCurrent?.();
         await fs.promises.mkdir(path.dirname(resolved.target), { recursive: true });
@@ -1346,12 +1345,15 @@ export class LibraryVault {
         await fs.promises.rename(stream.tmpAbs, publishing);
         req.assertCurrent?.();
         await replaceFile(publishing, resolved.target);
+        published = true;
       } catch (err) {
-        this.usageNeedsRescan = true;
         await this.abortStreamUnlocked(stream.streamId).catch(() => {});
         return this.tmpFailure(err, '分块提交失败(主机 IO 错误)');
       } finally {
-        await fs.promises.rm(publishing, { force: true });
+        await fs.promises.rm(publishing, { force: true }).catch((err) => {
+          if (published) this.usageNeedsRescan = true;
+          throw err;
+        });
       }
       const after = await this.lstatTarget(resolved.target);
       if (!after || !after.isFile()) {
@@ -1748,6 +1750,7 @@ export class LibraryVault {
       const checkpoint = await this.prepareUsageMutationUnlocked();
       if (checkpoint) return checkpoint;
       const identity = { dev: st.dev, ino: st.ino };
+      let linked = false;
       try {
         await fs.promises.mkdir(path.dirname(dst.target), { recursive: true });
         if (req.overwrite === true) {
@@ -1757,10 +1760,11 @@ export class LibraryVault {
           // link+unlink 两步之间崩溃会留下两份同容文件(内容不变,无损坏),
           // 下次覆盖写/rename 自愈——比「先查再 rename」的 TOCTOU 窗口安全。
           await fs.promises.link(src.target, dst.target);
+          linked = true;
           await fs.promises.unlink(src.target);
         }
       } catch (err) {
-        this.usageNeedsRescan = true;
+        if (linked) this.usageNeedsRescan = true;
         return this.tmpFailure(err, '重命名失败(主机 IO 错误)');
       }
       const after = await this.lstatTarget(dst.target);
