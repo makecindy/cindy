@@ -248,7 +248,6 @@ import {
   onSubscriptionPoolClaudeModelsChanged,
   onSubscriptionAccountsChanged,
   readSubscriptionPoolCodexModels,
-  lastConfirmedSubscriptionModelsAt,
   resetDefaultSubscriptionCodexDiscovery,
   resetDefaultSubscriptionClaudeDiscovery,
   readSubscriptionAccountBlocked,
