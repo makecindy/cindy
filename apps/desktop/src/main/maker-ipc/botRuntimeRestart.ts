@@ -28,9 +28,6 @@ export async function restartBotRuntime(
     controller.signal.throwIfAborted();
   };
   assertCurrent();
-  await deps.ensureQueueRestored(sessionId);
-  assertCurrent();
-  deps.stopInput(sessionId);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
@@ -39,18 +36,23 @@ export async function restartBotRuntime(
       reject(error);
     }, 30_000);
   });
-  const operation = deps.withSessionLock(sessionId, async () => {
-    assertCurrent();
-    // 暂停来源先落盘,再重建运行时:重建成功即意味着「用户已收手」这件事是持久的。
-    // 落盘失败就让重启失败(explicitStopImpl 同款:失败此时才抛),不带着未落盘的
-    // 暂停来源报成功。
-    await deps.flushStopPersistence?.(sessionId);
-    assertCurrent();
-    await deps.rebuild(sessionId, assertCurrent, controller.signal);
-    assertCurrent();
-    deps.onClosed(sessionId);
-  });
   try {
+    // withSessionLock installs the restart fence synchronously before its first await.
+    // Start it before queue restoration so slow DB reads are bounded and cannot admit sends.
+    const operation = deps.withSessionLock(sessionId, async () => {
+      assertCurrent();
+      await deps.ensureQueueRestored(sessionId);
+      assertCurrent();
+      deps.stopInput(sessionId);
+      // 暂停来源先落盘,再重建运行时:重建成功即意味着「用户已收手」这件事是持久的。
+      // 落盘失败就让重启失败(explicitStopImpl 同款:失败此时才抛),不带着未落盘的
+      // 暂停来源报成功。
+      await deps.flushStopPersistence?.(sessionId);
+      assertCurrent();
+      await deps.rebuild(sessionId, assertCurrent, controller.signal);
+      assertCurrent();
+      deps.onClosed(sessionId);
+    });
     await Promise.race([operation, timeout]);
   } finally {
     clearTimeout(timer);

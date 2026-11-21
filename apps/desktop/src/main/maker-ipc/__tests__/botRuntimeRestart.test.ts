@@ -160,6 +160,59 @@ describe('Bot runtime restart', () => {
     expect(order).toEqual(['restore', 'stop', 'flush', 'rebuild']);
   });
 
+  it('fences sends and bounds a stalled queue restore before stopping input', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：restartBotRuntime + withSessionRestartLock；快照恢复挂起时，新发送被拒绝且重启 30 秒内失败。
+    // - Bug／规则依据：#7512 Codex P2，重启 fence 与超时必须覆盖队列恢复。
+    // - 现有覆盖缺口：既有超时用例只挂在 rebuild，未覆盖 restore 尚未完成的窗口。
+    // - 最小失败输入：ensureQueueRestored 不结束，同时尝试向同一 session 发送。
+    // - tier：unit；通过真实 restart lock 和注入的挂起恢复依赖验证时序。
+    // - 实测耗时：4.74s wall（单文件 Vitest）。
+    vi.useFakeTimers();
+    const deps = harness();
+    let finishRestore!: () => void;
+    let enteredRestore!: () => void;
+    const restoreEntered = new Promise<void>((resolve) => { enteredRestore = resolve; });
+    let lockSettled!: () => void;
+    const restartLockSettled = new Promise<void>((resolve) => { lockSettled = resolve; });
+    deps.ensureQueueRestored.mockImplementation(async () => {
+      enteredRestore();
+      await new Promise<void>((resolve) => { finishRestore = resolve; });
+    });
+    deps.withSessionLock = async (id, run) => {
+      try {
+        return await withSessionRestartLock(id, run);
+      } finally {
+        lockSettled();
+      }
+    };
+
+    const operation = restartBotRuntime('restore-hung', vi.fn(), deps);
+    const failed = expect(operation).rejects.toThrow('timed out');
+    await restoreEntered;
+    const send = vi.fn();
+    await expect(withSendToSessionLock('restore-hung', send)).rejects.toThrow(
+      'restart is still in progress',
+    );
+    const otherSend = vi.fn();
+    await withSendToSessionLock('other-bot', otherSend);
+    expect(otherSend).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await failed;
+    expect(deps.stopInput).not.toHaveBeenCalled();
+    expect(deps.flushStopPersistence).not.toHaveBeenCalled();
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    await expect(withSendToSessionLock('restore-hung', send)).rejects.toThrow(
+      'restart is still in progress',
+    );
+
+    finishRestore();
+    await restartLockSettled;
+    expect(deps.stopInput).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('fails the restart before stopping when the queue snapshot cannot be restored', async () => {
     const deps = harness();
     deps.ensureQueueRestored.mockImplementation(async () => { throw new Error('snapshot read failed'); });
