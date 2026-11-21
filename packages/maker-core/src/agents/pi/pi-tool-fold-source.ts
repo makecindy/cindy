@@ -510,7 +510,9 @@ export default function (pi) {
     parameters: {
       type: 'object',
       properties: {
-        call_id: { type: 'string', minLength: 1, maxLength: 256, description: 'Tool call id from the folded or truncated record.' },
+        // 上限按 Pi 可能发出的最长调用 id 定：Gemini 历史里出现过 2,000+ 字符的 id，
+        // 折叠/截断提示写的是完整 id，约束必须容得下它，否则提示要求的值取不回原文。
+        call_id: { type: 'string', minLength: 1, maxLength: 4096, description: 'Tool call id from the folded or truncated record.' },
       },
       required: ['call_id'],
       additionalProperties: false,
