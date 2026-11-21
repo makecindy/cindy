@@ -5532,8 +5532,8 @@
       "workerHardLimitHint": "Maximum number of Workers allowed. Must be greater than or equal to the soft limit.",
       "idleRelease": "Idle Release (minutes)",
       "idleReleaseHint": "Set 0 to disable background auto-release; positive values release workers after this many idle minutes.",
-      "dispatchClaimVerification": "Verify dispatch claims",
-      "dispatchClaimVerificationHint": "Check that the Lead really dispatched before it reports a task as sent. An unbacked claim gets one correction and then a notification."
+      "dispatchClaimVerification": "Verify turn declarations",
+      "dispatchClaimVerificationHint": "Check the assignments and dispatches the Lead declares at turn end against the host's own dispatch records. A mismatch gets one correction and then a notification."
     },
     "agentResource": {
       "saveFailed": "Failed to save. Try again.",

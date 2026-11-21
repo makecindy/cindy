@@ -5590,8 +5590,8 @@
       "workerHardLimitHint": "Número máximo de Workers permitidos. Tem de ser >= ao limite indicativo.",
       "idleRelease": "Libertação por inatividade (minutos)",
       "idleReleaseHint": "Defina 0 para desativar a libertação automática em segundo plano; valores positivos libertam os Workers após este número de minutos de inatividade.",
-      "dispatchClaimVerification": "Verificar envios declarados",
-      "dispatchClaimVerificationHint": "Confirma se o Lead realmente enviou o trabalho antes de dar uma tarefa como enviada. Uma afirmação sem apoio é corrigida uma vez e, depois, és notificado."
+      "dispatchClaimVerification": "Verificar declarações de turno",
+      "dispatchClaimVerificationHint": "Confere as atribuições e envios que o Lead declara no fim do turno com os registos do host. Se não coincidirem, há uma correção e depois um aviso."
     },
     "agentResource": {
       "saveFailed": "Não foi possível guardar. Tente novamente.",

@@ -5489,8 +5489,8 @@
       "workerHardLimitHint": "許建立之 Worker 最大數，須不小於軟上限。",
       "idleRelease": "閒時釋放（分鐘）",
       "idleReleaseHint": "設為 0 則闔後臺自動釋放；正數謂閒逾此時長即自釋放。",
-      "dispatchClaimVerification": "核遣單之議",
-      "dispatchClaimVerificationHint": "Lead 雲已遣於 Worker 者，按宿主所記核之。虛言先正一次，再虛則告。"
+      "dispatchClaimVerification": "核回合之陳",
+      "dispatchClaimVerificationHint": "Lead 收口所陳指派與遣發，按宿之遣單核之。不合則正一次，仍未合則告。"
     },
     "agentResource": {
       "saveFailed": "存之未成，請再試。",

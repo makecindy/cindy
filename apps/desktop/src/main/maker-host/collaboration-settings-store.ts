@@ -7,7 +7,7 @@
  *  - softLimit: 5
  *  - hardLimit: 8
  *  - idleReleaseMinutes: 0 (disabled)
- *  - dispatchClaimVerification: true（Lead 派单主张对账，见 docs/dev-rules/orca-team-architecture.md）
+ *  - dispatchClaimVerification: true（Lead 回合声明与派发凭据对账，见 docs/dev-rules/orca-team-architecture.md）
  */
 
 import { app } from 'electron';

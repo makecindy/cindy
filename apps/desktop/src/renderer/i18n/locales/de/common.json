@@ -5532,8 +5532,8 @@
       "workerHardLimitHint": "Maximal zulässige Anzahl an Workern. Muss >= dem weichen Limit sein.",
       "idleRelease": "Bei Inaktivität freigeben (Minuten)",
       "idleReleaseHint": "Setze den Wert auf 0, um die automatische Freigabe im Hintergrund zu deaktivieren. Positive Werte geben Worker nach dieser Anzahl inaktiver Minuten frei.",
-      "dispatchClaimVerification": "Übergaben prüfen",
-      "dispatchClaimVerificationHint": "Prüft, ob der Lead wirklich einen Auftrag übergeben hat, bevor er eine Übergabe als erfolgt meldet. Eine unbelegte Angabe wird einmal korrigiert, danach wirst du benachrichtigt."
+      "dispatchClaimVerification": "Turn-Erklärungen prüfen",
+      "dispatchClaimVerificationHint": "Gleiche die Zuweisungen und Übergaben, die Lead am Turn-Ende erklärt, mit den Übergabeaufzeichnungen des Hosts ab. Bei Abweichung gibt es eine Korrektur, danach eine Benachrichtigung."
     },
     "agentResource": {
       "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",

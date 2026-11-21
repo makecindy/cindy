@@ -5590,8 +5590,8 @@
       "workerHardLimitHint": "Nombre maximal de Workers autorisés. Doit être >= à la limite souple.",
       "idleRelease": "Libération après inactivité (minutes)",
       "idleReleaseHint": "Définissez 0 pour désactiver la libération automatique en arrière-plan ; une valeur positive libère les Workers après ce nombre de minutes d'inactivité.",
-      "dispatchClaimVerification": "Vérifier les envois annoncés",
-      "dispatchClaimVerificationHint": "Vérifie que le Lead a réellement envoyé le travail avant d’annoncer une tâche comme envoyée. Une affirmation non étayée est corrigée une fois, puis tu es prévenu."
+      "dispatchClaimVerification": "Vérifier les déclarations de tour",
+      "dispatchClaimVerificationHint": "Compare les affectations et envois déclarés par Lead en fin de tour aux enregistrements de l'hôte. En cas d'écart, une correction puis une notification."
     },
     "agentResource": {
       "saveFailed": "Échec de l'enregistrement. Réessayez.",

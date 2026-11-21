@@ -529,12 +529,6 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
 
-### Dispatch claim
-
-Lead 声称已把任务派给 Worker 的说法。宿主按本轮派发记录核对：声称与记录不符时先要求 Lead 用队列编号补证，仍不符才升级落卡。中文用「派发主张」，与仓库既有的「派发任务」一致；「派单」是同一条 PR 早期文案里的另一种写法，已统一弃用。日语用「派遣主張」，韩语用「파견 주장」，德语用「Übergabe」（移交），西语、法语、葡语用 envío declarado、envoi annoncé、envio declarado 的「声明」形式。文言变体另有「遣单」，按 minorityByDesign 声明。
-
-已确定禁用：`派单（仅当英文含 dispatch）`（zh-CN）、`派單（仅当英文含 dispatch）`（zh-TW）、`派单（仅当英文含 dispatch）`（zh-Hans-x-lzh）、`派單（仅当英文含 dispatch）`（zh-Hant-x-lzh）、`발송（仅当英文含 dispatch）`（ko）、`Versand（仅当英文含 dispatch）`（de）
-
 ### Dissolve group
 
 Irreversible group termination, distinct from archive, leave and personal list removal.
@@ -1040,6 +1034,10 @@ Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 
 ### Token Plan
 
 阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。
+
+### Turn declaration
+
+Lead 每轮收口交给宿主的指派与派发账（report_turn 的 assignments / dispatched / pending）。中文用「回合声明」；日语「ターン宣言」，韩语「턴 선언」，德语「Turn-Erklärung」，西语、法语、葡语用 declaración / déclaration de turno。派发动作本身仍用既有的「派发」「派遣」「파견」「Übergabe」「envío」「envoi」「envio」。
 
 ### Ultrafast
 
