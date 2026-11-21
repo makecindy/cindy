@@ -41,6 +41,22 @@ describe('get_chat_history remote errors', () => {
 });
 
 describe('get_chat_history cursor pagination', () => {
+  it('adds one image viewing hint when history content contains a managed image', async () => {
+    const history = {
+      listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
+      getMessages: vi.fn(async () => ({ ok: true as const, page: {
+        items: [{ id: 'm1', sessionId: 'task', sessionWorkingDir: null, sessionAgentKind: 'cc', sessionTitle: 'Task',
+          role: 'user', content: { text: 'see cindy-media://blobs/' + 'a'.repeat(64) + '.png' }, toolUseId: null,
+          agentMeta: null, createdAt: 1000, rewindAt: null }], nextCursor: null, hasMore: false,
+      } })),
+    } satisfies XdtHelperHistoryDeps;
+    const registry = new XdtHelperToolRegistry();
+    registerGetChatHistoryTool(registry, { history });
+    const result = parseText(await registry.call('get_chat_history', { session_ids: ['task'] })) as Record<string, unknown>;
+    expect(result.image_view_hint).toContain('resolve_local_path');
+    expect(result.image_view_hint).toContain('重发');
+  });
+
   // Unit, lifecycle #15: the storage row id differs from the UI/native anchor.
   // Existing cursor cases never expose a message, so they cannot catch losing clientId.
   it.each([undefined, 'native-anchor'])('preserves optional message clientId %s for history operations', async clientId => {

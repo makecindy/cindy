@@ -54,6 +54,19 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('search_chat_history tool', () => {
+  it('adds one image viewing hint when a hit context contains a managed image', async () => {
+    const { registry } = setup(makeResult({
+      hits: [{ messageId: 'm1', sessionId: 's1', role: 'user', createdAt: 1000, snippet: null,
+        score: 1, ftsRank: null, vectorRank: null, vectorDistance: null, context: [{
+          id: 'm1', sessionId: 's1', role: 'user', content: 'cindy-media://blobs/' + 'b'.repeat(64) + '.jpg',
+          toolUseId: null, agentMeta: null, createdAt: 1000, rewindAt: null, isHit: true,
+        }] }],
+    }));
+    const result = parse(await registry.call('search_chat_history', { query: 'image' }));
+    expect(result.image_view_hint).toContain('resolve_local_path');
+    expect(result.image_view_hint).toContain('重发');
+  });
+
   it('超长 query → INVALID_ARGS (zod)', async () => {
     const { registry, searchChatHistory } = setup(makeResult());
     const res = await registry.call('search_chat_history', { query: '边'.repeat(257) });

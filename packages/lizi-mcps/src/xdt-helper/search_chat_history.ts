@@ -32,6 +32,7 @@ import { okPayload, errorPayload } from './_payload.js';
 import { parseIsoMs } from './_history_time.js';
 import { stringArrayParam } from './_array-param.js';
 import { resolveHistoryScope } from './_history_scope.js';
+import { containsManagedImageReference, HISTORY_IMAGE_VIEW_HINT } from './historyImageHint.js';
 import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } from './_history_devices.js';
 
 const ROLE_VALUES = [
@@ -209,39 +210,41 @@ export function registerSearchChatHistoryTool(
           ...(args.teammate_id ? { teammateId: args.teammate_id } : {}) }).catch(() => null)
         : null;
       const cloudPage = cloud ? cloudHitsPage(cloud.hits, limit) : null;
+      const outputHits = result.hits.map((h) => {
+        const out: Record<string, unknown> = {
+          messageId: h.messageId,
+          sessionId: h.sessionId,
+          role: h.role,
+          createdAt: new Date(h.createdAt).toISOString(),
+          score: h.score,
+          context: h.context.map((c) => {
+            const cm: Record<string, unknown> = {
+              id: c.id,
+              sessionId: c.sessionId,
+              role: c.role,
+              content: c.content,
+              createdAt: new Date(c.createdAt).toISOString(),
+              isHit: c.isHit,
+            };
+            if (c.toolUseId !== null) cm.toolUseId = c.toolUseId;
+            if (c.agentMeta !== null && c.agentMeta !== undefined) cm.agentMeta = c.agentMeta;
+            if (c.rewindAt !== null) cm.rewindAt = new Date(c.rewindAt).toISOString();
+            return cm;
+          }),
+        };
+        if (h.snippet !== null) out.snippet = h.snippet;
+        if (h.ftsRank !== null) out.ftsRank = h.ftsRank;
+        if (h.vectorRank !== null) out.vectorRank = h.vectorRank;
+        if (h.vectorDistance !== null) out.vectorDistance = h.vectorDistance;
+        return out;
+      });
       return okPayload({
         ...(cloudPage?.hits.length ? { cloud_hits: cloudPage.hits } : {}),
         ...(cloud?.incomplete || cloudPage?.continueTo ? { cloud_incomplete: true } : {}),
         ...(cloudPage?.continueTo ? { cloud_continue_to: cloudPage.continueTo } : {}),
         ...(cloud?.failed.length ? { cloud_failed: cloud.failed } : {}),
-        hits: result.hits.map((h) => {
-          const out: Record<string, unknown> = {
-            messageId: h.messageId,
-            sessionId: h.sessionId,
-            role: h.role,
-            createdAt: new Date(h.createdAt).toISOString(),
-            score: h.score,
-            context: h.context.map((c) => {
-              const cm: Record<string, unknown> = {
-                id: c.id,
-                sessionId: c.sessionId,
-                role: c.role,
-                content: c.content,
-                createdAt: new Date(c.createdAt).toISOString(),
-                isHit: c.isHit,
-              };
-              if (c.toolUseId !== null) cm.toolUseId = c.toolUseId;
-              if (c.agentMeta !== null && c.agentMeta !== undefined) cm.agentMeta = c.agentMeta;
-              if (c.rewindAt !== null) cm.rewindAt = new Date(c.rewindAt).toISOString();
-              return cm;
-            }),
-          };
-          if (h.snippet !== null) out.snippet = h.snippet;
-          if (h.ftsRank !== null) out.ftsRank = h.ftsRank;
-          if (h.vectorRank !== null) out.vectorRank = h.vectorRank;
-          if (h.vectorDistance !== null) out.vectorDistance = h.vectorDistance;
-          return out;
-        }),
+        hits: outputHits,
+        ...(containsManagedImageReference(outputHits) ? { image_view_hint: HISTORY_IMAGE_VIEW_HINT } : {}),
         sessions: Object.fromEntries(Object.entries(result.sessions).map(([id, meta]) => [id, {
           ...meta,
           ...(deps.history.sessionUrl ? { sessionUrl: deps.history.sessionUrl(id) } : {}),
