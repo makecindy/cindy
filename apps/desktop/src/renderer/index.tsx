@@ -19,6 +19,7 @@ const isSidebarWindow = urlParams.get('sidebarWindow') === '1';
 const isRegionScreenshot = urlParams.get('regionScreenshot') === '1';
 const isRegionScreenshotEditor = urlParams.get('regionScreenshotEditor') === '1';
 const isRegionScreenshotPin = urlParams.get('regionScreenshotPin') === '1';
+const isQuotaTray = urlParams.get('quotaTray') === '1';
 
 void i18nReady
   .then(() =>
@@ -36,7 +37,9 @@ void i18nReady
             ? import('./region-screenshot-entry')
             : isRegionScreenshotPin
               ? import('./region-screenshot-pin-entry')
-              : import('./main-entry'),
+              : isQuotaTray
+                ? import('./quota-tray-entry')
+                : import('./main-entry'),
   )
   .catch((error: unknown) => {
     // 入口加载失败发生在 React boundary 之前，仍通过统一 renderer logger 落盘。

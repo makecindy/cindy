@@ -13,7 +13,12 @@ export interface AgentNetSocketOptions extends Omit<PortableSocketOptions, 'clie
   udp?: boolean;
   bindAddress?: string;
   stunServers?: string[];
+  /** The relay's UDP address for relayed datagrams; see TransportOptions.relayUdpServer. */
+  relayUdpServer?: string;
+  /** Offer and accept only public direct-path candidates (tests and benchmarks force the relay path with it). */
+  publicCandidatesOnly?: boolean;
   tap?: TransportOptions['tap'];
+  udpTraffic?: TransportOptions['udpTraffic'];
 }
 /** Node bindings; device-link routing and framing are shared with mobile. */
 export class AgentNetSocket extends PortableSocket {
@@ -42,6 +47,8 @@ export class AgentNetSocket extends PortableSocket {
       createTransport: request => createCoreTransport({ ...request,
         identity: options.client.identity.transportPrivateKey, module: options.module,
         bindAddress: options.bindAddress, udp: options.udp, stunServers: options.stunServers, tap: options.tap,
+        udpTraffic: options.udpTraffic,
+        relayUdpServer: options.relayUdpServer, publicCandidatesOnly: options.publicCandidatesOnly,
       }),
       createDiscovery: request => {
         const lan = new LanDiscovery({ ...request, identity: options.client.identity, interfaceAddress: options.bindAddress });

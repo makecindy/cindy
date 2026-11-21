@@ -41,6 +41,8 @@ export interface CardMasonryProps<T> {
   /** 拖拽落定写回的新 1 维顺序;与列表 / rail 同一份 manualPinnedOrder 契约。 */
   onReorder: (newOrderIds: string[]) => void;
   reducedMotion: boolean;
+  /** 自动排序时只展示卡片，不能通过拖拽改写顺序。 */
+  disabled?: boolean;
   /** SortableJS 跨列拖拽的 group 名;默认 'pinned-cards'。 */
   groupId?: string;
   /** 与 SortableList 同口径；置顶卡片用原生 DnD 兼容分屏 drop。 */
@@ -53,6 +55,7 @@ export function CardMasonry<T>({
   renderItem,
   onReorder,
   reducedMotion,
+  disabled = false,
   groupId,
   forceFallback = true,
 }: CardMasonryProps<T>) {
@@ -81,6 +84,7 @@ export function CardMasonry<T>({
         {columns === 1 ? (
           <SortableList
             items={items}
+            disabled={disabled}
             getId={getId}
             onReorder={onReorder}
             reducedMotion={reducedMotion}
@@ -91,6 +95,7 @@ export function CardMasonry<T>({
         ) : (
           <DraggableCardColumns
             items={items}
+            disabled={disabled}
             columns={columns}
             getId={getId}
             renderItem={renderItem}

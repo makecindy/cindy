@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   dispatchFactsForTurn,
+  dispatchReconcileFloor,
   dropLeadDispatchFact,
   noteLeadDispatchFact,
   noteLeadTurnDeclaration,
@@ -119,6 +120,54 @@ describe('lead turn declaration reconciliation', () => {
       targets: ['research'],
       detail: 'research',
     });
+  });
+
+  it('matches a queued message id against every dispatch the worker received', () => {
+    for (const id of ['mq-1', 'mq-2']) {
+      noteLeadDispatchFact('lead-1', fact({ dispatchId: id, queuedMessageId: id }));
+    }
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
+      dispatched: [{ workerId: 'worker-1', messageId: 'mq-1' }],
+      pending: [],
+      turnGeneration: 0,
+    });
+
+    expect(
+      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
+    ).toEqual({ consistent: true });
+  });
+
+  it('keeps the record window at the turn that started the incident across the wake turn', () => {
+    noteLeadDispatchFact(
+      'lead-1',
+      fact({
+        dispatchId: 'mq-4',
+        queuedMessageId: 'mq-4',
+        turnGeneration: 4,
+        at: Date.now() - 60_000,
+      }),
+    );
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
+      dispatched: [],
+      pending: [],
+      turnGeneration: 4,
+    });
+    expect(reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 4)).consistent).toBe(
+      false,
+    );
+    expect(settleDispatchClaimIncident('lead-1', false, 4)).toBe('wake');
+
+    // 唤醒开的新一轮：账仍是第 4 轮那笔，凭据不能被新一轮的生成号挡掉。
+    const floor = dispatchReconcileFloor('lead-1', 7);
+    expect(floor).toBe(4);
+    expect(
+      dispatchFactsForTurn('lead-1', 7, floor).map((entry) => entry.dispatchId),
+    ).toEqual(['mq-4']);
+
+    settleDispatchClaimIncident('lead-1', true, 7);
+    expect(dispatchReconcileFloor('lead-1', 7)).toBe(7);
   });
 
   it('stays silent on a turn that dispatched nothing and declared nothing', () => {

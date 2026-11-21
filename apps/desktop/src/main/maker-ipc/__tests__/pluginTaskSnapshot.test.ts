@@ -15,9 +15,10 @@ import { createGhostProductionCallbacks } from '../../cindy-brain/__tests__/ghos
 import { clampPluginTaskPermissionMode } from '../../cindy-brain/pluginTaskPrefsStore.js';
 import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
 import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog.js';
-import { setSessionRuntimeHarness } from '../sessionRuntimeHarnessSelection.js';
-import { resolveSessionRuntimeAxes } from '../sessionRuntimeControl.js';
-import { findCatalogModel } from '@cindy/model-providers';
+import * as sessionAgentSwitch from '../sessionAgentSwitchHandler.js';
+import { getSessionRuntimeControlSnapshot } from '../sessionRuntimeControl.js';
+import { createSessionControlService, type SessionControlServiceDeps } from '../sessionControlService.js';
+import { createSessionControlRuntimeWriter } from '../sessionControlRuntimeWriter.js';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 
@@ -56,6 +57,7 @@ it.each(['other-computer', 'share:provider'])('forwards %s from the production t
   const declaration = tree.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'createPluginTaskSession')!;
   const openSession = vi.fn(async ({ body }: { body: object }) => ({ row: body }));
   const create = compile(`return (${declaration.getText(tree).replace(/^export\s+/, '')});`, {
+    getCurrentDbClientSnapshot: () => 'owner', projectForNewTask: async () => ({ projectDir: null, workspaceKind: 'dialogue' }),
     openSession, normalizeWorkingDirForStorage: (value: string) => value, log: { info: vi.fn() },
   });
   await create({ ghostId: 'p', sessionId: 'task', title: 'Remote', agentKind: 'codex', providerId: 'same', model: 'model',
@@ -76,42 +78,41 @@ function handler(kind: string, next: string, deps: Record<string, unknown>) {
   return compile(`return async function(pluginId,request){switch(request.kind){${branch}}}`, deps);
 }
 
-// Unlike the existing helper fixture, this runs register's actual runtime adapter.
+// Unlike the existing helper fixture, this runs the production runtime writer.
 // A remote-only model and an unavailable local catalog must still stage the exact source.
 it.each(['other-computer', 'share:provider'])('uses the %s catalog in the production runtime controller', async agentDeviceId => {
-  const start = source.indexOf('    setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) =>');
-  const property = source.slice(start, source.indexOf('    assertExternalInputAllowed:', start)).trim().replace(/,$/, '');
   const remote = vi.fn(async () => [{ id: 'remote-only', name: 'Remote', source: 'user', connected: true,
     agents: ['codex'], routing: { codex: {} }, models: { codex: [{ id: 'model', efforts: ['high'] }] } }]);
   const local = vi.fn(() => { throw Error('Local catalog must not be used'); });
   let pending: Record<string, unknown> | undefined;
-  const stage = vi.fn(async (_deps: unknown, selection: {
-    targetAgentKind: string; model: string; providerId: string; effort: string; fastMode: boolean; agentDeviceId: string;
-  }) => {
+  const stage = vi.fn<typeof sessionAgentSwitch.performSessionAgentSwitch>(async (_deps, selection) => {
     pending = { runtimeSource: 'agent', targetAgentKind: selection.targetAgentKind, model: selection.model,
       providerId: selection.providerId, effort: selection.effort, fastMode: selection.fastMode,
       targetAgentDeviceId: selection.agentDeviceId };
-    return { deferred: true };
+    return { switched: false, agentKind: 'codex', model: 'old', engineReady: false, deferred: true };
   });
-  const run = compile(`return ({${property}}).setSessionRuntime;`, {
-    setSessionRuntimeHarness, withSendToSessionLock: async (_id: string, work: () => Promise<unknown>) => work(),
-    captureSessionRuntimeControlOwnerEpoch: () => 'owner', getSessionRuntimeControlSnapshot: () => ({ generation: 4 }),
+  const ports = {
     agentSwitchPending: { revision: () => 0, get: () => pending },
     readSessionRuntimeProfiles: async () => ({ effective: { agentKind: 'codex', model: 'old', effort: null, fastMode: false } }),
     readUsableAgentDeviceProviders: remote, getDesktopProviderService: local, assertModelRouteUsable: local,
-    findCatalogModel, resolveSessionRuntimeAxes, performSessionAgentSwitch: stage, agentSwitchDeps: {},
-    throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
+    agentSwitchDeps: {},
     updateScheduledPreference: async () => true, reconcileBotModelRoute: { acceptTaskChoice: async () => {} },
-  });
-  const request = { targetSessionId: 'task', expectedGeneration: 4,
-    patch: { harness: 'codex', agentDeviceId, model: 'model', providerId: 'remote-only', effort: 'high', fastMode: false } };
-  expect(await run(request)).toMatchObject({ ok: true, pendingMutation: { profile: { agentDeviceId, model: 'model' } } });
-  expect(remote).toHaveBeenCalledWith(agentDeviceId, 'codex', 'model', 'remote-only');
-  expect(stage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentDeviceId, providerId: 'remote-only' }));
-  expect(local).not.toHaveBeenCalled();
-  remote.mockResolvedValueOnce([]);
-  expect(await run(request)).toMatchObject({ ok: false, errorCode: 'ROUTE_UNAVAILABLE' });
-  expect(stage).toHaveBeenCalledTimes(1);
+  };
+  const run = createSessionControlRuntimeWriter(ports as unknown as Parameters<typeof createSessionControlRuntimeWriter>[0]);
+  const request = { targetSessionId: 'task', expectedGeneration: getSessionRuntimeControlSnapshot('task').generation,
+    patch: { harness: 'codex' as const, agentDeviceId, model: 'model', providerId: 'remote-only', effort: 'high' as const, fastMode: false } };
+  const switchRoute = vi.spyOn(sessionAgentSwitch, 'performSessionAgentSwitch').mockImplementation(stage);
+  try {
+    expect(await run(request)).toMatchObject({ ok: true, pendingMutation: { profile: { agentDeviceId, model: 'model' } } });
+    expect(remote).toHaveBeenCalledWith(agentDeviceId, 'codex', 'model', 'remote-only');
+    expect(stage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentDeviceId, providerId: 'remote-only' }));
+    expect(local).not.toHaveBeenCalled();
+    remote.mockResolvedValueOnce([]);
+    expect(await run(request)).toMatchObject({ ok: false, errorCode: 'ROUTE_UNAVAILABLE' });
+    expect(stage).toHaveBeenCalledTimes(1);
+  } finally {
+    switchRoute.mockRestore();
+  }
 });
 
 // Remote output is persisted on the task computer. Read the production history
@@ -138,12 +139,55 @@ it('reads remote output from its own task history and withholds it after plugin 
   await expect(run('p', { kind: 'readMessages', taskId: 'own-remote-task' })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
 });
 
+// PR #10988: the old live Agent must not veto a permission supported by the
+// selected Agent. Existing adapters mocked SessionControlService's mixed validation.
+// One Codex -> Claude acceptEdits continuation; real control service, unit tier.
+it('applies project permission only after the selected idle Agent has replaced the old one', async () => {
+  const start = source.indexOf('      setModel: async (');
+  const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:', start)).trim().replace(/,$/, '');
+  let effective = { agentKind: 'codex' as 'codex' | 'claude-code', model: 'old', providerId: 'old', effort: null, fastMode: false };
+  let pending: typeof effective | null = null;
+  let generation = 0;
+  let permission = 'auto';
+  const live = { agentKind: effective.agentKind, isTurnRunning: () => false, getTurnControlSnapshot: () => ({}),
+    capabilities: { permissionModes: [{ id: 'ask' }, { id: 'auto' }], setPermissionModeMidSession: { supported: true } } };
+  const writePermission = vi.fn(async ({ mode, beforeMutation }: { mode: string; beforeMutation?: () => Promise<void> }) => {
+    await beforeMutation?.();
+    if (!live.capabilities.permissionModes.some(item => item.id === mode)) throw Error('Old Agent cannot use this permission');
+    permission = mode;
+  });
+  const control = createSessionControlService({
+    sessionExists: async () => true, getLiveSession: () => live,
+    getSessionActivitySnapshot: async () => ({}),
+    getSessionRuntimeDetails: async () => ({ runtimeGeneration: generation, effectiveProfile: effective,
+      baselineProfile: effective, pendingMutation: pending ? { profile: pending } : null, permissionMode: permission }),
+    setSessionRuntime: async ({ patch, beforeMutation }: Parameters<SessionControlServiceDeps['setSessionRuntime']>[0]) => {
+      await beforeMutation?.();
+      pending = { ...effective, ...patch, agentKind: patch.harness ?? effective.agentKind } as typeof effective;
+      return { ok: true, status: 'deferred', generation: ++generation, effectiveProfile: effective, pendingMutation: { profile: pending } };
+    },
+    setSessionPermissionMode: writePermission,
+  } as unknown as SessionControlServiceDeps);
+  const handoff = vi.fn(async () => {
+    effective = pending!; pending = null;
+    live.agentKind = 'claude-code'; live.capabilities.permissionModes = [{ id: 'ask' }, { id: 'acceptEdits' }];
+  });
+  const apply = compile(`return ({${property}}).setModel;`, {
+    PluginTaskError, sessionControlService: control, agentSwitchDeps: {}, applyPendingAgentSwitchIfIdle: handoff,
+  });
+  await expect(apply('task', { agentKind: 'cc', providerId: 'claude', model: 'model', effort: '', fastMode: false },
+    async () => {}, 'acceptEdits')).resolves.toEqual({ status: 'applied' });
+  expect(handoff).toHaveBeenCalledOnce();
+  expect(permission).toBe('acceptEdits');
+  expect(writePermission).toHaveBeenCalledOnce();
+});
+
 it.each([
   {pending:'claude-code', target:'codex', harness:'codex'},
   {pending:undefined, target:'cc', harness:'claude-code'},
   {pending:undefined, target:'codex', harness:undefined},
 ])('routes an explicit model choice through the correct runtime controller: %j', async ({pending,target,harness}) => {
-  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const start = source.indexOf('      setModel: async (');
   const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:',start)).trim().replace(/,$/, '');
   const set = vi.fn(async () => ({ok:true,status:'applied'}));
   const apply = compile(`return ({${property}}).setModel;`, {PluginTaskError,sessionControlService:{
@@ -164,7 +208,7 @@ it.each([
   { current: 'share:provider', target: undefined },
   { current: 'share:provider', target: 'share:provider' },
 ])('stages the complete source change $current → $target without touching the active turn', async ({ current, target }) => {
-  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const start = source.indexOf('      setModel: async (');
   const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:', start)).trim().replace(/,$/, '');
   const set = vi.fn(async () => ({ ok: true, status: 'deferred' }));
   const apply = compile(`return ({${property}}).setModel;`, { PluginTaskError, sessionControlService: {
@@ -242,7 +286,7 @@ it('keeps a verified remote provider group as the source while rejecting an unre
 });
 
 it.each(['codex', 'cc'])('rechecks preferences after runtime admission waits for %s', async agentKind => {
-  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const start = source.indexOf('      setModel: async (');
   const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:', start)).trim().replace(/,$/, '');
   let selectedModel = 'selected';
   let release!: () => void;

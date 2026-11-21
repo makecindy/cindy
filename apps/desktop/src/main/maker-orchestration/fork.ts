@@ -28,13 +28,14 @@ import { sessionToCamel } from '../localDb/mapper';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
 import { commitContextRebuild, createMessage } from '../localDb/ipc/messages.js';
 import { getMaker } from '../maker-host/index.js';
+import { resolveDesktopHandoffWindow } from '../maker-host/model-context-settings.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import { copySessionContextWindowBudget, pruneSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
 import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
-import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
+import { buildHandoff, handoffPreviewText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
 import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 import {
   type ClaudeTranscriptAnchorIndex,
@@ -66,7 +67,11 @@ export async function createSideChat(sourceSessionId: string): Promise<Session> 
   if (!source || source.status !== 'active') {
     throw forkError('SOURCE_NOT_FOUND', 'Source task is unavailable');
   }
-  if (source.source === 'side-chat' || source.source === 'review' || source.source === 'bot') {
+  if (source.agentKind === 'acp') {
+    // Plugin engines keep their own history; Cindy cannot fork it (docs/plans/acp-plugin-bridge.md).
+    throw forkError('UNSUPPORTED_HISTORY', 'Tasks running on a plugin engine cannot be forked');
+  }
+  if ((source.source === 'side-chat' && !source.sideChatPromoted) || source.source === 'review' || source.source === 'bot') {
     throw forkError('UNSUPPORTED_HISTORY', 'Open a side chat from the main task');
   }
   const inFlight = (source.activeTurnStartedAt ?? 0) > (source.lastTurnEndedAt ?? 0);
@@ -160,10 +165,24 @@ function parseJsonContent(content: string): unknown {
 function buildCodexForkRecoveryMarker(opts: {
   source: { model: string; providerId: string | null; sdkSessionId: string | null };
   rows: Array<Pick<ForkTimelineMessage, 'clientId' | 'role' | 'content' | 'createdAt' | 'toolUseId' | 'agentMeta' | 'agentKind'>>;
+  targetContextWindow?: number | null;
   newMessageIds: Array<{ clientId: string }>;
   sessionId: string;
   now: number;
 }) {
+  const replay = buildHandoff(opts.rows.filter((row) => row.role !== 'error').map((row) => ({
+    role: row.role,
+    content: parseJsonContent(row.content),
+    createdAt: row.createdAt,
+    toolUseId: row.toolUseId,
+    agentMeta: row.agentMeta,
+  })), {
+    fromLabel: 'Codex',
+    toLabel: 'Codex',
+    targetContextWindow: opts.targetContextWindow,
+    sessionId: opts.sessionId,
+    reason: 'native-session-recovery',
+  });
   return {
     id: createId(),
     clientId: createId(),
@@ -182,18 +201,8 @@ function buildCodexForkRecoveryMarker(opts: {
       sourceProviderId: opts.source.providerId,
       sourceSdkSessionId: opts.source.sdkSessionId,
       sourceUserClientId: opts.newMessageIds[opts.rows.findLastIndex((row) => row.role === 'user')]?.clientId ?? null,
-      handoff: buildHandoffText(opts.rows.filter((row) => row.role !== 'error').map((row) => ({
-        role: row.role,
-        content: parseJsonContent(row.content),
-        createdAt: row.createdAt,
-        toolUseId: row.toolUseId,
-        agentMeta: row.agentMeta,
-      })), {
-        fromLabel: 'Codex',
-        toLabel: 'Codex',
-        sessionId: opts.sessionId,
-        reason: 'native-session-recovery',
-      }),
+      ...replay,
+      handoffPreview: handoffPreviewText(replay.handoff),
     }),
   };
 }
@@ -204,6 +213,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   agentKind: DbAgentKind;
   model: string;
   providerId: string | null;
+  targetContextWindow?: number | null;
   reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap';
 }): Promise<void> {
   const handoffMessages: HandoffSourceMessage[] = opts.rows
@@ -221,7 +231,8 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   const lastUser = [...opts.rows].reverse().find((row) => row.role === 'user');
   const label =
     opts.agentKind === 'codex' ? 'Codex' : opts.agentKind === 'pi' ? 'Pi' : 'Claude Code';
-  const handoff = buildHandoffText(handoffMessages, {
+  const { handoff, handoffCoverage } = buildHandoff(handoffMessages, {
+    targetContextWindow: opts.targetContextWindow,
     fromLabel: label,
     toLabel: label,
     sessionId: opts.sessionId,
@@ -230,6 +241,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   });
   await commitContextRebuild(opts.sessionId, handoff, {
     reason: opts.reason,
+    handoffCoverage,
     sourceUserClientId: lastUser?.clientId ?? null,
     sourceAgentKind: opts.agentKind,
     sourceModel: opts.model,
@@ -243,7 +255,8 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
     agentMeta: {
       contextRebuild: {
         reason: opts.reason,
-        handoff,
+        handoff: handoffPreviewText(handoff),
+        handoffCoverage,
       },
     } as AgentMeta,
   });
@@ -844,6 +857,10 @@ export async function forkSessionAtMessage(
   if (!source) {
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
   }
+  if (source.agentKind === 'acp') {
+    // Plugin engines keep their own history; Cindy cannot fork it (docs/plans/acp-plugin-bridge.md).
+    throw forkError('UNSUPPORTED_HISTORY', 'Tasks running on a plugin engine cannot be forked');
+  }
 
   assertCindyMakeSessionAvailable(source.source);
 
@@ -1081,6 +1098,9 @@ export async function forkSessionAtMessage(
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
   const recoveryMarker = needsHistoryRecovery ? buildCodexForkRecoveryMarker({
     source: forkSource, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
+    targetContextWindow: await resolveDesktopHandoffWindow(sourceSessionId, {
+      ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
+    }),
   }) : undefined;
   // pi 与 codex 一样:uuidMap 空、无 Claude transcript 锚点,跳过 Claude 专用的
   // synthetic uuid 补全 / parentUuid 采集(只有 Claude cc 需要)。
@@ -1181,6 +1201,9 @@ export async function forkSessionAtMessage(
       agentKind: forkSource.agentKind,
       model: forkSource.model,
       providerId: forkSource.providerId,
+      targetContextWindow: await resolveDesktopHandoffWindow(newSessionId, {
+        ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
+      }),
       reason: forkSource.rebuildReason,
     });
   }
@@ -1197,6 +1220,10 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     .limit(1);
   if (!source) {
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
+  }
+  if (source.agentKind === 'acp') {
+    // Plugin engines keep their own history; Cindy cannot fork it (docs/plans/acp-plugin-bridge.md).
+    throw forkError('UNSUPPORTED_HISTORY', 'Tasks running on a plugin engine cannot be forked');
   }
 
   assertCindyMakeSessionAvailable(source.source);
@@ -1304,6 +1331,7 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
   const recoveryMarker = newSdkSessionId === null ? buildCodexForkRecoveryMarker({
     source, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
+    targetContextWindow: await resolveDesktopHandoffWindow(sourceSessionId, { ...source, agentKind: 'codex' }),
   }) : undefined;
   // 任务级窗口档位与普通 fork 同口径继承（同一条任务意图）；这是偏好文件里的条目，
   // 与普通 fork 一样先写后提交：写失败时任务还没建出来，事务失败则撤掉条目。

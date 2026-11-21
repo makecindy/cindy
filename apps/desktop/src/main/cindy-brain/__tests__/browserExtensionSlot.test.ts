@@ -186,9 +186,9 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
       extGhost({ id: 'plain', declare: false }),
       extGhost({ id: 'off', enabled: false }),
     ];
-    const { slot, bridges, natives, settle } = await makeSlot({}, ghosts);
+    const { slot, bridges, natives } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
-    await settle();
+    expect(await slot.handleRequest('_root__my-browser', { kind: 'status' })).toMatchObject({ ok: true });
     expect(bridges).toHaveLength(1);
     expect(bridges[0].options).toMatchObject({
       ghostId: 'my-browser',
@@ -205,19 +205,19 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     });
     // 幂等:同一份花名册不重建。
     slot.reconcile(ghosts);
-    await settle();
     expect(bridges).toHaveLength(1);
     // 换版:关旧开新。
-    const upgraded = [extGhost({ version: '1.1.0' })];
-    slot.reconcile(upgraded);
-    await settle();
+    ghosts[0] = extGhost({ version: '1.1.0' });
+    slot.reconcile(ghosts);
+    expect(await slot.handleRequest('_root__my-browser', { kind: 'status' })).toMatchObject({ ok: true });
     expect(bridges[0].closed).toBe(true);
     expect(natives[0].close).toHaveBeenCalledOnce();
     expect(bridges).toHaveLength(2);
     expect(bridges[1].options.installedVersion).toBe('1.1.0');
     // 停用:关掉,不再提供页面控制。
-    slot.reconcile([extGhost({ version: '1.1.0', enabled: false })]);
-    await settle();
+    ghosts[0] = extGhost({ version: '1.1.0', enabled: false });
+    slot.reconcile(ghosts);
+    await vi.waitFor(() => expect(natives[1].close).toHaveBeenCalledOnce());
     expect(bridges[1].closed).toBe(true);
     expect(slot.getPageControl()).toBeNull();
   });
@@ -252,17 +252,19 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     expect(order.indexOf('close0')).toBeLessThan(order.indexOf('install1'));
   });
 
-  // Native hosts run outside the sandbox and share one registration per account, so a plugin that
-  // is not the official Cindy Chrome must not get one, even under the official name.
+  // Native hosts require the declared Node capability, not an official plugin identity.
   it('声明 node 的普通插件也可安装自己的 native host', async () => {
     const ghosts = [extGhost({ id: 'impostor' })];
-    const { slot, bridges, natives, settle } = await makeSlot({}, ghosts);
+    const { slot, bridges, natives } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
-    await settle();
+    // PR #11114 Linux CI: restoring pairings from disk can outlast a fixed 25 ms wait.
+    // The public status request awaits startup, including native host registration.
+    expect(await slot.handleRequest('_root__impostor', { kind: 'status' })).toMatchObject({ ok: true });
     expect(bridges).toHaveLength(1);
     expect(bridges[0].started).toBe(true);
     expect(bridges[0].options.nativeToken).toBe('f'.repeat(64));
     expect(natives).toHaveLength(1);
+    expect(natives[0].install).toHaveBeenCalledExactlyOnceWith(18810, [CHROME_ID]);
   });
 
   it('没有 pageControl 的声明只做通道,不成为 Browser Use 执行端', async () => {

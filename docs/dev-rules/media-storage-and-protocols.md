@@ -3,6 +3,20 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改图片、视频、音频、3D 模型的生成、导入、附件、缓存、
 > 持久化、协议解析、远程传递或回收逻辑之前
+> **适用路径**：`apps/desktop/src/main/cindy-media/**`、
+> `apps/desktop/src/main/cindy-proxy-media/**`、
+> `apps/desktop/src/main/{image,video,model,audioFile,localFile}Protocol.ts`、
+> `apps/desktop/src/main/cindy-brain/ghostMedia*.ts`、
+> `apps/desktop/src/main/device-link/*{M,m}edia*.ts`、
+> `apps/desktop/src/main/im/**/*{M,m}edia*.ts`、
+> `apps/desktop/src/main/maker-ipc/chatServerMedia.ts`、
+> `apps/desktop/src/main/mcp-integrations/{cindyProxyMedia,mediaToolResultFallback}.ts`、
+> `apps/desktop/src/main/{lightboxMediaActions,projectIconMedia}.ts`、
+> `apps/desktop/src/main/bot-import/memoryMedia.ts`、
+> `apps/desktop/src/main/session-share/mediaUrlRewrite.pure.ts`、
+> `apps/desktop/src/shared/{remoteMediaUrl,mediaInvocation}.ts`、
+> `apps/desktop/src/main/maker-host/{attachmentPreservation,oversized-attachment-recovery,oversizedAttachmentRecoveryCore}.ts`、
+> `apps/desktop/src/main/remote-agent/attachmentPreservation.ts`
 
 本文治理 Desktop 中由 Cindy 管理副本的媒体字节。Electron 协议与进程安全另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
@@ -48,6 +62,11 @@
     `im-attachments/wechat/sessions/<任务ID>/`。
   - 任务删除时，两者与上述四个渠道统一由 `removeImSessionAttachmentDirs` 清理。迁移这两个渠道前，
     先对齐本条规则。
+- 插件经 `cindy.tasks.send` / `cindy.targets.send` 转进任务的附件（例如微信群插件转发的照片、视频、文件）
+  按同一判据分流（`cindy-media/pluginMessageAttachments.ts`）：Host 按真实字节识别，总仓白名单内的图片与音视频
+  进总仓，其余按非媒体文件放进同一棵 `im-attachments/plugin/`（消息本身的文件领养进 `sessions/<任务ID>/`，
+  只给模型的参考文件留在 `staging/` 按龄回收）。细则见
+  [插件任务接口实现](plugin-task-api-implementation.md#消息附件)。
 
 ## 写入与记账
 
@@ -240,7 +259,10 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 
 ## 媒体调用说明与执行绑定
 
-- 图片、视频的公开调用说明从 Server 读取；用户自带连接可保存账号隔离的自定义 Guide。
+- 图片、视频的公开调用说明从 Server 读取；除 Cindy AI（`xd`）只使用官方说明外，用户自带连接和
+  内置媒体来源均可保存账号隔离的自定义 Guide。内置来源沿用原执行器和托管登录，覆盖调用说明与输入参数，
+  不把图片适配器的输入说明当作可直发的 HTTP 协议，也不要求重新配置连接。原生媒体按 provider/model 保存，
+  复用现有存储的规范化 target（`agent=pi`），与调用任务使用的 Harness 无关；自带 HTTP 连接仍按实际 runtime 隔离。
   每次需要时获取，自定义优先、官方后备，没有加载或重载步骤。Guide 只描述请求、参数、响应与轮询协议；
   provider、实际地址、Key、连接摘要、模型可见性和额度归连接与执行上下文。
 - 客户端按完整 `modelId` 及连接已有的接口格式读取公开资料，不发送账号 token、Key、
@@ -281,6 +303,12 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   不适配时由 Agent 根据资料补本地 Guide。
   Guide 不能改 host 或凭证。
   公开来源只决定说明，不改变 provider、runtime、账号或计费。新说明只影响新的 prepare。
+- xAI `grok-imagine-video-1.5` 的图生视频支持 `image` 首帧、`last_frame` 尾帧、最多 4 个
+  `{image, timestamp_s}` 中间关键帧和最多 14 张 `reference_images`。有图片时 prompt 可省略；
+  尾帧、关键帧及参考图模式最高 720p；关键帧须在视频内部，不能落在同一个 1/3 秒格。
+  旧插件入口仍按既有协议最多接收 9 张参考图，适配器能力声明与入口保持一致。
+  经典与 1.5 型号按既有 provider 能力边界分别注册，避免共享能力声明放宽经典型号的入口校验。
+  旧 `grok-imagine-video` 仍仅接收单张起始图片，不因共享适配器开放 1.5 参数。
 - Core 返回 HTTP 状态、脱敏上游错误及提交/任务状态等事实；Agent 通过工具提示判断是否
   调整参数、处理连接、尝试官方或请用户补资料。错误文本在截断前按本次实际发出的连接
   `apiKey` 和全部托管 header 值精确脱敏，不按 header 名猜测；使用出站快照，不读取
@@ -368,8 +396,11 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 - JSON 请求超过宿主入口内存阈值（`maxRequestBodyBytes`）时，先由 `collectRecoverableBody` 分块落 Host 私有临时文件，
   再恢复，不因固定的 128 MiB 内存门槛提前拒绝仍可恢复的历史。Codex 的 HTTP 入口／回退上限
   从 128 MiB 降为 42 MiB，Claude Code／Pi 保持 32 MiB；这些是新控制器无法完成恢复时的边界，
-  不是默认的主动控制触发线。带图但缺少 DB、有效任务绑定、任务已删除或属于远端时，只运行已注入的
-  预处理，不写本机附件路径；仍超宿主上限的请求走旧恢复链，无法恢复则本地拒绝。
+  不是默认的主动控制触发线。托管运行若已绑定控制端附件保存能力，预算计算留在模型运行端，
+  被移出的附件保存到任务所在电脑并返回可读的虚拟路径，无需在运行端伪造任务 DB 行。
+  兼容与故障处理见[远程 Agent 协议](protocol-compatibility/remote-agent.md#托管请求的附件预算与保存2026-11-17)。
+  没有该绑定且缺少 DB、有效任务绑定、任务已删除或属于 SSH 远端时，只运行已注入的
+  预处理，不写本机附件路径；仍超宿主上限且无法恢复则本地拒绝。
 - 旧恢复链继续用 `tokenizeStrings`、`recoverInlineAttachments` 分块扫描和解码，不另设固定的
   单附件体积门槛。临时写入按实际可用磁盘共享预算，预留 256 MiB，并为解析、解码和保存预留副本
   空间；磁盘不足返回明确的 507，可清理空间后重试，原始历史不变。**当前新控制器落盘后会整包

@@ -59,7 +59,7 @@ export type UiMockMessage =
   | { role: 'user'; text: string }
   | { role: 'assistant'; text: string }
   | { role: 'thinking'; text: string }
-  | { role: 'error'; text: string }
+  | { role: 'error'; text: string; reason?: string; silentStopFailureCause?: string }
   | { role: 'tool'; name: string; input: Record<string, unknown>; result: string }
   /** New task "Let a plugin choose": the one-line note under the first message. */
   | { role: 'plugin-route'; note: Record<string, unknown> };
@@ -124,6 +124,20 @@ const RICH_ANSWER = [
   '> 只改样式，不影响登录流程。',
 ].join('\n');
 
+// Android real-message regression: a user bubble must retain its intrinsic
+// width, and native/HTML selection must agree on spaces and line breaks.
+const TABLE_SELECTION_ANSWER = [
+  '表前开始：中文  spaces **粗体**  `inline  code`  [链接](https://example.test)。',
+  '同段第二行 two  spaces。',
+  '',
+  '| 名称 | 内容 | 结果 |',
+  '| --- | --- | --- |',
+  '| 项目甲 | 中文  双空格 | 正常 |',
+  '| 项目乙 | | 第二行 |',
+  '',
+  '表后结束：复制完整。',
+].join('\n');
+
 /**
  * Task ids starting with `visual-` keep Mobile's runtime state overlays
  * (running, waiting for permission, queued) working; Desktop shows them as
@@ -132,6 +146,27 @@ const RICH_ANSWER = [
 export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
   UI_MOCK_BIDI_TASK,
+  {
+    id: 'ui-mock-silent-stop',
+    title: '空响应续跑暂停',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '检查空响应后的暂停提示及诊断详情。' },
+      { role: 'assistant', text: '上一轮已正常完成，以下为不同停止原因的模拟记录。' },
+      ...[
+        ['budget', '本次自动续跑次数已用完。'],
+        ['rate-limit', '距上次自动续跑时间过短，已触发频率保护。'],
+        ['session-breaker', '本任务累计自动续跑次数已达上限。'],
+        ['dispatch-error', '派发自动续跑请求时发生错误。'],
+        ['dispatch-not-accepted', '自动续跑请求未派发。'],
+      ].map(([cause, detail]): UiMockMessage => ({
+        role: 'error', reason: 'silent-stop-exhausted', silentStopFailureCause: cause,
+        text: `检测到空响应，自动续跑已暂停。${detail}\nsilentStopFailureCause=${cause}`,
+      })),
+    ],
+  },
   {
     id: 'ui-mock-auto-review-model-unavailable',
     title: '自动审批模型不可用',
@@ -182,6 +217,17 @@ export const UI_MOCK_TASKS: readonly UiMockTask[] = [
     messages: [
       { role: 'user', text: '手机上反馈问题时，确认卡提示只能回电脑处理。' },
       { role: 'assistant', text: '已整理好反馈，请检查标题、正文和公开署名，确认后提交。' },
+    ],
+  },
+  {
+    id: 'visual-input-handoff',
+    title: 'Set up the Mac mail app',
+    project: 'cindy-demo',
+    agentKind: 'cc', model: 'claude-sonnet-5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: 'Finish setting up the mail app on my Mac.' },
+      { role: 'assistant', text: 'The app is asking for your account. Please type it on your phone.' },
     ],
   },
   {
@@ -269,6 +315,23 @@ $$e\in\mathcal{E},\quad x^{12}+y_i$$` },
     messages: [
       { role: 'user', text: '把这周合并的改动整理成发布说明。' },
       { role: 'assistant', text: '已按「新功能／修复／体验改进」分组，共 12 条。需要我再写一段英文版吗？' },
+    ],
+  },
+  {
+    id: `${UI_MOCK_ID_PREFIX}table-selection`,
+    title: '表格连续选择验收',
+    project: 'cindy-demo',
+    agentKind: 'cc',
+    model: 'claude-opus-5',
+    effort: 'high',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 26,
+    messages: [
+      { role: 'user', text: '短消息' },
+      { role: 'assistant', text: '请提供表格。' },
+      { role: 'user', text: TABLE_SELECTION_ANSWER },
+      { role: 'assistant', text: TABLE_SELECTION_ANSWER },
     ],
   },
   {
@@ -574,7 +637,11 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
         push('thinking', { kind: 'thinking', text: message.text, durationMs: 1_500, isRedacted: false });
         break;
       case 'error':
-        push('error', { message: message.text });
+        push('error', {
+          message: message.text,
+          ...(message.reason ? { reason: message.reason } : {}),
+          ...(message.silentStopFailureCause ? { silentStopFailureCause: message.silentStopFailureCause } : {}),
+        });
         break;
       case 'tool': {
         const toolUseId = `${UI_MOCK_ID_PREFIX}${task.id}-tool-${index + 1}`;

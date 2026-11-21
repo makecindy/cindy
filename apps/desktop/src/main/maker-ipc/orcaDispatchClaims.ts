@@ -80,6 +80,11 @@ interface LeadLedger {
   /** 已升级成卡：同一矛盾不再重复落卡，等真实派发或一致声明解除。 */
   escalated: boolean;
   escalatedAt: number | null;
+  /**
+   * 这次不一致从哪一轮开始。唤醒会开新一轮，但凭据属于引发对账的那一轮，
+   * 所以地板只降不升；一致后清空。
+   */
+  incidentFloor: number | null;
 }
 
 const ledgers = new Map<string, LeadLedger>();
@@ -97,6 +102,7 @@ function ledgerFor(leadSessionId: string): LeadLedger {
       woke: false,
       escalated: false,
       escalatedAt: null,
+      incidentFloor: null,
     };
     ledgers.set(leadSessionId, ledger);
   }
@@ -119,6 +125,7 @@ function ledgersReset(ledger: LeadLedger): void {
   ledger.woke = false;
   ledger.escalated = false;
   ledger.escalatedAt = null;
+  ledger.incidentFloor = null;
 }
 
 /** 记一条宿主派发凭据。真实派发重置抑制状态：同一个动作值得重新判定。 */
@@ -139,16 +146,26 @@ export function dropLeadDispatchFact(leadSessionId: string, dispatchId: string):
   ledger.facts = ledger.facts.filter((fact) => fact.dispatchId !== dispatchId);
 }
 
+/** 这次不一致的凭据地板：唤醒会开新一轮，地板只降不升，避免自己造出假不一致。 */
+export function dispatchReconcileFloor(leadSessionId: string, turnGeneration: number): number {
+  const ledger = ledgerFor(leadSessionId);
+  if (ledger.incidentFloor !== null && ledger.incidentFloor <= turnGeneration) {
+    return ledger.incidentFloor;
+  }
+  return turnGeneration;
+}
+
 /** 本轮（含同轮后续续跑）的派发凭据。窗口是生成号，不是墙钟。 */
 export function dispatchFactsForTurn(
   leadSessionId: string,
   turnGeneration: number,
+  sinceGeneration = turnGeneration,
 ): LeadDispatchFact[] {
   const ledger = ledgerFor(leadSessionId);
   observeGeneration(ledger, turnGeneration);
   const cutoff = Date.now() - FACT_RETENTION_MS;
   ledger.facts = ledger.facts.filter((fact) => fact.at >= cutoff);
-  return ledger.facts.filter((fact) => fact.turnGeneration >= turnGeneration);
+  return ledger.facts.filter((fact) => fact.turnGeneration >= sinceGeneration);
 }
 
 /**
@@ -192,15 +209,21 @@ export function reconcileLeadTurnDeclaration(
     };
   }
 
-  const factByWorker = new Map(facts.map((fact) => [fact.workerId, fact]));
+  const factsByWorker = new Map<string, LeadDispatchFact[]>();
+  for (const fact of facts) {
+    const bucket = factsByWorker.get(fact.workerId);
+    if (bucket) bucket.push(fact);
+    else factsByWorker.set(fact.workerId, [fact]);
+  }
   const labelOf = (workerId: string): string =>
-    factByWorker.get(workerId)?.workerLabel ??
+    factsByWorker.get(workerId)?.[0]?.workerLabel ??
     declaration.assignments.find((entry) => entry.workerId === workerId)?.workerId ??
     workerId;
 
   for (const entry of declaration.dispatched) {
-    const fact = factByWorker.get(entry.workerId);
-    if (!fact) {
+    // 同一个 Worker 可以连着收多条（q1、q2）：按这一轮它全部凭据匹配，不能只看最后一条。
+    const bucket = factsByWorker.get(entry.workerId);
+    if (!bucket || bucket.length === 0) {
       return {
         consistent: false,
         reason: 'declared-not-dispatched',
@@ -208,12 +231,17 @@ export function reconcileLeadTurnDeclaration(
         detail: labelOf(entry.workerId),
       };
     }
-    if (entry.messageId && entry.messageId !== fact.dispatchId && entry.messageId !== fact.queuedMessageId) {
+    const matched =
+      !entry.messageId ||
+      bucket.some(
+        (fact) => fact.dispatchId === entry.messageId || fact.queuedMessageId === entry.messageId,
+      );
+    if (!matched) {
       return {
         consistent: false,
         reason: 'unknown-message-id',
-        targets: [fact.workerLabel],
-        detail: entry.messageId,
+        targets: [bucket[0]!.workerLabel],
+        detail: entry.messageId ?? '',
       };
     }
   }
@@ -281,6 +309,7 @@ export function toDispatchClaimNotice(verdict: {
 export function settleDispatchClaimIncident(
   leadSessionId: string,
   consistent: boolean,
+  turnGeneration = 0,
 ): DispatchClaimAction {
   const ledger = ledgerFor(leadSessionId);
 
@@ -288,11 +317,14 @@ export function settleDispatchClaimIncident(
     ledger.woke = false;
     ledger.escalated = false;
     ledger.escalatedAt = null;
+    ledger.incidentFloor = null;
     return null;
   }
 
   // 已经落过卡：同一处矛盾不再唤醒、不再重复落卡，等真实派发或一致声明解除。
   if (ledger.escalated) return null;
+
+  ledger.incidentFloor = Math.min(ledger.incidentFloor ?? turnGeneration, turnGeneration);
 
   if (ledger.woke) {
     ledger.escalated = true;

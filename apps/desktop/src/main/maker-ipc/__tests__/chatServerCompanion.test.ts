@@ -5,7 +5,7 @@ const fixture = vi.hoisted(() => ({ handle: vi.fn(), token: 'isolated-test-token
   capabilitiesJson: '{}', sockets: [] as import('ws').WebSocket[] }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => fixture.token, refresh: fixture.refresh }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
-vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: vi.fn() }) }));
+vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: vi.fn(async () => ({ id: sourceId, category: 'image', name: 'a.png', mimeType: 'image/png', size: 12, url: 'cindy-media://image', path: null })) }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/isolated' } }));
@@ -606,7 +606,7 @@ describe('Chat Server cloud companions', () => {
     await vi.advanceTimersByTimeAsync(0);
     // The server only hands 1:1 room work to a claim that declares it can run it.
     expect(calls('/executions/claim')[0]![2]).toMatchObject({ directRoomVersion: 1, accessPolicyVersion: 1, planVersion: 1 });
-    expect(host.deliverToCanonical).toHaveBeenCalledWith('local-bot', 'hi\n[附件: a.png]', `chat-direct:${execution.id}:${sourceId}`);
+    expect(host.deliverToCanonical).toHaveBeenCalledWith('local-bot', 'hi\n[附件: a.png]', `chat-direct:${execution.id}:${sourceId}`, [expect.objectContaining({ name: 'a.png', url: 'cindy-media://image' })]);
     expect(deps.ensureLane).not.toHaveBeenCalled();
     expect(deps.dispatch).not.toHaveBeenCalled();
     const results = fixture.handle.mock.calls.filter(([route, , body]) => route === `/conversations/${roomId}/executions/${execution.id}`

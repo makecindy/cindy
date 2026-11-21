@@ -24,7 +24,7 @@ export interface OverrideSettingsFile<T> {
   writePatchAtomic(patch: Partial<T>, options?: { preserveDefaults?: boolean }): Promise<void>;
   /** 在同一把跨进程锁内基于最新磁盘快照计算并写入 patch。 */
   updateAtomic(
-    updater: (current: OverrideSettingsState<T>) => Partial<T>,
+    updater: (current: OverrideSettingsState<T>) => Partial<T> | null,
     options?: { preserveDefaults?: boolean },
   ): Promise<T>;
   reset(): T;
@@ -256,7 +256,7 @@ export function createOverrideSettingsFile<T>(options: {
   }
 
   async function updateAtomic(
-    updater: (current: OverrideSettingsState<T>) => Partial<T>,
+    updater: (current: OverrideSettingsState<T>) => Partial<T> | null,
     writeOptions?: { preserveDefaults?: boolean },
   ): Promise<T> {
     const file = options.filePath();
@@ -276,7 +276,9 @@ export function createOverrideSettingsFile<T>(options: {
         }
         invalidate();
         const current = readWritableState();
-        writePatch(updater(current), writeOptions);
+        const patch = updater(current);
+        if (patch === null) return current.value;
+        writePatch(patch, writeOptions);
         return readState().value;
       },
     );

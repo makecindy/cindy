@@ -16,12 +16,18 @@ export interface BlueBubblesMessage {
   guid: string;
   text?: string | null;
   isFromMe: boolean;
+  service?: string | null;
+  tempGuid?: string;
+  error?: number | string;
   dateCreated: number;
   handle?: { address: string; service?: string };
   chats?: BlueBubblesChat[];
   attachments?: BlueBubblesAttachment[];
+  threadOriginatorGuid?: string;
   associatedMessageGuid?: string;
   associatedMessageType?: number;
+  replyToGuid?: string | null;
+  attributedBody?: unknown;
 }
 
 const WITH_MESSAGE = 'chats,chats.participants,attachments,attributed-body';
@@ -42,12 +48,13 @@ export class BlueBubblesApiError extends Error {
 
 export class BlueBubblesApi {
   readonly origin: string;
+  private groupSendMethod: 'apple-script' | 'private-api' = 'apple-script';
   constructor(origin: string, private readonly password: string, private readonly fetcher: typeof fetch = fetch) {
     this.origin = blueBubblesOrigin(origin);
     if (!password) throw new BlueBubblesApiError('BLUEBUBBLES_PASSWORD_REQUIRED');
   }
 
-  async request<T>(method: string, path: string, body?: unknown, binary = false): Promise<T> {
+  async request<T>(method: string, path: string, body?: unknown, binary = false, timeoutMs = 30_000): Promise<T> {
     if (!path.startsWith('/api/v1/') || path.includes('#')) throw new BlueBubblesApiError('BLUEBUBBLES_INVALID_ROUTE');
     const url = new URL(path, this.origin);
     url.searchParams.set('password', this.password);
@@ -55,7 +62,7 @@ export class BlueBubblesApi {
       const response = await this.fetcher(url, {
         method,
         redirect: 'error',
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(timeoutMs),
         ...(body instanceof FormData ? { body } : body === undefined ? {} : {
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         }),
@@ -87,7 +94,14 @@ export class BlueBubblesApi {
     }
   }
 
-  info(): Promise<{ server_version?: string }> { return this.request('GET', '/api/v1/server/info'); }
+  async info(): Promise<{ server_version?: string; private_api?: boolean; helper_connected?: boolean }> {
+    const info = await this.request<{server_version?: string; private_api?: boolean; helper_connected?: boolean}>('GET', '/api/v1/server/info');
+    this.groupSendMethod = info.private_api === true && info.helper_connected === true ? 'private-api' : 'apple-script';
+    return info;
+  }
+  iMessageAccount(): Promise<{ vetted_aliases?: unknown } | null> {
+    return this.request('GET', '/api/v1/icloud/account', undefined, false, 2_000);
+  }
   message(guid: string): Promise<BlueBubblesMessage> {
     return this.request('GET', `/api/v1/message/${encodeURIComponent(guid)}?with=${WITH_MESSAGE}`);
   }
@@ -103,14 +117,14 @@ export class BlueBubblesApi {
     return this.request('GET', `/api/v1/attachment/${encodeURIComponent(guid)}/download?original=true`, undefined, true);
   }
   sendText(chatGuid: string, message: string, tempGuid: string): Promise<{ guid: string }> {
-    return this.request('POST', '/api/v1/message/text', { chatGuid, message, tempGuid, method: 'apple-script' });
+    return this.request('POST', '/api/v1/message/text', { chatGuid, message, tempGuid, method: chatGuid.split(';')[1] === '+' ? this.groupSendMethod : 'apple-script' });
   }
   sendFile(chatGuid: string, data: Uint8Array, name: string, tempGuid: string): Promise<{ guid: string }> {
     if (data.byteLength > BLUEBUBBLES_MAX_BYTES) throw new BlueBubblesApiError('BLUEBUBBLES_FILE_TOO_LARGE');
     const form = new FormData();
     form.set('chatGuid', chatGuid);
     form.set('tempGuid', tempGuid);
-    form.set('method', 'apple-script');
+    form.set('method', chatGuid.split(';')[1] === '+' ? this.groupSendMethod : 'apple-script');
     // BlueBubbles validates this field separately from the multipart filename.
     form.set('name', name);
     form.set('attachment', new Blob([new Uint8Array(data)]), name);

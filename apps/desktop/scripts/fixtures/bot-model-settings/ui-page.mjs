@@ -7,6 +7,7 @@ export default {
   real: 'BotModelChainEditor, ModelRouteSelector, ModelSelector, themes and all translations',
   notCovered: 'Live catalog discovery, remote devices, persistence and model execution; fixture supplies providers and local component state',
   stubs: {
+    'src/renderer/hooks/useControllableDevices': 'export const useSelectableDevices = () => ({ devices: [], loaded: true });',
     'src/renderer/hooks/useModelRouteDevices': `export const useModelRouteDevices = ({ leadAgentDeviceId }) => ({
       devices: JSON.parse(document.getElementById('ui-page-context').textContent).case === 'loading-remote-favorite' ? [{ deviceId: 'fixture-device', name: 'Other computer' }]
         : leadAgentDeviceId ? [{ deviceId: leadAgentDeviceId, name: 'Shared models' }] : undefined,
@@ -16,6 +17,7 @@ export default {
   cases: {
     default: { about: 'Unavailable primary and backup; status belongs to the model' },
     available: { about: 'Long available name with reasoning effort; no unavailable status on this model' },
+    'plugin-primary': { about: 'Choose a plugin engine as the primary model and retain the built-in backup' },
     loading: { about: '#10207: local first snapshot pending, then ready while the saved model picker stays open' },
     'loading-remote-favorite': { about: '#10207 review: ready other-computer favorite remains selectable while local catalog is pending' },
     'four-backups': { about: 'Four visible backups with unbroken IDs and working reorder/remove controls' },
@@ -33,6 +35,17 @@ export default {
   },
   async check(page, ui) {
     const pickers = page.locator('[data-model-settings-fixture] button[aria-haspopup="listbox"]');
+    if (ui.case === 'plugin-primary') {
+      await pickers.first().click();
+      const row = page.locator('[data-plugin-engine-model="acp-plugin:sample:engine#sample-model"]').first();
+      await row.scrollIntoViewIfNeeded();
+      await ui.capture('choose-plugin-model');
+      await row.click();
+      await pickers.first().getByText('Sample Model', { exact: false }).waitFor();
+      await pickers.nth(1).getByText('Gemini with a very long model display name', { exact: false }).waitFor();
+      await ui.capture('plugin-primary-with-backup');
+      return;
+    }
     if (ui.case === 'loading-remote-favorite') {
       await pickers.first().click();
       const list = page.getByRole('listbox');

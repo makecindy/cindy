@@ -50,13 +50,6 @@ export const personalizationSettings = defineSettings({
     titleKey: 'settings.sections.auxiliaryModels',
     sectionKey: 'settings.sections.auxiliaryModels',
   },
-  visionBridge: {
-    id: 'personalization.visionBridge',
-    tab: 'personalization',
-    targetId: 'settings-search-target-personalization-vision-bridge',
-    titleKey: 'settings.sections.visionBridge',
-    sectionKey: 'settings.sections.visionBridge',
-  },
   terminalShell: {
     id: 'personalization.terminalShell',
     tab: 'personalization',

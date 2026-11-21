@@ -142,6 +142,7 @@ import {
   setAgentIslandLayoutDragActive,
   setAgentIslandMeasuredContentHeight,
   setAgentIslandPointerZones,
+  setAgentIslandSessionBackgroundWork,
   setAgentIslandSessionDisplaySuppressed,
   setAgentIslandStrings,
   setAgentIslandToolWording,
@@ -667,6 +668,13 @@ export class AgentIslandService {
   }
 
   registerIpc(): void {
+    // The native helper has no panel observing screen changes while the target is absent.
+    const refreshDisplays = () => {
+      if (this.isEnabled()) this.publish();
+    };
+    screen.on('display-added', refreshDisplays);
+    screen.on('display-removed', refreshDisplays);
+
     ipcMain.handle(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL, (event, sessionId: unknown) => {
       const sourceWindow = BrowserWindow.fromWebContents(event.sender);
       if (!sourceWindow || sourceWindow.isDestroyed()) {
@@ -868,7 +876,7 @@ export class AgentIslandService {
   ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
     // Keep the OS notification when this event has no enabled Cindy sound.
     if (!hasAgentIslandNotificationSound(this.soundSettings, kind)) return false;
-    if (this.isEnabled()) return true;
+    if (this.hasIslandDisplay()) return true;
     return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
   }
 
@@ -994,7 +1002,7 @@ export class AgentIslandService {
 
   /** True means this surface owns the alert; otherwise the caller uses the OS notification. */
   notifyGroupChat(groupId: string): boolean {
-    if (!this.isEnabled() || this.headless || this.nativeHost.failed || this.nativeHost.available === false) return false;
+    if (!this.hasIslandDisplay() || this.headless || this.nativeHost.failed || this.nativeHost.available === false) return false;
     const chat = this.state.sessions.get(groupChatIslandId(groupId))?.groupChat;
     if (!chat) return false;
     const window = this.deps.getMainWindow();
@@ -1134,6 +1142,16 @@ export class AgentIslandService {
       setAgentIslandVisibleSession(this.state, null, now);
     }
     setAgentIslandAppFocused(this.state, focused, now);
+  }
+
+  /** A plugin engine started or stopped working after its turn (see setAgentIslandSessionBackgroundWork). */
+  setSessionBackgroundWork(
+    meta: AgentIslandSessionMeta,
+    active: boolean,
+    options: { turnStarting?: boolean } = {},
+  ): void {
+    const hydrated = this.hydrateMeta(meta);
+    if (setAgentIslandSessionBackgroundWork(this.state, hydrated, active, Date.now(), options)) this.publish();
   }
 
   handleAgentEvent(
@@ -1295,7 +1313,7 @@ export class AgentIslandService {
       if (changed) this.publish();
       return;
     }
-    if (event.type === 'completed' || event.type === 'failed' || event.type === 'deferred') {
+    if (event.type === 'completed' || event.type === 'failed' || event.type === 'deferred' || event.type === 'skipped') {
       this.clearSilencedScheduleRun(event.runId);
     }
   }
@@ -2700,13 +2718,16 @@ export class AgentIslandService {
     ).contentWidth;
   }
 
+  /** Notification ownership requires a connected display that can show the island. */
+  private hasIslandDisplay(): boolean {
+    return this.isEnabled() && this.getTargetDisplays().length > 0;
+  }
+
   private getTargetDisplays(displays = this.getAvailableDisplays()): Display[] {
     if (this.displayTarget.mode === 'display') {
       const selectedDisplay = this.resolveSelectedDisplay(displays);
       if (!selectedDisplay) {
-        // A temporary disconnect uses the current fallback for rendering only;
-        // keep the saved identity so reconnecting restores the user's choice.
-        return [this.getTargetDisplay(displays)];
+        return [];
       }
       const resolvedTarget = this.displayTargetForDisplay(displays, selectedDisplay);
       if (!sameAgentIslandDisplayTarget(this.displayTarget, resolvedTarget)) {

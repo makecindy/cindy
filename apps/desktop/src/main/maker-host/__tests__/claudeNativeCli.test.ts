@@ -36,7 +36,7 @@ vi.mock('@cindy/anthropic-compat-proxy', async (original) => ({
   ...(await original<typeof import('@cindy/anthropic-compat-proxy')>()),
   hasProxyEnvConfig: () => h.envProxy,
 }));
-vi.mock('../claude-cli-proxy-bridge.js', () => ({ ensureClaudeCliProxyBridge: h.bridge }));
+vi.mock('../cli-proxy-bridge.js', () => ({ ensureCliProxyBridge: h.bridge }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
 vi.mock('node:worker_threads', () => ({
   Worker: class extends EventEmitter {
@@ -49,7 +49,7 @@ vi.mock('node:worker_threads', () => ({
       let stdout = '';
       child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
       child.once('error', (error: Error) => this.emit('error', error));
-      child.once('close', () => { this.emit('message', { stdout }); this.emit('exit', 0); });
+      child.once('close', () => { this.emit('message', { status: parseClaudeCliLoginStatus(stdout) }); this.emit('exit', 0); });
     }
   },
 }));
@@ -62,6 +62,7 @@ import {
   readClaudeCliPlanUsage,
   readClaudeCliLoginStatus,
   refreshClaudeCliLoginStatus,
+  onClaudeCliLoginStatusChange,
   resetClaudeNativeCliForTest,
   runClaudeCliLogin,
 } from '../claude-native-cli.desktop.js';
@@ -216,6 +217,19 @@ describe('claudeCliNetworkEnv', () => {
 });
 
 describe('登录态读取', () => {
+  // Standard: a display-name-only refresh must update the cached card and notify
+  // observers even when the CLI's legacy subscription classification is unchanged.
+  it('publishes an official display-name change from the worker result', async () => {
+    const listener = vi.fn();
+    onClaudeCliLoginStatusChange(listener);
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await refreshClaudeCliLoginStatus();
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: JSON.stringify({ ...JSON.parse(SUBSCRIPTION), planDisplayName: 'Ultra' }) }));
+    await refreshClaudeCliLoginStatus({ requireFresh: true });
+    expect(peekClaudeCliLoginStatus()).toMatchObject({ subscriptionType: 'max', planDisplayName: 'Ultra' });
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ planDisplayName: 'Ultra' }));
+  });
   // Standard: identity verification must not accept stale default metadata, and
   // a forced post-login read must run after any earlier in-flight profile read.
   it('requires a fresh default identity while ordinary display retains its fallback', async () => {

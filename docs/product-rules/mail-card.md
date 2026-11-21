@@ -1,5 +1,14 @@
 # 邮件卡：阅读、编辑与发送
 
+> **读取时机**：新增或修改邮件卡（阅读、编辑、草稿同步、发送、头像）或邮箱插件与 Cindy 之间的分工之前
+> **适用路径**：`apps/desktop/src/main/cindy-brain/**/mail*`、`apps/desktop/scripts/mailComposeRuntime.test.mjs`、
+> `apps/desktop/src/renderer/components/chat/**/{GhostMail,Mail,mail}*`、
+> `apps/desktop/src/renderer/features/right-sidebar/plugins/mail-preview/**`、
+> `apps/desktop/src/renderer/features/right-sidebar/lib/mailPreview*`、
+> `apps/desktop/scripts/fixtures/mail-reading/**`、`packages/maker-shared/src/**/mail*`、
+> `apps/desktop/src/shared/__tests__/mailMessage.test.ts`、`apps/mobile/app/mail-preview.tsx`、
+> `apps/mobile/src/**/{mail,mobileMail,MobileMail,MailLink}*`
+
 2026-10-18 至 2026-10-28 的用户裁决汇总。邮件卡由 Cindy 统一实现（卡片、草稿同步、发送与
 历史；统一卡片见 #6404，草稿同步与发送修复见 #7607，阅读排版与深色适配见 #7660），邮箱插件
 只适配收发能力（契约见插件仓 `docs/mail-compose.md`）；新邮件与回复共用同一张卡。
@@ -7,6 +16,7 @@
 ## 收件人与编辑
 
 - 回复默认「回复所有」，自动排除自己、重复地址和密送。
+- 回复默认引用原信。卡片按邮箱实际保存的纯文本或 HTML 显示引用，默认折叠；能识别发件人时显示其名字。缺少引用时展示状态，有对应原文时可点「添加引用」。点击添加时若原信没有正文或暂时读不到，提示原因，当前草稿仍可编辑和发送。用户主动清空后保留其选择，新邮件不出现引用栏。
 - HTML 正文直接点进去编辑，保留图文，放大查看时同样可编辑；不设独立编辑模式、源码视图或
   复杂工具栏。附件可添加、查看、删除；草稿可删除。
 - 自动同步，没有保存按钮，发送旁没有箭头。To／Cc 同一行按宽度折叠，展开后替换摘要，Bcc 只在

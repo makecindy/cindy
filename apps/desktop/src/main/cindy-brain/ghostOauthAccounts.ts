@@ -109,6 +109,8 @@ export interface GhostOauthVault {
   read(instanceKey: string, storageKey: string): string | null;
   /** Optional strict read used only by durable reconciliation. */
   readStrict?(instanceKey: string, storageKey: string): string | null;
+  /** Under the consumer lock, a platform can retire an unreadable manifest. */
+  readForUninstall?(instanceKey: string, storageKey: string): string | null;
   /** 返回 false = 写失败(safeStorage 不可用等),调用方折叠结构化错误。 */
   store(instanceKey: string, storageKey: string, value: string): boolean;
   remove(instanceKey: string, storageKey: string): void;
@@ -885,14 +887,25 @@ export class GhostOauthAccountManager {
 
   /** Follow the existing source archive (including inverse recovery), or remove
    * incoming reuse rows after uninstall. Ordinary accounts are untouched. */
-  async relocateSourceReferences(from: string, to: string | null, targets: readonly { instanceKey: string; keys: readonly string[] }[]): Promise<void> {
+  async relocateSourceReferences(
+    from: string,
+    to: string | null,
+    targets: readonly { instanceKey: string; keys: readonly string[] }[],
+  ): Promise<void> {
     const read = this.deps.vault.readStrict ?? this.deps.vault.read;
+    const readForUninstall = to === null ? this.deps.vault.readForUninstall : undefined;
     for (const target of targets) {
       for (const key of target.keys) {
         if (!key.endsWith(accountsKey(''))) continue;
-        if (!parseManifest(read(target.instanceKey, key)).accounts.some(row => row.reused?.instanceKey === from)) continue;
+        try {
+          if (!parseManifest(read(target.instanceKey, key)).accounts.some(row => row.reused?.instanceKey === from)) continue;
+        } catch (error) {
+          if (!readForUninstall) throw error;
+          // Retry under the consumer lock before retiring an unreadable record.
+        }
         await this.withMutationLock(target.instanceKey, () => {
-          const manifest = parseManifest(read(target.instanceKey, key));
+          const manifest = parseManifest((readForUninstall ?? read)(target.instanceKey, key));
+          if (!manifest.accounts.some(row => row.reused?.instanceKey === from)) return;
           const accounts = manifest.accounts.flatMap(row => row.reused?.instanceKey !== from ? [row]
             : to === null ? [] : [{ ...row, reused: { ...row.reused, instanceKey: to } }]);
           const next = { ...manifest, accounts,

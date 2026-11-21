@@ -8,6 +8,9 @@ import { providerShareGuestPeer } from '@cindy/device-link';
 import { describe, expect, it, vi } from 'vitest';
 
 import * as activeCatalogForHostParity from '../active-catalog.js';
+import { calibrateDraftModel } from '../../../shared/draftModelCalibration.js';
+import { resolveAutomaticImSettings } from '../../../shared/imAutomaticModel.js';
+import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
 import { readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
 import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
 import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
@@ -55,6 +58,8 @@ const h = vi.hoisted(() => ({
   /** Providers Cindy created for subscription accounts, and the providers whose accounts were read. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   refreshed: new Set<string>(),
+  openAiSiblingHealthy: false,
+  retainedOpenAiModels: null as import('@cindy/model-providers').CatalogModel[] | null,
   poolModels: null as import('@cindy/model-providers').CatalogModel[] | null,
   poolModelsByProvider: {} as Record<string, import('@cindy/model-providers').CatalogModel[]>,
   boundPoolModelsByProvider: {} as Record<string, import('@cindy/model-providers').CatalogModel[]>,
@@ -87,8 +92,6 @@ vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
     readMergedLegacyCodexAccountId: merged,
     readMergedProviderAccount: merged,
     restoreAutoMergedLegacyCodexAccounts: h.restoreLegacy,
-    restoreUnplacedSubscriptionAccounts: (options: Parameters<typeof actual.restoreUnplacedSubscriptionAccounts>[0]) =>
-      h.actualPlacement ? actual.restoreUnplacedSubscriptionAccounts(options) : Promise.resolve(false),
     readCreatedSubscriptionProviders: () => {
       if (h.placementError) throw h.placementError;
       return h.actualPlacement ? actual.readCreatedSubscriptionProviders() : h.created;
@@ -104,10 +107,13 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
   return {
     ...actual,
     // A created provider is connected once its own accounts were read (the built-ins follow the pool).
-    hasConnectedSubscriptionPool: (id: string, options?: { includeBoundAccounts?: boolean }) => h.poolConnectionByProvider[id]
+    hasConnectedSubscriptionPool: (id: string, options?: { includeBoundAccounts?: boolean; includeLastConfirmed?: boolean }) =>
+      id === 'openai' && h.retainedOpenAiModels ? h.openAiSiblingHealthy || options?.includeLastConfirmed === true : h.poolConnectionByProvider[id]
       ? h.poolConnectionByProvider[id][options?.includeBoundAccounts ? 'bound' : 'serving']
       : (h.created[id] || h.pool?.legacyCodexAccounts?.[id]
         ? h.refreshed.has(id) || h.legacyLoggedIn.has(id) : Boolean(h.pool && !h.pool.disconnected)),
+    hasUnavailableSubscriptionPoolAccount: (id: string) => id === 'openai' && h.retainedOpenAiModels !== null,
+    lastConfirmedSubscriptionModelsAt: (id: string) => id === 'openai' && h.retainedOpenAiModels ? 123 : undefined,
     // No real CLI homes here: a read only records which provider was read.
     refreshSubscriptionPool: async (id: string) => {
       h.refreshed.add(id);
@@ -116,8 +122,12 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
     refreshSubscriptionPoolCodexModels: async () => undefined,
     refreshSubscriptionPoolClaudeModels: h.claudeModelRefresh,
     readSubscriptionPoolClaudeModels: () => null,
-    readSubscriptionPoolCodexModels: (providerId = 'openai', options?: { includeBoundAccounts?: boolean }) =>
-      (options?.includeBoundAccounts ? h.boundPoolModelsByProvider[providerId] : undefined)
+    readSubscriptionPoolCodexModels: (providerId = 'openai', options?: { includeBoundAccounts?: boolean; includeLastConfirmed?: boolean }) =>
+      (providerId === 'openai' && h.retainedOpenAiModels ? [
+        ...(options?.includeLastConfirmed ? h.retainedOpenAiModels : []),
+        ...(h.openAiSiblingHealthy ? h.poolModels ?? [] : []),
+      ] : undefined)
+      ?? (options?.includeBoundAccounts ? h.boundPoolModelsByProvider[providerId] : undefined)
       ?? h.poolModelsByProvider[providerId] ?? h.poolModels,
   };
 });
@@ -199,6 +209,7 @@ vi.mock('../../authManager.js', () => ({
   getAuthState: () => ({ mode: 'signed-out', user: null }),
 }));
 vi.mock('../../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => 0,
   getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: h.owner }),
   activeOwnerScopeKey: () => `signed-out:${h.owner ?? 'none'}`,
   isAppSessionBoundaryPending: () => false,
@@ -341,6 +352,8 @@ import {
   refreshDiscoveredCodexModels,
 } from '../createDesktopProviderService.js';
 import { createGuestProviderRouteBinder, guestProviderModelIds } from '../../remote-agent/host/providerAccess.js';
+import { hostedProviderOffersModel } from '../guest-provider-route-store.js';
+import { bindHostedSessionProvider } from '../session-provider-store.js';
 import {
   buildCodexCustomProviderArgs,
   deriveCodexCustomProviderRoutes,
@@ -391,6 +404,39 @@ describe('provider catalog realm reload', () => {
       h.claudeModelRefresh.mockReset().mockResolvedValue(false);
     }
     expect(explicitDone).toBe(true);
+  });
+  // Unit regression: a pool-only model passes remote admission but the first
+  // inference request reads the empty default-account catalog and returns 403.
+  // Earlier coverage stops at admission. Exercise the live outbound guard too,
+  // including revoked permission and removed membership, without real CLI state.
+  it('uses pooled membership for hosted inference after remote admission', async () => {
+    const previous = getActiveCatalog();
+    const model = { id: 'pool-inference-only', name: 'Pool inference only', contextWindow: 100_000,
+      efforts: [], defaultEffort: null };
+    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    h.poolModels = [model];
+    let allowed = true;
+    const binding = bindHostedSessionProvider('pool-inference', 'openai', () => allowed);
+    try {
+      setDiscoveredCodexModels([]);
+      const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ snapshotOnly: true });
+      expect(guestProviderModelIds(views, 'openai', 'codex')).toContain(model.id);
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(true);
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', 'not-offered')).toBe(false);
+      allowed = false;
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+      allowed = true;
+      h.poolModels = [{ ...model, disabled: true }];
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+      h.poolModels = [];
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+    } finally {
+      binding.release();
+      h.pool = null;
+      h.poolModels = null;
+      setDiscoveredCodexModels([]);
+      setActiveCatalog(previous);
+    }
   });
   // #10405, unit: merging A(a1,a2) into B must not remove a2-only m2 from a saved
   // schedule's strict route resolver. Picker/guest membership still cannot borrow B's m3.
@@ -565,6 +611,52 @@ describe('provider catalog realm reload', () => {
       setActiveCatalog(previous);
     }
   });
+  // PR #11754, unit. Automatic draft and IM routing consume the same provider
+  // rows as the UI. The smallest failing input is one retained model plus a
+  // healthy alternative, including a currently healthy sibling in the same pool.
+  it.each([false, true])('keeps retained models out of routing when a sibling is healthy=%s', async siblingHealthy => {
+    const previous = getActiveCatalog();
+    const openai = BUNDLED_CATALOG.providers.find(provider => provider.id === 'openai')!;
+    const retained = { id: 'gpt-retained', name: 'Retained', contextWindow: 128_000, efforts: [], defaultEffort: null };
+    const healthy = { ...retained, id: 'gpt-healthy' };
+    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    h.retainedOpenAiModels = [retained];
+    h.openAiSiblingHealthy = siblingHealthy;
+    h.poolModels = [healthy];
+    const route = { model: healthy.id, providerId: siblingHealthy ? 'openai' : 'healthy' };
+    try {
+      setActiveCatalog({
+        ...BUNDLED_CATALOG,
+        providers: [openai, ...siblingHealthy ? [] : [{ ...openai, id: 'healthy', auth: { method: 'none' as const },
+          models: { codex: [healthy] } }]],
+      });
+      const service = getDesktopProviderService({ allowSideEffects: false });
+      const local = await service.listProviders({ includeSubscriptionDisplayModels: true });
+      expect(local.find(provider => provider.id === 'openai')).toMatchObject({
+        connected: siblingHealthy,
+        models: { codex: siblingHealthy ? [expect.objectContaining({ id: healthy.id })] : [] },
+        subscriptionDisplayModels: { codex: expect.arrayContaining([expect.objectContaining({ id: retained.id })]) },
+      });
+      expect(calibrateDraftModel({
+        providers: local, model: retained.id, agent: 'codex', chosenByUser: false, providersLoading: false,
+      })).toEqual(route);
+
+      for (const options of [{}, { picker: { scope: 'available' as const } }]) {
+        const remote = await service.listProviders(options);
+        expect(remote.find(provider => provider.id === 'openai')?.subscriptionDisplayModels).toBeUndefined();
+        expect(resolveAutomaticImSettings(IM_DEFAULT_SETTINGS, remote, { agentKind: 'codex' })?.agents.codex)
+          .toMatchObject(route);
+      }
+    } finally {
+      h.retainedOpenAiModels = null;
+      h.openAiSiblingHealthy = false;
+      h.poolModels = null;
+      h.pool = null;
+      h.refreshed.clear();
+      setActiveCatalog(previous);
+    }
+  });
+
   // Review regression (2026-11-13, subscription-account-pools.md 合并与拿出由用户决定): a created
   // provider counts as connected from reading its own accounts, but listing providers read only the
   // built-in pool, so a created GPT provider stayed out of the new-task picker until its settings
@@ -840,10 +932,11 @@ describe('provider catalog realm reload', () => {
     }
   });
 
-  // 2026-11-14 user correction: old wizard/pool additions must also become separate providers.
-  // Unit, real catalog refresh + placement file; prior restoration covered only legacy connections.
-  // Minimal failure: default + one unplaced account, no custom-provider connection to restore.
-  it('publishes a separate provider for an old pooled account on catalog refresh and keeps it on reload', async () => {
+  // 2026-11-18 user decision (subscription-account-pools.md 升级不再自动拆分), unit: the 11-14 split
+  // moved the only usable account out of a built-in provider and broke the provider groups and shares
+  // that named it (2026-11-17 field report). Real catalog refresh + placement file; minimal input:
+  // default + one unplaced account must stay in the built-in provider across refreshes.
+  it('keeps an old pooled account in its built-in provider on catalog refresh', async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-pooled-account-restore-'));
     const previous = getActiveCatalog();
     const previousOwner = h.owner;
@@ -854,16 +947,12 @@ describe('provider catalog realm reload', () => {
     h.copyAccountOverrides.mockClear();
     try {
       setActiveCatalog(BUNDLED_CATALOG);
-      await refreshCustomProvidersIntoCatalog();
-      const created = getActiveCatalog().providers.filter(p => p.id.startsWith('openai-sub-'));
-      expect(created).toHaveLength(1);
-      expect(h.copyAccountOverrides).toHaveBeenCalledExactlyOnceWith('openai', created[0].id);
-      const file = path.join(root, h.owner, 'subscription-account-placement.json');
-      const persisted = await fsp.readFile(file, 'utf8');
-      expect(JSON.parse(persisted).accounts).toEqual({ [`openai:${accountId}`]: created[0].id });
-      await refreshCustomProvidersIntoCatalog();
-      expect(getActiveCatalog().providers.filter(p => p.id.startsWith('openai-sub-')).map(p => p.id)).toEqual([created[0].id]);
-      expect(await fsp.readFile(file, 'utf8')).toBe(persisted);
+      for (let refresh = 0; refresh < 2; refresh++) {
+        await refreshCustomProvidersIntoCatalog();
+        expect(getActiveCatalog().providers.filter(p => p.id.startsWith('openai-sub-'))).toEqual([]);
+      }
+      expect(h.copyAccountOverrides).not.toHaveBeenCalled();
+      await expect(fsp.access(path.join(root, h.owner, 'subscription-account-placement.json'))).rejects.toThrow();
     } finally {
       setCustomProviders([]); setActiveCatalog(previous);
       h.pool = null; h.profileRoot = null; h.owner = previousOwner;

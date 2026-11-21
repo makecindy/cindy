@@ -23,11 +23,16 @@ export default {
     await row.locator('[aria-expanded]').first().click();
     await page.locator('[data-session-id="demo-0-0"]').waitFor();
     await row.locator('.lucide-folder-open').waitFor();
+    const folderTitle = await row.getByText('Cindy', { exact: true }).boundingBox();
+    const sessionTitle = await row.locator('[data-session-id="demo-0-0"] .sidebar-title-marquee__ellipsis').boundingBox();
+    if (!folderTitle || !sessionTitle || Math.abs(folderTitle.x - sessionTitle.x) > 1) {
+      throw new Error('Expanding a project must keep compact session titles in the sidebar title column');
+    }
     await page.locator('[data-project-working-dir="local:/Projects/工具库"] .lucide-folder').waitFor();
     // The merged menu must retain the quick double-click rename path.
     await row.locator('[data-project-header]').click({button:'right'});
-    await page.getByRole('menuitem', {name:'项目设置',exact:true}).waitFor();
-    if(await page.getByRole('menuitem', {name:'重命名',exact:true}).count()) throw new Error('Project rename is part of settings');
+    await page.getByRole('menuitem', {name:await ui.t('projectSettings.title'),exact:true}).waitFor();
+    if(await page.getByRole('menuitem', {name:await ui.t('ccAgent.sidebar.sessionMenu.rename'),exact:true}).count()) throw new Error('Project rename is part of settings');
     await ui.capture('project-menu');
     await page.keyboard.press('Escape');
     await row.locator('[data-project-header]').dblclick();

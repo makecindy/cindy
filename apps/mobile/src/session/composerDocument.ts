@@ -335,6 +335,7 @@ export function replaceComposerTextRange(
   const start = Math.max(0, Math.min(from, to));
   const end = Math.max(start, Math.max(from, to));
   const before: ComposerNode[] = [];
+  const spanned: ComposerNode[] = [];
   const after: ComposerNode[] = [];
   let offset = 0;
   let atomIndex = 0;
@@ -368,11 +369,16 @@ export function replaceComposerTextRange(
       const localEnd = Math.min(text.length, end - nodeStart);
       if (localStart > 0) before.push({ ...node, text: text.slice(0, localStart) });
       if (localEnd < text.length) after.unshift({ ...node, text: text.slice(localEnd) });
+    } else if (node.type === 'quote') {
+      // A quote has no projected text, so a text range spanning its position
+      // (`/`, quote, `com` replaced by a palette pick) cannot delete it. It
+      // stays right after the replacement, keeping a picked command in front.
+      spanned.push(node);
     }
   }
 
   if (!atomRange && start >= offset) before.push(...document.nodes.slice(before.length));
-  return normalizeComposerDocument({ version: 1, nodes: [...before, ...replacement, ...after] });
+  return normalizeComposerDocument({ version: 1, nodes: [...before, ...replacement, ...spanned, ...after] });
 }
 
 export function mentionComposerNode(

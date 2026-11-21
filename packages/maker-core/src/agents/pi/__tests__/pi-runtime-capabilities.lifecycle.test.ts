@@ -229,6 +229,32 @@ describe('Pi runtime capability lifecycle', () => {
     await handle.close();
   });
 
+  it.each(['discovery rejected', 'Unknown command: get_commands'])(
+    'retries exhausted discovery on user request unless unsupported: %s', async error => {
+      vi.useFakeTimers();
+      captured.runtimeFailures.add('s1');
+      captured.runtimeFailureMessage = error;
+      const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+      try {
+        const count = () => captured.instances[0]!.requests.filter(r => r.type === 'get_commands').length;
+        await vi.waitFor(() => expect(handle.getRuntimeCapabilities?.()?.error).toBeDefined());
+        handle.retryFailedRuntimeCapabilityCapture?.();
+        await vi.advanceTimersByTimeAsync(34_000);
+        expect(count()).toBe(4);
+        captured.runtimeFailures.delete('s1');
+        handle.retryFailedRuntimeCapabilityCapture?.();
+        handle.retryFailedRuntimeCapabilityCapture?.();
+        await vi.advanceTimersByTimeAsync(0);
+        const unsupported = error.startsWith('Unknown command');
+        expect(count()).toBe(unsupported ? 4 : 5);
+        expect(handle.getRuntimeCapabilities?.()?.status).toBe(unsupported ? 'unknown' : 'loaded');
+      } finally {
+        vi.useRealTimers();
+        await handle.close();
+      }
+    },
+  );
+
   it('does not block ready while capability discovery is pending', async () => {
     captured.catalogs.s1 = catalog('skill:s1');
     captured.runtimeDeferred = true;

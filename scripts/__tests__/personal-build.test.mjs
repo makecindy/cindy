@@ -457,3 +457,22 @@ test('each preparation captures a new selection; activation checks the fixed sna
  const old=structuredClone(report);delete old.upgradeSnapshot;
  assert.throws(()=>verifyUpgradeSnapshot(f.config,old),/Missing upgrade snapshot/);
 });
+
+test('browser seeds build native hosts before hashing and reject incomplete packages', t => {
+  const root = tmp(t), source = path.join(root, 'my-browser');
+  put(path.join(source, 'ghost.json'), { id: 'my-browser', version: '1.0.0', browserExtension: { nativeHost: { binary: 'native-host/bin' } } });
+  assert.throws(() => copyPlugin('my-browser', source, path.join(root, 'incomplete')), /Missing Cindy Chrome native host/);
+  put(path.join(root, 'scripts/build-browser-native.mjs'), `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    for (const os of ['darwin', 'linux', 'win32']) for (const arch of ['x64', 'arm64']) {
+      const dir = path.join(process.argv[3], os + '-' + arch);
+      fs.mkdirSync(dir, {recursive:true});
+      fs.writeFileSync(path.join(dir, 'cindy-browser-native' + (os === 'win32' ? '.exe' : '')), 'fixture');
+    }
+  `);
+  const dest = path.join(root, 'complete');
+  const entry = copyPlugin('my-browser', source, dest, { repositoryRoot: root });
+  assert.equal(entry.sha256, packageHash(dest));
+  assert.equal(fs.existsSync(path.join(source, 'native-host/bin')), false);
+});

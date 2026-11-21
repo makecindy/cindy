@@ -42,12 +42,135 @@ function createWorker(overrides: Partial<OrcaWorkerRecordSnapshot> = {}): OrcaWo
 }
 
 describe('model Orca cleanup authority', () => {
+  // #11060 P2: unit, archiveWorker's normal close refusal without a native probe
+  // must preserve the caller's expired completion stamp, not report ordinary busy.
+  it('preserves archive authority errors after an idle close normally refuses', async () => {
+    let allowed = true;
+    const revoked = Object.assign(new Error('completion stamp expired'), { code: 'STALE_REVISION' });
+    const { service, deps, setWorker, getWorker } = createDeps({
+      getLiveSession: () => ({ isTurnRunning: () => false }),
+      closeWorkerSessionIfIdle: vi.fn(async () => { allowed = false; return false; }),
+    });
+    setWorker(createWorker({ status: 'done' }));
+    await expect(service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', onlyIfIdle: true,
+      beforeArchive: async () => { if (!allowed) throw revoked; },
+    })).rejects.toBe(revoked);
+    expect(getWorker().status).toBe('done');
+    expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+  });
+  // #11060: unit, real idleWorker -> terminal retry. Probe rejection coverage
+  // misses a normal false close and the asynchronous rollback/capture afterward.
+  // Revoking the original guard at any boundary must not install a fresh retry.
+  it.each(['close', 'rollback', 'capture'] as const)(
+    'does not renew a refused close after authority expires during %s', async (phase) => {
+      let allowed = true;
+      const revoked = Object.assign(new Error('authority expired'), { code: 'STALE_REVISION' });
+      const guard = async () => { if (!allowed) throw revoked; };
+      const captureDeliveryAuthority = vi.fn(async () => {
+        if (phase === 'capture') allowed = false;
+        return async () => {};
+      });
+      const close = vi.fn(async () => {
+        if (phase === 'close') allowed = false;
+        return false;
+      });
+      const { service, deps, setWorker, getWorker } = createDeps({
+        getLiveSession: () => null, closeWorkerSessionIfIdle: close, captureDeliveryAuthority,
+      });
+      const restore = deps.restoreWorkerDoneIfIdle;
+      deps.restoreWorkerDoneIfIdle = async (id) => {
+        const restored = await restore(id);
+        if (phase === 'rollback') allowed = false;
+        return restored;
+      };
+      setWorker(createWorker({ status: 'done' }));
+      await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', expectedStatus: 'done' },
+        { assertCurrent: guard })).rejects.toBe(revoked);
+      expect(getWorker().status).toBe('done');
+      expect(captureDeliveryAuthority).toHaveBeenCalledTimes(phase === 'capture' ? 1 : 0);
+      close.mockResolvedValue(true);
+      await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'complete' });
+      expect(close).toHaveBeenCalledOnce();
+      expect(getWorker().status).toBe('done');
+    },
+  );
+  // Unit #11060 review: a guard rejected after the native probe must preserve
+  // its error and roll back done, without acquiring fresh deferred authority.
+  it.each([
+    { action: 'idle', probe: 'idle' }, { action: 'archive', probe: 'idle' },
+    { action: 'idle', probe: 'busy' }, { action: 'idle', probe: 'failed' },
+  ] as const)('propagates $action authority revocation during the $probe background probe', async ({ action, probe }) => {
+    let allowed = true;
+    const revoked = Object.assign(new Error('authority expired'), {
+      code: action === 'idle' ? 'PERMISSION_DENIED' : 'STALE_REVISION',
+    });
+    const guard = async () => { if (!allowed) throw revoked; };
+    const runtime = {
+      isTurnRunning: () => false, getTurnGeneration: () => 1,
+      hasLiveBackgroundWork: async () => {
+        allowed = false;
+        if (probe === 'failed') throw new Error('probe failed');
+        return probe === 'busy';
+      },
+    };
+    const captureDeliveryAuthority = vi.fn(async () => async () => {});
+    const { service, deps, setWorker, getWorker } = createDeps({
+      getLiveSession: () => runtime, captureDeliveryAuthority,
+    });
+    setWorker(createWorker({ status: 'done' }));
+    const result = action === 'idle'
+      ? service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', expectedStatus: 'done' }, { assertCurrent: guard })
+      : service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', onlyIfIdle: true, beforeArchive: guard });
+    await expect(result).rejects.toBe(revoked);
+    expect(getWorker().status).toBe('done');
+    expect(captureDeliveryAuthority).not.toHaveBeenCalled();
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'complete' });
+    expect(deps.closeWorkerSessionIfIdle).not.toHaveBeenCalled();
+    expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+    expect(getWorker().status).toBe('done');
+  });
   const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
   const callbacks = source.slice(source.indexOf('    switchFocus: async ('), source.indexOf('    listAvailableModels: async ('));
   const disable = source.slice(source.indexOf('  async function clearLeadOrcaRoleState('), source.indexOf('  ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA'));
   function compile(bindings: Record<string, unknown>, text = `return ({${callbacks}});`) {
     return new Function(...Object.keys(bindings), ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(...Object.values(bindings));
   }
+
+  it('leaves the team retryable when strict close fails after draining a Worker delivery', async () => {
+    const events: string[] = [];
+    let releaseDelivery!: () => void;
+    const delivery = new Promise<void>(resolve => { releaseDelivery = resolve; });
+    const closeSession = vi.fn(async () => { events.push('close'); }).mockRejectedValueOnce(new Error('close failed'));
+    const archiveWorkersByTeam = vi.fn(async (_team, beforeWrite: () => Promise<void>) => {
+      await delivery;
+      events.push('worker locks held');
+      await beforeWrite();
+      events.push('workers archived');
+      return [];
+    });
+    const run = compile({
+      getActiveTeamByLead: async () => ({ id: 'team-1' }),
+      listWorkersByLead: async () => [createWorker()],
+      maker: { getSession: () => ({ isTurnRunning: () => false, setVendorOptions: vi.fn() }), closeSession },
+      orcaTeamService: { clearAutoBridgeState: vi.fn() },
+      orcaWorkerResumeScheduler: { cancel: vi.fn() },
+      cleanupPendingInteractionsForSession: vi.fn(), forgetKnownOrcaWorkerSession: vi.fn(),
+      captureSessionRecycleScope: vi.fn(), archiveWorkersByTeam,
+      markTeamEnded: async () => { events.push('team ended'); },
+      markWorkersStatusByTeam: vi.fn(), orcaRemoteWorkers: { releaseEnded: vi.fn() },
+      setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
+      log: { warn: vi.fn(), info: vi.fn() },
+    }, `${disable}\nreturn disableOrcaInternal;`);
+    const first = run('lead-1', undefined, true);
+    await vi.waitFor(() => expect(archiveWorkersByTeam).toHaveBeenCalledTimes(1));
+    expect(closeSession).not.toHaveBeenCalled();
+    releaseDelivery();
+    await expect(first).rejects.toThrow('close failed');
+    expect(events).toEqual(['worker locks held']);
+    await expect(run('lead-1', undefined, true)).resolves.toEqual({ ok: true });
+    expect(events).toEqual(['worker locks held', 'worker locks held', 'close', 'team ended', 'workers archived']);
+  });
   it.each(['idleWorker', 'archiveWorker'].flatMap(action => ['revoked', 'close-error', 'healthy'].map(outcome => ({ action, outcome }))))(
     'preserves $action close semantics after abort: $outcome', async ({ action, outcome }) => {
       let allowed = true;
@@ -403,8 +526,8 @@ describe('lead turn declaration reconciliation', () => {
     await service.handleLeadTurnSettled({ leadSessionId: 'lead-1', turnGeneration: 0 });
 
     // 唤醒文本还带别的参数（worker 归属与来源标签），只验第一句对人说的话。
-    expect(deps.sendAutoBridgeToLead.mock.calls[0]?.[0]).toBe('lead-1');
-    expect(deps.sendAutoBridgeToLead.mock.calls[0]?.[1]).toContain('dispatched to research');
+    expect(vi.mocked(deps.sendAutoBridgeToLead).mock.calls[0]?.[0]).toBe('lead-1');
+    expect(vi.mocked(deps.sendAutoBridgeToLead).mock.calls[0]?.[1]).toContain('dispatched to research');
   });
 
   it('refuses a declaration from a session that leads no workers', async () => {
@@ -832,6 +955,30 @@ describe('OrcaTeamService', () => {
     );
     expect(vi.mocked(deps.resumeWorkerSession).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(deps.dispatchWorkerMessage).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  // 2026-11-17: a Lead staged a new source for Workers stopped at their Claude subscription
+  // usage limit, then send_to_worker failed with SUBSCRIPTION_ACCOUNT_LIMITED: the dormant
+  // Worker was woken on its old route before delivery applied the staged choice. Delivery owns
+  // that start when a choice is staged. Tier: unit (injected deps, production send entry).
+  it('lets delivery start a dormant worker on its staged route instead of waking the old one', async () => {
+    const { deps, service, setWorker } = createDeps({
+      hasPendingAgentSwitch: vi.fn((sessionId: string) => sessionId === 'worker-session-1'),
+    });
+    setWorker(createWorker({ status: 'error' }));
+
+    await expect(
+      service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-1',
+        message: '继续',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(deps.resumeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ targetSessionId: 'worker-session-1', message: '继续' }),
     );
   });
 
@@ -1349,6 +1496,28 @@ describe('OrcaTeamService', () => {
     expect(deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
   });
 
+  // 2026-11-17: the Lead only saw AGENT_NOT_READY with the raw account code and could not
+  // tell that another route continues the same Worker. Unit: production send entry; the code
+  // stays AGENT_NOT_READY, the original message is kept after the explanation.
+  it('explains a subscription usage limit on sendToWorker and how to continue the same worker', async () => {
+    const original = '[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset\nresetAtMs=1794878999000';
+    const { service } = createDeps({
+      resumeWorkerSession: vi.fn(async () => { throw new Error(original); }),
+    });
+
+    const result = await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '继续',
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY' });
+    const message = result.ok ? '' : result.message;
+    expect(message).toContain(`until ${new Date(1794878999000).toISOString()}`);
+    expect(message).toContain('set_worker_runtime');
+    expect(message.endsWith(original)).toBe(true);
+  });
+
   it.each([
     ['SESSION_RUNNING', 'BUSY'],
     ['SEND_FAILED', 'AGENT_NOT_READY'],
@@ -1632,13 +1801,16 @@ describe('OrcaTeamService', () => {
     expect(h.getWorker().status).toBe('running');
   });
 
-  it('cancels a queued dispatch when delivery authority is revoked', async () => {
+  it('cancels an accepted queue item when its linked Lead is archived before the team ends', async () => {
     let delayed: (() => void | Promise<void>) | undefined;
-    let deliverable = true;
+    const row = { status: 'active', sideChatClosePending: false,
+      clearedAt: null, permissionMode: 'auto', planModeEnabled: false };
+    const baselines = captureOrcaDeliveryBaselines({ row, live: null });
     const h = createDeps({
       captureControlAuthority: async () => async () => {},
       captureDeliveryAuthority: async () => async () => {
-        if (!deliverable) throw new Error('Orca task is no longer deliverable');
+        if (evaluateOrcaDeliveryScope({ ...baselines, row, live: null }) !== 'ok')
+          throw new Error('Orca task is no longer deliverable');
       },
       dispatchWorkerMessage: vi.fn(async (params) => {
         delayed = () =>
@@ -1664,7 +1836,8 @@ describe('OrcaTeamService', () => {
       targetSessionId: 'worker-session-1',
       message: 'queued before the team ended',
     });
-    deliverable = false;
+    row.status = 'archived';
+    row.sideChatClosePending = true;
 
     await expect(delayed!()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
     expect(h.getWorker().status).toBe('idle');
@@ -2742,7 +2915,7 @@ describe('OrcaTeamService', () => {
         expect(leadMessages[0]).toMatch(/^\[Auto-bridged: worker 异常终止\]\n\n完成了\n\n\(Host note: /);
         expect(leadMessages[0]).toContain('session_id: worker-session-1');
         expect(leadMessages[0]).toContain('send_to_worker');
-        expect(leadMessages[0]).toContain('set_session_runtime');
+        expect(leadMessages[0]).toContain('set_worker_runtime');
       }
     },
   );
@@ -2892,6 +3065,56 @@ describe('OrcaTeamService', () => {
       'broadcastOrcaWorkerChanged',
     ]);
   });
+
+  // #11042 (unit): done acknowledgement previously ignored native background
+  // work and lost the retry after closeIfIdle refused tracked work/continuations.
+  it.each(['native-work', 'probe-failed', 'close-refused'] as const)(
+    'defers done acknowledgement for %s until a later terminal', async (kind) => {
+      const runtime = {
+        isTurnRunning: () => false,
+        getTurnGeneration: () => 1,
+        hasLiveBackgroundWork: vi.fn(async () => false),
+      };
+      const { deps, service, setWorker, getWorker } = createDeps({ getLiveSession: () => runtime });
+      setWorker(createWorker({ status: 'done' }));
+      if (kind === 'native-work') runtime.hasLiveBackgroundWork.mockResolvedValueOnce(true);
+      if (kind === 'probe-failed') runtime.hasLiveBackgroundWork.mockRejectedValueOnce(new Error('unknown'));
+      if (kind === 'close-refused') vi.mocked(deps.closeWorkerSessionIfIdle).mockResolvedValueOnce(false);
+      await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', expectedStatus: 'done' }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+      expect(getWorker()?.status).toBe('done');
+      expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+      await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'complete' });
+      expect(getWorker()?.status).toBe('idle');
+    },
+  );
+
+  it.each(['generation', 'runtime', 'queue'] as const)(
+    'does not close a worker changed during the native probe: %s', async (change) => {
+      let generation = 1;
+      let queued = false;
+      const runtime = {
+        isTurnRunning: () => false,
+        getTurnGeneration: () => generation,
+        hasLiveBackgroundWork: async () => {
+          if (change === 'generation') generation++;
+          if (change === 'runtime') current = { ...runtime };
+          if (change === 'queue') queued = true;
+          return false;
+        },
+      };
+      let current = runtime;
+      const { deps, service, setWorker, getWorker } = createDeps({
+        getLiveSession: () => current,
+        hasPendingWorkerInput: async () => queued,
+      });
+      setWorker(createWorker({ status: 'done' }));
+      await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', expectedStatus: 'done' }))
+        .resolves.toMatchObject({ ok: false });
+      expect(getWorker().status).toBe('done');
+      expect(deps.closeWorkerSessionIfIdle).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not clear runtime or close a done worker when the conditional idle update loses a race', async () => {
     const { calls, deps, service, setWorker } = createDeps({
@@ -3247,7 +3470,7 @@ describe('OrcaTeamService', () => {
       message: 'worker worker-1 has an active turn',
     });
 
-    expect(deps.getLiveSession).toHaveBeenCalledTimes(1);
+    expect(deps.getLiveSession).toHaveBeenCalledWith('worker-session-1');
     expect(deps.closeWorkerSessionIfIdle).toHaveBeenCalledWith('worker-session-1');
     expect(deps.closeWorkerSession).not.toHaveBeenCalled();
     expect(deps.restoreWorkerDoneIfIdle).toHaveBeenCalledWith('worker-1');
@@ -4295,7 +4518,7 @@ it('release refuses an occupied send fence without waiting for it',async()=>{
 it('release closes under its own send fence and fails closed on close error',async()=>{
  const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));
  await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true});
- expect(deps.closeWorkerSessionIfIdle).toHaveBeenCalledWith('worker-session-1',true);
+ expect(deps.closeWorkerSessionIfIdle).toHaveBeenCalledWith('worker-session-1',true,{ intent: 'explicit-release' });
  vi.mocked(deps.archiveWorkerSession).mockClear();vi.mocked(deps.closeWorkerSessionIfIdle).mockRejectedValue(new Error('close failed'));
  expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);
  expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
@@ -4303,9 +4526,7 @@ it('release closes under its own send fence and fails closed on close error',asy
 
 describe('Orca delivery scope', () => {
   const permission = (mode: string, planEnabled = false) => ({ mode, planEnabled });
-  const row = (overrides: Partial<{
-    status: string; clearedAt: number | null; permissionMode: string; planModeEnabled: boolean;
-  }> = {}) => ({
+  const row = (overrides: Partial<NonNullable<Parameters<typeof evaluateOrcaDeliveryScope>[0]['row']>> = {}) => ({
     status: 'active',
     clearedAt: 100,
     permissionMode: 'bypassPermissions',
@@ -4373,6 +4594,11 @@ describe('Orca delivery scope', () => {
   it('keeps delivering for an archived task', () => {
     // Archived is reversible sidebar storage: it neither ends the team nor revokes the dispatch.
     expect(evaluate({ row: row({ status: 'archived' }) })).toBe('ok');
+  });
+
+  it('revokes queued delivery at the durable linked follow-up archive', () => {
+    expect(evaluate({ row: row({ status: 'archived', sideChatClosePending: false }) })).toBe('ok');
+    expect(evaluate({ row: row({ status: 'archived', sideChatClosePending: true }) })).toBe('task-gone');
   });
 
   it('rejects a task that was cleared, deleted or removed', () => {

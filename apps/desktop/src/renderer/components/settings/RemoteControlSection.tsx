@@ -33,7 +33,6 @@ import { Switch } from '@/components/ui/switch';
 import { MyDevicesPanel } from './MyDevicesPanel';
 import { RelayServicePanel, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
-import { OwnComputerModelAccessSetting } from './OwnComputerModelAccessSetting';
 import { RemoteSection } from './RemoteSection';
 import { CollapsibleSubSection } from './CollapsibleSubSection';
 import { useRemoteDevicesDeepLink } from './useRemoteDevicesDeepLink';
@@ -183,7 +182,7 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
               <MyDevicesPanel
                 s={s}
                 variant="self"
-                selfSettings={<div className="flex flex-col gap-2"><OwnComputerModelAccessSetting /><RemoteDesktopSetting /></div>}
+                selfSettings={<div className="flex flex-col gap-2"><RemoteDesktopSetting /></div>}
                 focusDeviceId={deepLink.focusDeviceId}
                 focusRequestKey={deepLink.focusRequestKey}
               />
@@ -206,7 +205,7 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
                   <MyDevicesPanel
                     s={s}
                     variant="self"
-                    selfSettings={<div className="flex flex-col gap-2"><OwnComputerModelAccessSetting /><RemoteDesktopSetting /></div>}
+                    selfSettings={<div className="flex flex-col gap-2"><RemoteDesktopSetting /></div>}
                     focusDeviceId={deepLink.focusDeviceId}
                     focusRequestKey={deepLink.focusRequestKey}
                   />
@@ -279,14 +278,6 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
                   />
                 }
               />
-              {v2.enabled ? (
-                <SettingsRow
-                  id={remoteControlSettings.onlyEncrypted.targetId}
-                  title={t(remoteControlSettings.onlyEncrypted.titleKey)}
-                  hint={t(remoteControlSettings.onlyEncrypted.descriptionKey)}
-                  trailing={<Switch data-setting-id={remoteControlSettings.onlyEncrypted.id} checked={v2.onlyEncrypted} onCheckedChange={v2.setOnlyEncrypted} aria-label={t(remoteControlSettings.onlyEncrypted.titleKey)} />}
-                />
-              ) : null}
             </SettingsCard>
           </SettingsSection>
         ) : null}

@@ -12,11 +12,13 @@ import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoor
  */
 
 import type { OutputLimitDetails } from '@cindy/maker-shared';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
 import type { MessageSourceDevice, MessageSourceGroupRequest, MessageSourceGroupThread, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
   formatAnnotationRegion,
@@ -29,6 +31,7 @@ import {
   projectLiteralUserText,
   readAgentInputReferences,
   type AgentInputReference,
+  type AgentSendToSessionHint,
 } from '@cindy/maker-shared/agent-input-projection';
 
 export type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
@@ -156,7 +159,8 @@ export interface AgentInputChatMessage {
   isPendingPersist?: boolean;
   createdAt?: string;
   images?: Array<AgentInputImageRef | AgentInputFallbackImage>;
-  files?: Array<{ name: string; path: string }>;
+  /** `url` is the cindy-media address of Host-stored audio/video, kept so the message pins it. */
+  files?: Array<{ name: string; path: string; url?: string }>;
   quotesEncoded?: boolean;
   agentReferences?: AgentInputReference[];
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
@@ -195,6 +199,8 @@ export interface AgentInputClearBoundaryOpts {
  * 而不是让 renderer 引用 main 的常量——这样以后调整上限，旧记录仍显示当时的值。
  */
 export interface AutoResumeInfo {
+  /** One retry after the Gemini per-minute input limit, independent of subscription reset. */
+  geminiInputRetry?: true;
   /** 中断原文（terminal error 的 message，通常是 SDK 的英文文案）。 */
   error?: string;
   /**
@@ -345,6 +351,12 @@ export interface AgentInputQueuedMessage {
   workingDir: string;
   vendorOptions?: Record<string, unknown>;
   files?: AgentInputSerializedFile[];
+  /**
+   * Main-only reference attachments for the model (a plugin's relayed group history or quoted
+   * messages), sent after `files`. Never shown or persisted with the message, and stripped
+   * from Renderer and device-link input.
+   */
+  contextFiles?: AgentInputSerializedFile[];
   mentions?: AgentInputMention[];
   sessionRefs?: AgentInputSessionRef[];
   trustedSessionReferenceContexts?: AgentInputSessionReferenceContext[];
@@ -723,6 +735,18 @@ export function projectionRetryText(
   return queuedMessageRetryToken(recovery.item);
 }
 
+/** Whether the pending row exposes text editing in the queue UI. */
+export function canEditQueuedMessage(
+  entry: Pick<AgentInputQueuedMessage, 'origin' | 'sourcePlugin' | 'text' | 'clientId'> & { isPendingEnqueue?: boolean },
+): boolean {
+  const origin = entry.origin?.kind;
+  return !entry.isPendingEnqueue
+    && origin !== 'orca' && origin !== 'scheduler' && origin !== 'session'
+    && !entry.sourcePlugin?.pluginId
+    && !entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
+    && !isAnsweredAsyncQuestionClientId(entry.clientId);
+}
+
 export function updateQueuedMessageText(
   entry: AgentInputQueuedMessage,
   newText: string,
@@ -889,6 +913,9 @@ export function reconcileSessionRefsForText(
         // Invalid parameter: treat it as absent.
       }
     }
+    // The Agent reads a guest task link with get_shared_task_progress under the
+    // active caller's authority. Do not request an account-history snapshot on paste.
+    if (!messageClientId && isSharedTaskPeer(linkDeviceId)) continue;
     const key = `${sessionId}\u0000${messageClientId ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -943,11 +970,16 @@ export function serializeSessionReferencePayload(
 }
 
 /** Immutable semantic projection shared by Ghost, titles, turn and steer. */
-export function getAgentFacingText(queued: AgentInputQueuedMessage): string {
+export function getAgentFacingText(
+  queued: AgentInputQueuedMessage,
+  options: { sendToSession?: AgentSendToSessionHint } = {},
+): string {
+  const sendToSession = queued.toolsDisabled === true ? undefined : options.sendToSession;
   const text = projectAgentFacingText({
     text: queued.text,
     quotesEncoded: queued.chatMessage.quotesEncoded === true,
     agentReferences: queued.agentReferences,
+    sendToSession,
   });
   // Host text-only welcomes stay synthetic in queue/history projections, not in model input.
   return queued.toolsDisabled === true && text.startsWith(UI_ACTION_TRIGGER_PREFIX)
@@ -1196,9 +1228,12 @@ export function deriveAutoTitleSeed(
 export function buildMakerUserMessage(
   queued: AgentInputQueuedMessage,
   sessionReferenceContexts: AgentInputSessionReferenceContext[] = [],
+  options: { sendToSession?: AgentSendToSessionHint } = {},
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
-  const facingText = getAgentFacingText(queued);
+  // The route comes from the live session's host-reconciled identity. Queued createOpts are only a
+  // snapshot: Review and plugin-engine identity are restored at start, so they cannot decide it.
+  const facingText = getAgentFacingText(queued, { sendToSession: options.sendToSession });
   // 主机内部消息只在排队行 / 历史里需要隐藏前缀;发给模型的正文不带它。
   const authoredText = queued.agentOmitsTriggerPrefix === true && facingText.startsWith(UI_ACTION_TRIGGER_PREFIX)
     ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)
@@ -1216,7 +1251,7 @@ export function buildMakerUserMessage(
   // 本条消息内 image block 的序号(从 1 起),与模型看到的图片顺序一致。
   let imageBlockCount = 0;
   const regionDescriptions: string[] = [];
-  for (const f of queued.files ?? []) {
+  for (const f of [...(queued.files ?? []), ...(queued.contextFiles ?? [])]) {
     const type = getAgentInputAttachmentBlockType(f.category, f.ext);
     const pathOrigin = type === 'image' && f.pathOrigin === 'desktop-host'
       ? { pathOrigin: f.pathOrigin }

@@ -23,9 +23,10 @@ import { remoteSessionStore, useSessionPendingInteractions } from './remoteSessi
 import type { PendingInteraction } from './types';
 
 /** Owned-session prompts stay outside the collapsible execution progress. */
-export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, executionStatus, stopping, executionId, groupId, startedAt, workStep, revealWaiting = true, footer, onError }: {
+export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, executionStatus, stopping, executionId, inputClientId, groupId, startedAt, workStep, revealWaiting = true, footer, onError }: {
   deviceId: string;
   executionId?: string;
+  inputClientId?: string;
   groupId?: string;
   startedAt?: number;
   workStep?: { position: number; total: number; task: string };
@@ -76,7 +77,7 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
         titleAccessory={<Text numberOfLines={1} style={styles.processState}>{stateLabel}</Text>}>
         {workStep ? <Text style={styles.statusText}>{t('groupChat.progress.step', { step: workStep.position, total: workStep.total })} · {workStep.task}</Text> : null}
         {lane && groupId && executionId ? <BotGroupLiveNotes key={`${deviceId}:${lane}:${executionId}`} deviceId={deviceId} sessionId={lane}
-          clientId={BOT_GROUP_CLIENT_ID.memberTurn(groupId, executionId, identity.botId)}
+          clientId={inputClientId ?? BOT_GROUP_CLIENT_ID.memberTurn(groupId, executionId, identity.botId)}
           groupId={groupId} executionId={executionId} since={startedAt} running={!waiting && !isStopping} />
           : live?.compactDetail?.trim() && !/^(?:NO_REPLY|SILENT)$/i.test(live.compactDetail.trim())
             ? <Text style={styles.statusText}>{live.compactDetail}</Text> : null}

@@ -1,3 +1,4 @@
+import type { DownloadProgress } from './downloadProgress';
 import type { GhostManifest, InstalledGhost } from './ghost';
 import type { GhostReadmeContent, PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
 
@@ -157,6 +158,18 @@ export interface PluginMarketInstallResult {
   ghost: InstalledGhost;
 }
 
+/**
+ * Pushed on `plugin-market:install-progress` to the window that started an install or update.
+ * Display only: the install's outcome is still the `plugin-market:install` result. Local IPC,
+ * not part of the device-link or plugin wire contracts.
+ */
+export interface PluginMarketInstallProgress {
+  pluginId: string;
+  download: DownloadProgress;
+  /** The verified package is waiting for the user to confirm its permissions. */
+  awaitingConsent?: true;
+}
+
 /* ------------------------------------------------------------------------ */
 /* 自定义市场源（Git / 本地文件夹）                                           */
 /* ------------------------------------------------------------------------ */
@@ -242,4 +255,19 @@ export function parseCustomMarketPluginId(
  */
 export function customMarketReleaseId(marketName: string, ghostId: string, version: string): string {
   return `custom:${encodeURIComponent(marketName)}:${encodeURIComponent(ghostId)}:${encodeURIComponent(version)}`;
+}
+
+/** A task or button may offer one installation only when all configured
+ * sources resolve the requested identity to one available listing. */
+export function uniquePluginInstallCandidate(
+  market: PluginMarketSnapshot,
+  target: { ghostId: string; namespace?: string | null; marketPluginId?: string },
+): PluginMarketItem | undefined {
+  if (market.unavailableReason || market.organizationAccessError || market.unavailableCustomSourceNames?.length) return;
+  const matches = market.items.filter(item =>
+    item.ghostId === target.ghostId &&
+    (target.namespace === undefined || item.namespace === target.namespace) &&
+    (!target.marketPluginId || item.pluginId === target.marketPluginId),
+  );
+  if (matches.length === 1 && matches[0].installState === 'not-installed') return matches[0];
 }

@@ -42,8 +42,9 @@ export const MessageListVisibilityContext = createContext<MessageListVisibility 
  */
 export const MessageListItemViewableContext = createContext<boolean | null>(null);
 
-export function useMessageListItemVisible(key: string): boolean {
-  const store = useContext(MessageListVisibilityContext);
+export function useMessageListItemVisible(key: string, override?: MessageListVisibility | null): boolean {
+  const parent = useContext(MessageListVisibilityContext);
+  const store = override ?? parent;
   const subscribe = useCallback((listener: () => void) => store?.subscribe(key, listener) ?? (() => {}), [store, key]);
   const getSnapshot = useCallback(() => store?.isVisible(key) ?? false, [store, key]);
   // LegendList's useViewability reads during render, then subscribes in an effect

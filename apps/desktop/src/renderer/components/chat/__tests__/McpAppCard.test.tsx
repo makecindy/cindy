@@ -70,6 +70,8 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
   },
 }));
 import { McpAppCard } from '../McpAppCard';
+import { useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 const digest = webcrypto.subtle.digest.bind(webcrypto.subtle);
 const pendingDigests: Promise<ArrayBuffer>[] = [];
 // The real presenter owns demand: no visible View means no state subscription;
@@ -289,6 +291,7 @@ it('reveals static pages quickly and enforces the total reveal deadline', async 
 });
 
 it('restores remembered heights and evicts the oldest cards at the cache limit', async () => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(400);
   vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
   vi.stubGlobal('matchMedia', () => ({ matches: false }));
@@ -313,7 +316,107 @@ it('restores remembered heights and evicts the oldest cards at the cache limit',
 
 // Regression for Windows reconnects: a pre-result size is a transient loading
 // layout and must not replace the remembered outer height or enter the cache.
+// Desktop history regression, unit: drop renderer modules but keep the profile storage.
+it('restores the measured height before opening a historical card in a fresh renderer at a matching width', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  let width = 400;
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width);
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  const props = { sessionId: 'history', clientId: 'height', title: 'Page' };
+  try {
+    setDataOwnerGeneration('layout-account');
+    await act(async () => root.render(<McpAppCard {...props} />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const page = state.controllers.at(-1)!;
+    // A same-account repair advances the generation while this card stays mounted.
+    setDataOwnerGeneration('layout-account');
+    await act(async () => {
+      page.message({ method: 'ui/notifications/initialized' });
+      page.message({ method: 'ui/notifications/sandbox-result-delivered' });
+      page.message({ method: 'ui/notifications/size-changed', params: { height: 481 } });
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    await act(async () => root.render(null));
+    // reset-modules: emulate a renderer restart while retaining the persisted profile cache.
+    vi.resetModules();
+    const { McpAppCard: FreshCard } = await import('../McpAppCard');
+    const { setDataOwnerGeneration: signIn } = await import('@/contexts/dataOwnerGeneration');
+    signIn('layout-account');
+    width += 16;
+    await act(async () => root.render(<FreshCard {...props} />));
+    expect(container.querySelector('[style*="height: 481px"]')).not.toBeNull();
+    expect(container.querySelector('iframe')).toBeNull();
+    await act(async () => root.render(null));
+    width++;
+    await act(async () => root.render(<FreshCard {...props} />));
+    expect(container.querySelector('[style*="height: 320px"]')).not.toBeNull();
+  } finally {
+    await act(async () => root.unmount()); container.remove(); setDataOwnerGeneration(null);
+  }
+});
+
+// Task reopen regression (unit): the session sets its message width in a parent
+// layout effect. The fresh-renderer coverage above gives the card a stable width.
+it('restores a page of historical cards at the settled message width before writing their heights', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
+  // jsdom has no layout. Model the measured 906px content before the session
+  // applies its column width, and the content box inside the card's 1px border.
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 0, 920, 800));
+  const heightsDuringSecondRead: string[] = [];
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+    const session = this.closest<HTMLElement>('[data-session]');
+    if (this.parentElement?.getAttribute('aria-label') === 'B') {
+      const first = session?.querySelector<HTMLElement>('dialog[aria-label="A"] > div:last-child');
+      if (first) heightsDuringSecondRead.push(first.style.height);
+    }
+    const width = session?.style.getPropertyValue('--cindy-message-width');
+    return width ? parseFloat(width) - 2 : 906;
+  });
+  function Session() {
+    const { containerRef, messageWidth } = useProportionalWidth(914);
+    return <div ref={containerRef} data-session=""><div style={{ maxWidth: messageWidth }}>
+      <McpAppCard sessionId="task" clientId="a" title="A" />
+      <McpAppCard sessionId="task" clientId="b" title="B" />
+    </div></div>;
+  }
+  const account = 'width-on-reopen';
+  const key = 'cindy.mcpAppHeights.v1.' + account;
+  localStorage.setItem(key, JSON.stringify([
+    [JSON.stringify([null, 'task', 'a']), 818, 446],
+    [JSON.stringify([null, 'task', 'b']), 912, 476],
+  ]));
+  setDataOwnerGeneration(account);
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<Session />));
+    // Reading B after committing A would force a second synchronous layout.
+    expect(heightsDuringSecondRead).toContain('320px');
+    expect(heightsDuringSecondRead).not.toContain('446px');
+    const mounts = [...container.querySelectorAll<HTMLElement>('dialog > div:last-child')];
+    expect(mounts.map(mount => mount.style.height)).toEqual(['446px', '320px']);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    setDataOwnerGeneration(null);
+    localStorage.removeItem(key);
+  }
+});
+
 it('keeps the remembered height through pre-result sizes and remembers the ready height', async () => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(400);
   vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
   vi.stubGlobal('matchMedia', () => ({ matches: false }));
@@ -348,6 +451,7 @@ it('keeps the remembered height through pre-result sizes and remembers the ready
 });
 
 it('applies a pending height after reveal when no post-result size arrives', async () => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(400);
   vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
   vi.stubGlobal('matchMedia', () => ({ matches: false }));
@@ -374,6 +478,7 @@ it('applies a pending height after reveal when no post-result size arrives', asy
 });
 
 it('applies a real post-result height immediately and replaces the remembered value', async () => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(400);
   vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
   vi.stubGlobal('matchMedia', () => ({ matches: false }));
@@ -458,6 +563,16 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
       controller.close.mockReturnValue(closed);
       const receive = added.mock.calls.find(([type]) => type === 'message')![1];
       const frame = container.querySelector('iframe')!;
+      if (scenario === 'unmount') {
+        await act(async () => {
+          controller.message({ method: 'ui/notifications/initialized' });
+          controller.message({ method: 'ui/notifications/sandbox-result-delivered' });
+          controller.message({ method: 'ui/notifications/size-changed', params: { height: 294 } });
+        });
+        expect(frame.style.opacity).toBe('1');
+        // jsdom has no layout. Supply the visible card's box before deleting its message tree.
+        vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue(new DOMRect(32, 64, 640, 294));
+      }
       // The ancestor sandbox must also allow the inner App's submit event (G5).
       expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-forms');
       if (scenario === 'disconnected') frame.remove();
@@ -479,6 +594,13 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
       if (scenario === 'unmount' || scenario === 'failure-retry') {
         expect(frame.parentElement).toBe(document.body);
         expect(frame.isConnected).toBe(true);
+      }
+      if (scenario === 'unmount') {
+        // While teardown is pending, keep the outgoing surface at its last size and hide it from input and paint.
+        const style = getComputedStyle(frame);
+        expect([style.width, style.height]).toEqual(['640px', '294px']);
+        expect(style.opacity).toBe('0');
+        expect(frame.inert).toBe(true);
       }
       if (scenario === 'disconnected') expect(move).not.toHaveBeenCalled();
       await act(async () => { finish(); await closed; });
@@ -762,6 +884,7 @@ it.each(['light', 'dark'])('keeps the live App mounted while entering and leavin
     expect(dialog.getAttribute('aria-label')).toBe('Live form');
     expect(showModal).toHaveBeenCalledOnce();
     expect(document.activeElement).toBe(dialog.querySelector('[data-exit-fullscreen]'));
+    expect(dialog.querySelector('[data-exit-fullscreen]')?.textContent).toBe('mcpApps.exitFullscreen');
     // #10625: host drops the request.
     const logToMain = vi.fn();
     vi.stubGlobal('electronAPI', { logToMain });
@@ -914,4 +1037,85 @@ it.each([
   } finally {
     await act(async () => root.unmount()); container.remove();
   }
+});
+
+// Card chrome / unit: real presenter, observed geometry and control requests.
+// Legacy coverage never measured a fill surface or offered Host fullscreen.
+it('fills a panel with nonzero dimensions and ignores App automatic heights without reopening', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  let resize!: () => void;
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="panel" clientId="fill" title="Page" chrome="panel" sizing="fill" />));
+    const frameRoot = container.querySelector('[aria-busy]') ?? container.querySelector('dialog > div:last-child')!;
+    let width = 600, height = 450;
+    Object.defineProperty(frameRoot, 'clientWidth', { configurable: true, get: () => width });
+    Object.defineProperty(frameRoot, 'clientHeight', { configurable: true, get: () => height });
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 600, height: 450 } }));
+    expect(container.textContent).not.toContain('Page');
+    for (let i = 0; i < 10; i++) await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 800 + i * 100 } }));
+    expect((frameRoot as HTMLElement).style.height).toBe('');
+    height = 700;
+    await act(async () => resize());
+    expect(controller.context).toHaveBeenLastCalledWith(expect.objectContaining({ containerDimensions: { width: 600, height: 700 } }));
+    const sent = controller.context.mock.calls.length;
+    width = 0; height = 0;
+    await act(async () => resize());
+    expect(controller.context).toHaveBeenCalledTimes(sent);
+    expect(controller.close).not.toHaveBeenCalled();
+    expect(state.controllers).toHaveLength(1);
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it.each([undefined, false, true])('offers fullscreen only after the Host explicitly permits its button (%s)', async allowed => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="full" clientId="button" title="Planner" />));
+    const dialog = container.querySelector('dialog')!; dialog.showModal = vi.fn(); dialog.close = vi.fn();
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    await act(async () => { controller.message({ method: 'ui/notifications/initialized' }); controller.message({ method: 'ui/notifications/sandbox-result-delivered' });
+      controller.message({ method: 'ui/notifications/host-context-changed', params: allowed === undefined ? {} : { 'cindy/host-controls': { fullscreenButton: allowed } } }); });
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    const button = container.querySelector<HTMLButtonElement>('[aria-label="mcpApps.fullscreen"]');
+    expect(Boolean(button)).toBe(allowed === true);
+    if (button) { await act(async () => button.click()); expect(controller.displayMode).toHaveBeenCalledExactlyOnceWith('fullscreen'); }
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// The public snapshot, rather than title/name matching, decides exception labels.
+// Minimal regression: a local plugin with the same name as a market plugin.
+it.each([
+  [undefined, undefined], [{ kind: 'market' }, undefined], [{ kind: 'organization' }, undefined],
+  [{ kind: 'local' }, 'mcpApps.source.local'], [{ kind: 'new-source' }, 'mcpApps.source.unknown'],
+])('renders source exceptions from the public card snapshot (%j)', async (source, warning) => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="task" clientId="source" title="Planner · legacy title" plugin={{ name: 'Planner', ...(source ? { source } : {}) }} />));
+    expect(container.textContent).toBe('Planner' + (warning ?? ''));
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// R3 / unit: production card title uses the snapshot, and old cards remain readable.
+it.each([true, {}, { name: 42 }, { name: 'Team reports' }])('renders configured custom MCP names with a legacy fallback (%j)', async customMcp => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="task" clientId="custom" title="Tool title" customMcp={customMcp} />));
+    expect(container.textContent).toBe((typeof customMcp === 'object' && customMcp.name === 'Team reports' ? 'Team reports' : 'Tool title') + 'mcpApps.customMcp');
+  } finally { await act(async () => root.unmount()); container.remove(); }
 });

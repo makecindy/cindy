@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
 import type { CodexSessionMcpConfigInput, CodexSubagentRoutingProfile } from '../../base-agent.js';
-import { AppServerClient, type OversizedNotification, type RequestProgressDeadline } from './client.js';
+import { AppServerClient, AppServerResponseError, type OversizedNotification, type RequestProgressDeadline } from './client.js';
 import { CODEX_EXTERNAL_AUTH_REFRESH, CodexExternalAuthSession, assertCodexEphemeralAuth, type CodexExternalAuth } from './external-auth.js';
 import type { Transport } from './transport.js';
 import {
@@ -320,6 +320,7 @@ export interface AppServerHostOptions {
   /** Cindy Provider codex/* 的内部 OpenAI transport identity。 */
   cindyRemoteCompactionProviderId?: string;
   localCompactionProviderId?: string;
+  contextProviderModels?: readonly string[];
   /** Generic custom Provider identities and capabilities frozen into this process. */
   codexCustomProviderRoutes?: Array<{
     providerId: string;
@@ -368,6 +369,21 @@ interface BufferedNotification {
 /** All native attempts have exited before this error is exposed to a task startup. */
 export class CodexNativeInitializationStoppedError extends Error {}
 
+interface ThreadResumeClaim {
+  owner: object;
+  previous?: ThreadResumeClaim;
+  phase: 'preparing' | 'pending' | 'ready' | 'active' | 'rejected' | 'uncertain';
+  release?: {
+    promise: Promise<void>;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+    state: 'waiting' | 'running' | 'done' | 'failed';
+    deadlineAt: number;
+  };
+}
+
+type ThreadResumeOwnership = (() => boolean) & { owner?: object };
+
 export class AppServerHost {
   private readonly externalAuth: CodexExternalAuthSession | undefined;
   private readonly connectionId = randomUUID();
@@ -386,6 +402,10 @@ export class AppServerHost {
   private nativeInitializationEpoch = 0;
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
+  // Claims start before resume awaits transport startup, not at subscription.
+  private readonly threadResumeOwners = new Map<string, ThreadResumeClaim>();
+  private readonly threadOwnerCleanupProofs = new Map<object, { promise: Promise<void>; resolve: () => void }>();
+  private readonly releasedThreadOwners = new WeakSet<object>();
   /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
   private readonly lineageRoots = new Map<string, string>();
   /**
@@ -535,6 +555,10 @@ export class AppServerHost {
 
   getCindyRemoteCompactionProviderId(): string | null {
     return this.opts.cindyRemoteCompactionProviderId ?? null;
+  }
+
+  getContextProviderModels(): readonly string[] | undefined {
+    return this.opts.contextProviderModels;
   }
 
   getCustomProviderModelProviderId(
@@ -956,6 +980,83 @@ export class AppServerHost {
   async request<R = unknown>(
     method: string,
     params?: unknown,
+    opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline; threadOwner?: object },
+  ): Promise<R> {
+    const threadId = method === Method.ThreadResume ? (params as { threadId?: unknown } | undefined)?.threadId : undefined;
+    if (typeof threadId !== 'string') {
+      const owner = opts?.threadOwner && (method === Method.ThreadStart || method === Method.ThreadFork) ? opts.threadOwner : undefined;
+      if (!owner) return this.dispatchRequest<R>(method, params, opts);
+      this.beginThreadOwnerAcquisition(owner);
+      let dispatched = false;
+      try {
+        const result = await this.dispatchRequest<R>(method, params, { ...opts, beforeDispatch: () => {
+          opts?.beforeDispatch?.();
+          this.beginThreadOwnerAcquisition(owner);
+          dispatched = true;
+        } });
+        const createdId = (result as { thread?: { id?: unknown } })?.thread?.id;
+        if (typeof createdId === 'string') this.threadResumeOwners.set(createdId, { owner, phase: 'ready' });
+        return result;
+      } catch (error) {
+        if (!dispatched || error instanceof AppServerResponseError) this.confirmUnownedThreadOwner(owner);
+        throw error;
+      }
+    }
+    const previous = this.threadResumeOwners.get(threadId);
+    const claim: ThreadResumeClaim = {
+      owner: opts?.threadOwner ?? (this.subscribers.has(threadId) ? previous?.owner : undefined) ?? {}, previous, phase: 'preparing',
+    };
+    this.beginThreadOwnerAcquisition(claim.owner);
+    this.threadResumeOwners.set(threadId, claim);
+    let dispatched = false;
+    const beganAt = Date.now();
+    try {
+      // Never write a new resume behind an unconfirmed destructive cleanup.
+      if (previous?.phase === 'uncertain') throw new Error('Codex thread runtime is quarantined after an unconfirmed resume');
+      if (previous?.release?.state === 'running') await previous.release.promise;
+      if (previous?.release?.state === 'failed') {
+        await this.requestThreadRelease(threadId, previous);
+      }
+      if (previous?.release?.state === 'done') claim.previous = undefined;
+      if (this.threadResumeOwners.get(threadId) !== claim) throw new Error('Codex thread resume was superseded before dispatch');
+      const remaining = opts?.timeoutMs == null ? undefined : opts.timeoutMs - (Date.now() - beganAt);
+      if (remaining !== undefined && remaining <= 0) throw new Error('Codex thread cleanup consumed the resume timeout budget');
+      claim.phase = 'pending';
+      const result = await this.dispatchRequest<R>(method, params, { ...opts, ...(remaining === undefined ? {} : { timeoutMs: remaining }), beforeDispatch: () => {
+        opts?.beforeDispatch?.();
+        if (this.threadResumeOwners.get(threadId) !== claim) throw new Error('Codex thread resume was superseded before dispatch');
+        this.beginThreadOwnerAcquisition(claim.owner);
+        dispatched = true;
+      } });
+      claim.phase = 'ready'; // Subscription, not the native response, commits a takeover.
+      if (previous?.owner === claim.owner && previous.phase === 'active' && this.subscribers.has(threadId)) {
+        claim.phase = 'active';
+        claim.previous = undefined;
+      }
+      this.settleThreadRelease(threadId);
+      return result;
+    } catch (error) {
+      // A timeout/write failure cannot prove the native resume was rejected.
+      if (!dispatched || error instanceof AppServerResponseError) {
+        claim.phase = 'rejected';
+        this.settleThreadRelease(threadId);
+        this.confirmUnownedThreadOwner(claim.owner);
+      } else {
+        claim.phase = 'uncertain';
+        for (let prior = claim.previous; prior; prior = prior.previous) {
+          if (prior.release?.state === 'waiting') {
+            prior.release.state = 'failed';
+            prior.release.reject(new Error('Codex thread cleanup is unconfirmed while a replacement resume is uncertain'));
+          }
+        }
+        claim.previous = undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async dispatchRequest<R>(
+    method: string, params?: unknown,
     opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline },
   ): Promise<R> {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
@@ -1004,14 +1105,141 @@ export class AppServerHost {
   }
 
   /** Release one thread's live runtime without archiving or deleting its history. */
-  async unsubscribeThread(threadId: string): Promise<void> {
+  async unsubscribeThread(threadId: string, isCurrent?: ThreadResumeOwnership): Promise<void> {
+    if (!this.client) return;
+    if (isCurrent?.() === false) {
+      if (isCurrent.owner && !this.subscribers.has(threadId)) {
+        for (let claim = this.threadResumeOwners.get(threadId); claim; claim = claim.previous) {
+          if (claim.owner === isCurrent.owner && claim.phase !== 'rejected') return this.requestThreadRelease(threadId, claim);
+        }
+      }
+      return;
+    }
+    const claim = this.threadResumeOwners.get(threadId);
+    if (claim) return this.requestThreadRelease(threadId, claim);
+    await this.client.request<ThreadUnsubscribeResponse>(Method.ThreadUnsubscribe, { threadId }, { timeoutMs: this.threadUnsubscribeTimeoutMs });
+  }
+
+  /** Abort unpublished startup resources; an active subscription has its own release handle. */
+  async releaseUncommittedThreadOwner(owner: object): Promise<boolean> {
+    const releases: Promise<void>[] = [];
+    let found = false;
+    for (const [threadId, current] of this.threadResumeOwners) {
+      for (let claim: ThreadResumeClaim | undefined = current; claim; claim = claim.previous) {
+        if (claim.owner !== owner || claim.phase === 'active' || claim.phase === 'rejected') continue;
+        found = true;
+        if (claim.phase === 'pending' || claim.phase === 'uncertain') throw new Error('Codex startup thread cleanup is unconfirmed');
+        if (claim.previous) {
+          claim.phase = 'rejected';
+          this.settleThreadRelease(threadId);
+          this.confirmThreadOwnerCleanup(owner);
+        } else releases.push(this.requestThreadRelease(threadId, claim));
+      }
+    }
+    await Promise.all(releases);
+    if (!found && this.threadOwnerCleanupProofs.has(owner)) throw new Error('Codex startup task cleanup is awaiting host exit');
+    return found || this.releasedThreadOwners.has(owner);
+  }
+
+  whenThreadOwnerReleased(owner: object): Promise<void> {
+    if (this.releasedThreadOwners.has(owner)) return Promise.resolve();
+    const existing = this.threadOwnerCleanupProofs.get(owner);
+    if (existing) return existing.promise;
+    let resolve!: () => void;
+    const promise = new Promise<void>(yes => { resolve = yes; });
+    this.threadOwnerCleanupProofs.set(owner, { promise, resolve });
+    return promise;
+  }
+
+  private beginThreadOwnerAcquisition(owner: object): void {
+    // Proof belongs to the previous acquisition, not the reusable handle identity.
+    // Register before startup/write: start/fork may time out without returning an id.
+    this.releasedThreadOwners.delete(owner);
+    this.whenThreadOwnerReleased(owner);
+  }
+
+  private confirmThreadOwnerCleanup(owner: object): void {
+    this.releasedThreadOwners.add(owner);
+    this.threadOwnerCleanupProofs.get(owner)?.resolve();
+    this.threadOwnerCleanupProofs.delete(owner);
+  }
+
+  private confirmUnownedThreadOwner(owner: object): void {
+    for (const current of this.threadResumeOwners.values()) {
+      for (let claim: ThreadResumeClaim | undefined = current; claim; claim = claim.previous) {
+        if (claim.owner === owner && claim.phase !== 'rejected') return;
+      }
+    }
+    this.confirmThreadOwnerCleanup(owner);
+  }
+
+  private requestThreadRelease(threadId: string, claim: ThreadResumeClaim): Promise<void> {
+    if (!claim.release || claim.release.state === 'failed') {
+      let resolve!: () => void;
+      let reject!: (error: unknown) => void;
+      const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+      // Callers still receive the rejection; this guards bookkeeping-only observers.
+      void promise.catch(() => {});
+      const deadlineAt = Date.now() + this.threadUnsubscribeTimeoutMs;
+      const release: NonNullable<ThreadResumeClaim['release']> = {
+        promise, state: 'waiting', deadlineAt,
+        resolve: () => { clearTimeout(timer); resolve(); },
+        reject: error => { clearTimeout(timer); reject(error); },
+      };
+      const timer = setTimeout(() => {
+        if (release.state !== 'waiting') return;
+        release.state = 'failed';
+        release.reject(new Error('Codex thread cleanup timed out waiting for replacement ownership'));
+      }, this.threadUnsubscribeTimeoutMs);
+      timer.unref?.();
+      claim.release = release;
+    }
+    this.settleThreadRelease(threadId);
+    return claim.release.promise;
+  }
+
+  private settleThreadRelease(threadId: string): void {
+    let current = this.threadResumeOwners.get(threadId);
+    while (current?.phase === 'rejected') current = current.previous;
+    if (!current) { this.threadResumeOwners.delete(threadId); return; }
+    this.threadResumeOwners.set(threadId, current);
+    if (current.phase === 'preparing' && current.previous?.release?.state === 'waiting') {
+      this.performThreadRelease(threadId, current.previous);
+    }
+    const release = current.release;
+    if (!release || release.state !== 'waiting' || this.subscribers.has(threadId)) return;
+    if (current.phase === 'preparing' || current.phase === 'pending' || current.phase === 'uncertain') {
+      if (current.phase === 'uncertain') {
+        release.state = 'failed';
+        release.reject(new Error('Codex thread cleanup is unconfirmed after an uncertain resume'));
+      }
+      return;
+    }
+    this.performThreadRelease(threadId, current);
+  }
+
+  private performThreadRelease(threadId: string, current: ThreadResumeClaim): void {
+    const release = current.release;
+    if (!release || release.state !== 'waiting' || this.subscribers.has(threadId)) return;
     const client = this.client;
-    if (!client) return;
-    await client.request<ThreadUnsubscribeResponse>(
-      Method.ThreadUnsubscribe,
-      { threadId },
-      { timeoutMs: this.threadUnsubscribeTimeoutMs },
-    );
+    if (!client) { release.state = 'failed'; release.reject(new Error('Codex cleanup transport is unavailable')); return; }
+    const remaining = release.deadlineAt - Date.now();
+    if (remaining <= 0) { release.state = 'failed'; release.reject(new Error('Codex thread cleanup exhausted its deadline')); return; }
+    release.state = 'running';
+    // Claim check and native write are synchronous; no replacement can slip between them.
+    void client.request<ThreadUnsubscribeResponse>(Method.ThreadUnsubscribe, { threadId }, { timeoutMs: remaining }).then(() => {
+      release.state = 'done';
+      if (this.threadResumeOwners.get(threadId) === current && !this.subscribers.has(threadId)) this.threadResumeOwners.delete(threadId);
+      for (let claim: ThreadResumeClaim | undefined = current; claim; claim = claim.previous) this.confirmThreadOwnerCleanup(claim.owner);
+      release.resolve();
+    }, error => { release.state = 'failed'; release.reject(error); });
+  }
+
+  /** A late resume may clean up only while no newer resume or subscriber owns it. */
+  captureThreadResumeOwnership(threadId: string): ThreadResumeOwnership {
+    const owner = this.threadResumeOwners.get(threadId)?.owner;
+    return Object.assign(() => owner !== undefined && this.threadResumeOwners.get(threadId)?.owner === owner
+      && !this.hasThreadSubscription(threadId), { owner });
   }
 
   async selectModelProvider(modelProvider: string | undefined): Promise<void> {
@@ -1044,6 +1272,7 @@ export class AppServerHost {
       const client = this.client;
       const shutdownPromise = Promise.resolve().then(async () => {
         await client?.close({ reason, throwOnTransportError: true });
+        for (const owner of this.threadOwnerCleanupProofs.keys()) this.confirmThreadOwnerCleanup(owner);
         if (this.client === client) this.client = null;
         // start() 的同步 transport 回调可能在 ensureStarted 赋值前触发关闭。
         this.startPromise = null;
@@ -1060,6 +1289,19 @@ export class AppServerHost {
       // MCP readiness belongs to the concrete app-server process.
       this.mcpToolAvailability.clear();
       this.subscribers.clear();
+      for (const current of this.threadResumeOwners.values()) {
+        for (let claim: ThreadResumeClaim | undefined = current; claim; claim = claim.previous) {
+          // Keep owner proof across failed shutdown retries and late startup observers.
+          // Only the confirmed client.close above may resolve it.
+          this.whenThreadOwnerReleased(claim.owner);
+          if (claim.release?.state === 'waiting') {
+            const release = claim.release;
+            // Retirement must confirm exit before it can confirm a pending release.
+            void shutdownPromise.then(() => { release.state = 'done'; release.resolve(); }, error => { release.state = 'failed'; release.reject(error); });
+          }
+        }
+      }
+      this.threadResumeOwners.clear();
       this.lineageRoots.clear();
       this.pendingLineage.clear();
       this.buffered.clear();
@@ -1183,7 +1425,7 @@ export class AppServerHost {
  * 不做 refcount → shutdown：共享 server 仍只跟 host.shutdown() 绑定。这里仅释放
  * 已关闭 session 对应的 thread state，避免它继续持有 MCP/app-server 子进程资源。
    */
-  subscribeThread(threadId: string, handlers: ThreadEventHandlers): ThreadSubscription {
+  subscribeThread(threadId: string, handlers: ThreadEventHandlers, threadOwner?: object): ThreadSubscription {
     if (this.retired) {
       throw new Error(`AppServerHost.subscribeThread(${threadId}) after retirement`);
     }
@@ -1194,6 +1436,16 @@ export class AppServerHost {
       this.logger.warn('overwriting thread subscription', { threadId });
     }
     if (this.client) this.writerCandidates.add(this.client);
+    const previous = this.threadResumeOwners.get(threadId);
+    if (threadOwner && previous && previous.owner !== threadOwner) throw new Error('Codex thread subscription was superseded');
+    const owner = threadOwner ?? previous?.owner ?? handlers;
+    this.releasedThreadOwners.delete(owner);
+    this.threadResumeOwners.set(threadId, { owner, phase: 'active' });
+    for (let claim = previous; claim; claim = claim.previous) {
+      if (claim.release?.state === 'waiting') { claim.release.state = 'done'; claim.release.resolve(); }
+      if (claim.owner !== owner) this.confirmThreadOwnerCleanup(claim.owner);
+    }
+    const ownsResume = this.captureThreadResumeOwnership(threadId);
     this.subscribers.set(threadId, handlers);
     this.lineageRoots.set(threadId, threadId);
     this.notifyThreadHandlerWaiters(threadId);
@@ -1246,7 +1498,7 @@ export class AppServerHost {
           return Promise.resolve();
         }
 
-        releasePromise = this.unsubscribeThread(threadId)
+        releasePromise = this.unsubscribeThread(threadId, ownsResume)
           .then(() => {
             serverReleased = true;
           })
@@ -1836,6 +2088,10 @@ export class AppServerHost {
   }
 
   // ── 诊断辅助 (测试 / 日志) ────────────────────────────────────────────────
+
+  async sampleResumeStack(): Promise<string[]> {
+    return await this.client?.sampleResumeStack() ?? [];
+  }
 
   /** 当前活跃 subscriber 数 — diagnostics, 不参与业务。 */
   get activeSubscriptions(): number {

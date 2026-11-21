@@ -3293,6 +3293,92 @@ it.each(['field', 'model'] as const)('inherits a text-only default when the user
   expect(result.providers[0]!.models[0]!.input).toEqual(['text']);
 });
 
+// #11023, unit: an unknown Chat gateway must retain an explicit per-connection
+// capability through catalog refresh and launch. Existing Google-only tests do
+// not exercise local overrides; false is the minimal previously dropped value.
+it.each([false, true, undefined])('projects a scoped Pi Chat store override %s without changing routes', supportsStore => {
+  const cfg = { id: 'store-fixture', name: 'Gateway', runtimes: { pi: {
+    baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'gemini-4-hydrogen', name: 'Gemini' }, { id: 'other', name: 'Other' },
+      { id: 'responses', name: 'Responses', api: 'openai-responses' as const }],
+  } } };
+  setActiveCatalog(BUNDLED_CATALOG);
+  setCustomProviderConfigs([cfg]);
+  const patches = supportsStore === undefined ? {} : Object.fromEntries(
+    ['gemini-4-hydrogen', 'responses'].map(id => [`store-fixture:${id}`, { perAgent: { pi: { supportsStore } } }]),
+  );
+  const parsed = sanitizeModelCatalogOverrides({ patches });
+  expect(parsed.invalid).toEqual([]);
+  setLocalCatalogOverrides(parsed.overrides);
+  try {
+    const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(result.providers[0].baseUrl).toBe(cfg.runtimes.pi.baseUrl);
+    expect(result.providers[0].api).toBe('openai-completions');
+    expect(result.providers[0].models[0].compat).toEqual({ supportsDeveloperRole: false,
+      ...(supportsStore !== undefined ? { supportsStore } : {}) });
+    expect(result.providers[0].models[1].compat).toEqual({ supportsDeveloperRole: false });
+    expect(result.providers[0].models[2].compat).toBeUndefined();
+    // Removing the local setting restores the original native behavior.
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    const reset = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(reset.providers[0].models[0].compat).toEqual({ supportsDeveloperRole: false });
+  } finally { setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES); setCustomProviders([]); }
+});
+
+it.each([{ base: { supportsStore: false } }, { perAgent: { codex: { supportsStore: false } } },
+  { perAgent: { pi: { supportsStore: 'false' } } }])('rejects store overrides outside the Pi capability contract: %j', patch => {
+  const parsed = sanitizeModelCatalogOverrides({ patches: { 'custom%3Astore-fixture:model': patch } });
+  expect(parsed.invalid).toEqual(['patches:custom%3Astore-fixture:model']);
+  expect(parsed.overrides.patches).toEqual({});
+});
+
+// #11108, unit: exercise the production catalog override -> Pi launch path,
+// not an injected Pi fixture. Unknown aliases must remain unchanged by default.
+it.each([64, null, undefined] as const)('projects the persisted Chat ID limit %s only to its configured model', maxToolCallIdLength => {
+  const cfg = { id: 'id-limit-fixture', name: 'Gateway', runtimes: { pi: {
+    baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'production-chat', name: 'Chat' }, { id: 'production-flash', name: 'Flash' },
+      { id: 'responses', name: 'Responses', api: 'openai-responses' as const }],
+  } } };
+  setActiveCatalog(BUNDLED_CATALOG);
+  setCustomProviderConfigs([cfg]);
+  const patches = maxToolCallIdLength === undefined ? {} : Object.fromEntries(
+    ['production-chat', 'responses'].map(id => [`id-limit-fixture:${id}`, { perAgent: { pi: { maxToolCallIdLength } } }]),
+  );
+  const parsed = sanitizeModelCatalogOverrides({ patches });
+  expect(parsed.invalid).toEqual([]);
+  setLocalCatalogOverrides(parsed.overrides);
+  try {
+    const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(result.providers[0].models[0].compat?.maxToolCallIdLength).toBe(maxToolCallIdLength);
+    expect(result.providers[0].models[1].compat?.maxToolCallIdLength).toBeUndefined();
+    expect(result.providers[0].models[2].compat?.maxToolCallIdLength).toBeUndefined();
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    const reset = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(reset.providers[0].models[0].compat?.maxToolCallIdLength).toBeUndefined();
+  } finally { setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES); setCustomProviders([]); }
+});
+
+it.each([
+  ['https://api.openai.com/v1', 64],
+  ['https://api.openai.com/v1/', 64],
+  ['https://api.openai.com.example/v1', undefined],
+  ['https://gateway.example/v1', undefined],
+] as const)('declares the official Chat ID constraint only for %s', (baseUrl, expected) => {
+  const { providers } = buildPiNativeProvidersFromConfigs([{ id: 'official-id-limit', name: 'Chat', runtimes: { pi: {
+    baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'deployment-alias' }],
+  } } }], () => 'fixture-key');
+  expect(providers[0].models[0].compat?.maxToolCallIdLength).toBe(expected);
+});
+
+it.each([{ base: { maxToolCallIdLength: 64 } }, { perAgent: { codex: { maxToolCallIdLength: 64 } } },
+  { perAgent: { pi: { maxToolCallIdLength: '64' } } }, { perAgent: { pi: { maxToolCallIdLength: 63 } } }])(
+  'rejects invalid Chat ID capability scopes and values: %j', patch => {
+    expect(sanitizeModelCatalogOverrides({ patches: { 'id-limit-fixture:model': patch } }).invalid)
+      .toEqual(['patches:id-limit-fixture:model']);
+  },
+);
+
 it.each([true, false])('keeps local image override %s above the custom connection form', (supportsImageInput) => {
   const cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: {
     baseUrl: 'https://user.example/v1', wireProtocol: 'openai-chat' as const,

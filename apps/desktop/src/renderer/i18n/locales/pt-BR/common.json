@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Salvar",
     "promptUnsupported": "Este local de execução do Pi não oferece suporte a trechos de instruções de sistema.",
+    "nativeHooksUnsupported": "Os hooks de ferramentas são compatíveis apenas com Claude Code e Pi locais.",
     "title": "Plugins da tarefa",
     "description": "Selecione os plugins desta tarefa. As alterações valem a partir da próxima mensagem.",
     "unsupported": "O processamento de cada solicitação só está disponível com Pi local. O mecanismo desta tarefa não oferece suporte.",
@@ -140,6 +141,10 @@
     "title": "Confirmar acesso ao anexo",
     "message": "O Cindy não consegue ler este anexo. Selecione o arquivo original para continuar enviando esta mensagem. Ao cancelar, seu rascunho será mantido.",
     "button": "Usar arquivo original"
+  },
+  "deviceLinkSendScope": {
+    "cancelled": "Este envio foi cancelado porque a tarefa ou a janela mudou.",
+    "invalid": "Este envio não é mais válido para a sessão atual."
   },
   "mailReader": {
     "showExternalImages": "Mostrar imagens externas",
@@ -432,7 +437,8 @@
       "loading": "Carregando acesso aos modelos…",
       "loadFailed": "Não foi possível carregar o acesso aos modelos. Reabra estas configurações.",
       "saveFailed": "Não foi possível salvar o acesso aos modelos. Tente novamente.",
-      "needsUpdate": "Atualize o Cindy no computador do provedor para gerenciar o acesso aos modelos."
+      "needsUpdate": "Atualize o Cindy no computador do provedor para gerenciar o acesso aos modelos.",
+      "followsPool": "Esta conexão foi mesclada a “{{pool}}”, então os modelos remotos seguem “{{pool}}”. Altere lá. Os limites de membros abaixo ainda podem ser definidos aqui."
     },
     "entry": {
       "label": "Acesso remoto e compartilhamento",
@@ -445,6 +451,8 @@
     },
     "manage": {
       "createLink": "Criar link de compartilhamento",
+      "exportRoster": "Exportar lista de membros",
+      "exportRosterFailed": "Não foi possível salvar a lista de membros.",
       "loading": "Carregando compartilhamento…",
       "notReady": "O compartilhamento não está disponível no momento. Verifique se você entrou e está online; uma nova tentativa será feita automaticamente.",
       "loadFailed": "Não foi possível carregar os detalhes do compartilhamento. Tente novamente em instantes.",
@@ -568,7 +576,8 @@
       "calloutUnknown": "Se você não reconhece esta pessoa, recuse; o link para de funcionar após a recusa.",
       "approve": "Aprovar compartilhamento",
       "reject": "Recusar solicitação",
-      "later": "Decidir depois"
+      "later": "Decidir depois",
+      "calloutPluginEngine": "{{name}} pode usar sem instalar o plugin nem a CLI no próprio computador, usando o login e a cota da CLI deste computador."
     },
     "apply": {
       "loading": "Lendo link de compartilhamento…",
@@ -874,8 +883,7 @@
         "loading": "Consultando cota…",
         "unavailable": "Não é possível consultar a cota deste computador agora",
         "none": "Este provedor não tem informações de cota",
-        "offline": "Este computador está offline, então não é possível consultar sua cota",
-        "share": "A cota não é exibida para computadores compartilhados por outras pessoas"
+        "offline": "Este computador está offline, então não é possível consultar sua cota"
       },
       "runningCount_one": "{{count}} tarefa em execução",
       "runningCount_other": "{{count}} tarefas em execução",
@@ -942,7 +950,7 @@
       "title": "Continuar em {{label}}?",
       "fallbackTitle": "Continuar em {{label}} com um resumo?",
       "fallbackDescription": "Não foi possível restaurar a conversa por completo. Um resumo pode omitir detalhes anteriores e resultados de ferramentas. Cancele para enviar no computador original.",
-      "description": "Para usar a cota de todas as contas de forma equilibrada, envie esta mensagem de {{label}} ({{quota}}). As últimas mensagens e um resumo serão transferidos; detalhes mais antigos podem ser perdidos.",
+      "description": "Para usar a cota de todas as contas de forma equilibrada, envie esta mensagem de {{label}} ({{quota}}). A conversa será transferida. As partes anteriores podem ser condensadas para caber no modelo.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
       "confirm": "Alternar só desta vez",
@@ -991,8 +999,8 @@
       "loading": "Carregando imagem…"
     },
     "moveToolbar": "Mover barra de ferramentas para a esquerda ou direita",
-    "hint": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Role para alterar o escopo · Espaço: tela inteira · C: copiar cor · Esc: sair",
-    "hintWithLast": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Role para alterar o escopo · Espaço: tela inteira · R: última área · C: copiar cor · Esc: sair",
+    "hint": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Role para alterar o escopo · Espaço: selecionar a janela inteira · C: copiar cor · Esc: sair",
+    "hintWithLast": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Role para alterar o escopo · Espaço: selecionar a janela inteira · R: última área · C: copiar cor · Esc: sair",
     "copy": "Copiar",
     "cancel": "Sair da captura de tela",
     "captureFailed": "Não foi possível capturar a tela",
@@ -1141,14 +1149,14 @@
   },
   "awayGuard": {
     "status": "O Cindy está trabalhando",
-    "hint": "Pressione qualquer tecla ou a tecla Touch ID para bloquear e depois desbloqueie com a digital ou a senha",
+    "hint": "Pressione qualquer tecla para abrir a tela de desbloqueio",
     "lockFailed": {
       "status": "O Cindy não conseguiu bloquear este Mac",
       "hint": "Toque no computador para tentar bloquear de novo. Se ainda não bloquear, confirme com Touch ID ou sua senha para remover a tela. Você também pode fechar a tampa ou apertar o botão de energia.",
       "hintWindows": "Toque no computador para tentar bloquear de novo. Se ainda não bloquear, confirme com o Windows Hello ou seu PIN para remover a tela. Você também pode pressionar a tecla do logotipo do Windows + L."
     },
-    "hintWindows": "Pressione qualquer tecla para bloquear; desbloqueie com o Windows Hello ou sua senha",
-    "hintLinux": "Pressione qualquer tecla para bloquear; desbloqueie com sua senha",
+    "hintWindows": "Pressione qualquer tecla para abrir a tela de desbloqueio",
+    "hintLinux": "Pressione qualquer tecla para abrir a tela de desbloqueio",
     "verifyReason": "remover a tela de privacidade"
   },
   "appBadge": {
@@ -1358,10 +1366,11 @@
         "body": "Esta tarefa está com {{device}} aberto em outro computador. Ative o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
         "action": "Ativar"
       },
-      "update": {
-        "title": "Atualize o plugin “{{plugin}}”",
-        "body": "Esta tarefa está com {{device}} aberto em outro computador. Atualize o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
-        "action": "Atualizar"
+      "unsupported": {
+        "title": "O plugin “{{plugin}}” não oferece visualização remota",
+        "body": "O plugin instalado não pode exibir {{device}} de outro computador. Procure uma atualização compatível ou use o dispositivo no computador que executa esta sessão.",
+        "action": "Buscar atualização compatível",
+        "unavailable": "Não há atualização compatível na origem deste plugin. Use o dispositivo no computador que executa esta sessão."
       }
     },
     "lockOnExitHintPrivacy": "Mostra a tela de privacidade ao sair, para a IA continuar trabalhando; tocar no computador o bloqueia.",
@@ -1372,6 +1381,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode trocar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness necessário.",
     "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado não está mais disponível no provedor. Verifique a conexão em Configurações ou escolha outro modelo disponível.",
+    "MODEL_CATALOG_UNCONFIRMED": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualize a lista de modelos e tente novamente.",
     "HARNESS_SWITCH_NOT_READY": "A troca de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
     "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente em breve.",
     "INVALID_PARAMS": "Entrada inválida. Verifique e tente novamente.",
@@ -1396,7 +1406,7 @@
     "REMOTE_PROVIDER_UPDATING": "As credenciais do provedor estão sendo atualizadas — tente novamente em instantes",
     "REMOTE_PROVIDER_UNSUPPORTED": "Este provedor não é compatível com sessões remotas SSH — escolha outra fonte",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Tarefas remotas não podem usar uma assinatura do Claude — escolha um modelo via gateway ou chave de API",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "O dispositivo de destino não está respondendo. Verifique o dispositivo remoto e tente novamente.",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "O dispositivo de destino não está respondendo no momento. A rede pode estar lenta ou o dispositivo ocupado. O Cindy verifica automaticamente; tente novamente quando a conexão se recuperar.",
     "INTERNAL": "A operação falhou. Tente novamente mais tarde.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "A configuração SSH foi alterada no disco. Recarregue-a e tente novamente.",
     "SSH_CONFIG_RELOAD_REQUIRED": "A configuração SSH foi salva, mas Cindy não conseguiu atualizá-la. Recarregue a configuração SSH.",
@@ -1435,6 +1445,7 @@
     "UPSTREAM_ERROR": "Erro no servidor upstream (5xx). Tente novamente mais tarde",
     "UPSTREAM_UNREACHABLE": "Não foi possível acessar o endpoint. Verifique sua rede e a URL base",
     "TIMEOUT": "A conexão expirou. Verifique sua rede e a URL base",
+    "CERT_ERROR": "A verificação do certificado falhou. Verifique se o nome do host da URL base corresponde ao certificado, assim como a cadeia de certificados e a configuração de confiança da CA da sua organização.",
     "UNKNOWN": "Erro desconhecido. Consulte os logs para mais detalhes",
     "upstreamToast": "Falha na requisição ao provedor \"{{provider}}\": {{message}}"
   },
@@ -1446,6 +1457,10 @@
     "details": "Detalhes do erro"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Banco de dados local danificado",
+      "description": "Foi detectada uma corrupção no banco de dados. O acesso foi interrompido para proteger seus dados. Você pode tentar reabrir os dados locais. Se falhar, copie os detalhes técnicos e entre em contato com o suporte. Não sobrescreva nem exclua os arquivos do banco de dados."
+    },
     "schemaLease": {
       "title": "Ainda não é possível abrir os dados locais",
       "retry": "Reabrir dados locais",
@@ -1933,7 +1948,6 @@
       "memory": "Memória",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Modelos auxiliares",
-      "visionBridge": "Vision Bridge",
       "compaction": "Compactação de contexto",
       "terminalShell": "Shell padrão do terminal",
       "composer": "Entrada de mensagens",
@@ -2832,7 +2846,7 @@
       "autoUpdateDisabledToast": "Instalação de atualizações durante a inatividade desativada",
       "autoUpdateSaveFailed": "Não foi possível salvar as configurações de atualização automática",
       "analyticsLabel": "Estatísticas de uso",
-      "analyticsDescription": "Ajuda a entender com que frequência Cindy é iniciado e permanece em uso. Envia informações do dispositivo e do ambiente de uso — como modelo do dispositivo, versão do sistema operacional, versão do aplicativo e identificador do dispositivo — além do ID da sua conta após entrar; nunca conversas, arquivos ou prompts. Desativar esta opção interrompe o envio imediatamente.",
+      "analyticsDescription": "Se você ativar esta opção, usaremos pseudônimos no lugar dos IDs da sua conta e do seu dispositivo. As visitas recorrentes e os totais de uso por modelo nos ajudam a melhorar o produto. Essas estatísticas não incluem suas conversas, arquivos ou prompts.",
       "analyticsEnabledToast": "Estatísticas de uso ativadas",
       "analyticsDisabledToast": "Estatísticas de uso desativadas",
       "analyticsSaveFailed": "Não foi possível salvar as configurações de estatísticas de uso",
@@ -3520,7 +3534,7 @@
         "end": "Tudo acima foi importado de {{source}}",
         "endHandoff": "Tudo acima foi importado de {{source}}. {{harness}} continua daqui."
       },
-      "projectMenu": "Importar sessões deste projeto de outras ferramentas…",
+      "projectMenu": "Importar tarefas…",
       "hiddenCount_many": "{{count}} ocultas",
       "groupTasks_many": "{{count}} sessões",
       "selectedSummary_many": "{{count}} selecionadas · {{size}}",
@@ -3757,6 +3771,8 @@
           "edit": "Editar",
           "editFailed": "Confira a URL, o protocolo e a chave e tente novamente.",
           "editNote": "Deixe a chave em branco para manter a credencial lida. Alterar a URL ou o protocolo exige uma nova chave.",
+          "useSavedCredential": "Usar credenciais salvas",
+          "confirmDestination": "Usar as credenciais salvas do Claude Code neste endereço?",
           "name": "Nome de exibição",
           "baseUrl": "URL base",
           "protocol": "Protocolo da API",
@@ -4162,7 +4178,27 @@
         "refreshSpeechAdded": "Modelos atualizados; 1 modelo de fala sugerido adicionado",
         "refreshNoNew": "A lista de modelos está atualizada — nenhuma novidade",
         "refreshFailed": "Não foi possível atualizar a lista de modelos — tente novamente mais tarde",
+        "refreshReconnect": "Não foi possível atualizar a lista de modelos. Reconecte este provedor e tente novamente.",
         "refreshFetchDisabled": "A busca no catálogo remoto de modelos está desativada — atualização ignorada",
+        "withdrawn": {
+          "refreshFound": "Modelos que não são mais oferecidos: {{count}}",
+          "refreshAdded": "Novos modelos: {{added}}. Não oferecidos mais: {{count}}",
+          "refreshSuspicious": "Modelos não retornados desta vez: {{count}}. A lista pode estar incompleta",
+          "refreshAddedSuspicious": "Novos modelos: {{added}}. Não retornados desta vez: {{count}}. A lista pode estar incompleta",
+          "review": "Revisar modelos",
+          "heading": "Modelos que não são mais oferecidos",
+          "intro": "Ao atualizar {{provider}}, o serviço não retornou estes modelos. Selecione os que deseja remover. Os motores que ainda os listam não são afetados.",
+          "suspicious": "Estão faltando muito mais modelos do que o normal. O serviço pode ter retornado uma lista incompleta. Atualize de novo mais tarde para confirmar ou selecione apenas os modelos que você sabe que foram retirados.",
+          "selectAll": "Selecionar todos",
+          "selected": "{{count}} de {{total}} selecionados",
+          "consequence": "Os modelos removidos deixam de aparecer na seleção de modelos e aparecerão como indisponíveis onde forem usados. Se o serviço voltar a oferecê-los, atualize para adicioná-los de novo.",
+          "confirm": "Remover modelos ({{count}})",
+          "cancel": "Manter modelos",
+          "removed": "Modelos removidos: {{count}}",
+          "cleanupIncomplete": "Modelos removidos: {{count}}. Não foi possível limpar algumas configurações de exibição ou desativação",
+          "stale": "A conexão mudou e não há modelos para remover. Atualize de novo para revisar",
+          "removeFailed": "Não foi possível remover os modelos"
+        },
         "disableModel": "Desativar este modelo",
         "paymentRequired": "Pago",
         "paymentUnlock": "Pague para desbloquear",
@@ -4393,7 +4429,8 @@
           "description": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O Agent é executado neste computador, usando o login e a cota dele.",
           "descriptionGroup": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O grupo de provedores escolhe o computador que executa o Agent.",
           "ariaLabel": "Permitir que seus outros computadores e as pessoas com quem você compartilha usem este provedor",
-          "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente."
+          "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente.",
+          "followsPool": "Esta conexão foi mesclada a “{{pool}}” e segue o “Permitir uso remoto” dele. Altere lá."
         },
         "ownComputersCanUse": "Disponível para meus outros computadores",
         "moreActionsAria": "Mais ações",
@@ -4401,7 +4438,6 @@
           "label": "Executar em",
           "optionLocal": "Este computador",
           "notSignedIn": "Sem login",
-          "autoBorrowing": "Este computador não está conectado, então as novas tarefas rodam em {{device}}. Não é preciso fazer login.",
           "local": "As novas tarefas rodam neste computador. Você pode escolher outro dos seus computadores conectados.",
           "pinned": "As novas tarefas rodam em {{device}} com o login dele. As tarefas em andamento continuam onde estão.",
           "inline": "Executa em",
@@ -4454,6 +4490,7 @@
         "authorizedToast": "Login realizado em {{name}}",
         "authorizeFailed": "Não foi possível entrar em {{name}}. Tente novamente.",
         "nameLabel": "Nome de exibição",
+        "geminiImageKeyNote": "Ao salvar, esta chave será usada nas conversas desta conexão e nas próximas imagens geradas pelo Gemini. Para gerar apenas imagens, desmarque todos os modelos de conversa.",
         "onlyAgentNote": "Este provedor só oferece suporte a {{agent}}",
         "endpointLabel": "URL base de {{agent}}",
         "noAuthNote": "Este proxy não exige chave de cliente; Cindy remove as credenciais de assinatura da CLI antes de encaminhar.",
@@ -5472,37 +5509,6 @@
       "title": "Dicas",
       "description": "Opções funcionais. Algumas exigem uma nova sessão para entrar em vigor (veja as descrições de cada célula)."
     },
-    "visionBridge": {
-      "title": "Vision Bridge",
-      "description": "Permita que modelos somente de texto leiam imagens, encaminhando-as a um modelo multimodal separado que converte imagens em descrições de texto.",
-      "enableLabel": "Ativar Vision Bridge",
-      "enableHint": "Quando desativado, todos os modelos funcionam exatamente como antes. Quando ativado, os modelos selecionados abaixo encaminham suas imagens pelo backend de visão. As imagens enviadas a esses modelos e o texto próximo usado como dica de foco são enviados ao backend de visão escolhido.",
-      "enableAria": "Alternar Vision Bridge",
-      "toast": {
-        "saved": "Configurações do Vision Bridge salvas",
-        "saveFailed": "Falha ao salvar as configurações do Vision Bridge"
-      },
-      "capability": {
-        "vision": "Com capacidade de visão conhecida",
-        "noVision": "Confirmado como somente texto",
-        "unknown": "Capacidade de visão desconhecida"
-      },
-      "targetModels": {
-        "label": "Modelos encaminhados pelo Vision Bridge",
-        "hint": "Modelos somente de texto (por exemplo, DeepSeek) são selecionados por padrão. Você também pode selecionar modelos com visão — por exemplo, para usar um modelo de descrição mais barato e economizar tokens.",
-        "empty": "Nenhum modelo disponível.",
-        "toggleAria": "Alternar Vision Bridge para {{model}}"
-      },
-      "backends": {
-        "label": "Modelos de backend de visão",
-        "hint": "Escolha até dois modelos multimodais que convertem imagens em texto. O segundo (reserva) é opcional.",
-        "primary": "Principal",
-        "fallback": "Reserva",
-        "unset": "Nenhum selecionado",
-        "noBackup": "Sem reserva",
-        "hintSecondary": "O backend principal é usado primeiro. Se ele falhar e houver um backend de reserva, o de reserva será usado. Se ambos falharem, a imagem não poderá ser descrita e será substituída por um aviso de texto."
-      }
-    },
     "terminalShell": {
       "title": "Shell padrão do terminal",
       "description": "Use este shell ao abrir uma nova aba de terminal na barra lateral.",
@@ -5519,8 +5525,19 @@
       "title": "Entrada de mensagens",
       "sendShortcut": {
         "label": "Usar {{shortcut}} para enviar",
-        "hint": "Quando ativado, {{shortcut}} envia mensagens. Quando desativado, Enter envia mensagens e Shift+Enter insere uma nova linha.",
-        "ariaLabel": "Usar {{shortcut}} para enviar mensagens"
+        "hint": "Enter envia. Shift+Enter insere uma nova linha.",
+        "ariaLabel": "Usar {{shortcut}} para enviar mensagens",
+        "hintModifierEnter": "{{shortcut}} envia. Enter insere uma nova linha."
+      },
+      "followUp": {
+        "label": "Envio durante a execução",
+        "hintQueue": "Enquanto a tarefa executa, o botão de enviar e {{send}} colocam a mensagem na fila.",
+        "hintSteer": "Enquanto a tarefa executa, o botão de enviar e {{send}} orientam a tarefa em andamento.",
+        "ariaLabel": "Envio enquanto a tarefa executa",
+        "options": {
+          "queue": "Colocar na fila",
+          "steer": "Orientar"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -5575,6 +5592,13 @@
         "description": "Mostra uma coluna de marcas ao lado da conversa, uma por pergunta: passe o mouse para visualizar a pergunta e o início da resposta; clique para voltar àquela interação. Aparece apenas quando há perguntas suficientes e a janela é larga o bastante."
       },
       "toggleAria": "Alternar barra de navegação de perguntas"
+    },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nomear worktrees com um modelo",
+        "description": "Dá ao worktree de uma nova tarefa um nome curto em inglês com base na primeira mensagem (ex.: fix-login-timeout), para que a pasta e a branch mostrem para que servem. Gerado pelos modelos auxiliares; se falhar, usa um nome aleatório. Afeta apenas os worktrees criados a partir de agora."
+      },
+      "toggleAria": "Ativar ou desativar a nomeação de worktrees com um modelo"
     },
     "promptRecommendation": {
       "label": "Sugestões de entrada",
@@ -6139,7 +6163,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Alternativa automática de modelo da tarefa",
-        "description": "Após falhas repetidas de conexão ou capacidade, tenta outra fonte conectada para o mesmo modelo e depois um modelo explicitamente recomendado para o Agent atual. Nunca troca de Agent nem altera sua seleção salva. Desativado por padrão."
+        "description": "Em caso de falha, o grupo tenta outros modelos disponíveis no grupo. Ao trocar de agente, a tarefa é transferida e a nova seleção é salva. Após falhas repetidas, outras tarefas tentam outra fonte ou um modelo recomendado do mesmo agente. Desativado por padrão."
       },
       "toggleAria": "Alternar alternativa automática de modelo da tarefa",
       "toast": {
@@ -6497,18 +6521,13 @@
         "allowInboundAria": "Alternar permissão para {{name}} controlar este dispositivo",
         "peerControlOff": "Controle remoto não ativado nesse dispositivo",
         "masterOffHint": "Primeiro, ative a opção principal acima",
-        "controllingThisMac": "Conectado ao Cindy",
-        "useThisDeviceModels": "Usar os modelos deste dispositivo",
-        "allowModelUseAria": "Permitir que {{name}} use os modelos deste computador"
+        "controllingThisMac": "Conectado ao Cindy"
       },
       "toast": {
         "revoked": "Acesso revogado para este dispositivo",
         "revokeFailed": "Falha ao revogar acesso",
         "restored": "Acesso restaurado para este dispositivo",
-        "restoreFailed": "Falha ao restaurar acesso",
-        "modelUseRestored": "Aquele computador pode usar os modelos deste de novo",
-        "modelUseRevoked": "Aquele computador não pode mais usar os modelos deste",
-        "modelUseFailed": "Não foi possível salvar “Usar os modelos daqui”. Tente novamente."
+        "restoreFailed": "Falha ao restaurar acesso"
       },
       "sections": {
         "myDevices": "Meus dispositivos",
@@ -6549,7 +6568,8 @@
           "defaultProjectFullAccessWarning": "O projeto padrão “{{name}}” está com Acesso total: uma @mention de qualquer grupo é executada nele com acesso total.",
           "sharedSettingsPointer": "Projetos, modelos e permissões são compartilhados por todos os bots oficiais.",
           "sharedSettingsPointerAction": "Abrir configurações",
-          "workspacesBoundCount_many": "{{count}} projetos"
+          "workspacesBoundCount_many": "{{count}} projetos",
+          "workspacesCardDescriptionWithPlugins": "Compartilhado por todos os bots oficiais e plugins de mensagens. Os projetos vêm da barra lateral: crie, renomeie ou remova por lá. Alterações feitas com /model em uma conversa também aparecem aqui. Modelos e permissões alterados para uma única conversa em um plugin não são afetados."
         },
         "binding": {
           "copyLink": "Copiar link",
@@ -6861,6 +6881,7 @@
           "latency": "Latência",
           "lastSeen": "Visto por último",
           "controlling": "Controlando este computador",
+          "protocol": "Conexão",
           "rttNote": "última medição",
           "manage": "Gerenciar dispositivo…",
           "linkStatus": "Com {{name}}",
@@ -6875,6 +6896,24 @@
         "protocol": {
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
+        },
+        "traffic": {
+          "title": "Tráfego neste computador",
+          "range": "Período",
+          "last5m": "Últimos 5 min",
+          "lastHour": "Última hora",
+          "lastDay": "Últimas 24 h",
+          "sent": "Enviado",
+          "received": "Recebido",
+          "total": "Total",
+          "scope": "Estimativa de tráfego das conexões diretas e por retransmissão, incluindo transferências diretas de arquivos. Exclui anúncios de descoberta de dispositivos e transmissões independentes de áudio, vídeo e HTTP."
+        },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
+        "linkTransport": {
+          "webrtc": "WebRTC"
         },
         "onlyEncrypted": "Usar apenas Agent-Net",
         "onlyEncryptedHint": "Dispositivos antigos e compartilhamentos que usam a conexão anterior ficarão indisponíveis. Desativado por padrão.",
@@ -7010,11 +7049,6 @@
       "description": "Dispositivos conectados à mesma conta do Feishu podem se descobrir. Quando \"Permitir controle\" estiver ativado, seus outros dispositivos poderão controlar remotamente o {{appName}} nesta máquina.",
       "allowControl": "Permitir que dispositivos da mesma conta controlem esta máquina",
       "allowControlHint": "Quando ativado, outros dispositivos conectados à mesma conta podem controlar esta máquina sem aprovação por conexão. Um indicador visível é exibido durante o controle, e você pode desconectar a qualquer momento.",
-      "ownModelAccess": {
-        "title": "Permitir que meus outros computadores usem os modelos deste",
-        "hint": "Quando ativado, seus outros computadores podem usar os provedores deste computador. O Agent é executado aqui, com o login e a cota deste computador. Nada é compartilhado com outras pessoas.",
-        "writeFailed": "Não foi possível salvar esta configuração. Tente novamente."
-      },
       "keepAwake": "Manter computador ativo",
       "keepAwakeHint": "Quando ativado, esta máquina não entrará em suspensão, para que Agents em segundo plano e tarefas agendadas continuem em execução (você ainda pode desligar o monitor ou bloquear a tela).",
       "linkStatus": {
@@ -7028,7 +7062,8 @@
         "replaced": "Conexão substituída por outra instância deste dispositivo",
         "too-many-connections": "Limite de conexões desta conta atingido",
         "version-mismatch": "Versão de protocolo incompatível — atualize o app",
-        "unstable": "A conexão cai e reconecta repetidamente — verifique a rede ou reinicie o Cindy se o problema persistir"
+        "unstable": "A conexão cai e reconecta repetidamente — verifique a rede ou reinicie o Cindy se o problema persistir",
+        "agent-net-relay-down": "Não é possível acessar o relay do Agent-Net; reconectando. Computadores conectados diretamente continuam funcionando; outros dispositivos não conseguem se conectar por enquanto"
       },
       "refresh": "Atualizar",
       "empty": "Nenhum outro dispositivo ainda. Entre no {{appName}} com a mesma conta em outro computador e ele aparecerá aqui.",
@@ -7084,11 +7119,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "Oficial",
-        "personal": "Pessoal"
+        "personal": "Pessoal",
+        "plugins": "Plugins"
       },
       "tips": {
         "cindy": "Fornecido e mantido pelo Cindy. Não é necessário criar um bot nem fornecer credenciais — siga as etapas de conexão para começar.",
-        "personal": "Use sua própria conta ou bot e gerencie as credenciais necessárias por conta própria. Cada canal mantém sua própria conta, permissões e configurações."
+        "personal": "Use sua própria conta ou bot e gerencie as credenciais necessárias por conta própria. Cada canal mantém sua própria conta, permissões e configurações.",
+        "plugins": "Entradas de mensagens fornecidas por plugins instalados. O login e a vinculação são feitos na página do plugin. Projetos, modelos e permissões seguem “Projetos e modelos” por padrão e podem ser alterados por conversa no plugin."
       },
       "defaults": {
         "title": "Configuração de novas conversas",
@@ -7120,6 +7157,10 @@
         },
         "groupPermissionLabel": "Modo de permissão para novas tarefas em grupo",
         "groupPermissionDescription": "Modo de permissão usado em todas as tarefas criadas em uma conversa em grupo — @bot ao abrir um tópico, /new e /ctr usam esse modo; o modo de permissão acima se aplica apenas a mensagens diretas. O padrão é Aprovação automática. O contexto do grupo pode conter conteúdo controlado pelos membros — escolher Acesso total executa ações sem confirmação a cada etapa, então selecione essa opção apenas para grupos em que você confia. As alterações se aplicam às tarefas criadas depois; altere uma tarefa existente com /permission no grupo."
+      },
+      "plugins": {
+        "rowHint": "Login, vinculação e configurações de cada conversa ficam na página do plugin.",
+        "open": "Abrir plugin"
       }
     },
     "shortcuts": {
@@ -7921,6 +7962,18 @@
         "overviewTab": "Visão geral",
         "addPlugin": "Adicionar plugin",
         "addPluginAria": "Opções de adição de plugin",
+        "githubInstall": {
+          "label": "Instalar de uma release do GitHub…",
+          "title": "Instalar de uma release do GitHub",
+          "description": "Cole o link de um repositório ou de uma release. Para um repositório privado, entre com uma conta GitHub que tenha acesso.",
+          "url": "Endereço do GitHub",
+          "submit": "Buscar plugin",
+          "loading": "Buscando e baixando…",
+          "invalid": "Insira a URL de um repositório ou de uma tag de release do GitHub.",
+          "not-found": "Esta versão está indisponível. Verifique o link e o acesso ao repositório.",
+          "ambiguous": "Este link contém vários plugins. Escolha uma release com um único pacote ou instale o arquivo diretamente.",
+          "installedAlready": "Este plugin já está instalado. Atualize-o nas configurações dele."
+        },
         "installedSection": "Instalados",
         "installedExpand": "Mostrar todos os {{count}} plugins instalados",
         "installedCollapse": "Ocultar plugins instalados adicionais",
@@ -8006,6 +8059,7 @@
           "accessDenied": "Esta operação de plugin não é permitida ou foi cancelada.",
           "notConfigured": "O marketplace de plugins não está disponível neste ambiente.",
           "invalidPackage": "Este pacote de plugin é inválido e não pode ser instalado. Entre em contato com o publicador.",
+          "downloadAuthorizationExpired": "A autorização de download do plugin expirou. Verifique a data e a hora do sistema antes de iniciar uma nova instalação.",
           "downloadTimeout": "O tempo limite do download do plugin foi excedido. Tente novamente mais tarde.",
           "downloadFailed": "Falha no download do plugin. Verifique sua conexão e tente novamente.",
           "brokerRedirectPortRequired": "Este plugin declara um intermediário de autorização, mas falta redirectPort na mesma configuração OAuth, por isso ele não pode ser instalado pelo marketplace de plugins. Entre em contato com o publicador para adicionar o campo e publicar uma nova versão.",
@@ -8267,6 +8321,7 @@
         "cindyEmbedText": "Pode enviar texto para ser convertido em vetores (para busca semântica)",
         "cindyModelsDecisions": "Pode usar modelos de decisão (consome sua cota de modelos)",
         "cindyModelsRerank": "Pode usar modelos de reordenação (consome sua cota de modelos)",
+        "cindyModelsMediaRequest": "Pode gerar imagens e vídeos, sintetizar voz e transcrever áudio com Cindy AI (consome sua cota de modelos)",
         "cindyEmbedTextDetail": "O texto é enviado ao modelo de embeddings do sistema e convertido em números, com até {{max}} itens por chamada. Pode haver cobrança pelo uso do modelo. Os vetores vão apenas para o plugin — nada é gravado na sua biblioteca.",
         "cindySearchWeb": "Pode pesquisar na web pública com Cindy AI",
         "cindySearchWebDetail": "As solicitações de pesquisa acessam a web pública e podem consumir a cota do Cindy AI.",
@@ -8294,8 +8349,8 @@
         "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes, e importar arquivos de tarefas em formato nativo neste computador.",
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. Operações que precisam da tarefa atual exigem um destino explícito.",
-        "hostTools_usage": "Ler o uso das assinaturas",
-        "hostTools_usageDetail": "Lê identificadores de conta, planos, períodos de cota e horários de atualização das assinaturas Claude e Codex conectadas à sua conta atual do Cindy neste computador. Não permite ler endereços de e-mail, credenciais, arquivos ou dados de outros computadores, nem alterar contas.",
+        "hostTools_usage": "Ler o uso e o status dos grupos de fornecedores",
+        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de cota e horários de atualização das contas locais de Claude/Codex conectadas à sua conta Cindy. Lê o uso registrado por dia e modelo, os custos estimados, a configuração e o status dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou em outros computadores autorizados da mesma conta. Não permite ler e-mails de login das assinaturas, diretórios de contas, impressões de identidade internas, credenciais ou arquivos, nem alterar contas ou configurações. Também lê a cota de tarefas acessíveis, inclusive em outro computador autorizado da mesma conta ou em um provedor compartilhado que permita ver a cota.",
         "hostTools_settings": "Configurações do aplicativo",
         "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são retornados e os dados confidenciais são preenchidos por você.",
         "hostTools_scheduler": "Gerenciamento de automações",
@@ -8323,10 +8378,14 @@
         "hostTools_terminalDetail": "Iniciar comandos e terminais interativos com suas permissões neste computador, ler a saída, enviar entradas e parar os processos deste plugin. Os comandos podem acessar seus arquivos e aplicativos.",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
+        "agentModelPreferences": "Ler e editar seus modelos favoritos e ler seus modelos usados recentemente",
+        "agentModelPreferencesDetail": "Pode ler os modelos favoritos e os usados recentemente neste computador, incluindo o esforço de raciocínio e Fast, e adicionar, alterar ou remover favoritos. As alterações também aparecem no seletor de modelo do Cindy. Os modelos escolhidos no plugin não são adicionados aos recentes. Não inclui modelos dos seus outros computadores nem compartilhados com você, e nenhuma credencial é compartilhada.",
+        "harnesses": "Fornece mecanismos de execução: {{names}}",
+        "harnessesDetail": "Nas suas tarefas, pode ler e gravar no diretório de trabalho, executar comandos e usar as mesmas ferramentas da Cindy que o Pi integrado.",
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
         "agentErrandDetail": "As tarefas criadas aparecem na lista de tarefas da Cindy, onde você pode acompanhar o progresso e continuar a conversa.",
         "agentSchedule": "Pode pedir que você crie uma automação",
-        "agentScheduleDetail": "Ele só pode abrir o painel de nova automação com os campos preenchidos; você decide se ela será criada — escolha um modelo e salve por conta própria. Após a criação, a Cindy a executa no horário definido por você. Pode haver cobrança pelo uso do modelo.",
+        "agentScheduleDetail": "Ele só pode abrir o painel de nova automação com os campos preenchidos; você decide se ela será criada — escolha um modelo e salve por conta própria. Após a criação, a Cindy a executa no horário definido por você. Pode haver cobrança pelo uso do modelo. Nos plugins com sincronização, você também pode confirmar qual computador executará a automação.",
         "nodeRuntime": "Pode executar neste computador um programa Node incluído no plugin",
         "nodeMcp": "Pode executar neste computador um MCP stdio incluído no plugin",
         "nodeRuntimeDetail": "Alto risco: ele tem o mesmo acesso local da sua conta de usuário, incluindo arquivos, rede e inicialização de outros programas. A Cindy não pode contê-lo na sandbox do navegador.",
@@ -8351,6 +8410,10 @@
         "subscribeTopics": "Observa a atividade da sua sessão (eventos de turnos e sessões, sem conteúdo das mensagens)",
         "subscribeMessage": "Eventos de conteúdo de mensagens",
         "subscribeMessageDetail": "Recebe mensagens salvas do usuário e respostas da IA. Os anexos são lidos e transferidos separadamente.",
+        "subscribeToolExecution": "Eventos de execução de ferramentas",
+        "subscribeToolExecutionDetail": "Recebe nomes, entradas, resultados e erros das ferramentas. Observa sem alterar a execução.",
+        "subscribeNativeRecovery": "Eventos nativos de recuperação",
+        "subscribeNativeRecoveryDetail": "Recebe o estado do mecanismo em novas tentativas, compactação do contexto e interrupção de tarefas.",
         "subscribeTaskState": "Eventos de estado de tarefas",
         "subscribeTaskStateDetail": "Recebe alterações de execução, espera, conclusão, arquivamento e ocultação de tarefas.",
         "subscribeActivity": "Observa quando a IA está pensando e quando está esperando por você",
@@ -8373,6 +8436,10 @@
         "subscribeStartTurnDetail": "Somente as tarefas em que você seleciona este plugin compartilham a mensagem atual com ele. Ele pode escolher um modelo conectado, o esforço de raciocínio e Fast. Os erros seguem a configuração da tarefa; ele não pode aprovar ações por você.",
         "subscribeModelRequest": "Pode processar cada solicitação ao modelo nas tarefas selecionadas",
         "subscribeModelRequestDetail": "Somente as tarefas em que você seleciona este plugin compartilham com ele as solicitações ao modelo. Ele pode ajustar modelos, parâmetros e conteúdo. Atualmente, apenas o Pi local é compatível; os erros seguem a configuração da tarefa. As credenciais de conexão não são incluídas.",
+        "subscribeToolCall": "Pode processar chamadas de ferramentas nas tarefas selecionadas",
+        "subscribeToolCallDetail": "Pode ler, alterar ou rejeitar parâmetros conforme os recursos do motor. Não pode aprovar operações por você.",
+        "subscribeToolResult": "Pode processar resultados de ferramentas nas tarefas selecionadas",
+        "subscribeToolResultDetail": "Pode ler resultados e adicionar contexto ou substituir resultados se o motor permitir. Não desfaz operações já executadas.",
         "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
         "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo oferecido por ele, ele lê a primeira mensagem e escolhe um dos seus modelos conectados. Esta etapa é executada apenas antes da primeira mensagem.",
         "card": "Renderiza cartões de mensagens",
@@ -8485,6 +8552,7 @@
             "contentStyle": "Alterar o espaçamento das mensagens e os balões"
           },
           "positions": {
+            "composer_header": "uma área acima da caixa de entrada",
             "composer_toolbar": "barra de ferramentas de entrada",
             "session_header": "cabeçalho da tarefa",
             "statusbar": "barra de status",
@@ -8561,6 +8629,32 @@
         "openInSidebar": "Abrir na barra lateral",
         "panelPageHosted": "Abre pela página do plugin · fecha ao sair",
         "panelNone": "Este plugin não tem painel",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: permitir uso remoto",
+          "description": "Quando ativado, seus outros computadores podem executar tarefas com este mecanismo. O Agent é executado neste computador, usando o login e a cota dele. Os arquivos e os comandos permanecem no computador em que a tarefa está.",
+          "unsupported": "Este plugin ainda não permite usar o mecanismo dele a partir de outros computadores.",
+          "remoteControlOff": "Este computador ainda não permite controle remoto, então outros computadores não podem usar este mecanismo.",
+          "ariaLabel": "Permitir que seus outros computadores usem {{engine}}",
+          "descriptionShareable": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem executar tarefas com este mecanismo sem instalar o plugin. O Agent é executado neste computador, usando o login e a cota dele. Os arquivos e os comandos permanecem no computador em que a tarefa está."
+        },
+        "githubRelease": {
+          "title": "Atualizações do plug-in",
+          "installed": "Instalada {{version}}",
+          "upstream": "Publicada {{version}}",
+          "prerelease": "Pré-lançamento",
+          "check": "Verificar atualizações",
+          "update": "Baixar e instalar",
+          "connect": "Entrar no GitHub",
+          "checking": "Verificando atualizações…",
+          "updating": "Baixando e instalando…",
+          "available": "Há uma atualização disponível.",
+          "current": "A versão instalada está atualizada.",
+          "updated": "Plug-in atualizado.",
+          "empty": "Nenhuma versão disponível para instalação.",
+          "sign-in": "Entre no GitHub para verificar atualizações.",
+          "forbidden": "Esta conta do GitHub não pode ler o repositório privado.",
+          "unavailable": "Não foi possível verificar ou instalar a atualização. Tente novamente."
+        },
         "customSlotTitle": "Área de configurações personalizadas do plugin",
         "dangerTitle": "Desinstalar plugin",
         "infoContents": "Contém",
@@ -8611,6 +8705,8 @@
         "browserUse": "Usar esta extensão do navegador",
         "browserActivated": "Extensão do navegador selecionada",
         "browserActivationFailed": "Não foi possível selecionar a extensão. Verifique se ela está ativada e aprove a troca de conexão.",
+        "automationHostSelect": "Usar este computador para as tarefas automáticas de {{name}}?",
+        "automationHostClear": "Remover este computador como principal para as tarefas automáticas de {{name}}?",
         "browserSwitchTitle": "Trocar a conexão da extensão?",
         "browserSwitchMessage": "Usar “{{name}}” nesta conexão?",
         "browserSwitchDetail": "Instância: {{instance}}\nRegistro: {{host}}\nIsso substitui o registro atual. A extensão se conectará a este plugin.",
@@ -8790,6 +8886,10 @@
       "panelHost": {
         "close": "Fechar painel"
       },
+      "installProgress": {
+        "awaitingConsent": "Aguardando confirmação…",
+        "installFailed": "Falha na instalação"
+      },
       "updateAll": {
         "title": "Atualizar todos · {{count}} plugins",
         "collapseDiff": "Recolher",
@@ -8800,6 +8900,7 @@
         "statusDone": "Atualizado",
         "statusSkipped": "Ignorado",
         "statusFailed": "Falha na atualização",
+        "progressCount": "{{done}} de {{total}} atualizados",
         "background": "Continuar em segundo plano",
         "doneAction": "Concluído",
         "doneToast": "Atualização em lote concluída: {{done}} atualizados, {{rest}} não concluídos",
@@ -9530,6 +9631,31 @@
     "preparing": "Conectando ao login",
     "preparingSubtitle": "Carregando os métodos disponíveis para esta região",
     "unavailable": "Login indisponível no momento",
+    "hostUnavailable": {
+      "title": "Serviço em segundo plano da Cindy",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Estes dados pertencem a uma conta diferente do login salvo pelo serviço em segundo plano da Cindy.",
+          "action": "Execute cindy-host login com a conta original, reinicie o serviço em segundo plano da Cindy e abra a Cindy novamente."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Outro aplicativo da Cindy está usando estes dados.",
+          "action": "Feche-o, reinicie o serviço em segundo plano da Cindy e abra a Cindy novamente."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "Não é possível abrir os dados desta conta.",
+          "action": "Se você usou recentemente uma versão mais nova da Cindy, atualize primeiro a Cindy neste computador para a versão mais recente, reinicie o serviço em segundo plano da Cindy e abra a Cindy novamente. Caso contrário, execute cindy-host status para ver o motivo."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "O serviço em segundo plano da Cindy não conseguiu acessar o serviço de login ao iniciar.",
+          "action": "Verifique sua rede, reinicie o serviço em segundo plano da Cindy e abra a Cindy novamente."
+        },
+        "HOST_START_FAILED": {
+          "body": "O serviço em segundo plano da Cindy encontrou um erro ao iniciar.",
+          "action": "Reinicie o serviço em segundo plano da Cindy e abra a Cindy novamente. Se acontecer de novo, execute cindy-host status para ver o motivo."
+        }
+      }
+    },
     "retry": "Tentar novamente",
     "browserWaiting": "Conclua a verificação no navegador",
     "browserCallback": {
@@ -9800,6 +9926,10 @@
     "cacheLine": "Detalhamento do cache: leitura {{read}} · gravação {{create}} · taxa de acertos {{rate}}",
     "cacheLineNoRate": "Detalhamento do cache: leitura {{read}} · gravação {{create}}",
     "stepsLine": "Solicitações neste turno: {{steps}} · ~{{context}} de contexto cada uma",
+    "traceChartLabel": "Velocidade de geração e raciocínio por solicitação neste turno",
+    "traceRequests": "Solicitações neste turno: {{requests}}",
+    "traceThinkingShare": "Raciocínio: {{share}} da saída",
+    "traceThinkingTokens": "Raciocínio: {{thinking}} tokens",
     "modelLine": "Modelo: {{model}}",
     "multipleModels": "{{count}} modelos",
     "costBreakdownHeader": "Por modelo:",
@@ -9912,6 +10042,41 @@
       },
       "providerTooltip": "O provedor selecionado atualmente para a sessão; em branco quando nenhum estiver fixado.",
       "tokensTooltip": "Conta apenas os tokens que esta sessão usou em {{range}}."
+    },
+    "auxiliary": {
+      "title": "Uso auxiliar",
+      "label": "Auxiliar",
+      "purpose": "Finalidade",
+      "requests": "Solicitações registradas",
+      "description": "Incluído no total de tokens. Apenas o uso retornado pelo provedor é registrado; dados ausentes e solicitações anteriores não são estimados.",
+      "sources": {
+        "title": "Geração de títulos",
+        "task-summary": "Resumos de tarefas",
+        "prompt-prediction": "Sugestões de entrada",
+        "working-status": "Status do trabalho",
+        "help": "Ajuda",
+        "bot-creation": "Criação de companheiros",
+        "bot-opening": "Saudações de companheiros",
+        "group-planning": "Planejamento do grupo",
+        "ambient-reply": "Decisões de resposta",
+        "auto-review": "Revisão automática",
+        "tool-loop-review": "Revisão de ciclos de ferramentas",
+        "memory-review": "Revisão da memória",
+        "git-summary": "Resumos de alterações",
+        "hook-generation": "Scripts de automação",
+        "automation-verification": "Verificação de importação",
+        "plugin-text": "Texto de plugins",
+        "voice-dialogue": "Conversas de voz",
+        "voice-exit": "Decisões de fim de chamada",
+        "voice-refinement": "Revisão do texto de voz",
+        "dictionary-learning": "Aprendizado do dicionário",
+        "embedding-query": "Busca vetorial",
+        "embedding-index": "Indexação vetorial",
+        "web-search": "Busca na Web",
+        "provider-probe": "Testes de conexão",
+        "vision-bridge": "Vision Bridge",
+        "auxiliary": "Outras solicitações auxiliares"
+      }
     }
   },
   "usageDashboard": {
@@ -10862,6 +11027,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Não foi possível carregar os amigos",
+    "rosterReload": "Recarregar amigos",
     "avatarStatus": {
       "awaiting": "Precisa da sua confirmação",
       "error": "Precisa de atenção",
@@ -10958,7 +11125,12 @@
       "summary": "Apresentação pessoal",
       "summaryPlaceholder": "Por exemplo: um romancista que adora ficção em série, tem um humor seco e é fascinado pelo que motiva os personagens.",
       "avatarSelectionFailed": "Não foi possível ler a imagem. Escolha uma imagem PNG, JPEG ou WebP de até 5 MB.",
-      "personality": "Personalidade e conversa"
+      "personality": "Personalidade e conversa",
+      "sourceLength": "{{length}} / {{limit}} unidades UTF-16 (sem espaços no início e no fim).",
+      "sourceExcess": "O limite foi excedido em {{excess}} unidades. Encurte o texto antes de salvar.",
+      "sourceTooLong": "Este texto é longo demais para salvar. Edite-o para continuar.",
+      "sourceRecovery": "O original salvo não muda e o rascunho completo permanece nesta página. Após copiar, cole em um local seguro e confira se o texto está completo antes de encurtá-lo ou descartar as alterações.",
+      "sourceCopy": "Copiar texto completo"
     },
     "nameLabel": "Como devemos chamar esse amigo?",
     "close": "Fechar",
@@ -10995,6 +11167,8 @@
     "autosave": {
       "saving": "Salvando…",
       "saved": "Salvo",
+      "unconfirmed": "Salvamento não confirmado",
+      "savedModel": "Salvo · a partir do próximo turno",
       "retry": "Salvar novamente"
     },
     "retry": "Tentar novamente",
@@ -11108,7 +11282,7 @@
       "discard": "Descartar alterações",
       "continueEditing": "Continuar editando"
     },
-    "profileSaveFailed": "Não foi possível salvar as configurações do amigo. Nenhuma alteração foi aplicada.",
+    "profileSaveFailed": "Não foi possível salvar as configurações do amigo.",
     "profileSaveOffline": "Não foi possível conectar ao computador do amigo. Restabeleça a conexão e salve novamente.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (indisponível no momento)",
@@ -11312,6 +11486,7 @@
       "unavailableTitle": "Esta conversa em grupo não está mais disponível",
       "unavailableDescription": "Ela pode ter sido excluída. Volte para Amigos para abrir outra conversa em grupo ou amigo.",
       "sidebar": {
+        "threadReply": "Resposta no tópico",
         "title": "Conversas em grupo",
         "empty": "Nenhuma mensagem ainda",
         "preview": "{{name}}: {{text}}",
@@ -11432,7 +11607,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} não pode responder: o dispositivo do amigo atingiu o limite de sessões remotas.\nPeça ao proprietário do amigo para arquivar as sessões não utilizadas ou ao proprietário do computador remoto para aumentar o limite em Acesso remoto e compartilhamento.",
           "REMOTE_TOTAL_LIMIT": "{{name}} não pode responder: o computador remoto atingiu o limite total de sessões remotas.\nPeça ao proprietário desse computador para liberar as sessões não utilizadas ou aumentar o limite em Acesso remoto e compartilhamento.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} não conseguiu responder: o modelo atual não oferece suporte a imagens.\nEscolha um modelo compatível com imagens ou ative e configure o Vision Bridge em Configurações → Personalização e envie sua mensagem novamente.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} não conseguiu responder: o modelo atual não aceita imagens.\nEscolha um modelo compatível com imagens.",
           "MODEL_UNAVAILABLE": "{{name}} não conseguiu responder: nenhum modelo está disponível.\nEscolha um modelo conectado e disponível nas configurações do amigo e envie sua mensagem novamente.",
           "AUTH_REQUIRED": "{{name}} não conseguiu responder: a conexão do modelo precisa de autenticação.\nReconecte o provedor do modelo em Configurações e envie sua mensagem novamente.",
           "RATE_LIMITED": "{{name}} não conseguiu responder: há solicitações demais ao modelo.\nEnvie sua mensagem novamente mais tarde ou escolha outro modelo disponível.",
@@ -11484,7 +11659,7 @@
         "projectDirChoose": "Escolher pasta",
         "projectDirChange": "Alterar pasta",
         "projectDirClear": "Limpar pasta",
-        "projectDirNote": "Os amigos trabalham aqui quando dividem o trabalho. Você pode deixar em branco para que usem a pasta desta conversa em grupo. Se você escolher um projeto git, cada divisão de trabalho recebe um novo worktree e uma nova branch, mantendo seu código intacto.",
+        "projectDirNote": "Escolha um projeto existente neste computador. Sem seleção, será usado o projeto do repositório ou o do parceiro que executar a tarefa. A divisão do trabalho no Git usa uma árvore de trabalho própria.",
         "autoContinueSaveFailed": "Não foi possível salvar as transições entre etapas. Tente novamente.",
         "projectDirSaveFailed": "Não foi possível salvar a pasta do projeto. Verifique se a pasta ainda existe e tente novamente.",
         "allowMemberInvites": "Permitir que todos convidem amigos",
@@ -11648,6 +11823,7 @@
           "sharedReplyFrom": "Compartilhou uma resposta de tópico de {{name}}",
           "sharedReply": "Compartilhou uma resposta de tópico",
           "edited": "Editado",
+          "replyNotFound": "Não foi possível encontrar esta resposta.",
           "sourceUnavailable": "A resposta original foi excluída ou não está disponível para você.",
           "viewThread": "Ver tópico",
           "viewInMain": "Ver na conversa principal",
@@ -11817,15 +11993,15 @@
           "replyModeAssistant": "A Cindy responde",
           "replyModeAssistantNote": "A Cindy do grupo responde.",
           "work": "Divisão do trabalho",
-          "ownFolder": "Pasta própria do grupo",
+          "ownFolder": "Automático",
           "projectDirHint": "Vale apenas neste computador.",
-          "projectDirClearHint": "Usar a pasta própria do grupo",
+          "projectDirClearHint": "Voltar à seleção automática do projeto",
           "project": "Projeto",
           "projectCaption": "Os amigos respondem e fazem as divisões do trabalho neste projeto. O repositório é compartilhado com o grupo; a pasta fica neste computador.",
           "githubRepo": "Repositório do GitHub",
-          "githubRepoHint": "Digite owner/name. Computadores sem pasta escolhida usam a própria cópia deste projeto ou baixam uma.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "Repositório",
-          "repositoryHint": "GitHub: digite owner/name. GitLab (inclusive próprio da empresa), CNB e outros: cole o link do repositório. Computadores sem pasta escolhida usam a própria cópia deste projeto ou baixam uma.",
+          "repositoryHint": "Para o GitHub, digite owner/name ou cole a URL do repositório. A Cindy procura um único projeto correspondente neste computador.",
           "repositoryPlaceholder": "owner/name ou link do repositório",
           "githubRepoSaveFailed": "O repositório não foi salvo. Confira e tente de novo.",
           "folderRepoFilled": "O repositório {{repo}} foi preenchido a partir desta pasta. Os computadores dos outros membros também vão usá-lo.",
@@ -12675,6 +12851,7 @@
       "createOwnApp": "Criar meu App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Entrega de anexos incompleta: {{count}} não enviados ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (acima do limite de {{limit}} MB)",
     "unnamedAttachment": "Anexo sem título",
     "text": {
       "discord": {
@@ -13030,6 +13207,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "A cota de um modelo de revisão automática se esgotou. Confira o uso ou a cobrança, ou personalize os modelos auxiliares nas configurações do computador que executa o Agent. As ações que precisam de revisão ainda exigem sua confirmação.",
           "autoReviewNoAvailableModel": "Nenhum modelo de revisão automática está disponível. No computador que executa o Agente, ative e conecte um provedor de revisão em Provedores de modelos ou personalize os modelos auxiliares nas configurações. As ações que precisam de revisão continuam exigindo sua confirmação.",
           "autoReviewUnavailable": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta maior risco.",
           "autoReviewUnavailableWechat": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. O WeChat pessoal não pode usar Acesso total. Confirme esta ação diretamente.",
@@ -13039,6 +13217,7 @@
           "overloadRetryingNoCount": "O serviço do modelo está ocupado. Tentando novamente de forma automática…",
           "overloadFailed": "⚠️ O serviço do modelo está ocupado — o serviço de origem está sem capacidade no momento. Reenvie esta mensagem aqui para tentar novamente ou mude para outro modelo no Cindy. (Clicar em “Tentar novamente” no app para desktop também continua a tarefa, mas o resultado não volta para esta mensagem.)"
         },
+        "audioInputUnavailable": "Esta conexão com o modelo não permite processar áudio diretamente. Peça à Cindy que transcreva o áudio antes de continuar.",
         "toolLoop": {
           "generic": "O modelo chamou ferramentas repetidamente vezes demais, então o Cindy interrompeu este turno para evitar um loop infinito. Envie uma nova mensagem para continuar.",
           "consecutive": "O modelo chamou a mesma ferramenta {{n}} vezes seguidas, então o Cindy interrompeu este turno para evitar um loop infinito. Envie uma nova mensagem para continuar.",
@@ -13070,7 +13249,7 @@
           "reasoningDominated": "O raciocínio consumiu a maior parte do orçamento de saída, então a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte a conversa primeiro e depois continue.",
           "generic": "O modelo atingiu o limite de tamanho da saída, então esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se continuar acontecendo, reduza o esforço de raciocínio ou compacte a conversa primeiro.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "O modelo retornou respostas vazias várias vezes seguidas, então a continuação automática foi pausada."
+          "silentStopExhausted": "Foi detectada uma resposta vazia. A continuação automática foi pausada."
         },
         "permission": {
           "autoReviewUnavailable": "A revisão automática não terminou. Confirme se você quer permitir esta ação.",
@@ -13603,6 +13782,8 @@
         },
         "reply": {
           "unsupportedMedia": "Esta versão ainda não oferece suporte a este tipo de mídia do WeChat.",
+          "delayedReply": "Resposta atrasada, preparada em {{createdAt}} para sua mensagem recebida em {{receivedAt}}. O conteúdo pode estar desatualizado.",
+          "delayedReplyQuestion": "Mensagem original: {{question}}",
           "stillProcessing": "Ainda processando…",
           "ownerOnlyCommands": "Só o dono pode usar os comandos do bot.",
           "companionManagedCommand": "Abra este colega no Cindy: o modelo é alterado nas configurações do colega e as permissões, abaixo da caixa de entrada da conversa.",
@@ -13636,9 +13817,17 @@
         "submitLabel": "Enviar respostas",
         "multiSelectHint": " (pode escolher mais de uma)",
         "resolved": "✅ Selecionado: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Este cartão expirou",
         "textHint": "Só quem fez a consulta pode responder. Envie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar.",
-        "replyHint": "Só quem fez o pedido pode responder. Toque em uma opção; para várias perguntas ou seleções, envie ao terminar.\nEnvie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar."
+        "replyHint": "Só quem fez o pedido pode responder. Toque em uma opção; para várias perguntas ou seleções, envie ao terminar.\nEnvie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar.",
+        "nextLabel": "Próxima pergunta",
+        "stepHint": "Só quem fez o pedido pode responder. Toque em uma opção ou envie {{code}} seguido da resposta.",
+        "stepSubmitHint": "Só quem fez o pedido pode responder. Escolha e toque em “{{action}}”; ou envie {{code}} seguido da resposta e depois {{code}} OK.",
+        "stepTextHint": "Só quem fez o pedido pode responder. Envie {{code}} seguido da resposta.",
+        "unanswered": "⚠️ Ainda sem resposta: pergunta {{numbers}}. Responda a todas as perguntas e depois envie.",
+        "unansweredSingle": "⚠️ Ainda sem resposta. Escolha uma opção ou digite uma resposta primeiro.",
+        "numberSeparator": ", "
       }
     }
   },
@@ -13768,9 +13957,8 @@
     "sendButton": {
       "send": "Enviar mensagem",
       "queue": "Adicionar mensagem à fila",
-      "queueTooltip": "Clique para colocar na fila; pressione {{shortcut}} para orientar sem interromper a tarefa",
-      "queueTooltipSendMode": "Clique para colocar na fila; pressione {{shortcut}} para enviar esta mensagem",
-      "stop": "Parar geração"
+      "stop": "Parar geração",
+      "steer": "Orientar a tarefa em andamento"
     },
     "pluginSetup": {
       "account": {
@@ -13830,12 +14018,6 @@
         "TARGET_UNAVAILABLE": "Este plugin está desativado, desinstalado ou indisponível. Verifique o plugin e tente novamente.",
         "ASSESSMENT_FAILED": "Não foi possível atualizar o status da configuração. Tente novamente.",
         "TIMEOUT": "O tempo limite da configuração foi excedido. Tente novamente."
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "Serviço de modelos de IA",
-          "description": "Conecte um serviço de modelos disponível antes de usar os recursos de imagem ou vídeo declarados por este plugin."
-        }
       },
       "form": {
         "placeholder": "Insira {{label}}",
@@ -14083,6 +14265,10 @@
         "fastBadge": "Rápido"
       },
       "source": {
+        "lastConfirmed": "Última atualização: {{time}}",
+        "unconfirmed": "Lista de modelos desatualizada",
+        "unreachable": "Não foi possível conectar a {{source}}",
+        "unreachableDetail": "Sem conexão. Verifique sua rede.",
         "unavailable": "Modelo indisponível",
         "reconnect": "Reconectar",
         "manage": "Gerenciar fonte",
@@ -14122,7 +14308,7 @@
         "effortEndFast": "Mais rápido",
         "effortEndSmart": "Mais inteligente",
         "railSameEngine": "Somente {{agent}}",
-        "crossEngineWarning": "Trocar de mecanismo reconstrói o contexto e pode causar perda de conteúdo",
+        "crossEngineWarning": "O mecanismo muda na próxima mensagem e dá continuidade à conversa. As partes anteriores podem ser condensadas.",
         "favoritesSyncFailed": "Não foi possível sincronizar os favoritos. Abra o seletor novamente para tentar outra vez; o computador remoto pode precisar de uma atualização.",
         "favoritesSyncFailedUnreachable": "Os favoritos ainda não foram sincronizados: aquele computador está inacessível. Reabra o seletor quando a conexão voltar.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14136,6 +14322,10 @@
         "standard": "Padrão",
         "fast": "Rápido",
         "ultrafast": "Ultrarrápido"
+      },
+      "discoveredCopy": {
+        "unavailableHere": "{{provider}} neste computador não está disponível agora.",
+        "unavailableOn": "{{provider}} em “{{device}}” não está disponível agora."
       }
     },
     "permissionSelector": {
@@ -14187,6 +14377,32 @@
           "bypassPermissions": {
             "label": "Acesso total",
             "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
+          }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmar sempre",
+            "description": "Você confirma quando o Agent pede permissão. O Cindy não consegue bloquear ações para as quais o Agent não pede confirmação."
+          },
+          "default": {
+            "label": "Padrão",
+            "description": "O agente trabalha do jeito padrão dele; você confirma as solicitações de permissão."
+          },
+          "acceptEdits": {
+            "label": "Aceitar edições",
+            "description": "O agente edita arquivos diretamente; você confirma as outras solicitações de permissão."
+          },
+          "auto": {
+            "label": "Automático",
+            "description": "O agente decide o que precisa de confirmação; você confirma as solicitações que ele fizer."
+          },
+          "plan": {
+            "label": "Só planejar",
+            "description": "O agente só analisa e planeja; não edita arquivos."
+          },
+          "bypassPermissions": {
+            "label": "Permitir tudo",
+            "description": "Todas as permissões pedidas pelo Agent são concedidas automaticamente."
           }
         }
       }
@@ -14402,32 +14618,14 @@
       "credentialSwitchApplied": "A troca de provedor de modelo entrou em vigor.",
       "credentialSwitchFailed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente.",
       "modelSwitchContextGuard": {
-        "title": "A conversa atual não cabe neste modelo",
         "warnToast": "Esta conversa já usa {{used}} — cerca de {{pct}}% da capacidade de {{total}} do novo modelo",
-        "overflowDescription": "Esta conversa já usa {{used}}, mais do que o novo modelo comporta ({{total}}, cerca de {{pct}}%). Se você trocar, Cindy fará um breve resumo e continuará. O histórico da conversa será mantido, mas não será repassado integralmente.",
-        "overflowDescriptionRemote": "Esta tarefa remota já usa {{used}} / {{total}} do contexto do modelo menor (cerca de {{pct}}%), então Cindy não pode trocar com segurança. Mantenha o modelo atual ou inicie uma nova tarefa antes de escolher este modelo.",
-        "confirmSwitch": "Trocar e continuar",
-        "cancelSwitch": "Manter este modelo"
+        "condensedToast": "As partes anteriores da conversa serão condensadas para caber no novo modelo. O histórico completo continua disponível.",
+        "overflowDescriptionRemote": "Esta tarefa remota já usa {{used}} / {{total}} do contexto do modelo menor (cerca de {{pct}}%), então Cindy não pode trocar com segurança. Mantenha o modelo atual ou inicie uma nova tarefa antes de escolher este modelo."
       },
       "agentSwitch": {
         "engineNotReady": "Mecanismo alterado, mas o novo mecanismo não iniciou; haverá uma nova tentativa quando você enviar uma mensagem",
         "failed": "Falha ao trocar o mecanismo; troca não aplicada",
-        "deferred": "Troca agendada: mudará para {{agent}} · {{model}} quando sua próxima mensagem for enviada",
-        "confirmation": {
-          "title": "Trocar Agent?",
-          "description": "O novo mecanismo do Agent continua por meio de um resumo de transferência, portanto não é possível garantir que o raciocínio e outros conteúdos sejam transferidos perfeitamente; ao voltar, você ainda poderá continuar a sessão do mecanismo original. A troca também interrompe o cache de prompts uma vez e pode aumentar o uso de tokens.",
-          "confirm": "Trocar Agent",
-          "cancel": "Manter Agent atual",
-          "dontShowAgain": "Não me lembrar novamente"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Executar o Agent neste computador novamente?",
-        "titleOther": "Executar o Agent em “{{device}}”?",
-        "description": "O registro da conversa no outro computador não pode ser transferido, então ela continua a partir de um resumo de transferência. O raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
-        "descriptionNativeHistory": "O registro completo da conversa é copiado e continua de onde parou. Se não puder ser restaurado, ela continua a partir de um resumo de transferência, e o raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
-        "confirm": "Trocar de computador",
-        "cancel": "Manter como está"
+        "deferred": "Troca agendada: mudará para {{agent}} · {{model}} quando sua próxima mensagem for enviada"
       }
     },
     "agentSelect": {
@@ -14671,6 +14869,25 @@
       "runningWithWorktree_one": "Espere terminar para mudar de branch. Com worktree, comece agora em uma cópia separada, sem interferências.",
       "runningWithWorktree_other": "Espere todas terminarem para mudar de branch. Com worktree, comece agora em uma cópia separada, sem interferências.",
       "runningWithWorktree_many": "Espere todas terminarem para mudar de branch. Com worktree, comece agora em uma cópia separada, sem interferências."
+    },
+    "sendDelivery": {
+      "menuAria": "Como enviar esta mensagem",
+      "queueHint": "Após esta resposta",
+      "steerHint": "Na próxima etapa",
+      "setDefault": "Definir como padrão",
+      "nowDefault": "Agora é o padrão",
+      "switchToSteer": "Orientar por padrão",
+      "switchToQueue": "Colocar na fila por padrão"
+    },
+    "pluginEngines": {
+      "group": "Mecanismos de plugins",
+      "genericName": "Mecanismo de plugin",
+      "defaultModel": "Modelo padrão",
+      "defaultModelHint": "Usa o padrão do próprio mecanismo",
+      "unavailable": "Indisponível",
+      "engineMissing": "O plugin que fornece este mecanismo está desativado ou foi desinstalado.",
+      "worktreeUnsupported": "Os mecanismos de plugins ainda não conseguem iniciar tarefas em uma Worktree. Desative a Worktree para enviar.",
+      "modelChangeFailed": "Não foi possível trocar o modelo"
     }
   },
   "onboarding": {
@@ -14911,11 +15128,6 @@
       "unavailable": "Imagem indisponível",
       "loading": "Carregando imagem…"
     },
-    "visionBridge": {
-      "analyzing": "Analisando {{count}} imagem(ns)…",
-      "fallback": "A ponte de visão recorreu a um backend de visão reserva (o principal está indisponível); o reconhecimento de imagens pode ser afetado",
-      "unavailable": "A ponte de visão está indisponível; não foi possível descrever a imagem, que foi substituída por um aviso de texto"
-    },
     "newMessageIndicator": {
       "aria": "Voltar ao fim e ver {{count}} novas mensagens",
       "label_one": "{{count}} nova mensagem",
@@ -14974,11 +15186,14 @@
     },
     "runningStatus": {
       "currentRate": "Última velocidade",
+      "lastRequestRate": "Média da última solicitação",
+      "recentTokenRate": "Recente {{rate}} tok/s",
       "waitingSample": "Amostragem",
       "averageRate": "Média do turno",
       "rateHistory": "Histórico de velocidade de geração",
       "outputTotal": "Saída",
       "observedPeak": "Pico",
+      "thinkingShare": "Raciocínio",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Intervalo de geração mais recente. Exclui ferramentas e esperas.",
@@ -15004,6 +15219,8 @@
       "subtitle_many": "{{count}} mensagens selecionadas"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper está ativado, mas não está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa.",
+      "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa.",
       "requestFormatError": "O aplicativo enviou uma solicitação inválida, por isso não foi possível concluir esta resposta.",
       "replyFailed": "Não foi possível concluir a resposta",
       "retryTitle": "Reenviar a última mensagem",
@@ -15013,6 +15230,9 @@
       "usageLimitAutoContinueTitle": "Se você não fizer nada até o limite de uso ser redefinido, esta tarefa continuará automaticamente",
       "usageLimitAutoContinueCancel": "Cancelar",
       "usageLimitAutoContinueCancelTitle": "Cancelar continuação automática. O erro e a opção Tentar novamente continuarão disponíveis.",
+      "usageLimitReached": "A conta do modelo atingiu o limite de uso",
+      "usageLimitReachedWithReset": "A conta do modelo atingiu o limite de uso. A redefinição do uso está prevista para {{resetAt}}.",
+      "usageLimitReachedNoReset": "A conta do modelo atingiu o limite de uso. Aguarde a redefinição do limite ou mude para outro modelo antes de tentar novamente.",
       "codexOrganizationUsageLimitWithReset": "A conta do Codex conectada é gerenciada pela sua organização e atingiu o limite de uso. A redefinição do uso está prevista para {{resetAt}}.",
       "codexOrganizationUsageLimit": "A conta do Codex conectada é gerenciada pela sua organização e atingiu o limite de uso. Aguarde a redefinição do limite ou mude para outra conta disponível antes de tentar novamente.",
       "codexUsageLimitWithReset": "A conta do Codex conectada atingiu o limite de uso. A redefinição do uso está prevista para {{resetAt}}.",
@@ -15023,6 +15243,7 @@
       "credentialSwitchBusy": "Outra tarefa do Codex ainda está em execução, então o provedor desta sessão ainda não pode ser aplicado (o processo compartilhado do Codex precisa ser reiniciado). Tente novamente quando essas tarefas terminarem.",
       "accountBoundaryPending": "O Cindy ainda está alterando o estado da conta, então esta tarefa ainda não pode começar. Aguarde um momento e pressione Tentar novamente. Se isso persistir, reinicie o Cindy.",
       "codexThreadStale": "O modo de autenticação do Codex mudou — esta sessão não pode continuar. Inicie uma nova sessão para aplicá-lo.",
+      "codexSharedAuthLinkUnavailable": "Neste computador o Codex já tem um login ativo, mas esta sessão não consegue usá-lo: não é possível criar o vínculo com esse login (com uma conta padrão do Windows, normalmente não é possível). Verifique se o {{appName}} neste computador tem permissão para criar esse vínculo (no Windows, execute-o uma vez como administrador ou ative o modo de desenvolvedor) e clique em “Tentar novamente”. Você também pode clicar em “Entrar novamente no ChatGPT” para que a Cindy use um login próprio para esta sessão.",
       "codexResumeNotReady": "O Codex não pode retomar esta tarefa agora. Tente novamente daqui a pouco.",
       "claudeGatewayOpusPlanMismatch": "Esta solicitação do Opus passou pelo XD Gateway, não pela sua assinatura do Claude.ai. Essa rota do gateway rejeitou o modelo. Mude para sua assinatura do Claude.ai e tente novamente, ou escolha outro modelo.",
       "claudeSubscriptionOpusPlanMismatch": "O Opus não está disponível no plano Claude Pro conectado. Mude para um modelo incluído no seu plano. Se você fez upgrade recentemente, reconecte a Anthropic nas Configurações e tente novamente.",
@@ -15030,7 +15251,7 @@
       "switchClaudeSubscriptionTitle": "Mudar esta sessão para a assinatura do Claude.ai e tentar novamente",
       "switchingClaudeSubscription": "Mudando para Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Não foi possível mudar para Claude.ai ou tentar novamente nesta sessão: {{msg}}",
-      "codexAppServerRetired": "O serviço do Codex foi reiniciado ou substituído. A solicitação atual foi interrompida; execute-a novamente.",
+      "codexAppServerRetired": "A conexão com o Codex foi perdida e a solicitação em andamento foi interrompida. Você pode continuar nesta sessão.",
       "codexAuthMissing": "O Codex remoto ainda não está conectado (401 Unauthorized). Clique em \"Sincronizar autenticação\" para enviar suas credenciais locais do Codex ao diretório do Cindy Codex remoto e tente novamente.",
       "codexAuthMissingLocal": "Não foi possível autenticar a conexão “{{provider}}” neste computador. Verifique o estado de login nas configurações e volte a esta sessão após restabelecer a conexão.",
       "codexSessionExpired": "A conexão com a OpenAI precisa de uma atualização. Reconecte o ChatGPT para continuar; {{appName}} não desconectará o Codex CLI do sistema nem pedirá que você reconecte outras fontes de modelos.",
@@ -15083,6 +15304,7 @@
     },
     "backgroundActivity": {
       "status": "Subtarefas em segundo plano em execução, ainda consumindo uso do modelo…",
+      "pluginEngineStatus": "Continuando o trabalho em segundo plano…",
       "bashWorkStatus_one": "Trabalhando em segundo plano ({{count}} comando)…",
       "bashServiceStatus_one": "{{count}} serviço em segundo plano em execução",
       "bashWorkStatus_other": "Trabalhando em segundo plano ({{count}} comandos)…",
@@ -15122,7 +15344,16 @@
       "continueFailed_many": "Não foi possível retomar {{count}} Sessões. Abra-as para tentar novamente."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualize a lista de modelos e tente novamente.",
+      "actionScheduled": "A autorização para esta ação expirou. A próxima execução continua agendada.",
+      "actionExpired": "A autorização da sessão para esta ação expirou. Confira a execução mais recente da automação.",
+      "actionRecovered": "A autorização para esta ação expirou. A mesma automação foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
+      "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS desse dispositivo. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_timeout": "A conexão com o GitHub expirou em {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_auth": "Entre novamente no GitHub em {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_rate-limit": "O GitHub limitou as solicitações de {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de solicitações.",
       "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
@@ -15131,6 +15362,7 @@
       "pluginDisabledUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário está desativado. Elas serão retomadas após a ativação.",
       "installPlugin": "Instalar plugin",
       "openPlugin": "Abrir plugin",
+      "enablePlugin": "Ativar plugin",
       "dismissTitle": "Fechar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {
@@ -15564,6 +15796,11 @@
         "relocatedElsewhere": "O Agent agora é executado em outro computador",
         "quotaRebalance": "a cota dele deve ser usada primeiro"
       },
+      "handoffCoverage": {
+        "complete": "Conversa transferida na íntegra",
+        "condensed": "Partes anteriores condensadas",
+        "details": "Conteúdo transferido para continuar a conversa"
+      },
       "contextRebuild": {
         "labelOverflow": "Contexto reorganizado, continuando",
         "labelTimeout": "O último turno não teve resposta; contexto reorganizado para continuar",
@@ -15793,11 +16030,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode trocar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness necessário.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Não foi possível compactar o contexto ao trocar de modelo porque esta conexão não permite usar o modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado não está mais disponível no provedor. Verifique a conexão em Configurações ou escolha outro modelo disponível.",
+      "MODEL_CATALOG_UNCONFIRMED": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualize a lista de modelos e tente novamente.",
       "HARNESS_SWITCH_NOT_READY": "A troca de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente em breve.",
       "REMOTE_DAEMON_CLOSED": "A conexão remota caiu, possivelmente durante uma atualização. Este turno foi encerrado. Envie a mensagem novamente.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Anexos de arquivos/imagens locais não estão acessíveis em sessões remotas. Cole o conteúdo diretamente.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "A cota de um modelo de revisão automática se esgotou. Confira o uso ou a cobrança, ou personalize os modelos auxiliares nas configurações do computador que executa o Agent. As ações que precisam de revisão ainda exigem sua confirmação.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Nenhum modelo de revisão automática está disponível. No computador que executa o Agente, ative e conecte um provedor de revisão em Provedores de modelos ou personalize os modelos auxiliares nas configurações. As ações que precisam de revisão continuam exigindo sua confirmação.",
       "AUTO_REVIEW_UNAVAILABLE": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta maior risco.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. O WeChat pessoal não pode usar Acesso total. Confirme esta ação diretamente.",
@@ -15809,6 +16049,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "O controle deste dispositivo está desativado; a mensagem não foi enviada.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Falha na transferência do anexo; a mensagem não foi enviada. Tente novamente.",
       "MCP_APPROVAL_AUTO_BLOCKED": "A revisão de aprovação automática bloqueou esta chamada de ferramenta. Nenhuma rejeição manual foi recebida.",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "A aprovação automática bloqueou esta chamada de ferramenta porque faltam detalhes da ação.",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque suas instruções mudaram ou ainda não foram sincronizadas.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque as permissões do diretório mudaram.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque a autorização delegada mudou.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "A aprovação automática bloqueou esta chamada de ferramenta porque a autorização do plugin ou da tarefa não está mais ativa.",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "A aprovação automática bloqueou esta chamada de ferramenta porque nenhuma instrução do usuário autoriza a ação.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "A aprovação automática bloqueou esta chamada de ferramenta porque o plano de trabalho excede o tamanho compatível.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "A aprovação automática bloqueou esta chamada de ferramenta porque o Agent executor não corresponde ao plano de trabalho registrado.",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque o diretório de trabalho da tarefa mudou.",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "A aprovação automática bloqueou esta chamada de ferramenta porque o escopo da tarefa delegada está ausente ou é inválido.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "A solicitação de permissão expirou sem uma decisão confirmada. A expiração não indica se você clicou em um botão.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Não foi possível concluir a confirmação de permissão. Nenhuma rejeição manual foi recebida.",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "Este modelo precisa que este computador encaminhe as solicitações, e a conexão remota ainda não pode fazer isso. Mude para Cindy AI ou use este modelo em uma tarefa local.",
@@ -15832,9 +16082,12 @@
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent não está disponível no outro computador. Instale-o ou entre na conta dele lá, ou escolha outro Agent.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este computador não consegue restaurar o estado anterior da sessão. Selecione um modelo de outro computador ou provedor para continuar com uma transferência de contexto. As mensagens existentes são mantidas.",
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy nos dois computadores.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "O mecanismo do plug-in não conseguiu restaurar a conversa anterior. Suas mensagens foram preservadas. Escolha outro mecanismo ou inicie uma nova tarefa.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "Este mecanismo de plug-in não consegue usar as ferramentas do computador em que a tarefa está, então ainda não pode executá-la a partir de outro computador. Escolha outro mecanismo ou modelo.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "Este mecanismo de plug-in só pode executar tarefas deste computador. Outros computadores ainda não podem usá-lo.",
       "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Crie uma nova sessão pela lista de sessões e copie o conteúdo necessário para continuar. A sessão original e as mensagens na fila são mantidas.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de compartilhamento definido pelo proprietário. Escolha outro modelo disponível para continuar.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não liberou para você este provedor ou o modelo selecionado. Se for seu próprio computador, ative “Permitir que meus outros computadores usem os modelos deste” na conexão remota dele. Se alguém compartilhou com você, peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento. Você também pode escolher outro modelo.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não liberou para você este provedor ou o modelo selecionado. Se for seu próprio computador, ative “Permitir uso remoto” neste provedor lá. Se alguém compartilhou com você, peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento. Você também pode escolher outro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tente novamente ou tente outra mensagem.",
       "REMOTE_AGENT_SHARE_PAUSED": "O proprietário pausou este compartilhamento para você, então estes modelos não podem ser usados até que ele seja retomado. Troque para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Este compartilhamento não está mais disponível (o proprietário o removeu ou você saiu). Troque para outro modelo para continuar.",
@@ -16018,7 +16271,6 @@
       "opened": "Uma página de prévia foi aberta"
     },
     "sideChat": {
-      "openPage": "Abrir página completa da tarefa",
       "returnMain": "Voltar à tarefa principal",
       "new": "Nova conversa paralela",
       "mainWindowDescription": "As conversas paralelas são executadas na janela principal no momento. Sua conversa está salva.",
@@ -16026,6 +16278,14 @@
       "commandDescription": "Abra uma conversa paralela com o contexto desta tarefa. O texto opcional vira um rascunho de pergunta.",
       "title": "Conversa paralela",
       "context": "Usa o contexto concluído no momento em que você a abriu. A tarefa principal continua em execução. O histórico fica disponível até você fechar esta aba.",
+      "viewCollaboration": "Ver colaboração",
+      "openConversation": "Abrir conversa",
+      "openFromTaskList": "Também disponível na lista de tarefas à esquerda.",
+      "returnToSideChat": "Voltar à pergunta lateral",
+      "reopenSideChat": "Reabrir a pergunta lateral",
+      "origin": "Esta conversa começou com uma pergunta lateral.",
+      "originNamed": "Esta conversa começou com uma pergunta lateral de “{{title}}”.",
+      "originUnavailable": "Esta conversa começou com uma pergunta lateral. A tarefa original está indisponível.",
       "opening": "Abrindo…",
       "notReady": "Aguarde a tarefa principal concluir a primeira resposta.",
       "unsupported": "O Agent desta tarefa é executado em outro ambiente de execução. A conversa paralela ainda não está disponível aqui.",
@@ -16034,9 +16294,10 @@
       "mainTaskOnly": "Abra uma conversa paralela a partir da tarefa principal.",
       "sharedTaskUnavailable": "Conversas paralelas não estão disponíveis em tarefas compartilhadas.",
       "archivedTask": "Desarquive esta tarefa para abrir uma conversa paralela.",
-      "closeTitle": "Fechar conversa paralela?",
-      "closeDescription": "Esta conversa de acompanhamento será interrompida e seu histórico será excluído. A tarefa principal continua em execução.",
-      "closeConfirm": "Fechar e excluir",
+      "closeTitle": "Fechar e arquivar esta pergunta de acompanhamento?",
+      "closeDescription": "A tarefa correspondente na barra lateral esquerda também será arquivada.",
+      "closeDescriptionRunning": "A tarefa correspondente na barra lateral esquerda também será arquivada, e seus Workers serão interrompidos.",
+      "closeConfirm": "Fechar e arquivar",
       "closeFailed": "Não foi possível fechar a conversa paralela. Tente novamente."
     },
     "teammateProcess": {
@@ -16090,9 +16351,19 @@
       "toggle": "Mostrar ou ocultar a resposta de “{{title}}”",
       "openTask": "Abrir tarefa"
     },
+    "geminiRateLimit": {
+      "retried": "Nova tentativa automática após a espera indicada pelo Gemini",
+      "title": "O limite de entrada por minuto do Gemini foi atingido.",
+      "exhausted": "O Gemini ainda está limitado após uma nova tentativa. Você pode tentar novamente manualmente.",
+      "retryIn": "Nova tentativa automática em {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos. A conta não muda automaticamente.",
-      "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos. A conta não muda automaticamente.",
+      "poolModelLimited": "O uso da assinatura para este modelo atingiu o limite. Você pode trocar de modelo.",
+      "poolRetryUntil": "Tente novamente após {{resetAt}}.",
+      "poolOtherSignedOut": "Outra conta de assinatura está desconectada. Entre nessa conta no computador que executa a tarefa e tente novamente.",
+      "poolUnavailable": "Nenhuma conta de assinatura está disponível para este modelo. Troque de modelo ou verifique as contas no computador que executa a tarefa.",
+      "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos.",
+      "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos.",
       "loginRequired": "A conta de assinatura desta tarefa exige um novo login. Entre novamente no computador que executa a tarefa e tente de novo.",
       "signingIn": "O login na conta de assinatura desta tarefa está em andamento. Tente de novo quando terminar.",
       "unavailable": "A conta de assinatura atribuída a esta tarefa não pode ser usada nesta solicitação. Verifique a conta nas configurações do provedor de modelos no computador que executa a tarefa ou escolha outra origem de modelos.",
@@ -16144,6 +16415,7 @@
       "saveFailed": "Falha ao salvar a faixa da janela de contexto"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "Aguardando a resposta remota…",
       "readingMemory": "Lendo a memória…",
       "savingMemory": "Salvando memória…",
       "deletingMemory": "Excluindo memória…",
@@ -16193,7 +16465,8 @@
         "replaced": "Esta conexão foi substituída por outra instância do mesmo dispositivo — reconectando…",
         "too-many-connections": "Há dispositivos online demais nesta conta — o servidor recusou a conexão",
         "version-mismatch": "A versão do protocolo não corresponde à do servidor — atualize o aplicativo e tente novamente",
-        "unstable": "Este computador perde e restabelece a conexão repetidamente, então as ações remotas podem continuar excedendo o tempo limite — verifique a rede ou reinicie o Cindy e tente novamente"
+        "unstable": "Este computador perde e restabelece a conexão repetidamente, então as ações remotas podem continuar excedendo o tempo limite — verifique a rede ou reinicie o Cindy e tente novamente",
+        "agent-net-relay-down": "Este computador não consegue acessar o relay do Agent-Net e está reconectando. As ações remotas falham se o outro computador não estiver conectado diretamente"
       }
     },
     "common": {
@@ -16328,6 +16601,14 @@
       "remoteProviderUnsupported": "Este provedor não é compatível com sessões remotas SSH — escolha outra fonte",
       "remoteNativeOauthUnavailable": "Tarefas remotas não podem usar uma assinatura do Claude — escolha um modelo via gateway ou chave de API",
       "claudeSubscriptionWorkspaceOverride": "As configurações .claude desta pasta alteram para onde o Claude envia solicitações ou como ele faz login, então a assinatura do Claude não pode ser usada aqui. Remova essas configurações ou escolha um modelo com gateway ou chave de API",
+      "savedModel": {
+        "loading": "Conectando ao modelo selecionado…",
+        "checkFailed": "Não foi possível verificar o modelo selecionado",
+        "engine": "O mecanismo selecionado não está disponível. Escolha um modelo para esta tarefa.",
+        "source": "A origem selecionada não está disponível. Escolha um modelo para esta tarefa.",
+        "model": "O modelo selecionado não está disponível. Escolha um modelo para esta tarefa.",
+        "thisTaskOnly": "O modelo selecionado se aplica somente a esta tarefa"
+      },
       "deviceStillLoading": "O dispositivo remoto ainda está carregando. Aguarde",
       "remoteDefaultsLoadFailed": "Não foi possível carregar as configurações do dispositivo remoto. Verifique a conexão; o Cindy está tentando novamente.",
       "branchChanged": "O projeto agora está em {{branch}}. Confira e envie novamente.",
@@ -16419,7 +16700,8 @@
         "project": "Projeto",
         "flat": "Lista simples",
         "device": "Dispositivo",
-        "dialogue": "Conversa"
+        "dialogue": "Conversa",
+        "automation": "Automação"
       },
       "filterGroupByDeviceManualTip": "Agrupar por dispositivo não está disponível durante a ordenação manual",
       "deviceGroup": {
@@ -16467,6 +16749,7 @@
       },
       "filterCreatorsHeading": "Amigos",
       "filterCreatorsAny": "Todas",
+      "filterHideAutomations": "Ocultar tarefas automatizadas",
       "filterCreatorsNone": "Ocultar tudo",
       "filterSelectedCreators": "{{count}} selecionadas",
       "filterProjectsHeading": "Projetos",
@@ -16556,7 +16839,10 @@
       "confirmArchive": {
         "title": "Arquivar sessão",
         "description": "Arquivar esta sessão? Ela será removida da lista.",
-        "dirtyWorktreeWarning": "O worktree desta sessão tem alterações sem commit; elas serão salvas como um snapshot do git antes do arquivamento e poderão ser restauradas pela sessão depois.",
+        "dirtyWorktreeWarning": "Esta tarefa contém alterações em arquivos que ainda não foram incluídas em um commit. Por padrão, elas são salvas ao arquivar a tarefa e podem ser restauradas depois na própria tarefa.",
+        "discardChanges": "Descartar alterações sem commit",
+        "discardWarning": "As alterações sem commit e os arquivos novos serão perdidos.",
+        "discardAndArchive": "Descartar e arquivar",
         "scheduleWarning_one": "A automação vinculada {{names}} continuará em execução e restaurará esta sessão.",
         "scheduleWarning_other": "As automações vinculadas {{names}} continuarão em execução e restaurarão esta sessão.",
         "scheduleWarningMany_one": "{{count}} destas sessões tem automações vinculadas que a restaurarão quando forem executadas.",
@@ -16594,6 +16880,7 @@
         "empty": "Esta automação não tem sessões para arquivar."
       },
       "archiveAll": {
+        "projectTitle": "Arquivar todas as tarefas de “{{name}}”?",
         "title": "Arquivar todas as sessões",
         "confirm": "Arquivar todas",
         "cancel": "Cancelar",
@@ -16742,18 +17029,28 @@
         }
       },
       "projectAction": {
+        "menu": "Menu do projeto {{name}}",
+        "previewFailed": "Não foi possível carregar as tarefas deste projeto. Tente novamente.",
+        "remotePreviewFailed": "Não foi possível ler as tarefas do projeto remoto. Verifique a conexão e a versão do Cindy no computador remoto.",
         "rename": "Renomear projeto",
         "pin": "Fixar projeto",
         "unpin": "Desafixar projeto",
-        "removeFromSidebar": "Remover projeto da barra lateral",
-        "removeFromSidebarConfirmTitle": "Remover {{name}}?",
-        "removeFromSidebarConfirmDescription": "Isso remove o projeto da barra lateral. Os arquivos no seu computador não serão excluídos. As sessões existentes serão movidas para a seção Conversa e continuarão disponíveis.",
+        "removeFromSidebar": "Remover projeto do Cindy…",
+        "removeFromSidebarConfirmTitle": "Remover {{name}} do Cindy?",
+        "removeFromSidebarConfirmDescription": "Tarefas ativas: {{count}}. Você poderá continuar em Conversas.",
         "removeFromSidebarConfirmAction": "Remover projeto",
-        "removeFromSidebarFailed": "Não foi possível remover o projeto da barra lateral — tente novamente.",
-        "showFiles": "Mostrar arquivos",
-        "archivedAll": "Arquivar todas",
-        "unarchiveAll": "Restaurar todas",
-        "openInExplorer": "Abrir no gerenciador de arquivos",
+        "removeFromSidebarFailed": "Não foi possível remover o projeto.",
+        "archiveOnRemove": "Arquivar também as tarefas ({{count}})",
+        "keepSkippedOnRemove": "Estas tarefas permanecerão em Conversas ({{skip}}).",
+        "removedArchived": "Tarefas que serão movidas para o arquivo: {{count}}.",
+        "removeAndArchive": "Remover projeto e arquivar tarefas",
+        "removeKeepFiles": "A fixação, o nome personalizado e o ícone do projeto serão removidos. Os arquivos e pastas serão mantidos.",
+        "showFiles": "Ver arquivos da tarefa na barra lateral",
+        "archivedAll": "Arquivar todas as tarefas",
+        "unarchiveAll": "Restaurar todas as tarefas",
+        "openInFinder": "Abrir pasta do projeto no Finder",
+        "openInExplorer": "Abrir pasta do projeto no Explorador de Arquivos",
+        "openInFileManager": "Abrir pasta do projeto no gerenciador de arquivos",
         "newInDirectory": "Nova sessão neste diretório",
         "copyDeepLink": "Copiar link do projeto",
         "search": "Pesquisar sessões neste projeto"
@@ -16773,6 +17070,7 @@
       "groupSummary": {
         "project": "Projeto",
         "dialogue": "Conversa",
+        "automation": "Automação",
         "device": "Dispositivo"
       },
       "taskStatusHeading": "Status da sessão",
@@ -16785,6 +17083,38 @@
         "priority": "Prioridade",
         "activity": "Atividade recente",
         "created": "Data de criação"
+      },
+      "inbox": {
+        "thisEvening": "Hoje à noite",
+        "tomorrow": "Amanhã",
+        "nextWeek": "Na próxima semana",
+        "indefinite": "Indefinidamente",
+        "custom": "Personalizar…",
+        "wakeAt": "Data e hora de retorno",
+        "timeZone": "Hora local ({{zone}})",
+        "invalidTime": "Escolha uma data e hora futuras dentro de um ano.",
+        "inbox": "Pendentes",
+        "working": "Em andamento",
+        "snoozed": "Adiadas",
+        "archived": "Tratadas",
+        "snooze": "Adiar tarefa",
+        "complete": "Concluído",
+        "wake": "Mostrar agora",
+        "restore": "Restaurar tarefa",
+        "process": "Marcar como tratada (arquivar)",
+        "empty": "A caixa de entrada está vazia",
+        "snoozeFailed": "Não foi possível salvar o horário. Verifique a conexão e atualize o computador que hospeda esta tarefa.",
+        "hours": "Em {{count}} horas",
+        "hours_one": "Em {{count}} hora",
+        "hours_many": "Em {{count}} horas",
+        "hours_other": "Em {{count}} horas"
+      },
+      "taskListMode": {
+        "heading": "Modo de tarefas",
+        "tasks": "Lista de tarefas",
+        "inbox": "Caixa de entrada",
+        "enterInbox": "Mudar para o modo caixa de entrada",
+        "leaveInbox": "Mudar para o modo lista de tarefas"
       }
     },
     "rename": {
@@ -16908,7 +17238,41 @@
             "token": "Usando token alternativo",
             "recheck": "Verificar conexão",
             "summary": "Gerencie repositórios, issues, pull requests e Actions do GitHub.",
-            "otherMethods": "Outros métodos de conexão"
+            "otherMethods": "Outros métodos de conexão",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "Acesso do GitHub App",
+            "all": "Todos os repositórios",
+            "selected": "Repositórios selecionados",
+            "visible": "Repositórios visíveis: {{count}}",
+            "unknownCount": "Contagem indisponível",
+            "permissions": "Permissões",
+            "read": "Somente leitura",
+            "write": "Leitura e gravação",
+            "admin": "Administração",
+            "loading": "Carregando acesso…",
+            "missing": "Conecte o GitHub App neste computador para ver o acesso.",
+            "unavailable": "Detalhes de acesso indisponíveis.",
+            "empty": "Nenhuma instalação visível para esta conta.",
+            "suspended": "Instalação suspensa",
+            "events": "Repositórios com eventos assinados neste computador: {{count}}",
+            "manage": "Gerenciar acesso aos repositórios",
+            "names": {
+              "actions": "Actions",
+              "administration": "Administração do repositório",
+              "checks": "Verificações",
+              "contents": "Conteúdo do repositório",
+              "deployments": "Implantações",
+              "issues": "Issues",
+              "members": "Membros da organização",
+              "metadata": "Metadados",
+              "organization_events": "Eventos da organização",
+              "pull_requests": "Pull requests",
+              "repository_hooks": "Webhooks do repositório",
+              "statuses": "Status dos commits",
+              "workflows": "Arquivos de workflow"
+            }
           },
           "app": {
             "title": "Eventos dos repositórios",
@@ -16921,12 +17285,28 @@
             "repositories": "Escolher repositórios",
             "disconnect": "Desconectar eventos",
             "connect": "Conectar GitHub App"
+          },
+          "connection": {
+            "operations": "Operações de repositório",
+            "operationsMissing": "Acesso ao repositório ainda não autorizado",
+            "checking": "Verificando a conexão com o GitHub…",
+            "mismatch": "As operações e notificações usam contas diferentes. Confira as contas e conecte novamente.",
+            "ready": "Conta do GitHub conectada.",
+            "close": "Fechar",
+            "incomplete": "Conta vinculada. Autorize as operações neste computador para concluir.",
+            "eventsOnly": "Esta conta recebe eventos de repositório. Seu nome não confirma a autorização neste computador.",
+            "connect": "Conectar GitHub",
+            "alternative": "Usar o login local do GitHub",
+            "cliDescription": "Você pode continuar usando o login local. Notificações pessoais e funções não suportadas por GitHub Apps ainda precisam dele.",
+            "disconnect": "Desconectar GitHub App",
+            "repositories": "Repositórios acompanhados: {{count}}"
           }
         },
         "unresolved": "Discussões de revisão não resolvidas: {{count}}",
         "summaryAria": "Ver resumo do PR #{{number}}",
         "unresolvedLabel": "Discussões de revisão não resolvidas",
         "checks": "Verificações",
+        "following": "Em acompanhamento",
         "checksTotal": "{{count}} no total",
         "failed": "Falhas",
         "passed": "Aprovadas",
@@ -16975,6 +17355,12 @@
       "unspecifiedDir": "Diretório não especificado"
     },
     "workdirBrowse": {
+      "previewFile": "Pré-visualizar",
+      "filterDirectory": "Filtrar esta pasta…",
+      "projectTree": "Árvore do projeto",
+      "systemPreview": "Prévia do sistema",
+      "listView": "Lista",
+      "gridView": "Miniaturas",
       "backToProjects": "Voltar para Projetos",
       "switchProject": "Trocar projeto",
       "activeSessionCount_one": "{{count}} sessão ativa",
@@ -16995,6 +17381,7 @@
         "openInFileBrowser": "Abrir no gerenciador de arquivos",
         "showInFolder": "Mostrar na pasta",
         "copyFilePath": "Copiar caminho do arquivo",
+        "copyFolderPath": "Copiar caminho da pasta",
         "deleteFile": "Excluir arquivo"
       },
       "searchPanel": {
@@ -17078,6 +17465,7 @@
         "menuSave": "Salvar",
         "menuInsertTable": "Inserir tabela",
         "externalChangeBlocked": "O arquivo foi alterado no disco. O salvamento automático foi pausado; salve manualmente para sobrescrever.",
+        "targetChanged": "O arquivo agora aponta para outro local. Seu rascunho continua no editor. Copie-o antes de reabrir o arquivo.",
         "tableMenu": {
           "addRowAbove": "Adicionar linha acima",
           "addRowBelow": "Adicionar linha abaixo",
@@ -17195,6 +17583,18 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "As verificações agendadas continuam sem notificações do GitHub App.",
+      "label": "PR",
+      "url": "URL da pull request",
+      "condition": "Executar quando",
+      "any": "Atividade na PR",
+      "merged": "Mesclagem",
+      "review": "Atividade de revisão",
+      "ci": "Alterações na CI",
+      "timed": "Verificar também periodicamente",
+      "invalid": "Insira a URL de uma pull request do GitHub."
+    },
     "presentation": {
       "status": {
         "active": "Ativo",
@@ -17287,7 +17687,8 @@
         "title": "Importar automações do repositório",
         "description": "Origem: {{workingDir}}. Revise as definições abaixo. A importação aplica estas alterações e ativa novas automações, que podem executar comandos e iniciar Agents com acesso total. Importe apenas conteúdo confiável.",
         "accept": "Confirmar importação",
-        "removed": "Serão removidos: {{names}}"
+        "removed": "Serão removidos: {{names}}",
+        "fileMissing": "Importação ignorada. Não foi possível encontrar o arquivo de automações em {{projectName}}."
       },
       "toast": {
         "summary": "adicionados {{inserted}} · atualizados {{updated}} · removidos {{deleted}}",
@@ -17330,6 +17731,7 @@
       "promote": {
         "menu": "Promover a automação de projeto",
         "noWorkingDir": "Não é possível promover um agendamento sem diretório de trabalho",
+        "pluginEngine": "Mecanismos de plugin só funcionam neste computador; não é possível promover este agendamento a automação do projeto",
         "success": "Promovido a automação de projeto"
       },
       "editProject": {
@@ -17383,6 +17785,7 @@
       "openWorkdirFailed": "Falha ao abrir pasta"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "O tempo de espera expirou antes do envio da mensagem. Quando a sessão de destino estiver livre, escolha {{action}} para executá-la.",
       "status": {
         "running": "Em execução",
         "success": "Sucesso",
@@ -17471,7 +17874,9 @@
           "jira_read": "Ler Jira",
           "jira_comment": "Comentar no Jira",
           "sessions_dispatch": "Despachar sessões",
-          "feishu_read": "Ler mensagens do Feishu"
+          "feishu_read": "Ler mensagens do Feishu",
+          "settings_read": "Ler membros dos compartilhamentos",
+          "usage_read": "Ler o uso e o status dos grupos de fornecedores"
         },
         "project": "Diretório do projeto",
         "capabilitiesLabel": "Recursos permitidos",
@@ -17483,7 +17888,9 @@
           "jira_read": "Ler issues do Jira (obter por chave / busca JQL)",
           "jira_comment": "Adicionar comentários a issues do Jira",
           "sessions_dispatch": "Criar ou reativar sessões do {{appName}} e entregar mensagens",
-          "feishu_read": "Listar conversas ativas recentemente; buscar mensagens recentes de uma conversa (grupo ou mensagem direta)"
+          "feishu_read": "Listar conversas ativas recentemente; buscar mensagens recentes de uma conversa (grupo ou mensagem direta)",
+          "settings_read": "Lê os membros dos seus compartilhamentos e os modelos permitidos neste computador ou em outros computadores autorizados da mesma conta; não faz alterações",
+          "usage_read": "Lê os identificadores, planos, períodos de cota e horários de atualização das contas locais de Claude/Codex conectadas à sua conta Cindy. Lê o uso registrado por dia e modelo, os custos estimados, a configuração e o status dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou em outros computadores autorizados da mesma conta. Não permite ler e-mails de login das assinaturas, diretórios de contas, impressões de identidade internas, credenciais ou arquivos, nem alterar contas ou configurações."
         },
         "capabilityWarn": {
           "ghostMissing": "Requer o plugin \"{{name}}\", que não está instalado — este recurso falhará durante a execução",
@@ -17602,6 +18009,7 @@
         "selectThread": "Selecione uma sessão de destino",
         "selectProject": "Selecione um diretório de projeto",
         "modelUnavailable": "O modelo {{model}} não está mais disponível. Selecione outro modelo.",
+        "pluginEngineUnavailable": "O mecanismo de plugin selecionado não está disponível agora. Selecione outro modelo.",
         "reasoningInvalid": "O raciocínio deve ser um de {{values}}",
         "preRunHookCommandRequired": "Insira o comando de verificação prévia",
         "preRunPluginRequired": "Escolha um plugin para a verificação prévia",
@@ -19217,6 +19625,9 @@
     },
     "errors": {
       "piStartupCloudFile": "Um arquivo de instruções disponível apenas na nuvem pode estar atrasando a inicialização do Pi: {{path}}. Baixe este arquivo no Finder, espere até que esteja disponível localmente e tente novamente. O tempo limite excedido pode ter outra causa.",
+      "hostProfileInUseByDesktop": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho. Feche-o e envie novamente.",
+      "hostProfileInUseByDesktopAtStart": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho, então o serviço em segundo plano da Cindy não foi iniciado. Feche-o, reinicie o serviço em segundo plano da Cindy e abra esta janela da Cindy novamente.",
+      "hostProfileInUseByDesktopRetry": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho, então não dá para alterar agora. Feche-o e tente novamente.",
       "openFileFailed": "Não foi possível abrir o arquivo no sistema",
       "emptyResponse": "O modelo não retornou conteúdo. Tente novamente. Se o contexto for muito longo, troque de modelo.",
       "turnFailed": "A tarefa falhou (o modelo não retornou detalhes do erro) — tente novamente.",
@@ -19226,8 +19637,9 @@
       "steerFailed": "Falha ao redirecionar: {{message}}",
       "qrExpired": "O código QR expirou. Comece novamente",
       "registrationFailed": "Falha na criação. Tente novamente mais tarde",
-      "silentStopExhausted": "O modelo retornou respostas vazias repetidamente; a retomada automática está pausada. Clique em \"Continuar\" para retomar a tarefa.",
+      "silentStopExhausted": "Foi detectada uma resposta vazia. A continuação automática foi pausada.",
       "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
+      "unexecutedToolMarkup": "O modelo escreveu uma chamada de ferramenta como texto. Não foi possível confirmar a execução, por isso este turno não foi concluído.",
       "outputLimit": "O modelo atingiu o limite de saída, então esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isso se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
       "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída desta solicitação, então a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte o histórico da conversa antes de continuar.",
       "outputLimitUsage": "Esta solicitação ao modelo usou {{outputTokens}} tokens de saída, incluindo {{reasoningTokens}} tokens de raciocínio.",
@@ -19336,6 +19748,7 @@
       "permissionLabel": "Modo de permissão",
       "noAvailableModels": "Nenhum modelo {{agent}} disponível. Verifique a conexão e as credenciais do provedor em Configurações.",
       "savedModelUnavailable": "O modelo salvo ou sua origem não está disponível.",
+      "pluginEngineNoWorktree": "Workers com mecanismo de plugin não podem usar um worktree. Desative a opção de worktree para criar este Worker.",
       "reselectModel": "Escolher um modelo",
       "effortLabel": "Esforço de raciocínio",
       "initialTaskLabel": "Tarefa inicial",
@@ -19505,6 +19918,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "A execução deste turno falhou.",
+    "blockedReasonUnknown": "Não foi informado um motivo específico para o bloqueio.",
+    "blockedNextStep": "Você pode acrescentar informações nesta tarefa. Após resolver a causa, clique em “{{action}}” para continuar.",
     "status": {
       "active": "Avançando na meta",
       "paused": "Em pausa",
@@ -19789,6 +20205,47 @@
       "notSupported": "A consulta de saldo não é compatível com esta conta.",
       "unavailable": "O saldo está temporariamente indisponível. Atualize para tentar novamente."
     },
+    "giftCard": {
+      "action": "Resgatar cartão-presente",
+      "title": "Resgatar cartão-presente",
+      "inputLabel": "Código de resgate",
+      "inputHint": "Digite o código de 16 caracteres ou cole o link de um cartão-presente.",
+      "continue": "Continuar",
+      "confirmTitle": "Resgatar este cartão-presente?",
+      "confirmAction": "Resgatar",
+      "from": "De {{sender}}",
+      "cardLabel": "Cartão-presente Cindy, {{amount}}",
+      "fields": {
+        "validity": "Validade",
+        "validityValue_one": "{{count}} dia após o resgate",
+        "validityValue_many": "{{count}} de dias após o resgate",
+        "validityValue_other": "{{count}} dias após o resgate",
+        "claimBy": "Resgatar até",
+        "destination": "Adicionado a",
+        "validityPermanent": "Não expira"
+      },
+      "doneTitle": "{{amount}} adicionados",
+      "doneDescription": "Adicionado ao seu Saldo promocional. Válido até {{date}}.",
+      "doneDescriptionNoDate": "Adicionado ao seu Saldo promocional.",
+      "pendingTitle": "Cartão-presente resgatado",
+      "pendingDescription": "{{amount}} estão sendo adicionados e vão aparecer em breve no seu Saldo promocional. Você não precisa resgatar de novo.",
+      "alreadyYours": "Você já resgatou este cartão-presente.",
+      "done": "Concluído",
+      "errors": {
+        "notFound": "Este código não é válido. Confira e tente novamente.",
+        "wrongRegionCn": "Este cartão-presente é para a edição da China continental do Cindy e não pode ser resgatado com esta conta.",
+        "wrongRegionGlobal": "Este cartão-presente é para a edição internacional do Cindy e não pode ser resgatado com esta conta.",
+        "alreadyClaimed": "Este cartão-presente já foi resgatado.",
+        "expired": "Este cartão-presente não pode mais ser resgatado porque o prazo terminou.",
+        "voided": "Este cartão-presente foi anulado.",
+        "voidedPurchased": "Este cartão-presente não pode ser resgatado no momento.",
+        "rateLimited": "Muitas tentativas. Tente novamente mais tarde.",
+        "failed": "Não foi possível resgatar o cartão-presente. Tente novamente mais tarde.",
+        "personalRequired": "Cartões-presente só podem ser resgatados com uma conta pessoal."
+      },
+      "doneDescriptionPurchased": "Adicionado ao seu Saldo de recarga. Não expira.",
+      "pendingDescriptionPurchased": "{{amount}} está sendo adicionado e vai aparecer em instantes no seu Saldo de recarga. Não é preciso resgatar de novo."
+    },
     "usage": {
       "title": "Uso do saldo",
       "observedAt": "Saldo atualizado em {{date}}",
@@ -19804,6 +20261,8 @@
         "empty": "Nenhuma concessão promocional disponível.",
         "incomplete": "Há muitos registros de concessões. Apenas os {{count}} mais recentes são exibidos.",
         "unnamed": "Concessão promocional",
+        "rolloverName": "Saldo acumulado",
+        "giftCard": "Cartão-presente · de {{sender}}",
         "original": "Original",
         "used": "Usado",
         "remaining": "Restante",
@@ -19814,7 +20273,8 @@
           "expired": "Expirado",
           "voided": "Anulado"
         }
-      }
+      },
+      "viewUsage": "Ver uso"
     },
     "orders": {
       "title": "Histórico de pedidos",
@@ -19830,7 +20290,10 @@
         "noPayment": "Nenhum pagamento necessário",
         "page": "Página {{page}}",
         "previous": "Página anterior",
-        "next": "Próxima página"
+        "next": "Próxima página",
+        "giftCard_one": "Cartão-presente × {{count}}",
+        "giftCard_many": "Cartões-presente × {{count}}",
+        "giftCard_other": "Cartões-presente × {{count}}"
       },
       "count": "{{count}} pedidos",
       "orderId": "Nº {{id}}",
@@ -20039,6 +20502,8 @@
       "basicModels": "Acesso a alguns modelos",
       "subscription": "Plano de assinatura",
       "rollover": "Mantenha até {{amount}} de saldo não utilizado para {{period}}",
+      "rolloverMonthly": "Acumule até {{amount}} de saldo não utilizado como saldo promocional\nVálido por 1 mês, sem novo acúmulo\nUtilizado antes do Saldo do plano e do Saldo de recarga",
+      "rolloverMonthlySummary": "Acumule até {{amount}} de saldo não utilizado, válido por 1 mês",
       "nextPeriod": {
         "MONTH": "o próximo mês",
         "YEAR": "o próximo ano",
@@ -20057,6 +20522,125 @@
         "MONTH": "Inclui {{amount}} por mês",
         "YEAR": "Inclui {{amount}} por ano",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Comprar cartão-presente",
+      "title": "Comprar cartão-presente",
+      "subtitle": "Dê de presente ou fique com ele. Ao resgatar, o valor vai para o seu Saldo de recarga e nunca expira.",
+      "previewLabel": "O que a pessoa vai receber",
+      "sameCards_one": "{{count}} cartão com o próprio código de resgate",
+      "sameCards_many": "{{count}} cartões com o mesmo design, valor e mensagem, cada um com o próprio código",
+      "sameCards_other": "{{count}} cartões com o mesmo design, valor e mensagem, cada um com o próprio código",
+      "fields": {
+        "face": "Design",
+        "amount": "Valor",
+        "quantity": "Quantidade",
+        "sender": "De",
+        "senderHint": "Aparece como “De {{sender}}”",
+        "senderPlaceholder": "Seu nome",
+        "message": "Mensagem (opcional)",
+        "messagePlaceholder": "Um recado para a pessoa",
+        "tooLong": "No máximo {{max}} caracteres",
+        "paymentMethod": "Forma de pagamento"
+      },
+      "decrease": "Um cartão a menos",
+      "increase": "Um cartão a mais",
+      "quantityHint": "Até {{limit}} cartões a cada {{hours}} horas · ainda dá para comprar {{remaining}}",
+      "quantityLimitReached": "Você já comprou o máximo de {{limit}} cartões em {{hours}} horas. Tente novamente mais tarde.",
+      "orderAmountCap": "Até {{amount}} por pedido",
+      "totalDetail_one": "{{count}} cartão × {{amount}}",
+      "totalDetail_many": "{{count}} cartões × {{amount}}",
+      "totalDetail_other": "{{count}} cartões × {{amount}}",
+      "pay": "Continuar para o pagamento",
+      "refundNote": "Cartões-presente não podem ser trocados por dinheiro. Cartões resgatados não são reembolsáveis. Para pedir o reembolso de um cartão não resgatado, entre em contato com o suporte.",
+      "cancel": "Cancelar",
+      "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
+      "checkoutSubtitle_one": "Cartão-presente {{amount}} × {{count}} · emitido assim que o pagamento for concluído",
+      "checkoutSubtitle_many": "Cartões-presente {{amount}} × {{count}} · emitidos assim que o pagamento for concluído",
+      "checkoutSubtitle_other": "Cartões-presente {{amount}} × {{count}} · emitidos assim que o pagamento for concluído",
+      "faces": {
+        "cindy": "Cindy · Vermelho da marca",
+        "cat": "Gato preto · Noite",
+        "bell": "Sino · Festivo",
+        "leap": "Salto · Marfim"
+      },
+      "errors": {
+        "limitReached": "Você atingiu o limite de compra de cartões-presente. Tente novamente mais tarde.",
+        "amountTooLarge": "Este pedido passa do limite de pagamento por pedido. Escolha menos cartões e tente de novo."
+      },
+      "done": {
+        "title_one": "Seu cartão-presente está pronto",
+        "title_many": "Seus {{count}} cartões-presente estão prontos",
+        "title_other": "Seus {{count}} cartões-presente estão prontos",
+        "pendingTitle": "Cartão-presente pago",
+        "loading": "Buscando os cartões deste pedido…",
+        "description": "Envie um link de resgate para alguém: ao abrir, a pessoa já pode resgatar. Você também pode ficar com um.",
+        "missing": "O pagamento foi concluído. Seus cartões vão aparecer em Meus cartões-presente em instantes.",
+        "cardTitle": "Cartão {{index}} · {{amount}}",
+        "cardMeta": "Final {{tail}} · {{status}}",
+        "linkHint": "O link de resgate é o próprio cartão: quem abrir primeiro fica com ele. Envie só para quem você vai presentear.",
+        "viewAll": "Ver meus cartões-presente",
+        "finish": "Concluir"
+      },
+      "list": {
+        "title": "Meus cartões-presente",
+        "description": "Envie um link de resgate para alguém: ao abrir, a pessoa já pode resgatar. Os cartões que você não deu nunca expiram e você pode resgatá-los. Ao resgatar, o valor vai para o seu Saldo de recarga.",
+        "count_one": "{{count}} cartão",
+        "count_many": "{{count}} cartões",
+        "count_other": "{{count}} cartões",
+        "loadMore": "Carregar mais",
+        "loadFailed": "Não foi possível carregar seus cartões-presente",
+        "retry": "Recarregar",
+        "status": {
+          "unclaimed": "Não resgatado",
+          "claimedBy": "Resgatado por {{name}}",
+          "claimed": "Resgatado",
+          "redeemedByYou": "Resgatado por você",
+          "refunded": "Reembolsado",
+          "onHold": "Em processamento, indisponível no momento"
+        },
+        "meta": {
+          "purchased": "Comprado em {{date}} · final {{tail}}",
+          "claimed": "Resgatado em {{date}} · final {{tail}}",
+          "redeemed": "Resgatado em {{date}} · final {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Copiar link de resgate",
+        "copied": "Copiado",
+        "more": "Mais ações",
+        "copyCode": "Copiar código de resgate",
+        "redeemSelf": "Resgatar para mim",
+        "sendEmail": "Enviar por e-mail"
+      },
+      "toasts": {
+        "linkCopied": "Link de resgate copiado",
+        "codeCopied": "Código de resgate copiado",
+        "copyFailed": "Não foi possível copiar. Tente novamente.",
+        "unavailable": "Este cartão já foi resgatado ou reembolsado",
+        "revealFailed": "Não foi possível obter o código de resgate. Tente novamente mais tarde.",
+        "emailQueued": "Enviando para {{email}}"
+      },
+      "email": {
+        "title": "Enviar por e-mail",
+        "description": "Envie o link para resgatar este cartão para o e-mail da pessoa que vai ganhá-lo. O e-mail inclui seu nome e sua mensagem.",
+        "previewLabel": "A pessoa vai receber",
+        "previewWithMessage": "“{{message}}” · com o link e o código de resgate",
+        "previewLinkOnly": "O link e o código de resgate",
+        "recipient": "E-mail do destinatário",
+        "placeholder": "nome@exemplo.com",
+        "hint": "Você pode enviar para qualquer endereço. Quem abrir o link primeiro fica com o cartão.",
+        "cooldown": "Você pode enviar de novo em {{seconds}} s",
+        "invalid": "Digite um e-mail válido",
+        "failed": "Não foi possível enviar. Tente novamente mais tarde.",
+        "send": "Enviar",
+        "status": {
+          "sending": "Enviando para {{email}}",
+          "sent": "Enviado para {{email}}",
+          "failed": "Não foi possível enviar para {{email}}",
+          "failedRetry": "Não foi possível enviar para {{email}}. Você pode enviar de novo."
+        }
       }
     }
   },
@@ -21165,7 +21749,7 @@
     "loadFailed": "Não foi possível carregar o aplicativo. Verifique a conexão e recarregue.",
     "updateRequired": "Este computador ainda não oferece suporte a MCP Apps. Atualize o Cindy nesse computador e tente novamente.",
     "appName": "Aplicativo MCP",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "Enviado por $t(mcpApps.appName) “{{name}}”",
     "serverId": "ID do servidor MCP: {{id}}",
     "exitFullscreen": "Sair da tela cheia",
@@ -21179,7 +21763,19 @@
     "pluginCspRejected": "A página solicitou um domínio não declarado e foi bloqueada.",
     "filesOnExecutionComputer": "Ver o conteúdo do arquivo no computador de execução",
     "awaitingApproval": "Aguardando sua aprovação",
-    "pendingApprovals": "{{count}} aprovações pendentes"
+    "pendingApprovals": "{{count}} aprovações pendentes",
+    "source": {
+      "official": "Cindy oficial",
+      "organization": "Organização · {{namespace}}",
+      "market": "Mercado de plugins",
+      "third-party": "Origem de terceiros",
+      "local": "Instalação local",
+      "unknown": "Origem desconhecida"
+    },
+    "customMcp": "MCP personalizado",
+    "sourceLabel": "Origem",
+    "signatureLabel": "Assinatura",
+    "fullscreen": "Tela cheia"
   },
   "richAnswer": {
     "invalidImageReference": "A referência desta imagem é inválida.",
@@ -21455,7 +22051,6 @@
       "sessionRuntimeFallback": "Troca automática do modelo das tarefas",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Modelos auxiliares",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Modelos exibidos e ocultos",
       "providerOrder": "Ordem dos provedores",
       "modelCatalogOverrides": "Parâmetros de modelo alterados",
@@ -21495,6 +22090,45 @@
         "allow": "Permitir",
         "deny": "Recusar"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "Fechar",
+    "project": {
+      "title": "Conheça os projetos",
+      "lead": "Dê um projeto a cada trabalho contínuo. Os arquivos ficam em uma pasta do seu computador e o Cindy retoma sempre do último resultado, sem você explicar o contexto de novo.",
+      "files": {
+        "title": "Resultados são seus",
+        "body": "O Cindy lê e edita direto na pasta do projeto. O que ele cria fica no seu computador."
+      },
+      "context": {
+        "title": "Sem repetir contexto",
+        "body": "Uma tarefa nova no projeto já vê esses arquivos e segue o que o projeto anotou."
+      },
+      "separate": {
+        "title": "Cada coisa no lugar",
+        "body": "Cada projeto reúne suas tarefas, e trabalhos diferentes não se misturam."
+      },
+      "start": "Continuar para o novo projeto",
+      "note": "Basta dar um nome. Uma pasta existente ou um repositório de código também servem."
+    },
+    "taskInbox": {
+      "title": "Conheça a caixa de entrada",
+      "lead": "Se você acompanha várias tarefas ao mesmo tempo, a caixa de entrada as agrupa por status. Em Pendentes, veja novos resultados e tarefas que aguardam sua resposta.",
+      "pending": {
+        "title": "Pendentes",
+        "body": "As tarefas aparecem aqui quando têm um resultado ou aguardam sua resposta."
+      },
+      "done": {
+        "title": "Concluído",
+        "body": "Crie o hábito de esvaziar a caixa de entrada. Clique em Concluído quando terminar uma tarefa."
+      },
+      "snooze": {
+        "title": "Adiadas",
+        "body": "Sem tempo agora? Escolha um horário e ela volta para Pendentes."
+      },
+      "start": "Começar",
+      "note": "Volte à lista de tarefas a qualquer momento pelo botão no topo da barra lateral."
     }
   },
   "firstRunGuide": {
@@ -21781,6 +22415,7 @@
     "removeTitle": "Remover {{name}}?",
     "removeDescription": "O Cindy deixará de atribuir tarefas a esta conta. O login da CLI e o histórico de conversas permanecerão neste computador.",
     "failed": "Não foi possível ler ou atualizar a conta. Verifique o login da CLI e a conexão de rede e tente novamente.",
+    "unreachable": "Não foi possível conectar ao serviço da conta, então não dá para confirmar o login. Verifique a conexão de rede e tente novamente.",
     "openDirectory": "Abrir pasta da conta",
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Ela pode ter sido movida ou excluída.",
     "loginAgain": "Entrar novamente",
@@ -21821,14 +22456,14 @@
     "openFailed": "Não foi possível abrir o GitHub."
   },
   "hostConnection": {
-    "connecting": "Conectando ao Cindy…",
+    "connecting": "Conectando ao serviço em segundo plano da Cindy…",
     "restoring": "Restaurando o estado das tarefas…",
     "retrying": "Tarefas ainda não sincronizadas. Tentando novamente…",
     "pairing": "É necessário autorizar a conexão",
-    "pairingHelp": "Mantenha esta página aberta. No terminal usado para iniciar o Cindy Host, execute novamente o comando para abrir o cliente web. Faça o pareamento na nova página e volte aqui.",
+    "pairingHelp": "Mantenha esta página aberta. No terminal usado para iniciar o serviço em segundo plano da Cindy, execute novamente o comando para abrir o cliente web. Faça o pareamento na nova página e volte aqui.",
     "keepDraft": "Seu rascunho será mantido. As tarefas serão sincronizadas quando a conexão for restabelecida.",
     "retry": "Reconectar",
-    "desktopAuthHelp": "Atualize as configurações de conexão do Host no terminal de inicialização e reabra este cliente experimental."
+    "desktopAuthHelp": "Atualize as configurações de conexão do serviço em segundo plano da Cindy no terminal de inicialização e reabra este cliente experimental."
   },
   "remoteControlConsent": {
     "title": "Permitir o controle remoto deste computador?",
@@ -21872,8 +22507,10 @@
     "picker": {
       "empty": "Ainda não há grupos de modelos. Combine várias fontes em um modo nas Configurações para escolhê-lo aqui.",
       "manage": "Gerenciar grupos de modelos",
+      "deviceTitle": "Grupos de modelos · {{device}}",
       "switched": "“{{name}}” trocou esta tarefa para {{model}}",
-      "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado."
+      "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
+      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado."
     },
     "why": {
       "expiringQuota": "Restam {{left}}% da cota, redefinida a {{reset}}, por isso vai primeiro",
@@ -21974,6 +22611,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "Baixar este repositório neste computador?",
+    "credentialNotice": "Se o repositório for privado, a Cindy poderá usar a conta conectada neste computador.",
+    "saveTo": "Salvar em",
+    "confirmImport": "Confirmar importação",
+    "confirmSshTitle": "Permitir que este projeto acesse os seguintes diretórios SSH?",
+    "sshHost": "Host SSH",
+    "readWriteAccess": "Leitura e gravação",
+    "readAccess": "Somente leitura",
+    "confirmAccess": "Permitir acesso",
     "autoLoading": "Buscando ícone…",
     "autoNone": "Usando as iniciais do nome do projeto.",
     "autoSource": "Origem",
@@ -22013,7 +22659,42 @@
     "discard": "Descartar",
     "colors": {
       "default": "Padrão (seguir tema)"
-    }
+    },
+    "directories": "Diretórios do projeto",
+    "directoriesHint": "Aplica-se a todas as tarefas deste projeto a partir do próximo turno. Os diretórios específicos de cada tarefa são mantidos.",
+    "removeDirectory": "Remover diretório",
+    "directoryPath": "Caminho completo do diretório",
+    "addDirectory": "Adicionar diretório",
+    "browseDirectory": "Procurar diretórios",
+    "mainDirectory": "Diretório principal",
+    "createTitle": "Novo projeto",
+    "createAction": "Criar projeto",
+    "repository": "URL do repositório",
+    "repositoryHint": "Compatível com GitHub, GitLab e outros repositórios Git via HTTPS ou SSH.",
+    "autoDirectory": "Sem selecionar diretório, será criado em {{path}}. Nomes repetidos recebem um número.",
+    "cloning": "Clonando repositório…",
+    "invalidRepository": "Insira uma URL válida de repositório GitHub, GitLab ou Git.",
+    "createFailed": "Não foi possível criar o projeto. Verifique a permissão de escrita, a URL e o acesso Git deste computador. O destino da clonagem deve estar vazio.",
+    "createNamePlaceholder": "Nome do projeto",
+    "createNameHint": "Dê um nome ao projeto para começar.",
+    "createFromRepository": "Criar de um repositório de código",
+    "createBlank": "Mudar para um projeto vazio",
+    "source_blank": "Projeto vazio",
+    "source_existing": "Abrir pasta existente",
+    "source_repository": "Importar repositório",
+    "sourceHint_blank": "Digite um nome. A pasta será criada automaticamente.",
+    "sourceHint_existing": "Escolha uma pasta de projeto neste computador.",
+    "sourceHint_repository": "Cole o link do repositório para baixar neste computador.",
+    "source": "Origem do projeto",
+    "sourceShort_blank": "Novo",
+    "sourceShort_existing": "Pasta",
+    "sourceShort_repository": "Repositório",
+    "automaticMain": "Principal · Automático",
+    "source_local": "Pasta local",
+    "sourceShort_local": "Pasta local",
+    "sourceHint_local": "Digite um nome para criar uma pasta ou escolha uma existente.",
+    "chooseExistingFolder": "Escolher pasta existente",
+    "changeMainDirectory": "Alterar"
   },
   "taskManagement": {
     "scope": "Apenas para esta conta neste computador.",
@@ -22062,6 +22743,19 @@
       "network": "Conexão perdida, tentando novamente…",
       "timeout": "Tempo de conexão esgotado, tentando novamente…",
       "server": "Servidor ocupado, tentando novamente…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "Ampliar as permissões desta conversa?",
+    "message": "Permitir que “{{name}}” use “{{mode}}” em “{{conversation}}” no projeto “{{project}}”?",
+    "detail": "Isso é mais amplo do que a configuração do projeto de mensagens ({{projectMode}}). Se você permitir, este plugin poderá usar esse nível de permissão neste projeto, só nas próprias sessões. Você pode voltar a seguir a configuração de mensagens no plugin a qualquer momento.",
+    "groupWarning": "Outros membros também podem enviar mensagens neste grupo. Quanto mais ampla a permissão, menos ações pedem sua confirmação, então confirme que você confia em todos do grupo.",
+    "allow": "Permitir",
+    "cancel": "Cancelar",
+    "modes": {
+      "ask": "Permissões padrão",
+      "auto": "Revisão automática",
+      "bypassPermissions": "Acesso total"
     }
   }
 }

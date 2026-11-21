@@ -16,12 +16,13 @@
  * assigned once in register.ts, at the top level of registerMakerIpc before the set-model handler is
  * registered, and never reassigned (a guard test keeps that so), so a call sees the same values.
  */
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import { acpHarnessKeyFromProviderId, type AgentKind, type Maker, type Session, type SessionMeta } from '@cindy/maker-core';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { sessions } from '../localDb/schema.js';
-import { isDeviceLinkInvoke, deviceLinkInvokeControllerSupports } from '../device-link/invoke-context.js';
+import { isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, deviceLinkInvokeControllerSupports } from '../device-link/invoke-context.js';
 import { normalizeSessionProviderId, getSessionProvider, hasSessionProvider, setSessionProvider, hydrateSessionProvider, clearSessionProvider } from '../maker-host/session-provider-store.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, isPluginEngineEffort } from '../../shared/pluginEngines.js';
 import { getSessionFastMode, getSessionEffort, setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { sessionRuntimeControlOwnerEpochMatches, acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot, captureSessionRuntimeControlOwnerEpoch, resolveSessionRuntimeRefreshEffort, resolveSessionRuntimeAxes, deferSessionRuntimeAxisMutation, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation } from './sessionRuntimeControl.js';
@@ -50,7 +51,7 @@ import { CredentialModeSwitchBusyError } from '../maker-host/codex-credential-sw
 import { withSendToSessionLock } from './sendToSessionLock.js';
 import type { ModelWindowSwitchPreparationResult } from './contextOverflowRollover.js';
 import type { createContextOverflowRollover } from './contextOverflowRollover.js';
-import type { SessionRuntimeAxisPatch, SessionRuntimeMutationSource, SessionRuntimeProfile } from './sessionRuntimeControl.js';
+import type { FallbackRouteProfile, SessionRuntimeAxisPatch, SessionRuntimeMutationSource, SessionRuntimeProfile } from './sessionRuntimeControl.js';
 import type { MakerSessionAgentSwitchHandlerDeps, PendingAgentSwitchRegistry } from './sessionAgentSwitchHandler.js';
 import type { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
 import type { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
@@ -74,6 +75,8 @@ export type InternalRuntimeSelectionOptions = {
   /** Internal calls from the send / switch transaction already own the route lock. */
   sessionLockHeld?: boolean;
   applyingUserSelectionOnSend?: boolean;
+  deviceLinkModelSelectionOrigin?: 'owner' | 'scoped';
+  nextInputChars?: number;
   /** Reassess the current Pi route after its catalog descriptor or budget changed. */
   refreshPiConfiguration?: boolean;
   /** The pending service owns removal and queue release after this apply commits. */
@@ -83,7 +86,7 @@ export type InternalRuntimeSelectionOptions = {
   expectedGeneration?: number;
   deferWhileRunning?: boolean;
   applyingPendingGeneration?: number;
-  previousProfile?: SessionRuntimeProfile;
+  previousProfile?: FallbackRouteProfile;
   /** Effective profile observed by the Agent CAS read; axis-only patches use it as the live base. */
   effectiveProfile?: SessionRuntimeProfile;
   effortExplicit?: boolean;
@@ -110,13 +113,19 @@ export type ApplySessionRuntimeSelection = (
   deferred: boolean;
   superseded: boolean;
   generation?: number;
+  persistedRoute?: true;
   effectiveProviderId?: string | null;
   effectiveModelId?: string;
   contextWindowConfirmationRequired?: number;
   contextTokensForConfirmation?: number;
 }>;
 
-/** What the body used from register.ts and from modules that load Electron (see the header). */
+/**
+ * What the body used from register.ts and from modules that load Electron (see the header). An object
+ * port is typed as the members the body calls (the provider service's listProviders, the input
+ * coordinator's refreshQueuedRoute, the bot route reconciler's acceptTaskChoice), so a binding that
+ * lacks one does not compile.
+ */
 export interface SessionRuntimeSelectionPorts {
   maker: Maker;
   agentSwitchPending: PendingAgentSwitchRegistry;
@@ -129,7 +138,7 @@ export interface SessionRuntimeSelectionPorts {
   resolvePendingRuntimeAxisPatch: (sessionId: string, patch: SessionRuntimeAxisPatch) => Promise<SessionRuntimeAxisPatch>;
   rehydrateColdPiRuntimeForWindowVerification: ReturnType<typeof createColdPiRehydrationForWindowVerification>;
   updateScheduledPreference: (sessionId: string, patch: { effort?: ScheduledModelSelection['effort']; fastMode?: ScheduledModelSelection['fastMode'] } | null, expectedBaseline?: string | null) => Promise<unknown>;
-  reconcileBotModelRoute: ReturnType<typeof createBotModelRouteReconciler>;
+  reconcileBotModelRoute: Pick<ReturnType<typeof createBotModelRouteReconciler>, 'acceptTaskChoice'>;
   log: Logger;
   localModelWindowSwitchErrorCode: (code: IpcErrorCode) => IpcErrorCode;
   wakeSessionInputAfterCredentialSwitch: (sessionId: string) => void;
@@ -140,12 +149,12 @@ export interface SessionRuntimeSelectionPorts {
   getPendingCredentialSwitchTarget: (sessionId: string) => { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' } | undefined;
   captureSharedTaskSettingGuard: (sessionId: string) => ReturnType<typeof createSharedTaskSettingGuard>;
   registerPendingCredentialSwitchForSession: (sessionId: string, target: { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' }) => Promise<void>;
-  agentInputCoordinatorHolder: AgentInputCoordinator | null;
+  agentInputCoordinatorHolder: Pick<AgentInputCoordinator, 'refreshQueuedRoute'> | null;
   getSessionDbAgentKind: typeof import('../messagePersistBroadcaster.desktop.js').getSessionDbAgentKind;
   broadcastSessionPatched: typeof import('../localDb/ipc/sessions.js').broadcastSessionPatched;
   persistSessionFields: typeof import('../localDb/ipc/sessions.js').persistSessionFields;
   markRemoteSettingPersistedInsideHandler: typeof import('../device-link/dispatch.desktop.js').markRemoteSettingPersistedInsideHandler;
-  getDesktopProviderService: typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService;
+  getDesktopProviderService: () => Pick<ReturnType<typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService>, 'listProviders'>;
   resolveConfiguredContextWindow: typeof import('../maker-host/model-context-settings.js').resolveConfiguredContextWindow;
   readStoredSessionContextWindowBudget: typeof import('../maker-host/model-context-settings.js').readStoredSessionContextWindowBudget;
   listSshCodexProviders: typeof import('../maker-host/index.js').listSshCodexProviders;
@@ -169,11 +178,19 @@ export interface AgentDeviceRuntimeSelectionInput {
     effort: string | null;
     fastMode: boolean | 'ultrafast';
     agentDeviceId: string | null;
+    model: string | null;
+    sdkSessionId: string | null;
   };
   assertRuntimeOwnerCurrent(): void;
   assertSharedTaskCurrent: { admit(): void };
   supersededByOwnerBoundary(): boolean;
 }
+
+/** Maker as seen after checking the persisted route and the current handle inside the route lock. */
+type BuiltinSessionsMaker = {
+  getSession(sessionId: string): (Session & { agentKind: AgentKind }) | undefined;
+  getSessionMeta(sessionId: string): Promise<(SessionMeta & { agentKind: AgentKind }) | null>;
+} & Maker;
 
 export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPorts) {
   const handleSetModel = async (
@@ -185,7 +202,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
     internalOptions: InternalRuntimeSelectionOptions,
   ): ReturnType<ApplySessionRuntimeSelection> => {
     const {
-      maker,
+      maker: makerPort,
       agentSwitchPending,
       broadcastSessionRuntimeProjection,
       assertReviewSettingsUnlocked,
@@ -368,6 +385,65 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       ) {
         return { deferred: false, superseded: true };
       }
+      const live = makerPort.getSession(sessionId);
+      if (runtimeStatus.agentKind === 'acp') {
+        if ((internalOptions.source !== 'user' && internalOptions.source !== 'fallback') || (live && live.agentKind !== 'acp')) {
+          return { deferred: false, superseded: true };
+        }
+        if (!runtimeStatus.providerId || !acpHarnessKeyFromProviderId(runtimeStatus.providerId)
+          || (providerId != null && providerId !== runtimeStatus.providerId)) {
+          throwIpcError('PRECONDITION_FAILED', 'a plugin engine task cannot switch to another engine or model source');
+        }
+        // 引擎在自己的另一台电脑上(第三期)：这台不必装这个插件，没有本机的引擎列表可核对。可选的模型与思考深度
+        // 来自那台握手给出的选项，是否仍然开放、取值认不认识都由那台在 setModel 时裁决，被拒就原样报错。
+        const engineElsewhere = !!runtimeStatus.agentDeviceId && !runtimeStatus.remoteHostId;
+        if (!engineElsewhere && !agentSwitchDeps.admitPluginEngineTarget) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
+        }
+        if (atomicSelection && atomicSelection.fastMode !== false) {
+          throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
+        }
+        // Keep the same owner, write authorization and send lock across the ACP round trip.
+        assertRuntimeOwnerCurrent();
+        assertSharedTaskCurrent.admit();
+        const target = engineElsewhere
+          ? {
+              model: model.trim() ? model : PLUGIN_ENGINE_DEFAULT_MODEL,
+              effort: isPluginEngineEffort(atomicSelection?.effort) ? atomicSelection.effort : '',
+            }
+          : agentSwitchDeps.admitPluginEngineTarget!({
+              providerId: runtimeStatus.providerId,
+              model,
+              effort: atomicSelection?.effort,
+            });
+        const effort = isPluginEngineEffort(target.effort) ? target.effort : undefined;
+        if (live && runtimeStatus.status === 'active') {
+          await live.setModel(target.model, effort ? { effort } : undefined);
+          assertRuntimeOwnerCurrent();
+          assertSharedTaskCurrent.admit();
+        }
+        await persistSessionFields(sessionId, { model: target.model, effort: effort ?? '' }, { allowEmptyEffort: true });
+        assertRuntimeOwnerCurrent();
+        const generation = internalOptions.source === 'fallback'
+          ? acceptSessionRuntimeMutation({
+              sessionId, source: 'fallback', deferred: false, previousProfile: internalOptions.previousProfile,
+              profile: { agentKind: 'acp', agentDeviceId: runtimeStatus.agentDeviceId, providerId: runtimeStatus.providerId,
+                model: target.model, effort: effort ?? null, fastMode: false },
+            })
+          : recordUserSessionRuntimeMutation(sessionId);
+        const response = {
+          deferred: false,
+          superseded: false,
+          generation,
+          persistedRoute: true as const,
+          effectiveModelId: target.model,
+          effectiveProviderId: runtimeStatus.providerId,
+        };
+        if (isDeviceLinkInvoke()) markRemoteSettingPersistedInsideHandler(response);
+        return response;
+      }
+      if (live?.agentKind === 'acp') return { deferred: false, superseded: true };
+      const maker = makerPort as BuiltinSessionsMaker;
       if (runtimeStatus.agentDeviceId && !runtimeStatus.remoteHostId) {
         return applyAgentDeviceRuntimeSelection({
           sessionId, model, providerId, atomicSelection, internalOptions, runtimeStatus,
@@ -566,7 +642,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           previousIntent?.sameAgentSelection && previousIntent.model === model &&
           previousIntent.targetAgentKind === dbToMakerAgentKind(runtimeStatus.agentKind) &&
           previousIntent.providerId === selectedProviderId ? previousIntent.confirmedContextWindow : undefined);
+        const deviceLinkModelSelectionOrigin = readDeviceLinkModelSelectionOrigin();
         const intent = {
+          ...(deviceLinkModelSelectionOrigin ? { deviceLinkModelSelectionOrigin } : {}),
           ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
           ...(internalOptions.configStaged === true ? { configStaged: true } : {}),
           sameAgentSelection: true,
@@ -755,7 +833,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       // piConfigurationRefresh 预演路径同样共用这个值。
       const sessionContextWindowBudget = await readStoredSessionContextWindowBudget(sessionId);
       const piConfigurationRefresh = runtimeAgentKind === 'pi' && internalOptions.refreshPiConfiguration === true;
-      const piPreview = runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh) && liveSessionBeforeRouteChange
+      let piPreview = runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh) && liveSessionBeforeRouteChange
         ? await liveSessionBeforeRouteChange.previewModelSwitch?.(model, {
             providerId: targetRouteProviderId,
           })
@@ -810,6 +888,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           );
           const skipColdPiWindowVerification =
             !!runtimeStatus.sdkSessionId &&
+            internalOptions.deviceLinkModelSelectionOrigin !== 'owner' &&
             shouldSkipColdPiWindowRehydration({
               contextTokens: coldPiLastLiveUsage?.contextTokens ?? null,
               targetContextWindow: coldPiTargetContextWindow,
@@ -877,6 +956,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               currentRuntimeModel = liveSessionBeforeRouteChange.model;
               runtimeRouteChanged =
                 currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
+              if (internalOptions.deviceLinkModelSelectionOrigin === 'owner' && runtimeRouteChanged) {
+                piPreview = await liveSessionBeforeRouteChange.previewModelSwitch?.(model, { providerId: targetRouteProviderId });
+              }
             }
           }
         }
@@ -887,12 +969,18 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       let budgetCompareWindow: number | undefined;
       let modelWindowContextNeedsProtection = false;
       let modelWindowRebuilt = false;
+      let ownerPiFinalWindow = false;
+      const modelSelectionOrigin = internalOptions.deviceLinkModelSelectionOrigin;
+      const ownerWindowRebuild = modelSelectionOrigin === 'owner' && !runtimeStatus.remoteHostId;
+      const localWindowRebuild = modelSelectionOrigin === undefined &&
+        !runtimeStatus.orcaRole && !parseOrcaRemoteLead(runtimeStatus.orcaRemoteLead);
       const resolveWindowForRoute = (
         agentKind: AgentKind,
         routeModelId: string,
         pid: string | null,
       ): number | null => resolveConfiguredContextWindow(
         getActiveCatalog(), agentKind, pid, routeModelId, sessionContextWindowBudget,
+        ownerWindowRebuild ? 'required' : undefined,
       );
       if (runtimeAgentKind && (runtimeRouteChanged || piConfigurationRefresh || confirmedContextWindow !== undefined)) {
         const resolveRouteWindow = (_agentKind: string, modelId: string, pid: string | null) =>
@@ -955,6 +1043,19 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           contextTokensKnown,
           contextTokens,
         );
+        ownerPiFinalWindow = ownerWindowRebuild && runtimeAgentKind === 'pi' &&
+          !!runtimeStatus.sdkSessionId && modelWindowContextNeedsProtection;
+        if (ownerWindowRebuild && runtimeAgentKind !== 'codex' && runtimeStatus.sdkSessionId &&
+            modelWindowContextNeedsProtection && (
+              !contextTokensKnown || !verifiedCurrentWindow || !targetContextWindow ||
+              (runtimeAgentKind === 'pi' && (rebuildLiveOrcaWorker ||
+                (piPreview?.action !== 'hot' && piPreview?.action !== 'refresh')))
+            )) {
+          if (rehydratedColdPiRuntime) await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+          throwIpcError('PRECONDITION_FAILED', runtimeAgentKind === 'pi'
+            ? 'Pi final context window could not be verified; runtime selection was not changed'
+            : 'target context window or current usage could not be verified; runtime selection was not changed');
+        }
         const modelSwitchPlan = planUserRuntimeModelSwitch({
           agentKind: runtimeAgentKind ?? 'claude-code',
           model,
@@ -962,7 +1063,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           currentFastMode: getSessionFastMode(sessionId),
           gate: {
             inTurn: isSessionInTurn(sessionId),
-            isRemote: !!runtimeStatus.remoteHostId ||
+            isRemote: !!runtimeStatus.remoteHostId || modelSelectionOrigin === 'scoped' ||
               (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke()),
             agentKind: runtimeAgentKind,
             runtimeRouteChanged: runtimeRouteChanged || piConfigurationRefresh,
@@ -983,6 +1084,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           );
         }
         if (
+          !ownerPiFinalWindow &&
           !modelSwitchPlan.skipRebuild &&
           typeof targetContextWindow === 'number' &&
           targetContextWindow > 0 &&
@@ -1000,11 +1102,15 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           try {
             preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(sessionId, {
               contextWindow: targetContextWindow!,
+              verifiedHandoffWindow: runtimeAgentKind ? resolveConfiguredContextWindow(
+                getActiveCatalog(), runtimeAgentKind, targetRouteProviderId, model, sessionContextWindowBudget, 'required',
+              ) : null,
+              nextInputChars: internalOptions.nextInputChars,
               recheckTargetPressure: true,
               confirmedTargetPressure:
                 (internalOptions.source === 'user' && internalOptions.applyingUserSelectionOnSend === true &&
-                  !runtimeStatus.orcaRole && !parseOrcaRemoteLead(runtimeStatus.orcaRemoteLead)) ||
-                (!isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow),
+                  (ownerWindowRebuild || localWindowRebuild)) ||
+                (modelSelectionOrigin === undefined && !isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow),
               onConfirmationRequired: (contextTokens) => {
                 confirmationContextTokens = contextTokens;
               },
@@ -1371,6 +1477,10 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           markRemoteSettingPersistedInsideHandler(response);
         }
         const piSessionAfterRouteChange = maker.getSession(sessionId);
+        if (ownerPiFinalWindow && result.status === 'applied' && result.retiredRuntime) {
+          restoreControlStores();
+          throwIpcError('PRECONDITION_FAILED', 'Pi final context window could not be verified; runtime selection was not changed');
+        }
         if (
           runtimeAgentKind === 'pi' &&
           (runtimeRouteChanged || piConfigurationRefresh) &&
@@ -1387,16 +1497,16 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             );
           }
           const reportedPiWindow = piSessionAfterRouteChange.getUsageSnapshot?.().contextWindow;
-          if (typeof reportedPiWindow !== 'number' || !Number.isFinite(reportedPiWindow) || reportedPiWindow <= 0) {
+          // Pi's live working budget can still be based on a catalog fallback.
+          const verifiedPiWindow = resolveWindowForRoute('pi', model, targetRouteProviderId);
+          if (typeof reportedPiWindow !== 'number' || !Number.isFinite(reportedPiWindow) || reportedPiWindow <= 0 ||
+              (ownerPiFinalWindow && verifiedPiWindow === null)) {
             await closeRejectedPiRuntime('final context window was not verified');
             throwIpcError(
               localModelWindowSwitchErrorCode('MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'),
               'Pi did not expose its verified final context window; runtime selection was not accepted',
             );
           }
-          // Pi reports the configured native budget, which may exceed the route
-          // ceiling. Final verification must not undo the history safety cap.
-          const verifiedPiWindow = resolveWindowForRoute('pi', model, targetRouteProviderId);
           const finalPiWindow = verifiedPiWindow === null
             ? reportedPiWindow : Math.min(reportedPiWindow, verifiedPiWindow);
           targetContextWindow = finalPiWindow;
@@ -1419,11 +1529,16 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
                 sessionId,
                 {
                   contextWindow: finalPiWindow,
+                  verifiedHandoffWindow: resolveConfiguredContextWindow(
+                    getActiveCatalog(), 'pi', targetRouteProviderId, model,
+                    Math.min(sessionContextWindowBudget ?? finalPiWindow, finalPiWindow), 'required',
+                  ),
+                  nextInputChars: internalOptions.nextInputChars,
                   recheckTargetPressure: true,
                   confirmedTargetPressure:
                     (internalOptions.source === 'user' && internalOptions.applyingUserSelectionOnSend === true &&
-                      !runtimeStatus.orcaRole && !parseOrcaRemoteLead(runtimeStatus.orcaRemoteLead)) ||
-                    (!isDeviceLinkInvoke() && confirmedContextWindow === finalPiWindow),
+                      (ownerWindowRebuild || localWindowRebuild)) ||
+                    (modelSelectionOrigin === undefined && !isDeviceLinkInvoke() && confirmedContextWindow === finalPiWindow),
                   onConfirmationRequired: (contextTokens) => {
                     finalPressureContextTokens = contextTokens;
                   },
@@ -1508,8 +1623,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             commitControlStores();
           }
         }
+        let persistedRoute = result.persistedRoute === true;
         if (
-          result.persistedRoute !== true &&
+          !persistedRoute &&
           (modelWindowRebuilt ||
             (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh)) ||
             internalOptions.persistRenamedSessionModel === true ||
@@ -1543,6 +1659,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             assertRuntimeOwnerCurrent();
             assertSharedTaskCurrent.admit();
             await persistSessionFields(sessionId, patch);
+            persistedRoute = true;
           } catch (persistenceError) {
             // The live route and host stores are applied before SQLite so the
             // harness can switch atomically. If SQLite rejects, unwind every
@@ -1742,6 +1859,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         // to dispatch and cannot be followed by a stale lock-free route write.
         return Object.assign(response, {
           generation,
+          ...(internalOptions.source === 'fallback' && persistedRoute ? { persistedRoute: true as const } : {}),
           effectiveModelId: model,
           effectiveProviderId: effectiveProviderId === undefined
             ? currentProviderId : normalizeSessionProviderId(effectiveProviderId) ?? null,

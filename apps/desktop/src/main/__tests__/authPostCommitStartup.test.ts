@@ -92,14 +92,13 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
 }
 
 describe('authentication does not wait for optional plugin provisioning', () => {
-  it.each([false, true])('keeps first-owner assets behind the login fence (copy fails: %s)', async (fails) => {
-    // #10334: the SQLite/native-auth handoff alone let the cloud runtime start
-    // without local provider keys or installed plugins. Exercise the real auth
-    // commit; a failed asset copy must retain ownership without publishing ready.
-    let committed = false;
+  it('commits cloud login without requiring local asset adoption', async () => {
+    // Unit, #10357 rollback: a failed asset handoff used to reject an already
+    // committed login and skip native provider binding. Existing startup cases
+    // do not execute the cloud-owner commit with an unavailable asset source.
+    let authenticated = false;
     let claimed = false;
-    let assets = false;
-    let visible: boolean | undefined;
+    let visible = false;
     const rollback = vi.fn();
     const deps = {
       isPassiveSharedUserDataInstance: () => false,
@@ -108,20 +107,16 @@ describe('authentication does not wait for optional plugin provisioning', () => 
       }) => {
         await hooks.prepareCommit();
         const result = await hooks.commit();
-        visible = assets;
+        visible = authenticated;
         return result;
       },
       reserveCloudOwnerData: () => ({
-        finalize: () => { claimed = committed; return claimed; }, rollback,
+        finalize: () => { claimed = authenticated; return claimed; }, rollback,
       }),
-      adoptLocalProfileAssets: async () => {
-        expect(claimed).toBe(true);
-        if (fails) throw new Error('asset copy unavailable');
-        assets = true;
-      },
+      adoptLocalProfileAssets: vi.fn(async () => { throw new Error('asset copy unavailable'); }),
       app: { getPath: () => 'test-only-user-data' },
       BRAND_IDENTITY: { dbFilePrefix: 'cindy', executableName: 'cindy' },
-      hasExclusiveSharedLegacyUserDataAccess: () => true,
+      hasExclusiveSharedLegacyUserDataAccess: () => false,
       acquireWindowsPackagedInstanceBarrier: vi.fn(),
       requestStableOwnerPostCommit: vi.fn(),
     };
@@ -130,17 +125,13 @@ describe('authentication does not wait for optional plugin provisioning', () => 
       { compilerOptions: { target: ScriptTarget.ES2022 } },
     ).outputText;
     const commit = new Function(...Object.keys(deps), compiled)(...Object.values(deps));
-    const result = commit({ previousOwnerId: 'local-v1', nextOwnerId: 'first-cloud',
-      prepareTransition: async () => {}, commit: () => { committed = true; } });
-    if (fails) {
-      await expect(result).rejects.toThrow('asset copy unavailable');
-      expect(visible).toBeUndefined();
-      expect(deps.requestStableOwnerPostCommit).not.toHaveBeenCalled();
-    } else {
-      await result;
-      expect(visible).toBe(true);
-    }
+    await commit({ previousOwnerId: 'local-v1', nextOwnerId: 'first-cloud',
+      prepareTransition: async () => {}, commit: () => { authenticated = true; } });
+    expect({ authenticated, claimed, visible }).toEqual({ authenticated: true, claimed: true, visible: true });
     expect(rollback).not.toHaveBeenCalled();
+    expect(deps.adoptLocalProfileAssets).not.toHaveBeenCalled();
+    expect(deps.acquireWindowsPackagedInstanceBarrier).not.toHaveBeenCalled();
+    expect(deps.requestStableOwnerPostCommit).toHaveBeenCalledWith('owner-commit');
   });
 
   // Unit, #9801: the real stable-owner callback must recover the public provider
@@ -165,6 +156,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
       activeOwnerScopeKey: () => 'recovered-scope', getActiveAppSession: () => ({ dataOwnerId: scenario.ownerId }),
       getActiveDataOwnerPushStamp: () => recovered, getMakerIfReady: () => scenario.liveMaker ? {} : null,
       refreshHostToolProviderOwner: hostTools.refreshHostToolProviderOwner,
+      scheduleNativeHistoryBackupCleanup: () => {},
       builtinPostCommitStep: { run: async () => 'deferred' },
     };
     try {

@@ -184,6 +184,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   let agentHome = '';
   let cwd = '';
   let disposed = 0;
+  let closedInstance = 0;
   let proxyDisposed = 0;
   let proxyGeneration = 0;
   let preparedMcpContext: unknown;
@@ -214,6 +215,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.requests = [];
     knobs.requestOptions = [];
     disposed = 0;
+    closedInstance = 0;
     proxyDisposed = 0;
     proxyGeneration++;
     preparedMcpContext = undefined;
@@ -289,6 +291,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
           },
           mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: 'Bearer spawn-secret-canary' },
           disposeSessionCtx: () => { disposed++; },
+          closeSessionInstance: () => { closedInstance++; },
         };
       },
       ...overrides,
@@ -2807,6 +2810,11 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
   it('routes model resume through the same retained-session helper and returns its generation id', async () => {
     const handle = await new PiAgent(buildDeps()).startSession(opts());
+    // #9705: resume must snapshot the live parent settings, not a stale child home.
+    const settingsFile = path.join(knobs.spawnedEnvs.at(-1)!.PI_CODING_AGENT_DIR!, 'settings.json');
+    const settings = { ...JSON.parse(readFileSync(settingsFile, 'utf8')),
+      shellPath: '/fixture/current shell', shellCommandPrefix: ' export PREFIX=live\n' };
+    writeFileSync(settingsFile, JSON.stringify(settings));
     const resumedId = '123e4567-e89b-42d3-a456-426614174098';
     const resumeSpy = vi.spyOn(piSubagentRuns, 'resumePiSubagentRun').mockResolvedValue(resumedId);
     try {
@@ -2819,6 +2827,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       })));
       expect(resumeSpy).toHaveBeenCalledWith(expect.any(String), '123e4567-e89b-42d3-a456-426614174097',
         'check again', expect.objectContaining({ runtimeOwnerId: expect.any(String), launchRunner: expect.any(Function) }), 'one-child');
+      expect(JSON.parse(resumeSpy.mock.calls[0]![3].runtimeSnapshot!.settingsJson!.toString('utf8'))).toMatchObject({
+        shellPath: settings.shellPath, shellCommandPrefix: settings.shellCommandPrefix,
+      });
     } finally { await handle.close(); }
   });
 
@@ -3386,12 +3397,14 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     // Pi RPC and Cindy's durable Subagent status poll both release their timers.
     expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
     expect(disposed).toBe(1);
+    expect(closedInstance).toBe(1);
     await vi.waitFor(() => expect(proxyDisposed).toBe(2));
 
     // 上层随后仍可能调用 close() —— 幂等,不得二次注销。
     await handle.close();
     expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
     expect(disposed).toBe(1);
+    expect(closedInstance).toBe(1);
     expect(proxyDisposed).toBe(2);
   });
 

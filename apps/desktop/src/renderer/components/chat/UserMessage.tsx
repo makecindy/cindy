@@ -24,7 +24,7 @@ import { hasEmbeddedImPrompt } from './userMessageDisplayText';
  */
 
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   ChevronDown,
@@ -75,6 +75,7 @@ import {
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { isRemoteFileOrigin, originDeviceId, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { ImageLightbox } from './ImageLightbox';
 import {
   joinChatQuoteTextSegments,
@@ -118,7 +119,11 @@ import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@/lib/mentionRefFormat';
 import { ghostCommandTokenLength, parseGhostCommandToken, splitGhostDirective } from '@/cindy-brain/ghostCommand';
 import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
-import { GhostSummonCard } from './GhostSummonCard';
+import {
+  GhostFulfillmentContext,
+  GhostSummonCard,
+  type GhostSummonDisplay,
+} from './GhostSummonCard';
 import { MessageSourceLabels } from './MessageSourceLabels';
 import { BotTaskLetterOpen, BotTaskLetterPill } from './BotStartedTasks';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
@@ -869,6 +874,9 @@ export function UserMessage({
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
   const makerKind: MakerAgentKind =
     agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  // 插件引擎任务(agent_kind = 'acp')不支持分叉与回退，也不读任何内置 Harness 的能力
+  // (docs/plans/acp-plugin-bridge.md)。
+  const pluginEngineTask = isPluginEngineKind(agentKind);
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
   // 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,deviceId 迟到注册时
@@ -880,14 +888,14 @@ export function UserMessage({
     () => toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir),
     [sessionFileCtx],
   );
-  const { capabilities } = useAgentCapabilities(makerKind, remoteDeviceId);
+  const { capabilities } = useAgentCapabilities(pluginEngineTask ? null : makerKind, remoteDeviceId);
   // 远端 cc daemon 会话暂不支持 Fork/Rewind 依赖的 query rebuild (MVP),
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
   const forkSupported =
-    !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && !pluginEngineTask && (!agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
-    !isRemote &&
+    !isRemote && !pluginEngineTask &&
     (!agentKind || (capabilities?.rewind?.supported ?? true));
 
   const hasImages = images && images.length > 0;
@@ -984,9 +992,29 @@ export function UserMessage({
   // 触发符恒为 1 个字符($ 或全角变体),token = 触发符 + 指令词。
   const ghostCmdToken = ghostCmd ? bubbleBody.slice(0, 1 + ghostCommandTokenLength(ghostCmd)) : null;
   const ghostPromptBody = ghostCmdToken ? bubbleBody.slice(ghostCmdToken.length).trim() : '';
-  // A user's bubble records their selection, never the assistant's later calls.
-  const ghostPillForm = ghostDirective?.kind === 'mention';
-  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostDirective;
+  // 本条消息出现真实调用时,用标注行展示完整调用摘要,原软提示保留在展开区。
+  // 判据来自 GhostFulfillmentContext
+  // (MessageStream 从会话历史现算,重启幂等)。
+  const ghostFulfillment = useContext(GhostFulfillmentContext);
+  const ghostCalls = messageClientId ? ghostFulfillment.get(messageClientId) : undefined;
+  const ghostFulfilledIds = ghostCalls?.ghostIds;
+  // 语义自主召唤:消息一个触发词都没命中(无任何追加段),AI 本轮仍真调了
+  // ghost_call → 合成 semantic 展示数据,渲染同一行召唤标注(与硬指令/兑现
+  // 软提示渲染一致)。orca / hook 消息不参与(它们本就不经意识展开)。
+  const ghostSemanticDisplay: GhostSummonDisplay | null =
+    !ghostDirective &&
+    !orcaCommunication &&
+    !hookSource &&
+    ghostFulfilledIds &&
+    ghostFulfilledIds.size > 0
+      ? { kind: 'semantic', ghostIds: [...ghostFulfilledIds] }
+      : null;
+  // 召唤展示数据(追加段解析优先;没有追加段才可能是 semantic),按形态分流:
+  // - 标注行(chip):硬指令 / 软提示已兑现 / semantic → 嵌进气泡顶部;
+  // - 胶囊(pill):软提示未兑现 → 保持原低调形态,留在气泡下方。
+  const ghostCardDisplay: GhostSummonDisplay | null = ghostDirective ?? ghostSemanticDisplay;
+  const ghostPillForm = ghostDirective?.kind === 'mention' && !ghostFulfilledIds?.size;
+  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostCardDisplay;
   const ghostPillDisplay = !simplifiedBotConversation && ghostPillForm ? ghostDirective : null;
   // 气泡实际显示的正文与其在原始 content 中的起点(粘贴块/斜杠命令高亮的
   // 偏移投影用):硬指令剥 $token,其余原样。
@@ -1165,9 +1193,9 @@ export function UserMessage({
         userSendAt: session.userSendAt,
       });
       // Force chat store to re-fetch messages (server filters rewind_at).
-      makerChatStore.reloadMessages(sessionId);
+      makerChatStore.reloadMessages(sessionId, { rewindFromClientId: messageClientId });
     },
-    [sessionId, draftBody, quoteDraftDocument, images, files],
+    [sessionId, messageClientId, draftBody, quoteDraftDocument, images, files],
   );
 
   // 第一条消息同样可回退：Codex / Pi 回到原生线程开头，Claude 目标之前没有可续接的
@@ -1600,9 +1628,15 @@ export function UserMessage({
                     className={cn("select-text", pendingEditing && "opacity-40 transition-opacity motion-reduce:transition-none")}
                   >
                     {ghostChipDisplay && (
+                      /* ghost-summon-chip:标注行(法阵 + 意识名 + 状态 + 展开
+                 caret)。running 由本条消息的真实未返回调用决定;
+                 调用结果全部返回就结束,不等待助手整轮回答。
+                 下方有正文/引用时加分隔线,单独成泡时不加。 */
                       <GhostSummonCard
                         directive={ghostChipDisplay}
                         commandNamespace={ghostCmd?.namespace ?? undefined}
+                        running={ghostCalls?.running ?? false}
+                        {...(messageClientId ? { messageClientId } : {})}
                         className={
                           inlineQuoteCount > 0 || displayBubbleBody.trim()
                             ? 'mb-2.5 border-b border-[var(--msg-user-border)] pb-2.5'
@@ -1806,10 +1840,13 @@ export function UserMessage({
                     )}
                   </ChatBubble>
                 )}
-                {/* ghost-summon-pill:历史提及保持低调胶囊,留在气泡下方
+                {/* ghost-summon-pill:未兑现的软提示保持低调胶囊,留在气泡下方
             (chip 标注行形态见气泡内部;提示原文仍可点开查看)。 */}
                 {ghostPillDisplay && (
-                  <GhostSummonCard directive={ghostPillDisplay} />
+                  <GhostSummonCard
+                    directive={ghostPillDisplay}
+                    {...(messageClientId ? { messageClientId } : {})}
+                  />
                 )}
                 {/* 订阅槽①:被意识钩子拦下 —— 气泡照常显示(未发出),下方渲一条
             error 红条,内容 = 意识返回的文本(直接显示,主机不加框不署名);

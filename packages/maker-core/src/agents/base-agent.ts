@@ -30,7 +30,7 @@ import {
   hasSessionPermissionUpdates,
   type SessionPermissionUpdate,
 } from '../types/permissions.js';
-import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
+import type { AgentKind, EngineKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
 import type {
   Capabilities,
   EffortDescriptor,
@@ -164,6 +164,8 @@ export interface PiExtraSpawnConfig {
    * close() 时调用且要求幂等。只要拿到 bridge（包括匿名会话）就应提供。
    */
   disposeSessionCtx?: () => void;
+  /** Close only the transports owned by a confirmed Agent process instance. */
+  closeSessionInstance?: () => void;
 }
 
 /** pi models.json 原生 provider 的 api 形态(BYOM 用;不过 anthropic-compat 代理)。 */
@@ -378,7 +380,15 @@ export interface CodexSessionMcpConfigInput {
   vendorOptions?: Record<string, unknown>;
 }
 
+export interface CodexDownshiftModelRejection {
+  model: string;
+  /** A bridge receipt has already verified an explicit model denial in the upstream body. */
+  transport: 'http' | 'bridge';
+}
+
 export interface CodexExtraSpawnConfig {
+  /** Exact root-connection model IDs frozen with the custom context catalog. */
+  contextProviderModels?: readonly string[];
   extraArgs: string[];
   extraEnv: Record<string, string>;
   /** Host 路由要求更强的 Codex 进程凭证时，冷启动以该模式重建 app-server。 */
@@ -487,6 +497,8 @@ export interface RefreshLocalModelsOptions {
    * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
    */
   onSupportedModels?: (models: unknown[]) => void;
+  /** Claude discovery hosts may classify failures instead of receiving false. */
+  throwOnError?: boolean;
   /** Codex: route a complete live snapshot to this caller instead of OAuth discovery. */
   onModelsListed?: (models: readonly CodexModelListItem[]) => void | Promise<void>;
 }
@@ -954,17 +966,6 @@ export interface AgentDeps {
    */
   capabilityAdditions?: AgentCapabilityAdditions;
 
-  /**
-   * Pi-only:视觉桥后端 env（层 C）。host 解析视觉桥配置（主/fallback 视觉后端 →
-   * OpenAI 兼容端点 + model + key）后返回键值对，PiAgent 注入 pi 子进程 spawnEnv，
-   * cindy-bridge 的 vision 工具读取。缺省 = 不注入（视觉桥工具不可用，零干扰）。
-   * model 参数供 host 按 session 模型判定是否命中视觉桥目标模型——未命中返回 null，
-   * 保证非目标/已有视觉能力的 Pi 模型不注册 vision 工具、不改变工具面（零干扰）。
-   * sessionId 供需要上游会话头的后端（OpenCode Go）确定性派生头值：spawn env 必须
-   * 同 session 重建逐字节稳定（pi-harness §4.10），不得用随机值。
-   * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
-   */
-  resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null;
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native
@@ -1240,6 +1241,13 @@ export interface AgentDeps {
   getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
 
   /**
+   * Probe the selected BYOM endpoint from the SSH execution host, without credentials.
+   * Success permits direct use of the configured URL; it does not authorize a host forward.
+   * Hosts without this capability keep loopback BYOM fail-closed.
+   */
+  probeRemotePiProviderEndpoint?: (remoteHostId: string, baseUrl: string) => Promise<boolean>;
+
+  /**
    * Pi 专用:为远端机器构造一个 pi `--mode rpc` transport。
    *
    * 当 session 标了 remoteHostId, PiAgent 会调这个钩子拿一个连远端 pi 进程的
@@ -1291,6 +1299,9 @@ export interface AgentDeps {
    * 代理经 SSH remote-forward 隧道)。host 装配;缺省 null = 远端不走本地代理。
    */
   getRemotePiAgentProxyEnv?: (remoteHostId: string) => Promise<Record<string, string> | null>;
+
+  /** Local CLI's HTTPS bridge, when provided by a desktop with system proxy support. */
+  getLocalPiHttpsProxy?: (env: NodeJS.ProcessEnv) => Promise<string | undefined>;
 
   /**
    * Pi 专用:远端 agentHome 文件操作原语。
@@ -1406,6 +1417,9 @@ export interface AgentDeps {
     reasoningEffort?: Effort | '';
   }) => void;
 
+  /** Original model of the local root's rejected native pre-turn downshift request, if observed. */
+  getRejectedCodexDownshiftModel?: (sessionId: string, threadId: string, turnId: string) => CodexDownshiftModelRejection | undefined;
+
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
   getCodexSubagentIdentity?: (args: { childThreadId: string }) => {
     model: string;
@@ -1471,6 +1485,10 @@ export interface AgentDeps {
    * Codex 不消费此字段。
    */
   claudeHooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+
+  /** Optional native tool hooks; the host owns live task selection and plugin lifecycle. */
+  toolLifecycleControl?: import('./shared/tool-lifecycle.js').ToolLifecycleControl;
+  nativeRecoveryObserver?: import('./shared/native-recovery-observer.js').NativeRecoveryObserver;
 
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
@@ -1616,7 +1634,21 @@ export interface RemoteClaudeRoute {
   env: Record<string, string>;
 }
 
+export interface OneShotUsage {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+}
+
 export interface OneShotOptions {
+  /** Accounting attribution only; never sent as prompt content. */
+  source?: string;
+  sessionId?: string;
+  providerId?: string;
+  onUsage?: (usage: OneShotUsage) => void | Promise<void>;
+
   /** 输出 token 上限。默认 100 (起标题用); skillReview 这种大 prompt 应传 4096。 */
   maxTokens?: number;
   /**
@@ -1703,14 +1735,24 @@ export class AgentStartupStoppedError extends Error {
   }
 }
 
-/** An adapter failed before returning a handle, but its process has not confirmed exit. */
+/** A shared-process adapter confirmed release/transfer of all unpublished task resources. */
+export class AgentStartupResourcesReleasedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'AgentStartupResourcesReleasedError';
+  }
+}
+
+/** An adapter failed before returning a handle, but its task runtime is not confirmed quiescent. */
 export class AgentStartupCleanupPendingError extends Error {
   readonly whenStopped: Promise<void>;
+  readonly retryCleanup?: () => Promise<void>;
 
-  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void> }) {
+  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void>; retryCleanup?: () => Promise<void> }) {
     super(message, { cause: options.cause });
     this.name = 'AgentStartupCleanupPendingError';
     this.whenStopped = options.whenStopped;
+    this.retryCleanup = options.retryCleanup;
   }
 }
 
@@ -2045,7 +2087,7 @@ export interface StartSessionOptions {
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
-  }) => 'standard' | 'priority' | undefined;
+  }) => 'standard' | 'priority' | { priceVariant: 'standard' | 'priority'; model?: string } | undefined;
   /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
   thinkingEnabled?: boolean;
   /**
@@ -2057,6 +2099,18 @@ export interface StartSessionOptions {
    * 用户改 prompt 后，下一次新 session 立即生效，老 session 维持启动时快照。
    */
   userPrompt?: string;
+  /**
+   * Plugin engines only (agentKind 'acp'): host text sent ahead of the first message of a newly
+   * created engine session. Plugin engines get no Cindy system prompt, so role instructions that
+   * the task cannot work without (collaboration Workers) travel this way. Other engines ignore it.
+   */
+  pluginEngineBriefing?: string;
+  /**
+   * Plugin engines only: Cindy cannot tell the engine's own sub-agents from the engine itself.
+   * true = the host trusts the engine as a whole, so its tool calls count as the task's own
+   * (collaboration Workers reporting to their Lead). Default: caller unknown.
+   */
+  pluginEngineTrustedCaller?: boolean;
   /**
    * Bot Profile runtime context, resolved by the main/DB authority at session
    * start. It is a startup system-prompt segment, not a per-turn user prefix.
@@ -2418,6 +2472,30 @@ export interface BackgroundTaskSnapshot {
  */
 export type TurnContinuationState = 'awaiting' | 'active' | 'cancelled';
 
+/** Fixed diagnostic codes only; never carry SDK errors, prompts or task output. */
+export type TurnContinuationCancellationReason =
+  | 'all_wake_tasks_stopped'
+  | 'bridge_aborted'
+  | 'graceful_stop'
+  | 'user_stop'
+  | 'wake_contract_unfulfilled';
+
+/** Runtime projection for adapters/consumers whose TypeScript contract may be older. */
+export function safeTurnContinuationCancellationReason(
+  reason: unknown,
+): TurnContinuationCancellationReason | undefined {
+  switch (reason) {
+    case 'all_wake_tasks_stopped':
+    case 'bridge_aborted':
+    case 'graceful_stop':
+    case 'user_stop':
+    case 'wake_contract_unfulfilled':
+      return reason;
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Why a session handle is being torn down.
  *
@@ -2489,7 +2567,7 @@ export type AgentMcpServerToolsState =
 export interface AgentMcpServerToolsReport {
   state: AgentMcpServerToolsState;
   /** Raw MCP tool names as the server declared them, not harness-qualified names. */
-  tools: Array<{ name: string; description?: string }>;
+  tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
 }
 
 export interface AgentSessionHandle {
@@ -2502,14 +2580,24 @@ export interface AgentSessionHandle {
    * the engine has no per-session MCP status entry.
    */
   readMcpServerTools?(serverName: string): Promise<AgentMcpServerToolsReport | null>;
+  /** On-demand public harness tool-catalog calls; unsupported methods must fail explicitly. */
+  callNativeToolCatalog?(method: string, args: unknown[]): Promise<unknown>;
   /** Native session identity safe for resume; may retain an unaccepted fork's source. */
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */
   readonly requestSessionId?: string;
-  readonly agentKind: AgentKind;
+  readonly agentKind: EngineKind;
+  /**
+   * Capabilities this session negotiated with its engine. Set only by engines whose
+   * abilities differ per session (the plugin ACP engine); Maker prefers it over the
+   * agent-level set. Built-in engines leave it undefined.
+   */
+  readonly negotiatedCapabilities?: Capabilities;
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** An explicit Skill send may retry exhausted discovery on the existing process. */
+  retryFailedRuntimeCapabilityCapture?(): void;
   /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
   onRuntimeCapabilitiesChange?(
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
@@ -2594,7 +2682,10 @@ export interface AgentSessionHandle {
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
   /**
-   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数
+   * Native continuation count: wake claims and bounded completion-to-start
+   * retention for provider-triggered background Bash follow-up. This probe
+   * does not itself claim a product turn or change send/Stop semantics.
+   * 「任务已终态、wake turn 尚未启动或仍在跑」
    * (awaiting + active,cancelled 不计)。listBackgroundTasks 在任务终态后
    * 立即不再包含该任务,空快照不能证明后续没有 wake turn —— renderer 的
    * 唤醒桥接对账以本计数为收口权威依据。不支持的 agent 留空(Session 层
@@ -2631,8 +2722,11 @@ export interface AgentSessionHandle {
    * wake task does not necessarily produce another provider `done`.
    */
   onTurnContinuationChange?(
-    listener: (continuationId: number, state: TurnContinuationState) => void,
+    listener: (continuationId: number, state: TurnContinuationState, reason?: TurnContinuationCancellationReason) => void,
   ): () => void;
+
+  /** Cause of a retained cancelled claim, including one whose done is still queued. */
+  getTurnContinuationCancellationReason?(continuationId: number): TurnContinuationCancellationReason | undefined;
 
   /** 关闭会话，清理子进程 */
   close(opts?: AgentSessionTeardownOptions): Promise<void>;
@@ -2737,7 +2831,7 @@ export interface AgentSessionHandle {
    * 上报 —— pi 为 compaction_start/end → compact_boundary)。仅
    * Capabilities.manualCompact 支持的 agent(pi)实现;不支持的 agent 不实现。
    */
-  compactSession?(instructions?: string): Promise<ManualCompactResult>;
+  compactSession?(instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult>;
 
   /** 读取 / 切换同一 SDK session 内的原生分支树。 */
   getSessionTree?(): Promise<SessionTreeSnapshot>;
@@ -2753,11 +2847,12 @@ export interface AgentSessionHandle {
 
   /**
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。
+   * remote 只由宿主提供目标 SSH 主机已验证的项目子集；不把旧控制端路径当远端授权。
    */
-  setExtraDirs?(dirs: string[], libraryRoot?: string | null): Promise<void>;
+  setExtraDirs?(dirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }): Promise<void>;
 
   /** 运行时增删附加可读写目录(覆盖式)，下一 turn 生效。 */
-  setWritableDirs?(dirs: string[]): Promise<void>;
+  setWritableDirs?(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void>;
 
   /**
    * 运行时合并 vendorOptions(浅合并到内部闭包)。
@@ -2819,7 +2914,7 @@ export interface AgentSessionHandle {
 }
 
 export abstract class BaseAgent {
-  abstract readonly kind: AgentKind;
+  abstract readonly kind: EngineKind;
   abstract readonly capabilities: Capabilities;
 
   /**

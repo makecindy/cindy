@@ -7,16 +7,21 @@
  * widths with decorations.
  */
 import { InputRule, Node, mergeAttributes, wrappingInputRule, type NodeConfig } from '@tiptap/core';
-import { Fragment, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
-import { liftListItem, splitListItem } from '@tiptap/pm/schema-list';
-import { Selection, TextSelection } from '@tiptap/pm/state';
+import { Fragment, NodeRange, Slice, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
+import { liftListItem, sinkListItem, splitListItem } from '@tiptap/pm/schema-list';
+import { Selection, TextSelection, type EditorState } from '@tiptap/pm/state';
+import { canJoin, ReplaceAroundStep } from '@tiptap/pm/transform';
 import type { EditorView } from '@tiptap/pm/view';
 import type { ComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import { applyListContinuation } from '@/lib/composerListContinuation';
+import { hasUserVisibleText } from '../../../shared/visibleText';
 
 const BULLET_MARKER_RE = /^([-+*•])([ \t]+)$/;
 const ORDERED_MARKER_RE = /^([1-9]\d{0,8})([.)])([ \t]+)$/;
-const CJK_ORDERED_MARKER_RE = /^([1-9]\d{0,8})(、)$/;
+// The ideographic comma needs no trailing separator, so the ordinal itself is
+// the only thing telling a list marker from an ID in running text. Ordinals
+// stop at 99; longer digit runs stay editable text.
+const CJK_ORDERED_MARKER_RE = /^([1-9]\d{0,1})(、)$/;
 
 type BulletMarker = '-' | '+' | '*' | '•';
 type OrderedMarker = '.' | ')' | '、';
@@ -28,8 +33,6 @@ interface OrderedListAttrs {
 }
 
 interface SelectedTaskPrefix {
-  from: number;
-  to: number;
   bodyIsEmpty: boolean;
   caretAtOrAfterPrefix: boolean;
   caretAtParagraphEnd: boolean;
@@ -99,17 +102,19 @@ function plainListParagraphMarker(text: string): PlainListParagraphMarker | null
       attrs: { start: Number(ordered[1]), marker: ordered[2], separator: ordered[3] },
     };
   }
-  const cjkOrdered = text.match(/^([1-9]\d{0,8})(、)([ \t]*)/);
-  if (cjkOrdered) {
-    return {
-      kind: 'ordered',
-      // Keep optional spacing in the item body so direct transactions and
-      // normalized documents serialize CJK markers identically.
-      prefixLength: cjkOrdered[1].length + cjkOrdered[2].length,
-      attrs: { start: Number(cjkOrdered[1]), marker: '、' },
-    };
-  }
+  // Non-Markdown CJK ordinals are never promoted here: paste, IME and
+  // dictation land here with text the user did not type as a list marker.
   return null;
+}
+
+function followingHardBreakOffset(paragraph: PMNode, from: number): number | undefined {
+  if (from >= paragraph.content.size) return undefined;
+  let offset: number | undefined;
+  paragraph.nodesBetween(from, paragraph.content.size, (node, pos) => {
+    if (offset === undefined && node.type.name === 'hardBreak') offset = pos;
+    return false;
+  });
+  return offset;
 }
 
 function hardBreakListInputRule(
@@ -143,23 +148,29 @@ function hardBreakListInputRule(
       if (documentFenceStateBefore(state.doc, $markerStart.before(1))) return null;
 
       const before = paragraph.content.cut(0, markerOffset - hardBreak.nodeSize);
-      const after = paragraph.content.cut(range.to - paragraphStart);
+      const markerEnd = range.to - paragraphStart;
+      const followingBreak = followingHardBreakOffset(paragraph, markerEnd);
+      const itemContent = paragraph.content.cut(markerEnd, followingBreak);
       const paragraphType = state.schema.nodes.paragraph;
       const itemType = state.schema.nodes.listItem;
       if (!paragraphType || !itemType) return null;
 
       const leadingParagraph = paragraph.type.create(paragraph.attrs, before, paragraph.marks);
-      const listParagraph = paragraph.type.create(paragraph.attrs, after, paragraph.marks);
+      const listParagraph = paragraph.type.create(paragraph.attrs, itemContent, paragraph.marks);
       const list = type.create(
         (match.data?.attributes as Record<string, unknown> | undefined) ?? {},
         itemType.create(null, listParagraph),
       );
       const paragraphPosition = $markerStart.before(1);
-      const replacement = Fragment.fromArray([leadingParagraph, list]);
+      const blocks = [leadingParagraph, list];
+      if (followingBreak !== undefined) {
+        const rest = paragraph.content.cut(followingBreak + 1);
+        blocks.push(paragraph.copy(rest));
+      }
       const tr = state.tr.replaceWith(
         paragraphPosition,
         paragraphPosition + paragraph.nodeSize,
-        replacement,
+        Fragment.fromArray(blocks),
       );
       const listPosition = paragraphPosition + leadingParagraph.nodeSize;
       tr.setSelection(TextSelection.create(tr.doc, listPosition + 3));
@@ -180,6 +191,21 @@ function fenceAwareWrappingInputRule(
         documentFenceStateBefore(props.state.doc, $markerStart.before(1))
       ) {
         return null;
+      }
+      if ($markerStart.parent.type.name === 'paragraph') {
+        const paragraphStart = $markerStart.start();
+        const followingBreak = followingHardBreakOffset(
+          $markerStart.parent,
+          props.range.to - paragraphStart,
+        );
+        // Wrap only the row containing the marker, even on the paragraph's first row.
+        if (followingBreak !== undefined) {
+          const position = paragraphStart + followingBreak;
+          const tr = props.state.tr.delete(position, position + 1).split(position);
+          if (position === props.range.to) {
+            tr.setSelection(TextSelection.create(tr.doc, position));
+          }
+        }
       }
       return rule.handler(props);
     },
@@ -356,8 +382,58 @@ function selectedListItemIsEmpty(view: EditorView, depth: number): boolean {
   return (
     item.childCount === 1 &&
     paragraph?.type.name === 'paragraph' &&
-    paragraph.content.content.every((node) => node.isText && !(node.text ?? '').trim())
+    paragraph.content.content.every((node) => node.isText && !hasUserVisibleText(node.text))
   );
+}
+
+/**
+ * liftListItem for the composer schema. The composer's listItem is in the
+ * `block` group, so prosemirror-schema-list's liftTarget stops at the parent
+ * item and leaves a nested item directly inside it — a shape the Markdown
+ * serializer skips, dropping the item's text on send. Nested items therefore
+ * lift into the outer list explicitly; top-level items keep the library's
+ * lift-out-of-list behavior.
+ */
+function liftComposerListItem(view: EditorView, itemType: NodeType): boolean {
+  const { state } = view;
+  const { $from, $to } = state.selection;
+  let range = $from.blockRange(
+    $to,
+    (node) => node.childCount > 0 && node.firstChild?.type === itemType,
+  );
+  if (!range) return false;
+  if (range.depth < 2 || $from.node(range.depth - 1).type !== itemType) {
+    return liftListItem(itemType)(state, view.dispatch);
+  }
+
+  // Same steps as prosemirror-schema-list's liftToOuterList, with the outer
+  // list (two levels above the nested list) as the explicit target.
+  const tr = state.tr;
+  const outerListDepth = range.depth - 2;
+  const end = range.end;
+  const endOfList = range.$to.end(range.depth);
+  if (end < endOfList) {
+    // Later siblings become children of the last lifted item.
+    tr.step(
+      new ReplaceAroundStep(
+        end - 1,
+        endOfList,
+        end,
+        endOfList,
+        new Slice(Fragment.from(itemType.create(null, range.parent.copy())), 1, 0),
+        1,
+        true,
+      ),
+    );
+    range = new NodeRange(tr.doc.resolve(range.$from.pos), tr.doc.resolve(endOfList), range.depth);
+  }
+  tr.lift(range, outerListDepth);
+  const $after = tr.doc.resolve(tr.mapping.map(end, -1) - 1);
+  if (canJoin(tr.doc, $after.pos) && $after.nodeBefore?.type === $after.nodeAfter?.type) {
+    tr.join($after.pos);
+  }
+  view.dispatch(tr.scrollIntoView());
+  return true;
 }
 
 function liftEmptyStructuredListItem(view: EditorView, itemType: NodeType): boolean {
@@ -366,7 +442,7 @@ function liftEmptyStructuredListItem(view: EditorView, itemType: NodeType): bool
   if (paragraph.type.name === 'paragraph' && paragraph.content.size > 0) {
     view.dispatch(view.state.tr.delete($from.start(), $from.end()));
   }
-  return liftListItem(itemType)(view.state, view.dispatch);
+  return liftComposerListItem(view, itemType);
 }
 
 function selectedListItemIsOnlyTaskParagraph(view: EditorView, depth: number): boolean {
@@ -382,30 +458,10 @@ function selectedTaskPrefix(view: EditorView): SelectedTaskPrefix | null {
   const match = text.match(/^\[[ xX]\](?:[ \t]+|$)/);
   if (!match) return null;
   return {
-    from: $from.start(),
-    to: $from.start() + match[0].length,
-    bodyIsEmpty: text.slice(match[0].length).trim().length === 0,
+    bodyIsEmpty: !hasUserVisibleText(text.slice(match[0].length)),
     caretAtOrAfterPrefix: $from.parentOffset >= match[0].length,
     caretAtParagraphEnd: $from.parentOffset === paragraph.content.size,
   };
-}
-
-function clearTaskPrefixAndLift(
-  view: EditorView,
-  itemDepth: number,
-  taskPrefix: SelectedTaskPrefix,
-): boolean {
-  if (
-    !taskPrefix.bodyIsEmpty ||
-    !taskPrefix.caretAtParagraphEnd ||
-    !selectedListItemIsOnlyTaskParagraph(view, itemDepth)
-  ) {
-    return false;
-  }
-  view.dispatch(view.state.tr.delete(taskPrefix.from, taskPrefix.to));
-  const itemType = view.state.schema.nodes.listItem;
-  if (itemType) liftListItem(itemType)(view.state, view.dispatch);
-  return true;
 }
 
 function backspaceAfterStructuredList(view: EditorView): boolean {
@@ -448,7 +504,7 @@ export function handleStructuredListBreak(view: EditorView): boolean {
     taskPrefix.caretAtParagraphEnd
   ) {
     if (!selectedListItemIsOnlyTaskParagraph(view, itemDepth)) return false;
-    return clearTaskPrefixAndLift(view, itemDepth, taskPrefix);
+    return liftEmptyStructuredListItem(view, itemType);
   }
   if (selectedListItemIsEmpty(view, itemDepth)) {
     return liftEmptyStructuredListItem(view, itemType);
@@ -489,6 +545,43 @@ export function handleComposerListEnter(
   return handleStructuredListBreak(view) || applyListContinuation(view);
 }
 
+function listItemAncestorCount($pos: EditorState['selection']['$from']): number {
+  let count = 0;
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    if ($pos.node(depth).type.name === 'listItem') count += 1;
+  }
+  return count;
+}
+
+/**
+ * Tab / Shift+Tab change the nesting level of structured list items, like an
+ * outliner. While the selection is in a list these keys belong to the list:
+ * Tab on the first item and Shift+Tab on a top-level item stay put instead of
+ * moving focus away or falling through to the permission-mode shortcut.
+ */
+export function handleComposerListTab(view: EditorView, event: KeyboardEvent): boolean {
+  if (
+    event.key !== 'Tab' ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.isComposing
+  ) return false;
+  const itemType = view.state.schema.nodes.listItem;
+  if (!itemType || selectedListItemDepth(view) === null) return false;
+
+  const { $from, $to } = view.state.selection;
+  if (event.shiftKey) {
+    // Lifting a top-level item would move it out of the list; only nested
+    // items move one level up.
+    const nested = listItemAncestorCount($from) > 1 && listItemAncestorCount($to) > 1;
+    if (nested) liftComposerListItem(view, itemType);
+  } else {
+    sinkListItem(itemType)(view.state, view.dispatch);
+  }
+  return true;
+}
+
 /** Exit an empty structured item with one Backspace, matching plain-list input. */
 export function handleStructuredListBackspace(view: EditorView): boolean {
   const { state } = view;
@@ -514,7 +607,6 @@ export function handleStructuredListBackspace(view: EditorView): boolean {
   ) {
     return false;
   }
-  if (taskPrefix) return clearTaskPrefixAndLift(view, itemDepth, taskPrefix);
   return liftEmptyStructuredListItem(view, itemType);
 }
 

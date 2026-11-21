@@ -119,8 +119,8 @@ describe('createGhCliTokenSource', () => {
     const execFileFn = vi.fn(
       (_file: string, args: string[], opts: { timeout: number }, cb: ExecCb) => {
         if (args[0] === 'api') {
-          expect(opts.timeout).toBeLessThanOrEqual(1_000);
-          cb(null, '', '');
+          // A healthy account can take two seconds to respond.
+          cb(opts.timeout < 2_000 ? new Error('deadline exceeded') : null, '', '');
         } else {
           expect(opts.timeout).toBe(3_000);
           cb(null, 'gho_after_probe', '');
@@ -134,7 +134,7 @@ describe('createGhCliTokenSource', () => {
     expect(execFileFn).toHaveBeenCalledWith(
       expectedGhExecutable,
       ['api', '--hostname', 'github.com', 'user', '--silent'],
-      { timeout: expect.any(Number), env: expect.any(Object) },
+      { timeout: 15_000, env: expect.any(Object), windowsHide: true },
       expect.any(Function),
     );
     expect(await src.readToken()).toBe('gho_after_probe');
@@ -148,6 +148,20 @@ describe('createGhCliTokenSource', () => {
     const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
     expect(await src.probeAvailability()).toBe(false);
     expect(execFileFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a recent confirmation on timeout but clears it on HTTP 401', async () => {
+    const probe = execMock((_file, cb) => cb(null, '', ''));
+    const source = createGhCliTokenSource({ execFileFn: probe, existsFn: () => false });
+    for (const [error, stderr, expected] of [
+      [null, '', true],
+      [new Error('timeout'), '', true],
+      [new Error('rejected'), 'gh: Bad credentials (HTTP 401)', false],
+      [new Error('timeout'), '', false],
+    ] as const) {
+      probe.mockImplementationOnce((_bin, _args, _opts, cb: ExecCb) => cb(error, '', stderr));
+      expect(await source.probeAvailability()).toBe(expected);
+    }
   });
 
   describe('readTokenDetailed 保留失败原因', () => {

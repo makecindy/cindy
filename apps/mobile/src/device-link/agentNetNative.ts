@@ -14,6 +14,7 @@ export interface NativeAgentNetOptions {
   deviceId: string;
   legacySigning?: boolean;
   udp?: boolean;
+  enhancedTransport?: boolean;
 }
 /** Trusted app adapter. Private seeds never enter AsyncStorage, logs or an RPC. */
 export class MobileAgentNetEngine implements NativeEnginePort {
@@ -61,6 +62,11 @@ export class MobileAgentNetEngine implements NativeEnginePort {
     if (!response.ok) throw new Error(response.code || 'AGENT_NET_NATIVE_COMMAND_FAILED');
     return response.value as T;
   }
+  /** Only binaries that have it (see `AgentNetNativeModule.wait`); the transport also checks the engine's features. */
+  wait = agentNetNative?.wait ? async (maxMs: number): Promise<boolean> => {
+    if (this.destroyed || !agentNetNative?.wait) throw new Error('AGENT_NET_ENGINE_CLOSED');
+    return agentNetNative.wait(this.handle, maxMs);
+  } : undefined;
   sign(text: string): Promise<string> { return this.command({ op: 'sign', text }); }
   random(): Promise<string> { return this.command({ op: 'random' }); }
   async destroy(): Promise<void> {

@@ -250,10 +250,16 @@ export class QuotaOverviewService {
     this.updateRunning();
   }
 
-  /** A panel is on screen: shorter cadences, and opening it refreshes every source. */
-  setInteractive(open: boolean): void {
+  /**
+   * A panel is on screen: shorter cadences, and opening it refreshes every source. A panel that
+   * opens on mere hover passes `refresh: false` when it refreshed a moment ago; the rebuild then
+   * re-reads only what has outlived its while-open cadence.
+   */
+  setInteractive(open: boolean, refresh = true): void {
     this.interactive = open;
-    if (open) this.refresh(false);
+    this.sharedReader?.repace();
+    if (open && refresh) this.refresh(false);
+    else if (open) this.scheduleRebuild(0);
   }
 
   /** Locale or presentation changed; rebuild from the caches. */

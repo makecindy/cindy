@@ -117,8 +117,9 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(chatInputSource).toContain(
       "`${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`",
     );
-    expect(chatInputSource).toContain("t('newChat.sendButton.queueTooltipSendMode', {");
-    expect(chatInputSource).toContain('shortcut: composerSendShortcutLabel');
+    expect(chatInputSource).toContain(
+      "`${t(`newChat.sendButton.${runningDeliveryMode}`)} · ${composerSendShortcutLabel}`",
+    );
     expect(chatInputSource).not.toContain(
       "`${t('newChat.chatInput.voiceInput.finishAndSend')} · Enter`",
     );

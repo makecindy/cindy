@@ -25,7 +25,7 @@ vi.mock('@/hooks/useCodexAuth', () => ({ useCodexAuth: () => ({ state: { kind: '
 import { ErrorBanner } from '../ErrorBanner';
 import { ErrorMessageCard } from '../ErrorMessageCard';
 import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
-import { remoteErrorMessageForBanner } from '@/lib/makerChatStore';
+import { remoteErrorMessageForBanner, handleStreamEvent, EMPTY_SESSION_STATE } from '@/lib/makerChatStore';
 import { buildErrorDiagnosisPrompt, prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
@@ -37,6 +37,47 @@ const raw = JSON.stringify({ error: {
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',
 } });
 afterEach(cleanup);
+
+it.each(['live', 'history'] as const)('reports a clean Codex transport exit as an interruption in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const message = 'app-server force-retired: transport error: codex app-server transport closed: child exited (exit code=0)';
+  const reason = 'app-server-force-retired';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} errorReason={reason} agentKind="codex" retryText="continue" onRetry={retry} />
+    : <ErrorMessageCard message={message} reason={reason} />}</I18nextProvider>);
+  expect(screen.getByText('The connection to Codex was lost. The current request was interrupted. You can continue in this session.')).toBeTruthy();
+  if (surface === 'live') {
+    fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
+    expect(retry).toHaveBeenCalledOnce();
+  }
+});
+
+// #10854, unit: production live reducer + banner/tail/history must retain the
+// actual cause for diagnosis while legacy reason-only errors use neutral copy.
+it.each(['live', 'tail', 'history'] as const)('keeps silent-stop %s copy neutral and preserves cause details', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const message = '检测到空响应，自动续跑已暂停。自动续跑请求未派发。\nsilentStopFailureCause=dispatch-not-accepted';
+  const state = handleStreamEvent({ ...EMPTY_SESSION_STATE, isStreaming: true }, {
+    sessionId: 'silent-copy', type: 'error',
+    data: { message, isTerminal: true, reason: 'silent-stop-exhausted', silentStopFailureCause: 'dispatch-not-accepted' },
+  } as Parameters<typeof handleStreamEvent>[1]);
+  expect(state.error).toBe(message);
+  const diagnose = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={state.error!} errorReason={state.errorReason} onRetry={vi.fn()} onSilentStopContinue={vi.fn()} onDiagnose={diagnose} />
+    : surface === 'tail'
+      ? <ErrorTailErrorBanner errorText={message} errorReason="silent-stop-exhausted" onContinue={vi.fn()} onDismiss={vi.fn()} onDiagnose={diagnose} />
+      : <ErrorMessageCard message={message} reason="silent-stop-exhausted" onDiagnose={diagnose} />}</I18nextProvider>);
+  expect(screen.getByText('An empty response was detected. Automatic continuation is paused.')).toBeTruthy();
+  expect(screen.queryByText(/dispatch-not-accepted/)).toBeNull();
+  fireEvent.click(screen.getByText(en.chat.errorBanner.networkShowRaw));
+  expect(screen.getByText(/silentStopFailureCause=dispatch-not-accepted/)).toBeTruthy();
+  fireEvent.click(screen.getByText(en.chat.errorBanner.diagnose));
+  expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ details: message, reason: 'silent-stop-exhausted' }));
+});
 
 it('keeps the shared Codex account reset guidance instead of replacing it with generic budget text', async () => {
   const i18n = createInstance();
@@ -172,7 +213,7 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(locales[locale].chat.errorBanner.networkShowRaw)).toBeNull();
   });
 
-  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
     const message = `Error invoking remote method device-link:invoke: Error: [${code}] upstream fallback api_key=private-test-value`;
@@ -320,4 +361,18 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(generic)).toBeNull();
     expect(screen.queryByText(/Switch this task/)).toBeNull();
   });
+});
+
+// #8706 unit: render each real error surface with the new code; the old UI offered Full access.
+it.each(['live', 'tail', 'history'] as const)('localizes quota exhaustion on %s without permission escalation', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_UPSTREAM_BODY';
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} onRetry={vi.fn()} />
+    : surface === 'tail'
+      ? <ErrorTailErrorBanner errorText={message} onContinue={vi.fn()} onDismiss={vi.fn()} />
+      : <ErrorMessageCard message={message} />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.chat.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA)).toBeTruthy();
+  expect(screen.queryByText(/PRIVATE_UPSTREAM_BODY|完全访问/)).toBeNull();
 });

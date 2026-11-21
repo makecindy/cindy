@@ -19,6 +19,7 @@ const OWNER = 'owner-a';
 const defaultPrefs = {
   groupByProject: true,
   groupDialogue: false,
+  groupAutomation: false,
   selectedDevice: null,
   sortBy: 'recency',
   statusFilter: 'active',
@@ -30,11 +31,61 @@ const defaultPrefs = {
   teammateFilterOwner: '',
   vendorFilter: 'all',
   lastActivityFilter: 'all',
+  taskListMode: 'tasks',
   viewMode: 'list',
   taskInfoFields: ['time'],
 } as const;
 
 describe('homeViewPreferenceStore', () => {
+  // Legacy list choices and concurrent edits must survive switching or resetting either mode.
+  it('round-trips independent inbox and task-list filters', async () => {
+    const { __testing, saveHomeViewPreferences, readHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
+    store.set(__testing.storageKey, JSON.stringify({ vendorFilter: 'pi' }));
+    expect((await readHomeViewPreferences(OWNER)).inboxFilters).toBeUndefined();
+    const reset = {
+      projectFilter: { owner: OWNER, value: 'all' }, teammateFilter: { owner: OWNER, value: 'all' },
+      vendorFilter: 'all', lastActivityFilter: 'all', hideAutomations: false,
+    } as const;
+    const inbox = {
+      projectFilter: { owner: OWNER, value: ['inbox-project'] }, teammateFilter: { owner: OWNER, value: 'none' },
+      vendorFilter: 'codex', lastActivityFilter: '1d', hideAutomations: true,
+    } as const;
+    await Promise.all([
+      saveHomeViewPreferences(inbox, 'inbox'),
+      saveHomeViewPreferences({ lastActivityFilter: '30d' }, 'tasks'),
+    ]);
+    const loaded = await readHomeViewPreferences(OWNER);
+    expect(loaded).toMatchObject({ vendorFilter: 'pi', lastActivityFilter: '30d', inboxFilters: {
+      vendorFilter: 'codex', lastActivityFilter: '1d', hideAutomations: true,
+      projectFilter: ['inbox-project'], teammateFilter: 'none',
+    } });
+    expect((await readHomeViewPreferences('owner-b')).inboxFilters).toMatchObject({ projectFilter: 'all', teammateFilter: 'all' });
+    await saveHomeViewPreferences(reset, 'tasks');
+    expect((await readHomeViewPreferences(OWNER)).inboxFilters).toEqual(loaded.inboxFilters);
+    await saveHomeViewPreferences({ vendorFilter: 'cc', hideAutomations: true });
+    await saveHomeViewPreferences(reset, 'inbox');
+    expect(await readHomeViewPreferences(OWNER)).toEqual({ ...defaultPrefs, vendorFilter: 'cc', hideAutomations: true });
+  });
+
+  it('keeps legacy row settings in the ordinary list and restores each mode after interleaved edits', async () => {
+    const { __testing, saveHomeViewPreferences, readHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
+    store.set(__testing.storageKey, JSON.stringify({
+      viewMode: 'text', taskInfoFields: ['cost', 'pr'], inboxFilters: { hideAutomations: true },
+    }));
+    expect(await readHomeViewPreferences(OWNER)).toMatchObject({
+      viewMode: 'text', taskInfoFields: ['cost', 'pr'],
+      inboxFilters: { viewMode: 'list', taskInfoFields: ['time'], hideAutomations: true },
+    });
+    await Promise.all([
+      saveHomeViewPreferences({ viewMode: 'text', taskInfoFields: [] }, 'inbox'),
+      saveHomeViewPreferences({ viewMode: 'list', taskInfoFields: ['pr', 'time'] }, 'tasks'),
+      saveHomeViewPreferences({ hideAutomations: false }, 'inbox'),
+    ]);
+    expect(await readHomeViewPreferences(OWNER)).toMatchObject({
+      viewMode: 'list', taskInfoFields: ['pr', 'time'], inboxFilters: { viewMode: 'text', taskInfoFields: [] },
+    });
+  });
+
   it('persists teammate multi-selection for its owner and resets without changing project choices', async () => {
     const { saveHomeViewPreferences, readHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
     await saveHomeViewPreferences({ teammateFilter: { owner: OWNER, value: ['cindy', 'filo'] }, projectFilter: { owner: OWNER, value: ['project'] } });
@@ -100,6 +151,7 @@ describe('homeViewPreferenceStore', () => {
     await saveHomeViewPreferences({
       groupByProject: true,
       groupDialogue: true,
+      groupAutomation: true,
       sortBy: 'priority',
       statusFilter: 'archived',
       projectOrder: 'custom',
@@ -117,6 +169,7 @@ describe('homeViewPreferenceStore', () => {
     const expected = {
       groupByProject: true,
       groupDialogue: true,
+      groupAutomation: true,
       sortBy: 'created',
       statusFilter: 'archived',
       projectOrder: 'custom',
@@ -130,6 +183,7 @@ describe('homeViewPreferenceStore', () => {
     };
     await expect(readHomeViewPreferences(OWNER)).resolves.toEqual({
       ...expected,
+      taskListMode: 'tasks',
       teammateFilter: 'all',
       teammateFilterOwner: '',
       selectedDevice: { deviceId: 'devA', name: 'Mac A' },
@@ -250,4 +304,15 @@ describe('homeViewPreferenceStore', () => {
     store.set(__testing.storageKey, 'not-json');
     await expect(readHomeViewPreferences(OWNER)).resolves.toEqual({ ...defaultPrefs });
   });
+});
+
+it('persists task mode across reload without changing grouping', async () => {
+  const prefs = await import('@/session/homeViewPreferenceStore');
+  await prefs.saveHomeViewPreferences({ taskListMode: 'inbox', groupByProject: false, viewMode: 'text' });
+  // reset-modules: simulate an app restart so persisted mode is read without the module's in-memory state.
+  vi.resetModules();
+  const reloaded = await import('@/session/homeViewPreferenceStore');
+  expect(await reloaded.readHomeViewPreferences(OWNER)).toMatchObject({ taskListMode: 'inbox', groupByProject: false, viewMode: 'text' });
+  await reloaded.saveHomeViewPreferences({ taskListMode: 'tasks' });
+  expect(await reloaded.readHomeViewPreferences(OWNER)).toMatchObject({ taskListMode: 'tasks', groupByProject: false, viewMode: 'text' });
 });

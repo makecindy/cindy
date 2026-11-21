@@ -5,18 +5,19 @@ import { AgentInputCoordinator, markManualSchedulerContinuation } from '../agent
 import { stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin } from '../makerSendTransaction.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import { isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
-import type { SchedulerQueuedPromptRequest } from '../register.js';
+import type { SchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 import type { SavedUsageLimitWait } from '../usageLimitRecoveryStore.js';
+import { createSchedulerQueueBridge } from '../schedulerQueueBridge.js';
+import { MAKER_INVOKE } from '../channels.js';
 
 // Execute the production IPC handler while injecting only its host services.
 // Shared by queue tests and the real scheduler-runner continuation regression.
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-const start = source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
-const handlerStart = source.indexOf('    async (event, sessionId: unknown, item: unknown, opts?: unknown) => {', start);
-const handlerEnd = source.indexOf('\n  );', handlerStart);
-if (start < 0 || handlerStart < start || handlerEnd < handlerStart) throw new Error('INPUT_ENQUEUE handler not found');
-const handler = source.slice(handlerStart, handlerEnd).trim().replace(/,$/, '');
-const compiled = transpileModule(`return (${handler});`, {
+const enqueueChannel = source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
+const enqueueStart = source.lastIndexOf('  ipcMain.handle(', enqueueChannel);
+const enqueueEnd = source.indexOf('\n  );', enqueueChannel);
+if (enqueueChannel < 0 || enqueueStart < 0 || enqueueEnd < enqueueChannel) throw new Error('INPUT_ENQUEUE registration not found');
+const compiled = transpileModule(source.slice(enqueueStart, enqueueEnd + '\n  );'.length), {
   compilerOptions: { target: ScriptTarget.ES2022 },
 }).outputText;
 
@@ -104,14 +105,22 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   const sameItem = (item: AgentInputQueuedMessage) => item;
   const owner = {};
   const acceptedCallbacks = new Map<string, () => void | Promise<void>>();
-  const preparations = new Map<string, Pick<SchedulerQueuedPromptRequest, 'onPreparing' | 'onPreparationFailed'>>();
+  const preparations = new Map<string, SchedulerQueuedPreparation>();
+  const discardWatchers = new Map();
+  const schedulerBridge = createSchedulerQueueBridge({
+    coordinator, isSessionBusy: () => false, getSessionMeta: async () => null,
+    getSessionRowSnapshot: async () => null, createId: () => 'unused-scheduler-id',
+    preparations, discardWatchers, discardAcceptedCallback: id => { acceptedCallbacks.delete(id); },
+    enqueue: async () => { throw new Error('Manual Continue must enqueue through its IPC handler'); },
+  });
   const bindings = {
     inputCoordinator: coordinator,
     CONTINUE_AFTER_APP_EXIT_PROMPT,
     markManualSchedulerContinuation,
     resumeInterruptedScheduleRun,
     getSessionFsSnapshot: options.getSessionFsSnapshot ?? (async () => ({ planModeEnabled: false })),
-    schedulerQueuedPromptDiscardWatchers: new Map(),
+    schedulerQueueBridgeHolder: schedulerBridge,
+    schedulerQueuedPromptDiscardWatchers: discardWatchers,
     schedulerQueuedPromptPreparations: preparations,
     orcaInterAgentDispatcher: {
       registerQueuedOrcaInterAgentAcceptedCallback: (id: string, fn: () => void | Promise<void>) => acceptedCallbacks.set(id, fn),
@@ -154,7 +163,11 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
       'discardSpecificQueuedAttachmentOwnership', 'markQueuedAttachmentDurableAfterSnapshot',
     ].map(name => [name, noop])),
   };
-  const enqueue = new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
-    (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
-  return { enqueue, acceptedCallbacks, preparations };
+  type EnqueueHandler = (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
+  const handlers = new Map<string, EnqueueHandler>();
+  const ipcMain = { handle: (channel: string, fn: EnqueueHandler) => handlers.set(channel, fn) };
+  new Function('ipcMain', 'MAKER_INVOKE', ...Object.keys(bindings), compiled)(ipcMain, MAKER_INVOKE, ...Object.values(bindings));
+  const enqueue = handlers.get(MAKER_INVOKE.INPUT_ENQUEUE);
+  if (!enqueue) throw new Error('INPUT_ENQUEUE handler was not registered');
+  return { enqueue, acceptedCallbacks, preparations, schedulerBridge };
 }
