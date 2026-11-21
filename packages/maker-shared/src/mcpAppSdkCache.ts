@@ -1,3 +1,4 @@
+import { isMcpAppOpenRejectedBeforeAllocation } from './mcpAppViewSlots.js';
 import type { McpAppDocument } from './mcpApps.js';
 
 type Sdk = NonNullable<McpAppDocument['sdk']>;
@@ -39,9 +40,8 @@ export class McpAppSdkCache {
         assertCurrent();
         document = await send({ ...input, sdkCacheHashes: [] }) as McpAppDocument;
       } catch (error) {
-        // A successful replacement consumes the slot internally. Only a failed
-        // replacement leaves capacity for another waiting page.
-        unusedFallbackSlot?.();
+        // A lost reply may have left the replacement open on the executor.
+        if (isMcpAppOpenRejectedBeforeAllocation(error)) unusedFallbackSlot?.();
         throw error;
       }
       assertCurrent();

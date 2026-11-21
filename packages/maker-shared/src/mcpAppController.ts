@@ -8,7 +8,7 @@ export type AppRpc = {
   [key: string]: unknown;
 };
 export type AppInvoker = (sessionId: string | null, input: Record<string, unknown>) => Promise<unknown>;
-export { McpAppViewSlots, McpAppWindowLimitError, confirmsMcpAppViewGone } from './mcpAppViewSlots.js';
+export { McpAppViewSlots, McpAppWindowLimitError, confirmsMcpAppViewGone, isMcpAppOpenRejectedBeforeAllocation } from './mcpAppViewSlots.js';
 
 let nextOpenId = 0;
 const closeSafeMethods = new Set(['cindy/view-state/set', 'ui/set-view-state']);
@@ -105,8 +105,10 @@ export class McpAppController {
   receive(message: AppRpc): void {
     if (this.stopped || !this.document || !message || message.jsonrpc !== '2.0') return;
     if (this.document.transport === 'sandbox') {
-      if (message.method === 'ui/notifications/sandbox-failed')
-        this.fail(new Error('MCP_APP_SANDBOX_FAILED'));
+      if (message.method === 'ui/notifications/sandbox-failed') {
+        const code = message.params?.code;
+        this.fail(new Error(code === 'MCP_PLUGIN_UNAVAILABLE' || code === 'MCP_APP_SERVER_CHANGED' ? code : 'MCP_APP_SANDBOX_FAILED'));
+      }
       if (this.closing) return;
       if (message.method === 'ui/notifications/sandbox-escape')
         void this.displayMode('inline').catch((error) => this.fail(error));

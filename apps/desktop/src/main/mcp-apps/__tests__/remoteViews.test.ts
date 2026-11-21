@@ -23,6 +23,7 @@ vi.mock('../sandboxProtocol.js', () => ({
     entry.dispose();
   },
 }));
+import { MCP_APPS_MAX_REMOTE_BYTES } from '../protocol.js';
 import { RemoteMcpAppViews } from '../remoteViews.js';
 const document = { viewId: 'remote-view', html: '<p>Private server-authored App</p>',
   csp: "default-src 'none'; connect-src https://private-app.example.invalid", prefersBorder: true,
@@ -306,18 +307,39 @@ describe('Main-bound remote MCP App Views', () => {
   });
   // Unit, PR #11917: failure before receiving a remote id frees the local
   // in-flight reservation, without promising remote capacity on an ambiguous reply.
-  it('releases a local pending reservation when the executor rejects the open', async () => {
+  it.each([
+    ['MCP_APP_SERVER_CHANGED', true], ['DEVICE_LINK_TIMEOUT', false],
+  ] as const)('returns local capacity while the remote cancellation request is still pending only for an ended open (%s)', async (reason, ended) => {
     const f = fixture();
     const pending: Array<(error: Error) => void> = [];
-    f.invoke.mockImplementation(async (_device, _session, input) => input.op === 'open'
-      ? new Promise((_resolve, reject) => pending.push(reject)) : {});
-    const opens = Array.from({ length: 16 }, () => expect(f.open()).rejects.toThrow('MCP_APP_SERVER_CHANGED'));
+    let started!: () => void, finish!: () => void;
+    const cancelStarted = new Promise<void>(resolve => { started = resolve; });
+    const cancelFinished = new Promise<void>(resolve => { finish = resolve; });
+    f.invoke.mockImplementation(async (_device, _session, input) => {
+      if (input.op === 'open') return new Promise((_resolve, reject) => pending.push(reject));
+      if (input.op === 'cancel-open') { started(); await cancelFinished; }
+      return {};
+    });
+    const opens = Array.from({ length: 16 }, () => expect(f.open()).rejects.toThrow(reason));
     await expect(f.open()).rejects.toThrow('MCP_APP_VIEW_LIMIT');
-    pending[0](new Error('MCP_APP_SERVER_CHANGED'));
+    pending[0](new Error(reason));
+    await cancelStarted;
+    const beforeRemoteCleanup = f.released.mock.calls.slice();
+    finish();
     await opens[0];
-    expect(f.released).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'renderer:1', undefined, 'pending');
-    for (const reject of pending.slice(1)) reject(new Error('MCP_APP_SERVER_CHANGED'));
+    expect(beforeRemoteCleanup).toEqual(ended ? [[expect.any(Object), 'renderer:1', undefined, 'pending']] : []);
+    expect(f.released).toHaveBeenCalledTimes(1);
+    for (const reject of pending.slice(1)) reject(new Error(reason));
     await Promise.all(opens);
+  });
+  // Unit: the executor returned a real page, but it cannot be mounted locally.
+  // Its confirmed teardown must grant a single opportunity across both quotas.
+  it('releases a rejected oversized remote document as one closed page', async () => {
+    const f = fixture();
+    f.invoke.mockResolvedValueOnce({ ...document, html: 'x'.repeat(MCP_APPS_MAX_REMOTE_BYTES) });
+    await expect(f.open()).rejects.toThrow('MCP_APP_DOCUMENT_TOO_LARGE');
+    expect(f.invoke.mock.calls.at(-1)?.[2]).toEqual({ op: 'teardown', viewId: document.viewId });
+    expect(f.released).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'renderer:1', 'device-a', 'pending');
   });
   it('releases the caller pending-open quota immediately and discards each late View', async () => {
     const f = fixture();
@@ -349,6 +371,19 @@ describe('Main-bound remote MCP App Views', () => {
     await f.control({ op: 'teardown', viewId: late.viewId });
     expect(f.released).toHaveBeenCalledTimes(2);
     expect(f.invoke.mock.calls.at(-1)?.[2]).toEqual({ op: 'teardown', viewId: 'remote-view' });
+  });
+  // Unit: a revoked plugin is a final poll result. A second read can see only
+  // the removed View and lose the cause seen by the open desktop card.
+  it('ends a remote poll on plugin revocation before the View disappears', async () => {
+    const f = fixture();
+    const local = await f.open();
+    vi.useFakeTimers();
+    f.invoke.mockRejectedValueOnce(new Error('MCP_PLUGIN_UNAVAILABLE'))
+      .mockRejectedValueOnce(new Error('MCP_APP_VIEW_UNAVAILABLE'));
+    const failed = expect(state.mounts.get(local.viewId)!.frame({ op: 'poll' })).rejects.toThrow('MCP_PLUGIN_UNAVAILABLE');
+    await vi.advanceTimersByTimeAsync(500);
+    await failed;
+    expect(f.invoke.mock.calls.filter(call => call[2].op === 'poll')).toHaveLength(1);
   });
   it('stops a failed read after its bounded retry window', async () => {
     const f = fixture();
@@ -469,8 +504,15 @@ it('retires an unresolved SDK reference before a single source fallback and bind
   await mounted.frame({ op: 'poll' });
   expect(f.invoke.mock.calls.at(-1)![2].viewId).toBe('full-source');
   expect(f.released).not.toHaveBeenCalled(); // The source replacement used the same slot.
+  for (const reason of ['MCP_APP_SERVER_CHANGED', 'MCP_APP_TOOL_LIST_TOO_LARGE', 'MCP_APP_INVALID_PAGINATION', 'MCP_APP_CONNECTION_CLOSED']) {
+    f.invoke.mockResolvedValueOnce({ ...document, sdkRef: 'f'.repeat(64) })
+      .mockResolvedValueOnce({}).mockRejectedValueOnce(new Error(reason));
+    await expect(f.open()).rejects.toThrow(reason);
+    expect(f.released).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'renderer:1', 'device-a', 'pending');
+    f.released.mockClear();
+  }
   f.invoke.mockResolvedValueOnce({ ...document, sdkRef: 'f'.repeat(64) })
-    .mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('MCP_APP_SERVER_CHANGED'));
-  await expect(f.open()).rejects.toThrow('MCP_APP_SERVER_CHANGED');
-  expect(f.released).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'renderer:1', 'device-a', 'pending');
+    .mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('connection lost'));
+  await expect(f.open()).rejects.toThrow('connection lost');
+  expect(f.released).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'renderer:1', undefined, 'pending');
 });

@@ -2,6 +2,7 @@ import { McpAppWindowLimitError } from '@cindy/maker-shared/mcp-app-controller';
 import { withHostAppSdk } from '@cindy/maker-shared/mcp-app-sdk';
 import { app, protocol, session, type WebContents, type WebFrameMain } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
+import { extractIpcError } from '../../shared/ipcError.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { appCsp, MCP_APPS_MAX_BYTES } from './protocol.js';
 import {
@@ -146,12 +147,13 @@ export function supplyMcpAppDocument(
     bridge: invoke ? { key: randomUUID(), invoke } : undefined,
   });
 }
-export function removeMcpAppDocument(id: string): void {
+export function removeMcpAppDocument(id: string, reason?: 'MCP_PLUGIN_UNAVAILABLE'): void {
   const entry = documents.get(id);
   documents.delete(id);
   if (entry?.local) {
     try {
-      void entry.bridge?.frame?.executeJavaScript?.("window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/sandbox-failed'},'*')").catch(() => {});
+      const failure = { jsonrpc: '2.0', method: 'ui/notifications/sandbox-failed', params: reason ? { code: reason } : undefined };
+      void entry.bridge?.frame?.executeJavaScript?.(`window.parent.postMessage(${JSON.stringify(failure)}, '*')`).catch(() => {});
     } catch (error) { if (!isDisposedFrameError(error)) throw error; }
   }
   entry?.dispose?.();
@@ -348,7 +350,11 @@ export function registerMcpAppProtocol(): void {
         if (documents.get(id) !== entry || entry.owner !== getCurrentDbClientSnapshot())
           return new Response(null, { status: 403 });
         return Response.json(await bridge.invoke(JSON.parse(text)), { headers: { 'Cache-Control': 'no-store' } });
-      } catch {
+      } catch (error) {
+        // A live poll can observe plugin revocation before the document is removed.
+        const code = error instanceof Error ? (extractIpcError(error)?.message ?? error.message) : undefined;
+        if (code === 'MCP_PLUGIN_UNAVAILABLE' || code === 'MCP_APP_SERVER_CHANGED')
+          return Response.json({ code }, { status: 410 });
         return new Response(null, { status: 400 });
       }
     }

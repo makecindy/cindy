@@ -45,8 +45,8 @@ function withoutCapacity(release: Release, caller: string, peer: string, limit?:
 
 // These rejections precede publication of the requested View. A transport timeout
 // or a disconnected executor may have lost the reply after allocation.
-function rejectedBeforeAllocation(error: unknown): boolean {
-  return /\bMCP_APP_(?:SERVER_CHANGED|TOOL_(?:UNAVAILABLE|NOT_VISIBLE)|OPEN_(?:TIMEOUT|CANCELLED)|CARD_(?:UNAVAILABLE|TOO_LARGE)|(?:SOURCE|VIEW|SESSION)_UNAVAILABLE|RESOURCE_(?:MISSING|NOT_FOUND|TOO_LARGE)|INVALID_RESOURCE|FILES_LOCAL_ONLY|CONNECTION_LIMIT)\b/.test(String(error))
+export function isMcpAppOpenRejectedBeforeAllocation(error: unknown): boolean {
+  return /\bMCP_APP_(?:SERVER_CHANGED|TOOL_(?:UNAVAILABLE|NOT_VISIBLE|LIST_TOO_LARGE)|OPEN_(?:TIMEOUT|CANCELLED)|CARD_(?:UNAVAILABLE|TOO_LARGE)|(?:SOURCE|VIEW|SESSION)_UNAVAILABLE|RESOURCE_(?:MISSING|NOT_FOUND|TOO_LARGE)|INVALID_(?:RESOURCE|PAGINATION)|FILES_LOCAL_ONLY|CONNECTION_(?:CLOSED|LIMIT))\b/.test(String(error))
     || /\bMCP_PLUGIN_(?:UNAVAILABLE|CSP_DOMAIN_NOT_DECLARED)\b/.test(String(error));
 }
 
@@ -142,7 +142,7 @@ export class McpAppViewSlots {
       if (retryGrant) {
         // On a lost reply the executor may still have a View. Local document
         // capacity is known independently, including when the executor is full.
-        if (atLimit || !rejectedBeforeAllocation(error)) retryGrant = withoutCapacity(retryGrant, caller, peer, failedLimit);
+        if (atLimit || !isMcpAppOpenRejectedBeforeAllocation(error)) retryGrant = withoutCapacity(retryGrant, caller, peer, failedLimit);
         if (retryGrant.window || retryGrant.peer) this.grantNext(owner, retryGrant);
       }
       throw error;

@@ -1,4 +1,4 @@
-import { confirmsMcpAppViewGone, McpAppWindowLimitError } from '@cindy/maker-shared/mcp-app-controller';
+import { confirmsMcpAppViewGone, isMcpAppOpenRejectedBeforeAllocation, McpAppWindowLimitError } from '@cindy/maker-shared/mcp-app-controller';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -81,7 +81,7 @@ export class RemoteMcpAppViews {
       catch (error) {
         this.assertView(view);
         failedAt ??= Date.now();
-        if (view.closing || /MCP_APP_|CHANNEL_NOT_ALLOWED|NOT_FOUND|ACCESS_REVOKED|PERMISSION_DENIED/.test(String(error)) ||
+        if (view.closing || /MCP_APP_|MCP_PLUGIN_UNAVAILABLE|CHANNEL_NOT_ALLOWED|NOT_FOUND|ACCESS_REVOKED|PERMISSION_DENIED/.test(String(error)) ||
             Date.now() - failedAt >= 30_000) throw error;
         // Only this View's read is retried. Never reset a peer/relay or replay App writes.
         await new Promise((resolve) => setTimeout(resolve, delay));
@@ -135,7 +135,6 @@ export class RemoteMcpAppViews {
       remoteOpenId: randomUUID(), cancelled: false, closeEpoch: this.deps.closeEpoch(deviceId) };
     this.opening.add(entry);
     allocated?.('pending');
-    let mounted = false;
     let remoteId: string | undefined;
     let releasedRemote = false;
     try {
@@ -165,23 +164,25 @@ export class RemoteMcpAppViews {
       const view: RemoteView = { ...entry, localId: '', remoteId, links: new Map(), linkEpoch: 0 };
       view.localId = mountRemoteAppDocument(document, caller, (raw) => this.frame(view, raw), () => this.dispose(view), input.context);
       this.views.set(view.localId, view);
-      mounted = true;
+      this.opening.delete(entry);
       return { viewId: view.localId, transport: 'sandbox', prefersBorder: document.prefersBorder };
     } catch (error) {
-      // No writes are replayed. An old Host may reject cancel-open; its idle lease remains the fallback.
-      // A definitive quota refusal did not allocate a remote View. Deliver it immediately so
-      // the viewer queues this page in refusal order, without a second device request.
+      let cancel: Promise<unknown> | undefined;
       if (remoteId) {
+        // The remote open succeeded. Retire that actual page once, including
+        // the local reservation, even if mounting its document failed.
         releasedRemote = await this.call(entry, { op: 'teardown', viewId: remoteId }).then(() => true, confirmsMcpAppViewGone);
       } else if (!/\bMCP_APP_VIEW_LIMIT\b/.test(String(error))) {
-        await this.call(entry, { op: 'cancel-open', openId: entry.remoteOpenId }).catch(() => {});
+        cancel = this.call(entry, { op: 'cancel-open', openId: entry.remoteOpenId }).catch(() => {});
+        // A lost reply could hide a live page. Let its cleanup settle before
+        // waking a waiter. A definitive refusal releases the local slot now.
+        if (!releasedRemote && !isMcpAppOpenRejectedBeforeAllocation(error)) await cancel;
       }
-      throw error;
-    } finally {
-      // Retiring an open attempt releases its reservation, but is not a viewer page closing.
-      const freedLocal = this.opening.delete(entry) && !mounted;
+      const freedLocal = this.opening.delete(entry);
       if (freedLocal || releasedRemote)
         this.deps.released?.(owner, caller, releasedRemote ? deviceId : undefined, freedLocal ? 'pending' : undefined);
+      await cancel;
+      throw error;
     }
   }
 
