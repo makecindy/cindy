@@ -1344,6 +1344,21 @@ describe('provider share guest routing', () => {
     expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 启动、leaveProviderShare 退出（含其后的名单刷新）和远程目标解析入口。
+  // - Bug／规则依据：用户在本机成功退出的分享已经确认不在了；退出后的名单刷新即使失败，也不能把它报成“暂不可用”（Greptile 审阅指出）。
+  // - 现有覆盖缺口：已有退出用例只检查偏好清理和 leftMemberIds，没有检查任务里看到的错误分类。
+  // - 最小失败输入：完整名单含 share-1，退出成功，退出后的那次名单刷新失败。
+  // - tier：unit。
+  it('keeps the removed verdict for a share left on this computer when the next list refresh fails', async () => {
+    state.received = [received('active')];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    state.receivedError = true;
+    await leaveProviderShare('m1');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+  });
+
   it('keeps the local directory budget from the list request start and does not renew it after a failure', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     try {
