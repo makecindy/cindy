@@ -98,9 +98,13 @@ function hasUnavailableSubscription(snapshot: ProvidersSnapshot | null): boolean
 function hasRecoveredSubscription(previous: ProvidersSnapshot | null, next: ProvidersSnapshot): boolean {
   if (!previous || previous.dataOwnerId !== next.dataOwnerId
     || previous.ownerGeneration !== next.ownerGeneration) return false;
-  const unavailableIds = new Set(previous.providers.filter(isUnavailableSubscription).map(provider => provider.id));
-  return next.providers.some(provider => unavailableIds.has(provider.id)
-    && provider.connected && !provider.suspended && !provider.removed && !provider.subscriptionReadUnavailable);
+  const previouslyUnavailable = new Map(previous.providers.filter(isUnavailableSubscription)
+    .map(provider => [provider.id, provider.connected]));
+  return next.providers.some(provider => {
+    if (!provider.connected || provider.suspended || provider.removed) return false;
+    const wasConnected = previouslyUnavailable.get(provider.id);
+    return wasConnected !== undefined && (!wasConnected || !provider.subscriptionReadUnavailable);
+  });
 }
 
 /**
