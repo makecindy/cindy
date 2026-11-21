@@ -26,6 +26,7 @@ import { readPrCheckDiagnosis } from '@cindy/maker-shared/schedule-model';
 import { deviceName } from '../device-link/deviceName.js';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveSystemNodeInterpreter } from './hook-runtimes.js';
 
 /** Platform port: Desktop uses utilityProcess; Node Host uses its own Node executable. */
 let spawnNodeScript = (script: string, cwd: string): ReturnType<typeof spawn> => {
@@ -80,28 +81,17 @@ export interface PreRunHookInput {
 }
 
 /**
- * `xdt-node` 命令前缀:用 Cindy 自带的 Electron 运行时以 Node 模式执行脚本
- * (ELECTRON_RUN_AS_NODE)。给"机器上没有系统 node"的用户兜底——AI 生成器探测
- * 不到系统 node 时改发 `xdt-node <script>`,执行时在这里解析成当前 app 的
- * process.execPath,**不把 exe 绝对路径写进 DB**(app 升级/换装路径变了命令
- * 依然有效)。纯 node 测试环境下 process.execPath 就是 node 本身,同样成立。
+ * `node` / `xdt-node` 首 token 在执行时解析为真实 Node 解释器:PATH 不可用
+ * 时由 hook-runtimes 发现版本管理器安装。xdt-node 找不到可用运行时则
+ * fail-closed,不能退回 RunAsNode(正式包可能只启动 GUI 并以 0 退出)。
+ * 只有首 token 会替换,后续脚本参数与 shell 文本保持原样。
  */
-const XDT_NODE_PREFIX = /^xdt-node\s+/;
-
-/** 解析 xdt-node 前缀(纯函数,可测)。普通命令原样返回。 */
-export function resolveHookCommand(command: string): {
-  command: string;
-  extraEnv: Record<string, string>;
-} {
-  if (XDT_NODE_PREFIX.test(command.trim())) {
-    const rest = command.trim().replace(XDT_NODE_PREFIX, '');
-    return {
-      command: `"${process.execPath}" ${rest}`,
-      extraEnv: { ELECTRON_RUN_AS_NODE: '1' },
-    };
-  }
-  return { command, extraEnv: {} };
-}
+const NODE_INTERPRETER_PREFIX = /^(node|xdt-node)(?=\s)/;
+const INVALID_XDT_NODE_PREFIX = /^xdt-node(?:$|[;&|])/;
+const XDT_NODE_RUNTIME_ERROR =
+  'xdt-node requires a working Node.js runtime; install Node.js or repair the version-manager installation';
+const INVALID_XDT_NODE_COMMAND_ERROR =
+  'invalid pre-run hook configuration: xdt-node must be followed by a script command';
 
 export type PreRunHookResult = PreRunHookRunResult;
 
@@ -171,7 +161,8 @@ export function findShellSyntaxError(
 
 /** 保存任务前校验前置检查命令;语法错误抛 invalid,让写错的命令当场被拒。 */
 export async function assertPreRunHookCommandSyntax(command: string): Promise<void> {
-  const syntaxError = await findShellSyntaxError(resolveHookCommand(command).command);
+  if (INVALID_XDT_NODE_PREFIX.test(command.trim())) throw new Error(INVALID_XDT_NODE_COMMAND_ERROR);
+  const syntaxError = await findShellSyntaxError(command);
   if (syntaxError) {
     throw new Error(
       `invalid pre-run hook configuration: shell syntax error in command: ${firstLine(syntaxError)}`,
@@ -206,36 +197,37 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     timedOut: false,
     aborted: true,
   });
+  const timedOutResult = (): PreRunHookResult => ({
+    status: 'timed_out',
+    decision: 'block',
+    exitCode: null,
+    durationMs: Date.now() - startedAt,
+    stdout: '',
+    stderr: '',
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: true,
+    aborted: false,
+    error: `pre-run hook timed out after ${timeoutMs ?? 0}ms`,
+  });
   // 进门先查:任务已被 pause/delete(信号已 abort)→ 不 spawn,直接返回
   if (input.signal?.aborted) return abortedResult();
 
-  const resolved = resolveHookCommand(input.command);
+  let command = input.command;
   // A literal script path, never a shell expression or Node CLI option. This is separate
   // from legacy xdt-node, whose Electron Node-mode behavior is unsuitable for shipped fuses.
   const nodeScript = /^cindy-node-script\s+"([^"\r\n]+)"\s*$/.exec(input.command.trim());
   // 预检与真实执行共用同一个取消信号和超时预算。
-  const syntaxError = await findShellSyntaxError(resolved.command, {
+  const syntaxError = await findShellSyntaxError(command, {
     signal: input.signal,
     timeoutMs,
   });
   if (input.signal?.aborted) return abortedResult();
-  const remainingTimeoutMs =
+  let remainingTimeoutMs =
     timeoutMs === undefined ? undefined : timeoutMs - (Date.now() - startedAt);
   // 预检已耗尽配置的超时预算:不再启动真实命令,直接按超时阻止本轮。
   if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
-    return {
-      status: 'timed_out',
-      decision: 'block',
-      exitCode: null,
-      durationMs: Date.now() - startedAt,
-      stdout: '',
-      stderr: '',
-      stdoutTruncated: false,
-      stderrTruncated: false,
-      timedOut: true,
-      aborted: false,
-      error: `pre-run hook timed out after ${timeoutMs}ms`,
-    };
+    return timedOutResult();
   }
   if (syntaxError) {
     return {
@@ -251,6 +243,44 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
       aborted: false,
       error: `shell syntax error in command: ${firstLine(syntaxError)}`,
     };
+  }
+
+  const trimmedCommand = input.command.trim();
+  const interpreterPrefix = NODE_INTERPRETER_PREFIX.exec(trimmedCommand);
+  let interpreter: string | null = null;
+  if (interpreterPrefix) {
+    try {
+      interpreter = await resolveSystemNodeInterpreter({
+        signal: input.signal,
+        timeoutMs: remainingTimeoutMs,
+      });
+    } catch {
+      // xdt-node 在下方 fail-closed;裸 node 保留原命令与既有错误语义。
+    }
+    if (input.signal?.aborted) return abortedResult();
+    remainingTimeoutMs = timeoutMs === undefined ? undefined : timeoutMs - (Date.now() - startedAt);
+    if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) return timedOutResult();
+  }
+  const invalidXdtNode = INVALID_XDT_NODE_PREFIX.test(trimmedCommand);
+  if (invalidXdtNode || (interpreterPrefix?.[1] === 'xdt-node' && !interpreter)) {
+    const error = invalidXdtNode ? INVALID_XDT_NODE_COMMAND_ERROR : XDT_NODE_RUNTIME_ERROR;
+    return {
+      status: 'failed',
+      decision: 'block',
+      exitCode: null,
+      durationMs: Date.now() - startedAt,
+      stdout: '',
+      stderr: error,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+      aborted: false,
+      error,
+    };
+  }
+  if (interpreterPrefix && interpreter) {
+    // 只替换首 token;其后的空白、引号、参数与 shell 操作符全部原样保留。
+    command = trimmedCommand.replace(NODE_INTERPRETER_PREFIX, interpreter);
   }
 
   return new Promise<PreRunHookResult>((resolve) => {
@@ -334,12 +364,12 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     input.signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
-      child = nodeScript ? spawnNodeScript(path.resolve(input.cwd || os.homedir(), nodeScript[1]), input.cwd || os.homedir()) : spawn(resolved.command, {
+      child = nodeScript ? spawnNodeScript(path.resolve(input.cwd || os.homedir(), nodeScript[1]), input.cwd || os.homedir()) : spawn(command, {
         shell: true,
         cwd: input.cwd?.trim() ? input.cwd : os.homedir(),
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, ...resolved.extraEnv },
+        env: process.env,
         // POSIX:自成进程组,超时/abort 时 kill(-pid) 才能连 shell 的子进程一起杀
         // (见 proc-util killProcessTree);Windows 忽略此参数,树杀走 taskkill /T。
         detached: process.platform !== 'win32',
