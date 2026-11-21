@@ -95,7 +95,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
   return (
     <div
       className={cn(
-        'w-full max-w-[914px] rounded-[12px] border p-4',
+        'w-full max-w-[914px] rounded-xl border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
       )}
     >
@@ -121,7 +121,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
       {/* 文件清单:自适应高度,超出封顶滚动。上限 = 4 整行 + 半行(行高 ≈65px:
           48px 缩略图 + py-2 + 分隔线)——刻意露出第 5 条的半截,让"还能往下滚"
           一眼可见(整 4 条收边会看起来像全部内容)。 */}
-      <div className="mt-3 max-h-[296px] overflow-y-auto rounded-[8px] border border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]">
+      <div className="mt-3 max-h-[296px] overflow-y-auto rounded-lg border border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]">
         {pending.items.map((item, idx) => (
           <div
             key={`${item.absPath}#${idx}`}
@@ -179,7 +179,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
           palette="permission" size="md" compact type="button" onClick={handleAllow}>
           <Check className="size-4" />
           <span>{t('ghostGrant.confirm.allow')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
+          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-px text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             {window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'}
           </kbd>
         </Button>

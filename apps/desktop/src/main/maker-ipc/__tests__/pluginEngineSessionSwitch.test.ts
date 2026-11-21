@@ -14,6 +14,7 @@
  * - tier：unit(依赖注入，与 sessionAgentSwitchHandler.test.ts 同一套 harness 形状)。
  */
 import { describe, expect, it, vi } from 'vitest';
+import { providerShareGuestPeer } from '@cindy/device-link';
 
 import {
   applyPendingAgentSwitchIfIdle,
@@ -188,16 +189,33 @@ describe('switching a task onto a plugin engine', () => {
     expect(pendingSwitches.get('s1')).toBeUndefined();
   });
 
-  it('does not register a switch to a shared provider or use local admission for an unsupported remote target', async () => {
-    const admitRemotePluginEngineTarget = vi.fn();
+  it('switches to a shared plugin engine via remote admission, while rejecting raw wire peers or unwired remote targets', async () => {
+    const admitRemotePluginEngineTarget = vi.fn(async () => ({
+      model: 'deepseek-v4', effort: 'high', permissionMode: 'default', engineName: 'DeepSeek Harness',
+    }));
     const { deps, pendingSwitches } = makeDeps(makeRow(), { admitRemotePluginEngineTarget });
-    await expect(performSessionAgentSwitch(deps, {
-      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE, agentDeviceId: 'share:s1',
-    })).rejects.toThrow('[PRECONDITION_FAILED]');
-    expect(admitRemotePluginEngineTarget).not.toHaveBeenCalled();
-    expect(pendingSwitches.get('s1')).toBeUndefined();
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, agentDeviceId: 'share:s1',
+    });
+    expect(admitRemotePluginEngineTarget).toHaveBeenCalledWith('share:s1', expect.objectContaining({ providerId: ENGINE, model: 'deepseek-v4' }));
+    expect(pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', targetAgentDeviceId: 'share:s1',
+    });
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(deps.admitPluginEngineTarget).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', agentDeviceId: 'share:s1', sdkSessionId: null,
+    }));
 
-    // Without remote admission wired, targeting another computer is refused.
+    // Raw wire peers are never valid task agentDeviceId targets (rejected at parameter validation).
+    admitRemotePluginEngineTarget.mockClear();
+    await expect(performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE,
+      agentDeviceId: providerShareGuestPeer('s1', 'm1', 'd1'),
+    })).rejects.toThrow('[INVALID_PARAMS]');
+    expect(admitRemotePluginEngineTarget).not.toHaveBeenCalled();
+
+    // Without remote admission wired, targeting another computer or share is refused.
     const { deps: noRemoteDeps, pendingSwitches: noRemotePending } = makeDeps(makeRow());
     await expect(performSessionAgentSwitch(noRemoteDeps, {
       sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE, agentDeviceId: 'mini',

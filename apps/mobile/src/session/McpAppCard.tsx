@@ -1,8 +1,9 @@
 import { mcpAppInitialHeight, parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { MCP_APP_MAX_HEIGHT } from '@cindy/maker-shared/mcp-app-controller';
-import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ActivityIndicator, Keyboard, Pressable, StyleSheet, View, type ViewInstance } from 'react-native';
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { ActivityIndicator, Dimensions, Keyboard, Pressable, StyleSheet, View, type ViewInstance } from 'react-native';
 import { MessageListRevealContext, MessageListKeepKeyboardContext } from './messageListReveal';
+import { MessageListItemViewableContext, MessageListVisibilityContext } from './messageListVisibility';
 import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { Text } from '@/components/AppText';
@@ -61,7 +62,29 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   const foreground = host?.foreground ?? false;
   // Keyboard resizing can temporarily remove the row from the visible set.
   // Its focused document must survive that transition, including unsaved input.
-  const surfaceActive = active || !!state.focus;
+  const list = useContext(MessageListVisibilityContext);
+  const rowVisible = useContext(MessageListItemViewableContext);
+  const card = useRef<ViewInstance>(null);
+  const [watchQuota, setWatchQuota] = useState(false);
+  const [quotaOffscreen, setQuotaOffscreen] = useState(false);
+  const checkQuota = useRef<() => boolean>(() => true);
+  checkQuota.current = () => {
+    const bounds = card.current?.getBoundingClientRect?.();
+    const viewport = list?.viewport?.();
+    const visible = active && rowVisible !== false && (!list || !bounds || (bounds.height > 0 &&
+      bounds.bottom > (viewport?.top ?? 0) && bounds.top < (viewport?.bottom ?? Dimensions.get('window').height)));
+    setQuotaOffscreen(!visible);
+    return visible;
+  };
+  useLayoutEffect(() => {
+    if (!watchQuota) return;
+    checkQuota.current();
+    return list?.onViewportChange(() => { checkQuota.current(); });
+  }, [watchQuota, list, active, rowVisible]);
+  useEffect(() => {
+    if (view?.document) setWatchQuota(false);
+  }, [view?.document]);
+  const surfaceActive = (active || !!state.focus) && !quotaOffscreen;
   const width = useRef(0);
   const frame = useRef<ViewInstance>(null);
   const reveal = useContext(MessageListRevealContext);
@@ -104,14 +127,18 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   }), [mode, colors, i18n.resolvedLanguage, i18n.language]);
   const contextRef = useRef(context);
   contextRef.current = context;
+  const isPlugin = !!plugin;
   const open = host?.open;
   const hasHost = !!host;
   useEffect(() => {
     const measuredWidth = frame.current?.getBoundingClientRect?.().width ?? width.current;
     setView(undefined);
     if (!surfaceActive || (hasHost && !foreground)) {
-      const remembered = deviceId && getMobileHeights().get(JSON.stringify([deviceId, sessionId, clientId]), measuredWidth);
-      setState({ height: remembered || declaredHeight, loading: false });
+      const remembered = deviceId ? getMobileHeights().get(JSON.stringify([deviceId, sessionId, clientId]), measuredWidth) : undefined;
+      // Keep a compact waiting row while it is offscreen so it cannot manufacture
+      // a new intersection by expanding into a full error placeholder.
+      setState((previous) => ({ ...previous, height: remembered ?? previous.height ?? declaredHeight, loading: false,
+        error: quotaOffscreen ? 'mcpApps.viewLimit' : undefined }));
       return;
     }
     if (!mcpAppSurfaceAvailable || !open) {
@@ -122,7 +149,10 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
       setState((previous) => ({ ...previous, loading: false, error: 'mcpApps.loadFailed' }));
       return;
     }
-    const current = open(deviceId, sessionId, clientId, contextRef.current, declaredHeight);
+    const current = open(deviceId, sessionId, clientId, contextRef.current, isPlugin, () => {
+      setWatchQuota(true);
+      return checkQuota.current();
+    }, declaredHeight);
     current.setWidth(measuredWidth);
     setView(current);
     const unsubscribe = current.subscribe(setState);
@@ -132,11 +162,11 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
       // card/route unmount. Its close() removes that same View only at the bound.
       void current.close();
     };
-  }, [open, hasHost, foreground, deviceId, sessionId, clientId, attempt, surfaceActive, declaredHeight]);
+  }, [open, hasHost, foreground, deviceId, sessionId, clientId, attempt, surfaceActive, quotaOffscreen, isPlugin, declaredHeight]);
   useEffect(() => { if (!view?.closing) void view?.controller.context(context).catch(() => {}); }, [view, context]);
   const { error, loading, height, filesUnavailable } = state;
   return (
-    <View style={[styles.card, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+    <View ref={card} collapsable={false} onLayout={() => { if (watchQuota) checkQuota.current(); }} style={[styles.card, { borderColor: colors.border, backgroundColor: colors.surface }]}>
       <View style={styles.header}>
         <McpAppIdentity title={title} plugin={plugin} customMcp={customMcp} />
         {surfaceActive && loading && <ActivityIndicator size="small" color={colors.textSecondary} />}

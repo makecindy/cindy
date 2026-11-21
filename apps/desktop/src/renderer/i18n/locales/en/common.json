@@ -567,7 +567,8 @@
       "calloutUnknown": "If you don’t recognize this person, decline; the link stops working once declined.",
       "approve": "Approve Sharing",
       "reject": "Decline Request",
-      "later": "Decide Later"
+      "later": "Decide Later",
+      "calloutPluginEngine": "{{name}} can use it without installing the plugin or CLI on their computer, using this computer’s CLI sign-in and quota."
     },
     "apply": {
       "loading": "Reading share link…",
@@ -1954,9 +1955,9 @@
       },
       "configWarning": "Cindy cannot evaluate some SSH configuration rules. The host list or connection details may differ from terminal SSH.",
       "configDiagnostic": {
-        "io": "Cindy could not read your SSH configuration. The last successfully loaded hosts are still shown. Check file permissions and reload.",
-        "syntax": "Cindy could not parse your SSH configuration. The last successfully loaded hosts are still shown. Fix the configuration and reload.",
-        "limit": "The SSH configuration is too deeply nested or too large for Cindy to read safely. The last successfully loaded hosts are still shown."
+        "io": "Cindy could not read your SSH configuration. The hosts that loaded last are still shown. Check file permissions and reload.",
+        "syntax": "Cindy could not parse your SSH configuration. The hosts that loaded last are still shown. Fix the configuration and reload.",
+        "limit": "The SSH configuration is too deeply nested or too large for Cindy to read safely. The hosts that loaded last are still shown."
       },
       "empty": {
         "title": "No remote machines yet.",
@@ -3757,6 +3758,7 @@
         "connecting": "Connecting…",
         "rename": "Rename",
         "suspended": "Disabled",
+        "hidden": "Hidden",
         "unconfigured": "Not configured"
       },
       "button": {
@@ -3767,7 +3769,9 @@
         "cancel": "Cancel",
         "retry": "Retry model discovery",
         "retrying": "Retrying discovery…",
-        "enableProvider": "Enable Provider"
+        "enableProvider": "Enable Provider",
+        "showProvider": "Show",
+        "hideInstead": "Hide Instead"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4148,7 +4152,7 @@
         "paymentRequired": "Paid",
         "paymentUnlock": "Pay to unlock",
         "enableModel": "Enable This Model",
-        "capabilityGroupHint": "Not shown in the chat model picker. The switch controls visibility in the relevant feature.",
+        "capabilityGroupHint": "Not shown in the model picker. The switch decides whether the relevant feature can use the model.",
         "accessWriteFailed": "Couldn’t save the change. Try again.",
         "visibilityWriteFailed": "Couldn't save the model visibility setting. Try again, or restart Cindy if the problem continues.",
         "disabledGroup": "Disabled",
@@ -4292,22 +4296,22 @@
           "aria": "Filter by model type",
           "chat": "Chat"
         },
-        "hiddenGroup": "Not shown",
+        "hiddenGroup": "Hidden",
         "management": {
           "brand": "Manufacturer"
         },
         "manage": {
           "title": "Models",
-          "selected": "{{count}} selected",
-          "hint": "Use the switches to choose your chat models.",
+          "selected": "{{count}} shown",
+          "hint": "Switches decide which models appear in the model picker. Turning one off only hides it; you can still choose it under Hidden at the bottom of the picker.",
           "menu": "Manage",
           "arrange": "Arrange list",
           "byBrand": "Group by maker",
           "byName": "Order by model name",
-          "selection": "Model selection",
-          "showAll": "Select all models",
-          "hideAll": "Clear selection",
-          "reset": "Restore default selection",
+          "selection": "Show in model picker",
+          "showAll": "Show all models",
+          "hideAll": "Hide all models",
+          "reset": "Restore default visibility",
           "connectionRequired": "Connect to use these models. Your selections are saved."
         }
       },
@@ -4322,7 +4326,8 @@
         "groupBadge_other": "Provider Group · {{count}} computers",
         "groupNote": "{{device}} made this provider a provider group. When you start a task with it, {{device}} assigns the task to one of the computers below by its group strategy, and moves it to another one if that computer runs into a problem. While {{device}} is online, use Remote & Sharing here to manage the group and its shares.",
         "groupMembersTitle": "Computers in the Group",
-        "groupMembersFailed": "Couldn’t get the status of the computers in the group right now."
+        "groupMembersFailed": "Couldn’t get the status of the computers in the group right now.",
+        "hiddenBanner": "Hidden from the model picker on this computer. Favorites and sessions that use it are unaffected."
       },
       "genericOAuth": {
         "subtitle": "Subscription account",
@@ -4366,7 +4371,8 @@
           "rejected": "This provider refused the request. The list below is from the last successful refresh. Try again later, or use a different provider.",
           "empty": "This provider returned no usable models this time. The list below is from the last successful refresh. Check your account's access, then retry."
         },
-        "suspendedBanner": "This provider is disabled. Credentials are kept; enable it to use its models again.",
+        "suspendedBanner": "This provider is disabled, so new sessions and background features no longer use it. Credentials are kept. To only keep it out of the model picker, hide it instead.",
+        "hiddenBanner": "Hidden from the model picker. Sessions and background features that use it are unaffected, and you can still choose it under Hidden at the bottom of the picker.",
         "remoteAccess": {
           "label": "Allow remote use",
           "description": "When on, your other computers and the people you share with can use this provider’s models. The Agent runs on this computer, using this computer’s sign-in and quota.",
@@ -4576,7 +4582,9 @@
       },
       "menu": {
         "disableProvider": "Disable This Provider",
-        "enableProvider": "Enable This Provider"
+        "enableProvider": "Enable This Provider",
+        "hideProvider": "Hide from Model Picker",
+        "showProvider": "Show in Model Picker"
       },
       "builtinApiKey": {
         "subtitle": "API key connection",
@@ -6976,7 +6984,7 @@
     },
     "devices": {
       "title": "Device Link",
-      "description": "Devices signed in with the same Feishu account can discover each other. Once \"Allow control\" is on, your other devices can remotely control {{appName}} on this machine.",
+      "description": "Devices signed in with the same Feishu account can discover each other. Once “Allow control” is on, your other devices can remotely control {{appName}} on this machine.",
       "allowControl": "Allow same-account devices to control this machine",
       "allowControlHint": "When enabled, other devices signed in with the same account can control this machine without per-connection approval. A visible indicator is shown while being controlled, and you can disconnect at any time.",
       "keepAwake": "Keep computer awake",
@@ -8559,7 +8567,8 @@
           "description": "When on, your other computers can run tasks with this engine. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on.",
           "unsupported": "This plugin doesn’t support using its engine from other computers yet.",
           "remoteControlOff": "This computer doesn’t allow remote control yet, so other computers can’t use this engine.",
-          "ariaLabel": "Allow your other computers to use {{engine}}"
+          "ariaLabel": "Allow your other computers to use {{engine}}",
+          "descriptionShareable": "When on, your other computers and people you share with can run tasks with this engine without installing the plugin. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on."
         },
         "githubRelease": {
           "title": "Plugin updates",
@@ -8944,7 +8953,7 @@
         "projectReadFailed": "Could not read project settings. Try again."
       },
       "usage": {
-        "downloadExplanation": "Cumulative download URL requests. Each successfully issued package URL counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
+        "downloadExplanation": "Cumulative download URL requests. Each package URL that is issued counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} uses",
         "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience."
@@ -14173,6 +14182,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Can't read that computer's models right now",
         "favoritesGroup": "Favorites",
         "recentGroup": "Recent",
+        "hiddenGroup": "Hidden ({{count}})",
+        "hiddenGroupHint": "Hidden providers and models can still be chosen",
         "recentEmpty": "No recent models yet — pick a model and it will show up here",
         "favoritesSaveFailed": "Could not save favorite changes",
         "favoritesCleanupFailed": "Could not remove favorites for revoked provider shares",
@@ -18102,7 +18113,7 @@
         "domain-radar": {
           "name": "Domain radar",
           "description": "Periodically collect the latest updates in a topic you follow and deliver an opinionated digest",
-          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "prompt": "Collect the latest developments about “{{topic}}” from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
           "params": {
             "topic": {
               "label": "Topic to follow",
@@ -18124,12 +18135,12 @@
         "weekly-work-draft": {
           "name": "Weekly report drafter",
           "description": "Compile this week's work from documents in the working directory into a report draft",
-          "prompt": "Based on this week's changes to documents, notes, and works in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+          "prompt": "Based on this week's changes to documents, notes, and works in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as “Done this week / In progress / Next week / Needs coordination”, concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
         },
         "knowledge-freshness": {
           "name": "Knowledge base freshness check",
           "description": "Monthly health check of working-directory docs for outdated or conflicting content",
-          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as “update / merge / delete” suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
         }
       }
     },
@@ -18167,8 +18178,8 @@
       "secretMissing": "Events are rejected until a secret is generated.",
       "rotateFailed": "Couldn't generate the secret. Secrets can only be managed on the computer running this task.",
       "genericSender": "the sender",
-      "secretFillHint": "Enter it as \"{{field}}\" in {{sender}}.",
-      "secretPastePlaceholder": "Paste \"{{field}}\" from {{sender}}",
+      "secretFillHint": "Enter it as “{{field}}” in {{sender}}.",
+      "secretPastePlaceholder": "Paste “{{field}}” from {{sender}}",
       "secretSave": "Save secret",
       "secretSaved": "Secret saved.",
       "secretSaveFailed": "Couldn't save the secret. Secrets can only be managed on the computer running this task.",
@@ -18372,7 +18383,7 @@
       "marked": "Marked as duplicate",
       "bannerPrefix": "This issue is a duplicate of",
       "bannerSuffix": "",
-      "bannerTitleWrap": "\"{{title}}\"",
+      "bannerTitleWrap": "“{{title}}”",
       "checkPanel": {
         "ariaLabel": "Similar issues found",
         "close": "Close",
@@ -21545,6 +21556,7 @@
       "reviewed": "Reviewed",
       "verified-publisher": "Verified publisher"
     },
+    "viewLimit": "Too many pages are open. Scroll another page out of view or collapse it, and this page will open automatically.",
     "pluginRevoked": "The plugin was disabled or changed. This page is no longer available.",
     "pluginCspRejected": "The page requested an undeclared domain and was blocked.",
     "filesOnExecutionComputer": "View file contents on the execution computer",

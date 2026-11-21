@@ -17,7 +17,7 @@ describe('RemoteDesktopConfirmationNotice', () => {
 
     const status = screen.getByRole('status');
 
-    expect(status.className).toContain('rounded-[12px]');
+    expect(status.className).toContain('rounded-xl');
     expect(status.textContent).toContain(
       'ccAgent.remoteDesktopConfirmation.title',
     );

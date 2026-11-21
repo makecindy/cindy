@@ -14,6 +14,12 @@
   "usageOnlyDevice": "{{name}} only",
   "usagePlans": "Plan allowances",
   "usageBudget": "Remaining period budget",
+  "usageWaiting": "Plan allowances and today’s usage appear once your computer connects",
+  "usageUpdateDesktop": "Update Cindy on your computer to see usage",
+  "usageWaitingTitle": "Your usage will appear here",
+  "usageWaitingCopy": "Once your phone connects to your computer, plan allowances and daily usage for each account sync automatically, usually within a few seconds.",
+  "usageUpdateDesktopTitle": "Update Cindy on your computer",
+  "usageUpdateDesktopCopy": "Cindy on your computer is too old to send usage to your phone. It will appear here after you update.",
   "management": {
     "title": "Device Management",
     "openDevice": "View details for {{name}}",

@@ -829,7 +829,10 @@ export function MessageRenderer({
     [scrollResetKey, remoteDeviceId, accountGeneration]);
   useEffect(() => () => richContent?.clear(), [richContent]);
   // Match LegendList's key: a new list must never inherit old visibility.
-  const messageListVisibility = useMemo(() => new MessageListVisibility(), [scrollResetKey]);
+  const listRef = useRef<LegendListRef>(null);
+  const messageListVisibility = useMemo(() => new MessageListVisibility(
+    () => listRef.current?.getNativeScrollRef()?.getBoundingClientRect?.(),
+  ), [scrollResetKey]);
   const tableDocuments = useTableDocumentList(richContent);
   const historyPositioning = useMessageHistoryPositioning();
   const historyPositioningRef = useRef(historyPositioning);
@@ -858,7 +861,6 @@ export function MessageRenderer({
   );
   const focusedItemKeyRef = useRef(focusedItemKey);
   focusedItemKeyRef.current = focusedItemKey;
-  const listRef = useRef<LegendListRef>(null);
   const listMetricsRef = useRef<LegendListMetrics>({ footerSize: 0, headerSize: 0 });
   const listTopPaddingRef = useRef(0);
   const listBottomPaddingRef = useRef(0);
@@ -2360,6 +2362,7 @@ export function MessageRenderer({
     event: NativeSyntheticEvent<NativeScrollEvent>,
     isFinalDragSample = false,
   ) => {
+    messageListVisibility.viewportChanged();
     richContent?.onScroll();
     if (!historyPositioningRef.current) return;
     // Cancellation releases ownership immediately. Only endDrag may still consume its final
@@ -2504,6 +2507,7 @@ export function MessageRenderer({
     handoffHistoryPrependToUser,
     scheduleStickyShareCheck,
     richContent,
+    messageListVisibility,
     processViewport.scroll,
     processViewport.inspecting,
   ]);
@@ -2674,13 +2678,14 @@ export function MessageRenderer({
   }, [attemptAutoLoadEarlier, loadEarlierEvaluationVersion]);
 
   const handleListLayout = useCallback((event: LayoutChangeEvent) => {
+    messageListVisibility.viewportChanged();
     const viewportHeight = event.nativeEvent.layout.height;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
     scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
     markMobileMvcpSettle();
     if (nearBottomRef.current) runStickToLatestVerify();
     acknowledgeCompanionReadRef.current();
-  }, [markMobileMvcpSettle, runStickToLatestVerify]);
+  }, [messageListVisibility, markMobileMvcpSettle, runStickToLatestVerify]);
 
   const handleListMetricsChange = useCallback((metrics: LegendListMetrics) => {
     listMetricsRef.current = metrics;
@@ -2705,6 +2710,7 @@ export function MessageRenderer({
   // 上翻历史时 nearBottomRef=false,不打断。animated:false → 即时跟随、不排队动画。
   // LegendList 内置 maintainScrollAtEnd 已弃用(见 LegendList props 注释),不存在双机制叠加。
   const handleContentSize = useCallback((_width: number, height: number) => {
+    messageListVisibility.viewportChanged();
     reconcileReopeningAnchor();
     markMobileMvcpSettle();
     scrollMetricsRef.current = { ...scrollMetricsRef.current, contentHeight: height };
@@ -2730,6 +2736,7 @@ export function MessageRenderer({
     acknowledgeCompanionReadRef.current();
   }, [
     getTailFollower,
+    messageListVisibility,
     reconcileReopeningAnchor,
     markMobileMvcpSettle,
     restoreHistoryAnchorOnce,

@@ -1,3 +1,4 @@
+import { createCompanyTokenReporting } from './usage/companyTokenReporting.desktop.js';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
 import { createPersonalBuildMonitor, createPersonalRendererProbe, personalMonitorEnvironment } from './personalBuildMonitor.js';
@@ -680,7 +681,7 @@ import {
   setPhysicalInputShielded,
 } from './mcp-integrations/computer.desktop.js';
 import * as usageReporting from './product-token-usage/reporting.js';
-import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
+import { initAnalyticsSettingsService, noteAuthColdStartState, onAnalyticsPermissionChange } from './analyticsSettingsService';
 import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
@@ -6897,6 +6898,8 @@ const registerIpcHandlers = () => {
 
   // ── Auth IPC handlers (delegated to authManager) ──
 
+  const companyReporting = !hostClientMode ? createCompanyTokenReporting(onAnalyticsPermissionChange) : null;
+  app.once('will-quit', () => companyReporting?.dispose());
   ipcMain.handle('auth:initialize', async () => {
     try {
       let pendingCompletion: Promise<authManager.AuthState> | null = null;
@@ -6912,6 +6915,7 @@ const registerIpcHandlers = () => {
       // 以后台完成的那次登录为准。
       const markAuthMilestone = (s: authManager.AuthState) => {
         if (s.isAuthenticated) markStartupMilestone('auth-initialized');
+        if (s.canEnterApp || !pendingCompletion) companyReporting?.refresh();
       };
       markAuthMilestone(state);
       void (pendingCompletion as Promise<authManager.AuthState> | null)?.then(markAuthMilestone, () => undefined);
@@ -7276,6 +7280,10 @@ const registerIpcHandlers = () => {
       });
       registerMakerCoreIpc(ipcMaker, {
         builtinApiKeyDeps,
+        // Keep aligned with maker-host/index.ts historyRemote injection. That provider fact wires
+        // sendToRemoteSession into cindy_helper; the shared register option carries the same fact
+        // into model-facing delivery hints.
+        supportsRemoteSessionHandoff: true,
         onAnySessionTurnKeepaliveChange: (isRunning) => {
           setMainWindowBackgroundThrottlingForActiveTurn(isRunning);
           notifyUpdateAutoRelaunchBusyStateChanged();

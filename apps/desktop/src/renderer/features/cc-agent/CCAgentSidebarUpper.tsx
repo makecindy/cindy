@@ -407,8 +407,8 @@ function RemoteSidebarLoadNotice({
           'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]',
         !quietDeviceLoading &&
           (partial
-            ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
-            : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center'),
+            ? 'mx-3 flex items-start gap-2 rounded-lg px-3 py-2'
+            : 'mx-3 flex flex-col items-center gap-3 rounded-xl px-4 py-8 text-center'),
       )}
     >
       {isError ? (

@@ -305,7 +305,7 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
           </Button>
         }
       />
-      <div className="flex flex-col gap-[14px]">
+      <div className="flex flex-col gap-3.5">
 
         {error && (
           <div className="flex items-center justify-between gap-3 text-12 text-[var(--error-fg)]">
