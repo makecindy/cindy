@@ -7,14 +7,15 @@
  * 找不到真实运行时时,xdt-node 明确 fail-closed(见 pre-run-hook),不使用
  * 正式包已关闭的 Electron RunAsNode。
  *
- * 结果按进程生命周期 + TTL 缓存,让"用户刚装完或修复 node"无需重启也能
+ * 结果按执行目录 + TTL 缓存,让"用户刚装完或修复 node"无需重启也能
  * 在几分钟后被感知。调用方取消或本轮预算耗尽不会写成全局不可用缓存。
  */
 
 import { spawn } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { killProcessTree } from './proc-util.js';
 
 const PROBE_TIMEOUT_MS = 3_000;
 const CACHE_TTL_MS = 5 * 60_000;
@@ -24,6 +25,8 @@ let cached: { value: boolean; at: number } | null = null;
 export interface ProbeOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** 与真实 hook 一致的工作目录;asdf / mise 的 PATH shim 会据此选择版本。 */
+  cwd?: string;
 }
 
 /** 探测一条命令能否成功执行(exit 0)。PATH 用 shell，候选绝对路径直接 exec，语义一致。 */
@@ -41,11 +44,7 @@ function probeCommand(command: string, args?: string[], options: ProbeOptions = 
     };
     let child: ReturnType<typeof spawn>;
     const kill = (): void => {
-      try {
-        child?.kill('SIGKILL');
-      } catch {
-        /* already exited */
-      }
+      if (child) killProcessTree(child.pid, child);
     };
     const onAbort = (): void => {
       kill();
@@ -58,7 +57,14 @@ function probeCommand(command: string, args?: string[], options: ProbeOptions = 
     timer.unref?.();
     options.signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      child = spawn(command, args ?? [], { shell: args === undefined, windowsHide: true, stdio: 'ignore' });
+      child = spawn(command, args ?? [], {
+        shell: args === undefined,
+        cwd: options.cwd,
+        windowsHide: true,
+        stdio: 'ignore',
+        // POSIX 下让 PATH shim 与其后代自成进程组,取消和超时才能整树终止。
+        detached: process.platform !== 'win32',
+      });
     } catch {
       settle(false);
       return;
@@ -84,25 +90,28 @@ export interface SystemNodeInterpreterOptions {
   signal?: AbortSignal;
   /** 本轮发现流程的总剩余预算,不是每个候选各自的新预算。 */
   timeoutMs?: number;
+  /** 真实 hook 的工作目录;缺省与执行器一样回落到用户目录。 */
+  cwd?: string;
   /** 以下依赖仅供单元测试隔离用户目录与真实进程。 */
   env?: NodeJS.ProcessEnv;
   home?: string;
   probeExecutable?: (executable: string, options?: ProbeOptions) => Promise<boolean>;
-  readVersions?: (directory: string) => string[];
+  readVersions?: (directory: string) => string[] | Promise<string[]>;
 }
 
-let cachedInterpreter: { value: string | null; at: number } | null = null;
+const cachedInterpreters = new Map<string, { value: string | null; at: number }>();
 
 interface VersionRoot {
   directory: string;
   executable: string;
 }
 
-function versionManagerCandidates(
+async function versionManagerCandidates(
   env: NodeJS.ProcessEnv,
   home: string,
-  readVersions: (directory: string) => string[],
-): string[] {
+  readVersions: (directory: string) => string[] | Promise<string[]>,
+  shouldStop: () => boolean,
+): Promise<string[]> {
   const current: string[] = [];
   const roots: VersionRoot[] = [];
   const executable = process.platform === 'win32' ? 'node.exe' : path.join('bin', 'node');
@@ -131,12 +140,14 @@ function versionManagerCandidates(
 
   const candidates = [...current];
   for (const root of roots) {
+    if (shouldStop()) return [];
     let versions: string[];
     try {
-      versions = readVersions(root.directory);
+      versions = await readVersions(root.directory);
     } catch {
       continue;
     }
+    if (shouldStop()) return [];
     versions = versions
       .filter(version => /^v?\d/.test(version))
       .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))
@@ -159,7 +170,9 @@ export async function resolveSystemNodeInterpreter(
   options: SystemNodeInterpreterOptions = {},
 ): Promise<string | null> {
   if (options.signal?.aborted) return null;
+  const cwd = options.cwd?.trim() ? options.cwd : os.homedir();
   const now = Date.now();
+  const cachedInterpreter = cachedInterpreters.get(cwd);
   if (!options.forceProbe && cachedInterpreter && now - cachedInterpreter.at < CACHE_TTL_MS) {
     return cachedInterpreter.value;
   }
@@ -168,7 +181,7 @@ export async function resolveSystemNodeInterpreter(
   if (options.signal?.aborted || (remaining() ?? 1) <= 0) return null;
   let value: string | null = null;
   const pathAvailable = await probeCommand('node --version', undefined, {
-    signal: options.signal, timeoutMs: remaining(),
+    signal: options.signal, timeoutMs: remaining(), cwd,
   });
   if (options.signal?.aborted || (remaining() ?? 1) <= 0) return null;
   if (pathAvailable) {
@@ -178,14 +191,16 @@ export async function resolveSystemNodeInterpreter(
     const home = options.home ?? os.homedir();
     const probe = options.probeExecutable ?? ((executable: string, probeOptions?: ProbeOptions) =>
       probeCommand(executable, ['--version'], probeOptions));
-    const readVersions = options.readVersions ?? readdirSync;
-    const candidates = versionManagerCandidates(env, home, readVersions);
+    const readVersions = options.readVersions ?? (async (directory: string) => readdir(directory));
+    const candidates = await versionManagerCandidates(env, home, readVersions, () =>
+      options.signal?.aborted === true || (remaining() ?? 1) <= 0);
+    if (options.signal?.aborted || (remaining() ?? 1) <= 0) return null;
     // 最多 4 个并发探测,既保持优先级,也把 PATH 失效后的最坏等待限制在约 12 秒。
     for (let offset = 0; offset < candidates.length; offset += 4) {
       const batch = candidates.slice(offset, offset + 4);
       const results = await Promise.all(batch.map(async executable => {
         try {
-          return await probe(executable, { signal: options.signal, timeoutMs: remaining() });
+          return await probe(executable, { signal: options.signal, timeoutMs: remaining(), cwd });
         } catch {
           return false;
         }
@@ -198,12 +213,12 @@ export async function resolveSystemNodeInterpreter(
       }
     }
   }
-  cachedInterpreter = { value, at: Date.now() };
+  cachedInterpreters.set(cwd, { value, at: Date.now() });
   return value;
 }
 
 /** 测试辅助:清缓存。 */
 export function __resetHookRuntimeCacheForTest(): void {
   cached = null;
-  cachedInterpreter = null;
+  cachedInterpreters.clear();
 }

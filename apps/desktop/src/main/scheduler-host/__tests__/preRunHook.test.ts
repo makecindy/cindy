@@ -22,7 +22,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-const nodeInterpreter = vi.hoisted(() => vi.fn(async (_options?: unknown): Promise<string | null> => 'node'));
+const nodeInterpreter = vi.hoisted(() => vi.fn(async (): Promise<string | null> => 'node'));
 vi.mock('../hook-runtimes', () => ({ resolveSystemNodeInterpreter: nodeInterpreter }));
 
 import {
@@ -281,8 +281,8 @@ describe('resolvePreRunHookTimeoutMs(无默认超时)', () => {
 });
 
 describe('Node 解释器执行回退', () => {
-  it('PATH 失效时使用带空格的真实 Node 路径,保留 PR 参数与 stdin', async () => {
-    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  it('PATH 失效时按字面使用带空格和 $& 的真实 Node 路径,保留 PR 参数与 stdin', async () => {
+    const { mkdtempSync, writeFileSync, rmSync, symlinkSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const pathMod = await import('node:path');
     const dir = mkdtempSync(pathMod.join(tmpdir(), 'real-node-hook-'));
@@ -295,13 +295,24 @@ describe('Node 解释器执行回退', () => {
         process.exit(2);
       `);
       const quotedScript = process.platform === 'win32' ? `"${script}"` : `'${script}'`;
-      const quotedNode = process.platform === 'win32' ? `"${process.execPath}"` : `'${process.execPath}'`;
+      const specialNode = pathMod.join(dir, 'real node$&runtime');
+      if (process.platform === 'win32') {
+        symlinkSync(pathMod.dirname(process.execPath), specialNode, 'junction');
+      } else {
+        symlinkSync(process.execPath, specialNode);
+      }
+      const executable = process.platform === 'win32'
+        ? pathMod.join(specialNode, pathMod.basename(process.execPath))
+        : specialNode;
+      const quotedNode = process.platform === 'win32' ? `"${executable}"` : `'${executable}'`;
       const prUrl = 'https://github.com/makecindy/cindy/pull/11722';
       nodeInterpreter.mockResolvedValueOnce(quotedNode);
       const result = await executePreRunHook({
         command: `node ${quotedScript} ${prUrl}`,
+        cwd: dir,
         stdinPayload: payload,
       });
+      expect(nodeInterpreter).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: dir }));
       expect(result).toMatchObject({ decision: 'skip', status: 'skipped', exitCode: 2 });
       expect(JSON.parse(result.stdout)).toEqual({ args: [prUrl], event: 'schedule-pre-run' });
     } finally {

@@ -253,6 +253,7 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
       interpreter = await resolveSystemNodeInterpreter({
         signal: input.signal,
         timeoutMs: remainingTimeoutMs,
+        cwd: input.cwd,
       });
     } catch {
       // xdt-node 在下方 fail-closed;裸 node 保留原命令与既有错误语义。
@@ -280,7 +281,7 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
   }
   if (interpreterPrefix && interpreter) {
     // 只替换首 token;其后的空白、引号、参数与 shell 操作符全部原样保留。
-    command = trimmedCommand.replace(NODE_INTERPRETER_PREFIX, interpreter);
+    command = trimmedCommand.replace(NODE_INTERPRETER_PREFIX, () => interpreter);
   }
 
   return new Promise<PreRunHookResult>((resolve) => {

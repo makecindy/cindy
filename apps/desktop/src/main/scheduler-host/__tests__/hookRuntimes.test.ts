@@ -5,7 +5,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const spawn = vi.hoisted(() => vi.fn());
+const killProcessTree = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ spawn }));
+vi.mock('../proc-util', () => ({ killProcessTree }));
 
 import { __resetHookRuntimeCacheForTest, resolveSystemNodeInterpreter } from '../hook-runtimes';
 
@@ -15,6 +17,7 @@ describe('resolveSystemNodeInterpreter', () => {
   beforeEach(() => {
     __resetHookRuntimeCacheForTest();
     spawn.mockReset();
+    killProcessTree.mockReset();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -22,7 +25,7 @@ describe('resolveSystemNodeInterpreter', () => {
   });
 
   function child() {
-    return Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
+    return Object.assign(new EventEmitter(), { pid: 4242, kill: vi.fn(() => true) });
   }
 
   it('PATH 可用时保持透明 node', async () => {
@@ -31,6 +34,33 @@ describe('resolveSystemNodeInterpreter', () => {
     const result = resolveSystemNodeInterpreter({ forceProbe: true });
     process.emit('close', 0);
     await expect(result).resolves.toBe('node');
+  });
+
+  it('PATH 探测使用实际执行目录,缓存按目录隔离', async () => {
+    const cwdA = path.join(tmpdir(), 'node-runtime-project-a');
+    const cwdB = path.join(tmpdir(), 'node-runtime-project-b');
+    const options = {
+      env: {}, home: tmpdir(), readVersions: () => [], probeExecutable: async () => false,
+    };
+    const first = child();
+    const second = child();
+    spawn.mockReturnValueOnce(first).mockReturnValueOnce(second);
+
+    const a = resolveSystemNodeInterpreter({ forceProbe: true, cwd: cwdA, ...options });
+    expect(spawn).toHaveBeenNthCalledWith(1, 'node --version', [],
+      expect.objectContaining({ cwd: cwdA, shell: true, detached: process.platform !== 'win32' }));
+    first.emit('close', 0);
+    await expect(a).resolves.toBe('node');
+
+    const b = resolveSystemNodeInterpreter({ forceProbe: true, cwd: cwdB, ...options });
+    expect(spawn).toHaveBeenNthCalledWith(2, 'node --version', [],
+      expect.objectContaining({ cwd: cwdB, shell: true, detached: process.platform !== 'win32' }));
+    second.emit('close', 1);
+    await expect(b).resolves.toBeNull();
+
+    await expect(resolveSystemNodeInterpreter({ cwd: cwdA, ...options })).resolves.toBe('node');
+    await expect(resolveSystemNodeInterpreter({ cwd: cwdB, ...options })).resolves.toBeNull();
+    expect(spawn).toHaveBeenCalledTimes(2);
   });
 
   it('PATH shim 失败时按版本倒序发现并验证版本管理器 Node', async () => {
@@ -77,7 +107,7 @@ describe('resolveSystemNodeInterpreter', () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
-  it('abort 立即结束且不污染下一次探测', async () => {
+  it('abort 立即结束并终止进程树,不污染下一次探测', async () => {
     const first = child();
     const second = child();
     spawn.mockReturnValueOnce(first).mockReturnValueOnce(second);
@@ -85,7 +115,7 @@ describe('resolveSystemNodeInterpreter', () => {
     const result = resolveSystemNodeInterpreter({ forceProbe: true, signal: controller.signal });
     controller.abort();
     await expect(result).resolves.toBeNull();
-    expect(first.kill).toHaveBeenCalledOnce();
+    expect(killProcessTree).toHaveBeenCalledWith(first.pid, first);
 
     const next = resolveSystemNodeInterpreter({ forceProbe: true });
     second.emit('close', 0);
