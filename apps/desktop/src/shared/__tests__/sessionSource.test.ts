@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isRetainableProjectSession, isRetainableProjectSessionSource } from '../sessionSource.js';
+import { isOrdinaryTaskListSession, isRetainableProjectSession, isRetainableProjectSessionSource } from '../sessionSource.js';
 
 describe('isRetainableProjectSessionSource', () => {
   it.each(['desktop', 'plugin'] as const)('accepts the durable %s project source', (source) => {
@@ -30,4 +30,10 @@ describe('isRetainableProjectSession', () => {
     'does not admit non-project source %j',
     (source) => expect(isRetainableProjectSession({ source })).toBe(false),
   );
+});
+
+it('shows projectless group tasks while keeping private buddy conversations out of the task list', () => {
+  expect(isOrdinaryTaskListSession({ source: 'bot', companion: { role: 'group' } })).toBe(true);
+  expect(isOrdinaryTaskListSession({ source: 'bot', companion: { role: 'canonical' } })).toBe(false);
+  expect(isOrdinaryTaskListSession({ source: 'bot', companion: { role: 'thread' } })).toBe(false);
 });

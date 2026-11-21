@@ -4,7 +4,7 @@ export default {
   name: 'companion-composer',
   entry: './companion-composer-fixture.tsx',
   viewport: { width: 760, height: 360 },
-  real: 'ChatInput, Tiptap editor, useAttachments, SendButton, VoiceInputButton, tooltips, send dispatch, themes and translations',
+  real: 'ChatInput, Tiptap editor, useAttachments, SendButton, VoiceInputButton, SendDeliveryTip, follow-up preference, tooltips, send dispatch, themes and translations',
   notCovered:
     'Microphone/ASR, live companion tasks, real media IO and speech synthesis; host services, delayed image cache, model catalog and dictation hook use scenario data. Windows runtime is not exercised.',
   stubs: {
@@ -46,6 +46,31 @@ export default {
     'voice-speaker-filtered': {
       about: 'Recording explains above the composer that the voiceprint filter ignored someone else',
     },
+    'follow-up-queue': {
+      about: 'Running turn, queue default: typing adds nothing; hovering Send opens the delivery tip. Click and Enter queue, Cmd+Enter and the other row steer, the swap makes steer the default',
+      data: { followUp: 'queue' },
+    },
+    'follow-up-steer': {
+      about: 'Running turn, steer default: the tip mirrors. Click and Enter steer, Cmd+Enter and the other row queue, the swap restores queue',
+      data: { followUp: 'steer' },
+    },
+    'follow-up-modifier': {
+      about: 'Cmd/Ctrl+Enter is the send key: it sends the selected mode and the other row has no key; Enter and Shift+Enter stay newlines',
+      data: { followUp: 'steer', sendKey: 'modifier-enter' },
+    },
+    'follow-up-voice': {
+      about: 'Long-press the microphone and release on Send: the dictated message follows the steer default like the Send button',
+      data: { followUp: 'steer' },
+    },
+    'follow-up-narrow': {
+      about: 'Delivery tip stays inside the window at narrow width',
+      data: { followUp: 'queue' },
+      viewport: { width: 360, height: 420 },
+    },
+    'quote-comment': {
+      about:
+        'A `> ` quote stays put and left-aligned with the comment typed under it during IME composition; Tab nests a list item',
+    },
     default: {
       about:
         'Empty/text/attachment action switch, stable target, keyboard send, call return and stop/queue',
@@ -84,6 +109,135 @@ export default {
       await page.waitForFunction(() => JSON.stringify(window.__composerImageCache.getDraft()?.text).includes('Keep unsaved text'));
       return;
     }
+    if (ui.case === 'follow-up-voice') {
+      const editor = page.locator('[contenteditable]');
+      await editor.click();
+      await page.keyboard.type('Typed before dictation');
+      const mic = page.getByRole('button', { name: await ui.t('newChat.chatInput.voiceInput.start'), exact: true });
+      const target = page.getByRole('button', { name: await ui.t('newChat.sendButton.steer'), exact: true });
+      const micBox = await mic.boundingBox();
+      const targetBox = await target.boundingBox();
+      await page.mouse.move(micBox.x + micBox.width / 2, micBox.y + micBox.height / 2);
+      await page.mouse.down();
+      // Past the 450ms long-press threshold the release target is armed.
+      await page.getByText(await ui.t('newChat.chatInput.voiceInput.releaseToStop')).first().waitFor();
+      await page.waitForTimeout(600);
+      await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 8 });
+      await ui.capture('release-on-send');
+      await page.mouse.up();
+      await page.waitForFunction(() => document.querySelector('[data-testid="sent"]')?.textContent === 'steer:Dictated message');
+      return;
+    }
+    if (typeof ui.data.followUp === 'string') {
+      const editor = page.locator('[contenteditable]');
+      const tip = page.locator('.send-delivery-tip');
+      const mode = ui.data.followUp === 'steer' ? 'steer' : 'queue';
+      const other = mode === 'steer' ? 'queue' : 'steer';
+      const modifierIsSendKey = ui.data.sendKey === 'modifier-enter';
+      const sendButton = async (delivery) =>
+        page.getByRole('button', { name: await ui.t('newChat.sendButton.' + delivery), exact: true });
+      const sent = (expected) => page.waitForFunction(
+        (value) => document.querySelector('[data-testid="sent"]')?.textContent === value, expected);
+      const draft = async (text) => { await editor.click(); await page.keyboard.type(text); };
+      const openTip = async () => { await (await sendButton(mode)).hover(); await tip.waitFor(); };
+
+      // Typing while the task runs adds nothing to the composer.
+      await draft('Add a regression test too');
+      assert.equal(await tip.count(), 0, 'nothing appears while typing');
+      await ui.capture('typing');
+
+      // Regression: both press and release during the 500ms hover delay must be reflected
+      // when the tip opens (DESIGN.md §14.6 modifier preview). Existing checks only press
+      // after opening, missing the stale-state window reported in review.
+      if (!modifierIsSendKey) {
+        for (const heldAtEntry of [false, true]) {
+          if (heldAtEntry) await page.keyboard.down('Control');
+          await (await sendButton(mode)).hover();
+          await page.keyboard[heldAtEntry ? 'up' : 'down']('Control');
+          await tip.waitFor();
+          await tip.locator('[data-row="' + (heldAtEntry ? 'default' : 'alternate') + '"][data-active]').waitFor({ timeout: 2000 });
+          await page.keyboard.up('Control');
+          await page.mouse.move(0, 0);
+          await tip.waitFor({ state: 'hidden' });
+        }
+      }
+
+      // Resting on Send opens the tip: the lit row next to the button is the default.
+      await openTip();
+      assert.equal(await tip.locator('[data-row="default"]').getAttribute('data-mode'), mode);
+      assert.equal(await tip.locator('[data-row="default"][data-active]').count(), 1);
+      const box = await tip.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= ui.viewport.width, 'tip stays inside the viewport');
+      assert.equal(await tip.locator('[data-row="alternate"] kbd').count(), modifierIsSendKey ? 0 : 2,
+        'the other mode names a key only when Enter is the send key');
+      await ui.capture('tip');
+      if (!modifierIsSendKey) {
+        // Holding the modifier slides the highlight to the other mode; nothing is sent.
+        await page.keyboard.down('Control');
+        await tip.locator('[data-row="alternate"][data-active]').waitFor();
+        await ui.capture('tip-modifier-held');
+        await page.keyboard.up('Control');
+        await tip.locator('[data-row="default"][data-active]').waitFor();
+      }
+      await (await sendButton(mode)).click();
+      await sent(mode + ':Add a regression test too');
+      assert.equal(await tip.count(), 0, 'sending closes the tip');
+
+      // Keys: the send key delivers the default; with Enter as the send key, modifier+Enter sends the other way.
+      await draft('Second note');
+      await page.keyboard.press(modifierIsSendKey ? 'ControlOrMeta+Enter' : 'Enter');
+      await sent(mode + ':Second note');
+      if (!modifierIsSendKey) {
+        await draft('Third note');
+        await page.keyboard.press('ControlOrMeta+Enter');
+        await sent(other + ':Third note');
+      }
+
+      // The other row sends this one message the other way and leaves the default alone.
+      await draft('Fourth note');
+      await openTip();
+      await tip.locator('[data-row="alternate"]').hover();
+      await tip.locator('[data-row="alternate"][data-active]').waitFor();
+      await ui.capture('tip-other-row');
+      await tip.locator('[data-row="alternate"]').click();
+      await sent(other + ':Fourth note');
+      assert.equal(await page.evaluate(() => localStorage.getItem('chat.followUpBehavior')), mode === 'steer' ? 'steer' : null);
+
+      // The swap makes the other mode the default in place: the rows trade places, nothing is sent.
+      await draft('Fifth note');
+      await openTip();
+      const swap = tip.getByRole('menuitem', {
+        name: await ui.t('newChat.sendDelivery.' + (other === 'steer' ? 'switchToSteer' : 'switchToQueue')), exact: true,
+      });
+      await swap.hover();
+      await tip.locator('[data-row="alternate"][data-note]').waitFor();
+      const swapBox = await tip.boundingBox();
+      assert.ok(swapBox.x >= 0 && swapBox.x + swapBox.width <= ui.viewport.width, 'tip stays inside the viewport');
+      assert.equal(Math.round(swapBox.width), Math.round(box.width), 'pointing at the swap does not resize the tip');
+      await ui.capture('swap-hover');
+      await swap.click();
+      await page.waitForFunction(
+        (expected) => localStorage.getItem('chat.followUpBehavior') === expected, other === 'steer' ? 'steer' : null);
+      assert.equal(await tip.locator('[data-row="default"]').getAttribute('data-mode'), other);
+      assert.equal(await editor.textContent(), 'Fifth note', 'changing the default sends nothing');
+      await ui.capture('swapped');
+      await (await sendButton(other)).click();
+      await sent(other + ':Fifth note');
+
+      // Swapping again restores the original default; the run ends on the resting tip.
+      await draft('Sixth note');
+      await (await sendButton(other)).hover();
+      await tip.waitFor();
+      await tip.getByRole('menuitem', {
+        name: await ui.t('newChat.sendDelivery.' + (mode === 'steer' ? 'switchToSteer' : 'switchToQueue')), exact: true,
+      }).click();
+      await page.waitForFunction(
+        (expected) => localStorage.getItem('chat.followUpBehavior') === expected, mode === 'steer' ? 'steer' : null);
+      await (await sendButton(mode)).hover();
+      await tip.locator('[data-row="default"][data-active]:not([data-note])').waitFor();
+      assert.equal(await tip.locator('[data-row="default"]').getAttribute('data-mode'), mode);
+      return;
+    }
     if (ui.data.recommendation) {
       const editor = page.locator('[contenteditable]');
       const call = page.getByRole('button', { name: await ui.t('bots.voiceMode.startConversation'), exact: true });
@@ -110,6 +264,69 @@ export default {
       await send.click();
       await call.waitFor();
       assert.equal(await page.getByTestId('sent').textContent(), ui.data.recommendation);
+      return;
+    }
+    if (ui.case === 'quote-comment') {
+      // User report (2026-11-17 video): composing a Chinese comment under a
+      // `> ` quote made the quote jump left on every IME composition. jsdom has
+      // no layout, so measure the real glyph position while Chromium composes.
+      const editor = page.locator('.ProseMirror');
+      await editor.click();
+      await editor.pressSequentially('> ');
+      await page.keyboard.insertText('这是一个引用块，引用 agent 上一轮的回复。');
+      await editor.press('Shift+Enter');
+      await editor.press('Backspace');
+      const firstGlyphLeft = (index) => editor.evaluate((root, paragraphIndex) => {
+        const paragraph = root.querySelectorAll(':scope > p')[paragraphIndex];
+        const text = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT).nextNode();
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, 1);
+        return range.getBoundingClientRect().left;
+      }, index);
+      const quoteLeft = await firstGlyphLeft(0);
+
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Input.imeSetComposition', { text: 'wo', selectionStart: 2, selectionEnd: 2 });
+      assert.equal(await editor.evaluate((node) => node.editor.view.composing), true);
+      assert.ok(Math.abs((await firstGlyphLeft(0)) - quoteLeft) < 0.5, 'quote moved while composing');
+      await ui.capture('composing');
+      await cdp.send('Input.insertText', { text: '我想针对这个引用块说几句话' });
+      await page.waitForFunction(() => !document.querySelector('.ProseMirror').editor.view.composing);
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+      assert.ok(Math.abs((await firstGlyphLeft(0)) - quoteLeft) < 0.5, 'quote moved after composing');
+      // `>` starts at the same left edge as the comment typed under it.
+      assert.ok(Math.abs((await firstGlyphLeft(1)) - quoteLeft) < 1, 'quote and comment are misaligned');
+      await ui.capture('quote-comment');
+
+      // #11117 review: a long letter run moves the quote row onto another
+      // layout branch; its `>` must stay on the same left edge.
+      await editor.press('Shift+Enter');
+      await editor.pressSequentially('> abcdefghijklmn');
+      const longRunQuoteLeft = await editor.evaluate((root) => {
+        const paragraph = root.querySelectorAll(':scope > p')[1];
+        const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+        let text;
+        while ((text = walker.nextNode()) && !text.textContent.startsWith('>'));
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, 1);
+        return range.getBoundingClientRect().left;
+      });
+      assert.ok(Math.abs(longRunQuoteLeft - quoteLeft) < 1, 'long-run quote jumped');
+      await ui.capture('long-run-quote');
+      await editor.press('Shift+Enter');
+      await editor.press('Backspace');
+
+      await editor.pressSequentially('- ');
+      await page.keyboard.insertText('第一项');
+      await editor.press('Shift+Enter');
+      await page.keyboard.insertText('第二项');
+      await editor.press('Tab');
+      assert.equal(await editor.locator('ul ul > li').count(), 1);
+      await ui.capture('nested-list');
+      await editor.press('Shift+Tab');
+      assert.equal(await editor.locator('ul ul > li').count(), 0);
       return;
     }
     if (ui.case === 'voice-speaker-filtered') {

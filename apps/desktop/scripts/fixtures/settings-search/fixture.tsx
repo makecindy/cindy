@@ -3,7 +3,6 @@ import { SettingsView } from '../../../src/renderer/components/settings/Settings
 import { ctx, mountPage, subscription, forbid } from '../../ui-page/harness';
 import { WallpaperSettingsProvider } from '../../../src/renderer/hooks/useWallpaperSettings';
 import { SUBAGENT_MODEL_SETTINGS_DEFAULTS } from '../../../src/shared/subagentModelSettings';
-import { VISION_BRIDGE_SETTINGS_DEFAULTS } from '../../../src/shared/visionBridgeSettings';
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../../src/shared/appearanceSettings';
 
@@ -18,6 +17,9 @@ const relayState = {
   available: true, mode: 'official', relay: null, issue: null,
   host: { enabled: false, running: false, error: null, port: 47820, listenAll: false, externalUrl: null, suggestedUrls: [] },
   deployments: [], deployJob: null, bundledRelayVersion: '0.3.1', joinLink: null, pendingRequests: [], join: { status: 'idle' },
+};
+const analyticsState = {
+  privacyConsentAccepted: true, analyticsEnabled: false, analyticsEnabledCustomized: false, allowed: false,
 };
 const emptyDirectory = { bytes: 0, fileCount: 0 };
 const visibilityWrites: unknown[] = [];
@@ -45,7 +47,13 @@ void mountPage({
     onUpdateChannelSettings: subscription('update-channel'),
     getUpdateChannelSettings: read({ channel: 'stable', isCustomized: false }),
     getAutoUpdateSettings: read({ autoRelaunchOnIdle: false, isCustomized: false, defaultAutoRelaunchOnIdle: false }),
-    getAnalyticsSettings: read({ privacyConsentAccepted: true, analyticsEnabled: false, analyticsEnabledCustomized: false, allowed: false }),
+    getAnalyticsSettings: read(analyticsState),
+    setAnalyticsEnabled: async (value: boolean) => {
+      analyticsState.analyticsEnabled = value;
+      analyticsState.allowed = value;
+      window.__uiPage.emit('analytics', {...analyticsState});
+      return {...analyticsState};
+    },
     onAnalyticsSettingsChange: subscription('analytics'),
     getLogUploadSettings: read({ enabled: false, isCustomized: false }),
     onLogUploadSettingsChange: subscription('logUpload'),
@@ -70,8 +78,9 @@ void mountPage({
       memoryGet: read({ enabled: true }), memoryGetSettingsState: read(state({ maker: true })),
       subagentModelSettingsGet: read(state(SUBAGENT_MODEL_SETTINGS_DEFAULTS)),
       auxiliaryModelSettingsGet: read(state({ models: ctx.data.customAuxiliary ? ['cat:openrouter:codex:openai/gpt-5-mini'] : [] })),
-      visionBridgeSettingsGet: read(state(VISION_BRIDGE_SETTINGS_DEFAULTS)),
       silentEncryptedRetryGet: read(state({ enabled: true })),
+      codexCompactionGet: read({ enabled: true, isCustomized: false }),
+      codexCompactionSet: forbid('codexCompactionSet'),
       listCustomMcpServers: read({ servers: [] }), onMcpChanged: subscription('mcp'),
       plugins: { list: read([]), getState: read({ effectiveEnabled: true }) },
     },

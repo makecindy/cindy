@@ -778,6 +778,81 @@ describe('OpenCode Go subscription quota', () => {
   });
   afterEach(resetProviderAccountUsageForTest);
   const read = (forceRefresh = false) => readOpenCodeGoAccountUsage({ providerId: 'opencode-go', forceRefresh });
+  const afterRejection = () => readOpenCodeGoAccountUsage({ providerId: 'opencode-go', agent: 'codex' }, 'after-limit');
+
+  // Unit: the real Go reader must not lend Goal a panel snapshot taken just
+  // before rejection. Existing tests only refreshed after the cache expired.
+  it('refreshes once for concurrent rejected turns even after a recent successful panel read', async () => {
+    const rolling = OPENCODE_GO_USAGE.usage.rolling;
+    fetcher.mockResolvedValueOnce(jsonRes({ usage: { rolling } }));
+    expect(await read(true)).toMatchObject({ snapshot: { windows: [{ limited: false }] } });
+    nowMs += 1000;
+    fetcher.mockResolvedValueOnce(jsonRes({ usage: { rolling: { ...rolling, status: 'rate-limited', percent: 100 } } }));
+    const [first, concurrent] = await Promise.all([afterRejection(), afterRejection()]);
+    expect(first).toMatchObject({ stale: false, snapshot: { windows: [{ limited: true, resetsAt: Date.parse(rolling.resetsAt) }] } });
+    expect(concurrent).toEqual(first);
+    expect(await afterRejection()).toEqual(first);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares a rejected turn’s pending snapshot with both the overview and the default-engine settings panel', async () => {
+    current.routing.pi = { upstream: 'https://api.kimi.com/coding', authStrategy: 'api-key-header' };
+    const [goal, overview, settings] = await Promise.all([
+      afterRejection(), read(true), readProviderAccountUsage({ providerId: 'opencode-go', forceRefresh: true }),
+    ]);
+    expect(goal).toMatchObject({ status: 'ready', agent: 'codex', snapshot: { kind: 'opencode-go-quota' } });
+    expect(overview).toEqual(goal);
+    expect(settings).toEqual(goal);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes after rejection when a panel read started before the model was rejected', async () => {
+    const rolling = OPENCODE_GO_USAGE.usage.rolling;
+    let finishPanel!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finishPanel = resolve; }));
+    fetcher.mockResolvedValueOnce(jsonRes({ usage: { rolling: { ...rolling, status: 'rate-limited', percent: 100 } } }));
+    const panel = read(true);
+    const goal = afterRejection();
+    finishPanel(jsonRes({ usage: { rolling } }));
+    await panel;
+    const result = await goal;
+    expect(result).toMatchObject({ stale: false, snapshot: { windows: [{ limited: true }] } });
+    expect(await read()).toEqual(result);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves a manual refresh that arrives during a passive cache hit', async () => {
+    const rolling = OPENCODE_GO_USAGE.usage.rolling;
+    fetcher.mockResolvedValueOnce(jsonRes({ usage: { rolling } }));
+    const cached = await read();
+    nowMs += 16_000;
+    fetcher.mockResolvedValueOnce(jsonRes({ usage: { rolling: { ...rolling, percent: 40 } } }));
+    const [passive, manual] = await Promise.all([read(), read(true)]);
+    expect(passive).toEqual(cached);
+    expect(manual).toMatchObject({ snapshot: { windows: [{ usedPercent: 40 }] } });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards a queued post-limit refresh if its account changes before the panel returns', async () => {
+    let finishPanel!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finishPanel = resolve; }));
+    const panel = read(true);
+    const goal = afterRejection();
+    setAccountUsageKeyReader(() => 'synthetic-replacement-key');
+    finishPanel(jsonRes(OPENCODE_GO_USAGE));
+    for (const result of await Promise.all([panel, goal])) {
+      expect(result).toMatchObject({ status: 'unavailable', error: 'updating' });
+    }
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors quota-endpoint backoff even after the model rejects a turn', async () => {
+    fetcher.mockResolvedValueOnce(new Response(null, { status: 429, headers: { 'retry-after': '120' } }));
+    expect(await read(true)).toMatchObject({ status: 'unavailable' });
+    nowMs += 30_000;
+    expect(await afterRejection()).toMatchObject({ status: 'unavailable', retryAt: 1_120_000 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
 
   it('reads the official usage endpoint with the stored API key and caches it', async () => {
     expect(await read()).toMatchObject({

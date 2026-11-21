@@ -27,6 +27,7 @@ const io = vi.hoisted(() => ({
   shares: vi.fn(() => [] as readonly ProviderShareReceived[]),
   group: vi.fn(() => null as ProviderGroupConfig | null),
   status: vi.fn(() => 'online'),
+  endpoint: vi.fn(() => 'https://device-link.invalid'),
   self: vi.fn(() => 'self'),
   closeEpoch: vi.fn(() => 0),
   offlineDirect: vi.fn(() => false),
@@ -53,7 +54,7 @@ vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: i
 vi.mock('../../device-link/ipc.js', () => ({ handleListDevices: io.devices, defaultDeps: vi.fn() }));
 vi.mock('../../device-link/index.js', () => ({ onRemotePushChannel: (listener: typeof io.accountPush) => { io.accountPush = listener; return () => {}; }, remoteBackgroundInvoke: io.invoke, getDeviceLinkStatus: io.status,
   getSelfDeviceId: io.self, getRemoteLinkCloseEpoch: io.closeEpoch, hasOfflineDirectPath: io.offlineDirect }));
-vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://device-link.invalid' }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: io.endpoint }));
 vi.mock('../../device-link/controllerPlatform.js', () => ({ isMobilePlatform: () => false }));
 vi.mock('../../device-link/deviceName.js', () => ({ deviceName: () => 'This computer' }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
@@ -89,6 +90,7 @@ const { captureProviderMetadataContinuityScope, invokeProviderMetadataContinuity
 
 afterEach(() => {
   io.closeEpoch.mockReturnValue(0);
+  io.endpoint.mockReturnValue('https://device-link.invalid');
   setProviderGroupClaudeUsageReader(null);
   setProviderGroupCodexUsageReader(null);
   io.group.mockReset();
@@ -687,6 +689,21 @@ describe('provider group runtime quota account selection', () => {
     return { read, config, localId };
   }
 
+  // Unit, interrupted add-computer lookup: the original owner and endpoint fence the live retry.
+  // Minimal case: a single device reports a metadata error after the account or endpoint changes.
+  it.each(['owner', 'endpoint'] as const)('does not retry an interrupted candidate read after the %s changes', async (changed) => {
+    const { localId } = harness();
+    io.shares.mockReturnValue([]);
+    io.catalogState.mockClear();
+    io.catalogState.mockImplementationOnce(async () => {
+      if (changed === 'owner') owner = 'new-candidate-owner';
+      else io.endpoint.mockReturnValue('https://new-device-link.invalid');
+      throw new Error('Metadata scope changed');
+    });
+    expect(await getProviderGroupDirectory().listCandidates(localId, null)).toEqual([]);
+    expect(io.catalogState).toHaveBeenCalledTimes(1);
+  });
+
   // PR #10910 / unit: production owner factory must wire external pending load,
   // not just direct router fixtures that inject that dependency themselves.
   it('wires pending same-account picks through the owner runtime and actual remote handler', async () => {
@@ -898,7 +915,9 @@ describe('provider group runtime quota account selection', () => {
     const devices = ['busy', 'healthy'];
     io.devices.mockResolvedValue({ devices: devices.map(deviceId => ({ deviceId, online: true,
       remoteControlEnabled: true, controlEnabled: true, platform: 'darwin' })) });
-    io.catalog.mockImplementation(async (_invoke, deviceId) => [provider(providerId, deviceId === 'busy' ? 2 : 0)]);
+    // Healthy runs more tasks: only its readable quota puts it ahead. Since 2026-11-19 an unreadable member stays a
+    // candidate (provider-groups.md §5), so a timed-out read must fall back to load, i.e. the less loaded busy one.
+    io.catalog.mockImplementation(async (_invoke, deviceId) => [provider(providerId, deviceId === 'busy' ? 2 : 3)]);
     h.config.members = normalizeProviderGroupConfig({ strategy: 'least', members: devices.map(agentDeviceId => ({
       kind: 'device', agentDeviceId, providerId,
     })) }, h.localId)!.members;

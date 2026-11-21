@@ -56,7 +56,7 @@ const CATALOG_VOICE_REFINER_PROVIDERS = new Set(['openai', 'xd']);
 export function voiceInputRefinerProviderKindForCatalogRoute(
   route: CatalogModelPinRoute,
 ): VoiceInputRefinerCatalogProviderKind | null {
-  if (route.agentKind !== 'codex' || !CATALOG_VOICE_REFINER_PROVIDERS.has(route.providerId)) {
+  if (route.agentDeviceId || route.agentKind !== 'codex' || !CATALOG_VOICE_REFINER_PROVIDERS.has(route.providerId)) {
     return null;
   }
   return encodeCatalogModelPin(route) as VoiceInputRefinerCatalogProviderKind;

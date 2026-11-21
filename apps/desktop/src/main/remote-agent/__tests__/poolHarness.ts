@@ -13,13 +13,164 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { RemoteAgentKind } from '@cindy/device-link';
+import { ScriptTarget, transpileModule } from 'typescript';
 import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
 import { expect, vi } from 'vitest';
+import {
+  createMakerSendTransaction,
+  type MakerSendTransactionDeps,
+} from '../../maker-ipc/makerSendTransaction';
+
+import { createAgentSwitchBoundaryInsert } from '../../maker-ipc/agentSwitchDepsCore';
+import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { withSharedSessionResumeRecovery } from '../../maker-ipc/sharedSessionResumeRecovery';
+import { isProviderShareAgentDeviceId, providerShareIdOfAgentDeviceId } from '../../../shared/providerShare';
+import { RuntimePluginControlError } from '../../cindy-brain/runtimeControl';
+import { SessionCreationCleanupPendingError } from '@cindy/maker-core';
 
 import { RemoteConnectionPool } from '../controller/connectionPool';
-import { hostRewritesResumeId, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
+import { hostRewritesResumeId, startRemoteAgentSession, takeStoppedSharedReconnectOffer, withSharedReconnectHandoff, withSharedReconnectOfferCapture, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
+
+/** Main's send transaction with in-memory persistence and startup composition. */
+export function sharedAccountSendTransaction(ports: Pick<MakerSendTransactionDeps,
+  'getSession' | 'captureSharedReconnectRecovery' | 'bootstrapSession' | 'peekPendingHandoff'
+  | 'consumePendingHandoff' | 'createDbMessage' | 'reconcileCreateOptsWithDb' | 'readScheduledPermissions'>) {
+  const noop = () => {};
+  return createMakerSendTransaction({
+    getResolvedMainLocale: () => null,
+    getMainClassicalStyle: () => 'plain',
+    readMcpAppModelContext: async () => ({ text: '', assertCurrent: async () => {}, consume: noop }),
+    getSessionMeta: async () => null,
+    closeSession: async () => {},
+    closeSessionIfCurrent: async () => {},
+    preflightBotRuntimeResources: async () => {},
+    ensureRemoteReadyForSessionStart: async () => {},
+    readSessionWorkingDirFromDb: async () => null,
+    checkWorkDirExists: async () => true,
+    statDirectory: async () => ({ isDirectory: () => true }),
+    readWorkingDirectoryRecoveryCreateOpts: async () => { throw new Error('Unexpected workdir recovery'); },
+    buildCreateOptsWithStderr: opts => opts,
+    synthesizeOrcaVendorOptionsFromDb: async () => false,
+    readSessionExtraDirsFromDb: async () => [],
+    withRehydrateCloseSuppressed: async (_id, run) => run(),
+    isOrcaMcpHydrated: () => true,
+    markOrcaRoleIfNeeded: async () => {},
+    broadcastSessionCreated: noop,
+    prepareSendUserMessage: async (_id, message) => message as never,
+    isMobileClientInvoke: () => false,
+    isSessionRunningError: () => false,
+    log: { info: noop, warn: noop },
+    ...ports,
+  });
+}
+
+// Load Main's actual wiring without starting Electron and replacing its DB or
+// device link process-wide. The send, bootstrap, relocation and starter stay real.
+const registerSource = fs.readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8');
+function compileRegisterPart(startAt: string, endAt: string, wrap: (source: string) => string) {
+  const start = registerSource.indexOf(startAt);
+  const end = registerSource.indexOf(endAt, start);
+  if (start < 0 || end < 0) throw new Error(`Missing register.ts fixture entry: ${startAt}`);
+  return transpileModule(wrap(registerSource.slice(start, end)), {
+    compilerOptions: { target: ScriptTarget.ES2022 },
+  }).outputText;
+}
+const compiledBootstrap = compileRegisterPart('  async function bootstrapSession(', '  installLocalAgentVisibleSessionHost(', source =>
+  `${source}
+return (opts, assertCurrent, reconnect) => bootstrapSession(opts, assertCurrent, false, reconnect);`);
+const compiledCapture = compileRegisterPart('    captureSharedReconnectRecovery: (session)', '    markOrcaRoleIfNeeded,', source =>
+  `return ({${source}}).captureSharedReconnectRecovery;`);
+const compiledStopAll = compileRegisterPart('  registerStopSessionBackgroundTasksHandler(createElectronIpcHandlerRegistry(), {',
+  '  // 单个后台任务的精确停止', source => source);
+
+export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
+  getSessionRowSnapshotStrict(): Promise<{ id: string; sdkSessionId?: string | null; clearedAt: number | null }>;
+  setSdkSessionId(id: string | null): void;
+}): Pick<MakerSendTransactionDeps,
+  'bootstrapSession' | 'captureSharedReconnectRecovery'> {
+  const noop = () => {};
+  const none = async () => null;
+  const readRow = { from: () => readRow, where: () => readRow, limit: async () => [] };
+  type Row = Awaited<ReturnType<typeof ports.getSessionRowSnapshotStrict>>;
+  const same = (field: keyof Row, value: unknown) => (row: Row) => row[field] === value;
+  const bindings = {
+    currentSessionCreationSignal: noop,
+    captureDataOwnerBroadcastScope: noop,
+    isDataOwnerBroadcastScopeCurrent: () => true,
+    applyPersistedCindyMakeMarker: noop,
+    readSessionSource: none,
+    orcaRemoteWorkersForHost: null,
+    applyProviderGroupAssignment: none,
+    worktreeManager: { assertPrecreatedSessionNotCancelled: noop },
+    workingDirectoryRecovery: { resolve: (_id: string, dir: string) => dir, observe: async () => {}, isFallback: () => false },
+    options: { waitForAccountProviderModelsReady: noop },
+    applySessionRuntimeOverrideForStart: noop,
+    applyPersistedReviewMode: noop,
+    applyOrcaInstructions: () => false,
+    applyProjectContextInjection: () => false,
+    prepareDirectoryGrantsForBootstrap: noop,
+    readSessionWritableDirsFromDb: none,
+    hydrateProviderIdBeforeSessionStart: noop,
+    readSessionAgentDeviceId: none,
+    assertTaskPromptCurrent: noop,
+    agentHandoffPending: { readGeneration: () => 0 },
+    resolveDesktopHandoffWindow: noop,
+    commitContextRebuild: noop,
+    markProjectContextIfNeeded: noop,
+    persistAndHydrateSessionProvider: noop,
+    wireSessionToIpc: noop,
+    markOrcaMcpHydratedIfNeeded: noop,
+    worktreeStore: { get: noop },
+    getDbClient: () => ({ drizzle: {
+      select: () => readRow,
+      update: () => ({ set: (patch: { sdkSessionId: string | null }) => ({
+        where: (matches: (row: Row) => boolean) => ({
+          run: async () => {
+            if (!matches(await ports.getSessionRowSnapshotStrict())) return { changes: 0 };
+            ports.setSdkSessionId(patch.sdkSessionId);
+            return { changes: 1 };
+          },
+        }),
+      }) }),
+    } }),
+    sessions: { id: 'id', sdkSessionId: 'sdkSessionId', clearedAt: 'clearedAt' },
+    eq: same,
+    isNull: (field: keyof Row) => same(field, null),
+    and: (...checks: Array<((row: Row) => boolean) | undefined>) =>
+      (row: Row) => checks.every(check => !check || check(row)),
+    getSessionProvider: noop,
+    getActiveCatalog: () => ({ providers: [] }),
+    builtinAgentKindOrNull: noop,
+    setSessionEffort: noop,
+    setSessionFastMode: noop,
+    PROVIDER_GROUP_SUPERSEDED_ERROR: 'Provider group recovery was superseded',
+    log: { warn: noop, debug: noop },
+    captureSessionRuntimeControlOwnerEpoch: noop,
+    sessionRuntimeControlOwnerEpochMatches: () => true,
+    getSessionRuntimeControlSnapshot: () => ({ generation: 0 }),
+    isAppSessionBoundaryPending: () => false,
+    providerShareAccessEpoch: () => 0,
+    findReceivedShare: () => ({ status: 'active' }),
+    withRehydrateCloseSuppressed: (_id: string, run: () => unknown) => run(),
+    RuntimePluginControlError, SessionCreationCleanupPendingError,
+    withSharedSessionResumeRecovery, withSharedReconnectHandoff, isProviderShareAgentDeviceId,
+    createAgentSwitchBoundaryInsert, relocateForFreshStart,
+    parseProviderShareAgentDeviceId: providerShareIdOfAgentDeviceId,
+    takeStoppedSharedReconnectOffer, withSharedReconnectOfferCapture,
+    ...ports,
+  };
+  const load = (body: string) => new Function(...Object.keys(bindings), body)(...Object.values(bindings));
+  return {
+    bootstrapSession: load(compiledBootstrap),
+    captureSharedReconnectRecovery: load(compiledCapture),
+  };
+}
+
+export function registerSharedAccountStopAll(ports: Record<string, unknown>): void {
+  new Function(...Object.keys(ports), compiledStopAll)(...Object.values(ports));
+}
 
 export interface PoolScenarioOptions {
   kind: RemoteAgentKind;

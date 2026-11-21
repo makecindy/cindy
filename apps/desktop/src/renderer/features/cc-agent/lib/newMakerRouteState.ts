@@ -15,6 +15,7 @@ export interface NewMakerFolderPickerRequest {
 export interface NewMakerRouteState {
   workspacePrompt: 'generic' | 'dialogue';
   dialogueTargetRequest?: NewMakerDialogueTargetRequest;
+  restoreLastCreatedWorkspace?: true;
   folderPickerRequest?: NewMakerFolderPickerRequest;
 }
 
@@ -48,12 +49,13 @@ export function shouldPrefillDefaultNewTaskWorkingDir(
 let dialogueTargetRequestSequence = 0;
 let folderPickerRequestSequence = 0;
 
-/** These requests select local/device-link execution, never an SSH workspace. */
+/** Compare both transport identities: equal paths may belong to different hosts. */
 export function isSameNewMakerDevice(
   deviceId: string | null,
   draft: { deviceLinkDeviceId?: string | null; remoteHostId?: string | null },
+  remoteHostId: string | null = null,
 ): boolean {
-  return !draft.remoteHostId && deviceId === (draft.deviceLinkDeviceId ?? null);
+  return (draft.remoteHostId ?? null) === remoteHostId && deviceId === (draft.deviceLinkDeviceId ?? null);
 }
 
 /**

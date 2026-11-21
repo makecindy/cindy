@@ -10,7 +10,7 @@ import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, type Gestur
 import { useTranslation } from 'react-i18next';
 import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
 import { HighlightedCodeText } from './HighlightedCodeText';
-import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
+import { MarkdownBlockCopyButton } from './MarkdownBlockCopyButton';
 import { MermaidDiagramWebView } from './mermaidWebView';
 import { MathFormulaWebView } from './mathWebView';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
@@ -19,7 +19,7 @@ import { Text } from '@/components/AppText';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
 import { fontWeight, monoFont, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
-import { mobileMarkdownListMarkerText, parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInline } from './messageMarkdown';
+import { mobileMarkdownListMarkerText, mobileMarkdownTableToTsv, parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInline } from './messageMarkdown';
 import { buildMessageContentLayout } from './messageContentLayout';
 import { buildMobileMarkdownTableColumnWidths } from './messageTableLayout';
 import { botGroupMentionMember, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
@@ -189,12 +189,17 @@ function BotGroupMarkdownTable({ block, styles, options, context }: {
       ))}
     </View>
   );
-  return <ScrollView horizontal style={styles.tableScroll} onLayout={onLayout}>
-    <View style={styles.table}>
-      {renderRow(block.header, `${block.key}:header`, true)}
-      {block.rows.map(row => renderRow(row.cells, row.key))}
-    </View>
-  </ScrollView>;
+  return <View style={styles.tableScroll}>
+    <ScrollView horizontal style={styles.tableScroll} onLayout={onLayout}>
+      <View style={styles.table}>
+        {renderRow(block.header, `${block.key}:header`, true)}
+        {block.rows.map(row => renderRow(row.cells, row.key))}
+      </View>
+    </ScrollView>
+    {options.richContent && options.interactive !== false ? (
+      <MarkdownBlockCopyButton kind="table" text={mobileMarkdownTableToTsv(block)} />
+    ) : null}
+  </View>;
 }
 
 function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOptions, diagramLabel: string, context?: BotGroupMentionContext): ReactNode {
@@ -216,7 +221,7 @@ function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOp
         return <View key={block.key} style={[styles.codeBlock, copyable && styles.codeWithCopy]}>
           <HighlightedCodeText text={block.text} language={block.language} styles={styles} selectable allowIosUITextView
             SpanComponent={Platform.OS === 'ios' ? MarkdownSelectableSpan : Text} />
-          {copyable ? <MarkdownCodeCopyButton text={block.text} /> : null}
+          {copyable ? <MarkdownBlockCopyButton text={block.text} /> : null}
         </View>;
       }
       return renderSourceBlock(block, styles);
@@ -275,6 +280,7 @@ export function BotGroupMarkdownText({ content, authorKind, mentionContext, rich
       <MessageHeavyContentVisibilityContext.Provider value={active && (!visibility || visible)}>
         <ChatFilePathContext.Provider value={null}>
           <MarkdownBody renderRichAnswers publicMediaOnly richStateKey={messageKey ?? instanceKey}
+            codeCopyEnabled={interactive}
             markdownImageCacheKey={messageKey ?? instanceKey} layout={layout} text={content} selectable
             onOpenPayload={next => {
               // Shared answers may open public media and diagrams, never task-local files.

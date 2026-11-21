@@ -325,6 +325,11 @@ function formatUpstreamBase(t: UpstreamTarget): string {
   );
 }
 
+/** 只含协议、主机与非默认端口;不含 basePath / query(可能带密钥),用于失败日志。 */
+function formatUpstreamOrigin(t: UpstreamTarget): string {
+  return `${t.protocol}//${formatHostHeader(t.hostname, t.port, t.protocol)}`;
+}
+
 function isRetryableListenError(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('code' in error)) return false;
   const code = (error as NodeJS.ErrnoException).code;
@@ -695,7 +700,8 @@ function respondRequestTooLarge(opts: {
   /** Content-Length 预检命中时的声明字节数;流式守卫命中时为 null。 */
   declaredBytes: number | null;
   receivedBytes: number;
-  reason?: 'request_body_too_large' | 'attachment_recovery_storage_exhausted';
+  reason?: 'request_body_too_large' | 'attachment_recovery_storage_exhausted'
+    | 'attachment_recovery_unavailable' | 'recovered_body_too_large';
 }): void {
   const { req, res, logger } = opts;
   const storageExhausted = opts.reason === 'attachment_recovery_storage_exhausted';
@@ -1057,6 +1063,7 @@ function forward(
     }
   }
   const upstreamReq = reqFn(upstreamOptions);
+  const upstreamStartedAt = Date.now();
   if (forwardLifecycle?.onStart) {
     notifyForwardLifecycle(() => forwardLifecycle.onStart?.());
   }
@@ -1347,7 +1354,7 @@ function forward(
               const model = appliedRule.useUpstreamModel
                 ? extractBodyModel(body)
                 : clientModel || extractBodyModel(body);
-              if (model) appliedRule.onRetry?.(threadId, model);
+              if (model) appliedRule.onRetry?.(threadId, model, formatUpstreamBase(actualTarget));
             }
           }
           const retry = (): void => {
@@ -2012,11 +2019,22 @@ function forward(
         ),
       );
     }
+    // 只凭错误文案(如 write EPIPE)分不清原因:上游嫌请求太大而断开、复用了上游已关闭的
+    // 空闲连接、还是超时。补上请求体字节数、耗时与连接是否复用("写完"只代表进了本机缓冲,
+    // 不代表上游收到,故不记)。上游地址只记协议/主机/端口,query 可能带用户配置的密钥,
+    // 不进日志。
+    const errorCode = (err as NodeJS.ErrnoException | null)?.code;
     logger.error?.('upstream request failed', {
       reqId,
       err: String(err),
+      ...(typeof errorCode === 'string' ? { errorCode } : {}),
       method,
       path: upstreamPathname,
+      upstreamOrigin: formatUpstreamOrigin(actualTarget),
+      bodyBytes: body.length,
+      reusedSocket: upstreamReq.reusedSocket,
+      elapsedMs: Date.now() - upstreamStartedAt,
+      ...(requestTimedOut ? { timedOut: true } : {}),
       ...(outboundProxy ? { viaProxy: outboundProxy.target.url } : {}),
     });
     if (upstreamResponseTerminal === null) upstreamResponseTerminal = 'error';
@@ -2593,10 +2611,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === 'REQUEST_TOO_LARGE' || msg === 'RECOVERY_STORAGE_EXHAUSTED') {
+        const recoveryReason = (err as { recoveryReason?: string }).recoveryReason;
         respondRequestTooLarge({
           req, res, logger, reqId, method, url, headers,
           limitBytes: maxBodyBytes,
-          reason: msg === 'RECOVERY_STORAGE_EXHAUSTED' ? 'attachment_recovery_storage_exhausted' : 'request_body_too_large',
+          reason: msg === 'RECOVERY_STORAGE_EXHAUSTED' ? 'attachment_recovery_storage_exhausted'
+            : recoveryReason === 'attachment_recovery_unavailable' || recoveryReason === 'recovered_body_too_large'
+              ? recoveryReason : 'request_body_too_large',
           declaredBytes: null,
           receivedBytes: (err as { receivedBytes?: number }).receivedBytes ?? 0,
         });

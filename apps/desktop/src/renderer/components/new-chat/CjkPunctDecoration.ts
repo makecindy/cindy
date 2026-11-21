@@ -55,6 +55,10 @@ import {
   hasCjkContextPunctuation,
   isCjkContextPunctuation,
 } from './CjkPunctuationUtils';
+import {
+  listDecorationCompositionScope,
+  type ListCompositionScope,
+} from './ComposerListIndentDecoration';
 
 type CjkDecorationPluginState = {
   decorations: DecorationSet;
@@ -202,12 +206,17 @@ function buildDecorations(
   doc: PMNode,
   slashCommandMatches: ReadonlyArray<Pick<SlashCommandMatch, 'from' | 'to'>> = [],
   voiceReplacementRange: VoiceInputReplacementRange | null = null,
-  ignoreListRanges = false,
+  suspendedListScope: ListCompositionScope | null = null,
 ): DecorationSet {
   const decorations: Decoration[] = [];
-  const listRanges = ignoreListRanges
-    ? []
-    : listLineRanges(doc, slashCommandMatches, voiceReplacementRange);
+  // 组字期间被暂停的列表包裹盒子不在 DOM 里,其范围内的标点改由本扩展接管;
+  // 范围外的列表行保留着包裹盒子,仍然不能叠加逐字 span。
+  const listRanges = listLineRanges(doc, slashCommandMatches, voiceReplacementRange).filter(
+    (range) =>
+      !suspendedListScope ||
+      range.from >= suspendedListScope.to ||
+      range.to <= suspendedListScope.from,
+  );
 
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return;
@@ -256,19 +265,20 @@ export const CjkPunctDecoration = Extension.create({
           apply(tr: Transaction, old: CjkDecorationPluginState, oldState: EditorState) {
             const compositionMeta = tr.getMeta(PLUGIN_KEY) as CompositionMeta | undefined;
             if (compositionMeta === 'suspend') {
-              // ComposerListIndentDecoration removes its wrappers during IME
-              // composition so ProseMirror does not let native composition DOM
-              // get split by stale layout decorations. Rebuild CJK spans
-              // without the list-owned exclusions for that same window; this
-              // keeps marker dots and fallback sibling ASCII punctuation in the
-              // explicit CJK font stack while the list wrappers are absent.
+              // ComposerListIndentDecoration removes the wrappers that could
+              // contain the composition so ProseMirror does not let native
+              // composition DOM get split by stale layout decorations. Rebuild
+              // CJK spans without the list-owned exclusions inside that same
+              // scope; this keeps marker dots and fallback sibling ASCII
+              // punctuation in the explicit CJK font stack while those
+              // wrappers are absent, and leaves untouched rows unchanged.
               const roster = getSlashCommandRoster(oldState);
               return {
                 decorations: buildDecorations(
                   tr.doc,
                   findSlashCommandMatches(tr.doc, roster),
                   resolveVoiceInputReplacementRange(tr, oldState).range,
-                  true,
+                  listDecorationCompositionScope(oldState),
                 ),
                 suspendedForComposition: true,
               };

@@ -13,7 +13,7 @@ import { hostRuntimeLayout } from '../runtime-layout.mjs';
 /**
  * @param {'cn' | 'global'} region
  * @param {string} [overrideDir]
- * @returns {{ authApiBaseUrl: string, authDesktopCallbackUrl?: string, deviceLinkApiBaseUrl?: string, oauthBrokerApiBaseUrl?: string, modelAccessApiBaseUrl?: string }}
+ * @returns {{ authApiBaseUrl: string, authDesktopCallbackUrl?: string, deviceLinkApiBaseUrl?: string, oauthBrokerApiBaseUrl?: string, modelAccessApiBaseUrl?: string, agentNetApiBaseUrl?: string }}
  */
 export function readAuthEndpoints(region, overrideDir = process.env.CINDY_HOST_ENDPOINT_DIR) {
   const dir = overrideDir?.trim() || hostRuntimeLayout().configDir;
@@ -32,6 +32,8 @@ export function readAuthEndpoints(region, overrideDir = process.env.CINDY_HOST_E
       ? { deviceLinkApiBaseUrl: manifest.deviceLinkApiBaseUrl } : {}),
     ...(typeof manifest.modelAccessApiBaseUrl === 'string' && /^https:\/\//.test(manifest.modelAccessApiBaseUrl)
       ? { modelAccessApiBaseUrl: manifest.modelAccessApiBaseUrl } : {}),
+    ...(typeof manifest.agentNetApiBaseUrl === 'string' && /^https:\/\//.test(manifest.agentNetApiBaseUrl)
+      ? { agentNetApiBaseUrl: manifest.agentNetApiBaseUrl.replace(/\/+$/, '') } : {}),
     ...(typeof callback === 'string' && callback ? { authDesktopCallbackUrl: callback } : {}),
   };
 }

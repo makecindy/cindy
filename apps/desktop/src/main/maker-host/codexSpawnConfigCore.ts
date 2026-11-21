@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { prepareCodexDesktopInputRules } from './codexDesktopInputRules.js';
 import type { AgentDeps } from '@cindy/maker-core';
 import type { ProviderView, Catalog } from '@cindy/model-providers';
 import type { createCodexProxyHost } from './codex-proxy-host.js';
@@ -64,7 +65,15 @@ export function createCodexSpawnConfig(ports: {
           (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
           throw error;
         }
-        const effectiveCodexHome = ctx.codexHome ?? getCodexHome();
+        const appHome = getCodexHome();
+        const effectiveCodexHome = ctx.codexHome ?? appHome;
+        if (!isControlPlane && !ctx.nativeStorageOnly && !guestProviderId) {
+          try {
+            await prepareCodexDesktopInputRules(ctx.runtimeCodexHome ?? effectiveCodexHome, appHome);
+          } catch (cause) {
+            throw Object.assign(new Error('Could not prepare Codex desktop input rules', { cause }), { codexSpawnConfigFatal: true });
+          }
+        }
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
         let buildSessionMcpConfig:
@@ -221,6 +230,7 @@ export function createCodexSpawnConfig(ports: {
             );
           }
         }
+        let contextProviderModels: string[] | undefined;
         let customContextCatalogArgs: string[] = [];
         let customContextCatalogPath: string | undefined;
         if (isCustomContext) {
@@ -237,12 +247,14 @@ export function createCodexSpawnConfig(ports: {
             }
             const catalog = getDesktopSelectableCatalog();
             const source = resolveDesktopModelContextProviderId(catalog, 'codex', ctx.customContextProviderId, modelId);
+            const provider = catalog.providers.find(provider => provider.id === source);
+            contextProviderModels = provider?.models.codex?.map(model => model.id) ?? [];
             const customCatalog = await prepareCodexCustomContextCatalog({
               binaryPath: ports.binaryPath,
               codexHome: effectiveCodexHome,
               modelId,
               contextWindow,
-              modelIds: catalog.providers.find(provider => provider.id === source)?.models.codex?.map(model => model.id),
+              modelIds: contextProviderModels,
               resolveCompactionPct: (id) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
               resolveContextWindow: (nativeModelId) => {
                 return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
@@ -270,9 +282,11 @@ export function createCodexSpawnConfig(ports: {
         }
         if (guestProviderId) {
           try {
+            const guestModelIds = ctx.deviceHostedGuestModelIds ?? [];
+            contextProviderModels = contextProviderModels?.filter(model => guestModelIds.includes(model));
             const guestCatalog = await prepareCodexGuestModelCatalog({
               binaryPath: ports.binaryPath, codexHome: effectiveCodexHome,
-              modelIds: ctx.deviceHostedGuestModelIds ?? [],
+              modelIds: guestModelIds,
               ...(customContextCatalogPath ? { baseCatalog: JSON.parse(await fs.readFile(customContextCatalogPath, 'utf8')) } : {}),
             });
             customContextCatalogArgs = guestCatalog.extraArgs;
@@ -307,6 +321,7 @@ export function createCodexSpawnConfig(ports: {
             ? { smartSubagentRoutes: smartSubagentConfig.routes }
             : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
+          contextProviderModels,
           codexProxyActive: ready,
           codexDefaultModelProviderId: CODEX_GATEWAY_PROVIDER_ID,
           codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,

@@ -254,10 +254,15 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   // Keep that identity in the cold-start list too; otherwise an SSH row can borrow a local alias.
   if (typeof item.remoteHostId === 'string') session.remoteHostId = item.remoteHostId;
   if (typeof item.source === 'string') session.source = item.source;
+  if (item.sideChatPromoted === true) session.sideChatPromoted = true;
   session.companion = parseTaskCompanion(item.companion);
   session.taskTeammate = parseTaskTeammate(item.taskTeammate);
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;
+  for (const field of ['snoozedUntil', 'snoozedAt'] as const) {
+    session[field] = typeof item[field] === 'string' && Number.isFinite(Date.parse(item[field]))
+      ? item[field] : null;
+  }
   if (typeof item.preview === 'string') session.preview = truncateText(item.preview);
 
   // interface 之外的草稿类布尔标记(HomeSessionRow 用 readBooleanField 读取),只保留 true 值。

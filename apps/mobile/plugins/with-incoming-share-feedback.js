@@ -38,7 +38,7 @@ function patchShareFeedback(source) {
   }`);
   replace(
     "      self.extensionContext?.completeRequest(returningItems: nil)",
-    "      showShareFeedback(received: false)",
+    '      NSLog("[CindyShare] invalid extension input")\n      showShareFeedback(received: false)',
   );
   replace(
     "      if !payload.isEmpty {",
@@ -50,7 +50,7 @@ function patchShareFeedback(source) {
   );
   replace(
     "        self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)",
-    "        showShareFeedback(received: false)",
+    '        NSLog("[CindyShare] no shareable payload")\n        showShareFeedback(received: false)',
   );
   replace(
     "    openURL(url)\n    self.close()",

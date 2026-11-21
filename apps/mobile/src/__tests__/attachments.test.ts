@@ -18,6 +18,11 @@ import type { RemoteSerializedAttachment } from '@/session/types';
 const SHA256 = 'a'.repeat(64);
 
 describe('mobile remote file attachments', () => {
+  // #9479, unit: mirror text routing for iOS/Android attachments.
+  it('recognizes Solidity source without admitting an archive', () => {
+    expect(categorizeMobileAttachment('Contract.SOL')).toBe('text');
+    expect(categorizeMobileAttachment('Contract.sol.zip')).toBe('file');
+  });
   // #10143, unit: newly recognized text must survive remote preview/attachment classification.
   it.each(['Directory.Build.props', 'App.CSPROJ.USER', '.globalconfig', 'Page.razor', 'Page.axaml',
     'Module.vb', 'script.csx', 'query.gql', 'api.http', 'schema.thrift', 'schema.avsc'])(

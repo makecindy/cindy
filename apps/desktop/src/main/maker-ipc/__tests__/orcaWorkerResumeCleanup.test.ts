@@ -28,10 +28,12 @@ describe('resumeOrcaWorkerSessionIfMissing runtime cleanup', () => {
     sessionStatus?: string;
     /** 冷启动后（post-bootstrap 复核）读到的会话状态；缺省与冷启动前相同。 */
     sessionStatusAfterBoot?: string;
+    /** 任务登记了下一次发送才生效的路线选择。 */
+    stagedSelection?: boolean;
   }
 
   function createRuntime(overrides: Overrides = {}) {
-    const { cancelledAt = null, sessionStatus = 'active', sessionStatusAfterBoot } = overrides;
+    const { cancelledAt = null, sessionStatus = 'active', sessionStatusAfterBoot, stagedSelection = false } = overrides;
     const closeSession = vi.fn(async () => undefined);
     const bootstrapSession = vi.fn(async (opts: { id: string }) => {
       booted = true;
@@ -73,6 +75,8 @@ describe('resumeOrcaWorkerSessionIfMissing runtime cleanup', () => {
       readSessionWritableDirsFromDb: async () => [],
       buildCreateOptsWithStderr: (opts: Record<string, unknown>) => opts,
       dbToMakerAgentKind: (value: unknown) => value,
+      dbToMakerEngineKind: (value: unknown) => value,
+      isPluginEngineKind: (value: unknown) => value === 'acp',
       permissionModeOrAsk: (value: unknown) => value,
       directoryGrantsForRuntime: () => ({}),
       ensureRemoteReadyForSessionStart: async () => undefined,
@@ -83,6 +87,9 @@ describe('resumeOrcaWorkerSessionIfMissing runtime cleanup', () => {
       applySessionContextWindowBudgetToCreateOpts: async () => undefined,
       bootstrapSession,
       markOrcaRoleIfNeeded,
+      agentSwitchPending: {
+        get: () => (stagedSelection ? { targetAgentKind: 'claude-code', model: 'next', providerId: 'gateway' } : undefined),
+      },
       log: { info: vi.fn(), warn: vi.fn() },
     };
     const js = ts.transpileModule(`${fnSource}\nreturn resumeOrcaWorkerSessionIfMissing;`, {
@@ -160,6 +167,17 @@ describe('resumeOrcaWorkerSessionIfMissing runtime cleanup', () => {
 
     expect(bootstrapSession).not.toHaveBeenCalled();
     expect(closeSession).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-17: Workers at their subscription usage limit had a new source staged. Waking them
+  // (focus pre-warm or a Lead send) must not start the old route; the next send applies the
+  // choice and starts the new one.
+  it('does not boot the old route while a route choice is staged', async () => {
+    const { resume, target, bootstrapSession } = createRuntime({ stagedSelection: true });
+
+    await expect(resume(target)).resolves.toBe(false);
+
+    expect(bootstrapSession).not.toHaveBeenCalled();
   });
 
   it('keeps the runtime on the healthy path', async () => {

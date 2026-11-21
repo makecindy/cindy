@@ -21,6 +21,8 @@
  */
 
 import { type Extension } from '@codemirror/state';
+import { tags } from '@lezer/highlight';
+import { parser as solidityParser } from '@replit/codemirror-lang-solidity';
 import { StreamLanguage } from '@codemirror/language';
 
 import { python } from '@codemirror/lang-python';
@@ -86,6 +88,26 @@ const fsharp = StreamLanguage.define(legacyFSharp);
 const vbnet = StreamLanguage.define(legacyVb);
 const http = StreamLanguage.define(legacyHttp);
 
+// Adapt custom Solidity token names to the semantic tags used by both themes.
+// Based on Lyz1116-FOUND's #9560; keep the package grammar unchanged.
+const solidity = StreamLanguage.define({
+  ...solidityParser,
+  tokenTable: {
+    ...solidityParser.tokenTable,
+    functionName: tags.function(tags.variableName),
+    parameterValue: tags.variableName,
+    addressFunction: tags.function(tags.variableName),
+    errorHandling: tags.keyword,
+    contractRelated: tags.keyword,
+    version: tags.number,
+    etherUnit: tags.unit,
+    doc: tags.docComment,
+    docReserve: tags.docComment,
+    mathematicalAndCryptographic: tags.standard(tags.variableName),
+    abi: tags.standard(tags.variableName),
+  },
+});
+
 export function getCodeMirrorLanguage(alias: string | undefined): Extension | null {
   if (!alias) return null;
   switch (alias.toLowerCase()) {
@@ -138,6 +160,10 @@ export function getCodeMirrorLanguage(alias: string | undefined): Extension | nu
     case 'cs':
     case 'c#':
       return csharpLezer();
+
+    case 'solidity':
+    case 'sol':
+      return solidity;
 
     // ── Stream parsers (legacy-modes) ────────────────────────────────────
     case 'kotlin':

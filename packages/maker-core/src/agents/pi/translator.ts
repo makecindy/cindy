@@ -1,3 +1,4 @@
+import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
 /**
@@ -855,6 +856,24 @@ export function translatePiEvent(
   queue: AsyncQueue<AgentEvent>,
   ctx: PiTranslateContext,
 ): void {
+  const projection = piToolMarkupProjection(ctx);
+  const message = event.message as PiAssistantMessage | undefined;
+  if (event.type === 'auto_retry_start') projection.beginSample(queue);
+  if (event.type === 'message_start' && (!message || message.role === 'assistant')) projection.beginSample(queue);
+  const preserve = message?.stopReason === 'error' || message?.stopReason === 'aborted'
+    || message?.stopReason === 'length' || isCurrentTurnHostAbortRequested(ctx);
+  if (event.type === 'message_end' && message?.role === 'assistant') projection.setMessage(message.content, preserve);
+  const generation = ctx.turnGeneration;
+  translatePiEventInternal(event, projection.queue(queue) as AsyncQueue<AgentEvent>, ctx);
+  if (ctx.turnGeneration !== generation) projection.resetTurn(queue);
+  if (event.type === 'message_end' && message?.role === 'assistant') projection.finish(queue, preserve);
+}
+
+function translatePiEventInternal(
+  event: PiRpcEvent,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: PiTranslateContext,
+): void {
   switch (event.type) {
     case 'agent_start': {
       if (ctx.isStreaming && !ctx.turnSettled && !ctx.terminalAssistantErrorEmitted
@@ -955,14 +974,14 @@ export function translatePiEvent(
       if (message.cindyCacheRecoveryHandled === true) ctx.cacheRecoveryHandled = true;
       const pendingPriceVariant = ctx.pendingPriceVariants.shift();
       const reportedPriceVariant = priceVariantFromServiceTier(message.usage?.service_tier);
-      const executionPriceVariant = message.usage && ctx.resolveUsagePriceVariant?.({
+      const observed = message.usage && ctx.resolveUsagePriceVariant?.({
         inputTokens: (message.usage.input ?? 0) + (message.usage.cacheRead ?? 0) + (message.usage.cacheWrite ?? 0),
         outputTokens: message.usage.output ?? 0,
         cacheReadTokens: message.usage.cacheRead ?? 0,
       });
       const priceVariant =
-        executionPriceVariant ?? pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
-      applyUsage(ctx, message.usage, message.model, priceVariant);
+        (typeof observed === 'object' ? observed.priceVariant : observed) ?? pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
+      applyUsage(ctx, message.usage, message.model || (typeof observed === 'object' ? observed.model : undefined), priceVariant);
       publishUsageReceipts(queue, ctx);
       const hadGenerationHeartbeat = ctx.generationHeartbeatAt > 0;
       samplePiGenerationHeartbeat(ctx);
@@ -1054,6 +1073,7 @@ export function translatePiEvent(
         // calibration overwrite it.
         ctx.turnMainOutputUsageComplete = false;
         ctx.unreportedEstimatedOutput += messageEstimate;
+        ctx.tokenSpeed.finishUnreportedRequest();
         ctx.lastCalibratedTokens = meterTokens;
       }
       pushStatus(queue, ctx, 'Working…', true);
@@ -1228,6 +1248,7 @@ export function translatePiEvent(
       // so `unreportedEstimatedOutput` never double counts a reported message.
       settlePiRun(ctx);
       const calibratedElapsedMs = ctx.tokenSpeed.snapshot()?.elapsedMs;
+      const generationTrace = ctx.tokenSpeed.trace();
       const usageDurationMs =
         typeof calibratedElapsedMs === 'number' && Number.isFinite(calibratedElapsedMs) && calibratedElapsedMs > 0
           ? Math.round(calibratedElapsedMs)
@@ -1250,6 +1271,8 @@ export function translatePiEvent(
         ...(ctx.turnWallClockStartedAt > 0
           ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) }
           : {}),
+        // Display only: lets the finished message show the chart the turn ran with.
+        ...(ctx.generationTimingReliable && generationTrace ? { generationTrace } : {}),
       };
       const terminalError = pendingAssistantError ?? (outputLimited ? {
         message: 'Pi reached the model output limit. The response may be incomplete.',

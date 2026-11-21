@@ -12,18 +12,21 @@ import { createPrivateNetwork, generateIdentity, verifyCertificate } from '../..
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 
-const fake = vi.hoisted(() => ({ target: vi.fn(), open: vi.fn(), identity: vi.fn(), enabled: false,
-  createTransport: vi.fn(), verifyCertificate: vi.fn(), readDirectory: vi.fn() }));
+const fake = vi.hoisted(() => ({ target: vi.fn(), open: vi.fn(), identity: vi.fn(), enabled: false, agentNetOnly: false,
+  createTransport: vi.fn(), rawFetch: vi.fn(), verifyCertificate: vi.fn(), readDirectory: vi.fn() }));
 vi.mock('@cindy/agent-net/portable', async original => ({ ...await original<typeof import('@cindy/agent-net/portable')>(),
   AgentNetSocket: { openWithBindings: fake.open }, NativeTransport: { create: fake.createTransport } }));
+vi.mock('@/api/client', async original => ({
+  ...await original<typeof import('@/api/client')>(), apiFetchRaw: fake.rawFetch,
+}));
 vi.mock('expo-network', () => ({ getIpAddressAsync: vi.fn() }));
 vi.mock('react-native', () => ({ AppState: { addEventListener: vi.fn(() => ({ remove: vi.fn() })) } }));
 vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.test',
   getOfficialDeviceLinkApiBaseUrl: () => 'https://relay.example.test', getOfficialAgentNetApiBaseUrl: () => 'https://agent-net.example.test' }));
 vi.mock('@/device-link/agentNetNative', () => ({ MobileAgentNetEngine: { available: () => true } }));
 vi.mock('@/device-link/agentNetIdentity', () => ({ ensureMobileAgentNetIdentity: fake.identity, clearMobileAgentNetIdentity: vi.fn(), currentMobileAgentNetIdentity: () => null }));
-vi.mock('@/device-link/selfHostedRelayRouting', () => ({ getActiveSelfHostedRelay: () => null,
-  getSelfHostedRelayRouteGeneration: () => 0, isAgentNetOnlyRoute: () => false,
+vi.mock('@/device-link/selfHostedRelayRouting', () => ({ getActiveSelfHostedRelay: () => fake.agentNetOnly ? { signing: { agentNet: { certificate: {} } } } : null,
+  getSelfHostedRelayRouteGeneration: () => 0, isAgentNetOnlyRoute: () => fake.agentNetOnly,
   subscribeSelfHostedRelayRoute: () => () => {}, deviceLinkMediaApiBaseUrl: () => 'https://relay.example.test' }));
 vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferences: () => ({ ready: true, enabled: fake.enabled, onlyEncrypted: false, generation: 0 }),
   mobileAgentNetRequiresEncryption: () => false, subscribeMobileAgentNetPreferences: () => () => {} }));
@@ -35,13 +38,14 @@ vi.mock('@/device-link/agentNetLan', () => ({ mobileAgentNetDiscovery: vi.fn() }
 vi.mock('@/device-link/agentNetProtocol', () => ({ verifyMobileAgentNetCertificate: fake.verifyCertificate, verifyMobileAgentNetDelegation: vi.fn() }));
 vi.mock('@/device-link/agentNetDirectoryCache', () => ({ readMobileAgentNetDirectory: fake.readDirectory, writeMobileAgentNetDirectory: vi.fn() }));
 vi.mock('@/device-link/agentNetMode', () => ({ verifyMobileAgentNetModeProof: vi.fn() }));
-vi.mock('@/device-link/agentNetSharing', () => ({ mobileAgentNetSharingMediaTarget: fake.target }));
+vi.mock('@/device-link/agentNetSharing', () => ({ mobileAgentNetSharingMediaTarget: fake.target, setMobileAgentNetPrivateSharingSupport: vi.fn() }));
 
 import { openMobileAgentNetSocket, mobileAgentNetShouldUseLegacyPeer, mobileAgentNetShouldProbeLegacyPeer } from '@/device-link/agentNetRuntime';
 import { uploadMobileAttachment } from '@/session/mobileAttachmentUpload';
 beforeEach(() => {
-  fake.target.mockReset(); fake.open.mockReset(); fake.identity.mockReset(); fake.enabled = false;
+  fake.target.mockReset(); fake.open.mockReset(); fake.identity.mockReset(); fake.enabled = false; fake.agentNetOnly = false;
   fake.readDirectory.mockReset().mockResolvedValue(null);
+  fake.rawFetch.mockReset().mockResolvedValue({ devices: [] });
   fake.createTransport.mockReset(); fake.verifyCertificate.mockReset().mockImplementation(verifyCertificate);
   setMobileAuthOwner('unit-media-owner');
 });
@@ -72,7 +76,7 @@ it.each([false, true])('handles an ordinary peer missing a certificate without d
   fake.enabled = true;
   const socket = new EventEmitter() as any;
   socket.close = () => socket.emit('close', 1000);
-  socket.knowsPeer = () => known; socket.certificateFor = () => undefined;
+  socket.knowsPeer = () => known; socket.certificateFor = () => undefined; socket.restrictPeers = () => undefined;
   fake.open.mockResolvedValue(socket);
   fake.identity.mockResolvedValue({ api: { identity: { deviceId: 'phone' }, certificate: { expiresAt: Date.now() + 48 * 60 * 60_000 } },
     signer: {}, newTransportEngine: async () => ({ destroy: vi.fn() }) });
@@ -106,7 +110,7 @@ it('opens a legacy link with no cached directory while the V2 relay is offline, 
     identity, certificate: bootstrap.ownerCertificate, connect: async () => { throw new Error('offline'); } },
     signer: {}, newTransportEngine: async () => ({ destroy: vi.fn() }) });
   const connect = vi.fn();
-  fake.createTransport.mockResolvedValue({ id: 'phone', dial: {}, connect, close: async () => undefined });
+  fake.createTransport.mockResolvedValue({ id: 'phone', dial: {}, connect, supports: () => false, close: async () => undefined });
   const socket = await openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null });
   expect(socket).not.toBeNull();
   await expect(socket!.dial('unknown')).rejects.toThrow('UNAUTHORIZED_PEER');
@@ -150,4 +154,60 @@ it('fences the original account while the selected media module loads asynchrono
   await importing; setMobileAuthOwner('other-owner'); release();
   expect(await outcome).toMatchObject({ message: 'AGENT_NET_OWNER_CHANGED' });
   expect(upload).not.toHaveBeenCalled(); expect(legacy).not.toHaveBeenCalled();
+});
+
+// Production socket startup must use the original V2 transport with the toggle
+// off. With opt-in, even a never-answering UDP lookup cannot delay startup.
+// Unit tier: one forced route, in-memory relay and native boundaries.
+it.each([false, true])('keeps forced V2 startup independent of UDP discovery (enabled=%s)', async enabled => {
+  fake.agentNetOnly = true;
+  fake.enabled = enabled;
+  const socket = new EventEmitter() as any;
+  socket.close = () => socket.emit('close', 1000);
+  const configureUdpServer = vi.fn();
+  fake.createTransport.mockResolvedValue({ supports: () => true, configureUdpServer });
+  fake.open.mockImplementation(async options => {
+    await options.bindings.createTransport({});
+    return socket;
+  });
+  const engine = { destroy: vi.fn() };
+  const createEngine = vi.fn(async () => engine);
+  fake.identity.mockResolvedValue({ api: { base: 'https://private.example.test',
+    identity: { deviceId: 'phone' }, certificate: { networkId: 'private:test', expiresAt: Date.now() + 48 * 60 * 60_000 } },
+    signer: {}, newTransportEngine: createEngine });
+  let finishLookup!: (response: Response) => void;
+  const fetch = vi.fn(() => new Promise<Response>(resolve => { finishLookup = resolve; }));
+  vi.stubGlobal('fetch', fetch);
+  try {
+    await expect(openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null })).resolves.toBe(socket);
+    expect(fetch).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    expect(configureUdpServer).not.toHaveBeenCalled();
+    expect(fake.rawFetch).not.toHaveBeenCalled();
+    expect(createEngine).toHaveBeenCalledWith(expect.any(Function), enabled);
+    expect(fake.createTransport).toHaveBeenCalledWith(engine, {}, expect.any(Function), enabled);
+  } finally {
+    finishLookup?.(new Response(null, { status: 503 }));
+    socket.close();
+    vi.unstubAllGlobals();
+  }
+});
+
+// The admission rule must exclude a still-certified peer missing from the
+// official Device Link response, even on the first socket open. V2 directory
+// display tests cannot exercise this startup boundary. Unit with raw HTTP fake.
+it('applies the raw official Device Link list before opening the Agent-Net socket', async () => {
+  fake.enabled = true;
+  const events = new EventEmitter();
+  const socket = Object.assign(events, { restrictPeers: vi.fn(), close: () => events.emit('close', 1000) });
+  fake.open.mockResolvedValue(socket);
+  fake.rawFetch.mockResolvedValue({ devices: [{ deviceId: 'phone' }] });
+  fake.readDirectory.mockResolvedValue({ devices: [{ certificate: { deviceId: 'removed-desktop' } }] });
+  fake.identity.mockResolvedValue({ api: { identity: { deviceId: 'phone' }, certificate: { expiresAt: Date.now() + 48 * 60 * 60_000 } },
+    signer: {}, newTransportEngine: async () => ({ destroy: vi.fn() }) });
+  try {
+    await openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => 'unit-only' });
+    expect(fake.rawFetch).toHaveBeenCalledExactlyOnceWith('/api/device-link/devices',
+      expect.objectContaining({ baseUrl: 'https://relay.example.test' }));
+    expect(fake.open).toHaveBeenCalledWith(expect.objectContaining({ peerRule: { allowed: ['phone'], refused: [] } }));
+  } finally { socket.close(); }
 });

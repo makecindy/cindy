@@ -150,6 +150,7 @@ describe('createGitSnapshotCoordinator', () => {
       'codex',
       expect.stringContaining('please update login'),
       {
+        source: 'git-summary',
         maxTokens: 80,
         timeoutMs: 1_000,
         signal: expect.any(AbortSignal),

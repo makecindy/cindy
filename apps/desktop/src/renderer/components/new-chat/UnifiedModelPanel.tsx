@@ -84,10 +84,14 @@ import {
   resolveStoredModelEntry,
   sameAnchor,
   unavailableFavoriteEntry,
+  withRemoteModelGroupRailItems,
+  withRemotePluginEngineRailItems,
+  type DeviceModelGroupsRailTab,
   type ForeignFavoriteRow,
   type UnifiedAnchor,
   type UnifiedListRow,
   type UnifiedEngine,
+  type PluginEngineRailTab,
   type UnifiedRailFilter,
   type UnifiedRailItem,
   type UnifiedRowConfig,
@@ -130,6 +134,19 @@ export interface UnifiedModelPanelProps {
   pinnedTopHasRows?: boolean;
   /** 左侧栏「模型组」一格及其内容；不传就没有这一格。 */
   modelGroupsView?: ReactNode;
+  /**
+   * 另一台电脑自己的模式(model-groups.md §6.3)：每台一格，排进那台电脑那一段；选中时列表区显示
+   * `renderDeviceModelGroups(deviceId)`。不传 / 空数组就没有这些格。
+   */
+  deviceModelGroupTabs?: readonly DeviceModelGroupsRailTab[];
+  renderDeviceModelGroups?: (deviceId: string) => ReactNode;
+  /**
+   * 插件提供的执行引擎：每个引擎在左侧栏单独一格(名字 + 插件图标)，选中时列表区显示
+   * `renderPluginEngine(providerId, deviceId)`。不传 / 空数组就没有这些格(没装任何引擎时)。
+   * 带 `deviceId` 的是自己另一台电脑上的引擎，格位排进那台电脑那一段。
+   */
+  pluginEngineTabs?: readonly PluginEngineRailTab[];
+  renderPluginEngine?: (providerId: string, deviceId?: string) => ReactNode;
   /** 「收藏」视图且没有搜索词时，列表最上方额外渲染的内容(收藏的模式)。 */
   favoritesPinned?: ReactNode;
   /** favoritesPinned 当前有内容：只有它时「收藏」不显示空态引导。 */
@@ -148,7 +165,7 @@ export interface UnifiedModelPanelProps {
   isVisible: (providerId: string, model: CatalogModel, agent: AgentKind) => boolean;
   /** 整供应商排除(SSH 远程排除 chat-bridged Codex 源等)。 */
   excludeProvider?: (provider: ProviderView, agent: AgentKind) => boolean;
-  /** 只从模型分组里收起、收藏与最近照常解析的供应商(见 buildUnifiedListSections)。 */
+  /** 从来源栏与模型分组里收起、收藏与最近照常解析的供应商(见 buildUnifiedListSections)。 */
   listHiddenProviderIds?: ReadonlySet<string>;
   /** 单模型排除(SSH 远程排除订阅直连前缀等)。 */
   excludeModel?: (model: CatalogModel, provider: ProviderView, agent: AgentKind) => boolean;
@@ -365,12 +382,14 @@ export interface UnifiedModelPanelProps {
       config: UnifiedSelectedRow;
     }) => void | boolean | Promise<void | boolean>;
     labelOf: (deviceId: string, providerId: string) => string;
+    homeUnavailableReasonOf?: (deviceId: string, providerId: string) => string | undefined;
     /** 正在浏览的远程供应商;null = 正在浏览本机目录。 */
     active: { deviceId: string; providerId: string } | null;
     /** 列表数据是否已经是 `active` 那台电脑的目录。 */
     ready: boolean;
     /** `active` 那台的目录读取失败时,列表区显示的提示(含重试)。 */
     failure?: ReactNode;
+    status?: ReactNode;
     onActivate: (target: { deviceId: string; providerId: string } | null) => void;
   };
   /**
@@ -379,6 +398,7 @@ export interface UnifiedModelPanelProps {
    * (见 widthSizerSections)。composer 的 `w-max` 面板不传 = 开启。
    */
   panelWidthFluid?: boolean;
+  readableRows?: boolean;
 }
 
 /**
@@ -398,6 +418,10 @@ export function UnifiedModelPanel({
   pinnedTop,
   pinnedTopHasRows = false,
   modelGroupsView,
+  deviceModelGroupTabs,
+  renderDeviceModelGroups,
+  pluginEngineTabs,
+  renderPluginEngine,
   favoritesPinned,
   favoritesPinnedHasRows = false,
   providers,
@@ -447,6 +471,7 @@ export function UnifiedModelPanel({
   panelElement,
   overlayClassName,
   panelWidthFluid = false,
+  readableRows = false,
   catalogNotice,
   emptyCatalogNotice,
   remoteSources,
@@ -599,10 +624,15 @@ export function UnifiedModelPanel({
   const localRailItems = remoteSources?.localRailItems;
   const remoteGroups = remoteSources?.groups;
   const hasModelGroupsView = modelGroupsView !== undefined;
+  // 本机的引擎格与另一台电脑上的引擎格分开排：一个字符串键表达两组的身份，目录没变就不重排。
+  const pluginEngineTabsKey = JSON.stringify((pluginEngineTabs ?? []).map((tab) => [tab.providerId, tab.deviceId ?? '']));
+  const deviceModelGroupTabsKey = (deviceModelGroupTabs ?? []).map((tab) => tab.deviceId).join('\n');
   const railItems = useMemo<UnifiedRailItem[]>(() => {
     // 远程 Agent:本机格按本机目录派生(此刻 entries 可能是某台电脑的目录),
     // 其后每台电脑一段远程供应商格。
-    const items: UnifiedRailItem[] = !localRailItems ? buildUnifiedRail(entries, undefined, providerOrder) : [
+    const items: UnifiedRailItem[] = !localRailItems ? buildUnifiedRail(
+      entries.filter(entry => !listHiddenProviderIds?.has(entry.providerId)), undefined, providerOrder,
+    ) : [
       ...localRailItems,
       ...(remoteGroups ?? []).flatMap((group) =>
         group.providerIds.map((providerId) => ({
@@ -612,11 +642,21 @@ export function UnifiedModelPanel({
         })),
       ),
     ];
-    if (!hasModelGroupsView) return items;
-    // 「模型组」紧跟「全部」：它和「全部」一样跨供应商，排在各供应商格之前。
+    const engineTabs = (JSON.parse(pluginEngineTabsKey) as Array<[string, string]>)
+      .map(([providerId, deviceId]) => ({ providerId, ...(deviceId ? { deviceId } : {}) }));
+    const groupTabs = deviceModelGroupTabsKey ? deviceModelGroupTabsKey.split('\n').map((deviceId) => ({ deviceId })) : [];
+    if (!hasModelGroupsView && engineTabs.length === 0) return withRemoteModelGroupRailItems(items, groupTabs);
+    // 「模型组」紧跟「全部」(和「全部」一样跨供应商)；本机的插件引擎各占一格排在它后面、各供应商格之前。
     const all = items.findIndex((item) => item.kind === 'all');
-    return [...items.slice(0, all + 1), { kind: 'model-groups' }, ...items.slice(all + 1)];
-  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView]);
+    const inserted: UnifiedRailItem[] = [
+      ...(hasModelGroupsView ? [{ kind: 'model-groups' as const }] : []),
+      ...engineTabs.filter((tab) => !tab.deviceId).map((tab) => ({ kind: 'plugin-engine' as const, providerId: tab.providerId })),
+    ];
+    // 另一台电脑上的引擎排进那台电脑那一段(它的供应商格之后)。
+    // 另一台电脑的「模型组」格排在那台电脑那一段最前面。
+    return withRemoteModelGroupRailItems(withRemotePluginEngineRailItems(
+      [...items.slice(0, all + 1), ...inserted, ...items.slice(all + 1)], engineTabs), groupTabs);
+  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView, pluginEngineTabsKey, deviceModelGroupTabsKey, listHiddenProviderIds]);
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
     if (rail.kind === 'all') return;
@@ -927,6 +967,7 @@ export function UnifiedModelPanel({
     if (el.clientHeight < 1) return; // 还没有真实布局,等下一次尺寸回调。
     const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
     if (!row) {
+      el.scrollTop = 0;
       needsEnsureVisibleRef.current = false; // 本视图没有选中行,无事可做。
       return;
     }
@@ -1314,6 +1355,7 @@ export function UnifiedModelPanel({
     const rowElement = (
       <UnifiedModelRow
         key={key}
+        readable={readableRows}
         measurementOnly={sizer}
         entry={row.entry}
         anchor={row.anchor}
@@ -1323,6 +1365,7 @@ export function UnifiedModelPanel({
             ? t('newChat.modelSelector.unified.remoteFavoriteUnavailable', { source: label })
             : label
         }
+        sourceNotice={remoteSources?.homeUnavailableReasonOf?.(rowDeviceId, row.entry.providerId)}
         selected={false}
         active={false}
         isFavoriteRow
@@ -1429,6 +1472,8 @@ export function UnifiedModelPanel({
         providers={providers}
         providerLabel={providerHeading}
         interactionDisabled={interactionDisabled || actionPending}
+        {...(pluginEngineTabs?.length ? { pluginEngineTabs } : {})}
+        {...(deviceModelGroupTabs?.length ? { modelGroupDeviceTabs: deviceModelGroupTabs } : {})}
         {...(remoteSources
           ? {
               remoteSources: {
@@ -1455,6 +1500,7 @@ export function UnifiedModelPanel({
             // 底部加宽到 12px:滚到底时最后一行不贴着面板底边/footer(Chris 2026-08-13:
             // 「最底部稍微放宽一点高度」)。
             'morph-panel-list-scroll flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2 pb-3 [scrollbar-gutter:stable]',
+            readableRows && 'overflow-x-hidden',
             // min-h-0 是能不能滚到底的关键:flex item 的默认 min-height:auto 会让它按内容
             // 撑开、拒绝收缩,于是超出面板的部分被外层裁掉且**滚不到**(2026-08-13 实测:
             // 列表翻不到最下面)。加上 min-h-0 后,面板高度受限时列表自己收缩并内部滚动,
@@ -1505,7 +1551,7 @@ export function UnifiedModelPanel({
               <div className="mx-1 my-1 h-px bg-[var(--cmd-palette-border)]" />
             </>
           )}
-          {/* 只在已登记跨 Harness 切换时提示有损;浏览「全部」或同 Harness 换模型不提示。 */}
+          {/* 只在已登记跨 Harness 切换时提示如何接续;浏览「全部」或同 Harness 换模型不提示。 */}
           {sessionEngineFilter?.pendingTarget && (
             <div
               role="note"
@@ -1522,7 +1568,7 @@ export function UnifiedModelPanel({
               )}
             >
               <TriangleAlert size={12} className="shrink-0" />
-              <span className="truncate">
+              <span className="min-w-0 break-words">
                 {t('newChat.modelSelector.unified.crossEngineWarning')}
               </span>
             </div>
@@ -1530,8 +1576,11 @@ export function UnifiedModelPanel({
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
           {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
           {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
+          {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
           {effectiveRail.kind === 'model-groups' ? (
-            modelGroupsView ?? null
+            (effectiveRail.deviceId ? renderDeviceModelGroups?.(effectiveRail.deviceId) : modelGroupsView) ?? null
+          ) : effectiveRail.kind === 'plugin-engine' ? (
+            renderPluginEngine?.(effectiveRail.providerId, effectiveRail.deviceId) ?? null
           ) : remoteListPending ? (
             remoteSources?.failure ?? (
               <div
@@ -1616,12 +1665,16 @@ export function UnifiedModelPanel({
                   return (
                     <UnifiedModelRow
                       key={key}
+                      readable={readableRows}
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}
                       {...(showsSourceRow
                         ? { sourceLabel: aggregateSourceLabel(row.entry.providerId) }
                         : {})}
+                      sourceNotice={remoteActiveDeviceId
+                        ? remoteSources?.homeUnavailableReasonOf?.(remoteActiveDeviceId, row.entry.providerId)
+                        : undefined}
                       selected={isSelectedRow(row.anchor, row.entry)}
                       active={sameAnchor(flyAnchor, row.anchor)}
                       isFavoriteRow={!!starredFavorite}

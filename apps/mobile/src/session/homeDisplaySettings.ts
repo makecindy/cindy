@@ -14,6 +14,17 @@ export type HomeLastActivityFilter = '1d' | '3d' | '7d' | '30d' | 'all';
 /** 'all' = 不筛选;数组 = 只看这些项目(含对话占位键)。 */
 export type HomeProjectFilter = 'all' | readonly string[];
 export type HomeTeammateFilter = HomeProjectFilter | 'none';
+export interface HomeFilterSelection {
+  projectFilter: HomeProjectFilter;
+  teammateFilter: HomeTeammateFilter;
+  vendorFilter: HomeVendorFilter;
+  lastActivityFilter: HomeLastActivityFilter;
+  hideAutomations?: boolean;
+}
+export const DEFAULT_HOME_FILTERS: HomeFilterSelection = {
+  projectFilter: 'all', teammateFilter: 'all', vendorFilter: 'all', lastActivityFilter: 'all',
+};
+
 export type HomeListViewMode = 'text' | 'list';
 /**
  * 与桌面任务信息同序,但不含 worktree:产品规则(sidebar-redesign-plan §3.4)限定 worktree
@@ -21,6 +32,11 @@ export type HomeListViewMode = 'text' | 'list';
  * 旧版本存下的 'worktree' 由 normalizeTaskInfoFields 丢弃。
  */
 export type HomeTaskInfoField = 'time' | 'pr' | 'tokens' | 'cost';
+
+export interface HomeModeDisplayPreferences extends HomeFilterSelection {
+  viewMode: HomeListViewMode;
+  taskInfoFields: readonly HomeTaskInfoField[];
+}
 
 /** 项目筛选里「对话」的占位键;与真实项目 key 不会撞(项目 key 带设备 / 路径前缀)。 */
 export const HOME_DIALOGUE_FILTER_KEY = 'dialogue';
@@ -40,6 +56,7 @@ export const LAST_ACTIVITY_DAYS: Record<Exclude<HomeLastActivityFilter, 'all'>, 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface HomeContentFilters {
+  hideAutomations?: boolean;
   projects: HomeProjectFilter;
   teammates?: HomeTeammateFilter;
   teammateKey?: (item: RemoteSessionListItem) => string | undefined;
@@ -100,7 +117,8 @@ export function activeContentFilterCount(filters: HomeContentFilters): number {
   return (filters.projects !== 'all' ? 1 : 0)
     + (filters.teammates && filters.teammates !== 'all' ? 1 : 0)
     + (filters.vendor !== 'all' ? 1 : 0)
-    + (filters.lastActivity !== 'all' ? 1 : 0);
+    + (filters.lastActivity !== 'all' ? 1 : 0)
+    + (filters.hideAutomations ? 1 : 0);
 }
 
 

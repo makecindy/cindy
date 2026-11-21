@@ -411,7 +411,7 @@ describe('MCP App persistence and IPC wiring', () => {
     state.updateResult = [state.row!];
     await state.deps!.writeCard('task', 'card', full);
     expect(state.broadcast.mock.calls[0]![1].content).toEqual({
-      mcpAppHistory: { version: 1, title: 'form', text: 'Saved result' },
+      mcpAppHistory: { version: 1, customMcp: true, title: 'form', text: 'Saved result' },
     });
     expect(await state.deps!.readCard('task', 'card')).toEqual(full);
     expect(JSON.parse(state.row!.content as string)).toEqual({ mcpApp: full });
@@ -524,6 +524,19 @@ it.each(['allow', 'block', 'ask'] as const)('routes page approval through Auto (
     { name: record.tool.name, description: undefined, inputSchema: record.tool.inputSchema });
   expect(request).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
   if (verdict === 'ask') expect(request).toHaveBeenCalledWith('task', expect.objectContaining({ metadata: expect.objectContaining({ mcpApp: { clientId: 'card', serverId: 'custom', title: 'Planner', scope: 'once' } }) }), expect.any(AbortSignal));
+});
+
+// #8706 unit: this page-specific approval path builds its own metadata.
+it('retains a safe quota cause while requiring page confirmation', async () => {
+  state.session.permissionMode = 'auto';
+  const review = vi.fn(async () => ({ verdict: 'ask' as const, unavailable: true,
+    unavailableReason: 'quota_exhausted' as const, reason: 'Safe host guidance' }));
+  registerMcpAppsIpc(async () => {}, request, review);
+  await state.deps!.authorizeTool('task', record.tool, {}, new AbortController().signal,
+    { clientId: 'card', serverId: 'custom', title: 'Planner' });
+  expect(request).toHaveBeenCalledExactlyOnceWith('task', expect.objectContaining({
+    metadata: expect.objectContaining({ autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' }),
+  }), expect.any(AbortSignal));
 });
 
 // unit: page-only task grants were absent. Minimum input is two page calls with one

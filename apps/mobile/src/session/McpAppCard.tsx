@@ -1,3 +1,4 @@
+import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { MCP_APP_MAX_HEIGHT } from '@cindy/maker-shared/mcp-app-controller';
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Keyboard, Pressable, StyleSheet, View, type ViewInstance } from 'react-native';
@@ -12,17 +13,27 @@ import { MCP_APP_DEFAULT_HEIGHT, getMcpAppHeight } from './mcpAppView';
 import { getMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
 interface McpAppCardProps {
+  plugin?: unknown; customMcp?: unknown;
   deviceId?: string; sessionId: string; clientId: string; title: string; active?: boolean; fallbackText?: string;
 }
+function McpAppIdentity({ title, plugin, customMcp }: Pick<McpAppCardProps, 'title' | 'plugin' | 'customMcp'>) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const identity = plugin && typeof plugin === 'object' ? plugin as { name?: string; source?: unknown } : undefined;
+  const origin = identity?.source === undefined ? undefined : parseMcpAppSource(identity.source);
+  const custom = parseMcpAppCustomMcp(customMcp);
+  const label = origin && isExceptionalPluginSource(origin) ? t(`mcpApps.source.${origin.kind}`) : custom ? t('mcpApps.customMcp') : undefined;
+  return <><Text style={[styles.title, { color: colors.textPrimary }]}>{identity?.name || (custom && custom !== true ? custom.name : title) || t('mcpApps.appName')}</Text>
+    {label && <Text style={[styles.source, { color: custom ? colors.textSecondary : colors.warningFg }]}>{label}</Text>}</>;
+}
+
 export function McpAppCard(props: McpAppCardProps) {
   const { colors } = useTheme();
   const { t } = useTranslation();
   if (isSharedTaskPeer(props.deviceId)) return (
     <View style={[styles.card, { borderColor: colors.border, backgroundColor: colors.surface }]}>
       <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.textPrimary }]}>
-          {props.title ? t('mcpApps.cardTitle', { title: props.title }) : t('mcpApps.appName')}
-        </Text>
+        <McpAppIdentity {...props} />
       </View>
       {props.fallbackText ? <Text selectable style={[styles.historyText, { color: colors.textPrimary }]}>{props.fallbackText}</Text> : null}
       <Text style={[styles.error, { color: colors.textSecondary }]}>{t('mcpApps.sharedTaskReadOnly')}</Text>
@@ -31,7 +42,7 @@ export function McpAppCard(props: McpAppCardProps) {
   return <InteractiveMcpAppCard {...props} />;
 }
 
-function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = true, fallbackText }: McpAppCardProps) {
+function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = true, fallbackText, plugin, customMcp }: McpAppCardProps) {
   const host = useMcpAppViews();
   const { colors, mode } = useTheme();
   const { t, i18n } = useTranslation();
@@ -119,7 +130,7 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   return (
     <View style={[styles.card, { borderColor: colors.border, backgroundColor: colors.surface }]}>
       <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.textPrimary }]}>{title ? t('mcpApps.cardTitle', { title }) : t('mcpApps.appName')}</Text>
+        <McpAppIdentity title={title} plugin={plugin} customMcp={customMcp} />
         {surfaceActive && loading && <ActivityIndicator size="small" color={colors.textSecondary} />}
         {error && <Pressable accessibilityRole="button" onPress={() => setAttempt((value) => value + 1)} style={styles.retry}>
           <Text style={[styles.action, { color: colors.textPrimary }]}>{t('mcpApps.retry')}</Text>
@@ -141,6 +152,7 @@ const styles = StyleSheet.create({
   card: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.container, overflow: 'hidden', marginVertical: spacing.sm },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   title: { ...textStyles.subtitle, fontWeight: fontWeight.medium, flex: 1 },
+  source: { ...textStyles.caption },
   action: { ...textStyles.body, fontWeight: fontWeight.medium },
   error: { ...textStyles.footnote, paddingHorizontal: spacing.md, paddingBottom: spacing.md },
   historyText: { ...textStyles.bodyLarge, paddingHorizontal: spacing.md, paddingBottom: spacing.md },

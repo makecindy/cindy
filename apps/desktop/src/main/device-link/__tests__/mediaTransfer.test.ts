@@ -26,6 +26,8 @@ vi.mock('../agentNetDeviceDirectory.js', () => ({ readCurrentDeviceDirectory: vi
 // device-management secrets or enumerate devices; fail if that boundary changes.
 vi.mock('../agentNetRuntime.js', () => ({
   agentNetClientForRelay: () => { throw new Error('unexpected device-management runtime'); },
+  // The API assembly registers the device-list reader at load; registering reads nothing.
+  useDeviceLinkDeviceList: () => {},
 }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => { throw new Error('unexpected device-management owner read'); },

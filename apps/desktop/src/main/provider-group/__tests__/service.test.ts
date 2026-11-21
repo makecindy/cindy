@@ -217,6 +217,69 @@ describe('companion group failover eligibility', () => {
     expect(await h.eligibility.usageLimit('s1')).toBe(false);
   });
 
+  // Unit regression: the real eligibility gate used to reject every shared
+  // task before the group could move an exhausted/offline member to another.
+  it.each([{ sdkError: 'rate_limit' }, { message: '[REMOTE_AGENT_UNAVAILABLE] offline' }])(
+    'relocates shared ordinary tasks but keeps delayed quota waits disabled: %j', async signals => {
+      const h = companionHarness();
+      h.state.source = 'desktop';
+      h.eligibilityDeps.isShared = () => true;
+      await h.service.onTurnError('s1', signals, 1);
+      expect(h.row.agentDeviceId).toBe('mini');
+      expect(h.deps.continueSession).toHaveBeenCalledOnce();
+      expect(h.deps.fallback).not.toHaveBeenCalled();
+      expect(await h.eligibility.usageLimit('s1')).toBe(false);
+      expect(await h.eligibility.providerGroup('s1', { kind: 'rebalance' })).toBe(false);
+    },
+  );
+
+  // Unit regression (#11111): restart bypasses normal group lookup, while a
+  // one-member group's reconnect has no switch candidate. Exercise the real
+  // policy + service; shared recovery must require a live selected group.
+  it.each(['remote_agent_restarted', 'remote_agent_lost'])(
+    'reconnects a shared one-member group after %s', async reason => {
+      const h = companionHarness();
+      h.state.source = 'desktop';
+      h.eligibilityDeps.isShared = () => true;
+      h.config.members = [MINI];
+      Object.assign(h.row, { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId });
+      h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+      await h.service.onTurnError('s1', { reason }, 1);
+      expect(h.deps.continueSession).toHaveBeenCalledExactlyOnceWith('s1', 99,
+        expect.objectContaining({ agentReconnect: expect.any(Object) }));
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.fallback).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['unbound', 'removed-member', 'disabled-group'])(
+    'does not restart a shared remote task with %s', async condition => {
+      const h = companionHarness();
+      h.state.source = 'desktop';
+      h.eligibilityDeps.isShared = () => true;
+      Object.assign(h.row, { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId });
+      if (condition === 'unbound') h.bindings.delete('s1');
+      else h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+      if (condition === 'removed-member') h.config.members = [LOCAL];
+      if (condition === 'disabled-group') h.config.autoSwitch = false;
+      await h.service.onTurnError('s1', { reason: 'remote_agent_restarted' }, 1);
+      expect(h.deps.continueSession).not.toHaveBeenCalled();
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.fallback).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not use ungrouped reconnect when a shared task cannot read its selected group', async () => {
+    const h = companionHarness();
+    h.state.source = 'desktop';
+    h.eligibilityDeps.isShared = () => true;
+    Object.assign(h.row, { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId });
+    h.bindings.set('s1', { providerId: 'anthropic', groupDeviceId: 'unreachable-owner', memberKey: MINI.key, at: 1 });
+    await h.service.onTurnError('s1', { reason: 'remote_agent_lost' }, 1);
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledOnce();
+  });
+
   it('moves a retry away from the exhausted member before sending, without balancing healthy inputs', async () => {
     const h = companionHarness();
     await h.service.beforeSend('s1', { clientId: 'retry' });
@@ -367,6 +430,10 @@ describe('assignBeforeStart', () => {
     expect(context?.route).toEqual({ agentDeviceId: null, providerId: null });
     expect(h.deps.persistRoute).not.toHaveBeenCalled();
     expect(h.bindings.get('s1')).toMatchObject({ providerId: 'anthropic', memberKey: 'local' });
+    // Reopening the binding must still resolve the local default (#11088).
+    const reopened = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });
+    expect(reopened?.member.key).toBe('local');
+    expect(h.deps.markReleased).not.toHaveBeenCalled();
   });
 
   it('leaves tasks that already run elsewhere alone and never moves a started task', async () => {
@@ -1684,6 +1751,36 @@ describe('switching accounts between messages to balance quota', () => {
 });
 
 describe('onTurnError — one decision for every failure (failurePolicy)', () => {
+  // Unit, §6.1: existing stay coverage used invalid_request, which hides this
+  // gap. A terminal shared-provider scope refusal with a healthy spare must
+  // preserve the original error rather than move the task or enqueue a retry.
+  it('returns an explicit shared-provider scope refusal without relocating or continuing', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    const signals = { message: 'unexpected status 403 Forbidden: [SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.', errorStatus: 403 };
+    await h.service.onTurnError('s1', signals, 7);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(1);
+    expect(h.bindings.get('s1')?.memberKey).toBe('local');
+    expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
+  // Unit, §6.1 / review 4614256549: a disappearing model used the same old
+  // 403 sentence as a scope denial. A healthy spare must still receive the task.
+  it('continues on a healthy member after an ambiguous legacy model refusal', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    await h.service.onTurnError('s1', {
+      message: 'unexpected status 403 Forbidden: This request is outside the provider shared with you.', errorStatus: 403,
+    }, 7);
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(1);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
   it('switches when the agent there ends mid-turn without a terminal event (default: switch), without cooling it', async () => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
@@ -2149,6 +2246,18 @@ describe('moving a task into a group on this computer from the model list (2026-
 // as group suppliers. Previously only a group binding could enter this path.
 describe('supplier process restart', () => {
   const signals = { reason: 'remote_agent_restarted' };
+  // Unit regression: onTurnError used to hand back after restart probes even
+  // when an authorized group target remained. Existing restart cases had no binding.
+  it.each(['offline', 'unavailable'] as const)('relocates a bound task after its restarted executor remains %s', async outcome => {
+    const h = harness({ members: [MINI, STUDIO], row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    h.bindings.set('task', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.probe.mockResolvedValue(outcome);
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.row.agentDeviceId).toBe(STUDIO.agentDeviceId);
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(h.probe).toHaveBeenCalledTimes(outcome === 'offline' ? PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS + 1 : 1);
+  });
   it('continues on the original computer without a group binding or relocation', async () => {
     const h = harness({ row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
     expect(h.service.mayHandleTurnError('task', signals)).toBe(true);
@@ -2160,8 +2269,64 @@ describe('supplier process restart', () => {
     expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 
+  it.each(['stop', 'close', 'disabled'] as const)('does not relocate a bound restarted task after %s', async outcome => {
+    const h = harness({ members: [MINI, STUDIO], autoSwitch: outcome !== 'disabled',
+      row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    h.bindings.set('task', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.probe.mockImplementation(async () => {
+      if (outcome === 'stop') h.service.noteUserAction('task');
+      if (outcome === 'close') h.deps.leaseRecovery.mockReturnValue(null);
+      return 'unavailable';
+    });
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.row.agentDeviceId).toBe(MINI.agentDeviceId);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(outcome === 'disabled' ? 1 : 0);
+  });
+
+  // Closing clears the restart candidate but deliberately retains its recovery
+  // lease. Cover the async selection/handoff gap, absent from probe-only cases.
+  it.each(['selection', 'handoff', 'own-close'] as const)('preserves the restart close fence during %s', async phase => {
+    const h = harness({ members: [MINI, STUDIO], row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    h.bindings.set('task', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.probe.mockResolvedValue('unavailable');
+    if (phase === 'selection') h.deps.isFailoverEligible.mockImplementation(async (_id, context) => {
+      if (context.kind === 'failure') h.deps.leaseRecovery.mockReturnValue(null);
+      return true;
+    });
+    const switchAgentLocation = vi.fn<ProviderGroupServiceDeps['switchAgentLocation']>(async (_id, route, options) => {
+      if (phase === 'handoff') h.deps.leaseRecovery.mockReturnValue(null);
+      if (!options?.isCurrent?.()) throw new Error('provider group: superseded by user action');
+      options.onRelocationMutationStart?.();
+      h.deps.leaseRecovery.mockReturnValue(null);
+      expect(options.isCurrent()).toBe(true);
+      h.row.agentDeviceId = route.agentDeviceId;
+      h.row.providerId = route.providerId;
+    });
+    const service = createProviderGroupService({ ...h.deps, switchAgentLocation });
+    await service.onTurnError('task', signals, 1);
+    expect(h.row.agentDeviceId).toBe(phase === 'own-close' ? STUDIO.agentDeviceId : MINI.agentDeviceId);
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(phase === 'own-close' ? 1 : 0);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
   // Unit: the persisted share:<id> route identifies O; only a live direct
   // handle can probe its pinned M. Expiry during the probe must cancel recovery.
+  it('does not arm a guest switch token when closed while requesting it', async () => {
+    const route = 'share:restart-close';
+    const h = harness({ row: { agentDeviceId: route, providerId: 'shared-provider' } });
+    const guestSwitch = createProviderGroupGuestSwitch();
+    const direct = { ownerRoute: route, probeReconnect: async () => 'unavailable' as const,
+      requestSwitch: async () => { h.deps.leaseRecovery.mockReturnValue(null); return 'late-token'; } };
+    const service = createProviderGroupService({ ...h.deps, guestSwitch, directGuestSession: () => direct });
+    await service.onTurnError('task', signals, 1);
+    expect(guestSwitch.takeForOpen('task')).toBeUndefined();
+    expect(guestSwitch.hasOffer('task')).toBe(false);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+  });
+
   it.each(['returns', 'expires'] as const)('probes the direct executor instead of its share owner: %s', async outcome => {
     const SHARE_ROUTE = 'share:direct-restart';
     let live = true;

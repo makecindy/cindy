@@ -1,4 +1,5 @@
 /** Official CLI login/control APIs only. No Claude credential access. */
+import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import {
 import { parseClaudeOAuthUsageResponse } from '../../shared/claudeSubscriptionUsage.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import { AccountServiceUnreachableError, isAccountServiceUnreachable } from './accountServiceError.js';
 
 /** Preserve the old adapter's owner/revocation checks; do not adopt ~/.codex on upgrade. */
 export async function readLegacyCodexAccount(): Promise<AuthState> {
@@ -40,6 +42,11 @@ export async function loginLegacyCodexAccount(signal: AbortSignal): Promise<void
 export async function readLegacyCodexProviderAccount(providerId: string, directory: string) {
   const { codexAccountState } = await import('../maker-host/codex-account-auth.desktop.js');
   const state = codexAccountState(providerId);
+  // Right after a restart the connection may not be in the provider catalog yet (custom providers
+  // load once the database is ready). That says nothing about the login: report a failed read, so
+  // the snapshot retries within seconds instead of caching "requires login" and failing the
+  // interrupted task's automatic resume (2026-11-18).
+  if (state.errorReason === 'provider_unavailable') throw new Error('Codex connection is not loaded');
   return state.authenticated ? readNativeAccount('openai', directory) : state;
 }
 
@@ -55,6 +62,17 @@ export async function loginLegacyCodexProviderAccount(providerId: string, signal
   } finally {
     signal.removeEventListener('abort', cancel);
   }
+}
+
+// Only used to classify; the CLI's own wording never leaves this module.
+const UNREACHABLE_CLI_ERROR = /time(?:d)?\s*out|timeout|network|connect|dns|unreachable|sending request|tls|certificate|proxy|offline/i;
+
+function codexRequestError(error: unknown): Error {
+  const message = typeof (error as { message?: unknown })?.message === 'string'
+    ? (error as { message: string }).message : '';
+  return UNREACHABLE_CLI_ERROR.test(message)
+    ? new AccountServiceUnreachableError('Codex account request failed')
+    : new Error('Codex account request failed');
 }
 
 function codexProfileEnv(directory: string): Record<string, string> {
@@ -77,8 +95,8 @@ function codexProfileEnv(directory: string): Record<string, string> {
 export async function readNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
-  options?: { force?: boolean },
-): Promise<AuthState & { plan?: string; planTier?: string; planType?: string; loginExpiresAt?: string }> {
+  options?: { force?: boolean; codexCanDispatch?: () => boolean | Promise<boolean> },
+): Promise<AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string }> {
   if (provider === 'anthropic') {
     const result = await refreshClaudeCliLoginStatus({
       configDir: directory === path.join(homedir(), '.claude') ? undefined : directory,
@@ -90,10 +108,11 @@ export async function readNativeAccount(
       authSource: 'oauth',
       plan: result.subscriptionType,
       planTier: result.planTier,
+      planDisplayName: result.planDisplayName,
       ...(result.loginExpiresAt ? { loginExpiresAt: result.loginExpiresAt } : {}),
     };
   }
-  const result = (await codexAccountRpc(directory, 'account/read', { refreshToken: false })) as {
+  const result = (await codexAccountRpc(directory, 'account/read', { refreshToken: false }, options?.codexCanDispatch)) as {
     account?: { type?: string; email?: string; planType?: string } | null;
     requiresOpenaiAuth?: boolean;
   };
@@ -207,6 +226,7 @@ export function codexAccountRpc(
   method: string,
   params: unknown,
   canDispatch?: () => boolean | Promise<boolean>,
+  refreshId?: string,
 ): Promise<unknown> {
   const binary = getReadyBinaryPath('codex');
   if (!binary) return Promise.reject(new Error('Codex CLI unavailable'));
@@ -217,6 +237,8 @@ export function codexAccountRpc(
       stdio: ['pipe', 'pipe', 'ignore'],
       windowsHide: true,
     });
+    // Codex's own model-manager log identifies each probe by process id.
+    if (refreshId) desktopMakerLogger.debug('Codex model/list probe started', { refreshId, pid: child.pid });
     let settled = false;
     let buffer = '';
     const finish = (error?: Error, result?: unknown) => {
@@ -227,7 +249,8 @@ export function codexAccountRpc(
       if (error) reject(error);
       else resolve(result);
     };
-    const timer = setTimeout(() => finish(new Error('Codex account read timed out')), 15_000);
+    // A stalled read is almost always the CLI waiting on its account service (startup refreshes).
+    const timer = setTimeout(() => finish(new AccountServiceUnreachableError('Codex account read timed out')), 15_000);
     const send = (message: unknown) => child.stdin.write(JSON.stringify(message) + '\n');
     const dispatch = async () => {
       try {
@@ -259,7 +282,7 @@ export function codexAccountRpc(
         } catch {
           continue;
         }
-        if (message.error) return finish(new Error('Codex account request failed'));
+        if (message.error) return finish(codexRequestError(message.error));
         if (message.id === 1) {
           send({ method: 'initialized', params: {} });
           // Startup may await configuration/auth refresh. A reset must still use
@@ -323,7 +346,15 @@ export async function loginNativeAccount(
       else resolve();
     });
   });
-  const state = await readNativeAccount(provider, directory);
+  let state: Awaited<ReturnType<typeof readNativeAccount>>;
+  try {
+    state = await readNativeAccount(provider, directory);
+  } catch (error) {
+    // The CLI finished its browser login; only this follow-up read could not reach the service.
+    // The caller confirms the sign-in itself and reports the connection problem if it persists.
+    if (isAccountServiceUnreachable(error)) return;
+    throw error;
+  }
   if (!state.authenticated)
     throw new Error(
       state.errorReason === 'codex_provider_managed_auth'

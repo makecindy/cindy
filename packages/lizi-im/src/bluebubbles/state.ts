@@ -1,3 +1,6 @@
+import { createHmac } from 'node:crypto';
+import type { BlueBubblesMessage } from './api.js';
+
 /** Receipt metadata only. Host owns atomic, account-scoped persistence. */
 export interface BlueBubblesState {
   version: 1;
@@ -6,8 +9,11 @@ export interface BlueBubblesState {
   chatActivatedAt?: Record<string, number>;
   cursors: Record<string, number>;
   inbox: Record<string, { receivedAt: number; state: 'pending' | 'dispatching' | 'accepted' | 'ignored';
+    echoHint?: { id: string; failed: boolean };
     stop?: { chatId: string; sentAt: number; before: string[] } }>;
-  outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string }>;
+  outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string; failed?: true;
+    /** Optional on old journals. Only retained while awaiting an authoritative ID. */
+    echoSignature?: string }>;
 }
 export type BlueBubblesReceiptUpdate =
   | { kind: 'inbox'; id: string; value: BlueBubblesState['inbox'][string] }
@@ -30,7 +36,11 @@ export function applyBlueBubblesReceiptUpdate(state: BlueBubblesState, update: B
     state.inbox[update.id] = update.value;
   }
   else if (update.kind === 'outbox' && update.value && typeof update.value.chatId === 'string'
-    && ['sending', 'sent', 'unknown'].includes(update.value.state)) state.outbox[update.id] = update.value;
+    && ['sending', 'sent', 'unknown'].includes(update.value.state)
+    && (update.value.echoSignature === undefined || update.value.echoSignature === 'file'
+      || (typeof update.value.echoSignature === 'string' && /^[a-f0-9]{64}\.[a-f0-9]{64}$/.test(update.value.echoSignature)))
+    && (update.value.failed === undefined || (update.value.failed === true && update.value.state === 'unknown'
+      && typeof update.value.messageId === 'string' && !!update.value.messageId))) state.outbox[update.id] = update.value;
   else throw new Error('BLUEBUBBLES_INVALID_RECEIPTS');
 }
 export class BlueBubblesReceipts {
@@ -39,9 +49,19 @@ export class BlueBubblesReceipts {
   private readonly arrivalOrder = new Map<string, number>();
   private readonly dispatching = new Set<string>();
   private readonly unsettledSends = new Set<string>();
+  // A missing delivery result stays visible in health after ingress has finished correlating it.
+  private readonly awaitingCorrelation = new Set<string>();
+  private readonly outgoingChats = new Map<string, string>();
+  private readonly sentByChat = new Map<string, Map<string, number>>();
   private readonly unresolved = new Set<string>();
   private readonly stops = new Map<string, { sentAt: number; before: Set<string> }>();
-  constructor(private readonly storage: BlueBubblesStateStorage, now: number) {
+  private readonly signatureKey?: Buffer;
+  private readonly signaturePrefix?: string;
+  constructor(private readonly storage: BlueBubblesStateStorage, now: number, echoKey?: string) {
+    if (echoKey) {
+      this.signatureKey = createHmac('sha256', echoKey).update('BlueBubbles echo content v1').digest();
+      this.signaturePrefix = createHmac('sha256', echoKey).update('BlueBubbles echo key v1').digest('hex') + '.';
+    }
     const saved = storage.read();
     if (saved && (saved.version !== 1 || !Number.isFinite(saved.activatedAt)
       || !saved.cursors || !saved.inbox || !saved.outbox)) throw new Error('BLUEBUBBLES_INVALID_RECEIPTS');
@@ -58,7 +78,12 @@ export class BlueBubblesReceipts {
     for (const value of Object.values(this.state.inbox)) this.indexStop(value.stop);
     for (const [id, value] of Object.entries(this.state.outbox)) {
       applyBlueBubblesReceiptUpdate(this.state, { kind: 'outbox', id, value });
-      if (value.state !== 'sent') this.unsettledSends.add(id);
+      if (value.messageId) this.outgoingChats.set(value.messageId, value.chatId);
+      this.indexSent(value, 1);
+      if (value.state !== 'sent' && !value.failed) {
+        this.unsettledSends.add(id);
+        this.awaitingCorrelation.add(id);
+      }
     }
     for (const [id, value] of Object.entries(this.state.cursors)) applyBlueBubblesReceiptUpdate(this.state, { kind: 'cursor', id, value });
   }
@@ -130,6 +155,8 @@ export class BlueBubblesReceipts {
     else {
       const next = this.snapshot(); applyBlueBubblesReceiptUpdate(next, update); this.storage.write(next);
     }
+    const previousSend = update.kind === 'outbox' && Object.hasOwn(this.state.outbox, update.id)
+      ? this.state.outbox[update.id] : undefined;
     applyBlueBubblesReceiptUpdate(this.state, update);
     if (update.kind === 'inbox') {
       if (!this.arrivalOrder.has(update.id)) this.arrivalOrder.set(update.id, this.arrivalOrder.size);
@@ -139,7 +166,16 @@ export class BlueBubblesReceipts {
       else this.unresolved.delete(update.id);
       this.indexStop(update.value.stop);
     } else if (update.kind === 'outbox') {
-      if (update.value.state !== 'sent') this.unsettledSends.add(update.id); else this.unsettledSends.delete(update.id);
+      this.indexSent(previousSend, -1);
+      this.indexSent(update.value, 1);
+      if (update.value.messageId) this.outgoingChats.set(update.value.messageId, update.value.chatId);
+      if (update.value.state === 'sent' || update.value.failed) {
+        this.unsettledSends.delete(update.id);
+        this.awaitingCorrelation.delete(update.id);
+      } else {
+        this.unsettledSends.add(update.id);
+        this.awaitingCorrelation.add(update.id);
+      }
     }
   }
   setCursor(chat: string, value: number): void { this.update({ kind: 'cursor', id: chat, value }); }
@@ -148,10 +184,95 @@ export class BlueBubblesReceipts {
     if (!previous) throw new Error('BLUEBUBBLES_RECEIPT_MISSING');
     this.update({ kind: 'inbox', id: guid, value: { ...previous, state } });
   }
-  outgoing(id: string, value: BlueBubblesState['outbox'][string]): void { this.update({ kind: 'outbox', id, value }); }
-  receive(guid: string, now: number): boolean {
-    if (Object.hasOwn(this.state.inbox, guid)) return false;
-    this.update({ kind: 'inbox', id: guid, value: { receivedAt: now, state: 'pending' } });
+  hasSentMessage(chatId: string, messageId: string): boolean {
+    return this.sentByChat.get(chatId)?.has(messageId) === true;
+  }
+  private indexSent(row: BlueBubblesState['outbox'][string] | undefined, change: 1 | -1): void {
+    if (row?.state !== 'sent' || !row.messageId) return;
+    const messages = this.sentByChat.get(row.chatId) ?? new Map<string, number>();
+    const count = (messages.get(row.messageId) ?? 0) + change;
+    if (count > 0) {
+      messages.set(row.messageId, count);
+      this.sentByChat.set(row.chatId, messages);
+    } else {
+      messages.delete(row.messageId);
+      if (!messages.size) this.sentByChat.delete(row.chatId);
+    }
+  }
+  confirmedSend(id: string): string | undefined {
+    const row = this.state.outbox[id];
+    return row?.state === 'sent' ? row.messageId : undefined;
+  }
+  isOutgoing(chat: string, guid: string, tempGuid?: string): boolean {
+    return this.outgoingChats.get(guid) === chat || (!!tempGuid && this.state.outbox[tempGuid]?.chatId === chat);
+  }
+  textSignature(text: string): string | undefined {
+    if (!this.signatureKey || !this.signaturePrefix) return undefined;
+    const normalized = text.normalize('NFKC').replace(/\s+/gu, ' ').trim();
+    return this.signaturePrefix + createHmac('sha256', this.signatureKey).update(normalized).digest('hex');
+  }
+  mayBeUnconfirmedEcho(chat: string, message: BlueBubblesMessage): boolean {
+    let signature: string | undefined;
+    for (const id of this.unsettledSends) {
+      const row = this.state.outbox[id];
+      if (row.chatId !== chat) continue;
+      // Before a complete scan, even a different-looking message can acquire
+      // an authoritative GUID from the in-flight POST or the history response.
+      if (this.awaitingCorrelation.has(id)) return true;
+      const expected = row.echoSignature;
+      if (!expected || !message.text?.trim() || message.text.includes('\uFFFC') || message.attachments?.length) return true;
+      if (expected === 'file') {
+        if (!Array.isArray(message.attachments)) return true;
+        continue; // Verified plain text with an explicitly empty attachment list.
+      }
+      if (!this.signaturePrefix || !expected.startsWith(this.signaturePrefix)) return true;
+      signature ??= this.textSignature(message.text);
+      if (signature === expected) return true;
+    }
+    return false;
+  }
+  inactiveCorrelationsByChat(active: ReadonlySet<string>): Map<string, string[]> {
+    const byChat = new Map<string, string[]>();
+    for (const id of this.awaitingCorrelation) {
+      if (active.has(id)) continue;
+      const chat = this.state.outbox[id].chatId;
+      const ids = byChat.get(chat);
+      if (ids) ids.push(id);
+      else byChat.set(chat, [id]);
+    }
+    return byChat;
+  }
+  finishHistoryCheck(ids: readonly string[]): void {
+    for (const id of ids) this.awaitingCorrelation.delete(id);
+  }
+  recordEcho(chat: string, guid: string, tempGuid: string | undefined, failed: boolean): boolean {
+    if (!tempGuid) return false;
+    const prior = this.state.outbox[tempGuid];
+    if (prior?.chatId !== chat || prior.failed || (prior.state === 'sent' && !failed)) return false;
+    // Keep the v1 journal readable by older clients. A verified error identifies
+    // the outgoing GUID without claiming successful delivery.
+    this.update({ kind: 'outbox', id: tempGuid, value: failed
+      ? { chatId: chat, state: 'unknown', messageId: guid, failed: true }
+      : { chatId: chat, state: 'sent', messageId: guid } });
+    return true;
+  }
+  outgoing(id: string, value: BlueBubblesState['outbox'][string]): void {
+    const prior = this.state.outbox[id];
+    if (prior?.state === 'sent' || prior?.failed) return;
+    this.update({ kind: 'outbox', id, value });
+  }
+  echoHintFor(guid: string) { return this.state.inbox[guid]?.echoHint; }
+  receive(guid: string, now: number, tempGuid?: unknown, error?: unknown): boolean {
+    // Some BlueBubbles versions return tempGuid only in the authenticated callback.
+    // Keep only IDs we generated. The API lookup still has to verify isFromMe and chat.
+    const echoHint = typeof tempGuid === 'string' && Object.hasOwn(this.state.outbox, tempGuid)
+      ? { id: tempGuid, failed: error != null && error !== 0 && error !== '0' } : undefined;
+    const previous = Object.hasOwn(this.state.inbox, guid) ? this.state.inbox[guid] : undefined;
+    if (previous && (!echoHint || previous.state !== 'pending' || (previous.echoHint?.id === echoHint.id
+      && (previous.echoHint.failed || !echoHint.failed)))) return false;
+    this.update({ kind: 'inbox', id: guid, value: {
+      ...(previous ?? { receivedAt: now, state: 'pending' }), ...(echoHint && { echoHint }),
+    } });
     return true;
   }
 }

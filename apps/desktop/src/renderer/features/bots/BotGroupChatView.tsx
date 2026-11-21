@@ -55,7 +55,6 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
-import './BotGroupChatView.css';
 import { captureDraftRecoveryScope, discardDraftTree } from '@/lib/composerDraftStore';
 import {
   classifyUnclassifiedDroppedItems,
@@ -76,11 +75,13 @@ import type {
   BotGroupQuoteView,
 } from '../../../shared/botGroupChat';
 import { botGroupQuoteFromMessage, isBotGroupMessageQuotable, resolveBotGroupQuote } from '../../../shared/botGroupChat';
+import { useSplitPaneFocus } from '../cc-agent/splitPaneFocus';
 import { useRegisterContentHeader } from '../feature-context';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
 import { botGroupAttachmentScope, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import { BotGroupComposer } from './BotGroupComposer';
+import { focusBotGroupComposer } from './botGroupTextInput';
 import { BotGroupThreadHint } from './BotGroupThreadHint';
 import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
 import {
@@ -93,7 +94,7 @@ import {
 } from './BotGroupLiveStatus';
 import { messageReactionRevision } from './ChatServerControls';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
-import { animateThreadPanelWidth, ChatThreadPanel } from './ChatThreadPanel';
+import { animateThreadPanel, ChatThreadPanel } from './ChatThreadPanel';
 import {
   BotGroupPlanFollowUpRow,
   type BotGroupFollowUpAction,
@@ -236,11 +237,13 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   // Groups have no single task session; namespace their existing composer UI state.
   const controlledBannerKey = `bot-group:${groupId}`;
   const shareScope = controlledBannerKey;
+  const focused = useSplitPaneFocus();
   const sharing = useShareSelectionActive(shareScope);
   useEffect(() => {
+    if (!focused) return;
     shareSelectionStore.exitIfNotSession(shareScope);
     return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };
-  }, [shareScope]);
+  }, [focused, shareScope]);
   const controlledBannerCollapsed = useComposerCollapsed(controlledBannerKey);
   const navigate = useNavigate();
   const location = useLocation();
@@ -252,6 +255,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       && (!threadRootId || /^[0-9a-f-]{36}$/i.test(threadRootId)) ? { messageId, threadRootId } : null;
   }, [location.search]);
   const handledNotification = useRef<string | null>(null);
+  const threadFocusNonce = useRef(0);
+  const previousNavigationKey = useRef(location.key);
   const [state, setState] = useState<GroupViewState>({ kind: 'loading' });
   const stateRef = useRef(state); stateRef.current = state;
   const [pendingShares, setPendingShares] = useState<Array<{ sourceId: string; row: BotGroupTimelineMessage;
@@ -798,8 +803,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     threadWasOpenRef.current = !!threadRootId;
     if (!opening) return;
     const panel = threadLayoutRef.current?.querySelector('aside');
-    const animation = panel && animateThreadPanelWidth(panel, '0px',
-      threadResize.width === undefined ? '50%' : `${threadResize.width}px`);
+    const animation = panel && animateThreadPanel(panel, 'open');
     if (!animation) return;
     threadOpenAnimationRef.current = animation;
     void animation.finished.then(() => animation.cancel(), () => {});
@@ -808,7 +812,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const closeThread = useCallback(() => {
     if (threadCloseAnimationRef.current) return;
     const panel = threadLayoutRef.current?.querySelector('aside');
-    const animation = panel && animateThreadPanelWidth(panel, `${panel.getBoundingClientRect().width}px`, '0px');
+    const animation = panel && animateThreadPanel(panel, 'close');
+    // The exit starts at the computed transform before releasing an unfinished entrance.
+    threadOpenAnimationRef.current?.cancel();
     threadOpenerRef.current?.focus();
     if (!panel || !animation) { setThreadRootId(null); return; }
     panel.inert = true;
@@ -833,7 +839,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     return true;
   }, []);
   useEffect(() => {
-    if (!group?.serverBacked || !threadRootId) return;
+    if (!focused || !group?.serverBacked || !threadRootId) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       if (event.target !== document.body && !threadLayoutRef.current?.contains(event.target as Node) && !threadHeaderRef.current?.contains(event.target as Node)) return;
@@ -844,7 +850,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [group?.serverBacked, threadRootId, closeThread, shareScope]);
+  }, [focused, group?.serverBacked, threadRootId, closeThread, shareScope]);
 
   const settingsLabel = t('bots.groupChat.settings.open');
   const mainHeaderSpeakers = headerGroup?.round?.speakers.filter(speaker => speaker.threadRootId === null || (!speaker.sourceMessageId && !speaker.threadRootId));
@@ -1200,11 +1206,11 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       const panel = threadLayoutRef.current?.querySelector('aside');
       if (panel) panel.inert = false;
       if (messageId === threadRootIdRef.current) {
-        (panel?.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)') ?? panel?.querySelector<HTMLButtonElement>('header button'))?.focus();
+        focusBotGroupComposer(panel);
       }
     }
     setThreadRootId(messageId);
-    setThreadFocus(focusMessageId ? { messageId: focusMessageId, nonce: Date.now() } : null);
+    setThreadFocus(focusMessageId ? { messageId: focusMessageId, nonce: ++threadFocusNonce.current } : null);
   }, []);
   const locateMention = useCallback((entry: GroupMaskMention) => {
     if (entry.threadRootId) onOpenThread(entry.threadRootId, entry.messageId);
@@ -1224,13 +1230,21 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   }, [direct, resumeBottomFollow]);
   const locateNotification = useRef(locateQuoted); locateNotification.current = locateQuoted;
   useEffect(() => {
-    if (state.kind !== 'ready' || !notificationTarget || handledNotification.current === location.key) return;
+    if (state.kind !== 'ready' || handledNotification.current === location.key) return;
+    const navigated = previousNavigationKey.current !== location.key;
+    previousNavigationKey.current = location.key;
+    // A sidebar group-row click returns from an open topic to the main chat.
+    if (!notificationTarget) {
+      if (navigated && !location.search) closeThread();
+      handledNotification.current = null;
+      return;
+    }
     handledNotification.current = location.key;
     jumpingToBottomRef.current = false;
     stickToBottomRef.current = false;
     if (notificationTarget.threadRootId) onOpenThread(notificationTarget.threadRootId, notificationTarget.messageId);
     else void locateNotification.current({ messageId: notificationTarget.messageId, sequence: null });
-  }, [state.kind, notificationTarget, location.key, onOpenThread]);
+  }, [state.kind, notificationTarget, location.key, location.search, onOpenThread, closeThread]);
 
   const planById = useMemo(() => new Map(plans.map((plan) => [plan.id, plan])), [plans]);
   const layout = useMemo(() => layoutBotGroupTimeline(rows), [rows]);
@@ -1369,7 +1383,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   return (
     <div ref={threadLayoutRef} className={cn('flex h-full min-w-0 overflow-hidden', threadResize.isDragging && 'select-none [&_*]:cursor-col-resize')}>
     <BotGroupChatMain
-      direct={direct}
       className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]"
       onDragEnter={(event) => {
         if (!isAttachmentDrag(event)) return;
@@ -1592,7 +1605,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             draftKey={attachmentScope}
             members={group.members}
             running={running} canStop={group.round.canStop !== false && (!group.serverBacked || allSpeakers.some(speaker => canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId })))}
-            planState={botGroupComposerPlanState(openPlan, group.replyMode)}
+            planState={group.independentReplies ? null : botGroupComposerPlanState(openPlan, group.replyMode)}
             divisionSteps={!!group.singleSpeaker}
             attachments={attachmentState}
             attachmentScope={attachmentScope}
@@ -1624,11 +1637,10 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 }
 
 /** Mount the observer with the ready view, after the loading/error early returns. */
-function BotGroupChatMain({ direct, className, ...props }: ComponentProps<'main'> & { direct: boolean }) {
-  // Groups use the available pane, including when a topic or sidebar is open.
-  // Keep private conversations on their existing reading width and padding.
-  const { containerRef } = useProportionalWidth(direct ? 914 : 1440, { compact: !direct });
-  return <main {...props} ref={containerRef} className={cn(className, !direct && 'bot-group-adaptive-width')} />;
+function BotGroupChatMain(props: ComponentProps<'main'>) {
+  // Share the task/private-chat cap, padding and narrow-pane behavior.
+  const { containerRef } = useProportionalWidth(914);
+  return <main {...props} ref={containerRef} />;
 }
 
 /** Older shares checked before the latest edit, deletion or reset: they may be out of date. */

@@ -77,13 +77,17 @@ export function nextLibraryExtraDirs(current: readonly string[], root: string | 
 export async function excludeDirectoryGrantConflictsWithSlots(
   candidates: readonly string[],
   blocked: readonly string[],
+  inherited: readonly string[] = [],
 ): Promise<string[]> {
   const runtimeAccepted = await excludeDirectoryGrantConflicts(
     extraDirsForRuntime(candidates),
     extraDirsForRuntime(blocked),
+    undefined,
+    extraDirsForRuntime(inherited),
   );
   const accepted = new Set(runtimeAccepted);
-  return candidates.filter((dir) => accepted.has(libraryRootFromSlot(dir)));
+  const requested = inherited.length ? [...new Set([...candidates, ...inherited])] : candidates;
+  return requested.filter((dir) => accepted.has(libraryRootFromSlot(dir)));
 }
 
 export interface ValidateResult {
@@ -204,27 +208,30 @@ export async function excludeDirectoryGrantConflicts(
   candidates: readonly string[],
   blocked: readonly string[],
   resolvePath?: (dir: string) => Promise<string>,
+  inherited: readonly string[] = [],
 ): Promise<string[]> {
-  if (candidates.length === 0) return [];
+  if (!candidates.length && !inherited.length) return [];
   // Bounded recovery probes must not treat a timed-out alias as a disjoint tree.
   const canonical = (dir: string) => resolvePath
     ? resolvePath(dir).catch(() => null)
     : canonicalDirectoryKey(dir);
   const blockedKeys = await Promise.all(blocked.map(canonical));
   if (blockedKeys.some((key) => key === null)) return [];
-  const result: string[] = [];
-  const acceptedKeys: string[] = [];
-  for (const candidate of candidates) {
-    const candidateKey = await canonical(candidate);
-    if (candidateKey === null) continue;
-    const overlapsBlockedTree = blockedKeys.some((blockedKey) =>
-      isSelfOrSubdir(candidateKey, blockedKey!) || isSelfOrSubdir(blockedKey!, candidateKey));
-    const overlapsAcceptedTree = acceptedKeys.some((acceptedKey) =>
-      isSelfOrSubdir(candidateKey, acceptedKey) || isSelfOrSubdir(acceptedKey, candidateKey));
-    if (!overlapsBlockedTree && !overlapsAcceptedTree) {
-      result.push(candidate);
-      acceptedKeys.push(candidateKey);
+  const validateSource = async (source: readonly string[]) => {
+    const accepted: Array<{ path: string; key: string }> = [];
+    for (const candidate of source) {
+      const candidateKey = await canonical(candidate);
+      if (candidateKey === null) continue;
+      const overlaps = (key: string | null) => key !== null &&
+        (isSelfOrSubdir(candidateKey, key) || isSelfOrSubdir(key, candidateKey));
+      if (blockedKeys.some(overlaps) || accepted.some(dir => overlaps(dir.key))) continue;
+      accepted.push({ path: candidate, key: candidateKey });
     }
-  }
-  return result;
+    return accepted;
+  };
+  const [taskRoots, projectRoots] = await Promise.all([validateSource(candidates), validateSource(inherited)]);
+  // Keep each project root independently revocable from a task parent. A task child already
+  // covered by a project root needs no live grant of its own (revoking it could interrupt Codex).
+  const additional = taskRoots.filter(task => !projectRoots.some(project => isSelfOrSubdir(task.key, project.key)));
+  return [...additional, ...projectRoots].map(dir => dir.path);
 }

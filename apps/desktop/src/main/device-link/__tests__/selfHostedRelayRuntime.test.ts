@@ -420,9 +420,9 @@ it('renames a deployment locally, including the route in use and a deployment st
   expect((await command({ type: 'rename-deployment', relayId: '00000000-0000-4000-8000-000000000000', name: 'X' })).error).toBe('NO_DEPLOYMENT');
 });
 
-// 0.5.0 需要发送排队修复，0.5.1 需要 App 元数据；两种已部署版本都必须能从状态投影进入升级。
-// 生产入口为 state IPC；原 0.5.0 用例发现不了新改动复用 0.5.1 的缺陷。最小输入：已完成的 0.5.1 部署，tier: unit。
-it.each(['0.5.0', '0.5.1'])('offers the bundled update to an existing %s relay and clears it after upgrading', async relayVersion => {
+// 0.5.0 需要发送排队修复，0.5.1 需要 App 元数据，0.5.2、0.5.3（证书监听与部署重试）需要中转 UDP 转发；已部署的这几个版本都必须能从状态投影进入升级。
+// 生产入口为 state IPC；版本号未递增时最新旧版的用例失败。最小输入：已完成的旧版部署，tier: unit。
+it.each(['0.5.0', '0.5.1', '0.5.2', '0.5.3'])('offers the bundled update to an existing %s relay and clears it after upgrading', async relayVersion => {
   h.deploy.mockResolvedValueOnce({ relayVersion });
   await command(deployCommand);
   await vi.runAllTimersAsync();

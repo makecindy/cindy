@@ -29,7 +29,7 @@ import { parseRemoteMediaUrl, REMOTE_MEDIA_SCHEME } from '../../shared/remoteMed
 import { parseRangeHeader } from '../videoProtocol';
 import * as blobStore from '../cindy-media/blobStore.desktop';
 import * as ledger from '../cindy-media/ledger';
-import { buildRangedMediaResponse } from '../cindy-media/rangeResponse';
+import { buildRangedFileResponse, buildRangedMediaResponse } from '../cindy-media/rangeResponse';
 import { remoteInvoke } from './index';
 import { DL_MEDIA_FETCH_CHANNEL } from '@cindy/device-link';
 import { downloadToBuffer, openMediaStream, removeRemote } from './mediaTransfer.desktop';
@@ -73,6 +73,7 @@ const LOCAL_BUFFER_MAX = 64 * 1024 * 1024;
 async function serveLocalCindyMediaBlob(
   origUrl: string,
   rangeHeader: string | null,
+  saveSignal?: AbortSignal,
 ): Promise<Response | null> {
   const assertCurrent = captureRemoteMediaOwner();
   let resolved: { absPath: string; mimeType: string; hash: string };
@@ -86,6 +87,20 @@ async function serveLocalCindyMediaBlob(
     // Only current-account attachments may bypass the device-scoped cache index.
     if (!await ledger.hasNonCacheBlob(resolved.hash)) return null;
     assertCurrent();
+    if (saveSignal) {
+      const opened = await blobStore.openBlobFile(origUrl);
+      try {
+        assertCurrent();
+      } catch (error) {
+        await opened.file.close();
+        throw error;
+      }
+      void ledger.touchBlob(resolved.hash);
+      return await buildRangedFileResponse({
+        ...opened, rangeHeader, cacheControl: 'public, max-age=31536000, immutable',
+        signal: saveSignal,
+      });
+    }
     buffer = await fs.readFile(resolved.absPath);
     assertCurrent();
   } catch {
@@ -360,6 +375,7 @@ async function handleRemoteMedia(
   url: string,
   rangeHeader: string | null,
   signal?: AbortSignal,
+  forSave = false,
 ): Promise<Response> {
   const parsed = parseRemoteMediaUrl(url);
   if (!parsed) return new Response(null, { status: 400 });
@@ -373,7 +389,7 @@ async function handleRemoteMedia(
   const assertCurrent = captureRemoteMediaOwner();
   try {
     if (parsed.origUrl.startsWith('cindy-media://')) {
-      const local = await serveLocalCindyMediaBlob(parsed.origUrl, rangeHeader);
+      const local = await serveLocalCindyMediaBlob(parsed.origUrl, rangeHeader, forSave ? signal : undefined);
       assertCurrent();
       if (local) return local;
     }
@@ -447,6 +463,11 @@ async function handleRemoteMedia(
     // 502:上游(被控端 / OSS)取件失败 → renderer 媒体占位 + 可重试,不致命。
     return new Response(null, { status: 502 });
   }
+}
+
+/** Save keeps the authorized protocol body as a stream, including local blob hits. */
+export function openRemoteMediaForSave(url: string, signal: AbortSignal): Promise<Response> {
+  return handleRemoteMedia(url, null, signal, true);
 }
 
 /** Privilege entry for the one-shot registerSchemesAsPrivileged in bootstrap. */

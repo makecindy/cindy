@@ -691,7 +691,7 @@ describe('claude generation pause boundaries', () => {
       generationReliable: true,
     });
     expect(events).toContainEqual(expect.objectContaining({
-      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done' },
+      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done', isError: false },
     }));
     if (hasEnvelope) {
       expect(events).toContainEqual(expect.objectContaining({
@@ -2196,6 +2196,7 @@ describe('claude live token speed', () => {
     stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 0);
     flow(0, thinking, 107, 0, 20_000, 500);
     stream({ type: 'content_block_stop', index: 0 }, 20_000);
+    expect(speed(20_000)?.measurement).toEqual({ latest: null, average: null });
     // The request really thought three tokens for every estimated one: 300 tok/s.
     stream({ type: 'message_delta', usage: { output_tokens: 6_000, output_tokens_details: { thinking_tokens: 6_000 } } }, 20_000);
     expect(speed(20_000)).toMatchObject({ tokens: 6_000, elapsedMs: 20_000, average: 300 });
@@ -2206,6 +2207,7 @@ describe('claude live token speed', () => {
     flow(0, thinking, 107, 25_000, 45_000, 500);
     // The same summary now counts for what it stood for last time, while it is still streaming.
     const live = speed(45_000);
+    expect(live?.measurement).toMatchObject({ average: 300, latest: { kind: 'request', rate: 300, measuredAt: 20_000 } });
     expect(live?.tokens).toBeGreaterThan(11_000);
     expect(live?.tokens).toBeLessThan(12_300);
     expect(Math.min(...readings)).toBeGreaterThan(270);

@@ -63,7 +63,7 @@ vi.mock('../worktree/gitExec', async (original) => {
   }) };
 });
 
-import { checkpointWorktreeForReuse, recycleManagedWorktree } from '../worktree/managedRecycle';
+import { checkpointWorktreeForReuse, recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
 import { restoreRecordedWorktree } from '../worktree/restoreRecovery';
 import { newRecycleRecord, readRecycleRecord, writeRecycleRecord } from '../worktree/recycleJournal';
 import { releaseObsoleteRecoverySnapshots } from '../worktree/recycleMaintenance';
@@ -104,6 +104,35 @@ describe('worktree recovery with real Git', () => {
     state.refs.push({ id: name, status: 'archived', source: 'desktop', currentDatabase: true, workingDir: worktree, worktreePath: worktree });
     return meta;
   };
+
+  // A discard choice covers only the confirmed checkout contents. Existing recovery
+  // tests exercise automatic snapshots, not the discard journal flag or later edits.
+  it.each(['unchanged', 'later-edits', 'archive-again'] as const)(
+    'recycles a worktree after archive-and-discard: %s',
+    async (scenario) => {
+      const meta = await createFixture(`discard-${scenario}`);
+      const branchHead = await git(repo, 'rev-parse', meta.branch);
+      await requestWorktreeRecycle(meta.sessionId);
+      await requestWorktreeRecycle(meta.sessionId, [meta.path], true);
+      const requested = (await readRecycleRecord(meta.path))!;
+      if (scenario === 'later-edits') {
+        await fs.writeFile(path.join(meta.path, 'draft.txt'), 'later edits');
+      }
+      if (scenario === 'archive-again') await requestWorktreeRecycle(meta.sessionId);
+
+      expect(await recycleManagedWorktree(meta, { canRemove: async () => true })).toBe(true);
+      expect(await git(repo, 'rev-parse', meta.branch)).toBe(branchHead);
+      if (scenario === 'unchanged') {
+        expect(await restoreRecordedWorktree(meta.sessionId, meta.path)).toBeNull();
+        await expect(git(repo, 'rev-parse', '--verify', requested.snapshot!.ref)).rejects.toThrow();
+      } else {
+        expect(await restoreRecordedWorktree(meta.sessionId, meta.path)).toBe(true);
+        expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe(
+          scenario === 'later-edits' ? 'later edits' : `discard-${scenario} contents\n`,
+        );
+      }
+    },
+  );
 
   // PR #10836: normal recycle records bypassed the legacy Multibox restore helper.
   // Restore through the real journal entry, preserving all three Git states and a local

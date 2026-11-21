@@ -5,6 +5,7 @@
  * 静默(它们的 message 是内部英文串, 外发等于把裸英文推给渠道用户)。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { autoReviewUnavailablePromptLine, permissionPromptDescription } from '../autoReviewUnavailablePrompt';
 import { setMainLocale } from '../../../i18n.desktop';
 
 import {
@@ -20,6 +21,32 @@ import {
 // 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
 beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
+
+// #10854: the stable legacy reason includes non-budget failures, so IM must not
+// turn a first empty response plus failed dispatch into repeated empty responses.
+it.each([undefined, 'budget', 'rate-limit', 'session-breaker', 'dispatch-not-accepted', 'dispatch-error'])(
+  'uses neutral silent-stop IM copy for cause %s', silentStopFailureCause => {
+    expect(terminalErrorText({ reason: 'silent-stop-exhausted', silentStopFailureCause }))
+      .toBe('检测到空响应，自动续跑已暂停。');
+  },
+);
+
+// Telegram regression (unit): a provider rejection arrived as a serialized response body.
+it('explains unsupported audio input without hiding other unsupported parameters', () => {
+  const unsupported = 'Audio input is not supported for this request.';
+  const failure = (message: string, code: string | null = 'unsupported_parameter') => ({
+    message: JSON.stringify({
+      type: 'error',
+      error: { message, type: 'invalid_request_error', param: 'input', code },
+      status: 400,
+    }),
+  });
+  expect(terminalErrorText(failure(unsupported))).toContain('转成文字');
+  expect(terminalErrorText(failure('Audio input is not available.', null))).toContain('转成文字');
+  expect(terminalErrorText({ message: unsupported })).toContain('转成文字');
+  const other = failure('Audio output is not supported for this request.');
+  expect(terminalErrorText(other)).toBe(other.message);
+});
 
 describe('turnRetryNotice', () => {
   // #10385, unit: both channel styles must expose recovery, never the provider's raw details.
@@ -436,4 +463,17 @@ describe('控制文案跟随界面语言', () => {
     setMainLocale('ja');
     expect(overloadRetryNotice(data)).toBe('モデルサービスが混雑しています。自動で再試行しています（1/3）…');
   });
+});
+
+// #8706 unit: IM notice and confirmation are separate real consumers. Neither may leak
+// English/provider text or replace the cause with generic Full access guidance.
+it.each(['telegram', 'wechat'])('explains review quota to %s and strips the fallback once', channel => {
+  const text = turnRetryNotice({ message: '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_BODY' }, { channel });
+  expect(text).toContain('配额已耗尽');
+  expect(text).not.toMatch(/PRIVATE_BODY|完全访问/);
+  const request = { kind: 'permission' as const, requestId: 'quota', toolName: 'Bash', input: {},
+    description: 'Source\nAutomatic review could not finish, so this action needs your confirmation.',
+    metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' } };
+  expect(autoReviewUnavailablePromptLine(request)).toBe(text);
+  expect(permissionPromptDescription(request)).toBe('Source');
 });

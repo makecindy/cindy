@@ -4,6 +4,11 @@ export interface AgentNetNativeModule {
   create(options: string): Promise<string>;
   command(id: string, command: string): Promise<string>;
   destroy(id: string): Promise<void>;
+  /**
+   * `native-wait` binaries (the engine's `identity().features`): resolves true as soon as the engine has something to read
+   * with the `poll` command, false after `maxMs`. Meanwhile the engine receives, acknowledges and runs its timers by itself.
+   */
+  wait?(id: string, maxMs: number): Promise<boolean>;
   beginNotificationScope?(): string;
   notificationScope?(): string | null;
   openNotification?(link: string): string | null;

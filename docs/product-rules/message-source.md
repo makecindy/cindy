@@ -1,5 +1,12 @@
 # 消息来源：界面标签与模型说明同源
 
+> **读取时机**：新增或修改自动发送／远程发送消息的路径、消息来源标签，或发给模型的来源说明之前
+> **适用路径**：`packages/maker-shared/src/**/{messageSource,syntheticTrigger}*`、
+> `apps/desktop/src/main/maker-ipc/**/{messageSourceNote,forwardedRequest}*`、
+> `apps/desktop/src/shared/**/{imMessageSource,forwardedRequest}*`、
+> `apps/desktop/src/renderer/**/{MessageSourceLabels,messageSourceLabel,userMessageSourceLabels,AutomationOriginBadge}*`、
+> `apps/mobile/src/**/messageSourceLabels*`、`apps/desktop/src/main/device-link/**/sharedTaskMessageOrigin*`
+
 2026-10-05 裁决。非本机用户亲手输入的消息，界面上显示的来源与模型收到的来源说明必须来自
 同一份 host 盖章的数据、说同一件事。新增任何自动发送或远程发送路径时，两侧一起补。
 
@@ -97,9 +104,14 @@ Agent 用 `send_to_session` 把消息发给另一台电脑上的任务时（包�
 不是用户输入、不带用户授权。`send_to_session` 的说明告诉模型：对方收到消息时附有来源任务编号，可用 `get_chat_history`
 读来源对话补背景。
 
-默认不回报（2026-11-10 主人裁决）：任务做完由它自己的完成通知告知主人，伙伴开任务时默认不请它发回；只有主人要伙伴拿结果
-继续做（汇总、接着干）时才请对方发回。原因：发回的消息出现在伙伴对话里主人这一侧，一次主人发言会变成多轮往来，占用主人的位置。
-伙伴的做法写在起始模板的 hand-off 技能里（`botProjectTemplate.ts`，模板第 2 版），收到结果只对照要求读，有缺漏让原任务补，不自己重做。
+默认回报（2026-11-21 主人裁决，起始模板第 8 版，取代下面 2026-11-10 的「默认不回报」）：伙伴在群外开的任务默认请对方做完用
+`send_to_session` 发回，卡住、需要主人决定或审批、失败时立即发回；主人说不用回才省略，群里仍由任务卡带回。原因：结果只靠完成通知
+告知时停在任务里，伙伴不知道，主人也常忘了收尾。原先担心的「发回消息占用主人一侧」已由下面的来信胶囊解决。做法与回报格式见
+[伙伴运行时](cindy-bots-runtime.md) 6.1 与 hand-off 技能（`botProjectTemplate.ts`）；收到结果对照要求读，有缺漏让原任务补，不自己重做。
+
+~~默认不回报（2026-11-10 主人裁决，已被上面第 8 版取代）~~：任务做完由它自己的完成通知告知主人，伙伴开任务时默认不请它发回；只有
+主人要伙伴拿结果继续做（汇总、接着干）时才请对方发回。原因：发回的消息出现在伙伴对话里主人这一侧，一次主人发言会变成多轮往来，
+占用主人的位置。当时写在起始模板 hand-off 技能第 2 版。
 
 伙伴对话里的来信（2026-11-10 主人裁决）：其他任务发来的消息在桌面端伙伴对话里不画成主人一侧的右侧气泡，收成左侧与伙伴回复对齐的一行
 （与「开了任务」同形的胶囊：任务名 + 回信 + 首行预览），点开看全文和「打开任务」，展开后才有操作栏；右侧只代表主人本人或替主人发的输入。普通任务页、Orca 卡片和 Hook 卡片不变，

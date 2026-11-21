@@ -398,7 +398,7 @@ describe('shared task MCP App data stays at the owner boundary', () => {
     },
   };
   const expected = {
-    mcpAppHistory: { version: 1, title: 'Draft form', text: 'Saved result\n\nSecond paragraph' },
+    mcpAppHistory: { version: 1, customMcp: true, title: 'Draft form', text: 'Saved result\n\nSecond paragraph' },
   };
 
   it.each(['online', 'reconnecting'])(

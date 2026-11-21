@@ -27,7 +27,7 @@ import {
   useSegments,
 } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useRef, type ReactElement } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, type ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
@@ -59,6 +59,8 @@ import { OutsideTapProvider } from '@/platform/OutsideTap';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
 import '@/i18n';
 import { LocaleProvider } from '@/i18n/useLocale';
+import { WallpaperProvider } from '@/theme/WallpaperProvider';
+import { supportsAppWallpaper } from '@/theme/wallpaper';
 import { ThemeProvider, useTheme } from '@/theme/ThemeProvider';
 import { createNavigationTheme } from '@/theme/navigationTheme';
 import { MobileLoginHandoffStage } from '@/components/MobileLoginHandoffStage';
@@ -101,6 +103,7 @@ import { removeLegacyClipboardInvitationHistory } from '@/device-link/legacyClip
 import { useHomeStartupSplashRelease } from '@/session/useHomeMode';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 import { ChatInviteHost } from '@/chat/ChatInviteHost';
+import { GiftCardHost } from '@/gift-card/GiftCardHost';
 import { TaskArchiveUndoHost } from '@/session/TaskArchiveUndoNotice';
 
 const holdSplash = () => undefined;
@@ -254,6 +257,8 @@ function NavigationGate() {
       </RemoteDesktopHost>
       <TaskArchiveUndoHost />
       <ChatInviteHost ready={auth.initialized && auth.isAuthenticated
+        && segments[0] !== '(auth)' && segments[0] !== 'add-account'} />
+      <GiftCardHost ready={auth.initialized && auth.isAuthenticated
         && segments[0] !== '(auth)' && segments[0] !== 'add-account'} />
     </NavigationThemeProvider>
   );
@@ -463,6 +468,8 @@ function RootAfterEndpoints() {
   return <RootAfterUpdateChannel channel={channelGate.channel} />;
 }
 
+const PlatformWallpaperProvider = supportsAppWallpaper(Platform.OS) ? WallpaperProvider : Fragment;
+
 function RootLayout() {
   useEffect(() => startLocalDiagnostics(), []);
   // JS 报错兜底的启动窗口从根布局首次提交起算(见 jsErrorGuard):窗口内报错照旧致命,
@@ -541,6 +548,7 @@ function RootLayout() {
       <SafeAreaProvider>
         <AdaptiveWindowProvider>
         <ThemeProvider>
+        <PlatformWallpaperProvider>
           {/* 语言 Provider 常驻 root:恢复持久化 override,覆盖含 (auth) 在内的全部屏幕 */}
           <LocaleProvider>
             {/* handoff Provider 常驻 root(PR4b):闸门屏切换不重置衔接状态机 */}
@@ -556,6 +564,7 @@ function RootLayout() {
               </StartupSplashOverlay>
             </MobileLoginHandoffProvider>
           </LocaleProvider>
+        </PlatformWallpaperProvider>
         </ThemeProvider>
         </AdaptiveWindowProvider>
       </SafeAreaProvider>

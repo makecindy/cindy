@@ -12,6 +12,7 @@ import {
   AUTO_REVIEW_RETRY_ATTEMPTS,
   AUTO_REVIEW_RETRY_BACKOFF_MS,
   annotatePermissionRequestForUnavailableReview,
+  annotatePermissionRequestForAutoReview,
   autoReviewRetryBudgetMs,
   getAutoReviewDelegateHardCeilingMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
@@ -88,6 +89,36 @@ describe('toolAutoReviewAction', () => {
 });
 
 describe('resolveAutoReviewDecision', () => {
+  // #8706 unit: the real normalization/annotation/notice chain must keep quota,
+  // discard arbitrary delegate text, and never grant permission on model failure.
+  it('preserves only the safe quota cause through confirmation metadata and notices', async () => {
+    const decision = await resolveAutoReviewDecision(request({ kind: 'exec', command: 'npm run build' }), async () => ({
+      verdict: 'ask', unavailable: true, unavailableReason: 'quota_exhausted', reason: 'PRIVATE_UPSTREAM_BODY',
+    }));
+    expect(decision).toMatchObject({ verdict: 'ask', unavailable: true, unavailableReason: 'quota_exhausted' });
+    const permission: { kind: 'permission'; metadata?: Record<string, unknown> } = { kind: 'permission' };
+    const annotated = annotatePermissionRequestForAutoReview(permission, decision);
+    expect(annotated.metadata).toMatchObject({ autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' });
+    const emit = vi.fn();
+    const notice = createAutoReviewUnavailableNotice(emit);
+    notice.notify(decision);
+    notice.notify(decision);
+    expect(emit).toHaveBeenCalledOnce();
+    expect(emit.mock.calls[0][0]).toContain('[AUTO_REVIEW_UNAVAILABLE_QUOTA]');
+    expect(isAutoReviewUnavailableNotice(emit.mock.calls[0][0])).toBe(true);
+    expect(JSON.stringify([decision, annotated, emit.mock.calls])).not.toMatch(/PRIVATE_UPSTREAM_BODY|Full access/);
+    notice.reset();
+    notice.notify(decision);
+    expect(emit).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['allow', 'block'] as const)('does not attach an outage to a valid %s', async (verdict) => {
+    const decision = await resolveAutoReviewDecision(request({ kind: 'exec', command: 'npm run build' }), async () => ({
+      verdict, unavailable: true, unavailableReason: 'quota_exhausted',
+    }));
+    expect(decision).toEqual({ verdict });
+  });
+
   it('names the legacy prompt result as an internal needs-review tier, not a UI prompt', () => {
     expect(classifyLocalAutoReviewTier(request({ kind: 'other' }))).toBe('needs-review');
     expect(classifyLocalAutoReviewTier(request({
@@ -240,6 +271,46 @@ describe('resolveAutoReviewDecision', () => {
       request({ kind: 'exec', command }), delegate,
     )).resolves.toEqual({ verdict: 'allow' });
     expect(delegate).toHaveBeenCalledWith(expect.objectContaining({ action: { kind: 'exec', command } }));
+  });
+
+  // 诊断通道只能带 Cindy 自己的确定性原因。模型自由文本可能含参数、路径、片段，
+  // 不得原样进 UI / 日志，所以来源必须逐条标出来。
+  it('marks the reason source so only policy copy may enter diagnostics', async () => {
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(131_100)}` }),
+      async () => ({ verdict: 'allow' }),
+    )).resolves.toMatchObject({ verdict: 'ask', policyReason: true });
+    // The model boundary never marks its reason as policy copy.
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => ({ verdict: 'block', reason: 'model free text about the command' }),
+    )).resolves.toMatchObject({ verdict: 'block', reason: 'model free text about the command' });
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => ({ verdict: 'block', reason: 'model free text about the command' }),
+    )).resolves.not.toHaveProperty('policyReason');
+  });
+
+  // delegate 自己声明「这条 reason 出自宿主固定文案」(它根本没调用模型)→ 保留为
+  // policy 原因,能进诊断 / UI 通道;否则用户只看到一句通用拦截,不知道宿主已经判过。
+  it('keeps a host-authored reason as policy copy while unmarked delegate text stays out', async () => {
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => ({
+        verdict: 'block',
+        reason: 'No user request authorizes this action; only reads may run without one.',
+        hostReason: true,
+      }),
+    )).resolves.toMatchObject({
+      verdict: 'block',
+      reason: 'No user request authorizes this action; only reads may run without one.',
+      policyReason: true,
+    });
+    // 没声明来源的 delegate 结果依旧按模型自由文本处理:不得进诊断通道。
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => ({ verdict: 'block', reason: 'model free text about the command' }),
+    )).resolves.not.toHaveProperty('policyReason');
   });
 
   it('counts exec cwd in the complete evidence size limit', async () => {

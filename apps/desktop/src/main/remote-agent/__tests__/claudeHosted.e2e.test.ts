@@ -11,15 +11,54 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createAnthropicCompatProxy, type ProxyHandle } from '@cindy/anthropic-compat-proxy';
-import { ClaudeCodeAgent, type AgentDeps, type AgentEvent, type InteractionDecision, type InteractionRequest, type Logger } from '@cindy/maker-core';
+import {
+  ClaudeCodeAgent, NATIVE_SUBSCRIPTION_ACCOUNT, type AgentDeps, type AgentEvent,
+  type BaseAgent, type AgentSessionHandle, Session, type StartSessionOptions,
+  type InteractionDecision, type InteractionRequest, type Logger,
+} from '@cindy/maker-core';
 import { buildUserProvider } from '@cindy/model-providers';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+// External authentication/status/quota use isolated fixtures. CLI execution,
+// account selection/placement/bindings, hosted transport, message assembly and handoff are real.
+const poolCli = vi.hoisted(() => ({ active: false, limited: new Set<string>(), signedOut: new Set<string>() }));
+vi.mock('../../subscription-accounts/nativeCli.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../subscription-accounts/nativeCli.js')>();
+  return { ...actual,
+    readNativeAccount: async (...args: Parameters<typeof actual.readNativeAccount>) => poolCli.active
+      ? { authenticated: !poolCli.signedOut.has(args[1]), authSource: 'oauth', identity: args[1] } : actual.readNativeAccount(...args),
+    readNativeAccountUsage: async (...args: Parameters<typeof actual.readNativeAccountUsage>) => poolCli.active
+      ? { claudeUsage: { updatedAt: Date.now(), fiveHour: { utilization: poolCli.limited.has(args[1]) ? 100 : 10,
+        resetsAt: Date.now() / 1000 + 3600 }, sevenDay: null, scoped: [] } } : actual.readNativeAccountUsage(...args),
+  };
+});
+import { withSubscriptionAccounts } from '../../subscription-accounts/agent';
+import { canSwitchHostedSubscriptionAccount, refreshSubscriptionPool, runSubscriptionAccountCommand } from '../../subscription-accounts/runtime';
+import { accountDirectory, accountOwnerPrefix, readAccountBinding, updatePool } from '../../subscription-accounts/store';
+import { accountProviderId, createSubscriptionProvider } from '../../subscription-accounts/placement';
+import { subscriptionRouteAllowsModel } from '../../subscription-accounts/legacyAccountAccess';
+import { activeOwnerScopeKey, commitVolatileAppSession, getActiveAppSession } from '../../appSessionState';
+import { configureUserDataDir, getUserDataDir } from '../../userDataPath';
+import { setRemoteProviderInvocationEnabled } from '../../maker-host/remote-provider-access-store';
+import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
+import { createProviderGroupExternalLoad } from '../../provider-group/externalLoad';
+import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
+import { createProviderGroupDirectory } from '../../provider-group/directory';
+import { createProviderGroupRouter } from '../../provider-group/router';
+import { createProviderGroupService } from '../../provider-group/service';
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator';
+import { createMessagePersistence, type MessagePersistencePorts } from '../../messagePersistBroadcaster';
+import { persistSessionStreamEventCore } from '../../maker-ipc/sessionEventStreamCore';
+import { assistantSamplingSettlements } from '../../assistantSamplingSettlement';
+import { relocateForFreshStart, type AgentSwitchSessionRow } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { createAgentHandoffPendingRegistry, prependHandoffToUserMessage, type HandoffSourceMessage } from '../../maker-ipc/agentHandoff';
+import { hostSessionIdFor } from '../host/sessionIdentity';
 
 import { remoteAgentEventMapper } from '../controller/eventMap';
 import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
-import { exerciseConnectionPool } from './poolHarness';
+import { exerciseConnectionPool, sharedAccountRegisterWiring, sharedAccountSendTransaction } from './poolHarness';
 import { getActiveCatalog, setCustomProviders } from '../../maker-host/active-catalog';
 import { createModelRoutingTransform, setClaudeProxyGatewayKeyReader, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host';
 import { setCustomProviderKeyReader } from '../../maker-host/provider-route';
@@ -479,5 +518,513 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
       expect(requests.every((request) => request.apiKey === 'selected-native-test-key')).toBe(true);
       expect(fallbackRequests).toEqual([]);
     });
+  });
+});
+
+/**
+ * E2E regression: A's existing shared task must continue after an account merged
+ * from B replaces its exhausted account. Older tests never connected a real CLI
+ * to the allocator and only checked strings supplied to a fake native handle.
+ * Minimum input: a real old Claude thread with a successful tool result, two
+ * isolated CLI profiles, and an exhausted bound account on cold resume / send.
+ * Tier: existing E2E (real CLI, loopback HTTP, real controller-side file tools).
+ * OAuth status/quota and share authentication are fixtures; the CLI uses a fake
+ * API key against loopback, preserving production's no-OAuth-redirect rule.
+ * SQLite and Electron input-coordinator ports use an in-memory row store, while
+ * message persistence, history-to-handoff generation and wire injection are real.
+ */
+describe.skipIf(!available || process.platform === 'win32')('shared account handoff with a real Claude CLI', () => {
+  let root = '';
+  let priorData = '';
+  let priorSession: ReturnType<typeof getActiveAppSession>;
+  beforeAll(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-cc-pool-handoff-')));
+    const isolatedHome = path.join(root, 'home');
+    fs.mkdirSync(isolatedHome, { recursive: true });
+    for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']) vi.stubEnv(key, isolatedHome);
+    // Re-root every account store and CLI home before creating fixture profiles.
+    priorData = getUserDataDir();
+    priorSession = getActiveAppSession();
+    configureUserDataDir(path.join(root, 'profile'));
+    commitVolatileAppSession('local', undefined, true);
+    poolCli.active = true;
+  });
+  afterAll(async () => {
+    poolCli.active = false;
+    poolCli.limited.clear();
+    poolCli.signedOut.clear();
+    commitVolatileAppSession(priorSession.mode, priorSession.dataOwnerId, true);
+    configureUserDataDir(priorData);
+    vi.unstubAllEnvs();
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  });
+
+  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect',
+    { disconnectHandoff = false, replayAttachments = false } = {}) {
+    const reconnect = failure === 'reconnect' || failure === 'scheduled-reconnect';
+    const continuation = 'Continue the remaining work.';
+    const oldRequestsWithContinuation = () => observations.filter(request =>
+      request.nativeId === oldNative && request.body.includes(continuation)).length;
+    commitVolatileAppSession('local', undefined, true);
+    poolCli.limited.clear();
+    poolCli.signedOut.clear();
+    const caseRoot = path.join(root, randomUUID());
+    const project = path.join(caseRoot, 'project');
+    fs.mkdirSync(project, { recursive: true });
+    const marker = `CONTEXT_${randomUUID()}`;
+    const image = { originalName: 'handoff-screenshot.png', url: `cindy-media://blobs/${'a'.repeat(64)}.png`, mimeType: 'image/png' };
+    const file = { name: 'handoff-notes.pdf', path: path.join(caseRoot, 'guest-private-files', 'handoff-notes.pdf') };
+    const completed = path.join(project, 'completed-step.txt');
+    const remaining = path.join(project, 'remaining-step.txt');
+    const task = randomUUID();
+    const shareRoute = `share:${randomUUID()}`;
+    const guest = `share-guest-${randomUUID()}`;
+    const accounts = Object.fromEntries(['a', 'b'].map(id => [id, `cindy-${accountOwnerPrefix()}-${randomUUID()}`]));
+    const replacement = original === 'a' ? 'b' : 'a';
+    await updatePool('anthropic', () => ({ strategy: 'order', accounts: Object.values(accounts).map(id => ({ id, paused: false, limit: 4, weight: 1 })) }));
+    // A's published entry remains fixed in either account direction. B is
+    // merged only after A's original native task has produced durable history.
+    const published = await createSubscriptionProvider('anthropic', accounts[original], 'Fixture A', () => randomUUID().replaceAll('-', '').slice(0, 8));
+    const donor = await createSubscriptionProvider('anthropic', accounts[replacement], 'Fixture B', () => randomUUID().replaceAll('-', '').slice(0, 8));
+    await setRemoteProviderInvocationEnabled(published, true);
+    const row: AgentSwitchSessionRow = { id: task, status: 'active', agentKind: 'cc', model: MODEL,
+      providerId: published, agentDeviceId: shareRoute, remoteHostId: null, orcaRole: null, sdkSessionId: null, workingDir: project };
+    const history: Array<HandoffSourceMessage & { clientId: string; sessionId: string }> = [];
+    const pending = createAgentHandoffPendingRegistry(async () => null);
+    const persistence = createMessagePersistence({
+      assistantSamplingSettlements, broadcastTap: { captureDataOwnerBroadcastScope: () => null },
+      createDbMessage: async (sessionId: string, body: Record<string, unknown>) => {
+        const stored = { ...body, sessionId, createdAt: body.createdAt ?? Date.now() };
+        history.push(stored as typeof history[number]); return stored;
+      },
+      updateDbMessageContent: async (_id: string, clientId: string, content: unknown) => {
+        const stored = history.find(item => item.clientId === clientId); if (stored) stored.content = content; return stored;
+      },
+      broadcastMessageRow: async () => {}, broadcastMessageAgentMetaUpdate: async () => {},
+      commitMessageMediaRefs: async () => {}, findVisibleToolUseMessageByAliases: async () => null,
+      onPersistenceError: (error: unknown) => { throw error; },
+    } as unknown as MessagePersistencePorts);
+    persistence.noteSessionAgentKind(task, 'cc');
+    const observations: Array<{ nativeId: string; body: string }> = [];
+    let oldNative = '';
+    let failOriginal = false;
+    let releaseQuotaResponse!: () => void;
+    let sawRunningRequest!: () => void;
+    const quotaResponse = new Promise<void>(resolve => { releaseQuotaResponse = resolve; });
+    const runningRequest = new Promise<void>(resolve => { sawRunningRequest = resolve; });
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', async () => {
+        if (req.url?.includes('count_tokens')) { res.writeHead(200, { 'content-type': 'application/json' }).end('{"input_tokens":100}'); return; }
+        const parsed = JSON.parse(body || '{}') as { tools?: Array<{ name: string }>; messages?: Array<{ role: string; content: unknown }> };
+        if (!parsed.tools?.some(tool => tool.name.startsWith('mcp__cindy_exec__'))) {
+          res.writeHead(200, { 'content-type': 'text/event-stream' }).end(text('ok')); return;
+        }
+        const nativeId = String(req.headers['x-claude-code-session-id'] ?? '');
+        observations.push({ nativeId, body });
+        if (failOriginal && nativeId === oldNative) {
+          if (failure === 'run') {
+            sawRunningRequest();
+            await quotaResponse;
+          }
+          res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '0' })
+            .end(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'usage limit exceeded' } })); return;
+        }
+        const results = (parsed.messages ?? []).flatMap(message => Array.isArray(message.content)
+          ? message.content.filter((block: { type?: string }) => block.type === 'tool_result') : []);
+        if (nativeId === oldNative) {
+          const step = results.length === 0
+            ? toolUse(0, 'mcp__cindy_exec__Bash', { command: `printf '%s\n' '${marker}' > completed-step.txt; cat completed-step.txt`, description: 'Finish step one and return its receipt' })
+            : text('Step one completed. Remaining step two: write remaining-step.txt with exactly the receipt from step one. Do not repeat step one.');
+          res.writeHead(200, { 'content-type': 'text/event-stream' }).end(step); return;
+        }
+        // The new CLI must obtain its receipt from the production handoff. The
+        // gateway does not insert the known marker if the new request lacks it.
+        const transferred = body.match(/CONTEXT_[0-9a-f-]{36}/)?.[0];
+        const hasPlan = body.includes('Remaining step two:') && body.includes('Do not repeat step one.');
+        const answer = transferred && hasPlan
+          ? results.length === 0 ? toolUse(0, 'mcp__cindy_exec__Write', { file_path: remaining, content: transferred }) : text('Remaining step completed.')
+          : text('MISSING_HANDOFF_CONTEXT');
+        res.writeHead(200, { 'content-type': 'text/event-stream' }).end(answer);
+      });
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const engines = new Map<string, ClaudeCodeAgent>();
+    const startupAuthDenied = new Set<string>();
+    const starts: StartSessionOptions[] = [];
+    const nativeAgent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async (options: StartSessionOptions) => {
+      starts.push(options);
+      const profile = options[NATIVE_SUBSCRIPTION_ACCOUNT]!.configDir;
+      let engine = engines.get(profile);
+      if (!engine) {
+        engine = new ClaudeCodeAgent({ binaryPath: CLAUDE, logger: noopLogger,
+          runtimeConfig: { endpoint, behaviorFlags: { ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_MAX_RETRIES: '0' } },
+          auth: { getState: async () => ({ authenticated: !startupAuthDenied.has(profile), authSource: 'api-key' }),
+            triggerLogin: async () => ({ authenticated: true }), logout: async () => {},
+            getAuthEnv: async () => ({ ANTHROPIC_API_KEY: 'invalid-pool-e2e-key', CLAUDE_CONFIG_DIR: profile }) },
+        });
+        engines.set(profile, engine);
+      }
+      // Real SDK/CLI execution in the selected profile. Synthetic API transport
+      // is deliberate: native subscription auth must never be redirected to a test gateway.
+      // The fixture adapter selects a normal custom API source only below the
+      // real pool lease. It preserves the chosen account's isolated config dir;
+      // the task/share/provider, allocator and host admission above stay intact.
+      return engine.startSession({ ...options, providerId: 'pool-e2e-loopback',
+        deviceHosted: { ...options.deviceHosted!, guestProvider: options.deviceHosted?.guestProvider
+          ? { ...options.deviceHosted.guestProvider, providerId: 'pool-e2e-loopback' } : undefined } });
+    } } as unknown as BaseAgent);
+    const guestSwitch = createProviderGroupGuestSwitch();
+    const order: string[] = [];
+    const directory = createProviderGroupDirectory({ listLocalProviders: async () => [], localDeviceName: () => 'fixture',
+      listDevices: async () => [], readDeviceProviders: async () => [], listReceivedShares: () => [], isMobilePlatform: () => false, now: Date.now });
+    const router = createProviderGroupRouter({ directory, readGroup: () => null, listBindings: () => ({}), isTurnRunning: () => false, now: Date.now, random: () => 0 });
+    const externalLoad = createProviderGroupExternalLoad({ now: Date.now });
+    let hostNow = Date.now();
+    const host = createRemoteAgentHost({ runsRoot: path.join(caseRoot, 'host'),
+      ...(reconnect ? {
+        now: () => hostNow,
+        readLimits: () => ({ perDevice: 16, total: 64, idleMinutes: 1 }),
+      } : {}),
+      isAgentAvailable: kind => kind === 'claude-code', startHosted: input => nativeAgent.startSession(hostedStartOptions(input)),
+      isControllerAuthorized: controller => controller === guest, controllerTrust: () => 'guest',
+      providerAccess: { resolve: async () => published, isAllowed: (provider, _controller, model) => provider === published && subscriptionRouteAllowsModel(provider, model, { remote: true }) },
+      bindGuestProviderRoute: async () => ({ routeToken: 'fixture-guest-route', modelIds: [MODEL], release() {} }),
+      captureOwner: activeOwnerScopeKey, isOwnerCurrent: owner => owner === activeOwnerScopeKey(),
+      canSwitchLocalAccount: input => canSwitchHostedSubscriptionAccount(input.providerId, input.hostSessionId, input.model),
+      groupRelay: createProviderGroupGuestRelay({ readGroup: () => null, scope: () => ({ router, externalLoad, isCurrent: () => true }),
+        connect: () => { throw new Error('Fixture has no remote member'); }, now: Date.now, log: { warn() {} } }),
+    });
+    const handles: AgentSessionHandle[] = [];
+    const perHandleEvents = new Map<AgentSessionHandle, AgentEvent[]>();
+    const events: AgentEvent[] = [];
+    let active!: AgentSessionHandle;
+    let live: Session | undefined;
+    const opens: Array<{ groupSwitchToken?: string; options: StartSessionOptions }> = [];
+    let sends = 0;
+    let reclaimed = false;
+    const open = async (resume?: string) => {
+      try {
+        active = await startRemoteAgentSession('claude-code', { sessionId: task, workingDir: project, model: MODEL,
+          providerId: published, permissionMode: 'bypassPermissions', ...(resume ? { resumeSessionId: resume } : {}) }, {
+          invoke: async args => {
+            const request = JSON.parse(JSON.stringify(args[0]));
+            if (request.op === 'open') opens.push(request.payload.json);
+            if (request.op === 'call' && request.method === 'send') sends++;
+            return JSON.parse(JSON.stringify(await host.handle(guest, request) ?? null));
+          },
+          recoverSharedReconnect: reconnect,
+          log: { info: message => { if (message === 'remote agent connection released by the other computer') reclaimed = true; }, warn() {} },
+          rgPath: RG, prepareMcp: async () => ({ servers: new Map(), dispose() {} }), collectProjectFiles: async () => [],
+          isGitRepo: async () => false, mapEvent: remoteAgentEventMapper, newId: randomUUID,
+          groupSwitch: { token: guestSwitch.takeForOpen(task), offer: token => { order.push('token'); guestSwitch.offer(task, token); } },
+        });
+        handles.push(active);
+        const opened = active;
+        const localEvents: AgentEvent[] = []; perHandleEvents.set(opened, localEvents);
+        if (active.id !== '<pending>') row.sdkSessionId = active.id;
+        guestSwitch.release(task);
+        active.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'allow' }));
+        const receive = (event: AgentEvent) => {
+            localEvents.push(event); events.push(event); order.push(event.type);
+            persistSessionStreamEventCore({ persistence, orcaTeamServiceForEvents: null, log: noopLogger,
+              broadcastSubagentRunsChanged() {} }, { id: task, workDir: project } as Session, { event, eventAgentMeta: null });
+            if (event.type === 'done' && opened.id !== '<pending>') row.sdkSessionId = opened.id;
+            if (event.type === 'done' || event.type === 'error') {
+              persistence.flushAssistantBlock(task); persistence.flushOrphanToolResults(task, null);
+            }
+        };
+        if (reconnect) {
+          live = new Session({ id: task, agentKind: 'claude-code', agentDeviceId: shareRoute, workDir: project,
+            handle: opened, permissionMode: 'bypassPermissions', capabilities: {} as never, logger: noopLogger });
+          live.onEvent(receive);
+        } else {
+          void (async () => { for await (const event of opened.events()) receive(event); })();
+        }
+      } catch (error) { order.push('start-failed'); throw error; }
+    };
+    const relocate = async (isCurrent = () => true) => {
+      await active.close({ reason: 'navigation' });
+      await persistence.drainPersistQueue();
+      const relocated = await relocateForFreshStart({ getSessionRow: async () => ({ ...row }),
+        listMessagesForHandoff: async () => structuredClone(history),
+        applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); }, setSessionProvider() {},
+        insertBoundaryMessage: async () => randomUUID(), applyResumeFallbackAtomically: async () => {},
+        setPendingHandoff: (id, note, generation) => { if (!disconnectHandoff) pending.set(id, note, generation); },
+        readPendingHandoffGeneration: id => pending.readGeneration(id), log: noopLogger,
+      }, { sessionId: task, providerId: published, agentDeviceId: shareRoute, sharedRelocation: true,
+        assertCurrent: () => { if (!isCurrent()) throw new Error('superseded'); } });
+      expect(relocated.nativeId).toBeNull();
+      return relocated;
+    };
+    const sendContinuation = async () => {
+      await open();
+      const message = { type: 'user' as const, content: continuation };
+      const note = await pending.peek(task);
+      const wire = note ? prependHandoffToUserMessage(message, note) : message;
+      await active.send(wire as Parameters<AgentSessionHandle['send']>[0]);
+      pending.consume(task);
+      await vi.waitFor(() => expect(perHandleEvents.get(active)?.some(event => event.type === 'done')).toBe(true), { timeout: 30_000, interval: 20 });
+      return 'resumed' as const;
+    };
+    const service = createProviderGroupService({ router, directory, readGroup: () => null,
+      readBinding: () => null, writeBinding: async () => {}, isReleased: () => false, markReleased: async () => {},
+      readSessionRow: async () => ({ ...row, agentDeviceId: shareRoute, agentKind: 'claude-code' }), resolveImplicitProvider: async () => published,
+      persistRoute: async () => {}, hasAssistantHistory: async () => true, isFailoverEligible: async () => true,
+      leaseRecovery: () => ({}), isLeaseCurrent: () => true, rearmContinue: () => 2, cancelContinue() {},
+      switchAgentLocation: async (_id, _route, opts) => { await relocate(opts?.isCurrent); },
+      isTurnRunning: () => false, hasLiveSession: () => true, continueSession: sendContinuation,
+      fallback: () => { throw new Error('Unexpected fallback'); }, readResetAt: () => null, now: Date.now,
+      guestSwitch, log: noopLogger,
+    });
+    try {
+      await open(); oldNative = active.id;
+      const user = 'Complete step one, report its receipt and the remaining step, then wait.';
+      const content = replayAttachments
+        ? JSON.stringify({ text: user, images: [image], files: [file], slashCommandRanges: [] })
+        : user;
+      history.push({ clientId: randomUUID(), sessionId: task, role: 'user', content, createdAt: Date.now() });
+      if (live) await live.send(user);
+      else await active.send({ type: 'user', content: user });
+      await vi.waitFor(() => expect(events.filter(event => event.type === 'done')).toHaveLength(1), { timeout: 30_000, interval: 20 });
+      await persistence.drainPersistQueue();
+      expect(observations.some(request => request.nativeId === oldNative)).toBe(true);
+      expect(fs.readFileSync(completed, 'utf8').trim()).toBe(marker);
+      expect(history.some(message => message.role === 'tool_result' && JSON.stringify(message.content).includes(marker))).toBe(true);
+      expect(history.some(message => message.role === 'assistant' && JSON.stringify(message.content).includes('Remaining step two:'))).toBe(true);
+      await runSubscriptionAccountCommand({ action: 'merge', providerId: donor, target: published });
+      expect(accountProviderId('anthropic', accounts[replacement])).toBe(published);
+      const originalDir = accountDirectory('anthropic', accounts[original]);
+      const hostTask = hostSessionIdFor(guest, task);
+      expect(readAccountBinding(`native:${oldNative}`, 'anthropic')?.accountId).toBe(accounts[original]);
+      if (reconnect) {
+        hostNow += 61_000;
+        await vi.waitFor(() => expect(reclaimed).toBe(true), { timeout: 12_000, interval: 30 });
+        expect(host.limitUsage().total).toBe(0);
+        expect(live?.getStatus()).toBe('active');
+        hostNow += 13 * 60 * 60_000;
+        poolCli.limited.add(originalDir);
+        await refreshSubscriptionPool(published, true);
+        const clientId = randomUUID();
+        const wiring = sharedAccountRegisterWiring({
+          maker: {
+            getSession: () => live,
+            closeSessionIfCurrent: async (current: Session) => {
+              if (live !== current || !await current.closeIfIdle()) return 'busy';
+              live = undefined;
+              return 'closed';
+            },
+          },
+          providerGroupService: service,
+          getProviderGroupGuestSwitch: () => guestSwitch,
+          getSessionRowSnapshotStrict: async () => ({ ...row, clearedAt: null }),
+          setSdkSessionId: id => { row.sdkSessionId = id; },
+          listMessagesForAgentHandoff: async () => {
+            await persistence.drainPersistQueue();
+            return structuredClone(history);
+          },
+          createDbMessage: async (_id: string, _body: unknown, options: { beforePublish(): Promise<void> }) => {
+            await options.beforePublish();
+            expect(row.sdkSessionId).toBe(active.id === '<pending>' ? null : active.id);
+            expect(await pending.peek(task)).toBeNull();
+            return { id: randomUUID() };
+          },
+          agentSwitchDeps: {
+            getSessionRow: async () => ({ ...row }),
+            setPendingHandoff: (id: string, note: string, generation: number) => pending.set(id, note, generation),
+            readPendingHandoffGeneration: (id: string) => pending.readGeneration(id),
+            log: noopLogger,
+          },
+          createSessionWithRuntimePlugins: async (opts: StartSessionOptions) => {
+            await open(opts.resumeSessionId);
+            return live;
+          },
+        });
+        const { sendToAgentAccepted } = sharedAccountSendTransaction({
+          ...wiring,
+          captureSharedReconnectRecovery: process.env.CINDY_TEST_DISABLE_SHARED_RECONNECT === '1'
+            ? undefined : wiring.captureSharedReconnectRecovery,
+          getSession: () => live,
+          readScheduledPermissions: async () => ({ permissionMode: 'bypassPermissions', planModeEnabled: false }),
+          reconcileCreateOptsWithDb: async (_id, opts) => {
+            opts.agentDeviceId = shareRoute;
+            opts.providerId = published;
+            opts.resumeSessionId = row.sdkSessionId ?? undefined;
+          },
+          createDbMessage: async (_id, body) => {
+            history.push({ clientId: body.clientId, role: 'user', content: body.content, createdAt: Date.now(), sessionId: task });
+          },
+          peekPendingHandoff: id => pending.peek(id),
+          consumePendingHandoff: id => pending.consume(id),
+        });
+        const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) =>
+          (await sendToAgentAccepted(...args)).outcome);
+        const coordinator = new AgentInputCoordinator({
+          sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
+          touchUserSend: async () => {}, createUserMessage: vi.fn(),
+          isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
+          getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
+          getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
+          emitProjection: () => {},
+        });
+        coordinator.enqueue(task, {
+          clientId, text: continuation, persistedContent: continuation, model: MODEL, effort: 'medium',
+          permissionMode: 'bypassPermissions', workingDir: project,
+          createOpts: { agentKind: 'claude-code', workingDir: project, model: MODEL, permissionMode: 'bypassPermissions' },
+          chatMessage: { clientId, role: 'user', content: continuation, isStreaming: false, createdAt: new Date().toISOString() },
+          ...(failure === 'scheduled-reconnect' ? {
+            origin: { kind: 'scheduler', scheduleId: 'fixture-schedule', scheduleName: 'Fixture', runId: 'fixture-run' },
+          } : {}),
+        }, { manualUiSend: failure === 'reconnect' });
+        await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+        if (failure === 'scheduled-reconnect') {
+          await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+          expect(guestSwitch.hasOffer(task)).toBe(true);
+          expect(order.filter(event => event === 'token')).toHaveLength(1);
+          expect(opens).toHaveLength(2);
+          expect(sends).toBe(1);
+          expect(oldRequestsWithContinuation()).toBe(0);
+          expect(await pending.peek(task)).toBeNull();
+          expect(fs.existsSync(remaining)).toBe(false);
+          return;
+        }
+        await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
+        expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+        expect(opens).toHaveLength(3);
+        expect(opens[1].options.resumeSessionId).toBe(oldNative);
+        expect(opens[2].groupSwitchToken).toEqual(expect.any(String));
+        expect(opens[2].options.resumeSessionId).toBeUndefined();
+        expect(sends).toBe(2);
+        expect(order.filter(event => event === 'token')).toHaveLength(1);
+      } else if (failure === 'cold' || failure === 'cold-auth') {
+        await active.close({ reason: 'navigation' });
+        if (failure === 'cold-auth') startupAuthDenied.add(originalDir);
+        else {
+          poolCli.limited.add(originalDir);
+          await refreshSubscriptionPool(published, true);
+        }
+        // cold-auth passes cached allocator admission, then the real
+        // ClaudeCodeAgent auth gate throws its definite no-process error.
+        await expect(open(oldNative)).rejects.toThrow(failure === 'cold-auth' ? 'not authenticated' : 'SUBSCRIPTION_ACCOUNT_LIMITED');
+        expect(order).toContain('token');
+        expect(order.indexOf('token')).toBeLessThan(order.indexOf('start-failed'));
+        const recovery = await service.prepareGuestStartSwitch(task);
+        expect(recovery).not.toBeNull();
+        try { await relocate(recovery!.isCurrent); } finally { recovery!.dispose(); }
+        await sendContinuation();
+      } else {
+        if (failure === 'idle-send') {
+          expect(active.isTurnRunning?.()).toBe(false);
+          expect(host.limitUsage().total).toBe(1);
+          failOriginal = true;
+          await active.send({ type: 'user', content: continuation });
+          expect(opens).toHaveLength(1);
+          expect(sends).toBe(2);
+        } else if (failure === 'send-auth') {
+          poolCli.signedOut.add(originalDir);
+          await updatePool('anthropic', value => ({ ...value, accounts: value.accounts.map(account => account.id === accounts[original]
+            ? { ...account, reloginIdentity: 'previous@example.invalid' } : account) }));
+          await refreshSubscriptionPool(published, true);
+          const originalRequests = observations.filter(request => request.nativeId === oldNative).length;
+          await expect(active.send({ type: 'user', content: continuation })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+          expect(observations.filter(request => request.nativeId === oldNative)).toHaveLength(originalRequests);
+        } else {
+          failOriginal = true;
+          await active.send({ type: 'user', content: continuation });
+          await runningRequest;
+          expect(active.isTurnRunning?.()).toBe(true);
+          releaseQuotaResponse();
+        }
+        await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true), { timeout: 30_000, interval: 20 });
+        expect(order.indexOf('token')).toBeLessThan(order.indexOf('error'));
+        expect(guestSwitch.hasOffer(task)).toBe(true);
+        if (failure === 'send-auth') {
+          const authError = events.find(event => event.type === 'error')!.data as { message: string; usageLimit?: boolean };
+          expect(authError.message).toContain('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+          expect(authError.usageLimit).not.toBe(true);
+          expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+        }
+        await service.onTurnError(task, events.find(event => event.type === 'error')!.data as { sdkError: string }, 1);
+      }
+      await vi.waitFor(() => expect(events.filter(event => event.type === 'done').length).toBeGreaterThanOrEqual(2), { timeout: 30_000, interval: 20 });
+      const freshNative = active.id;
+      expect(freshNative).not.toBe(oldNative);
+      expect(readAccountBinding(`native:${oldNative}`, 'anthropic')?.accountId).toBe(accounts[original]);
+      expect(readAccountBinding(`native:${freshNative}`, 'anthropic')?.accountId).toBe(accounts[replacement]);
+      expect(readAccountBinding(`task:${hostTask}`, 'anthropic')?.accountId).toBe(accounts[replacement]);
+      expect(starts.at(-1)?.resumeSessionId).toBeUndefined();
+      // Inspect only native transcript filenames, never auth/config file contents.
+      const originalFiles = fs.readdirSync(originalDir, { recursive: true }).map(String);
+      const replacementFiles = fs.readdirSync(accountDirectory('anthropic', accounts[replacement]), { recursive: true }).map(String);
+      expect(originalFiles.some(file => file.endsWith(`${oldNative}.jsonl`))).toBe(true);
+      expect(originalFiles.some(file => file.endsWith(`${freshNative}.jsonl`))).toBe(false);
+      expect(replacementFiles.some(file => file.endsWith(`${freshNative}.jsonl`))).toBe(true);
+      expect(replacementFiles.some(file => file.endsWith(`${oldNative}.jsonl`))).toBe(false);
+      expect(row).toMatchObject({ id: task, providerId: published, agentDeviceId: shareRoute });
+      const freshRequests = observations.filter(request => request.nativeId === freshNative);
+      expect(freshRequests.length).toBeGreaterThan(0);
+      if (disconnectHandoff) {
+        expect(freshRequests.every(request => !request.body.includes(marker))).toBe(true);
+        expect(fs.existsSync(remaining)).toBe(false);
+      }
+      expect(freshRequests[0].body.includes(marker), 'fresh CLI request must include old tool receipt').toBe(true);
+      if (replayAttachments) {
+        const request = JSON.parse(freshRequests[0].body) as { messages: Array<{ role: string; content: unknown }> };
+        const firstUser = contentText(request.messages.find(message => message.role === 'user')?.content);
+        expect(firstUser.includes('[Attachment references:'), 'fresh CLI request must include attachment references').toBe(true);
+        expect(firstUser).toContain(user);
+        expect(firstUser).toContain(image.originalName);
+        expect(firstUser).toContain(image.url);
+        expect(firstUser).toContain(file.name);
+        expect(firstUser).not.toContain(file.path);
+        expect(firstUser).not.toContain('guest-private-files');
+      }
+      expect(freshRequests[0].body.match(/Continue the remaining work\./g)).toHaveLength(1);
+      expect(events.some(event => event.type === 'text' && JSON.stringify(event.data).includes('Remaining step completed.'))).toBe(true);
+      if (failure === 'run' || failure === 'idle-send') expect(oldRequestsWithContinuation()).toBeGreaterThan(0);
+      else expect(oldRequestsWithContinuation()).toBe(0);
+      expect(freshRequests[0].body).toContain('Remaining step two:');
+      expect(freshRequests[0].body).toContain('Do not repeat step one.');
+      expect(fs.readFileSync(remaining, 'utf8')).toBe(marker);
+      expect(fs.readFileSync(completed, 'utf8').trim()).toBe(marker);
+      expect(events.some(event => event.type === 'tool_use' && JSON.stringify(event.data).includes('Write'))).toBe(true);
+      expect(events.filter(event => event.type === 'tool_use' && (event.data as { toolName?: string }).toolName === 'Bash')).toHaveLength(1);
+    } finally {
+      releaseQuotaResponse();
+      await live?.close().catch(() => undefined);
+      for (const handle of handles) await handle.close({ reason: 'navigation' }).catch(() => undefined);
+      await host.dispose();
+      await persistence.drainPersistQueue();
+      persistence.clearSessionPersistState(task);
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  }
+
+  it.each(['a', 'b'].flatMap(original => ['cold', 'run'].map(failure => ({ original, failure }))))(
+    'continues the same shared task from account $original after $failure exhaustion', { timeout: 90_000 },
+    async ({ original, failure }) => exercise(original as 'a' | 'b', failure as 'cold' | 'run'));
+  it.each(['cold-auth', 'send-auth'] as const)('continues the same shared task after %s rejection without relabeling it as quota', { timeout: 90_000 },
+    async failure => exercise('a', failure));
+  // 11-20 incident / #11081, e2e: the old test closed G before cold open.
+  // Keep G's Session alive and let the production idle sweep reclaim O's run.
+  // CINDY_TEST_DISABLE_SHARED_RECONNECT=1 disconnects only the new dispatch recovery.
+  it('continues the original input once after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
+    await exercise('a', 'reconnect');
+  });
+  it('keeps scheduled inputs on the existing failure path after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
+    await exercise('a', 'scheduled-reconnect');
+  });
+  it('switches accounts when an existing idle run rejects the next send', { timeout: 90_000 }, async () => {
+    await exercise('a', 'idle-send');
+  });
+  it('fails to finish the remaining action when the production handoff sink is disconnected', { timeout: 90_000 }, async () => {
+    await expect(exercise('a', 'cold', { disconnectHandoff: true })).rejects.toThrow('fresh CLI request must include old tool receipt');
+  });
+  // E2E: the shared quota switch builds from the saved user envelope. The
+  // replacement CLI's first loopback request must include references but no file path.
+  it('replays image references and file names in the first replacement CLI request', { timeout: 90_000 }, async () => {
+    await exercise('a', 'cold', { replayAttachments: true });
   });
 });

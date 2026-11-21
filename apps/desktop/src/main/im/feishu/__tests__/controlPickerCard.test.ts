@@ -11,7 +11,7 @@ beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
 
 // cardBuilders 工厂只依赖 ui 文案包 + effort 查询函数 — 用 feishu 真实文案包
-// 构造, effort 固定 'high'(本测试不涉及 model picker)。
+// 构造, effort 固定 'high'。
 const cards = createCardBuilders(ui, () => 'high');
 
 const PROJECTS: ControlProject[] = [
@@ -122,5 +122,48 @@ describe('选项列表卡按列表排布(飞书一行一个满宽按钮, 文字�
     expect(
       cards.buildProjectPickerCard({ botAppId: 'bot1', projects: [], currentName: 'x' }).buttonLayout,
     ).toBeUndefined();
+  });
+});
+
+describe('buildModelPickerCard — 同名模型按供应商区分', () => {
+  // 两家供应商都有一个叫 GPT-5.5 的模型: 只写模型名时,「当前」一行和选中后的回执都看不出是哪一家。
+  const section = (id: string, name: string) => ({
+    provider: { id, name },
+    models: [{ id: 'gpt-5.5', displayName: 'GPT-5.5', efforts: [], defaultEffort: null, contextWindow: 200_000 }],
+  });
+  const build = (currentProviderId: string | null) =>
+    cards.buildModelPickerCard({
+      sessionId: 'sess-1',
+      agentKind: 'codex',
+      sections: [section('openai', 'OpenAI'), section('relay', 'My Relay')] as unknown as Parameters<
+        typeof cards.buildModelPickerCard
+      >[0]['sections'],
+      currentModelId: 'gpt-5.5',
+      currentProviderId,
+      currentEffort: 'high',
+    });
+
+  it('按钮、「当前」一行与选中后的回执都写出供应商', () => {
+    const spec = build('relay');
+    expect(spec.buttons!.map((button) => button.label)).toEqual([
+      'OpenAI / GPT-5.5 · high',
+      'My Relay / GPT-5.5 · high',
+    ]);
+    expect(spec.buttons!.map((button) => button.type)).toEqual(['default', 'primary']);
+    expect(spec.body).toContain(ui.cards.model.currentLine('My Relay / GPT-5.5', 'high', ''));
+    // 回执文案原样取 payload.modelLabel(见 cardActionHandler 的 model:pick)。
+    expect(spec.buttons!.map((button) => button.payload?.modelLabel)).toEqual([
+      'OpenAI / GPT-5.5',
+      'My Relay / GPT-5.5',
+    ]);
+  });
+
+  it('会话没有锁定来源、或锁定的来源不在清单里时,「当前」一行只写模型名', () => {
+    for (const currentProviderId of [null, 'gone']) {
+      const spec = build(currentProviderId);
+      expect(spec.body).toContain(ui.cards.model.currentLine('GPT-5.5', 'high', ''));
+      expect(spec.body).not.toContain(' / GPT-5.5');
+      expect(spec.buttons!.every((button) => button.type === 'default')).toBe(true);
+    }
   });
 });

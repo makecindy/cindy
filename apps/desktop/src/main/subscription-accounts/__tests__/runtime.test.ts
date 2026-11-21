@@ -1,18 +1,23 @@
+import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   SubscriptionAccountCommand,
   SubscriptionPoolConfig,
   SubscriptionProvider,
 } from '../../../shared/subscriptionAccounts.js';
+import { parseSubscriptionSessionAccountView } from '../../../shared/subscriptionAccounts.js';
 import {
   NATIVE_SUBSCRIPTION_ACCOUNT,
+  Session,
   AgentStartupStoppedError,
   AgentStartupCleanupPendingError,
   AgentNotAuthenticatedError,
+  type AgentEvent,
   type BaseAgent,
   type AgentSessionHandle,
   type StartSessionOptions,
   type ForkSdkSessionOptions,
+  type Logger,
 } from '@cindy/maker-core';
 const h = vi.hoisted(() => ({
   afterPoolWrite: undefined as (() => void) | undefined,
@@ -24,6 +29,10 @@ const h = vi.hoisted(() => ({
   tokens: vi.fn(),
   usage: vi.fn(),
   modelCacheRead: vi.fn(),
+  savedModelFiles: new Map<string, string>(),
+  ownerBoundaryPending: false,
+  onSnapshotStage: undefined as (() => void) | undefined,
+  rejectSnapshotRename: false,
   directoryEntries: vi.fn(),
   login: vi.fn(),
   bound: true,
@@ -122,8 +131,9 @@ vi.mock('../../provider-group/coolingStore.js', () => ({
 }));
 vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.remote }));
 vi.mock('../../appSessionState.js', () => ({
+  ownerScopedUserDataPath: (...parts: string[]) => [h.owner, ...parts].join('/'),
   activeOwnerScopeKey: () => h.owner,
-  isAppSessionBoundaryPending: () => false,
+  isAppSessionBoundaryPending: () => h.ownerBoundaryPending,
 }));
 vi.mock('../../maker-host/nativeProviderAuthBinding.js', () => ({
   bindNativeProviderAuth: vi.fn(() => { h.bound = true; h.shared = true; }),
@@ -151,8 +161,28 @@ vi.mock('../../usage/accountUsageStorage.js', () => ({
     if (current()) h.storedUsage.set(`${kind}:${id}`, structuredClone(value));
   },
 }));
-vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: h.modelCacheRead, readdir: h.directoryEntries,
-  default: { mkdir: vi.fn(), writeFile: vi.fn(), rm: vi.fn(), readdir: h.directoryEntries,
+vi.mock('node:fs/promises', () => ({
+  mkdir: vi.fn(),
+  readFile: async (file: string) => {
+    if (!file.includes('/model-discovery/')) return h.modelCacheRead(file, 'utf8');
+    const saved = h.savedModelFiles.get(file);
+    if (saved === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return saved;
+  },
+  readdir: h.directoryEntries,
+  writeFile: async (file: string, body: string) => {
+    h.savedModelFiles.set(file, body);
+    h.onSnapshotStage?.();
+  },
+  rename: async (source: string, destination: string) => {
+    if (h.rejectSnapshotRename) throw Object.assign(new Error('locked snapshot'), { code: 'EACCES' });
+    const staged = h.savedModelFiles.get(source);
+    if (staged === undefined) throw new Error('missing staged snapshot');
+    h.savedModelFiles.set(destination, staged);
+    h.savedModelFiles.delete(source);
+  },
+  rm: async (file: string) => { h.savedModelFiles.delete(file); },
+  default: { mkdir: vi.fn(), writeFile: vi.fn(), rename: vi.fn(), rm: vi.fn(), readdir: h.directoryEntries,
     readFile: h.modelCacheRead, stat: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } },
 }));
 // The host production dispatcher runs in memory; no listener or personal files.
@@ -205,6 +235,7 @@ vi.mock('../store.js', () => ({
 import {
   acquireSubscriptionAccount,
   hasUnavailableSubscriptionPoolAccount,
+  isSubscriptionPoolReadUnreachable,
   needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
   readSubscriptionPool,
   readSubscriptionUsage,
@@ -214,6 +245,7 @@ import {
   readSubscriptionPoolClaudeModels,
   setSubscriptionPoolClaudeModelProbe,
   onSubscriptionPoolCodexModelsChanged,
+  onSubscriptionPoolClaudeModelsChanged,
   onSubscriptionAccountsChanged,
   readSubscriptionPoolCodexModels,
   resetDefaultSubscriptionCodexDiscovery,
@@ -226,14 +258,18 @@ import {
   readLegacySubscriptionPoolUsage,
   readSubscriptionSessionUsage,
   readSubscriptionSessionAccount,
+  canSwitchHostedSubscriptionAccount,
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   hasConnectedSubscriptionPool,
+  lastConfirmedSubscriptionModelsAt,
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
   pooledCodexResetTarget,
+  refreshCodexSubscriptionAccountAfterReset,
   hasRestoredPooledCodexQuota,
 } from '../runtime.js';
+import { AccountServiceUnreachableError } from '../accountServiceError.js';
 import { createCodexRateLimitResetService } from '../../usage/codexRateLimitReset.js';
 import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/codexResetAutoUse.js';
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
@@ -251,7 +287,30 @@ import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '.
 import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
 import type { ProviderGroupBinding } from '../../provider-group/bindings.js';
 import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';
-import { createRemoteAgentHost } from '../../remote-agent/host/runHost.js';
+import { createRemoteAgentHost, GROUP_SWITCH_TOKEN_TTL_MS } from '../../remote-agent/host/runHost.js';
+import { RemoteAgentPoller, RemoteAgentRunClient } from '../../remote-agent/controller/runClient.js';
+import { startRemoteAgentSession, takeGroupSwitchState } from '../../remote-agent/controller/startRemote.js';
+import { createInputEnqueueHarness } from '../../maker-ipc/__tests__/inputEnqueueHarness.js';
+import { MAKER_INVOKE } from '../../maker-ipc/channels.js';
+import type { IpcHandler } from '../../maker-ipc/ipcHandlerRegistry.js';
+import { registerMakerSessionSendHandler } from '../../maker-ipc/sessionSendHandler.js';
+import { registerStopSessionBackgroundTasksHandler } from '../../maker-ipc/stopSessionBackgroundTasksHandler.js';
+import { registerSharedAccountStopAll, sharedAccountRegisterWiring, sharedAccountSendTransaction } from '../../remote-agent/__tests__/poolHarness.js';
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
+import { providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
+import { providerShareGuestPeer } from '@cindy/device-link';
+import type { RemoteAgentOpenPayload } from '../../remote-agent/wire.js';
+import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch.js';
+import {
+  applyPendingAgentSwitchIfIdle,
+  createPendingAgentSwitchRegistry,
+  registerMakerSessionAgentSwitchHandler,
+  relocateForFreshStart,
+  type AgentSwitchSessionRow,
+  type MakerSessionAgentSwitchHandlerDeps,
+} from '../../maker-ipc/sessionAgentSwitchHandler.js';
+import { prependHandoffToUserMessage } from '../../maker-ipc/agentHandoff.js';
+import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
 import type { ProviderView } from '@cindy/model-providers';
 import { subscriptionPoolSources } from '../../menubar/collect.js';
 import { setAnthropicModelProbe, refreshAnthropicModelsFromProbe, syncAnthropicModelsWithClaudeLogin } from '../../maker-host/model-discovery/anthropic.js';
@@ -275,6 +334,10 @@ beforeEach(() => {
     chatgptAccountId: directory, canDispatch: () => true,
   }));
   h.usage.mockReset().mockResolvedValue({});
+  h.savedModelFiles.clear();
+  h.ownerBoundaryPending = false;
+  h.onSnapshotStage = undefined;
+  h.rejectSnapshotRename = false;
   h.modelCacheRead.mockReset().mockRejectedValue(new Error('no account cache'));
   h.directoryEntries.mockReset().mockResolvedValue([]);
   h.login.mockReset().mockResolvedValue(undefined);
@@ -409,6 +472,21 @@ it.each(['paused', 'removed', 'signed-out', 'unknown', 'exhausted', 'cooling', '
   },
 );
 
+// Unit regression: admission must explain a model cooldown alongside a signed-out
+// sibling, without exposing identities or applying the cooldown to other models.
+it('explains an unbound task blocked by a model limit and a signed-out account', async () => {
+  const until = Date.now() + 60_000;
+  h.cooling = { anthropic: { default: { 'claude:fable': until } } };
+  h.read.mockImplementation(async (_kind: string, dir: string) => ({
+    authenticated: dir.endsWith('default'), identity: dir,
+  }));
+  await expect(acquireSubscriptionAccount('anthropic', 'claude-fable-5-2', []))
+    .rejects.toThrow(new Error(`[SUBSCRIPTION_POOL_MODEL_LIMITED] Subscription usage limit for this model\nresetAtMs=${until}\notherAccountSignedOut=true`));
+  const lease = await acquireSubscriptionAccount('anthropic', 'claude-opus-5-5', []);
+  expect(lease?.accountId).toBe('default');
+  lease?.release();
+});
+
 it('reads round capacity without advancing the account cursor or reserving a slot', async () => {
   h.pools.anthropic!.strategy = 'round';
   for (let i = 0; i < 2; i++) expect(await readSubscriptionPoolScheduling('anthropic', 'claude-sonnet-5'))
@@ -443,7 +521,7 @@ it.each(['anthropic', 'openai'] as const)('persists and restores every %s accoun
   h.pools[provider] = { strategy: 'round', accounts: [account('default'), account('second')] };
   h.read.mockImplementation(async (_provider: string, directory: string) => ({
     authenticated: true, identity: directory, plan: provider === 'anthropic' ? 'max' : 'plus',
-    ...(provider === 'anthropic' ? { planTier: 'max_20x' } : { planType: 'plus' }),
+    ...(provider === 'anthropic' ? { planTier: 'max_20x', planDisplayName: 'Ultra' } : { planType: 'plus' }),
   }));
   h.usage.mockImplementation(async (_provider: string, directory: string) => {
     const used = directory.endsWith('second') ? 42 : 12;
@@ -456,6 +534,9 @@ it.each(['anthropic', 'openai'] as const)('persists and restores every %s accoun
   const initial = await readSubscriptionPool(provider);
   expect(h.storedUsage.has(`${provider}:default`)).toBe(true);
   expect(h.storedUsage.has(`${provider}:second`)).toBe(true);
+  if (provider === 'anthropic') expect(h.storedUsage.get('anthropic:second')).toMatchObject({
+    subscriptionType: 'max', planTier: 'max_20x', planDisplayName: 'Ultra',
+  });
   h.owner += ':restart'; // discard runtime state, retain the simulated owner's database
   const authorized = h.read.getMockImplementation()!;
   h.read.mockRejectedValue(new Error('temporary authentication read failure'));
@@ -464,10 +545,34 @@ it.each(['anthropic', 'openai'] as const)('persists and restores every %s accoun
   h.usage.mockRejectedValue(new Error('temporarily offline'));
   const restored = await refreshSubscriptionPool(provider, true);
   expect(restored.accounts.map(a => a.usage)).toEqual(initial.accounts.map(a => a.usage));
-  expect(restored.accounts[1]).toMatchObject(provider === 'anthropic' ? { planTier: 'max_20x' } : { planType: 'plus' });
+  expect(restored.accounts[1]).toMatchObject(provider === 'anthropic'
+    ? { planTier: 'max_20x', planDisplayName: 'Ultra' } : { planType: 'plus' });
   h.owner += ':replacement';
   h.read.mockResolvedValue({ authenticated: true, identity: 'different-account' });
   expect((await readSubscriptionPool(provider)).accounts.every(a => a.usage === undefined)).toBe(true);
+});
+
+// Unit: a marketing-name change is independent of quota and machine tier. The
+// next status read must update stored/displayed metadata even while quota is reused.
+it.each(['Pro', undefined])('updates or clears the Claude display name without refreshing quota (%s)', async nextName => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  const now = Date.now();
+  try {
+    h.pools.anthropic = { strategy: 'order', accounts: [account('second')] };
+    let planDisplayName: string | undefined = 'Ultra';
+    h.read.mockImplementation(async () => ({ authenticated: true, identity: 'same@example.test',
+      plan: 'pro', planTier: 'pro', planDisplayName }));
+    h.usage.mockResolvedValue({ claudeUsage: { source: 'oauth-endpoint', updatedAt: now,
+      fiveHour: { utilization: 10 }, scoped: [] } });
+    expect((await readSubscriptionPool('anthropic')).accounts[0]).toMatchObject({ planDisplayName: 'Ultra' });
+    planDisplayName = nextName;
+    vi.setSystemTime(now + 31_000);
+    const view = (await readSubscriptionPool('anthropic')).accounts[0];
+    expect(view.planDisplayName).toBe(nextName);
+    expect(view.usage?.claude?.planDisplayName).toBe(nextName);
+    expect(h.storedUsage.get('anthropic:second')).toMatchObject({ subscriptionType: 'pro', planTier: 'pro', planDisplayName: nextName });
+    expect(h.usage).toHaveBeenCalledTimes(1);
+  } finally { vi.useRealTimers(); }
 });
 
 // Test value / unit: use real admission, account events and commands. A healthy
@@ -511,7 +616,8 @@ describe('read-only subscription usage', () => {
     h.pools[provider] = { strategy: 'round', accounts: [account('default'), account('second')] };
     h.read.mockImplementation(async (_kind: string, directory: string) => ({ authenticated: true,
       identity: `${directory}@private.test`, plan: provider === 'anthropic' ? 'max' : 'plus',
-      planTier: provider === 'anthropic' ? 'max_20x' : undefined, accessToken: 'must-not-leak' }));
+      planTier: provider === 'anthropic' ? 'max_20x' : undefined,
+      planDisplayName: provider === 'anthropic' ? 'Ultra' : undefined, accessToken: 'must-not-leak' }));
     const observedAt = Date.now() - 10_000;
     h.usage.mockImplementation(async (_kind: string, directory: string) => {
       const used = directory.endsWith('second') ? 74 : 12;
@@ -526,6 +632,8 @@ describe('read-only subscription usage', () => {
     expect(result.accounts.map(a => [a.accountId, a.windows[0].usedPercent])).toEqual([['default', 12], ['second', 74]]);
     expect(result.accounts[0]).toMatchObject({ providerId: provider, provider, status: 'connected',
       plan: { type: provider === 'anthropic' ? 'max' : 'plus', tier: provider === 'anthropic' ? 'max_20x' : null }, usageStatus: 'available' });
+    if (provider === 'anthropic') expect(result.accounts[0].plan).toHaveProperty('displayName', 'Ultra');
+    else expect(result.accounts[0].plan).not.toHaveProperty('displayName');
     expect(result.accounts[0].windows[0]).toMatchObject({ windowMinutes: 300, resetsAt: 9_999_999_999 });
     expect(JSON.stringify(result)).not.toMatch(/must-not-leak|private\.test|directory|accountKey|accountFingerprint|accessToken/);
     const reads = h.usage.mock.calls.length;
@@ -739,6 +847,196 @@ it.each(['anthropic', 'openai'].flatMap(provider => ['remove', 'remove-provider'
   expect(h.storedUsage.get(`${provider}:default`)).toEqual(sentinel);
 });
 describe('owner-only subscription identity', () => {
+  // Unit: workspace B cannot retain A's model list after its own first refresh times out.
+  it('does not reuse models across same-email workspace changes', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-a', canDispatch: () => true });
+    h.rpc.mockResolvedValue({ data: [{ id: 'workspace-a-model' }] });
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-b', canDispatch: () => true });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    try {
+      await refreshSubscriptionPool('openai');
+      h.rpc.mockRejectedValue(new Error('timed out'));
+      await refreshSubscriptionPoolCodexModels();
+      expect(readSubscriptionPoolCodexModels()).toEqual([]);
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    } finally { clock.mockRestore(); }
+  });
+
+  // Unit: a model read that cannot reach OpenAI is reported as a connection problem;
+  // any other failure, and a later success, are not.
+  it('marks a failed model read as unreachable only when the service could not be reached', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(isSubscriptionPoolReadUnreachable('openai')).toBe(false);
+    h.rpc.mockRejectedValueOnce(new AccountServiceUnreachableError('Codex account read timed out'));
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(isSubscriptionPoolReadUnreachable('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    h.rpc.mockRejectedValueOnce(new Error('Invalid Codex model list'));
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(isSubscriptionPoolReadUnreachable('openai')).toBe(false);
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+    expect(isSubscriptionPoolReadUnreachable('openai')).toBe(false);
+  });
+
+  // Unit: the first launch after an upgrade may have only the CLI cache as evidence.
+  // A disk-only id must not become selectable, even while we recheck a shorter response.
+  it('rechecks conflicting first discovery without publishing disk-only models', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ fetched_at: new Date().toISOString(),
+      models: ['sol', 'astra'].map(slug => ({ slug, supported_in_api: true, visibility: 'list' })) }));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    h.rpc.mockRejectedValueOnce(new Error('retry timeout'));
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    await refreshSubscriptionPoolCodexModels(true);
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+  });
+
+  // Unit: a staged write from the previous owner must be discarded after an account switch.
+  it('discards the staged model list when the owner changes before publication', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }] });
+    await refreshSubscriptionPool('openai');
+    h.onSnapshotStage = () => {
+      h.owner = 'another-owner';
+      readSubscriptionPoolCodexModels();
+    };
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(h.savedModelFiles.size).toBe(0);
+  });
+
+  // Unit, PR #11754: a default logout yields before deleting its persisted list.
+  // Existing cleanup tests keep the owner stable or replace the runtime on switch.
+  it.each(['an owner switch', 'a pending owner boundary'])('preserves saved models when logout cleanup is interrupted by %s', async transition => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    const ownerFile = `${h.owner}/model-discovery/codex-pool-default.json`;
+    const nextOwnerFile = 'another-owner/model-discovery/codex-pool-default.json';
+    const saved = h.savedModelFiles.get(ownerFile);
+    expect(saved).toBeDefined();
+    h.savedModelFiles.set(nextOwnerFile, saved!);
+
+    resetDefaultSubscriptionCodexDiscovery(false);
+    // Switch without touching the new owner's subscription runtime.
+    if (transition === 'an owner switch') h.owner = 'another-owner';
+    else h.ownerBoundaryPending = true;
+    await Promise.resolve();
+    expect(h.savedModelFiles.get(ownerFile)).toBe(saved);
+    expect(h.savedModelFiles.get(nextOwnerFile)).toBe(saved);
+  });
+
+  // Unit: reopening the owner's runtime discards memory; transient failure must still
+  // retain Astra even across repeated fallback replies; only consistent native evidence confirms removal.
+  it('recovers persisted membership without confirming repeated conflicting fallback lists', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }, { id: 'sol', supportedReasoningEfforts: [] }] });
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: ['astra', 'sol'].map(slug => ({
+      slug, supported_in_api: true, visibility: 'list',
+    })) }));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    const owner = h.owner;
+    h.owner = 'another-owner';
+    readSubscriptionPoolCodexModels();
+    h.owner = owner;
+    h.rpc.mockRejectedValueOnce(new Error('timeout'));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
+    // An omitted effort list permits registry fallback, while an explicit empty list overrides it.
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.discoveredMetadata?.efforts)).toEqual([undefined, []]);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: [{ slug: 'sol', supported_in_api: true, visibility: 'list' }] }));
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+    // Unrelated disk-only ids are not a contraction of this account's verified list.
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: ['sol', 'disk-only'].map(slug => ({
+      slug, supported_in_api: true, visibility: 'list',
+    })) }));
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }, { id: 'new-model' }] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol', 'new-model']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+  });
+
+  // Unit regression: a restart followed by a slow RPC used to hide a verified model
+  // until the request finished. Assert the published directory while the real refresh is pending.
+  it('publishes the same-workspace disk snapshot before discovery finishes', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }] });
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    const owner = h.owner;
+    h.owner = 'another-owner';
+    readSubscriptionPoolCodexModels();
+    h.owner = owner;
+    await refreshSubscriptionPool('openai');
+    let finish!: (value: unknown) => void;
+    h.rpc.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = refreshSubscriptionPoolCodexModels();
+    try {
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra']);
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    } finally {
+      finish({ data: [{ id: 'astra' }] });
+      await pending;
+    }
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+  });
+
+  // Unit: a confirmed empty list can fail to replace an older snapshot. The next
+  // identical refresh must repair disk so cold recovery cannot revive the removed model.
+  it('repairs an older disk snapshot on the next unchanged successful refresh', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }] });
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+
+    h.rejectSnapshotRename = true;
+    h.rpc.mockResolvedValue({ data: [] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+
+    h.rejectSnapshotRename = false;
+    await refreshSubscriptionPoolCodexModels(true);
+    const owner = h.owner;
+    h.owner = 'another-owner';
+    readSubscriptionPoolCodexModels();
+    h.owner = owner;
+    h.rpc.mockRejectedValueOnce(new Error('timeout'));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+  });
+
   it('does not carry quota across same-email workspace changes', async () => {
     h.pools.openai = { strategy: 'order', accounts: [account('default')] };
     h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.test' });
@@ -793,6 +1091,28 @@ describe('duplicate subscription account profiles', () => {
       ? { data: [{ id: directory.endsWith('/other') ? 'model-b' : 'gpt-6' }], nextCursor: null } : undefined);
     expect(await readSubscriptionPoolScheduling('openai', 'gpt-6')).toMatchObject({ accounts: 1, totalRunning: 0 });
     expect(await readSubscriptionPoolScheduling('openai', 'model-b')).toMatchObject({ accounts: 1, totalRunning: 0 });
+    expect(await readSubscriptionPoolScheduling('openai', 'openai/gpt-image-2', { capability: 'image.generate' }))
+      .toMatchObject({ accounts: 2, totalRunning: 0 });
+  });
+
+  it('uses the image model for remote legacy account authorization without chat catalog membership', async () => {
+    const model = 'openai/gpt-image-2';
+    const options = { remote: true, capability: 'image.generate' as const };
+    h.pools.openai = { strategy: 'order', accounts: [account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' } };
+    let allowed = true;
+    h.accountAllowed.mockImplementation((_id, requested) => allowed && requested === model);
+
+    expect(await readSubscriptionPoolScheduling('openai', model, options)).toMatchObject({ accounts: 1 });
+    const lease = await acquireSubscriptionAccount('openai', model, [], false, options);
+    expect(lease?.accountId).toBe('imported');
+    try {
+      expect(() => lease?.assertDispatchable()).not.toThrow();
+      allowed = false;
+      expect(() => lease?.assertDispatchable()).toThrow('Subscription account remote access was revoked');
+    } finally {
+      lease?.release();
+    }
   });
 
   it('merges into two accounts, empties the source and retains the old task directory', async () => {
@@ -1076,17 +1396,36 @@ describe('pooled Claude model discovery', () => {
     h.pools.anthropic!.accounts = [account('second')];
     const probe = vi.fn(async () => [model('claude-owned')]);
     setSubscriptionPoolClaudeModelProbe(probe);
+    const availability: boolean[] = [];
+    const stop = onSubscriptionPoolClaudeModelsChanged(() => {
+      availability.push(hasUnavailableSubscriptionPoolAccount('anthropic'));
+    });
     try {
       await refreshSubscriptionPoolClaudeModels();
+      availability.length = 0;
       h.read.mockRejectedValueOnce(new Error('CLI read unavailable'));
       await refreshSubscriptionPool('anthropic', true);
-      expect(await refreshSubscriptionPoolClaudeModels()).toBe(false);
-      expect(readSubscriptionPoolClaudeModels()).toEqual([]); // Auth is still required.
+      // PR #11754, unit: an account-only read must notify the picker even when the
+      // previously discovered models are identical. Repeated failures stay quiet.
+      expect(availability).toEqual([true]);
+      h.read.mockRejectedValueOnce(new Error('CLI read still unavailable'));
       await refreshSubscriptionPool('anthropic', true);
+      expect(availability).toEqual([true]);
+      expect(await refreshSubscriptionPoolClaudeModels()).toBe(false);
+      // 2026-11-20: the picker keeps the last confirmed list with its time while the account is
+      // unreadable; the routing catalog still requires a current sign-in.
+      expect(readSubscriptionPoolClaudeModels('anthropic', { includeLastConfirmed: true })?.map(m => m.id)).toEqual(['claude-owned']);
+      expect(lastConfirmedSubscriptionModelsAt('anthropic')).toEqual(expect.any(Number));
+      expect(readSubscriptionPoolClaudeModels('anthropic', { includeBoundAccounts: true })).toEqual([]);
+      await refreshSubscriptionPool('anthropic', true);
+      expect(availability).toEqual([true, false]);
       expect(await refreshSubscriptionPoolClaudeModels()).toBe(true);
       expect(probe).toHaveBeenCalledOnce();
       expect(readSubscriptionPoolClaudeModels()?.map(m => m.id)).toEqual(['claude-owned']);
-    } finally { setSubscriptionPoolClaudeModelProbe(null); }
+    } finally {
+      stop();
+      setSubscriptionPoolClaudeModelProbe(null);
+    }
   });
 
   it('discovers each account on its own profile with the built-in disconnected and survives provider renames', async () => {
@@ -1203,6 +1542,7 @@ describe('pooled Codex model discovery', () => {
       let complete!: (value: unknown) => void;
       h.rpc.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
       const pending = refreshSubscriptionPoolCodexModels(true);
+      await vi.waitFor(() => expect(complete).toBeTypeOf('function'));
       h.owner = 'next-owner';
       const beforeLate = push.mock.calls.length;
       complete({ data: [{ id: 'stale-model' }], nextCursor: null });
@@ -1436,6 +1776,7 @@ describe('pooled Codex model discovery', () => {
     let complete!: (value: unknown) => void;
     h.rpc.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
     const old = refreshSubscriptionPoolCodexModels();
+    await vi.waitFor(() => expect(complete).toBeTypeOf('function'));
     h.owner = 'next-owner';
     complete({ data: [{ id: 'old-owner-model' }], nextCursor: null });
     await old;
@@ -1456,7 +1797,9 @@ describe('pooled Codex model discovery', () => {
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['new-owner-model']);
     await refreshSubscriptionPool('openai', true);
     h.rpc.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const callsBeforeLogin = h.rpc.mock.calls.length;
     const beforeLogin = refreshSubscriptionPoolCodexModels();
+    await vi.waitFor(() => expect(h.rpc.mock.calls.length).toBeGreaterThan(callsBeforeLogin));
     h.read.mockResolvedValue({ authenticated: true, identity: 'different-login' });
     await refreshSubscriptionPool('openai', true);
     complete({ data: [{ id: 'stale-login-model' }], nextCursor: null });
@@ -1491,6 +1834,97 @@ describe('pooled Codex model discovery', () => {
 // redemption path. Unit/in-process integration through the real service and engine;
 // the native CLI transport is the only replacement, so no real credit is consumed.
 describe('pooled Codex resets', () => {
+  // Unit regression: a completed reset on the original connection must bypass
+  // the warm quota and notify observers, including the implicit default slot.
+  it.each([
+    { scope: 'openai', accountId: 'default', configured: true },
+    { scope: 'openai-old', accountId: 'second', configured: true },
+    { scope: 'openai', accountId: 'default', configured: false },
+  ])('publishes fresh quota after resetting $scope (configured pool: $configured)', async ({ scope, accountId, configured }) => {
+    if (configured) h.pools.openai = {
+      strategy: 'least',
+      accounts: [account('default'), account('second')],
+      legacyCodexAccounts: { 'openai-old': 'second' },
+    };
+    let redeemed = false;
+    const resetsAt = Math.floor(Date.now() / 1000) + 86_400;
+    h.usage.mockImplementation(async (_provider, directory: string) => ({
+      codexUsage: providerGroupCodexUsageFromReads(null, {
+        rateLimits: {
+          limitId: 'codex',
+          secondary: {
+            usedPercent: redeemed && directory.endsWith(accountId) ? 0 : 100,
+            windowDurationMins: 10_080,
+            resetsAt,
+          },
+        },
+      }, Date.now()),
+    }));
+    const weeklyUsage = (view: Awaited<ReturnType<typeof readSubscriptionPool>>) =>
+      Object.fromEntries(view.accounts.map(entry =>
+        [entry.id, entry.usage?.codex?.buckets.codex.secondary?.usedPercent]));
+    const initialUsage = configured ? { default: 100, second: 100 } : { default: 100 };
+    expect(weeklyUsage(await readSubscriptionPool('openai'))).toEqual(initialUsage);
+    const updates: Promise<Awaited<ReturnType<typeof readSubscriptionPool>>>[] = [];
+    const unsubscribe = onSubscriptionAccountsChanged((provider, resetAccountId) => {
+      if (provider === 'openai' && resetAccountId === accountId) updates.push(readSubscriptionPool('openai'));
+    });
+    try {
+      redeemed = true;
+      await refreshCodexSubscriptionAccountAfterReset(scope);
+      expect((await Promise.all(updates)).map(weeklyUsage)).toEqual([{ ...initialUsage, [accountId]: 0 }]);
+      expect(h.usage.mock.calls).toHaveLength(configured ? 3 : 2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  // Unit regression: a manual refresh started before redemption can return the old
+  // window. The reset notification must let observers read the renewed window.
+  it('publishes renewed default Codex quota after a pre-reset refresh finishes', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    const now = Date.now();
+    const quota = (usedPercent: number, remainingDays: number) => ({
+      codexUsage: providerGroupCodexUsageFromReads(null, {
+        rateLimits: {
+          limitId: 'codex',
+          secondary: {
+            usedPercent,
+            windowDurationMins: 10_080,
+            resetsAt: Math.floor(now / 1000) + remainingDays * 86_400,
+          },
+        },
+      }, now),
+    });
+    const exhausted = quota(100, 2);
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    let finish!: (value: typeof exhausted) => void;
+    const pending = new Promise<typeof exhausted>(resolve => { finish = resolve; });
+    h.usage.mockImplementationOnce(() => {
+      started();
+      return pending;
+    });
+    h.usage.mockResolvedValue(quota(0, 7));
+    const weeklyUsed = (view: Awaited<ReturnType<typeof readSubscriptionPool>>) =>
+      view.accounts[0]?.usage?.codex?.buckets.codex.secondary?.usedPercent;
+    const updates: Promise<Awaited<ReturnType<typeof readSubscriptionPool>>>[] = [];
+    const unsubscribe = onSubscriptionAccountsChanged((provider, accountId) => {
+      if (provider === 'openai' && accountId === 'default') updates.push(readSubscriptionPool('openai'));
+    });
+    try {
+      const preResetRefresh = refreshSubscriptionPool('openai', true);
+      await reading;
+      const resetRefresh = refreshCodexSubscriptionAccountAfterReset('openai');
+      finish(exhausted);
+      expect(weeklyUsed(await preResetRefresh)).toBe(100);
+      await resetRefresh;
+      expect((await Promise.all(updates)).map(weeklyUsed)).toEqual([0]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('reads, automatically redeems and refreshes only the selected account', async () => {
     h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second'), account('third')] };
     const redeemed = new Set<string>();
@@ -2877,6 +3311,8 @@ describe('native account assignment on the executing computer', () => {
     h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
     h.read.mockImplementation(async (_p: string, directory: string) => ({
       authenticated: true, identity: directory.endsWith('second') ? 'second@example.test' : 'first@example.test',
+      ...(provider === 'anthropic' ? { plan: 'pro', planTier: 'pro',
+        planDisplayName: directory.endsWith('second') ? 'Ultra' : 'Pro' } : {}),
     }));
     const now = Date.now();
     h.usage.mockImplementation(async (_p: string, directory: string) => {
@@ -2894,6 +3330,8 @@ describe('native account assignment on the executing computer', () => {
     expect(bound).toMatchObject({ state: 'bound', account: {
       isDefault: false, number: 2, identity: 'second@example.test', status: 'ready',
     } });
+    if (provider === 'anthropic') expect(parseSubscriptionSessionAccountView(bound, provider))
+      .toMatchObject({ account: { plan: 'pro', planTier: 'pro', planDisplayName: 'Ultra' } });
     expect(bound.state === 'bound' && (provider === 'anthropic'
       ? bound.account.usage?.claude?.fiveHour?.utilization
       : bound.account.usage?.codex?.buckets.codex.primary?.usedPercent)).toBe(30);
@@ -2948,6 +3386,10 @@ describe('native account assignment on the executing computer', () => {
   // is exhausted. Existing tests only exercise the new pool query, not old calls.
   it.each(['anthropic', 'openai'] as const)('keeps old %s quota readers usable without changing the default account card', async (provider) => {
     h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
+    if (provider === 'anthropic') h.read.mockImplementation(async (_kind: string, directory: string) => ({
+      authenticated: true, identity: directory, plan: 'pro', planTier: 'pro',
+      planDisplayName: directory.endsWith('second') ? 'Ultra' : 'Pro',
+    }));
     const now = Date.now();
     h.usage.mockImplementation(async (_provider: string, directory: string) => {
       const used = directory.endsWith('default') ? 100 : 12;
@@ -2960,7 +3402,8 @@ describe('native account assignment on the executing computer', () => {
     const read = (channel: string, args: unknown[]) => readLegacySubscriptionQuota(readLegacySubscriptionPoolUsage, channel, args);
     if (provider === 'anthropic') {
       const usage = await read('maker:usage:claude-subscription', []);
-      expect(usage).toMatchObject({ fiveHour: { utilization: 12 }, providerId: 'anthropic' });
+      expect(usage).toMatchObject({ fiveHour: { utilization: 12 }, providerId: 'anthropic',
+        subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' });
       expect(providerGroupMemberUsageState({ claudeUsage: providerGroupUsageSnapshot(usage, now) }, undefined, now, 'claude-code').limited).toBe(false);
       expect(JSON.stringify(usage)).not.toContain('private-identity');
     } else {
@@ -3385,6 +3828,36 @@ describe('native account assignment on the executing computer', () => {
       lease?.release();
       vi.useRealTimers();
     }
+  });
+
+  // Unit / shared A grows by merging B: the hosted replacement probe must use
+  // A's actual admission, while B's retained share cannot inherit A's accounts.
+  // Existing probes covered owner tasks, not this unchanged-share boundary.
+  it.each(['pool', 'alias'] as const)('offers a hosted replacement only inside the original shared provider: %s', async route => {
+    h.pools.anthropic!.accounts = [account('default'), account('second')];
+    const a = 'anthropic-sub-aaaaaaaa';
+    const b = 'anthropic-sub-bbbbbbbb';
+    h.created[a] = { kind: 'anthropic', name: 'A', account: route === 'pool' ? 'default' : 'second' };
+    h.created[b] = { kind: 'anthropic', name: 'B', account: route === 'pool' ? 'second' : 'default' };
+    h.placement['anthropic:default'] = a;
+    h.placement['anthropic:second'] = a;
+    const model = 'claude-sonnet';
+    const original = await acquireSubscriptionAccount(a, model, [], false, { accountId: 'default' });
+    await original!.bind(['task:guest-a']);
+    original!.observeFailure({ sdkError: 'rate_limit' }, model, 'run');
+    original!.release();
+    const published = route === 'pool' ? a : b;
+    if (route === 'alias') h.bindings.set('task:guest-a', { providerId: 'anthropic', accountId: 'default', via: b });
+    const view = await readSubscriptionSessionAccount('anthropic', {
+      sessionId: 'guest-a', model, routeProviderId: published,
+    }, { remote: true });
+    expect(view).toMatchObject({ state: 'bound', account: { blocked: true, switchAvailable: true } });
+    // The owner can move B's task to A, but B's guest must keep B's grant.
+    if (route === 'alias') expect(view).toHaveProperty('replacementProviderId', a);
+    expect(await canSwitchHostedSubscriptionAccount(published, 'guest-a', model)).toBe(route === 'pool');
+    h.pools.anthropic!.accounts[1].paused = true;
+    expect(await canSwitchHostedSubscriptionAccount(a, 'guest-a', model)).toBe(false);
+    expect(h.bindings.get('task:guest-a')?.accountId).toBe('default');
   });
 
   it('moves a task off an account that remembers a real failure for its model', async () => {
@@ -4376,7 +4849,7 @@ describe('native account assignment on the executing computer', () => {
       expect(next?.account.configDir).toBe('anthropic/second');
       next?.release();
     } else if (backup === 'exhausted') {
-      await expect(acquireSubscriptionAccount('anthropic', model, ['task:new'])).rejects.toThrow('No subscription account');
+      await expect(acquireSubscriptionAccount('anthropic', model, ['task:new'])).rejects.toThrow('[SUBSCRIPTION_POOL_MODEL_LIMITED]');
     }
     expect(await readSubscriptionPoolModelAvailability('anthropic', 'claude-opus-5-5')).toBe(true);
   });
@@ -4708,7 +5181,7 @@ describe('native account assignment on the executing computer', () => {
         }
         if (provider === 'anthropic') {
           await expect(acquireSubscriptionAccount(provider, 'claude-sonnet', []))
-            .rejects.toThrow('No subscription account is available');
+            .rejects.toThrow('[SUBSCRIPTION_POOL_MODEL_LIMITED]');
         } else {
           const next = await acquireSubscriptionAccount(provider, 'gpt-6', []);
           expect(next?.account.configDir).toBe('openai/default');
@@ -4745,6 +5218,202 @@ describe('native account assignment on the executing computer', () => {
     expect((await readSubscriptionPool('openai')).accounts[0].usage?.codex).toMatchObject({
       buckets: { codex: { primary: { usedPercent: 55 } } },
       credits: { balance: '12.50' },
+    });
+  });
+
+  // 2026-11-19 user report (Codex 发消息卡 1–2 秒) and decision, subscription-account-pools.md
+  // 「同机多账号的故障隔离」, unit. Entry: the wrapped agent's startSession plus the account views.
+  // Every Codex runtime start waited for each account's quota read (its own CLI process and a
+  // chatgpt.com request), although ChatGPT quota only orders new assignments. Existing start tests
+  // answer that read at once and their logins carry no plan, so none could see the wait.
+  // Minimal failing input: a quota read older than its 3-minute reuse window that has not answered.
+  describe('starting while an account quota read is still running', () => {
+    let now = 1_800_000_000_000;
+    // The default account is nearly through its five-hour window; the second has room.
+    const quotaFor = (directory: string, percent = directory.endsWith('/default') ? 90 : 10) => directory.startsWith('anthropic/')
+      ? { claudeUsage: { source: 'oauth-endpoint', updatedAt: now,
+        fiveHour: { utilization: percent, resetsAt: now / 1000 + 3 * 3600 } } }
+      : { codexUsage: { appServerBuckets: { codex: { limitId: 'codex', limitName: null, updatedAt: now,
+        primary: { usedPercent: percent, windowMinutes: 300, resetsAt: now / 1000 + 3 * 3600 }, secondary: null } },
+      webSnapshot: null } };
+    /** Reads every account once as the settings page does, ages that read, then holds the next quota read. */
+    const holdNextQuotaRead = async (provider: SubscriptionProvider, ageMs: number, fresh: number) => {
+      h.read.mockImplementation(async (_kind: string, directory: string) => ({
+        authenticated: true, identity: `${directory.replace('/', '-')}@example.test`, plan: 'plus', planType: 'plus',
+      }));
+      h.usage.mockImplementation(async (_kind: string, directory: string) => quotaFor(directory));
+      await readSubscriptionPool(provider);
+      now += ageMs;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      h.usage.mockImplementation(async (_kind: string, directory: string) => { await gate; return quotaFor(directory, fresh); });
+      return release;
+    };
+    const startAgent = (kind: 'codex' | 'claude-code', checkAuth = false) => {
+      const spawned = vi.fn();
+      const start = vi.fn(async (options: StartSessionOptions) => {
+        if (checkAuth) expect(await options[NATIVE_SUBSCRIPTION_ACCOUNT]?.readState()).toMatchObject({ authenticated: true });
+        spawned();
+        return { id: 'task-native', close: async () => {} } as unknown as AgentSessionHandle;
+      });
+      return { start, spawned, agent: withSubscriptionAccounts({ kind, startSession: start } as unknown as BaseAgent) };
+    };
+    const shownQuota = async (provider: SubscriptionProvider, accountId: string) => {
+      const usage = (await readSubscriptionPool(provider)).accounts.find((entry) => entry.id === accountId)?.usage;
+      return provider === 'openai' ? usage?.codex?.buckets.codex.primary?.usedPercent : usage?.claude?.fiveHour?.utilization;
+    };
+
+    // Rows that wait prove it by their result: only the fresh quota picks `default` (row 4) or stops
+    // the limited Claude account (row 5); the quota read before would have chosen otherwise.
+    it.each([
+      { name: 'a Codex task resuming on its account', kind: 'codex', provider: 'openai', accounts: ['default', 'second'],
+        bound: 'second', ageMs: 4 * 60_000, waits: false, fresh: 50, account: 'second' },
+      { name: 'a new Codex task with one account', kind: 'codex', provider: 'openai', accounts: ['default'],
+        ageMs: 40 * 60_000, waits: false, fresh: 50, account: 'default' },
+      { name: 'a new Codex task ordered by a quota read four minutes ago', kind: 'codex', provider: 'openai',
+        accounts: ['default', 'second'], ageMs: 4 * 60_000, waits: false, fresh: 50, account: 'second' },
+      { name: 'a new Codex task whose last quota is too old to order by', kind: 'codex', provider: 'openai',
+        accounts: ['default', 'second'], ageMs: 6 * 60_000, waits: true, fresh: 50, account: 'default' },
+      { name: 'a Claude task, whose quota decides whether it may start', kind: 'claude-code', provider: 'anthropic',
+        accounts: ['default', 'second'], bound: 'second', ageMs: 4 * 60_000, waits: true, fresh: 100, account: null },
+    ] as const)('$name: waits for the quota read = $waits', async (row) => {
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        h.pools[row.provider] = { strategy: 'least', accounts: row.accounts.map(account) };
+        const bound: string | undefined = 'bound' in row ? row.bound : undefined;
+        if (bound) for (const key of ['task:task', 'native:task-native'])
+          h.bindings.set(key, { providerId: row.provider, accountId: bound });
+        const release = await holdNextQuotaRead(row.provider, row.ageMs, row.fresh);
+        const loginReads = h.read.mock.calls.length;
+        const quotaReads = h.usage.mock.calls.length;
+        const { start, agent } = startAgent(row.kind);
+        const starting = agent.startSession({ providerId: row.provider, sessionId: 'task',
+          model: row.kind === 'codex' ? 'gpt-6' : 'claude-sonnet',
+          ...(bound ? { resumeSessionId: 'task-native' } : {}) } as StartSessionOptions);
+        await vi.waitFor(() => expect(h.usage.mock.calls.length).toBeGreaterThan(quotaReads));
+        if (!row.waits) await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+        // The login is still read for every start; only the quota read stops blocking Codex.
+        expect(h.read.mock.calls.length).toBeGreaterThan(loginReads);
+        release();
+        if (row.account === null) {
+          await expect(starting).rejects.toBeInstanceOf(AgentStartupStoppedError);
+          expect(start).not.toHaveBeenCalled();
+        } else {
+          const handle = await starting;
+          expect(start.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe(`${row.provider}/${row.account}`);
+          await handle.close();
+        }
+        // The quota read still completes and is what the account views show.
+        expect(await shownQuota(row.provider, bound ?? row.account ?? 'default')).toBe(row.fresh);
+      } finally { clock.mockRestore(); }
+    });
+
+    // Same decision: returning to Cindy refreshes the account views, and a message sent meanwhile
+    // joins that read. The task starts on the login it read; the views still wait for its quota.
+    it('starts on the login of a view read that is still fetching quota, without a second read', async () => {
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+        const release = await holdNextQuotaRead('openai', 4 * 60_000, 50);
+        const quotaReads = h.usage.mock.calls.length;
+        let viewed = false;
+        const viewing = readSubscriptionPool('openai').then((view) => { viewed = true; return view; });
+        await vi.waitFor(() => expect(h.usage).toHaveBeenCalledTimes(quotaReads + 1));
+        const { start, agent } = startAgent('codex');
+        const starting = agent.startSession({ providerId: 'openai', sessionId: 'task', model: 'gpt-6' } as StartSessionOptions);
+        await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+        expect(viewed).toBe(false);
+        release();
+        expect((await viewing).accounts[0].usage?.codex?.buckets.codex.primary?.usedPercent).toBe(50);
+        expect(h.usage).toHaveBeenCalledTimes(quotaReads + 1);
+        await (await starting).close();
+      } finally { clock.mockRestore(); }
+    });
+
+    // The host checks auth again before spawning. Hold quota and release it on either side of
+    // model discovery: the native start must proceed, and its login must survive quota enrichment
+    // even for a legacy default login without a plan (review threads #11479, unit).
+    it.each([
+      { legacy: false, finishQuotaFirst: true },
+      { legacy: false, finishQuotaFirst: false },
+      { legacy: true, finishQuotaFirst: true },
+      { legacy: true, finishQuotaFirst: false },
+    ])('starts with legacy=$legacy and quota finishing before models=$finishQuotaFirst', async ({ legacy, finishQuotaFirst }) => {
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      let releaseQuota: (() => void) | undefined;
+      let listModels: (() => void) | undefined;
+      let starting: Promise<AgentSessionHandle> | undefined;
+      let existing: Awaited<ReturnType<typeof acquireSubscriptionAccount>> = null;
+      try {
+        h.pools.openai = { strategy: 'least', accounts: [{ ...account('default'), limit: 2 }], legacyCodexDefault: legacy };
+        if (legacy && finishQuotaFirst) existing = await acquireSubscriptionAccount('openai', undefined, []);
+        releaseQuota = await holdNextQuotaRead('openai', 4 * 60_000, 50);
+        const originalUsage = h.usage.getMockImplementation()!;
+        h.usage.mockImplementation(async (kind: string, directory: string) => ({
+          ...await originalUsage(kind, directory), codexPlan: 'pro',
+        }));
+        const listed = new Promise<void>((resolve) => { listModels = resolve; });
+        h.rpc.mockImplementation(async (_directory: string, method: string) => {
+          if (method !== 'model/list') return undefined;
+          await listed;
+          return { data: [{ id: 'gpt-6' }], nextCursor: null };
+        });
+        const { start, spawned, agent } = startAgent('codex', true);
+        starting = agent.startSession({ providerId: 'openai', sessionId: 'task', model: 'gpt-6' } as StartSessionOptions);
+        void starting.catch(() => {});
+        await vi.waitFor(() => expect(h.rpc.mock.calls.some((call) => call[1] === 'model/list')).toBe(true));
+        if (finishQuotaFirst) {
+          // A running task can publish its plan and quota while a new task is discovering models.
+          if (legacy) {
+            expect(existing).not.toBeNull();
+            observeSubscriptionAccountUsage(existing!.account, {
+              limitId: 'codex-other', planType: 'pro',
+              secondary: { usedPercent: 65, windowMinutes: 10_080, resetsAt: now / 1000 + 3600 },
+            });
+          }
+          releaseQuota();
+          expect(await shownQuota('openai', 'default')).toBe(50);
+        }
+        listModels!();
+        await vi.waitFor(() => expect(spawned).toHaveBeenCalledOnce());
+        await starting;
+        expect(start.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir)
+          .toBe(legacy ? '/existing-cindy/codex-home' : 'openai/default');
+        releaseQuota();
+        const view = await readSubscriptionPool('openai');
+        expect(view.accounts[0].plan).toBe(legacy ? 'pro' : 'plus');
+        expect(view.accounts[0].usage?.codex?.buckets.codex.primary?.usedPercent).toBe(50);
+        if (legacy && finishQuotaFirst)
+          expect(view.accounts[0].usage?.codex?.buckets['codex-other']?.secondary?.usedPercent).toBe(65);
+      } finally {
+        releaseQuota?.();
+        listModels?.();
+        await starting?.then((handle) => handle.close(), () => {});
+        existing?.release();
+        clock.mockRestore();
+      }
+    });
+
+    // An auth rejection can now race the pending quota request. A late successful quota
+    // must never make the rejected login usable again (account pool login admission, unit).
+    it('keeps a rejected Codex login unavailable after its pending quota read completes', async () => {
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      let releaseQuota: (() => void) | undefined;
+      try {
+        h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+        releaseQuota = await holdNextQuotaRead('openai', 4 * 60_000, 50);
+        const lease = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+        expect(lease).not.toBeNull();
+        const viewing = readSubscriptionPool('openai');
+        lease!.account.invalidateAuth?.('invalid_grant', 'test-token');
+        releaseQuota();
+        expect((await viewing).accounts[0].status).toBe('signed-out');
+        await expect(lease!.account.readState()).resolves.toMatchObject({ authenticated: false });
+        lease!.release();
+      } finally {
+        releaseQuota?.();
+        clock.mockRestore();
+      }
     });
   });
   it('reserves login before asynchronous writes, and an early cancellation never launches the CLI', async () => {
@@ -5040,6 +5709,122 @@ describe('native account assignment on the executing computer', () => {
     expect(start).toHaveBeenCalledExactlyOnceWith(options);
     expect(h.read).not.toHaveBeenCalled();
   });
+  // #10301 回归(系统账号已登录 + 旧任务用内部 codex-home + symlink EPERM)。这条链路上
+  // lazy create 抛的是「凭证连不上」而不是「没登录」,恢复入口(到模型供应商里重新连接)
+  // 依赖这个 reason 一路活着到界面。这里同时钉住两件事:旧路由的隔离策略不被绕过(不注入
+  // 账号),以及这个 reason 不被 AgentStartupStoppedError 的包装吃掉 —— 少任何一条,
+  // 用户看到的就是一句没有出路的「回复未完成」。
+  it('keeps the shared-link reason on a legacy-home resume instead of falling back to another account', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('default'), account('second')] };
+    const start = vi.fn(async (_options: StartSessionOptions): Promise<never> => {
+      throw new AgentNotAuthenticatedError('codex', 'codex not authenticated: codex_shared_auth_link_unavailable');
+    });
+    const agent = withSubscriptionAccounts({
+      kind: 'codex',
+      startSession: start,
+    } as unknown as BaseAgent, { getState: h.legacyRead, resolveCodexHistoryHome: async () => '/unregistered-private-home' });
+    const options = {
+      providerId: 'openai',
+      resumeSessionId: 'legacy',
+      sessionId: 'old-task',
+    } as StartSessionOptions;
+    await expect(agent.startSession(options)).rejects.toThrow('codex_shared_auth_link_unavailable');
+    // 旧路由照旧不注入账号:恢复走「重新连接」,不是换一个账号池里的账号。
+    expect(start).toHaveBeenCalledExactlyOnceWith(options);
+    expect(start.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+  });
+});
+
+// #10692: existing disabled-account cases persist task/native bindings first. These unit
+// cases enter real pre-send recovery with only host-owned history metadata, then start
+// through the production account wrapper; no credentials, disk history or native CLI are used.
+describe('unbound Codex history account recovery', () => {
+  function fixture() {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')],
+      legacyCodexAccounts: { 'openai-old': 'imported' } };
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex',
+      model: 'gpt-6.1-sol', sdkSessionId: 'legacy' } as SessionRowSnapshot;
+    const deps = {
+      readSession: vi.fn(async () => row),
+      isRunning: vi.fn(() => false),
+      resolveCodexHistoryHome: vi.fn(async (): Promise<string | undefined> => 'openai/imported'),
+      rebuild: vi.fn(async (_id: string, assertCurrent: () => void) => {
+        assertCurrent();
+        row.sdkSessionId = null;
+      }),
+    };
+    return { row, deps };
+  }
+  it.each(['removed', 'paused'] as const)('hands off %s history before starting a fresh native session', async cause => {
+    const { row, deps } = fixture();
+    if (cause === 'paused') h.pools.openai!.accounts.push({ ...account('imported'), paused: true });
+    const start = vi.fn(async (_options: StartSessionOptions) => ({ id: 'replacement-native', close: async () => {} }));
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start } as unknown as BaseAgent,
+      { getState: h.legacyRead, resolveCodexHistoryHome: deps.resolveCodexHistoryHome });
+    // Original failure is produced by the actual allocator, not an injected startup error.
+    await expect(agent.startSession({ providerId: 'openai', sessionId: 'old-task',
+      resumeSessionId: 'legacy', model: row.model! } as StartSessionOptions)).rejects.toThrow('SUBSCRIPTION_ACCOUNT_UNAVAILABLE');
+    expect(start).not.toHaveBeenCalled();
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(true);
+    expect(row.sdkSessionId).toBeNull();
+    expect(deps.rebuild).toHaveBeenCalledOnce();
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('second');
+    expect(h.bindings.has('native:legacy')).toBe(false);
+    expect(h.pools.openai!.legacyCodexAccounts).toEqual({ 'openai-old': 'imported' });
+    const handle = await agent.startSession({ providerId: row.providerId, sessionId: 'old-task',
+      resumeSessionId: row.sdkSessionId ?? undefined, model: row.model! } as StartSessionOptions);
+    expect(start).toHaveBeenCalledOnce();
+    expect(start.mock.calls[0][0].resumeSessionId).toBeUndefined();
+    expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/second');
+    await handle.close();
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(false);
+    expect(deps.rebuild).toHaveBeenCalledOnce();
+  });
+  it.each(['healthy', 'unknown', 'new-task', 'bound', 'ssh', 'remote-agent', 'other-provider', 'other-engine'] as const)(
+    'preserves existing routing when %s', async condition => {
+      const { row, deps } = fixture();
+      if (condition === 'healthy') h.pools.openai!.accounts.push(account('imported'));
+      if (condition === 'unknown') deps.resolveCodexHistoryHome.mockResolvedValue('/unregistered-private-home');
+      if (condition === 'new-task') row.sdkSessionId = null;
+      if (condition === 'bound') h.bindings.set('task:old-task', { providerId: 'openai', accountId: 'second' });
+      if (condition === 'ssh') row.remoteHostId = 'ssh-host';
+      if (condition === 'remote-agent') row.agentDeviceId = 'other-computer';
+      if (condition === 'other-provider') row.providerId = 'custom';
+      if (condition === 'other-engine') row.agentKind = 'pi';
+      const before = new Map(h.bindings);
+      expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(false);
+      expect(deps.rebuild).not.toHaveBeenCalled();
+      expect(h.bindings).toEqual(before);
+      if (!['healthy', 'unknown'].includes(condition)) expect(deps.resolveCodexHistoryHome).not.toHaveBeenCalled();
+    });
+  it('does not overwrite a task rebound within the same provider while preparing the handoff', async () => {
+    const { row, deps } = fixture();
+    deps.rebuild.mockImplementation(async (_id, assertCurrent) => {
+      h.bindings.set('task:old-task', { providerId: 'openai', accountId: 'second' });
+      assertCurrent();
+    });
+    await expect(prepareSubscriptionAccountForSend('old-task', deps)).rejects.toThrow('account changed');
+    expect(row.sdkSessionId).toBe('legacy');
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('second');
+    expect(h.bindings.has('native:legacy')).toBe(false);
+  });
+  it.each(['lookup-failed', 'owner-changed', 'route-changed', 'busy', 'no-replacement', 'rebuild-failed'] as const)(
+    'keeps old history and task ownership on %s', async failure => {
+      const { row, deps } = fixture();
+      if (failure === 'lookup-failed') deps.resolveCodexHistoryHome.mockRejectedValue(new Error('history unavailable'));
+      if (failure === 'owner-changed' || failure === 'route-changed') deps.resolveCodexHistoryHome.mockImplementation(async () => {
+        if (failure === 'owner-changed') h.owner = 'other-owner';
+        else row.providerId = 'custom';
+        return 'openai/imported';
+      });
+      if (failure === 'busy') deps.isRunning.mockReturnValue(true);
+      if (failure === 'no-replacement') h.pools.openai!.accounts[0].paused = true;
+      if (failure === 'rebuild-failed') deps.rebuild.mockRejectedValue(new Error('handoff failed'));
+      await expect(prepareSubscriptionAccountForSend('old-task', deps)).rejects.toThrow();
+      expect(row.sdkSessionId).toBe('legacy');
+      expect(h.bindings.size).toBe(0);
+      if (failure !== 'rebuild-failed') expect(deps.rebuild).not.toHaveBeenCalled();
+    });
 });
 
 // Unit regression (2026-11-11): retry reused a disabled account despite another account
@@ -5207,5 +5992,1033 @@ describe('disabled task account recovery before send', () => {
     await expect(handle.send({ type: 'user', content: 'continue' })).rejects.toThrow('disabled');
     expect(send).not.toHaveBeenCalled();
     await handle.close();
+  });
+});
+
+// Integration (in-memory native/credential/storage boundaries, NOT real-device E2E).
+// Bug: an unchanged A share retained a's native session after B merged into A;
+// a was limited, b healthy, but the guest saw LAZY_CREATE_FAILED forever.
+// Existing probe/relay tests isolated the receiver from actual account admission.
+// Minimal input: one guest task, two distinct profiles, one terminal rate limit.
+// This exercises the production transport, allocator, token receiver, group recovery,
+// history relocation and fresh native open, including the first start-failed ordering.
+// Standalone full-file validation: 405 cases / 6.35s wall (1.61s cases); most cost is module collection.
+describe('shared subscription recovery through controller and account allocation', () => {
+  it.each([
+    { original: 'default', phase: 'run', boundary: 'none' },
+    { original: 'default', phase: 'idle-send', boundary: 'none' },
+    { original: 'second', phase: 'run', boundary: 'none' },
+    { original: 'default', phase: 'run', boundary: 'all-run-limited' },
+    { original: 'default', phase: 'cold', boundary: 'none' },
+    { original: 'default', phase: 'auth-cold', boundary: 'none' },
+    { original: 'default', phase: 'auth-send', boundary: 'none' },
+    { original: 'default', phase: 'auth-send', boundary: 'no-spare' },
+    { original: 'default', phase: 'auth-pending-start', boundary: 'none' },
+    { original: 'default', phase: 'pre-pool', boundary: 'none' },
+    { original: 'default', phase: 'pending-start', boundary: 'none' },
+    { original: 'default', phase: 'cold', boundary: 'all-limited' },
+    { original: 'second', phase: 'cold', boundary: 'old-share' },
+    // 11-20 incident / #11081, unit: O has reclaimed its run and the pinned
+    // Opus account is blocked. Drive the real starter, Session and coordinator
+    // through the next send. The older cold case opens a new RunClient directly.
+    // Native agent, credentials, persistence and wire delivery are fixtures.
+    { original: 'second', phase: 'reconnect', boundary: 'none' },
+    { original: 'second', phase: 'reconnect', boundary: 'edited-input' },
+    { original: 'second', phase: 'reconnect', boundary: 'expired-host-token' },
+    { original: 'second', phase: 'scheduled-reconnect', boundary: 'none' },
+    { original: 'second', phase: 'legacy-reconnect', boundary: 'none' },
+    { original: 'second', phase: 'reconnect', boundary: 'replacement-id-write-failed' },
+    { original: 'second', phase: 'reconnect', boundary: 'boundary-write-failed' },
+    { original: 'second', phase: 'reconnect', boundary: 'stop-during-open' },
+    { original: 'second', phase: 'reconnect', boundary: 'new-input-during-open' },
+    // Unit integration (in-memory IPC/transport): after the replacement open,
+    // a second UI input at the real send's final fence must preserve FIFO.
+    { original: 'second', phase: 'reconnect', boundary: 'registered-input-before-replay-rpc' },
+    { original: 'second', phase: 'reconnect', boundary: 'stop-all-during-open' },
+    { original: 'second', phase: 'reconnect', boundary: 'stop-all-after-id-write' },
+    { original: 'second', phase: 'reconnect', boundary: 'all-limited' },
+    // Unit (in-memory share directory): a retained execution route is not
+    // current authorization to tear down this Session and claim a new run.
+    { original: 'second', phase: 'reconnect', boundary: 'share-list-unknown' },
+    { original: 'second', phase: 'reconnect', boundary: 'late-input' },
+    { original: 'second', phase: 'reconnect', boundary: 'late-stop' },
+    { original: 'second', phase: 'reconnect', boundary: 'late-route-change' },
+    { original: 'second', phase: 'reconnect', boundary: 'late-revoke' },
+    { original: 'second', phase: 'cold-weekly', boundary: 'none' },
+    { original: 'default', phase: 'run', boundary: 'stopped' },
+    { original: 'default', phase: 'run', boundary: 'revoked' },
+  ] as const)('$phase: $original with $boundary', async ({ original, phase, boundary }) => {
+    h.modelCacheRead.mockRejectedValue(Object.assign(new Error('synthetic missing file'), { code: 'ENOENT' }));
+    const a = 'anthropic-sub-aaaaaaaa';
+    const b = 'anthropic-sub-bbbbbbbb';
+    const weekly = phase.endsWith('reconnect') || phase === 'cold-weekly';
+    const nextInputDuringOpen = boundary === 'new-input-during-open';
+    const nextInputBeforeReplayRpc = boundary === 'registered-input-before-replay-rpc';
+    let reachedReplayRpc!: () => void;
+    let releaseReplayRpc!: () => void;
+    const replayRpcReady = new Promise<void>(resolve => { reachedReplayRpc = resolve; });
+    const replayRpcGate = new Promise<void>(resolve => { releaseReplayRpc = resolve; });
+    let finishReplayTurn!: () => void;
+    const replayTurnGate = new Promise<void>(resolve => { finishReplayTurn = resolve; });
+    const supersededDuringOpen = nextInputDuringOpen || boundary === 'stop-during-open' || boundary === 'stop-all-during-open';
+    const stopAfterIdWrite = boundary === 'stop-all-after-id-write';
+    let receivedReplacementOpen!: () => void;
+    let finishReplacementOpen!: () => void;
+    const replacementOpened = new Promise<void>(resolve => { receivedReplacementOpen = resolve; });
+    const replacementReply = new Promise<void>(resolve => { finishReplacementOpen = resolve; });
+    const delayedOffer = boundary.startsWith('late-');
+    let recoveryAllowed = true;
+    let shareListKnown = boundary !== 'share-list-unknown';
+    const published = weekly ? 'anthropic' : boundary === 'old-share' ? b : a;
+    const nextAccount = original === 'default' ? 'second' : 'default';
+    const model = weekly ? 'claude-opus-5-5' : 'claude-sonnet-5-5';
+    const task = `guest-${phase}-${original}-${boundary}`;
+    const peer = weekly ? providerShareGuestPeer('fixture-share', 'fixture-member', 'fixture-laptop') : 'share-test-guest';
+    const route = 'share:isolated-test';
+    h.pools.anthropic = { strategy: 'order', accounts: [account('default'), account('second')].map(entry => ({ ...entry, limit: 4 })) };
+    if (!weekly) h.created[a] = { kind: 'anthropic', name: 'A', account: 'default' };
+    h.created[b] = { kind: 'anthropic', name: 'B', account: 'second' };
+    h.placement['anthropic:default'] = published === 'anthropic' ? 'anthropic' : a;
+    h.placement['anthropic:second'] = published === 'anthropic' ? 'anthropic' : a;
+    h.read.mockImplementation(async (_kind: string, dir: string) => ({ authenticated: true, identity: dir }));
+    const row: AgentSwitchSessionRow = { id: task, status: 'active', agentKind: 'cc', model,
+      providerId: published, agentDeviceId: route, remoteHostId: null, orcaRole: null, sdkSessionId: null };
+    const guestSwitch = createProviderGroupGuestSwitch();
+    const wireOrder: string[] = [];
+    const starts: StartSessionOptions[] = [];
+    const received: unknown[] = [];
+    const events: AgentEvent[] = [];
+    const clients: RemoteAgentRunClient[] = [];
+    const limited = new Set<string>();
+    let authorized = true;
+    let confirmStopped!: () => void;
+    const whenStopped = new Promise<void>(resolve => { confirmStopped = resolve; });
+    let probeEntered!: () => void;
+    let resolveProbe: (() => void) | undefined;
+    const probeGate = new Promise<void>(resolve => { probeEntered = resolve; });
+    let nativeSequence = 0;
+    const pendingStart = phase === 'pending-start' || phase === 'auth-pending-start';
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async (options: StartSessionOptions) => {
+      starts.push(options);
+      if (phase === 'auth-cold' && options.resumeSessionId) throw new AgentNotAuthenticatedError('claude-code');
+      if (phase === 'auth-pending-start') throw new AgentStartupCleanupPendingError('not authenticated', { cause: 'not authenticated', whenStopped });
+      if (phase === 'pending-start') throw new AgentStartupCleanupPendingError('usage limit exceeded', { cause: 'usage limit exceeded', whenStopped });
+      const id = `isolated-native-${++nativeSequence}`;
+      const queue: AgentEvent[] = [];
+      let ended = false;
+      let wake: (() => void) | undefined;
+      const emit = (event: AgentEvent) => { queue.push(event); wake?.(); wake = undefined; };
+      return { id, agentKind: 'claude-code', model, setInteractionResolver() {}, abort: async () => {},
+        send: async (message: unknown) => {
+          received.push(message);
+          const dir = options[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir ?? 'anthropic/default';
+          if (phase !== 'idle-send' || !limited.size) emit({ type: 'text', data: { text: 'native started this turn' } } as AgentEvent);
+          const terminal = limited.has(dir.split('/').at(-1)!)
+            ? { type: 'error', data: { sdkError: 'rate_limit', message: 'usage limit exceeded', isTerminal: true } } as AgentEvent
+            : { type: 'done', data: {} } as AgentEvent;
+          if (nextInputBeforeReplayRpc && dir.endsWith('/default') && received.length === 2) {
+            void replayTurnGate.then(() => emit(terminal));
+          } else {
+            emit(terminal);
+          }
+        },
+        close: async () => { ended = true; wake?.(); },
+        events: async function* () {
+          while (!ended) {
+            if (queue.length) yield queue.shift()!;
+            else await new Promise<void>(resolve => { wake = resolve; });
+          }
+        },
+      } as unknown as AgentSessionHandle;
+    } } as unknown as BaseAgent);
+    let hostNow = Date.now();
+    const probeResults: boolean[] = [];
+    const host = createRemoteAgentHost({
+      runsRoot: '/synthetic-shared-pool-integration', isAgentAvailable: () => true,
+      ...(weekly ? { now: () => hostNow, readLimits: () => ({ perDevice: 16, total: 64, idleMinutes: 1 }) } : {}),
+      isControllerAuthorized: () => authorized, controllerTrust: () => 'guest',
+      providerAccess: { resolve: async () => published, isAllowed: () => authorized },
+      bindGuestProviderRoute: async () => ({ routeToken: 'synthetic-route', modelIds: [model], release() {} }),
+      captureOwner: () => h.owner, isOwnerCurrent: owner => owner === h.owner,
+      canSwitchLocalAccount: async input => {
+        if (delayedOffer || boundary === 'stopped' || boundary === 'revoked') {
+          probeEntered();
+          await new Promise<void>(resolve => { resolveProbe = resolve; });
+        }
+        const available = await canSwitchHostedSubscriptionAccount(input.providerId, input.hostSessionId, input.model);
+        probeResults.push(available);
+        return available;
+      },
+      groupRelay: { plan: async () => null, connect: () => { throw new Error('no remote group member'); },
+        noteStartFailure: () => false, noteRunFailure: () => false,
+        trackRun: () => ({ setRunning() {}, release() {} }), forget: async () => {} },
+      startHosted: input => agent.startSession({ ...input.options, sessionId: input.hostSessionId,
+        workingDir: input.shadowDir, deviceHosted: { ...input.workspace, guest: true } } as StartSessionOptions),
+    });
+    const opens: RemoteAgentOpenPayload[] = [];
+    let sendCalls = 0;
+    const poller = new RemoteAgentPoller(async (args, invokeOptions) => {
+      const request = JSON.parse(JSON.stringify(args[0]));
+      if (nextInputBeforeReplayRpc && opens.length === 3 && sendCalls === 1
+        && request.op === 'call' && request.method === 'send') {
+        expect(invokeOptions?.beforeDispatch).toBeTypeOf('function');
+        reachedReplayRpc();
+        await replayRpcGate;
+      }
+      invokeOptions?.beforeDispatch?.();
+      if (request.op === 'open') {
+        opens.push(request.payload.json);
+        if (boundary === 'expired-host-token' && request.payload.json.groupSwitchToken) {
+          // Advance only O's clock after G claims the offer. The real host
+          // ignores the expired token and opens normally, as in #11081.
+          hostNow += GROUP_SWITCH_TOKEN_TTL_MS + 1;
+        }
+      }
+      if (request.op === 'call' && request.method === 'send') sendCalls++;
+      const response = await host.handle(peer, request);
+      if (supersededDuringOpen && opens.length === 3 && request.op === 'open' && request.payload.json.groupSwitchToken) {
+        receivedReplacementOpen();
+        await replacementReply;
+      }
+      return JSON.parse(JSON.stringify(response ?? null));
+    });
+    let active!: RemoteAgentRunClient;
+    let remoteHandle: AgentSessionHandle | undefined;
+    let guestSession: Session | undefined;
+    const guestLog: Logger = {
+      trace() {}, debug() {}, info: vi.fn(), warn: vi.fn(), error() {}, fatal() {}, child: () => guestLog,
+    };
+    const openRemote = async (resumeSessionId?: string) => {
+      remoteHandle = await startRemoteAgentSession('claude-code', {
+        sessionId: task, workingDir: '/controller/work', model, providerId: published, resumeSessionId,
+      }, {
+        poller, invoke: poller.invoke, rgPath: 'rg', newId: randomUUID, log: guestLog,
+        recoverSharedReconnect: true,
+        prepareMcp: async () => ({ servers: new Map(), dispose() {} }),
+        collectProjectFiles: async () => [], isGitRepo: async () => false,
+        groupSwitch: { token: guestSwitch.takeForOpen(task), offer: token => {
+          wireOrder.push('token'); guestSwitch.offer(task, token);
+        } },
+      });
+      row.sdkSessionId = remoteHandle.id;
+      guestSwitch.release(task);
+      return remoteHandle;
+    };
+    let handoff = '';
+    const open = async (resume?: string) => {
+      active = new RemoteAgentRunClient(randomUUID(), poller, {
+        onEvent: event => { events.push(event as AgentEvent); wireOrder.push((event as AgentEvent).type); },
+        onState: state => takeGroupSwitchState(state, token => { wireOrder.push('token'); guestSwitch.offer(task, token); }),
+        onRequest: async () => ({ type: 'callback', value: undefined }), onWs() {}, onClosed() {},
+      }, randomUUID);
+      clients.push(active);
+      try {
+        const result = await active.open('claude-code', { sessionId: task, virtualWorkspace: true,
+          options: { model, providerId: published, ...(resume ? { resumeSessionId: resume } : {}) },
+          acceptsGroupSwitch: true, ...(guestSwitch.takeForOpen(task) ? { groupSwitchToken: guestSwitch.takeForOpen(task) } : {}),
+          workspace: { workingDir: '/controller/work', platform: 'darwin', shell: 'bash' },
+          projectFiles: [], ancestorFiles: [], personal: { files: [] }, mcpServers: [] });
+        row.sdkSessionId = result.id as string;
+        guestSwitch.release(task);
+      } catch (error) { wireOrder.push('start-failed'); throw error; }
+    };
+    const relocate = async (isCurrent = () => true, deferSharedCommit?: true) => {
+      expect(isCurrent()).toBe(true);
+      if (!weekly) await active.close('close', 'navigation');
+      const relocated = await relocateForFreshStart({
+        getSessionRow: async () => ({ ...row }),
+        listMessagesForHandoff: async () => [{ role: 'user', content: 'Keep the codeword PINEAPPLE-42.', createdAt: 1 },
+          { role: 'assistant', content: 'Previous work is complete; continue remaining work.', createdAt: 2 }],
+        applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); }, setSessionProvider() {},
+        insertBoundaryMessage: async () => 'boundary', setPendingHandoff: (_id, text) => { handoff = text; },
+        applyResumeFallbackAtomically: async () => {}, log: { info() {}, warn() {} },
+      }, { sessionId: task, agentDeviceId: route, providerId: published, sharedRelocation: true, deferSharedCommit,
+        assertCurrent: () => { if (!isCurrent()) throw new Error('superseded'); } });
+      expect(relocated.nativeId).toBeNull();
+      if (!deferSharedCommit) expect(row.sdkSessionId).toBeNull();
+      return relocated;
+    };
+    const continueSession = vi.fn(async () => {
+      if (weekly) {
+        const fresh = await openRemote();
+        const message = prependHandoffToUserMessage('Continue remaining work.', handoff);
+        if (typeof message !== 'string') throw new Error('Expected a text handoff');
+        await fresh.send({ type: 'user', content: message });
+        for await (const event of fresh.events()) {
+          events.push(event);
+          if (event.type === 'done') break;
+        }
+        return 'resumed' as const;
+      }
+      await open();
+      await active.call('send', [prependHandoffToUserMessage({ type: 'user', content: 'Continue remaining work.' }, handoff)]);
+      return 'resumed' as const;
+    });
+    const fallback = vi.fn();
+    const directory = createProviderGroupDirectory({ listLocalProviders: async () => [], localDeviceName: () => 'guest',
+      listDevices: async () => [], readDeviceProviders: async () => [], listReceivedShares: () => [],
+      isMobilePlatform: () => false, now: Date.now });
+    const router = createProviderGroupRouter({ directory, readGroup: () => null, listBindings: () => ({}),
+      isTurnRunning: () => false, now: Date.now, random: () => 0 });
+    const service = createProviderGroupService({ router, directory, readGroup: () => null,
+      readBinding: () => null, writeBinding: async () => {}, isReleased: () => false, markReleased: async () => {},
+      readSessionRow: async () => ({ ...row, agentDeviceId: row.agentDeviceId ?? null, agentKind: 'claude-code' }), resolveImplicitProvider: async () => published,
+      persistRoute: async () => {}, hasAssistantHistory: async () => true, isFailoverEligible: async () => true,
+      leaseRecovery: () => ({}), isLeaseCurrent: () => true, rearmContinue: () => 2, cancelContinue() {},
+      switchAgentLocation: async (_id, _route, opts) => { await relocate(opts?.isCurrent); },
+      isTurnRunning: () => false, hasLiveSession: () => true, continueSession, fallback,
+      readResetAt: () => null, now: Date.now, sleep: async () => {}, guestSwitch, log: { info() {}, warn() {} },
+    });
+    if (weekly) vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      // Created-share binding is derived using the real host's same identity function.
+      const hostTask = hostSessionIdFor(peer, task);
+      if (phase !== 'pre-pool') h.bindings.set(`task:${hostTask}`, {
+        providerId: 'anthropic', accountId: original, ...(weekly ? {} : { via: published }),
+      });
+      else delete h.pools.anthropic;
+      if (weekly) {
+        const originalHandle = await openRemote();
+        const oldNative = originalHandle.id;
+        guestSession = new Session({ id: task, agentKind: 'claude-code', permissionMode: 'bypassPermissions', workDir: '/controller/work',
+          agentDeviceId: route, handle: originalHandle, capabilities: {} as never, logger: guestLog });
+        const session = guestSession;
+        const settled = new Promise<void>(resolve => session.onEvent(event => { if (event.type === 'done') resolve(); }));
+        await session.send('Keep the codeword PINEAPPLE-42.');
+        await settled;
+
+        hostNow += 61_000;
+        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.waitFor(() => expect(guestLog.info).toHaveBeenCalledWith(
+          'remote agent connection released by the other computer', expect.any(Object)));
+        expect(host.limitUsage().total).toBe(0);
+        hostNow += 13 * 60 * 60_000;
+        await vi.advanceTimersByTimeAsync(5_000);
+        vi.mocked(guestLog.info).mockClear();
+
+        const resetAtMs = Date.now() + 3 * 86_400_000;
+        const exhausted = await acquireSubscriptionAccount(published, model, [], true, { accountId: original, remote: true });
+        expect(exhausted!.observeFailure({ sdkError: 'rate_limit', usageResetAt: resetAtMs }, model, 'run')).toBe(true);
+        exhausted!.release();
+        h.usage.mockImplementation(async (_kind: string, dir: string) => ({ claudeUsage: {
+          updatedAt: Date.now(), fiveHour: dir.endsWith('/second') ? null : { utilization: 11, resetsAt: Date.now() / 1000 + 3600 },
+          sevenDay: { utilization: dir.endsWith('/second') ? 100 : 3, resetsAt: resetAtMs / 1000 },
+          scoped: [{ utilization: 0, resetsAt: resetAtMs / 1000, modelDisplayName: 'Fable', modelId: null }],
+        } }));
+        await refreshSubscriptionPool(published, true);
+        const view = await readSubscriptionSessionAccount('anthropic',
+          { sessionId: hostTask, model, routeProviderId: published }, { remote: true });
+        expect(view).toMatchObject({ state: 'bound', account: { blocked: true, switchAvailable: true, status: 'limited' } });
+        expect(view).not.toHaveProperty('replacementProviderId');
+
+        let live: Session | undefined = session;
+        session.onStatusChange(status => {
+          if (status === 'closed' && live === session) live = undefined;
+        });
+        const persisted: string[] = [];
+        const persistedError = vi.fn();
+        const onUsageLimitedTurnError = vi.fn();
+        const bootstrapped = vi.fn();
+        if (boundary === 'all-limited') {
+          const spare = await acquireSubscriptionAccount(published, model, [], true, { accountId: nextAccount, remote: true });
+          expect(spare!.observeFailure({ sdkError: 'rate_limit', usageResetAt: resetAtMs }, model, 'run')).toBe(true);
+          spare!.release();
+        }
+        if (phase === 'cold-weekly') {
+          await session.close();
+          live = undefined;
+        }
+        let coordinator: AgentInputCoordinator;
+        let holdEditedInput = boundary === 'edited-input';
+        const attach = (current: Session) => {
+          current.onEvent(event => {
+            events.push(event);
+            if (event.type === 'done') coordinator.onTurnEvent(task, 'done', undefined, undefined, event);
+          });
+        };
+        const insertBoundary = vi.fn(async (_id: string, _body: unknown, options: { beforePublish(): Promise<void> }) => {
+          await options.beforePublish();
+          if (boundary === 'boundary-write-failed') throw new Error('Synthetic handoff write failure');
+          return { id: 'boundary' };
+        });
+        const history = () => [
+          { role: 'user', content: 'Keep the codeword PINEAPPLE-42.', createdAt: 1 },
+          { role: 'assistant', content: 'Previous work is complete; continue remaining work.', createdAt: 2 },
+          ...persisted.map(clientId => ({ role: 'user', content: 'Continue.', clientId, createdAt: 3 })),
+        ];
+        const stopAllHandlers = new Map<string, IpcHandler>();
+        const maker = {
+          getSession: () => live,
+          closeSession: async () => { await live?.close(); live = undefined; },
+          closeSessionIfCurrent: async (current: Session) => {
+            if (live !== current || !await current.closeIfIdle()) return 'busy';
+            live = undefined;
+            return 'closed';
+          },
+        };
+        const wiring = sharedAccountRegisterWiring({
+          maker,
+          persistAndHydrateSessionProvider: async () => {
+            if (stopAfterIdWrite && opens.length === 3) {
+              receivedReplacementOpen();
+              await replacementReply;
+            }
+          },
+          providerGroupService: service,
+          providerShareAccessEpoch: () => recoveryAllowed ? 0 : 1,
+          // Keep the old execution lookup available even when the current
+          // directory is missing the share, as with a retained Agent Net route.
+          findReceivedShareForExecution: () => ({ status: authorized ? 'active' : 'revoked' }),
+          findReceivedShare: () => shareListKnown ? { status: authorized ? 'active' : 'revoked' } : null,
+          getProviderGroupGuestSwitch: () => guestSwitch,
+          getSessionRowSnapshotStrict: async () => ({ ...row, clearedAt: null }),
+          setSdkSessionId: id => { row.sdkSessionId = id; },
+          listMessagesForAgentHandoff: async () => history(),
+          createDbMessage: insertBoundary,
+          agentSwitchDeps: {
+            getSessionRow: async () => ({ ...row }),
+            listMessagesForHandoff: async () => history(),
+            applyAgentSwitchToDb: async (_id: string, patch: object) => { Object.assign(row, patch); },
+            setSessionProvider() {},
+            insertBoundaryMessage: async () => 'cold-boundary',
+            setPendingHandoff: (_id: string, note: string) => { handoff = note; },
+            log: guestLog,
+          },
+          createSessionWithRuntimePlugins: async (opts: StartSessionOptions) => {
+            const handle = await openRemote(opts.resumeSessionId);
+            if (boundary === 'replacement-id-write-failed') {
+              row.sdkSessionId = oldNative;
+              await handle.close({ reason: 'navigation' });
+              throw new Error('Synthetic native ID write failure');
+            }
+            live = guestSession = new Session({ id: task, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
+              workDir: '/controller/work', agentDeviceId: route, handle, capabilities: {} as never, logger: guestLog });
+            attach(live);
+            return live;
+          },
+        });
+        registerSharedAccountStopAll({
+          createElectronIpcHandlerRegistry: () => ({ handle: (channel: string, handler: IpcHandler) => stopAllHandlers.set(channel, handler) }),
+          registerStopSessionBackgroundTasksHandler, maker, providerGroupService: service,
+          clearClaudeSessionBackgroundActivity() {}, resetAutomaticRecoveryForExplicitStop() {}, pauseGoalBeforeExplicitStop() {},
+        });
+        const { sendToAgentAccepted } = sharedAccountSendTransaction({
+          ...wiring,
+          getSession: () => live,
+          readScheduledPermissions: async () => ({ permissionMode: 'bypassPermissions', planModeEnabled: false }),
+          peekPendingHandoff: async () => handoff || null,
+          consumePendingHandoff: () => { handoff = ''; },
+          createDbMessage: async (_id, msg) => { persisted.push(msg.clientId); },
+          reconcileCreateOptsWithDb: async (_id, opts) => {
+            opts.agentDeviceId = route;
+            opts.providerId = published;
+            opts.resumeSessionId = row.sdkSessionId ?? undefined;
+          },
+          bootstrapSession: async (...args) => {
+            bootstrapped();
+            return wiring.bootstrapSession(...args);
+          },
+        });
+        if (phase === 'legacy-reconnect') {
+          const handlers = new Map<string, IpcHandler>();
+          registerMakerSessionSendHandler({ handle: (channel, handler) => handlers.set(channel, handler) }, {
+            sendToAgentAccepted: (id, message, opts, sendOptions) => sendToAgentAccepted(id, message, opts, sendOptions),
+          });
+          await expect(handlers.get(MAKER_INVOKE.SEND)!(null, task, 'Continue.')).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+          expect(guestSwitch.hasOffer(task)).toBe(true);
+          expect(wireOrder).toEqual(['token']);
+          expect(opens).toHaveLength(2);
+          expect(sendCalls).toBe(1);
+          expect(received).toHaveLength(1);
+          expect(bootstrapped).not.toHaveBeenCalled();
+          return;
+        }
+        const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) =>
+          (await sendToAgentAccepted(...args)).outcome);
+        coordinator = new AgentInputCoordinator({
+          sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
+          touchUserSend: async () => {}, createUserMessage: vi.fn(),
+          isTurnRunning: () => holdEditedInput || (live?.isTurnRunning() ?? false), hasPendingInteraction: () => false,
+          getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
+          getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
+          emitProjection: () => {}, persistTerminalSendError: persistedError, onUsageLimitedTurnError,
+        });
+        const registeredInput = nextInputBeforeReplayRpc ? createInputEnqueueHarness(coordinator, { remote: false }) : undefined;
+        const inputItem = (clientId: string, body: string) => ({
+          clientId, text: body, persistedContent: body, model, effort: 'medium',
+          permissionMode: 'default', workingDir: '/controller/work',
+          createOpts: { agentKind: 'claude-code', model, workingDir: '/controller/work', permissionMode: 'bypassPermissions' },
+          ...(phase === 'scheduled-reconnect' ? {
+            origin: { kind: 'scheduler', scheduleId: 'fixture-schedule', scheduleName: 'Fixture', runId: 'fixture-run' },
+          } : {}),
+          chatMessage: { clientId, role: 'user', content: body, isStreaming: false, createdAt: new Date().toISOString() },
+        }) satisfies Parameters<AgentInputCoordinator['enqueue']>[1];
+        const enqueue = (clientId: string, body: string) => coordinator.enqueue(task, inputItem(clientId, body), {
+          manualUiSend: phase !== 'scheduled-reconnect',
+        });
+        if (registeredInput) await registeredInput.enqueue({}, task, inputItem('after-idle', 'Continue.'));
+        else enqueue('after-idle', 'Continue.');
+        if (holdEditedInput) {
+          expect(send).not.toHaveBeenCalled();
+          coordinator.updateText(task, 'after-idle', 'Continue the edited input.');
+          holdEditedInput = false;
+          coordinator.resume(task);
+        }
+        await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+        if (registeredInput) {
+          try {
+            await Promise.race([
+              replayRpcReady,
+              send.mock.results[0].value.then(() => { throw new Error('Expected recovery to reach the send RPC'); }),
+            ]);
+            expect(opens).toHaveLength(3);
+            expect(opens[2]).toHaveProperty('groupSwitchToken', expect.any(String));
+            expect(insertBoundary).toHaveBeenCalledOnce();
+            const queued = await registeredInput.enqueue({}, task, inputItem('next-input', 'Send after the recovered input.'));
+            expect(queued.pendingQueue.map(item => item.clientId)).toEqual(['next-input']);
+            expect(send).toHaveBeenCalledOnce();
+            expect(sendCalls).toBe(1);
+            expect(received).toHaveLength(1);
+          } finally {
+            releaseReplayRpc();
+          }
+          try {
+            // The send ACK arrives while the recovered turn is still running.
+            await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
+            expect(send).toHaveBeenCalledOnce();
+            expect(sendCalls).toBe(2);
+            expect(received).toHaveLength(2);
+            expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).toEqual(['next-input']);
+          } finally {
+            finishReplayTurn();
+          }
+          await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+          await expect(send.mock.results[1].value).resolves.toMatchObject({ dispatched: true });
+          await vi.waitFor(() => expect(events.filter(event => event.type === 'done')).toHaveLength(2));
+          expect(opens).toHaveLength(3);
+          expect(persisted).toEqual(['after-idle', 'next-input']);
+          expect(sendCalls).toBe(3);
+          expect(received.slice(1)).toEqual([
+            expect.objectContaining({ content: expect.stringContaining('Continue.') }),
+            expect.objectContaining({ content: 'Send after the recovered input.' }),
+          ]);
+          expect(JSON.stringify(received[1])).toContain('PINEAPPLE-42');
+          expect(persistedError).not.toHaveBeenCalled();
+          return;
+        }
+        if (boundary === 'replacement-id-write-failed' || boundary === 'boundary-write-failed') {
+          await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+          expect(opens).toHaveLength(3);
+          expect(opens[2]).toHaveProperty('groupSwitchToken', expect.any(String));
+          expect(insertBoundary).toHaveBeenCalledTimes(boundary === 'boundary-write-failed' ? 1 : 0);
+          expect(row.sdkSessionId).toBe(oldNative);
+          expect(live).toBeUndefined();
+          expect(guestSwitch.takeForOpen(task)).toBeUndefined();
+          expect(handoff).toBe('');
+          expect(received).toHaveLength(1);
+          expect(sendCalls).toBe(1);
+          expect(persisted).toEqual(['after-idle']);
+          return;
+        }
+        if (supersededDuringOpen || stopAfterIdWrite) {
+          const firstSend = send.mock.results[0].value as Promise<unknown>;
+          const settled = Promise.allSettled([firstSend]);
+          try {
+            await Promise.race([replacementOpened, firstSend.then(() => { throw new Error('Expected replacement open'); })]);
+            expect(opens[2].groupSwitchToken).toEqual(expect.any(String));
+            expect(wireOrder).toEqual(['token']);
+            if (stopAfterIdWrite) expect(row.sdkSessionId).not.toBe(oldNative);
+            if (nextInputDuringOpen) {
+              enqueue('next-input', 'Send the next input.');
+              // The next user's input releases G's old send even before O replies.
+              await settled;
+            } else if (boundary !== 'stop-during-open') {
+              await expect(stopAllHandlers.get(MAKER_INVOKE.STOP_SESSION_BACKGROUND_TASKS)!(null, task)).resolves.toEqual({ ok: true });
+            } else {
+              coordinator.stop(task);
+            }
+          } finally {
+            finishReplacementOpen();
+          }
+          await settled;
+          expect(live).toBeUndefined();
+          expect(row.sdkSessionId).toBe(oldNative);
+          expect(insertBoundary).not.toHaveBeenCalled();
+          expect(handoff).toBe('');
+          expect(guestSwitch.hasOffer(task)).toBe(false);
+          expect(guestSwitch.takeForOpen(task)).toBeUndefined();
+          expect(sendCalls).toBe(1);
+          expect(received).toHaveLength(1);
+          if (!nextInputDuringOpen) enqueue('next-input', 'Send the next input.');
+          await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+          const followUp = await send.mock.results[1].value.catch((error: unknown) => error);
+          // O may already have rebound the task before the cancellation reached G.
+          // The ordinary follow-up still uses the original history and no old token.
+          expect(h.bindings.get(`task:${hostTask}`)?.accountId).toBe(nextAccount);
+          expect(opens).toHaveLength(4);
+          expect(opens[3].options.resumeSessionId).toBe(oldNative);
+          expect(opens[3]).not.toHaveProperty('groupSwitchToken');
+          expect(followUp).toMatchObject({
+            accepted: false, code: 'LAZY_CREATE_FAILED', message: 'The task subscription account changed',
+          });
+          expect(sendCalls).toBe(1);
+          expect(received).toHaveLength(1);
+          expect(insertBoundary).not.toHaveBeenCalled();
+          expect(persisted).toEqual(['after-idle']);
+          if (boundary === 'stop-all-after-id-write') {
+            // Unit regression for the cancelled-handoff window: exercise the
+            // provider picker IPC and apply its real deferred route intents.
+            // The intermediate local provider is only selected, not run.
+            await vi.advanceTimersByTimeAsync(120_000);
+            expect(send).toHaveBeenCalledTimes(2);
+            expect(opens).toHaveLength(4);
+            const manualBoundaries: string[] = [];
+            const pendingSwitches = createPendingAgentSwitchRegistry();
+            const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
+              pendingSwitches,
+              getSessionRow: async () => ({ ...row }),
+              getLiveSession: () => live,
+              closeSession: maker.closeSession,
+              listMessagesForHandoff: async () => history(),
+              applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); },
+              setSessionProvider() {},
+              insertBoundaryMessage: async (_id, note) => {
+                manualBoundaries.push(note.toProviderId!);
+                return `manual-switch-${manualBoundaries.length}`;
+              },
+              applyResumeFallbackAtomically: async () => { throw new Error('Unexpected parked-history fallback'); },
+              setPendingHandoff: (_id, note) => { handoff = note; },
+              bootstrapSwitchedSession: async () => { throw new Error('Expected lazy startup on send'); },
+              withCloseSuppressed: async (_id, run) => run(),
+              log: guestLog,
+            };
+            registerMakerSessionAgentSwitchHandler({
+              handle: (channel, handler) => stopAllHandlers.set(channel, handler),
+            }, switchDeps);
+            const selectProvider = stopAllHandlers.get(MAKER_INVOKE.SWITCH_SESSION_AGENT)!;
+            await expect(selectProvider(null, task, 'claude-code', model, 'xd', undefined, undefined,
+              { agentDeviceId: null })).resolves.toMatchObject({ deferred: true });
+            await applyPendingAgentSwitchIfIdle(switchDeps, task);
+            expect(row).toMatchObject({ providerId: 'xd', agentDeviceId: null, sdkSessionId: null });
+            await expect(selectProvider(null, task, 'claude-code', model, published, undefined, undefined,
+              { agentDeviceId: route })).resolves.toMatchObject({ deferred: true });
+            await applyPendingAgentSwitchIfIdle(switchDeps, task);
+            expect(row).toMatchObject({ providerId: published, agentDeviceId: route, sdkSessionId: null });
+
+            const doneEvents = events.filter(event => event.type === 'done').length;
+            enqueue('after-manual-switch', 'Send after switching back.');
+            await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
+            await expect(send.mock.results[2].value).resolves.toMatchObject({ dispatched: true });
+            await vi.waitFor(() => expect(events.filter(event => event.type === 'done')).toHaveLength(doneEvents + 1));
+            expect(opens).toHaveLength(5);
+            expect(opens[4].options.resumeSessionId).toBeUndefined();
+            expect(opens[4]).not.toHaveProperty('groupSwitchToken');
+            expect(received).toHaveLength(2);
+            expect(received.at(-1)).toMatchObject({ content: expect.stringContaining('Send after switching back.') });
+            expect(starts.at(-1)?.[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/default');
+            expect(sendCalls).toBe(2);
+            expect(persisted).toEqual(['after-idle', 'after-manual-switch']);
+            expect(manualBoundaries).toEqual(['xd', published]);
+          }
+          return;
+        }
+        if (delayedOffer) {
+          await probeGate;
+          if (boundary === 'late-stop') coordinator.stop(task);
+          else if (boundary === 'late-input') enqueue('new-input', 'Use my latest instructions.');
+          else recoveryAllowed = false;
+          resolveProbe!();
+          if (boundary === 'late-stop') {
+            await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: false });
+          } else if (boundary === 'late-input') {
+            await expect(send.mock.results[0].value).rejects.toMatchObject({ name: 'AbortError' });
+          } else {
+            await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+          }
+          expect(bootstrapped).not.toHaveBeenCalled();
+          expect(sendCalls).toBe(1);
+          expect(probeResults).toEqual([true]);
+          expect(guestSwitch.hasOffer(task)).toBe(false);
+          return;
+        }
+        if (boundary === 'share-list-unknown') {
+          await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+          await vi.waitFor(() => expect(persistedError).toHaveBeenCalledWith(task, expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED')));
+          expect(live).toBe(session);
+          expect(session.getStatus()).toBe('active');
+          expect(bootstrapped).not.toHaveBeenCalled();
+          expect(insertBoundary).not.toHaveBeenCalled();
+          expect(opens).toHaveLength(2);
+          expect(sendCalls).toBe(1);
+          expect(received).toHaveLength(1);
+          expect(probeResults).toEqual([true]);
+          expect(guestSwitch.hasOffer(task)).toBe(false);
+
+          shareListKnown = true;
+          // The refused attempt still used O's one local offer for this round.
+          // Advance O's clock past that existing budget, without asking it for a refresh.
+          hostNow += 31 * 60_000;
+          // The normal rejected-send drain can retire the old runtime. This is
+          // independent of the recovery path, which must not close it itself.
+          await vi.waitFor(() => expect(live).toBeUndefined());
+          enqueue('after-directory-recovery', 'Proceed after the directory recovers.');
+          await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+          await expect(send.mock.results[1].value).resolves.toMatchObject({ dispatched: true });
+          expect(bootstrapped).toHaveBeenCalledOnce();
+          expect(opens).toHaveLength(4);
+          expect(opens[2].options.resumeSessionId).toBe(oldNative);
+          expect(opens[3].groupSwitchToken).toEqual(expect.any(String));
+          expect(opens[3].options.resumeSessionId).toBeUndefined();
+          expect(sendCalls).toBe(2);
+          expect(persisted).toEqual(['after-idle', 'after-directory-recovery']);
+          expect(JSON.stringify(received.at(-1))).toContain('Proceed after the directory recovers.');
+          expect(JSON.stringify(received.at(-1))).toContain('PINEAPPLE-42');
+          return;
+        }
+        if (boundary === 'all-limited') {
+          await vi.waitFor(() => expect(persistedError).toHaveBeenCalledWith(task, expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED')));
+          expect(persisted).toEqual(['after-idle']);
+          expect(bootstrapped).not.toHaveBeenCalled();
+          expect(opens).toHaveLength(2);
+          expect(sendCalls).toBe(1);
+          expect(probeResults).toEqual([false]);
+          expect(guestSwitch.hasOffer(task)).toBe(false);
+          return;
+        }
+        if (phase === 'scheduled-reconnect') {
+          await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+          expect(bootstrapped).not.toHaveBeenCalled();
+          expect(guestSwitch.hasOffer(task)).toBe(true);
+          expect(wireOrder).toEqual(['token']);
+          expect(opens).toHaveLength(2);
+          expect(sendCalls).toBe(1);
+          expect(received).toHaveLength(1);
+          expect(handoff).toBe('');
+          return;
+        }
+        const dispatched = await send.mock.results[0].value.catch((error: unknown) => error);
+        expect(probeResults, 'the host must have an eligible spare').toEqual([true]);
+        expect(bootstrapped, 'the confirmed rejection must reopen the stale controller Session').toHaveBeenCalledOnce();
+        expect(dispatched).toMatchObject({ dispatched: true });
+        await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
+        expect(persisted).toEqual(['after-idle']);
+        if (phase === 'reconnect') expect(insertBoundary).toHaveBeenCalledOnce();
+        expect(persistedError).not.toHaveBeenCalled();
+        expect(onUsageLimitedTurnError).not.toHaveBeenCalled();
+        expect(opens).toHaveLength(3);
+        expect(opens[1]).toMatchObject({ acceptsGroupSwitch: true, options: { resumeSessionId: oldNative } });
+        expect(opens[1]).not.toHaveProperty('groupAssigned');
+        expect(opens[2]).toHaveProperty('groupSwitchToken', expect.any(String));
+        expect(opens[2].options).not.toHaveProperty('resumeSessionId');
+        expect(sendCalls).toBe(2);
+        expect(starts).toHaveLength(2);
+        expect(starts[1][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/default');
+        expect(h.bindings.get(`native:${oldNative}`)?.accountId).toBe(original);
+        expect(JSON.stringify(received.at(-1))).toContain('PINEAPPLE-42');
+        const expectedInput = boundary === 'edited-input' ? 'Continue the edited input.' : 'Continue.';
+        expect(JSON.stringify(received.at(-1)).split(expectedInput)).toHaveLength(2);
+        if (boundary === 'edited-input') expect(JSON.stringify(received.at(-1))).not.toContain('Continue.');
+        if (boundary === 'expired-host-token') {
+          expect(wireOrder).toEqual(['token']);
+          expect(received).toHaveLength(2);
+          expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+        }
+        return;
+      }
+
+      if (pendingStart) {
+        await expect(open()).rejects.toThrow(phase === 'auth-pending-start' ? 'not authenticated' : 'usage limit exceeded');
+        expect(await canSwitchHostedSubscriptionAccount(published, hostTask, model)).toBe(true);
+        expect((await readSubscriptionPool(a)).accounts.map(entry => entry.running)).toEqual([1, 0]);
+        expect(await service.prepareGuestStartSwitch(task)).toBeNull();
+        expect(wireOrder).not.toContain('token');
+        confirmStopped(); await whenStopped;
+        expect((await readSubscriptionPool(a)).accounts.map(entry => entry.running)).toEqual([0, 0]);
+        expect(starts).toHaveLength(1);
+        expect(guestSwitch.hasOffer(task)).toBe(false);
+        return;
+      }
+      await open();
+      const oldNative = row.sdkSessionId!;
+      expect(oldNative).toBe('isolated-native-1');
+      await active.call('send', [{ type: 'user', content: 'Keep the codeword PINEAPPLE-42.' }]);
+      await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
+      if (phase === 'pre-pool') h.pools.anthropic = { strategy: 'order', accounts: [account('default'), account('second')].map(entry => ({ ...entry, limit: 4 })) };
+      const originalLease = await acquireSubscriptionAccount(published, model, [`task:${hostTask}`], true,
+        { accountId: original, remote: true });
+      if (phase === 'auth-cold') {
+        originalLease!.release();
+        await active.close('close', 'navigation');
+        // Cached allocator admission remains healthy; the real wrapper releases
+        // the lease after target.startSession's definite no-process auth failure.
+        await expect(open(oldNative)).rejects.toThrow('agent-not-authenticated:claude-code');
+        expect(wireOrder).toContain('token');
+        expect(wireOrder.indexOf('token')).toBeLessThan(wireOrder.indexOf('start-failed'));
+        const recovery = await service.prepareGuestStartSwitch(task);
+        expect(recovery).not.toBeNull();
+        try { await relocate(recovery!.isCurrent); } finally { recovery!.dispose(); }
+        await continueSession();
+      } else if (phase === 'idle-send') {
+        originalLease!.release();
+        limited.add(original);
+        expect(host.limitUsage().total).toBe(1);
+        expect(received).toHaveLength(1);
+        await active.call('send', [{ type: 'user', content: 'Continue remaining work.' }]);
+        expect(received).toHaveLength(2);
+        await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true));
+        expect(wireOrder.filter(event => event === 'token')).toHaveLength(1);
+        expect(wireOrder.indexOf('token')).toBeLessThan(wireOrder.indexOf('error'));
+        await service.onTurnError(task, events.find(event => event.type === 'error')!.data as { message: string; usageLimit: boolean }, 1);
+        expect(continueSession).toHaveBeenCalledOnce();
+        expect(received).toHaveLength(3);
+        expect(JSON.stringify(received.at(-1)).match(/Continue remaining work\./g)).toHaveLength(1);
+      } else if (phase === 'auth-send') {
+        originalLease!.release();
+        h.pools.anthropic!.accounts[0].reloginIdentity = 'previous@example.invalid';
+        if (boundary === 'no-spare') h.pools.anthropic!.accounts[1].paused = true;
+        h.read.mockImplementation(async (_kind: string, dir: string) => ({ authenticated: !dir.endsWith(original), identity: dir }));
+        await refreshSubscriptionPool(a, true);
+        const count = received.length;
+        await expect(active.call('send', [{ type: 'user', content: 'Continue.' }])).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+        expect(received).toHaveLength(count); // lease.assertDispatchable rejected before native send; no native terminal exists.
+        if (boundary === 'no-spare') {
+          expect(guestSwitch.hasOffer(task)).toBe(false);
+          expect(wireOrder).not.toContain('token');
+          expect(starts).toHaveLength(1);
+          return;
+        }
+        expect(wireOrder).toContain('token');
+        await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true));
+        const authError = events.find(event => event.type === 'error')!.data as { message: string; usageLimit?: boolean };
+        expect(authError.message).toContain('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+        expect(authError.usageLimit).not.toBe(true);
+        expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+        expect(wireOrder.indexOf('token')).toBeLessThan(wireOrder.indexOf('error'));
+        await service.onTurnError(task, authError, 1);
+      } else if (phase === 'cold' || phase === 'pre-pool') {
+        await active.close('close', 'navigation');
+        expect(originalLease!.observeFailure({ sdkError: 'rate_limit' }, model, 'run')).toBe(true);
+        expect(readSubscriptionAccountBlocked('anthropic', original, model)).toBe(true);
+        originalLease!.release();
+        limited.add(original);
+        if (boundary === 'all-limited') {
+          limited.add(nextAccount);
+          const other = await acquireSubscriptionAccount(a, model, [], true, { accountId: nextAccount });
+          other!.observeFailure({ sdkError: 'rate_limit' }, model, 'run'); other!.release();
+        }
+        h.usage.mockImplementation(async (_kind: string, dir: string) => ({ claudeUsage: { updatedAt: Date.now(),
+          fiveHour: { utilization: limited.has(dir.split('/').at(-1)!) ? 100 : 10, resetsAt: Date.now() / 1000 + 3600 },
+          sevenDay: null, scoped: [] } }));
+        await refreshSubscriptionPool(a, true);
+        await expect(open(oldNative)).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+        if (boundary === 'none') {
+          expect(wireOrder.indexOf('token')).toBeLessThan(wireOrder.indexOf('start-failed'));
+          const recovery = await service.prepareGuestStartSwitch(task);
+          expect(recovery).not.toBeNull();
+          await relocate(recovery!.isCurrent); recovery!.dispose();
+          await continueSession();
+        } else {
+          expect(await service.prepareGuestStartSwitch(task)).toBeNull();
+          expect(wireOrder).not.toContain('token');
+          expect(starts).toHaveLength(1);
+          return;
+        }
+      } else {
+        originalLease!.release();
+        limited.add(original);
+        if (boundary === 'all-run-limited') limited.add(nextAccount);
+        const errorsBefore = events.filter(event => event.type === 'error').length;
+        await active.call('send', [{ type: 'user', content: 'Continue.' }]);
+        if (boundary === 'stopped' || boundary === 'revoked') {
+          await probeGate;
+          if (boundary === 'stopped') { service.noteUserAction(task); await active.call('abort', []); }
+          else { authorized = false; service.noteUserAction(task); await host.abortControllers(controller => controller === peer); }
+          resolveProbe!();
+          if (boundary === 'stopped') await vi.waitFor(() => expect(events.filter(event => event.type === 'error').length).toBeGreaterThan(errorsBefore));
+          else expect(host.limitUsage().total).toBe(0);
+          expect(wireOrder).not.toContain('token');
+          expect(guestSwitch.hasOffer(task)).toBe(false);
+          expect(continueSession).not.toHaveBeenCalled();
+          return;
+        }
+        await vi.waitFor(() => expect(events.filter(event => event.type === 'error').length).toBeGreaterThan(errorsBefore));
+        expect(wireOrder).toContain('token');
+        expect(wireOrder.indexOf('token')).toBeLessThan(wireOrder.indexOf('error'));
+        expect(service.mayHandleTurnError(task, { sdkError: 'rate_limit' })).toBe(true);
+        await service.onTurnError(task, { sdkError: 'rate_limit' }, 1);
+      }
+      if (boundary === 'all-run-limited') {
+        await vi.waitFor(() => expect(events.filter(event => event.type === 'error').length).toBe(2));
+        expect(wireOrder.filter(item => item === 'token')).toHaveLength(1);
+        expect(service.mayHandleTurnError(task, { sdkError: 'rate_limit' })).toBe(false);
+        await service.onTurnError(task, { sdkError: 'rate_limit' }, 2);
+        expect(fallback).toHaveBeenCalledOnce();
+        expect(starts).toHaveLength(2);
+        expect(h.bindings.get(`native:${oldNative}`)?.accountId).toBe(original);
+        expect(h.bindings.get('native:isolated-native-2')?.accountId).toBe(nextAccount);
+        return;
+      }
+      await vi.waitFor(() => expect(events.filter(event => event.type === 'done').length).toBe(2));
+      expect(starts).toHaveLength(phase === 'auth-cold' ? 3 : 2);
+      expect(starts.at(-1)![NATIVE_SUBSCRIPTION_ACCOUNT]!.configDir).toBe(`anthropic/${nextAccount}`);
+      expect(starts.at(-1)!.resumeSessionId).toBeUndefined();
+      expect(h.bindings.get(`native:${oldNative}`)?.accountId).toBe(original);
+      expect(h.bindings.get('native:isolated-native-2')?.accountId).toBe(nextAccount);
+      expect(h.bindings.get(`task:${hostTask}`)?.accountId).toBe(nextAccount);
+      expect(row.agentDeviceId).toBe(route);
+      expect(row.providerId).toBe(published);
+      expect(JSON.stringify(received.at(-1))).toContain('PINEAPPLE-42');
+      expect(JSON.stringify(received.at(-1))).toContain('Continue remaining work.');
+      expect(fallback).not.toHaveBeenCalled();
+      expect(guestSwitch.takeForOpen(task)).toBeUndefined();
+    } finally {
+      confirmStopped();
+      resolveProbe?.();
+      await guestSession?.close();
+      await remoteHandle?.close({ reason: 'navigation' });
+      for (const client of clients) client.abandon('test-finished');
+      await host.dispose();
+      if (weekly) vi.useRealTimers();
+    }
+  });
+});
+
+// 2026-11-18 user report, unit: the router returned a wrong address for chatgpt.com, so every
+// Codex account read timed out while the login on disk was valid. The account looked signed out,
+// and signing in again failed before the browser opened. Existing login cases use reads that
+// answer or fail without a cause. Minimal input: the native account read rejects as unreachable.
+describe('unreachable account service', () => {
+  const unreachable = () => new AccountServiceUnreachableError('Codex account request failed');
+
+  // The sign-in still has to be confirmed (登录完成须确认, 2026-11-16): an offline confirmation is
+  // not a completed login, but it must say the service was unreachable instead of a generic failure.
+  it('still opens the browser login for a known account and reports an unconfirmed result as unreachable', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    h.read.mockRejectedValue(unreachable());
+    await expect(runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'second', loginKey: 'offline' }))
+      .rejects.toBeInstanceOf(AccountServiceUnreachableError);
+    expect(h.login).toHaveBeenCalledWith('openai', 'openai/second', expect.any(AbortSignal));
+    expect((await readSubscriptionPool('openai')).accounts.find((entry) => entry.id === 'second')?.status).toBe('unavailable');
+  });
+
+  it('keeps the last identity while unreadable and announces the change both ways', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    h.read.mockResolvedValue({ authenticated: true, identity: 'kept@example.test' });
+    await refreshSubscriptionPool('openai', true);
+    const events: string[] = [];
+    const off = onSubscriptionAccountsChanged((provider) => events.push(provider));
+    try {
+      h.read.mockRejectedValue(unreachable());
+      expect((await refreshSubscriptionPool('openai', true)).accounts[0])
+        .toMatchObject({ status: 'unavailable', identity: 'kept@example.test' });
+      expect(events).toEqual(['openai']);
+      await refreshSubscriptionPool('openai', true);
+      expect(events).toEqual(['openai']);
+      h.read.mockResolvedValue({ authenticated: true, identity: 'kept@example.test' });
+      expect((await refreshSubscriptionPool('openai', true)).accounts[0].status).toBe('ready');
+      expect(events).toEqual(['openai', 'openai']);
+    } finally {
+      off();
+    }
+  });
+
+  // 2026-11-20 user report: a short outage emptied the local model picker ("模型列表暂未更新" with
+  // no time) and the provider read as signed out. Cases above check only the account row.
+  // Minimal input: a signed-in account with a model list whose next account read fails.
+  it('keeps the provider connected and its last list with its time, without routing to it', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'gpt-kept' }], nextCursor: null });
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels(true);
+
+    h.read.mockRejectedValue(unreachable());
+    const rpcCalls = h.rpc.mock.calls.length;
+    expect((await refreshSubscriptionPool('openai', true)).accounts[0].status).toBe('unavailable');
+    await refreshSubscriptionPoolCodexModels();
+    expect(h.rpc).toHaveBeenCalledTimes(rpcCalls);
+    // PR #11754 review: the default gate also drives oneshot model selection.
+    // An unreadable account with a saved list must leave room for a healthy fallback.
+    expect(hasConnectedSubscriptionPool('openai')).toBe(false);
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })?.map(m => m.id)).toEqual(['gpt-kept']);
+    expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(hasConnectedSubscriptionPool('openai', { includeBoundAccounts: true })).toBe(false);
+    expect(readSubscriptionPoolCodexModels('openai', { includeBoundAccounts: true })).toEqual([]);
+    await expect(acquireSubscriptionAccount('openai', 'gpt-kept', [])).rejects.toThrow('No subscription account is available');
+
+    // Back online: the account reads again and its list is fetched afresh.
+    h.read.mockResolvedValue({ authenticated: true, identity: 'account' });
+    h.rpc.mockResolvedValue({ data: [{ id: 'gpt-fresh' }], nextCursor: null });
+    expect((await refreshSubscriptionPool('openai', true)).accounts[0].status).toBe('ready');
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-fresh']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+  });
+
+  // Unit: after one account is unreadable, the aggregate failure marker and display
+  // models stay constant when the last healthy account also becomes unreadable.
+  it('publishes loss of the last usable account even if display models stay the same', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    const offline = new Set<string>();
+    h.read.mockImplementation(async (_provider: string, directory: string) => {
+      if (offline.has(directory.split('/').at(-1)!)) throw unreachable();
+      return { authenticated: true, identity: directory };
+    });
+    h.rpc.mockResolvedValue({ data: [{ id: 'gpt-shared' }], nextCursor: null });
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels(true);
+    offline.add('default');
+    await refreshSubscriptionPool('openai', true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(hasConnectedSubscriptionPool('openai')).toBe(true);
+
+    const observed: boolean[] = [];
+    const stop = onSubscriptionPoolCodexModelsChanged(() => observed.push(hasConnectedSubscriptionPool('openai')));
+    try {
+      offline.add('second');
+      await refreshSubscriptionPool('openai', true);
+      expect(observed).toContain(false);
+      expect(readSubscriptionPoolCodexModels()).toEqual([]);
+      expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })?.map(m => m.id))
+        .toEqual(['gpt-shared']);
+    } finally { stop(); }
+  });
+
+  // Offline at startup: memory is gone, so the list saved for the slot is the evidence. A
+  // confirmed sign-out clears it, so a later offline start does not resurrect the account.
+  it('restores the saved list after an offline restart until a sign-out is confirmed', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'gpt-saved' }], nextCursor: null });
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels(true);
+    const owner = h.owner;
+    const restart = () => { h.owner = 'another-owner'; readSubscriptionPoolCodexModels(); h.owner = owner; };
+
+    restart();
+    h.read.mockRejectedValue(unreachable());
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })?.map(m => m.id)).toEqual(['gpt-saved']);
+    expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
+
+    h.read.mockResolvedValue({ authenticated: false });
+    await refreshSubscriptionPool('openai', true);
+    expect(h.savedModelFiles.size).toBe(0);
+    restart();
+    h.read.mockRejectedValue(unreachable());
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels();
+    expect(hasConnectedSubscriptionPool('openai')).toBe(false);
+    expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })).toEqual([]);
+  });
+
+  it('does not invent a sign-in for an account that was never confirmed', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    h.read.mockRejectedValue(unreachable());
+    expect((await refreshSubscriptionPool('openai', true)).accounts[0].status).toBe('unavailable');
+    await refreshSubscriptionPoolCodexModels();
+    expect(hasConnectedSubscriptionPool('openai')).toBe(false);
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
   });
 });

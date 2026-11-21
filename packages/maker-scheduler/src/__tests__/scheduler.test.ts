@@ -20,6 +20,7 @@ class InMemoryStorage implements ScheduleStorage {
   schedules = new Map<string, Schedule>();
   runs = new Map<string, ScheduleRun>();
   claimInterruptedRun?: ScheduleStorage['claimInterruptedRun'];
+  latestClosureFailure?: ScheduleStorage['latestClosureFailure'];
 
   async list(filter?: ListFilter): Promise<Schedule[]> {
     const all = [...this.schedules.values()];
@@ -391,7 +392,7 @@ it.each(['none', 'read-rejected', 'schedule-missing', 'pre-enqueue-rejected', 'f
   const schedule = await h.scheduler.create(baseInput);
   const oldRun: ScheduleRun = { id: 'old-run', scheduleId: schedule.id,
     sessionId: 'original-task', firedAt: clock.now() - 5000,
-    status: 'interrupted', errorMsg: 'app restarted' };
+    status: 'interrupted', errorMsg: 'app restarted', costAttribution: 'exact' };
   await storage.insertRun(oldRun);
   storage.claimInterruptedRun = vi.fn(async () => {
     if (storage.runs.get(oldRun.id)?.status !== 'interrupted') return null;
@@ -410,7 +411,7 @@ it.each(['none', 'read-rejected', 'schedule-missing', 'pre-enqueue-rejected', 'f
       failure === 'read-rejected' ? 'storage unavailable'
         : failure === 'schedule-missing' ? 'Schedule not found' : 'continuation enqueue unavailable',
     );
-    expect(storage.runs.get(oldRun.id)?.status).toBe('interrupted');
+    expect(storage.runs.get(oldRun.id)).toMatchObject({ status: 'interrupted', sessionId: oldRun.sessionId, costAttribution: 'exact' });
     expect(h.fireCalls).toHaveLength(failure === 'pre-enqueue-rejected' ? 1 : 0);
     expect(h.scheduler.resolveInflightRunForSession('original-task')).toBeUndefined();
   }
@@ -683,6 +684,66 @@ describe('Scheduler', () => {
     h = makeHarness();
   });
 
+
+  it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
+    const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';
+    const s = await h.scheduler.create({ ...baseInput, prompt });
+    expect(s.primaryHostKey).toBe('public/cindy-contacts');
+    expect((await h.scheduler.update(s.id, { name: 'renamed' })).primaryHostKey).toBe(s.primaryHostKey);
+    await expect(h.scheduler.update(s.id, { primaryHostKey: undefined })).rejects.toThrow('binding');
+    expect((await h.scheduler.create({ ...baseInput, prompt: prompt + '\nnamespace 传「local」。' })).primaryHostKey).toBe('local/cindy-contacts');
+    expect((await h.scheduler.create({ ...baseInput, prompt: 'compile a list' })).primaryHostKey).toBeUndefined();
+  });
+
+  it('remembers the first local task of a primary persistent schedule for subsequent runs', async () => {
+    const saved = await h.scheduler.create({ ...baseInput, primaryHostKey: 'public/cindy-contacts', persistentSession: true });
+    await h.scheduler.updateFromCurrent(saved.id, async current =>
+      current.persistentSession && !current.targetSessionId ? { targetSessionId: 'first-task' } : {});
+    expect(await h.scheduler.get(saved.id)).toMatchObject({ primaryHostKey: saved.primaryHostKey, targetSessionId: 'first-task' });
+    await expect(h.scheduler.update(saved.id, { agentDeviceId: 'other' })).rejects.toThrow('host');
+    await expect(h.scheduler.create({ ...baseInput, primaryHostKey: saved.primaryHostKey, targetSessionId: 'unrelated-task' })).rejects.toThrow('host');
+  });
+
+  it('can rename a primary schedule with an explicit local model and a legacy remote default', async () => {
+    const saved = await h.scheduler.create({
+      ...baseInput, primaryHostKey: 'public/cindy-contacts', agentDeviceId: 'studio', modelAgentDeviceId: '',
+      modelAgentKind: 'codex', model: 'test-model', providerId: 'local-provider',
+    });
+    expect(await h.scheduler.update(saved.id, { name: 'renamed' })).toMatchObject({
+      name: 'renamed', agentDeviceId: 'studio', modelAgentDeviceId: '', primaryHostKey: 'public/cindy-contacts',
+    });
+    await expect(h.scheduler.update(saved.id, { modelAgentDeviceId: 'other' })).rejects.toThrow('host');
+  });
+
+  // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19): unit through Scheduler.create /
+  // update. A plugin engine only runs as a new task each run on the automation host; the minimal
+  // failing inputs are a bound/persistent/worktree/remote/script plugin schedule being saved, or an
+  // old peer rewriting only agentKind back to a built-in Harness (a silent engine switch).
+  it('saves a plugin engine only as a local new-task-each-run automation', async () => {
+    const engine = { agentKind: 'acp', modelAgentKind: 'acp', providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
+      model: 'deepseek-v4' } as const;
+    const saved = await h.scheduler.create({ ...baseInput, ...engine });
+    expect(saved).toMatchObject(engine);
+    for (const extra of [
+      { targetSessionId: 'task-1' },
+      { persistentSession: true },
+      { useWorktree: true, workspaceKind: 'project' as const, workingDir: '/repo' },
+      { agentDeviceId: 'studio-mac' },
+      { providerId: 'anthropic' },
+      { modelAgentKind: 'claude-code' as const },
+      { executionMode: 'script' as const, scriptConfig: { command: 'echo hi', capabilities: [] } },
+    ]) {
+      await expect(h.scheduler.create({ ...baseInput, ...engine, ...extra })).rejects.toThrow();
+    }
+    // A half switch is refused (changing agentKind alone also drops the saved model).
+    await expect(h.scheduler.update(saved.id, { agentKind: 'claude-code' })).rejects.toThrow();
+    await expect(h.scheduler.update(saved.id, { agentKind: 'claude-code', model: 'deepseek-v4' })).rejects.toThrow(/plugin engine/);
+    // A complete switch back to a built-in Harness is an ordinary edit.
+    const builtin = await h.scheduler.update(saved.id, {
+      agentKind: 'claude-code', modelAgentKind: 'claude-code', model: 'claude-opus-5-5', providerId: 'anthropic',
+    });
+    expect(builtin).toMatchObject({ agentKind: 'claude-code', modelAgentKind: 'claude-code' });
+  });
 
   it('persists an explicit Harness with its model and clears it when following the target', async () => {
     const saved = await h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: 'grok-4.6' });
@@ -2798,6 +2859,7 @@ describe('Scheduler', () => {
     const local = makeHarness({
       runnerImpl: (_s, ctx) =>
         new Promise<{ sessionId: string }>((resolve) => {
+          ctx.onTurnActive?.('sess-caller');
           resolveRunner = resolve;
           ctx.signal.addEventListener('abort', () => signalAborted.push(true));
         }),
@@ -2810,7 +2872,10 @@ describe('Scheduler', () => {
     const callerRunId = local.fireCalls[0].ctx.runId;
 
     // 豁免 caller run:delete 立即返回(不 abort 它、不等它 settle)
-    await local.scheduler.delete(sch.id, { exemptRunId: callerRunId });
+    const receipt = { errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED' as const, firedAt: 1, laterRunSucceeded: false };
+    local.storage.latestClosureFailure = async (scheduleId, sessionId) =>
+      scheduleId === sch.id && sessionId === 'sess-caller' ? receipt : undefined;
+    expect(await local.scheduler.delete(sch.id, { exemptRunId: callerRunId })).toEqual(receipt);
     expect(signalAborted).toHaveLength(0);
     expect(await local.storage.get(sch.id)).toBeNull();
     // caller run 仍在 in-flight(fireOne 还没走完 finally)

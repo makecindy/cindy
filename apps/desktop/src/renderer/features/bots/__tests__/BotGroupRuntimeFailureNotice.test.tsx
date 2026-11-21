@@ -31,10 +31,10 @@ describe('group failure notice', () => {
     const { container } = render(<BotGroupRuntimeFailureNotice name="A" code="AUTH_REQUIRED" reason="unclaimed_timeout" />);
     expect(container.textContent).toContain('重新认证');
   });
-  it('shows the image failure and the actual recovery settings', () => {
+  it('shows the image failure and recovery through an image-capable model', () => {
     render(<BotGroupRuntimeFailureNotice name="m" code="IMAGE_INPUT_UNSUPPORTED" />);
-    expect(screen.getByText(/当前模型不支持图片/).textContent).toContain('设置 → 个性化 → 视觉桥');
-    expect(screen.getByText(/当前模型不支持图片/).textContent).toContain('重新发送');
+    expect(screen.getByText(/当前模型不支持图片/).textContent).toContain('请切换到支持图片的模型。');
+    expect(screen.getByText(/当前模型不支持图片/).textContent).not.toContain('视觉桥');
   });
   // #6835: unit render entry must show the limit and recovery, not an unavailable notice.
   it.each([

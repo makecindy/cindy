@@ -179,6 +179,8 @@ export const sessions = sqliteTable(
     planModeEnabled: integer('plan_mode_enabled', { mode: 'boolean' }).notNull().default(false),
     clearedAt: integer('cleared_at'), // unix ms
     pinnedAt: integer('pinned_at'), // unix ms
+    snoozedUntil: integer('snoozed_until'), // unix ms; presentation only
+    snoozedAt: integer('snoozed_at'), // host time of the explicit snooze
     /**
      * 后台隐藏时刻（unix ms）。非 NULL = 插件以 `agent.hiddenTasks` 声明创建或切换为
      * 隐藏的后台任务：不进入任务列表、搜索、未结束提示与新任务通知；用户仍可在插件
@@ -254,6 +256,9 @@ export const sessions = sqliteTable(
      * 进入桌面 sidebar；feishu 仍由飞书模块独立查询，不混进桌面主列表。
      */
     source: text('source', { enum: SESSION_SOURCES }).notNull().default('desktop'),
+    /** Display an Orca lead as an independent task while retaining its side-chat provenance. */
+    sideChatPromoted: integer('side_chat_promoted', { mode: 'boolean' }).notNull().default(false),
+    sideChatClosePending: integer('side_chat_close_pending', { mode: 'boolean' }).notNull().default(false),
     /**
      * feishu-bot: 对方的飞书 open_id（仅 source='feishu' 时有值）。
      * 99% 场景是 bot owner 自己。findActiveFeishu 用 (botAppId, openId) 复合查询。
@@ -1514,11 +1519,13 @@ export const schedules = sqliteTable(
      * 引擎 fireOne 优先用 intervalMs 算 nextFireAt；旧 cron 数据 0015 migration 自动回填。
      */
     intervalMs: integer('interval_ms'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    // 'acp' = plugin engine (docs/plans/acp-plugin-bridge.md); TS-only enum, no CHECK constraint.
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }).notNull(),
     /** NULL preserves legacy bound-task Harness inheritance. */
-    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
+    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }),
     /** NULL inherits a bound task; empty string explicitly selects the automation host. */
     modelAgentDeviceId: text('model_agent_device_id'),
+    inheritedProjectDir: text('inherited_project_dir'),
     model: text('model'),
     /**
      * 显式选定的供应商(来源)id。NULL = 回落该 agent 原生默认来源(no-break,
@@ -1565,6 +1572,7 @@ export const schedules = sqliteTable(
      * exit 0 放行 / exit 2 跳过本轮(run 记 'skipped') / 其它、超时阻止本轮并记 failed。
      * 内存对象里与 timeout 合成 `Schedule.preRunHook` 嵌套对象(同 notify 的拆列模式)。
      */
+    prTrigger: text('pr_trigger'),
     preRunHookCommand: text('pre_run_hook_command'),
     /** 前置检查脚本超时毫秒。NULL = 不限时。仅 command 非空时有意义。 */
     preRunHookTimeoutMs: integer('pre_run_hook_timeout_ms'),
@@ -1573,6 +1581,7 @@ export const schedules = sqliteTable(
      * 可并存(先问插件再跑脚本)。内存里与 on_failure 合成 `Schedule.preRunPlugin`。
      */
     preRunPluginId: text('pre_run_plugin_id'),
+    primaryHostKey: text('primary_host_key'),
     /** 插件没回应 / 出错 / 不可用时的处理:allow | skip | block。仅 plugin id 非空时有意义。 */
     preRunPluginOnFailure: text('pre_run_plugin_on_failure'),
     /**
@@ -1926,6 +1935,22 @@ export const dailySpend = sqliteTable(
   }),
 );
 
+/** Auxiliary requests are independent of task turns and retain their own attribution. */
+export const auxiliaryUsageReceipts = sqliteTable('auxiliary_usage_receipts', {
+  receiptId: text('receipt_id').primaryKey(),
+  providerId: text('provider_id').notNull(),
+  model: text('model').notNull(),
+  source: text('source').notNull(),
+  sessionId: text('session_id'),
+  transport: text('transport').notNull(),
+  day: text('day').notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  cacheReadTokens: integer('cache_read_tokens'),
+  cacheCreateTokens: integer('cache_create_tokens'),
+}, t => ({ dayIndex: index('auxiliary_usage_receipts_day_idx').on(t.day) }));
+
 /** Immutable request receipts; insertion and aggregate increments share one transaction. */
 export const piUsageReceipts = sqliteTable('pi_usage_receipts', {
   sessionId: text('session_id').notNull(),
@@ -1986,6 +2011,38 @@ export const dailyModelUsage = sqliteTable(
     pk: primaryKey({ columns: [t.day, t.agentKind, t.model, t.costCurrency] }),
   }),
 );
+
+/** UTC execution-day token counts. Account and task identity stay outside this table. */
+export const dailyTokenAttribution = sqliteTable('daily_token_attribution', {
+  day: text('day').notNull(),
+  provider: text('provider').notNull(),
+  billingSource: text('billing_source').notNull(),
+  model: text('model').notNull(),
+  inputTokens: integer('input_tokens').notNull(),
+  outputTokens: integer('output_tokens').notNull(),
+  cacheReadTokens: integer('cache_read_tokens').notNull(),
+  cacheCreateTokens: integer('cache_create_tokens').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.day, t.provider, t.billingSource, t.model] }) }));
+
+// Only the first, partial UTC day needs an exact enrollment timestamp. All later days
+// reuse dailyTokenAttribution. A fresh generation isolates same-day opt-out/re-enrollment.
+export const tokenReportingWindow = sqliteTable('token_reporting_window', {
+  id: integer('id').primaryKey(),
+  generation: text('generation').notNull(),
+  day: text('day').notNull(),
+  startsAt: integer('starts_at').notNull(),
+});
+
+export const tokenReportingFirstDay = sqliteTable('token_reporting_first_day', {
+  provider: text('provider').notNull(),
+  billing: text('billing').notNull(),
+  model: text('model').notNull(),
+  generation: text('generation').notNull(),
+  input: integer('input').notNull(),
+  output: integer('output').notNull(),
+  cacheRead: integer('cache_read').notNull(),
+  cacheWrite: integer('cache_write').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.provider, t.billing, t.model] }) }));
 
 /**
  * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选
@@ -2511,7 +2568,8 @@ export const sessionTaskTags = sqliteTable(
 export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   id: text('id').primaryKey(),
   pluginId: text('plugin_id').notNull(),
-  operation: text('operation', { enum: ['create', 'send', 'target'] }).notNull(),
+  // imPermission: a looser IM-project permission the user allowed in Cindy (TypeScript-only enum).
+  operation: text('operation', { enum: ['create', 'send', 'target', 'imPermission'] }).notNull(),
   targetId: text('target_id').notNull(),
   requestKey: text('request_key').notNull(),
   fingerprint: text('fingerprint').notNull(),

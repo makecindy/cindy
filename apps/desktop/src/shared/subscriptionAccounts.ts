@@ -91,6 +91,8 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   identity?: string;
   plan?: string;
   planTier?: string;
+  /** Official CLI display name; presentation only, not an entitlement. */
+  planDisplayName?: string;
   planType?: string;
   /** Advisory ISO date reported by this account's official CLI; older hosts omit it. */
   loginExpiresAt?: string;
@@ -187,10 +189,13 @@ export interface SubscriptionSessionAccount {
   identity?: string;
   plan?: string;
   planTier?: string;
+  planDisplayName?: string;
   planType?: string;
   paused: boolean;
   status: SubscriptionAccountView['status'];
   usage?: SubscriptionAccountUsage;
+  /** Time of the last complete account usage read, in Unix milliseconds. */
+  usageUpdatedAt?: number;
   /**
    * Only for a `model` query on a newer host: the bound account cannot take that model now
    * (remembered failure, exhausted trusted quota or signed out). Replacement admission is reported
@@ -262,12 +267,15 @@ export function parseSubscriptionSessionAccountView(
       ...(text(account.identity) ? { identity: text(account.identity) } : {}),
       ...(text(account.plan) ? { plan: text(account.plan) } : {}),
       ...(text(account.planTier) ? { planTier: text(account.planTier) } : {}),
+      ...(text(account.planDisplayName) ? { planDisplayName: text(account.planDisplayName) } : {}),
       ...(text(account.planType) ? { planType: text(account.planType) } : {}),
       paused: account.paused === true,
       status: account.status as SubscriptionAccountView['status'],
       ...(usage && typeof usage === 'object' && !Array.isArray(usage)
         ? { usage: usage as SubscriptionAccountUsage }
         : {}),
+      ...(typeof account.usageUpdatedAt === 'number' && Number.isFinite(account.usageUpdatedAt)
+        && account.usageUpdatedAt > 0 ? { usageUpdatedAt: account.usageUpdatedAt } : {}),
       ...(account.blocked === true && account.paused !== true ? { blocked: true as const } : {}),
       ...((account.blocked === true || (route.routeProviderId && account.paused === true)) && typeof account.switchAvailable === 'boolean'
         ? { switchAvailable: account.switchAvailable } : {}),

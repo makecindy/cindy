@@ -102,6 +102,7 @@ const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
   // The Terra proxy regression starts a real Codex binary when explicitly configured.
   'src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts',
+  'src/main/remote-agent/__tests__/execServerProjection.e2e.test.ts',
   // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
   'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
   'src/main/remote-agent/__tests__/startupProbe.e2e.test.ts',
@@ -162,11 +163,17 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Actual send closures: Pi startup/retry race and literal-input isolation (#11112).
+  'src/renderer/features/cc-agent/__tests__/sessionSlashDispatch.guard.test.ts',
   // Host and desktop source contracts: lines the Node Host copies or wires as the desktop does.
   'src/main/maker-host/__tests__/hostDesktopSourceContracts.guard.test.ts',
+  // Usage cores shared with the Host: desktop code reaches them only through wrappers that bind every port they use.
+  'src/main/__tests__/usageCorePortWiring.guard.test.ts',
   // Build fuses and Node worker entrypoints are a cross-file packaging contract.
   'src/main/cindy-brain/__tests__/nodeRuntimePackaging.test.ts',
   'src/renderer/components/settings/__tests__/settingsSearchCatalog.guard.test.ts',
+  // User copy rule (2026-11-18): the Cindy background service is never called "Host" in any locale.
+  'src/renderer/i18n/__tests__/hostWordInCopy.guard.test.ts',
   // Cross-file host/engine prompt ownership and remote-authorization isolation.
   'src/main/plugin-oauth/__tests__/runtimePrompt.test.ts',
   // Cross-hook voice stop/refine ownership and composer hydration race wiring.
@@ -408,7 +415,9 @@ export default {
           command: vitestBin('run', '--maxWorkers=2'),
           include: [
             'src/main/local-agent/__tests__/*.integration.test.ts',
+            'src/main/device-link/__tests__/linkTraffic.integration.test.ts',
             'src/main/bot-import/__tests__/skillArchive.integration.test.ts',
+            'src/main/maker-host/__tests__/codexSmartNamespace.integration.test.ts',
             'src/main/maker-host/__tests__/hostPiPackagesParity.integration.test.ts',
           ],
         },
