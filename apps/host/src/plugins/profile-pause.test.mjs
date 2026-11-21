@@ -85,7 +85,7 @@ const nodeWorker = String.raw`
   });
 `;
 
-async function fixture(t, { executable, resident = true, node = false, services = false, onCleaned } = {}) {
+async function fixture(t, { executable, resident = true, node = false, services = false, restartWithJournal = false, onCleaned } = {}) {
   const cleanup = lifoCleanup(t);
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-plugin-pause-'));
   cleanup.after(() => fs.rm(profile, { recursive: true, force: true }));
@@ -97,11 +97,14 @@ async function fixture(t, { executable, resident = true, node = false, services 
   const root = (...parts) => ownerScopedPath(profile, ownerId, ...parts);
   let runtime;
   const cleaned = [];
-  const manager = createHostGhostManager({ userDataDir: profile, ownerId, onUninstallSourceState: async part => {
+  let desktopPresent = restartWithJournal;
+  const managerOptions = { userDataDir: profile, ownerId, onUninstallSourceState: async part => {
+    if (!runtime) throw new Error('Plugin account cleanup is unavailable');
     await runtime.cleanupUninstalledSource(part);
     cleaned.push(part);
     await onCleaned?.();
-  } });
+  } };
+  let manager = createHostGhostManager(managerOptions);
   cleanup.after(() => manager.disposeNotificationIndex());
   const zip = new JSZip();
   zip.file('ghost.json', JSON.stringify({
@@ -123,6 +126,14 @@ async function fixture(t, { executable, resident = true, node = false, services 
   const installed = await manager.install(archive, { namespace: null, uiCapabilityApproved: true });
   assert.ok(installed.ghost, JSON.stringify(installed));
   const id = installedGhostStoragePart(installed.ghost);
+  if (restartWithJournal) {
+    // The account cleanup port was unavailable before shutdown. Recreate the
+    // real manager from disk while the profile is still owned by the desktop.
+    const removal = await manager.uninstall(installedGhostPhysicalRelId(installed.ghost));
+    assert.equal(removal.rejection?.code, 'io');
+    manager.disposeNotificationIndex();
+    manager = createHostGhostManager(managerOptions);
+  }
   const assets = executable ? { ...await prepareHostPluginAssets(), executablePath: executable }
     : { bridgeSource: '', executablePath: null, nodeWorker: '', libraryWorker: '', close: async () => {} };
   cleanup.after(() => assets.close());
@@ -144,7 +155,7 @@ async function fixture(t, { executable, resident = true, node = false, services 
   }
   const secrets = new Map();
   runtime = await createHostPluginRuntime({
-    profileDir: profile, ownerId, manager, assets, log,
+    profileDir: profile, ownerId, manager, assets, log, isProfileHeld: () => desktopPresent,
     credentials: { read: key => secrets.get(key) ?? null, write: (key, value) => secrets.set(key, value),
       remove: key => secrets.delete(key) }, hostToolRequest: hostTools?.request,
     getLoginEmail: () => null, getSession: () => undefined, requestFileConfirmation: async () => false,
@@ -153,6 +164,7 @@ async function fixture(t, { executable, resident = true, node = false, services 
     onPluginStopped: id => terminalCleanup.push(id),
     publish: (channel, payload) => pushes.push({ channel, payload }),
   });
+  if (desktopPresent) runtime.pauseForDesktop(holdMessage);
   cleanup.after(() => runtime.close());
   const gateway = runtime.taskPlugins.getGhostSubscriptionGateway();
   const call = args => runtime.callTool({ ghostId: id, tool: 'echo', args: args ?? {}, timeoutMs: 2_500 });
@@ -160,7 +172,7 @@ async function fixture(t, { executable, resident = true, node = false, services 
     { engine: 'pi', phase: 'call', sessionId: 'task', toolName: 'read', toolCallId: 'tool', input: {} },
     { pluginId: id, onFailure: 'block' });
   return { root, manager, runtime, id, archive, installed: installed.ghost, cleaned, gateway, call, control, pushes, warnings, terminalCleanup,
-    hold: () => runtime.pauseForDesktop(holdMessage) };
+    desktopExited: () => { desktopPresent = false; }, hold: () => runtime.pauseForDesktop(holdMessage) };
 }
 
 function installBrowserSubstitute(t, { beforePage, beforeToolAnswer } = {}) {
@@ -655,17 +667,19 @@ test('an interrupted external upload is not resent and committed staging remains
 test('resume finishes the held uninstall journal and releases its quarantine', realPage, async t => {
   const started = Promise.withResolvers();
   const finish = Promise.withResolvers();
-  const f = await fixture(t, { executable: executablePath, resident: false, onCleaned: () => {
+  const f = await fixture(t, { executable: executablePath, resident: false, restartWithJournal: true, onCleaned: () => {
     started.resolve(); return finish.promise;
   } });
   const physical = installedGhostPhysicalRelId(f.installed);
   const store = new GhostInstallReceiptStore(() => f.manager.approvalStateRoot());
-  f.hold();
-  assert.equal((await f.manager.uninstall(physical)).rejection?.code, 'io');
+  assert.equal(await f.runtime.resumeAfterDesktop(), false);
   assert.equal(store.readPendingMutationSync(physical).state, 'valid');
   assert.deepEqual(f.cleaned, []);
+  f.desktopExited();
   const resuming = f.runtime.resumeAfterDesktop();
-  await started.promise;
+  // A failed retry can settle without ever reaching the source cleanup port.
+  await Promise.race([started.promise, resuming]);
+  assert.deepEqual(f.cleaned, [f.id]);
   try {
     assert.deepEqual(await f.call(), held);
     assert.throws(() => f.runtime.captureMutationOwner(), { code: 'PRECONDITION_FAILED' });
@@ -688,4 +702,20 @@ test('resume keeps a disabled resident and its Node worker off', realPage, async
   assert.equal(spawn.mock.callCount(), 0);
   assert.equal(f.runtime.node.stateOf(f.id), 'off');
   assert.equal(f.manager.findInstalledInstance(f.id)?.enabled, false);
+});
+
+// Integration: losing the owner while the real uninstall is finishing keeps the
+// account error at the recovery boundary. External mutations cannot use that owner.
+test('journal recovery preserves an actual owner change', realPage, async t => {
+  let leaveBoundary;
+  const f = await fixture(t, {
+    executable: executablePath, resident: false, restartWithJournal: true,
+    onCleaned: () => { leaveBoundary = beginAppSessionBoundary(); },
+  });
+  try {
+    f.desktopExited();
+    await assert.rejects(f.runtime.resumeAfterDesktop(), /PLUGIN_OWNER_CHANGED/);
+    assert.deepEqual(f.cleaned, [f.id]);
+    assert.throws(() => f.runtime.captureMutationOwner(), /PLUGIN_OWNER_CHANGED/);
+  } finally { leaveBoundary?.(); }
 });
