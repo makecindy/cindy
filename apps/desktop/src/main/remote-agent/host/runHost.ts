@@ -1601,7 +1601,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       forwarded: 0,
     };
     try {
-      if (run.trust === 'guest' && run.groupProviderId && deps.providerAccess) {
+      if (run.trust === 'guest' && run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && run.groupProviderId && deps.providerAccess) {
         // Group preflight did not require O's login. Every local start, including a fallback from M,
         // must resolve again against this computer's real connection state before starting an agent.
         const provider = await deps.providerAccess.resolve(builtinKindOf(run.kind), payload.options.model,
@@ -4056,7 +4056,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           // Routing hints prevent group loops; they are not permission to skip
           // this executor's policy. Direct and relayed guests inherit its local
           // group restriction even when the caller says it was already assigned.
-          ...(trust === 'guest' && deps.groupRelay && providerId ? { groupProviderId: providerId } : {}),
+          ...(!pluginEngine && trust === 'guest' && deps.groupRelay && providerId ? { groupProviderId: providerId } : {}),
           id: request.runId,
           sessionId: payload.sessionId,
           authorizedModel: payload.options.model,
