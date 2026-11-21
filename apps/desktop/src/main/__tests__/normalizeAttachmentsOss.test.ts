@@ -1,6 +1,6 @@
 /**
  * normalizeAttachmentsOss.test.ts — 被控端入方向物化:device-link 出方向 OSS 引用 →
- * presign-get 下载 → 写临时文件 → block.path 变本地路径 → 用后删 OSS。失败丢该附件。
+ * presign-get 下载 → 写临时文件 → block.path 变本地路径 → 用后删 OSS。失败拒绝整条消息。
  */
 import assert from 'node:assert/strict';
 
@@ -8,6 +8,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/test-attach' } }));
 
+const sessionRow = vi.hoisted(() => vi.fn());
+vi.mock('../localDb/sessionDispatchSnapshot.js', () => ({ getSessionRowSnapshotStrict: sessionRow }));
 const writeFile = vi.hoisted(() => vi.fn(async () => {}));
 const mkdir = vi.hoisted(() => vi.fn(async () => {}));
 const chmod = vi.hoisted(() => vi.fn(async () => {}));
@@ -21,7 +23,7 @@ const lstat = vi.hoisted(() =>
 );
 const readFile = vi.hoisted(() => vi.fn(async () => Buffer.from('image-bytes')));
 vi.mock('node:fs/promises', () => ({
-  default: { writeFile, mkdir, chmod, lstat, readFile, rm: vi.fn(async () => {}) },
+  default: { access: vi.fn(async () => {}), writeFile, mkdir, chmod, lstat, readFile, rm: vi.fn(async () => {}) },
   writeFile,
   mkdir,
   chmod,
@@ -86,7 +88,7 @@ import {
   collectQueuedAttachmentRefs,
 } from '../maker-ipc/normalizeAttachments.desktop';
 import { QueuedAttachmentOwnershipRegistry } from '../maker-ipc/queuedAttachmentOwnership';
-import { buildAttachmentOssRef } from '../../shared/attachmentOssRef';
+import { buildAttachmentOssRef, buildLegacyAttachmentOssRef } from '../../shared/attachmentOssRef';
 import { buildPeerAttachmentRef } from '@cindy/device-link';
 import { CHAT_FOLDER_MIME } from '../../shared/chatFolderAttachment';
 
@@ -216,6 +218,7 @@ describe('queued attachment cleanup regression', () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionRow.mockResolvedValue({ remoteHostId: null, agentDeviceId: null, workingDir: '/work', source: 'desktop' });
   downloadToFile.mockResolvedValue(undefined);
   readFile.mockResolvedValue(Buffer.from('image-bytes'));
   ingestMedia.mockResolvedValue({
@@ -263,19 +266,45 @@ describe('normalizeUserMessage — device-link 出方向 OSS 引用物化', () =
     expect(removeRemote).toHaveBeenCalledWith('cindy/device-link/u/x.png');
   });
 
-  it('下载失败 → 丢该附件(turn 仍发出),不删 OSS', async () => {
-    downloadToFile.mockRejectedValue(new Error('OSS GET 失败 (404)'));
-    const ref = buildAttachmentOssRef({ ossKey: 'k/x.png' });
-    const out = await normalizeUserMessage('sess-1', {
+  it('下载失败时整条拒绝，保留远端引用供重试并清理本次临时文件', async () => {
+    downloadToFile.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('OSS GET 失败 (404)'));
+    const ref = (ossKey: string) => buildAttachmentOssRef({ ossKey });
+    await expect(normalizeUserMessage('sess-1', {
       type: 'user',
       content: [
         { type: 'text', text: 'hi' },
-        { type: 'image', path: ref },
+        { type: 'image', path: ref('k/a.png') },
+        { type: 'image', path: ref('k/b.png') },
       ],
+    })).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' });
+    const { default: fs } = await import('node:fs/promises');
+    expect(downloadToFile).toHaveBeenCalledTimes(2);
+    for (const [, destination] of downloadToFile.mock.calls as unknown as [string, string][]) {
+      expect(fs.rm).toHaveBeenCalledWith(destination, { force: true });
+    }
+    expect(removeRemote).not.toHaveBeenCalled();
+  });
+
+  it('keeps a legacy phone’s no-integrity file compatible when a download fails', async () => {
+    const legacy = buildLegacyAttachmentOssRef({ ossKey: 'old/file', originalName: 'old.txt' });
+    downloadToFile.mockRejectedValue(new Error('offline'));
+    const message = { type: 'user' as const, content: [{ type: 'text', text: 'hi' }, { type: 'file', path: legacy }] };
+    const prepared = await materializeDirectSendOssAttachments('sess-1', message, undefined);
+    await expect(normalizeUserMessage('sess-1', prepared.message as typeof message)).resolves.toEqual({
+      type: 'user', content: [{ type: 'text', text: 'hi' }],
     });
-    const content = (out as { content: Array<{ type: string }> }).content;
-    expect(content).toHaveLength(1); // 附件被丢,只剩 text
-    expect(content[0].type).toBe('text');
+    expect(removeRemote).not.toHaveBeenCalled();
+
+    // The compatibility exception ends when the download succeeds.
+    downloadToFile.mockResolvedValueOnce(undefined);
+    const cachedUrl = 'xdt-image://sess-1/old.txt';
+    copyFromPath.mockResolvedValueOnce({ url: cachedUrl });
+    resolveSafe.mockImplementationOnce(() => { throw new Error('private cache path'); });
+    await expect(materializeDirectSendOssAttachments('sess-1', message, undefined)).rejects.toMatchObject({
+      code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+      message: '[DEVICE_LINK_MEDIA_TRANSFER_FAILED] Attachment transfer failed',
+    });
+    expect(removeFile).toHaveBeenCalledWith(cachedUrl);
     expect(removeRemote).not.toHaveBeenCalled();
   });
 
@@ -295,7 +324,7 @@ describe('normalizeUserMessage — device-link 出方向 OSS 引用物化', () =
           { type: 'image', path: ref },
         ],
       }),
-    ).rejects.toThrow(/下载不完整/);
+    ).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' });
 
     expect(downloadToFile).toHaveBeenCalledWith('k/x.png', expect.any(String), {
       size: 3,
@@ -470,7 +499,7 @@ describe('materializeQueuedOssAttachmentsDeferred — 出方向 files[] + persis
     expect(f[0].path).toBe('/workdir/assets/photo.png');
   });
 
-  it('本机绝对路径图片读取失败 → 保留原引用(降级,不阻断整条)', async () => {
+  it('本机绝对路径图片读取失败时整条拒绝，远端工作区路径保持远端引用', async () => {
     readFile.mockRejectedValue(new Error('ENOENT'));
     const item = {
       clientId: 'c1',
@@ -480,10 +509,35 @@ describe('materializeQueuedOssAttachmentsDeferred — 出方向 files[] + persis
         files: [],
       }),
     };
-    const materialized = await materializeQueuedOssAttachmentsDeferred('sess-1', item);
-    const out = materialized.item as { persistedContent: string };
-    const pc = JSON.parse(out.persistedContent) as { images: Array<{ url: string }> };
-    expect(pc.images[0].url).toBe('/gone/missing.png');
+    const failure = { code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', message: '[DEVICE_LINK_MEDIA_TRANSFER_FAILED] Attachment transfer failed' };
+    await expect(materializeQueuedOssAttachmentsDeferred('sess-1', item)).rejects.toMatchObject(failure);
+    sessionRow.mockResolvedValueOnce({ remoteHostId: 'ssh' });
+    await expect(materializeQueuedOssAttachmentsDeferred('remote-task', item)).resolves.toMatchObject({ item });
+    sessionRow.mockResolvedValueOnce({ remoteHostId: 'ssh' });
+    const remoteImage = { type: 'user' as const, content: [{ type: 'image', path: '/remote-only/missing.png' }] };
+    const { default: disk } = await import('node:fs/promises');
+    vi.mocked(disk.access).mockClear();
+    await expect(normalizeUserMessage('remote-task', remoteImage)).resolves.toEqual(remoteImage);
+    expect(disk.access).not.toHaveBeenCalled();
+    // Even a pathOrigin hint cannot establish the execution site of an SSH task.
+    const localImage = { type: 'image', path: '/desktop/pic.png', pathOrigin: 'desktop-host' };
+    sessionRow.mockResolvedValueOnce({ remoteHostId: 'ssh' });
+    const prepared = await materializeQueuedOssAttachmentsDeferred('remote-task', { files: [localImage] });
+    expect(prepared.item).toMatchObject({ files: [localImage] });
+    expect(disk.access).not.toHaveBeenCalled();
+    // One inline image must not exempt a separate path-backed chip with the same source.
+    readFile.mockResolvedValueOnce(Buffer.from('selected image'));
+    const selected = { ...localImage, path: '/workspace/selected.png' };
+    const mixed = await materializeQueuedOssAttachmentsDeferred('local', {
+      files: [{ ...selected, base64: 'aGk=' }, selected],
+      persistedContent: JSON.stringify({ images: [{ url: selected.path }] }),
+    });
+    expect(mixed.item).toMatchObject({ files: [{ base64: 'aGk=' }, { url: BLOB_URL }] });
+    const malformed = 'cindy-oss-attach://%';
+    const message = { type: 'user' as const, content: [{ type: 'file', path: malformed }] };
+    await expect(normalizeUserMessage('sess-1', message)).rejects.toMatchObject(failure);
+    await expect(materializeDirectSendOssAttachments('sess-1', message, undefined)).rejects.toMatchObject(failure);
+    await expect(materializeQueuedOssAttachmentsDeferred('sess-1', { files: [{ path: malformed }] })).rejects.toMatchObject(failure);
   });
 
   it('非图片扩展的绝对路径不触发物化(仅 png/jpg/jpeg/gif/webp 准入)', async () => {
@@ -502,8 +556,8 @@ describe('materializeQueuedOssAttachmentsDeferred — 出方向 files[] + persis
     expect(copyFromPath).not.toHaveBeenCalled();
   });
 
-  it('单个附件物化失败 → 保留原引用,不删该 OSS(降级,不阻断整条)', async () => {
-    const imgRef = buildAttachmentOssRef({ ossKey: 'oss/img.png', mimeType: 'image/png' });
+  it('无完整性字段的旧手机附件入队物化失败时保留引用，不删 OSS', async () => {
+    const imgRef = buildLegacyAttachmentOssRef({ ossKey: 'oss/img.png', mimeType: 'image/png' });
     downloadToFile.mockRejectedValue(new Error('OSS GET 失败'));
     const item = {
       clientId: 'c1',
@@ -537,7 +591,7 @@ describe('materializeQueuedOssAttachmentsDeferred — 出方向 files[] + persis
           files: [{ name: 'doc.pdf', path: ref }],
         }),
       }),
-    ).rejects.toThrow(/完整性校验失败/);
+    ).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' });
   });
 });
 

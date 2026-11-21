@@ -3399,6 +3399,7 @@ async function prepareUserMessageForAgent(
   sessionId: string,
   message: unknown,
   logPrefix: 'send' | 'steer',
+  replay?: Parameters<typeof normalizeUserMessage>[2],
 ): Promise<IpcUserMessage> {
   const msg = message as IpcUserMessage;
   // 归一化 image/file 块到真实 fs path (xdt-image:// 反查、F6 base64 落临时文件、
@@ -3407,7 +3408,7 @@ async function prepareUserMessageForAgent(
   // send 与 steer 必须共用这一层：插话是投递模式，不是缩水版内容类型。
   // 过去队列 bug 的根源就是 busy/idle 两条路径各自拼消息，导致附件、mention、
   // 持久化内容不同步；这里把 main 边界也收敛成同一个 helper。
-  const normalized = await normalizeUserMessage(sessionId, msg);
+  const normalized = await normalizeUserMessage(sessionId, msg, replay);
   const sentImageUrls = imageCacheStore.collectSessionImageUrls(msg);
   if (sentImageUrls.length > 0) {
     const mark = await imageCacheStore.markFilesCommitted(sentImageUrls);
@@ -18173,8 +18174,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     markOrcaRoleIfNeeded,
     broadcastSessionCreated,
-    prepareSendUserMessage: (sessionId, message) =>
-      prepareUserMessageForAgent(sessionId, message, 'send'),
+    prepareSendUserMessage: (sessionId, message, replay) =>
+      prepareUserMessageForAgent(sessionId, message, 'send', replay),
     materializeDirectSendOssAttachments,
     captureCindyLearnInvocation: createCindyLearnInvocationCapture({
       getSession: (sessionId) => maker.getSession(sessionId),

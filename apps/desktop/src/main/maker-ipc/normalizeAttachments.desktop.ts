@@ -2,6 +2,7 @@
 // initialization. Keep this assembly's dependencies free of back-imports to
 // either entry (and maker-host/index.ts) so the single instance is ready first.
 import { app } from 'electron';
+import { getSessionRowSnapshotStrict } from '../localDb/sessionDispatchSnapshot.js';
 import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as cindyMediaBlobStore from '../cindy-media/blobStore.desktop.js';
 import * as cindyMediaLedger from '../cindy-media/ledger.js';
@@ -17,6 +18,11 @@ export const {
   cleanupSessionTempAttachments, cleanupOrphanedTempAttachments,
 } = createAttachmentNormalizer({
   getTempDir: () => app.getPath('temp'),
+  isLocalTask: async id => {
+    const row = await getSessionRowSnapshotStrict(id);
+    return row?.remoteHostId === null && row.agentDeviceId === null && !!row.workingDir &&
+      row.source !== 'side-chat' && row.source !== 'review';
+  },
   imageCacheStore: {
     resolveSafe: (...args) => imageCacheStore.resolveSafe(...args),
     copyFromPath: (...args) => imageCacheStore.copyFromPath(...args),

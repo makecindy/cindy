@@ -1,3 +1,5 @@
+import { acceptedAttachmentReplay } from '../attachmentReplay.js';
+import { normalizeUserMessage } from '../normalizeAttachments.desktop.js';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { DbClient } from '../../localDb/client/DbClient.js';
@@ -16360,12 +16362,25 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const text = '[UI_ACTION_TRIGGER]Group request: <untrusted-data>{"currentRequest":{"text":"这张图是什么？"}}</untrusted-data>';
     const original = makeItem('bot-group:room:execution:bot', text, {
       agentOmitsTriggerPrefix: true,
-      files: [{ id: 'picture', name: 'picture.png', path: '/test/picture.png', ext: '.png', category: 'image', mimeType: 'image/png', size: 128 }],
+      files: [{ id: 'picture', name: 'picture.png', path: 'cindy-media://blobs/' + 'a'.repeat(64) + '.png', ext: '.png', category: 'image', mimeType: 'image/png', size: 128 }],
     });
     original.chatMessage.content = `${text}\n恢复背景：此前已讨论图片所在的房间。`;
     await failAfterDispatch(h, sid, original);
+    // L337: an accepted group image may have been recycled since this turn. Unit.
+    const send = h.sendToAgent.getMockImplementation()!;
+    const engine = vi.fn();
+    h.sendToAgent.mockImplementationOnce(async (id, message, _create, opts) => {
+      const prepared = await normalizeUserMessage(id, message as Parameters<typeof normalizeUserMessage>[1], acceptedAttachmentReplay(opts));
+      engine(prepared);
+      return send(id, prepared, _create, opts);
+    });
     await expect(h.coordinator.autoRetryLastError(sid, takeover.sessionTotal)).resolves.toBe('resumed');
     await flush();
+    await vi.waitFor(() => expect(engine).toHaveBeenCalledTimes(1));
+    expect(mocks.logger.warn).toHaveBeenCalledWith('skipped cleaned cache images during accepted input replay', { sessionId: sid, count: 1 });
+    const content = engine.mock.calls[0][0].content;
+    expect(content.some((block: { type: string }) => block.type === 'image')).toBe(false);
+    expect(JSON.stringify(content)).toContain('这张图是什么？');
     const resumed = h.onDispatchedUserTurn.mock.calls[1]?.[1];
     expect(resumed).toMatchObject({ autoResume: true, retrySourceClientId: original.clientId, files: original.files });
     expect(resumed.text).toContain('这张图是什么？');
