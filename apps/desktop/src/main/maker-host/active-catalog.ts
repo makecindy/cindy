@@ -1278,32 +1278,32 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
 
   // 自定义供应商先追加、再做通用发现 augment——顺序反了的话,自定义 OAuth 供应商
   // 的发现模型永远合不进目录(map 只扫过内置列表)。
+  // Use the catalog definition before per-account discovery and Platform-key overrides.
+  const openaiDefinition = providerSources.find((provider) => provider.id === 'openai');
+  const bindSubscriptionImageDefinition = (provider: Provider): Provider => {
+    const bindId = (id: string): string => id.replace(/^openai\//, `${provider.id}/`);
+    const defaults = openaiDefinition?.imageDefaults;
+    return {
+      ...provider,
+      imageModels: openaiDefinition?.imageModels?.map((model) => ({
+        ...model,
+        id: bindId(model.id),
+      })),
+      imageDefaults: defaults
+        ? {
+            standard: bindId(defaults.standard),
+            ...(defaults.draft ? { draft: bindId(defaults.draft) } : {}),
+            ...(defaults.best ? { best: bindId(defaults.best) } : {}),
+          }
+        : undefined,
+    };
+  };
   if (custom.length > 0) {
-    // Bind the public image definition before applying any account discovery or overrides.
-    // Copying the final builtin connection would leak its Platform-key membership/preferences.
-    const openaiDefinition = providerSources.find((provider) => provider.id === 'openai');
     const managedIds = new Set(managed.map((provider) => provider.id));
     const accounts = custom
       .filter((provider) => !managedIds.has(provider.id))
-      .map((provider) => {
-        if (!isOpenAiSubscriptionProvider(provider)) return provider;
-        const bindId = (id: string): string => id.replace(/^openai\//, `${provider.id}/`);
-        const defaults = openaiDefinition?.imageDefaults;
-        return {
-          ...provider,
-          imageModels: openaiDefinition?.imageModels?.map((model) => ({
-            ...model,
-            id: bindId(model.id),
-          })),
-          imageDefaults: defaults
-            ? {
-                standard: bindId(defaults.standard),
-                ...(defaults.draft ? { draft: bindId(defaults.draft) } : {}),
-                ...(defaults.best ? { best: bindId(defaults.best) } : {}),
-              }
-            : undefined,
-        };
-      });
+      .map((provider) => isOpenAiSubscriptionProvider(provider)
+        ? bindSubscriptionImageDefinition(provider) : provider);
     providers = [...providers, ...accounts];
   }
   if (managed.length > 0) providers = [...providers, ...managed];
@@ -1881,7 +1881,7 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
   );
   // Subscription image_generation is one hosted capability, not the Platform model list.
   // Keep the original ID so saved Art selections and visibility overrides still resolve.
-  providers = providers.map((provider) => {
+  const normalizeSubscriptionImage = (provider: Provider): Provider => {
     if (!isOpenAiSubscriptionProvider(provider) ||
         (provider.id === 'openai' && openAiImagesApiKeyConfigured) ||
         provider.imageModels?.length === 0) return provider;
@@ -1903,7 +1903,8 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
       }],
       imageDefaults: provider.imageDefaults ? { standard: id } : undefined,
     };
-  });
+  };
+  providers = providers.map(normalizeSubscriptionImage);
   // Execution mappings are provider data, not a guess based on a model's name.
   // Gate after every overlay so a preference cannot claim a target absent from this account.
   providers = providers.map(provider => {
@@ -2009,10 +2010,13 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
   for (const entry of subscriptionPoolProviders) {
     const base = providers.find((provider) => provider.id === entry.kind);
     if (!base || providers.some((provider) => provider.id === entry.id)) continue;
-    providers = [...providers, {
+    const independent: Provider = {
       ...base, id: entry.id, name: entry.name, subscriptionPool: entry.kind,
       imageModels: undefined, imageDefaults: undefined, videoModels: undefined, videoDefaults: undefined,
-    }];
+    };
+    providers = [...providers, entry.kind === 'openai'
+      ? normalizeSubscriptionImage(bindSubscriptionImageDefinition(independent))
+      : independent];
   }
   return { ...b, modelRegistry, providers };
 }

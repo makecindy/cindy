@@ -725,7 +725,8 @@ import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './devic
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
 import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
-import { acquireSubscriptionAccount, attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
+import { accountProviderId } from './subscription-accounts/placement.js';
+import { acquireSubscriptionAccount, attachDefaultSubscriptionPool, disconnectSubscriptionPool, hasReadyOpenAiImagePool } from './subscription-accounts/runtime.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
 import {
@@ -3070,27 +3071,35 @@ registerLayoutIpc();
 // 无跳变)、install/uninstall 写路径、changed 广播。见 main/cindy-brain/。
 // 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
 // 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
+async function acquireCodexImageRequestAuth(providerId: string, modelId: string, remote: boolean) {
+  const lease = await acquireSubscriptionAccount(providerId, modelId, [], false, { remote, capability: 'image.generate' });
+  let proof: (() => boolean) | undefined;
+  const assertDispatchable = () => {
+    if (!remote && (!lease || accountProviderId('openai', lease.accountId) !== providerId))
+      throw new Error('OpenAI subscription image account is unavailable');
+    lease?.assertDispatchable();
+    if (proof && !proof()) throw new Error('OpenAI authorization changed before dispatch');
+  };
+  return {
+    async getAuth() {
+      if (!remote) assertDispatchable();
+      // The local lease identifies the pool account; the bridge uses this id as its OpenAI family gate.
+      const auth = await getChatgptBridgeAuthForDispatch(remote ? providerId : 'openai', lease?.account);
+      proof = auth.canDispatch;
+      return auth;
+    },
+    assertDispatchable,
+    async onAuthFailure(failure: Parameters<typeof invalidateChatgptBridgeAuth>[0]) {
+      lease?.observeFailure({ errorStatus: failure.status, message: failure.body }, modelId, 'run');
+      await invalidateChatgptBridgeAuth(failure, providerId, lease?.account);
+    },
+    release() { lease?.release(); },
+  };
+}
 setCodexImageAuthBinding({
-  async acquireRemoteAuth(providerId, modelId) {
-    const lease = await acquireSubscriptionAccount(providerId, modelId, [], false, { remote: true, capability: 'image.generate' });
-    let proof: (() => boolean) | undefined;
-    return {
-      async getAuth() {
-        const auth = await getChatgptBridgeAuthForDispatch(providerId, lease?.account);
-        proof = auth.canDispatch;
-        return auth;
-      },
-      assertDispatchable() {
-        lease?.assertDispatchable();
-        if (proof && !proof()) throw new Error('OpenAI authorization changed before dispatch');
-      },
-      async onAuthFailure(failure) {
-        lease?.observeFailure({ errorStatus: failure.status, message: failure.body }, modelId, 'run');
-        await invalidateChatgptBridgeAuth(failure, providerId, lease?.account);
-      },
-      release() { lease?.release(); },
-    };
-  },
+  acquireRemoteAuth: (providerId, modelId) => acquireCodexImageRequestAuth(providerId, modelId, true),
+  acquirePoolAuth: (providerId, modelId) => acquireCodexImageRequestAuth(providerId, modelId, false),
+  hasPoolAuth: hasReadyOpenAiImagePool,
   hasAuth: (providerId) => codexAccountState(providerId).authenticated,
   getAuth: getChatgptBridgeAuth,
   onAuthFailure: invalidateChatgptBridgeAuth,

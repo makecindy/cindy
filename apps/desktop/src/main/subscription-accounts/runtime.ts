@@ -1119,6 +1119,18 @@ export function hasConnectedSubscriptionPool(
     .some(account => state.cache.get(keyOf(found.kind, account.id))?.auth.authenticated === true);
 }
 
+/** Credential readiness for new image requests on an independent OpenAI channel. */
+export function hasReadyOpenAiImagePool(providerId: string): boolean {
+  const found = poolFor(providerId);
+  if (!found?.ref.created || found.kind !== 'openai') return false;
+  const state = currentRuntime();
+  return providerAccounts('openai', found.pool.accounts, providerId).some(account =>
+    !account.paused && (account.id !== 'default' || defaultAccountBound('openai')) &&
+    signInEvidenceOf(state.cache.get(keyOf('openai', account.id))) === 'signed-in' &&
+    ![...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === account.id),
+  );
+}
+
 /**
  * What the last completed read of an account showed, without reading again. A failed read is
  * cached as signed out with `unavailable`; that is not evidence of a sign-out, so it is unknown.

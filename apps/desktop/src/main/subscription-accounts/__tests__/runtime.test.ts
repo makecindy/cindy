@@ -262,6 +262,7 @@ import {
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   hasConnectedSubscriptionPool,
+  hasReadyOpenAiImagePool,
   lastConfirmedSubscriptionModelsAt,
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
@@ -1070,6 +1071,35 @@ describe('owner-only subscription identity', () => {
     h.pools.openai.accounts[1].paused = true;
     expect(subscriptionProviderAccountKeys('openai')).toBeUndefined();
   });
+});
+
+it('uses only an independent image channel’s signed-in, active accounts', async () => {
+  const id = 'openai-sub-12345678';
+  h.created[id] = { kind: 'openai', name: 'Independent', account: 'second' };
+  h.placement['openai:second'] = id;
+  h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+  h.read.mockImplementation(async (_kind: string, directory: string) => ({
+    authenticated: !directory.endsWith('/second'),
+  }));
+  await refreshSubscriptionPool('openai');
+  await refreshSubscriptionPool(id);
+  expect(hasConnectedSubscriptionPool('openai')).toBe(true);
+  expect(hasReadyOpenAiImagePool(id)).toBe(false);
+
+  h.read.mockResolvedValue({ authenticated: true });
+  await refreshSubscriptionPool(id, true);
+  expect(hasReadyOpenAiImagePool(id)).toBe(true);
+  const lease = await acquireSubscriptionAccount(id, `${id}/gpt-image-2`, [], false, { capability: 'image.generate' });
+  try {
+    expect(lease?.accountId).toBe('second');
+    h.pools.openai.accounts[1].paused = true;
+    expect(hasReadyOpenAiImagePool(id)).toBe(false);
+    h.pools.openai.accounts[1].paused = false;
+    delete h.placement['openai:second'];
+    expect(hasReadyOpenAiImagePool(id)).toBe(false);
+  } finally {
+    lease?.release();
+  }
 });
 
 // Unit regression: merging two profiles of the same verified ChatGPT account counted it twice.

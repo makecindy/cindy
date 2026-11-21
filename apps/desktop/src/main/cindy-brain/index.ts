@@ -719,7 +719,6 @@ import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-hos
 import {
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
-  isOrganizationManagedProvider,
   isProviderDisabled,
   type MediaCapability,
   type ProviderView,
@@ -780,11 +779,12 @@ import { isProviderRouteMutationInProgress, getProviderRouteCredentialRevision }
 import { geminiImageAgent, geminiImageConnectionId, resolveGeminiImageKey, savedGeminiRouteMatches } from '../maker-host/gemini-image-connection.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
-import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
+import { createPooledCodexImageChannel, getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import {
   createByokImageChannel,
   pruneDynamicImageChannels,
+  isDynamicCodexImageProvider,
   registerByokImageChannels,
 } from './byokImageChannel.js';
 import { createCustomImageChannel, registerCustomImageChannels } from './customImageChannel.js';
@@ -5515,25 +5515,25 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     registeredCustomImageAccounts,
   );
   for (const provider of imageProviders) {
-    if (
-      isOrganizationManagedProvider(provider) ||
-      provider.auth.native !== 'codex' ||
-      registeredCodexImageAccounts.has(provider.id)
-    )
-      continue;
+    if (!isDynamicCodexImageProvider(provider) || registeredCodexImageAccounts.has(provider.id)) continue;
     const providerId = provider.id;
+    const options = {
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model: string) => assertMediaModelStillEnabled('image', model, providerId),
+    };
     imageChannelRegistrySingleton.register(
       providerId,
-      createCodexImageChannel({
-        providerId,
-        hasOAuthLogin: () => getCodexImageAuthBinding().hasAuth?.(providerId) === true,
-        getAuth: () => getCodexImageAuthBinding().getAuth(providerId),
-        onAuthFailure: async (failure) => {
-          await getCodexImageAuthBinding().onAuthFailure(failure, providerId);
-        },
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
-      }),
+      provider.subscriptionPool === 'openai'
+        ? createPooledCodexImageChannel(providerId, options)
+        : createCodexImageChannel({
+            ...options,
+            providerId,
+            hasOAuthLogin: () => getCodexImageAuthBinding().hasAuth?.(providerId) === true,
+            getAuth: () => getCodexImageAuthBinding().getAuth(providerId),
+            onAuthFailure: async failure => {
+              await getCodexImageAuthBinding().onAuthFailure(failure, providerId);
+            },
+          }),
     );
     registeredCodexImageAccounts.add(providerId);
   }

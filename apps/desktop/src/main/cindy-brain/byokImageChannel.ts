@@ -108,6 +108,11 @@ export function createByokImageChannel(opts: CreateByokImageChannelOptions): Ima
   };
 }
 
+export function isDynamicCodexImageProvider(provider: Provider): boolean {
+  return provider.id !== 'openai' && !isOrganizationManagedProvider(provider)
+    && (provider.auth.native === 'codex' || provider.subscriptionPool === 'openai');
+}
+
 /** Release obsolete dynamic channels before registering either kind of account. */
 export function pruneDynamicImageChannels(
   registry: ImageChannelRegistry,
@@ -116,9 +121,7 @@ export function pruneDynamicImageChannels(
   registeredByok: Set<string>,
   registeredCustom: Set<string> = new Set(),
 ): void {
-  const codexIds = new Set(providers.filter((provider) =>
-    !isOrganizationManagedProvider(provider) && provider.auth.native === 'codex',
-  ).map((provider) => provider.id));
+  const codexIds = new Set(providers.filter(isDynamicCodexImageProvider).map(provider => provider.id));
   const byokIds = new Set(providers.filter((provider) =>
     isOrganizationManagedProvider(provider) && provider.imageModels?.length,
   ).map((provider) => provider.id));
