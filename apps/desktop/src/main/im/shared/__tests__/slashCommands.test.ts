@@ -494,6 +494,22 @@ describe('IM slash commands', () => {
       expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.companionDmNew);
     });
 
+    // An unresolvable companion (paused, no model) used to fall through to the channel's own
+    // `/new`, creating a task under another identity. It must answer with the notice instead.
+    it('/new answers with the companion notice and creates nothing when the bot is unavailable', async () => {
+      const repo = makeRepo();
+      const turnRunner = makeTurnRunner({
+        rotateCompanionLane: vi.fn(async () => ({ unavailable: 'companion paused notice' })),
+      } as Partial<ImTurnRunner>);
+      const { handlers } = makeHarness({ repo, turnRunner });
+
+      await handlers.handleSlashCommand('/new', { botContextId: 'bot', userId: 'g/oc_chat' });
+
+      expect(repo.prepareNewSession).not.toHaveBeenCalled();
+      expect(repo.createSession).not.toHaveBeenCalled();
+      expect(mocks.sendMarkdownText).toHaveBeenCalledWith('g/oc_chat', 'companion paused notice');
+    });
+
     it('/new falls back to the channel’s own behaviour when the connection is not handed over', async () => {
       const repo = makeRepo();
       const turnRunner = makeTurnRunner({

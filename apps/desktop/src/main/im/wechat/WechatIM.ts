@@ -1446,6 +1446,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
             await this.#commitSimpleReply(task, imText('imBot.text.wechat.reply.companionDmNew'));
             return;
           }
+          // 伙伴解析不出: 不新建微信自己的任务(另一个身份), 回「伙伴暂时不可用」。
+          if (typeof result === 'object') {
+            await this.#commitSimpleReply(task, result.unavailable);
+            return;
+          }
         }
         const accepted = await this.#requireStore().markAccepted(task.bindingEpoch, task.id);
         if (!accepted) throw new Error('WECHAT_ACCEPT_CAS_REJECTED');

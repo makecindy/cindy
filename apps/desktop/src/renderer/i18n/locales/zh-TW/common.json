@@ -13166,6 +13166,10 @@
           "allow": "允許",
           "deny": "拒絕",
           "approve": "批准"
+        },
+        "companion": {
+          "retryLater": "請稍後再試",
+          "noModel": "夥伴還沒有可用的模型，請在 Cindy 的夥伴設定裡選擇"
         }
       },
       "hook": {

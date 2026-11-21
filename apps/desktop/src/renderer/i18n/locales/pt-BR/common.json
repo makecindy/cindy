@@ -13330,6 +13330,10 @@
           "allow": "permitir",
           "deny": "negar",
           "approve": "aprovar"
+        },
+        "companion": {
+          "retryLater": "tente novamente mais tarde",
+          "noModel": "ainda não há um modelo disponível. Escolha um nas configurações dele no Cindy"
         }
       },
       "hook": {

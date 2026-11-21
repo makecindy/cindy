@@ -49,7 +49,7 @@ export function createImCompanionRouteDeps(ownerBotId: string | (() => string | 
 
     async resolveSession({ botId, target, create }): Promise<ImCompanionSessionResult | null> {
       if (!create) {
-        // 只查已有任务: 伙伴不可用时报不可用(调用方回落渠道自己的路由), 可用但
+        // 只查已有任务: 伙伴不可用时报不可用(调用方当作没有任务, 不落渠道自己的行), 可用但
         // 还没有这条任务时返回 null(调用方不建行)。
         const status = await readProfileStatus(botId);
         if (status !== 'active') {

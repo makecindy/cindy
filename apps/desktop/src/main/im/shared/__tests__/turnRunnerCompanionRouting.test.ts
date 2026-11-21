@@ -5,7 +5,7 @@
  *  - 主人私聊 → 伙伴主任务(不注入渠道 vendorOptions, 按共享任务给投递说明);
  *  - 群 / 话题 → 伙伴 channel 专线(route key 按 chat / topic, 照常挂渠道工具);
  *  - 伙伴任务不跟随渠道默认、不对齐渠道默认路由;
- *  - 伙伴解析不出 → 回落原有渠道路由, 每个连接只告警一次;
+ *  - 伙伴解析不出 → 拒绝并回「伙伴暂时不可用」, 不回落渠道路由(瞬时态先重试), 每个连接只告警一次;
  *  - 发送前伙伴守卫拒绝 → 回一句提示, 不发送;
  *  - 停止 / `/new` 走同一解析, 停止不建行。
  */
@@ -758,23 +758,15 @@ describe('turnRunner: connection handed to a companion bot', () => {
   });
 
   // Use the public runner and inspect Session.send: a binding alone must never
-  // suppress the policy on fallback. No network or extra runtime is required.
+  // suppress the policy on a channel-owned session. No network or extra runtime is required.
   it.each([
     { route: 'companion', owner: true, optIn: true, forced: false },
     { route: 'companion', owner: false, optIn: true, forced: true },
     { route: 'companion', owner: undefined, optIn: true, forced: true },
     { route: 'companion', owner: true, optIn: false, forced: true },
-    { route: 'paused', owner: true, optIn: true, forced: true },
-    { route: 'missing-row', owner: true, optIn: true, forced: true },
     { route: 'unbound', owner: true, optIn: true, forced: true },
   ])('keeps the resolved-route permission boundary: %j', async ({ route, owner, optIn, forced }) => {
-    if (route === 'paused') {
-      companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
-    } else if (route === 'missing-row') {
-      botRows.delete('mimi-main');
-    } else if (route === 'unbound') {
-      binding = null;
-    }
+    if (route === 'unbound') binding = null;
     const policy: TurnPermissionPolicy = {
       origin: { kind: 'im', channel: 'wechat' },
       confirmationSurface: 'channel',
@@ -791,16 +783,66 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(send.mock.calls[0]![1]?.turnPermissionPolicy).toBe(forced ? policy : undefined);
   });
 
-  it('falls back to the channel’s own routing when the bot cannot be resolved, warning once', async () => {
-    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
-    await runTurn(OWNER, 'first');
-    harnesses.get(legacyIdFor(BOT_CONTEXT, OWNER))!.emit({ type: 'done', data: {} } as AgentEvent);
-    await runTurn(OWNER, 'second');
-    expect(fakeRepo.createSession).toHaveBeenCalledTimes(1);
-    expect(harnesses.get(legacyIdFor(BOT_CONTEXT, OWNER))!.send).toHaveBeenCalledTimes(2);
+  // Bug: an unresolvable companion (paused, canonical task changing, no model for a new
+  // group) used to fall back to a plain channel task that answered under another identity.
+  // A companion connection must reject with the same notice as the pre-send guard, never
+  // start or persist anything, and only tell the owner internal details.
+  it.each([
+    { name: 'paused owner DM', userId: OWNER, owner: true, errorCode: 'TARGET_BOT_INACTIVE',
+      says: 'Bot 当前未启用', hides: null },
+    { name: 'no model, member in a new group', userId: 'g/-100123', owner: false, errorCode: 'NO_MODEL',
+      says: '请稍后再试', hides: '模型' },
+    { name: 'no model, owner in a new group', userId: 'g/-100123', owner: true, errorCode: 'NO_MODEL',
+      says: '伙伴还没有可用的模型', hides: null },
+    { name: 'resolver threw', userId: 'g/-100123', owner: false, errorCode: 'THROW',
+      says: '请稍后再试', hides: 'db exploded' },
+  ])('rejects instead of using the channel’s own routing: $name', async ({ userId, owner, errorCode, says, hides }) => {
+    if (errorCode === 'THROW') companion.resolveSession.mockRejectedValue(new Error('db exploded'));
+    else companion.resolveSession.mockResolvedValue({ ok: false, errorCode, message: '伙伴还没有可用模型' });
+    for (const text of ['first', 'second']) {
+      await runner.runAgentTurn({
+        botContextId: BOT_CONTEXT, userId, userMessageId: `${userId}|${text}`, text, attachments: [],
+        ...(owner ? { requesterIsOwner: true } : {}),
+      });
+    }
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+    expect(createSessionArgs).toHaveLength(0);
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+    const notices = mocks.im.sendText.mock.calls.map(([, text]) => String(text));
+    expect(notices).toHaveLength(2);
+    for (const notice of notices) {
+      expect(notice).toContain('伙伴现在接不了消息');
+      expect(notice).toContain(says);
+      if (hides) expect(notice).not.toContain(hides);
+    }
     const warnings = mocks.logger.warn.mock.calls.filter(([msg]) =>
-      String(msg).includes('falling back to the channel'));
+      String(msg).includes('rejecting instead of using the channel'));
     expect(warnings).toHaveLength(1);
+  });
+
+  it.each([
+    { name: 'recovers once the canonical task settles', recovers: true },
+    { name: 'rejects when it stays unavailable', recovers: false },
+  ])('retries a changing canonical task briefly: $name', async ({ recovers }) => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const changing = { ok: false, errorCode: 'TARGET_CANONICAL_UNAVAILABLE', message: '目标伙伴的主任务正在变化' };
+      companion.resolveSession.mockResolvedValueOnce(changing).mockResolvedValueOnce(changing);
+      if (!recovers) companion.resolveSession.mockResolvedValue(changing);
+      const turn = runTurn(OWNER);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await turn;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(companion.resolveSession).toHaveBeenCalledTimes(3);
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+    if (recovers) {
+      expect(harnesses.get('mimi-main')!.send).toHaveBeenCalledOnce();
+    } else {
+      expect(harnesses.has('mimi-main')).toBe(false);
+      expect(mocks.im.sendText).toHaveBeenCalledWith(OWNER, expect.stringContaining('请稍后再试'), expect.anything());
+    }
   });
 
   it('replies with a notice and does not send when the bot guard blocks the turn', async () => {
@@ -838,6 +880,12 @@ describe('turnRunner: connection handed to a companion bot', () => {
 
     await expect(runner.rotateCompanionLane!(BOT_CONTEXT, OWNER)).resolves.toBe('owner-dm');
     expect(companion.archiveLane).toHaveBeenCalledTimes(1);
+
+    // An unresolvable companion answers `/new` with the notice instead of the channel's own `/new`.
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    await expect(runner.rotateCompanionLane!(BOT_CONTEXT, OWNER)).resolves.toEqual({
+      unavailable: expect.stringContaining('Bot 当前未启用'),
+    });
 
     binding = null;
     await expect(runner.rotateCompanionLane!(BOT_CONTEXT, 'g/-100123')).resolves.toBe('unbound');
