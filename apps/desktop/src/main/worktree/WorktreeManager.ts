@@ -582,12 +582,16 @@ async function stageCheckout(
     );
   }
 
+  // 新 worktree 还没有子模块的 gitdir。两个阶段都只检出父仓库，避免继承的
+  // submodule.recurse 在 Git 写完索引前中断 checkout。
   // 2. 选择性 checkout 白名单文件(同步, 用户可见)
   if (existingPaths.length > 0) {
     try {
-      await gitExec(['checkout', 'HEAD', '--', ...existingPaths], worktreePath, {
-        onSpawn: onCheckoutChildSpawn,
-      });
+      await gitExec(
+        ['checkout', '--no-recurse-submodules', 'HEAD', '--', ...existingPaths],
+        worktreePath,
+        { onSpawn: onCheckoutChildSpawn },
+      );
       log.info(
         `[stageCheckout] selective checkout done in ${Date.now() - t0}ms (${existingPaths.length} paths)`,
       );
@@ -604,7 +608,10 @@ async function stageCheckout(
   //    LC_ALL=C 让 git 报错文案一致, 便于解析。
   const bgT0 = Date.now();
   const fullCheckoutPromise = gitExec(
-    ['checkout', 'HEAD', '--', '.', ':(exclude).claude', ':(exclude).sivi'],
+    [
+      'checkout', '--no-recurse-submodules', 'HEAD', '--', '.',
+      ':(exclude).claude', ':(exclude).sivi',
+    ],
     worktreePath,
     { extraEnv: { LC_ALL: 'C' }, onSpawn: onCheckoutChildSpawn },
   )
