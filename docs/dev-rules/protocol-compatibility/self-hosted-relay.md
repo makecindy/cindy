@@ -105,6 +105,18 @@ Nginx 的独立 V2 路径。公共前端只代理两个固定回环内核，不�
 部署控制器与 Renderer 开关验证通过；Mobile iOS/Android 原生构建和探针通过，实际 SSH/systemd/ACME、真实账号全业务和物理手机锁屏推送仍待验收。
 记录与剩余项见 [`Desktop 接线记录`](../../../prototypes/agent-net-spike/results/2026-11-07-desktop-runtime/README.md)。
 
+## 自建媒体中继
+
+从中转包 0.6.0 起，「部署到我的服务器」或原有升级入口在 Cindy 自己负责 TLS 的 Linux 服务器上尝试安装 eturnal 1.12.3。安装器先校验架构和固定 SHA-256，原有 HTTPS/WSS 与 V2 校验完成后才配置可选媒体服务。现有 Nginx 占用 443 时跳过下载和安装。应用内中转、手动部署和旧版本继续返回 404。公网没有新增监听端口。官方服务与 V2-only 租户身份沿用原有行为。
+
+原有 HTTPS 端点 `GET /api/device-link/ice-servers` 使用同一份设备鉴权和 `no-store` 响应。可用时返回两条原有公共 STUN 地址和一条同主机的 `turns:…:443?transport=tcp`，兼容现有 Desktop、Mobile 和文件传输解析器。两个媒体端分别取票。TURN 只在同一服务上的分配之间转发，一个使用 TURN 的新端与没有中继分配的旧端仍可尝试原有路径。媒体继续服从 WebRTC DTLS 的对端身份及远控租约。证书续期沿用当前 TLS owner；入口根据首个解密字节区分 HTTP 与 STUN，请求模式不依赖浏览器发送 ALPN。
+
+TURN 签名材料从本中转现有密钥按用途派生。票据只含匿名设备标记及到期时间，有效约 55–60 分钟；撤销即停止新签发，已发票据到期前可用于这项受限媒体服务。开启严格到期检查，客户端沿用已有媒体重试。长会话可能需要重新协商。部署时以既有信令账号派生 TURN 配置，只有 root 可读配置源文件。systemd 将配置的只读副本交给媒体服务。媒体与代理各用独立动态用户，均无法读取信令持久目录、设备清单和 TLS 私钥；代理也不能读取 TURN 配置。受管 socket 记录宿主网络命名空间的 ID。媒体服务每次启动都确认自身命名空间与宿主不同，且只有回环接口，然后才监听。后端监听 127.0.0.1，只允许以 127.0.0.2 为对端，后者的 UDP socket 只属于这台中转分配的媒体端口。签名不能授权访问宿主内网。
+
+配额为整个服务 64 个 UDP 分配端口、96 个 TCP 连接，每条连接上限 4 MiB/s、每个分配至多 8 个权限。设备共用这份容量。最后一条连接关闭 60 秒后代理退出，systemd 随之停止后端。安装失败时保留信令和原有 STUN/JPEG。运行时 TURN 进程中断不会重启信令。已加密的 443 仍可能被只允许 HTTP 的代理拦截。
+
+回归入口为 `@cindy/device-link-relay` 的 `test`、`interop` 和 `interop:turn`（需要本机 OpenSSL），以及 Desktop 的 `selfHostedRelayDeploy.test.ts`。真实 WebRTC 使用[双端强制中继探针](../../../scripts/remote-desktop-turn-smoke.mjs)，同时检查两端候选类型及 16 KiB 数据回送。公网部署和物理手机的活动首帧、正常直连延迟及功耗仍需按[远控验证矩阵](../remote-desktop-connectivity.md#verification)对照验收。
+
 ## 自建中转同步维护
 
 服务器部署的 Nginx 自动接入使用中转 bundle `0.3.0`（`nginx` 为 SSH 部署内部 CLI）。公网仍使用

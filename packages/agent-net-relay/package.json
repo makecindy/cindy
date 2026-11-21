@@ -20,6 +20,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@cindy/device-link-relay": "workspace:*",
     "@cindy/agent-net-protocol": "workspace:*",
     "@cindy/device-link-sharing": "workspace:*",
     "jose": "^6.2.2",

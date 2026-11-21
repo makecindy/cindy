@@ -151,6 +151,21 @@ describe('deployRelayToServer', () => {
     expect(privileged.every((c) => c.command.startsWith('sudo -n bash -c '))).toBe(true);
     expect(fetch).toHaveBeenCalledWith('https://203.0.113.10/api/device-link/relay/info', expect.anything());
   });
+  // The old installer had no optional media phase. A missing artifact or a
+  // media health-check failure must still leave verified V1 signaling online.
+  it.each(['stage-timeout', 'unhealthy'] as const)('retains HTTPS after optional TURN %s', async failure => {
+    mocks.responses['relay-deploy-inspect'] = () => ok('TURN_MANAGED yes\n');
+    mocks.responses['relay-deploy-turn-runtime'] = () => {
+      if (failure === 'stage-timeout') throw new Error('relay-deploy-turn-runtime timed out after 60000ms');
+      return ok('TURN_STAGED\n');
+    };
+    mocks.responses['relay-deploy-turn-configure'] = () => ({ exitCode: 1, stderr: '', stdout: '' });
+    expect((await run()).error).toBeNull();
+    const labels = mocks.commands.map(c => c.label);
+    expect(labels.includes('relay-deploy-turn-configure')).toBe(failure === 'unhealthy');
+    expect(labels).toContain('relay-deploy-turn-disable');
+    expect(fetch).toHaveBeenCalledWith('https://203.0.113.10/api/device-link/relay/info', expect.anything());
+  });
   // The V2 process must receive only public bootstrap material, and authenticated reachability must precede a successful receipt.
   it('deploys an independent V2 process using the existing owner vault and verifies its pinned directory', async () => {
     const { bootstrap } = createPrivateNetwork('Unit private network');
@@ -359,6 +374,7 @@ describe('deployRelayToServer', () => {
       ok('{"event":"nginx","port":47822,"challengePort":47823,"existingCertificate":false}\n');
     const success = await run();
     expect(success.error).toBeNull();
+    expect(mocks.commands.some(c => c.label === 'relay-deploy-turn-runtime')).toBe(false);
     expect(mocks.commands.some((c) => c.label === 'relay-deploy-nginx-activate')).toBe(true);
     expect(mocks.commands.some((c) => c.label === 'relay-deploy-nginx-commit')).toBe(true);
     const configure = mocks.commands.find((c) => c.label === 'relay-deploy-configure')!;
