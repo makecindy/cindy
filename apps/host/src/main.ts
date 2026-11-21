@@ -888,7 +888,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   });
   const toolOwnerCurrent = () => activeOwnerScopeKey() === pluginOwner && !isAppSessionBoundaryPending();
   const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
-  hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
+  const confirmations = createHostConfirmations({ current: toolOwnerCurrent });
+  hostConfirmations = confirmations;
   hostTools = createHostToolService({ profileDir: dataDir, ownerId,
     profileHold: () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null,
     deviceId: () => currentDeviceId ?? 'local',
@@ -931,6 +932,21 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       openExternal: async url => { await openSystemBrowser(url); },
     },
     getSession: id => agentGraph?.maker.getSession(id),
+    // A new connection host widens the plugin's network allowlist, so the user
+    // must approve it in the host's own dialog (same wording as Desktop).
+    confirmConnectionHost: (id, label, host) => {
+      const ghost = plugins?.getGhost(id);
+      if (!ghost) return Promise.resolve(false);
+      const name = ghost.manifest.name;
+      return confirmations.confirm({
+        ghostId: id, ghostName: name, ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+        body: `${i18n.t('settings.ghosts.connections.confirmMessage').replaceAll('{{name}}', name).replaceAll('{{host}}', host)}\n\n`
+          + i18n.t('settings.ghosts.connections.confirmDetail').replaceAll('{{label}}', label),
+        confirmText: i18n.t('settings.ghosts.connections.confirmAllow'),
+        cancelText: i18n.t('settings.ghosts.connections.confirmCancel'),
+        danger: false,
+      });
+    },
     requestFileConfirmation: (id, payload) => fileConfirmation.request(id, payload),
     appContext: () => ({ ok: true, context: { region: resolveHostRegion(),
       locale: ghostAppContextLocale(Intl.DateTimeFormat().resolvedOptions().locale) } }),
