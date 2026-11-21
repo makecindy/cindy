@@ -1499,7 +1499,7 @@ import {
 import { patchSessionMetaInDb, setSideChatArchiveCleanup, updateSessionInDb } from '../localDb/ipc/sessions.js';
 import {
   codexCustomProviderConfigSignature,
-  hasCodexAppliedCustomProviderCapability,
+  hasAppliedCodexCustomProviderRoute,
 } from '../maker-host/codex-custom-provider-route.js';
 import { runSchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
 import {
@@ -7395,8 +7395,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
     codexCustomProviderConfigSignature,
-    hasAppliedCodexCustomProviderImageGeneration: (providerId) =>
-      hasCodexAppliedCustomProviderCapability(providerId, 'imageGeneration'),
+    hasAppliedCodexCustomProviderRoute,
     listBusyLocalCodexSessionIds: () =>
       maker
         .listActiveSessions()

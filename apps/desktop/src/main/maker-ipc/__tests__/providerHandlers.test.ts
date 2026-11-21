@@ -2354,7 +2354,7 @@ describe('provider:custom:* CRUD handlers', () => {
       listBusyLocalCodexSessionIds: () => ['codex-1'],
       prepareCodexCustomProviderHostChange: prepare,
       finalizeCodexCustomProviderHostChange: finalize,
-      hasAppliedCodexCustomProviderImageGeneration: () => true,
+      hasAppliedCodexCustomProviderRoute: () => true,
       readCustomProviderHeadersForMutation: vi.fn(
         (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
       ),
@@ -2415,6 +2415,37 @@ describe('provider:custom:* CRUD handlers', () => {
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id);
     expectOneHardCut();
     expect(await getCustomProvider(config.id)).toBeNull();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：PROVIDER_OAUTH_LOGIN → prepareCodexCustomProviderHostChange。
+  //   纯文本已应用路由重新登录也要重建 Host，否则凭证代次推进后专用路由持续 503（#9759）。
+  // - Bug／规则依据：#9759。旧依赖只认图片生成已应用。
+  // - 现有覆盖缺口：上面的硬切矩阵用的是带 supportsImageGeneration 的配置。
+  // - 最小失败输入：没有图片能力的 Responses 供应商，依赖报已应用路由，再登录。
+  // - tier：unit。内存数据库 + IPC harness，不访问网络。
+  it('rebuilds the Codex Host when a text-only applied route logs in again', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const prepare = vi.fn(async () => {});
+    const finalize = vi.fn(async () => {});
+    registerProviderHandlers(harness, makeDeps({
+      prepareCodexCustomProviderHostChange: prepare,
+      finalizeCodexCustomProviderHostChange: finalize,
+      hasAppliedCodexCustomProviderRoute: () => true,
+    }));
+    const textOnly = imageProviderConfig('text-only-relogin-provider');
+    delete textOnly.runtimes.codex?.supportsImageGeneration;
+    expect(textOnly.runtimes.codex?.supportsImageGeneration).toBeUndefined();
+
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, textOnly);
+    expect(prepare).toHaveBeenCalledOnce();
+    prepare.mockClear();
+    finalize.mockClear();
+
+    await harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, textOnly.id);
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(finalize).toHaveBeenCalledOnce();
   });
 
   it('publishes the route generation and releases the stopped Host guard when refresh fails after update persistence', async () => {
@@ -4917,7 +4948,7 @@ describe('provider:oauth mutation ordering', () => {
     const cancelHostChange = vi.fn();
     const deps = makeDeps({
       beginRouteMutation: beginProviderRouteMutation,
-      hasAppliedCodexCustomProviderImageGeneration: () => true,
+      hasAppliedCodexCustomProviderRoute: () => true,
       prepareCodexCustomProviderHostChange: vi.fn(async () => {
         throw new Error('retire failed');
       }),
@@ -4947,7 +4978,7 @@ describe('provider:oauth mutation ordering', () => {
     const finalize = vi.fn(async () => {});
     const deps = makeDeps({
       beginRouteMutation: beginProviderRouteMutation,
-      hasAppliedCodexCustomProviderImageGeneration: () => true,
+      hasAppliedCodexCustomProviderRoute: () => true,
       listBusyLocalCodexSessionIds: () => [],
       finalizeCodexCustomProviderHostChange: finalize,
       oauthLogout: vi.fn().mockRejectedValue(new Error('safe storage deletion failed')),
@@ -4987,7 +5018,7 @@ describe('provider:oauth mutation ordering', () => {
     let finish!: (result: { ok: boolean }) => void;
     const login = vi.fn(() => new Promise<{ ok: boolean }>(resolve => { finish = resolve; }));
     const deps = makeDeps({ oauthLogin: login,
-      hasAppliedCodexCustomProviderImageGeneration: () => true,
+      hasAppliedCodexCustomProviderRoute: () => true,
       listBusyLocalCodexSessionIds: () => ['busy-task'],
     });
     registerProviderHandlers(harness, deps);
@@ -5754,7 +5785,7 @@ describe('provider connection management', () => {
     const harness = new IpcHarness();
     const deps = makeDeps({
       listBusyLocalCodexSessionIds: () => ['busy-task'],
-      hasAppliedCodexCustomProviderImageGeneration: () => true,
+      hasAppliedCodexCustomProviderRoute: () => true,
     });
     registerProviderHandlers(harness, deps);
     const config = imageProviderConfig('disconnect-image-provider');
@@ -5780,7 +5811,7 @@ describe('provider connection management', () => {
     const harness = new IpcHarness();
     const deps = makeDeps({
       beginRouteMutation: beginProviderRouteMutation,
-      hasAppliedCodexCustomProviderImageGeneration: () => true,
+      hasAppliedCodexCustomProviderRoute: () => true,
     });
     registerProviderHandlers(harness, deps);
     const config = imageProviderConfig('committed-catalog-failure');

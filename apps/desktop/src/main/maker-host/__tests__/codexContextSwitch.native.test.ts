@@ -12,13 +12,24 @@ import { CodexAgent } from '../../../../../../packages/maker-core/src/agents/cod
 import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger';
 import { nativeCodexFallbackModel, prepareCodexCustomContextCatalog } from '../codex-custom-context-catalog';
 
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { buildCodexCustomProviderArgs, deriveCodexCustomProviderRoutes, resolveCodexCustomProviderModelProviderId,
+  toCodexCustomProviderHostRoutes } from '../codex-custom-provider-route';
+
 const binary = process.env.CINDY_CODEX_TEST_BINARY;
 const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
 
 // Different-provider catalogs cannot assume the old model is available. SSH uses
 // thread config instead of a local catalog. Neither removes native pre-turn
 // compaction with the target model; verify the real requests, not only RPC config.
-it.skipIf(!binary).each(['same-provider', 'different-provider', 'retry-different-provider', 'thread-budget', 'custom-compaction'] as const)(
+it.skipIf(!binary).each([
+  'custom-compaction',
+  'different-provider',
+  'retry-different-provider',
+  'same-provider',
+  'text-provider',
+  'thread-budget',
+] as const)(
   'cold-resumes and natively compacts before continuing (%s)', async mode => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-context-switch-native-'));
   const home = path.join(root, 'home');
@@ -77,6 +88,14 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'retry-different
       'wire_api="responses"', 'requires_openai_auth=false', 'request_max_retries=0', 'stream_max_retries=0',
       '[mcp_servers.cindy_memory]', 'url="http://127.0.0.1:1/mcp"', 'enabled=false',
     ].join('\n'));
+    // #9611 / integration: production registration + CodexAgent RPC selection across a cold Host.
+    // Existing cases use a fixed fixture identity and cannot catch a missing cindy_custom table.
+    const textRoutes = deriveCodexCustomProviderRoutes({ ...BUNDLED_CATALOG, providers: [buildUserProvider({
+      id: 'cprov-fixture', name: 'Text fixture', runtimes: { codex: {
+        baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        wireProtocol: 'openai-responses', models: Object.keys(windows).map(id => ({ id, name: id })),
+      } },
+    })] });
     const makeAgent = () => new CodexAgent({
       binaryPath: binary!, logger, runtimeConfig: {}, resolveCodexLocalAuthPolicy: () => 'isolated',
       resolveModelCompactionPct: (_provider, model) => compactionPct(model),
@@ -95,6 +114,13 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'retry-different
           modelIds: contextProviderModels,
           resolveCompactionPct: compactionPct,
           resolveContextWindow: model => model === 'org/fixture-wide' ? 500_000 : targetProvider ? null : windows[model] ?? null });
+        if (mode === 'text-provider') {
+          const config = buildCodexCustomProviderArgs(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, 'oauth-bearer', textRoutes);
+          return { extraArgs: [...catalog.extraArgs, ...config.extraArgs], extraEnv: config.extraEnv,
+            codexProxyActive: true, contextProviderModels,
+            codexCustomProviderRoutes: toCodexCustomProviderHostRoutes(textRoutes),
+            resolveCustomProviderModelProviderId: (providerId, model) => resolveCodexCustomProviderModelProviderId(textRoutes, providerId, model) };
+        }
         return { extraArgs: catalog.extraArgs, extraEnv: {}, codexProxyActive: true, contextProviderModels: legacyResume ? undefined : contextProviderModels };
       },
       auth: {
@@ -122,6 +148,10 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'retry-different
     };
     await send('ORIGINAL_HISTORY_MARKER');
     const threadId = handle.id;
+    if (mode === 'text-provider') {
+      expect(textRoutes).toHaveLength(1);
+      expect(handle.codexThreadModelProviderId).toBe(textRoutes[0]!.modelProviderId);
+    }
     expect(requests).toHaveLength(1);
     expect(handle.getUsageSnapshot().contextWindow).toBe(475_000);
     await handle.close(); await agent.dispose();
@@ -142,10 +172,11 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'retry-different
     }
     await resume();
     expect(handle.id).toBe(threadId);
+    if (mode === 'text-provider') expect(handle.codexThreadModelProviderId).toBe(textRoutes[0]!.modelProviderId);
     await send('CONTINUE_MARKER');
     expect(deniedModels).toEqual(mode === 'retry-different-provider' ? [oldModel] : []);
     expect(requests.map(request => request.model)).toEqual([oldModel,
-      mode === 'same-provider' ? oldModel : 'fixture-small', 'fixture-small']);
+      mode === 'same-provider' || mode === 'text-provider' ? oldModel : 'fixture-small', 'fixture-small']);
     expect(JSON.stringify(requests[1]!.input)).toContain('ORIGINAL_HISTORY_MARKER');
     expect(JSON.stringify(requests[1]!.input)).toContain('FIRST_REPLY');
     expect(JSON.stringify(requests[2]!.input)).toContain('NATIVE_SUMMARY');
