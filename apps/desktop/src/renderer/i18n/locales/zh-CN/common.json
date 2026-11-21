@@ -2817,6 +2817,7 @@
         "dialogueDirectoryOpen": "打开目录",
         "dialogueDirectoryChoose": "更改目录",
         "dialogueDirectoryReset": "恢复默认位置",
+        "dialogueDirectoryUnavailable": "对话工作区不可用。请在存储空间设置中更改目录或恢复默认位置",
         "dialogueDirectoryFailed": "无法更新对话工作区，请确认所选目录可写后重试。",
         "dialogueDirectoryDefault": "默认",
         "dialogueDirectoryFullPath": "完整路径",

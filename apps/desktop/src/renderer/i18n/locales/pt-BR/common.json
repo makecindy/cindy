@@ -2885,6 +2885,7 @@
         "dialogueDirectoryOpen": "Abrir diretório",
         "dialogueDirectoryChoose": "Alterar diretório",
         "dialogueDirectoryReset": "Restaurar local padrão",
+        "dialogueDirectoryUnavailable": "O espaço de trabalho da conversa está indisponível. Nas configurações de armazenamento, altere o diretório ou restaure o local padrão.",
         "dialogueDirectoryFailed": "Não foi possível atualizar o espaço de trabalho das conversas. Verifique se é possível gravar na pasta selecionada e tente novamente.",
         "dialogueDirectoryDefault": "Padrão",
         "dialogueDirectoryFullPath": "Caminho completo",

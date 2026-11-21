@@ -2817,6 +2817,7 @@
         "dialogueDirectoryOpen": "폴더 열기",
         "dialogueDirectoryChoose": "폴더 변경",
         "dialogueDirectoryReset": "기본 위치로 복원",
+        "dialogueDirectoryUnavailable": "대화 작업 공간을 사용할 수 없습니다. 저장 공간 설정에서 폴더를 변경하거나 기본 위치로 복원하세요.",
         "dialogueDirectoryFailed": "대화 작업 공간을 변경하지 못했습니다. 선택한 폴더에 쓰기 권한이 있는지 확인한 후 다시 시도하세요.",
         "dialogueDirectoryDefault": "기본",
         "dialogueDirectoryFullPath": "전체 경로",

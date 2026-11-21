@@ -2885,6 +2885,7 @@
         "dialogueDirectoryOpen": "Abrir diretório",
         "dialogueDirectoryChoose": "Alterar diretório",
         "dialogueDirectoryReset": "Restaurar localização predefinida",
+        "dialogueDirectoryUnavailable": "O espaço de trabalho da conversa está indisponível. Nas definições de armazenamento, altere o diretório ou restaure a localização predefinida.",
         "dialogueDirectoryFailed": "Não foi possível atualizar o espaço de trabalho da conversa. Verifique se a pasta selecionada permite escrita e tente novamente.",
         "dialogueDirectoryDefault": "Predefinido",
         "dialogueDirectoryFullPath": "Caminho completo",

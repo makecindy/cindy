@@ -1,4 +1,5 @@
 import { isIpcError, isIpcErrorCode, type IpcError } from './ipc-errors';
+import { DIALOGUE_WORKSPACE_UNAVAILABLE } from './dialogueWorkspaceSettings';
 
 const IPC_ERROR_MESSAGE_RE = /(?:^|: Error: )\[([A-Z0-9_]+)\]\s*([\s\S]*)$/;
 
@@ -12,6 +13,15 @@ export function extractIpcError(err: unknown): IpcError | null {
   const code = match[1];
   if (!isIpcErrorCode(code)) return null;
   return { code, message: match[2] };
+}
+
+export function dialogueWorkspaceUnavailableI18nKey(error: unknown): string | null {
+  const failure = extractIpcError(error);
+  if (failure?.code !== 'PRECONDITION_FAILED') return null;
+  return failure.message === DIALOGUE_WORKSPACE_UNAVAILABLE
+    || failure.message === `[PRECONDITION_FAILED] ${DIALOGUE_WORKSPACE_UNAVAILABLE}`
+    ? 'settings.about.storage.dialogueDirectoryUnavailable'
+    : null;
 }
 
 /**

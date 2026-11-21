@@ -317,7 +317,7 @@ import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
-import { extractIpcError } from '@/utils/ipcError';
+import { dialogueWorkspaceUnavailableI18nKey, extractIpcError } from '@/utils/ipcError';
 import { rememberRemoteDraftDefaults, forgetRemoteDraftDefaults } from './remoteDraftDefaultsCache';
 import { nextRemoteDraftEngine } from './remoteDraftEngineFollow';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
@@ -892,6 +892,16 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   /** createSession 失败 toast:远端路由错误按 code 给可操作文案,其余回退通用文案。 */
   const toastCreateSessionFailed = (err?: unknown) => {
     if (createSessionErrorHandledRef.current) return;
+    const dialogueWorkspaceError = dialogueWorkspaceUnavailableI18nKey(err ?? createSessionErrorRef.current);
+    if (dialogueWorkspaceError) {
+      toast.error(t(dialogueWorkspaceError), {
+        action: {
+          label: t('sidebar.databaseSizeWarning.openSettings'),
+          onClick: () => navigate('/settings?tab=storage&section=dialogueDirectory'),
+        },
+      });
+      return;
+    }
     const code =
       (err as { code?: string } | null | undefined)?.code ??
       (createSessionErrorRef.current as { code?: string } | null)?.code;
@@ -7327,7 +7337,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           if (createSessionErrorHandledRef.current && createSessionErrorRef.current) {
             throw createSessionErrorRef.current;
           }
-          throw new Error(t('ccAgent.draft.createSessionFailed'));
+          const dialogueWorkspaceError = dialogueWorkspaceUnavailableI18nKey(createSessionErrorRef.current);
+          throw new Error(t(dialogueWorkspaceError ?? 'ccAgent.draft.createSessionFailed'));
         }
         // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
         carryDraftFavoriteAnchorToSession(
