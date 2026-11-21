@@ -1155,6 +1155,7 @@ describe("Pi provider-aware model routing", () => {
     expect(
       JSON.parse(readFileSync(path.join(configHome, "settings.json"), "utf8")),
     ).toEqual({
+      defaultTools: ["+codemode"],
       transport: "sse",
       compaction: { modelOverrides: expect.any(Object) },
       retry: {
