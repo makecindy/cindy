@@ -1954,9 +1954,9 @@
       },
       "configWarning": "Cindy cannot evaluate some SSH configuration rules. The host list or connection details may differ from terminal SSH.",
       "configDiagnostic": {
-        "io": "Cindy could not read your SSH configuration. The last successfully loaded hosts are still shown. Check file permissions and reload.",
-        "syntax": "Cindy could not parse your SSH configuration. The last successfully loaded hosts are still shown. Fix the configuration and reload.",
-        "limit": "The SSH configuration is too deeply nested or too large for Cindy to read safely. The last successfully loaded hosts are still shown."
+        "io": "Cindy could not read your SSH configuration. The hosts that loaded last are still shown. Check file permissions and reload.",
+        "syntax": "Cindy could not parse your SSH configuration. The hosts that loaded last are still shown. Fix the configuration and reload.",
+        "limit": "The SSH configuration is too deeply nested or too large for Cindy to read safely. The hosts that loaded last are still shown."
       },
       "empty": {
         "title": "No remote machines yet.",
@@ -6976,7 +6976,7 @@
     },
     "devices": {
       "title": "Device Link",
-      "description": "Devices signed in with the same Feishu account can discover each other. Once \"Allow control\" is on, your other devices can remotely control {{appName}} on this machine.",
+      "description": "Devices signed in with the same Feishu account can discover each other. Once “Allow control” is on, your other devices can remotely control {{appName}} on this machine.",
       "allowControl": "Allow same-account devices to control this machine",
       "allowControlHint": "When enabled, other devices signed in with the same account can control this machine without per-connection approval. A visible indicator is shown while being controlled, and you can disconnect at any time.",
       "keepAwake": "Keep computer awake",
@@ -8944,7 +8944,7 @@
         "projectReadFailed": "Could not read project settings. Try again."
       },
       "usage": {
-        "downloadExplanation": "Cumulative download URL requests. Each successfully issued package URL counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
+        "downloadExplanation": "Cumulative download URL requests. Each package URL that is issued counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} uses",
         "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience."
@@ -18102,7 +18102,7 @@
         "domain-radar": {
           "name": "Domain radar",
           "description": "Periodically collect the latest updates in a topic you follow and deliver an opinionated digest",
-          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "prompt": "Collect the latest developments about “{{topic}}” from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
           "params": {
             "topic": {
               "label": "Topic to follow",
@@ -18124,12 +18124,12 @@
         "weekly-work-draft": {
           "name": "Weekly report drafter",
           "description": "Compile this week's work from documents in the working directory into a report draft",
-          "prompt": "Based on this week's changes to documents, notes, and works in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+          "prompt": "Based on this week's changes to documents, notes, and works in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as “Done this week / In progress / Next week / Needs coordination”, concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
         },
         "knowledge-freshness": {
           "name": "Knowledge base freshness check",
           "description": "Monthly health check of working-directory docs for outdated or conflicting content",
-          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as “update / merge / delete” suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
         }
       }
     },
@@ -18167,8 +18167,8 @@
       "secretMissing": "Events are rejected until a secret is generated.",
       "rotateFailed": "Couldn't generate the secret. Secrets can only be managed on the computer running this task.",
       "genericSender": "the sender",
-      "secretFillHint": "Enter it as \"{{field}}\" in {{sender}}.",
-      "secretPastePlaceholder": "Paste \"{{field}}\" from {{sender}}",
+      "secretFillHint": "Enter it as “{{field}}” in {{sender}}.",
+      "secretPastePlaceholder": "Paste “{{field}}” from {{sender}}",
       "secretSave": "Save secret",
       "secretSaved": "Secret saved.",
       "secretSaveFailed": "Couldn't save the secret. Secrets can only be managed on the computer running this task.",
@@ -18372,7 +18372,7 @@
       "marked": "Marked as duplicate",
       "bannerPrefix": "This issue is a duplicate of",
       "bannerSuffix": "",
-      "bannerTitleWrap": "\"{{title}}\"",
+      "bannerTitleWrap": "“{{title}}”",
       "checkPanel": {
         "ariaLabel": "Similar issues found",
         "close": "Close",
