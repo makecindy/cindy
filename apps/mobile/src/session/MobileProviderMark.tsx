@@ -33,6 +33,7 @@ import { resolveModelIconKind } from '@cindy/model-providers/sections';
 
 import { providerMonogram } from './providerModelSections';
 import { RemoteSourceMark } from './RemoteSourceMark';
+import { resolveProviderSvgColorScheme } from './resolveProviderSvgColorScheme';
 
 const MARK_SIZE = 18;
 /** 官方 mark 的字形边长:比 monogram 容器缩一档(桌面同比:行内 mark ≈ 12.3 vs 容器 18),避免视觉过重。 */
@@ -106,21 +107,37 @@ export interface MobileProviderMarkProps {
 
 /** 渲染单个供应商的来源徽标(官方 mark 或 monogram)。 */
 export function MobileProviderMark(props: MobileProviderMarkProps) {
+  const fallback = <DefaultProviderMark {...props} />;
+  if (typeof props.customIcon !== 'string' || !props.customIcon) return fallback;
   return (
-    <MobileCustomProviderIcon svg={props.customIcon} color={props.color} remote={props.remote}>
-      <DefaultProviderMark {...props} />
+    <MobileCustomProviderIcon
+      key={props.customIcon}
+      svg={props.customIcon}
+      color={props.color}
+      remote={props.remote}
+    >
+      {fallback}
     </MobileCustomProviderIcon>
   );
 }
 
 function MobileCustomProviderIcon({ svg, children, color, remote }: {
-  svg?: string;
+  svg: string;
   children: ReactNode;
   color?: string;
   remote?: boolean;
 }) {
-  if (typeof svg !== 'string' || !svg) return children;
-  return <MobileProviderImage key={svg} svg={svg} fallback={children} color={color} remote={remote} />;
+  const { mode } = useTheme();
+  const themedSvg = resolveProviderSvgColorScheme(svg, mode);
+  return (
+    <MobileProviderImage
+      key={themedSvg}
+      svg={themedSvg}
+      fallback={children}
+      color={color}
+      remote={remote}
+    />
+  );
 }
 
 function MobileProviderImage({ svg, fallback, color, remote }: {

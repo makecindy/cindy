@@ -45,6 +45,45 @@ vi.mock("@/session/RemoteSourceMark", () => ({
 // Static artwork assertions use React’s server renderer.
 const firstPath = (markup: string) => markup.match(/<path d="([^"]+)"/)?.[1];
 
+// Unit: expo-image ignores color-scheme queries in uploaded SVGs. The existing
+// artwork tests cover built-in palettes only. Even one dark query used to reach
+// the decoder unchanged, so inspect the SVG passed by the real provider mark.
+it("resolves exact color-scheme blocks in place when the App theme changes", () => {
+  const base = ".mark{fill:red}";
+  const dark = '.mark{fill:cyan}/* } */.other{font-family:"}"}';
+  const light = ".mark{fill:orangered}";
+  const compound = "@media screen and (prefers-color-scheme: dark){.other{fill:green}}";
+  const width = "@media (min-width:24px){.other{fill:purple}}";
+  const tail = ".last{opacity:.5}";
+  const wrap = (css: string) =>
+    `<svg><style>${css}</style><rect class="mark"/></svg>`;
+  const icon = wrap(
+    `${base}@MEDIA(PREFERS-COLOR-SCHEME:DARK){${dark}}${compound}` +
+    `@media ( prefers-color-scheme : light ) {${light}}${width}${tail}`,
+  );
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const mark = () => <MobileProviderMark name="Enterprise" customIcon={icon} />;
+  const decodedSvg = () => {
+    const uri = container.querySelector("img")?.getAttribute("src") ?? "";
+    expect(uri).toMatch(/^data:image\/svg\+xml;base64,/);
+    return Buffer.from(uri.split(",")[1], "base64").toString("utf8");
+  };
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  try {
+    themeState.mode = "light";
+    act(() => root.render(mark()));
+    expect(decodedSvg()).toBe(wrap(base + compound + light + width + tail));
+    themeState.mode = "dark";
+    act(() => root.render(mark()));
+    expect(decodedSvg()).toBe(wrap(base + dark + compound + width + tail));
+  } finally {
+    act(() => root.unmount());
+    themeState.mode = "light";
+    vi.unstubAllGlobals();
+  }
+});
+
 // Unit: provider ID alone cannot distinguish personal and XD organization.
 it("uses the original XD paths with the supplied theme color and keeps the remote badge", () => {
   const xd = render(
