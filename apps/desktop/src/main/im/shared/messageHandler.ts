@@ -478,6 +478,7 @@ export function createMessageHandler(
       : isCommandAuthorized(event);
     // Telegram / 飞书由渠道自己登记带 transport 的作用域; 企业微信 / 钉钉 / Discord 的伙伴专线
     // 轮次登记一份不带 transport 的, 让伙伴技能等能按本轮触发者授权(否则主人也只读)。
+    let replyScopeKey = event.scopeKey;
     try {
       // A context failure may degrade, but it cannot renew an invalidated ingress grant.
       event.assertCurrent?.();
@@ -499,6 +500,11 @@ export function createMessageHandler(
         : '';
       const deliveredReply = prepared?.replyContext ??
         (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
+      // A companion keeps its canonical task; this root only selects where this turn replies.
+      const replyThreadRootMessageId = channelToolScope?.channel === 'feishu' && channelToolScope.companion &&
+        channelToolScope.chatKind === 'direct' && channelToolScope.requesterIsOwner
+        ? event.replyThread?.rootMessageId : undefined;
+      replyScopeKey = replyThreadRootMessageId ?? event.scopeKey;
       const turnArgs: ImRunAgentTurnArgs = {
         ...(event.assertCurrent ? { beforeProviderStart: async () => { event.assertCurrent?.(); } } : {}),
         ...(notificationSessionId ? {
@@ -564,6 +570,7 @@ export function createMessageHandler(
         attachments: event.attachments,
         // 只取 adapter 实际交给模型的回复投影(可能已被过滤成占位), 不用 event 原值。
         ...(deliveredReply ? { replyContext: deliveredReply } : {}),
+        ...(replyThreadRootMessageId ? { replyThreadRootMessageId } : {}),
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)
         scopeKey: notificationSessionId || threadScoped ? event.scopeKey : undefined,
         // Title generation and similar detached work must stay visible to the
@@ -594,7 +601,7 @@ export function createMessageHandler(
               ? ui.agent.companionUnavailable?.(dispatch.reason) ?? ui.agent.runtimeError(dispatch.reason)
               : ui.agent.sendInternalError(dispatch.reason);
           try {
-            await im.sendText(event.senderId, text, { threadTs: event.scopeKey });
+            await im.sendText(event.senderId, text, { threadTs: replyScopeKey });
             event.delivery.accept();
           } catch {
             // A failed failure notice is not handled: retain it for a later retry.
@@ -626,7 +633,7 @@ export function createMessageHandler(
       if (!openerConsumed) {
         try {
           await im.sendText(event.senderId, errorText, {
-            threadTs: event.scopeKey,
+            threadTs: replyScopeKey,
             fallbackOpenerId: richIm?.takeNotedFallbackOpenerId?.(event.senderId, 'markdown'),
           });
         } catch {

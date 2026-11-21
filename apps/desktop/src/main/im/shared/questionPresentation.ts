@@ -14,12 +14,16 @@ type Pending = { code: string; lane: string; respondent: string; scope?: string;
 const pending = new WeakMap<TextChannelIM, Set<Pending>>();
 export function findImQuestionReply(im: TextChannelIM, event: Reply): (() => Promise<boolean>) | undefined {
   if (/^\s*[!/]/.test(event.text)) return;
+  // Feishu private topics carry an output root without changing the task-routing key.
+  const replyScope = event.channelName === 'feishu'
+    ? event.replyThread?.rootMessageId ?? event.scopeKey
+    : event.scopeKey;
   for (const entry of pending.get(im) ?? []) {
     const coded = event.text.trim().match(/^\[?(Q[0-9a-f]{8})\]?\s+([\s\S]+)$/i);
     const quoted = event.replyContext?.messageId && entry.messages.has(event.replyContext.messageId);
     if (!quoted && coded?.[1].toLowerCase() !== entry.code.toLowerCase()) continue;
     if (event.senderId !== entry.lane || (event.speaker?.id ?? event.senderId) !== entry.respondent
-      || (entry.scope !== undefined && event.scopeKey !== entry.scope) || !entry.current()) {
+      || (entry.scope !== undefined && replyScope !== entry.scope) || !entry.current()) {
       return async () => false; // Matched another person's question: never enqueue as a model turn.
     }
     return () => entry.answer(coded ? coded[2] : event.text);
