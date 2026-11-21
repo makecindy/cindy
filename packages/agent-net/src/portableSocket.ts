@@ -34,8 +34,8 @@ const REDIAL_MAX_MS = 30_000;
  * The side that does not dial from the directory (the higher id) dials after all when the other side's dial has not
  * arrived this long after it was due, doubling like the redial. The other side dials within a moment of seeing this device
  * online, unless it still holds its end of a connection this device no longer has: this device was killed or restarted
- * without its close reaching the peer, the peer believes it is connected, and an idle connection is never declared dead. It
- * then never dials, and neither did this side. The dial from here is what tells it: it takes the new connection over once
+ * without its close reaching the peer, the peer believes it is connected, and a core older than 2026-11-21 never declares
+ * an idle connection dead (a newer one does after 30 s of unanswered probes). It then never dials, and neither did this side. The dial from here is what tells it: it takes the new connection over once
  * its own is older than REDIAL_TAKEOVER_MS (`adopt`), and until then drops it, which schedules the next try here.
  * 2026-11-21, a phone killed and started again: the relay-only computer with the lower id stayed offline on the phone for
  * 20 seconds to 15 minutes; the computers with higher ids, which the phone dials, were back at once.
