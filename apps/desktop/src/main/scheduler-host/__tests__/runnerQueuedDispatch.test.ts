@@ -1884,6 +1884,20 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(replacement.listenerCount()).toBe(0);
   });
 
+  it.each(['local session', 'shared send without an offer'] as const)(
+    'fails promptly when %s closes without claimed shared recovery', async () => {
+      const session = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true, sharedReconnectPending: () => false });
+      const { runner } = createRunnerHarness(session.session, queue.deps);
+      const fire = runner.fire(heartbeatSchedule(), createFireContext());
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      await queue.accept();
+      session.emitStatus('closed');
+      await expect(fire).rejects.toThrow('session ended without a terminal event');
+      expect(session.listenerCount()).toBe(0);
+    },
+  );
+
   // Quota waits may last days: use the engine's existing queue-wait contract,
   // which releases capacity and excludes the run from the no-progress watchdog.
   it.each(['resume', 'cancel', 'no-slot'] as const)('settles a scheduled quota wait on %s', async (outcome) => {

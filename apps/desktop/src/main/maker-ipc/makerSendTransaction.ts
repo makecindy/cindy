@@ -360,6 +360,8 @@ export interface MakerSendTransactionDeps {
     takeOffer(error: unknown): (() => void) | undefined;
     dispose(): void;
   } | undefined;
+  onSharedReconnectClaimed?(sessionId: string, clientId: string): void;
+  onSharedReconnectFinished?(sessionId: string, clientId: string): void;
   markOrcaRoleIfNeeded(
     sessionId: string,
     role: 'lead' | 'worker' | null | undefined,
@@ -2244,6 +2246,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             requestedSendOpts.signal?.throwIfAborted();
             if (!reconnectInput.isCurrent() || !reconnect.isCurrent()) throw err;
           };
+          deps.onSharedReconnectClaimed?.(sessionId, persistUserMessage.clientId);
           requestedSendOpts.onUndispatchedRetry?.();
           try {
             if (await reconnect.close()) {
@@ -2271,6 +2274,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         }
         throw err;
       } finally {
+        if (reconnect && persistUserMessage) {
+          deps.onSharedReconnectFinished?.(sessionId, persistUserMessage.clientId);
+        }
         reconnect?.dispose();
       }
   }

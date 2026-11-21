@@ -3224,7 +3224,13 @@ describe('AgentInputCoordinator send transaction', () => {
       await flush();
       const sendOpts = h.sendToAgent.mock.calls[0]?.[3];
       expect(typeof sendOpts?.reconnectRecovery?.isCurrent).toBe('function');
-      if (source === 'scheduler') expect(h.coordinator.isSharedReconnectPending(sid, 'r')).toBe(true);
+      if (source === 'scheduler') {
+        expect(h.coordinator.isSharedReconnectPending(sid, 'r')).toBe(false);
+        h.coordinator.markSharedReconnectPending(sid, item.clientId);
+        expect(h.coordinator.isSharedReconnectPending(sid, 'r')).toBe(true);
+        h.coordinator.clearSharedReconnectPending(sid, item.clientId);
+        expect(h.coordinator.isSharedReconnectPending(sid, 'r')).toBe(false);
+      }
     },
   );
 

@@ -15385,6 +15385,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAcceptedRollback?: SchedulerQueuedPromptRequest['onAcceptedRollback'];
     onAcceptedCommit?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
+    manualUiSend?: boolean;
     sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
     /** Host-accepted task text or a forwarded request receipt. */
     autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
@@ -15410,7 +15411,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           params.onAcceptedCommit,
         );
       }
-      inputCoordinator.enqueue(params.targetSessionId, queued);
+      inputCoordinator.enqueue(params.targetSessionId, queued, params.manualUiSend ? { manualUiSend: true } : undefined);
     };
     if (params.authorizationGuard) await commitBotAuthorizationInput(params.authorizationGuard, enqueue);
     else enqueue();
@@ -18246,6 +18247,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
     },
     onUndispatchedDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnAbort(sessionId),
+    onSharedReconnectClaimed: (sessionId, clientId) =>
+      agentInputCoordinatorHolder?.markSharedReconnectPending(sessionId, clientId),
+    onSharedReconnectFinished: (sessionId, clientId) =>
+      agentInputCoordinatorHolder?.clearSharedReconnectPending(sessionId, clientId),
     ackInterruptedTurnDispatched: async (sessionId, endedAt) => {
       await ackSessionTurnEndedDurable(sessionId, endedAt);
     },
@@ -21018,7 +21023,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             // 远端 Orca 派活也经此 IPC。来源盖章会剥掉 wire 的 origin，因此从规范化远控载荷
             // 读取自动投递意图，只用于收紧恢复暂停，不授予来源身份或权限；本机仍按显式输入处理。
             resumeRestorePausedQueue: !(deviceLinkInvoke && isAutomaticInputOriginKind(parsed.origin?.kind)),
-            manualUiSend: parsed.origin?.kind === 'scheduler' || !isAutomaticInputOriginKind(parsed.origin?.kind),
+            manualUiSend: !isAutomaticInputOriginKind(parsed.origin?.kind),
             onDuplicate: () => {
               duplicate = true;
             },

@@ -99,6 +99,7 @@ interface SchedulerQueueBridgeDeps<Meta> {
     onAccepted: SchedulerQueuedPromptRequest['onAccepted'];
     onAcceptedRollback?: SchedulerQueuedPromptRequest['onAcceptedRollback'];
     origin: SchedulerQueuedPromptRequest['origin'];
+    manualUiSend?: boolean;
   }): Promise<void>;
 }
 
@@ -227,6 +228,7 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
           onAccepted,
           onAcceptedRollback: req.onAcceptedRollback,
           origin: req.origin,
+          manualUiSend: true,
         });
       } catch (err) {
         awaitingAcceptance.delete(clientId);

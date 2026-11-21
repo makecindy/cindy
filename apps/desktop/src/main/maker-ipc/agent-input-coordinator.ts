@@ -756,6 +756,8 @@ interface ActiveTurn {
    */
   providerGroupReconnect?: AutoResumeInfo;
   reconnectRecovery?: AbortController;
+  /** True only after shared reconnect has claimed a stopped-start offer. */
+  sharedReconnectPending?: boolean;
 }
 
 interface PendingCompactRequest {
@@ -7564,13 +7566,22 @@ export class AgentInputCoordinator {
     return this.getState(sessionId).autoResumePending !== null;
   }
 
+  markSharedReconnectPending(sessionId: string, clientId: string): void {
+    const active = this.states.get(sessionId)?.activeTurn;
+    if (active?.item?.clientId === clientId) active.sharedReconnectPending = true;
+  }
+
+  clearSharedReconnectPending(sessionId: string, clientId: string): void {
+    const active = this.states.get(sessionId)?.activeTurn;
+    if (active?.item?.clientId === clientId) delete active.sharedReconnectPending;
+  }
+
   /** A scheduler send is awaiting the same-id replacement opened by shared reconnect recovery. */
   isSharedReconnectPending(sessionId: string, runId: string): boolean {
     const active = this.states.get(sessionId)?.activeTurn;
     return active?.item?.origin?.kind === 'scheduler'
       && active.item.origin.runId === runId
-      && active.reconnectRecovery !== undefined
-      && !active.reconnectRecovery.signal.aborted;
+      && active.sharedReconnectPending === true;
   }
 
   getAutoResumeAttemptToken(sessionId: string): number | null {
