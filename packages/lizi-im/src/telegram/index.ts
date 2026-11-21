@@ -1381,8 +1381,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const handshakeTimer = setTimeout(() => handshake.abort(), CONNECT_HANDSHAKE_TIMEOUT_MS);
     try {
       me = await api.call<TgUser>('getMe', undefined, handshake.signal);
-    } catch (err) {
+    } catch (caught) {
       if (this.configVersion !== generation || this.disposing) return false;
+      // 超时一律按网络失败: 响应头已到、正文卡住时, 中止会被 parseResponse 包成
+      // error_code=200 的 TelegramApiError, 不能因此被当成不可重试的接口错误。
+      const err = handshake.signal.aborted ? new Error('telegram getMe timed out') : caught;
       if (handshake.signal.aborted) this.log.warn(`getMe timed out after ${CONNECT_HANDSHAKE_TIMEOUT_MS}ms`);
       this.setStatus(mapConnectErrorToStatus(err));
       const retryable = !(err instanceof TelegramApiError)

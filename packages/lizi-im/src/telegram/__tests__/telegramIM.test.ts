@@ -305,36 +305,45 @@ describe('TelegramIM', () => {
   });
 
   // A getMe that never answers used to leave the connection in `connecting` forever
-  // (and held back every companion connection started after it). Only the handshake is
-  // bounded: the 50s long poll must not inherit the short timeout.
-  it('times out a stalled startup handshake, reports a network error and retries', async () => {
+  // (and held back every companion connection started after it). Runs through the real
+  // Bot API client with fetch stubbed (no network): a stall before the headers and a
+  // stalled body after HTTP 200 must both become a retryable network error. Only the
+  // handshake is bounded: the 50s long poll must not inherit the short timeout.
+  it.each(['headers', 'body'] as const)('times out a handshake stalled on %s and retries', async (stall) => {
     vi.useFakeTimers();
     ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
-    const original = api.call.bind(api);
-    let stalled = true;
-    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
-      if (method === 'getMe' && stalled) {
-        stalled = false;
-        api.calls.push({ method, params: params ?? {} });
-        return new Promise((_resolve, reject) => {
-          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-        });
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      const method = String(url).split('/').pop()!;
+      calls.push(method);
+      const onAbort = (fn: () => void) => init.signal?.addEventListener('abort', fn, { once: true });
+      const hang = () => new Promise<Response>((_resolve, reject) => {
+        onAbort(() => reject(new DOMException('aborted', 'AbortError')));
+      });
+      if (method === 'getMe' && calls.filter((m) => m === 'getMe').length === 1) {
+        if (stall === 'headers') return hang();
+        return Promise.resolve(new Response(new ReadableStream({
+          start: (controller) => onAbort(() => controller.error(new DOMException('aborted', 'AbortError'))),
+        }), { status: 200 }));
       }
-      return original(method, params, signal);
-    }) as typeof api.call;
+      if (method === 'getUpdates') return hang();
+      return Promise.resolve(Response.json({ ok: true, result: method === 'getMe' ? BOT : {} }));
+    });
+    const realIm = new TelegramIM(ctx.host, {});
     try {
-      const starting = im.init();
+      const starting = realIm.init();
       await vi.advanceTimersByTimeAsync(14_999);
-      expect(im.getStatus().kind).toBe('connecting');
+      expect(realIm.getStatus().kind).toBe('connecting');
       await vi.advanceTimersByTimeAsync(1);
       await starting;
-      expect(im.getStatus()).toMatchObject({ kind: 'error', code: 'network' });
+      expect(realIm.getStatus()).toMatchObject({ kind: 'error', code: 'network' });
       await vi.advanceTimersByTimeAsync(2_000);
-      expect(im.getStatus().kind).toBe('connected');
+      expect(realIm.getStatus().kind).toBe('connected');
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(api.calls.filter((call) => call.method === 'getUpdates')).toHaveLength(1);
+      expect(calls.filter((m) => m === 'getUpdates')).toHaveLength(1);
     } finally {
-      await im.dispose();
+      await realIm.dispose();
+      vi.unstubAllGlobals();
       vi.useRealTimers();
     }
   });
