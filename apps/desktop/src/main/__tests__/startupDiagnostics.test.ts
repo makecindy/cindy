@@ -33,7 +33,12 @@ vi.mock('../logger', () => ({
   }),
 }));
 
-import { RunMarkerStore, scanCrashDumps, type RunMarker } from '../startup-diagnostics';
+import {
+  markerAliveSeconds,
+  RunMarkerStore,
+  scanCrashDumps,
+  type RunMarker,
+} from '../startup-diagnostics';
 
 let tmpDir: string;
 
@@ -41,7 +46,18 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-run-markers-'));
 });
 
+const originalProcessCreationTimeDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  'getCreationTime',
+);
+
 afterEach(() => {
+  if (originalProcessCreationTimeDescriptor) {
+    Object.defineProperty(process, 'getCreationTime', originalProcessCreationTimeDescriptor);
+  } else {
+    Reflect.deleteProperty(process, 'getCreationTime');
+  }
+  vi.restoreAllMocks();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -66,15 +82,34 @@ function writeMarker(marker: Partial<RunMarker> & { pid: number }): string {
 }
 
 function makeStore(
-  opts: { pid?: number; alivePids?: number[]; now?: () => Date; bootTimeMs?: number | null } = {},
+  opts: {
+    pid?: number;
+    alivePids?: number[];
+    now?: () => Date;
+    processStartedAt?: (now: Date) => Date | null;
+    bootTimeMs?: number | null;
+  } = {},
 ) {
   return new RunMarkerStore({
     dir: tmpDir,
     pid: opts.pid ?? 111,
     version: '0.0.2',
     now: opts.now,
+    processStartedAt: opts.processStartedAt ?? ((now) => now),
     isPidAlive: (pid) => (opts.alivePids ?? []).includes(pid),
     bootTimeMs: () => opts.bootTimeMs ?? null,
+    warn: () => {},
+  });
+}
+
+function makeStoreWithDefaultProcessStart(opts: { pid: number; now: () => Date }) {
+  return new RunMarkerStore({
+    dir: tmpDir,
+    pid: opts.pid,
+    version: '0.0.2',
+    now: opts.now,
+    isPidAlive: () => false,
+    bootTimeMs: () => null,
     warn: () => {},
   });
 }
@@ -93,17 +128,132 @@ describe('RunMarkerStore state machine', () => {
     expect(m.heartbeatIntervalMs).toBeGreaterThan(0);
   });
 
-  it('heartbeat() refreshes heartbeatAt without touching state', () => {
-    let t = new Date('2026-07-07T12:00:00.000Z');
-    const store = makeStore({ pid: 42, now: () => t });
+  it('begin() records process start instead of delayed marker write time', () => {
+    const processStartedAt = new Date('2026-07-07T12:00:00.000Z');
+    const store = makeStore({
+      pid: 42,
+      now: () => new Date('2026-07-07T12:00:21.000Z'),
+      processStartedAt: () => processStartedAt,
+    });
     store.begin();
 
+    const m = readMarker(42);
+    expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
+    expect(m.processStartedAtMs).toBe(processStartedAt.getTime());
+    expect(m.heartbeatAt).toBe('2026-07-07T12:00:21.000Z');
+  });
+
+  it('begin() prefers the Electron process creation time by default', () => {
+    const processStartedAt = new Date('2026-07-07T12:00:00.000Z');
+    const now = new Date('2026-07-07T12:00:21.000Z');
+    Object.defineProperty(process, 'getCreationTime', {
+      configurable: true,
+      value: () => processStartedAt.getTime(),
+    });
+    const store = makeStoreWithDefaultProcessStart({ pid: 43, now: () => now });
+
+    store.begin();
+
+    const m = readMarker(43);
+    expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
+    expect(m.heartbeatAt).toBe('2026-07-07T12:00:21.000Z');
+  });
+
+  it('begin() preserves OS creation time across backward clock steps', () => {
+    const processStartedAt = new Date('2026-07-07T12:01:00.000Z');
+    const now = new Date('2026-07-07T12:00:00.000Z');
+    Object.defineProperty(process, 'getCreationTime', {
+      configurable: true,
+      value: () => processStartedAt.getTime(),
+    });
+    const store = makeStoreWithDefaultProcessStart({ pid: 45, now: () => now });
+
+    store.begin();
+
+    const m = readMarker(45);
+    expect(m.startedAt).toBe('2026-07-07T12:01:00.000Z');
+    expect(m.heartbeatAt).toBe('2026-07-07T12:00:00.000Z');
+  });
+
+  it('begin() records a monotonic lifetime across backward clock steps', () => {
+    const processStartedAt = new Date('2026-07-07T12:01:00.000Z');
+    const now = new Date('2026-07-07T12:00:00.000Z');
+    vi.spyOn(process, 'uptime').mockReturnValue(21);
+    const store = makeStore({
+      pid: 46,
+      now: () => now,
+      processStartedAt: () => processStartedAt,
+    });
+
+    store.begin();
+
+    const m = readMarker(46) as RunMarker & { aliveMs?: number };
+    expect(m.startedAt).toBe('2026-07-07T12:01:00.000Z');
+    expect(m.heartbeatAt).toBe('2026-07-07T12:00:00.000Z');
+    expect(m.aliveMs).toBe(21_000);
+  });
+
+  it('markerAliveSeconds prefers the monotonic lifetime when wall clock moved backward', () => {
+    expect(
+      markerAliveSeconds({
+        pid: 47,
+        version: '0.0.2',
+        startedAt: '2026-07-07T12:01:00.000Z',
+        heartbeatAt: '2026-07-07T12:00:00.000Z',
+        aliveMs: 21_000,
+        heartbeatIntervalMs: 30_000,
+        state: 'running',
+      }),
+    ).toBe(21);
+  });
+
+  it('markerAliveSeconds keeps the wall-clock fallback for legacy markers', () => {
+    expect(
+      markerAliveSeconds({
+        pid: 48,
+        version: '0.0.1',
+        startedAt: '2026-07-07T12:00:00.000Z',
+        heartbeatAt: '2026-07-07T12:00:21.000Z',
+        heartbeatIntervalMs: 30_000,
+        state: 'running',
+      }),
+    ).toBe(21);
+  });
+
+  it('begin() falls back to process uptime when creation time is unavailable', () => {
+    const now = new Date('2026-07-07T12:00:21.000Z');
+    Object.defineProperty(process, 'getCreationTime', {
+      configurable: true,
+      value: () => {
+        throw new Error('creation time unavailable');
+      },
+    });
+    vi.spyOn(process, 'uptime').mockReturnValue(21);
+    const store = makeStoreWithDefaultProcessStart({ pid: 44, now: () => now });
+
+    store.begin();
+
+    const m = readMarker(44);
+    expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
+    expect(m.heartbeatAt).toBe('2026-07-07T12:00:21.000Z');
+  });
+
+  it('heartbeat() refreshes heartbeatAt without touching state', () => {
+    let t = new Date('2026-07-07T12:00:00.000Z');
+    let uptimeSec = 0;
+    vi.spyOn(process, 'uptime').mockImplementation(() => uptimeSec);
+    const store = makeStore({ pid: 42, now: () => t });
+    store.begin();
+    expect(readMarker(42).aliveMs).toBe(0);
+
     t = new Date('2026-07-07T12:00:30.000Z');
+    uptimeSec = 30;
     store.heartbeat();
 
     const m = readMarker(42);
     expect(m.heartbeatAt).toBe('2026-07-07T12:00:30.000Z');
     expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
+    expect(m.aliveMs).toBe(30_000);
     expect(m.state).toBe('running');
   });
 
@@ -265,6 +415,33 @@ describe('resolveReusedPids', () => {
 
     expect(resolved).toEqual([
       expect.objectContaining({ kind: 'abnormal', pidReusedSince: '2026-07-16T08:00:00.000Z' }),
+    ]);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('时钟回拨后 PID 被更早时间启动的进程复用 → 仍按进程身份识别并清掉标记', async () => {
+    const originalStartedAtMs = Date.parse('2026-07-07T12:01:00.000Z');
+    const replacementStartedAtMs = Date.parse('2026-07-07T12:00:30.000Z');
+    const marker = {
+      pid: 2187,
+      state: 'running' as const,
+      startedAt: new Date(originalStartedAtMs).toISOString(),
+      processStartedAtMs: originalStartedAtMs,
+    };
+    const file = writeMarker(marker);
+    const store = makeStore({ alivePids: [2187] });
+    const stillRunning = store.analyzePreviousRuns();
+
+    const resolved = await store.resolveReusedPids(
+      stillRunning,
+      startTimesOf([[2187, replacementStartedAtMs]]),
+    );
+
+    expect(resolved).toEqual([
+      expect.objectContaining({
+        kind: 'abnormal',
+        pidReusedSince: new Date(replacementStartedAtMs).toISOString(),
+      }),
     ]);
     expect(fs.existsSync(file)).toBe(false);
   });
