@@ -874,9 +874,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     onUninstallSourceState: async fromPart => {
       const current = plugins;
       if (!current || activeOwnerScopeKey() !== pluginOwner) throw new Error('Plugin account cleanup is unavailable');
-      const release = current.acquireMutationLease(current.captureMutationOwner());
-      try { await current.authorization.cleanupSourceReferences(fromPart); }
-      finally { release(); }
+      await current.cleanupUninstalledSource(fromPart);
     },
     onChanged: ghosts => {
       if (activeOwnerScopeKey() !== pluginOwner || isAppSessionBoundaryPending()) return;

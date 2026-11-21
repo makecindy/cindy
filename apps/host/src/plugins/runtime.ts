@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { holdError, holdRefusal, releaseFailure, type ProfileHold } from '../agent/profile-hold.js';
 import { createRequire } from 'node:module';
 import { setMaxListeners } from 'node:events';
@@ -129,6 +130,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const assertCurrent = () => { if (!current()) throw new Error('PLUGIN_OWNER_CHANGED'); };
   // Keep external tool admission closed while reconcile restores resident runtimes.
   let restoring: Pause | null = null;
+  const uninstallRecovery = new AsyncLocalStorage<Pause>();
   const pausedReason = () => desktopPause?.reason ?? restoring?.reason;
   const profileHoldMessage = () => {
     const held = pausedReason();
@@ -573,7 +575,11 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       restoring = pause;
       desktopPause = null;
       try {
-        if (options.manager.hasPendingMutationRecovery()) await options.manager.retryInterruptedMutationsAfterDbReady();
+        if (options.manager.hasPendingMutationRecovery()) {
+          await uninstallRecovery.run(pause, () => options.manager.retryInterruptedMutationsAfterDbReady());
+          assertCurrent();
+          if (options.manager.hasPendingMutationRecovery()) throw holdError(releaseFailure());
+        }
         // Preserve the browser partition and the gateway fuses. The usual
         // resident policy starts residents; on-demand plugins wait for a call.
         await reconcile();
@@ -593,7 +599,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
         publish('ghosts:runtime-changed', { states: runtime.listStates() });
         return true;
       } catch (error) {
-        if (!resumedSignal.aborted) pauseForDesktop(releaseFailure());
+        if (current() && !resumedSignal.aborted) pauseForDesktop(releaseFailure());
         throw error;
       }
     } finally {
@@ -658,6 +664,21 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     /** Built-in and approved plugin Skills, as Desktop's listCindyManagedSkills. */
     listManagedSkills: () => managedSkills.listCindyManagedSkills(),
     identity,
+    async cleanupUninstalledSource(part: string) {
+      const pause = uninstallRecovery.getStore();
+      const check = () => {
+        if (!pause) return assertPluginAvailable();
+        assertCurrent();
+        if (desktopPause) throw holdError(desktopPause.reason);
+        if (pause !== restoring || options.isProfileHeld?.()) throw new Error('Plugin recovery was superseded');
+      };
+      check();
+      const release = mutation.acquire();
+      try {
+        await authorization.cleanupSourceReferences(part, check);
+        check();
+      } finally { release(); }
+    },
     captureMutationOwner() { assertPluginAvailable(); return getActiveAppSession(); },
     acquireMutationLease(expected: ActiveAppSession) {
       assertPluginAvailable();

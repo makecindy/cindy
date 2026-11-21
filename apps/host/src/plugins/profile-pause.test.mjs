@@ -11,6 +11,8 @@ import { beginAppSessionBoundary, commitVolatileAppSession, getActiveDataOwnerPu
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { configureGhostSnapshotProcess } from '../../../desktop/src/main/cindy-brain/ghostSnapshotCapability.ts';
+import { GhostInstallReceiptStore } from '../../../desktop/src/main/cindy-brain/ghostInstallReceipt.ts';
+import { installedGhostPhysicalRelId } from '../../../desktop/src/shared/pluginIdentity.ts';
 import { GhostRuntime } from '../../../desktop/src/main/cindy-brain/runtime/GhostRuntime.ts';
 import { installedGhostStoragePart } from '../../../desktop/src/shared/pluginIdentity.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
@@ -83,7 +85,7 @@ const nodeWorker = String.raw`
   });
 `;
 
-async function fixture(t, { executable, resident = true, node = false, services = false } = {}) {
+async function fixture(t, { executable, resident = true, node = false, services = false, onCleaned } = {}) {
   const cleanup = lifoCleanup(t);
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-plugin-pause-'));
   cleanup.after(() => fs.rm(profile, { recursive: true, force: true }));
@@ -93,7 +95,13 @@ async function fixture(t, { executable, resident = true, node = false, services 
   configureGhostSnapshotProcess(createSnapshotProcess);
   const ownerId = LOCAL_DATA_OWNER_ID;
   const root = (...parts) => ownerScopedPath(profile, ownerId, ...parts);
-  const manager = createHostGhostManager({ userDataDir: profile, ownerId });
+  let runtime;
+  const cleaned = [];
+  const manager = createHostGhostManager({ userDataDir: profile, ownerId, onUninstallSourceState: async part => {
+    await runtime.cleanupUninstalledSource(part);
+    cleaned.push(part);
+    await onCleaned?.();
+  } });
   cleanup.after(() => manager.disposeNotificationIndex());
   const zip = new JSZip();
   zip.file('ghost.json', JSON.stringify({
@@ -135,7 +143,7 @@ async function fixture(t, { executable, resident = true, node = false, services 
     cleanup.after(() => hostTools.close());
   }
   const secrets = new Map();
-  const runtime = await createHostPluginRuntime({
+  runtime = await createHostPluginRuntime({
     profileDir: profile, ownerId, manager, assets, log,
     credentials: { read: key => secrets.get(key) ?? null, write: (key, value) => secrets.set(key, value),
       remove: key => secrets.delete(key) }, hostToolRequest: hostTools?.request,
@@ -151,7 +159,7 @@ async function fixture(t, { executable, resident = true, node = false, services 
   const control = () => runtime.taskPlugins.screenGhostControlPoint('will-tool-call',
     { engine: 'pi', phase: 'call', sessionId: 'task', toolName: 'read', toolCallId: 'tool', input: {} },
     { pluginId: id, onFailure: 'block' });
-  return { root, manager, runtime, id, gateway, call, control, pushes, warnings, terminalCleanup,
+  return { root, manager, runtime, id, archive, installed: installed.ghost, cleaned, gateway, call, control, pushes, warnings, terminalCleanup,
     hold: () => runtime.pauseForDesktop(holdMessage) };
 }
 
@@ -640,4 +648,44 @@ test('an interrupted external upload is not resent and committed staging remains
   assert.equal((await staging('chunk', { stagingId: unfinished.stagingId, seq: 1, content: data.toString('base64'), encoding: 'base64' })).result.ok, false);
   assert.equal((await staging('commit', { stagingId: unfinished.stagingId })).result.ok, false);
   assert.equal(transport.count(), 1);
+});
+
+// Integration: an actual uninstall can leave a quarantined package and a durable
+// journal while the profile is held. Recover with the authorized cleanup port.
+test('resume finishes the held uninstall journal and releases its quarantine', realPage, async t => {
+  const started = Promise.withResolvers();
+  const finish = Promise.withResolvers();
+  const f = await fixture(t, { executable: executablePath, resident: false, onCleaned: () => {
+    started.resolve(); return finish.promise;
+  } });
+  const physical = installedGhostPhysicalRelId(f.installed);
+  const store = new GhostInstallReceiptStore(() => f.manager.approvalStateRoot());
+  f.hold();
+  assert.equal((await f.manager.uninstall(physical)).rejection?.code, 'io');
+  assert.equal(store.readPendingMutationSync(physical).state, 'valid');
+  assert.deepEqual(f.cleaned, []);
+  const resuming = f.runtime.resumeAfterDesktop();
+  await started.promise;
+  try {
+    assert.deepEqual(await f.call(), held);
+    assert.throws(() => f.runtime.captureMutationOwner(), { code: 'PRECONDITION_FAILED' });
+  } finally { finish.resolve(); }
+  assert.equal(await resuming, true);
+  assert.equal(store.readPendingMutationSync(physical).state, 'missing');
+  assert.deepEqual(f.cleaned, [f.id]);
+  await assert.rejects(fs.stat(f.installed.dir), { code: 'ENOENT' });
+  assert.ok('ghost' in await f.manager.install(f.archive, { namespace: null, uiCapabilityApproved: true }));
+});
+
+// Integration tier. A stopped resident must not be relaunched by reconciliation.
+test('resume keeps a disabled resident and its Node worker off', realPage, async t => {
+  const f = await fixture(t, { executable: executablePath, node: true });
+  const result = await f.manager.setEnabled(installedGhostPhysicalRelId(f.installed), false);
+  assert.deepEqual(result, { ok: true });
+  f.hold();
+  const spawn = t.mock.method(GhostRuntime.prototype, 'spawn');
+  assert.equal(await f.runtime.resumeAfterDesktop(), true);
+  assert.equal(spawn.mock.callCount(), 0);
+  assert.equal(f.runtime.node.stateOf(f.id), 'off');
+  assert.equal(f.manager.findInstalledInstance(f.id)?.enabled, false);
 });
