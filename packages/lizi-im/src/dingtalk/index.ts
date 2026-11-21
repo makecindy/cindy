@@ -74,6 +74,8 @@ export interface DingTalkIMOptions {
   secretKeyPrefix?: string;
   /** 是否注册 `dingtalkBot:*` 设置卡 IPC 并广播状态(缺省 true; 伙伴连接关掉)。 */
   ipc?: boolean;
+  /** 伙伴连接可接收访客私聊；个人设置页 bot 默认仅接收 owner。 */
+  allowGuestDirect?: boolean;
   fetcher?: DingTalkFetch;
   clientFactory?: (credentials: {
     appKey: string;
@@ -680,6 +682,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       if (isGroup || !this.claimOwner(envelope.senderId)) return;
     }
     const isOwner = envelope.senderId === this.ownerUserId;
+    if (!isGroup && !isOwner && !this.options.allowGuestDirect) return;
 
     const content = parseInboundContent(envelope);
     if (

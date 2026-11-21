@@ -261,6 +261,27 @@ describe("DingTalkIM", () => {
     expect(shared.decide).not.toHaveBeenCalled();
   });
 
+  it("keeps personal bots owner-only when guest direct access is not enabled", async () => {
+    const { host } = makeHost();
+    const client = new FakeClient();
+    const im = new DingTalkIM(host, {
+      clientFactory: () => client,
+      fetcher: validCredentialFetcher(),
+    });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+    await im.init();
+    client.emit(directMessage());
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    client.emit(
+      directMessage({ msgId: "personal-guest", senderStaffId: "guest-user" }),
+      "personal-callback",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(received).toHaveLength(1);
+    await im.dispose();
+  });
+
   it("uploads remote Markdown images and sends native image messages", async () => {
     const { host } = makeHost();
     const fetchRemoteImage = vi.fn(async () => ({
@@ -366,6 +387,7 @@ describe("DingTalkIM", () => {
     const im = new DingTalkIM(host, {
       clientFactory: () => client,
       fetcher: validCredentialFetcher(),
+      allowGuestDirect: true,
     });
     const received: IMMessageEvent[] = [];
     im.onMessage((event) => received.push(event));

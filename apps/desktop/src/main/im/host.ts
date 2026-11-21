@@ -271,6 +271,7 @@ export function createBotDingTalkIM(secretKeyPrefix: string): DingTalkIM {
     fetcher: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
     secretKeyPrefix,
     ipc: false,
+    allowGuestDirect: true,
   });
 }
 export function createBotDiscordIM(
