@@ -81,14 +81,15 @@ function McpRow({
           {config.name}
         </span>
         <span
-          className="truncate text-13 leading-tight"
+          className={cn('text-13 leading-tight', config.readError ? 'break-words' : 'truncate')}
           style={{ color: 'var(--settings-integration-subtitle)' }}
         >
-          {config.url}
+          {config.readError ? t('settings.mcp.errors.localUnreadable')
+            : config.transport === 'stdio' ? t('settings.mcp.fields.localConfig') : config.url}
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <RowIconButton icon={<Pencil size={16} />} label={t('settings.mcp.editAria')} onClick={onEdit} />
+        {!config.readError && <RowIconButton icon={<Pencil size={16} />} label={t('settings.mcp.editAria')} onClick={onEdit} />}
         <RowIconButton icon={<Trash2 size={16} />} label={t('settings.mcp.deleteAria')} onClick={onDelete} />
       </div>
     </div>
@@ -174,7 +175,11 @@ export function McpServersSection() {
   );
 
   return (
-    <SettingsSection title={t('settings.mcp.title')} description={t('settings.mcp.subtitle')}>
+    <SettingsSection
+      id="settings-mcp-servers"
+      title={t('settings.mcp.title')}
+      description={t('settings.mcp.subtitle')}
+    >
       <McpDuplicateNotice />
       {/* MCP 列表自带传输类型图标与行尾操作，行样式保留 */}
       {!loading && (

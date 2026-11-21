@@ -46,7 +46,8 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomMcpToken: () 
 const CREATE_SQL = `
   CREATE TABLE custom_mcp_servers (
     id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, transport TEXT NOT NULL, url TEXT NOT NULL,
-    headers TEXT NOT NULL DEFAULT '{}', sort_order INTEGER NOT NULL DEFAULT 0,
+    headers TEXT NOT NULL DEFAULT '{}',
+    stdio TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
   );
   CREATE INDEX idx_custom_mcp_servers_sort_order ON custom_mcp_servers (sort_order);
@@ -450,4 +451,24 @@ describe('MCP setup creation receipt', () => {
     await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, { ...validConfig, id: 'public-failure' })).rejects.toThrow('fake public refresh failure');
     expect(await listCustomMcpServers()).toHaveLength(3);
   });
+});
+
+// Unit: adding a command upgrades this configuration to local process execution.
+// Exercise the actual IPC handler so an untrusted sender cannot persist it.
+it('requires a trusted Desktop form for local command creation and updates', async () => {
+  mountDb();
+  const harness = new IpcHarness();
+  const deps = makeDeps();
+  registerMcpHandlers(harness, deps);
+  const config = { ...validConfig, transport: 'stdio', url: '',
+    stdio: { command: 'node', args: [], env: {} } };
+  vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => { throw new Error('PERMISSION_DENIED'); });
+  await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, config)).rejects.toThrow('PERMISSION_DENIED');
+  expect(await listCustomMcpServers()).toEqual([]);
+  vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => {});
+  await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, config);
+  expect(await listCustomMcpServers()).toEqual([config]);
+  vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => { throw new Error('PERMISSION_DENIED'); });
+  await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, { ...config, name: 'changed' })).rejects.toThrow('PERMISSION_DENIED');
+  expect(await listCustomMcpServers()).toEqual([config]);
 });

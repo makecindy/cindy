@@ -281,7 +281,7 @@ async function collectSetupSecrets(request: SetupTransferSecretsRequest): Promis
   if (request.mcpServers.length > 0) {
     const wanted = new Set(request.mcpServers);
     for (const server of await listCustomMcpServers()) {
-      if (!wanted.has(server.id)) continue;
+      if (!wanted.has(server.id) || server.transport === 'stdio') continue;
       bundle.mcpServers.push({
         id: server.id,
         url: server.url,
