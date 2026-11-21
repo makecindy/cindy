@@ -1,3 +1,4 @@
+import { useWallpaper } from '@/theme/wallpaper';
 import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
 import { useTaskRowSwipeWidth } from './useTaskRowSwipeWidth';
 /**
@@ -24,7 +25,7 @@ import { useTaskRowSwipeWidth } from './useTaskRowSwipeWidth';
  *  - 全滑判定在 onSwipeableWillOpen(松手后的 JS 回调)同步读 translation,不在
  *    worklet 拖动中触发 —— 手指还按着时行被移除会拆手势树。
  */
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { Text } from "@/components/AppText";
 import {
@@ -157,9 +158,12 @@ function SwipeableSessionRowInner({
   const instanceId = useId();
   const rowKey = `${instanceId}:${session.id}`;
   const pinnedAt = session.pinnedAt;
+  const { selected: wallpaper } = useWallpaper();
+  const [swipingRow, setSwipingRow] = useState<string | null>(null);
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { fullSwipeThreshold, onRowLayout } = useTaskRowSwipeWidth();
+  const rowSurface = wallpaper === 'none' || swipingRow === rowKey ? colors.surface : 'transparent';
 
   const methodsRef = useRef<SwipeableMethods | null>(null);
   // Leave the pane edge's drag band to resizing (see usePaneEdgeInset).
@@ -204,11 +208,13 @@ function SwipeableSessionRowInner({
   });
   const handleOpenStartDrag = useCallback(() => {
     const { registry, rowKey } = gestureInputs.current;
+    if (wallpaper !== 'none') setSwipingRow(rowKey);
     registry.onRowOpen(rowKey, close);
-  }, [close]);
+  }, [close, wallpaper]);
 
   const handleClose = useCallback(() => {
     const { registry, rowKey } = gestureInputs.current;
+    setSwipingRow(null);
     registry.onRowClose(rowKey);
   }, []);
 
@@ -328,8 +334,8 @@ function SwipeableSessionRowInner({
     <Swipeable
       ref={methodsRef}
       hitSlop={hitSlop}
-      childrenContainerStyle={{ backgroundColor: colors.surface }}
-      containerStyle={{ backgroundColor: colors.surface }}
+      childrenContainerStyle={{ backgroundColor: rowSurface }}
+      containerStyle={{ backgroundColor: rowSurface }}
       onSwipeableClose={handleClose}
       onSwipeableOpenStartDrag={handleOpenStartDrag}
       onSwipeableWillOpen={handleWillOpen}

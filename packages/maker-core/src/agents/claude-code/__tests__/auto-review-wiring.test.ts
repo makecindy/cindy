@@ -1041,6 +1041,20 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
   /** 让 push 进队列的事件 fan-out 到收集器。 */
   const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 
+  // #8706 unit: unavailable used to discard reason before the real SDK confirmation callback.
+  it('keeps quota cause on the Claude confirmation and session notice', async () => {
+    const { handle, canUseTool, seen } = await startSession('auto', {
+      reviewer: async () => ({ verdict: 'ask', unavailable: true, unavailableReason: 'quota_exhausted' }),
+    });
+    const { notices } = startNoticeCollector(handle);
+    try {
+      await canUseTool('Write', { file_path: '/tmp/quota-output.txt' }, { toolUseID: 'quota' });
+      expect(permissionRequests(seen)[0]?.metadata).toMatchObject({ autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' });
+      await vi.waitFor(() => expect(notices.some(message => message.includes('[AUTO_REVIEW_UNAVAILABLE_QUOTA]'))).toBe(true));
+      expect(notices.join('')).not.toContain('Full access');
+    } finally { await handle.close(); }
+  });
+
   it('emits one notice for a broken reviewer, not one per blocked action', async () => {
     // reviewer 抛错 = resolveAutoReviewDecision 走 unavailable 兜底 block。
     const { handle, canUseTool } = await startSession('auto', {

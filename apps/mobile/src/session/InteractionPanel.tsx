@@ -992,7 +992,7 @@ function PermissionEvidence({
       </Text>)}
       <Text style={styles.companionMeta}><Text style={styles.companionMetaLabel}>{`${t('interaction.companion.operation')}  `}</Text>{presentation.toolName}</Text>
       {presentation.sourceDescription ? <Text selectable style={styles.body}>{presentation.sourceDescription}</Text> : null}
-      {presentation.autoReviewUnavailable ? <Text style={styles.body}>{t('interaction.permission.autoReviewUnavailable')}</Text> : null}
+      {presentation.autoReviewUnavailable ? <Text style={styles.body}>{t(presentation.autoReviewQuotaExhausted ? 'session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA' : 'interaction.permission.autoReviewUnavailable')}</Text> : null}
       {presentation.autoReviewReason ? <Text selectable style={styles.body} testID="interaction.permission.autoReviewReason">
         {t('interaction.permission.autoReviewReason', { reason: presentation.autoReviewReason })}
       </Text> : null}
@@ -1033,7 +1033,7 @@ function PermissionEvidence({
       {presentation.autoReviewUnavailable || presentation.description ? (
         <Text style={styles.permissionDescription}>
           {presentation.autoReviewUnavailable
-            ? t('interaction.permission.autoReviewUnavailable')
+            ? t(presentation.autoReviewQuotaExhausted ? 'session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA' : 'interaction.permission.autoReviewUnavailable')
             : presentation.description}
         </Text>
       ) : null}

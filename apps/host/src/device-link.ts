@@ -38,6 +38,8 @@ import { MAKER_INVOKE, MAKER_PUSH } from '../../desktop/src/main/maker-ipc/chann
 import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.js';
 import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.js';
 import { explicitPorts } from './agent/explicit-ports.js';
+import { listDir, mkdirP, statPath } from '../../desktop/src/main/fsBrowse/core.js';
+import { requireObject, requireString } from '../../desktop/src/main/utils/ipcValidate.js';
 
 /**
  * What each port the Host hands the shared inbound dispatch (dispatch.ts InboundDispatchPorts) can do
@@ -214,6 +216,31 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     const held = deps.profileHold?.();
     if (held) throw Object.assign(new Error(`[PRECONDITION_FAILED] ${held}`), { code: 'PRECONDITION_FAILED' });
   };
+  // Project-directory browsing uses the same pure helpers as the desktop. The Device Link
+  // allowlist admits these channels only for same-account controllers, and the paths always
+  // refer to this Host's filesystem, never the controller's.
+  registry.register('fs:list-dir', async ([arg]) => {
+    assertCurrent();
+    const obj = requireObject(arg);
+    const result = await listDir(requireString(obj.path, 'path'), { canonicalDirectory: obj.canonicalDirectory === true });
+    assertCurrent();
+    return result;
+  });
+  registry.register('fs:stat-path', async ([arg]) => {
+    assertCurrent();
+    const obj = requireObject(arg);
+    const result = await statPath(requireString(obj.path, 'path'), obj.canonicalDirectory === true);
+    assertCurrent();
+    return result;
+  });
+  registry.register('fs:mkdir-p', async ([arg]) => {
+    refuseWhileHeld();
+    assertCurrent();
+    const obj = requireObject(arg);
+    const result = await mkdirP(requireString(obj.path, 'path'));
+    assertCurrent();
+    return result;
+  });
   registry.register('maker:create-session', ([input]) => { refuseWhileHeld(); return deps.createRuntimeSession(input); });
   registry.register(PROJECT_ARCHIVE_CHANNEL, ([input]) => {
     // The preview is a read. Like project-info writes at the service boundary,

@@ -96,7 +96,8 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   const [reviewedRequest, setReviewedRequest] = useState<string | null>(null);
   const showInstallSummary = isPluginInstallConsent && reviewedRequest !== permission.requestId;
   const promptDescription = autoReviewUnavailable
-    ? t('newChat.permissionPrompt.autoReviewUnavailable')
+    ? t(permission.autoReviewQuotaExhausted
+      ? 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA' : 'newChat.permissionPrompt.autoReviewUnavailable')
     : isPluginInstallConsent
       ? consentHead
       : description;
