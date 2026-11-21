@@ -70,6 +70,8 @@ export const PORTS_ONLY_PI_READS = {
   resolvePiGatewayModelDescriptor: undefined,
   resolvePiGatewayModelSpec: undefined,
   resolvePiGlobalContextHome: undefined,
+  resolvePiLiveCompactEnabled: undefined,
+  resolvePiLiveCompactShadowDir: undefined,
   resolvePiManagedPackageResources: undefined,
   resolvePiNativeCompatOverride: undefined,
   resolvePiNativeCompatStorePath: undefined,
