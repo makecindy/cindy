@@ -2092,15 +2092,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     }
   }, [isAgentDeviceDraft, effectiveAgentDeviceId, capabilityAgentKind, dlSel]);
 
-  // 远程草稿展示用:已 seed 用 dlSel;seed 完成前(等隧道 / 能力)先用 capabilities 默认占位,
-  // 绝不回落控制端本地(仅 capabilities 未就绪的极早期暂为 null,此时与改造前行为一致)。
+  // Use the same host defaults for the first render and subsequent selection.
   const deviceLinkInitial = useMemo<DeviceLinkDraftSelection | null>(() => {
     if (!usesDeviceCatalog) return null;
     if (dlSel) return dlSel;
-    if (capabilities) {
+    if (capabilities && deviceDraftDefaultsReady) {
       return resolveDeviceLinkDraftDefaults(
         capabilities,
-        null,
+        deviceDraftDefaults,
         undefined,
         capabilityAgentKind,
         agentCatalogProviders,
@@ -2110,6 +2109,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   }, [
     usesDeviceCatalog,
     dlSel,
+    deviceDraftDefaultsReady,
+    deviceDraftDefaults,
     capabilities,
     capabilityAgentKind,
     agentCatalogProviders,
@@ -2143,8 +2144,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   }, [dlSel, deviceDraftDefaults]);
 
   // 选中模型 + effort:device-link 用镜像 holder(deviceLinkInitial,被控端草稿值已按 capabilities
-  // 校准);本地草稿用 chatPrefs(逐字节不变)。device-link 在 holder seed 完成前(等隧道 / 能力)
-  // 极早期暂用 chatPrefs,随后被 deviceLinkInitial 取代。
+  // 校准)。首次等待远端默认值时，模型选择器显示读取状态。
   // 播种出来的模型与档位:被控端给的原样用(目录还在读 / 老被控端只有拍平 capabilities 时)。
   const draftSeedSelection = useMemo(() => {
     // 播种出来的模型可能是空串(那份目录没给出可用型号,见 resolveDeviceLinkDraftDefaults 的
@@ -7559,6 +7559,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     remoteAgentDevices={remoteAgentDevices}
                     catalogHostDeviceId={controlledModelRoute.catalogHostDeviceId}
                     modelMemoryOverride={deviceLinkDraftMemory}
+                    draftModelPending={isDeviceLinkDraft && !dlSel && !activePluginEngine &&
+                      remoteDraftState.status !== 'error' && remoteModelListStatus !== 'error' &&
+                      (!deviceDraftDefaultsReady || !capabilities)}
                     initialModel={draftInitialModel}
                     initialEffort={draftInitialEffort}
                     initialPermissionMode={activePluginEngine ? activePluginEngine.permissionMode : chatInitialPermissionMode}

@@ -1,3 +1,5 @@
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
+import { useWallpaper } from '@/theme/wallpaper';
 import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
 import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
 import { projectAliasComparisonKey, projectDirectoryName } from '@cindy/maker-shared/project-alias-sync';
@@ -3236,6 +3238,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return name && name !== deviceId ? name : null;
   })();
   const paneLayout = useSessionPaneLayout();
+  const { selected: wallpaper } = useWallpaper();
+  // The controls stay in the safe area. Their backdrop spans the artwork
+  // through the landscape phone's side insets.
+  const blurOutsets = !paneLayout.persistent && wallpaper !== 'none' ? insets : undefined;
   const horizontalSystemHeader = Platform.OS === 'ios' && adaptiveWindow.barEdge === 'none'
     && !paneLayout.persistent && !shareSelectionActive;
   const composerRegion = keyboardControlRegion(adaptiveWindow, keyboardState.height);
@@ -10661,6 +10667,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   return (
     <GestureDetector gesture={sessionListDrawerPullGesture}>
     <View style={styles.safeArea} testID="session.screen">
+      <WallpaperBackdrop />
       <PaneViewportProvider value={detailViewport}>
       <ComposerKeyboardAvoidingView
         keyboard={keyboardState}
@@ -10676,7 +10683,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         style={[styles.keyboard, { marginLeft: paneLayout.detail.x, marginRight: Math.max(0, windowDimensions.width - paneLayout.detail.x - paneLayout.detail.width) }]}
       >
         {Platform.OS === 'ios' ? (
-          <SessionHeaderNativeBlur height={topChromeHeight}
+          <SessionHeaderNativeBlur height={topChromeHeight} horizontalOutsets={blurOutsets}
             fadeInside={companionHeaderShown ? CHAT_HEADER_BLUR_FADE_INSIDE : undefined} />
         ) : null}
         <SessionChromeLayer
@@ -11410,6 +11417,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             pointerEvents="none" style={StyleSheet.absoluteFill}>
             <SessionHeaderNativeBlur
               edge="bottom"
+              horizontalOutsets={blurOutsets}
               height={Math.max(0, bottomOverlayHeight - composerBackdropTop)}
               inset={dockKeyboardFollow ? 0 : nativeShellLayout.keyboardBottomInset}
             />
