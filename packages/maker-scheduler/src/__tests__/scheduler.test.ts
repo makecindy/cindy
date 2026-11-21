@@ -873,6 +873,88 @@ describe('Scheduler', () => {
     expect(local.fireCalls[0]!.schedule.id).toBe(schedule.id);
   });
 
+  // Codex P1 on #11577:切账号 / 重启时宿主先 stop 调度器(apps/desktop 的
+  // resetScheduler),挂死的过期写入随后才回来。stop() 已经清掉 activeSchedules,
+  // 过期快照检查「查无新版」会判定它是最新版本,把上一段生命周期的结果写回缓存
+  // 并广播 changed —— 新主人会收到上一账号的时间线。
+  it('drops an expiry reply that arrives after stop', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 30 });
+    const changed: string[] = [];
+    local.scheduler.on('changed', (e: { scheduleId: string }) => changed.push(e.scheduleId));
+    const expireAt = local.clock.now() + 60_000;
+    const schedule = await local.scheduler.create({ ...baseInput, expireAt });
+    const realUpdate = local.storage.update.bind(local.storage);
+    let releaseExpire!: (value: Schedule | null) => void;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) =>
+      patch.status === 'expired'
+        ? new Promise<Schedule | null>((resolve) => { releaseExpire = resolve; })
+        : realUpdate(id, patch, expected),
+    );
+    local.clock.setTo(expireAt + 1);
+    const settled = await Promise.race([
+      local.scheduler.tick().then(() => 'tick' as const),
+      // real-wait: 挂死哨兵 —— 修复路径 30ms 内完成,旧代码的无界 await 稳定判 hung
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
+    ]);
+    expect(settled).toBe('tick');
+
+    // 宿主停机(切账号 / 重启):调度器换代。
+    await local.scheduler.stop();
+    changed.length = 0;
+
+    // 挂死的过期写入这时才回来 —— 属于上一段生命周期,不得再改状态或广播。
+    releaseExpire({ ...schedule, status: 'expired', nextFireAt: undefined, updatedAt: expireAt + 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(changed).toEqual([]);
+  });
+
+  // Codex P1 on #11577:用户延长截止时间后任务重新 active、到点进入派发队列,新行
+  // 已从 activeSchedules 摘走(只在 automaticDispatchSchedules 里)。这时迟到的过期
+  // 快照若只查 activeSchedules 就「查无此行」,会被当成最新版本并覆盖派发守卫,
+  // canDispatch 变 false,一次本该触发的运行被推迟。
+  it('keeps the in-flight dispatch snapshot when the expiry reply arrives late', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 30,
+      // 派发停在途中:快照留在 automaticDispatchSchedules,便于观察守卫。
+      runnerImpl: async () => new Promise<FireResult>(() => {}),
+    });
+    const createdAt = local.clock.now();
+    const expireAt = createdAt + 60_000;
+    const schedule = await local.scheduler.create({ ...baseInput, intervalMs: 15_000, expireAt });
+    const realUpdate = local.storage.update.bind(local.storage);
+    let releaseExpire!: (value: Schedule | null) => void;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) =>
+      patch.status === 'expired'
+        ? new Promise<Schedule | null>((resolve) => { releaseExpire = resolve; })
+        : realUpdate(id, patch, expected),
+    );
+    local.clock.setTo(expireAt + 1);
+    const settled = await Promise.race([
+      local.scheduler.tick().then(() => 'tick' as const),
+      // real-wait: 挂死哨兵 —— 修复路径 30ms 内完成,旧代码的无界 await 稳定判 hung
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
+    ]);
+    expect(settled).toBe('tick');
+
+    // 用户在迟到回包到达前延长截止时间,任务重新 active。
+    const extended = await local.scheduler.update(schedule.id, { expireAt: expireAt + 3_600_000 });
+    expect(extended.status).toBe('active');
+
+    // 到点 → 进入派发队列:新行从 activeSchedules 摘走,只留在派发快照里。
+    local.clock.setTo(expireAt + 2_000);
+    void local.scheduler.tick().catch(() => undefined);
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(local.fireCalls).toHaveLength(1);
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(true);
+
+    // 迟到的过期快照这时才回来 —— 它比派发中的那一版旧,不能覆盖派发守卫。
+    releaseExpire({ ...schedule, status: 'expired', nextFireAt: undefined, updatedAt: expireAt + 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(true);
+
+    await local.scheduler.stop();
+  });
+
 
   it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
     const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';
