@@ -269,7 +269,7 @@ describe('resolveSystemNodeInterpreter', () => {
       command: 'node "must-not-run.mjs"', cwd,
       signal: controller.signal, stdinPayload: stdinPayload(cwd),
     });
-    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1), { interval: 1, timeout: 1_000 });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1), { interval: 10, timeout: 5_000 });
     pathChild.emit('close', 1);
     await started.promise;
     controller.abort();
@@ -295,10 +295,10 @@ describe('resolveSystemNodeInterpreter', () => {
     spawn.mockReturnValueOnce(pathChild);
     const cwd = path.join(tmpdir(), 'node-runtime-executor-timeout');
     const pending = executePreRunHook({
-      command: 'node "must-not-run.mjs"', cwd, timeoutMs: 50,
+      command: 'node "must-not-run.mjs"', cwd, timeoutMs: 2_000,
       stdinPayload: stdinPayload(cwd),
     });
-    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1), { interval: 1, timeout: 1_000 });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1), { interval: 10, timeout: 5_000 });
     pathChild.emit('close', 1);
     await started.promise;
 

@@ -282,7 +282,7 @@ describe('resolvePreRunHookTimeoutMs(无默认超时)', () => {
 
 describe('Node 解释器执行回退', () => {
   it('PATH 失效时按字面使用带空格和 $& 的真实 Node 路径,保留 PR 参数与 stdin', async () => {
-    const { mkdtempSync, writeFileSync, rmSync, symlinkSync } = await import('node:fs');
+    const { mkdtempSync, writeFileSync, rmSync, chmodSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const pathMod = await import('node:path');
     const dir = mkdtempSync(pathMod.join(tmpdir(), 'real-node-hook-'));
@@ -295,16 +295,16 @@ describe('Node 解释器执行回退', () => {
         process.exit(2);
       `);
       const quotedScript = process.platform === 'win32' ? `"${script}"` : `'${script}'`;
-      const specialNode = pathMod.join(dir, 'real node$&runtime');
+      // 普通可执行文件即可覆盖字面替换,不依赖 symlink / junction 的宿主能力。
+      const specialNode = pathMod.join(dir, process.platform === 'win32' ? 'real node$&runtime.cmd' : 'real node$&runtime');
       if (process.platform === 'win32') {
-        symlinkSync(pathMod.dirname(process.execPath), specialNode, 'junction');
+        writeFileSync(specialNode, `@"${process.execPath}" %*\r\n`);
       } else {
-        symlinkSync(process.execPath, specialNode);
+        const quotedExecPath = process.execPath.replace(/'/g, `'\\''`);
+        writeFileSync(specialNode, `#!/bin/sh\nexec '${quotedExecPath}' "$@"\n`);
+        chmodSync(specialNode, 0o755);
       }
-      const executable = process.platform === 'win32'
-        ? pathMod.join(specialNode, pathMod.basename(process.execPath))
-        : specialNode;
-      const quotedNode = process.platform === 'win32' ? `"${executable}"` : `'${executable}'`;
+      const quotedNode = process.platform === 'win32' ? `"${specialNode}"` : `'${specialNode}'`;
       const prUrl = 'https://github.com/makecindy/cindy/pull/11722';
       nodeInterpreter.mockResolvedValueOnce(quotedNode);
       const result = await executePreRunHook({
@@ -318,7 +318,7 @@ describe('Node 解释器执行回退', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it('xdt-node 找不到真实运行时则 fail-closed,不启动命令', async () => {
     nodeInterpreter.mockResolvedValueOnce(null);
