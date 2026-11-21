@@ -38,6 +38,7 @@ import {
   VERSION_ID,
   ORIGINAL_DEV_ENV_KEYS,
   ORIGINAL_DEV_ENVIRONMENT_OVERRIDES,
+  DEV_ENVIRONMENT_OVERRIDES_CAPABILITY,
   supportsDevEnvironmentOverrides,
   withVersionStore,
   writeVersionJson,
@@ -365,6 +366,7 @@ export function describeOriginalVersion(node?: string): OriginalVersion {
               process.env.XDT_DESKTOP_DEV_MODE === 'local'
                 ? ('local' as const)
                 : ('remote' as const),
+            capabilities: { [DEV_ENVIRONMENT_OVERRIDES_CAPABILITY]: true },
             environment: Object.fromEntries(
               ORIGINAL_DEV_ENV_KEYS.flatMap((key) =>
                 process.env[key] !== undefined ? [[key, process.env[key]!]] : [],

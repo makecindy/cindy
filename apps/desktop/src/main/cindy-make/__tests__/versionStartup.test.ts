@@ -129,6 +129,7 @@ beforeEach(async ({ task }) => {
     'XDT_ENDPOINT_MANIFEST_FILE',
     'XDT_ENDPOINTS_CDN',
     'XDT_DESKTOP_DEV_MODE',
+    'XDT_DISABLE_GLOBAL_SHORTCUTS',
   ])
     vi.stubEnv(key, undefined);
   vi.stubEnv('PATH', path.dirname(originalExec));
@@ -255,6 +256,7 @@ describe('one original version type for Dev and installed Cindy', () => {
       root: path.join(root, 'checkout'),
       node: originalExec,
       mode: 'remote',
+      capabilities: { 'dev-environment-overrides': true },
     });
     expect(value.development?.environment).not.toHaveProperty('OPENAI_API_KEY');
     expect(value.development?.environment).not.toHaveProperty('NODE_OPTIONS');

@@ -340,7 +340,6 @@ describe('local Cindy version snapshots', () => {
     await expect(verifyPersonalVersion(h.userData, id, h.original)).rejects.toMatchObject({
       code: 'incompatible',
     });
-
     const item = readPersonalVersion(h.userData, id);
     await writeFile(
       path.join(versionDirectory(h.userData, id), item.resources, 'cindy-version-protocol.json'),
@@ -349,6 +348,10 @@ describe('local Cindy version snapshots', () => {
         capabilities: { [DEV_ENVIRONMENT_OVERRIDES_CAPABILITY]: true },
       }),
     );
+    await expect(verifyPersonalVersion(h.userData, id, h.original)).rejects.toMatchObject({
+      code: 'incompatible',
+    });
+    h.original.development.capabilities = { [DEV_ENVIRONMENT_OVERRIDES_CAPABILITY]: true };
     expect(await verifyPersonalVersion(h.userData, id, h.original)).toMatchObject({ id });
   });
   it('verifies synchronously for the pre-ready startup path with the same outcome', async () => {

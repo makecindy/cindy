@@ -53,6 +53,8 @@ export interface OriginalVersion {
     node: string;
     mode: 'local' | 'remote';
     environment: Record<string, string>;
+    /** Capabilities this origin can record for retained personal versions. */
+    capabilities?: Record<string, boolean>;
     environmentOverrides?: Record<string, string>;
   };
 }
@@ -322,6 +324,11 @@ function personalVersionVerification(profile: string, id: string, original: Orig
     capabilities?: unknown;
   }>(path.join(resources, 'cindy-version-protocol.json'));
   if (protocol?.version !== CINDY_VERSION_PROTOCOL) throw versionError('unavailable');
+  if (
+    hasCapability(protocol.capabilities, DEV_ENVIRONMENT_OVERRIDES_CAPABILITY) &&
+    !supportsDevEnvironmentOverrideOrigin(original)
+  )
+    throw versionError('incompatible');
   if (!supportsDevEnvironmentOverrides(resources, original)) throw versionError('incompatible');
   return {
     executable: path.join(root, item.executable),
@@ -397,6 +404,22 @@ export function listPersonalVersions(
   return id ? [describePersonalVersion(profile, id, original)] : [];
 }
 
+function hasCapability(value: unknown, capability: string): boolean {
+  if (Array.isArray(value)) return value.includes(capability);
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    Object.entries(value).some(([key, entry]) => key === capability && entry === true)
+  );
+}
+
+export function supportsDevEnvironmentOverrideOrigin(original: OriginalVersion): boolean {
+  return hasCapability(
+    original.development?.capabilities,
+    DEV_ENVIRONMENT_OVERRIDES_CAPABILITY,
+  );
+}
+
 export function supportsDevEnvironmentOverrides(
   resources: string,
   original: OriginalVersion,
@@ -408,16 +431,7 @@ export function supportsDevEnvironmentOverrides(
   const protocol = readVersionJson<{ capabilities?: unknown }>(
     path.join(resources, 'cindy-version-protocol.json'),
   );
-  const capabilities = protocol?.capabilities;
-  return (
-    (Array.isArray(capabilities) && capabilities.includes(DEV_ENVIRONMENT_OVERRIDES_CAPABILITY)) ||
-    (!!capabilities &&
-      typeof capabilities === 'object' &&
-      !Array.isArray(capabilities) &&
-      Object.entries(capabilities).some(
-        ([key, value]) => key === DEV_ENVIRONMENT_OVERRIDES_CAPABILITY && value === true,
-      ))
-  );
+  return hasCapability(protocol?.capabilities, DEV_ENVIRONMENT_OVERRIDES_CAPABILITY);
 }
 
 /** Old registries have no slot yet; adopt their newest runnable generation on read. */
