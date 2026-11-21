@@ -15420,7 +15420,7 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "unverified": "Envío no verificado",
+        "unverified": "Declaración de turno sin verificar",
         "notice": {
           "noDeclaration": "Este turno no presentó declaración de envío",
           "declaredNotDispatched": "La declaración afirma un envío a {{target}} que el host nunca aceptó",

@@ -15316,7 +15316,7 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "unverified": "Dispatch not verified",
+        "unverified": "Turn declaration unverified",
         "notice": {
           "noDeclaration": "This turn carried no report_turn declaration",
           "declaredNotDispatched": "The declaration claims a dispatch to {{target}} that the host never accepted",

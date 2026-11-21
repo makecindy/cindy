@@ -15242,7 +15242,7 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "unverified": "遣單無據，待核",
+        "unverified": "回合之陳未核",
         "notice": {
           "noDeclaration": "此輪未有回合之陳",
           "declaredNotDispatched": "陳稱已遣往 {{target}}，然宿未納",

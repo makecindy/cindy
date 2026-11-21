@@ -15279,7 +15279,7 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "unverified": "Übergabe nicht bestätigt",
+        "unverified": "Turn-Erklärung unbestätigt",
         "notice": {
           "noDeclaration": "Für diesen Turn liegt keine Übergabe-Erklärung vor",
           "declaredNotDispatched": "Die Erklärung nennt eine Übergabe an {{target}}, die der Host nie angenommen hat",

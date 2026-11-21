@@ -15251,7 +15251,7 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "unverified": "파견이 확인되지 않았습니다",
+        "unverified": "턴 선언 미확인",
         "notice": {
           "noDeclaration": "이번 턴의 보고 선언이 제출되지 않았습니다",
           "declaredNotDispatched": "{{target}}에게 파견했다고 선언했지만 호스트가 접수하지 않았습니다",

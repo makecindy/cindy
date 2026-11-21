@@ -15250,7 +15250,7 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "unverified": "派發未經核實",
+        "unverified": "回合聲明未核實",
         "notice": {
           "noDeclaration": "這一輪沒有交回合聲明",
           "declaredNotDispatched": "聲明稱已派給 {{target}}，宿主這一輪沒有接受",
