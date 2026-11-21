@@ -1148,7 +1148,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const shareSelectionActive = useShareSelectionActive(sessionId);
   const shareSelectionCount = useShareSelectionCount();
   const shareSelectionRevision = useShareSelectionRevision();
-  const deviceId = readRouteParam(params.deviceId) ?? remoteSessionStore.getSessionDeviceId(sessionId) ?? '';
+  const linkedDeviceId = readRouteParam(params.deviceId);
+  const listedSession = remoteSessionStore.getSessions?.()?.find((item) => item.id === sessionId);
+  const deviceId = resolveSessionLinkDeviceId({
+    listedDeviceId: listedSession?.canonicalDeviceId ?? listedSession?.deviceLinkDeviceId,
+    linkedDeviceId,
+    currentDeviceId: remoteSessionStore.getSessionDeviceId(sessionId),
+  }) ?? '';
   // 回撤 preview/commit 的「请求代际」。每次发起 +1、每次切 session 也 +1(见下方 reset effect),
   // 异步返回后代际已变则丢弃。比只比较 sessionId 更严谨:仅比 sessionId 无法失效「A 发起 → 切到 B →
   // 请求返回前又切回 A」期间的 stale 请求(切回后 sessionId 再次相等会误放行,导致确认框在 A 复活或
