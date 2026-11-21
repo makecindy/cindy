@@ -187,11 +187,13 @@ export function useRemoteBotSync(): void {
             publish(snapshot.map(row => row.deviceId === deviceId && row.id === bot.id
               ? { ...row, delegatedSessionIds: created } : row));
           } catch (error) {
-            // Keep this host's last known attribution on a temporary read failure.
-            if (!current()) return;
+            // Keep this host's last known attribution on a temporary read failure. A superseded
+            // round must not pause the round that replaced it.
+            if (!current() || generations.get(deviceId) !== epoch) return;
             delegationRetryAt.set(retryKey, Date.now() + DELEGATION_RETRY_MS);
-            // A stalled host still holds that request: do not queue the next teammate behind it.
-            if (error === DELEGATION_READ_TIMEOUT) { delegationRetryAt.set(deviceId, Date.now() + DELEGATION_RETRY_MS); break; }
+            // The host still holds that request until its invoke budget ends: do not queue the next
+            // teammate behind it. Later rounds skip this teammate and read the others.
+            if (error === DELEGATION_READ_TIMEOUT) { delegationRetryAt.set(deviceId, Date.now() + DELEGATION_HOST_PAUSE_MS); break; }
           }
         }
         if (current() && generations.get(deviceId) === epoch) taskRefreshes.delete(deviceId);
@@ -303,6 +305,8 @@ const legacyDelegationHosts = new Set<string>();
 const delegationRetryAt = new Map<string, number>();
 const DELEGATION_READ_TIMEOUT_MS = 10_000;
 const DELEGATION_RETRY_MS = 5 * 60_000;
+/** The default 30 s invoke budget: an abandoned read can hold the host's slot that long. */
+const DELEGATION_HOST_PAUSE_MS = 30_000;
 const DELEGATION_READ_TIMEOUT = new Error('legacy delegation read timed out');
 
 /**
