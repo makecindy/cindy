@@ -173,6 +173,7 @@ function refreshCache(): void {
   }
   const leads: LeadWorkerSessions[] = [];
   const targets = new Map<string, { workerSessionId: string; chatSessionId: string }>();
+  const remoteQuestionLeadRows = new Set<string>();
   for (const [leadId, snapshot] of listRetainedWorkerProjections()) {
     const localIds = localOrcaWorkerSessionIds(snapshot.workers, leadId);
     leads.push([leadId, localIds]);
@@ -182,16 +183,19 @@ function refreshCache(): void {
       return statuses.get(chatId)?.hasPendingAskUser ||
         (worker.executionDevice && remoteQuestionPending(chatId, worker.executionDevice.deviceId));
     });
-    if (worker) targets.set(leadId, {
+    if (!worker) continue;
+    targets.set(leadId, {
       workerSessionId: worker.sessionId,
       chatSessionId: worker.executionDevice?.remoteSessionId ?? worker.sessionId,
     });
+    if (snapshot.leadDeviceId) {
+      remoteQuestionLeadRows.add(sessionRowKey({ id: leadId, deviceLinkDeviceId: snapshot.leadDeviceId }));
+    }
   }
   if (localSessions !== cachedLocalSessions || remoteSessions !== cachedRemoteSessions) {
     const isWorker = (session: Session) => session.status === 'active' && session.orcaRole === 'worker';
     listedWorkers = [...(localSessions?.filter(isWorker) ?? []), ...remoteSessions.filter(isWorker)];
   }
-  const remoteQuestionLeadRows = new Set<string>();
   for (const worker of listedWorkers) {
     const leadId = worker.orcaLeadSessionId;
     if (!leadId) continue;
@@ -348,7 +352,7 @@ export function useOrcaLeadWorkerAttention(): ReadonlyMap<string, OrcaLeadWorker
   );
 }
 
-function getRemoteOrcaQuestionLeadRows(): ReadonlySet<string> {
+export function getRemoteOrcaQuestionLeadRows(): ReadonlySet<string> {
   refreshCache();
   return cachedRemoteQuestionLeadRows;
 }

@@ -58,6 +58,8 @@ function mapExecutionDevice(raw: unknown): WorkerExecutionDevice | undefined {
 
 export interface WorkersSnapshot {
   workers: WorkerInfo[];
+  /** Device that supplied these workers, even if a Worker runs elsewhere. */
+  leadDeviceId?: string;
   softLimit: number;
   hardLimit: number;
   workerStatus: 'idle' | 'applied' | 'failed';
@@ -217,10 +219,12 @@ function writeWorkersSnapshot(
   requestId: number,
   status: WorkersSnapshot['workerStatus'],
   workers: WorkerInfo[],
+  leadDeviceId?: string,
 ): WorkersRefreshResult {
   entry.snapshot = {
     ...entry.snapshot,
     workers,
+    leadDeviceId: status === 'applied' ? leadDeviceId : entry.snapshot.leadDeviceId,
     workerStatus: status,
     requestId,
     updatedAt: nowMs(),
@@ -278,8 +282,7 @@ function hasOwnKey(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-function projectionWorkflowsFor(leadSessionId: string) {
-  const deviceId = getStickySessionDeviceId(leadSessionId);
+function projectionWorkflowsFor(leadSessionId: string, deviceId: string | undefined) {
   return deviceId ? orcaWorkflowsForDevice(deviceId) : orcaWorkflowsFor(leadSessionId);
 }
 
@@ -393,7 +396,8 @@ function startRemoteLeadRequest(
   entry: LeadEntry,
   requestId: number,
 ): Promise<WorkersRefreshResult> {
-  const request = projectionWorkflowsFor(leadSessionId)
+  const leadDeviceId = getStickySessionDeviceId(leadSessionId);
+  const request = projectionWorkflowsFor(leadSessionId, leadDeviceId)
     .listWorkersByLead(leadSessionId)
     .then((records) => {
       if (entry.requestSeq !== requestId) {
@@ -405,7 +409,7 @@ function startRemoteLeadRequest(
         };
       }
       const workers = (records as unknown as Array<Record<string, unknown>>).map(mapWorkerRecord);
-      return writeWorkersSnapshot(leadSessionId, entry, requestId, 'applied', workers);
+      return writeWorkersSnapshot(leadSessionId, entry, requestId, 'applied', workers, leadDeviceId);
     })
     .catch((err) => {
       if (entry.requestSeq === requestId) {
@@ -678,7 +682,7 @@ function requestWorkerSettings(
 
   const requestId = entry.settingsSeq + 1;
   entry.settingsSeq = requestId;
-  const request = projectionWorkflowsFor(leadSessionId)
+  const request = projectionWorkflowsFor(leadSessionId, getStickySessionDeviceId(leadSessionId))
     .getCollaborationSettings()
     .then((settings) => {
       if (entry.settingsSeq !== requestId) return { status: 'failed' as const, hardLimit: null };

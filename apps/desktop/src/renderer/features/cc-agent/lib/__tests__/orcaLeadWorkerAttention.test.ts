@@ -5,6 +5,9 @@ import type { Session } from '@/lib/ccAgent.types';
 import { countAppAttention } from '../appAttentionCount';
 import type { SessionStatusInfo } from '@/lib/makerChatStore';
 import type { WorkersSnapshot } from '../../hooks/workerProjectionStore';
+import { taskInboxSection, taskInboxSignalsFromRank } from '@cindy/maker-shared/live-task-priority';
+import { sessionNaturalPriorityRank } from '../mainListModel';
+import { sidebarPriorityContext } from '../sidebarPriorityContext';
 
 const projection = vi.hoisted(() => ({
   version: 0,
@@ -66,6 +69,7 @@ import {
   findOrcaLeadSessionIdForWorker,
   formatOrcaWorkerNotificationTitle,
   getOrcaLeadWorkerAttention,
+  getRemoteOrcaQuestionLeadRows,
   pendingOrcaWorkerQuestion,
   getSessionAttentionKindsWithOrcaLeads,
   mergeOrcaLeadAttentionKind,
@@ -425,21 +429,42 @@ describe('Worker 通知', () => {
 
 // Regression: a remote Lead can execute its Worker here. The task selector uses
 // the proxy ID; the answer panel and live status belong to the actual chat ID.
-// Existing tests only covered Workers without executionDevice. Unit tier.
+// A Lead with the same ID on a second device must remain in the working section.
+// Unit tier.
 it('tracks actual chat questions and their settle events while retaining the proxy selection', () => {
-  const workers = snapshot('proxy');
+  const workers = { ...snapshot('proxy'), leadDeviceId: 'owner' };
+  const lead = { id: 'remote-lead', title: 'Lead', status: 'active', orcaRole: 'lead' } as Session;
+  for (const device of ['owner', 'other']) remoteProjectsStore.setDeviceSessions(device, device, [lead]);
+  const rows = remoteProjectsStore.getVisibleMergedRemoteSessions().filter(row => row.id === lead.id);
+  const sectionsByDevice = () => {
+    const priority = sidebarPriorityContext({
+      runningSessionIds: new Set(), attentionSessionIds: new Set([lead.id]),
+      remoteWaitingRows: getRemoteOrcaQuestionLeadRows(),
+    }, rows, () => 'running');
+    return Object.fromEntries(rows.map(row => {
+      const rank = sessionNaturalPriorityRank(row, priority);
+      return [row.deviceLinkDeviceId!, taskInboxSection(row, taskInboxSignalsFromRank(rank, rank), 0)];
+    }));
+  };
   workers.workers[0].executionDevice = { deviceId: 'here', deviceName: 'Here', remoteSessionId: 'actual', reachable: true, workingDir: null };
   setProjections([['remote-lead', workers]]);
   const listener = vi.fn();
   const off = subscribeOrcaLeadWorkerAttention(listener);
-  setPending('actual', { hasPendingAskUser: true });
-  expect(listener).toHaveBeenCalled();
-  expect(getOrcaLeadWorkerAttention().get('remote-lead')).toBe('awaiting');
-  expect(pendingOrcaWorkerQuestion('remote-lead')).toEqual({ workerSessionId: 'proxy', chatSessionId: 'actual' });
-  listener.mockClear();
-  setPending('actual', {});
-  expect(listener).toHaveBeenCalled();
-  expect(getOrcaLeadWorkerAttention().has('remote-lead')).toBe(false);
-  expect(pendingOrcaWorkerQuestion('remote-lead')).toBeUndefined();
-  off();
+  try {
+    setPending('actual', { hasPendingAskUser: true });
+    expect(listener).toHaveBeenCalled();
+    expect(getOrcaLeadWorkerAttention().get('remote-lead')).toBe('awaiting');
+    expect(pendingOrcaWorkerQuestion('remote-lead')).toEqual({ workerSessionId: 'proxy', chatSessionId: 'actual' });
+    expect(sectionsByDevice()).toEqual({ owner: 'inbox', other: 'working' });
+    listener.mockClear();
+    setPending('actual', {});
+    expect(listener).toHaveBeenCalled();
+    expect(getOrcaLeadWorkerAttention().has('remote-lead')).toBe(false);
+    expect(pendingOrcaWorkerQuestion('remote-lead')).toBeUndefined();
+    expect(sectionsByDevice()).toEqual({ owner: 'working', other: 'working' });
+  } finally {
+    off();
+    remoteProjectsStore.removeDevice('owner');
+    remoteProjectsStore.removeDevice('other');
+  }
 });

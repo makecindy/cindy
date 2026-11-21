@@ -35,6 +35,7 @@ import {
   __getWorkerProjectionOwnerCountForTest,
   __setWorkerProjectionCoalesceMsForTest,
   getAllWorkerProjectionVersion,
+  getWorkerProjectionSnapshot,
   listRetainedWorkerProjections,
   retainWorkerProjection,
   revalidateActiveWorkerSettings,
@@ -432,6 +433,7 @@ describe('useWorkers / worker projection store', () => {
     });
     expect(mocks.listWorkersByLead).toHaveBeenCalledWith('dev-sticky', 'remote-sticky');
     expect(mocks.listWorkersByLeads).not.toHaveBeenCalled();
+    expect(getWorkerProjectionSnapshot('remote-sticky').leadDeviceId).toBe('dev-sticky');
   });
 
   it('keeps old attention when a changed lead refresh fails', async () => {
