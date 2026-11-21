@@ -276,7 +276,9 @@ import { resolveDesktopClaudeSubagentModelAccess } from './subagent-model-access
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
 import { createToolLoopReviewer } from './tool-loop-reviewer.js';
-import { createCustomAutoReviewFallback, requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { createCustomAutoReviewFallback, requestExplicitUtilityText, requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { installRemoteUtilityTextHost, disposeRemoteUtilityTextHost } from '../utility-model/remote/runtime.desktop.js';
+import { requestUtilityTextWithinTimeout } from '../utility-model/utilityTextTimeout.js';
 import {
   AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
   createAutoReviewModelRouter,
@@ -2838,6 +2840,12 @@ export function getMaker(): Maker {
     _maker.recyclePiRuntimeIfResourcesDrifted = async (session: Session) =>
       withRehydrateCloseSuppressed(session.id, () => baseRecyclePiRuntimeIfResourcesDrifted(session));
     // 本机作为「Agent 运行的电脑」：同账号另一台电脑的任务可让 Agent 在这里运行。
+    installRemoteUtilityTextHost((prompt, options) => requestUtilityTextWithinTimeout(
+      (signal) => requestExplicitUtilityText(prompt, { ...options, signal }),
+      options.timeoutMs ?? 90_000,
+      options.signal,
+      () => ({ ok: false, reason: 'timeout', attempts: [] }),
+    ));
     installRemoteAgentHost({
       getMaker: () => getMaker(),
       userDataDir: app.getPath('userData'),
@@ -3072,6 +3080,7 @@ export function resetMaker(): void {
   remoteWorkerBridge = null;
   workerBridgeProvider = null;
   void disposeLocalAgentHost();
+  disposeRemoteUtilityTextHost();
   disposeRemoteAgentHost();
   _sessionArchiveSync?.stop();
   _sessionArchiveSync = null;

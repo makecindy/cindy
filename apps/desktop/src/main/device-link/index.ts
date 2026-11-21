@@ -38,6 +38,7 @@ import {
   RoutedDeviceLinkClient,
   type DeviceLinkClientOptions,
   FILE_PEER_CHANNEL,
+  isRemoteUtilityCancelInvoke,
   isProviderSharePeer,
   isScopedPeer,
   parseSharedTaskPeer,
@@ -2537,10 +2538,11 @@ async function remoteInvokeLive(
   };
   // Cleanup is best effort over the existing link. A late file answer must never
   // reopen the remote session just to dispose its now-unwanted allocation.
-  if (channel === FILE_PEER_CHANNEL && (args[0] as { action?: unknown } | null)?.action === 'close') {
+  if ((channel === FILE_PEER_CHANNEL && (args[0] as { action?: unknown } | null)?.action === 'close')
+    || isRemoteUtilityCancelInvoke({ channel, args })) {
     preSend();
     if (!client?.isLinkReady(deviceId))
-      throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
+      throw new DeviceLinkError('LINK_NOT_OPEN', 'cleanup requires an existing link');
     return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...options, diagnosticSource: options?.diagnosticSource ?? 'main', preSend });
   }
   const invoke = async (): Promise<InvokeResultPayload> => {

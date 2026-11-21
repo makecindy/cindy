@@ -1807,6 +1807,7 @@ it('an open plugin selection without a source session follows the auxiliary chai
       resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
       getEffectiveAuxiliaryModelRefs: () => ['chain'], getEffectiveAuxiliaryModelChainSnapshot: () => 'chain',
       auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
+      isRemoteAuxiliaryModelRef: () => false,
       savedPluginTaskRemoteRoute, readPluginRouteProviders: async () => [],
       // Remote catalog admission is covered by resolveRemotePluginTaskRoute's own tests; mark the path taken.
       resolveRemotePluginTaskRoute: async (route: PluginTaskRoute) => ({ ...route, viaRemoteCatalog: true }) };
@@ -1916,7 +1917,8 @@ it.each([
     resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
     // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
     getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
-    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute };
+    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute,
+    isRemoteAuxiliaryModelRef: () => false };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;

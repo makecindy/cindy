@@ -143,6 +143,10 @@ export function buildAuxiliaryModelOptions(args: {
   return result;
 }
 
+import { decodeRemoteAuxiliaryModelRef } from '../../shared/remoteAuxiliaryModelRef.js';
+import { getRemoteUtilityTextClient } from '../utility-model/remote/registry.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+
 function settingsWire(): AuxiliaryModelSettingsState {
   const state = readAuxiliaryModelSettingsState();
   const models = Array.isArray(state.value.models) ? state.value.models : [];
@@ -204,6 +208,7 @@ export function registerAuxiliaryModelSettingsIpc(): void {
   });
 
   const updateAuxiliarySettings = async (rawPatch: unknown) => {
+    const owner = activeOwnerScopeKey();
     try {
       // Persisted intent ignores transient credential readiness, while execution
       // still validates credentials and fails closed immediately before dispatch.
@@ -216,11 +221,23 @@ export function registerAuxiliaryModelSettingsIpc(): void {
           'auxiliary',
         ).map((option) => option.id),
       );
-      const patch = parseAuxiliaryModelSettingsPatch(
-        rawPatch,
-        allowedPins,
-        new Set(readAuxiliaryModelSettings().models),
-      );
+      const persistedPins = new Set(readAuxiliaryModelSettings().models);
+      const input = rawPatch && typeof rawPatch === 'object' ? (rawPatch as { models?: unknown }).models : undefined;
+      if (isValidAuxiliaryModelListInput(input)) {
+        // At most three choices; reuse the remote capability result per device within this save.
+        const reads = new Map<string, Promise<{ allowedRoutes: { providerId: string; agentKind: string; model: string }[] } | null>>();
+        for (const ref of input) {
+          if (persistedPins.has(ref)) continue;
+          const route = decodeRemoteAuxiliaryModelRef(ref);
+          if (!route) continue;
+          let pending = reads.get(route.deviceId);
+          if (!pending) { pending = getRemoteUtilityTextClient()?.readCapabilities(route.deviceId) ?? Promise.resolve(null); reads.set(route.deviceId, pending); }
+          const caps = await pending;
+          if (caps?.allowedRoutes.some((r) => r.providerId === route.providerId && r.agentKind === route.agentKind && r.model === route.model)) allowedPins.add(ref);
+        }
+      }
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throwIpcError('PERMISSION_DENIED', 'Account changed');
+      const patch = parseAuxiliaryModelSettingsPatch(rawPatch, allowedPins, persistedPins);
       await writeAuxiliaryModelSettingsPatch(patch);
       return settingsWire();
     } catch (error) {

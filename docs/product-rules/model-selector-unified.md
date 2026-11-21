@@ -104,7 +104,7 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
   `listedSourceFolds`、`ModelSelector.tsx` 的 `runLocationFold`、`ProvidersSection.tsx` 与
   `UnifiedModelPickerSheet.tsx`；同一份数据下设置页与选择器列出相同来源由 ui:check 页面
   `provider-listing-consistency` 守住，各路径回归见 `model-selector-remote-repro`。
-  只限本机的例外是封闭清单，因为这些入口目前不能保存或消费其他电脑的模型：子代理（随父任务运行，设置不存运行位置）、辅助模型与只有快问快答的插件（本机直接发一次性请求）。第三方插件的 `cindy.pickModel` 保留 `allowRemote` 显式开启，旧插件不认运行位置。新增例外必须同时改这里和守卫测试。
+  只限本机的例外是封闭清单，因为这些入口目前不能保存或消费其他电脑的模型：子代理（随父任务运行，设置不存运行位置）、视觉桥（本机代理调用）、只有快问快答的插件的显式选型（本机直接发一次性请求）。辅助模型设置已支持同账号电脑的短文本来源，复用现有远程设备栏并叠加执行端短文本准入，保存设备身份；跨账号分享、供应商组和旧端暂不支持。插件跟随辅助链时，短文本走该精确来源；插件自己的正式任务通过既有远程任务路由保留位置。第三方插件的 `cindy.pickModel` 保留 `allowRemote` 显式开启，旧插件不认运行位置。新增例外必须同时改这里和守卫测试。
 - **插件“模型与任务”设置与普通任务列表一致**（2026-11-16 用户要求）：能建任务的插件，其设置卡（Desktop、
   Desktop 远程控制与 Mobile）列出与普通任务相同的同账号其他电脑与分享来的供应商；选中哪一行，运行位置
   （`agentDeviceId`）就随模型一起存进插件设置。插件新建任务（`tasks.create`、`setModel('plugin-default')`、

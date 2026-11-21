@@ -58,6 +58,7 @@ export const {
   notifyProviderShareCatalogChanged,
   revalidateRemoteModelAccess,
   setRemoteAgentHandler,
+  setRemoteUtilityTextHandler,
   setProviderGroupRemoteHandler,
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,

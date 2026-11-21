@@ -8,6 +8,14 @@ import {
 import type { InvokePayload } from './protocol.js';
 import { REMOTE_AGENT_CHANNEL, isRemoteAgentReadInvoke, remoteAgentInvokeHoldMs } from './remoteAgent.js';
 import { FILE_PEER_CHANNEL, FILE_PEER_STREAM_RPC_MAX_TIMEOUT_MS } from './filePeer.js';
+import { REMOTE_UTILITY_TEXT_CHANNEL } from './remoteUtilityText.js';
+
+/** Inference cancellation uses the existing control-traffic admission path. */
+export function isRemoteUtilityCancelInvoke(payload: InvokePayload | undefined): boolean {
+  const request = payload?.args?.[0];
+  return payload?.channel === REMOTE_UTILITY_TEXT_CHANNEL && !!request && typeof request === 'object'
+    && 'op' in request && request.op === 'cancel';
+}
 
 /** These reads may wait behind current-task work. Not a retry or authorization policy.
  * sessions:list also serves initial loading and recovery probes, so it stays foreground.
@@ -98,6 +106,7 @@ export function resolveInvokePriority(channel: string, backgroundHint?: boolean,
 
 /** Control traffic must not wait behind business operations to maintain a link/lease. */
 export function bypassInvokeScheduling(payload: InvokePayload): boolean {
+  if (isRemoteUtilityCancelInvoke(payload)) return true;
   if (payload.channel === 'device-link:subscribe' || payload.channel === 'device-link:unsubscribe') return true;
   const request = payload.args?.[0];
   return payload.channel === 'device-link:remote-desktop:v1' && !!request &&

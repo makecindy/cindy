@@ -17,6 +17,7 @@ import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
 // After the Desktop modules, so module evaluation keeps the former order.
 import { createOneShotCandidates } from './oneShotCandidatesCore.js';
+import { getRemoteUtilityTextClient } from './remote/registry.js';
 import { getDesktopSelectableCatalog } from '../maker-host/createDesktopProviderService.js';
 import { acquireSubscriptionAccount } from '../subscription-accounts/runtime.js';
 import { accountProviderId } from '../subscription-accounts/placement.js';
@@ -32,6 +33,10 @@ export type {
 } from './oneShotCandidatesCore.js';
 
 const desktopOneShot = createOneShotCandidates({
+  // Remote routes are wired by the Desktop assembly; without it the choice stays
+  // unavailable instead of dispatching into a half-initialized Device Link.
+  requestRemoteUtilityText: (route, prompt, opts) => getRemoteUtilityTextClient()?.request(route, prompt, opts)
+    ?? Promise.resolve({ ok: false, reason: 'no_candidate', attempts: [] }),
   getCatalog: () => getDesktopSelectableCatalog(),
   acquireSubscriptionAccount: async (...args) => {
     const lease = await acquireSubscriptionAccount(...args);

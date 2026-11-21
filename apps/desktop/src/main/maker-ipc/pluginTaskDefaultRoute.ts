@@ -18,7 +18,11 @@ import type { AgentKind } from '@cindy/maker-core';
 import { getUtilityModelProfile } from '../../shared/utilityModelProfiles.js';
 import { parsedAuxiliaryModelRefs } from '../utility-model/resolveAuxiliaryModelChain.js';
 
+import { decodeRemoteAuxiliaryModelRef, isRemoteAuxiliaryModelRef } from '../../shared/remoteAuxiliaryModelRef.js';
+import { encodeCatalogModelPin } from '../../shared/catalogModelPin.js';
+
 export interface PluginTaskDefaultCandidate {
+  agentDeviceId?: string;
   agentKind: AgentKind;
   providerId: string;
   model: string;
@@ -39,10 +43,15 @@ export function auxiliaryChainSessionCandidates(refs: readonly string[]): Plugin
   const out: PluginTaskDefaultCandidate[] = [];
   const seen = new Set<string>();
   for (const ref of parsedAuxiliaryModelRefs(refs)) {
-    const candidate = ref.kind === 'catalog'
-      ? { agentKind: ref.route.agentKind as AgentKind, providerId: ref.route.providerId, model: ref.route.model }
-      : profileRoute(ref.id);
-    const key = `${candidate.agentKind}\u0000${candidate.providerId}\u0000${candidate.model}`;
+    const pin = ref.kind === 'catalog' ? encodeCatalogModelPin(ref.route) : null;
+    const remote = pin ? decodeRemoteAuxiliaryModelRef(pin) : null;
+    if (pin && isRemoteAuxiliaryModelRef(pin) && !remote) continue;
+    const candidate: PluginTaskDefaultCandidate = remote
+      ? { agentDeviceId: remote.deviceId, agentKind: remote.agentKind, providerId: remote.providerId, model: remote.model }
+      : ref.kind === 'catalog'
+        ? { agentKind: ref.route.agentKind as AgentKind, providerId: ref.route.providerId, model: ref.route.model }
+        : profileRoute(ref.id);
+    const key = `${candidate.agentDeviceId ?? ''}\u0000${candidate.agentKind}\u0000${candidate.providerId}\u0000${candidate.model}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(candidate);

@@ -779,6 +779,7 @@ import { createBotGroupAttachmentStore } from './botGroupAttachments.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { auxiliaryChainSessionCandidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from './pluginTaskDefaultRoute.js';
+import { isRemoteAuxiliaryModelRef } from '../../shared/remoteAuxiliaryModelRef.js';
 import { findRepositoryFolders, folderRepositories } from './groupProjectFolder.js';
 import { runGit } from '../git-review/gitRunner.js';
 import { markGroupCindyTask } from './groupCollaborationSkill.js';
@@ -14171,11 +14172,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // selection remains the last resort.
           for (const { candidate, effort } of pluginTaskRouteAttempts(auxiliaryChainSessionCandidates(getEffectiveAuxiliaryModelRefs()))) {
             try {
+              if (candidate.agentDeviceId) {
+                const remote = await resolveRemotePluginTaskRoute({ ...candidate,
+                  agentKind: candidate.agentKind === 'claude-code' ? 'cc' : candidate.agentKind,
+                  effort: effort ?? '', fastMode: false,
+                }, {
+                  readProviders: readPluginRouteProviders,
+                  assertCurrent: () => assertPlugin(pluginId),
+                });
+                assertPlugin(pluginId);
+                return remote;
+              }
               execution = await resolveSessionExecution({ ...selection, ...candidate, ...(effort ? { effort } : {}) });
               assertPlugin(pluginId);
               break;
             } catch { execution = undefined; }
           }
+          if (!execution && getEffectiveAuxiliaryModelRefs().some(isRemoteAuxiliaryModelRef)) return routeUnavailable();
         }
         execution ??= await resolveSessionExecution(selection, sourceSessionId);
         assertPlugin(pluginId);

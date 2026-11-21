@@ -90,6 +90,7 @@ export * from "./taskMigration.js";
 export * from "./setupSnapshot.js";
 export * from "./setupTransfer.js";
 export * from "./remoteAgent.js";
+export * from "./remoteUtilityText.js";
 export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
 export * from "./machineStatus.js";

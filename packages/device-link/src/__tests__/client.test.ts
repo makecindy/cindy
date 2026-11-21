@@ -442,6 +442,26 @@ describe('outbound invoke admission', () => {
     } finally { h.client.stop(); }
   });
 
+  // A cancel must leave the client even when all inference admission slots are occupied.
+  // Before the utility cancel control classification this waits behind the model runs.
+  it('sends short-text cancellation while model requests fill the ordinary slots', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const pending: Promise<unknown>[] = [];
+    try {
+      h.client.start(); await tick(); h.current().ack();
+      for (let i = 0; i < 13; i++) pending.push(h.client.invoke('host', {
+        channel: 'maker:utility-text:v1', args: [{ version: 1, op: 'run', requestId: `run-${i}` }],
+      }).catch(error => error));
+      expect(h.current().sent.filter(frame => frame.kind === 'invoke')).toHaveLength(12);
+      const cancel = h.client.invoke('host', { channel: 'maker:utility-text:v1', args: [{ version: 1, op: 'cancel', requestId: 'run-0' }] });
+      pending.push(cancel.catch(error => error));
+      const frame = h.current().sent.find(frame => frame.kind === 'invoke' && (frame.payload as any).args[0].op === 'cancel');
+      expect(frame).toBeDefined();
+      h.current().push({ v: 1, kind: 'invoke-result', src: 'host', id: frame!.id, payload: { ok: true, result: 'cancelled' } });
+      await expect(cancel).resolves.toEqual({ ok: true, result: 'cancelled' });
+    } finally { h.client.stop(); await Promise.all(pending); }
+  });
+
   it('uses actual socket pressure to serialize background reads without blocking foreground work', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });

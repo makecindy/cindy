@@ -23,12 +23,18 @@ vi.mock('@/components/ui/popover', () => ({
   PopoverContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+vi.mock('@/components/new-chat/modelPickerPreferences', () => ({
+  useTransientModelPickerPreferences: () => ({ engines: { get: vi.fn(), set: vi.fn(), clear: vi.fn() }, favorites: {}, memory: {} }),
+}));
+
 let picker: React.ComponentProps<typeof import('@/components/new-chat/ModelSelector').ModelSelector>;
 vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: (props: typeof picker) => { picker = props; return <div data-testid="shared-picker" />; },
 }));
 
-import { OneshotModelPinPicker, type OneshotPinOption } from '../OneshotModelPinPicker';
+import { OneshotModelPinPicker, oneshotPickerProviders, type OneshotPinOption } from '../OneshotModelPinPicker';
+import { filterModelSelectorRoutes } from '@/components/new-chat/modelSelectorRouteFilter';
+import { encodeRemoteAuxiliaryModelRef } from '../../../shared/remoteAuxiliaryModelRef';
 
 const options: OneshotPinOption[] = [
   {
@@ -73,6 +79,30 @@ const xdOption: OneshotPinOption = {
 describe('OneshotModelPinPicker shared A adapter', () => {
   const mount = (extra = {}) => render(<OneshotModelPinPicker defaultOptionLabel="Automatic"
     options={options} onChange={vi.fn()} ariaLabel="Auxiliary model" {...extra} />);
+
+  // Unit: identical provider/model names on different computers must retain their exact route.
+  it('filters identical catalog entries independently by device and agent', () => {
+    const providers = oneshotPickerProviders(options);
+    const filter = ({ deviceId, agentKind }: { deviceId: string | null; agentKind: string }) =>
+      deviceId === 'a' && agentKind === 'codex';
+    expect(filterModelSelectorRoutes(providers, 'a', filter).map((provider) => provider.id)).toEqual(['openrouter']);
+    expect(filterModelSelectorRoutes(providers, 'b', filter)).toEqual([]);
+    expect(filterModelSelectorRoutes(providers, null, filter)).toEqual([]);
+  });
+
+  it('saves the selected device and refuses a route absent from that device caps', async () => {
+    const onChange = vi.fn();
+    const encode = (deviceId: string, providerId: string, agentKind: 'pi' | 'codex' | 'claude-code', model: string) =>
+      deviceId === 'device-a' ? encodeRemoteAuxiliaryModelRef({ deviceId, providerId, agentKind, model }) : null;
+    const remote = { open: true, devices: [{ deviceId: 'device-a', name: 'Mini', online: true }, { deviceId: 'device-b', name: 'Pro', online: true }],
+      allows: ({ deviceId }: { deviceId: string | null }) => deviceId === 'device-a', encode, onOpenChange: vi.fn() };
+    mount({ onChange, remote });
+    const selection = { providerId: 'openrouter', modelId: 'openai/gpt-5-mini', engine: 'codex' as const, fast: false, favoriteUid: null };
+    expect(await picker.onUnifiedSelect!({ ...selection, agentDevice: { deviceId: 'device-a', name: 'Mini' } })).toBe(true);
+    expect(onChange).toHaveBeenCalledWith(encode('device-a', selection.providerId, 'codex', selection.modelId));
+    expect(await picker.onUnifiedSelect!({ ...selection, agentDevice: { deviceId: 'device-b', name: 'Pro' } })).toBe(false);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
 
   it('selects an approved Pi HTTP auxiliary route and retains an unavailable saved Pi route', async () => {
     const option: OneshotPinOption = { ...options[0], id: 'cat:go:pi:deepseek-v4.1-flash',

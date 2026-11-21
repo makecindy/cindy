@@ -132,6 +132,8 @@ override 仍然优先。供应商／模型停用、退役、付费准入和凭�
 只用于辅助模型。插件跟随辅助模型链时使用用户已经保存的选择。
 语音润色继续遵循现有的 OpenAI / Cindy AI 白名单，不因辅助模型候选扩大而新增通道。
 
+辅助模型自定义链可保存同账号另一台电脑的精确来源，使用 `cat:` 外壳中的保留远程命名空间记录设备、连接、配置来源和模型；用户原顺序和三项上限不变。执行端复用显式短文本请求，不运行自己的默认辅助链或 Agent。旧执行端不支持时保留配置并标为不可用，只继续用户已选备选；恢复自动仍删除原 models 覆盖。跨账号分享、供应商组及远程 BYOK 语音润色不在此能力范围。协议、降级与旧插件任务边界见[同账号辅助短文本](protocol-compatibility/remote-auxiliary-text.md)。
+
 实现与回归：`apps/desktop/src/main/utility-model/directTextRoute.ts`、
 `__tests__/auxiliaryDirectRoutes.test.ts`、`__tests__/oneShotCandidates.test.ts`。
 

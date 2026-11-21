@@ -176,8 +176,13 @@ export type AutoReviewAuxiliaryFallback = (
   opts: { timeoutMs: number; signal?: AbortSignal; sessionId?: string; validateResponse: (text: string) => boolean },
 ) => Promise<UtilityTextResult>;
 
+import { decodeRemoteAuxiliaryModelRef, REMOTE_AUXILIARY_PROVIDER_PREFIX, type RemoteAuxiliaryRoute } from '../../shared/remoteAuxiliaryModelRef.js';
+import { encodeCatalogModelPin } from '../../shared/catalogModelPin.js';
+
 /** The Desktop-only reads, resolved by each launcher. */
 export interface OneShotCandidatesPorts {
+  /** Unsupported launchers retain the exact choice as unavailable, never resolve it locally. */
+  requestRemoteUtilityText?: (route: RemoteAuxiliaryRoute, prompt: string, opts: UtilityTextRequestOptions) => Promise<UtilityTextResult>;
   /** Local subscription membership, including account-discovered models. */
   getCatalog?: typeof getActiveCatalog;
   acquireSubscriptionAccount?: typeof import('../subscription-accounts/runtime.js').acquireSubscriptionAccount;
@@ -989,6 +994,13 @@ async function requestExplicitProviderText(
   prompt: string,
   opts: UtilityTextRequestOptions & { providerId: string },
 ): Promise<UtilityTextResult> {
+  if (opts.providerId.toLowerCase().startsWith(REMOTE_AUXILIARY_PROVIDER_PREFIX)) {
+    const remote = opts.agentKind && opts.model ? decodeRemoteAuxiliaryModelRef(encodeCatalogModelPin({
+      providerId: opts.providerId, agentKind: opts.agentKind, model: opts.model,
+    })) : null;
+    if (!remote || !ports.requestRemoteUtilityText) return { ok: false, reason: 'no_candidate', attempts: [] };
+    return ports.requestRemoteUtilityText(remote, prompt, opts);
+  }
   const provider = getCatalog().providers.find((item) => item.id === opts.providerId);
   const agentKind = opts.agentKind ?? inferProviderAgent(provider);
   const configuredModels = agentKind ? provider?.models[agentKind] ?? [] : [];
