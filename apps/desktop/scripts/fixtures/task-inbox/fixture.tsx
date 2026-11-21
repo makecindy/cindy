@@ -1,5 +1,6 @@
 import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import { useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { WorktreeProvider } from '../../../src/renderer/contexts/WorktreeContext';
 import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import { ProjectsSection } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectsSection';
@@ -127,6 +128,23 @@ function IntroSpecimen() {
   );
 }
 
+/**
+ * 段头「＋」的键盘激活要能看到「落到哪个路由、带了什么状态」。ui:check 的 MemoryRouter
+ * 不改窗口 URL，所以把 location 摆成一个隐藏节点给场景读；只在 header-actions 场景挂。
+ */
+function RouteProbe() {
+  const location = useLocation();
+  const state = location.state as { workspacePrompt?: string } | null;
+  return (
+    <output
+      hidden
+      data-route-probe=""
+      data-pathname={location.pathname}
+      data-workspace-prompt={state?.workspacePrompt ?? ''}
+    />
+  );
+}
+
 function StructureSpecimen() {
   const filter = useSidebarFilter(hidden, snapshot);
   const task = {
@@ -146,6 +164,7 @@ function StructureSpecimen() {
   const [projectCollapsed, setProjectCollapsed] = useState(true);
   return (
     <div className="min-h-screen w-[320px] bg-sidebar text-foreground p-2">
+      {ctx.case === 'header-actions' ? <RouteProbe /> : null}
       {/* Same placement as the sidebar's top chrome row (back / forward), right end. */}
       <div data-fixture-top-row="" className="flex h-[46px] items-center justify-end pr-2">
         <TaskListModeToggle hasUnread={hasUnread} />

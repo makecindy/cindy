@@ -176,6 +176,29 @@ export default {
       assert.equal(await rightMost(), label, 'The inbox row keeps it at the right end');
       await header.hover();
       await ui.capture('header-hover-inbox', { locator: header });
+      // 键盘激活（不是点击）：切回任务列表，真实 Tab 到「＋」后按 Enter，应落到通用新建草稿。
+      // 路由状态从 fixture 的隐藏节点读（MemoryRouter 不改窗口 URL）。
+      const toggle = page.locator('[data-task-list-mode-toggle]');
+      await toggle.click();
+      await page.waitForFunction(() => document.querySelector('[data-task-list-mode-toggle]')
+        ?.getAttribute('aria-pressed') === 'false');
+      await page.mouse.move(1, ui.viewport.height - 1);
+      reached = false;
+      for (let i = 0; i < 15 && !reached; i += 1) {
+        await page.keyboard.press('Tab');
+        reached = await entry.evaluate((node) => document.activeElement === node);
+      }
+      assert.ok(reached, 'Tab reaches the new-task entry after switching back to the task list');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('[data-route-probe]')
+        ?.getAttribute('data-pathname') === '/cc-agent/new');
+      const route = page.locator('[data-route-probe]');
+      assert.equal(await route.getAttribute('data-pathname'), '/cc-agent/new', 'Enter opens the new-task page');
+      assert.equal(
+        await route.getAttribute('data-workspace-prompt'),
+        'generic',
+        'Enter opens the generic draft, not a device-scoped dialogue',
+      );
       return;
     }
     if (ui.case === 'structure') {
