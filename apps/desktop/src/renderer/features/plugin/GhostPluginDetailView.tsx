@@ -6,7 +6,6 @@ import { PluginShareButton } from './PluginShareButton';
 import { PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
 import { permissionItemDetail } from '../../../shared/ghostPermissionDetail';
 import { Button } from '@/components/ui/button';
-import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -48,6 +47,7 @@ import { GhostHandoffFilesSection } from './GhostHandoffFilesSection';
 import { GhostAccountReuseSection } from './GhostAccountReuseSection';
 import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
 import { PluginControlPointsSection } from './PluginControlPointsSection';
+import { PluginEngineRemoteUseCards, usePluginRemoteUseEngines } from './PluginEngineRemoteUse';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -206,12 +206,16 @@ export function GhostPluginDetailView({
   const hasGithubConnection =
     !remote && !needsReapproval &&
     ghost?.manifest.network?.secrets?.some(secret => secret.source === 'gh-cli') === true;
+  // 这个插件在本机提供的执行引擎：每个引擎一张「允许被远程调用」的卡片(远程查看别的电脑的插件时不显示，
+  // 开关只能在装着插件的那台电脑上改)。
+  const remoteUseEngines = usePluginRemoteUseEngines(!remote && ghost ? detail.id : null);
   const hasConfiguration =
     hasGithubConnection ||
     Boolean(ghost?.manifest.browserExtension) ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
-    detail.hasTaskPreferences;
+    detail.hasTaskPreferences ||
+    remoteUseEngines.length > 0;
   const summary = hasGithubConnection
     ? t('ccAgent.gitContext.pr.setup.account.summary')
     : ghostPluginSummary(detail.description, detail.ghostId);
@@ -509,10 +513,11 @@ export function GhostPluginDetailView({
                       reloadKey={githubConnectionVersion}
                       account={
                         hasGithubConnection ? (
-                          <div>
-                            <GithubAccountCard onConnected={() => setGithubConnectionVersion((version) => version + 1)} />
-                            {ghost.manifest.id === 'cindy-github' && ghost.namespace === null && <GithubAppCard />}
-                          </div>
+                          <GithubAccountCard
+                            pluginSettings
+                            includeEvents={ghost.manifest.id === 'cindy-github' && ghost.namespace === null}
+                            onConnected={() => setGithubConnectionVersion((version) => version + 1)}
+                          />
                         ) : undefined
                       }
                       ghost={ghost}
@@ -543,6 +548,7 @@ export function GhostPluginDetailView({
                   </div>
                 )
               ) : null}
+              <PluginEngineRemoteUseCards engines={remoteUseEngines} surfaceClassName={DETAIL_SURFACE_CLASS} />
               {ghost?.manifest.routineEvents ? (
                 <p className="text-13 text-[var(--text-secondary)]">
                   {t('routines.pluginCapability')}

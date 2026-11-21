@@ -564,6 +564,23 @@ describe('newMakerDraft store', () => {
     expect(getDraft().defaultTupleCustomized).toBe(false);
   });
 
+  it('restores the saved model and engine after a startup roster omits the selected engine', async () => {
+    const store = await loadModule();
+    store.switchVendor('codex', { userSelected: true });
+    store.patchVendorPrefs('codex', { model: 'gpt-6.2-sol', providerId: 'openai' });
+
+    const startup = await reloadModule();
+    expect(startup.fallbackUnavailableVendor(new Set(['pi']))).toBe(false);
+    startup.patchDraft({ workingDir: '/project' });
+    expect(startup.fallbackUnavailableVendor(new Set(['codex', 'pi']))).toBe(false);
+
+    const reopened = await reloadModule();
+    expect(reopened.getDraft()).toMatchObject({
+      vendor: 'codex',
+      lastByVendor: { codex: { model: 'gpt-6.2-sol', providerId: 'openai' } },
+    });
+  });
+
   it('persists an explicit Pi model choice across reload', async () => {
     const m1 = await loadModule();
     m1.patchVendorPrefs('pi', { model: 'chatgpt/gpt-5.6' });

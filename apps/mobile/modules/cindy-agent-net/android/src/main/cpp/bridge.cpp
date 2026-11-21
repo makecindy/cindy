@@ -32,6 +32,24 @@ extern "C" JNIEXPORT void JNICALL
 Java_app_cindy_agentnet_CindyAgentNetModule_nativeDestroy(JNIEnv *, jobject, jlong id) {
   cindy_agent_net_destroy(reinterpret_cast<CindyAgentNetEngine *>(id));
 }
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_cindy_agentnet_CindyAgentNetModule_nativePump(JNIEnv *, jobject, jlong id) {
+  return static_cast<jlong>(cindy_agent_net_pump(reinterpret_cast<CindyAgentNetEngine *>(id)));
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_cindy_agentnet_CindyAgentNetModule_nativeWaiter(JNIEnv *, jobject, jlong id) {
+  return reinterpret_cast<jlong>(cindy_agent_net_waiter(reinterpret_cast<CindyAgentNetEngine *>(id)));
+}
+// Blocks without touching the JVM: no JNI reference is held across the wait.
+extern "C" JNIEXPORT jint JNICALL
+Java_app_cindy_agentnet_CindyAgentNetModule_nativeWait(JNIEnv *, jobject, jlong waiter, jint timeoutMs) {
+  return static_cast<jint>(cindy_agent_net_wait(reinterpret_cast<const CindyAgentNetWaiter *>(waiter),
+      timeoutMs > 0 ? static_cast<uint32_t>(timeoutMs) : 0));
+}
+extern "C" JNIEXPORT void JNICALL
+Java_app_cindy_agentnet_CindyAgentNetModule_nativeWaiterFree(JNIEnv *, jobject, jlong waiter) {
+  cindy_agent_net_waiter_free(reinterpret_cast<CindyAgentNetWaiter *>(waiter));
+}
 extern "C" JNIEXPORT jstring JNICALL
 Java_app_cindy_agentnet_AgentNetNotifications_nativeOpen(JNIEnv *env, jobject, jbyteArray input) {
   auto size = env->GetArrayLength(input);

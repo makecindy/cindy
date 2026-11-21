@@ -1,6 +1,6 @@
 /**
  * Window-level progress of market installs and updates this window started, keyed by market
- * pluginId.
+ * pluginId (GitHub Release updates use their own `github:<instanceId>` key).
  *
  * Display only. Whoever runs one (the Plugin page's market flow and update button, or the
  * "update all" batch, which keeps running after the page unmounts) brackets it with begin / end
@@ -90,24 +90,37 @@ function currentEntry(pluginId: string): Entry | undefined {
   return entry;
 }
 
-function onPush(event: PluginMarketInstallProgress, ownerStamp?: unknown): void {
-  if (!isDataOwnerPushCurrent(ownerStamp)) return;
-  const current = currentEntry(event.pluginId);
+function applyStep(pluginId: string, download: DownloadProgress, awaitingConsent: boolean): void {
+  const current = currentEntry(pluginId);
   if (!current) return;
   // Declining the permission confirmation is not an outcome to show.
-  if (event.download.phase === 'cancelled') {
-    write(event.pluginId, null);
+  if (download.phase === 'cancelled') {
+    write(pluginId, null);
     return;
   }
-  const failed = event.download.phase === 'failed';
-  write(event.pluginId, {
+  const failed = download.phase === 'failed';
+  write(pluginId, {
     owner: current.owner,
     intent: current.intent,
-    download: event.download,
-    awaitingConsent: event.awaitingConsent === true,
+    download,
+    awaitingConsent,
     // Main's failure push carries no words; keep the reason the runner may already have given.
     ...(failed && current.failure ? { failure: current.failure } : {}),
   });
+}
+
+function onPush(event: PluginMarketInstallProgress, ownerStamp?: unknown): void {
+  if (!isDataOwnerPushCurrent(ownerStamp)) return;
+  applyStep(event.pluginId, event.download, event.awaitingConsent === true);
+}
+
+/**
+ * Steps for an update whose download reports on its own channel (GitHub Release updates, keyed
+ * by the runner's progress key). Like Main's market pushes, it only fills an entry already begun.
+ */
+export function reportPluginInstallProgress(pluginId: string, download: DownloadProgress): void {
+  if (doneHolds.has(pluginId)) return;
+  applyStep(pluginId, download, false);
 }
 
 /**

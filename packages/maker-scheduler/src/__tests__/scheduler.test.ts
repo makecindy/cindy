@@ -392,7 +392,7 @@ it.each(['none', 'read-rejected', 'schedule-missing', 'pre-enqueue-rejected', 'f
   const schedule = await h.scheduler.create(baseInput);
   const oldRun: ScheduleRun = { id: 'old-run', scheduleId: schedule.id,
     sessionId: 'original-task', firedAt: clock.now() - 5000,
-    status: 'interrupted', errorMsg: 'app restarted' };
+    status: 'interrupted', errorMsg: 'app restarted', costAttribution: 'exact' };
   await storage.insertRun(oldRun);
   storage.claimInterruptedRun = vi.fn(async () => {
     if (storage.runs.get(oldRun.id)?.status !== 'interrupted') return null;
@@ -411,7 +411,7 @@ it.each(['none', 'read-rejected', 'schedule-missing', 'pre-enqueue-rejected', 'f
       failure === 'read-rejected' ? 'storage unavailable'
         : failure === 'schedule-missing' ? 'Schedule not found' : 'continuation enqueue unavailable',
     );
-    expect(storage.runs.get(oldRun.id)?.status).toBe('interrupted');
+    expect(storage.runs.get(oldRun.id)).toMatchObject({ status: 'interrupted', sessionId: oldRun.sessionId, costAttribution: 'exact' });
     expect(h.fireCalls).toHaveLength(failure === 'pre-enqueue-rejected' ? 1 : 0);
     expect(h.scheduler.resolveInflightRunForSession('original-task')).toBeUndefined();
   }
@@ -684,6 +684,36 @@ describe('Scheduler', () => {
     h = makeHarness();
   });
 
+
+  it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
+    const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';
+    const s = await h.scheduler.create({ ...baseInput, prompt });
+    expect(s.primaryHostKey).toBe('public/cindy-contacts');
+    expect((await h.scheduler.update(s.id, { name: 'renamed' })).primaryHostKey).toBe(s.primaryHostKey);
+    await expect(h.scheduler.update(s.id, { primaryHostKey: undefined })).rejects.toThrow('binding');
+    expect((await h.scheduler.create({ ...baseInput, prompt: prompt + '\nnamespace 传「local」。' })).primaryHostKey).toBe('local/cindy-contacts');
+    expect((await h.scheduler.create({ ...baseInput, prompt: 'compile a list' })).primaryHostKey).toBeUndefined();
+  });
+
+  it('remembers the first local task of a primary persistent schedule for subsequent runs', async () => {
+    const saved = await h.scheduler.create({ ...baseInput, primaryHostKey: 'public/cindy-contacts', persistentSession: true });
+    await h.scheduler.updateFromCurrent(saved.id, async current =>
+      current.persistentSession && !current.targetSessionId ? { targetSessionId: 'first-task' } : {});
+    expect(await h.scheduler.get(saved.id)).toMatchObject({ primaryHostKey: saved.primaryHostKey, targetSessionId: 'first-task' });
+    await expect(h.scheduler.update(saved.id, { agentDeviceId: 'other' })).rejects.toThrow('host');
+    await expect(h.scheduler.create({ ...baseInput, primaryHostKey: saved.primaryHostKey, targetSessionId: 'unrelated-task' })).rejects.toThrow('host');
+  });
+
+  it('can rename a primary schedule with an explicit local model and a legacy remote default', async () => {
+    const saved = await h.scheduler.create({
+      ...baseInput, primaryHostKey: 'public/cindy-contacts', agentDeviceId: 'studio', modelAgentDeviceId: '',
+      modelAgentKind: 'codex', model: 'test-model', providerId: 'local-provider',
+    });
+    expect(await h.scheduler.update(saved.id, { name: 'renamed' })).toMatchObject({
+      name: 'renamed', agentDeviceId: 'studio', modelAgentDeviceId: '', primaryHostKey: 'public/cindy-contacts',
+    });
+    await expect(h.scheduler.update(saved.id, { modelAgentDeviceId: 'other' })).rejects.toThrow('host');
+  });
 
   // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19): unit through Scheduler.create /
   // update. A plugin engine only runs as a new task each run on the automation host; the minimal

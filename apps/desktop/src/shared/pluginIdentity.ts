@@ -35,6 +35,12 @@ export interface PluginLogicalIdentity {
   ghostId: string;
 }
 
+/** Stable account resource, shared by schedule drafts and the resident plugin slot. */
+export function pluginAutomationHostKey(namespace: string | null, ghostId: string): string {
+  const channel = namespace === null ? 'public' : namespace === LOCAL_PLUGIN_NAMESPACE ? 'local' : 'org.' + namespace;
+  return channel + '/' + ghostId;
+}
+
 export function resolvePluginNamespaceState(raw: unknown): PluginNamespaceState {
   if (typeof raw !== 'object' || raw === null || !hasDeliveryNamespace(raw)) {
     return { kind: 'legacy' };

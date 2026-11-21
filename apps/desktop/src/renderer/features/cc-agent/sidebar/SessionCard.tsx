@@ -85,6 +85,7 @@ import { resolveSessionCardBody } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import {
   mergeOrcaLeadAttentionKind,
+  pendingOrcaWorkerQuestion,
   useOrcaLeadWorkerAttentionKind,
 } from '../lib/orcaLeadWorkerAttention';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
@@ -132,7 +133,7 @@ function getNeutralAwaitingKind(
   return '';
 }
 
-/** SessionCard 与 SessionItem 共用同一份 props 契约（indented 在卡片流中无意义，忽略）。
+/** SessionCard 与 SessionItem 共用同一份 props 契约。
  *  variant:
  *    - 'card'(默认):白底描边卡片(瀑布流),标题 1 行 + 正文 2 行 + 右下角时间。
  *    - 'list':满宽扁平行(类 Telegram / 对话列表),无卡片描边底色;标题 + 右上角
@@ -268,7 +269,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   );
   const awaitingKind =
     (islandActivity?.phase === 'needs-interaction' ? islandActivity.interactionKind : null) ??
-    (neutralAwaitingKind || null);
+    (neutralAwaitingKind || (orcaWorkerAttentionKind === 'awaiting' && pendingOrcaWorkerQuestion(session.id) ? 'ask_user' : null));
   const awaitingText =
     awaitingKind == null
       ? null

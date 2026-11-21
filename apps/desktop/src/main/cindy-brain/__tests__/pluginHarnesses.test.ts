@@ -174,4 +174,24 @@ describe('plugin harness registry', () => {
     await expect(r.registry.spawn('dsh-plugin:dsh')).rejects.toThrow('Install DSH first');
     expect(r.deps.spawn).toHaveBeenCalledTimes(1);
   });
+
+  // 任务的文件在另一台电脑时，引擎自带的文件与命令工具只会作用在本机。只有插件声明自己能把这些交给 Cindy
+  // (remoteWorkspace)才允许这样启动；没声明就启动，Agent 会在错误的电脑上读写(docs/plans/acp-plugin-bridge.md 第三期)。
+  // 最小失败输入：未发布 remoteWorkspace 的引擎以远程工作区方式启动。
+  it('starts an engine for a task on another computer only when its plugin offers that mode', async () => {
+    const r = setup([ghost()], { harnesses: [{ id: 'dsh', available: true }] });
+    expect(r.registry.list()[0]).not.toHaveProperty('remoteWorkspace');
+    await expect(r.registry.spawn('dsh-plugin:dsh', { remoteWorkspace: true })).rejects.toThrow('another computer');
+    expect(r.deps.spawn).not.toHaveBeenCalled();
+
+    r.publish({ harnesses: [{ id: 'dsh', available: true, remoteWorkspace: true }] });
+    r.registry.reconcile();
+    expect(r.registry.list()[0]).toMatchObject({ remoteWorkspace: true });
+    await expect(r.registry.spawn('dsh-plugin:dsh', { remoteWorkspace: true })).resolves.toBe(r.process);
+    expect(r.deps.spawn).toHaveBeenLastCalledWith('dsh-plugin', 'dsh', { remoteWorkspace: true });
+    // An unavailable engine cannot keep the mode: it is not startable either way.
+    r.publish({ harnesses: [{ id: 'dsh', available: false, remoteWorkspace: true }] });
+    r.registry.reconcile();
+    expect(r.registry.list()[0]).not.toHaveProperty('remoteWorkspace');
+  });
 });

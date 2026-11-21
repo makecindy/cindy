@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c3b552d6-d7dc-4745-ac36-12480ef342f1",
+  "id": "d917d993-dd4d-4547-84ba-a4636a221f7d",
   "prevId": "ab9fabbf-f67a-45ae-827f-ce3325d7a349",
   "tables": {
     "account_usage_snapshots": {
@@ -2101,13 +2101,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'{}'"
-        },
-        "stdio": {
-          "name": "stdio",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "sort_order": {
           "name": "sort_order",
@@ -5338,6 +5331,13 @@
         },
         "pre_run_plugin_id": {
           "name": "pre_run_plugin_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "primary_host_key": {
+          "name": "primary_host_key",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

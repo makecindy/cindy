@@ -484,11 +484,10 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).not.toContain('sourceLabel={sourceLabel}');
   });
 
-  it('aligns list automation headers with regular tasks and indents only expanded children', () => {
+  it('aligns list automation headers with regular tasks', () => {
     expect(automationGroupSource).toMatch(
-      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: indented\s*\? 'pl-5 pr-2'\s*: 'pl-3 pr-2'/,
+      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: 'pl-3 pr-2'/,
     );
-    expect(automationGroupSource).toContain('<div className="flex flex-col gap-0.5 pl-2">');
     expect(automationGroupSource).toContain("sessionVariant === 'list' ? 'w-3' : 'w-[15px]'");
     expect(automationGroupSource).toContain("sessionVariant === 'list' && 'order-2'");
   });

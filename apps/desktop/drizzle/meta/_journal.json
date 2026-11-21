@@ -1097,8 +1097,29 @@
     {
       "idx": 156,
       "version": "6",
-      "when": 1795138627678,
-      "tag": "0156_add_stdio_to_custom_mcp",
+      "when": 1795157998457,
+      "tag": "0156_schedule_primary_host",
+      "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "6",
+      "when": 1795171167620,
+      "tag": "0157_promote_orca_side_chat",
+      "breakpoints": true
+    },
+    {
+      "idx": 158,
+      "version": "6",
+      "when": 1795172272030,
+      "tag": "0158_close_linked_side_chat",
+      "breakpoints": true
+    },
+    {
+      "idx": 159,
+      "version": "6",
+      "when": 1795224788494,
+      "tag": "0159_steady_quentin_quire",
       "breakpoints": true
     }
   ]
