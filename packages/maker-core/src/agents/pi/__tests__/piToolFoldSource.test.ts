@@ -369,15 +369,15 @@ describe('cindy-tool-fold extension source', () => {
     expect(() => projection(context, messages)).not.toThrow();
   });
 
-  it('evicts the least-recently-recovered pin when the pin budget is exceeded', async () => {
+  it('keeps an over-budget recovery out of the pin budget instead of exempting it', async () => {
+    // 记录卡本身超过 pin 预算时，恢复结果不能既回灌原文、又被 pin 回下一次请求：
+    // “至少保留一条”的豁免会让同一段文本出现两份，顶穿接近满的上下文。
     const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_PIN_BUDGET: '1' });
     const messages = pairs(40);
     projection(context, messages);
     await tool.execute('t1', { call_id: 'call-2' });
-    await tool.execute('t2', { call_id: 'call-6' }); // budget 1 char -> evicts call-2
     const view = projection(context, messages);
-    expect(isFolded(view[4])).toBe(true); // call-2 re-folded: oldest recovery evicted
-    expect(isFolded(view[12])).toBe(false); // call-6 still pinned
+    expect(isFolded(view[4])).toBe(true);
   });
 
   it('bounds retained giant payloads by aggregate characters, not just entry count', async () => {

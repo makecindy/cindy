@@ -553,11 +553,12 @@ export default function (pi) {
       }
       var raw = String(original.text || '');
       if (!giants.has(String(id))) {
-        if (raw.length > RECOVERY_READ_MAX_CHARS) {
-          // 分块读取折叠记录：转存进 giant 注册表，而不是 pin 住整条历史。
-          // pin 会把整段原文留在下一次请求里，120k 的切片反而要付 300k 的上下文代价。
-          if (!admitGiant(String(id), raw)) pinOriginal(id);
-        } else {
+        // 不超过 pin 预算的记录照旧钉住：下一次请求里看得到原文，这是既有契约。
+        // 超过预算则只转存 giant 注册表、不钉；否则 pinOriginal 会自占一条超出预算的
+        // 名额（“至少保留一条”），同一段文本在下一次请求里就出现两份：恢复结果与钉回的原调用。
+        if (raw.length <= PIN_BUDGET_CHARS) {
+          pinOriginal(id);
+        } else if (!admitGiant(String(id), raw)) {
           pinOriginal(id);
         }
       }
