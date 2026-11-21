@@ -45,6 +45,7 @@ import { resolveProjectAliasForSessions, type ProjectAliasesByDevice } from '@ci
 import { isOrcaLeadSession, isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { normalizeWorkingDirForGrouping } from '../../../../shared/workingDir';
 import { sessionTaskProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import {
   deviceLinkProjectKey,
   normalizeProjectKey,
@@ -219,6 +220,81 @@ export function filterPersistentLocalProjectsByLastActivity(
   // With an activity filter, only matching tasks may introduce a project group.
   // A recently registered directory alone is not evidence of task activity.
   return [];
+}
+
+/**
+ * The sessions and persistent projects the sidebar groups into its project tree.
+ * The teammate filter is deliberately ignored here and applied in sidebarProjectRows,
+ * so choosing a teammate never removes ordinary project folders.
+ */
+export function sidebarGroupingInput(
+  sessions: readonly Session[],
+  persistentLocalProjects: readonly PersistentLocalProject[],
+  /** 「最近活跃」截止时间；null 表示全部。 */
+  cutoff: number | null,
+  activityMs: (session: Session) => number,
+): { sessions: readonly Session[]; persistentLocalProjects: readonly PersistentLocalProject[] } {
+  return {
+    sessions: cutoff === null ? sessions : sessions.filter((s) => activityMs(s) >= cutoff),
+    persistentLocalProjects: filterPersistentLocalProjectsByLastActivity(persistentLocalProjects, cutoff),
+  };
+}
+
+/** 「筛选 → 伙伴」：只决定伙伴的文件夹和伙伴的任务；null 表示全部伙伴。 */
+export interface SidebarTeammateFilter {
+  session: (session: Session) => boolean;
+  project: (project: ProjectNode) => boolean;
+}
+
+/**
+ * Project nodes and their rows after the vendor and teammate filters. The
+ * teammate filter hides only teammate folders and teammate tasks; ordinary
+ * projects stay exactly as without it. Hidden teammate tasks also stop counting
+ * toward a project's recent activity, so "recent activity" order follows what
+ * is still visible (projects are grouped before this filter runs).
+ */
+export function sidebarProjectRows(
+  projects: readonly ProjectNode[],
+  vendor: string,
+  teammateFilter: SidebarTeammateFilter | null,
+): ProjectNode[] {
+  const vendorPredicate =
+    vendor === 'all' ? null : (session: Session) => (session.agentKind ?? 'cc') === vendor;
+  const rows = projects.flatMap((project) => {
+    if (teammateFilter && !teammateFilter.project(project)) return [];
+    const matchingSessions = vendorPredicate ? project.sessions.filter(vendorPredicate) : project.sessions;
+    // A teammate's registered folder with no task of its own is not an empty project row
+    // (cindy-bots-runtime.md §3); the collapsed rail would otherwise list it.
+    if (
+      teammateFilter &&
+      isTeammateProjectPath(project.workingDir) &&
+      !matchingSessions.some(teammateFilter.session)
+    )
+      return [];
+    if (
+      matchingSessions.length === 0 &&
+      (!project.isPersistentLocal || (vendorPredicate && !persistentProjectMatchesVendor(project, vendor)))
+    )
+      return [];
+    const visible = matchingSessions.filter(
+      (session) => session.pinnedAt == null && (teammateFilter === null || teammateFilter.session(session)),
+    );
+    const node = withProjectSessions(project, visible);
+    if (!teammateFilter) return [node];
+    // Same clock as buildMainListEntries: only visible tasks count, so an empty project sorts as 0.
+    const latestActivityAt = visibleLatestActivityAt(project.sessions.filter(teammateFilter.session));
+    return [latestActivityAt === project.latestActivityAt ? node : { ...node, latestActivityAt }];
+  });
+  return teammateFilter ? rows.sort(compareProjectsByLatestSessionDesc) : rows;
+}
+
+/** Latest activity among the sessions a filter left visible; '' when none remain. */
+function visibleLatestActivityAt(sessions: readonly Session[]): string {
+  let latest: Session | null = null;
+  for (const session of sessions) {
+    if (latest === null || sortTimeMs(session) > sortTimeMs(latest)) latest = session;
+  }
+  return latest ? sortTimeIso(latest) : '';
 }
 
 export function persistentProjectMatchesVendor(

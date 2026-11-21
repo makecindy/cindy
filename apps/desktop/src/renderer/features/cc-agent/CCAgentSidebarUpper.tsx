@@ -4,7 +4,9 @@ import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
 import { InboxUnreadReporter, useTaskListMode } from '@/hooks/useTaskListMode';
 import {
+  matchesSidebarTeammateFilter,
   matchesTaskCreators,
+  sidebarTeammateProjectVisible,
   useTaskCreatorIndex,
   useTaskCreatorOptions,
 } from '@/features/bots/botFollowScopes';
@@ -168,14 +170,13 @@ import { useHiddenProjects, type UseHiddenProjectsReturn } from './hooks/useHidd
 import {
   deviceLinkProjectKey,
   buildPersistentLocalProjects,
-  filterPersistentLocalProjectsByLastActivity,
   normalizeProjectKey,
   normalizeWorkingDir,
   projectIdentityKey,
   projectIdentityKeyForSession,
   pinnedSessionIdsInDisplayOrder,
-  persistentProjectMatchesVendor,
-  withProjectSessions,
+  sidebarGroupingInput,
+  sidebarProjectRows,
   type PersistentLocalProject,
   type ProjectNode,
 } from './lib/projectGrouping';
@@ -183,6 +184,7 @@ import { projectDisplayLabelWithMachine } from './lib/remoteProjectIdentity';
 import { useSessionGroupArchive } from './hooks/useSessionGroupArchive';
 import { useBulkSessionArchive } from './hooks/useBulkSessionArchive';
 import { cutoffForLastActivity, filterSidebarTasks } from './lib/sidebarTaskFilters';
+import { sessionActivityMs } from './lib/dateSessionGrouping';
 import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
 import { observeSidebarTaskChanges } from './lib/sidebarTaskObserver';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
@@ -1633,14 +1635,19 @@ function ExpandedView({
   );
 
   const taskCreatorIndex = useTaskCreatorIndex();
-  const { hideAutomations, creators, lastActivity } = filter;
-  const filterTaskSessions = useCallback(
-    (source: Session[]) => filterSidebarTasks(source, { hideAutomations, creators, lastActivity }, taskCreatorIndex),
-    [hideAutomations, creators, lastActivity, taskCreatorIndex],
-  );
-  const activityFilteredSessions = useMemo(
-    () => filterTaskSessions(sidebarSessions), [filterTaskSessions, sidebarSessions],
-  );
+  // 「筛选 → 伙伴」只管伙伴的文件夹和伙伴的任务；普通项目和普通任务不受影响。
+  // 所以下面按任务内容筛选时一律传 creators: 'all'，伙伴筛选在分组之后（sidebarProjectRows）
+  // 单独套用；收件箱按它自己保存的伙伴筛选单独套用。
+  const teammateFilter = useMemo(() => {
+    const selected = filter.creators;
+    if (selected === 'all') return null;
+    return {
+      session: (s: Session) => matchesSidebarTeammateFilter(s, selected, taskCreatorIndex),
+      project: (project: ProjectNode) => sidebarTeammateProjectVisible(project, selected, taskCreatorIndex),
+    };
+  }, [filter.creators, taskCreatorIndex]);
+  const sessionMatchesCreators = teammateFilter?.session ?? null;
+  const { hideAutomations, lastActivity } = filter;
   const statusIndependentSidebarSessions = useMemo(() => {
     const scoped = selectVisibleSessions(allSessionsForAttention, remoteProjectSessions, selectedMachineId)
       .filter(session => !isOrcaWorkerSession(session)
@@ -1649,10 +1656,15 @@ function ExpandedView({
     return sidebarSessionsWithHiddenProjectsAsDialogues(scoped, hiddenProjectKeys, localPlatform);
   }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys, localPlatform]);
   const inboxFilter = filter.inbox;
-  const inboxSourceSessions = useMemo(
-    () => filterSidebarTasks(statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex),
-    [statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex],
-  );
+  // 收件箱有自己保存的筛选；伙伴同样只管伙伴的任务，普通任务不受影响。
+  const inboxSourceSessions = useMemo(() => {
+    const sessions = filterSidebarTasks(
+      statusIndependentSidebarSessions, { ...inboxFilter, creators: 'all' }, taskCreatorIndex);
+    const selected = inboxFilter.creators;
+    return selected === 'all'
+      ? sessions
+      : sessions.filter(session => matchesSidebarTeammateFilter(session, selected, taskCreatorIndex));
+  }, [statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex]);
   // The inbox counts a task as a teammate's by the same test as the teammate filter.
   const isInboxTeammateTask = useCallback(
     (session: Session) => !matchesTaskCreators(session, 'none', taskCreatorIndex),
@@ -1662,14 +1674,18 @@ function ExpandedView({
   const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, true,
     undefined, localPlatform, undefined, projectAliasMembers);
 
-  const activityFilteredPersistentLocalProjects = useMemo(
+  const groupingInput = useMemo(
     () =>
-      filterPersistentLocalProjectsByLastActivity(
-        filter.creators === 'all' ? visiblePersistentLocalProjects : [],
-        cutoffForLastActivity(filter.lastActivity),
+      sidebarGroupingInput(
+        filterSidebarTasks(sidebarSessions, { hideAutomations, creators: 'all', lastActivity: 'all' }, taskCreatorIndex),
+        visiblePersistentLocalProjects,
+        cutoffForLastActivity(lastActivity),
+        sessionActivityMs,
       ),
-    [filter.lastActivity, filter.creators, visiblePersistentLocalProjects],
+    [sidebarSessions, hideAutomations, taskCreatorIndex, visiblePersistentLocalProjects, lastActivity],
   );
+  const activityFilteredSessions = groupingInput.sessions;
+  const activityFilteredPersistentLocalProjects = groupingInput.persistentLocalProjects;
 
   /* ---- Grouping & collapse ---- */
   const { mode: taskListMode } = useTaskListMode();
@@ -2010,11 +2026,11 @@ function ExpandedView({
   }, [visiblePinnedEntries, pinnedRemoteActivityRevision]);
 
   const visibleUnclassified = useMemo(() => {
-    const sessions = vendorPredicate
-      ? groups.unclassified.filter(vendorPredicate)
-      : groups.unclassified;
+    const sessions = groups.unclassified.filter(
+      (s) => (!vendorPredicate || vendorPredicate(s)) && (!sessionMatchesCreators || sessionMatchesCreators(s)),
+    );
     return sortSessionsForSidebar(sessions, filter.sortBy);
-  }, [groups.unclassified, vendorPredicate, filter.sortBy]);
+  }, [groups.unclassified, vendorPredicate, sessionMatchesCreators, filter.sortBy]);
 
   // rail 项目面板的未分类与展开态同一门控:选中具体项目筛选时隐藏
   // (ProjectsSection.unclassifiedHidden 同判定 filter.projects !== 'all'),
@@ -2025,10 +2041,14 @@ function ExpandedView({
   );
 
   const visibleDialogues = useMemo(() => {
-    const sessions = vendorPredicate ? groups.dialogues.filter(vendorPredicate) : groups.dialogues;
+    const sessions = vendorPredicate || sessionMatchesCreators
+      ? groups.dialogues.filter(
+          (s) => (!vendorPredicate || vendorPredicate(s)) && (!sessionMatchesCreators || sessionMatchesCreators(s)),
+        )
+      : groups.dialogues;
     if (filter.projectsAsSet === null) return sessions;
     return filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? sessions : [];
-  }, [groups.dialogues, vendorPredicate, filter.projectsAsSet]);
+  }, [groups.dialogues, vendorPredicate, sessionMatchesCreators, filter.projectsAsSet]);
   // Group actions include pinned and content-filtered members;
   // allProjectGroups still respects device scope and task status.
   const dialogueActionSessions = allProjectGroups.dialogues;
@@ -2146,20 +2166,7 @@ function ExpandedView({
       (project) =>
         !projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform),
     );
-    const projects = unpinnedProjects.flatMap((project) => {
-      const matchingSessions = vendorPredicate
-        ? project.sessions.filter(vendorPredicate)
-        : project.sessions;
-      if (
-        matchingSessions.length === 0 &&
-        (!project.isPersistentLocal ||
-          (vendorPredicate && !persistentProjectMatchesVendor(project, filter.vendor)))
-      )
-        return [];
-      return [
-        withProjectSessions(project, matchingSessions.filter((session) => session.pinnedAt == null)),
-      ];
-    });
+    const projects = sidebarProjectRows(unpinnedProjects, filter.vendor, teammateFilter);
     return sortProjectsForSidebar(
       projects,
       hostProjectSort.sortBy,
@@ -2172,7 +2179,7 @@ function ExpandedView({
     visibleProjects,
     pinnedProjectComparisonKeys,
     localPlatform,
-    vendorPredicate,
+    teammateFilter,
     filter.vendor,
     hostProjectSort,
     projectPriorityContext,
@@ -2208,23 +2215,7 @@ function ExpandedView({
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
   // 否则侧栏折叠后这些项目及其取消置顶入口都会完全不可达。
   const visibleRailProjectsWithVendor = useMemo(() => {
-    const projects = visibleProjects.flatMap((project) => {
-      const matchingSessions = vendorPredicate
-        ? project.sessions.filter(vendorPredicate)
-        : project.sessions;
-      if (
-        matchingSessions.length === 0 &&
-        (!project.isPersistentLocal ||
-          (vendorPredicate && !persistentProjectMatchesVendor(project, filter.vendor)))
-      )
-        return [];
-      return [
-        {
-          ...project,
-          sessions: matchingSessions.filter((session) => session.pinnedAt == null),
-        },
-      ];
-    });
+    const projects = sidebarProjectRows(visibleProjects, filter.vendor, teammateFilter);
     return sortProjectsForSidebar(
       projects,
       hostProjectSort.sortBy,
@@ -2233,7 +2224,7 @@ function ExpandedView({
       localPlatform,
       projectPriorityContext,
     );
-  }, [visibleProjects, vendorPredicate, filter.vendor, hostProjectSort, localPlatform, projectPriorityContext]);
+  }, [visibleProjects, teammateFilter, filter.vendor, hostProjectSort, localPlatform, projectPriorityContext]);
 
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter

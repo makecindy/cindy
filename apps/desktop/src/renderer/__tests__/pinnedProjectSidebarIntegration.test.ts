@@ -9,7 +9,12 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { includeProjectInFilter } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
-import type { PersistentLocalProject } from '@/features/cc-agent/lib/projectGrouping';
+import {
+  groupSessions,
+  sidebarProjectRows,
+  type PersistentLocalProject,
+} from '@/features/cc-agent/lib/projectGrouping';
+import type { Session } from '@/lib/ccAgent.types';
 import {
   collectRestorableProjectKeys,
   restoreHiddenProjectIfPresent,
@@ -29,9 +34,13 @@ describe('pinned project sidebar integration', () => {
     expect(sidebarSource).toContain('const groupsWithPinnedProjects = useProjectGroups(');
     expect(sidebarSource).toContain('const notHidden = visibleSidebarProjects(');
     expect(sidebarSource).toContain('if (filter.projectsAsSet === null) return notHidden;');
-    expect(sidebarSource).toContain(
-      'sessions: matchingSessions.filter((session) => session.pinnedAt == null)',
-    );
+    const row = (id: string, pinnedAt: string | null) => ({
+      id, title: id, status: 'active', workingDir: '/work/app', workspaceKind: 'project',
+      pinnedAt, userSendAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      createdAt: '2026-01-01T00:00:00Z', _count: { messages: 1 },
+    }) as unknown as Session;
+    const allPinned = groupSessions([row('a', '2026-01-02T00:00:00Z')], { includePinnedInProjects: true }).projects;
+    expect(sidebarProjectRows(allPinned, 'all', null).map((p) => p.sessions.length)).toEqual([0]);
   });
 
   it('applies main-process pinned-order broadcasts to every mounted sidebar hook', () => {
