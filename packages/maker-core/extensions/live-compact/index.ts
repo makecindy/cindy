@@ -163,10 +163,8 @@
  *   - keptTokens 与实际切点对齐(上游 8ee6876b):长 read 刀可以落在普通保留轮右侧,按
  *     「保留区整段」计数会把切点左侧的轮也数进来,tailBeyondKept 变负、尾巴守卫失效;改为
  *     只数 rounds 里 start 在实际切点右边的轮,轮间杂项不计。
- *   - 长 read 刀翻车后的重试(上游 8ee6876b):配对/指针/卡片检验失败时,带 disableLongRead
- *     递归一次;重试再翻车返回 null。(1.1.10 已吸收上游 1.1.7 修复:longSpan 受标记门控,
- *     重试真正跳过长读分类、兜底普通选点 —— 本仓报的 #54 已由上游关闭,对应用例已翻转;)
- *     详见下方 1.1.10 章节。
+ *   - 长 read 刀翻车后的重试(上游 8ee6876b):配对/指针/卡片检验失败时回试另一候选。
+ *     (1.1.10 起由 disableLongRead 递归实现,1.1.12 起并入双候选队列,见下节。)
  *   - 增长基线在被跳过的收尾上重置(上游 8ee6876b):官方压缩冷却/空闲窗口冷却/水位门三个
  *     跳过路径把 last=当前总量、max=0;收尾完成后同样清 max。此前 max 永不重置,一次尖峰之后
  *     projected 恒真,云端跟着连白切。
@@ -218,11 +216,16 @@
  *     普通刀节省恒 ≈10%,守卫只在估算口径/卡片形态变化时才会咬合 —— 防御性移植,
  *     无可观察输入,按测试价值门槛不加用例。
  *   1.1.11 对齐(2026-11-15):
- *   - 候选回退修复(#60):普通候选按 tokens 取大先胜出、卡片校验在后;翻车时带
- *     forceLongRead 回试已选出的长读候选,仍翻车才走 disableLongRead 兜底。
+ *   - 候选回退修复(#60):普通候选按 tokens 取大先胜出、卡片校验在后;翻车时回试
+ *     长读候选。(1.1.12 起并入双候选队列,见下节。)
  *   - 工具事实预算修复(#61):硬行只进工具块前缀一次,正文 withoutHardFacts 去重;
  *     失败诊断完整性仍按过滤前的 kept 逐行核对(硬行在前缀算已保留),与上游同款。
- *   以下为 1.1.7-1.1.11 里判「pi 无对等层 / 本仓无该路径」的条目:
+ *   1.1.12 对齐(2026-11-16):
+ *   - #60 候选队列:单赢家+逐出口临时重试升级为双候选队列 —— 赢家先试、输家后备,
+ *     指针配对/长读范围/尾段扩展/平衡/失败工具/卡片任一出口失败都自然落到下一个候选;
+ *     disableLongRead 递归废除(队列已蕴含其语义),forceLongRead 保留(队列只放长读),
+ *     selectNewestChunk 加 export 供回归测试。
+ *   以下为 1.1.7-1.1.12 里判「pi 无对等层 / 本仓无该路径」的条目:
  *   - shadow worker 超时不杀进程(1.1.7):无 worker 池(同上口径)。
  *   - turn/end max-tokens 边界(1.1.8)与整套轮末维护机器(1.1.8/1.1.10:pre-step 桥、
  *     turn-stopping 窗口、dispose 让位、waitForMaintenance、scheduleTurnEndMaintenance):
@@ -234,7 +237,14 @@
  *     readExistingRaw 已有同款区分。
  *   - Windows shadow worker execArgv 过滤、already-pruned retryable、captureBlocked
  *     轮后维护重试(1.1.11 #62):shadow worker 池与捕获 catchup 机器本仓无;
- *     retryable 字段落进本仓 persistRaw 无消费者,不加死代码。
+ *     retryable 字段落进本仓 persistRaw 无消费者,不加死代码。(1.1.12 起上游改标
+ *     unrecoverable 并加游标推进,同域同口径不搬。)
+ *   - spine-decisions.jsonl 决策日志与 symlink/hardlink/常规文件防护(1.1.12):
+ *     实现在 shadow.js(shadow 存储域),本仓无该层。
+ *   - 维护活性与 retry fencing(1.1.12):pre-step 3 秒截止、维护超时只 abort 当前 job、
+ *     catch-up 合并/turn-stopping 去重/barrier 保留 —— 轮末维护机器(同上口径)。
+ *   - #50 catalog ESM 加载、preset ID 白名单、late bundle 重挂载(1.1.12 client.js/
+ *     settings.js)与 gate.js 测试门禁 —— DSH client/宿主注册/测试门禁域,本仓无。
  *   - gate.js 日志文案(1.1.8):本仓无 gate.js。#53 package.json export(1.1.7):
  *     DSH bundle loader 专属。
  *
@@ -2899,7 +2909,6 @@ export function selectNewestChunk(
   // 1.1.6(上游 8ee6876b): keptTokens 改为在切点定案后统计「实际切点右侧」的保留轮 ——
   // 长 read 刀可以落在普通保留轮右边,按保留区整段计数会数到切点左侧,tailBeyondKept
   // 变负、尾巴守卫失效。计数挪到本函数末尾。
-  let keptTokens = 0;
   if (cutEnd !== null && kept) {
     end = cutEnd;
     while (end >= first && (isUser(entries[end]) || entries[end].opaque) && !(floorCard >= 0 && end - 1 <= floorCard)) end -= 1;
@@ -2916,7 +2925,8 @@ export function selectNewestChunk(
   // 新内容之间插刀,前缀缓存直接报废)。卡片右边那一轮长 read 这一轮切不到也不要紧 —— 保留区窗口
   // 跟着尾巴走,下一轮这个长 read 落到窗口左侧,它就成了卡片右侧的可切候选:延后一轮,不是丢失。
   // 1.1.7: disableLongRead 真正跳过长读分类 —— 重试不再撞同一堵墙(本仓报的
-  // Tranquillitatis-Lab/dsh-live-compact#54,上游已在 1.1.7 修复)。
+  // Tranquillitatis-Lab/dsh-live-compact#54,上游已在 1.1.7 修复)。1.1.12 起队列接管重试,
+  // 本仓侧已无调用方;上游 1.1.12 也只在 longSpan 这里留判据,标记随之只在内部语义里存在。
   const longSpan = !context.disableLongRead && newestLong && newestLong.start > floorCard ? { start: newestLong.start, end: newestLong.end } : null;
   if (!longSpan && (end < first || isCheckpoint(entries[end]))) {
     return warn(`end<first or checkpoint (tail all shortTail/checkpoint)`);
@@ -2933,12 +2943,6 @@ export function selectNewestChunk(
     urgentTokens: URGENT_TOKENS,
     keepBudget: KEEP_ROUND_TOKENS,
   };
-  let usedLongCut = false;
-  let picked: ReturnType<typeof selectCutIndexes> = null;
-  // 1.1.6(上游 8ee6876b): 长读刀在配对/指针/卡片检验上翻车时,带 disableLongRead 递归
-  // 重试一次;1.1.7 起重试真正跳过长读分类(见 longSpan 门),再翻车就返回 null。
-  const fallbackWithoutLongRead = () =>
-    context.disableLongRead ? null : selectNewestChunk(entries, diag, { ...context, disableLongRead: true });
   let longPicked: ReturnType<typeof selectCutIndexes> = null;
   if (longSpan) {
     const candidate = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
@@ -2946,23 +2950,29 @@ export function selectNewestChunk(
   }
   // 1.1.9: 长读候选不再无条件抢占 —— 普通候选总是参与,取 tokens 更大的一段。
   const ordinaryPicked = selectCutIndexes(items, cutOptions);
-  // 1.1.11(#60): 普通候选卡片翻车后的重试带 forceLongRead 进来,直接用已选出的长读候选。
-  if (context.forceLongRead && longPicked) {
-    picked = longPicked;
-    usedLongCut = true;
+  // 1.1.12(#60): 单赢家+逐出口临时重试升级为双候选队列 —— 赢家先试、输家后备;
+  // 指针配对/长读范围/尾段扩展/平衡/失败工具/卡片任一出口失败都自然落到下一个候选。
+  // disableLongRead 递归由此废除(队列已蕴含其语义);forceLongRead 保留(队列只放长读)。
+  const candidates: Array<{ candidate: NonNullable<ReturnType<typeof selectCutIndexes>>; usedLongCut: boolean }> = [];
+  const addCandidate = (candidate: NonNullable<ReturnType<typeof selectCutIndexes>>, usedLongCut: boolean) => {
+    if (!candidate || candidates.some((item) => item.candidate === candidate)) return;
+    candidates.push({ candidate, usedLongCut });
+  };
+  if (context.forceLongRead) {
+    addCandidate(longPicked, true);
   } else if (longPicked && ordinaryPicked) {
-    if ((ordinaryPicked.tokens || 0) >= (longPicked.tokens || 0)) picked = ordinaryPicked;
-    else {
-      picked = longPicked;
-      usedLongCut = true;
+    if ((ordinaryPicked.tokens || 0) >= (longPicked.tokens || 0)) {
+      addCandidate(ordinaryPicked, false);
+      addCandidate(longPicked, true);
+    } else {
+      addCandidate(longPicked, true);
+      addCandidate(ordinaryPicked, false);
     }
-  } else if (ordinaryPicked) {
-    picked = ordinaryPicked;
-  } else if (longPicked) {
-    picked = longPicked;
-    usedLongCut = true;
+  } else {
+    addCandidate(ordinaryPicked, false);
+    addCandidate(longPicked, true);
   }
-  if (!picked) {
+  if (!candidates.length) {
     if (end < first || isCheckpoint(entries[end])) {
       return warn(`no span end=${end} checkpoint/tail total=${spanTokens(items, 0, nodes.length - 1)} engine=${engine}`);
     }
@@ -3016,10 +3026,14 @@ export function selectNewestChunk(
     return bits.join("\n");
   };
 
-  let start = picked.start;
-  let spanEnd = picked.end;
-  let card: any;
-  let tokens = spanTokens(items, start, spanEnd);
+  const evaluateCandidate = (queueItem: { candidate: NonNullable<ReturnType<typeof selectCutIndexes>>; usedLongCut: boolean }) => {
+    const picked = { ...queueItem.candidate };
+    const usedLongCut = queueItem.usedLongCut;
+    let keptTokens = 0;
+    let start = picked.start;
+    let spanEnd = picked.end;
+    let card: any;
+    let tokens = spanTokens(items, start, spanEnd);
   if (picked.pointerOnly) {
     // 超大工具结果:只留指针,并连同发这个调用的 assistant 一起换掉。
     const toolCallId = entries[spanEnd].results[0] || '';
@@ -3030,16 +3044,15 @@ export function selectNewestChunk(
         break;
       }
     }
-    if (pairStart < 0) return usedLongCut ? fallbackWithoutLongRead() : warn(`pointer-only result ${spanEnd} has no call in front`);
+    if (pairStart < 0) return null;
     if (usedLongCut && longSpan && pairStart < longSpan.start) {
-      diag?.(`pointer cut escapes long read round ${longSpan.start}; retry without long read`);
-      return fallbackWithoutLongRead();
+      return null;
     }
     if (!pointerSpanAllowed(items, pairStart, spanEnd, engine)) {
-      return usedLongCut ? fallbackWithoutLongRead() : warn(`pointer span rejected ${pairStart}..${spanEnd}`);
+      return null;
     }
     if (!cutOk(() => pairStart <= 0 || prefixBalanced[pairStart - 1])) {
-      return usedLongCut ? fallbackWithoutLongRead() : warn(`prefix not balanced at pointer start=${pairStart}`);
+      return null;
     }
     start = pairStart;
     // 上游同步回写 picked.start:后面的 escapes 检查按配对后的段头算。
@@ -3048,8 +3061,7 @@ export function selectNewestChunk(
   }
   // 1.1.1: 长 read 的刀只能留在自己的轮里。(1.1.10: 移到配对之后、扩段之前,上游顺序。)
   if (usedLongCut && longSpan && (picked.start < longSpan.start || picked.end > longSpan.end)) {
-    diag?.(`long read cut escapes ${longSpan.start}..${longSpan.end}; retry without long read`);
-    return fallbackWithoutLongRead();
+    return null;
   }
   // 1.1.9(恢复 1.0.6 选点法则): 先选最新合法段,再向左扩到 32K 轨 —— 卡在
   // checkpoint/真实 user 边界/长读下界/配额/试卡失败;前导不平衡对向右修剪,全剪没
@@ -3075,7 +3087,7 @@ export function selectNewestChunk(
       expandedStart += 1;
     }
     if (expandedStart > picked.end) {
-      return usedLongCut ? fallbackWithoutLongRead() : warn(`expansion collapsed start=${expandedStart} end=${picked.end}`);
+      return null;
     }
     picked.start = expandedStart;
   }
@@ -3086,7 +3098,7 @@ export function selectNewestChunk(
     // 1.1.5(#33): 上游的失败检查发生在 pairStart 扩展之后、查整段 —— 同一轮的短失败结果
     // 会随 pairStart 一起被换掉,只查超大结果本身会漏检。
     if (pointerPieces.some((piece) => normalizeRole(piece.role) === "tool" && isToolFailure(piece.text, piece.isError))) {
-      return usedLongCut ? fallbackWithoutLongRead() : warn(`pointer-only span ${start}..${spanEnd} holds a known failure`);
+      return null;
     }
     // 指针核不上时(原文快照的 meta 缺失或损坏),卡片里就没有任何可回查的路径。
     // 主 shadow 里存着这一段的正文,把它挂上 —— 切走之后模型还能找回原文。
@@ -3097,16 +3109,8 @@ export function selectNewestChunk(
   } else {
     card = buildCard(spanText(start, spanEnd), liveText(start, spanEnd), cardBudgetFor(spanText(start, spanEnd)), spanPieces(start, spanEnd), extras);
     if (card.ok !== true) {
-      // 1.1.11(#60): 普通候选按 tokens 取大先胜出、卡片校验在后;它翻车时给已选出的
-      // 长读候选一次完整重试,而不是直接放弃整刀。
-      if (!usedLongCut && longPicked && !context.forceLongRead) {
-        return selectNewestChunk(entries, diag, { ...context, forceLongRead: true });
-      }
-      if (usedLongCut) {
-        diag?.(`span UNCONFIRMED start=${start} end=${spanEnd}; retry without long read`);
-        return fallbackWithoutLongRead();
-      }
-      return warn(`span UNCONFIRMED start=${start} end=${spanEnd} role=${entries[start].role} est=${entries[start].est} hard=${card.hardCount} missing=${card.missing.length} omittedHard=${card.omittedHard} spanChars=${spanText(start, spanEnd).length}`);
+      // 1.1.12(#60): 卡片翻车 → 队列自然落到下一个候选,不再原地重试。
+      return null;
     }
     // 切割后 prefix 是 [0..start-1],所以平衡判据要取 start-1(原仓 toolPairingBalancedBefore)。
     if (!cutOk(() => start <= 0 || prefixBalanced[start - 1])) return warn(`prefix not balanced at start=${start}`);
@@ -3125,7 +3129,13 @@ export function selectNewestChunk(
     if (!Number.isInteger(round.start) || !Number.isInteger(round.end) || round.start <= spanEnd) continue;
     for (let index = round.start; index <= round.end; index += 1) keptTokens += entries[index].est;
   }
-  return { start, end: spanEnd, tokens, after, keptTokens, prefix, card, entries };
+    return { start, end: spanEnd, tokens, after, keptTokens, prefix, card, entries };
+  };
+  for (const item of candidates) {
+    const result = evaluateCandidate(item);
+    if (result) return result;
+  }
+  return null;
 }
 
 /** 1.0.7: 云端/本地判定要 provider;pi 把 provider 记在消息上(扩展拿不到 baseURL)。 */

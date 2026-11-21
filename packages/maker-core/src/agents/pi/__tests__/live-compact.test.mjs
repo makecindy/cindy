@@ -1777,6 +1777,31 @@ describe('live compact 1.1.6: 切点对齐、本地屏障、决策收窄与快�
     ];
     expect(selectNewestChunk(checkpoint, undefined, { drain: true, totalTokens: 60000 })).toBeNull();
   });
+  it('falls through to the long-read candidate when the pointer candidate holds a known failure (1.1.12 queue)', () => {
+    // 1.1.12(上游 #60 候选队列):老段里一个超大的失败结果自成指针候选,但它吞掉了已知失败;
+    // 队列不在这里直接放弃,而是接着试下一个候选——最新的健康长 read 轮接棒。
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('r1', 'file', 2000, 'read'),
+      ...round('huge', 'x', 65000, 'shell', true),
+      ...round('k1', 'log', 3000),
+      ...round('k2', 'log', 3000),
+      ...round('k3', 'log', 3000),
+      ...round('rN', 'file', 2000, 'read'),
+    ];
+    const diag = [];
+    const picked = selectNewestChunk(entries, (why) => diag.push(why), { engine: 'cloud', drain: true, totalTokens: 60000 });
+    expect(diag).toEqual([]);
+    expect(picked).not.toBeNull();
+    // 赢家必须是最新长 read 那一轮，而不是含失败的老段。
+    expect(picked.start).toBe(12);
+    expect(picked.end).toBe(13);
+    // 赢家必须是最新长 read 那一轮,而不是含失败的老段。
+    expect(picked.start).toBe(entries.length - 2);
+    expect(picked.end).toBe(entries.length - 1);
+  });
+
 });
 
 describe('live compact 1.1.10: 跨题撤退与收尾重写守卫', () => {
