@@ -522,10 +522,14 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     [undefined, false],
   ] as const)('passes safe CLI proxy routes through the Desktop fork (%s)', (endpoint, allowed) => {
     const bypass = 'localhost,127.0.0.1,::1';
-    for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY']) vi.stubEnv(key, undefined);
-    vi.stubEnv('http_proxy', endpoint);
-    vi.stubEnv('https_proxy', 'http://demo:synthetic@localhost:8080');
-    vi.stubEnv('no_proxy', bypass);
+    // A plain object also exercises distinct POSIX aliases on a Windows runner.
+    const environment = process.env;
+    process.env = {
+      ...environment, HTTP_PROXY: undefined, NO_PROXY: undefined,
+      http_proxy: endpoint, no_proxy: bypass,
+      https_proxy: 'http://demo:synthetic@localhost:8080',
+      HTTPS_PROXY: 'http://localhost:18081',
+    };
     const fork = vi.fn((_entry: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => new FakeUtilityProcess());
     const worker = createUtilityNodeWorkerProcess('demo.cjs', os.tmpdir(), 'demo', fork as never);
     try {
@@ -536,7 +540,7 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
       expect(env.HTTPS_PROXY).toBeUndefined();
     } finally {
       worker.kill();
-      vi.unstubAllEnvs();
+      process.env = environment;
     }
   });
 

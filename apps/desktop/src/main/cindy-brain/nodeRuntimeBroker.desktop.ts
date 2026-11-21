@@ -19,20 +19,24 @@ function desktopPluginEnvironment(ghostId: string): NodeJS.ProcessEnv {
   const env = pluginNodeEnvironment(ghostId);
   const endpoints: NodeJS.ProcessEnv = {};
   const exclusions: NodeJS.ProcessEnv = {};
-  for (const key of ['http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY', 'no_proxy', 'NO_PROXY']) {
+  for (const key of ['no_proxy', 'NO_PROXY']) {
     const value = process.env[key];
     if (!value) continue;
-    if (key.toLowerCase() === 'no_proxy') {
-      // A malformed bypass list must never silently redirect private traffic.
-      const entries = value.split(/[,\t ]+/).filter(Boolean);
-      if (!entries.every(entry => /^[a-z0-9_.*:[\]-]+(?:\/\d{1,3})?$/i.test(entry))) return env;
-      exclusions[key] = value;
-      continue;
-    }
+    // A malformed bypass list must never silently redirect private traffic.
+    const entries = value.split(/[,\t ]+/).filter(Boolean);
+    if (!entries.every(entry => /^[a-z0-9_.*:[\]-]+(?:\/\d{1,3})?$/i.test(entry))) return env;
+    exclusions[key] = value;
+  }
+  for (const name of ['http_proxy', 'https_proxy']) {
+    const keys = [name, name.toUpperCase()];
     // Validate the raw authority too: URL parsing alone normalizes paths and whitespace.
-    if (/^https?:\/\/(?:[a-z0-9.-]+|\[[a-f0-9:.]+\])(?::\d+)?\/?$/i.test(value)
-        && URL.canParse(value)) {
-      endpoints[key] = value;
+    // Keep both spellings or neither so filtering cannot activate a fallback.
+    if (keys.every(key => {
+      const value = process.env[key];
+      return !value || (/^https?:\/\/(?:[a-z0-9.-]+|\[[a-f0-9:.]+\])(?::\d+)?\/?$/i.test(value)
+        && URL.canParse(value));
+    })) {
+      for (const key of keys) if (process.env[key]) endpoints[key] = process.env[key];
     }
   }
   return Object.keys(endpoints).length ? Object.assign(env, endpoints, exclusions) : env;
