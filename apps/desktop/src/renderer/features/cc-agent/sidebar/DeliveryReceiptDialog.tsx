@@ -121,7 +121,7 @@ function ReceiptFiles({
           ) : (
             <button
               type="button"
-              className="min-h-8 w-full truncate rounded-md px-1 text-left text-sm text-[var(--text-primary)] hover:bg-titlebar-button-hover"
+              className="min-h-8 w-full truncate rounded-lg px-1 text-left text-sm text-[var(--text-primary)] hover:bg-titlebar-button-hover"
               onClick={() => {
                 void window.electronAPI.openPath(resolveReceiptPath(file.path, workingDir));
               }}
