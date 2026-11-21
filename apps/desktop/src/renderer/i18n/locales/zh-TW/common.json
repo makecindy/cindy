@@ -10102,7 +10102,9 @@
         "maximizeAria": "最大化側欄",
         "restoreAria": "退出最大化",
         "closeAria": "關閉側欄",
-        "detachAria": "在獨立視窗中開啟目前標籤"
+        "detachAria": "在獨立視窗中開啟目前標籤",
+        "persistentHint": "單擊展開或收起；長按 2 秒設為常駐",
+        "persistentHintActive": "單擊展開或收起；已常駐，長按 2 秒取消"
       },
       "contextMenu": {
         "close": "關閉",
