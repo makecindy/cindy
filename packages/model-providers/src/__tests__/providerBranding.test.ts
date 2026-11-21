@@ -40,6 +40,16 @@ describe('provider branding', () => {
     })).toBeNull();
   });
 
+  it('keeps the Runcrate mark after the connection is renamed', () => {
+    expect(resolveProviderLogoKind('runcrate')).toBe('runcrate');
+    expect(resolveProviderLogoKind('renamed', {
+      pi: { upstream: 'https://api.runcrate.ai/v1' },
+    })).toBe('runcrate');
+    expect(resolveProviderLogoKind('custom', {
+      pi: { upstream: 'https://api.runcrate.ai.example.org/v1' },
+    })).toBeNull();
+  });
+
   it('uses a dedicated xAI mark', () => {
     expect(resolveProviderLogoKind('xai')).toBe('xai');
     expect(PROVIDER_LOGO_PATHS.xai).not.toBe(PROVIDER_LOGO_PATHS.openrouter);
