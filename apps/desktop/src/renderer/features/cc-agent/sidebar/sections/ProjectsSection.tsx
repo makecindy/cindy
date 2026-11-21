@@ -125,7 +125,7 @@ import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
-import { TaskInboxWithTeammates } from '../TaskInboxWithTeammates';
+import { TaskInbox, type TaskInboxProps } from '../TaskInbox';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -196,6 +196,8 @@ export interface ProjectsSectionProps {
   unclassified: Session[];
   /** Same device/content scope, including archived tasks, for the standalone inbox mode. */
   inboxSessions?: readonly Session[];
+  inboxNow?: number;
+  inboxTeammates?: TaskInboxProps['teammates'];
   /** Inbox: whether a task belongs to a teammate (the task list's teammate-filter test). */
   isInboxTeammateTask?: (session: Session) => boolean;
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
@@ -290,6 +292,8 @@ export interface ProjectsSectionProps {
 export function ProjectsSection({
   unclassified,
   inboxSessions,
+  inboxNow,
+  inboxTeammates,
   isInboxTeammateTask,
   projects,
   dialogues,
@@ -911,10 +915,9 @@ export function ProjectsSection({
   const FoldIcon = foldState === 'expand-all' ? ChevronsUpDown : ChevronsDownUp;
   // 散排行的来源标签:平铺时项目会话也要标项目名,不能只喂 dialogues。
   const flattenedSessionsForSourceLabels = useMemo(() => {
-    if (inboxSessions) return inboxSessions;
-    if (filter.groupBy === 'project') return dialogues;
-    return [...projects.flatMap((project) => project.sessions), ...dialogues];
-  }, [inboxSessions, filter.groupBy, projects, dialogues]);
+    if (taskListMode === 'inbox' && inboxSessions) return inboxSessions;
+    return [...projects.flatMap((project) => project.sessions), ...dialogues, ...unclassified];
+  }, [taskListMode, inboxSessions, projects, dialogues, unclassified]);
   const dialogueSourceLabelMap = useMemo(
     () =>
       buildSessionSourceLabelMap(
@@ -1400,7 +1403,9 @@ export function ProjectsSection({
         </div>
       ) : null}
       {taskListMode === 'inbox' && inboxSessions && (
-        <TaskInboxWithTeammates
+        <TaskInbox
+          now={inboxNow}
+          teammates={inboxTeammates}
           sessions={inboxSessions}
           contentFiltered={sidebarContentFilterCount(filter) > 0}
           isTeammateTask={isInboxTeammateTask}

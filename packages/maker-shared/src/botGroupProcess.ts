@@ -1,4 +1,5 @@
 import { buildMessageToolResultPairing, parseMessageToolUse } from './messageNormalize';
+import { isSyntheticTriggerContent } from './syntheticTrigger';
 import { segmentTeammateWork, type ProjectableWorkChild, type WorkActivityMessageLike } from './workActivityProjection';
 
 /** Only a locator is posted to the group. Notes and tool data stay on the execution host. */
@@ -77,7 +78,7 @@ export async function readBotGroupProcessMessages(
       // answer. A seal closes reply prose, not the delivery of thinking/results.
       // Stop before another input or new prose so its work cannot enter this turn.
       if (completed && row.role !== 'thinking' && row.role !== 'tool_result'
-        || row.role === 'user' && meta?.isSyntheticTrigger !== true) {
+        || row.role === 'user' && meta?.isSyntheticTrigger !== true && !isSyntheticTriggerContent(row.content)) {
         onBoundary?.();
         return messages;
       }

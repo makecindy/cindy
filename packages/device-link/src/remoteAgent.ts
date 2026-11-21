@@ -352,6 +352,8 @@ export interface RemoteAgentCaps {
   imageRecovery?: boolean;
   imageRecoveryRelay?: boolean;
   sharedImageGeneration?: boolean;
+  /** The image executor recognizes the built-in OpenAI subscription identity. */
+  sharedBuiltinOpenAiImage?: true;
   /**
    * This computer can run its plugin-provided engines for a task of another computer of the
    * same account (`open` with the plugin engine kind). Never declared to shared users.
@@ -964,6 +966,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.imageRecovery === true ? { imageRecovery: true } : {}),
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
     ...(v.sharedImageGeneration === true ? { sharedImageGeneration: true } : {}),
+    ...(v.sharedBuiltinOpenAiImage === true ? { sharedBuiltinOpenAiImage: true as const } : {}),
     ...(v.pluginEngines === true ? { pluginEngines: true as const } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),

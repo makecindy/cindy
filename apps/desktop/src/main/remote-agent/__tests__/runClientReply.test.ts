@@ -280,10 +280,10 @@ describe('RemoteAgentRunClient pipelined upload', () => {
       },
       unregister() {},
     } as unknown as RemoteAgentPoller;
-    const client = () => new RemoteAgentRunClient(randomUUID(), poller, {
+    const client = (log?: ConstructorParameters<typeof RemoteAgentRunClient>[4]) => new RemoteAgentRunClient(randomUUID(), poller, {
       onEvent() {}, onState() {}, onWs() {}, onClosed() {},
       onRequest: async () => ({ type: 'callback', value: null }),
-    }, randomUUID);
+    }, randomUUID, log);
     /** Acknowledge held chunks oldest first until `done` settles. */
     const drain = async (done: Promise<unknown>) => {
       let settled = false;
@@ -309,6 +309,45 @@ describe('RemoteAgentRunClient pipelined upload', () => {
     expect(opened[0].payload).toEqual(value);
     expect(maxInFlight()).toBeGreaterThanOrEqual(2);
     expect(maxInFlight()).toBeLessThanOrEqual(4);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:RemoteAgentRunClient.open 的启动诊断 total 行;排查时看到上传字节、分段数和各字段大小。
+  // - Bug／规则依据:2026-11-21 联调,启动资料上传 16–65 秒,日志只有耗时,分不清资料大还是线路慢;
+  //   startupTiming.ts 规定诊断只带固定字段名和数字,不带内容。
+  // - 现有覆盖缺口:相邻用例只验证上传与打开顺序,不看成功或失败的诊断。
+  // - 最小失败输入:一份分段载荷,首块拒收,总计行仍应带计划的大小和块数（#11857）。
+  // - tier:unit(进程内 fake poller)。
+  it.each(['ok', 'failed'] as const)('reports planned payload size without content when startup is %s', async (status) => {
+    const rejection = new Error('[REMOTE_AGENT_BUSY] too much staged data');
+    const { client, drain, opened } = fixture((index) =>
+      status === 'failed' && index === 0 ? rejection : undefined);
+    const lines: Array<Record<string, unknown>> = [];
+    const value = { sessionId: 'pipelined-fixture', personal: { text: randomBytes(600 * 1024).toString('base64') },
+      projectFiles: [{ path: 'AGENTS.md', content: 'secret-marker' }] };
+    const started = client({ warn() {}, debug: (_message, meta) => { if (meta) lines.push(meta); } })
+      .open('claude-code', value);
+    await drain(started);
+    if (status === 'failed') {
+      await expect(started).rejects.toBe(rejection);
+      expect(opened).toHaveLength(0);
+    } else {
+      await started;
+    }
+    const total = lines.find((line) => line.stage === 'total');
+    expect(total?.status).toBe(status);
+    expect(total?.payload).toEqual({
+      uploadBytes: expect.any(Number),
+      chunks: opened[0]?.chunks ?? expect.any(Number),
+      fieldBytes: {
+        personal: Buffer.byteLength(JSON.stringify(value.personal)),
+        projectFiles: Buffer.byteLength(JSON.stringify(value.projectFiles)),
+      },
+    });
+    const { uploadBytes, chunks } = total?.payload as { uploadBytes: number; chunks: number };
+    expect(uploadBytes).toBeGreaterThan(0);
+    expect(chunks).toBeGreaterThan(1);
+    expect(JSON.stringify(lines)).not.toMatch(/secret-marker|AGENTS\.md/);
   });
 
   it('shares four upload slots among the runs of one computer', async () => {

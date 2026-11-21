@@ -185,6 +185,7 @@ vi.mock('../../maker-host/claude-session-background-activity.js', async (importO
   ).hasWorkingBackgroundCommand,
   noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
   noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
+  observePluginEngineEvent: effects.fn('observePluginEngineEvent'),
 }));
 vi.mock('../../subagentObservationRewindFence.js', () => ({
   noteSubagentObservationTurnStarted: effects.fn('noteSubagentObservationTurnStarted'),
@@ -1146,6 +1147,22 @@ describe('production Session event pipeline', () => {
     h.emit(event('text', { isFinal: true, text: 'real worker reply' }, { source: 'pi' }));
     expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).toHaveBeenCalledWith('task', 'real worker reply', { isFinal: true });
     await h.dispose();
+  });
+
+  // PR #11776 review: a plugin engine's reply between turns has no done to commit it, so it stayed
+  // in memory and was lost on restart. Its final segment commits it; deltas and turn text do not.
+  it('commits a plugin engine reply written between turns at its final segment only', async () => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: 'acp' });
+    try {
+      h.emit(event('text', { text: 'The content', isFinal: false }, { turnScope: 'background' }));
+      h.emit(event('text', { text: 'In a turn', isFinal: true, isFullText: true }));
+      expect(effects.fn('flushAssistantBlock')).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'The content is `finished`', isFinal: true, isFullText: true }, { turnScope: 'background' }));
+      expect(effects.fn('flushAssistantBlock')).toHaveBeenCalledOnce();
+    } finally {
+      await h.dispose();
+    }
   });
 
   it('preserves ordinary Pi text without the Host recovery marker', async () => {

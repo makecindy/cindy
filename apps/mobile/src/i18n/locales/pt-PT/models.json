@@ -113,6 +113,40 @@
     "quotaAverageHint": "Quota semanal · Peso igual por conta",
     "quotaResetHint": "Ao ritmo atual, pode restar quota na reposição: amarelo até 24 horas, vermelho até 6 horas."
   },
+  "modelGroups": {
+    "title": "Grupos de modelos",
+    "sourceCount_one": "{{count}} fonte",
+    "sourceCount_many": "{{count}} fontes",
+    "sourceCount_other": "{{count}} fontes",
+    "strategy": {
+      "expiring": "Primeiro o que expira",
+      "order": "Por ordem",
+      "rotate": "À vez",
+      "cheapest": "O mais barato"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "Restam {{left}}% da quota, reposta a {{reset}}, por isso vai primeiro",
+      "expiring": "Primeira pela quota",
+      "order": "A primeira fonte disponível",
+      "rotate": "Desta vez é a vez dela",
+      "only": "A única disponível agora",
+      "soonest": "Todas as fontes esgotaram a quota; esta recupera primeiro",
+      "soonestUntil": "Todas as fontes esgotaram a quota; esta recupera primeiro ({{reset}})",
+      "cheapest": "Preço de tabela mais baixo",
+      "cheapestFree": "Ainda há quota de subscrição, sem custo adicional",
+      "exceptionImage": "A mensagem tem imagens, por isso só foram consideradas as fontes que as conseguem ver",
+      "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte as consegue ver, por isso escolheu como habitualmente",
+      "exceptionHours": "Neste horário usa «{{name}}»",
+      "separator": "; "
+    },
+    "picker": {
+      "switched": "«{{name}}» mudou esta tarefa para {{model}}",
+      "switchUnavailable": "«{{name}}» não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
+      "chooseUnavailable": "«{{name}}» não tem agora nenhuma fonte utilizável, por isso não foi selecionado."
+    },
+    "anotherDevice": "Outro computador"
+  },
   "pluginEngines": {
     "genericName": "Motor de plugin",
     "defaultModel": "Modelo predefinido",

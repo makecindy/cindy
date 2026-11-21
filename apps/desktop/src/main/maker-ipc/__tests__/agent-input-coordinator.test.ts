@@ -1438,6 +1438,28 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(h.onOwnerMessage).toHaveBeenCalledTimes(expected ? 1 : 0);
   });
 
+  // Regression (PR #11894 review): a steer reaches the running runtime without the send transaction's
+  // pending-switch step, so it must ask for the live route; a dispatch asks for the post-switch one.
+  // Entry: production coordinator steer and dispatch; observable: the model message content.
+  // Minimum: one referenced conversation per delivery path; tier: unit.
+  it('asks for the live route on steer and the send route on dispatch', async () => {
+    const route = { agentKind: 'claude-code' as const, supportsRemote: false };
+    const sendToSessionHint = vi.fn((_id: string, receiver: 'live' | 'send') => receiver === 'live' ? route : undefined);
+    const h = createHarness({ sendToSessionHint });
+    const href = 'cindy://session/target';
+    const referenced = (clientId: string) => makeItem(clientId, href, {
+      agentReferences: [{ kind: 'session', start: 0, end: href.length, href, sessionId: 'target', title: 'Target' }],
+    });
+    h.setRunning(true);
+    await h.coordinator.steer('route-steer', referenced('route-steer-input'));
+    expect(JSON.stringify(h.steerToAgent.mock.calls[0]?.[1])).toContain('send_to_session');
+    h.setRunning(false);
+    h.coordinator.enqueue('route-send', referenced('route-send-input'));
+    await vi.waitFor(() => expect(h.sendToAgent).toHaveBeenCalledOnce());
+    expect(JSON.stringify(h.sendToAgent.mock.calls[0]?.[1])).not.toContain('send_to_session');
+    expect(sendToSessionHint.mock.calls).toEqual([['route-steer', 'live'], ['route-send', 'send']]);
+  });
+
   it('carries message sources through steer delivery and the steer user row', async () => {
     const h = createHarness();
     const sid = 'source-steer';
@@ -2075,6 +2097,7 @@ function createHarness(opts?: {
   awaitQueuePersistence?: AgentInputCoordinatorDeps['awaitQueuePersistence'];
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
   providerGroupSwitchCandidate?: AgentInputCoordinatorDeps['providerGroupSwitchCandidate'];
+  sendToSessionHint?: AgentInputCoordinatorDeps['sendToSessionHint'];
 }) {
   let running = false;
   let liveRunningOverride: boolean | null | 'unknown' = null;
@@ -2222,6 +2245,7 @@ function createHarness(opts?: {
   >(async () => []);
   const rewindPersistedUserMessageAfterClear = vi.fn(async (_sessionId: string, _clientId: string) => {});
   const coordinator = new AgentInputCoordinator({
+    sendToSessionHint: opts?.sendToSessionHint,
     rewindPersistedUserMessageAfterClear,
     sendToAgent,
     steerToAgent,
@@ -3202,6 +3226,35 @@ describe('AgentInputCoordinator send transaction', () => {
       await flush();
       expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(source === 'owner');
       if (source === 'owner') expect(h.coordinator.getAcceptedInputProvenance(sid)?.authoredText?.trim()).toBe(request);
+    },
+  );
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 AgentInputCoordinator.enqueue → sendToAgent 的发送选项；手动输入和 scheduler 都带 reconnectRecovery。
+  // - Bug／规则依据：scheduler 在共享会话 run 被回收后必须沿用 #11751 的 stopped-start recovery，
+  //   否则 runner 会先把逻辑 run 判失败而替代会话随后才执行。
+  // - 现有覆盖缺口：旧矩阵把 scheduler 作为自动来源，未验证它能接住同一次重开凭证。
+  // - 最小失败输入：`/pi install npm:example` 以 scheduler origin 和 manualUiSend 入队。
+  // - tier：unit；只用进程内 coordinator 与 fake sendToAgent。
+  it.each(['plain', 'trusted-desktop', 'scheduler'] as const)(
+    'arms shared reconnect recovery for user and scheduler input (%s)', async source => {
+      const h = createHarness(), sid = `manual-ui-origin-${source}`;
+      const base = makeItem(`manual-${source}`, '/pi install npm:example', {
+        ...(source === 'scheduler' ? { origin: { kind: 'scheduler', scheduleId: 's', scheduleName: 'n', runId: 'r' } as const } : {}),
+      });
+      const item = source === 'trusted-desktop' ? stampTrustedDesktopQueuedOrigin(base, false) : base;
+      if (source === 'trusted-desktop') expect(item.origin?.kind).toBe('desktop');
+      h.coordinator.enqueue(sid, item, { manualUiSend: true });
+      await flush();
+      const sendOpts = h.sendToAgent.mock.calls[0]?.[3];
+      expect(typeof sendOpts?.reconnectRecovery?.isCurrent).toBe('function');
+      if (source === 'scheduler') {
+        expect(h.coordinator.isSharedReconnectPending(sid, 'r')).toBe(false);
+        h.coordinator.markSharedReconnectPending(sid, item.clientId);
+        expect(h.coordinator.isSharedReconnectPending(sid, 'r')).toBe(true);
+        h.coordinator.clearSharedReconnectPending(sid, item.clientId);
+        expect(h.coordinator.isSharedReconnectPending(sid, 'r')).toBe(false);
+      }
     },
   );
 
@@ -17853,6 +17906,22 @@ describe('usage-limit wait (ordinary tasks)', () => {
     const candidate = h.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
     return { h, candidate };
   }
+
+  it.each([true, false])('only exhausts Gemini retries sent for this limit (Gemini retry: %s)', async gemini => {
+    const sid = 'minute-limit-retry';
+    const { h, candidate } = await failWithLimit(sid, false);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, Date.now())).toBe(true);
+    const info = { ...INFO, maxAttempts: 1, ...(gemini ? { geminiInputRetry: true as const } : {}) };
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, info)).toBe('resumed');
+    await flush();
+    h.setRunning(false);
+    const message = JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED',
+      message: 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count. Generate content input tokens per minute limit exceeded. Please retry in 56.6s.' } });
+    h.coordinator.onTurnEvent(sid, 'error', message, { errorStatus: 429, usageLimit: true });
+    await flush();
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledTimes(gemini ? 1 : 2);
+    expect(h.coordinator.getProjection(sid).errorReason).toBe(gemini ? 'gemini-input-retry-exhausted' : undefined);
+  });
 
   // Unit: cancellation uses the actual recovery entry, not an activity-field
   // whitelist. The prior phase matrix only used service-generated metadata.

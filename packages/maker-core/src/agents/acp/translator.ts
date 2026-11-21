@@ -203,17 +203,26 @@ export class AcpUpdateTranslator {
     return events;
   }
 
-  /** Ends the current turn: closes segments, settles open tool calls, emits `done` or a terminal `error`. */
+  /**
+   * Ends the current turn: closes segments, emits `done` or a terminal `error`.
+   *
+   * A normal end (`end_turn`) keeps tool calls the agent has not finished open:
+   * some agents answer the prompt and keep working, then report the result
+   * outside any turn. Marking those calls done here would show work as finished
+   * while it still runs. The session settles whatever stays open
+   * (`settleOpenTools`) when the agent goes quiet or its process ends. A cancelled
+   * or failed turn marks unfinished calls as interrupted; other stop reasons keep
+   * the earlier rule and treat them as done.
+   */
   finish(outcome: AcpTurnOutcome): AgentEvent[] {
     const events = this.flushPending();
     const interrupted = 'error' in outcome || outcome.stopReason === 'cancelled';
-    for (const tool of this.tools.values()) {
-      if (tool.settled) continue;
-      // An agent that ends the turn without a final status still ran the tool;
-      // only a cancelled or failed turn marks unfinished calls as failed.
-      this.settleTool(tool, events, interrupted ? 'interrupted' : 'done');
+    const carryOpen = !interrupted && outcome.stopReason === 'end_turn';
+    for (const [toolCallId, tool] of this.tools) {
+      if (!tool.settled && carryOpen) continue;
+      if (!tool.settled) this.settleTool(tool, events, interrupted ? 'interrupted' : 'done');
+      this.tools.delete(toolCallId);
     }
-    this.tools.clear();
     const result = this.lastText;
     this.lastText = '';
     if ('error' in outcome) {
@@ -232,6 +241,23 @@ export class AcpUpdateTranslator {
         stopReason: outcome.stopReason,
       },
     });
+    return events;
+  }
+
+  /** Tool calls the agent started and has not reported finished. */
+  openToolCount(): number {
+    let count = 0;
+    for (const tool of this.tools.values()) if (!tool.settled) count += 1;
+    return count;
+  }
+
+  /** Settles every open tool call (the agent went quiet or its process ended) and forgets settled ones. */
+  settleOpenTools(result: 'done' | 'interrupted'): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    for (const tool of this.tools.values()) {
+      if (!tool.settled) this.settleTool(tool, events, result);
+    }
+    this.tools.clear();
     return events;
   }
 

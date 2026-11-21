@@ -55,7 +55,8 @@ export interface PluginEnginesPickerProps {
   engines: readonly PluginEngineChoice[];
   /** Current engine choice (already resolved against the list); null = a built-in model is used. */
   active: PluginEngineSelection | null;
-  onSelect(selection: PluginEngineSelection): void;
+  /** Existing tasks wait for the host to accept the choice. False leaves the panel open. */
+  onSelect(selection: PluginEngineSelection): void | boolean | Promise<boolean>;
   /** Device Link picker reloads its own computer's list when opened. */
   readCatalogue?(): void;
 }
@@ -387,6 +388,21 @@ export function PluginEnginesSection({
   onPicked(): void;
 }) {
   const { t } = useTranslation();
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const selectionInFlight = useRef(false);
+  const choose = async (selection: PluginEngineSelection, dismiss: boolean) => {
+    if (selectionInFlight.current) return;
+    selectionInFlight.current = true;
+    try {
+      const selectionResult = picker.onSelect(selection);
+      const applied = typeof selectionResult === 'object' ? await selectionResult : selectionResult;
+      if (applied !== false && dismiss && sectionRef.current) onPicked();
+    } catch {
+      // Selection failures leave the panel open. The task's selection handler reports the error.
+    } finally {
+      selectionInFlight.current = false;
+    }
+  };
   const needle = query.trim().toLowerCase();
   const defaultLabel = t('newChat.pluginEngines.defaultModel').toLowerCase();
   const blocks = picker.engines
@@ -404,23 +420,22 @@ export function PluginEnginesSection({
   return (
     // Each engine carries its own group label (like a provider), so the section has no visible
     // heading of its own; the 「插件引擎」 name stays for assistive technology and the rail tab.
-    <div role="group" aria-label={label} data-plugin-engines-section>
+    <div ref={sectionRef} role="group" aria-label={label} data-plugin-engines-section>
       {blocks.map(({ engine, rows, activeModelId }) => (
         <EngineBlock
           key={pluginEngineChoiceKey(engine)}
           engine={engine}
           rows={rows}
           activeModelId={activeModelId}
-          onChoose={(modelId) => {
-            picker.onSelect({ providerId: engine.providerId, modelId, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}) });
-            onPicked();
-          }}
+          onChoose={(modelId) => { void choose({
+            providerId: engine.providerId, modelId, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
+          }, true); }}
           // A row shows the level it would run with: the chosen one where it is offered, else its own.
           effortOf={(row) => resolvePluginEngineEffort(
             engine, row.id, isSamePluginEngineChoice(picker.active, engine) ? picker.active?.effort : undefined)}
-          onChooseEffort={(modelId, effort) => picker.onSelect({
+          onChooseEffort={(modelId, effort) => { void choose({
             providerId: engine.providerId, modelId, effort, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
-          })}
+          }, false); }}
         />
       ))}
     </div>

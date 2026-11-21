@@ -33,6 +33,7 @@ import type { CompanionImportSource } from '@cindy/maker-shared/companion-import
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { at, GuideCover } from '@/components/feature-intro/GuideCover';
 import { ImportSourceMark } from '@/components/icons/ImportSourceMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark, type ProviderLogoRouting } from '@/components/icons/ProviderLogoMark';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
@@ -896,7 +897,11 @@ function ConnectedProviderRow({ provider, onClick }: { provider: ProviderView; o
   const detail = [account?.identity, account?.planLabel].filter(Boolean).join(' · ');
   return (
     <OptionRow
-      icon={providerIcon(provider.id, provider.name, provider.routing)}
+      icon={(
+        <CustomProviderIcon svg={provider.customIcon} size={16}>
+          {providerIcon(provider.id, provider.name, provider.routing)}
+        </CustomProviderIcon>
+      )}
       label={provider.name}
       badge={t('firstRunGuide.models.own.connected')}
       sub={detail || undefined}

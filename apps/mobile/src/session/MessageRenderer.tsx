@@ -1,3 +1,4 @@
+import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
 import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
 import { SettingsLinkSpan } from './SettingsLinkSpan';
@@ -3600,6 +3601,7 @@ function MessageBubble({
 }) {
   const { colors: userBubbleColors } = useUserBubbleAppearance();
   const { user: viewer } = useAuth();
+  const { selected: wallpaper } = useWallpaper();
   const styles = useThemedStyles(makeStyles);
   const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
@@ -4042,8 +4044,10 @@ function MessageBubble({
         presentation.density === 'rich' && styles.bubbleRich,
         isUser ? styles.userBubble : styles.agentBubble,
         actions.companion && !isUser && !item.message.systemCardType && styles.companionAnswer,
+        !isUser && !item.message.systemCardType && wallpaper !== 'none' && { backgroundColor: 'transparent' },
         actions.intermediateProcess && { paddingVertical: 0 },
         hookSource && styles.hookSourceBubble,
+        (isUser || hookSource) && wallpaper !== 'none' && !item.message.systemCardType && { backgroundColor: wallpaperRaisedFill(colors.surfaceElevated, mode) },
         ownBubbleColors && { backgroundColor: ownBubbleColors.background, borderColor: ownBubbleColors.border },
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
@@ -4080,7 +4084,7 @@ function MessageBubble({
       {item.message.systemCardType === 'mcp-app' ? (
         <ViewabilityGatedMcpAppCard deviceId={actions.remoteDeviceId} sessionId={item.message.source.sessionId}
           clientId={item.message.source.clientId} title={String(item.message.systemCardData?.title ?? '')}
-          plugin={item.message.systemCardData?.plugin} customMcp={item.message.systemCardData?.customMcp}
+          plugin={item.message.systemCardData?.plugin} customMcp={item.message.systemCardData?.customMcp} initialHeight={item.message.systemCardData?.initialHeight}
           fallbackText={String(item.message.systemCardData?.fallbackText ?? '')} />
       ) : item.message.systemCardType ? (
         <MobileSystemCard
@@ -6001,6 +6005,8 @@ function MobileAutoResumeActionRow({
       : t('message.systemCard.autoResume.agentReconnect.unnamed')
     : info.groupSwitch
     ? t('message.systemCard.autoResume.groupSwitch')
+    : info.geminiInputRetry
+    ? t('chat.geminiRateLimit.retried')
     : info.usageLimitReset
     ? t('message.systemCard.autoResume.usageReset')
     : state === 'live'

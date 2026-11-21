@@ -142,6 +142,7 @@ import {
   setAgentIslandLayoutDragActive,
   setAgentIslandMeasuredContentHeight,
   setAgentIslandPointerZones,
+  setAgentIslandSessionBackgroundWork,
   setAgentIslandSessionDisplaySuppressed,
   setAgentIslandStrings,
   setAgentIslandToolWording,
@@ -1143,6 +1144,16 @@ export class AgentIslandService {
     setAgentIslandAppFocused(this.state, focused, now);
   }
 
+  /** A plugin engine started or stopped working after its turn (see setAgentIslandSessionBackgroundWork). */
+  setSessionBackgroundWork(
+    meta: AgentIslandSessionMeta,
+    active: boolean,
+    options: { turnStarting?: boolean } = {},
+  ): void {
+    const hydrated = this.hydrateMeta(meta);
+    if (setAgentIslandSessionBackgroundWork(this.state, hydrated, active, Date.now(), options)) this.publish();
+  }
+
   handleAgentEvent(
     meta: AgentIslandSessionMeta,
     event: AgentEvent,
@@ -1302,7 +1313,7 @@ export class AgentIslandService {
       if (changed) this.publish();
       return;
     }
-    if (event.type === 'completed' || event.type === 'failed' || event.type === 'deferred') {
+    if (event.type === 'completed' || event.type === 'failed' || event.type === 'deferred' || event.type === 'skipped') {
       this.clearSilencedScheduleRun(event.runId);
     }
   }

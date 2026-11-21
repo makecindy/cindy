@@ -45,6 +45,7 @@ import {
   RefreshCw,
   Search,
   Unplug,
+  WifiOff,
   Zap,
   Lock,
 } from 'lucide-react';
@@ -69,6 +70,7 @@ import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provide
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { CindyMark } from '@/components/icons/CindyMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { agentOptionOf } from './agentOptions';
 import type { SelectableVendor } from '@/lib/agentVendors';
@@ -80,7 +82,7 @@ import {
 } from './UnifiedModelPanel';
 import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
 import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
-import { matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
+import { buildModelGroupPickerRows, isModelGroupSelected, matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import {
   activePluginEngineModelId,
@@ -97,6 +99,7 @@ import {
   isSamePluginEngineChoice,
   pluginEngineModelName,
   resolvePluginEngineEffort,
+  visiblePluginEngineChoices,
   type PluginEngineChoice,
 } from '@/lib/pluginEngineSelection';
 import type { PluginEngineEffort } from '../../../shared/pluginEngines';
@@ -117,8 +120,9 @@ import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useMod
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
 import { useProviders } from '@/hooks/useProviders';
+import { withSubscriptionDisplayModels } from '@/lib/localCatalogSnapshot';
 import { LocalModelCatalogNotice } from './LocalModelCatalogNotice';
-import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
+import { PROVIDER_TITLE_KEY, providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
 import {
   evictDeviceProviders,
   prefetchDeviceProviders,
@@ -167,6 +171,7 @@ import {
   chatEligibleSourcesForModel,
   actualSourceIdForModel,
   effectiveSourceIdForModel,
+  displayNameOfStoredModelId,
   findCatalogModel,
   nativeDefaultSourceId,
   getModel,
@@ -435,7 +440,18 @@ function modelDisplayProvider(
 
 // 来源供应商 → 单色官方 mark(fill=currentColor)。trigger 默认右间距 + trigger 文字色;
 // 列表行前缀通过 colorClass / withMargin 改用 secondary 色 + 由 flex gap 控间距。
-export function ProviderMark({
+export function ProviderMark(props: Parameters<typeof DefaultProviderMark>[0] & {
+  customIcon?: string;
+}) {
+  return (
+    <CustomProviderIcon svg={props.customIcon} size={props.dense ? 12.3 : 13}
+      className={cn(props.withMargin !== false && 'mr-1.5', 'shrink-0')}>
+      <DefaultProviderMark {...props} />
+    </CustomProviderIcon>
+  );
+}
+
+function DefaultProviderMark({
   providerId,
   name,
   routing,
@@ -489,11 +505,12 @@ export function ProviderMark({
 
 /**
  * 模型行 / trigger 的图标 —— 统一规则(桌面与手机同源,见 resolveModelIconKind):
- * 模型条目带 `icon`(**AI Gateway / 目录设定**)就渲染对应厂牌 mark;缺省或未知值
- * 回落该行来源供应商标(ProviderMark)。禁止在客户端按 model id 猜厂牌。
+ * 优先使用模型目录的厂牌 `icon`，缺省时回落来源供应商标。
+ * 禁止在客户端按 model id 猜厂牌。
  */
 export function ModelIconMark({
   icon,
+  customIcon,
   providerId,
   name,
   routing,
@@ -504,6 +521,7 @@ export function ModelIconMark({
 }: {
   /** 模型条目的展示图标 id(CatalogModel.icon);undefined = 未设定。 */
   icon?: string;
+  customIcon?: string;
   /** 回落用的来源供应商 id / 展示名(与 ProviderMark 同语义)。 */
   providerId: string;
   name?: string;
@@ -517,14 +535,8 @@ export function ModelIconMark({
   if (kind) {
     const common = cn(withMargin && 'mr-1.5', 'shrink-0', colorClass);
     const markSize = dense ? 12.3 : 13;
-    if (kind === 'claude') return <AnthropicMark size={markSize} className={common} />;
-    if (kind === 'codex') return <OpenAIMark size={markSize} className={common} />;
-    return (
-      <CindyMark
-        size={markSize}
-        className={common}
-      />
-    );
+    const Mark = kind === 'claude' ? AnthropicMark : kind === 'codex' ? OpenAIMark : CindyMark;
+    return <Mark size={markSize} className={common} />;
   }
   return (
     <ProviderMark
@@ -532,6 +544,7 @@ export function ModelIconMark({
       name={name}
       routing={routing}
       logoKind={logoKind}
+      customIcon={customIcon}
       colorClass={colorClass}
       withMargin={withMargin}
       dense={dense}
@@ -776,6 +789,7 @@ export type ModelSelectorProps = ModelSelectorBaseProps & ModelSelectorSource;
 export interface ModelSelectorBaseProps {
   /** Nonzero request from a terminal-error recovery action; selection still uses the normal transaction. */
   openRequest?: number;
+  draftModelPending?: boolean;
   onOpenRequestConsumed?: (nonce: number) => void;
   'data-setting-id'?: string;
   /** 语义同 ModelSelectorContentProps.pluginModels。 */
@@ -850,6 +864,8 @@ export interface ModelSelectorBaseProps {
    * 其他消费方(ScheduleChips / ImDefaultSettingsSection / CreateWorkerPopover 等)不传 = 行为不变。
    */
   sourceDisconnected?: boolean;
+  /** A saved draft retains its model trigger while the source is being checked or unavailable. */
+  preserveDraftModel?: boolean;
   /** 语义同 ModelSelectorContentProps.actualRoute(仅已建会话传 true)。 */
   actualRoute?: boolean;
   /** Task whose existing subscription binding should be displayed, when browsing its host. */
@@ -1285,13 +1301,6 @@ export function ModelSelectorContent(props: ModelSelectorContentProps) {
   const gatewayPricing = useGatewayModelPricing();
   const referencePricing = useReferenceModelPricing();
   const { accountTier } = useModelAccessStatus();
-  // 面板打开时请插件引擎刷新模型列表，与供应商模型在同一时机自动刷新(冷却由 main 控制)。
-  const hasPluginEngines = (props.pluginEngines?.engines.length ?? 0) > 0;
-  const readCatalogue = props.pluginEngines?.readCatalogue
-    ?? (hasPluginEngines ? requestPluginEnginesRefresh : undefined);
-  useEffect(() => {
-    readCatalogue?.();
-  }, [readCatalogue]);
   return (
     <ModelSelectorContentView
       {...props}
@@ -1366,6 +1375,25 @@ function ModelSelectorContentView({
   modelAccessAccountTier: ModelAccessAccountTier | null;
 }) {
   const confirmDialog = useOptionalConfirmDialog();
+  // 面板打开时请插件引擎刷新模型列表(或读取同账号其他电脑开放的插件引擎)，与供应商模型在同一时机自动刷新(冷却由 main 控制)。
+  const hasPluginEngines = (pluginEngines?.engines.length ?? 0) > 0;
+  const readCatalogue = pluginEngines?.readCatalogue
+    ?? (hasPluginEngines ? requestPluginEnginesRefresh : undefined);
+  useEffect(() => {
+    readCatalogue?.();
+  }, [readCatalogue]);
+  // 面板打开时读一次其他电脑的模式(model-groups.md §6.3，15 秒内复用上次的答案)。
+  const readModelGroupDevices = modelGroups?.readDevices;
+  useEffect(() => {
+    readModelGroupDevices?.();
+  }, [readModelGroupDevices]);
+  // 已装但未登录 / 未就绪的插件引擎不在选择器里占位；仅当前任务正选着该引擎时保留以便识别状态。
+  const visiblePluginEngines = useMemo(
+    () => pluginEngines
+      ? { ...pluginEngines, engines: visiblePluginEngineChoices(pluginEngines.engines, pluginEngines.active) }
+      : undefined,
+    [pluginEngines],
+  );
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t, i18n } = useTranslation();
@@ -1377,26 +1405,28 @@ function ModelSelectorContentView({
   // 打开时停在草稿当前的落点(Agent 在哪台电脑就先列哪台);左侧栏点到另一台电脑的供应商时,
   // 下面整套目录(能力 / 供应商 / 可见性 / 用量 / 收藏)都随 deviceId 换成那台电脑的。
   const remoteAgentDeviceId = remoteAgent?.selectedDeviceId ?? null;
+  // 插件引擎在独立的来源格。浏览从任务所在电脑的目录开始，换内置模型时照常按实际运行位置判断是否要换电脑。
+  const preferredBrowseDeviceId = pluginEngines?.active ? null : remoteAgentDeviceId;
   const [remoteBrowse, setRemoteBrowse] = useState<{
     deviceId: string;
     /** null = 还不知道该落在哪个供应商格(等那台的目录到了再按当前来源 / 首个供应商定)。 */
     providerId: string | null;
   } | null>(() =>
-    remoteAgentDeviceId ? { deviceId: remoteAgentDeviceId, providerId: currentProviderId ?? null } : null,
+    preferredBrowseDeviceId ? { deviceId: preferredBrowseDeviceId, providerId: currentProviderId ?? null } : null,
   );
   // 落点在面板之外变了(那台电脑被解除配对而回到本机等):跟到新落点,不停在旧目录上。
-  const lastRemoteAgentDeviceIdRef = useRef(remoteAgentDeviceId);
+  const lastPreferredBrowseDeviceIdRef = useRef(preferredBrowseDeviceId);
   useEffect(() => {
-    if (lastRemoteAgentDeviceIdRef.current === remoteAgentDeviceId) return;
-    lastRemoteAgentDeviceIdRef.current = remoteAgentDeviceId;
+    if (lastPreferredBrowseDeviceIdRef.current === preferredBrowseDeviceId) return;
+    lastPreferredBrowseDeviceIdRef.current = preferredBrowseDeviceId;
     setRemoteBrowse((current) =>
-      (current?.deviceId ?? null) === remoteAgentDeviceId
+      (current?.deviceId ?? null) === preferredBrowseDeviceId
         ? current
-        : remoteAgentDeviceId
-          ? { deviceId: remoteAgentDeviceId, providerId: null }
+        : preferredBrowseDeviceId
+          ? { deviceId: preferredBrowseDeviceId, providerId: null }
           : null,
     );
-  }, [remoteAgentDeviceId]);
+  }, [preferredBrowseDeviceId]);
   // 没在浏览其他电脑时列任务所在电脑的目录:本机任务是本机,被控电脑上的任务是那台。
   const homeDeviceId = remoteAgent?.homeDeviceId;
   const deviceId = remoteAgent ? (remoteBrowse?.deviceId ?? homeDeviceId) : deviceIdProp;
@@ -1513,7 +1543,7 @@ function ModelSelectorContentView({
     [localProviders.providers, sshCodexProviders],
   );
   const localTaskProviders = useMemo(
-    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider ?? null),
+    () => withFollowedAccountSource(localProviders.providers.map(withSubscriptionDisplayModels), taskSourceProvider ?? null),
     [localProviders.providers, taskSourceProvider],
   );
   const providers = deviceId
@@ -1909,6 +1939,12 @@ function ModelSelectorContentView({
         : [];
     });
   }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold, remoteDisable, remoteAgentDeviceId, currentProviderId]);
+  // 其他电脑的模式只在那台电脑已列在「其他电脑」那一段时出现：选了它，Agent 在那台运行，只能用那台开了
+  // 「允许被远程调用」的来源(model-groups.md §3.1、§6.3)。
+  const deviceModelGroupChoices = useMemo(() => {
+    const devices = new Set(remoteAgentGroups.map((group) => group.deviceId));
+    return (modelGroups?.devices ?? []).filter((device) => devices.has(device.deviceId));
+  }, [remoteAgentGroups, modelGroups?.devices]);
   // 目录还在读或读取失败的其他电脑(分享不算):收藏区里它们的收藏置灰列出,不当作模型已下架。
   const remoteAgentUnavailableDeviceIds = useMemo(
     () =>
@@ -3292,6 +3328,7 @@ function ModelSelectorContentView({
                     name={provider.name}
                     routing={provider.routing}
                     logoKind={provider.logoKind}
+                    customIcon={provider.customIcon}
                     colorClass="text-[var(--text-secondary)]"
                     withMargin={false}
                     dense
@@ -3784,7 +3821,7 @@ function ModelSelectorContentView({
                   ),
                 }
               : {})}
-            {...(pluginModels || modelGroups || pluginEngines ? {
+            {...(pluginModels || modelGroups || (visiblePluginEngines && visiblePluginEngines.engines.length > 0) ? {
               // 模型组在「全部」最上方：不搜索时整段列出(用户建好就天天要用)，搜索时只列命中的。
               // 插件引擎是独立的一组(不混进供应商目录)，排在它们之后、内置模型之前。
               pinnedTop: (
@@ -3794,17 +3831,24 @@ function ModelSelectorContentView({
                     <ModelGroupsPickerSection picker={modelGroups} query={query} onPicked={() => onDismiss?.()}
                       variant={query.trim() ? 'search' : 'all'} />
                   )}
-                  {pluginEngines && (
-                    <PluginEnginesSection picker={pluginEngines} query={query} onPicked={() => onDismiss?.()} />
+                  {/* 搜索时也列出其他电脑命中的模式，每台一段、标题带电脑名(不搜索时它们在各自那一格) */}
+                  {modelGroups && query.trim() && deviceModelGroupChoices.map((device) => (
+                    <ModelGroupsPickerSection key={`model-groups:${device.deviceId}`} picker={modelGroups} query={query}
+                      deviceId={device.deviceId} onPicked={() => onDismiss?.()} variant="search" />
+                  ))}
+                  {visiblePluginEngines && visiblePluginEngines.engines.length > 0 && (
+                    <PluginEnginesSection picker={visiblePluginEngines} query={query} onPicked={() => onDismiss?.()} />
                   )}
                 </>
               ),
               pinnedTopHasRows: (pluginModels ? matchPluginModels(pluginModels.models, query).length > 0 : false)
                 || (!!modelGroups && matchModelGroupRows(modelGroupRows, query) > 0)
-                || (!!pluginEngines && matchPluginEngineRows(
-                  pluginEngines.engines,
+                || (!!modelGroups && !!query.trim() && deviceModelGroupChoices.some((device) =>
+                  matchModelGroupRows(buildModelGroupPickerRows(device.config, t, device.deviceId), query) > 0))
+                || (!!visiblePluginEngines && matchPluginEngineRows(
+                  visiblePluginEngines.engines,
                   query,
-                  (engine) => activePluginEngineModelId(pluginEngines.active, engine),
+                  (engine) => activePluginEngineModelId(visiblePluginEngines.active, engine),
                   t('newChat.pluginEngines.defaultModel').toLowerCase(),
                 ) > 0),
             } : {})}
@@ -3813,11 +3857,18 @@ function ModelSelectorContentView({
               favoritesPinned: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />,
               favoritesPinnedHasRows: favoriteModelGroupCount > 0,
             } : {})}
-            {...(pluginEngines && pluginEngines.engines.length > 0 ? {
+            {...(modelGroups && deviceModelGroupChoices.length ? {
+              // 其他电脑自己的模式：每台一格，排进那台电脑那一段；由那台选来源(model-groups.md §6.3)。
+              deviceModelGroupTabs: deviceModelGroupChoices.map((device) => ({ deviceId: device.deviceId, name: device.name })),
+              renderDeviceModelGroups: (deviceId: string) => (
+                <ModelGroupsPickerSection picker={modelGroups} query="" deviceId={deviceId} onPicked={() => onDismiss?.()} />
+              ),
+            } : {})}
+            {...(visiblePluginEngines && visiblePluginEngines.engines.length > 0 ? {
               // 和供应商一样每个引擎在左侧栏单独一格(插件自己的图标)，点开只列这个引擎的模型；
               // 「全部」最上方照旧列出全部引擎。
               // 自己另一台电脑上的引擎带着电脑名，格位排进那台电脑那一段(见 UnifiedModelPanel)。
-              pluginEngineTabs: pluginEngines.engines.map((engine) => ({
+              pluginEngineTabs: visiblePluginEngines.engines.map((engine) => ({
                 providerId: engine.providerId,
                 ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
                 name: pluginEngineChoiceLabel(engine),
@@ -3826,8 +3877,8 @@ function ModelSelectorContentView({
               renderPluginEngine: (providerId: string, engineDeviceId?: string) => (
                 <PluginEnginesSection
                   picker={{
-                    ...pluginEngines,
-                    engines: pluginEngines.engines.filter((engine) =>
+                    ...visiblePluginEngines,
+                    engines: visiblePluginEngines.engines.filter((engine) =>
                       isSamePluginEngineChoice(engine, { providerId, deviceId: engineDeviceId })),
                   }}
                   query=""
@@ -4392,7 +4443,8 @@ export function ModelSelector({
   providersOverrideState,
   taskSourceProvider,
   sshCodex,
-  modelId,
+  modelId: selectedModelId,
+  draftModelPending = false,
   currentSelection,
   onReconnectSource,
   effort,
@@ -4443,6 +4495,7 @@ export function ModelSelector({
   'data-setting-id': settingId,
   currentProviderId,
   sourceDisconnected = false,
+  preserveDraftModel = false,
   actualRoute = false,
   subscriptionTaskId,
   taskStarted = false,
@@ -4450,6 +4503,7 @@ export function ModelSelector({
   onNavigateToProviders,
   agentSwitch,
 }: ModelSelectorProps) {
+  const modelId = draftModelPending ? '' : selectedModelId;
   const { t, i18n } = useTranslation();
   // 插件引擎的显示名：在自己另一台电脑上的带电脑名。
   const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
@@ -4602,7 +4656,7 @@ export function ModelSelector({
     [localProviders.providers, sshCodexProviders],
   );
   const localTaskProviders = useMemo(
-    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider ?? null),
+    () => withFollowedAccountSource(localProviders.providers.map(withSubscriptionDisplayModels), taskSourceProvider ?? null),
     [localProviders.providers, taskSourceProvider],
   );
   const providers = deviceId
@@ -4620,7 +4674,7 @@ export function ModelSelector({
     pi,
     providers: remoteProviders,
   });
-  const remoteModelLoading = providersOverrideState?.status === 'loading' ||
+  const remoteModelLoading = draftModelPending || providersOverrideState?.status === 'loading' ||
     (sshCodexCurrent && sshCodex?.status === 'loading') || (!!deviceId && remoteModelListStatus === 'loading');
   const localModelLoading = !deviceId && !providersOverride && !sshCodexCurrent && !localProviders.loadFailed && (
     localProviders.loading ||
@@ -4713,6 +4767,7 @@ export function ModelSelector({
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
       (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
+      (preserveDraftModel && modelId ? displayNameOfStoredModelId(modelId) : null) ??
       (unconfirmedList ? modelId : null) ??
       (modelId
         ? t(localModelLoading
@@ -4792,12 +4847,15 @@ export function ModelSelector({
     !providersOverride &&
     !sshCodexCurrent &&
     !actualRoute &&
+    !preserveDraftModel &&
     !!onProviderChange &&
     !!onNavigateToProviders &&
     !deviceId &&
     !!currentAgentKind &&
     !providersLoading &&
-    !hasConnectedSource;
+    !hasConnectedSource &&
+    !providers.some(provider => !provider.suspended && !provider.removed &&
+      provider.subscriptionDisplayModels?.[currentAgentKind]?.length);
   // trigger 上仍展示当前模型的 effort(模型支持时)。
   const triggerProvider = actualRoute && routeProvider
     ? routeProvider
@@ -4854,12 +4912,22 @@ export function ModelSelector({
     !!currentAgentKind && chatEligibleSourcesForModel([disconnectedProvider], modelId, currentAgentKind, { includeDisabled: true }).length === 0;
   const lastConfirmedAt = unconfirmedList ? routeProvider?.subscriptionModelsConfirmedAt : undefined;
   const showStaleList = unconfirmedList && (showSourceDisconnected || lastConfirmedAt !== undefined);
+  // The read failed because the provider's service could not be reached: say that, not "not updated".
+  const staleUnreachable = showStaleList && routeProvider?.subscriptionReadUnreachable === true;
   const showSourceIssue = showSourceDisconnected || showStaleList;
   const issueColor = showStaleList ? 'text-[var(--text-secondary)]' : 'text-[var(--error-fg)]';
-  const IssueIcon = showStaleList ? Clock3 : selectedSourceUnavailable ? CircleAlert : Unplug;
-  const sourceIssueLabel = t(showStaleList ? 'newChat.modelSelector.source.unconfirmed' : selectedSourceUnavailable
-    ? 'newChat.modelSelector.source.unavailable'
-    : 'newChat.modelSelector.source.disconnected');
+  const IssueIcon = staleUnreachable ? WifiOff : showStaleList ? Clock3 : selectedSourceUnavailable ? CircleAlert : Unplug;
+  const unreachableVendorKey = routeProvider?.subscriptionAccountPool
+    ? PROVIDER_TITLE_KEY[routeProvider.subscriptionAccountPool] : undefined;
+  const sourceIssueLabel = staleUnreachable
+    ? t('newChat.modelSelector.source.unreachable', {
+      source: unreachableVendorKey ? t(unreachableVendorKey) : routeProvider ? providerDisplayName(routeProvider, t) : currentProviderId,
+    })
+    : t(showStaleList ? 'newChat.modelSelector.source.unconfirmed' : selectedSourceUnavailable
+      ? 'newChat.modelSelector.source.unavailable'
+      : 'newChat.modelSelector.source.disconnected');
+  // The panel header already names the source and account.
+  const sourceIssueHeaderLabel = staleUnreachable ? t('newChat.modelSelector.source.unreachableDetail') : sourceIssueLabel;
   const baseAriaLabel = noSource
     ? t('newChat.modelSelector.source.connect')
     : showSourceIssue
@@ -4909,9 +4977,18 @@ export function ModelSelector({
     agentDeviceLabel ? `${label} · ${agentDeviceLabel}` : label;
   const activePluginModel = pluginModels?.active ?? null;
   const modelGroupRows = useModelGroupPickerRows(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
+  // 选着另一台电脑的模式时，按钮写「模式名 · 那台电脑」。
+  const activeModelGroupDevice = modelGroups?.active?.deviceId
+    ? modelGroups.devices?.find((device) => device.deviceId === modelGroups.active?.deviceId)
+    : undefined;
+  const deviceModelGroupRows = useModelGroupPickerRows(
+    activeModelGroupDevice?.config ?? MODEL_GROUPS_DEFAULTS, activeModelGroupDevice?.deviceId,
+  );
   const activeModelGroupRow = modelGroups?.active
-    ? modelGroupRows.find((row) =>
-        row.selection.type === modelGroups.active?.type && row.selection.id === modelGroups.active.id) ?? null
+    ? (activeModelGroupDevice
+        ? deviceModelGroupRows.map((row) => ({ ...row, name: `${row.name} · ${activeModelGroupDevice.name}` }))
+        : modelGroupRows
+      ).find((row) => isModelGroupSelected(modelGroups.active, row.selection)) ?? null
     : null;
   const triggerTitleBase = withAgentDeviceLabel(pendingSelectionTitle
     ? `${pendingSelectionTitle}${showSourceIssue ? ` · ${sourceIssueLabel}` : ''}`
@@ -4943,8 +5020,13 @@ export function ModelSelector({
     : (() => {
         const active = pluginEngines?.active;
         const engine = active ? pluginEngines?.engines.find((item) => isSamePluginEngineChoice(item, active)) : undefined;
-        return active && engine
-          ? { name: pluginEngineChoiceLabel(engine), engine, modelId: active.modelId, effort: resolvePluginEngineEffort(engine, active.modelId, active.effort) }
+        return active
+          ? {
+              name: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
+              engine: engine ?? null,
+              modelId: active.modelId,
+              effort: resolvePluginEngineEffort(engine, active.modelId, active.effort),
+            }
           : null;
       })();
   // The engine's level reads like a built-in task's: compact name after the model, full name in the title.
@@ -5249,6 +5331,7 @@ export function ModelSelector({
             name={disconnectedProvider?.name}
             routing={disconnectedProvider?.routing}
             logoKind={disconnectedProvider?.logoKind}
+            customIcon={disconnectedProvider?.customIcon}
             colorClass={issueColor}
           />
           {agentIdentityPrefix}
@@ -5311,6 +5394,7 @@ export function ModelSelector({
                 name={triggerActiveProvider?.name}
                 routing={triggerActiveProvider?.routing}
                 logoKind={triggerActiveProvider?.logoKind}
+                customIcon={triggerActiveProvider?.customIcon}
                 colorClass="text-current"
                 withMargin={false}
               />
@@ -5322,6 +5406,7 @@ export function ModelSelector({
               name={triggerActiveProvider?.name}
               routing={triggerActiveProvider?.routing}
               logoKind={triggerActiveProvider?.logoKind}
+              customIcon={triggerActiveProvider?.customIcon}
               colorClass={
                 isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : undefined
               }
@@ -5447,7 +5532,7 @@ export function ModelSelector({
       {showSourceIssue && (showStaleList || onReconnectSource) && !deviceId && (
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-default)] px-3 py-2" role="status">
           <div className="min-w-0 text-12 text-[var(--text-secondary)]">
-            <div className="truncate">{disconnectedProvider ? providerDisplayName(disconnectedProvider, t) : currentProviderId} · {sourceIssueLabel}</div>
+            <div className="truncate">{disconnectedProvider ? providerDisplayName(disconnectedProvider, t) : currentProviderId} · {sourceIssueHeaderLabel}</div>
             {lastConfirmedAt !== undefined && (
               <time dateTime={new Date(lastConfirmedAt).toISOString()}>
                 {t('newChat.modelSelector.source.lastConfirmed', { time: new Date(lastConfirmedAt).toLocaleString(i18n.language) })}
