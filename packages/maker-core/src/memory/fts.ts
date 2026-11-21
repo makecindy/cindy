@@ -268,7 +268,7 @@ export class MemoryFts {
         description: string;
         body: string;
       }>;
-      const lowered = terms.map((term) => term.toLowerCase());
+      const lowered = terms.map(lowerAscii);
       const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
       const required = requiredMatchCount(lowered.length);
       type Row = (typeof rows)[number];
@@ -372,19 +372,29 @@ function escapeLikePattern(q: string): string {
  */
 function parseQuery(query: string): { matchQuery: string; terms: string[] } {
   const matchQuery = query.trim().slice(0, MAX_QUERY_CHARS);
-  // 打分与 LIKE 都大小写不敏感, 去重也用同一口径: 「cache CACHE logs」是 3 个词而不是
-  // 重复计数, 否则大小写变体会把覆盖率门槛虚高一倍。保留首次出现的大小写供 markTerms。
+  // 去重按 LIKE 实际支持的大小写规则 (只折 ASCII): 「cache CACHE logs」是 2 个词而不是
+  // 重复计数; 但「Échec échec」在 LIKE 眼里是两种写法, 合并会漏掉后一种写法的记录。
+  // 保留首次出现的大小写给 markTerms。
   const seen = new Set<string>();
   const terms: string[] = [];
   for (const raw of matchQuery.split(/\s+/)) {
     if (!raw) continue;
-    const key = raw.toLowerCase();
+    const key = lowerAscii(raw);
     if (seen.has(key)) continue;
     seen.add(key);
     if (terms.length >= MAX_QUERY_TERMS) continue;
     terms.push(raw);
   }
   return { matchQuery, terms };
+}
+
+/**
+ * 与 SQLite LIKE 一致的大小写折叠: 只折 ASCII (A-Z)。JS 的 toLowerCase() 还会合并
+ * É/é 这类非 ASCII 变体, 而 LIKE 把它们当不同字节 — 两边口径不一致时, 去重会丢掉
+ * 另一种写法的召回, 打分也会虚增覆盖率。
+ */
+function lowerAscii(s: string): string {
+  return s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
 }
 
 /** 多词兜底: 词在正文中的首个命中位置 (小写化坐标, 与 body 等长) */
@@ -405,9 +415,10 @@ function scoreLikeHit(
   r: { title: string; description: string; body: string },
   terms: readonly string[],
 ): { score: number; matched: number; bodyHits: BodyHit[] } {
-  const title = r.title.toLowerCase();
-  const description = r.description.toLowerCase();
-  const body = r.body.toLowerCase();
+  // 与 SQL LIKE 同口径 (只折 ASCII) 的大小写比较, 否则非 ASCII 变体会被多算一份命中
+  const title = lowerAscii(r.title);
+  const description = lowerAscii(r.description);
+  const body = lowerAscii(r.body);
   let score = 0;
   let matched = 0;
   const bodyHits: BodyHit[] = [];
@@ -553,8 +564,8 @@ function countOccurrences(haystack: string, needle: string, cap: number): number
 }
 
 function containsAnyTerm(text: string, terms: readonly string[]): boolean {
-  const lower = text.toLowerCase();
-  return terms.some((term) => lower.includes(term.toLowerCase()));
+  const lower = lowerAscii(text);
+  return terms.some((term) => lower.includes(lowerAscii(term)));
 }
 
 function escapeRegExp(s: string): string {

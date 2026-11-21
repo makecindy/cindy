@@ -183,7 +183,8 @@ describe('MemoryFts', () => {
   //   「登录 失败 缓存」只命中 1/3 → 旧实现会返回低覆盖结果;
   //   3 条高密度 link 记录 + LinkedIn (limit 3) → 子串命中被重复行挤掉;
   //   「甲×24 登录 乙×74 缓存 丙×198 日志」合并窗口缩到 99 → 「缓存」被切掉;
-  //   「cache CACHE CaChE logs auth」 → 单 cache 记录靠大小写变体凑满覆盖率门槛。
+  //   「cache CACHE CaChE logs auth」 → 单 cache 记录靠大小写变体凑满覆盖率门槛;
+  //   「Échec échec」 → 按 toLowerCase 去重后只剩一种写法, 另一种写法的记录漏搜。
   // - tier: unit (真 better-sqlite3 内存库, 无真实 I/O; 整文件约 1.5s)。
   // - 正常路径对照 (修复前不失败, 守住改动没跑偏): MATCH 不足 limit 时补满且不重复、
   //   首尾命中不加多余省略号、超 3 段只留前 3 段、大小写重复词的片段仍是单窗口。
@@ -546,6 +547,26 @@ describe('MemoryFts', () => {
     const snippet = hit?.snippet ?? '';
     expect(snippet.includes('…')).toBe(false);
     expect(snippet.match(/<mark>mycache<\/mark>/gi)?.length).toBe(2);
+  });
+
+  it('非 ASCII 大小写变体不被去重合并: 两种写法都召回', () => {
+    // SQLite 的 LIKE 只对 ASCII 忽略大小写, 「Échec」「échec」是两种写法:
+    // 按 JS 的 toLowerCase 去重会只剩第一种, 另一条记忆进不了候选集。
+    fts.upsert(record('project_upper.md', 'Échec du build 说明'));
+    fts.upsert(record('project_lower.md', 'échec de login 说明'));
+
+    const hits = fts.search('Échec échec');
+    expect(hits.map((h) => h.filename)).toEqual(['project_lower.md', 'project_upper.md']);
+  });
+
+  it('非 ASCII 变体各自算一个词, 不虚增覆盖率', () => {
+    // 与上一条同口径: A 只含一种写法 → 3 词里命中 1 个, 低于门槛 2 被丢掉;
+    // 若打分时用 toLowerCase 把两种写法缝成两个命中, A 会错误地留下来。
+    fts.upsert(record('project_a.md', 'Échec du build'));
+    fts.upsert(record('project_b.md', 'échec 日志 说明'));
+
+    const hits = fts.search('Échec échec 日志');
+    expect(hits.map((h) => h.filename)).toEqual(['project_b.md']);
   });
 
   it('超过 8 个词只取前 8 个', () => {
