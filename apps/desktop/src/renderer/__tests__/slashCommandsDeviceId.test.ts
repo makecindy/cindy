@@ -108,7 +108,7 @@ describe('loadAllCommands deviceId', () => {
     expect(s.listAgentSkills).toHaveBeenCalledTimes(3);
   });
 
-  it('does not share skill reads across a task, folder, agent or device boundary', async () => {
+  it('keeps skill reads session-scoped; folder, agent and device stay boundaries', async () => {
     const s = stubElectron();
     const results = await Promise.all([
       loadAllCommands('claude-code', '/w', { sessionId: 'one' }),
@@ -118,6 +118,9 @@ describe('loadAllCommands deviceId', () => {
       loadAllCommands('claude-code', '/w', { sessionId: 'one' }, 'remote-one'),
       loadAllCommands('claude-code', '/w', { sessionId: 'one' }, 'remote-two'),
     ]);
+    // The main side filters skills per session, so two sessions of one
+    // folder must not share one response; folder / agent / device boundaries
+    // each get their own read as well.
     expect(s.listAgentSkills).toHaveBeenCalledTimes(4);
     expect(s.invoke.mock.calls.filter((call) => call[1] === 'maker:list-agent-skills')).toHaveLength(2);
     expect(results.slice(0, 4).every((commands) => commands.some((x) => x.name === 'localskill'))).toBe(true);

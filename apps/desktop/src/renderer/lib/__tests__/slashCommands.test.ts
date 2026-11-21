@@ -53,8 +53,7 @@ function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedComma
 
 // Unit: repeated palette consumers previously logged each identical conflict.
 // Existing merge tests checked precedence but not repeated renderer log IPC.
-it('warns once per conflict while preserving command precedence across rebuilds', () => {
-  const logToMain = vi.fn();
+it('warns once per conflict while preserving command precedence across rebuilds', () => {  const logToMain = vi.fn();
   vi.stubGlobal('window', { electronAPI: { logToMain } });
   const preferred = skill({ name: 'conflict-diagnostic-test' });
   const desktop: UnifiedCommand = { kind: 'desktop', name: preferred.name, description: 'fallback' };
@@ -63,6 +62,29 @@ it('warns once per conflict while preserving command precedence across rebuilds'
   expect(warnings()).toHaveLength(1);
   expect(mergeCommands([], [{ kind: 'agent-builtin', name: preferred.name, description: 'builtin' }], [preferred])).toEqual([preferred]);
   expect(warnings()).toHaveLength(2);
+});
+
+// Unit: the in-flight request is scoped to one session. The main side
+// filters skills per session, so two sessions on the same directory must
+// not share one response.
+it('keeps the in-flight skill scan session-scoped', async () => {
+  const listAgentSkills = vi.fn(async () => ({ success: true, skills: [skill({ name: 'shared' })] }));
+  vi.stubGlobal('window', { electronAPI: { maker: {
+    listDesktopCommands: vi.fn(async () => ({ success: true, commands: [] })),
+    listAgentCommands: vi.fn(async () => ({ success: true, commands: [] })),
+    listAgentSkills,
+  } } });
+  await Promise.all([
+    loadAllCommands('claude-code', '/repo', { sessionId: 'session-a' }),
+    loadAllCommands('claude-code', '/repo', { sessionId: 'session-b' }),
+  ]);
+  expect(listAgentSkills).toHaveBeenCalledTimes(2);
+  // The same session still shares one in-flight scan.
+  await Promise.all([
+    loadAllCommands('claude-code', '/repo', { sessionId: 'session-a' }),
+    loadAllCommands('claude-code', '/repo', { sessionId: 'session-a' }),
+  ]);
+  expect(listAgentSkills).toHaveBeenCalledTimes(3);
 });
 
 describe('loadAllCommands Learn fallback', () => {

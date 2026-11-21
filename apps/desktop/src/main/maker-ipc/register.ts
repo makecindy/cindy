@@ -990,6 +990,7 @@ import {
   piPackageMutationMayHaveChangedState,
   type PiPackageRuntimeInvalidationPhase,
 } from '../maker-host/pi-package-store.js';
+import { onSkillFactsGenerationChanged, readSkillFactsGeneration } from '../skillFactsGeneration';
 import {
   invalidateLocalPiPackageRuntimes,
   invalidateLocalPiPackageRuntimesForObservedChange,
@@ -6450,6 +6451,29 @@ export interface RegisterMakerIpcOptions {
 }
 
 let disposePiPackagesChangedBroadcast: (() => void) | null = null;
+let disposeSkillFactsGenerationSubscription: (() => void) | null = null;
+
+let builtInSkillDescriptorsSnapshotCache: {
+  key: string;
+  load: Promise<Awaited<ReturnType<typeof builtInSkillDescriptorsAsync>>>;
+} | null = null;
+
+/**
+ * Palette reads share one generation-keyed snapshot of the verified built-in
+ * identity instead of rehashing every file on each open. Skill mutations and
+ * managed-package changes bump the generation; the mutation paths in
+ * built-in-skills keep verifying per read.
+ */
+function builtInSkillDescriptorsSnapshot() {
+  const key = JSON.stringify([readSkillFactsGeneration(), app.getVersion(), app.getPath('userData'), app.getPath('appData')]);
+  if (builtInSkillDescriptorsSnapshotCache?.key === key) return builtInSkillDescriptorsSnapshotCache.load;
+  const load = builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData')).catch((error: unknown) => {
+    if (builtInSkillDescriptorsSnapshotCache?.key === key) builtInSkillDescriptorsSnapshotCache = null;
+    throw error;
+  });
+  builtInSkillDescriptorsSnapshotCache = { key, load };
+  return load;
+}
 
 /**
  * Preselects a route in the local new-task draft, the same push the app-default model
@@ -6612,6 +6636,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   }));
   disposePiPackagesChangedBroadcast?.();
+  disposeSkillFactsGenerationSubscription?.();
+  disposeSkillFactsGenerationSubscription = onSkillFactsGenerationChanged(() => {
+    // Skill/plugin installs, removals and package changes drop the
+    // generation-cached agent skill scans; the next palette open rescans.
+    maker.invalidateAgentSkillFacts();
+  });
   disposePiPackagesChangedBroadcast = onPiPackagesChanged((origin) => {
     void invalidateLocalPiPackageRuntimesForObservedChange(maker, origin)
       .then((invalidation) => {
@@ -8072,7 +8102,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         let disabled: ReadonlySet<string> | undefined;
         const readActivation = async () => {
           descriptors = await measureTraceOperation('maker:list-agent-skills:identity',
-            () => builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData')));
+            () => builtInSkillDescriptorsSnapshot());
           const paths = readDisabledSkillPaths(descriptors);
           disabled = new Set(paths);
           return paths;
