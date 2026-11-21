@@ -12,6 +12,7 @@ import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, getCurrentDbClientSnapshot, setCurrentDbClient } from '../../localDb/client/current';
 import * as markers from '../../localDb/sessionActiveTurn';
 import * as schema from '../../localDb/schema';
+import { bindSessionUsageAccount } from '../../usage/sessionUsageOwner';
 import { SilentStopAutoResumeGuard } from '../silentStopAutoResume';
 import { handleDesktopSilentStopTurnEnd } from '../silentStopTurnEnd.desktop';
 import { SilentStopTurnLeaseGate } from '../sessionTurnLease';
@@ -121,6 +122,7 @@ it.each([
   const register = compileRegister({
     getActiveAppSession, getCurrentDbClientSnapshot, log,
     handleDesktopSilentStopTurnEnd,
+    bindSessionUsageAccount,
     sessionTurnObserverDependencies: {}, installSessionTurnObserver: () => noop,
     noteSessionAgentKind: noop, makerToDbEngineKind: () => 'cc',
     createGhostSessionTap: () => ({ dispose: noop, handleEvent: noop }),
