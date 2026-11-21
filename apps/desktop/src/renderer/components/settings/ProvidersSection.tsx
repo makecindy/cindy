@@ -412,7 +412,7 @@ function CustomTag({ label }: { label: string }) {
 
 function BetaTag({ label }: { label: string }) {
   return (
-    <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
+    <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
       {label}
     </span>
   );
@@ -2207,7 +2207,7 @@ function XdGatewayHeader({
         syncStatus.accountTier === 'free' ? (
           <span
             data-testid="cindy-ai-free-tier-badge"
-            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
+            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-px text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
           >
             {t('settings.providers.xd.accountTier.free')}
           </span>

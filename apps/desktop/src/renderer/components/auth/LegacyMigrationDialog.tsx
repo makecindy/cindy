@@ -166,7 +166,7 @@ export function LegacyMigrationDialog() {
               minHeight: 58,
               // 设计稿 r40/h80 = 半高真 pill;用 9999 表达 pill 语义,长文案把
               // 按钮撑高时圆角跟随保持胶囊形(codex review P1)。
-              borderRadius: 9999,
+              borderRadius: 'var(--radius-full)',
               background: 'var(--login-callback-cta-bg)',
               border: '1px solid var(--login-callback-cta-border)',
               color: 'var(--login-callback-cta-text)',

@@ -928,7 +928,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           )}
         </div>
       ) : (
-        <div className="relative flex h-full flex-col px-[10px] pt-[8px] pb-[8px]">
+        <div className="relative flex h-full flex-col px-2.5 pt-2 pb-2">
           {/* 右上角 hover 操作钮(More + Archive/Undo);archivePending 时换成红色确认胶囊。
             时间在右下角(见下),操作钮放右上角空位、不和时间挤在一起。 */}
           {!navigationOnly && !isEditing && !archivePending && (
@@ -1096,7 +1096,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
             draggable={splitDragHandleActive}
             className={cn(
-              'mt-[4px] h-[2.8em] text-11 leading-[1.4]',
+              'mt-1 h-[2.8em] text-11 leading-[1.4]',
               '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
               isActive
                 ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
@@ -1111,7 +1111,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             远程业务标识、worktree;右下角业务时间。中间空位自然由图标簇与时间撑开。 */}
           <div
             className={cn(
-              'mt-[6px] flex items-center gap-1.5',
+              'mt-1.5 flex items-center gap-1.5',
               'text-11 font-medium leading-none tabular-nums',
               isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
             )}

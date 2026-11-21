@@ -271,7 +271,7 @@ export function BuiltinToolRow({
   return (
     <div
       className={cn(
-        'flex items-center justify-between gap-3 px-4 py-[14px]',
+        'flex items-center justify-between gap-3 px-4 py-3.5',
         divider && 'border-t border-[var(--settings-theme-card-border)]',
       )}
     >
@@ -284,7 +284,7 @@ export function BuiltinToolRow({
         >
           <Puzzle size={16} className="text-[var(--settings-section-title)]" />
         </div>
-        <div className="flex flex-col gap-[8px] min-w-0">
+        <div className="flex flex-col gap-2 min-w-0">
           <div className="flex items-center gap-2">
             <p className="text-14 font-medium leading-[1.25] text-[var(--settings-section-title)] truncate">
               {name}

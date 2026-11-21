@@ -659,7 +659,7 @@ export function ModelAdvancedDrawer({
         {discount !== undefined && discount > 0 && discount <= 1 && (
           <Row label={t('settings.providers.models.advanced.discount')}>
             <span
-              className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
+              className="inline-flex items-center rounded-full px-2 py-px text-10 font-medium"
               style={{
                 color: EFFORT_TIER_COLORS.low,
                 backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
