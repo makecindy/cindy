@@ -1886,6 +1886,7 @@ function budgetText(message: any): string {
 // 每 4 个汉字 pi 记 1 token,真实约 1.5 字符/token,补 (1/1.5 - 1/4) ≈ 0.4167。
 // 注意:这条对卡片本身同样生效 —— 中文卡片 token 被抬高,更容易撞上
 // `framedTokens >= chunk.tokens` 被拒。中文场景有意偏保守。
+// 1.1.12 原样:正则只认基本汉字区,假名与谚文不进补偿(日韩会话低估约 2 倍),已报上游 #68。
 const CJK_TOKEN_RE = /[\u4e00-\u9fff]/g;
 function estimateTokens(message: any): number {
   const base = estimateMessageTokens(message);
