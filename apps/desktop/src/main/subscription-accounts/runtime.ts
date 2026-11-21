@@ -163,6 +163,8 @@ interface CodexModelSnapshot {
   models: CatalogModel[];
   confirmedAt?: number;
   failedAt?: number;
+  /** The failed read could not reach the account service; the picker says so instead of "not updated". */
+  unreachable?: true;
   needsSave?: true;
 }
 interface CodexModelFlight {
@@ -192,9 +194,9 @@ interface OwnerRuntime {
   codexModels: Map<string, CodexModelSnapshot>;
   codexModelFlights: Map<string, CodexModelFlight>;
   codexCatalogs?: Map<string, readonly CatalogModel[]>;
-  publishedCodexCatalog?: Record<string, { models: readonly CatalogModel[] | null; unavailable: boolean }> | null;
+  publishedCodexCatalog?: Record<string, { models: readonly CatalogModel[] | null; unavailable: boolean; unreachable: boolean }> | null;
   defaultCodexAuthEpoch: number;
-  claudeModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; failedAt?: number }>;
+  claudeModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; failedAt?: number; unreachable?: true }>;
   claudeModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
   claudeCatalogs?: Map<string, readonly CatalogModel[]>;
   publishedClaudeCatalog?: Record<string, readonly CatalogModel[] | null> | null;
@@ -239,14 +241,15 @@ function publishCodexCatalogChange(state: OwnerRuntime, refreshId?: string): voi
   const pool = readPool('openai');
   const providers = new Set(['openai', ...pool?.accounts.map(account => accountProviderId('openai', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
-    [providerId, { models: readSubscriptionPoolCodexModels(providerId), unavailable: hasUnavailableSubscriptionPoolAccount(providerId) }])) : null;
+    [providerId, { models: readSubscriptionPoolCodexModels(providerId), unavailable: hasUnavailableSubscriptionPoolAccount(providerId),
+      unreachable: isSubscriptionPoolReadUnreachable(providerId) }])) : null;
   if (isDeepStrictEqual(state.publishedCodexCatalog ?? null, models)) return;
   if (refreshId && models) {
     for (const [providerId, next] of Object.entries(models)) {
       const previous = state.publishedCodexCatalog?.[providerId];
       if (!isDeepStrictEqual(previous, next)) log.debug('subscription provider model list published', {
         refreshId, providerId, previousCount: previous?.models?.length, modelCount: next.models?.length,
-        status: next.unavailable ? 'unconfirmed' : 'ready',
+        status: next.unreachable ? 'unreachable' : next.unavailable ? 'unconfirmed' : 'ready',
       });
     }
   }
@@ -1170,7 +1173,8 @@ export async function refreshSubscriptionPoolClaudeModels(force = false, provide
         state.claudeModels.set(id, { auth, models });
       } catch (error) {
         if (isCurrent()) {
-          state.claudeModels.set(id, { auth, models: sameLogin ? previous?.models ?? [] : [], failedAt: Date.now() });
+          state.claudeModels.set(id, { auth, models: sameLogin ? previous?.models ?? [] : [], failedAt: Date.now(),
+            ...(isAccountServiceUnreachable(error) ? { unreachable: true as const } : {}) });
           log.warn('subscription account model read failed', { accountId: id, error: error instanceof Error ? error.name : typeof error });
         }
       }
@@ -1369,11 +1373,12 @@ export async function refreshSubscriptionPoolCodexModels(
         const retained = await lastVerified() ?? (sameAccount ? previous : undefined);
         if (!isCurrent()) return;
         const source = !retained ? 'unconfirmed' : retained === previous ? 'memory' : 'disk';
+        const unreachable = isAccountServiceUnreachable(error);
         state.codexModels.set(id, { auth, accountKey: info.accountKey, models: retained?.models ?? [],
-          confirmedAt: retained?.confirmedAt, failedAt: Date.now() });
+          confirmedAt: retained?.confirmedAt, failedAt: Date.now(), ...(unreachable ? { unreachable: true as const } : {}) });
         log.warn('subscription account model read failed', {
           refreshId, source, publishedCount: retained?.models.length ?? 0, confirmedAt: retained?.confirmedAt,
-          elapsedMs: Date.now() - startedAt, error: error instanceof Error ? error.name : typeof error,
+          elapsedMs: Date.now() - startedAt, error: error instanceof Error ? error.name : typeof error, unreachable,
         });
       }
     };
@@ -1436,18 +1441,36 @@ export function lastConfirmedSubscriptionModelsAt(providerId: string): number | 
 
 /** Cached read evidence only; disconnected/unconfigured/paused pools never request UI recovery. */
 export function hasUnavailableSubscriptionPoolAccount(providerId: string): boolean {
+  return subscriptionPoolReadIssues(providerId).length > 0;
+}
+
+/** Every account whose models could not be read failed to reach its service (network, DNS, proxy). */
+export function isSubscriptionPoolReadUnreachable(providerId: string): boolean {
+  const issues = subscriptionPoolReadIssues(providerId);
+  return issues.length > 0 && issues.every(issue => issue === 'unreachable');
+}
+
+/** One entry per serving account whose model list is not current: why it is not. */
+function subscriptionPoolReadIssues(providerId: string): Array<'unreachable' | 'unconfirmed'> {
   const found = poolFor(providerId);
-  if (!found || found.off) return false;
+  if (!found || found.off) return [];
   const state = currentRuntime();
-  return servingAccounts(found).some(account => {
-    if (account.paused || disconnectedFor(found.pool, found.kind, account.id)) return false;
+  const issues: Array<'unreachable' | 'unconfirmed'> = [];
+  for (const account of servingAccounts(found)) {
+    if (account.paused || disconnectedFor(found.pool, found.kind, account.id)) continue;
     const info = state.cache.get(keyOf(found.kind, account.id));
-    if (!info?.auth.authenticated) return info?.unavailable === true;
-    if (found.kind === 'anthropic') return state.claudeModels.get(account.id)?.failedAt !== undefined;
-    if (readLegacyCodexProviderId(account.id)) return false;
-    const models = state.codexModels.get(account.id);
-    return !sameCodexModelAccount(models, info) || models?.failedAt !== undefined;
-  });
+    let failed: { unreachable?: boolean } | undefined;
+    if (!info?.auth.authenticated) failed = info?.unavailable === true ? info : undefined;
+    else if (found.kind === 'anthropic') {
+      const models = state.claudeModels.get(account.id);
+      failed = models?.failedAt !== undefined ? models : undefined;
+    } else if (!readLegacyCodexProviderId(account.id)) {
+      const models = state.codexModels.get(account.id);
+      failed = !sameCodexModelAccount(models, info) ? {} : models?.failedAt !== undefined ? models : undefined;
+    }
+    if (failed) issues.push(failed.unreachable === true ? 'unreachable' : 'unconfirmed');
+  }
+  return issues;
 }
 
 /** Native account membership is independent of the supplier's union. Imported

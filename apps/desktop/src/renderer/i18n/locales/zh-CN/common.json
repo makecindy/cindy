@@ -14094,6 +14094,8 @@
       "source": {
         "lastConfirmed": "上次刷新：{{time}}",
         "unconfirmed": "模型列表暂未更新",
+        "unreachable": "连不上 {{source}}",
+        "unreachableDetail": "连不上，请检查网络",
         "unavailable": "模型不可用",
         "reconnect": "重新连接",
         "manage": "管理来源",

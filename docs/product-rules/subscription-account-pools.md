@@ -295,6 +295,7 @@ Claude 保留官方 `subscriptionType` 与 `planTier`，另存可选 `planDispla
   - 账号行显示「无法获取状态」，保留本机此前确认过的身份；供应商标题栏在没有可用账号、且有账号读不到时显示「无法获取状态」和「重试」（只重读，不发起登录），不显示「未连接」和「登录」。账号在读得到与读不到之间切换时发出既有的 `subscription-accounts:changed`，所有打开的视图随之刷新；连续失败不重复通知。
   - 重新登录已知账号或新目录时，登录前的预读连不上服务不阻断浏览器登录。登录后的确认仍按前文「登录完成须确认」：读不到不算完成、不重连、不清冷却，只是报错改为连不上账号服务。把默认登录挂进账号池和 Claude 续登仍要求预读给出答案。
   - 命令失败返回 `SUBSCRIPTION_ACCOUNT_UNREACHABLE`，提示「暂时连不上账号服务，无法确认登录状态」；主进程按动作、供应商与分类原因记录日志（只记已知原因或错误类型，不记 message）。旧端不认识该错误码时沿用通用失败提示。回归见 `nativeCli.test.ts`、`runtime.test.ts` 的 unreachable account service、`ipc.test.ts` 与 `providersSectionDeepLink.test.tsx`。
+  - 模型列表读取同样区分原因（2026-11-21 用户报告：网络连不上 OpenAI 时，模型选择器只说「模型列表暂未更新」，看不出是网络问题）：Codex `model/list` 或 Claude 模型读取因连不上服务失败时，失败快照记 `unreachable`；来源下所有读取失败的账号都属此类时，Main 在 `subscriptionReadUnavailable` 之外再给 `subscriptionReadUnreachable`。选择器底栏显示「连不上 OpenAI」（断网图标），面板顶栏显示「OpenAI · 账号 · 连不上，请检查网络」，上次刷新时间与「重新读取模型」不变；其他失败、读取中或混有其他原因时仍显示「模型列表暂未更新」。旧端缺少该标记沿用原文案。回归见 `runtime.test.ts` 的 unreachable only when the service could not be reached 与 `modelSelectorTriggerVariant.test.ts`。
 - Claude 历史定位（分叉、回退、导出、跨电脑转录复制和工作目录移动）按每个原生会话的账号绑定选择目录；新增账号缺失历史时不拿默认账号的同名文件替代。默认账号与未绑定的旧任务保持原有目录查找和恢复行为。
 - 选择发生在实际执行电脑的本机 Agent 入口；外层远程供应商组仅选择供应商/电脑，内部继续选择账号。账号身份、路径与凭证不传给组成员或访客。
 - 未显式指定供应商的原生订阅任务也必须经过账号池：在执行电脑复用启动时的鉴权适配器确认默认路由，确实使用本机订阅时应用账号开关与分配策略；网关、其他供应商和 SSH 不据模型同名猜成订阅。新任务在来源落库前落实为确认后的供应商，让账号显示和后续恢复同源；旧任务保留恢复路径。切换到隐式订阅同样重建并选择账号。实现与回归见 `subscription-accounts/agent.ts`、`__tests__/runtime.test.ts` 及 `maker-ipc/register.ts`。

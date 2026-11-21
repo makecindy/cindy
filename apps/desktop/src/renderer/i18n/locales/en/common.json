@@ -14148,6 +14148,8 @@
       "source": {
         "lastConfirmed": "Last refreshed: {{time}}",
         "unconfirmed": "Model list not up to date",
+        "unreachable": "Can't reach {{source}}",
+        "unreachableDetail": "Can't connect. Check your network.",
         "unavailable": "Model unavailable",
         "reconnect": "Reconnect",
         "manage": "Manage source",
