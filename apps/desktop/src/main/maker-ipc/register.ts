@@ -131,7 +131,7 @@ import {
 import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { liveDirectGuestSession } from '../remote-agent/controller/service.js';
 import { currentProviderPartyUsageStore } from '../usage/providerPartyUsageStore.js';
-import { recordSessionProviderPartyUsage } from './sessionProviderPartyUsage.js';
+import { observeUnbilledProviderPartyUsage, recordSessionProviderPartyUsage } from './sessionProviderPartyUsage.js';
 import { createProviderGroupLeaseReporter, type ProviderGroupLeaseReporter } from '../provider-group/leaseReporter.js';
 import { ensureProviderGroupUsageReporter, notifyProviderGroupUsage } from '../provider-group/usageReportRuntime.js';
 import { PROVIDER_GROUP_USAGE_ENSURE_INTERVAL_MS, PROVIDER_GROUP_USAGE_STARTUP_DELAY_MS } from '../provider-group/usageReporter.js';
@@ -6366,10 +6366,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     }
     const generation = event.sessionTurnGeneration ?? session.getTurnGeneration();
     handleSessionEvent(ownerEventDependencies, session, event, usageAccount.forEvent(generation), () => {
-      // Claude reports process-cumulative usage. Consume a denied turn's snapshot
-      // in memory so its delta cannot be charged to the next admitted turn.
-      if (event.type !== 'done' || event.source !== 'claude-code' || session.agentKind !== 'claude-code'
-          || generation !== session.getTurnGeneration() || sessionBindings.getSession(session.id) !== session) return;
+      if (generation !== session.getTurnGeneration() || sessionBindings.getSession(session.id) !== session
+          || event.source !== session.agentKind) return;
+      if (event.source !== 'claude-code' && event.source !== 'codex' && event.source !== 'pi') return;
+      observeUnbilledProviderPartyUsage(session, event);
+      if (event.type !== 'done' || event.source !== 'claude-code') return;
       const data = event.data as { modelUsage?: Record<string, unknown>; total_cost_usd?: number } | undefined;
       if (data?.modelUsage && typeof data.modelUsage === 'object') {
         const { next } = computeModelUsageDeltas(lastReportedModelUsageBySession.get(session.id), data.modelUsage);

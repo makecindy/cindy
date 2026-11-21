@@ -524,3 +524,64 @@ it.each(['logout','cloud to local','local to cloud'] as const)('rejects both run
     expect(owner.db.prepare('SELECT input_tokens FROM daily_model_usage').all()).toEqual([]);
   }
 });
+
+// DB tier: the same vendor process outlives an account switch. Inspect the
+// production provider ledger and the group report queued for the other device.
+it.each(['claude-code', 'codex', 'pi'] as const)('isolates denied provider and group receipts for %s', async kind => {
+  const { a, b } = await databases();
+  const id = randomUUID();
+  seedUsageSession(id, a, b);
+  const { currentProviderPartyUsageStore } = await import('../usage/providerPartyUsageStore.js');
+  const bindings = await import('../provider-group/bindings.desktop.js');
+  const link = await import('../device-link/index.js');
+  const reporter = await import('../provider-group/usageReportRuntime.js');
+  const binding = vi.spyOn(bindings, 'readProviderGroupBinding').mockReturnValue({
+    groupDeviceId: 'group-owner', memberKey: 'device:self:vendor', providerId: 'group-provider', at: 1,
+  });
+  const device = vi.spyOn(link, 'getSelfDeviceId').mockReturnValue('self');
+  const notice = vi.spyOn(reporter, 'notifyProviderGroupUsage').mockImplementation(() => {});
+  const route = vi.spyOn(routeGuard, 'verdictForModelRoute').mockResolvedValue({ kind: 'pass' });
+  onTestFinished(() => { route.mockRestore(); });
+  setSessionProvider(id, 'vendor');
+  const ledger = currentProviderPartyUsageStore();
+  const writes = vi.spyOn(ledger, 'record');
+  onTestFinished(async () => {
+    binding.mockRestore(); device.mockRestore(); notice.mockRestore(); writes.mockRestore();
+    setSessionProvider(id, null); await ledger.flush();
+  });
+  const turn = bindSession(id, kind);
+  async function complete(n: number) {
+    if (kind === 'claude-code') await turn.deliver(claudeCumulativeDone(n));
+    else {
+      await turn.deliver({ type: 'status', source: kind, data: { requestUsage: {
+        epoch: 'process', models: [{ model: 'fixture', inputTokens: 7*n, outputTokens: 3*n }],
+      } } } as AgentEvent);
+      await turn.deliver({ type: 'done', source: kind, data: { usage: kind === 'pi'
+        ? { inputTokens: 7, outputTokens: 3 } : { promptTokens: 7, completionTokens: 3 } } } as AgentEvent);
+    }
+    await setImmediate();
+  }
+  await turn.send(); await complete(1);
+  expect(ledger.groupReport('group-owner', null)).toMatchObject([{ inputTokens: 7, outputTokens: 3, turns: 1 }]);
+  await turn.send();
+  commitActiveAppSession('cloud', 'b'); b.activate();
+  const other = currentProviderPartyUsageStore();
+  const otherWrites = vi.spyOn(other, 'record');
+  onTestFinished(() => { otherWrites.mockRestore(); });
+  writes.mockClear(); notice.mockClear();
+  await complete(2);
+  expect(writes).not.toHaveBeenCalled(); expect(otherWrites).not.toHaveBeenCalled();
+  expect(notice).not.toHaveBeenCalled();
+  expect(other.query('vendor', 'all').local).toBeNull();
+  expect(other.groupReport('group-owner', null)).toEqual([]);
+  commitActiveAppSession('cloud', 'a'); a.activate();
+  await turn.send(); await complete(3);
+  expect.soft(ledger.query('vendor', 'all').local?.models).toMatchObject([{ inputTokens: 14, outputTokens: 6, turns: 2 }]);
+  expect.soft(ledger.groupReport('group-owner', null)).toMatchObject([{ inputTokens: 14, outputTokens: 6, turns: 2 }]);
+  for (const party of ['local', 'group']) {
+    const samples = writes.mock.calls.filter(([owner]) => owner.kind === party).flatMap(([, usage]) => usage.samples);
+    expect.soft(samples.reduce((total, row) => total + row.inputTokens, 0)).toBe(7);
+    expect.soft(samples.reduce((total, row) => total + row.outputTokens, 0)).toBe(3);
+  }
+  expect(notice).toHaveBeenCalled();
+});
