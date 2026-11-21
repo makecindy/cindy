@@ -299,6 +299,25 @@ describe('SessionCard visual cases', () => {
     },
   );
 
+  // List and text rows must forward the clicked row itself, not only its id: a cached
+  // remote row with the same id would otherwise decide the retry device (#11885).
+  it.each(['list', 'text'] as const)('passes the clicked %s row to the session handler', (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, deviceLinkDeviceId: undefined };
+    const onClick = vi.fn();
+    const props = {
+      session, isActive: false, isRunning: false, hasAttentionNotification: false,
+      onClick, onAction: vi.fn(), onRename: vi.fn(), onTogglePin: vi.fn(),
+    };
+    const view = render(variant === 'list'
+      ? createElement(SessionCard, { ...props, variant: 'list' })
+      : createElement(SessionItem, props));
+    const row = view.container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
+    fireEvent.click(row);
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(onClick).toHaveBeenNthCalledWith(1, session.id, expect.any(Object), session);
+    expect(onClick).toHaveBeenNthCalledWith(2, session.id, undefined, session);
+  });
+
   it('scrolls a text row into nearest view only when it becomes active', () => {
     const props = {
       session: sessionCardVisualCases[0].session,

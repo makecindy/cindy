@@ -148,7 +148,8 @@ import {
 import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
-import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { get as getLocalSession } from '@/lib/sessionService';
 import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
 import { readRemoteBots } from '@/features/bots/useRemoteBots';
@@ -609,7 +610,7 @@ export function MainLayout() {
   const currentPathRef = useRef(`${location.pathname}${location.search}`);
   currentPathRef.current = `${location.pathname}${location.search}`;
   const navigateToOrdinarySession = useCallback(
-    (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true, deviceId?: string) => {
+    (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true, deviceId?: string | null) => {
       // 已知镜像可提前解析 Orca 角色；明确指定电脑时，先由任务入口恢复并校验
       // 来源，避免读到本机同 ID。Worker 后续转到 Lead 时保留 device 和 searchJump。
       const remoteSession =
@@ -618,7 +619,9 @@ export function MainLayout() {
       const route = deviceId
         ? Promise.resolve(remoteBotRouteForSession(readRemoteBots().filter(bot => bot.deviceId === deviceId), sessionId)?.route
           ?? `/cc-agent/${encodeURIComponent(sessionId)}`)
-        : resolveSessionRoute(sessionId, remoteSession);
+        : deviceId === null
+          ? getLocalSession(sessionId).then(session => resolveSessionRoute(sessionId, session))
+          : resolveSessionRoute(sessionId, remoteSession);
       void route.then((target) => {
         if (!isLatest()) return;
         if (deviceId && target !== '/cc-agent') {
@@ -626,11 +629,13 @@ export function MainLayout() {
           url.searchParams.set('device', deviceId);
           target = `${url.pathname}${url.search}`;
         }
+        const localTaskSessionId = deviceId === null ? getSessionRouteOwnerId(target) : null;
         if (messageClientId) {
           // 带消息锚点:即使已在目标路由也要 navigate——新的 location.state 才能
           // 触发 CCAgentSessionView 的 searchJump 消费 effect(定位 + 高亮)。
           navigate(target, {
             state: {
+              ...(localTaskSessionId ? { localTaskSessionId } : {}),
               searchJump: {
                 kind: 'conversation-search',
                 sessionId,
@@ -640,11 +645,11 @@ export function MainLayout() {
               },
             },
           });
-        } else if (currentPathRef.current !== target) {
-          navigate(target);
+        } else if (currentPathRef.current !== target || localTaskSessionId) {
+          navigate(target, localTaskSessionId ? { state: { localTaskSessionId }, replace: currentPathRef.current === target } : undefined);
         }
 
-      });
+      }).catch(error => { log.warn('Could not open task entry', error); });
     },
     [navigate],
   );

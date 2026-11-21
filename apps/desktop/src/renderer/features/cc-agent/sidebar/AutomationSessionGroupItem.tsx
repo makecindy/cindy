@@ -356,7 +356,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     const collapsedRef = useRef(collapsed);
     collapsedRef.current = collapsed;
     const handleChildSessionClick = useCallback<SessionClickHandler>(
-      (id, modifiers) => {
+      (id, modifiers, session) => {
         if (
           !collapsedRef.current &&
           !showAllRef.current &&
@@ -364,7 +364,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
         ) {
           freezeCurrentLayoutRef.current(id);
         }
-        onSessionClick(id, modifiers);
+        onSessionClick(id, modifiers, session);
       },
       [onSessionClick],
     );
@@ -475,9 +475,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     const openLatestSession = () => {
       const targetId = headerSessionId;
       if (!targetId) return;
+      const targetSession = group.sessions.find((session) => session.id === targetId);
       // 仅在展开 + 前 5 条态下冻结当前布局;收起态未读子行随已读状态收回。
       if (!collapsed && !showAll) freezeCurrentLayout(targetId);
-      onSessionClick(targetId);
+      onSessionClick(targetId, undefined, targetSession);
     };
 
     return (

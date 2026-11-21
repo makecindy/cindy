@@ -483,13 +483,12 @@ export function regenerateSessionTitleFor(sessionId: string): Promise<{ title: s
 }
 
 /** 读会话元数据:远程走隧道 local-db:sessions:get(本地 DB 没有该 row,直接调会 404)。 */
-export function getSessionFor(sessionId: string): Promise<Session> {
+export function getSessionFor(sessionId: string, deviceId = getStickySessionDeviceId(sessionId) ?? null): Promise<Session> {
   // Session metadata is part of the same remote send attempt as the later
   // enqueue. Keep using the last known device while the mirror is being
   // rebuilt; reading the controller's local DB in that window returns either
   // an unrelated row or a misleading 404 and can make a UI trigger fall back
   // to the wrong maker instance.
-  const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return sessionService.get(sessionId);
   return invokeRemote(deviceId, 'local-db:sessions:get', [sessionId]) as Promise<Session>;
 }

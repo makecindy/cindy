@@ -306,7 +306,7 @@ export interface SessionClickModifiers {
   ctrlKey: boolean;
 }
 
-export type SessionClickHandler = (id: string, modifiers?: SessionClickModifiers) => void;
+export type SessionClickHandler = (id: string, modifiers?: SessionClickModifiers, session?: Session) => void;
 
 export function hasSessionSelectionModifier(modifiers?: SessionClickModifiers): boolean {
   return modifiers?.shiftKey === true || modifiers?.metaKey === true || modifiers?.ctrlKey === true;
@@ -616,9 +616,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         shiftKey: e.shiftKey,
         metaKey: e.metaKey,
         ctrlKey: e.ctrlKey,
-      });
+      }, session);
     },
-    [isEditing, onClick, session.id],
+    [isEditing, onClick, session],
   );
 
   const handleDoubleClick = useCallback(
@@ -981,7 +981,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         if (e.target !== e.currentTarget) return;
         if (!isEditing && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault();
-          onClick(session.id);
+          onClick(session.id, undefined, session);
         }
       }}
       onContextMenu={(e) => {

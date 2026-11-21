@@ -193,7 +193,7 @@ import {
   useLocalHostProjectOrder,
   useRemoteHostProjectOrders,
 } from './hooks/useRemoteHostProjectOrders';
-import { isOrcaWorkerSession, orcaWorkerSessionRoute, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { getSessionRouteOwnerId, isOrcaWorkerSession, orcaWorkerSessionRoute, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import {
   buildProjectKeyComparisonSet,
   findProjectRepresentativeKey,
@@ -2608,8 +2608,10 @@ function ExpandedView({
     return () => window.removeEventListener('focus', handler);
   }, [viewedSessionId]);
 
+  const sessionClickLocationRef = useRef(location);
+  sessionClickLocationRef.current = location;
   const handleSessionClick = useCallback(
-    async (id: string, modifiers?: SessionClickModifiers) => {
+    async (id: string, modifiers?: SessionClickModifiers, clickedSession?: Session) => {
       if (hasSessionSelectionModifier(modifiers)) {
         if (modifiers?.shiftKey) {
           const visibleIds = getVisibleSidebarSessionIds(sidebarScrollRef.current);
@@ -2660,7 +2662,19 @@ function ExpandedView({
       for (const [sessionId, kind] of attentionKindsRef.current) {
         if (kind === 'awaiting' || kind === 'error') waiting.add(sessionId);
       }
-      const target = sessionsByIdRef.current.get(id);
+      const target = clickedSession ?? sessionsByIdRef.current.get(id);
+      const openRoute = (route: string) => {
+        const localTaskSessionId = clickedSession && !clickedSession.deviceLinkDeviceId ? getSessionRouteOwnerId(route) : null;
+        if (clickedSession?.deviceLinkDeviceId && getSessionRouteOwnerId(route)) {
+          const url = new URL(route, 'https://cindy.invalid');
+          url.searchParams.set('device', clickedSession.deviceLinkDeviceId);
+          route = url.pathname + url.search;
+        }
+        const current = sessionClickLocationRef.current;
+        const samePath = route === current.pathname + current.search;
+        if (samePath && (!localTaskSessionId || current.state?.localTaskSessionId === localTaskSessionId)) return;
+        navigate(route, localTaskSessionId ? { state: { localTaskSessionId }, replace: samePath } : undefined);
+      };
       holdSidebarViewedPriority(
         id,
         sidebarPriorityContext(
@@ -2682,16 +2696,16 @@ function ExpandedView({
         if (worker) {
           makerChatStore.setAskUserViewerState(worker.chatSessionId, 'expanded');
           const search = target.deviceLinkDeviceId ? new URLSearchParams({ device: target.deviceLinkDeviceId }).toString() : '';
-          navigate(orcaWorkerSessionRoute(id, worker.workerSessionId, search));
+          openRoute(orcaWorkerSessionRoute(id, worker.workerSessionId, search));
           return;
         }
         if (makerChatStore.getRunningSnapshot().get(id)?.hasPendingAskUser) {
           makerChatStore.setAskUserViewerState(id, 'expanded');
         }
       }
-      if (id === activeSessionIdRef.current) return; // No duplicate navigate.
+      if (!clickedSession && id === activeSessionIdRef.current) return;
       if (import.meta.env.DEV) perfLog.debug(`sidebar:click sid=${id}`); // 纯诊断,生产剔除
-      navigate(await resolveSessionRoute(id, target));
+      openRoute(await resolveSessionRoute(id, target, { remote: !!target?.deviceLinkDeviceId }));
     },
     [navigate, clearNotification, markAutomationSessionRunsRead],
   );
@@ -4548,8 +4562,8 @@ function RailPanels({
   // 首击就 closeAll 会把行卸载、重命名永远进不去(codex review);面板由指针
   // 离开的 hover 宽限 / Esc / 外点自然收回,与展开态「点击不收侧栏」同语义。
   const handlePanelSessionClick = useCallback<NonNullable<RailPanelsProps['onSessionClick']>>(
-    (id) => {
-      onSessionClick(id);
+    (id, _modifiers, session) => {
+      onSessionClick(id, undefined, session);
     },
     [onSessionClick],
   );

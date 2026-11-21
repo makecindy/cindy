@@ -84,6 +84,7 @@ function attentionSidebar() {
     runningSessionIdsRef: { current: new Set() }, sidebarNotificationsRef: { current: new Set() },
     holdSidebarViewedPriority: vi.fn(), sidebarPriorityContext: (context: unknown) => context,
     clearNotification: vi.fn(), activeSessionIdRef: { current: 'shown' },
+    sessionClickLocationRef: { current: { pathname: '/cc-agent/shown', search: '', state: null } },
     navigate: vi.fn(), resolveSessionRoute: async () => '/cc-agent/clicked',
     importMeta: { env: { DEV: false } }, perfLog: { debug: vi.fn() },
   };
@@ -95,7 +96,7 @@ function attentionSidebar() {
     // the production ExpandedView code. Receipt payloads stay in helper tests.
     return createElement('button', { onClick: () => onSessionClick(clickedSessionId) }, 'Open task');
   }
-  return { Component: SidebarAttention, clearAttention };
+  return { Component: SidebarAttention, clearAttention, navigate: bindings.navigate };
 }
 
 type NotificationSession = {
@@ -248,16 +249,18 @@ describe('sidebar system attention consumers', () => {
   });
 
   it('clears the clicked task, including re-opening the already active task', async () => {
-    const { Component, clearAttention } = attentionSidebar();
+    const { Component, clearAttention, navigate } = attentionSidebar();
     const view = render(createElement(Component, { viewedSessionId: 'shown' }));
     clearAttention.mockClear();
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open task' })));
     expect(clearAttention.mock.calls).toEqual([['clicked']]);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/clicked', undefined);
 
     view.rerender(createElement(Component, { viewedSessionId: 'shown', clickedSessionId: 'shown' }));
     clearAttention.mockClear();
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open task' })));
     expect(clearAttention.mock.calls).toEqual([['shown']]);
+    expect(navigate).toHaveBeenCalledTimes(1);
   });
 });
 
