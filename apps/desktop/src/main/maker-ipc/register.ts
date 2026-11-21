@@ -1,4 +1,5 @@
 import { assertSessionTreeOwner, navigateAndRehydrateSessionTree } from './sessionTreeNavigation.js';
+import { bindSessionUsageAccount } from '../usage/sessionUsageOwner.js';
 import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt, contextRecoveryAbortSignal } from './contextRecoveryAssembly.js';
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
@@ -131,7 +132,7 @@ import {
 import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { liveDirectGuestSession } from '../remote-agent/controller/service.js';
 import { currentProviderPartyUsageStore } from '../usage/providerPartyUsageStore.js';
-import { recordSessionProviderPartyUsage } from './sessionProviderPartyUsage.js';
+import { observeUnbilledProviderPartyUsage, recordSessionProviderPartyUsage } from './sessionProviderPartyUsage.js';
 import { createProviderGroupLeaseReporter, type ProviderGroupLeaseReporter } from '../provider-group/leaseReporter.js';
 import { ensureProviderGroupUsageReporter, notifyProviderGroupUsage } from '../provider-group/usageReportRuntime.js';
 import { PROVIDER_GROUP_USAGE_ENSURE_INTERVAL_MS, PROVIDER_GROUP_USAGE_STARTUP_DELAY_MS } from '../provider-group/usageReporter.js';
@@ -973,7 +974,7 @@ import {
   readModelPriceOverrideView,
   setModelPriceOverride,
 } from '../usage/modelPriceOverrideStore.js';
-import { ClaudeOutputLagTimingGuard, type ModelUsageCumulative } from '../usage/modelUsageDelta.js';
+import { ClaudeOutputLagTimingGuard, computeModelUsageDeltas, type ModelUsageCumulative } from '../usage/modelUsageDelta.js';
 
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { readSessionModelForUsage, unpricedSubscriptionValueMarker } from './turnUsageSessionDefaults.js';
@@ -1617,6 +1618,7 @@ import {
   type MainOwnedInputBoundaryStamp,
 } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote, readWireSourceDevice } from './messageSourceNote.js';
+import { resolveAgentSendToSessionHint, type AgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.desktop.js';
 import {
   buildUiLanguageErrorNote,
@@ -6335,7 +6337,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     return asyncQuestionInputDispatcher(session, ...answer);
   });
 
-  registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session));
+  const usageAccount = bindSessionUsageAccount(() => {
+    turnModelPromiseBySession.delete(session.id);
+    turnUsageContextBySession.delete(session.id);
+  });
+  registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session, usageAccount));
 
   // session-agent-switch:登记本会话当前引擎,broadcaster / user 行落库据此逐行
   // stamp messages.agent_kind(切换后历史行的 agent_meta 必须按写入时引擎解析)。
@@ -6372,7 +6378,22 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       persistAgentPlanModeChangeWith({ ownerDb, sessionBindings, persistSessionFields, log }, session, event);
       return;
     }
-    handleSessionEvent(ownerEventDependencies, session, event);
+    const generation = event.sessionTurnGeneration ?? session.getTurnGeneration();
+    handleSessionEvent(ownerEventDependencies, session, event, usageAccount.forEvent(generation), () => {
+      if (generation !== session.getTurnGeneration() || sessionBindings.getSession(session.id) !== session
+          || event.source !== session.agentKind) return;
+      if (event.source !== 'claude-code' && event.source !== 'codex' && event.source !== 'pi') return;
+      observeUnbilledProviderPartyUsage(session, event);
+      if (event.type !== 'done' || event.source !== 'claude-code') return;
+      const data = event.data as { modelUsage?: Record<string, unknown>; total_cost_usd?: number } | undefined;
+      if (data?.modelUsage && typeof data.modelUsage === 'object') {
+        const { next } = computeModelUsageDeltas(lastReportedModelUsageBySession.get(session.id), data.modelUsage);
+        lastReportedModelUsageBySession.set(session.id, next);
+      }
+      if (typeof data?.total_cost_usd === 'number' && data.total_cost_usd >= 0) {
+        lastReportedCostUsdBySession.set(session.id, data.total_cost_usd);
+      }
+    });
   };
   const ownerDb = getCurrentDbClientSnapshot();
   const ownerEventDependencies = Object.create(sessionEventDependencies) as SessionEventDependencies;
@@ -6385,7 +6406,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // 「远程与分享」页按使用方的用量：本机自己的任务记在当前账号的账本里，换了账号之后的迟到事件不记。
   Object.defineProperty(ownerEventDependencies, 'recordProviderPartyUsage', {
     value: (target: Session, event: AgentEvent) => {
-      if (!ownerDb || getCurrentDbClientSnapshot() !== ownerDb) return;
       try {
         recordSessionProviderPartyUsage({
           providerOf: getSessionProvider,
@@ -6434,6 +6454,7 @@ type SendToSessionDispatchSession = {
   agentKind: EngineKind;
   workDir: string;
   remoteHostId: string | null;
+  sendToSessionHint?: AgentSendToSessionHint;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 };
 
@@ -6451,6 +6472,8 @@ async function confirmReviewExternalArtifacts(
 }
 
 export interface RegisterMakerIpcOptions {
+  /** Whether createDesktopMcpProviders injected sendToRemoteSession from historyRemote. */
+  supportsRemoteSessionHandoff?: boolean;
   /** Reuse the normal settings save notifications, including credential-generation invalidation. */
   builtinApiKeyDeps: BuiltinApiKeyBridgeDeps;
   onAnySessionTurnKeepaliveChange?: (isRunning: boolean) => void;
@@ -9255,6 +9278,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await reconnectHandoff.commit();
       reconnectHandoff = undefined;
     }
+    Object.assign(session, {
+      sendToSessionHint: resolveAgentSendToSessionHint({
+        agentKind: o.agentKind,
+        remoteHostId: o.remoteHostId,
+        reviewMode: o.reviewMode,
+        supportsRemote: options.supportsRemoteSessionHandoff === true,
+      }),
+    });
     wireSessionToIpc(session);
     markOrcaMcpHydratedIfNeeded(session.id, o);
     try {
@@ -9388,6 +9419,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               permissionMode: 'ask',
             });
             assertLocalAppOwner();
+            // No sendToSessionHint: a local-application task mounts only the application's MCP
+            // endpoint (LOCAL_AGENT_CLIENT), never cindy_helper, so there is no route to advertise.
             wireSessionToIpc(session);
             if (opts.resumeSessionId) agentHandoffPending.consume(session.id);
             broadcastSessionCreated(session.id);
@@ -11255,6 +11288,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // turn 运行中登记的切换意图(下一条消息发送时刻由 send 事务 apply)。
   const agentSwitchPending = createPendingAgentSwitchRegistry();
+  /**
+   * The send_to_session route projected into model input before delivery: the live session's
+   * host-reconciled route. A steer ('live') reaches that running runtime as is. A send ('send': queued
+   * dispatch, context-rollover replay) enters the send transaction, which first applies a pending
+   * switch, so a pending switch to another engine yields nothing. A same-engine model/provider
+   * selection keeps the route, which depends only on the engine (message-source.md「发给模型的说明」).
+   */
+  function confirmedSendToSessionHint(
+    sessionId: string,
+    receiver: 'live' | 'send' = 'send',
+  ): AgentSendToSessionHint | undefined {
+    const hint = (maker.getSession(sessionId) as { sendToSessionHint?: AgentSendToSessionHint } | null | undefined)
+      ?.sendToSessionHint;
+    const pending = receiver === 'send' ? agentSwitchPending.get(sessionId) : undefined;
+    return pending && pending.targetAgentKind !== hint?.agentKind ? undefined : hint;
+  }
   // User send intent owns the next route boundary, including automatic requests
   // that read the runtime generation after the picker accepted that intent.
   const canApplyAutomaticRuntimeSelection = createCanApplyAutomaticRuntimeSelection({ agentSwitchPending });
@@ -12016,7 +12065,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const sourceNote = source && shouldPrependMobileClientPromptNote(message, session.agentKind)
         ? buildWireMessageSourceNote(
             { origin: source.origin, sourcePlugin: source.sourcePlugin, autoReviewUserText: source.autoReviewUserText },
-            { visibleText: source.persistedText ?? message },
+            {
+              visibleText: source.persistedText ?? message,
+              sendToSession: session.sendToSessionHint,
+            },
           )
         : null;
       const outgoingMessage: UserMessage = sourceNote
@@ -18592,6 +18644,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       eq: (left, right) => eq(left, right),
     }, sessionId);
   contextOverflowRolloverHolder = createContextOverflowRollover({
+    sendToSessionHint: confirmedSendToSessionHint,
     hasExternalRecoveryOwner: (sessionId) =>
       isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: readContextRecoverySession,
@@ -19600,6 +19653,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
+    sendToSessionHint: confirmedSendToSessionHint,
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
         let runtimePreparationStarted = false;

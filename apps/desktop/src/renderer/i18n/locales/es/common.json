@@ -576,7 +576,8 @@
       "calloutUnknown": "Si no reconoces a esta persona, rechaza la solicitud; el enlace deja de funcionar una vez rechazada.",
       "approve": "Aprobar uso compartido",
       "reject": "Rechazar solicitud",
-      "later": "Decidir más tarde"
+      "later": "Decidir más tarde",
+      "calloutPluginEngine": "{{name}} puede usarlo sin instalar el complemento ni la CLI en su computadora, usando el inicio de sesión y la cuota de la CLI de esta computadora."
     },
     "apply": {
       "loading": "Leyendo el enlace para compartir…",
@@ -8631,7 +8632,8 @@
           "description": "Cuando está activado, tus otras computadoras pueden ejecutar tareas con este motor. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea.",
           "unsupported": "Este complemento todavía no permite usar su motor desde otras computadoras.",
           "remoteControlOff": "Esta computadora aún no permite el control remoto, por lo que otras computadoras no pueden usar este motor.",
-          "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}"
+          "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}",
+          "descriptionShareable": "Cuando está activado, tus otras computadoras y las personas con quienes lo compartas pueden ejecutar tareas con este motor sin instalar el complemento. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea."
         },
         "githubRelease": {
           "title": "Actualizaciones del complemento",

@@ -927,18 +927,29 @@ describe('AcpAgent (the acp engine)', () => {
     expect(note!.text).toContain('You are a Worker.');
     expect(message).toEqual({ type: 'text', text: 'hi' });
     expect(more).toBeUndefined();
+
+    // Shared-provider guest tasks add guestWorkspace: true so the plugin isolates owner-local skills/fetch/state.
+    await engine.startSession({
+      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+      deviceHosted: { ...hosted, guest: true },
+    });
+    expect(connected).toEqual([{ remoteWorkspace: true }, { remoteWorkspace: true, guestWorkspace: true }]);
+    expect(prepared).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['the agent cannot connect to the tools of the task\'s computer', { agentCapabilities: {} }, {}, 'PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED'],
-    ['the task belongs to a shared user', { agentCapabilities: { mcpCapabilities: { http: true } } }, { guest: true }, "'remoteSession' not supported"],
-  ])('refuses a task of another computer when %s', async (_name, agentOptions, extra, message) => {
+    ['the agent cannot connect to the tools of the task\'s computer', { agentCapabilities: {} }, { deviceHosted: hosted, model: '' }, 'PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED'],
+    ['the task is on an SSH host', { agentCapabilities: { mcpCapabilities: { http: true } } }, { remoteHostId: 'box', model: '' }, "'remoteSession' not supported"],
+    ['a hosted guest requests an approved model that the engine does not apply', {
+      agentCapabilities: { mcpCapabilities: { http: true } },
+      configOptions: [{ id: 'model', category: 'model', name: 'Model', type: 'select', currentValue: 'default-unapproved', options: [{ value: 'default-unapproved', name: 'Default' }] }],
+    }, { deviceHosted: { ...hosted, guest: true }, model: 'approved-only' }, 'does not offer model'],
+  ])('refuses a remote task when %s', async (_name, agentOptions, extra, message) => {
     const agent = createFakeAgent(agentOptions);
     await expect(createAcpAgent(() => agent.transport).startSession({
-      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh', deviceHosted: { ...hosted, ...extra },
+      workingDir: '/shadow/p', providerId: 'acp-plugin:dsh-acp:dsh', ...extra,
     })).rejects.toThrow(message);
-    // Refused before any session exists on the agent's side.
-    expect(agent.methods()).not.toContain('session/new');
+    expect(agent.prompts).toHaveLength(0);
   });
 
   // Unit regressions for PR #11549. Simulate a failed resume with and without

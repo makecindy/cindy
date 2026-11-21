@@ -83,16 +83,24 @@ export interface PluginEngineView {
   };
   /** Models the agent offered the last time a task ran on it; empty until then. */
   models: PluginEngineModel[];
+  /**
+   * False when a shared engine's model range restricts models and excludes `default` (for example,
+   * the member's allowed model list is `[]` or a specific subset). Prevents pickers and detail views
+   * from synthesizing a fallback `default` entry when `models` was filtered to empty.
+   */
+  defaultModelAllowed?: boolean;
   permissionModes: PluginEnginePermissionMode[];
   /** The mode a new task starts in (the agent's own default mode, else 'ask'). */
   defaultPermissionMode: PluginEnginePermissionModeId;
   /**
    * Use from the owner's other computers (the agent runs on the computer that has the plugin,
    * files and commands stay on the task's computer). `supported`: the plugin offers that mode for
-   * this engine; `enabled`: the user opened it on that computer. Absent on a computer running a
-   * Cindy version from before this existed; read it as not offered.
+   * this engine; `enabled`: the user opened it on that computer; `shareSupported`: the plugin also
+   * isolates sharer-local skills/config (`guestWorkspace`) so this engine can be shared across
+   * accounts. Absent on a computer running a Cindy version from before this existed; read it as
+   * not offered.
    */
-  remoteUse?: { supported: boolean; enabled: boolean };
+  remoteUse?: { supported: boolean; enabled: boolean; shareSupported?: boolean };
 }
 
 /** The engine can run a task of another computer of the same account right now. */
@@ -129,9 +137,14 @@ export function parseOfferedPluginEngines(raw: unknown): PluginEngineView[] {
     const offered: PluginEngineView = {
       ...(view as PluginEngineView),
       models,
+      ...(typeof view.defaultModelAllowed === 'boolean' ? { defaultModelAllowed: view.defaultModelAllowed } : {}),
       permissionModes,
       defaultPermissionMode: isPluginEnginePermissionModeId(view.defaultPermissionMode) ? view.defaultPermissionMode : 'ask',
-      remoteUse: { supported: remoteUse.supported === true, enabled: remoteUse.enabled === true },
+      remoteUse: {
+        supported: remoteUse.supported === true,
+        enabled: remoteUse.enabled === true,
+        ...(typeof remoteUse.shareSupported === 'boolean' ? { shareSupported: remoteUse.shareSupported } : {}),
+      },
     };
     return isPluginEngineOfferedRemotely(offered) ? [offered] : [];
   });

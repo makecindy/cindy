@@ -960,7 +960,16 @@ export function classifyCodexError(
       ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
       : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
         ? CONTEXT_OVERFLOW_REASON
-        : undefined;
+        // Preserve a diagnosis that native only provided inside its exhausted
+        // transport wrapper. This reason is presentation-only: upstream-overload
+        // and errorStatus=529 also authorize host/goal retries. Do not promote
+        // nested diagnostics into those control signals or expose the body.
+        // Restrict this to the confirmed opaque stream wrapper; recognized
+        // timeout/network messages retain their existing recovery policy.
+        : rawMessage === 'stream disconnected before completion' && errorInfoTag === 'responseTooManyFailedAttempts' && gatewayStatus === 529
+          && errorStatus === undefined && !usageLimit && !hasMissingBearer && !hasAuthErrorMarker
+          ? 'UPSTREAM_OVERLOADED'
+          : undefined;
   return {
     message,
     ...(errorStatus !== undefined ? { errorStatus } : {}),

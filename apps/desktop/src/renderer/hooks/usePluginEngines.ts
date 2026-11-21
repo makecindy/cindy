@@ -129,6 +129,7 @@ interface DeviceCatalogue {
   markStale(): void;
   evict(): void;
   hasPrefetchSubscribers(): boolean;
+  hasLoadedConsumers(): boolean;
   subscribe(listener: () => void, prefetchOnReconnect?: boolean): () => void;
   snapshot(): readonly PluginEngineView[] | null;
 }
@@ -336,6 +337,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
     },
     markStale() {
       clearRefreshTimer();
+      pickerReadAt.delete(catalogue);
       refreshRereadDueAt = 0;
       lastReadAt = 0;
       lastFailedAt = 0;
@@ -346,6 +348,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       deviceGeneration += 1;
       pending = undefined;
       clearRefreshTimer();
+      pickerReadAt.delete(catalogue);
       refreshRereadDueAt = 0;
       lastReadAt = 0;
       lastFailedAt = 0;
@@ -359,6 +362,9 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
     },
     hasPrefetchSubscribers() {
       return Array.from(subscribers.values()).includes(true);
+    },
+    hasLoadedConsumers() {
+      return catalogue.hasPrefetchSubscribers() || (subscribers.size > 0 && current !== null);
     },
     subscribe(listener, prefetchOnReconnect = true) {
       subscribers.set(listener, prefetchOnReconnect);
@@ -375,6 +381,11 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
 /** Whether mounted task UI needs this catalogue during device bootstrap/reconnect. */
 export function hasRemotePluginEngineSubscribers(deviceId: string): boolean {
   return existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.hasPrefetchSubscribers() ?? false;
+}
+
+/** Whether mounted UI (including an open picker that already loaded this catalogue) is consuming this device's engines. */
+export function hasRemotePluginEngineInterest(deviceId: string): boolean {
+  return existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.hasLoadedConsumers() ?? false;
 }
 
 /** One coalesced background catalogue read for a remote computer (used on bootstrap/reconnect). */

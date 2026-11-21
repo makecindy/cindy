@@ -13,8 +13,8 @@ import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
 import { isRetainableProjectSession } from '../../../shared/sessionSource.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
 import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
-import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import { consumeWritableDirectoryPickerGrants, WritableDirectoryPickerGrantError } from '../../maker-ipc/writableDirectoryPickerGrant.js';
 import { forgetProvisionalSession, isProvisionalSession, markProvisionalSession } from '../provisionalSessions.js';
@@ -82,8 +82,10 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
         throwIpcError('INVALID_PARAMS', 'plugin engine tasks do not run in SSH workspaces');
       }
       if (bodyObj.agentDeviceId !== undefined && bodyObj.agentDeviceId !== null
-        && (typeof bodyObj.agentDeviceId !== 'string' || isProviderShareAgentDeviceId(bodyObj.agentDeviceId))) {
-        throwIpcError('INVALID_PARAMS', 'plugin engines are only offered by your own computers');
+        && (typeof bodyObj.agentDeviceId !== 'string'
+          || isSharedTaskPeer(bodyObj.agentDeviceId)
+          || Boolean(parseProviderSharePeer(bodyObj.agentDeviceId)))) {
+        throwIpcError('INVALID_PARAMS', 'invalid agentDeviceId for plugin engine task');
       }
     }
     if (
