@@ -131,7 +131,11 @@ export function migratedAutomationId(routineId: string, index: number): string {
 export function convertRoutine(
   routine: Routine,
   route: BotModelRoute | null,
-  options: { now: number; timezone: string; next?: Record<string, number> },
+  options: {
+    now: number; timezone: string; next?: Record<string, number>;
+    /** An imported job (or one that may be): without its own delivery it kept its source's output, not the chat. */
+    imported?: boolean;
+  },
 ): RoutineConversion {
   const skipped: string[] = [];
   const schedules: Array<{ cronExpr: string; timezone: string; recurring: boolean; intervalMs?: number }> = [];
@@ -204,9 +208,17 @@ export function convertRoutine(
     ...(lostModel ? ['its model on another computer could not be carried, created paused'] : []),
     // Results now stay in the automation's own task; a chat destination needs setting up again.
     ...(routine.delivery?.kind === 'im' ? [`results were sent to a chat (${routine.delivery.targetId}); they now stay in the automation's task, created paused`] : []),
+    // V1 posted results in the teammate's conversation by default (bot-routines.md「最终送达」). The
+    // automation keeps (or, resumed, starts) running, so nothing else would say they stopped showing up there.
+    ...(automations.length > 0 && (routine.delivery?.kind === 'companion' || (!routine.delivery && !options.imported))
+      ? ['its results were posted in your conversation with the owner; they now stay in the automation\'s own task and the owner only gets a notification (a quiet run notifies only when it asks to). If the owner wants them in the conversation, set that up as the hand-off skill\'s "Scheduled work" says']
+      : []),
   ];
   return { automations, note: reasons.length > 0 ? `${routine.name}: ${reasons.join('; ')}` : null };
 }
+
+/** Said once when any routine became an automation: V1 ran routines with the teammate's own permissions. */
+export const CONVERTED_ROUTINE_PERMISSION_NOTE = 'Automations converted from routines run with full access, like every project automation; as routines they ran with this buddy\'s own permission level.';
 
 // ── Carryover document ───────────────────────────────────────────────────────────────────
 

@@ -43,9 +43,9 @@ vi.mock('../botV1Routines.js', () => ({
   removeV1Routine: async (_root: string, id: string) => { h.remove(id); h.routines = h.routines.filter(routine => routine.id !== id); },
 }));
 vi.mock('../botRoutineAutomations.js', () => ({
-  writeRoutineAutomations: async (_dir: string, routine: Routine, options: { paused?: boolean }) => {
-    h.write(routine.id, options.paused === true);
-    return { configIds: [], note: null };
+  writeRoutineAutomations: async (_dir: string, routine: Routine, options: { paused?: boolean; imported?: boolean }) => {
+    h.write(routine.id, options.paused === true, options.imported === true);
+    return { configIds: [`routine-${routine.id}`], note: null };
   },
 }));
 vi.mock('../../bot-import/runtime.js', () => ({
@@ -86,7 +86,8 @@ it('carries the teammate\'s own routines, drops retired built-ins and holds impo
     'command-job': { kind: 'openclaw', original: { payload: { kind: 'command', argv: ['node', 'report.js'] } }, handover: 'ready' },
   };
   await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('migrated');
-  expect(h.write.mock.calls).toEqual([['own', false], ['handover-pending', true], ['command-job', true]]);
+  // Only the imported jobs are converted as such (they kept their source's output, not the chat).
+  expect(h.write.mock.calls).toEqual([['own', false, false], ['handover-pending', true, true], ['command-job', true, true]]);
   expect(h.remove.mock.calls.map(([id]) => id)).toEqual(['own', 'handover-pending', 'command-job', 'nightly', 'follow', todoCheckRoutineId(BOT)]);
   const home = path.join(h.root, 'bots', BOT);
   // The exact definitions are archived before anything is removed.
@@ -94,6 +95,8 @@ it('carries the teammate\'s own routines, drops retired built-ins and holds impo
   expect(archived.map(row => row.id)).toHaveLength(6);
   const carryover = await fs.readFile(path.join(home, 'workspace', 'CARRYOVER.md'), 'utf8');
   expect(carryover).toContain('command-job: needs the script, command or monitor it ran at its source; created paused');
+  // V1 ran routines with the teammate's permission level; automations run with full access. Said once.
+  expect(carryover.split('run with full access').length - 1).toBe(1);
   // The receipt makes a rerun a no-op, apart from the one-time move of its memory into the project.
   await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('already');
   expect(h.write).toHaveBeenCalledTimes(3);

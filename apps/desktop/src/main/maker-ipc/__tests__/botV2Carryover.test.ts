@@ -19,6 +19,8 @@ describe('convertRoutine', () => {
     const { automations, note } = convertRoutine(routine({
       silentWhenIdle: true, preRunHook: { command: 'node check.mjs', timeoutMs: 180000 },
       modelOverride: { agentKind: 'pi', model: 'flash', providerId: 'xd', effort: 'high', fastMode: false },
+      // Its results only stayed in its own task, as an automation's do: nothing to say.
+      delivery: { kind: 'none' },
     }), route, { now: 0, timezone: 'UTC' });
     expect(note).toBeNull();
     expect(automations).toEqual([{ enabled: false, config: expect.objectContaining({
@@ -29,6 +31,25 @@ describe('convertRoutine', () => {
     // Without its own model it keeps running on the teammate's.
     expect(convertRoutine(routine({ enabled: true }), route, { now: 0, timezone: 'UTC' }).automations[0])
       .toMatchObject({ enabled: true, config: { agentKind: 'codex', model: 'm', providerId: 'p' } });
+  });
+
+  // Teammate review 2026-11-21: 4 of 6 teammates on one computer had a daily job keep running
+  // after the upgrade while its results, posted in their conversation under V1 (the default),
+  // silently stayed in the automation's own task. It keeps running, so its note says so.
+  it('says when results that were posted in the conversation now stay in the automation\'s task', () => {
+    const convert = (patch: Partial<Routine>, imported?: boolean) =>
+      convertRoutine(routine({ enabled: true, ...patch }), route, { now: 0, timezone: 'UTC', imported });
+    const chat = 'its results were posted in your conversation with the owner';
+    for (const posted of [convert({}), convert({ delivery: { kind: 'companion', mode: 'process' } }),
+      convert({ delivery: { kind: 'companion', mode: 'direct' } }, true)]) {
+      expect(posted.automations[0]?.enabled).toBe(true);
+      expect(posted.note).toContain(chat);
+    }
+    // An imported job without its own destination kept its source's output; none kept it in its task.
+    expect(convert({}, true).note).toBeNull();
+    expect(convert({ delivery: { kind: 'none' } }).note).toBeNull();
+    // A finished one-off is not recreated, so there is nothing whose results moved.
+    expect(convert({ triggers: [{ id: 'o', kind: 'once', at: -1 }] }).note).not.toContain(chat);
   });
 
   // QA 2026-11-10: every 7 minutes became a paused manual automation, every 24 h a fixed 9:00,

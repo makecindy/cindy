@@ -39,6 +39,7 @@ import {
   buildCarryover,
   missingCarryover,
   carryoverPointer,
+  CONVERTED_ROUTINE_PERMISSION_NOTE,
   type CarryoverLabel,
 } from './botV2Carryover.js';
 import { todoCheckRoutineId } from '../bot-autonomy/todoCheckRoutine.js';
@@ -85,21 +86,23 @@ async function writeAtomic(file: string, content: string): Promise<void> {
 /**
  * Routines of an imported teammate that must start paused: a takeover not finished (its source
  * still runs), a job with open issues, or one relying on its source's script, command or monitor,
- * which the removed import runtime ran and a project automation cannot. null: all of them (the
- * private import data cannot be read, so none may start unattended).
+ * which the removed import runtime ran and a project automation cannot (`pause`), and every
+ * imported job (`ids`). null: the private import data cannot be read, so any of them may be
+ * imported and none may start unattended.
  */
-async function importedRoutinesToPause(ownerRoot: string, botId: string,
-  assertCurrent: () => void): Promise<Map<string, string | null> | null> {
+async function importedRoutines(ownerRoot: string, botId: string,
+  assertCurrent: () => void): Promise<{ pause: Map<string, string | null>; ids: Set<string> } | null> {
   const [{ companionEnvironmentStore }, { importedRuntimeRequired }] = await Promise.all([
     import('../bot-import/runtime.js'), import('../bot-import/sourceAutomations.js')]);
   const environment = await companionEnvironmentStore.read(ownerRoot, botId, assertCurrent).catch(() => null);
   if (environment === null) return null;
-  const paused = new Map<string, string | null>();
-  for (const [id, binding] of Object.entries(environment?.automations ?? {})) {
-    if (importedRuntimeRequired(binding.kind, binding.original)) paused.set(id, 'needs the script, command or monitor it ran at its source; created paused');
-    else if (binding.issues?.length || binding.handover !== 'ready') paused.set(id, null);
+  const pause = new Map<string, string | null>();
+  const bindings = Object.entries(environment?.automations ?? {});
+  for (const [id, binding] of bindings) {
+    if (importedRuntimeRequired(binding.kind, binding.original)) pause.set(id, 'needs the script, command or monitor it ran at its source; created paused');
+    else if (binding.issues?.length || binding.handover !== 'ready') pause.set(id, null);
   }
-  return paused;
+  return { pause, ids: new Set(bindings.map(([id]) => id)) };
 }
 
 async function migrateRoutines(botId: string, ownerRoot: string, workingDir: string, archiveDir: string,
@@ -146,19 +149,23 @@ async function migrateRoutines(botId: string, ownerRoot: string, workingDir: str
     savedNotes.push(...runNotes);
   }
   const [route] = await readEffectiveBotModelChain(config).catch(() => []);
-  const imported = botId.startsWith('import_') ? await importedRoutinesToPause(ownerRoot, botId, assertCurrent) : new Map<string, string | null>();
+  const imported = botId.startsWith('import_') ? await importedRoutines(ownerRoot, botId, assertCurrent)
+    : { pause: new Map<string, string | null>(), ids: new Set<string>() };
   const notes: string[] = [];
   for (const routine of all) {
     assertCurrent();
     if (!retired(routine)) {
-      const hold = imported === null || imported.has(routine.id);
-      const written = await writeRoutineAutomations(workingDir, routine, { route: route ?? null, paused: hold, next: slice.next });
-      const reason = imported?.get(routine.id);
+      const hold = imported === null || imported.pause.has(routine.id);
+      const written = await writeRoutineAutomations(workingDir, routine, {
+        route: route ?? null, paused: hold, next: slice.next, imported: imported === null || imported.ids.has(routine.id) });
+      const reason = imported?.pause.get(routine.id);
       const note = !reason || !routine.enabled ? written.note
         : written.note ? `${written.note}; ${reason}` : `${routine.name}: ${reason}`;
-      if (note) {
-        // Kept on disk before the routine is removed, so a rerun after a partial run still lists it.
-        notes.push(note);
+      // Kept on disk before the routine is removed, so a rerun after a partial run still lists it.
+      // The permission change is said once, whichever routine came over first.
+      const added = [...(written.configIds.length > 0 ? [CONVERTED_ROUTINE_PERMISSION_NOTE] : []), ...(note ? [note] : [])];
+      if (added.length > 0) {
+        notes.push(...added);
         await writeAtomic(notesFile, JSON.stringify([...new Set([...savedNotes, ...notes])], null, 2));
       }
     }

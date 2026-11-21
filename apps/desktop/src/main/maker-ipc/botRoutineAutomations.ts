@@ -56,9 +56,11 @@ export async function writeRoutineAutomations(workingDir: string, routine: Routi
   route: BotModelRoute | null; paused?: boolean; now?: number; timezone?: string;
   /** V1 timers (`<routine>:<trigger>` → when it was due next), keeping an interval's beat. */
   next?: Record<string, number>;
+  /** An imported job, or one that may be: see `convertRoutine`. */
+  imported?: boolean;
 }): Promise<{ configIds: string[]; note: string | null }> {
   const converted = convertRoutine(routine, options.route,
-    { now: options.now ?? Date.now(), timezone: options.timezone ?? localTimezone(), next: options.next });
+    { now: options.now ?? Date.now(), timezone: options.timezone ?? localTimezone(), next: options.next, imported: options.imported });
   const loader = (await schedulerHost()).getProjectAutomationLoader();
   for (const automation of converted.automations) {
     await loader.upsertSchedule(workingDir, automation.config, { keepUnreadable: true });

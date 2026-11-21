@@ -17,7 +17,7 @@ import { canonicalJson, COMPANION_VALUE_MAX_BYTES } from '../companion-cloud/upl
 import { BOT_SKILL_MAX_BODY_BYTES, parseBotSkillFile } from './botSkillStore.js';
 import { GROUP_REQUEST_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
-export const TEAMMATE_TEMPLATE_VERSION = 9;
+export const TEAMMATE_TEMPLATE_VERSION = 10;
 /** What the project started from and which template files it still has untouched. */
 export const TEAMMATE_TEMPLATE_RECORD = path.join('.cindy', 'template.json');
 const PENDING_DIR = path.join('.cindy', 'template');
@@ -233,7 +233,7 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
     '.agents/skills/hand-off/SKILL.md': [
       '---',
       'name: hand-off',
-      'description: Use to coordinate teammates in a group, hand off longer work to a project task, handle the report a task sends back, or check its progress.',
+      'description: Use to coordinate teammates in a group, hand off longer work to a project task, handle the report a task sends back, check its progress, or set up scheduled work whose results the user needs to see.',
       '---',
       '',
       '# Hand-off',
@@ -263,6 +263,14 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
       '## While it runs',
       '',
       '- When asked how things are going, read `get_task_digest` for each task; open the full history only when needed. Do not wait in a loop.',
+      '',
+      '## Scheduled work',
+      '',
+      'An automation of this project runs in its own task, named after it, and its result stays in that task: it does not appear in this conversation. The user hears about a run only through a notification, and a quiet run (`silentWhenIdle`) notifies only when it calls `schedule_notify_current_run`.',
+      '',
+      '- When the user needs to see the results (a daily summary, a reminder, an alert), agree with them where the results go and set that up: in this conversation, bind it here with `schedule_create` and `bindToCurrentSession: true` (each run then happens in this conversation, with its permissions); or keep it a project automation whose instructions end by sending the result here with `send_to_session` to this conversation\'s session id; or rely on the notification, without quiet mode, ending each run with the result.',
+      '- After creating or changing one, read it back with `schedule_get`. After its first run, check with `schedule_list_runs` that it ran and that the result reached the agreed place, then tell the user where to look. When asked whether a run happened, check its runs the same way instead of guessing.',
+      '- Cindy added one automation to this project itself: `teammate-memory-review`, a nightly review of your memory and skills that finishes quietly when there is nothing to keep. The user can pause it; do not remove or duplicate it unless they ask.',
       '',
       OWN_RULES_HEADING,
       '',
