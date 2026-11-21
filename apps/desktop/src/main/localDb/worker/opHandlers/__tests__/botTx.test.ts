@@ -540,6 +540,27 @@ describe('Bot named worker transactions', () => {
     expect(db.prepare('SELECT COUNT(*) FROM sessions').pluck().get()).toBe(1);
   });
 
+  it('renames the canonical chat when the buddy name changes', () => {
+    tx(db, { name: 'bots.createProfile', args: {
+      id: 'bot-1', displayName: '产品巡检伙伴', description: '', avatar: '🤖', avatarColor: 'violet',
+      identitySource: 'identity', capabilitiesJson: '{}', now: 1,
+    } });
+    tx(db, { name: 'bots.replaceCanonicalSession', args: {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      session: {
+        id: 'session-1', title: '产品巡检伙伴', workingDir: '/tmp/session-1', workspaceKind: 'dialogue',
+        model: 'claude-sonnet-4-6', effort: 'high', permissionMode: 'ask', agentKind: 'cc',
+        remoteHostId: null, providerId: null, extraDirs: '[]', source: 'bot', createdAt: 2, updatedAt: 2,
+      },
+      now: 2,
+    } });
+    tx(db, { name: 'bots.updateProfile', args: {
+      id: 'bot-1', displayName: 'Cindy Tinker', expectedCurrentVersion: 1,
+      identitySource: 'identity', capabilitiesJson: '{}', profileContentChanged: true, now: 3,
+    } });
+    expect(db.prepare('SELECT title FROM sessions WHERE id = ?').pluck().get('session-1')).toBe('Cindy Tinker');
+  });
+
   // #6782: production named transactions must propagate a canonical choice in both
   // directions. Existing tests never changed permission after creating a channel.
   // Minimal failure: ask main + ask channel, save main bypass -> channel stayed ask.
