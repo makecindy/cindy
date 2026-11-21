@@ -166,11 +166,22 @@ export function useSplash() {
   }, [envStatus]);
 
   // ── Effect 2b: updater spawn failure overrides the relaunch dialog ──
+  // update_apply_aborted means the install was cancelled before the updater
+  // spawned (the staged patch is still there). Effect 5 already fired its one
+  // auto-relaunch for this visit, and main now answers that attempt with
+  // not-ready, so staying on splash_update_done would leave the splash saying
+  // "waiting to restart" forever. Re-run the startup check instead; it enters
+  // the app with the banner when the patch should stay staged.
   useEffect(() => {
-    if (updateErrorCode === 'updater_spawn_failed' && phase === 'splash_update_done') {
+    if (phase !== 'splash_update_done') return;
+    if (updateErrorCode === 'updater_spawn_failed') {
       setPhase('splash_spawn_failed');
+      return;
     }
-  }, [updateErrorCode, phase]);
+    if (updateErrorCode === 'update_apply_aborted') {
+      void checkEnvironment();
+    }
+  }, [updateErrorCode, phase, checkEnvironment]);
 
   // ── Effect 3: fade-out trigger ──
   // The shell owns business readiness; this hook only owns the display floor and fade.

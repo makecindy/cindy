@@ -88,9 +88,9 @@ describe('PI Subagent reclaim before an update relaunch', () => {
     // "Cindy is restarting". Both callbacks — and every synchronous refusal —
     // converge on `handleApplyFailure`, which is where the release belongs.
     const handler = source.slice(
-      source.indexOf('function handleApplyFailure(reason: string): void {'),
+      source.indexOf('function releaseApplyAttempt(): void {'),
     );
-    const body = handler.slice(0, handler.indexOf("setStatus('error'"));
+    const body = handler.slice(0, handler.indexOf('function abortApply'));
     expect(body).toContain('clearSubagentLaunchFence()');
     // The two asynchronous exits really do route here.
     const windows = source.slice(
@@ -128,8 +128,8 @@ describe('PI Subagent reclaim before an update relaunch', () => {
     const relaunch = source.slice(source.indexOf('async function executeRelaunch('));
     const gate = relaunch.indexOf('if (!await reclaimSubagentRunnersForRelaunch())');
     const branch = relaunch.slice(gate, relaunch.indexOf('incrementApplyAttempts();', gate));
-    // Propagated to the renderer as a failed update, so the user can retry.
-    expect(branch).toContain("handleApplyFailure('subagent_reclaim_unconfirmed')");
+    // Propagated to the renderer as ready with staged patch kept, so the user can retry.
+    expect(branch).toContain("abortApply('subagent_reclaim_unconfirmed')");
     expect(branch).toContain('return;');
     expect(branch).toMatch(/could not be confirmed stopped/);
   });
