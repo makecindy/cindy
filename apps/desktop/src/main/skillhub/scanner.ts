@@ -31,6 +31,7 @@ import { projectSkillList } from './customizationScanHost';
 import { isIgnoredSkillPackagePath } from './packageIgnore';
 
 import { createLogger } from '../logger';
+import { resetClaudeUserInvocableCommandCache } from '../maker-ipc/claudeSlashCommandGuard';
 
 const log = createLogger('skillhub:scanner');
 
@@ -713,6 +714,7 @@ export async function renameLocalSkill(params: {
     // packageIgnore excludes this reserved backup from browsing, hashes,
     // snapshots and ZIPs even if Windows keeps it locked after commit.
     try { fs.unlinkSync(backupPath); } catch { /* Do not roll back committed preferences. */ }
+    resetClaudeUserInvocableCommandCache();
     return { success: true, newAbsolutePath };
   } catch (err) {
     if (renamed) {

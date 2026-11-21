@@ -174,8 +174,8 @@ describe('skillhub/installService', () => {
     removeTestRoot();
   });
 
-  async function localFixture(name: string) {
-    const source = path.join(TEST_ROOT, '.agents', 'skills', name);
+  async function localFixture(name: string, discoveryDir = '.agents') {
+    const source = path.join(TEST_ROOT, discoveryDir, 'skills', name);
     fs.mkdirSync(source, { recursive: true });
     fs.writeFileSync(path.join(source, 'SKILL.md'), 'fixture content');
     const { inspectLocalSkillTarget } = await import('../localSkillTarget');
@@ -194,6 +194,20 @@ describe('skillhub/installService', () => {
     expect(await uninstall(source, target)).toEqual({ success: true });
     expect(fs.existsSync(source)).toBe(false);
     expect(isCindySkillEnabled(source)).toBe(true);
+  });
+
+  it('stops recognizing a Claude command immediately after uninstalling its Skill', async () => {
+    const name = 'uninstalled-claude-skill';
+    const { source, target } = await localFixture(name, '.claude');
+    const { uninstall } = await import('../installService');
+    const { resolveClaudeUserInvocableCommandNames } = await import('../../maker-ipc/claudeSlashCommandGuard');
+    const readCommands = () => resolveClaudeUserInvocableCommandNames(
+      TEST_ROOT, '/' + name + ' ping', path.join(TEST_ROOT, 'isolated-config'),
+    );
+
+    expect((await readCommands()).has(name)).toBe(true);
+    expect(await uninstall(source, target)).toEqual({ success: true });
+    expect((await readCommands()).has(name)).toBe(false);
   });
 
   it('keeps files intact when a remote approval expires after the uninstall leases are acquired', async () => {
@@ -1312,9 +1326,14 @@ describe('skillhub/installService', () => {
       const zipBuf = await makeZip({ 'SKILL.md': 'global content' });
       await setupInstallDownload('claude-gate-on', zipBuf);
       vi.mocked(sharedSkills.shouldProjectToClaudeSkills).mockResolvedValue(true);
+      const { resolveClaudeUserInvocableCommandNames } = await import('../../maker-ipc/claudeSlashCommandGuard');
+      const readCommands = () => resolveClaudeUserInvocableCommandNames(TEST_ROOT,
+        '/claude-gate-on ping', path.join(fakeHome, '.claude'));
+      expect((await readCommands()).has('claude-gate-on')).toBe(false);
       const on = await install({ name: 'claude-gate-on', version: '1.0.0' }, () => {});
       expect(on).toMatchObject({ success: true });
       expect(fs.existsSync(path.join(fakeHome, '.claude', 'skills', 'claude-gate-on'))).toBe(true);
+      expect((await readCommands()).has('claude-gate-on')).toBe(true);
 
       const zipBuf2 = await makeZip({ 'SKILL.md': 'global content' });
       await setupInstallDownload('claude-gate-off', zipBuf2);

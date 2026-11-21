@@ -28,6 +28,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { app, shell } from 'electron';
+import { resetClaudeUserInvocableCommandCache } from '../maker-ipc/claudeSlashCommandGuard';
 import { createDownloadProgressReporter, download, DownloadError } from '../downloader/index.js';
 import { isLocalSkillTargetCurrent, type LocalSkillTarget } from './localSkillTarget';
 import {
@@ -989,6 +990,7 @@ export async function install(p: InstallParams, onProgress: ProgressCb, remoteGu
       log.warn('[skillInstall] prepare shared global skill links failed:', err);
     }
 
+    resetClaudeUserInvocableCommandCache();
     onProgress({ phase: 'done', name: p.name, version: versionStr, absolutePath: logicalFinalDir });
     return {
       success: true,
@@ -1299,6 +1301,7 @@ async function uninstallLocked(
   // Even a rejected trash call can have removed its entry. Recovery inspects
   // the original identity; it never repeats the destructive operation.
   const complete = await finishUninstallCleanup(cleanup, lease, allowed);
+  resetClaudeUserInvocableCommandCache();
   if (
     trashError &&
     cleanup.phase === 'completed' &&
@@ -1414,7 +1417,9 @@ export async function retryUninstallCleanup(
     // waited for a lease. Always re-read under the acquired lock.
     const current = readUninstallCleanup(token);
     if (!current) return true;
-    return await finishUninstallCleanup(current, lease, allowed);
+    const complete = await finishUninstallCleanup(current, lease, allowed);
+    resetClaudeUserInvocableCommandCache();
+    return complete;
   } finally {
     await lease?.();
     for (const release of releases) release();

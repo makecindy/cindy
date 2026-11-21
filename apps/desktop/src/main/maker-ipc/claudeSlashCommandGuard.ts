@@ -52,6 +52,7 @@ const FRONTMATTER_HEAD_BYTES = 2048;
 type CommandRoster = { commands: Set<string>; skills: Map<string, Set<string>> };
 type CacheEntry = { at: number; roster: CommandRoster };
 const cache = new Map<string, CacheEntry>();
+let cacheGeneration = 0;
 
 function readCache(key: string): CacheEntry | undefined {
   const entry = cache.get(key);
@@ -218,10 +219,12 @@ async function readClaudeCommandRoster(
   const key = `${resolvedWorkingDir}\0${resolvedConfigDir}`;
   let roster = readCache(key)?.roster;
   if (!roster) {
+    const generation = cacheGeneration;
     roster = await scanCommandNames(resolvedWorkingDir, resolvedConfigDir).catch(() => ({
       commands: new Set<string>(), skills: new Map<string, Set<string>>(),
     }));
-    writeCache(key, roster);
+    // A scan started before a Skill mutation must not refill the cleared cache.
+    if (generation === cacheGeneration) writeCache(key, roster);
   }
   return roster;
 }
@@ -236,6 +239,7 @@ export async function resolveClaudeUserInvocableCommandNames(
 }
 
 export function resetClaudeUserInvocableCommandCache(): void {
+  cacheGeneration++;
   cache.clear();
 }
 

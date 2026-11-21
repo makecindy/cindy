@@ -17,6 +17,7 @@ import {
   withSharedGlobalSkillProjectionMutation,
 } from '../authBoundaryQuarantine.js';
 import { createLogger, maskPath } from '../logger';
+import { resetClaudeUserInvocableCommandCache } from '../maker-ipc/claudeSlashCommandGuard';
 import {
   prepareSharedGlobalSkillLinks,
   prepareSharedProjectSkillLinks,
@@ -576,6 +577,7 @@ export async function importLocalSkill(params: ImportLocalParams): Promise<Impor
       log.warn('[importLocal] prepare shared global skill links failed:', err);
     }
 
+    resetClaudeUserInvocableCommandCache();
     return {
       success: true,
       name,
