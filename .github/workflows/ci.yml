@@ -415,8 +415,26 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      # setup-node restores the package store. pnpm keeps its lockfile verification
+      # result separately and checks the lockfile and active policies on reuse.
+      - name: Restore pnpm lockfile verification
+        id: pnpm-verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
+
       - name: Install dependencies
+        env:
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
         run: pnpm install --frozen-lockfile
+
+      - name: Save verified lockfile from main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 1 && steps.pnpm-verification.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: ${{ steps.pnpm-verification.outputs.cache-primary-key }}
 
       # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
       # 命中后 install:ripgrep 按 .version 标记直接跳过下载。
