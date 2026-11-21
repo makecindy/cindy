@@ -128,6 +128,7 @@ beforeEach(async ({ task }) => {
     'XDT_SCHEDULER_PASSIVE',
     'XDT_ENDPOINT_MANIFEST_FILE',
     'XDT_ENDPOINTS_CDN',
+    'XDT_DISABLE_GLOBAL_SHORTCUTS',
     'XDT_DESKTOP_DEV_MODE',
   ])
     vi.stubEnv(key, undefined);
@@ -247,6 +248,7 @@ describe('one original version type for Dev and installed Cindy', () => {
   it('captures Dev as the original and keeps full Forge/Vite return information without credentials', async () => {
     vi.stubEnv('OPENAI_API_KEY', 'fake-never-persist');
     vi.stubEnv('NODE_OPTIONS', '--require private-hook');
+    vi.stubEnv('XDT_DISABLE_GLOBAL_SHORTCUTS', '1');
     const value = await startup.rememberOriginalVersion(originalExec);
     expect(value.version).toBe('0.1.99');
     expect(store.readOriginalVersion(h.profile)?.version).toBe('0.1.99');
@@ -257,6 +259,7 @@ describe('one original version type for Dev and installed Cindy', () => {
     });
     expect(value.development?.environment).not.toHaveProperty('OPENAI_API_KEY');
     expect(value.development?.environment).not.toHaveProperty('NODE_OPTIONS');
+    expect(value.development?.environment).toMatchObject({ XDT_DISABLE_GLOBAL_SHORTCUTS: '1' });
     expect(JSON.parse(value.profile.endpointSnapshot!.manifestText).authApiBaseUrl).toBe(
       'https://auth.example.invalid',
     );
