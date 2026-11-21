@@ -700,7 +700,12 @@ export class BrowserProxyAuthCoordinator {
         } catch (error) {
           // Same containment as the live attach path: a worker that cannot be
           // gated is closed alone; startup only fails if that also fails.
-          if (!isWorkerTargetType(target.type)) throw error;
+          if (!isWorkerTargetType(target.type)) {
+            // Discovery and auto-attach can await the same setup Promise.
+            // Apply the same strict disappearance proof to both callers.
+            if (await this.targetHasDisappeared(target.targetId)) continue;
+            throw error;
+          }
           this.logger.warn('browser proxy authentication could not prepare a new browser target');
           await this.closeWorkerTarget(target.targetId);
         }
@@ -840,6 +845,22 @@ export class BrowserProxyAuthCoordinator {
     return setup;
   }
 
+  /** A failed setup can race a child closing. Never trust the CDP error
+   * wording: preserve the browser only after a successful, well-formed
+   * browser-level target inventory proves the target no longer exists. */
+  private async targetHasDisappeared(targetId: string): Promise<boolean> {
+    try {
+      const result = await this.command('Target.getTargets') as {
+        targetInfos?: Array<{ targetId?: unknown }>;
+      } | null;
+      return Array.isArray(result?.targetInfos)
+        && result.targetInfos.every((target) => typeof target?.targetId === 'string' && target.targetId.trim().length > 0)
+        && !result.targetInfos.some((target) => target.targetId === targetId);
+    } catch {
+      return false;
+    }
+  }
+
   private async enableFetch(sessionId: string): Promise<void> {
     if (this.sessions.has(sessionId)) return;
     this.sessions.add(sessionId);
@@ -885,6 +906,13 @@ export class BrowserProxyAuthCoordinator {
             await this.command('Runtime.runIfWaitingForDebugger', {}, sessionId);
           }
         } catch {
+          if (!isWorkerTargetType(targetInfo?.type) && targetInfo?.targetId
+            && await this.targetHasDisappeared(targetInfo.targetId)) {
+            this.sessions.delete(sessionId);
+            this.sessionTargets.delete(sessionId);
+            this.logger.warn('browser proxy target disappeared during setup; browser preserved');
+            return;
+          }
           this.logger.warn('browser proxy authentication could not prepare a new browser target');
           // A worker that cannot be gated is closed on its own: it never runs
           // ungated, and the page that owns it keeps working. Only when that
