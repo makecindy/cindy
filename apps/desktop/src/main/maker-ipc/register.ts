@@ -1,3 +1,4 @@
+import { bindSessionUsageAccount } from '../usage/sessionUsageOwner.js';
 import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt, contextRecoveryAbortSignal } from './contextRecoveryAssembly.js';
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
@@ -971,7 +972,7 @@ import {
   readModelPriceOverrideView,
   setModelPriceOverride,
 } from '../usage/modelPriceOverrideStore.js';
-import { ClaudeOutputLagTimingGuard, type ModelUsageCumulative } from '../usage/modelUsageDelta.js';
+import { ClaudeOutputLagTimingGuard, computeModelUsageDeltas, type ModelUsageCumulative } from '../usage/modelUsageDelta.js';
 
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { readSessionModelForUsage, unpricedSubscriptionValueMarker } from './turnUsageSessionDefaults.js';
@@ -6322,7 +6323,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     return asyncQuestionInputDispatcher(session, ...answer);
   });
 
-  registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session));
+  const usageAccount = bindSessionUsageAccount(() => {
+    turnModelPromiseBySession.delete(session.id);
+    turnUsageContextBySession.delete(session.id);
+  });
+  registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session, usageAccount));
 
   // session-agent-switch:登记本会话当前引擎,broadcaster / user 行落库据此逐行
   // stamp messages.agent_kind(切换后历史行的 agent_meta 必须按写入时引擎解析)。
@@ -6359,7 +6364,21 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       persistAgentPlanModeChangeWith({ ownerDb, sessionBindings, persistSessionFields, log }, session, event);
       return;
     }
-    handleSessionEvent(ownerEventDependencies, session, event);
+    const generation = event.sessionTurnGeneration ?? session.getTurnGeneration();
+    handleSessionEvent(ownerEventDependencies, session, event, usageAccount.forEvent(generation), () => {
+      // Claude reports process-cumulative usage. Consume a denied turn's snapshot
+      // in memory so its delta cannot be charged to the next admitted turn.
+      if (event.type !== 'done' || event.source !== 'claude-code' || session.agentKind !== 'claude-code'
+          || generation !== session.getTurnGeneration() || sessionBindings.getSession(session.id) !== session) return;
+      const data = event.data as { modelUsage?: Record<string, unknown>; total_cost_usd?: number } | undefined;
+      if (data?.modelUsage && typeof data.modelUsage === 'object') {
+        const { next } = computeModelUsageDeltas(lastReportedModelUsageBySession.get(session.id), data.modelUsage);
+        lastReportedModelUsageBySession.set(session.id, next);
+      }
+      if (typeof data?.total_cost_usd === 'number' && data.total_cost_usd >= 0) {
+        lastReportedCostUsdBySession.set(session.id, data.total_cost_usd);
+      }
+    });
   };
   const ownerDb = getCurrentDbClientSnapshot();
   const ownerEventDependencies = Object.create(sessionEventDependencies) as SessionEventDependencies;
@@ -6372,7 +6391,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // 「远程与分享」页按使用方的用量：本机自己的任务记在当前账号的账本里，换了账号之后的迟到事件不记。
   Object.defineProperty(ownerEventDependencies, 'recordProviderPartyUsage', {
     value: (target: Session, event: AgentEvent) => {
-      if (!ownerDb || getCurrentDbClientSnapshot() !== ownerDb) return;
       try {
         recordSessionProviderPartyUsage({
           providerOf: getSessionProvider,

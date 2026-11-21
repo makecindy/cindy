@@ -1,3 +1,4 @@
+import { mayRecordTurnUsage, turnUsageBroadcastScope } from './usage/turnUsageAdmission.js';
 /**
  * turnCostBroadcaster — 把 per-turn 费用挂到该轮最后一条 assistant 消息上。
  *
@@ -192,7 +193,7 @@ export async function recordTurnCostOnMessage(
   if (!sessionId || !clientId) return false;
   const normalized = normalizeRegionalMoney(money);
   if (!normalized || normalized.amount < 1e-10) return false;
-  const ownerScope = captureOwnerScope();
+  let ownerScope = captureOwnerScope();
   try {
     let userTurnMoney = normalized;
     let userTurnCostIsEstimate = normalized.kind === 'value-estimate';
@@ -254,7 +255,8 @@ export async function recordTurnCostOnMessage(
     // owner switch only suppresses the stale renderer/device-link broadcast;
     // report success so scheduler fallback cannot charge the same segment
     // again.
-    if (!isOwnerScopeCurrent(ownerScope)) return true;
+    ownerScope = turnUsageBroadcastScope(ownerScope, captureOwnerScope);
+    if (!mayRecordTurnUsage() || !isOwnerScopeCurrent(ownerScope)) return true;
     const payload: MessageTurnCostPayload = {
       sessionId,
       clientId,
@@ -323,7 +325,7 @@ export async function recordTurnUsageOnMessage(
 ): Promise<boolean> {
   const { sessionId, clientId, turnUsageDetails } = args;
   if (!sessionId || !clientId || !turnUsageDetails) return false;
-  const ownerScope = captureOwnerScope();
+  let ownerScope = captureOwnerScope();
   try {
     let persistedTurnUsageDetails = turnUsageDetails;
     const outcome = await deps.enqueue(`turn-usage:${sessionId}:${clientId}`, async () => {
@@ -357,7 +359,8 @@ export async function recordTurnUsageOnMessage(
     if (!outcome) return false;
     // Usage metadata is durable even when the captured owner became stale;
     // skip only the old-owner broadcast and keep the successful result.
-    if (!isOwnerScopeCurrent(ownerScope)) return true;
+    ownerScope = turnUsageBroadcastScope(ownerScope, captureOwnerScope);
+    if (!mayRecordTurnUsage() || !isOwnerScopeCurrent(ownerScope)) return true;
     try {
       const { userTurnMoney, userTurnCostIsEstimate } = outcome;
       const payload: MessageTurnCostPayload = {
@@ -436,6 +439,7 @@ export async function recordSchedulerTurnCost(
     return null;
   }
   try {
+    if (!mayRecordTurnUsage()) return null;
     return await deps.recordDirect({
       runId: turnOrigin.runId,
       money: args.money,
