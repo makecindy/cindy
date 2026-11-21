@@ -1548,7 +1548,9 @@ export class InputHandoffSession {
         .some((w) => w.title === focused.title && w.index === focused.index);
       if (!existedBefore || !sameWindow) return toTarget(mine!, focused);
     }
-    if (sameWindow) return null;
+    // QR polling also uses this to refresh a renamed or reindexed native window.
+    if (sameWindow) return sameWindow.title !== current.window.title || sameWindow.index !== current.window.index
+      ? toTarget(mine!, sameWindow) : null;
     // The window closed.
     if (hints?.windowClosed && this.initial && current.pid === this.initial.pid &&
         current.window.title === this.initial.window.title) return 'ended';
