@@ -96,7 +96,6 @@ interface PluginRuntimeOptions {
 /** Production installed-plugin execution. All persistent stores use the same
  * owner roots and records as Desktop; no installation or approval is fabricated.
  * UI and account-dependent slots are attached separately by their owning services. */
-
 export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const assets = options.assets ?? await prepareHostPluginAssets();
   const owner = activeOwnerScopeKey();
@@ -578,7 +577,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
         if (options.manager.hasPendingMutationRecovery()) {
           await uninstallRecovery.run(pause, () => options.manager.retryInterruptedMutationsAfterDbReady());
           assertCurrent();
-          if (options.manager.hasPendingUninstallRecovery()) throw holdError(releaseFailure());
+          if (options.manager.hasPendingMutationRecovery()) {
+            log.warn('some plugin mutations remain isolated after recovery');
+          }
         }
         // Preserve the browser partition and the gateway fuses. The usual
         // resident policy starts residents; on-demand plugins wait for a call.

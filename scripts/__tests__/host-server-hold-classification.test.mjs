@@ -52,4 +52,8 @@ test('main binds all four profile writers and the installed memory MCP provider 
   assert.ok(/mcpProviders: await pluginGateway\.prepareMcpProviders\(\[\.\.\.hostTools\.providers, \.\.\.memory\.providers\(/.test(main), 'installed memory MCP');
   assert.ok(/updateProjectInfo: profileServices\.project\(/.test(main), 'project update');
   assert.ok(/const runtimePluginSettings = profileServices\.plugins\(/.test(main), 'task plugin settings');
+  assert.ok(!/\bcreateHost(?:ToolService|MemoryManager|MemoryMcpProviders|ProjectInfoUpdate|RuntimePluginSettings)\s*\(/.test(main),
+    'main must obtain profile writers from the bound services');
+  const uninstall = main.match(/onUninstallSourceState:\s*async fromPart => \{([\s\S]*?)\n    \},/)?.[1] ?? '';
+  assert.match(uninstall, /await current\.cleanupUninstalledSource\(fromPart\)/, 'uninstall must use the scoped cleanup lease');
 });

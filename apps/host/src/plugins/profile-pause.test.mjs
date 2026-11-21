@@ -85,7 +85,7 @@ const nodeWorker = String.raw`
   });
 `;
 
-async function fixture(t, { executable, resident = true, node = false, services = false, restartWithJournal = false, onCleaned } = {}) {
+async function fixture(t, { executable, resident = true, node = false, services = false, restartWithJournal = false, retainedBuiltin = false, onCleaned } = {}) {
   const cleanup = lifoCleanup(t);
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-plugin-pause-'));
   cleanup.after(() => fs.rm(profile, { recursive: true, force: true }));
@@ -97,7 +97,7 @@ async function fixture(t, { executable, resident = true, node = false, services 
   const root = (...parts) => ownerScopedPath(profile, ownerId, ...parts);
   let runtime;
   const cleaned = [];
-  let desktopPresent = restartWithJournal;
+  let desktopPresent = restartWithJournal || retainedBuiltin;
   const managerOptions = { userDataDir: profile, ownerId, onUninstallSourceState: async part => {
     if (!runtime) throw new Error('Plugin account cleanup is unavailable');
     await runtime.cleanupUninstalledSource(part);
@@ -126,11 +126,27 @@ async function fixture(t, { executable, resident = true, node = false, services 
   const installed = await manager.install(archive, { namespace: null, uiCapabilityApproved: true });
   assert.ok(installed.ghost, JSON.stringify(installed));
   const id = installedGhostStoragePart(installed.ghost);
+  let retiredPlugin;
+  if (retainedBuiltin) {
+    // Persist the same transaction a desktop commits before writing its built-in
+    // tombstone. The Host manager opens this real receipt without a tombstone writer.
+    const manifest = JSON.parse(await zip.file('ghost.json').async('string'));
+    zip.file('ghost.json', JSON.stringify({ ...manifest, id: 'retired-builtin' }));
+    const retiredArchive = path.join(profile, 'retired.cindy');
+    await fs.writeFile(retiredArchive, await zip.generateAsync({ type: 'nodebuffer' }));
+    const { ghost } = await manager.install(retiredArchive, { namespace: null, uiCapabilityApproved: true });
+    assert.ok(ghost);
+    retiredPlugin = ghost;
+    const receipts = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+    await receipts.writePendingMutation(installedGhostPhysicalRelId(ghost), { kind: 'uninstall', builtinTombstone: true });
+  }
   if (restartWithJournal) {
     // The account cleanup port was unavailable before shutdown. Recreate the
     // real manager from disk while the profile is still owned by the desktop.
     const removal = await manager.uninstall(installedGhostPhysicalRelId(installed.ghost));
     assert.equal(removal.rejection?.code, 'io');
+  }
+  if (desktopPresent) {
     manager.disposeNotificationIndex();
     manager = createHostGhostManager(managerOptions);
   }
@@ -171,7 +187,7 @@ async function fixture(t, { executable, resident = true, node = false, services 
   const control = () => runtime.taskPlugins.screenGhostControlPoint('will-tool-call',
     { engine: 'pi', phase: 'call', sessionId: 'task', toolName: 'read', toolCallId: 'tool', input: {} },
     { pluginId: id, onFailure: 'block' });
-  return { root, manager, runtime, id, archive, installed: installed.ghost, cleaned, gateway, call, control, pushes, warnings, terminalCleanup,
+  return { root, manager, runtime, id, archive, retiredPlugin, installed: installed.ghost, cleaned, gateway, call, control, pushes, warnings, terminalCleanup,
     desktopExited: () => { desktopPresent = false; }, hold: () => runtime.pauseForDesktop(holdMessage) };
 }
 
@@ -718,4 +734,48 @@ test('journal recovery preserves an actual owner change', realPage, async t => {
     assert.deepEqual(f.cleaned, [f.id]);
     assert.throws(() => f.runtime.captureMutationOwner(), /PLUGIN_OWNER_CHANGED/);
   } finally { leaveBoundary?.(); }
+});
+
+// Integration: a durable built-in uninstall journal cannot be completed by the
+// Host. The missing port quarantines one plugin while another resident runs.
+test('a retained built-in uninstall leaves other approved residents available', realPage, async t => {
+  const f = await fixture(t, { executable: executablePath, node: true, retainedBuiltin: true });
+  const quarantined = installedGhostStoragePart(f.retiredPlugin);
+  const physical = installedGhostPhysicalRelId(f.retiredPlugin);
+  const store = new GhostInstallReceiptStore(() => f.manager.approvalStateRoot());
+  const journal = store.readPendingMutationSync(physical);
+  assert.equal(journal.state, 'valid');
+  assert.equal(journal.mutation.builtinTombstone, true);
+  assert.deepEqual(await f.call(), held);
+  const spawn = t.mock.method(GhostRuntime.prototype, 'spawn');
+  const warningsBeforeResume = f.warnings.length;
+  f.desktopExited();
+  assert.equal(await f.runtime.resumeAfterDesktop(), true);
+  assert.deepEqual(spawn.mock.calls.map(call => installedGhostStoragePart(call.arguments[0])), [f.id]);
+  assert.equal(f.runtime.node.stateOf(quarantined), 'off');
+  assert.deepEqual(store.readPendingMutationSync(physical), journal);
+  assert.deepEqual(f.warnings.slice(warningsBeforeResume), ['some plugin mutations remain isolated after recovery']);
+  assert.equal((await f.call({ node: true })).result?.ok, true);
+  const denied = await f.runtime.callTool({ ghostId: quarantined, tool: 'echo', args: {} });
+  assert.equal(denied.ok, false);
+  assert.notEqual(denied.errorCode, 'PRECONDITION_FAILED');
+});
+
+// Integration: revoke the real installation receipt while the desktop owns the
+// profile. A previously approved resident must not start on the old approval.
+test('a resident whose approval was revoked during the hold stays off', realPage, async t => {
+  const f = await fixture(t, { executable: executablePath, node: true });
+  await f.runtime.reconcile();
+  assert.equal((await f.call({ node: true })).result?.ok, true);
+  f.hold();
+  const physical = installedGhostPhysicalRelId(f.installed);
+  const receipts = new GhostInstallReceiptStore(() => f.manager.approvalStateRoot());
+  assert.equal(receipts.readForRecovery(physical).state, 'approved');
+  assert.equal(await f.manager.removeInstallApproval(physical), true);
+  assert.equal(receipts.readForRecovery(physical).state, 'missing');
+  const spawn = t.mock.method(GhostRuntime.prototype, 'spawn');
+  assert.equal(await f.runtime.resumeAfterDesktop(), true);
+  assert.equal(spawn.mock.callCount(), 0);
+  assert.equal(f.runtime.node.stateOf(f.id), 'off');
+  assert.equal((await f.call()).ok, false);
 });
