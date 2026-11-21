@@ -18,6 +18,8 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
   const operations=useRef(new Map<string, () => Promise<void>>());
   const queue=useRef(Promise.resolve());
   const lastParticipation=useRef(0);
+  // Learned from the last definitive read; a reconnect to an upgraded server arrives as a group push.
+  const unsupported=useRef(false);
   const reload=useCallback(async () => {
     const api=window.electronAPI.maker.chatServer;
     if (!api.mask || !api.mentions) return;
@@ -28,6 +30,8 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
     try {
       const response=await api.mask({groupId});
       if (!current()) return;
+      if (response.ok) unsupported.current=false;
+      else if (response.errorCode==='UNSUPPORTED_OPERATION') unsupported.current=true;
       if (!response.ok) {
         if (['CONVERSATION_NOT_FOUND', 'OWNER_CHANGED', 'HUMAN_REQUIRED', 'UNSUPPORTED_OPERATION'].includes(response.errorCode)) {
           authority.current++; failed.current.clear(); operations.current.clear(); stateRef.current=null; setState(null); setMentions([]);
@@ -53,13 +57,17 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
     }
   },[groupId]);
   useEffect(()=>{
+    const api=window.electronAPI.maker.chatServer;
+    if (!api.mask || !api.mentions) return;
     alive.current=true; void reload();
     const stop=window.electronAPI.maker.onBotGroupChanged((event,stamp)=>{
       if(isDataOwnerPushCurrent(stamp) && (event.groupId===groupId || !event.groupId)) void reload();
     });
-    // Scheduled windows still change when no message is arriving.
-    const timer=setInterval(()=>void reload(),15000);
-    return ()=>{alive.current=false; version.current++; clearInterval(timer); stop();};
+    // Scheduled windows still change when no message is arriving. A hidden window reads once on return.
+    const timer=setInterval(()=>{ if(!document.hidden && !unsupported.current) void reload(); },15000);
+    const onVisibility=()=>{ if(!document.hidden) void reload(); };
+    document.addEventListener('visibilitychange',onVisibility);
+    return ()=>{alive.current=false; version.current++; clearInterval(timer); document.removeEventListener('visibilitychange',onVisibility); stop();};
   },[groupId,reload]);
   const act=useCallback((retryKey:string, makeAction:(current:ChatMaskState)=>ChatMaskAction)=>{
     const owner=getDataOwnerGeneration(), generation=authority.current;
