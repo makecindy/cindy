@@ -60,7 +60,7 @@ vi.mock('../providerShareApi.js', () => ({
       return state.ownedIncomplete ? Object.assign([...state.owned], { authorityIncomplete: true }) : state.owned;
     },
     listReceived: async () => {
-      if (state.receivedDenied) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED' });
+      if (state.receivedDenied) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED', statusCode: 401 });
       if (state.receivedError) throw new Error('offline');
       return state.unavailableReceived.length ? Object.assign([...state.received],
         { unavailableShareIds: state.unavailableReceived, authorityIncomplete: true }) : state.received;
@@ -1306,6 +1306,42 @@ describe('provider share guest routing', () => {
     await refreshReceivedShares('recovered');
     expect(getReceivedSharesSnapshot().received.map(item => item.shareId)).toEqual(['share-1']);
     expect(resolveRemoteAgentTarget('share:share-1')).toBe(providerShareHostPeer('share-1', 'owner-mac'));
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 启动、名单刷新和远程目标解析入口。
+  // - Bug／规则依据：本次运行第一次名单被拒绝时没有历史 ID 可供判断，未确认不能报已删除。
+  // - 现有覆盖缺口：已有拒绝用例先成功加载过分享，无法覆盖重启后首次 401/403。
+  // - 最小失败输入：运行时首次收到 401，随后收到完整空名单。
+  // - tier：unit；覆盖本区名单拒绝、恢复和删除分类。
+  it('classifies a first local list denial as unavailable until a complete empty list confirms removal', async () => {
+    state.receivedDenied = true;
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('first-denial');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
+
+    state.receivedDenied = false;
+    state.received = [];
+    await refreshReceivedShares('confirmed-empty');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 名单刷新入口产生 authorityIncomplete，再解析保存任务目标。
+  // - Bug／规则依据：不完整回包漏行时不能把缺行解释成分享已删除。
+  // - 现有覆盖缺口：已有 partial-list 用例只检查可用目录，没有检查未知缺行的错误分类。
+  // - 最小失败输入：首次回包标记 authorityIncomplete 且不包含目标分享，随后完整空名单。
+  // - tier：unit；覆盖不完整名单与完整名单的分类边界。
+  it('classifies a first incomplete local list that omits a share as unavailable', async () => {
+    state.unavailableReceived = ['missing-share'];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('incomplete');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
+
+    state.unavailableReceived = [];
+    state.received = [];
+    await refreshReceivedShares('confirmed-empty');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
   });
 
   it('keeps the local directory budget from the list request start and does not renew it after a failure', async () => {

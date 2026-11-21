@@ -37,6 +37,7 @@ import {
   crossRegionWithdraw,
   getCrossRegionReceived,
   isCrossRegionShareListUnavailable,
+  hasUnconfirmedCrossRegionReceivedList,
   getMembershipConfirmedCrossRegionReceivedRegions,
   getUnavailableCrossRegionShareIds,
   getConfirmedCrossRegionRegionBudgets,
@@ -95,8 +96,8 @@ interface Runtime {
   authorityIncomplete: boolean;
   listConfirmed: boolean;
   listUnavailable: boolean;
-  /** Share IDs seen in a successful response, retained only to classify a later denial. */
-  knownShareIds: Set<string>;
+  /** Shares explicitly left during this runtime keep the original removed verdict. */
+  leftShareIds: Set<string>;
   /** The service retains member IDs for the same share/account across approvals. */
   knownMembers: Map<string, string>;
   departureScope: string;
@@ -203,13 +204,6 @@ function membershipConfirmedRegions(rt: Runtime): Region[] {
 function unavailableShareIds(rt: Runtime): Set<string> {
   return new Set([...rt.unavailable, ...getUnavailableCrossRegionShareIds(),
     ...(rt.listUnavailable ? rt.received.map(share => share.shareId) : [])]);
-}
-
-/** A missing row is removable only after a complete successful response. */
-function isReceivedShareListUnavailable(rt: Runtime | null, shareId: string): boolean {
-  if (!rt || !current(rt)) return true;
-  if (rt.unavailable.has(shareId) || (rt.listUnavailable && rt.received.some(share => share.shareId === shareId))) return true;
-  return rt.fetchedAt === 0 || (!rt.listConfirmed && rt.knownShareIds.has(shareId));
 }
 
 let metadataPermissionFingerprint = '';
@@ -358,7 +352,9 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
   if (!shareId) return agentDeviceId;
   const share = findReceivedShare(shareId);
   if (!share) {
-    if (isReceivedShareListUnavailable(runtime, shareId) || isCrossRegionShareListUnavailable(shareId)) {
+    if (!runtime?.leftShareIds.has(shareId)
+      && ((!runtime || !current(runtime) || !runtime.listConfirmed || runtime.unavailable.has(shareId))
+        || hasUnconfirmedCrossRegionReceivedList())) {
       throw new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE);
     }
     let hidden = false;
@@ -449,7 +445,7 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
     unavailable: new Set(), authorityIncomplete: false,
     listConfirmed: false,
     listUnavailable: false,
-    knownShareIds: new Set(),
+    leftShareIds: new Set(),
     knownMembers: new Map(),
     departureScope: JSON.stringify([getActiveAuthRealm(), scope]),
     timer: null,
@@ -508,11 +504,6 @@ export function refreshReceivedShares(reason: string): Promise<void> {
             }
           }
           rt.received = received;
-          if (rt.authorityIncomplete) {
-            for (const share of received) rt.knownShareIds.add(share.shareId);
-          } else {
-            rt.knownShareIds = new Set(received.map(share => share.shareId));
-          }
           rt.unavailable = unavailable;
           rt.listConfirmed = !rt.authorityIncomplete;
           rt.listUnavailable = false;
@@ -766,6 +757,7 @@ export async function leaveProviderShare(memberId: string): Promise<void> {
   const noteLeft = () => {
     if (left) return;
     left = true;
+    if (shareId) rt.leftShareIds.add(shareId);
     const ids = pendingDepartures.get(rt.departureScope)?.ids ?? new Set<string>();
     ids.add(memberId);
     pendingDepartures.set(rt.departureScope, { ids, revision: ++leftMemberSequence });

@@ -1149,6 +1149,25 @@ describe('cross-region provider share', () => {
     expect(findReceivedShare('share-x', { existingLease: true })).toMatchObject({ shareId: 'share-x' });
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：真实本区 Guest 启动、跨区 /session 刷新和远程目标解析入口。
+  // - Bug／规则依据：跨区名单尚未完整确认时，缺少的分享只能暂不可用；两个区域都确认为空后才报已删除。
+  // - 现有覆盖缺口：原拒绝用例只启动跨区运行时，本区 Guest 未启动，无法验证跨区未确认会影响完整 Guest 路由。
+  // - 最小失败输入：本区完整确认、跨区首次 403，随后跨区完整空名单。
+  // - tier：unit；删除跨区未确认判定实现后该断言必须失败。
+  it('classifies an unconfirmed cross-region list as unavailable until both regions confirm absence', async () => {
+    state.responses.set('/session', Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED', statusCode: 403 }));
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await refreshReceivedShares('local-ready');
+    await refreshProviderShareCrossRegion('global');
+    expect(getReceivedSharesSnapshot().confirmedRegions).toContain('cn');
+    expect(() => resolveRemoteAgentTarget('share:share-x')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
+
+    state.responses.set('/session', { credential: null, expiresAt: null, shares: [] });
+    await refreshProviderShareCrossRegion('global');
+    expect(() => resolveRemoteAgentTarget('share:share-x')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+  });
+
   it('keeps the bounded peer directory when the cross-region switch is disabled', async () => {
     state.responses.set('/session', { credential: CREDENTIAL,
       expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });

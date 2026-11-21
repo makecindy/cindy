@@ -80,9 +80,6 @@ interface RegionState {
   failures: number;
   loaded: boolean;
   listConfirmed: boolean;
-  listUnavailable: boolean;
-  /** Share IDs seen in successful responses, retained to classify a later denial. */
-  knownShareIds: Set<string>;
   /** Request start of the last successful authoritative list for this region. */
   viewAnchor: ViewAnchor | null;
   requestRevision: number;
@@ -466,7 +463,7 @@ function scheduleRefresh(rt: Runtime, state: RegionState): void {
 
 function initialRegionState(region: Region, loaded = false): RegionState {
   return { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, refreshingRevision: 0, timer: null, failures: 0, loaded, viewAnchor: null, requestRevision: 0,
-    listConfirmed: false, listUnavailable: false, knownShareIds: new Set() };
+    listConfirmed: false };
 }
 
 /** 用新名片换取这台电脑在对方区域的分享列表与连接凭证。 */
@@ -515,9 +512,7 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       state.expiresAt = expiresAt;
       const previousShares = state.shares;
       state.shares = preserveNewerHostOnline(previousShares, shares, requestedHostOnlineSequence);
-      state.knownShareIds = new Set(shares.map(share => share.shareId));
       state.listConfirmed = true;
-      state.listUnavailable = false;
       noteSharePermissions(previousShares, state.shares);
       state.loaded = true;
       if (shares.length === 0 || !credential) {
@@ -539,7 +534,6 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       if (isCurrent()) {
         const wasConfirmed = target.listConfirmed;
         target.listConfirmed = false;
-        target.listUnavailable = true;
         log.warn('cross-region session refresh failed', { region, error: error instanceof Error ? error.message : String(error) });
         if (isAuthoritativeShareListDenial(error)) {
           // Retire this region's directory immediately. A refusal does not
@@ -673,7 +667,13 @@ export function getMembershipConfirmedCrossRegionReceivedRegions(): Region[] {
 }
 
 export function isCrossRegionShareListUnavailable(shareId: string): boolean {
-  return [...(runtime?.regions.values() ?? [])].some(state => state.listUnavailable && state.knownShareIds.has(shareId));
+  return stateForShare(shareId)?.listConfirmed === false;
+}
+
+/** Whether any current cross-region membership list is still unconfirmed. */
+export function hasUnconfirmedCrossRegionReceivedList(): boolean {
+  const rt = runtime;
+  return !!rt && current(rt) && [...rt.regions.values()].some(state => !state.listConfirmed);
 }
 
 export function getUnavailableCrossRegionShareIds(): string[] {
