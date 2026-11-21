@@ -1461,6 +1461,7 @@ import {
   clearProviderDisableOverrides,
   setModelsDisabled,
   setProviderDisabled,
+  setProviderHidden,
   stageProviderDisableOverridesClear,
   readModelDisableOverrides,
 } from '../maker-host/model-disable-store.js';
@@ -7502,6 +7503,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       setModelsDisabled(providerId, modelIds, disabled),
     setProviderDisabled: (providerId, disabled) => setProviderDisabled(providerId, disabled),
     getDisabledProviders: () => readModelDisableOverrides().disabledProviders ?? {},
+    setProviderHidden: (providerId, hidden) => setProviderHidden(providerId, hidden),
+    getHiddenProviders: () => readModelDisableOverrides().hiddenProviders ?? {},
     listRemoteProviders: (deviceId) => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
     getRemoteProviderInvocationEnabled: (providerId) =>
       isRemoteProviderInvocationAllowed(providerId),

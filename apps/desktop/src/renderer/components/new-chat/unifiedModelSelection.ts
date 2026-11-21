@@ -545,6 +545,11 @@ export interface UnifiedListSection {
    * 合并组 —— 分组名必须直接回答"这是哪家的",不引入第二套口径)。
    */
   group?: { type: 'provider'; providerId: string };
+  /**
+   * 该小节属于「已隐藏」区:用户在设置里从选择器收起的供应商 / 模型。面板把它们排在
+   * 常规小节之后、默认折叠,搜索时自动展开 —— 隐藏只是收起,不是不能选。
+   */
+  hidden?: true;
   rows: UnifiedListRow[];
 }
 

@@ -22,6 +22,7 @@ import { isCindyAutoModelId, isCindyDistributedProvider } from './provider-ident
 import {
   isModelDisabled,
   isProviderDisabled,
+  isProviderHidden,
   type ModelDisableOverrides,
 } from './disableOverrides.js';
 
@@ -142,6 +143,12 @@ export interface ProviderView extends Provider {
    */
   suspended?: boolean;
   /**
+   * 用户把该供应商从模型选择器里「隐藏」(见 disableOverrides.ts)。纯陈列:带可见性
+   * 过滤的清单派生(modelList.ts)把它的模型当作未显示,路由 / 来源解析 / 辅助模型链
+   * 一律不看这个标志。旧 host 不下发,等同未隐藏。
+   */
+  hidden?: boolean;
+  /**
    * 该供应商名下的停用 override 总数(供应商级标志 + 全部逐模型条目)。与烘进模型
    * 条目的 `disabled` 标志不同,它**包含指向已下架模型的陈旧条目**。设置页据此在
    * 「目录里已无对应行」时仍展示组级「全部启用」恢复入口(configuration-and-
@@ -219,6 +226,7 @@ export function buildRegistry(
       ...mediaOverrides,
       connected: connected[p.id] ?? false,
       ...(suspended ? { suspended: true } : {}),
+      ...(isProviderHidden(access, p.id) ? { hidden: true } : {}),
       ...(disableOverrideCount > 0 ? { disableOverrideCount } : {}),
       ...(failureView ? { modelDiscoveryFailure: failureView } : {}),
     };

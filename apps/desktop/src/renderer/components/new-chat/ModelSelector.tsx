@@ -1920,8 +1920,12 @@ function ModelSelectorContentView({
         scope: 'draft',
       });
       // 「运行于」收起的供应商只是不占左栏；那台电脑上的收藏仍按完整目录解析，不因收起消失。
+      // 用户在设置里隐藏的那台电脑上的供应商同理:不占左栏,收藏与正在用的那一项照常解析。
       const providerIds = [...new Set(entries.map((entry) => entry.providerId))].filter(
-        (providerId) => !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)),
+        (providerId) =>
+          !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)) &&
+          (!remoteDisable.isHidden(device.deviceId, providerId) ||
+            (remoteAgentDeviceId === device.deviceId && currentProviderId === providerId)),
       );
       return entries.length > 0
         ? [{ deviceId: device.deviceId, providers: shared, providerIds, entries }]

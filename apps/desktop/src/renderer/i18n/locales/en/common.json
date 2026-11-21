@@ -3757,6 +3757,7 @@
         "connecting": "Connecting…",
         "rename": "Rename",
         "suspended": "Disabled",
+        "hidden": "Hidden",
         "unconfigured": "Not configured"
       },
       "button": {
@@ -3767,7 +3768,9 @@
         "cancel": "Cancel",
         "retry": "Retry model discovery",
         "retrying": "Retrying discovery…",
-        "enableProvider": "Enable Provider"
+        "enableProvider": "Enable Provider",
+        "showProvider": "Show",
+        "hideInstead": "Hide Instead"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4148,7 +4151,7 @@
         "paymentRequired": "Paid",
         "paymentUnlock": "Pay to unlock",
         "enableModel": "Enable This Model",
-        "capabilityGroupHint": "Not shown in the chat model picker. The switch controls visibility in the relevant feature.",
+        "capabilityGroupHint": "Not shown in the model picker. The switch decides whether the relevant feature can use the model.",
         "accessWriteFailed": "Couldn’t save the change. Try again.",
         "visibilityWriteFailed": "Couldn't save the model visibility setting. Try again, or restart Cindy if the problem continues.",
         "disabledGroup": "Disabled",
@@ -4292,22 +4295,22 @@
           "aria": "Filter by model type",
           "chat": "Chat"
         },
-        "hiddenGroup": "Not shown",
+        "hiddenGroup": "Hidden",
         "management": {
           "brand": "Manufacturer"
         },
         "manage": {
           "title": "Models",
-          "selected": "{{count}} selected",
-          "hint": "Use the switches to choose your chat models.",
+          "selected": "{{count}} shown",
+          "hint": "Switches decide which models appear in the model picker. Turning one off only hides it; you can still choose it under Hidden at the bottom of the picker.",
           "menu": "Manage",
           "arrange": "Arrange list",
           "byBrand": "Group by maker",
           "byName": "Order by model name",
-          "selection": "Model selection",
-          "showAll": "Select all models",
-          "hideAll": "Clear selection",
-          "reset": "Restore default selection",
+          "selection": "Show in model picker",
+          "showAll": "Show all models",
+          "hideAll": "Hide all models",
+          "reset": "Restore default visibility",
           "connectionRequired": "Connect to use these models. Your selections are saved."
         }
       },
@@ -4322,7 +4325,8 @@
         "groupBadge_other": "Provider Group · {{count}} computers",
         "groupNote": "{{device}} made this provider a provider group. When you start a task with it, {{device}} assigns the task to one of the computers below by its group strategy, and moves it to another one if that computer runs into a problem. While {{device}} is online, use Remote & Sharing here to manage the group and its shares.",
         "groupMembersTitle": "Computers in the Group",
-        "groupMembersFailed": "Couldn’t get the status of the computers in the group right now."
+        "groupMembersFailed": "Couldn’t get the status of the computers in the group right now.",
+        "hiddenBanner": "Hidden from the model picker on this computer. Favorites and sessions that use it are unaffected."
       },
       "genericOAuth": {
         "subtitle": "Subscription account",
@@ -4366,7 +4370,8 @@
           "rejected": "This provider refused the request. The list below is from the last successful refresh. Try again later, or use a different provider.",
           "empty": "This provider returned no usable models this time. The list below is from the last successful refresh. Check your account's access, then retry."
         },
-        "suspendedBanner": "This provider is disabled. Credentials are kept; enable it to use its models again.",
+        "suspendedBanner": "This provider is disabled, so new sessions and background features no longer use it. Credentials are kept. To only keep it out of the model picker, hide it instead.",
+        "hiddenBanner": "Hidden from the model picker. Sessions and background features that use it are unaffected, and you can still choose it under Hidden at the bottom of the picker.",
         "remoteAccess": {
           "label": "Allow remote use",
           "description": "When on, your other computers and the people you share with can use this provider’s models. The Agent runs on this computer, using this computer’s sign-in and quota.",
@@ -4576,7 +4581,9 @@
       },
       "menu": {
         "disableProvider": "Disable This Provider",
-        "enableProvider": "Enable This Provider"
+        "enableProvider": "Enable This Provider",
+        "hideProvider": "Hide from Model Picker",
+        "showProvider": "Show in Model Picker"
       },
       "builtinApiKey": {
         "subtitle": "API key connection",
@@ -14171,6 +14178,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Can't read that computer's models right now",
         "favoritesGroup": "Favorites",
         "recentGroup": "Recent",
+        "hiddenGroup": "Hidden ({{count}})",
+        "hiddenGroupHint": "Hidden providers and models can still be chosen",
         "recentEmpty": "No recent models yet — pick a model and it will show up here",
         "favoritesSaveFailed": "Could not save favorite changes",
         "favoritesCleanupFailed": "Could not remove favorites for revoked provider shares",
