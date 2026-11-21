@@ -51,8 +51,8 @@ const log = createLogger('startup-diagnostics');
 /** 心跳刷新间隔。30s:足够定位 hang 的时间窗,又不构成可感知的 I/O 负担。 */
 const HEARTBEAT_INTERVAL_MS = 30_000;
 /**
- * 进程启动时刻与标记 startedAt 的比较容差:`ps` 只报到秒,再留一点采样偏差。
- * 写标记的进程启动必然早于 startedAt,因此容差只需覆盖精度,不必放大。
+ * 两次 OS 进程启动时刻查询的比较容差:`ps` 只报到秒,再留一点采样偏差。
+ * 只用于判断两次观测是否属于同一进程,不能用先后顺序代替身份比较。
  */
 const PID_REUSE_TOLERANCE_MS = 2_000;
 /** PID 复用核对要拉起 PowerShell / ps,延后到启动高峰之后,不和首屏抢 CPU。 */
@@ -77,6 +77,8 @@ export interface RunMarker {
   pid: number;
   version: string;
   startedAt: string; // ISO
+  /** 精确的 OS 进程创建时刻(epoch ms),用于 PID 复用身份比较;旧标记可能缺失。 */
+  processStartedAtMs?: number;
   heartbeatAt: string; // ISO
   heartbeatIntervalMs: number;
   state: RunMarkerState;
@@ -239,6 +241,7 @@ export class RunMarkerStore {
       pid: this.pid,
       version: this.version,
       startedAt: startedAt.toISOString(),
+      processStartedAtMs: startedAt.getTime(),
       heartbeatAt: nowIso,
       heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
       state: 'running',
@@ -335,9 +338,9 @@ export class RunMarkerStore {
    * 早已退出、编号被别的程序占用时,它的标记会被永久保留,每次启动都误报「另一个实例在运行」,
    * 而它真正的退出结论永远不会出现。
    *
-   * 用 OS 报告的进程启动时刻核对:写标记的进程启动时刻必然不晚于 marker.startedAt,当前占用
-   * 该 PID 的进程若明显晚于它启动,就不可能是写标记的那个实例——按标记状态补出退出结论并清掉
-   * 标记。读不到启动时刻或时刻对不上时保持 still-running,不臆断。
+   * 用 OS 报告的进程启动时刻核对身份:新标记保存精确的 processStartedAtMs,与当前占用该
+   * PID 的进程启动时刻相差超过容差即视为复用;旧标记缺少该字段时,退回 startedAt 的顺序
+   * 比较。读不到启动时刻或时刻对不上时保持 still-running,不臆断。
    *
    * 核对发生在启动之后:期间旧实例可能已正常退出并写下 exited,所以按此刻重读的标记下结论——
    * exited 由 process 'exit' 钩子写下,本身就证明该实例已结束,不必再看 PID 查询结果;
@@ -359,14 +362,17 @@ export class RunMarkerStore {
         return [{ kind: classifyEndedRun(marker, this.bootTimeMs()), file: report.file, marker }];
       }
       const ownerStartedAtMs = startTimes.get(marker.pid);
-      const markerStartedAtMs = Date.parse(marker.startedAt);
-      if (
-        ownerStartedAtMs === undefined ||
-        !Number.isFinite(markerStartedAtMs) ||
-        ownerStartedAtMs <= markerStartedAtMs + PID_REUSE_TOLERANCE_MS
-      ) {
-        return [{ ...report, marker }];
-      }
+      if (ownerStartedAtMs === undefined) return [{ ...report, marker }];
+
+      const exactMarkerStartedAtMs = marker.processStartedAtMs;
+      const legacyMarkerStartedAtMs = Date.parse(marker.startedAt);
+      const isSameProcess =
+        typeof exactMarkerStartedAtMs === 'number' && Number.isFinite(exactMarkerStartedAtMs)
+        ? Math.abs(ownerStartedAtMs - exactMarkerStartedAtMs) <= PID_REUSE_TOLERANCE_MS
+        : Number.isFinite(legacyMarkerStartedAtMs) &&
+          ownerStartedAtMs <= legacyMarkerStartedAtMs + PID_REUSE_TOLERANCE_MS;
+      if (isSameProcess) return [{ ...report, marker }];
+
       this.remove(report.file);
       return [
         {

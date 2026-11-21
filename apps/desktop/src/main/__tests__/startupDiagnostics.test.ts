@@ -134,6 +134,7 @@ describe('RunMarkerStore state machine', () => {
 
     const m = readMarker(42);
     expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
+    expect(m.processStartedAtMs).toBe(processStartedAt.getTime());
     expect(m.heartbeatAt).toBe('2026-07-07T12:00:21.000Z');
   });
 
@@ -359,6 +360,33 @@ describe('resolveReusedPids', () => {
 
     expect(resolved).toEqual([
       expect.objectContaining({ kind: 'abnormal', pidReusedSince: '2026-07-16T08:00:00.000Z' }),
+    ]);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('时钟回拨后 PID 被更早时间启动的进程复用 → 仍按进程身份识别并清掉标记', async () => {
+    const originalStartedAtMs = Date.parse('2026-07-07T12:01:00.000Z');
+    const replacementStartedAtMs = Date.parse('2026-07-07T12:00:30.000Z');
+    const marker = {
+      pid: 2187,
+      state: 'running' as const,
+      startedAt: new Date(originalStartedAtMs).toISOString(),
+      processStartedAtMs: originalStartedAtMs,
+    };
+    const file = writeMarker(marker);
+    const store = makeStore({ alivePids: [2187] });
+    const stillRunning = store.analyzePreviousRuns();
+
+    const resolved = await store.resolveReusedPids(
+      stillRunning,
+      startTimesOf([[2187, replacementStartedAtMs]]),
+    );
+
+    expect(resolved).toEqual([
+      expect.objectContaining({
+        kind: 'abnormal',
+        pidReusedSince: new Date(replacementStartedAtMs).toISOString(),
+      }),
     ]);
     expect(fs.existsSync(file)).toBe(false);
   });
