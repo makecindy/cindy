@@ -148,6 +148,15 @@ export function mergeModelMetadata(
         input: result.modalities.input.filter((modality) => modality !== 'image'),
       };
     }
+    // A higher-priority explicit enable restores image after a lower-layer denial.
+    // Same-layer modalities remain authoritative; never invent an output list.
+    if (fields.supportsImageInput === true && fields.modalities === undefined &&
+        result.modalities && !result.modalities.input.includes('image')) {
+      result.modalities = {
+        ...result.modalities,
+        input: [...result.modalities.input, 'image'],
+      };
+    }
   }
   return result;
 }

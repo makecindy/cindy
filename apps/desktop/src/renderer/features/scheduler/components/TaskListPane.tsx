@@ -146,7 +146,7 @@ export function TaskListPane({
         'border-r border-[var(--cmd-palette-border)]',
       )}
     >
-      <div className="flex shrink-0 items-center justify-between px-[10px] pb-2 pt-[14px]">
+      <div className="flex shrink-0 items-center justify-between px-2.5 pb-2 pt-3.5">
         <TaskListFilterPopover value={statusFilter} onChange={onStatusFilterChange} />
         <span className="text-11 text-[var(--settings-section-desc)]">{schedules.length}</span>
       </div>

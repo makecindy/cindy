@@ -186,7 +186,7 @@ export function InlinePlanCard({
     <div className="flex w-full justify-start" data-inline-plan-card="true">
       <div
         className={cn(
-          'max-w-full overflow-hidden rounded-[12px] border border-[var(--msg-tool-card-border)]',
+          'max-w-full overflow-hidden rounded-xl border border-[var(--msg-tool-card-border)]',
           'bg-[var(--msg-tool-card-bg)]',
         )}
       >
@@ -195,7 +195,7 @@ export function InlinePlanCard({
           aria-expanded={expanded}
           onClick={() => setExpanded((current) => !current)}
           className={cn(
-            'flex w-full cursor-pointer select-none items-center gap-2 px-[14px] py-[10px]',
+            'flex w-full cursor-pointer select-none items-center gap-2 px-3.5 py-2.5',
             'transition-opacity hover:opacity-80',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
             'focus-visible:ring-[var(--focus-ring)]',
@@ -228,12 +228,12 @@ export function InlinePlanCard({
         )}
 
         {expanded && (
-          <div className="border-t border-[var(--msg-tool-card-border)] px-[14px] pb-[12px] pt-[10px]">
-            <div className="flex flex-col gap-[2px]">
+          <div className="border-t border-[var(--msg-tool-card-border)] px-3.5 pb-3 pt-2.5">
+            <div className="flex flex-col gap-0.5">
               {todos.map((todo, index) => (
                 <div
                   key={`${todo.content}:${index}`}
-                  className="flex min-h-[30px] items-center gap-[10px]"
+                  className="flex min-h-[30px] items-center gap-2.5"
                 >
                   {todo.status === 'completed' && (
                     <CircleCheck
@@ -378,7 +378,7 @@ export function TodoListCard({
               'border border-[var(--msg-tool-card-border)]',
               'bg-[var(--msg-tool-card-bg)]',
               // 28px 紧凑高度:计划槽位仍保持 32px,上下各留约 2px,避免胶囊贴住输入框。
-              'px-[14px] py-[6px]',
+              'px-3.5 py-1.5',
               'cursor-pointer select-none',
               'hover:opacity-80 transition-opacity',
             )}
@@ -428,7 +428,7 @@ export function TodoListCard({
             <div
               aria-hidden={!revealed}
               className={cn(
-                'relative w-full origin-bottom overflow-hidden rounded-[12px]',
+                'relative w-full origin-bottom overflow-hidden rounded-xl',
                 'border border-[var(--msg-tool-card-border)]',
                 'bg-[var(--msg-tool-card-bg)]',
                 revealed ? 'animate-float-in' : 'animate-float-out',
@@ -457,12 +457,12 @@ export function TodoListCard({
               )}
               <div
                 className={cn(
-                  'flex max-h-[280px] flex-col gap-[2px] overflow-y-auto py-[10px] pl-[14px]',
-                  onDismiss ? 'pr-10' : 'pr-[14px]',
+                  'flex max-h-[280px] flex-col gap-0.5 overflow-y-auto py-2.5 pl-3.5',
+                  onDismiss ? 'pr-10' : 'pr-3.5',
                 )}
               >
                 {todos.map((todo, i) => (
-                  <div key={i} className="flex h-[30px] items-center gap-[10px]">
+                  <div key={i} className="flex h-[30px] items-center gap-2.5">
                     {/* Icon */}
                     {todo.status === 'completed' && (
                       <CircleCheck

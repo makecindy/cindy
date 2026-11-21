@@ -6,6 +6,17 @@ vi.mock('@/hooks/useModelRouteDevices', () => ({
   }),
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [] }) }));
+const { pluginEngineState } = vi.hoisted(() => ({
+  pluginEngineState: {
+    local: [] as any[],
+    remote: null as any[] | null,
+  },
+}));
+vi.mock('@/hooks/usePluginEngines', () => ({
+  requestPluginEnginesRefresh: vi.fn(),
+  usePluginEngines: () => pluginEngineState.local,
+  useRemotePluginEngines: () => ({ engines: pluginEngineState.remote, refresh: vi.fn() }),
+}));
 
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -96,6 +107,8 @@ afterEach(() => {
   roster.availableVendors = new Set(['cc', 'codex', 'pi']);
   roster.loaded = true;
   defaultModel.model = 'default-model';
+  pluginEngineState.local = [];
+  pluginEngineState.remote = null;
 });
 
 describe('BotModelChainEditor', () => {
@@ -411,4 +424,24 @@ it('preserves the SSH catalog when execution locations cannot be browsed', () =>
     providerId: 'openai', effort: 'high', fastMode: false, agentDeviceId: 'share:one' }]} onChange={vi.fn()} />);
   expect(modelSelectorProps.mock.lastCall?.[0]).toMatchObject({ deviceId: undefined,
     remoteAgent: undefined, excludeSubscriptionDirect: true, excludeChatBridgedCodex: true });
+});
+
+// A companion's settings must save the host plugin's exact model and show it when reopened.
+// Unit regression: use one plugin with no built-in providers in the real primary and backup editor.
+it.each([undefined, 'controlled-host'])('saves and reopens a model offered by the companion host %s', deviceId => {
+  const engine = {
+    key: 'sample:engine', providerId: 'acp-plugin:sample:engine', ghostId: 'sample', harnessId: 'engine',
+    name: 'Sample', availability: { state: 'available' }, models: [{ id: 'sample-model', displayName: 'Sample Model' }],
+  };
+  if (deviceId) pluginEngineState.remote = [engine];
+  else pluginEngineState.local = [engine];
+  const onChange = vi.fn();
+  const view = render(<BotModelChainEditor deviceId={deviceId} value={[]} onChange={onChange} />);
+  const picker = () => modelSelectorProps.mock.lastCall![0].pluginEngines;
+  expect(picker().engines).toEqual([engine]);
+  picker().onSelect({ providerId: engine.providerId, modelId: 'sample-model', effort: 'high' });
+  const saved = onChange.mock.lastCall![0];
+  expect(saved).toEqual([{ harness: 'acp', providerId: engine.providerId, model: 'sample-model', effort: 'high', fastMode: false }]);
+  view.rerender(<BotModelChainEditor deviceId={deviceId} value={saved} onChange={onChange} />);
+  expect(picker().active).toEqual({ providerId: engine.providerId, modelId: 'sample-model', effort: 'high' });
 });

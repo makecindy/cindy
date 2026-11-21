@@ -18,10 +18,17 @@ import { PROVIDER_METADATA_TRUST_MS, readProviderMetadataContinuity, type Provid
 
 import { hasDeviceProvidersInterest, hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
 import { hasDeviceCapabilitiesInterest } from '@/hooks/useAgentCapabilities';
+import {
+  evictRemotePluginEngines,
+  hasRemotePluginEngineInterest,
+  markRemotePluginEnginesStale,
+  prefetchRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
 import { createLogger } from '@/lib/logger';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { getProviderShareFavoriteRegions, reconcileProviderShareFavorites } from '@/state/providerShareFavorites';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 
 import type {
   ProviderShareOwnerState,
@@ -256,15 +263,25 @@ function invalidateShareCatalogs(
   // per-target refresh against the new owner.
   if (options?.skipCatalogs) return;
   const revokedCatalog = { providerContinuity: { stale: true, remainingMs: 0 } };
+  const previousById = new Map(previous.map((share) => [share.shareId, share]));
   const nextById = new Map(next.map((share) => [share.shareId, share]));
   const { changed, removed, revoked } = diffReceivedShares(previous, next);
   const revokedById = new Set(revoked);
   for (const shareId of changed) {
     const deviceId = providerShareAgentDeviceId(shareId);
     const after = nextById.get(shareId);
+    const before = previousById.get(shareId);
     // 暂停、成员/供应商/区域/主机身份变化是明确换了一代许可：
     // 即使刷新失败或卡住，也不能继续显示旧目录。
     const mustClear = revokedById.has(shareId) || after?.status !== 'active';
+    if (pluginEngineKeyFromProviderId(after?.providerId ?? before?.providerId)) {
+      if (mustClear || options?.retireShareIds?.has(shareId)) evictRemotePluginEngines(deviceId);
+      else {
+        markRemotePluginEnginesStale(deviceId);
+        if (hasRemotePluginEngineInterest(deviceId)) void prefetchRemotePluginEngines(deviceId);
+      }
+      continue;
+    }
     if (options?.retireShareIds?.has(shareId)) void refreshRemoteCatalogSnapshot(deviceId, revokedCatalog, { retireOnly: true }).catch(() => undefined);
     else void refreshRemoteCatalogSnapshot(deviceId, mustClear ? revokedCatalog : undefined)
       .catch(() => undefined);
@@ -272,12 +289,24 @@ function invalidateShareCatalogs(
   for (const shareId of removed) {
     // 已移出名单的分享没有可再读的目录；清掉界面上可能仍挂着的旧行。
     const deviceId = providerShareAgentDeviceId(shareId);
+    if (pluginEngineKeyFromProviderId(previousById.get(shareId)?.providerId)) {
+      evictRemotePluginEngines(deviceId);
+      continue;
+    }
     // A share no longer in the authoritative list has no target to read; do
     // not repopulate its mounted catalog after removing the row.
     void refreshRemoteCatalogSnapshot(deviceId, revokedCatalog, { retireOnly: true }).catch(() => undefined);
   }
   for (const share of next) {
     const deviceId = providerShareAgentDeviceId(share.shareId);
+    if (pluginEngineKeyFromProviderId(share.providerId)) {
+      if (share.status === 'active' && share.hostOnline && share.hostCapable
+        && options?.refreshShareIds?.has(share.shareId) && !changed.includes(share.shareId)) {
+        markRemotePluginEnginesStale(deviceId);
+        if (hasRemotePluginEngineInterest(deviceId)) void prefetchRemotePluginEngines(deviceId);
+      }
+      continue;
+    }
     // A received-list push is also a catalog invalidation even when membership
     // is unchanged. Refresh live consumers, including successful empty results;
     // retire an unused cached copy so reopening reads once without background polling.
@@ -509,8 +538,17 @@ export function ensureProviderShareReceivedStarted(): void {
   receivedStarted = true;
   unsubscribeCatalogPush = window.electronAPI?.deviceLink?.onRemotePush?.(push => {
     if (push.channel !== 'maker:provider:changed' || !push.deviceId.startsWith('share:')) return;
-    if (!getReceivedSnapshot().received.some(share => providerShareAgentDeviceId(share.shareId) === push.deviceId && share.status === 'active')) return;
+    const matched = getReceivedSnapshot().received.find(share => providerShareAgentDeviceId(share.shareId) === push.deviceId && share.status === 'active');
+    if (!matched) return;
     const continuity = readProviderMetadataContinuity(push.payload);
+    if (pluginEngineKeyFromProviderId(matched.providerId)) {
+      if (continuity?.remainingMs === 0) evictRemotePluginEngines(push.deviceId);
+      else {
+        markRemotePluginEnginesStale(push.deviceId);
+        if (hasRemotePluginEngineInterest(push.deviceId)) void prefetchRemotePluginEngines(push.deviceId);
+      }
+      return;
+    }
     if (continuity?.remainingMs === 0) {
       // Explicit denial / expired budget: retire the display without reopening
       // the denied target (a prefetch would revive it and can feed a 403 loop).

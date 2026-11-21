@@ -576,7 +576,8 @@
       "calloutUnknown": "Si no reconoces a esta persona, rechaza la solicitud; el enlace deja de funcionar una vez rechazada.",
       "approve": "Aprobar uso compartido",
       "reject": "Rechazar solicitud",
-      "later": "Decidir más tarde"
+      "later": "Decidir más tarde",
+      "calloutPluginEngine": "{{name}} puede usarlo sin instalar el complemento ni la CLI en su computadora, usando el inicio de sesión y la cuota de la CLI de esta computadora."
     },
     "apply": {
       "loading": "Leyendo el enlace para compartir…",
@@ -3806,6 +3807,7 @@
         "connecting": "Conectando…",
         "rename": "Cambiar nombre",
         "suspended": "Desactivado",
+        "hidden": "Oculto",
         "unconfigured": "No configurado"
       },
       "button": {
@@ -3816,7 +3818,9 @@
         "cancel": "Cancelar",
         "retry": "Volver a buscar modelos",
         "retrying": "Buscando modelos de nuevo…",
-        "enableProvider": "Habilitar proveedor"
+        "enableProvider": "Habilitar proveedor",
+        "showProvider": "Mostrar",
+        "hideInstead": "Ocultar en su lugar"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4202,7 +4206,7 @@
         "paymentRequired": "De pago",
         "paymentUnlock": "Pagar para desbloquear",
         "enableModel": "Habilitar este modelo",
-        "capabilityGroupHint": "No se muestra en el selector de modelo de chat. El interruptor controla la visibilidad en la función relevante.",
+        "capabilityGroupHint": "No se muestra en el selector de modelos. El interruptor decide si la función correspondiente puede usar el modelo.",
         "accessWriteFailed": "No se pudo guardar el cambio. Por favor inténtalo de nuevo.",
         "visibilityWriteFailed": "No se pudo guardar la configuración de visibilidad del modelo. Inténtelo de nuevo o reinicie Cindy si el problema continúa.",
         "disabledGroup": "Desactivado",
@@ -4346,22 +4350,22 @@
           "aria": "Filtrar por tipo de modelo",
           "chat": "Conversación"
         },
-        "hiddenGroup": "No mostrado",
+        "hiddenGroup": "Ocultos",
         "management": {
           "brand": "Fabricante"
         },
         "manage": {
           "title": "Modelos",
-          "selected": "Seleccionados: {{count}}",
-          "hint": "Utilice los interruptores para elegir sus modelos de chat.",
+          "selected": "Mostrados: {{count}}",
+          "hint": "Los interruptores deciden qué modelos aparecen en el selector de modelos. Al desactivar uno solo se oculta; aún puedes elegirlo en «Ocultos», al final del selector.",
           "menu": "Administrar",
           "arrange": "Organizar lista",
           "byBrand": "Agrupar por fabricante",
           "byName": "Ordenar por nombre de modelo",
-          "selection": "Selección de modelo",
-          "showAll": "Seleccionar todos los modelos",
-          "hideAll": "Borrar selección",
-          "reset": "Restaurar la selección predeterminada",
+          "selection": "Mostrar en el selector de modelos",
+          "showAll": "Mostrar todos los modelos",
+          "hideAll": "Ocultar todos los modelos",
+          "reset": "Restaurar la visibilidad predeterminada",
           "connectionRequired": "Conéctate para usar estos modelos. Tus selecciones se conservan."
         },
         "modelCount_many": "Modelos {{count}}"
@@ -4378,7 +4382,8 @@
         "groupNote": "{{device}} convirtió a este proveedor en un grupo de proveedores. Cuando inicia una tarea con él, {{device}} asigna la tarea a una de las siguientes computadoras según su estrategia de grupo y la mueve a otra si esa computadora tiene un problema. Mientras {{device}} esté en línea, use Remoto y compartido aquí para administrar el grupo y sus recursos compartidos.",
         "groupMembersTitle": "Computadoras en el grupo",
         "groupMembersFailed": "No se pudo obtener el estado de las computadoras del grupo en este momento.",
-        "groupBadge_many": "Grupo de proveedores · {{count}} computadoras"
+        "groupBadge_many": "Grupo de proveedores · {{count}} computadoras",
+        "hiddenBanner": "Oculto del selector de modelos en este ordenador. Los favoritos y las sesiones que lo usan no se ven afectados."
       },
       "genericOAuth": {
         "subtitle": "Cuenta de suscripción",
@@ -4422,7 +4427,8 @@
           "rejected": "Este proveedor rechazó la solicitud. La lista a continuación corresponde a la última actualización exitosa. Vuelve a intentarlo más tarde o utiliza un proveedor diferente.",
           "empty": "Este proveedor no devolvió ningún modelo utilizable esta vez. La lista a continuación corresponde a la última actualización exitosa. Verifique el acceso a su cuenta y luego vuelva a intentarlo."
         },
-        "suspendedBanner": "Este proveedor está deshabilitado. Las credenciales se conservan; habilítalo para volver a usar sus modelos.",
+        "suspendedBanner": "Este proveedor está deshabilitado: las sesiones nuevas y las funciones en segundo plano ya no lo usan. Las credenciales se conservan. Si solo quieres que no aparezca en el selector de modelos, ocúltalo en su lugar.",
+        "hiddenBanner": "Oculto del selector de modelos. Las sesiones y las funciones en segundo plano que lo usan no se ven afectadas, y aún puedes elegirlo en «Ocultos», al final del selector.",
         "remoteAccess": {
           "label": "Permitir uso remoto",
           "description": "Cuando está activado, sus otras computadoras y las personas con las que comparte pueden usar los modelos de este proveedor. El Agent se ejecuta en esta computadora, utilizando el inicio de sesión y la cuota de esta computadora.",
@@ -4632,7 +4638,9 @@
       },
       "menu": {
         "disableProvider": "Deshabilitar este proveedor",
-        "enableProvider": "Habilitar este proveedor"
+        "enableProvider": "Habilitar este proveedor",
+        "hideProvider": "Ocultar del selector de modelos",
+        "showProvider": "Mostrar en el selector de modelos"
       },
       "builtinApiKey": {
         "subtitle": "Conexión con clave API",
@@ -7968,7 +7976,7 @@
           "loading": "Buscando y descargando…",
           "invalid": "Introduce una URL de un repositorio o una etiqueta de release de GitHub.",
           "not-found": "Esta versión no está disponible. Comprueba el enlace y tu acceso al repositorio.",
-          "ambiguous": "Este enlace contiene varios plugins. Elige una release con un solo paquete o instala el archivo directamente.",
+          "ambiguous": "Este enlace contiene varios complementos. Elige una release con un solo paquete o instala el archivo directamente.",
           "installedAlready": "Este plugin ya está instalado. Puedes actualizarlo en sus ajustes."
         },
         "installedSection": "Instalado",
@@ -8631,7 +8639,8 @@
           "description": "Cuando está activado, tus otras computadoras pueden ejecutar tareas con este motor. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea.",
           "unsupported": "Este complemento todavía no permite usar su motor desde otras computadoras.",
           "remoteControlOff": "Esta computadora aún no permite el control remoto, por lo que otras computadoras no pueden usar este motor.",
-          "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}"
+          "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}",
+          "descriptionShareable": "Cuando está activado, tus otras computadoras y las personas con quienes lo compartas pueden ejecutar tareas con este motor sin instalar el complemento. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea."
         },
         "githubRelease": {
           "title": "Actualizaciones del complemento",
@@ -12132,7 +12141,7 @@
       "core": {
         "group": "Habilidad principal",
         "name": "Núcleo del amigo",
-        "hint": "Tareas, otros amigos, modelos, herramientas y plugins, memoria. Se actualiza con Cindy.",
+        "hint": "Tareas, otros amigos, modelos, herramientas y complementos, memoria. Se actualiza con Cindy.",
         "meta": "Común a todos los amigos · Siempre activa · Se actualiza con Cindy",
         "note": "La coordinación que tiene cada amigo. No se puede desactivar ni editar. Para que trabaje de otra forma, díselo en el chat y lo guardará como su propia habilidad.",
         "covers": "Incluye",
@@ -14263,6 +14272,8 @@
       "source": {
         "lastConfirmed": "Última actualización: {{time}}",
         "unconfirmed": "Lista de modelos sin actualizar",
+        "unreachable": "No se puede conectar con {{source}}",
+        "unreachableDetail": "Sin conexión. Revisa la red.",
         "unavailable": "Modelo no disponible",
         "reconnect": "Reconectar",
         "manage": "Administrar fuente",
@@ -14286,6 +14297,8 @@
         "remoteFavoriteUnavailable": "{{source}} · No se pueden leer los modelos de esa computadora en este momento",
         "favoritesGroup": "Favoritos",
         "recentGroup": "Reciente",
+        "hiddenGroup": "Ocultos ({{count}})",
+        "hiddenGroupHint": "Los proveedores y modelos ocultos se pueden seguir eligiendo",
         "recentEmpty": "Aún no hay modelos recientes. Elige uno y aparecerá aquí",
         "favoritesSaveFailed": "No se pudieron guardar los cambios en favoritos",
         "favoritesCleanupFailed": "No se pudieron quitar los favoritos de los proveedores cuyo acceso compartido se revocó",
@@ -17669,7 +17682,8 @@
         "title": "Importar automatizaciones del repositorio",
         "description": "Origen: {{workingDir}}. Revisa las definiciones siguientes. La importación aplica estos cambios y activa las nuevas automatizaciones, que pueden ejecutar comandos e iniciar Agents con acceso completo. Importa solo contenido de confianza.",
         "accept": "Confirmar importación",
-        "removed": "Se eliminarán: {{names}}"
+        "removed": "Se eliminarán: {{names}}",
+        "fileMissing": "Se omitió la importación porque no se encontró el archivo de automatizaciones en {{projectName}}."
       },
       "toast": {
         "summary": "Agregados: {{inserted}} · actualizados: {{updated}} · eliminados: {{deleted}}",
@@ -17766,6 +17780,7 @@
       "openWorkdirFailed": "No se pudo abrir la carpeta"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
       "status": {
         "running": "En ejecución",
         "success": "Éxito",
@@ -21739,6 +21754,7 @@
       "reviewed": "Revisado",
       "verified-publisher": "Editor verificado"
     },
+    "viewLimit": "Hay demasiadas páginas abiertas. Desplaza otra página fuera de la vista o ciérrala para que esta se abra automáticamente.",
     "pluginRevoked": "El complemento se desactivó o cambió. Esta página ya no está disponible.",
     "pluginCspRejected": "La página solicitó un dominio no declarado y se bloqueó.",
     "filesOnExecutionComputer": "Ver el contenido del archivo en la computadora de ejecución",
@@ -22486,6 +22502,7 @@
     "picker": {
       "empty": "Aún no hay grupos de modelos. Combina varias fuentes en un modo en Ajustes para elegirlo aquí.",
       "manage": "Gestionar grupos de modelos",
+      "deviceTitle": "Grupos de modelos · {{device}}",
       "switched": "«{{name}}» cambió esta tarea a {{model}}",
       "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo.",
       "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó."

@@ -1005,6 +1005,18 @@ function message(
 }
 
 function visualMockPendingInteractions(sessionId: string): PendingInteraction[] {
+  // 代输入 in English: a Mac app asks for an account; long purpose and note exercise wrapping.
+  if (sessionId === 'visual-input-handoff') return [{ request: {
+    kind: 'input_handoff', requestId: 'visual-input-handoff-request', revision: 1, phase: 'ready',
+    purpose: 'Sign in to your mail account so the app can finish syncing your inbox',
+    note: 'Use the same account you added on your other devices.',
+    requester: 'Set up the Mac mail app',
+    source: { app: 'Mail' }, stepNumber: 1, remoteInput: true,
+    controls: [
+      { id: 'c0', kind: 'text', label: 'Email address', contentType: 'email' },
+      { id: 'c1', kind: 'text', label: 'Password', contentType: 'password' },
+    ],
+  } }];
   if (sessionId === 'visual-issue-confirm') return [{ request: {
     kind: 'issue_confirm', requestId: 'visual-issue-confirm-request', remoteConfirmSupported: true,
     draft: { title: '手机无法完成问题反馈确认', type: 'bug',

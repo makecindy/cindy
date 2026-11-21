@@ -106,6 +106,7 @@ export class NativeTransport implements Transport {
   private admissionAt = Number.NEGATIVE_INFINITY;
   private channels = new Map<number, NativeChannel>();
   private waiting = new Map<number, Waiting>();
+  private readonly remoteKeys = new Map<number, { raw: string; hex: string }>();
   private links = new Map<string, number>();
   private deviceForLink = new Map<number, string>();
   private lastAdmission = '';
@@ -338,13 +339,32 @@ export class NativeTransport implements Transport {
     this.polling = true;
     void (async () => {
       try {
+        await this.writeFirst();
         await this.poll();
-        if (this.again && !this.closed) { this.again = false; await this.poll(); }
+        if (this.again && !this.closed) { this.again = false; await this.writeFirst(); await this.poll(); }
       } catch { this.polling = false; await this.close(); return; }
       this.polling = false;
       this.again = false;
       if (this.waits) this.rest(); else this.schedule();
     })();
+  }
+  /**
+   * Bytes waiting here go to the engine before the poll, not after it. The engine sends on the write itself; a poll is a
+   * bridge round trip and then a pass over every connection, and a request used to wait for both before it was written:
+   * with seven computers connected, about 10 ms on a phone whose cores had clocked down (2026-11-21, 2.6 ms for the round
+   * trip and 6 ms for the pass), on a line whose round trip was 4 ms. Only while the socket has not reported a change to
+   * what JS mirrors into the engine, and only to a peer admitted right now (`admit` reads the clock): after a change the
+   * poll hands the engine the admitted peers first, as it always did. The once-a-second look for admission that lapsed
+   * with time (ADMISSION_RECHECK_MS) does not hold a write back: it took 8–17 ms with 26 devices in the account, and a
+   * request that came when it was due waited for all of it.
+   */
+  private async writeFirst(): Promise<void> {
+    if (this.options.admissionVersion?.() === undefined || this.mirrorChanged()) return;
+    for (const channel of [...this.channels.values()]) {
+      if (!channel.moving || !this.options.admit(channel.remoteId)) continue;
+      try { await channel.flush(); }
+      catch { channel.close({ drain: false }); this.engine.assertCurrent?.(); }
+    }
   }
   /**
    * `native-wait`: leave the engine to itself until it has something for JS. With bytes still to hand to it (or a dial, a
@@ -367,6 +387,14 @@ export class NativeTransport implements Transport {
       this.waits = false;
       this.schedule(0);
     });
+  }
+  /** A connection's remote key in hex. It never changes for a connection, and every poll reports every connection. */
+  private remoteKey(state: NativeState): string {
+    const known = this.remoteKeys.get(state.id);
+    if (known?.raw === state.remoteKey) return known.hex;
+    const hex = keyHex(state.remoteKey);
+    this.remoteKeys.set(state.id, { raw: state.remoteKey, hex });
+    return hex;
   }
   private mirrorChanged(): boolean {
     return this.options.admissionVersion?.() !== this.mirroredVersion
@@ -400,9 +428,10 @@ export class NativeTransport implements Transport {
       if (JSON.stringify(mapped) !== JSON.stringify(this.mapped)) { this.mapped = mapped; this.updateCandidates(); }
     }
     const alive = new Set(result.connections.map(connection => connection.id));
+    for (const id of this.remoteKeys.keys()) if (!alive.has(id)) this.remoteKeys.delete(id);
     for (const state of result.connections) {
       let channel = this.channels.get(state.id);
-      const key = keyHex(state.remoteKey);
+      const key = this.remoteKey(state);
       if (state.dead || state.closedByPeer || !this.options.admit(key)) {
         channel?.close({ drain: false });
         this.waiting.get(state.id)?.reject(new Error('NATIVE_CONNECTION_CLOSED'));
@@ -423,7 +452,9 @@ export class NativeTransport implements Transport {
           }
           else this.options.onIncoming(channel);
         }
-        if (channel) { channel.receive(state); await channel.flush(); }
+        // A connection with nothing to hand to the engine is done here: `flush` would find nothing, at the price of a
+        // dozen promise turns, for every connection on every poll.
+        if (channel) { channel.receive(state); if (channel.moving) await channel.flush(); }
       } catch (error) {
         channel?.close({ drain: false });
         this.waiting.get(state.id)?.reject(error instanceof Error ? error : new Error('NATIVE_CONNECTION_CLOSED'));
@@ -577,7 +608,7 @@ class NativeChannel implements PeerChannel {
     if (this.closeDeadline && now() >= this.closeDeadline) { this.dispose(); return; }
     const before = this.bufferedAmount;
     const order = this.owner.enhanced ? [this.control, ...(this.lanes ? [this.lanes.control, this.lanes.normal] : []), this.data, ...(this.lanes ? [this.lanes.background] : [])] : [this.data];
-    for (const outgoing of order) { if (this.disposed) return; await this.flushStream(outgoing); }
+    for (const outgoing of order) { if (this.disposed) return; if (outgoing.items.length) await this.flushStream(outgoing); }
     if (this.owner.enhanced && before > DRAIN_LOW_WATER_BYTES && this.bufferedAmount <= DRAIN_LOW_WATER_BYTES) for (const handler of this.drainHandlers) handler();
     if (this.closeDeadline && !this.finished && order.every(outgoing => !outgoing.items.length)) {
       this.finished = true;

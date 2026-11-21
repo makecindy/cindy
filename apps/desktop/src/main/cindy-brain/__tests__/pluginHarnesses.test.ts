@@ -135,6 +135,9 @@ describe('plugin harness registry', () => {
     expect(requestRefresh.mock.calls.slice(2).map(([id]) => id)).toEqual(['offline-plugin']);
     requestPluginHarnessRefresh(1_000 + PLUGIN_HARNESS_REFRESH_COOLDOWN_MS);
     expect(requestRefresh.mock.calls.slice(3).map(([id]) => id).sort()).toEqual(['dsh-plugin', 'offline-plugin']);
+    // Targeting a single shared plugin never wakes or burns cooldowns on unshared plugins.
+    requestPluginHarnessRefresh(1_000 + PLUGIN_HARNESS_REFRESH_COOLDOWN_MS * 2, 'dsh-plugin');
+    expect(requestRefresh.mock.calls.slice(5).map(([id]) => id)).toEqual(['dsh-plugin']);
   });
 
   it('notifies listeners only when a reconcile changes the list', () => {
@@ -187,11 +190,22 @@ describe('plugin harness registry', () => {
     r.publish({ harnesses: [{ id: 'dsh', available: true, remoteWorkspace: true }] });
     r.registry.reconcile();
     expect(r.registry.list()[0]).toMatchObject({ remoteWorkspace: true });
+    expect(r.registry.list()[0]).not.toHaveProperty('guestWorkspace');
     await expect(r.registry.spawn('dsh-plugin:dsh', { remoteWorkspace: true })).resolves.toBe(r.process);
     expect(r.deps.spawn).toHaveBeenLastCalledWith('dsh-plugin', 'dsh', { remoteWorkspace: true });
+    // Cross-account shared tasks additionally require guestWorkspace: true from the plugin.
+    await expect(r.registry.spawn('dsh-plugin:dsh', { remoteWorkspace: true, guestWorkspace: true })).rejects.toThrow('shared');
+    expect(r.deps.spawn).toHaveBeenCalledTimes(1);
+
+    r.publish({ harnesses: [{ id: 'dsh', available: true, remoteWorkspace: true, guestWorkspace: true }] });
+    r.registry.reconcile();
+    expect(r.registry.list()[0]).toMatchObject({ remoteWorkspace: true, guestWorkspace: true });
+    await expect(r.registry.spawn('dsh-plugin:dsh', { remoteWorkspace: true, guestWorkspace: true })).resolves.toBe(r.process);
+    expect(r.deps.spawn).toHaveBeenLastCalledWith('dsh-plugin', 'dsh', { remoteWorkspace: true, guestWorkspace: true });
     // An unavailable engine cannot keep the mode: it is not startable either way.
-    r.publish({ harnesses: [{ id: 'dsh', available: false, remoteWorkspace: true }] });
+    r.publish({ harnesses: [{ id: 'dsh', available: false, remoteWorkspace: true, guestWorkspace: true }] });
     r.registry.reconcile();
     expect(r.registry.list()[0]).not.toHaveProperty('remoteWorkspace');
+    expect(r.registry.list()[0]).not.toHaveProperty('guestWorkspace');
   });
 });

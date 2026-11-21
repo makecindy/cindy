@@ -576,7 +576,8 @@
       "calloutUnknown": "Se não reconhecer esta pessoa, recuse; a ligação deixa de funcionar assim que o pedido for recusado.",
       "approve": "Aprovar partilha",
       "reject": "Recusar pedido",
-      "later": "Decidir mais tarde"
+      "later": "Decidir mais tarde",
+      "calloutPluginEngine": "{{name}} pode utilizá-lo sem instalar o plugin nem a CLI no próprio computador, usando a sessão e a quota da CLI deste computador."
     },
     "apply": {
       "loading": "A ler ligação de partilha…",
@@ -3806,6 +3807,7 @@
         "connecting": "A ligar…",
         "rename": "Mudar nome",
         "suspended": "Desativado",
+        "hidden": "Oculto",
         "unconfigured": "Não configurado"
       },
       "button": {
@@ -3816,7 +3818,9 @@
         "cancel": "Cancelar",
         "retry": "Detetar modelos novamente",
         "retrying": "A tentar novamente a deteção…",
-        "enableProvider": "Ativar fornecedor"
+        "enableProvider": "Ativar fornecedor",
+        "showProvider": "Mostrar",
+        "hideInstead": "Ocultar em vez disso"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4202,7 +4206,7 @@
         "paymentRequired": "Pago",
         "paymentUnlock": "Pagar para desbloquear",
         "enableModel": "Ativar este modelo",
-        "capabilityGroupHint": "Não é apresentado no seletor de modelos da conversa. O interruptor controla a visibilidade na funcionalidade relevante.",
+        "capabilityGroupHint": "Não é apresentado no seletor de modelos. O interruptor define se a funcionalidade relevante pode usar o modelo.",
         "accessWriteFailed": "Não foi possível guardar a alteração. Tente novamente.",
         "visibilityWriteFailed": "Não foi possível guardar a definição de visibilidade do modelo. Tente novamente ou reinicie Cindy se o problema persistir.",
         "disabledGroup": "Desativado",
@@ -4346,22 +4350,22 @@
           "aria": "Filtrar por tipo de modelo",
           "chat": "Conversa"
         },
-        "hiddenGroup": "Não apresentado",
+        "hiddenGroup": "Ocultos",
         "management": {
           "brand": "Fabricante"
         },
         "manage": {
           "title": "Modelos",
-          "selected": "{{count}} selecionados",
-          "hint": "Use os interruptores para escolher os modelos de conversa.",
+          "selected": "{{count}} apresentados",
+          "hint": "Os interruptores definem que modelos aparecem no seletor de modelos. Desligar um apenas o oculta; continua a poder escolhê-lo em «Ocultos», no fundo do seletor.",
           "menu": "Gerir",
           "arrange": "Organizar lista",
           "byBrand": "Agrupar por fabricante",
           "byName": "Ordenar por nome do modelo",
-          "selection": "Seleção de modelos",
-          "showAll": "Selecionar todos os modelos",
-          "hideAll": "Limpar seleção",
-          "reset": "Restaurar seleção predefinida",
+          "selection": "Mostrar no seletor de modelos",
+          "showAll": "Mostrar todos os modelos",
+          "hideAll": "Ocultar todos os modelos",
+          "reset": "Restaurar visibilidade predefinida",
           "connectionRequired": "Ligue-se para usar estes modelos. As suas seleções são guardadas."
         },
         "modelCount_many": "{{count}} modelos"
@@ -4378,7 +4382,8 @@
         "groupNote": "{{device}} transformou este fornecedor num grupo de fornecedores. Ao iniciar uma tarefa com este grupo, {{device}} atribui a tarefa a um dos computadores abaixo segundo a estratégia do grupo e transfere-a para outro se esse computador tiver um problema. Enquanto {{device}} estiver online, use Acesso remoto e partilha aqui para gerir o grupo e as respetivas partilhas.",
         "groupMembersTitle": "Computadores do grupo",
         "groupMembersFailed": "Não foi possível obter o estado dos computadores do grupo neste momento.",
-        "groupBadge_many": "Grupo de fornecedores · {{count}} computadores"
+        "groupBadge_many": "Grupo de fornecedores · {{count}} computadores",
+        "hiddenBanner": "Oculto do seletor de modelos neste computador. Os favoritos e as sessões que o usam não são afetados."
       },
       "genericOAuth": {
         "subtitle": "Conta de subscrição",
@@ -4422,7 +4427,8 @@
           "rejected": "Este fornecedor recusou o pedido. A lista abaixo é da última atualização bem-sucedida. Tente mais tarde ou use outro fornecedor.",
           "empty": "Este fornecedor não devolveu modelos utilizáveis desta vez. A lista abaixo é da última atualização bem-sucedida. Verifique o acesso da sua conta e tente novamente."
         },
-        "suspendedBanner": "Este fornecedor está desativado. As credenciais são mantidas; ative-o para voltar a usar os seus modelos.",
+        "suspendedBanner": "Este fornecedor está desativado: as novas sessões e as funcionalidades em segundo plano deixam de o usar. As credenciais são mantidas. Se apenas não o quiser ver no seletor de modelos, oculte-o em vez disso.",
+        "hiddenBanner": "Oculto do seletor de modelos. As sessões e as funcionalidades em segundo plano que o usam não são afetadas, e continua a poder escolhê-lo em «Ocultos», no fundo do seletor.",
         "remoteAccess": {
           "label": "Permitir utilização remota",
           "description": "Quando ativo, os seus outros computadores e as pessoas com quem partilha podem usar os modelos deste fornecedor. O Agent é executado neste computador, usando a sessão e a quota deste computador.",
@@ -4632,7 +4638,9 @@
       },
       "menu": {
         "disableProvider": "Desativar este fornecedor",
-        "enableProvider": "Ativar este fornecedor"
+        "enableProvider": "Ativar este fornecedor",
+        "hideProvider": "Ocultar do seletor de modelos",
+        "showProvider": "Mostrar no seletor de modelos"
       },
       "builtinApiKey": {
         "subtitle": "Ligação por chave de API",
@@ -8631,7 +8639,8 @@
           "description": "Quando ativo, os seus outros computadores podem executar tarefas com este motor. O Agent é executado neste computador, usando a sessão e a quota deste computador. Os ficheiros e os comandos permanecem no computador onde a tarefa está.",
           "unsupported": "Este plugin ainda não permite usar o motor dele a partir de outros computadores.",
           "remoteControlOff": "Este computador ainda não permite controlo remoto, pelo que outros computadores não podem utilizar este motor.",
-          "ariaLabel": "Permitir que os seus outros computadores usem {{engine}}"
+          "ariaLabel": "Permitir que os seus outros computadores usem {{engine}}",
+          "descriptionShareable": "Quando ativo, os seus outros computadores e as pessoas com quem o partilha podem executar tarefas com este motor sem instalar o plugin. O Agent é executado neste computador, usando a sessão e a quota deste computador. Os ficheiros e os comandos permanecem no computador onde a tarefa está."
         },
         "githubRelease": {
           "title": "Atualizações do plugin",
@@ -14263,6 +14272,8 @@
       "source": {
         "lastConfirmed": "Última atualização: {{time}}",
         "unconfirmed": "Lista de modelos desatualizada",
+        "unreachable": "Não é possível ligar a {{source}}",
+        "unreachableDetail": "Sem ligação. Verifique a rede.",
         "unavailable": "Modelo indisponível",
         "reconnect": "Restabelecer ligação",
         "manage": "Gerir fonte",
@@ -14286,6 +14297,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Não é possível ler os modelos desse computador neste momento",
         "favoritesGroup": "Favoritos",
         "recentGroup": "Recentes",
+        "hiddenGroup": "Ocultos ({{count}})",
+        "hiddenGroupHint": "Os fornecedores e modelos ocultos continuam a poder ser escolhidos",
         "recentEmpty": "Ainda não há modelos recentes — escolha um modelo e aparecerá aqui",
         "favoritesSaveFailed": "Não foi possível guardar as alterações aos favoritos",
         "favoritesCleanupFailed": "Não foi possível remover os favoritos de partilhas de fornecedores revogadas",
@@ -17669,7 +17682,8 @@
         "title": "Importar automatizações do repositório",
         "description": "Origem: {{workingDir}}. Reveja as definições abaixo. A importação aplica estas alterações e ativa novas automatizações, que podem executar comandos e iniciar Agents com acesso total. Importe apenas conteúdo de confiança.",
         "accept": "Confirmar importação",
-        "removed": "Serão removidos: {{names}}"
+        "removed": "Serão removidos: {{names}}",
+        "fileMissing": "Importação ignorada. Não foi possível encontrar o ficheiro de automatizações em {{projectName}}."
       },
       "toast": {
         "summary": "adicionados {{inserted}} · atualizados {{updated}} · removidos {{deleted}}",
@@ -17766,6 +17780,7 @@
       "openWorkdirFailed": "Falha ao abrir a pasta"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "O tempo de espera expirou antes de a mensagem ser enviada. Quando a sessão de destino estiver livre, escolhe {{action}} para a executar.",
       "status": {
         "running": "Em execução",
         "success": "Sucesso",
@@ -21739,6 +21754,7 @@
       "reviewed": "Revisto",
       "verified-publisher": "Editor verificado"
     },
+    "viewLimit": "Há demasiadas páginas abertas. Desloque outra página para fora da área visível ou recolha-a para que esta se abra automaticamente.",
     "pluginRevoked": "O plugin foi desativado ou alterado. Esta página já não está disponível.",
     "pluginCspRejected": "A página solicitou um domínio não declarado e foi bloqueada.",
     "filesOnExecutionComputer": "Ver o conteúdo do ficheiro no computador de execução",
@@ -22486,6 +22502,7 @@
     "picker": {
       "empty": "Ainda não há grupos de modelos. Combine várias fontes num modo nas Definições para o escolher aqui.",
       "manage": "Gerir grupos de modelos",
+      "deviceTitle": "Grupos de modelos · {{device}}",
       "switched": "«{{name}}» mudou esta tarefa para {{model}}",
       "switchUnavailable": "«{{name}}» não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
       "chooseUnavailable": "«{{name}}» não tem agora nenhuma fonte utilizável, por isso não foi selecionado."
