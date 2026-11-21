@@ -346,7 +346,7 @@ describe('local Cindy version snapshots', () => {
       path.join(versionDirectory(h.userData, id), item.resources, 'cindy-version-protocol.json'),
       JSON.stringify({
         version: 1,
-        capabilities: [DEV_ENVIRONMENT_OVERRIDES_CAPABILITY],
+        capabilities: { [DEV_ENVIRONMENT_OVERRIDES_CAPABILITY]: true },
       }),
     );
     expect(await verifyPersonalVersion(h.userData, id, h.original)).toMatchObject({ id });

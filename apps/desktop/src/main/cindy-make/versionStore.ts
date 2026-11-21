@@ -408,9 +408,15 @@ export function supportsDevEnvironmentOverrides(
   const protocol = readVersionJson<{ capabilities?: unknown }>(
     path.join(resources, 'cindy-version-protocol.json'),
   );
+  const capabilities = protocol?.capabilities;
   return (
-    Array.isArray(protocol?.capabilities) &&
-    protocol.capabilities.includes(DEV_ENVIRONMENT_OVERRIDES_CAPABILITY)
+    (Array.isArray(capabilities) && capabilities.includes(DEV_ENVIRONMENT_OVERRIDES_CAPABILITY)) ||
+    (!!capabilities &&
+      typeof capabilities === 'object' &&
+      !Array.isArray(capabilities) &&
+      Object.entries(capabilities).some(
+        ([key, value]) => key === DEV_ENVIRONMENT_OVERRIDES_CAPABILITY && value === true,
+      ))
   );
 }
 
