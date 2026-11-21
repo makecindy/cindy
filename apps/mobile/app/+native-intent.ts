@@ -94,6 +94,7 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
       }
       const hasDeviceId = pairs.some(([key]) => key === 'deviceId');
       const hasFocusClientId = pairs.some(([key]) => key === 'focusClientId');
+      const hasFocusRequestKey = pairs.some(([key]) => key === 'focusRequestKey');
       const linkedDevice = pairs.find(([key]) => key === 'deviceId')?.[1]
         ?? pairs.find(([key]) => key === 'device')?.[1];
       const linkedPeer = linkedDevice ? parseSharedTaskPeer(linkedDevice) : null;
@@ -107,7 +108,10 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
         } else if (key === 'device') {
           if (!hasDeviceId) normalizedParams.push(`deviceId=${encodeURIComponent(value)}`);
         } else if (key === 'message') {
-          if (!hasFocusClientId) normalizedParams.push(`focusClientId=${encodeURIComponent(value)}`);
+          if (!hasFocusClientId) {
+            normalizedParams.push(`focusClientId=${encodeURIComponent(value)}`);
+            if (!initial && !hasFocusRequestKey) normalizedParams.push(`focusRequestKey=${Date.now()}`);
+          }
         } else {
           normalizedParams.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
         }

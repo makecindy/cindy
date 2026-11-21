@@ -179,7 +179,7 @@ describe('mobile native deep-link redirects', () => {
         '/session/s-123?device=host-7&message=msg-9&source=history#inbox',
       ]) {
         expect(redirectSystemPath({ path, initial })).toBe(
-          '/sessions/s-123?deviceId=host-7&focusClientId=msg-9&source=history#inbox',
+          `/sessions/s-123?deviceId=host-7&focusClientId=msg-9${initial ? '' : `&focusRequestKey=${Date.now()}`}&source=history#inbox`,
         );
       }
     });
@@ -213,7 +213,7 @@ describe('mobile native deep-link redirects', () => {
       expect(redirectSystemPath({
         path: 'cindy://session/s-123?device=%E0%A4%A&message=msg-9',
         initial: false,
-      })).toBe('/sessions/s-123?focusClientId=msg-9');
+      })).toBe(`/sessions/s-123?focusClientId=msg-9&focusRequestKey=${Date.now()}`);
     });
 
     it('keeps guest shared-task links on the original route contract', () => {
