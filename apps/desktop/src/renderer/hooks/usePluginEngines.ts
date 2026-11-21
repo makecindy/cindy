@@ -123,6 +123,7 @@ export function usePluginEngines(enabled = true): readonly PluginEngineView[] {
 interface DeviceCatalogue {
   read(): Promise<void>;
   ensureLoaded(): void;
+  retainPicker(): () => void;
   refreshForPicker(): void;
   prefetch(): Promise<void>;
   markStale(): void;
@@ -169,6 +170,8 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
   let current: readonly PluginEngineView[] | null = null;
   let pending: Promise<void> | undefined;
   let deviceGeneration = 0;
+  let pickerUsers = 0;
+  let pickerGeneration = 0;
   let lastReadAt = 0;
   let lastFailedAt = 0;
   let lastRefreshAt = 0;
@@ -223,15 +226,33 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       if (lastFailedAt > 0 && Date.now() - lastFailedAt < DEVICE_PLUGIN_ENGINES_REREAD_MS) return;
       void catalogue.read();
     },
+    retainPicker() {
+      pickerUsers += 1;
+      return () => {
+        pickerUsers = Math.max(0, pickerUsers - 1);
+        if (pickerUsers === 0) {
+          pickerGeneration += 1;
+          clearRefreshTimer();
+        }
+      };
+    },
     refreshForPicker() {
-      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId) || unsupported) return;
+      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId) || unsupported || pickerUsers === 0) {
+        return;
+      }
       const refreshGeneration = deviceGeneration;
+      const activePickerGeneration = pickerGeneration;
+      const isPickerActive = () =>
+        isDataOwnerGenerationCurrent(owner)
+        && refreshGeneration === deviceGeneration
+        && pickerUsers > 0
+        && activePickerGeneration === pickerGeneration;
       const now = Date.now();
       const freshEnough =
         current !== null && lastReadAt > 0 && now - lastReadAt < DEVICE_PLUGIN_ENGINES_REREAD_MS;
       const ensureCurrent = freshEnough ? Promise.resolve() : catalogue.read();
       void ensureCurrent.then(() => {
-        if (!isDataOwnerGenerationCurrent(owner) || refreshGeneration !== deviceGeneration || !(current?.length)) return;
+        if (!isPickerActive() || !(current?.length)) return;
         const afterRead = Date.now();
         if (lastRefreshAt > 0 && afterRead - lastRefreshAt < DEVICE_PLUGIN_ENGINES_REFRESH_MS) return;
         const invoke = window.electronAPI?.deviceLink?.invoke;
@@ -240,12 +261,12 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
         clearRefreshTimer();
         void Promise.resolve(invoke(deviceId, PLUGIN_ENGINES_INVOKE.REFRESH, []))
           .then(() => {
-            if (!isDataOwnerGenerationCurrent(owner) || refreshGeneration !== deviceGeneration) return;
+            if (!isPickerActive()) return;
             clearRefreshTimer();
             const timer = setTimeout(() => {
               activeRefreshTimers.delete(timer);
               if (refreshRereadTimer === timer) refreshRereadTimer = undefined;
-              if (isDataOwnerGenerationCurrent(owner) && refreshGeneration === deviceGeneration) {
+              if (isPickerActive()) {
                 void catalogue.read();
               }
             }, DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
@@ -328,7 +349,11 @@ function unreadSnapshot(): null {
 }
 
 /** Reads on entry/reconnect when requested. `'once'` reuses an existing catalogue; `refresh` asks plugins to republish models. */
-export function useRemotePluginEngines(deviceId?: string, readOnEntry: boolean | 'once' = false): {
+export function useRemotePluginEngines(
+  deviceId?: string,
+  readOnEntry: boolean | 'once' = false,
+  active = true,
+): {
   engines: readonly PluginEngineView[] | null;
   read: () => void;
   refresh: () => void;
@@ -337,10 +362,12 @@ export function useRemotePluginEngines(deviceId?: string, readOnEntry: boolean |
   const catalogue = useMemo(() => deviceId ? deviceCatalogue(owner, deviceId) : null, [owner, deviceId]);
   const read = useCallback(() => { void catalogue?.read(); }, [catalogue]);
   const refresh = useCallback(() => { catalogue?.refreshForPicker(); }, [catalogue]);
+  useEffect(() => (catalogue && active ? catalogue.retainPicker() : undefined), [catalogue, active]);
   useEffect(() => {
+    if (!active) return;
     if (readOnEntry === true) read();
     else if (readOnEntry === 'once') catalogue?.ensureLoaded();
-  }, [readOnEntry, read, catalogue]);
+  }, [active, readOnEntry, read, catalogue]);
   const remoteEngines = useSyncExternalStore(
     catalogue?.subscribe ?? subscribeDisabled,
     catalogue?.snapshot ?? unreadSnapshot,

@@ -69,7 +69,7 @@ import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   isSamePluginEngineChoice,
   remotePluginEngineChoices,
-  resolvePluginEngineEffort,
+  resolvePluginEngineSessionSwitchEffort,
   type PluginEngineChoice,
   type PluginEngineSelection,
 } from '@/lib/pluginEngineSelection';
@@ -2292,6 +2292,7 @@ function CCAgentSessionContent({
     pluginEngineOnTaskComputer && !readOnly && (pluginEngineTask || pluginEngineSwitchEligible)
       && !remoteSessionUnavailable && !awaitingCreation ? pluginEngineDeviceId : undefined,
     viewVisible ? (pluginEngineTask ? true : 'once') : false,
+    viewVisible,
   );
   const refreshPluginEngineCatalogue = pluginEngineDeviceId ? remotePluginCatalogue.refresh : undefined;
   const pluginEngines = remotePluginCatalogue.engines ?? localPluginEngines;
@@ -2378,6 +2379,7 @@ function CCAgentSessionContent({
     pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !readOnly && !remoteSessionUnavailable && !awaitingCreation
       ? pluginEngineAgentDeviceId : undefined,
     pluginEngineTask && viewVisible,
+    viewVisible,
   );
   /** 那台电脑的引擎列表；undefined = 引擎就在任务所在电脑，null = 那台还没答复(或暂时连不上)。 */
   const agentDevicePluginEngines = pluginEngineAgentDeviceId
@@ -3842,6 +3844,30 @@ function CCAgentSessionContent({
       agentPluginCatalogue.refresh, agentDevicePluginEngines, t],
   );
 
+  const activeSessionPluginEngineChoice = useMemo<PluginEnginesPickerProps['active']>(() => {
+    if (!session) return null;
+    const intentDeviceId = pluginEngineSwitchIntent
+      ? (pluginEngineSwitchIntent.agentDeviceId === undefined ? (session.agentDeviceId ?? null) : pluginEngineSwitchIntent.agentDeviceId)
+      : null;
+    if (pluginEngineSwitchIntent?.providerId) {
+      return {
+        providerId: pluginEngineSwitchIntent.providerId,
+        ...(intentDeviceId ? { deviceId: intentDeviceId } : {}),
+        modelId: pluginEngineSwitchIntent.model,
+        ...(isPluginEngineEffort(pluginEngineSwitchIntent.effort) ? { effort: pluginEngineSwitchIntent.effort } : {}),
+      };
+    }
+    if (pluginEngineTask && !agentSwitchIntent && session.providerId) {
+      return {
+        providerId: session.providerId,
+        ...(pluginEngineAgentDeviceId ? { deviceId: pluginEngineAgentDeviceId } : {}),
+        modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+        ...(isPluginEngineEffort(session.effort) ? { effort: session.effort } : {}),
+      };
+    }
+    return null;
+  }, [session, pluginEngineSwitchIntent, pluginEngineTask, agentSwitchIntent, pluginEngineAgentDeviceId]);
+
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
   // set-model)；换到另一个引擎——从内置引擎或别的插件引擎——与内置引擎之间的切换一样登记意图，
   // 下一条消息发送时带着对话交接过去。和在选择器里点一行同一个顺序保证：已经点了发送就不再换。
@@ -3850,11 +3876,11 @@ function CCAgentSessionContent({
     if (hasPendingAgentSendDispatch(sessionId) || hasPendingAgentSwitchOperation(sessionId)) return false;
     const finishSwitch = beginAgentSwitchOperation(sessionId);
     const targetEngine = switchablePluginEngines.find((item) => isSamePluginEngineChoice(item, selection));
-    const resolvedEffort = selection.effort ?? resolvePluginEngineEffort(
+    const resolvedEffort = resolvePluginEngineSessionSwitchEffort(
+      selection,
       targetEngine,
-      selection.modelId,
-      pluginEngineSwitchIntent?.effort ?? (pluginEngineTask ? session.effort : undefined),
-    ) ?? undefined;
+      activeSessionPluginEngineChoice,
+    );
     const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
     const switchTo = () => api.switchSessionAgent(
       sessionId, 'acp', selection.modelId, selection.providerId, resolvedEffort ?? '', false,
@@ -3893,7 +3919,7 @@ function CCAgentSessionContent({
       finishSwitch();
     }
   }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
-    pluginEngineTask, pluginEngineSwitchIntent, pluginEngineAgentDeviceId, switchablePluginEngines,
+    pluginEngineTask, activeSessionPluginEngineChoice, pluginEngineAgentDeviceId, switchablePluginEngines,
     pluginEngineChoiceLabel, handlePluginEngineModelSelect, t]);
   // 打开模型选择器时：本机已装插件引擎请插件重报模型，同时读取同账号其他电脑开放的引擎(与新建任务一致)。
   // 引用必须稳定——选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。
@@ -3919,33 +3945,14 @@ function CCAgentSessionContent({
       || (!pluginEngineTask && !pluginEngineDeviceId && switchablePluginEngines.length === 0 && switchPluginEngineDevices.length === 0)) {
       return undefined;
     }
-    const intentDeviceId = pluginEngineSwitchIntent
-      ? (pluginEngineSwitchIntent.agentDeviceId === undefined ? (session.agentDeviceId ?? null) : pluginEngineSwitchIntent.agentDeviceId)
-      : null;
-    const active = pluginEngineSwitchIntent?.providerId
-      ? {
-          providerId: pluginEngineSwitchIntent.providerId,
-          ...(intentDeviceId ? { deviceId: intentDeviceId } : {}),
-          modelId: pluginEngineSwitchIntent.model,
-          ...(isPluginEngineEffort(pluginEngineSwitchIntent.effort) ? { effort: pluginEngineSwitchIntent.effort } : {}),
-        }
-      : pluginEngineTask && !agentSwitchIntent && session.providerId
-        ? {
-            providerId: session.providerId,
-            ...(pluginEngineAgentDeviceId ? { deviceId: pluginEngineAgentDeviceId } : {}),
-            modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
-            ...(isPluginEngineEffort(session.effort) ? { effort: session.effort } : {}),
-          }
-        : null;
     return {
       engines: switchablePluginEngines,
-      active,
+      active: activeSessionPluginEngineChoice,
       onSelect: handlePluginEngineSwitchSelect,
       readCatalogue: readSessionPluginEngines,
     };
   }, [pluginEngineSwitchEligible, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
-    session, pluginEngineSwitchIntent, pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect,
-    pluginEngineAgentDeviceId, readSessionPluginEngines]);
+    session, activeSessionPluginEngineChoice, pluginEngineTask, handlePluginEngineSwitchSelect, readSessionPluginEngines]);
 
   // effort 已在 ChatInput 中落库成功；直接 merge 确切值回 SSoT，避免额外 GET
   // 读取到旧快照后把菜单选中态反向覆盖。ChatInput 不维护第二条 local state。

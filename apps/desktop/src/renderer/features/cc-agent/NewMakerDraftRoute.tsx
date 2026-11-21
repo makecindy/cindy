@@ -1345,8 +1345,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const pluginEnginesProps = useMemo(
     () => (
       (pluginEnginesAllowed && (pluginEngineList.length || pluginEngineDevices.length)) ||
-      (controlledPluginEnginesAllowed &&
-        (controlledPluginCatalogue.engines === null || pluginEngineChoices.length > 0 || !!dlPluginEngine))
+      controlledPluginEnginesAllowed
     )
       ? {
           engines: pluginEngineChoices,
@@ -1424,8 +1423,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       pluginEnginesAllowed,
       controlledPluginEnginesAllowed,
       effectiveDeviceLinkDeviceId,
-      controlledPluginCatalogue.engines,
-      dlPluginEngine,
       pluginEngineList,
       pluginEngineDevices,
       pluginEngineChoices,

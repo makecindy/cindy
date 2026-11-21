@@ -112,17 +112,20 @@ import {
   pluginEngineSessionCreateFields,
   remotePluginEngineChoices,
   resolveActivePluginEngine,
+  resolvePluginEngineSessionSwitchEffort,
 } from '@/lib/pluginEngineSelection';
 import { engineIconKindOf } from '@/components/sidebar/VendorIcon';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
   DEVICE_PLUGIN_ENGINES_REFRESH_MS,
   DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS,
+  DEVICE_PLUGIN_ENGINES_REREAD_MS,
   findPluginEngine,
   hasRemotePluginEngineSubscribers,
   markRemotePluginEnginesStale,
   resetPluginEnginesStoreForTests,
   useDevicesPluginEngines,
+  usePluginEngineIdentity,
   useRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
 import { PLUGIN_ENGINES_INVOKE, type PluginEngineView } from '../../../../shared/pluginEngines';
@@ -306,6 +309,90 @@ it('asks the controlled computer to republish plugin engine models on picker ref
       await Promise.resolve();
     });
     expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(2);
+
+    // Leaving or hiding the picker view cancels the pending 2.5s re-read even while sidebar rows remain mounted.
+    const sidebarRow = renderHook(() => usePluginEngineIdentity(publishedDsh.providerId, 'computer-b'));
+    const callsBeforeLeave = invoke.mock.calls.length;
+    first.unmount();
+    second.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(invoke.mock.calls).toHaveLength(callsBeforeLeave);
+    sidebarRow.unmount();
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    resetPluginEnginesStoreForTests();
+  }
+});
+
+// 生产入口与可观察结果：useRemotePluginEngines 空初始目录复读 + resolvePluginEngineSessionSwitchEffort；
+// 被控电脑初始无引擎时后续重开面板仍可发现新装插件，跨插件引擎切换模型使用目标模型默认档位而非旧引擎档位。
+// 规则依据：server-channel-review(15s 冷却后可重新读取空目录、离开页面后在途 refresh 不再安排定时器)与模型选择器行展示一致性。
+// 覆盖缺口：此前空目录未保留远程读取或离开后在途 refresh 仍挂定时器，且跨插件引擎切换误带入旧引擎的 high 档位。
+// 最小失败输入与 tier：unit；在途 refresh 返回前卸载视图仍触发延迟 LIST，或引擎 A(high)切到引擎 B(默认 low)提交了 high。
+it('discovers newly enabled remote engines after an initially empty list, stops in-flight refresh on leave, and keeps cross-engine default effort', async () => {
+  vi.useFakeTimers();
+  const newlyEnabled = engine('agy-plugin:agy', 'Antigravity', {
+    models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'low' }],
+  });
+  let hasEngineOnPeer = false;
+  let finishRefresh!: () => void;
+  const invoke = vi.fn((_deviceId: string, channel: string) => {
+    if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
+      return Promise.resolve(hasEngineOnPeer ? [newlyEnabled] : []);
+    }
+    if (channel === PLUGIN_ENGINES_INVOKE.REFRESH) {
+      return new Promise<void>((resolve) => { finishRefresh = resolve; });
+    }
+    return Promise.resolve(undefined);
+  });
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  try {
+    const draft = renderHook(
+      ({ active }) => useRemotePluginEngines('computer-b', 'once', active),
+      { initialProps: { active: true } },
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(draft.result.current.engines).toEqual([]);
+
+    // User installs/enables a plugin on computer B and opens the picker after the 15s read cooldown.
+    hasEngineOnPeer = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REREAD_MS);
+      draft.result.current.refresh();
+      await Promise.resolve();
+    });
+    expect(draft.result.current.engines).toEqual([newlyEnabled]);
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
+
+    // Leaving before the in-flight REFRESH resolves prevents scheduling a delayed LIST download.
+    const callsWhenLeaving = invoke.mock.calls.length;
+    draft.rerender({ active: false });
+    await act(async () => {
+      finishRefresh();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(invoke.mock.calls).toHaveLength(callsWhenLeaving);
+
+    // Same plugin engine carries over explicit 'high'; switching to a different plugin engine uses its own 'low' default.
+    expect(
+      resolvePluginEngineSessionSwitchEffort(
+        { providerId: newlyEnabled.providerId, modelId: 'gemini-3-pro' },
+        newlyEnabled,
+        { providerId: newlyEnabled.providerId, effort: 'high' },
+      ),
+    ).toBe('high');
+    expect(
+      resolvePluginEngineSessionSwitchEffort(
+        { providerId: newlyEnabled.providerId, modelId: 'gemini-3-pro' },
+        newlyEnabled,
+        { providerId: 'acp-plugin:dsh-plugin:dsh', effort: 'high' },
+      ),
+    ).toBe('low');
   } finally {
     cleanup();
     vi.useRealTimers();
