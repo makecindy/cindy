@@ -382,6 +382,28 @@ describe('MakerScheduleRunner model selection', () => {
       expect(started).toHaveBeenCalledWith(h.session.id);
     });
 
+    // PR #11881 review r4651177672: the pick was recorded only after the whole reply, so a failed run was
+    // never recorded and a long run's decision had expired. It must be recorded once the message is dispatched.
+    it('records the pick when the message is dispatched, before the reply, even if the run then fails', async () => {
+      const h = createSessionHarness();
+      const started = vi.fn();
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
+        pickScheduleModelGroup: async () => ({
+          route: { modelAgentKind: 'codex' as const, model: 'gpt-picked', providerId: '', effort: undefined, modelAgentDeviceId: '' },
+          started,
+        }),
+        resolveModelSelection: async (choice) => choice,
+      });
+      const firing = harness.runner.fire(baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
+      }), createFireContext()).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(h.send).toHaveBeenCalled());
+      await vi.waitFor(() => expect(started).toHaveBeenCalledWith(h.session.id));
+      h.emit({ type: 'error', data: { message: 'upstream failed' } });
+      await firing;
+      expect(started).toHaveBeenCalledOnce();
+    });
+
     it('keeps the saved model when the mode has nothing to pick', async () => {
       const h = createSessionHarness();
       const started = vi.fn();

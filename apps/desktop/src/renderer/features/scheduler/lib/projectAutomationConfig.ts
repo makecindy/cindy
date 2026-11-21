@@ -112,6 +112,8 @@ export function formToProjectConfig(
     providerId: form.providerId.trim() || undefined,
     agentDeviceId: form.model.trim() ? form.agentDeviceId?.trim() || undefined : undefined,
     effort: form.effort || undefined,
+    // 模型组(模式)：脚本与插件引擎任务不按模式选，与 buildScheduleInput 同源。
+    modelGroup: (form.executionMode ?? 'agent') !== 'script' && !form.pluginEngine && form.modelGroup ? form.modelGroup : undefined,
     // Codex / Pi 都生效(runner.ts:665);只认 codex 会丢弃 Pi 任务的 Fast(codex review)。
     fastMode: (form.agentKind === 'codex' || form.agentKind === 'pi') && form.fastMode ? true : undefined,
     useWorktree: form.useWorktree,

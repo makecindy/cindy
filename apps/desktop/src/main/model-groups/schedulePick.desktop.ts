@@ -37,9 +37,10 @@ export function createDesktopScheduleModelGroupPicker() {
     },
     bind: bindModelGroupSession,
     sessionLocation: async (sessionId) => {
-      const [row] = await getDbClient().drizzle.select({ agentDeviceId: sessions.agentDeviceId }).from(sessions)
+      const [row] = await getDbClient().drizzle
+        .select({ agentDeviceId: sessions.agentDeviceId, remoteHostId: sessions.remoteHostId }).from(sessions)
         .where(eq(sessions.id, sessionId)).limit(1);
-      return row ? (row.agentDeviceId ?? null) : undefined;
+      return row ? { agentDeviceId: row.agentDeviceId ?? null, ssh: !!row.remoteHostId } : undefined;
     },
     writeNote: (sessionId, note, { clientId, sinceMs }) => {
       void (async () => {

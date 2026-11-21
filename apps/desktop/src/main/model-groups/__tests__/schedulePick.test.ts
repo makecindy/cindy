@@ -26,7 +26,7 @@ const routed = (agentDeviceId?: string): ModelGroupResolveResult => ({
   why: 'order', quota: null, trace: [{ state: 'picked', limitedUntilMs: null } as never],
 });
 
-function ports(result: ModelGroupResolveResult, location: string | null | undefined = undefined) {
+function ports(result: ModelGroupResolveResult, location: { agentDeviceId: string | null; ssh: boolean } | undefined = undefined) {
   let now = 1_000;
   const calls = {
     resolve: [] as ModelGroupResolveRequest[],
@@ -68,10 +68,18 @@ describe('scheduled runs pick from their model group', () => {
   });
 
   it('a bound task is picked where it already runs and keeps following it', async () => {
-    const { value, calls } = ports(routed('desk-2'), 'desk-2');
+    const { value, calls } = ports(routed('desk-2'), { agentDeviceId: 'desk-2', ssh: false });
     const pick = await createScheduleModelGroupPicker(value)({ ...schedule, targetSessionId: 'task-9' } as Schedule);
     expect(calls.resolve[0]).toEqual({ selection: { type: 'route', id: 'daily' }, location: { agentDeviceId: 'desk-2' } });
     expect(pick?.route).toHaveProperty('modelAgentDeviceId', undefined);
+  });
+
+  // PR #11881 review r4651177678: an SSH task looked local, so the mode could pick another engine or a local
+  // source and the SSH run then failed. Modes are not used for SSH yet (model-groups.md §6, §9).
+  it('a bound SSH task keeps its saved model and is not picked', async () => {
+    const { value, calls } = ports(routed(), { agentDeviceId: null, ssh: true });
+    expect(await createScheduleModelGroupPicker(value)({ ...schedule, targetSessionId: 'ssh-task' } as Schedule)).toBeNull();
+    expect(calls.resolve).toHaveLength(0);
   });
 
   it('a deleted mode runs the saved model and writes nothing', async () => {

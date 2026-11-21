@@ -313,7 +313,7 @@ export interface SchedulerQueueDeps {
  */
 export interface ScheduleModelGroupPick {
   route?: Pick<Schedule, 'modelAgentKind' | 'model' | 'providerId' | 'effort' | 'modelAgentDeviceId'>;
-  /** 这次运行建好或唤醒了任务后调用一次：提交选路记录、记下任务用着哪个来源、在任务里写说明。 */
+  /** 这一轮消息派发出去时调用一次(不等回复结束)：提交选路记录、记下任务用着哪个来源、在任务里写说明。 */
   started(sessionId: string): void;
 }
 
@@ -1037,15 +1037,21 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (modelGroupPick?.route) schedule = { ...schedule, ...modelGroupPick.route, fastMode: false };
     }
     const holder: EphemeralSessionHolder = { assertOwner: ctx.assertFireContext };
+    if (modelGroupPick) {
+      const pick = modelGroupPick;
+      let recorded = false;
+      holder.runDispatched = (sessionId) => {
+        if (recorded) return;
+        recorded = true;
+        pick.started(sessionId);
+      };
+    }
     const closeQuietOutput = hidesScheduledTranscript(schedule)
       ? beginQuietScheduledOutput(schedule.id, ctx.runId)
       : undefined;
     try {
       throwIfFireAborted(ctx.signal, 'runner entry');
-      const result = await this.fireInner(schedule, ctx, holder, enqueuePrompt);
-      // 顺延(没真跑)不算用了这次选路；真跑了才提交、记绑定、写说明。
-      if (modelGroupPick && !result.deferred && result.sessionId) modelGroupPick.started(result.sessionId);
-      return result;
+      return await this.fireInner(schedule, ctx, holder, enqueuePrompt);
     } finally {
       closeQuietOutput?.();
       holder.releaseAgentSwitchLock?.();
@@ -2449,6 +2455,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (acceptedMessageClientId) {
             this.deps.onModelDispatched?.(session.id, acceptedMessageClientId);
           }
+          holder.runDispatched?.(session.id);
         },
         planMode: routinePermissions?.planMode ?? heartbeatPermissions?.planMode ?? false,
         onAccepted: async (signal) => {
@@ -2946,6 +2953,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // turn is headless; marking the whole queue wait would suppress setup
         // cards in that unrelated interactive turn.
         markHeadlessTurnDispatched();
+        if (!ctx.signal.aborted) holder.runDispatched?.(sessionId);
         const live = this.deps.maker.getSession(sessionId);
         // abort 撞上"项已转 activeTurn、尚未 accept"的派发窗口时,removeQueuedPrompt
         // 是 no-op、coordinator 会继续把 turn 发出去 —— 这里在 accept 时刻补杀:
@@ -4422,6 +4430,11 @@ function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
  */
 interface EphemeralSessionHolder {
   assertOwner?: () => void;
+  /**
+   * 这一轮定时消息真的派发出去时调用一次(直发在 onDispatching，排队在 onAccepted)。
+   * 模型组的选路记录、任务绑定与说明挂在这里：运行开始就记，不等回复结束、失败也算用过。
+   */
+  runDispatched?: (sessionId: string) => void;
   preRunHookOutput?: string;
   /** 与引擎写进 run 记录的同一份放行结果；本轮之后的失败通知要带上它，去重才对得上。 */
   preRunHookResult?: ScheduleRun['preRunHookResult'];

@@ -6,6 +6,7 @@
  * - 绑定已有任务(含持续会话第二次起)：只在那个任务所在的运行位置里选，换模型时沿用它，不借模式换电脑。
  * - 新建任务：模式自己决定这次在哪台运行，与新任务草稿相同。
  * - 模式已删除：按没选模式运行，不写说明；里面都用不了：沿用存下的具体模型，说明写明沿用了它。
+ * - 绑定的是 SSH 任务：模式现在不用于 SSH(model-groups.md §6、§9)，按存下的具体模型运行，不选不写。
  */
 import type { Schedule } from '@cindy/maker-scheduler';
 
@@ -27,8 +28,11 @@ export interface ScheduleModelGroupPorts {
   resolve(request: ModelGroupResolveRequest): Promise<ModelGroupResolveResult>;
   commit(decisionId: string): void;
   bind(sessionId: string, selection: ModelGroupSelection, pickedKey: string): void;
-  /** 绑定任务现在的运行位置：null = 本机；undefined = 任务已不存在(这次会新建)。 */
-  sessionLocation(sessionId: string): Promise<string | null | undefined>;
+  /**
+   * 绑定任务现在在哪里运行：agentDeviceId null = 本机；ssh = 任务在 SSH 主机上。
+   * undefined = 任务已不存在(这次会新建)。
+   */
+  sessionLocation(sessionId: string): Promise<{ agentDeviceId: string | null; ssh: boolean } | undefined>;
   /** 写说明：放在 `sinceMs` 之后这个任务的第一条用户消息下面(就是这次运行发出的那条)。 */
   writeNote(sessionId: string, note: ModelGroupRouteNoteBody, options: { clientId: string; sinceMs: number }): void;
   t: ModelGroupTranslate;
@@ -49,10 +53,11 @@ export function createScheduleModelGroupPicker(ports: ScheduleModelGroupPorts) {
     const pickedAt = ports.now();
     const boundSessionId = schedule.targetSessionId?.trim() || null;
     const boundLocation = boundSessionId ? await ports.sessionLocation(boundSessionId) : undefined;
+    if (boundLocation?.ssh) return null;
     const bound = boundLocation !== undefined;
     const result = await ports.resolve({
       selection,
-      ...(bound ? { location: { agentDeviceId: boundLocation } } : {}),
+      ...(bound ? { location: { agentDeviceId: boundLocation.agentDeviceId } } : {}),
     });
     if (result.outcome === 'missing') return null;
     const note = buildModelGroupRouteNote(result, keptModelName(schedule), ports.t, ports.locale(), ports.locationName);
