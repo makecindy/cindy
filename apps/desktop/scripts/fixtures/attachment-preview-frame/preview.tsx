@@ -15,6 +15,25 @@ const markdown = [
   ...Array.from({ length: 8 }, (_, i) => `第 ${i + 1} 段：用于检查长文档在预览窗里的滚动与留白。`),
 ].join('\n\n');
 
+// #10888: one CommonMark HTML node used to swallow all of these visible runs.
+// Resource-bearing HTML is deliberately nested, not an existing standalone img.
+const htmlMarkdown = [
+  '# HTML 正文核对',
+  '<div>容器正文<span>与嵌套文字</span></div>',
+  '<details><summary>展开标题</summary><div><p>第一段正文</p><p>第二段正文<br>换行内容</p></div></details>',
+  '<table><tr><th>名称</th><th>数量</th></tr><tr><td>苹果</td><td>2</td></tr></table>',
+  '<div>cindy://session/abc /tmp/review.txt</div>',
+  '[普通链接](https://example.com/document)',
+  '**普通 Markdown** 仍然显示。',
+  '```html\n<div><script>literal_code()</script></div>\n```',
+  '<div id="html-injection" style="color:red" onclick="window.__htmlExecuted=true">安全正文' +
+    '<script>window.__htmlExecuted=true</script><style>body{display:none}</style>' +
+    '<iframe src="https://html-safety.invalid/frame"></iframe>' +
+    '<object data="https://html-safety.invalid/object">object_payload</object>' +
+    '<img src="https://html-safety.invalid/image" onerror="window.__htmlExecuted=true">' +
+    '<a href="javascript:window.__htmlExecuted=true">链接标签正文</a></div>',
+].join('\n\n');
+
 function sampleImage() {
   const canvas = document.createElement('canvas');
   canvas.width = 1600;
@@ -53,7 +72,7 @@ function Conversation() {
   );
 }
 
-function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
+function Fixture({ kind, initialLine }: { kind: 'zip' | 'markdown' | 'image'; initialLine?: number }) {
   const [open, setOpen] = useState(true);
   const [image] = useState(sampleImage);
   return (
@@ -61,7 +80,7 @@ function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
       <Conversation />
       {open && kind === 'zip' && <TextLightbox filePath={ZIP} onClose={() => setOpen(false)} />}
       {open && kind === 'markdown' && (
-        <TextLightbox filePath={MARKDOWN} onClose={() => setOpen(false)} />
+        <TextLightbox filePath={MARKDOWN} initialLine={initialLine} onClose={() => setOpen(false)} />
       )}
       {open && kind === 'image' && (
         <ImageLightbox src={image} filename="示例图片.png" onClose={() => setOpen(false)} />
@@ -72,7 +91,7 @@ function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
 
 mountPage({
   route: '/',
-  host: () => ({
+  host: (ctx) => ({
     fileBrowser: {
       readFile: async () => ({ ok: false, code: 'BINARY_FILE', message: 'binary' }),
       stat: async ({ relPath }: { relPath: string }) => ({
@@ -83,13 +102,19 @@ mountPage({
       }),
       onEvent: subscription('file-browser'),
     },
-    readTextFilePreview: async () => ({ success: true, data: markdown, size: markdown.length }),
+    readTextFilePreview: async () => {
+      const content = typeof ctx.data.document === 'string'
+        ? ctx.data.document
+        : ctx.case === 'html-content' ? htmlMarkdown : markdown;
+      return { success: true, data: content, size: content.length };
+    },
     showItemInFolder: async () => ({ success: true }),
     openPath: async () => '',
   }),
   render: (ctx) => (
     <Fixture
-      kind={ctx.case === 'markdown' ? 'markdown' : ctx.case === 'image' ? 'image' : 'zip'}
+      kind={ctx.case === 'markdown' || ctx.case.startsWith('html-') ? 'markdown' : ctx.case === 'image' ? 'image' : 'zip'}
+      initialLine={typeof ctx.data.initialLine === 'number' ? ctx.data.initialLine : undefined}
     />
   ),
 });

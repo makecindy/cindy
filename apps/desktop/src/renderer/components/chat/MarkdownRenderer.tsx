@@ -16,8 +16,8 @@ import { WorkspaceMediaSrc } from './useWorkspaceMediaPath';
  * - Code blocks: JetBrains Mono, Card bg + Board border + 12px radius
  * - Inline code: Stone bg + 4px padding + 6px radius
  * - GFM tables, lists, bold, italic, links
- * - HTML tags filtered (no <script>); safe single <img> tags are normalized
- *   into Markdown image nodes before HTML filtering.
+ * - Raw HTML stays disabled; container text is preserved as Markdown text nodes,
+ *   and safe single <img> tags use the existing Markdown image renderer.
  */
 
 import { Tip } from '@/components/ui/tooltip';
@@ -40,6 +40,7 @@ import { normalizeDisplayMathFences } from './normalizeDisplayMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
+import remarkHtmlText from './remarkHtmlText';
 import remarkBareSpaceLocalImages from './remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
@@ -226,12 +227,9 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // 全中招);mobile 自研 parser 用正则配对本就能渲染这些写法,此处对齐。只放宽
 // emphasis/strong 的定界判定,不碰 `~~` 删除线(gfm strikethrough 有独立定界
 // 逻辑,行为不变),也不影响带空格的 `2 ** 3 ** 4` 这类本应保持字面量的写法。
-// remarkPreserveRawLocalDestinations 必须排在**链尾**:它给 image / link 节点存原始
-// 本地目的地(见该文件头部说明),必须在所有会新建这两类节点的插件之后运行——
-// remarkHtmlImages(<img> HTML → mdast image)、remarkBareSpaceLocalImages(带裸空格的
-// 本地图片 → image,须在 remarkLocalPathLinks 之前,否则路径会先被切成链接碎片)与
-// remarkLocalPathLinks(正文裸路径 → link)。remarkSessionLinks 产出的 cindy:// 深链带 scheme,被它的判据跳过,
-// 顺序无关。
+// remarkPreserveRawLocalDestinations follows all image/link-producing transforms
+// to preserve their local destinations. remarkHtmlText runs last: restored HTML
+// prose must not enter path/session-link discovery or create active nodes.
 export const REMARK_PLUGINS: PluggableList = [
   [remarkGfm, { singleTilde: false }],
   remarkCjkFriendly,
@@ -242,6 +240,7 @@ export const REMARK_PLUGINS: PluggableList = [
   remarkBareSpaceLocalImages,
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
+  remarkHtmlText,
 ];
 export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   [remarkGfm, { singleTilde: false }],
@@ -254,6 +253,7 @@ export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   remarkSessionLinks,
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
+  remarkHtmlText,
 ];
 // rehypeSlug: assigns a slug-style `id` to every heading. Without it
 // in-document anchor links (`[Section](#section-name)`) hit dead targets.
