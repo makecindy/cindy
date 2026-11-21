@@ -1,3 +1,4 @@
+import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
 /**
  * useUsageHistory — 首页用量仪表盘的数据 hook。
  *
@@ -404,6 +405,7 @@ function serializeForCompare(p: UsageHistoryPayload): string {
 }
 
 interface UsageHistoryScopeState {
+  generation?: number;
   cache: UsageHistoryPayload | null;
   cacheSerialized: string | null;
   inflight: Promise<UsageHistoryPayload | null> | null;
@@ -611,6 +613,7 @@ export function useUsageHistory(opts?: {
   history: UsageHistoryPayload | null;
   refreshing: boolean;
 } {
+  const generation = useOptionalDataOwnerGeneration();
   const paused = opts?.paused ?? false;
   const scopeKey = normalizeScopeKey(opts?.userId);
   const request: UsageHistoryRequest = {
@@ -644,7 +647,9 @@ export function useUsageHistory(opts?: {
     setScopedHistory(activeScope.cache);
     // mount 与 paused→false (展开瞬间) 都拉一次 — 折叠摘要 / 图表数据都保持新鲜。
     // 收起时跳过后续 push 订阅, 避免每个 turn 触发后台重拉。
-    void load(scopedKey);
+    const ownerChanged = activeScope.generation !== undefined && activeScope.generation !== generation;
+    activeScope.generation = generation;
+    void load(scopedKey, { forceRefresh: ownerChanged });
     setIsRefreshing(activeScope.refreshing);
 
     // paused (卡片收起): 不订阅消费推送, 收起用户的 per-turn 重拉成本归零
@@ -706,7 +711,7 @@ export function useUsageHistory(opts?: {
       offPricing();
       if (peerTimer) clearInterval(peerTimer);
     };
-  }, [paused, scopedKey]);
+  }, [paused, scopedKey, generation]);
 
   const history = historyState.scopeKey === scopedKey ? historyState.value : scope.cache;
   const refreshing =

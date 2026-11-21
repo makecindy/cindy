@@ -23,7 +23,7 @@ export { USAGE_XAI_RATE_LIMIT_CHANGED, USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED } f
  *   - maker-ipc/usage.ts: maker:usage:today(agentKind) handler 读 readAgentTodayUsage
  */
 
-import { BrowserWindow } from './usageBroadcastPorts.js';
+import { BrowserWindow, getTokenOwnerLifetime } from './usageBroadcastPorts.js';
 
 import { isTrustedAppRendererWindow } from './usageBroadcastPorts.js';
 
@@ -248,6 +248,7 @@ interface CodexTokenSnapshot {
   total: number;
 }
 
+let tokenOwnerLifetime: number | undefined;
 let codexTodaySnapshot: CodexTokenSnapshot = blankCodexSnapshot();
 
 function blankCodexSnapshot(): CodexTokenSnapshot {
@@ -279,11 +280,7 @@ export function recordCodexTurnUsage(usage: unknown): void {
   if (!usage || typeof usage !== 'object') return;
   const u = usage as CodexTurnUsage;
 
-  // 切日检测: localDayKey 与 snapshot.day 不一致 → 整体 reset 后再累加
-  const today = localDayKey();
-  if (today !== codexTodaySnapshot.day) {
-    codexTodaySnapshot = blankCodexSnapshot();
-  }
+  const today = readCodexTodaySnapshot().day;
 
   const promptDelta = Number(u.promptTokens) || 0;
   const completionDelta = Number(u.completionTokens) || 0;
@@ -306,17 +303,17 @@ export function recordCodexTurnUsage(usage: unknown): void {
 
 /** 重新广播当前 Codex token 快照, 用于延迟模型用量写入后触发 renderer 刷新。 */
 export function rebroadcastCodexTodayUsage(): void {
-  const today = localDayKey();
-  if (today !== codexTodaySnapshot.day) {
-    codexTodaySnapshot = blankCodexSnapshot();
-  }
-  broadcastCodexTokens(codexTodaySnapshot);
+  broadcastCodexTokens(readCodexTodaySnapshot());
 }
 
 /** Codex 今日 token 累计 (供 IPC handler / 内部消费)。renderer 拉取时也做切日兜底。 */
 function readCodexTodaySnapshot(): CodexTokenSnapshot {
   const today = localDayKey();
-  if (today !== codexTodaySnapshot.day) codexTodaySnapshot = blankCodexSnapshot();
+  const owner = getTokenOwnerLifetime();
+  if (today !== codexTodaySnapshot.day || owner !== tokenOwnerLifetime) {
+    tokenOwnerLifetime = owner;
+    codexTodaySnapshot = blankCodexSnapshot();
+  }
   return codexTodaySnapshot;
 }
 

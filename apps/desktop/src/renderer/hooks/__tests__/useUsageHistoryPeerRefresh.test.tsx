@@ -155,3 +155,35 @@ it('only the window at the settled generation refreshes on the turn receipt', as
     setDataOwnerGeneration(null, 0);
   }
 });
+
+// Renderer tier: the first push can precede the AuthProvider commit in this window.
+// On the actual hook's generation update, pull the missed view once without polling.
+it('reads today and history when a window catches up with an earlier stamped push', async () => {
+  const auth = await import('@/contexts/AuthContext');
+  const { setDataOwnerGeneration } = await import('@/contexts/dataOwnerGeneration');
+  const { useTodaySpend } = await import('../useTodaySpend');
+  const generation = vi.spyOn(auth, 'useOptionalDataOwnerGeneration').mockReturnValue(41);
+  const usage = window.electronAPI.maker.usage;
+  const getToday = vi.fn(async () => ({ day: 'fixture', totalTokens: 10 }));
+  const offs = new Set<(data: { total: number }, stamp: unknown) => void>();
+  Object.assign(usage, { getToday, onTodayTokensChanged: (cb: (value: {total:number}, stamp:unknown) => void) => {
+    offs.add(cb); return () => offs.delete(cb);
+  } });
+  try {
+    setDataOwnerGeneration('a', 41);
+    const view = renderHook(() => { useUsageHistory({userId:'window-catchup'}); return useTodaySpend(); });
+    await act(async () => {});
+    expect(view.result.current.codexTokens).toBe(10);
+    const initial = getHistory.mock.calls.length;
+    act(() => { for (const cb of offs) cb({total:3}, {dataOwnerId:'b',ownerGeneration:42}); });
+    expect(view.result.current.codexTokens).toBe(10);
+    getToday.mockResolvedValue({day:'fixture',totalTokens:3});
+    generation.mockReturnValue(42);
+    setDataOwnerGeneration('b',42);
+    await act(async () => { view.rerender(); });
+    expect(getToday).toHaveBeenCalledTimes(4);
+    expect(view.result.current.codexTokens).toBe(3);
+    expect(getHistory).toHaveBeenCalledTimes(initial+1);
+    view.unmount();
+  } finally { generation.mockRestore(); setDataOwnerGeneration(null); }
+});

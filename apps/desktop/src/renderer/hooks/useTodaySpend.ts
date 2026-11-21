@@ -1,3 +1,4 @@
+import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
 import { isDataOwnerPushCurrent } from '../contexts/dataOwnerGeneration';
 /**
  * useTodaySpend — 订阅"今日用量"实时数据 (走 maker.usage.* IPC)。
@@ -37,6 +38,7 @@ function localDayKey(): string {
 }
 
 export function useTodaySpend(): TodaySpendData {
+  const generation = useOptionalDataOwnerGeneration();
   const [data, setData] = useState<TodaySpendData>({
     day: localDayKey(),
     money: null,
@@ -44,6 +46,7 @@ export function useTodaySpend(): TodaySpendData {
   });
 
   useEffect(() => {
+    setData({ day: localDayKey(), money: null, codexTokens: null });
     let cancelled = false;
     let currentDay = localDayKey();
 
@@ -119,7 +122,7 @@ export function useTodaySpend(): TodaySpendData {
       unsubscribeCodex();
       clearInterval(dateCheckInterval);
     };
-  }, []);
+  }, [generation]);
 
   return data;
 }
