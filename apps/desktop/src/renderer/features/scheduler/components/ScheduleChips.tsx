@@ -1203,7 +1203,7 @@ export function ModelEffortChip({
             title={t('scheduler.chips.model.modelGroupTitle', { name: activeModelGroupName })}
             active={open}
             disabled={disabled}
-            className="[&>span:last-of-type]:min-w-[106px] max-w-[240px] px-2"
+            className="max-w-[240px] px-2"
           />
         ) : (
         <ChipButton
