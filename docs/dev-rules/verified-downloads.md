@@ -68,7 +68,7 @@ Agent runtime、Cindy Make 工具、GitHub CLI、Ollama runtime、llama.cpp runt
   尚未覆盖：插件市场安装没有进度通道（需新增 IPC 与手机端回执，另行设计）；SkillHub 详情页的
   「更新到新版本」仍只显示按钮运行态。
 - 重试次数：插件市场与 SkillHub 的包从 Cindy 服务器下载，2026-11-17 起 `maxAttempts` 由 1 改为 3
-  （退避约 1 秒、2 秒，4xx 含签名过期不重试，无扇出；插件仍受原 `totalMs` 总时限约束）。SkillHub
+  （退避约 1 秒、2 秒，4xx 含签名过期不重试，无扇出；插件总预算为至少 120 秒，或 60 秒连接余量加按 256 KiB/s 传完整包的时间（取较大值）；128 MiB 包上限使预算最多 572 秒）。SkillHub
   使用 `resume: false`，每次重试从头下载，龟速换连接不适用。
 
 ## 受管工具安装

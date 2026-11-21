@@ -71,6 +71,33 @@ describe('downloadVerifiedPlugin', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  // #11825: exercise the production download entry with progress beyond the old total deadline.
+  it('finishes a large archive after 120 seconds of continuous progress', async () => {
+    vi.useFakeTimers();
+    const chunk = Buffer.alloc(8 * 1024 * 1024, 7);
+    const bytes = Buffer.concat([chunk, chunk, chunk, chunk]);
+    let pulls = 0;
+    fetchMock.mockResolvedValue(new Response(new ReadableStream({
+      pull(controller) {
+        pulls++;
+        return new Promise<void>(resolve => setTimeout(() => {
+          controller.enqueue(chunk);
+          if (pulls === 4) controller.close();
+          resolve();
+        }, 40_000));
+      },
+    }, { highWaterMark: 0 })));
+    const file = target();
+    const result = downloadVerifiedPlugin('https://downloads.example.test/a', expected(bytes), file);
+    for (let i = 1; i <= 4; i++) {
+      await vi.waitFor(() => expect(pulls).toBe(i));
+      await vi.advanceTimersByTimeAsync(40_000);
+    }
+    await result;
+    expect(expected(fs.readFileSync(file))).toEqual(expected(bytes));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('accepts a package above the former 8 MiB market limit', async () => {
     const bytes = Buffer.alloc(9 * 1024 * 1024, 7);
     fetchMock.mockResolvedValue(new Response(bytes));

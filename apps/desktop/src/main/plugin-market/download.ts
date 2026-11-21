@@ -29,9 +29,9 @@ export async function downloadVerifiedPlugin(
       redirect: 'error',
       resume: false,
       existingTarget: 'error',
-      // Up to 3 tries within the same total budget (user decision 2026-11-17).
+      // Keep retries bounded; allow large archives time to transfer at 256 KiB/s.
       retry: { maxAttempts: 3 },
-      timeout: { connectMs: 60_000, idleMs: 60_000, totalMs: 120_000 },
+      timeout: { connectMs: 60_000, idleMs: 60_000, totalMs: Math.max(120_000, 60_000 + Math.ceil(expected.sizeBytes / (256 * 1024)) * 1000) },
     });
   } catch (error) {
     if (error instanceof DownloadError) {
