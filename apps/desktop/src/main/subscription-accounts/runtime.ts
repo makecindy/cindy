@@ -149,6 +149,12 @@ interface AccountSnapshot {
   unavailable?: boolean;
   /** The failed read could not reach the account service (not a CLI or file problem). */
   unreachable?: boolean;
+  /**
+   * Unreachable reads only: the sign-in this slot last confirmed in this session (same auth object
+   * and account key). Being unable to reach the service is not a sign-out, so the source and its
+   * last verified models stay listed. Never makes the account usable for a run.
+   */
+  retainedSignIn?: { auth: AccountSnapshot['auth']; accountKey?: string };
   at: number;
   usageAt?: number;
   /**
@@ -172,9 +178,13 @@ interface CodexModelFlight {
   forced: boolean;
   saving?: Promise<void>;
 }
-function sameCodexModelAccount(snapshot: CodexModelSnapshot | undefined, info: AccountSnapshot): boolean {
+function sameCodexModelAccount(snapshot: CodexModelSnapshot | undefined, info: Pick<AccountSnapshot, 'auth' | 'accountKey'>): boolean {
   return !!snapshot && (info.accountKey || snapshot.accountKey
     ? !!info.accountKey && snapshot.accountKey === info.accountKey : snapshot.auth === info.auth);
+}
+/** The sign-in a source listing may show: the current one, or the one kept through an unreachable read. */
+function listedSignIn(info: AccountSnapshot | undefined): Pick<AccountSnapshot, 'auth' | 'accountKey'> | undefined {
+  return info?.auth.authenticated ? info : info?.retainedSignIn;
 }
 
 interface OwnerRuntime {
@@ -962,10 +972,16 @@ async function snapshot(
           error: error instanceof Error ? error.name : typeof error,
           unreachable: isAccountServiceUnreachable(error),
         });
+        const unreachable = isAccountServiceUnreachable(error);
+        const retainedSignIn = !unreachable ? undefined
+          : lastRead?.auth.authenticated
+            ? { auth: lastRead.auth, ...(lastRead.accountKey ? { accountKey: lastRead.accountKey } : {}) }
+            : lastRead?.retainedSignIn;
         result = {
           auth: { authenticated: false, ...(identity ? { identity } : {}) },
           unavailable: true,
-          ...(isAccountServiceUnreachable(error) ? { unreachable: true } : {}),
+          ...(unreachable ? { unreachable: true } : {}),
+          ...(retainedSignIn ? { retainedSignIn } : {}),
           at: Date.now(),
         };
       }
@@ -1047,7 +1063,7 @@ export function hasConnectedSubscriptionPool(providerId: string, options: { incl
   const serving = new Set(servingAccounts(found).map(account => account.id));
   return found.pool.accounts.filter(account => (serving.has(account.id) || historical.has(account.id))
     && !disconnectedFor(found.pool, found.kind, account.id))
-    .some((a) => state.cache.get(keyOf(found.kind, a.id))?.auth.authenticated);
+    .some((a) => !!listedSignIn(state.cache.get(keyOf(found.kind, a.id))));
 }
 
 /**
@@ -1213,9 +1229,9 @@ export function readSubscriptionPoolClaudeModels(
       || disconnectedFor(found.pool, 'anthropic', account.id)) continue;
     if (account.id === 'default' && !defaultAccountBound('anthropic')) continue;
     if ([...state.logins].some(([key, login]) => key.startsWith('anthropic:') && login.accountId === account.id)) continue;
-    const auth = state.cache.get(keyOf('anthropic', account.id))?.auth;
+    const auth = listedSignIn(state.cache.get(keyOf('anthropic', account.id)))?.auth;
     const snapshot = state.claudeModels.get(account.id);
-    if (!auth?.authenticated) continue;
+    if (!auth) continue;
     if (!snapshot || !(snapshot.auth === auth || (!!auth.identity && snapshot.auth.identity === auth.identity))
       || (snapshot.failedAt !== undefined && snapshot.models.length === 0)) {
       discoveryUnavailable = true;
@@ -1255,7 +1271,11 @@ export async function refreshSubscriptionPoolCodexModels(
   const refreshAccount = async (id: string): Promise<void> => {
     const loggingIn = () => [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id);
     const info = state.cache.get(keyOf('openai', id));
-    if (!info?.auth.authenticated || loggingIn()) { state.codexModels.delete(id); return; }
+    if (!info?.auth.authenticated || loggingIn()) {
+      // An unreachable account read keeps its last verified list; its model read would fail the same way.
+      if (!info?.retainedSignIn || loggingIn()) state.codexModels.delete(id);
+      return;
+    }
     const { auth } = info;
     const previous = state.codexModels.get(id);
     if (!force && previous?.auth === auth && (previous.failedAt === undefined
@@ -1415,9 +1435,9 @@ export function readSubscriptionPoolCodexModels(
     if (disconnectedFor(found.pool, 'openai', account.id)) continue;
     if ((account.paused && !historical.has(account.id)) || readLegacyCodexProviderId(account.id)) continue;
     if ([...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === account.id)) continue;
-    const info = state.cache.get(keyOf('openai', account.id));
+    const signIn = listedSignIn(state.cache.get(keyOf('openai', account.id)));
     const snapshot = state.codexModels.get(account.id);
-    if (!info?.auth.authenticated || !snapshot || !sameCodexModelAccount(snapshot, info)) continue;
+    if (!signIn || !snapshot || !sameCodexModelAccount(snapshot, signIn)) continue;
     for (const model of snapshot.models) if (!models.has(model.id)) models.set(model.id, model);
   }
   const next = [...models.values()];
@@ -1436,9 +1456,11 @@ export function lastConfirmedSubscriptionModelsAt(providerId: string): number | 
   const times: number[] = [];
   for (const account of servingAccounts(found)) {
     const info = state.cache.get(keyOf('openai', account.id));
+    const signIn = listedSignIn(info);
     const models = state.codexModels.get(account.id);
-    if (!account.paused && info?.auth.authenticated && models?.failedAt !== undefined
-      && models.confirmedAt !== undefined && sameCodexModelAccount(models, info)) times.push(models.confirmedAt);
+    // A retained sign-in means the account itself could not be read: its whole list is the last confirmed one.
+    if (!account.paused && signIn && (models?.failedAt !== undefined || !info?.auth.authenticated)
+      && models?.confirmedAt !== undefined && sameCodexModelAccount(models, signIn)) times.push(models.confirmedAt);
   }
   return times.length ? Math.min(...times) : undefined;
 }

@@ -246,6 +246,7 @@ import {
   onSubscriptionPoolCodexModelsChanged,
   onSubscriptionAccountsChanged,
   readSubscriptionPoolCodexModels,
+  lastConfirmedSubscriptionModelsAt,
   resetDefaultSubscriptionCodexDiscovery,
   resetDefaultSubscriptionClaudeDiscovery,
   readSubscriptionAccountBlocked,
@@ -6876,5 +6877,31 @@ describe('unreachable account service', () => {
     } finally {
       off();
     }
+  });
+
+  // Unit (2026-11-21 user report): losing the network made OpenAI vanish from the model picker,
+  // because an unreachable account read looked signed out. Only that case keeps the source listed.
+  it('keeps the source and its last verified models listed while the account cannot be reached', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels();
+    expect(hasConnectedSubscriptionPool('openai')).toBe(true);
+    for (let read = 0; read < 2; read++) {
+      h.read.mockRejectedValue(unreachable());
+      h.rpc.mockRejectedValue(unreachable());
+      expect((await refreshSubscriptionPool('openai', true)).accounts[0].status).toBe('unavailable');
+      await refreshSubscriptionPoolCodexModels(true);
+      expect(hasConnectedSubscriptionPool('openai')).toBe(true);
+      expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+      expect(isSubscriptionPoolReadUnreachable('openai')).toBe(true);
+      expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
+    }
+    h.read.mockRejectedValue(new Error('temporary authentication read failure'));
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasConnectedSubscriptionPool('openai')).toBe(false);
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
   });
 });
