@@ -313,6 +313,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       parseSharedTaskPeer,
       shortDeviceRef,
       replayActiveSubscriptions,
+      broadcast,
+      DEVICE_LINK_PUSH,
       sharedHostStreams,
       sharedHostSourceEpoch: 1,
       broadcast, DEVICE_LINK_PUSH,
@@ -327,6 +329,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       expect(broadcast).toHaveBeenCalledWith(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
       expect(broadcast.mock.invocationCallOrder[0]).toBeLessThan(replayActiveSubscriptions.mock.invocationCallOrder[0]);
     } else expect(broadcast).not.toHaveBeenCalled();
+
+    expect(broadcast).toHaveBeenCalledWith(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
 
     // Exact target matters: losing the peer argument would replay healthy peers.
     // Ordinary/guest peers and an unchanged shared-host stream must still replay
