@@ -5,7 +5,11 @@
  */
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { rewritesRevealSource, useSidebarPresentation } from '../sidebarPresentation';
+import {
+  passiveRevealOnBackgroundOpen,
+  rewritesRevealSource,
+  useSidebarPresentation,
+} from '../sidebarPresentation';
 
 const root = { current: { getBoundingClientRect: () => ({ width: 800 }) } } as never;
 const width = () => 800;
@@ -265,4 +269,17 @@ it('rewrites the reveal source only when the request really changes the pane', (
   expect(rewritesRevealSource({ ...passiveClose, collapsed: true })).toBe(false);
   // 用户手势照旧改写，合并回来的来源翻转还靠它。
   expect(rewritesRevealSource({ visibility: 'open', userInitiated: true, collapsed: false })).toBe(true);
+});
+
+// Bug: 后台任务的旧档在写之前没读，写完再读只会读到「已展开」，程序开栏永远记不上被动
+// 展示；用户第一次落地那个任务时被当成用户开栏，窗口被自动化拉宽。
+it('marks a background program open passive only when the pane was really closed', () => {
+  const open = { visibility: 'open' as const, userInitiated: false };
+  expect(passiveRevealOnBackgroundOpen({ ...open, wasCollapsed: true })).toBe(true);
+  // 已经开着的幂等请求：那格记忆是用户自己开的那次，落地时该照常占窗口宽度。
+  expect(passiveRevealOnBackgroundOpen({ ...open, wasCollapsed: false })).toBe(false);
+  // 用户手势跨任务开栏走自己的来源，不算被动展示。
+  expect(passiveRevealOnBackgroundOpen({ ...open, userInitiated: true, wasCollapsed: true })).toBe(false);
+  // 收起不是开栏，标记由 close 分支清掉。
+  expect(passiveRevealOnBackgroundOpen({ visibility: 'close', userInitiated: false, wasCollapsed: false })).toBe(false);
 });

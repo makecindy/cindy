@@ -154,7 +154,7 @@ import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileFor
 import { createPassiveRevealMarker } from '@/layout/passiveRevealMarker';
 import { createUserRevealMarker } from '@/layout/userRevealMarker';
 import { rightSidebarExpansionReady } from '@/layout/rightSidebarReadiness';
-import { rewritesRevealSource } from '@/layout/sidebarPresentation';
+import { passiveRevealOnBackgroundOpen, rewritesRevealSource } from '@/layout/sidebarPresentation';
 import { readRemoteBots } from '@/features/bots/useRemoteBots';
 import { useSessionEntryLocationCommits } from '@/features/bots/useSessionEntryLocationCommits';
 import { islandEntryRouteState, requestIslandEntryAlertDisposal } from '@/features/bots/islandEntryAlert';
@@ -1161,18 +1161,26 @@ export function MainLayout() {
       } else if (targetSessionId) {
         // 后台路径:写入目标 session 存档。用户手势跨任务 open 才切主窗;
         // agent / 插件自动化(userInitiated:false)只落档,不抢当前输入焦点。
+        // 旧档必须在写之前读：写完之后再读只会读到刚写下的「已展开」。
+        const wasCollapsed = readCollapsedFor(targetSessionId);
         writeCollapsedFor(targetSessionId, targetCollapsed);
         if (visibility === 'open' && opts.userInitiated !== false) {
           // 用户手势：落地后照常占窗口宽度。
           programReveal.drop(targetSessionId);
           userReveal.mark(targetSessionId);
           navigateToSessionRef.current?.(targetSessionId);
-        } else if (visibility === 'open') {
+        } else if (
+          passiveRevealOnBackgroundOpen({
+            visibility,
+            userInitiated: opts.userInitiated !== false,
+            wasCollapsed,
+          })
+        ) {
           // 程序动作：只在落档里把面板打开，落地时按被动展示，不占窗口宽度。已经开着的
           // 幂等请求不记：那格记忆本来就属于之前的开栏，落地时该按它自己的来源恢复
           // （用户开着的那次是占过宽度的，设置页往返要把它宽回来）。
-          if (readCollapsedFor(targetSessionId)) programReveal.mark(targetSessionId);
-        } else {
+          programReveal.mark(targetSessionId);
+        } else if (visibility === 'close') {
           // 同一个任务被程序收起：这次后台开栏不再成立。
           programReveal.drop(targetSessionId);
         }

@@ -23,6 +23,20 @@ export function rewritesRevealSource(opts: {
   return opts.userInitiated || opts.collapsed !== (opts.visibility === 'close');
 }
 
+/**
+ * 后台任务上的程序开栏要不要记为「被动展示」。
+ * 只记第一次真的从收起变展开的那次：原本就开着的幂等请求，「开着」是用户自己那次，
+ * 落地时该照常占窗口宽度。`wasCollapsed` 必须是写档之前读到的值——写完再读只会读到刚
+ * 写的「已展开」，标记永远记不上，自动化开栏就会被当成用户开栏把窗口拉宽。
+ */
+export function passiveRevealOnBackgroundOpen(opts: {
+  visibility: 'open' | 'close';
+  userInitiated: boolean;
+  wasCollapsed: boolean;
+}): boolean {
+  return opts.visibility === 'open' && !opts.userInitiated && opts.wasCollapsed;
+}
+
 /** Hold the old layout while native geometry crosses the IPC/compositor boundary. */
 export function useSidebarPresentation(
   root: RefObject<HTMLDivElement | null>,
