@@ -1382,7 +1382,7 @@ export function UserMessage({
     ) : null;
 
   const historyNotice = inputNotice === 'oversized-input-skipped' ? (
-    <p className="text-12 leading-5 text-[var(--text-secondary)]" data-input-notice="">
+    <p className="text-12 leading-[1.667] text-[var(--text-secondary)]" data-input-notice="">
       {t('chat.userMessage.oversizedInputSkipped')}
     </p>
   ) : null;

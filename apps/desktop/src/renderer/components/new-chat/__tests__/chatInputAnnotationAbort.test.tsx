@@ -1144,6 +1144,35 @@ it('keeps a remote draft with no directory local-scan-free, but searches nonempt
   expect(h.scan).toHaveBeenLastCalledWith('', expect.any(String), 2000, 'needle', 'remote-device', expect.objectContaining({ includeLocalContext: false, includeTaskHistory: true }));
 });
 
+// Unit, L342: the mounted composer sends the admitted route while a model
+// choice is a preview. A missing catalog row leaves the explicit provider in
+// the payload, and the default route stays null. The onSend port is the fixture.
+it.each([
+  ['active provider absent from the catalog', 'missing-connection', false],
+  ['current provider absent from the catalog during a preview', 'missing-connection', true],
+  ['default provider during a preview', null, true],
+] as const)('preserves the %s in the send payload', async (_label, providerId, preview) => {
+  const sessionId = 'composer-provider-route';
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only'), sshModel('preview-only')])];
+  if (preview) {
+    makerChatStore.noteAgentSwitchIntent(sessionId, 'codex', { model: 'preview-only', providerId: 'openai' });
+  }
+  const onSend = vi.fn<ComponentProps<typeof ChatInput>['onSend']>().mockResolvedValue(true);
+  try {
+    renderComposer({ sessionId, ...(preview ? { remoteHostId: 'builder' } : { deviceLinkDeviceId: 'target' }),
+      runtimeAgentKind: 'codex', vendorKey: 'codex', initialModel: 'remote-only',
+      initialProviderId: providerId, initialEffort: 'low', onSend });
+    await waitFor(() => expect(h.editor).not.toBeNull());
+    await act(async () => { h.editor!.commands.setContent('<p>Continue the task</p>'); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' })); });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0][1]).toBe('remote-only');
+    expect(onSend.mock.calls[0][6]).toMatchObject({ providerId });
+  } finally {
+    makerChatStore.clearAgentSwitchIntent(sessionId);
+  }
+});
+
 it('restores text, attachments and strokes after an aborted annotated send', async () => {
   h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only')])];
   const restoreFiles = vi.fn((files: readonly AttachedFile[]) => [...files]);

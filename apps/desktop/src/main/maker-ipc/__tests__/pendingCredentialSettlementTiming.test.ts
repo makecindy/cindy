@@ -18,7 +18,11 @@ describe('desktop credential settlement without a permit', () => {
         maker: { listActiveSessions: () => { record('sessions'); return []; }, closeSession: async () => {} },
         ...(path === 'persist' || path === 'pi' ? {
           resolveRoute: async () => { record('resolve'); return { model: 'model', providerId: 'after', degraded: false }; },
-          persistRoute: async () => { record('persist'); },
+          persistRoute: async () => {
+            record('persist');
+            await Promise.resolve();
+            record('persist-ready');
+          },
         } : {}),
         applyPiPending: async () => { record('pi'); return 'applied'; },
         onApplied: () => record('wake'),
@@ -34,7 +38,9 @@ describe('desktop credential settlement without a permit', () => {
           timer: ['0 sessions before', '0 wake after', '0 applied after'],
           close: ['0 wake after', '0 applied after'],
           pi: ['0 sessions before', '0 resolve before', '2 pi before', '3 wake before', '3 applied before'],
-          persist: ['0 sessions before', '0 resolve before', '2 persist after', '3 wake after', '3 applied after'],
+          // The writer still sees the old provider on entry and at the end of its async work.
+          // The queue wake and applied event both see the new provider on the next tick.
+          persist: ['0 sessions before', '0 resolve before', '2 persist before', '3 persist-ready before', '4 wake after', '4 applied after'],
           applied: ['0 sessions before', '0 wake after', '0 applied after'],
         };
         expect(calls).toEqual(expected[path]);
