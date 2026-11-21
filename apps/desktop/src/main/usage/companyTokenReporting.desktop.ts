@@ -14,6 +14,7 @@ import { CompanyTokenQueue, projectUsage, type CompanyPolicy } from './companyTo
 import { installCompanyUsageCapture, installExecutionReporting, type CompanyModelTokens } from './companyTokenFacts.js';
 
 const POLICY_CHECK_INTERVAL_MS = 12 * 60 * 60_000;
+const RETRY_INTERVAL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
 function identity() {
@@ -131,8 +132,10 @@ export function createCompanyTokenReporting(
       return;
     }
     syncing = true;
+    clearTimeout(timer);
     const version = invalidation;
     let policyLoaded = false;
+    let nextRefreshAt = Date.now() + POLICY_CHECK_INTERVAL_MS;
     try {
       const who = identity();
       if (!who) {
@@ -150,7 +153,6 @@ export function createCompanyTokenReporting(
         policy = null;
         return;
       }
-      timer.refresh();
       const me = meResponseSchema.parse(await (await request(who, '/api/me')).json());
       if (!current(who) || invalidation !== version) return;
       const rule = me.membership.companyTokenReporting;
@@ -258,12 +260,19 @@ export function createCompanyTokenReporting(
         queue.acknowledge(scope, batch.batchId);
       }
     } catch (error) {
-      if (version === invalidation && (!policyLoaded || error instanceof CompanyAuthorizationError)) policy = null;
+      if (version === invalidation) {
+        if (!policyLoaded || error instanceof CompanyAuthorizationError) policy = null;
+        // Temporary failures must not postpone policy discovery or a durable withdrawal for 12 hours.
+        if (!(error instanceof CompanyAuthorizationError)) nextRefreshAt = Date.now() + RETRY_INTERVAL_MS;
+      }
     } finally {
       syncing = false;
       if (rerun) {
         rerun = false;
         void refresh();
+      } else if (!disposed) {
+        timer = setTimeout(() => void refresh(), Math.max(0, nextRefreshAt - Date.now()));
+        timer.unref();
       }
     }
   };
@@ -401,7 +410,7 @@ export function createCompanyTokenReporting(
     }
     void refresh();
   };
-  const timer = setInterval(() => {
+  let timer = setTimeout(() => {
     if (identity()) void refresh();
   }, POLICY_CHECK_INTERVAL_MS);
   timer.unref();
@@ -432,7 +441,7 @@ export function createCompanyTokenReporting(
     refresh: () => onOwner(true),
     dispose() {
       disposed = true;
-      clearInterval(timer);
+      clearTimeout(timer);
       unsubscribe();
       unsubscribeSettings();
       requests.abort();

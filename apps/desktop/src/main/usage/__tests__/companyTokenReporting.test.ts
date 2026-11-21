@@ -93,18 +93,123 @@ it('keeps the policy until its 12-hour recheck and ignores unchanged identity no
   service.dispose();
   vi.useFakeTimers();
   try {
-    ports.fetch.mockResolvedValueOnce(Response.json(me(true))).mockResolvedValueOnce(Response.json(me(false)));
+    let finish!: (response: Response) => void;
+    ports.fetch.mockReturnValueOnce(new Promise<Response>(resolve => { finish = resolve; }))
+      .mockResolvedValueOnce(Response.json(me(false)));
     service = createCompanyTokenReporting(subscribeSettings);
     service.refresh();
+    await vi.advanceTimersByTimeAsync(1_000);
+    finish(Response.json(me(true)));
     await vi.advanceTimersByTimeAsync(0);
     const onAuthChange = ports.subscribe.mock.lastCall![0];
     onAuthChange();
-    await vi.advanceTimersByTimeAsync(12 * 60 * 60_000 - 60_000);
+    await vi.advanceTimersByTimeAsync(12 * 60 * 60_000 - 60_000 - 1_000);
     expect(ports.fetch).toHaveBeenCalledTimes(1);
     expect(startCompanyUsage()).toBeTypeOf('function');
     await vi.advanceTimersByTimeAsync(60_000);
     expect(ports.fetch).toHaveBeenCalledTimes(2);
     expect(startCompanyUsage()).toBeUndefined();
+  } finally {
+    service.dispose();
+    vi.useRealTimers();
+  }
+});
+
+// Unit regression for discussion_r4654181708: the public service previously waited 12 hours
+// after a single offline request. Existing delivery tests only retried via manual refresh.
+// Fake time and synthetic responses verify recovery, durable withdrawal and batch idempotency.
+it.each(['policy', 'withdrawal', 'batch'] as const)(
+  'automatically retries a failed %s after five minutes and restores the normal cadence',
+  async (failure) => {
+    const { CompanyTokenQueue } = await import('../companyTokenQueue');
+    service.dispose();
+    vi.useFakeTimers();
+    try {
+      const file = path.join(dir, 'company-token-outbox.json');
+      if (failure === 'batch') {
+        new CompanyTokenQueue(file).add(
+          { owner: JSON.stringify(['cn', org.orgId, org.id]), orgRevision: 2, memberRevision: 1 },
+          [{ day: '2020-01-01', model: 'gpt-5', ...counts }],
+        );
+      }
+      const failedRoute = { policy: '/api/me', withdrawal: '/participation', batch: '/batches' }[failure];
+      const batches: string[] = [];
+      let attempts = 0;
+      let participating = true;
+      ports.fetch.mockImplementation(async (url: string, options) => {
+        if (url.endsWith('/batches')) batches.push(JSON.parse(options.body).batchId);
+        if (url.endsWith(failedRoute) && ++attempts === 1) throw new Error('offline');
+        if (url.endsWith('/api/me')) return Response.json({
+          ...me(true), membership: { ...member, companyTokenReporting: { ...rule, participating } },
+        });
+        if (url.endsWith('/participation')) participating = JSON.parse(options.body).participating;
+        return new Response(null, { status: 204 });
+      });
+      service = createCompanyTokenReporting(subscribeSettings);
+      if (failure === 'withdrawal') {
+        ports.allowed.mockReturnValue(false);
+        settingsChanged(false, false);
+      } else {
+        service.refresh();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toBe(1);
+      expect(companyExecutionReporting()?.available()).toBe(failure === 'batch');
+      if (failure === 'withdrawal') expect(readdirSync(dir).some(name => name.startsWith('company-token-opt-out-'))).toBe(true);
+      await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+      expect(attempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts).toBe(2);
+      expect(companyExecutionReporting()?.available()).toBe(failure !== 'withdrawal');
+      if (failure === 'withdrawal') {
+        expect(participating).toBe(false);
+        expect(readdirSync(dir)).toEqual([]);
+      }
+      if (failure === 'batch') expect(batches).toEqual([batches[0], batches[0]]);
+      const requests = ports.fetch.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(12 * 60 * 60_000 - 1);
+      expect(ports.fetch).toHaveBeenCalledTimes(requests);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ports.fetch).toHaveBeenCalledTimes(requests + (failure === 'withdrawal' ? 0 : 1));
+    } finally {
+      service.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it('never schedules another request when an offline response arrives after disposal', async () => {
+  service.dispose();
+  vi.useFakeTimers();
+  try {
+    let fail!: (error: Error) => void;
+    ports.fetch.mockReturnValue(new Promise((_resolve, reject) => { fail = reject; }));
+    service = createCompanyTokenReporting(subscribeSettings);
+    service.refresh();
+    service.dispose();
+    fail(new Error('offline'));
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+    expect(ports.fetch).toHaveBeenCalledTimes(1);
+    expect(companyExecutionReporting()?.available()).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    service.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it('does not use the short retry cadence when the server denies company authorization', async () => {
+  service.dispose();
+  vi.useFakeTimers();
+  try {
+    ports.fetch.mockResolvedValue(new Response(null, { status: 403 }));
+    service = createCompanyTokenReporting(subscribeSettings);
+    service.refresh();
+    await vi.advanceTimersByTimeAsync(12 * 60 * 60_000 - 1);
+    expect(ports.fetch).toHaveBeenCalledTimes(1);
+    expect(startCompanyUsage()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ports.fetch).toHaveBeenCalledTimes(2);
   } finally {
     service.dispose();
     vi.useRealTimers();
