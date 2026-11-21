@@ -350,6 +350,55 @@ it.each([['never comes', false], ['comes in time', true]] as const)(
   });
 
 /** 测试价值
+ * - 生产入口与可观察结果：PortableSocket.openWithBindings 读目录、交给传输层的准入名单（`admittedPeers`）、拨号与入站连接的归属
+ *   （Desktop worker、Node Host 与手机共用）。目录里同账号两张证书带同一把传输密钥时，只认签发晚的那一张：准入名单里这把密钥只出现一次，
+ *   用这把密钥建的连接记在那台设备名下，另一个设备号像不在目录里的设备一样连不上，但仍记作 Agent-Net 设备（不因此改走 Device Link）；
+ *   带本机自己密钥的别的设备号不算对端。
+ * - Bug／规则依据：2026-11-21 真机，账号目录 26 台设备里有两个设备号带同一把传输密钥（同一台设备换了设备号重新登记，旧证书还在）。
+ *   手机的原生引擎按密钥准入，遇到重复就拒收整份名单（`DUPLICATE_PEER`），手机每次打开 Agent-Net 都失败；电脑上连接被记到排在前面的旧设备号名下。
+ * - 现有覆盖缺口：没有任何用例的目录里有重复的传输密钥；原生引擎的 `DUPLICATE_PEER` 只在名单本身出错时测过。
+ * - 最小失败输入：一台设备的两张证书（不同设备号、不同签发时间、同一把密钥），先旧后新或先新后旧；再加一张带本机密钥的别的设备号的证书。
+ * - tier：unit，真实证书与路由，内存传输；三行合计约 40 毫秒。 */
+it.each([['listed first', true], ['listed last', false]] as const)(
+  'keeps only the latest certificate of a transport key when the earlier one is %s', async (_name, staleFirst) => {
+    const local = generateIdentity('a-local'), device = generateIdentity('m-renamed-device');
+    const { root, bootstrap } = createPrivateNetwork('Duplicate transport key', local);
+    const issued = Date.now();
+    const view = (identity: Pick<typeof device, 'deviceId' | 'signingKey' | 'transportKey'>, now: number, online: boolean): DeviceView => ({
+      certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity, role: 'member', now }),
+      name: identity.deviceId, online, remoteControlEnabled: true, capabilities: [] });
+    const stale = view({ ...device, deviceId: 'm-earlier-device-id' }, issued - 60_000, false), current = view(device, issued, true);
+    // Another device id carrying this device's own key is this device as it was, whenever it was issued: never a peer.
+    const impostor = view({ ...local, deviceId: 'z-carries-the-local-key' }, issued, true);
+    const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const,
+      devices: staleFirst ? [stale, current, impostor] : [impostor, current, stale], delegations: [],
+      send() {}, presence() {}, onDatagram() {}, close() {} });
+    const key = Buffer.from(device.transportKey, 'base64url').toString('hex');
+    const connect = vi.fn(async (entry: RosterEntry): Promise<PeerChannel> => ({ remoteId: entry.id, send() {}, onData() {}, onClose() {}, close() {}, path: () => 'relay' }));
+    let transport!: TransportOptions;
+    const socket = await AgentNetSocket.openWithBindings({
+      client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
+        connect: async () => uplink },
+      userId: bootstrap.ownerCertificate.subject,
+      bindings: { verifyCertificate, createTransport: async (options) => { transport = options; return { id: 'local', dial: {}, connect, close: async () => undefined }; } },
+    });
+    try {
+      const admitted = transport.admittedPeers!();
+      expect(admitted.filter(peer => peer.id === key).map(peer => peer.relayId)).toEqual(['m-renamed-device']);
+      expect(new Set(admitted.map(peer => peer.id)).size).toBe(admitted.length);
+      expect(admitted.map(peer => peer.relayId)).not.toContain('z-carries-the-local-key');
+      expect(transport.relayIdOf!(key)).toBe('m-renamed-device');
+      expect([socket.supports('m-renamed-device'), socket.supports('m-earlier-device-id'), socket.supports('z-carries-the-local-key')]).toEqual([true, false, false]);
+      // Left out, not forgotten: a device this socket has seen on Agent-Net is not handed to Device Link instead.
+      expect([socket.knowsPeer('m-renamed-device'), socket.knowsPeer('m-earlier-device-id'), socket.knowsPeer('z-carries-the-local-key')]).toEqual([true, true, true]);
+      socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+      await vi.waitFor(() => expect(socket.pathTo('m-renamed-device')).toBe('relay'));
+      expect(socket.pathTo('m-earlier-device-id')).toBeNull();
+      expect(connect).toHaveBeenCalledOnce();
+    } finally { socket.close(); }
+  });
+
+/** 测试价值
  * - 生产入口与可观察结果：PortableSocket 的拨号与入站连接（Desktop worker 与手机共用）；对端重建节点后再拨进来，
  *   本机立刻换用新连接、帧写到新连接上；同时拨号时仍只留一条。
  * - Bug／规则依据：docs/benchmarks/agent-net-session-2026-11-13 卡死复测，控制端重建节点后被控端拒收新连接，

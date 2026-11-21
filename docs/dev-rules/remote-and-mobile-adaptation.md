@@ -572,6 +572,15 @@ Device Link 上有活着的链路时照旧走 Device Link，那上面已确认�
     没有回音就断，对方 30 秒内自己发现、照常重拨；自己停了很久刚醒来的一端先接连探测几次再下结论。
     对方是旧版本时仍然靠这次后拨。真机：手机被强杀后重启，设备号比手机小、只能经中转的电脑原来在手机上离线 20 秒到 15 分钟，
     改后约 1.2 秒；设备号比手机大的电脑由手机拨，一直不受影响。
+  - 目录里同账号两张证书带同一把传输密钥（同一台设备换了设备号重新登记，密钥没换，旧证书还在）：一把传输密钥只认一台设备，
+    只留签发晚的那张（`portableSocket.ts` 的 `supersedes`；带本机自己密钥的别的设备号一律不算对端），其余当作不在目录里：
+    不准入、不拨号、显示离线，但仍记作见过的 Agent-Net 设备，不因此改走 Device Link（2026-11-21）。Desktop 与 Node Host 的
+    worker 外层另有一份「见过的设备」，只从收到的目录和路径事件里填，所以 worker 每次报状态时把里层的那份一并带上（`knownPeers`）。原来用这把密钥建的连接记在排在前面的设备号名下；手机的原生引擎按密钥准入，
+    遇到重复就拒收整份名单（`DUPLICATE_PEER`），一对重复让这个账号下的手机全都打不开 Agent-Net。真机：一台 iPhone 换了设备号
+    重新登记后，另一台安卓手机每次打开都失败，改后照常连上其余电脑。故障半径：① 证据是两张都由本账号根密钥签发、传输密钥相同的证书；
+    ② 只是不认被顶替的那一张，别的设备的准入、连接、重试与时限都不变；③ `portableSocket.test.ts`
+    「keeps only the latest certificate of a transport key …」，`socket.integration.test.ts`
+    「keeps a device id superseded for sharing a transport key known through the worker …」。
   - Node Host 回复「支持后台链路」、连接前等读本机身份（最多 2 秒）改成只在开着 Agent-Net 时生效，关着时和主干一样。
   - 主干的部分目录（只读到一条腿时并回上次完整目录）也按 Device Link 设备列表过滤；Agent-Net 后台读设备列表走主干的共享限流账（`officialDeviceListFetch`）。
 - **第三轮（2026-11-17 补齐兼容与恢复能力）**：断线续传（在途的写在重开的链路上用原请求号找结果；代次改变或双端未协商结果恢复则不发，记录已淘汰则报告可能已执行）；
