@@ -1968,6 +1968,7 @@ function CCAgentSessionContent({
     errorRetryText,
     errorCanContinue,
     errorPersistId,
+    modelFallbackDetails,
     disposedErrorPersistId,
     credentialSwitchWait,
     continuationInFlightClientId,
@@ -6019,6 +6020,7 @@ function CCAgentSessionContent({
                   errorReason={errorTailMsg?.errorReason}
                   toolLoop={errorTailMsg?.toolLoop}
                   outputLimit={errorTailMsg?.outputLimit}
+                  modelFallbackDetails={errorTailMsg?.modelFallbackDetails}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
@@ -6094,6 +6096,7 @@ function CCAgentSessionContent({
                 errorReason={errorReason}
                 toolLoop={toolLoop}
                 outputLimit={outputLimit}
+                modelFallbackDetails={modelFallbackDetails}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 onRetry={handleRetry}

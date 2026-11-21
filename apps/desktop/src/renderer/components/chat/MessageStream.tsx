@@ -7454,6 +7454,7 @@ const MessageItem = memo(function MessageItem({
           providerId={message.errorProviderId}
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}
+          modelFallbackDetails={message.modelFallbackDetails}
           sessionSource={sessionSource}
           canConfigureAutoReview={canConfigureAutoReview}
           onDiagnose={onDiagnoseError}

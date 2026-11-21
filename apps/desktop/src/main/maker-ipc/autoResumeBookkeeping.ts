@@ -20,6 +20,7 @@
  * 副作用全部经注入的 deps，因此可以在没有 electron / DB 的环境里整体驱动。
  */
 
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import type { BotGroupLaneTerminal } from './botGroupChatService.js';
 
 export type AutoResumeOutcome = 'succeeded' | 'failed';
@@ -29,6 +30,12 @@ export interface SuppressedTurnError {
   message?: string;
   reason?: string;
   sdkError?: string;
+  modelFallbackDetails?: string;
+}
+
+interface ModelFallbackHistory {
+  priorFailures: readonly string[];
+  activeModel: string;
 }
 
 /** Exact coordinator owner for a deferred terminal error. */
@@ -69,6 +76,7 @@ interface SuppressedTurnErrorEntry {
    */
   islandReplacementPreviewed: boolean;
   replacementDispatching: boolean;
+  modelGroupSwitch?: ModelFallbackHistory;
 }
 
 export interface AutoResumeScheduleAttempt {
@@ -78,7 +86,7 @@ export interface AutoResumeScheduleAttempt {
 
 export interface AutoResumeBookkeepingDeps {
   /** 把压住的 error 行补落进历史。**不负责横幅** —— 横幅由 abandonTakeover 决定。 */
-  persistSuppressedError: (sessionId: string, detail: SuppressedTurnError) => void;
+  persistSuppressedError: (sessionId: string, detail: SuppressedTurnError) => string | void;
   /** 这条错误已确定需要呈现给用户；由 host 同步到聊天之外的错误表面（如 Agent Island）。 */
   surfaceSuppressedError?: (sessionId: string, detail: SuppressedTurnError) => void;
   /**
@@ -93,7 +101,7 @@ export interface AutoResumeBookkeepingDeps {
   /** 回滚守卫的 pendingResume（不回滚会让该会话之后的中断永远被判成「上一次还在路上」）。 */
   rollbackGuardPendingResume: (sessionId: string, attemptToken?: number) => void;
   /** 清 coordinator 的接管态；带 message 时把红横幅回落出来。 */
-  abandonTakeover: (sessionId: string, message?: string, attemptToken?: number) => void;
+  abandonTakeover: (sessionId: string, message?: string, attemptToken?: number, persistId?: string, modelFallbackDetails?: string) => void;
   /** 已接管的自动续跑最终没能继续；Schedule runner 用它结束同一个逻辑 run。 */
   onAutoResumeFailed?: (sessionId: string, attemptToken?: number) => void;
   log?: (message: string, fields?: Record<string, unknown>) => void;
@@ -120,6 +128,11 @@ export class AutoResumeBookkeeping {
   >();
 
   /** Current automatic recovery owner. Every async settlement must match it. */
+  // A switched retry can be accepted before its terminal error. Keep its diagnostic
+  // separate from the suppressed error, which must still be retired at acceptance.
+  private readonly switchedModelInputs = new Map<string, { clientId: string; history: ModelFallbackHistory }>();
+  private readonly modelFallbackAttempts = new Map<string, { token: number; history: ModelFallbackHistory }>();
+
   private readonly currentAttempts = new Map<string, number>();
 
   /** Exact retry queue item that owns the suppressed error during pre-dispatch. */
@@ -149,10 +162,50 @@ export class AutoResumeBookkeeping {
   constructor(private readonly deps: AutoResumeBookkeepingDeps) {}
 
   /** Start an attempt; deferred errors stashed before the decision inherit this token. */
-  beginAttempt(sessionId: string, attemptToken: number): void {
+  beginAttempt(sessionId: string, attemptToken: number, failedClientId?: string): void {
+    const switchedInput = this.switchedModelInputs.get(sessionId);
+    const previous = this.suppressedErrors.get(sessionId);
+    const history = failedClientId && switchedInput?.clientId === failedClientId
+      ? switchedInput.history
+      : failedClientId && previous?.replacementDispatching && previous.retryOwnerClientId === failedClientId
+        ? this.modelFallbackHistoryForEntry(sessionId, previous)
+        : undefined;
+    this.switchedModelInputs.delete(sessionId);
+    this.modelFallbackAttempts.delete(sessionId);
+    if (history) this.modelFallbackAttempts.set(sessionId, { token: attemptToken, history });
     this.currentAttempts.set(sessionId, attemptToken);
     const suppressed = this.suppressedErrors.get(sessionId);
     if (suppressed?.attemptToken === null) suppressed.attemptToken = attemptToken;
+  }
+
+  noteModelGroupSwitch(
+    sessionId: string,
+    attemptToken: number,
+    transition: { fromModel: string; toModel: string },
+  ): void {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (entry?.attemptToken !== attemptToken) return;
+    const history = this.modelFallbackAttempts.get(sessionId)?.history;
+    const previousFailure = modelFailureDetail(transition.fromModel, entry.detail.message);
+    if (!previousFailure) return;
+    entry.modelGroupSwitch = {
+      priorFailures: [...(history?.priorFailures ?? []), previousFailure],
+      activeModel: transition.toModel,
+    };
+  }
+
+  private modelFallbackHistoryForEntry(sessionId: string, entry: SuppressedTurnErrorEntry): ModelFallbackHistory | undefined {
+    if (entry.modelGroupSwitch) return entry.modelGroupSwitch;
+    const attempt = this.modelFallbackAttempts.get(sessionId);
+    if (attempt && attempt.token === entry.attemptToken) return attempt.history;
+    return undefined;
+  }
+
+  private rememberSwitchedInput(sessionId: string, entry: SuppressedTurnErrorEntry): void {
+    const history = this.modelFallbackHistoryForEntry(sessionId, entry);
+    if (history && entry.retryOwnerClientId) {
+      this.switchedModelInputs.set(sessionId, { clientId: entry.retryOwnerClientId, history });
+    }
   }
 
   isCurrentAttempt(sessionId: string, attemptToken: number): boolean {
@@ -410,6 +463,7 @@ export class AutoResumeBookkeeping {
     if (entry?.retryOwnerClientId !== clientId) return false;
     if (disposition === 'discard') {
       const attemptToken = entry.attemptToken;
+      this.rememberSwitchedInput(sessionId, entry);
       this.suppressedErrors.delete(sessionId);
       this.suppressedErrorClients.delete(sessionId);
       if (attemptToken !== null) this.releaseAttemptIfUnowned(sessionId, attemptToken);
@@ -443,6 +497,7 @@ export class AutoResumeBookkeeping {
     const entry = this.suppressedErrors.get(sessionId);
     if (entry?.replacementDispatching !== true) return false;
     const attemptToken = entry.attemptToken;
+    this.rememberSwitchedInput(sessionId, entry);
     this.suppressedErrors.delete(sessionId);
     this.suppressedErrorClients.delete(sessionId);
     if (attemptToken !== null) this.releaseAttemptIfUnowned(sessionId, attemptToken);
@@ -530,6 +585,8 @@ export class AutoResumeBookkeeping {
    * Claimed entries remain owned by their exact queue-item disposition.
    */
   supersedeUnclaimedErrorForUserIntervention(sessionId: string): boolean {
+    this.switchedModelInputs.delete(sessionId);
+    this.modelFallbackAttempts.delete(sessionId);
     const cancelled = this.cancelSchedule(sessionId);
     if (!cancelled) {
       // A tokenized timer removes itself before entering async coordinator/DB work.
@@ -568,20 +625,33 @@ export class AutoResumeBookkeeping {
 
     const entry = this.suppressedErrors.get(sessionId);
     const ownsEntry = token === undefined || entry?.attemptToken === token;
-    const detail = ownsEntry ? entry?.detail : undefined;
+    let detail = ownsEntry ? entry?.detail : undefined;
+    const fallback = this.modelFallbackAttempts.get(sessionId);
+    if (surfaceError && fallback && fallback.token === entry?.attemptToken && detail) {
+      const failure = modelFailureDetail(fallback.history.activeModel, detail.message);
+      if (failure) {
+        detail = { ...detail, modelFallbackDetails: [...fallback.history.priorFailures, failure].join('\n\n') };
+      }
+    }
+    if (fallback?.token === token) this.modelFallbackAttempts.delete(sessionId);
     const orcaTerminal = ownsEntry ? (entry?.orcaTerminal ?? null) : null;
     const entryAttemptToken = ownsEntry ? (entry?.attemptToken ?? null) : null;
+    let persistedId: string | void = undefined;
     if (ownsEntry) {
       this.suppressedErrors.delete(sessionId);
       this.suppressedErrorClients.delete(sessionId);
       if (detail) {
-        this.deps.persistSuppressedError(sessionId, detail);
+        persistedId = this.deps.persistSuppressedError(sessionId, detail);
         if (surfaceError) this.deps.surfaceSuppressedError?.(sessionId, detail);
       }
       this.releaseOrcaSuppressedTerminal(sessionId, orcaTerminal, surfaceError);
       if (surfaceError && entry?.groupTerminal) this.deps.finalizeBotGroupSuppressedTerminal?.(entry.groupTerminal);
     }
-    this.deps.abandonTakeover(sessionId, surfaceError ? detail?.message : undefined, token);
+    if (surfaceError && detail?.modelFallbackDetails && persistedId) {
+      this.deps.abandonTakeover(sessionId, detail.message, token, persistedId, detail.modelFallbackDetails);
+    } else {
+      this.deps.abandonTakeover(sessionId, surfaceError ? detail?.message : undefined, token);
+    }
     this.deps.onAutoResumeFailed?.(sessionId, token);
     if (entryAttemptToken !== null) this.releaseAttemptIfUnowned(sessionId, entryAttemptToken);
     if (token !== undefined) this.releaseAttemptIfUnowned(sessionId, token);
@@ -883,6 +953,8 @@ export class AutoResumeBookkeeping {
    *  4. 把悬空的待确认记录钉成 failed。
    */
   teardown(sessionId: string): void {
+    this.switchedModelInputs.delete(sessionId);
+    this.modelFallbackAttempts.delete(sessionId);
     const attemptToken =
       this.currentAttempts.get(sessionId) ??
       this.pendingOutcomes.get(sessionId)?.attemptToken ??
@@ -943,4 +1015,9 @@ export function shouldSkipOrcaWorkerTerminal(input: OrcaWorkerTerminalSkipInput)
     input.isAutoResumePending ||
     input.isAutoResumeDeferred
   );
+}
+
+function modelFailureDetail(model: string, message: string | undefined): string | undefined {
+  if (!model || !message) return undefined;
+  return `${redactSensitiveText(model).replace(/[\r\n]/g, ' ').slice(0, 256)}: ${redactSensitiveText(message).slice(0, 4_000)}`;
 }

@@ -52,6 +52,7 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
 /** The Session reference is only a teardown lease, never proof that a route changed. */
 export interface RuntimeFallbackResult<T> {
   session: T | null;
+  modelGroupTransition?: { fromModel: string; toModel: string };
   outcome: 'unchanged' | 'switched' | 'exhausted' | 'failed' | 'superseded';
 }
 

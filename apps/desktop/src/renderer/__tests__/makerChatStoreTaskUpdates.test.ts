@@ -1361,6 +1361,41 @@ describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
     }
   });
 
+  // #10700, unit: a live failure projection reaches the real store before the
+  // error row is visible. History restoration alone misses this no-row case.
+  it('shows live model fallback details before the error row is loaded', () => {
+    const sid = 'live-model-fallback-details';
+    const details = 'primary: HTTP 403\n\nbackup: HTTP 429';
+    const projection = {
+      sessionId: sid,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: false,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      error: 'HTTP 429',
+      errorPersistId: 'fallback-row',
+      errorRetryText: 'retry-token',
+      credentialSwitchWait: null,
+      recovery: null,
+    };
+    try {
+      makerChatStore.__applyInputProjectionForTest({ ...projection, modelFallbackDetails: details });
+      expect(makerChatStore.getSnapshot(sid).messages).toHaveLength(0);
+      expect(makerChatStore.getLightSnapshot(sid)).toMatchObject({
+        error: 'HTTP 429',
+        errorRetryText: 'retry-token',
+        modelFallbackDetails: details,
+      });
+      makerChatStore.__applyInputProjectionForTest({ ...projection, errorPersistId: 'unrelated-row' });
+      expect(makerChatStore.getLightSnapshot(sid).modelFallbackDetails).toBeUndefined();
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
   it('rollback reconciliation preserves an automatic-resume item during backoff', async () => {
     const sid = 'rollback-auto-resume-' + Math.random().toString(36).slice(2, 8);
     const globalWindow = globalThis as typeof globalThis & {

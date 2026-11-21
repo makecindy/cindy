@@ -566,6 +566,8 @@ export interface AgentInputProjection {
   error: string | null;
   /** Exact persisted error row owned by this banner; older hosts may omit it. */
   errorPersistId?: string | null;
+  /** Display-only diagnostics for the exact error row above. */
+  modelFallbackDetails?: string;
   /** Stable error reason for live clients; older controlled hosts may omit it. */
   errorReason?: string | null;
   /** Bounded details for tool-loop errors; never carries the raw provider message. */
