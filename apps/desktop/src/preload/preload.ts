@@ -5239,7 +5239,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   } satisfies RemoteDesktopApi,
   // macOS「本地网络」权限：只读本机状态与请求授权，不进入 device-link 远程白名单。
   localNetwork: {
-    status: () => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.STATUS),
+    status: (options) => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.STATUS, options),
     request: () => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.REQUEST),
     onChanged: (callback) => fanOutLocalNetworkChanged((data) => callback(data as LocalNetworkState)),
   } satisfies LocalNetworkApi,

@@ -62,7 +62,7 @@ export function LocalNetworkBanner({ isCollapsed }: LocalNetworkBannerProps) {
   const { t } = useTranslation();
   const { status: updateStatus } = useUpdateStatus();
   const { dismissed: updateDismissed } = useUpdateBannerDismiss();
-  const { state, requesting, request } = useLocalNetworkAccess();
+  const { state, requesting, request } = useLocalNetworkAccess({ probe: false });
   const [dismissal, setDismissal] = useState(readDismissal);
 
   const reminder = state?.access === 'denied' ? state.reminder : null;

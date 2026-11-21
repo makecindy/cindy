@@ -4,9 +4,11 @@ import type { LocalNetworkState } from '../../shared/localNetwork';
 /**
  * macOS Local Network access of this computer. Main pushes every change; `poll`
  * also re-reads while a settings row is on screen, so a grant made in System
- * Settings shows up without returning focus to Cindy.
+ * Settings shows up without returning focus to Cindy. With `probe: false` the
+ * hook only reads what Main already knows, and probes on focus only while a
+ * reminder is showing, so an always-mounted surface never triggers the system prompt.
  */
-export function useLocalNetworkAccess({ poll = false }: { poll?: boolean } = {}) {
+export function useLocalNetworkAccess({ poll = false, probe = true }: { poll?: boolean; probe?: boolean } = {}) {
   const [state, setState] = useState<LocalNetworkState | null>(null);
   const [requesting, setRequesting] = useState(false);
   const [openedSettings, setOpenedSettings] = useState(false);
@@ -14,15 +16,18 @@ export function useLocalNetworkAccess({ poll = false }: { poll?: boolean } = {})
   const mounted = useRef(false);
   const supported = window.electronAPI?.platform === 'darwin' && !!window.electronAPI.localNetwork;
 
-  const refresh = useCallback(async () => {
+  const reminding = useRef(false);
+  reminding.current = !!state?.reminder;
+
+  const refresh = useCallback(async (fresh = probe) => {
     if (!supported) return;
     try {
-      const next = await window.electronAPI.localNetwork.status();
+      const next = await window.electronAPI.localNetwork.status({ probe: fresh });
       if (mounted.current) setState(next);
     } catch {
       // Unknown is not denied: say nothing rather than a wrong reminder.
     }
-  }, [supported]);
+  }, [probe, supported]);
 
   useEffect(() => {
     mounted.current = true;
@@ -33,7 +38,7 @@ export function useLocalNetworkAccess({ poll = false }: { poll?: boolean } = {})
     const off = window.electronAPI.localNetwork.onChanged((next) => {
       if (mounted.current) setState(next);
     });
-    const onFocus = () => void refresh();
+    const onFocus = () => void refresh(probe || reminding.current);
     window.addEventListener('focus', onFocus);
     const timer = poll
       ? setInterval(() => {

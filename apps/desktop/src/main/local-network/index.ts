@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, shell } from 'electron';
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
+import { throwIpcError } from '../utils/ipcValidate';
 import {
   LOCAL_NETWORK_LOCAL,
   type LocalNetworkAccess,
@@ -120,10 +121,22 @@ export function onLocalNetworkGranted(listener: () => void): () => void {
   return () => grantedListeners.delete(listener);
 }
 
+/** `undefined` and `{ probe: true }` probe; `{ probe: false }` reads the last known state. */
+function parseStatusOptions(value: unknown): boolean | null {
+  if (value === undefined) return true;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'probe')) return null;
+  if (record.probe !== undefined && typeof record.probe !== 'boolean') return null;
+  return record.probe !== false;
+}
+
 export function registerLocalNetworkIpc(): void {
-  ipcMain.handle(LOCAL_NETWORK_LOCAL.STATUS, (event) => {
+  ipcMain.handle(LOCAL_NETWORK_LOCAL.STATUS, (event, options: unknown) => {
     assertTrustedAppRendererEvent(event);
-    return readState();
+    const probe = parseStatusOptions(options);
+    if (probe === null) throwIpcError('INVALID_PARAMS', 'Invalid local network status options');
+    return probe ? readState() : currentState();
   });
   ipcMain.handle(LOCAL_NETWORK_LOCAL.REQUEST, async (event) => {
     assertTrustedAppRendererEvent(event);

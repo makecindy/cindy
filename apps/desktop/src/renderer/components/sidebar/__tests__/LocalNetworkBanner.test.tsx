@@ -52,7 +52,8 @@ describe('LocalNetworkBanner', () => {
   it('stays hidden when access is granted or there is nothing slowed down', async () => {
     const api = installApi({ access: 'granted', reminder: null });
     render(<LocalNetworkBanner isCollapsed={false} />);
-    await waitFor(() => expect(window.electronAPI.localNetwork.status).toHaveBeenCalled());
+    // The always-mounted sidebar must never probe by itself: a probe is what makes macOS prompt.
+    await waitFor(() => expect(window.electronAPI.localNetwork.status).toHaveBeenCalledWith({ probe: false }));
     expect(screen.queryByRole('status')).toBeNull();
     api.push({ access: 'denied', reminder: null });
     expect(screen.queryByRole('status')).toBeNull();

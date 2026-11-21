@@ -22,8 +22,11 @@ export interface LocalNetworkState {
 }
 
 export interface LocalNetworkApi {
-  /** Probes the LAN gateway; never opens System Settings. */
-  status(): Promise<LocalNetworkState>;
+  /**
+   * Current state; never opens System Settings. `probe: false` returns what Main already knows
+   * without touching the LAN, so merely showing the app never triggers the system prompt.
+   */
+  status(options?: { probe?: boolean }): Promise<LocalNetworkState>;
   /** Shows the system prompt when macOS has not decided, otherwise opens System Settings. */
   request(): Promise<LocalNetworkState>;
   onChanged(callback: (state: LocalNetworkState) => void): () => void;
