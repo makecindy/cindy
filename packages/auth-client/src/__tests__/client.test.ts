@@ -1179,3 +1179,39 @@ describe("reduceAuthFlow", () => {
     expect(JSON.stringify(state)).not.toContain("secret-sso-ticket");
   });
 });
+
+// #8694: the Passport recovery chain must retain 503 cooldowns for both JSON
+// and non-JSON bodies. Existing 429 tests do not cover the service-busy branch.
+describe("Passport recovery Retry-After", () => {
+  it.each([false, true])(
+    "preserves 503 cooldown (invalid JSON=%s)",
+    async (invalidJson) => {
+      const now = Date.now();
+      const c = client(async () => ({
+        ok: false,
+        status: 503,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "retry-after" ? "600" : null,
+        },
+        json: async () => {
+          if (invalidJson) throw new Error("not JSON");
+          return { error: { code: "BUSY" } };
+        },
+      }));
+      for (const request of [
+        () => c.refreshAccount("test-passport"),
+        () => c.exchangeAccountMembership("test-access", "original"),
+      ]) {
+        const error = await request().catch((e: unknown) => e);
+        expect(error).toMatchObject({
+          statusCode: 503,
+          retryAt: expect.any(Number),
+        });
+        expect((error as AuthApiError).retryAt).toBeGreaterThanOrEqual(
+          now + 600_000,
+        );
+      }
+    },
+  );
+});
