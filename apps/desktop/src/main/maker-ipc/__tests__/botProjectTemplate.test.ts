@@ -133,6 +133,28 @@ describe('applyTeammateTemplate', () => {
       expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain('### In a group\n- Never create a task.');
     });
 
+    // Review r4652566330: fields the teammate added to the frontmatter (native invocation settings,
+    // allowed tools, metadata) survive the upgrade; the standard's own fields keep its values.
+    it('keeps frontmatter fields the teammate added', async () => {
+      const mine = oldStandard.replace('name: hand-off\n', 'name: hand-off\ndisable-model-invocation: true\nmetadata:\n  displayName: Handover\n');
+      await setUp(mine, true);
+      await upgrade(2, newStandard(), async (_relative, hash) => hash === sha(oldStandard) ? oldStandard : null);
+      const header = /^---\n([\s\S]*?)\n---\n/.exec(await read())![1];
+      expect(header).toBe('name: hand-off\ndisable-model-invocation: true\nmetadata:\n  displayName: Handover');
+    });
+
+    // Review r4652566333: a removal keeps the section the standard had it in, and does not fall under
+    // the section of a rule moved just before it.
+    it('keeps the section a removal came from', async () => {
+      const standard = '---\nname: hand-off\n---\n\n# Hand-off\n\n## In a group\n\n- Answer whoever asked.\n\n## Report back\n\n- Create a one-time check for long work.\n';
+      const mine = standard.replace('- Answer whoever asked.\n', '- Answer whoever asked.\n- Never create a task.\n').replace('- Create a one-time check for long work.\n', '');
+      await setUp(mine, true, standard);
+      await upgrade(2, `${standard}\n${OWN_RULES_HEADING}\n\nRules go here.\n`, async (_relative, hash) => hash === sha(standard) ? standard : null);
+      const text = await read();
+      expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain(
+        '### In a group\n- Never create a task.\n### Report back\n- Leave out from the standard above: Create a one-time check for long work.');
+    });
+
     it('keeps an own skill that predates the template, for the teammate to tidy', async () => {
       await setUp('---\nname: hand-off\n---\n\n# Hand-off\n\n- Pick the project.\n- Design reviews go straight to the owner.\n', false);
       await upgrade(2, newStandard());

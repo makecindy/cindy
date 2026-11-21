@@ -54,39 +54,84 @@ function contentLines(text: string): string[] {
  * standard says (the changes made to it). Without a known starting point, every line the new
  * standard does not have is kept, for the teammate to tidy.
  */
+/** Top-level frontmatter fields as blocks (a key line plus its indented or list continuation lines). */
+function frontmatterFields(text: string): Map<string, string> {
+  const match = /^---\n([\s\S]*?)\n---\n/.exec(text);
+  const fields = new Map<string, string>();
+  let key: string | null = null;
+  for (const line of match ? match[1].split('\n') : []) {
+    const top = /^([A-Za-z0-9_][^:\s]*)\s*:/.exec(line);
+    if (top) { key = top[1]; fields.set(key, line); }
+    else if (key) fields.set(key, `${fields.get(key)}\n${line}`);
+  }
+  return fields;
+}
+
+/**
+ * The new standard's frontmatter plus the fields the teammate added (native invocation settings,
+ * allowed tools, metadata). The standard's own fields keep the standard's value; a field an earlier
+ * standard had and the new one dropped is not brought back unless the teammate changed it.
+ */
+function mergedHeader(next: string, current: string, previousStandard: string | null): string {
+  const mine = frontmatterFields(current);
+  const theirs = frontmatterFields(next);
+  const before = previousStandard === null ? new Map<string, string>() : frontmatterFields(previousStandard);
+  const added = [...mine].filter(([key, block]) => !theirs.has(key) && before.get(key) !== block).map(([, block]) => block);
+  if (!added.length) return next;
+  if (!theirs.size) return next;
+  return next.replace(/^(---\n[\s\S]*?)\n---\n/, (_all, head: string) => `${head}\n${added.join('\n')}\n---\n`);
+}
+
+/**
+ * The new file for a layered template: the new standard, then the own rules it already had, then
+ * whatever the earlier standard text had that neither the standard it started from nor the new
+ * standard says (the changes made to it). Without a known starting point, every line the new
+ * standard does not have is kept, for the teammate to tidy.
+ */
 function layeredContent(current: string, previousStandard: string | null, next: string): string {
   const { standard, own } = standardPart(current);
   const known = new Set(contentLines(standardPart(next).standard).map(line => line.trim()));
   if (previousStandard !== null) for (const line of contentLines(standardPart(previousStandard).standard)) known.add(line.trim());
-  // A kept rule keeps its scope: it goes under the heading it sat under, whether the teammate
-  // added that heading or the standard has it ("In a group" rules stay group rules). Headings are
-  // nested under the own section, so they do not read as sections of the standard.
+  // Every moved line keeps its scope: it goes under the heading it sat under, whether the teammate
+  // added that heading or the standard has it ("In a group" rules stay group rules), and a removal
+  // under the section the standard had it in. Unscoped lines come first, so none falls under a
+  // section it did not belong to. Headings are nested under the own section.
   const demote = (heading: string) => heading.replace(/^\s*#{1,2}(?=\s)/, '###');
-  const kept: string[] = [];
+  const groups = new Map<string | null, string[]>([[null, []]]);
+  const add = (scope: string | null, line?: string) => {
+    if (!groups.has(scope)) groups.set(scope, []);
+    if (line !== undefined) groups.get(scope)!.push(line);
+  };
+  const scopeOf = (heading: string) => (/^#\s/.test(heading) ? null : heading); // the skill's title is not a scope
   let scope: string | null = null;
   for (const line of contentLines(standard)) {
     const text = line.trim();
     if (/^#{1,6}\s/.test(text)) {
-      if (!known.has(text)) { kept.push(demote(text)); scope = null; }
-      else scope = /^#\s/.test(text) ? null : text; // the skill's title is not a scope
+      scope = scopeOf(text);
+      if (!known.has(text) && scope) add(scope); // a heading the teammate added stays, even without new lines
       continue;
     }
-    if (known.has(text)) continue;
-    if (scope) { kept.push(demote(scope)); scope = null; }
-    kept.push(line);
+    if (!known.has(text)) add(scope, line);
   }
   // A standard line the teammate removed, still in the new standard: keep the removal, for list
   // items and plain paragraphs alike (a heading's removal shows in the lines it held).
-  const removed = previousStandard === null ? [] : contentLines(standardPart(previousStandard).standard)
-    .filter(line => !/^\s*#/.test(line) && !contentLines(standard).some(mine => mine.trim() === line.trim())
-      && contentLines(standardPart(next).standard).some(theirs => theirs.trim() === line.trim()))
-    .map(line => `- Leave out from the standard above: ${line.trim().replace(/^(?:[-*]|\d+\.)\s+/, '')}`);
-  const additions = [...kept, ...removed];
+  if (previousStandard !== null) {
+    const mine = new Set(contentLines(standard).map(line => line.trim()));
+    const theirs = new Set(contentLines(standardPart(next).standard).map(line => line.trim()));
+    scope = null;
+    for (const line of contentLines(standardPart(previousStandard).standard)) {
+      const text = line.trim();
+      if (/^#{1,6}\s/.test(text)) { scope = scopeOf(text); continue; }
+      if (!mine.has(text) && theirs.has(text)) add(scope, `- Leave out from the standard above: ${text.replace(/^(?:[-*]|\d+\.)\s+/, '')}`);
+    }
+  }
+  const additions = [...groups].flatMap(([heading, lines]) => heading === null ? lines : [demote(heading), ...lines]);
   // The new standard's own section brings its intro; an earlier copy of it is not an own rule.
   const nextOwn = new Set(contentLines(next.slice(standardPart(next).standard.length)).map(line => line.trim()));
   const ownRules = own.split('\n').filter(line => !nextOwn.has(line.trim())).join('\n').trim();
   const sections = [ownRules, additions.length ? `${KEPT_NOTE}\n\n${additions.join('\n')}` : ''].filter(Boolean);
-  return sections.length ? `${next.trimEnd()}\n\n${sections.join('\n\n')}\n` : next;
+  const header = mergedHeader(next, current, previousStandard);
+  return sections.length ? `${header.trimEnd()}\n\n${sections.join('\n\n')}\n` : header;
 }
 
 const MEMORY_ROUTE = [
