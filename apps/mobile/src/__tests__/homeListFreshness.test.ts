@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rehydrateDeviceLinkPeer, type DeviceLinkRehydrateDeps } from '@/device-link/rehydrate';
 import {
+  createHomeInstalledRows,
   createHomeListFreshness,
+  createHomeRefreshRequests,
   HOME_LIST_FOCUS_REUSE_MAX_MS,
   planHomeListFocusReturn,
 } from '@/session/homeListFreshness';
@@ -136,7 +138,7 @@ describe('Home list freshness on return', () => {
     expect(home.freshness.isFresh('mac')).toBe(false);
   });
 
-  it('falls back to a full reload after background, reconnect or a long stay away', async () => {
+  it('refills missed background pushes without a directory reload, but fully reloads after reconnect or a long absence', async () => {
     const home = createHarness(['mac', 'pc']);
     await home.hydrate('mac');
     await home.hydrate('pc');
@@ -172,5 +174,93 @@ describe('Home list freshness on return', () => {
     await home.hydrate('mac');
     home.freshness.clear();
     expect(home.freshness.isFresh('mac')).toBe(false);
+  });
+});
+
+// Unit / review: source-string checks could not detect consumption of a newer
+// full refresh or automation event by a late older round. Exercise the production intent owner.
+it('keeps newer full refresh intent through an old commit and an unsuccessful read', () => {
+  const requests = createHomeRefreshRequests();
+  requests.requestFull();
+  const old = requests.captureFull();
+  requests.requestFull();
+  const latest = requests.captureFull();
+  requests.completeFull(old);
+  expect(requests.captureFull()).toBe(latest);
+  // A failed/superseded read does not complete the token: returning Home still needs full work.
+  const plan = planHomeListFocusReturn({ forceFull: requests.captureFull() !== null,
+    blurredAt: 900, now: 1000, lastSyncedAt: 800, deviceIds: [],
+    freshness: createHomeListFreshness(), listMutationEpoch: () => 0 });
+  expect(plan).toEqual({ kind: 'full' });
+  requests.completeFull(latest);
+  expect(requests.captureFull()).toBeNull();
+});
+
+it('selects only dirty automation indexes and cannot consume a later event with an old reply', () => {
+  const requests = createHomeRefreshRequests();
+  const old = requests.markScheduleDirty('pc');
+  expect([...requests.scheduleDeviceIds()]).toEqual(['pc']); // healthy mac is not reread
+  const latest = requests.markScheduleDirty('pc');
+  requests.completeSchedule('pc', old);
+  expect([...requests.scheduleDeviceIds()]).toEqual(['pc']);
+  requests.completeSchedule('pc', latest);
+  expect([...requests.scheduleDeviceIds()]).toEqual([]);
+});
+
+it('clears account-owned intent and prevents old freshness tokens from reviving it', () => {
+  const requests = createHomeRefreshRequests();
+  const freshness = createHomeListFreshness();
+  requests.requestFull();
+  requests.markScheduleDirty('old-account-pc');
+  const token = freshness.capture('old-account-pc');
+  requests.clear();
+  freshness.clear();
+  freshness.markFresh('old-account-pc', token);
+  expect(requests.captureFull()).toBeNull();
+  expect([...requests.scheduleDeviceIds()]).toEqual([]);
+  expect(freshness.isFresh('old-account-pc')).toBe(false);
+});
+
+// Review #9752: enrichment now lands after Home marks the list fresh and arms the automation
+// index. A raw list under the limit plus a capped history-only page must still behave as
+// truncated, and history-only lanes must enter the index scope without a redundant reread.
+describe('history enrichment installed after the list is ready', () => {
+  const rows = (prefix: string, count: number) => Array.from({ length: count }, (_, i) => ({ id: `${prefix}${i}` }));
+
+  it('re-pulls after a list push once enrichment fills the page limit', () => {
+    remoteSessionStore.upsertDeviceSession('old-desktop', 'old-desktop', {
+      id: 'raw0', status: 'active', title: 'raw0', source: 'desktop',
+      createdAt: '2026-10-20T00:00:00Z', updatedAt: '2026-10-20T00:00:00Z',
+    } as RemoteSession);
+    const freshness = createHomeListFreshness();
+    const epoch = () => remoteSessionStore.captureDeviceSessionListMutationEpoch('old-desktop');
+    const token = freshness.capture('old-desktop');
+    const installed = createHomeInstalledRows({
+      limit: 200,
+      onBounded: () => freshness.markBounded('old-desktop', token, epoch()),
+      onScheduleScopeGrew: () => undefined,
+    });
+    installed.install(rows('raw', 120));
+    freshness.markFresh('old-desktop', token, installed.markFresh(120) ? epoch() : null);
+    installed.install([...rows('raw', 120), ...rows('lane', 200)]);
+    expect(freshness.isFresh('old-desktop', epoch())).toBe(true);
+
+    remoteSessionStore.applyRemotePush('old-desktop', 'local-db:sessions:patched', { sessionId: 'raw0', patch: { status: 'archived' } });
+    expect(freshness.isFresh('old-desktop', epoch())).toBe(false);
+  });
+
+  it('rereads the automation index only when enrichment adds rows outside its scope', () => {
+    const refreshes: string[][] = [];
+    const installed = createHomeInstalledRows({
+      limit: 200,
+      onBounded: () => undefined,
+      onScheduleScopeGrew: () => refreshes.push([...installed.sessionIds()]),
+    });
+    installed.install(rows('raw', 2));
+    installed.armSchedule();
+    installed.install(rows('raw', 2)); // a current Desktop already lists every lane
+    expect(refreshes).toEqual([]);
+    installed.install([...rows('raw', 2), { id: 'routine-lane' }]);
+    expect(refreshes).toEqual([['raw0', 'raw1', 'routine-lane']]);
   });
 });
