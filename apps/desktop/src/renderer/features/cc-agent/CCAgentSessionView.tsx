@@ -2368,11 +2368,21 @@ function CCAgentSessionContent({
   // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
   // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
   const { devices: selectableDevices } = useSelectableDevices();
-  // 插件引擎在自己的另一台电脑上运行的任务(任务、文件与命令留在任务所在电脑，Agent 在那台)：引擎的名称、
-  // 图标、模型、思考深度与权限档都读那台的列表，任务所在电脑没装这个插件也不会显示成「插件已停用或卸载」。
-  // 别人分享的来源不提供插件引擎。Agent 恰好就在正在看的这台电脑上(从另一台建的任务)时读本机的列表。
+  // 切到插件引擎的意图同样带位置(Agent 回到任务所在电脑时为 null)。
+  const pendingAgentDeviceId = storedAgentSwitchIntent?.agentDeviceId;
+  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，并进本机任务，
+  // 不进设备切换器。已暂停 / 已不在的分享只在它正是当前或即将使用的位置时保留。
+  const {
+    devices: providerShareDevices,
+    pluginEngineDevices: sharedPluginEngineDevices = [],
+    nameFor: providerShareDeviceName,
+    isReceived: isReceivedProviderShare,
+  } = useProviderShareAgentDevices([session?.agentDeviceId, pendingAgentDeviceId], remoteDeviceId);
+  // 插件引擎在自己的另一台电脑或好友分享(`share:<id>`)上运行的任务(任务、文件与命令留在任务所在电脑，
+  // Agent 在那台)：引擎的名称、图标、模型、思考深度与权限档都读那台的列表，免装插件即可使用。
+  // Agent 恰好就在正在看的这台电脑上(从另一台建的任务)时读本机的列表。
   const pluginEngineAgentDeviceId = pluginEngineTask && session?.agentDeviceId
-    && !isProviderShareAgentDeviceId(session.agentDeviceId) ? session.agentDeviceId : undefined;
+    ? session.agentDeviceId : undefined;
   const pluginEngineAgentIsThisComputer = !!pluginEngineAgentDeviceId && pluginEngineAgentDeviceId === selfDeviceId;
   const thisComputerPluginEngines = usePluginEngines(pluginEngineAgentIsThisComputer);
   const agentPluginCatalogue = useRemotePluginEngines(
@@ -2387,6 +2397,8 @@ function CCAgentSessionContent({
     : undefined;
   const pluginEngineAgentDeviceName = pluginEngineAgentDeviceId
     ? selectableDevices.find((device) => device.deviceId === pluginEngineAgentDeviceId)?.name
+      ?? providerShareDeviceName?.(pluginEngineAgentDeviceId)
+      ?? undefined
     : undefined;
   const pluginEngine = useMemo<PluginEngineChoice | null>(() => {
     if (!pluginEngineTask) return null;
@@ -2398,21 +2410,27 @@ function CCAgentSessionContent({
       : null;
   }, [pluginEngineTask, pluginEngineAgentDeviceId, pluginEngineAgentDeviceName, pluginEngines, agentDevicePluginEngines, session?.providerId]);
   const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
-  // 切到插件引擎的意图同样带位置(Agent 回到任务所在电脑时为 null)。
-  const pendingAgentDeviceId = storedAgentSwitchIntent?.agentDeviceId;
-  // 本机普通任务也能切到自己另一台电脑开放的引擎。已选的远程引擎保留回显。
+  // 本机普通任务也能免装切到自己另一台电脑或好友分享开放的引擎。已选的远程引擎保留回显。
   const pendingPluginEngineDeviceId = pluginEngineSwitchIntent
     ? (pluginEngineSwitchIntent.agentDeviceId === undefined
         ? (session?.agentDeviceId ?? undefined)
         : (pluginEngineSwitchIntent.agentDeviceId ?? undefined))
     : undefined;
-  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId
-    && (localPluginEngines.length > 0 || !!pendingPluginEngineDeviceId);
+  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId;
   const switchPluginEngineDevicesKey = canBrowseRemotePluginEngines
-    ? JSON.stringify(selectableDevices
-      .filter((device) => !isProviderShareAgentDeviceId(device.deviceId) && !isSharedTaskPeer(device.deviceId)
-        && ((localPluginEngines.length > 0 && device.online) || device.deviceId === pendingPluginEngineDeviceId))
-      .map(({ deviceId: id, name }) => [id, name ?? null]))
+    ? JSON.stringify([
+        ...selectableDevices
+          .filter((device) => !isProviderShareAgentDeviceId(device.deviceId) && !isSharedTaskPeer(device.deviceId)
+            && (device.online || device.deviceId === pendingPluginEngineDeviceId))
+          .map(({ deviceId: id, name }): [string, string | null] => [id, name ?? null]),
+        ...sharedPluginEngineDevices
+          .map(({ deviceId: id, name }): [string, string | null] => [id, name || null]),
+        ...(pendingPluginEngineDeviceId
+          && isProviderShareAgentDeviceId(pendingPluginEngineDeviceId)
+          && !sharedPluginEngineDevices.some((item) => item.deviceId === pendingPluginEngineDeviceId)
+          ? [[pendingPluginEngineDeviceId, providerShareDeviceName?.(pendingPluginEngineDeviceId) ?? null] as [string, string | null]]
+          : []),
+      ])
     : '[]';
   const switchPluginEngineDevices = useMemo(
     () => (JSON.parse(switchPluginEngineDevicesKey) as Array<[string, string | null]>)
@@ -2466,13 +2484,6 @@ function CCAgentSessionContent({
     pendingAgentDeviceId,
     sshRemote: !!session?.remoteHostId,
   });
-  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，并进本机任务，
-  // 不进设备切换器。已暂停 / 已不在的分享只在它正是当前或即将使用的位置时保留。
-  const {
-    devices: providerShareDevices,
-    nameFor: providerShareDeviceName,
-    isReceived: isReceivedProviderShare,
-  } = useProviderShareAgentDevices([session?.agentDeviceId, pendingAgentDeviceId], remoteDeviceId);
   // 被控电脑上的任务 Agent 现在 / 挂着的位置是分享时:分享按账号授予,本机也收到了同一条就经本机
   // 的分享通道读它的目录,模型按钮按分享显示(否则只能读到被控电脑自己的目录,显示「模型信息暂
   // 不可用」)。本机没收到的分享读不到,维持原样。

@@ -39,12 +39,20 @@ export interface PluginHarnessSpawnOptions {
    * Refused unless the plugin published `remoteWorkspace` for this engine.
    */
   remoteWorkspace?: boolean;
+  /**
+   * The task belongs to another Cindy account (provider sharing): the entry is started with
+   * GHOST_HARNESS_GUEST_WORKSPACE_ARG alongside GHOST_HARNESS_REMOTE_WORKSPACE_ARG. Refused unless
+   * the plugin published both `remoteWorkspace` and `guestWorkspace` for this engine.
+   */
+  guestWorkspace?: boolean;
 }
 
 export interface PluginHarness {
   reportsUsage?: true;
   /** The plugin says this engine can serve a task whose files are on another computer. */
   remoteWorkspace?: true;
+  /** The plugin says this engine isolates personal context/tools for shared users. */
+  guestWorkspace?: true;
   /** `${ghostId}:${harnessId}`,任务记录里的稳定标识。 */
   key: string;
   ghostId: string;
@@ -139,6 +147,7 @@ function projectHarnesses(deps: PluginHarnessRegistryDeps, ghosts: InstalledGhos
         ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
         ...(status?.reportsUsage && ghost.manifest.node?.protocol === 'json-rpc-stdio' ? { reportsUsage: true } : {}),
         ...(status?.remoteWorkspace ? { remoteWorkspace: true } : {}),
+        ...(status?.remoteWorkspace && status?.guestWorkspace ? { guestWorkspace: true } : {}),
         ...(status?.models ? { models: status.models.map((model) => ({ ...model, ...(model.efforts ? { efforts: [...model.efforts] } : {}) })) } : {}),
         ...(status?.modes ? { modes: [...status.modes] } : {}),
         ...(status?.defaultMode ? { defaultMode: status.defaultMode } : {}),
@@ -206,15 +215,21 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
           throw new Error(`Task engine ${current.name} is unavailable${current.availability.message ? `: ${current.availability.message}` : ''}`);
         }
         // 插件没有声明能把文件与命令交给 Cindy 时,它的工具只会作用在本机:项目不在这里,不能启动。
-        if (options?.remoteWorkspace && !current.remoteWorkspace) {
+        if ((options?.remoteWorkspace || options?.guestWorkspace) && !current.remoteWorkspace) {
           throw new Error(`Task engine ${current.name} cannot run a task whose files are on another computer`);
+        }
+        if (options?.guestWorkspace && !current.guestWorkspace) {
+          throw new Error(`Task engine ${current.name} cannot be shared with other accounts`);
         }
         harness = current;
       } catch (error) {
         throw new AgentStartupStoppedError(error);
       }
-      return options?.remoteWorkspace
-        ? deps.spawn(harness.ghostId, harness.harnessId, { remoteWorkspace: true })
+      return (options?.remoteWorkspace || options?.guestWorkspace)
+        ? deps.spawn(harness.ghostId, harness.harnessId, {
+            remoteWorkspace: true,
+            ...(options?.guestWorkspace ? { guestWorkspace: true } : {}),
+          })
         : deps.spawn(harness.ghostId, harness.harnessId);
     },
     reconcile(ghosts) {
@@ -276,10 +291,14 @@ const lastRefreshRequestAt = new Map<string, number>();
  * 引擎状态与模型列表。插件怎么取模型由插件自己决定；结果经 `PUT /harnesses` 回来，照常对账。
  * 只发给当前列出引擎的插件；冷却内与逻辑页不在线时不发(不在线的下次再试)。
  */
-export function requestPluginHarnessRefresh(now = Date.now()): void {
+export function requestPluginHarnessRefresh(now = Date.now(), targetGhostId?: string): void {
   const send = registryDeps.requestRefresh;
   if (!send) return;
-  const ghostIds = new Set(registry.list().map((harness) => harness.ghostId));
+  const harnesses = registry.list();
+  const ghostIds = new Set(
+    (targetGhostId ? harnesses.filter((harness) => harness.ghostId === targetGhostId) : harnesses)
+      .map((harness) => harness.ghostId),
+  );
   for (const ghostId of ghostIds) {
     const last = lastRefreshRequestAt.get(ghostId);
     if (last !== undefined && now - last < PLUGIN_HARNESS_REFRESH_COOLDOWN_MS) continue;

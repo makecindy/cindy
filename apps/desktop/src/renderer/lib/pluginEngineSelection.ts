@@ -191,7 +191,7 @@ export function resolvePluginEngineSessionSwitchEffort(
  * so the current choice is shown and can be picked again.
  */
 export function pluginEngineModelRows(
-  engine: Pick<PluginEngineView, 'models'>,
+  engine: Pick<PluginEngineView, 'models' | 'defaultModelAllowed'>,
   activeModelId?: string | null,
 ): PluginEngineModelRow[] {
   const models: PluginEngineModelRow[] = engine.models.map((model: PluginEngineModel) => ({
@@ -203,8 +203,10 @@ export function pluginEngineModelRows(
     ...(model.defaultEffort ? { defaultEffort: model.defaultEffort } : {}),
   }));
   const defaultRow: PluginEngineModelRow = { id: PLUGIN_ENGINE_DEFAULT_MODEL, isDefault: true, efforts: [] };
-  if (models.length === 0) return [defaultRow];
-  return activeModelId === PLUGIN_ENGINE_DEFAULT_MODEL ? [defaultRow, ...models] : models;
+  if (models.length === 0) return engine.defaultModelAllowed === false ? [] : [defaultRow];
+  return activeModelId === PLUGIN_ENGINE_DEFAULT_MODEL && engine.defaultModelAllowed !== false
+    ? [defaultRow, ...models]
+    : models;
 }
 
 /** Display name of a model of this engine; undefined for the default entry or an unknown id. */
@@ -244,7 +246,7 @@ export function pluginEnginePermissionMode(
 /**
  * Engine fields of the session row created for a plugin engine task (local-db sessions:create).
  * Main accepts `agentKind: 'acp'` only with an `acp-plugin:` providerId; `agentDeviceId` names the
- * other computer of this account that has the engine (never SSH or a shared provider).
+ * other computer of this account or received provider share that has the engine (never SSH).
  */
 export function pluginEngineSessionCreateFields(selection: ActivePluginEngine): {
   agentKind: typeof PLUGIN_ENGINE_AGENT_KIND;
@@ -264,24 +266,22 @@ export function pluginEngineSessionCreateFields(selection: ActivePluginEngine): 
 }
 
 /**
- * The engines other computers of this account offer, as picker choices. `catalogues` holds what
- * each computer last answered (null = not read yet or unreachable: it offers nothing for now);
- * only engines opened there for remote use, able to run, and whose plugin is also installed on the
- * task's computer (`installedEngines`) are kept. Shared providers are not computers of this account
- * and never offer plugin engines.
+ * The engines other computers of this account or received provider shares offer, as picker choices.
+ * `catalogues` holds what each computer/share last answered (null = not read yet or unreachable: it
+ * offers nothing for now); only engines opened there for remote use and with at least one permitted
+ * model are kept. The consumer computer does not need the plugin installed locally.
  */
 export function remotePluginEngineChoices(
   devices: readonly { deviceId: string; name?: string | null }[],
   catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>,
   displayName: (deviceId: string, name?: string | null) => string,
-  installedEngines: readonly Pick<PluginEngineView, 'providerId'>[],
+  _installedEngines?: readonly Pick<PluginEngineView, 'providerId'>[],
 ): PluginEngineChoice[] {
-  if (installedEngines.length === 0) return [];
   return devices.flatMap((device) =>
     (catalogues.get(device.deviceId) ?? [])
       .filter((engine) =>
         !!pluginEngineKeyFromProviderId(engine.providerId)
         && isPluginEngineOfferedRemotely(engine)
-        && installedEngines.some((installed) => sameInstalledPluginHarness(installed, engine)))
+        && (engine.models.length > 0 || engine.defaultModelAllowed !== false))
       .map((engine) => ({ ...engine, deviceId: device.deviceId, deviceName: displayName(device.deviceId, device.name) })));
 }

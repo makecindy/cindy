@@ -563,7 +563,8 @@
       "calloutUnknown": "如果你不认识申请人，请拒绝；拒绝后这条链接作废。",
       "approve": "同意分享",
       "reject": "拒绝申请",
-      "later": "稍后处理"
+      "later": "稍后处理",
+      "calloutPluginEngine": "{{name}} 使用时无需在自己的电脑上安装插件或 CLI，会使用这台电脑上的 CLI 登录和配额。"
     },
     "apply": {
       "loading": "正在读取分享链接…",
@@ -8516,7 +8517,8 @@
           "description": "开启后，你的其他电脑可以用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。",
           "unsupported": "这个插件还不支持让其他电脑使用它的引擎。",
           "remoteControlOff": "这台电脑还没有允许同账号设备远程控制，其他电脑不能使用这个引擎。",
-          "ariaLabel": "允许你的其他电脑使用 {{engine}}"
+          "ariaLabel": "允许你的其他电脑使用 {{engine}}",
+          "descriptionShareable": "开启后，你的其他电脑和分享的好友无需安装插件即可用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。"
         },
         "githubRelease": {
           "title": "插件更新",

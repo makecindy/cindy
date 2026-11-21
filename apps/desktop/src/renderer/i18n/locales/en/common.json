@@ -567,7 +567,8 @@
       "calloutUnknown": "If you don’t recognize this person, decline; the link stops working once declined.",
       "approve": "Approve Sharing",
       "reject": "Decline Request",
-      "later": "Decide Later"
+      "later": "Decide Later",
+      "calloutPluginEngine": "{{name}} can use it without installing the plugin or CLI on their computer, using this computer’s CLI sign-in and quota."
     },
     "apply": {
       "loading": "Reading share link…",
@@ -8559,7 +8560,8 @@
           "description": "When on, your other computers can run tasks with this engine. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on.",
           "unsupported": "This plugin doesn’t support using its engine from other computers yet.",
           "remoteControlOff": "This computer doesn’t allow remote control yet, so other computers can’t use this engine.",
-          "ariaLabel": "Allow your other computers to use {{engine}}"
+          "ariaLabel": "Allow your other computers to use {{engine}}",
+          "descriptionShareable": "When on, your other computers and people you share with can run tasks with this engine without installing the plugin. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on."
         },
         "githubRelease": {
           "title": "Plugin updates",

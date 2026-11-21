@@ -1159,7 +1159,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
    * 设备不会占模型列表的位置。当前落点即使掉线也保留,让用户看得到、换得回来。
    */
   // 供应商分享：别人分享给我的供应商(`share:<id>`)同样是落点，只并进模型选择器，不进设备切换器。
-  const { devices: providerShareDevices } =
+  const {
+    devices: providerShareDevices,
+    pluginEngineDevices: sharedPluginEngineDevices = [],
+    nameFor: providerShareDeviceName,
+  } =
     useProviderShareAgentDevices([effectiveAgentDeviceId], effectiveDeviceLinkDeviceId);
   const remoteAgentDevices = useMemo(() => {
     if (effectiveDeviceLinkDeviceId) {
@@ -1290,14 +1294,23 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       ? remoteDraftPluginEngine.selection
       : null;
   const rememberedPluginEngineDeviceId = pluginEnginesAllowed ? draft.pluginEngine?.deviceId : undefined;
-  // 本机装了对应插件才列出同账号其他电脑开放的插件引擎；本机没有任何插件引擎时不向其他电脑请求目录。
+  // 同账号其他电脑与收到的插件引擎分享无需本机预装插件即可列出：打开模型选择器时按需读取。
   // 设备列表随在线状态刷新会换新数组：按「哪几台、叫什么」取一个键，内容没变就沿用同一份，
   // 不让模型选择器跟着每次在线状态刷新重算。
-  const pluginEngineDevicesKey = pluginEnginesAllowed && pluginEngineList.length > 0
-    ? JSON.stringify(selectableDevices
-      .filter((device) => !isProviderShareAgentDeviceId(device.deviceId)
-        && (device.online || device.deviceId === rememberedPluginEngineDeviceId))
-      .map(({ deviceId, name }) => [deviceId, name ?? null]))
+  const pluginEngineDevicesKey = pluginEnginesAllowed
+    ? JSON.stringify([
+        ...selectableDevices
+          .filter((device) => !isProviderShareAgentDeviceId(device.deviceId)
+            && (device.online || device.deviceId === rememberedPluginEngineDeviceId))
+          .map(({ deviceId, name }): [string, string | null] => [deviceId, name ?? null]),
+        ...sharedPluginEngineDevices
+          .map(({ deviceId, name }): [string, string | null] => [deviceId, name || null]),
+        ...(rememberedPluginEngineDeviceId
+          && isProviderShareAgentDeviceId(rememberedPluginEngineDeviceId)
+          && !sharedPluginEngineDevices.some((item) => item.deviceId === rememberedPluginEngineDeviceId)
+          ? [[rememberedPluginEngineDeviceId, providerShareDeviceName(rememberedPluginEngineDeviceId)] as [string, string | null]]
+          : []),
+      ])
     : '[]';
   const pluginEngineDevices = useMemo(
     () => (JSON.parse(pluginEngineDevicesKey) as Array<[string, string | null]>).map(([deviceId, name]) => ({ deviceId, name })),
