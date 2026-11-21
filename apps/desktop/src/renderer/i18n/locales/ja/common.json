@@ -17529,6 +17529,7 @@
       "openWorkdirFailed": "フォルダを開けませんでした"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "待機時間を超えたため、プロンプトは送信されませんでした。対象のセッションが空いたら「{{action}}」で実行できます。",
       "status": {
         "running": "実行中",
         "success": "成功",

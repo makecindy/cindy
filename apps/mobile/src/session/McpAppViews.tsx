@@ -6,11 +6,12 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { useTheme } from '@/theme';
 import { NativeMcpAppHost, NativeMcpAppSlot, mcpAppSurfaceAvailable } from './NativeMcpAppSurface';
+import { getMobileHeights } from './mcpAppMeasuredHeights';
 import { McpAppView } from './mcpAppView';
 
 const Context = createContext<{
   foreground: boolean;
-  open(deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean, quotaVisible: () => boolean): McpAppView;
+  open(deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean, quotaVisible: () => boolean, placeholder: number): McpAppView;
 } | null>(null);
 export const useMcpAppViews = () => useContext(Context);
 export { NativeMcpAppSlot, mcpAppSurfaceAvailable };
@@ -24,14 +25,14 @@ export function McpAppViewsProvider({ children }: { children: ReactNode }) {
   const [, refresh] = useState(0);
   const [foreground, setForeground] = useState(AppState.currentState !== 'background' && AppState.currentState !== 'inactive');
   const changed = useCallback(() => { if (mounted.current) refresh((n) => n + 1); }, []);
-  const open = useCallback((deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean, quotaVisible: () => boolean) => {
+  const open = useCallback((deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean, quotaVisible: () => boolean, placeholder: number) => {
     const view = new McpAppView(invoke, deviceId, sessionId, clientId, changed,
       () => { views.current.delete(view); changed(); }, async (url) => {
         const parsed = new URL(url);
         if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password)
           throw new Error('MCP_APP_INVALID_LINK');
         await Linking.openURL(parsed.href);
-      }, getMobileAuthOwner().generation, isPlugin, getUserCloseEpoch, onUserClose);
+      }, getMobileAuthOwner().generation, placeholder, isPlugin, getUserCloseEpoch, onUserClose);
     views.current.add(view);
     changed();
     void view.open(context, () => mounted.current && AppState.currentState !== 'background' && AppState.currentState !== 'inactive' && quotaVisible());
@@ -41,6 +42,7 @@ export function McpAppViewsProvider({ children }: { children: ReactNode }) {
     mounted.current = true;
     const subscription = AppState.addEventListener('change', (state) => {
       const active = state === 'active';
+      if (!active) void getMobileHeights()?.flush();
       if (!active) for (const view of views.current) void view.close();
       setForeground(active);
     });

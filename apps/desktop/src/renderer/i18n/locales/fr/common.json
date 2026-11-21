@@ -17769,6 +17769,7 @@
       "openWorkdirFailed": "Impossible d'ouvrir le dossier"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
       "status": {
         "running": "En cours",
         "success": "Réussie",

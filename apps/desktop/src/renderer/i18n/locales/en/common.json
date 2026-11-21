@@ -17603,6 +17603,7 @@
       "openWorkdirFailed": "Failed to open folder"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
       "status": {
         "running": "Running",
         "success": "Success",

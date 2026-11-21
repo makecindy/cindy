@@ -1,8 +1,10 @@
+import { mcpAppInitialHeight } from '@cindy/maker-shared/mcp-apps';
 import { Maximize2 } from 'lucide-react';
 import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { McpAppPermissionPrompt } from './McpAppPermissionPrompt';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import {
@@ -18,6 +20,7 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import { CONTENT_HEADER_HEIGHT_PX } from '@/components/layout/ContentHeader';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
+import { desktopMcpAppHeights } from '@/lib/mcpAppMeasuredHeights';
 import { createLogger } from '@/lib/logger';
 import { Spinner } from '@/components/ui/spinner';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
@@ -37,14 +40,26 @@ const appFailureCodes = new Set([
   'MCP_PLUGIN_UNAVAILABLE', 'MCP_PLUGIN_CSP_DOMAIN_NOT_DECLARED',
   'CHANNEL_NOT_ALLOWED', 'CHANNEL_NOT_FOUND', 'UNKNOWN_CHANNEL', 'NOT_FOUND',
 ]);
-const MCP_APP_HEIGHT_CACHE_LIMIT = 100;
 const MCP_APP_DEFAULT_HEIGHT = 320;
 const MCP_APP_SIDEBAR_LOADING_HEIGHT = 48;
 const MCP_APP_LOADING_INDICATOR_DELAY_MS = 400;
 const MCP_APP_HEIGHT_FALLBACK_DELAY_MS = 500;
+// A history page can mount several cards in one React commit. Read all settled
+// column widths before React commits any of their restored heights.
+const pendingHeightRestores = new Set<() => void>();
+function afterCardLayout(restore: () => void): () => void {
+  if (!pendingHeightRestores.size) queueMicrotask(() => {
+    flushSync(() => {
+      pendingHeightRestores.forEach(readHeight => readHeight());
+      pendingHeightRestores.clear();
+    });
+  });
+  pendingHeightRestores.add(restore);
+  return () => { pendingHeightRestores.delete(restore); };
+}
+
 const MCP_APP_OFFSCREEN_KEEP_MS = 5_000;
 const MCP_APP_OFFSCREEN_KEEP_LIMIT = 2;
-const mcpAppHeightCache = new Map<string, number>();
 // §8.7: one renderer-wide expiry timer, at most two five-second local leases.
 const retainedLocalViews = new Map<object, { expiresAt: number; release(): void }>();
 let retainedLocalViewsTimer: ReturnType<typeof setTimeout> | undefined;
@@ -78,13 +93,7 @@ function releaseAllRetainedLocalViews(): void {
   retainedLocalViews.clear(); scheduleRetainedLocalViews();
   items.forEach(item => item.release());
 }
-function cachedMcpAppHeight(key: string): number | undefined { return mcpAppHeightCache.get(key); }
-function rememberMcpAppHeight(key: string, height: number): void {
-  mcpAppHeightCache.delete(key);
-  mcpAppHeightCache.set(key, height);
-  while (mcpAppHeightCache.size > MCP_APP_HEIGHT_CACHE_LIMIT)
-    mcpAppHeightCache.delete(mcpAppHeightCache.keys().next().value!);
-}
+
 function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' | 'active' | 'exit-fullscreen', sessionId: string | null, clientId: string): void {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   const code = message.match(/\b[A-Z][A-Z_]+\b/g)?.find(value => appFailureCodes.has(value)) ?? 'UNKNOWN';
@@ -135,6 +144,7 @@ function hostContext(locale: string, element: HTMLElement, fixed = false): Recor
 }
 
 interface McpAppCardProps {
+  initialHeight?: unknown;
   sessionId: string | null;
   clientId: string;
   title: string;
@@ -184,7 +194,7 @@ export function McpAppCard(props: McpAppCardProps) {
 }
 
 /** Untrusted HTML always sits across an origin boundary, without Cindy's preload. */
-function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable, customMcp, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
+function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable, customMcp, initialHeight, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
   const { t, i18n } = useTranslation();
   const [canFullscreen, setCanFullscreen] = useState(false);
   const appTitle = title || t('mcpApps.appName');
@@ -194,8 +204,10 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState<ReturnType<typeof mcpAppFailureKey> | 'mcpApps.pluginRevoked' | 'mcpApps.pluginCspRejected' | 'mcpApps.filesOnExecutionComputer'>();
   const [loading, setLoading] = useState(true);
-  const heightKey = `${deviceId ?? 'local'}:${sessionId ?? 'none'}:${clientId}`;
-  const [height, setHeight] = useState(() => cachedMcpAppHeight(heightKey));
+  const heights = desktopMcpAppHeights;
+  const heightKey = JSON.stringify([deviceId ?? null, sessionId, clientId]);
+  const rememberLayout = !source && sizing === 'content' && chrome === 'card';
+  const [height, setHeight] = useState<number>();
   const [mode, setMode] = useState('inline');
   const sidebarSection = sizing === 'sidebar-section';
   const fixed = sizing === 'fill' || mode === 'fullscreen';
@@ -215,9 +227,15 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   const enabled = visible || retained;
   const updateContextRef = useRef<(() => void) | undefined>(undefined);
 
-  useEffect(() => {
-    setHeight(cachedMcpAppHeight(heightKey));
-  }, [heightKey]);
+  useLayoutEffect(() => {
+    if (fixed) return;
+    if (!rememberLayout) { setHeight(undefined); return; }
+    // The session sets its column width in a parent layout effect, after the
+    // card's effect. Read the settled width and apply the height before paint.
+    return afterCardLayout(() => {
+      if (root.current) setHeight(heights.get(heightKey, root.current.clientWidth));
+    });
+  }, [heightKey, heights, rememberLayout, fixed]);
 
   useEffect(() => {
     // A failed View collapses; observe the card so its retry stays visible.
@@ -270,6 +288,12 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     let resultDelivered = Boolean(source || sessionId === null);
     let sizeDelivered = false;
     let latestHeight: number | undefined;
+    let measuredWidth = 0;
+    const adoptHeight = (height: number) => {
+      if (rememberLayout && visibleRef.current && measuredWidth > 0 && measuredWidth === element.clientWidth)
+        heights.remember(heightKey, measuredWidth, height);
+      setHeight(height);
+    };
     let handshakeStarted = false;
     let revealTimer: ReturnType<typeof setTimeout> | undefined;
     let staticTimer: ReturnType<typeof setTimeout> | undefined;
@@ -309,16 +333,17 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           // the page; the automatic pre-result size can still show the old frame.
           if (initialized && resultDelivered) sizeDelivered = true;
           const value = message.params?.height;
-          if (!fixedRef.current && typeof value === 'number' && Number.isFinite(value)) {
+          if (!fixedRef.current && visibleRef.current && typeof value === 'number' && Number.isFinite(value) && value > 0) {
+            measuredWidth = element.clientWidth;
             const nextHeight = heightGuard.accept(value);
             latestHeight = nextHeight;
             if (initialized && resultDelivered) {
               clearTimeout(heightFallbackTimer);
               heightFallbackTimer = undefined;
-              rememberMcpAppHeight(heightKey, nextHeight);
-              setHeight(nextHeight);
+              adoptHeight(nextHeight);
             } else if (revealedFrame) {
-              setHeight(nextHeight);
+              if (initialized) setHeight(nextHeight);
+              else adoptHeight(nextHeight);
             }
           }
         }
@@ -359,13 +384,12 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       // immediately. For SDK pages, keep the remembered height until a
       // post-result size arrives, with a bounded fallback for pages that never
       // emit another size notification.
-      if (!fixedRef.current && !initialized && latestHeight !== undefined) setHeight(latestHeight);
+      if (!fixedRef.current && !initialized && latestHeight !== undefined) adoptHeight(latestHeight);
       if (!fixedRef.current && initialized && !sizeDelivered && latestHeight !== undefined) {
         heightFallbackTimer = setTimeout(() => {
           heightFallbackTimer = undefined;
           if (disposed || fixedRef.current || sizeDelivered || latestHeight === undefined) return;
-          rememberMcpAppHeight(heightKey, latestHeight);
-          setHeight(latestHeight);
+          adoptHeight(latestHeight);
         }, MCP_APP_HEIGHT_FALLBACK_DELAY_MS);
       }
       // A sidebar already waiting on a reported size keeps its compact footprint.
@@ -544,7 +568,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, sidebarSection]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, sidebarSection, heights, heightKey, rememberLayout]);
 
   useLayoutEffect(() => {
     const controller = controllerRef.current;
@@ -586,7 +610,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     void controllerRef.current?.displayMode('inline').catch((error) => logAppFailure(error, 'exit-fullscreen', sessionId, clientId));
   };
   const showSpinner = loading && visible && !revealed;
-  const frameHeight = height ?? MCP_APP_DEFAULT_HEIGHT;
+  const frameHeight = height ?? (rememberLayout ? mcpAppInitialHeight(initialHeight) : undefined) ?? MCP_APP_DEFAULT_HEIGHT;
   const sidebarHeight = height ?? MCP_APP_SIDEBAR_LOADING_HEIGHT;
   const frameMount = (
     <div

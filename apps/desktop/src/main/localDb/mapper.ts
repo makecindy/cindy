@@ -440,7 +440,7 @@ export function sessionCreateToRow(
         permissionMode?: string;
         fastMode?: boolean | 'ultrafast';
         planModeEnabled?: boolean;
-        agentKind?: AgentKind;
+        agentKind?: AgentKind | 'acp';
         orcaRole?: OrcaRole | null;
         parentSessionId?: string | null;
         forkedAtMessageId?: string | null;

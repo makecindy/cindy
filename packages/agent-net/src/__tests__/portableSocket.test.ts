@@ -189,7 +189,8 @@ it('retires a failed LAN candidate and retries only that peer through the relay'
  * - Bug 依据：2026-11-17 审查，连接断开（路径丢了、NAT 换了映射）以后只有下一次调用、目录更新才会再拨；这期间对方显示离线，
  *   「仅使用 Agent-Net」时空闲的账号可以一直这样。
  * - 最小失败输入：目录里在线的一台设备，连上后连接断开。tier：unit，假定时器推进重拨的等待。 */
-it('dials a device of the account again when its connection drops while the directory has it online', async () => {
+// A failed first handshake has no channel to emit a close event. Exercise both recovery entries.
+it.each(['initial failure', 'fresh directory', 'channel close'])('redials an online device after %s', async failure => {
   const local = generateIdentity('a-local'), remote = generateIdentity('b-remote');
   const { root, bootstrap } = createPrivateNetwork('Redial after drop', local);
   const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
@@ -200,20 +201,24 @@ it('dials a device of the account again when its connection drops while the dire
   const drops: Array<() => void> = [];
   const connect = vi.fn(async (): Promise<PeerChannel> => ({ remoteId, send() {}, onData() {}, onClose(callback) { drops.push(callback); },
     close() {}, path: () => 'relay' }));
+  if (failure !== 'channel close') connect.mockRejectedValueOnce(new Error('handshake timed out'));
   const socket = await AgentNetSocket.openWithBindings({
     client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
       connect: async () => uplink },
     userId: bootstrap.ownerCertificate.subject,
     bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, connect, close: async () => undefined }) },
   });
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   try {
     socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
-    await vi.waitFor(() => expect(socket.pathTo('b-remote')).toBe('relay'));
+    await vi.advanceTimersByTimeAsync(0);
     expect(connect).toHaveBeenCalledOnce();
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    drops[0]();
+    if (failure === 'channel close') drops[0]();
     expect(socket.pathTo('b-remote')).toBeNull();
-    await vi.advanceTimersByTimeAsync(1_300);
+    if (failure === 'fresh directory') uplink.emit('directory');
+    await vi.advanceTimersByTimeAsync(700);
+    expect(connect).toHaveBeenCalledTimes(failure === 'fresh directory' ? 2 : 1);
+    await vi.advanceTimersByTimeAsync(600);
     expect(connect).toHaveBeenCalledTimes(2);
     expect(socket.pathTo('b-remote')).toBe('relay');
   } finally { vi.useRealTimers(); socket.close(); }
