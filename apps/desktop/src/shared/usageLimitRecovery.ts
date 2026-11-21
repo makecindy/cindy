@@ -291,6 +291,19 @@ function parseTextResetAt(
   nowMs: number,
   opts?: UsageLimitRecoveryParseOptions,
 ): number | null {
+  // Some OpenAI-compatible providers (for example Volcengine Agent Plan)
+  // embed an RFC-822-like wall-clock timestamp in prose:
+  // "It will reset at 2026-11-09 00:00:00 +0800 CST".  This is an absolute
+  // timestamp because it carries a numeric offset, so it is safe to use for
+  // auto-resume even when the task runs on a remote host.
+  const offsetDate = text.match(
+    /\b(?:reset|resets)\s+at\s+(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?\s+[+-]\d{4})(?:\s+[A-Z]{2,6})?/i,
+  );
+  if (offsetDate) {
+    const parsed = Date.parse(offsetDate[1]);
+    if (Number.isFinite(parsed) && parsed > nowMs) return parsed;
+  }
+
   const isoMatches = text.match(
     /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})\b/g,
   );

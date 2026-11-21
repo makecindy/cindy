@@ -34,6 +34,19 @@ describe('usage limit recovery detection', () => {
     ).toEqual({ resetAtMs: NOW + 75 * 60_000, isAccountUsageLimit: true });
   });
 
+  it('parses provider reset timestamps with an explicit numeric offset', () => {
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          errorStatus: 429,
+          message:
+            'You have exceeded the weekly usage quota. It will reset at 2026-11-09 00:00:00 +0800 CST.',
+        },
+        Date.parse('2026-11-05T00:00:00.000Z'),
+      ),
+    ).toEqual({ resetAtMs: Date.parse('2026-11-08T16:00:00.000Z') });
+  });
+
   it('parses the Codex app-server "try again at" wording in local time', () => {
     const sameDay = new Date(NOW);
     sameDay.setHours(23, 30, 0, 0);
@@ -211,8 +224,7 @@ describe('usage limit recovery detection', () => {
       extractUsageLimitRecoveryHint({ message: 'insufficient_quota: add billing credits' }, NOW),
     ).toBeNull();
   });
-
-  it('keeps an upstream overload that also says "rate limit exceeded" out of the limit path', () => {
+  it('keeps an upstream overload that also says \"rate limit exceeded\" out of the limit path', () => {
     // 实录文案同时命中限额正则与过载短语，过载短语必须优先(否则会按限额的周期
     // 重置去安排自动续跑，issue #7897)。
     expect(
@@ -222,4 +234,5 @@ describe('usage limit recovery detection', () => {
       ),
     ).toBeNull();
   });
+
 });
