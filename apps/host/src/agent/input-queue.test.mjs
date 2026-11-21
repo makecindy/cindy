@@ -4470,6 +4470,7 @@ test('context recovery assembly: an overflow rebuilds the task and replays the m
   assert.equal(rebuilt[0].patch.contextTokens, 0);
   assert.ok(Number.isFinite(Date.parse(rebuilt[0].patch.updatedAt)), 'with the commit\'s update time');
   assert.equal(r.rows('assembled-ok', 'user').length, 1, 'the replay writes no second user row');
+  assert.equal((await readMessagesList('assembled-ok')).find(row => row.role === 'user')?.agentMeta?.inputNotice, undefined);
   assert.equal(r.rows('assembled-ok', 'error').length, 0, 'a recovered overflow writes no error row');
   assert.equal(r.h.events.filter(event => event.sessionId === 'assembled-ok' && event.type === 'error').length, 0);
   await waitFor(() => r.marker('assembled-ok').consumed === true);
@@ -5020,6 +5021,50 @@ for (const full of [false, true]) {
     assert.deepEqual(r.rows(id, 'error'), []);
     assert.equal(r.h.queue.projection(id).error, null);
     assert.equal(r.h.events.some(event => event.sessionId === id && event.type === 'error'), false);
+  });
+}
+
+// L343 / integration. The queue gives a rejected prompt's turn to the next input.
+// A fresh reader must find its notice on the original user row, once, even after
+// a duplicate terminal. Real recovery assembly and SQLite, fixture provider.
+for (const writeFails of [false, true]) {
+  test('L343 keeps the ordered queue moving after an oversized input: ' + (writeFails ? 'notice write fails' : 'history reopens with one notice'), async t => {
+    const r = await assembledRecovery(lifoCleanup(t));
+    const id = 'oversized-notice';
+    await r.db.createTask(id);
+    if (writeFails) r.db.db.exec(`CREATE TRIGGER reject_input_notice BEFORE UPDATE OF agent_meta ON messages
+      WHEN NEW.agent_meta LIKE '%oversized-input-skipped%' BEGIN SELECT RAISE(ABORT, 'notice fixture write failed'); END;`);
+    for (const [clientId, text] of [['original', 'first prompt'], ['next', 'second'], ['last', 'third']]) {
+      await r.h.queue.enqueue(id, { clientId, text });
+      if (clientId === 'original') await waitFor(() => r.h.maker.getSession(id)?.sent.length === 1);
+    }
+    const live = r.h.maker.getSession(id);
+    const terminal = { type: 'error', data: OVERFLOW, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId };
+    live.emit(terminal);
+    live.emit(terminal);
+    await waitFor(() => live.sent.includes('second'));
+    live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+    await waitFor(() => live.sent.includes('third'));
+    assert.deepEqual(live.sent, ['first prompt', 'second', 'third']);
+    await r.h.queue.dispose();
+    const history = new Database(r.db.db.name, { readonly: true, fileMustExist: true });
+    try {
+      const users = history.prepare(`SELECT client_id, json_extract(agent_meta, '$.inputNotice') AS notice
+        FROM messages WHERE session_id = ? AND role = 'user' AND rewind_at IS NULL ORDER BY rowid`).all(id);
+      const notice = writeFails ? null : 'oversized-input-skipped';
+      assert.deepEqual(users, [
+        { client_id: 'original', notice },
+        { client_id: 'next', notice: null }, { client_id: 'last', notice: null },
+      ]);
+      const refreshed = r.h.events.filter(event => event.type === 'message_created' &&
+        event.message?.agentMeta?.inputNotice === 'oversized-input-skipped');
+      assert.deepEqual(refreshed.map(event => event.message.clientId), writeFails ? [] : ['original']);
+      const reopened = (await readMessagesList(id)).find(row => row.clientId === 'original');
+      assert.equal(reopened.content, 'first prompt');
+      assert.equal(reopened.agentMeta?.inputNotice ?? null, notice);
+    } finally {
+      history.close();
+    }
   });
 }
 

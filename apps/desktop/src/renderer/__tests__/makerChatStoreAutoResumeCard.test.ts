@@ -69,6 +69,7 @@ const inputGetProjection = vi.fn<() => Promise<unknown>>(async () =>
 );
 
 let inputProjectionCb: ((projection: unknown) => void) | null = null;
+let messageCreatedCb: ((payload: unknown) => void) | null = null;
 let makerEventCb: ((payload: unknown) => void) | null = null;
 let makerStatusCb: ((payload: unknown) => void) | null = null;
 
@@ -101,7 +102,10 @@ function makeElectronApiStub() {
         stop: inputStop,
       },
     },
-    localDb: { messages: { onCreated: fanOut() } },
+    localDb: { messages: { onCreated: (cb: (payload: unknown) => void) => {
+      messageCreatedCb = cb;
+      return () => { messageCreatedCb = null; };
+    } } },
     deviceLink: { onRemotePush: fanOut() },
     onUsageMessageTurnCost: fanOut(),
   };
@@ -244,6 +248,32 @@ describe('mapServerMessages auto-resume 分隔线', () => {
     expect(row('question-reply:answered:q1:digest')).toMatchObject({ content: '', isSyntheticTrigger: true });
     expect(row('question-reply:q1:digest')?.content).toBe('> Install?\n\nYes');
     expect(row('question-reply:q1:digest')?.isSyntheticTrigger).toBeUndefined();
+  });
+
+  // L343 / unit. Existing windows merge the refreshed DB row. A reopened
+  // window finds the same single notice on the original message.
+  it.each(['reopened', 'already open'] as const)('projects the oversized input notice in %s history', async (entry) => {
+    const original = serverMessage({ sessionId: SID, clientId: 'old', role: 'user', content: 'first prompt' });
+    const saved = { ...original, agentMeta: { inputNotice: 'oversized-input-skipped' } as const };
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      entry === 'reopened' ? saved : original,
+      serverMessage({ sessionId: SID, clientId: 'next', role: 'user', content: 'second' }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+    if (entry === 'already open') {
+      expect(makerChatStore.getSnapshot(SID).messages.find(message => message.clientId === 'old')?.inputNotice).toBeUndefined();
+      expect(messageCreatedCb).not.toBeNull();
+      messageCreatedCb?.({ sessionId: SID, message: saved });
+      messageCreatedCb?.({ sessionId: SID, message: saved });
+      await flush();
+    }
+    const users = makerChatStore.getSnapshot(SID).messages.filter(message => message.role === 'user');
+    expect(users.filter(message => message.inputNotice !== undefined)).toEqual([
+      expect.objectContaining({ clientId: 'old', content: 'first prompt', inputNotice: 'oversized-input-skipped' }),
+    ]);
+    expect(users.find(message => message.clientId === 'next')?.inputNotice).toBeUndefined();
   });
 
   // Unit / PR #6611: the first queued input resumes without a hidden clone.

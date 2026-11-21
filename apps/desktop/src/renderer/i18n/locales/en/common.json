@@ -15781,6 +15781,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "This message was too long to process. The remaining messages will be processed in order.",
       "attachmentPrefix": "Attachments: ",
       "attachmentAttachedAria": "Attached {{name}}",
       "saveAttachmentAs": "Save attachment {{name}} as",

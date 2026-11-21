@@ -1,6 +1,6 @@
 import { ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
 import { handoffPreviewText } from './agentHandoff.js';
-import type { ContextOverflowRolloverDeps } from './contextOverflowRollover.js';
+import type { ClaimedOversizedInput, ContextOverflowRolloverDeps } from './contextOverflowRollover.js';
 import type { MakerSessionCreateOpts as CreateOpts } from './sessionRequest.js';
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
 
@@ -281,8 +281,10 @@ export interface RecoveryCallbackPorts {
     clearError(sessionId: string): void;
     hasPendingQueuedWork(sessionId: string): boolean;
     getInputAbortSignal(sessionId: string): AbortSignal;
+    skippedOversizedInputClientId?(sessionId: string, claim: ClaimedOversizedInput): string | undefined;
   } | null;
   resetWireNotes(sessionId: string): void;
+  persistSkippedOversizedInput?(sessionId: string, clientId: string): void;
 }
 
 export function contextRecoveryRebuilt(
@@ -296,13 +298,16 @@ export function contextRecoveryRebuilt(
 }
 
 export function contextRecoveryAbortSignal(
-  ports: RecoveryCallbackPorts, sessionId: string,
+  ports: RecoveryCallbackPorts, sessionId: string, skippedInput?: ClaimedOversizedInput,
 ): AbortSignal {
   const coordinator = ports.getCoordinator()!;
   if (coordinator.hasPendingQueuedWork(sessionId)) {
     // The terminal error may have installed recovery after this input was
     // queued. Release that old error so the queued input can actually drain.
+    const skippedClientId = skippedInput
+      ? coordinator.skippedOversizedInputClientId?.(sessionId, skippedInput) : undefined;
     coordinator.clearError(sessionId);
+    if (skippedClientId) ports.persistSkippedOversizedInput?.(sessionId, skippedClientId);
     return AbortSignal.abort();
   }
   return coordinator.getInputAbortSignal(sessionId);

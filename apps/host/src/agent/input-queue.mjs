@@ -425,12 +425,15 @@ export function createInputQueue(deps) {
         assertCurrent,
         replay: (...args) => executor.replay(...args),
         drainHistories: () => executor.drainHistories(),
+        behindDurableWrites: (...args) => executor.behindDurableWrites(...args),
         resetWireNotes: id => executor.resetWireNotes(id),
         readAutoReviewHistory: id => executor.readAutoReviewHistory(id),
         noteRebuilt: id => executor.noteRecoveryRebuilt(id),
         coordinator: {
           hasPendingQueuedWork: id => coordinator.hasPendingQueuedWork(id),
           getInputAbortSignal: id => coordinator.getInputAbortSignal(id),
+          skippedOversizedInputClientId: (id, claim) =>
+            closing || stateFor(id).closed || !isCurrent() ? undefined : coordinator.skippedOversizedInputClientId(id, claim),
           // As the desktop (contextRecoveryRebuilt): the coordinator's clear, synchronously. A
           // context overflow's error is not in the queue snapshot, so the clear writes nothing.
           // Nothing changes once the runtime is closing, the task is closed or the owner changed.

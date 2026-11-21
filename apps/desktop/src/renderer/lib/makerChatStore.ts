@@ -686,6 +686,7 @@ export interface ChatMessage {
   systemCardData?: Record<string, unknown>;
   /** First input resumed after group quota recovery; its user bubble stays visible. */
   usageLimitAutoResumeInfo?: Record<string, unknown>;
+  inputNotice?: AgentMeta['inputNotice'];
   /** FP-3: plan_review message fields */
   planReviewStatus?: 'pending' | 'approved' | 'revised' | 'expired' | 'cancelled';
   planReviewRequestId?: string;
@@ -20503,6 +20504,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(m.agentMeta?.autoResumeInfo?.reason === 'usage-limit-reset'
           ? { usageLimitAutoResumeInfo: { ...m.agentMeta.autoResumeInfo } }
           : {}),
+        ...(m.agentMeta?.inputNotice === 'oversized-input-skipped'
+          ? { inputNotice: m.agentMeta.inputNotice } : {}),
         ...(parsed.images.length > 0 && { images: parsed.images }),
         ...(parsed.files.length > 0 && { files: parsed.files }),
         ...(parsed.quotesEncoded === true && { quotesEncoded: true }),

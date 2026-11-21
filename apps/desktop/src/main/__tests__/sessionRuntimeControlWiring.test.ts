@@ -1935,6 +1935,7 @@ function recoveryFixture() {
     broadcastSessionPatched: vi.fn(() => { order.push('project'); }),
     createDbMessage: vi.fn(async () => { order.push('card'); throw new Error('card unavailable'); }),
     createId: () => 'id', agentHandoffPending: { set: vi.fn(), readGeneration: () => 1 },
+    enqueueDurableWrite: vi.fn(), broadcastMessageRow: vi.fn(),
     agentInputCoordinatorHolder: coordinator, wireNoteMemory: { reset: vi.fn(() => { order.push('reset'); }) },
     readPiNativeCompatOverride: vi.fn(), recordPiNativeCompatOverride: vi.fn(),
     buildCreateOptsWithStderr: (x: unknown) => x,

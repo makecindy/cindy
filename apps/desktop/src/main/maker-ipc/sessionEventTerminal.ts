@@ -322,7 +322,7 @@ export function finishSessionTerminalEvent(
     const contextRecoveryInput = {
       session, event, attributedEvent, broadcastEvent, eventAgentMeta,
       isPlannedUpgradeClose, isRemoteAuthRetry, isGatewayProxyTokenRecovery,
-      autoResumeSuppressesPersist, persistId,
+      autoResumeSuppressesPersist, persistId, inputClientId: prepared.activeInputId ?? undefined,
     };
     const overflowClaim = claimContextRecoveryTerminal(contextRecoveryPorts, contextRecoveryInput);
     const deferUnsuccessfulProductTurn = (): void => {

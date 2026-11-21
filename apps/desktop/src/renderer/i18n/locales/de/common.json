@@ -15744,6 +15744,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "Diese Nachricht war zu lang und konnte nicht verarbeitet werden. Die weiteren Nachrichten werden der Reihe nach verarbeitet.",
       "attachmentPrefix": "Anhänge: ",
       "attachmentAttachedAria": "{{name}} angehängt",
       "saveAttachmentAs": "Anhang {{name}} speichern unter",

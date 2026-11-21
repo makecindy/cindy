@@ -1,3 +1,4 @@
+import { desktopContextRecoveryAbortSignal } from '../contextRecoveryAssembly.desktop.js';
 import { acceptedAttachmentReplay } from '../attachmentReplay.js';
 import { normalizeUserMessage } from '../normalizeAttachments.desktop.js';
 import Database from 'better-sqlite3';
@@ -5241,6 +5242,106 @@ describe('AgentInputCoordinator send transaction', () => {
     // The retry was superseded — no second dispatch occurred.
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
+
+  // L343 / unit with SQLite. The real Desktop adapter must update the original
+  // row after releasing the error. The old test only manually cleared the error.
+  it.each(['live', 'changed-owner', 'wrong-turn', 'cleared', 'compact-only'] as const)(
+    'releases the queue and writes the oversized notice only to the current visible input (%s)',
+    async (mode) => {
+      const h = createHarness();
+      const sid = 'oversized-notice';
+      const old = new Database(':memory:');
+      const next = new Database(':memory:');
+      const initialise = (sqlite: Database.Database) => {
+        sqlite.exec(`
+          CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, cleared_at INTEGER);
+          CREATE TABLE messages (id TEXT, session_id TEXT, client_id TEXT, role TEXT, content TEXT,
+            tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, rewind_at INTEGER, created_at INTEGER);
+          INSERT INTO sessions VALUES ('oversized-notice', 'active', NULL), ('other-task', 'active', NULL);
+          INSERT INTO messages VALUES ('old-row', 'oversized-notice', 'original', 'user', '"first prompt"',
+            NULL, '{"sourceDevice":{"platform":"ios"}}', NULL, NULL, 100);
+          INSERT INTO messages VALUES ('other-row', 'other-task', 'original', 'user', '"other prompt"',
+            NULL, NULL, NULL, NULL, 100);`);
+        return { drizzle: drizzle(sqlite) } as unknown as DbClient;
+      };
+      const client = initialise(old);
+      const otherClient = initialise(next);
+      setCurrentDbClient(client, 'old');
+      try {
+        const claim = { inputClientId: 'original', instanceId: 'harness-session', generation: 3 };
+        h.setTurnGeneration(claim.generation);
+        h.coordinator.enqueue(sid, makeItem('original', 'first prompt'));
+        await flush();
+        if (mode === 'compact-only') {
+          await h.coordinator.compact(sid, makeItem('compact', '').createOpts);
+        } else {
+          h.coordinator.enqueue(sid, makeItem('next', 'second'));
+          if (mode === 'live') h.coordinator.enqueue(sid, makeItem('last', 'third'));
+        }
+        await flush();
+        h.setRunning(false);
+        h.coordinator.onTurnEvent(sid, 'error', 'prompt is too long', { reason: 'context-overflow' }, {
+          sessionInstanceId: claim.instanceId, sessionTurnGeneration: claim.generation,
+        });
+        const refreshed = vi.fn();
+        const queuedWrites: Promise<unknown>[] = [];
+        const writes = Promise.withResolvers<void>();
+        const ports: Parameters<typeof desktopContextRecoveryAbortSignal>[0] = {
+          getCoordinator: () => h.coordinator,
+          resetWireNotes: vi.fn(),
+          enqueueDurableWrite: (_label, write) => {
+            expect(h.coordinator.getProjection(sid).recovery).toBeNull();
+            const pending = writes.promise.then(() => write(null));
+            queuedWrites.push(pending);
+            return pending;
+          },
+          broadcastMessageRow: refreshed,
+          isCurrentTurn: () => true,
+          log: mocks.logger,
+        };
+        const claimed = mode === 'wrong-turn' ? { ...claim, generation: 2 } : claim;
+        expect(desktopContextRecoveryAbortSignal(ports, sid, claimed).aborted).toBe(true);
+        // The notice writer can wait even while the next input reaches the provider.
+        h.setTurnGeneration(claim.generation + 1);
+        await flush();
+        const sent = () => h.sendToAgent.mock.calls.map(([, message]) =>
+          typeof message === 'string' ? message : message.content);
+        expect(sent()).toEqual(['first prompt', mode === 'compact-only' ? '/compact' : 'second']);
+        if (mode === 'live') {
+          h.setRunning(false);
+          h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+            sessionInstanceId: claim.instanceId, sessionTurnGeneration: claim.generation + 1,
+          });
+          await flush();
+          expect(sent()).toEqual(['first prompt', 'second', 'third']);
+        }
+        if (mode === 'changed-owner') setCurrentDbClient(otherClient, 'replacement');
+        if (mode === 'cleared') old.exec("UPDATE sessions SET cleared_at = 100 WHERE id = 'oversized-notice'");
+        writes.resolve();
+        await Promise.all(queuedWrites);
+        const read = (db: Database.Database) => db.prepare(
+          "SELECT id, json_extract(agent_meta, '$.inputNotice') AS notice FROM messages ORDER BY id",
+        ).all();
+        expect(read(old)).toEqual([
+          { id: 'old-row', notice: mode === 'live' ? 'oversized-input-skipped' : null },
+          { id: 'other-row', notice: null },
+        ]);
+        expect(read(next)).toEqual([{ id: 'old-row', notice: null }, { id: 'other-row', notice: null }]);
+        if (mode === 'live') {
+          expect(refreshed).toHaveBeenCalledExactlyOnceWith(sid, expect.objectContaining({
+            clientId: 'original',
+            agentMeta: { sourceDevice: { platform: 'ios' }, inputNotice: 'oversized-input-skipped' },
+          }), null);
+        } else {
+          expect(refreshed).not.toHaveBeenCalled();
+        }
+      } finally {
+        clearCurrentDbClient();
+        old.close();
+        next.close();
+      }
+    },
+  );
 
   it('lets already queued input take over when oversized recovery clears the old error', async () => {
     const h = createHarness();

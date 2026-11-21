@@ -15885,6 +15885,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "Esta mensagem era demasiado longa para ser processada. As mensagens seguintes serão processadas por ordem.",
       "attachmentPrefix": "Anexos: ",
       "attachmentAttachedAria": "{{name}} anexado",
       "saveAttachmentAs": "Guardar anexo {{name}} como",

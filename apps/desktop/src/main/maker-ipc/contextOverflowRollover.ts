@@ -91,6 +91,16 @@ export function isContextOverflowErrorData(data: unknown, agentKind?: string): b
   );
 }
 
+function isPromptLengthRejection(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const { reason, message, sdkError } = data as Record<string, unknown>;
+  // Recoverable history/compact/option errors are distinct from a prompt limit.
+  if (reason != null && reason !== CONTEXT_OVERFLOW_REASON) return false;
+  const diagnostics = [message, sdkError].filter((value): value is string => typeof value === 'string');
+  return !diagnostics.some(isRemoteCompactEncryptedContentError) &&
+    (reason === CONTEXT_OVERFLOW_REASON || diagnostics.some(isContextOverflowErrorMessage));
+}
+
 export function isOversizedHistoryErrorData(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   return (data as { reason?: unknown }).reason === CODEX_HISTORY_OVERSIZED_REASON;
@@ -523,7 +533,7 @@ export interface ContextOverflowRolloverDeps {
       sourceCapabilitySelectionText: string;
     },
   ): Promise<{ accepted: boolean }>;
-  getRecoveryAbortSignal?(sessionId: string): AbortSignal;
+  getRecoveryAbortSignal?(sessionId: string, skippedInput?: ClaimedOversizedInput): AbortSignal;
   /**
    * Read persisted learning for the exact connection/wire-model/route.
    * A live runtime receipt separately confirms whether it actually loaded the fix.
@@ -561,7 +571,8 @@ export function canContinueContextRecovery(row: { source?: string | null; botRol
   return row.source === 'desktop' || isCanonicalBotContext(row);
 }
 
-type RecoveryTurnIdentity = { instanceId?: string; generation?: number };
+type RecoveryTurnIdentity = { instanceId?: string; generation?: number; inputClientId?: string };
+export type ClaimedOversizedInput = Required<RecoveryTurnIdentity>;
 
 export type ContextRebuildReason =
   | 'context-overflow'
@@ -643,7 +654,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     sessionId: string,
     errorData: unknown,
     /** 产生该终态错误的 turn 身份：区分「同一轮的重复投递」与「重放后的新一轮失败」。 */
-    turnIdentity?: { instanceId?: string; generation?: number },
+    turnIdentity?: RecoveryTurnIdentity,
   ): Promise<boolean>;
   prepareUnhealthySession(sessionId: string): Promise<boolean>;
   prepareNativeSessionRecovery(
@@ -1387,7 +1398,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     async tryRecover(
       sessionId: string,
       errorData: unknown,
-      turnIdentity?: { instanceId?: string; generation?: number },
+      turnIdentity?: RecoveryTurnIdentity,
     ): Promise<boolean> {
       let signal: AbortSignal | undefined;
       try {
@@ -1401,8 +1412,15 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           && (deps.hasExternalRecoveryOwner?.(sessionId) ?? false);
         const claim = inFlight.get(sessionId) ?? new AbortController();
         inFlight.set(sessionId, claim);
-        if (turnIdentity && !claimTurns.has(claim)) claimTurns.set(claim, turnIdentity);
-        const inputSignal = deps.getRecoveryAbortSignal?.(sessionId);
+        const claimed = claimTurns.get(claim);
+        if (turnIdentity && !claimed) claimTurns.set(claim, turnIdentity);
+        const skippedInput = !claim.signal.aborted && claimed?.inputClientId && claimed.instanceId &&
+          claimed.generation !== undefined && claimed.inputClientId === turnIdentity?.inputClientId &&
+          claimed.instanceId === turnIdentity.instanceId && claimed.generation === turnIdentity.generation &&
+          isPromptLengthRejection(errorData)
+          ? { inputClientId: claimed.inputClientId, instanceId: claimed.instanceId, generation: claimed.generation }
+          : undefined;
+        const inputSignal = deps.getRecoveryAbortSignal?.(sessionId, skippedInput);
         signal = inputSignal ? AbortSignal.any([claim.signal, inputSignal]) : claim.signal;
         if (deps.withSessionLock) {
           return await deps.withSessionLock(sessionId, () =>

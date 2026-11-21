@@ -400,6 +400,26 @@ describe('createContextOverflowRollover', () => {
     };
   }
 
+  // L343 / unit. At the real claim/settle entry a cancelled recovery can own
+  // different error classes. Only the claimed prompt rejection carries notice proof.
+  it.each([
+    ['prompt length', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }, true],
+    ['oversized Codex history', { reason: CODEX_HISTORY_OVERSIZED_REASON }, false],
+    ['remote compact', { reason: 'remote-compact-encrypted-content', message: 'context_length_exceeded' }, false],
+    ['unavailable compact model', { reason: CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON }, false],
+    ['unsupported option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON }, false],
+    ['ordinary failure', { reason: 'provider-timeout' }, false],
+  ] as const)('carries notice proof only for a prompt rejection: %s', async (_kind, errorData, shouldMark) => {
+    const deps = makeDeps([]);
+    const getRecoveryAbortSignal = vi.fn(() => AbortSignal.abort());
+    const rollover = createContextOverflowRollover({ ...deps, getRecoveryAbortSignal });
+    const turn = { instanceId: 'same-runtime', generation: 2, inputClientId: 'accepted' };
+    expect(rollover.claim('s', turn)).toBe('claimed');
+    expect(await rollover.tryRecover('s', errorData, turn)).toBe(true);
+    expect(getRecoveryAbortSignal).toHaveBeenCalledExactlyOnceWith('s', shouldMark ? turn : undefined);
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
   // Unit, PR #11352: a 200K BYOK display/default window in the row and live
   // snapshot is not proof of route capacity. A restart must keep the 16K cap.
   it('does not enlarge rebuild history from an unverified snapshot window', async () => {

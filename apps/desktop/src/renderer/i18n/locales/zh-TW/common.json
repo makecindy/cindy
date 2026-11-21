@@ -15715,6 +15715,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "這則訊息太長，無法處理。後續訊息會繼續依序處理。",
       "attachmentPrefix": "附件：",
       "attachmentAttachedAria": "已附加 {{name}}",
       "saveAttachmentAs": "另存附件 {{name}}",

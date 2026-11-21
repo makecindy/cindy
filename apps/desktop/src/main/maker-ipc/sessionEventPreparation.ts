@@ -458,6 +458,7 @@ export function prepareSessionEvent(
     attributedEvent,
     botTaskResultInputIds,
     pluginTargetInputIds,
+    activeInputId,
     groupLaneInputClientId,
     broadcastEvent,
     eventAgentMeta,
