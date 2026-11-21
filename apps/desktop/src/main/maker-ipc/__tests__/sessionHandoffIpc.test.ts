@@ -6,6 +6,7 @@ import path from 'node:path';
 import { captureAgentRequest } from '../forwardedRequest.js';
 import { createRemoteSessionHandoff } from '../../mcp-integrations/sessionHandoffRemote.js';
 import { validateRemoteTaskActionReceipt } from '../remoteTaskActionReceipt.js';
+import { isAuthorizedExternalDelivery } from '../crashRestoreQueueRelease.js';
 import { bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { SUPPORTED_LOCALES } from '../../../shared/locale.js';
@@ -262,7 +263,33 @@ describe('maker:session:handoff (receiving computer)', () => {
       },
       // 另一台电脑的来信不能借恢复把任务提到 bypass。
       resumeWithStoredPermissionMode: true,
+      // 收据已在本机校验通过,这是接收方可验的已授权投递(见下方回归用例)。
+      externalAuthorizedDelivery: true,
     });
+  });
+
+  // Unit regression (#7512 review P1): a cross-device task delivery used to reach the
+  // crash-restore release check with no authorized stamp. The companion's `origin` carries
+  // no `senderBotId` (the sender lives on another computer, so this host cannot resolve
+  // its partner binding), so a target paused by a restart stayed paused and kept
+  // accumulating deliveries. The stamp must come from the validated receipt.
+  it('stamps a cross-device task delivery as an authorized external delivery', async () => {
+    const s = setup();
+    expect(await s.handle('device-A', request)).toMatchObject({ ok: true });
+    const params = s.send.mock.calls[0]![0];
+    expect(params.externalAuthorizedDelivery).toBe(true);
+    expect(isAuthorizedExternalDelivery({ externalAuthorizedDelivery: params.externalAuthorizedDelivery })).toBe(true);
+  });
+
+  // Unit regression: plugin dispatch is an automatic source. It must not release the
+  // owner's restored drafts, so the handoff must not stamp it either.
+  it('does not stamp a plugin delivery', async () => {
+    const s = setup();
+    expect(await s.handle('device-A', { ...request, sender: { kind: 'plugin', pluginId: 'dashboard', name: 'Dashboard' } }))
+      .toMatchObject({ ok: true });
+    const params = s.send.mock.calls[0]![0];
+    expect(params.externalAuthorizedDelivery).toBeFalsy();
+    expect(isAuthorizedExternalDelivery({ externalAuthorizedDelivery: params.externalAuthorizedDelivery })).toBe(false);
   });
 
   it('gives the model and the label the same source, addressable for a reply', async () => {

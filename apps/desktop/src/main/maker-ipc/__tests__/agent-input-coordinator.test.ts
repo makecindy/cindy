@@ -20,7 +20,7 @@ import { AgentStartupStoppedError, ASYNC_QUESTION_ANSWER, AUTO_REVIEW_SOURCE_CON
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
+import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from '../taskActionAuthorization.js';
 import { isBotCandidateUnavailable } from '../botCandidateRecovery.js';
 import { computeModelGroupSwitchOffer } from '../../model-groups/switchOffer.js';
 import { createSessionRuntimeFallback } from '../sessionRuntimeFallback.js';
@@ -81,8 +81,9 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../../shared/agentInputQueue.js';
-import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON, isAutomaticInputOriginKind } from '../../../shared/agentInputQueue.js';
+import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue.js';
 import { buildRemoteWorkerQueuedMessage, createOrcaRemoteWorkerRuntime, type RemoteWorkerTurnEnd } from '../orcaRemoteWorkerRuntime.js';
+import { isAuthorizedExternalDelivery } from '../crashRestoreQueueRelease.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
@@ -98,6 +99,11 @@ import {
   TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
   TRUSTED_DESKTOP_QUEUE_ORIGIN,
 } from '../makerSendTransaction.js';
+
+// register.ts 的生产源码片段在本文件的多处 guard 用例里被执行(转译后跑真实闭包),
+// 不是对其文本做字面量断言。全文件只读一次,避免同一份源码被反复读取。
+const registerSourceText = readFileSync(new URL('../register.ts', import.meta.url), 'utf8')
+  .replace(/\r\n/g, '\n');
 
 const mocks = vi.hoisted(() => {
   const logger = {
@@ -298,7 +304,7 @@ describe('task action dispatch authorization', () => {
 // coordinator edit/dispatch path. The old immutable body discarded owner edits.
 // Guard tier wiring is exercised here alongside the existing coordinator cases.
 describe('trusted owner queue edits', () => {
-  const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+  const registerSource = registerSourceText;
   const start = registerSource.indexOf('  function stampQueuedEditProvenance(');
   const end = registerSource.indexOf('  ipcMain.handle(', start);
   const loadFinalizer = new Function('inputCoordinator', 'getDeviceLinkInvokeContext',
@@ -836,6 +842,343 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
     expect(h.coordinator.getProjection('restored-worker').queuePaused).toBe(true);
     expect(h.sendToAgent).toHaveBeenCalledOnce();
     expect(h.sendToAgent.mock.calls[0]?.[0]).toBe('other-task');
+  });
+});
+
+// #7209:外部投递走 send_to_session 的入队通路,不经 INPUT_ENQUEUE,因此拿不到
+// 解挂崩溃恢复暂停的 flag。恢复暂停的队列永不出队 → shouldQueueNewTurn 恒为真 →
+// 该会话跨重启永久假忙,日志持续打「send_to_session queued while target busy」。
+// 这里执行生产入队函数本身(与上面 INPUT_ENQUEUE 用例同一手法),断言「外部已授权
+// 投递」能解挂并推进队列,其它来源仍保持暂停。
+describe('外部已授权投递解挂崩溃恢复暂停队列', () => {
+  const source = registerSourceText;
+  const start = source.indexOf('  async function enqueueSendToSessionMessage(params: {');
+  const end = source.indexOf('  async function buildSessionControlInputItem(params: {', start);
+  const compiled = transpileModule(
+    `${source.slice(start, end)}\nreturn enqueueSendToSessionMessage;`,
+    { compilerOptions: { target: ScriptTarget.ES2022 } },
+  ).outputText;
+
+  /** 伙伴发来的消息:发送方身份由宿主按发送方 session 的伙伴绑定盖章。 */
+  const companionOrigin = {
+    kind: 'session' as const,
+    senderSessionId: 'buddy-session',
+    displayText: 'ping',
+    senderBotId: 'buddy-1',
+    senderBotName: 'Buddy',
+  };
+
+  function externalEnqueue(h: ReturnType<typeof createHarness>) {
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const noop = () => undefined;
+    const bindings = {
+      inputCoordinator: h.coordinator,
+      buildSessionControlInputItem: async (params: { clientId: string; message: string }) =>
+        makeItem(params.clientId, params.message),
+      orcaInterAgentDispatcher: { registerQueuedOrcaInterAgentAcceptedCallback: noop },
+      assertTaskActionCurrent: async () => undefined,
+      commitBotAuthorizationInput: async (_guard: unknown, run: () => void) => run(),
+      isAuthorizedExternalDelivery,
+      log: { info: noop, warn: noop, debug: noop, error: noop },
+    };
+    return new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
+      (params: {
+        targetSessionId: string;
+        clientId: string;
+        message: string;
+        persistedContent: string;
+        origin?: AgentInputQueuedMessage['origin'];
+        externalAuthorizedDelivery?: boolean;
+      }) => Promise<void>;
+  }
+
+  it('releases the restored pause and dispatches the queue when a companion delivers a message', async () => {
+    const h = createHarness();
+    const sid = 'companion-session';
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'restored draft')]);
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'delivery-1',
+      message: 'ping',
+      persistedContent: 'ping',
+      origin: companionOrigin,
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    // 恢复出来的队首先派发,这条投递接在后面(队列仍是 FIFO)。
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'restored draft' });
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['delivery-1']);
+  });
+
+  it('releases the restored pause when the owner speaks in the companion room', async () => {
+    const h = createHarness();
+    const sid = 'companion-room-session';
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'restored draft')]);
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'chat-direct:execution-1:message-1',
+      message: 'ping',
+      persistedContent: 'ping',
+      externalAuthorizedDelivery: true,
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the restored pause for deliveries outside the authorized lanes', async () => {
+    const h = createHarness();
+    const sid = 'plugin-task-session';
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'restored draft')]);
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'plugin-task:run-1',
+      message: 'ping',
+      persistedContent: 'ping',
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['restored', 'plugin-task:run-1']);
+  });
+
+  it('does not let an external delivery release the pause left by restarting a companion', async () => {
+    // 「重启伙伴」的排队请求保留但不自动重放,只有主人的下一条消息启动新运行
+    // (docs/product-rules/cindy-bots-runtime.md)。它与崩溃恢复共用
+    // queuePausedByRestore,但外部投递不得放行它。
+    const h = createHarness();
+    const sid = 'restarted-companion';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('kept', 'kept request'));
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true, resumeOnUserInput: true });
+    h.setRunning(false);
+    await flush();
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'delivery-2',
+      message: 'ping',
+      persistedContent: 'ping',
+      origin: companionOrigin,
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['kept', 'delivery-2']);
+  });
+
+  it('releases the crash-restored pause when an authorized retry hits the duplicate guard', async () => {
+    // #7512 review P1:直连房间的 clientId 由 execution+source_message 决定。「已入队
+    // 落盘、进程未结算」之间崩溃后,恢复出的队列里已有这条投递;服务器重试同一条
+    // clientId 会命中去重守卫。修复前守卫直接 return,放行块永远走不到 —— 重试已报
+    // 成功而队列停在崩溃恢复暂停。守卫内也要放行,且放行后补一次 drain:队首已在
+    // 内存里,没有新项入队,靠正常入队路径不会被调度。
+    const h = createHarness();
+    const sid = 'duplicate-authorized-release';
+    h.setLoadQueueSnapshot(async () => [makeItem('chat-direct:execution-1:message-1', 'room message')]);
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'chat-direct:execution-1:message-1',
+      message: 'room message',
+      persistedContent: 'room message',
+      externalAuthorizedDelivery: true,
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'room message' });
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
+  it('rebinds a live task-action guard onto a JSON-restored duplicate before release', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：enqueue 去重分支；JSON 恢复的 remote-task-action 行只剩
+    //   requires-authorization 标记与 clientId 前缀，授权重试行上的活守卫必须转到存活行，
+    //   drain 才不会按 TASK_ACTION_AUTHORIZATION_REQUIRED 丢弃它。
+    // - Bug／规则依据：#7512 Codex P1（13:27 CST，审查 9f62d0ceff），「Rebind the live
+    //   guard before releasing handoff duplicates」。
+    // - 现有覆盖缺口：既有 duplicate-authorized-release 用例是 chat-direct（两侧都无守卫），
+    //   没有覆盖跨 JSON 丢掉 Symbol 守卫的 handoff 行。
+    // - 最小失败输入：快照恢复 remote-task-action 行（JSON 化，无 Symbol）+ 同 clientId
+    //   授权重试（带刚校验过的守卫）。
+    // - tier：unit；真实 coordinator enqueue + drain，不经 mock 掉的 guard 旁路。
+    // - 实测耗时：本条 -t 单跑 17ms（文件 collect 15.6s 为既有 846 用例的固定成本）；
+    //   与 taskActionAuthorization + sessionHandoffIpc 合跑 WALL 69.7s，991/991 通过。
+    const h = createHarness();
+    const sid = 'remote-task-action-rebind';
+    const clientId = 'remote-task-action:receipt-1';
+    const original = makeItem(clientId, 'handoff body');
+    bindTaskActionInput(sid, original, async () => {});
+    // JSON 往返模拟崩溃快照：Symbol 守卫与 onSettled 消失，requires-authorization 标记留下。
+    const restored = JSON.parse(JSON.stringify(original)) as typeof original;
+    expect(Object.getOwnPropertySymbols(restored)).not.toContain(TASK_ACTION_INPUT_GUARD);
+    expect(restored.taskActionRequiresAuthorization).toBe(true);
+    h.setLoadQueueSnapshot(async () => [restored]);
+
+    const incoming = makeItem(clientId, 'handoff body');
+    let validated = 0;
+    bindTaskActionInput(sid, incoming, async () => {
+      validated += 1;
+    });
+
+    await h.coordinator.enqueue(sid, incoming, { resumeCrashRestoredPausedQueue: true });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    expect(validated).toBeGreaterThan(0);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'handoff body' });
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
+  it('releases a crash-restored pause for another queued request without enqueueing the persisted duplicate', async () => {
+    // #7512 review P1:用户行已落库的重试在 dispatch 层就返回,进不了 enqueue 的
+    // 去重放行。队里活下来的是另一条请求。这条路径只解开崩溃恢复暂停并 drain,
+    // 不再把已落库的那条重新入队。
+    const h = createHarness();
+    const sid = 'persisted-authorized-release';
+    h.setLoadQueueSnapshot(async () => [makeItem('other-queued', 'survived the crash')]);
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+
+    expect(h.coordinator.releaseCrashRestoredPausedQueue(sid, 'persisted-authorized-release')).toBe(true);
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'survived the crash' });
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual([]);
+  });
+
+  it('does not release a restart-held pause when asked to release a persisted duplicate', async () => {
+    const h = createHarness();
+    const sid = 'persisted-restart-hold';
+    h.setLoadQueueSnapshot(async () => ({
+      items: [makeItem('kept', 'kept request')],
+      orcaReportsStopped: false,
+      pauseHeld: true,
+    }));
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+
+    expect(h.coordinator.releaseCrashRestoredPausedQueue(sid, 'persisted-authorized-release')).toBe(false);
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['kept']);
+  });
+
+  it('keeps the restart-held pause when an authorized retry hits the duplicate guard', async () => {
+    // 守卫里的放行只认崩溃恢复暂停:「重启伙伴」按住的队列(暂停来源已随快照落盘)
+    // 不因同 clientId 重发解开,重试只确认投递,不重放用户已收手的请求。
+    const h = createHarness();
+    const sid = 'duplicate-restart-hold-kept';
+    h.setLoadQueueSnapshot(async () => ({
+      items: [makeItem('chat-direct:execution-2:message-2', 'room message')],
+      orcaReportsStopped: false,
+      pauseHeld: true,
+    }));
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'chat-direct:execution-2:message-2',
+      message: 'room message',
+      persistedContent: 'room message',
+      externalAuthorizedDelivery: true,
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['chat-direct:execution-2:message-2']);
+  });
+
+  it('does not let an external delivery release a legacy snapshot that records a user stop', async () => {
+    // 旧快照没有 queue-pause-held 标记(升级前写的):「用户显式 Stop / 「重启伙伴」」
+    // 那条路径只会留下 orca-report-stop 标记。旧快照分不清「用户收手」与「崩溃恢复」,
+    // 按收手处理:外部投递不得放行,只有主人的下一条消息能放行。
+    const h = createHarness();
+    const sid = 'legacy-stopped-session';
+    h.setLoadQueueSnapshot(async () => ({
+      items: [makeItem('kept', 'kept request')],
+      orcaReportsStopped: true,
+    }));
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'delivery-4',
+      message: 'ping',
+      persistedContent: 'ping',
+      origin: companionOrigin,
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['kept', 'delivery-4']);
+  });
+
+  it('does not let an external delivery release a pause restored from a snapshot that records the pause cause', async () => {
+    // #7534:暂停来源必须随快照落盘。「重启伙伴」按住的队列在崩溃后恢复时,若被
+    // 一律当成崩溃恢复暂停,下一条外部投递就会把它放行,绕过「只有主人的下一条
+    // 消息才能放行」这条约定。
+    const h = createHarness();
+    const sid = 'restarted-then-crashed';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('kept', 'kept request'));
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true, resumeOnUserInput: true });
+    h.setRunning(false);
+    await flush();
+    const snapshot = h.persistQueueSnapshot.mock.calls.at(-1);
+    expect(snapshot?.[3]).toBe(true);
+
+    const restarted = createHarness();
+    restarted.setLoadQueueSnapshot(async () => ({
+      items: JSON.parse(JSON.stringify(snapshot?.[1] ?? [])),
+      orcaReportsStopped: false,
+      pauseHeld: true,
+    }));
+    await restarted.coordinator.ensureQueueRestored(sid);
+    expect(restarted.coordinator.getProjection(sid).queuePaused).toBe(true);
+
+    await externalEnqueue(restarted)({
+      targetSessionId: sid,
+      clientId: 'delivery-3',
+      message: 'ping',
+      persistedContent: 'ping',
+      origin: companionOrigin,
+    });
+    await flush();
+
+    expect(restarted.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(restarted.sendToAgent).not.toHaveBeenCalled();
+    expect(restarted.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['kept', 'delivery-3']);
   });
 });
 
@@ -8246,7 +8589,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     const beforeMutation = vi.fn(async () => { if (revoked) throw failure; });
     h.setScreenUserMessage(async () => { if (boundary === 'screening') revoked = true; return { action: 'allow' }; });
     h.resolveSessionReferences.mockImplementationOnce(async () => { if (boundary === 'references') revoked = true; return []; });
-    const source = readFileSync(resolve(__dirname, '../register.ts'), 'utf8');
+    const source = registerSourceText;
     const start = source.indexOf('    steerQueuedMessage: async (sessionId, item, expectedTurn) =>');
     const end = source.indexOf('    getQueueSnapshot:', start);
     expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
@@ -18887,7 +19230,7 @@ describe('provider group computer switch hold', () => {
 
 
 describe('Goal input boundary', () => {
-  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const source = registerSourceText;
   const boundary = source.slice(source.indexOf('export function isGoalInputBlocked'), source.indexOf('export function isSessionInTurn'));
   const compiled = transpileModule(boundary.replace(/export /g, '') + '\nreturn { isGoalInputBlocked, ensureGoalInputReady };', {
     compilerOptions: { target: ScriptTarget.ES2022 },

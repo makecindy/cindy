@@ -31,6 +31,7 @@ import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
+import { isAuthorizedExternalDelivery } from '../crashRestoreQueueRelease.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
 
@@ -295,6 +296,9 @@ function botTaskDispatchHarness(
     // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
     resolveSendToSessionCreateRoute,
     isBotGroupInTaskClientId,
+    isAuthorizedExternalDelivery,
+    // toTaskFile 切片用真实 node:path 解析附件路径。
+    path,
     getSelfDeviceId: () => 'self-device',
   };
   Object.assign(stubs, overrides);
@@ -737,6 +741,133 @@ describe('group dispatch cancellation during preparation', () => {
     expect(await dispatch).toMatchObject({ ok: false });
     expect(enqueue).not.toHaveBeenCalled();
     expect(h.sentTo).toEqual([]);
+  });
+});
+
+// #7512 review P1: dispatchBotSessionMessage 的 files 分支此前无条件
+// resumeRestorePausedQueue —— 外部已授权投递(伙伴房间带附件)会连「重启伙伴」
+// 按住的队列一起解开。无附件路径 enqueueSendToSessionMessage 的尺子是
+// isAuthorizedExternalDelivery:授权外部只解崩溃恢复暂停;非外部调用方
+// (群派活、欢迎语)代表一次新的显式派发,维持 resumeRestorePausedQueue。
+// 执行生产 dispatch 闭包,断言最终交给 inputCoordinator.enqueue 的 flag。
+describe('bot dispatch files-branch pause-release flag', () => {
+  function flagHarness() {
+    const enqueue = vi.fn();
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, {
+      inputCoordinator: { ensureQueueRestored: async () => {}, shouldQueueNewTurn: () => false, enqueue },
+      buildSessionControlInputItem: async (input: Record<string, unknown>) => ({ ...input }),
+    });
+    h.scope.enqueueSendToSessionMessage = h.enqueueGroupMessage;
+    return { h, enqueue };
+  }
+
+  it('releases only the crash-restore pause for an authorized external delivery with attachments', async () => {
+    const { h, enqueue } = flagHarness();
+    const result = await h.dispatchBotSessionMessage({
+      targetSessionId: 'child',
+      clientId: 'chat-direct:execution-1:message-1',
+      message: 'room message with attachment',
+      persistedContent: 'room message with attachment',
+      files: [{ id: 'f1', name: 'note.txt', path: '/fixture/note.txt', category: 'document', size: 1 }],
+      externalAuthorizedDelivery: true,
+    });
+    expect(result).toMatchObject({ ok: true, wakeKind: 'queued' });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue.mock.calls[0]?.[2]).toEqual({ resumeCrashRestoredPausedQueue: true });
+  });
+
+  it('keeps resumeRestorePausedQueue for a group dispatch with attachments', async () => {
+    const { h, enqueue } = flagHarness();
+    const result = await h.groupDispatch({
+      targetSessionId: 'child',
+      clientId: 'bot-group:run-1',
+      message: 'group task with attachment',
+      persistedContent: 'group task with attachment',
+      attachments: [{ id: 'file', name: 'note.txt', path: '/fixture/note.txt', category: 'document', size: 1 }],
+      onAccepted: vi.fn(),
+    });
+    expect(result).toMatchObject({ ok: true, wakeKind: 'queued' });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue.mock.calls[0]?.[2]).toEqual({ resumeRestorePausedQueue: true });
+  });
+});
+
+// #7512 review P1:用户行已落库时 dispatch 在入队前返回 already-active,授权盖章
+// 到不了协调器。已授权的重试要放行崩溃恢复暂停,且不能再入队第二条。
+describe('bot dispatch persisted-row pause release', () => {
+  function persistedHarness(ensureQueueRestored: () => Promise<void> = async () => {}) {
+    const releaseCrashRestoredPausedQueue = vi.fn();
+    const enqueue = vi.fn();
+    const dbChain = {
+      from: () => dbChain,
+      innerJoin: () => dbChain,
+      where: () => dbChain,
+      limit: async () => [{ id: 'msg-1' }],
+    };
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, {
+      getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+      inputCoordinator: {
+        ensureQueueRestored,
+        shouldQueueNewTurn: () => false,
+        enqueue,
+        releaseCrashRestoredPausedQueue,
+      },
+    });
+    return { h, enqueue, releaseCrashRestoredPausedQueue };
+  }
+
+  it('releases the crash-restore pause and does not enqueue a second row', async () => {
+    const { h, enqueue, releaseCrashRestoredPausedQueue } = persistedHarness();
+    const onAccepted = vi.fn();
+    const result = await h.dispatchBotSessionMessage({
+      targetSessionId: 'child',
+      clientId: 'chat-direct:execution-1:message-1',
+      message: 'room message',
+      externalAuthorizedDelivery: true,
+      onAccepted,
+    });
+    expect(result).toMatchObject({ ok: true, wakeKind: 'already-active' });
+    expect(releaseCrashRestoredPausedQueue).toHaveBeenCalledTimes(1);
+    expect(releaseCrashRestoredPausedQueue).toHaveBeenCalledWith('child', 'persisted-authorized-release');
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(onAccepted).toHaveBeenCalledWith(true);
+  });
+
+  it('does not release the pause for a persisted row that is not an authorized delivery', async () => {
+    const { h, enqueue, releaseCrashRestoredPausedQueue } = persistedHarness();
+    const result = await h.dispatchBotSessionMessage({
+      targetSessionId: 'child',
+      clientId: 'bot-group:run-1',
+      message: 'group retry',
+    });
+    expect(result).toMatchObject({ ok: true, wakeKind: 'already-active' });
+    expect(releaseCrashRestoredPausedQueue).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('does not acknowledge an authorized persisted retry when queue restoration fails', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：dispatchBotSessionMessage；恢复失败必须拒绝且不调用 onAccepted，服务端才会保留重试。
+    // - Bug／规则依据：#7512 Codex P2，不能吞掉队列恢复失败并确认重复投递。
+    // - 现有覆盖缺口：既有用例只覆盖恢复成功和非授权重复，没有恢复异常分支。
+    // - 最小失败输入：已有用户行 + 外部授权投递 + ensureQueueRestored reject。
+    // - tier：guard；执行 register.ts 的真实派发闭包，覆盖持久化回执边界。
+    // - 实测耗时：15.23s wall；该既有 guard 文件收集耗时 10.47s，新增断言执行 59ms。
+    const restoreError = new Error('queue snapshot read failed');
+    const ensureQueueRestored = vi.fn(async () => { throw restoreError; });
+    const { h, releaseCrashRestoredPausedQueue } = persistedHarness(ensureQueueRestored);
+    const onAccepted = vi.fn();
+
+    await expect(h.dispatchBotSessionMessage({
+      targetSessionId: 'child',
+      clientId: 'chat-direct:execution-1:message-1',
+      message: 'room message',
+      externalAuthorizedDelivery: true,
+      onAccepted,
+    })).rejects.toBe(restoreError);
+    expect(ensureQueueRestored).toHaveBeenCalledOnce();
+    expect(releaseCrashRestoredPausedQueue).not.toHaveBeenCalled();
+    expect(onAccepted).not.toHaveBeenCalled();
   });
 });
 

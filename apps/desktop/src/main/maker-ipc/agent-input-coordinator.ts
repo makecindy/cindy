@@ -4,7 +4,7 @@ import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionAnswerOrigin, inheritTelegram
 import { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization, rebindTaskActionInputGuard, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON } from './botCandidateRecovery.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
@@ -717,6 +717,8 @@ export interface AgentInputCoordinatorDeps {
     sessionId: string,
     items: AgentInputQueuedMessage[],
     orcaReportsStopped?: boolean,
+    /** 写快照时队列处于暂停态:恢复后不得当成崩溃恢复暂停(#7534)。 */
+    pauseHeld?: boolean,
   ) => void | Promise<void>;
   loadClearBoundary?: (sessionId: string) => Promise<unknown>;
   loadQueueSnapshot?: (sessionId: string) => Promise<AgentInputQueuedMessage[] | AgentInputQueueSnapshotState>;
@@ -820,6 +822,17 @@ interface SessionInputState {
   queuePausedByRestore: boolean;
   /** Queue head whose steer delivery is unknown; its protective pause needs an explicit user decision. */
   uncertainDeliveryClientId: string | null;
+  /**
+   * 当前 queuePaused 是否来自崩溃快照恢复这一种来源。
+   *
+   * 「重启伙伴」与崩溃恢复共用 queuePausedByRestore(都认用户的下一次显式输入),
+   * 但两者对**外部投递**的态度不同:崩溃恢复出来的队列允许外部 Bot 私聊投递放行
+   * (#7209:该会话跨重启永久假忙);「重启伙伴」的排队请求按产品规则保留但不自动
+   * 重放,只有主人自己的下一条消息才启动新运行
+   * (docs/product-rules/cindy-bots-runtime.md「重启伙伴」)。故另立此标记,
+   * 外部放行只认它。
+   */
+  queuePausedByCrashRestore: boolean;
   queueExpanded: boolean;
   queueInteractionLocks: string[];
   /** Interaction locks that must survive a later user Stop. */
@@ -971,6 +984,7 @@ function createInitialInputState(
     queuePaused: false,
     queuePausedByRestore: false,
     uncertainDeliveryClientId: null,
+    queuePausedByCrashRestore: false,
     queueExpanded: false,
     queueInteractionLocks: [],
     interactionLocksPreservedOnStop: [],
@@ -1762,9 +1776,16 @@ export class AgentInputCoordinator {
     }
     let items: AgentInputQueuedMessage[];
     let savedOrcaReportsStopped = false;
+    let savedPauseHeld = false;
     try {
       const snapshot = await this.deps.loadQueueSnapshot!(sessionId);
       savedOrcaReportsStopped = !Array.isArray(snapshot) && snapshot.orcaReportsStopped;
+      // 暂停来源随快照落盘(#7534)。新快照带 queue-pause-held 标记;旧快照没有,
+      // 但「用户显式 Stop / 「重启伙伴」」这条路径会置 orcaReportsStopped,旧格式把
+      // 它写成 orca-report-stop 标记 —— 旧快照分不清「用户收手」与「崩溃恢复」,
+      // 按收手处理:外部投递不得放行它(宁可等主人说话,也不重放用户已收手的请求)。
+      savedPauseHeld = !Array.isArray(snapshot)
+        && (snapshot.pauseHeld === true || snapshot.orcaReportsStopped === true);
       items = (Array.isArray(snapshot) ? snapshot : snapshot.items)
         .map(sanitizeQueuedMessageForPersistence)
         .map(normalizeRestoredSyntheticTrigger)
@@ -1867,7 +1888,7 @@ export class AgentInputCoordinator {
     // 收口点直接跳过,避免每次打开会话都发一次冗余覆盖写/删除。只要有丢弃项就
     // 留空，让 maybePersistQueueSnapshot 把清理后的快照写回盘面。
     if (staleClearItems.length === 0) {
-      this.lastQueueSnapshotJson.set(sessionId, JSON.stringify([items, savedOrcaReportsStopped]));
+      this.lastQueueSnapshotJson.set(sessionId, JSON.stringify([items, savedOrcaReportsStopped, savedPauseHeld]));
     } else {
       this.lastQueueSnapshotJson.delete(sessionId);
     }
@@ -1965,6 +1986,10 @@ export class AgentInputCoordinator {
     if (!state.queuePaused && (wasQuiet || state.orcaReportsStopped === true)) {
       state.queuePaused = true;
       state.queuePausedByRestore = true;
+      // 快照里带「暂停来源」标记 → 这条队列在写快照时就是暂停态(等主人输入 /
+      // 用户显式 Stop),不是崩溃恢复出来的:外部投递不得放行它,只有主人的下一条
+      // 显式输入可以(#7534)。没有标记的旧快照按崩溃恢复处理,行为不变。
+      state.queuePausedByCrashRestore = !savedPauseHeld;
     }
     log.info('restored queued input from crash snapshot', {
       sessionId,
@@ -2111,6 +2136,7 @@ export class AgentInputCoordinator {
     this.blockAutomaticOrcaReports(state);
     state.queuePaused = state.pendingQueue.length > 0 || state.pendingCompacts.length > 0;
     state.queuePausedByRestore = false;
+    state.queuePausedByCrashRestore = false;
     this.emit(sessionId);
     return this.getProjection(sessionId);
   }
@@ -2135,6 +2161,29 @@ export class AgentInputCoordinator {
       state.steeringQueueClientIds.includes(clientId) ||
       state.recentEnqueuedClientIds.includes(clientId)
     );
+  }
+
+  /**
+   * 去重命中时把重试行上的活守卫转到存活行(JSON 恢复会剥掉 Symbol 与 onSettled)。
+   * 只在 pendingQueue / activeTurn / active-turn recovery 里找同 clientId 的行;
+   * 仅剩 recent-client 窗口时行已离队,没有可转的对象。
+   */
+  private rebindDuplicateTaskActionGuard(
+    state: SessionInputState,
+    incoming: AgentInputQueuedMessage,
+  ): void {
+    const activeItem = state.activeTurn?.item;
+    const recoveryItem = state.recovery?.kind === 'active-turn' ? state.recovery.item : undefined;
+    const survivors: AgentInputQueuedMessage[] = [
+      ...state.pendingQueue,
+      ...(activeItem ? [activeItem] : []),
+      ...(recoveryItem ? [recoveryItem] : []),
+    ];
+    for (const existing of survivors) {
+      if (existing.clientId === incoming.clientId) {
+        rebindTaskActionInputGuard(incoming, existing);
+      }
+    }
   }
 
   private rememberEnqueuedClientId(state: SessionInputState, clientId: string): void {
@@ -2189,6 +2238,31 @@ export class AgentInputCoordinator {
     }
   }
 
+  /**
+   * 放行崩溃恢复暂停并补一次 drain,不入队。
+   *
+   * 已授权的重试有两条路都会走到「这条消息本身不能再入队」:协调器去重
+   * (队里已经有同一 clientId),以及更高一层的用户行已落库守卫(register.ts
+   * 的 persisted-row)。后者在入队之前就返回,去重分支的放行够不着;队里若还
+   * 有另一条崩溃恢复出来的请求,重试会被记成已送达而那条请求继续停着。
+   * 只认 `queuePausedByCrashRestore`——「重启伙伴」和用户 Stop 不动。
+   *
+   * @returns 是否真的解开了暂停
+   */
+  releaseCrashRestoredPausedQueue(sessionId: string, reason = 'authorized-crash-restore-release'): boolean {
+    const state = this.states.get(sessionId);
+    if (!state?.queuePaused || !state.queuePausedByCrashRestore) return false;
+    state.queuePaused = false;
+    state.queuePausedByRestore = false;
+    state.queuePausedByCrashRestore = false;
+    log.info('crash-restored paused queue released by an external Bot DM delivery', {
+      sessionId,
+      reason,
+    });
+    this.scheduleDrain(sessionId, reason);
+    return true;
+  }
+
   enqueue(
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -2197,6 +2271,13 @@ export class AgentInputCoordinator {
       sendAtMs?: number;
       resumeRestorePausedQueue?: boolean;
       manualUiSend?: boolean;
+      /**
+       * 放行**崩溃恢复**暂停的队列(外部 Bot 私聊投递,#7209)。与
+       * resumeRestorePausedQueue 的差别:后者是主人的显式输入,可放行「重启
+       * 伙伴」的暂停;本 flag 只放行崩溃快照恢复的暂停,不放行用户显式 Stop
+       * 或「重启伙伴」的暂停。
+       */
+      resumeCrashRestoredPausedQueue?: boolean;
       onDuplicate?: () => void;
     },
   ): AgentInputProjection {
@@ -2214,6 +2295,20 @@ export class AgentInputCoordinator {
         sessionId,
         clientId: item.clientId,
       });
+      // JSON 恢复的 remote-task-action 行只剩 taskActionRequiresAuthorization / clientId
+      // 前缀,Symbol 守卫与 onSettled 已被持久化剥掉;重试行带着刚校验过的守卫。
+      // 只放行暂停会丢掉重试行,drain 随后按 TASK_ACTION_AUTHORIZATION_REQUIRED
+      // 丢弃恢复行,收据也不结算(#7512 Codex P1)。先把活守卫转到存活行上。
+      this.rebindDuplicateTaskActionGuard(state, item);
+      // 授权投递撞去重也要先解崩溃恢复暂停(#7512 review P1):直连房间的
+      // clientId 由 execution+source_message 确定,「已入队落盘、进程未结算」
+      // 之间崩溃后,服务器重试同一条会命中这里;若直接 return,放行块永远
+      // 走不到,队列停在暂停态而重试已报成功。只放行崩溃恢复暂停——「重启
+      // 伙伴」按住的队列不因重发解开。放行后补一次 drain:队首已在内存里,
+      // 没有新项入队,靠下面的入队路径不会被调度。
+      if (opts?.resumeCrashRestoredPausedQueue) {
+        this.releaseCrashRestoredPausedQueue(sessionId, 'duplicate-authorized-release');
+      }
       opts?.onDuplicate?.();
       return this.getProjection(sessionId);
     }
@@ -2303,13 +2398,31 @@ export class AgentInputCoordinator {
     // 携带本 flag)即视为放行——否则「继续任务」只是往暂停队列再塞一条,永远
     // 派发不出去,会话直到重启都处于"全部排队"死锁。用户显式 Stop 的暂停
     // (queuePausedByRestore=false)不受影响;Orca 等 main 侧自动投递不带本 flag。
-    if (opts?.resumeRestorePausedQueue && state.queuePaused && state.queuePausedByRestore) {
+    //
+    // 外部 Bot 私聊投递(#7209)走另一个 flag:它只能放行**崩溃恢复**这一种暂停
+    // (queuePausedByCrashRestore)。该会话跨重启恢复出的队列若不放行,就永久卡在
+    // 暂停态——队列不出队 → shouldQueueNewTurn 恒为真 → 会话永久假忙。而
+    // 「重启伙伴」的排队请求按产品规则保留但不自动重放,外部投递不得放行它
+    // (docs/product-rules/cindy-bots-runtime.md「重启伙伴」)。
+    const releasesRestorePause = Boolean(
+      opts?.resumeRestorePausedQueue && state.queuePaused && state.queuePausedByRestore,
+    );
+    const releasesCrashRestorePause = Boolean(
+      opts?.resumeCrashRestoredPausedQueue && state.queuePaused && state.queuePausedByCrashRestore,
+    );
+    if (releasesRestorePause || releasesCrashRestorePause) {
       state.queuePaused = false;
       state.queuePausedByRestore = false;
-      log.info('crash-restored paused queue released by explicit user input', {
-        sessionId,
-        clientId: item.clientId,
-      });
+      state.queuePausedByCrashRestore = false;
+      log.info(
+        releasesCrashRestorePause && !releasesRestorePause
+          ? 'crash-restored paused queue released by an external Bot DM delivery'
+          : 'crash-restored paused queue released by explicit user input',
+        {
+          sessionId,
+          clientId: item.clientId,
+        },
+      );
     }
     if (!preservesAutoResume) {
       this.abandonActiveTurnRecoveryForUserAction(state);
@@ -3168,6 +3281,7 @@ export class AgentInputCoordinator {
           latest.recovery = { kind: 'queue-head', clientId: item.clientId };
           latest.queuePaused = false;
           latest.queuePausedByRestore = false;
+          latest.queuePausedByCrashRestore = false;
         }
         // 投递结果不确定(ack 超时 / post-send abort,见 isSteerDeliveryUncertainError):
         // 把该消息物化到队首(composer 入口的插话不在队列里,不物化则"结果不确定"
@@ -3180,6 +3294,7 @@ export class AgentInputCoordinator {
           // 不确定投递的保护性暂停必须由用户显式处置,不许新输入静默放行。
           latest.queuePausedByRestore = false;
           latest.uncertainDeliveryClientId = item.clientId;
+          latest.queuePausedByCrashRestore = false;
         }
       } else if (
         isSteerDeliveryUncertainError(err) &&
@@ -3198,6 +3313,7 @@ export class AgentInputCoordinator {
         // 同上:不确定投递的保护性暂停,不许新输入静默放行。
         latest.queuePausedByRestore = false;
         latest.uncertainDeliveryClientId = item.clientId;
+        latest.queuePausedByCrashRestore = false;
         log.warn('steer delivery uncertain after stop/close; materialized into paused queue', {
           sessionId,
           clientId: item.clientId,
@@ -3487,6 +3603,9 @@ export class AgentInputCoordinator {
     // released by the next deliberate user input, never by background enqueue.
     state.queuePausedByRestore = shouldPause && opts?.resumeOnUserInput === true;
     state.uncertainDeliveryClientId = null;
+    // 显式 Stop 不是崩溃恢复:外部投递(Bot 私聊)不得放行它,也不得放行
+    // 「重启伙伴」的暂停(它只认主人的下一次显式输入)。
+    state.queuePausedByCrashRestore = false;
     state.queueAbortPending = shouldPause && this.isDispatchBoundaryBusy(sessionId, state);
     const abortBoundaryToken = Symbol('agent-input-abort-boundary');
     const abortBoundaryGeneration = state.generation;
@@ -3559,6 +3678,7 @@ export class AgentInputCoordinator {
     state.queuePaused = false;
     state.queuePausedByRestore = false;
     state.uncertainDeliveryClientId = null;
+    state.queuePausedByCrashRestore = false;
     if (pausedQueueHeadRecoveryClientId !== null) {
       state.error = null;
       clearErrorProjectionSignals(state);
@@ -5091,12 +5211,18 @@ export class AgentInputCoordinator {
     if (!state) return;
     const items = this.computeQueueSnapshotItems(state);
     const orcaReportsStopped = state.orcaReportsStopped === true;
-    const json = JSON.stringify([items, orcaReportsStopped]);
+    // 暂停来源随快照落盘(#7534):写快照时队列处于暂停态且不是崩溃恢复暂停
+    // (「重启伙伴」等主人输入 / 用户显式 Stop),恢复后外部投递不得放行它。
+    const pauseHeld = state.queuePaused && !state.queuePausedByCrashRestore;
+    const json = JSON.stringify([items, orcaReportsStopped, pauseHeld]);
     if (this.lastQueueSnapshotJson.get(sessionId) === json) return;
     this.lastQueueSnapshotJson.set(sessionId, json);
-    const result = orcaReportsStopped
-      ? this.deps.persistQueueSnapshot(sessionId, items, true)
-      : this.deps.persistQueueSnapshot(sessionId, items);
+    // 只有真的带暂停来源时才多传这个参数:既有调用形状不变(报告停止标记单独传)。
+    const result = pauseHeld
+      ? this.deps.persistQueueSnapshot(sessionId, items, orcaReportsStopped, true)
+      : orcaReportsStopped
+        ? this.deps.persistQueueSnapshot(sessionId, items, true)
+        : this.deps.persistQueueSnapshot(sessionId, items);
     if (result && typeof (result as Promise<void>).catch === 'function') {
       (result as Promise<void>).catch(() => {
         if (this.lastQueueSnapshotJson.get(sessionId) === json) {

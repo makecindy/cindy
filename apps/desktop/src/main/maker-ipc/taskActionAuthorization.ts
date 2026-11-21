@@ -375,6 +375,25 @@ export async function settleTaskActionInput(item: AgentInputQueuedMessage): Prom
   await (item as GuardedInput)[TASK_ACTION_INPUT_GUARD]?.onSettled?.();
 }
 
+/**
+ * A JSON-restored duplicate keeps `taskActionRequiresAuthorization` / the remote clientId
+ * rule but loses the Symbol guard and its onSettled. The retry that hit de-duplication
+ * carries a freshly validated guard; move it onto the surviving row before that retry
+ * object is discarded, or drain rejects the restored row as
+ * TASK_ACTION_AUTHORIZATION_REQUIRED even though the receipt was just revalidated.
+ * No-op when the source has no live guard or the target already has one.
+ */
+export function rebindTaskActionInputGuard(
+  from: AgentInputQueuedMessage,
+  to: AgentInputQueuedMessage,
+): boolean {
+  const source = (from as GuardedInput)[TASK_ACTION_INPUT_GUARD];
+  if (!source || (to as GuardedInput)[TASK_ACTION_INPUT_GUARD]) return false;
+  to.taskActionRequiresAuthorization = true;
+  (to as GuardedInput)[TASK_ACTION_INPUT_GUARD] = source;
+  return true;
+}
+
 /** Restored input that needed a live grant has attribution, not consent. Never infer a grant from that data. */
 export function taskActionInputGuard(
   target: string,
