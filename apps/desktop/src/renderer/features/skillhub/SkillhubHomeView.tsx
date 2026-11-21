@@ -64,6 +64,7 @@ import { HomeMarketCard } from './components/HomeMarketCard';
 import { SkillIcon } from './components/SkillIcon';
 import { SkillPublishUpdateHint } from './SkillPublishUpdateHint';
 import { OfficialSkillBadge } from './components/OfficialSkillBadge';
+import { SkillStateBadge } from './components/SkillStateBadge';
 import { useSkillhubHomeNavigation } from './hooks/useSkillhubHomeNavigation';
 import { useMarketSkillUpdate } from './hooks/useMarketSkillUpdate';
 
@@ -608,15 +609,18 @@ function LocalGroup({
                   <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
                     {s.name}
                   </span>
-                  {s.builtIn ? (
-                    <OfficialSkillBadge />
-                  ) : (
-                    <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
-                      {source === 'skillhub'
-                        ? t('skillhub.home.sourceSkillhub')
-                        : t('skillhub.home.sourceLocal')}
-                    </span>
-                  )}
+                  <span className="flex shrink-0 items-center gap-1 text-10 text-[var(--text-tertiary)]">
+                    {s.kind === 'skill' && <SkillStateBadge enabled={s.cindyEnabled !== false} />}
+                    {s.builtIn ? (
+                      <OfficialSkillBadge />
+                    ) : (
+                      <span className="shrink-0">
+                        {source === 'skillhub'
+                          ? t('skillhub.home.sourceSkillhub')
+                          : t('skillhub.home.sourceLocal')}
+                      </span>
+                    )}
+                  </span>
                 </span>
                 {displayDescription && (
                   <span className="line-clamp-1 text-12 leading-4 text-[var(--text-secondary)]">
