@@ -5126,6 +5126,14 @@ describe('session-agent-switch handoff injection', () => {
     const sent = vi.mocked(fresh.send).mock.calls[0]?.[0] as { content: string };
     expect(sent.content).toContain('OVERFLOW-HANDOFF');
   });
+
+  it('registered desktop send adapter forwards Pi recovery context', () => {
+    const register = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+    const start = register.lastIndexOf('    prepareUnhealthySession: (sessionId, sendContext) =>');
+    expect(start).toBeGreaterThan(0);
+    const adapter = register.slice(start, register.indexOf('    workdirDiagnostics:', start));
+    expect(adapter).toContain('prepareUnhealthySessionForSend(sessionId, sendContext)');
+  });
 });
 
 it('persists coordination audit metadata and dispatches the model without a prompt notification', async () => {

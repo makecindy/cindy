@@ -18400,8 +18400,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentInputCoordinatorHolder?.setProviderGroupSendReconnect(sessionId, null);
       });
     },
-    prepareUnhealthySession: (sessionId) =>
-      prepareUnhealthySessionForSend(sessionId),
+    prepareUnhealthySession: (sessionId, sendContext) =>
+      prepareUnhealthySessionForSend(sessionId, sendContext),
     workdirDiagnostics: workdirLog,
     log,
   });
