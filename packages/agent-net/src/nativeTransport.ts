@@ -57,6 +57,14 @@ const ACTIVE_WINDOW_MS = 1_000;
 const IDLE_WAIT_MS = 250;
 const IDLE_FULL_POLL_MS = 1_000;
 const ADMISSION_RECHECK_MS = 1_000;
+/**
+ * A dial over the relay made while the relay's UDP path is still coming up waits for it, at most this long after the path
+ * was last set up. A handshake sent over the relay WebSocket in that window got no answer and went again at the core's
+ * 200 ms retransmission: every start and every reconnect of a phone spent 230–240 ms on its first dials, and the same
+ * handshake sent once the path was up was answered in 30–45 ms (2026-11-21). Nothing waits for a relay that issued no UDP
+ * credentials or a binary without relay UDP; where UDP is blocked the dial goes over the WebSocket when the time is up.
+ */
+const RELAY_UDP_DIAL_WAIT_MS = 200;
 const now = () => performance.now();
 
 /**
@@ -110,6 +118,9 @@ export class NativeTransport implements Transport {
   /** The relay UDP credentials last given to the engine (`undefined`: none given yet). */
   private relayCredentials: object | null | undefined = undefined;
   private relayUdpUp = false;
+  /** When the relay's UDP path was last set up (this transport, new credentials), and the dials waiting for it (RELAY_UDP_DIAL_WAIT_MS). */
+  private relayUdpSince = now();
+  private relayUdpWaiters: Array<() => void> = [];
   private relayUdpServer: string | undefined;
   private refreshingAddresses = false;
   private constructor(
@@ -180,6 +191,8 @@ export class NativeTransport implements Transport {
   async configureUdpServer(server: string): Promise<void> {
     if (this.closed || !this.enhanced) return;
     this.relayUdpServer = server;
+    // The next poll hands the engine the relay's UDP credentials: now, not when the engine next has something for JS.
+    this.wake();
     await this.startStun([server]);
   }
   private async startStun(servers = (this.options.stunServers ?? []).slice(0, MAX_STUN_SERVERS)): Promise<void> {
@@ -196,8 +209,26 @@ export class NativeTransport implements Transport {
     const credentials = read() ?? null;
     if (credentials === this.relayCredentials) return;
     this.relayCredentials = credentials;
+    if (credentials) this.relayUdpSince = now();
     await this.call({ op: 'relayUdp', server, ...(credentials
       ? { session: toBase64Url(credentials.session), key: toBase64Url(credentials.key) } : { session: null }) });
+  }
+  /** See RELAY_UDP_DIAL_WAIT_MS. Resolves at once when the path is up, cannot come up, or has had its time. */
+  private relayUdpSettled(): Promise<void> {
+    const remaining = this.relayUdpSince + RELAY_UDP_DIAL_WAIT_MS - now();
+    if (this.relayUdpUp || remaining <= 0 || this.closed || !this.enhanced || !this.identity.udpPort
+      || !this.supports('relay-udp-v2') || !this.options.relay?.udpCredentials?.()) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.relayUdpWaiters = this.relayUdpWaiters.filter(waiter => waiter !== done);
+        resolve();
+      };
+      const timer = setTimeout(done, remaining);
+      this.relayUdpWaiters.push(done);
+      // The credentials reach the engine in a poll, and so does the news that the path is up.
+      this.wake();
+    });
   }
   private linkFor(deviceId: string): number {
     const existing = this.links.get(deviceId);
@@ -230,6 +261,7 @@ export class NativeTransport implements Transport {
     const expected = this.options.relayIdOf?.(entry.id);
     if (!expected || dial.relayId !== expected) throw new Error('PEER_ADDRESS_MISMATCH');
     const address = dial.preferUdp && dial.udp ? dial.udp : { link: this.linkFor(expected) };
+    if ('link' in address) await this.relayUdpSettled();
     const key = toBase64Url(Uint8Array.from(entry.id.match(/../g)!, part => parseInt(part, 16)));
     const id = await this.call<number>({ op: 'connect', key, address });
     return new Promise((resolve, reject) => {
@@ -349,6 +381,7 @@ export class NativeTransport implements Transport {
       if (deviceId) this.options.relay?.uplink.send(deviceId, fromBase64Url(packet.data));
     }
     this.relayUdpUp = result.relayUdp === true;
+    if (this.relayUdpUp) for (const done of [...this.relayUdpWaiters]) done();
     if (Array.isArray(result.mapped)) {
       const mapped = result.mapped.filter(value => value && typeof value.address === 'string' && value.address.length <= 128
         && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535).slice(0, MAX_STUN_SERVERS);
@@ -407,6 +440,7 @@ export class NativeTransport implements Transport {
     const ids = [...this.channels.keys(), ...this.waiting.keys()];
     for (const pending of this.waiting.values()) pending.reject(new Error('NATIVE_TRANSPORT_CLOSED'));
     this.waiting.clear();
+    for (const done of [...this.relayUdpWaiters]) done();
     for (const channel of [...this.channels.values()]) channel.close({ drain: false });
     this.channels.clear();
     if (this.enhanced && ids.length) {

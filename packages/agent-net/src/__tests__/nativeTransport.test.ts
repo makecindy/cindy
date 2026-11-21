@@ -339,3 +339,50 @@ it('lets a native-wait engine wake it instead of polling on timers', async () =>
     expect(waits).toHaveLength(0);
   } finally { await transport?.close(); vi.useRealTimers(); }
 });
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机的 NativeTransport.connect 经中转拨号。中转发了 UDP 凭据、UDP 通道还没就绪时，
+ *   拨号命令等到就绪才交给引擎；一直不就绪也只等 RELAY_UDP_DIAL_WAIT_MS；中转没发凭据时不等。
+ * - Bug／规则依据：2026-11-21 真机，手机每次启动、每次重连的第一批拨号在 UDP 通道就绪前经 WebSocket 发出握手，
+ *   收不到回应，等核心 200 毫秒后重发，拨号 230–240 毫秒；通道就绪后发出的同一个握手 30–45 毫秒就有回应。
+ * - 现有覆盖缺口：现有用例的引擎替身没有 UDP 端口，也没有中转凭据，走不到中转 UDP 这段。
+ * - 最小失败输入：一个带 `relay-udp-v2` 的引擎替身、一份中转凭据、一次经中转的拨号，以及就绪／不就绪／没有凭据三种情况。
+ * - tier：unit，引擎用替身，计时器用替身推进；三行合计约 30 毫秒。 */
+it.each(['comes up', 'never comes up', 'was not offered'] as const)(
+  'holds a relay dial while the relay UDP path is coming up: the path %s', async (mode) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    const local = generateIdentity('native'), remote = generateIdentity('remote');
+    const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+    const ops: string[] = [];
+    let up = false, nextStream = 0;
+    const engine: NativeEnginePort = {
+      async command<T>(command: Record<string, unknown>): Promise<T> {
+        ops.push(command.op as string);
+        let value: unknown;
+        if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: 40000, features: ['relay-udp-v2'] };
+        if (command.op === 'poll') value = { packets: [], relayUdp: up, connections: ops.includes('connect') ? [{ id: 7, established: true, dead: false,
+          closedByPeer: false, unacked: false, remoteKey: remote.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 }] : [] };
+        if (command.op === 'connect') value = 7;
+        if (command.op === 'openStream') value = ++nextStream;
+        return value as T;
+      }, async destroy() {},
+    };
+    const credentials = mode === 'was not offered' ? null : { session: Uint8Array.of(1), key: Uint8Array.of(2) };
+    const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, send() {}, onDatagram() {}, close() {} });
+    let transport: NativeTransport | undefined;
+    try {
+      transport = await NativeTransport.create(engine, { admit: () => true, admittedPeers: () => [{ id: key, relayId: remote.deviceId }],
+        relayIdOf: () => remote.deviceId, onIncoming: () => undefined,
+        relay: { deviceId: local.deviceId, uplink: uplink as never, udpCredentials: () => credentials as never }, relayUdpServer: 'relay.example.test:3478' }, undefined, true);
+      const dial = transport.connect({ id: key, dial: { relayId: remote.deviceId } });
+      await vi.advanceTimersByTimeAsync(20);
+      // The engine has the credentials; the dial itself has not gone to it unless there was nothing to wait for.
+      if (mode !== 'was not offered') expect(ops.includes('relayUdp')).toBe(true);
+      expect(ops.includes('connect')).toBe(mode === 'was not offered');
+      if (mode === 'comes up') { up = true; await vi.advanceTimersByTimeAsync(60); }
+      else await vi.advanceTimersByTimeAsync(190);
+      expect(ops.includes('connect')).toBe(true);
+      await vi.advanceTimersByTimeAsync(60);
+      await expect(dial).resolves.toBeDefined();
+    } finally { await transport?.close(); vi.useRealTimers(); }
+  });
