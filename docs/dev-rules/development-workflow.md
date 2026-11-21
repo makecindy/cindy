@@ -167,9 +167,10 @@ worktree 建成空目录或自动切到项目根继续修改代码。
     测试尚未执行；`guard` 和 CI 不参与。锁只协调同样选择 `--lock` 的进程，不能管理
     未选择排队的任务；有意统一预算时由使用者或宿主协调各入口。
   - **Agent 环境变量**：workspace runner 启动测试前清掉 Agent 终端可能带着、会改变测试结果
-    但不属于被测代码的变量（`NODE_ENV`、`NODE_DEBUG`、`CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL`、
-    `CINDY_INPUT_HANDOFF_ROUTE`），并在输出里列出清掉了哪些。新发现同类变量时加进
-    `scripts/test-workspaces.mjs` 的 `AGENT_ENV_TEST_POLLUTANTS`，不要只在对话里口头排除。
+    但不属于被测代码的变量，并在输出里列出清掉了哪些。完整清单以
+    [`scripts/test-workspaces.mjs` 的 `AGENT_ENV_TEST_POLLUTANTS`](../../scripts/test-workspaces.mjs)
+    为准，其中 `CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP` 会影响 maker-core 的 Claude Code 测试。
+    新发现同类变量时直接更新这份清单。
   - **长测试调用**：耗时不确定的检查优先后台运行并保留进度。工具结束等待不等于测试失败，
     不因等待时间较长重复启动或终止仍在正常运行的测试；外层超时按选定范围和本机情况设置。
     输出较长时写进日志文件再读取定位失败项，不因终端截断而整轮重跑。
