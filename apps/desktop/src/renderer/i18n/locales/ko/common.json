@@ -1834,6 +1834,23 @@
       "restored": "기본 설정으로 복원했습니다",
       "restoreFailed": "기본 설정으로 복원하지 못했습니다."
     },
+    "contentGroups": {
+      "getStarted": "시작하기",
+      "versions": "버전 및 업데이트",
+      "diagnostics": "진단 및 로그",
+      "privacy": "개인정보 및 약관",
+      "advanced": "고급 설정",
+      "jump": "섹션으로 이동",
+      "work": "작업 및 메시지"
+    },
+    "navGroups": {
+      "preferences": "자주 쓰는 설정",
+      "models": "모델",
+      "interaction": "데스크톱 조작",
+      "connections": "연결 및 공유",
+      "extensions": "도구 및 플러그인",
+      "data": "작업 및 저장 공간"
+    },
     "tabs": {
       "storage": "저장 공간",
       "general": "일반",

@@ -1902,6 +1902,23 @@
       "restored": "Definições predefinidas restauradas",
       "restoreFailed": "Não foi possível restaurar as predefinições."
     },
+    "contentGroups": {
+      "getStarted": "Primeiros passos",
+      "versions": "Versão e atualizações",
+      "diagnostics": "Diagnóstico e registos",
+      "privacy": "Privacidade e termos",
+      "advanced": "Definições avançadas",
+      "jump": "Ir para a secção",
+      "work": "Tarefas e mensagens"
+    },
+    "navGroups": {
+      "preferences": "Definições comuns",
+      "models": "Modelos",
+      "interaction": "Interação no computador",
+      "connections": "Ligações e partilha",
+      "extensions": "Ferramentas e plugins",
+      "data": "Tarefas e armazenamento"
+    },
     "tabs": {
       "storage": "Armazenamento",
       "general": "Geral",

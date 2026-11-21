@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -32,6 +32,9 @@ import type { DesktopSavedAccount } from '@/lib/authService';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { shouldLabelRegion } from '../../../shared/regionCode';
 import { MobileDownloadDialog } from './MobileDownloadDialog';
+import { SidebarAccountUsage } from './SidebarAccountUsage';
+import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
+import { canAccessUsageSettings } from '@/components/settings/usageVisibility';
 
 interface UserInfoSectionProps {
   isCollapsed: boolean;
@@ -81,6 +84,8 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const [switchingAccountKey, setSwitchingAccountKey] = useState<string | null>(null);
   const [addingAccount, setAddingAccount] = useState(false);
   const mobileDownloadButtonRef = useRef<HTMLButtonElement>(null);
+  const accountCardRef = useRef<HTMLDivElement>(null);
+  const [accountCardWidth, setAccountCardWidth] = useState<number>();
   const accountsLoadGenerationRef = useRef(0);
   const { t } = useTranslation();
   const accountsOwnerKey = mode === 'cloud' ? dataOwnerId : null;
@@ -100,6 +105,17 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   // 头像地址变化(设置页改头像 / 服务端资料更新)时重置加载失败标记,
   // 让新地址有机会渲染,而不是永远停在首字母兜底。
   const isLocal = mode === 'local';
+  const hasAccountCard = Boolean(user || isLocal) && !isCollapsed;
+  useLayoutEffect(() => {
+    const card = accountCardRef.current;
+    if (!hasAccountCard || !card) return;
+    const measure = () => setAccountCardWidth(card.getBoundingClientRect().width);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(card);
+    return () => observer.disconnect();
+  }, [hasAccountCard]);
   const displayName = user?.name ?? (isLocal ? t('settings.userProfile.local.name') : '');
   const moreLabel = t('sidebar.user.moreLabel', { name: displayName });
   const avatarUrl = user?.avatar ?? null;
@@ -296,7 +312,10 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const renderMoreMenu = (trigger: ReactNode) => (
     <DropdownMenu onOpenChange={(open) => open && void refreshSavedAccounts()}>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-[190px]">
+      {/* The trigger starts after the capsule's 1px border and 7px padding. */}
+      <DropdownMenuContent side="top" align="start" alignOffset={isCollapsed ? 0 : -8} sideOffset={8}
+        style={{ width: isCollapsed ? undefined : accountCardWidth }}
+        className="min-w-[228px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto">
         {mode === 'cloud' && accountsReadyForOwner && !accountsMutationAllowed ? (
           <p role="status" className="max-w-[280px] px-2 py-2 text-12 text-[var(--text-secondary)]">
             {t('sidebar.accountSwitcher.sharedDataRestriction')}
@@ -322,7 +341,12 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
             {addingAccount ? t('sidebar.accountSwitcher.adding') : t('login.signIn')}
           </DropdownMenuItem>
         ) : null}
-        <DropdownMenuItem onSelect={openSettings} className="gap-2.5">
+        {canAccessUsageSettings({ mode }) && (
+          <SidebarAccountUsage ownerId={dataOwnerId}
+            showBilling={canAccessBillingSettings({ mode, membershipKind: user?.membershipKind ?? null })}
+            onSelect={(tab) => navigate(`/settings?tab=${tab}`)} />
+        )}
+        <DropdownMenuItem onSelect={openSettings} className={isCollapsed ? 'gap-2.5' : 'gap-4'}>
           <Settings className="h-4 w-4" aria-hidden="true" />
           {t('sidebar.user.menuSettings')}
         </DropdownMenuItem>
@@ -428,6 +452,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
       {/* 胶囊整体承载 hover(方案 D):玻璃底色加深一档;悬停右侧操作按钮时用
         :has() 把胶囊底色还原,只让当前按钮高亮,避免双层叠色。 */}
       <div
+        ref={accountCardRef}
         className={cn(
           'flex h-10 items-center rounded-full border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] px-[7px]',
           'transition-colors hover:bg-[var(--sidebar-user-card-bg-hover)]',

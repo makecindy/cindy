@@ -228,6 +228,7 @@ describe('SettingsView Escape', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' }));
     await waitFor(() => expect(location()).toContain('tab=providers'));
     snapshot.readiness.ok = true;
+    fireEvent.click(screen.getByRole('button', { name: 'settings.navGroups.interaction' }));
     fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.voiceInput' }));
     await waitFor(() => expect(screen.queryByText(missingCredential)).toBeNull());
     expect(screen.getByText(cannotRefine)).toBeTruthy();
@@ -235,6 +236,7 @@ describe('SettingsView Escape', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.refiner.openAuxiliary' }));
     await waitFor(() => expect(location()).toContain('tab=personalization'));
     snapshot.selection.refinerProviderChain = ['configured-refiner'];
+    fireEvent.click(screen.getByRole('button', { name: 'settings.navGroups.interaction' }));
     fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.voiceInput' }));
     await waitFor(() => expect(screen.queryByText(cannotRefine)).toBeNull());
     expect(screen.getByText('settings.voiceInput.serviceSource.refiner.followHint')).toBeTruthy();

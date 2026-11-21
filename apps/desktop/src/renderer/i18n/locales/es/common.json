@@ -1902,6 +1902,23 @@
       "restored": "Configuración predeterminada restaurada",
       "restoreFailed": "No se pudieron restaurar los valores predeterminados."
     },
+    "contentGroups": {
+      "getStarted": "Primeros pasos",
+      "versions": "Versión y actualizaciones",
+      "diagnostics": "Diagnósticos y registros",
+      "privacy": "Privacidad y términos",
+      "advanced": "Ajustes avanzados",
+      "jump": "Ir a la sección",
+      "work": "Tareas y mensajes"
+    },
+    "navGroups": {
+      "preferences": "Ajustes habituales",
+      "models": "Modelos",
+      "interaction": "Uso del escritorio",
+      "connections": "Conectar y compartir",
+      "extensions": "Herramientas y complementos",
+      "data": "Tareas y almacenamiento"
+    },
     "tabs": {
       "storage": "Almacenamiento",
       "general": "General",

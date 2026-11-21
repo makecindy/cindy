@@ -1834,6 +1834,23 @@
       "restored": "已復預設規制",
       "restoreFailed": "無法復預設規制"
     },
+    "contentGroups": {
+      "getStarted": "初用",
+      "versions": "版本與更新",
+      "diagnostics": "診查與日誌",
+      "privacy": "隱私與條款",
+      "advanced": "進階規制",
+      "jump": "往此節",
+      "work": "差事與訊"
+    },
+    "navGroups": {
+      "preferences": "常用",
+      "models": "模型",
+      "interaction": "桌面互動",
+      "connections": "互聯與共享",
+      "extensions": "器用與法器",
+      "data": "差事與儲藏"
+    },
     "tabs": {
       "storage": "儲藏",
       "general": "通則",

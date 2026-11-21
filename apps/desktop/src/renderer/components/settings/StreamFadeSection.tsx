@@ -23,7 +23,7 @@ export function StreamFadeSection() {
   const enabled = preference === 'on';
 
   return (
-    <SettingsSection title={t('settings.streamFade.title')} headingLevel={3}>
+    <SettingsSection id={appearanceSettings.streamFade.targetId} title={t('settings.streamFade.title')} headingLevel={3}>
       <SettingsCard>
         <SettingsRow
           title={t(appearanceSettings.streamFadeLabel.titleKey)}

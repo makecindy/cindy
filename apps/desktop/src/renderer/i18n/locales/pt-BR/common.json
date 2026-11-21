@@ -1902,6 +1902,23 @@
       "restored": "Configurações padrão restauradas",
       "restoreFailed": "Não foi possível restaurar os padrões."
     },
+    "contentGroups": {
+      "getStarted": "Primeiros passos",
+      "versions": "Versão e atualizações",
+      "diagnostics": "Diagnóstico e registros",
+      "privacy": "Privacidade e termos",
+      "advanced": "Configurações avançadas",
+      "jump": "Ir para a seção",
+      "work": "Tarefas e mensagens"
+    },
+    "navGroups": {
+      "preferences": "Configurações comuns",
+      "models": "Modelos",
+      "interaction": "Interação no computador",
+      "connections": "Conexões e compartilhamento",
+      "extensions": "Ferramentas e plugins",
+      "data": "Tarefas e armazenamento"
+    },
     "tabs": {
       "storage": "Armazenamento",
       "general": "Geral",

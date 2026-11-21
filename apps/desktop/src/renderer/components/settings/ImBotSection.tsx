@@ -35,7 +35,7 @@ import { TelegramBotSection } from './TelegramBotSection';
 import { WechatBotSection } from './WechatBotSection';
 import { WecomBotSection } from './WecomBotSection';
 import { showCindyGroup } from './imBotVisibility';
-import { SettingsPageHeader } from '@/components/ui/settings-rows';
+import { SettingsPageHeader, SETTINGS_SECTION_TITLE_CLASS } from '@/components/ui/settings-rows';
 
 /** 「IM 机器人」页面分区 id(与 ?imGroup= 参数共用)。 */
 export type ImBotSettingsGroup = 'cindy' | 'personal';
@@ -148,7 +148,7 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
   }, [effectiveTargetGroup]);
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-6">
       <SettingsPageHeader
         title={t(imBotSettings.imBot.sectionKey)}
         adornment={<span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
@@ -156,7 +156,7 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
         </span>}
       />
 
-      <div key={`${mode}:${dataOwnerId ?? 'none'}`} className="mt-4 flex flex-col gap-8">
+      <div key={`${mode}:${dataOwnerId ?? 'none'}`} className="flex flex-col gap-9">
         {cindyGroupAvailable && (
           <section
             ref={cindySectionRef}
@@ -166,7 +166,8 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
           >
             <h3
               id="im-bot-group-heading-cindy"
-              className="text-14 font-medium leading-[1.4] text-[var(--settings-section-title)]"
+              className={SETTINGS_SECTION_TITLE_CLASS}
+              data-settings-section-heading tabIndex={-1}
             >
               {t(IM_BOT_GROUP_LABEL_KEY.cindy)}
             </h3>
@@ -183,7 +184,8 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
         >
           <h3
             id="im-bot-group-heading-personal"
-            className="text-14 font-medium leading-[1.4] text-[var(--settings-section-title)]"
+            className={SETTINGS_SECTION_TITLE_CLASS}
+            data-settings-section-heading tabIndex={-1}
           >
             {t(IM_BOT_GROUP_LABEL_KEY.personal)}
           </h3>
@@ -203,7 +205,8 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
           >
             <h3
               id="im-bot-group-heading-plugins"
-              className="text-14 font-medium leading-[1.4] text-[var(--settings-section-title)]"
+              className={SETTINGS_SECTION_TITLE_CLASS}
+              data-settings-section-heading tabIndex={-1}
             >
               {t('settings.imBot.groups.plugins')}
             </h3>

@@ -105,7 +105,9 @@ export function SettingsSection({ title, titleId, count, description, action, ca
   return <section {...rest} className={cn('flex min-w-0 flex-col', !drawer && 'gap-[14px]', className)} data-testid={testId}>
     {(title || action) && <div className={cn('flex items-center justify-between gap-3', (drawer || action) && 'min-h-6', drawer && 'mb-2')}>
       <div className="flex min-w-0 flex-col gap-1">
-        <Heading id={titleId} className={cn('min-w-0', drawer ? 'text-13 font-medium leading-[1.38] text-[var(--text-secondary)]' : SETTINGS_SECTION_TITLE_CLASS)}>
+        <Heading id={titleId} data-settings-section-heading={!drawer && title ? '' : undefined}
+          tabIndex={!drawer && title ? -1 : undefined}
+          className={cn('min-w-0', drawer ? 'text-13 font-medium leading-[1.38] text-[var(--text-secondary)]' : SETTINGS_SECTION_TITLE_CLASS)}>
           {title}{count !== undefined && <span className="ml-1.5 font-normal tabular-nums text-[var(--text-tertiary)]">{count}</span>}
         </Heading>
         {description && <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">{description}</p>}
@@ -120,6 +122,12 @@ export function SettingsSection({ title, titleId, count, description, action, ca
 export function SettingsCard({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
   const drawer = useContext(DrawerScope);
   return <div className={cn(drawer ? DRAWER_CARD : PAGE_CARD, className)} {...rest} />;
+}
+
+/** Keep a search anchor around related rows without adding a second card. */
+export function SettingsRowGroup({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  const drawer = useContext(DrawerScope);
+  return <div {...rest} className={cn('empty:hidden', drawer ? SETTINGS_DIVIDER : PAGE_DIVIDER, className)} />;
 }
 
 export interface SettingsRowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title' | 'value'> {

@@ -2619,7 +2619,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
               <dd className="mt-1 truncate text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
                 {formatUsd(cost.totalUsd)}
               </dd>
-              <dd className="mt-1 truncate text-11 leading-[1.3] text-[var(--text-secondary)]">
+              <dd className="mt-1 [overflow-wrap:anywhere] text-11 leading-[1.3] text-[var(--text-secondary)]">
                 {t('settings.voiceInput.usage.costBreakdown', {
                   asr: formatUsd(cost.asrUsd),
                   refine: formatUsd(cost.refineUsd),

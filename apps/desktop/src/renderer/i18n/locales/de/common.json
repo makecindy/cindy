@@ -1864,6 +1864,23 @@
       "restored": "Standardeinstellungen wiederhergestellt",
       "restoreFailed": "Standardeinstellungen konnten nicht wiederhergestellt werden."
     },
+    "contentGroups": {
+      "getStarted": "Erste Schritte",
+      "versions": "Version und Updates",
+      "diagnostics": "Diagnose und Protokolle",
+      "privacy": "Datenschutz und Bedingungen",
+      "advanced": "Erweiterte Einstellungen",
+      "jump": "Zum Abschnitt springen",
+      "work": "Aufgaben und Nachrichten"
+    },
+    "navGroups": {
+      "preferences": "Häufige Einstellungen",
+      "models": "Modelle",
+      "interaction": "Desktop-Bedienung",
+      "connections": "Verbindungen und Freigaben",
+      "extensions": "Werkzeuge und Plugins",
+      "data": "Aufgaben und Speicher"
+    },
     "tabs": {
       "storage": "Speicher",
       "general": "Allgemein",

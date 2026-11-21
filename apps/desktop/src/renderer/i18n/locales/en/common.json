@@ -1864,6 +1864,23 @@
       "restored": "Restored default settings",
       "restoreFailed": "Could not restore defaults."
     },
+    "contentGroups": {
+      "getStarted": "Get started",
+      "versions": "Version and updates",
+      "diagnostics": "Diagnostics and logs",
+      "privacy": "Privacy and terms",
+      "advanced": "Advanced settings",
+      "jump": "Jump to section",
+      "work": "Tasks and messages"
+    },
+    "navGroups": {
+      "preferences": "Common settings",
+      "models": "Models",
+      "interaction": "Desktop interaction",
+      "connections": "Connections & sharing",
+      "extensions": "Tools & plugins",
+      "data": "Tasks & storage"
+    },
     "tabs": {
       "storage": "Storage",
       "general": "General",

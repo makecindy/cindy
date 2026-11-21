@@ -9,9 +9,9 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
-export function GitSafetySection() {
+export function GitSafetySection({ enabled = true }: { enabled?: boolean }) {
   const { t } = useTranslation();
-  const { mode, setMode, reset, isCustomized } = useGitSafetySettings();
+  const { mode, setMode, reset, isCustomized } = useGitSafetySettings({ enabled });
   const [saving, setSaving] = useState(false);
 
   const handleModeChange = useCallback(

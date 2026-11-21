@@ -43,14 +43,13 @@ function ComposerFollowUpRow() {
   );
 }
 
-export function ComposerSendShortcutSection() {
+export function ComposerSendShortcutSection({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation();
   const { preference, setPreference } = useComposerSendShortcutPreference();
   const shortcut = getComposerModifierShortcutLabel(window.electronAPI?.platform);
 
-  return (
-    <SettingsSection title={t('settings.composer.title')}>
-      <SettingsCard>
+  const rows = (
+    <>
         <SettingsRow
           title={t(personalizationDetailsSettings.composerSendShortcutLabel.titleKey, { shortcut })}
           hint={t(
@@ -75,7 +74,9 @@ export function ComposerSendShortcutSection() {
           }
         />
         <ComposerFollowUpRow />
-      </SettingsCard>
-    </SettingsSection>
+    </>
+  );
+  return embedded ? rows : (
+    <SettingsSection title={t('settings.composer.title')}><SettingsCard>{rows}</SettingsCard></SettingsSection>
   );
 }

@@ -34,7 +34,7 @@ import {
 
 type DesktopCloseBehavior = LinuxCloseBehavior | WindowsCloseBehavior;
 
-export function WindowBehaviorSection() {
+export function WindowBehaviorSection({ embedded = false }: { embedded?: boolean }) {
   const { enabled, setEnabled } = useSwallowActivationClickSettings();
   const loginItem = useLoginItemSetting();
   const menubar = useMenubarSetting();
@@ -189,13 +189,10 @@ export function WindowBehaviorSection() {
     });
   }
 
-  return (
+  const content = rows.map((row) => <Fragment key={row.key}>{row.node}</Fragment>);
+  return embedded ? <>{content}</> : (
     <SettingsSection title={t('settings.windowBehavior.title')}>
-      <SettingsCard>
-        {rows.map((row) => (
-          <Fragment key={row.key}>{row.node}</Fragment>
-        ))}
-      </SettingsCard>
+      <SettingsCard>{content}</SettingsCard>
     </SettingsSection>
   );
 }

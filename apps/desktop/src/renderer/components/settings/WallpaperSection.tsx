@@ -299,7 +299,7 @@ export function WallpaperSection() {
                     </span>
                     <span
                       className={cn(
-                        'truncate text-12 font-medium',
+                        'hyphens-auto [overflow-wrap:break-word] text-12 font-medium',
                         selected
                           ? 'text-[var(--settings-theme-label-active)]'
                           : 'text-[var(--settings-theme-label)]',

@@ -1870,14 +1870,14 @@ function BalanceOverviewCard({
             </p>
           )}
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">
           <Button
             variant="secondary"
             size="md"
             compact
             type="button"
             onClick={onRedeemGiftCard}
-            className="shrink-0 select-none"
+            className="h-auto min-h-8 max-w-full shrink-0 select-none py-1 leading-tight [overflow-wrap:anywhere]"
           >
             {t('billing.giftCard.action')}
           </Button>
@@ -1900,7 +1900,7 @@ function BalanceOverviewCard({
             compact
             type="button"
             onClick={onPurchase}
-            className="shrink-0 select-none"
+            className="h-auto min-h-8 max-w-full shrink-0 select-none py-1 leading-tight [overflow-wrap:anywhere]"
           >
             {t('billing.settings.topupCard.action')}
           </Button>
