@@ -706,7 +706,10 @@ describe('push notification realm routing', () => {
     envState.activeRealm = 'cn';
     const cnApiFetch = vi.fn().mockResolvedValue({ deleted: true });
 
-    await retryPendingUnregister(cnApiFetch);
+    const offlineApiFetch = vi.fn().mockRejectedValue(new Error('offline'));
+    expect(await retryPendingUnregister(offlineApiFetch)).toBe(false);
+    expect(readStoredRealms(PENDING_KEY)).toEqual(expect.arrayContaining(['cn', 'global']));
+    expect(await retryPendingUnregister(cnApiFetch)).toBe(true);
 
     expect(cnApiFetch).toHaveBeenCalledWith(
       '/api/device-link/push-token',

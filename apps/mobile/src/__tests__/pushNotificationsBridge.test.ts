@@ -13,12 +13,18 @@ const state = vi.hoisted(() => ({
   uploads: [] as string[],
   reads: 0,
   failNextSync: false,
+  nativeToken: 'initial-token',
+  unregisterAttempts: 0,
+  pendingUnregister: false,
+  foregroundListeners: new Set<(state: string) => void>(),
   auth: { initialized: true, isAuthenticated: true, accountGeneration: 1,
     user: { id: 'fixture-user' }, apiFetch: async () => ({}) },
 }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }),
   usePathname: () => '/', useGlobalSearchParams: () => ({}) }));
-vi.mock('react-native', () => ({ AppState: { addEventListener: () => ({ remove() {} }) } }));
+vi.mock('react-native', () => ({ AppState: { addEventListener: (_: string, listener: (state: string) => void) => {
+  state.foregroundListeners.add(listener); return { remove() { state.foregroundListeners.delete(listener); } };
+} } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => state.auth }));
 vi.mock('@/device-link/selfHostedRelay', () => ({ useSelfHostedRelay: () => null }));
 vi.mock('@/notifications/NotificationReconciliationBridge', () => ({ NotificationReconciliationBridge: () => null }));
@@ -34,7 +40,12 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en
 vi.mock('@/notifications/notificationActionRunner', () => ({ handleNotificationActionResponse: () => false }));
 vi.mock('@/notifications/pushNotifications', () => ({
   configureForegroundNotificationBehavior() {}, registerNotificationActionCategories: async () => {}, isPushSupported: () => true,
-  readPushEnabled: async () => state.enabled, retryPendingUnregister: async () => {},
+  readPushEnabled: async () => state.enabled, retryPendingUnregister: async () => {
+    if (!state.pendingUnregister) return true;
+    if (++state.unregisterAttempts === 1) return false;
+    state.pendingUnregister = false;
+    return true;
+  },
   syncPushRegistration: async (opts: { deviceToken?: { type: 'ios'; data: string } }) => {
     if (state.failNextSync) {
       state.failNextSync = false;
@@ -43,7 +54,7 @@ vi.mock('@/notifications/pushNotifications', () => ({
     let token = opts.deviceToken;
     if (!token) {
       if (++state.reads > 3) throw Error('recursive native registration');
-      token = { type: 'ios', data: 'initial-token' };
+      token = { type: 'ios', data: state.nativeToken };
       state.listener?.(token);
     }
     state.uploads.push(token.data);
@@ -55,6 +66,7 @@ const roots: ReturnType<typeof createRoot>[] = [];
 afterEach(async () => {
   await act(async () => { for (const root of roots) root.unmount(); });
   roots.length = 0; state.uploads = []; state.reads = 0; state.failNextSync = false; state.enabled = true;
+  state.nativeToken = 'initial-token'; state.unregisterAttempts = 0; state.pendingUnregister = false;
   vi.unstubAllGlobals();
 });
 
@@ -126,4 +138,36 @@ it('recovers a failed initial registration on profile refresh, then stops repeat
   } finally {
     state.auth = auth;
   }
+});
+
+// Cached sessions must repair both a failed opt-out and a failed token rotation
+// on foreground, even if iOS never emits another token event.
+it.each(['unregister', 'rotation'] as const)('recovers a pending %s on foreground', async (operation) => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  const root = createRoot(document.createElement('div'));
+  roots.push(root);
+  if (operation === 'unregister') {
+    state.enabled = false;
+    state.pendingUnregister = true;
+  }
+  await act(async () => { root.render(createElement(PushNotificationsBridge)); });
+  if (operation === 'rotation') {
+    state.nativeToken = 'rotated-token';
+    state.failNextSync = true;
+    await act(async () => { state.listener?.({ type: 'ios', data: state.nativeToken }); });
+    expect(state.uploads).not.toContain('rotated-token');
+  }
+  const foreground = () => act(async () => {
+    for (const listener of state.foregroundListeners) listener('active');
+  });
+  await foreground();
+  if (operation === 'unregister') {
+    expect(state.unregisterAttempts).toBe(2);
+    expect(state.uploads).toEqual([]);
+  } else {
+    expect(state.uploads).toContain('rotated-token');
+  }
+  const reads = state.reads;
+  await foreground();
+  expect(state.reads).toBe(reads);
 });

@@ -671,28 +671,30 @@ export function unregisterPushTokenBestEffort(
  */
 async function retryPendingUnregisterInternal(
   apiFetch: AuthedApiFetch,
-): Promise<void> {
-  if (!isPushSupported()) return;
+): Promise<boolean> {
+  if (!isPushSupported()) return true;
   const realm = getActiveMobileSessionRealm();
   const stateScope = capturePushStateScope(realm);
   const pendingRealms = await readPushRealms(
     PUSH_PENDING_UNREGISTER_KEY,
     stateScope,
   );
-  if (!pendingRealms.has(realm)) return;
+  if (!pendingRealms.has(realm)) return true;
 
   try {
     const token = await getNativeDeviceTokenBestEffort();
     await mutatePushTokens(apiFetch, realm, 'DELETE', pushDeleteBody(token));
     await removePushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
     await removePushRealm(PUSH_REGISTERED_KEY, realm, stateScope);
+    return true;
   } catch {
-    // 仍失败：保留当前区域标记，下次同区登录继续补偿。
+    // 保留标记，通知调用方在同区域恢复连接时补偿。
+    return false;
   }
 }
 
 export function retryPendingUnregister(
   apiFetch: AuthedApiFetch,
-): Promise<void> {
+): Promise<boolean> {
   return runPushMutation(() => retryPendingUnregisterInternal(apiFetch));
 }
