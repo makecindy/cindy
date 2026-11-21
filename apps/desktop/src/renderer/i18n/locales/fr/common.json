@@ -17674,7 +17674,8 @@
         "title": "Importer les automatisations du dépôt",
         "description": "Source : {{workingDir}}. Vérifiez les définitions ci-dessous. L’importation applique ces modifications et active les nouvelles automatisations, qui peuvent exécuter des commandes et lancer des Agents avec un accès complet. Importez uniquement du contenu de confiance.",
         "accept": "Confirmer l’importation",
-        "removed": "Suppressions prévues : {{names}}"
+        "removed": "Suppressions prévues : {{names}}",
+        "fileMissing": "Importation ignorée. Le fichier d’automatisation est introuvable dans {{projectName}}."
       },
       "toast": {
         "summary": "{{inserted}} ajoutées · {{updated}} mises à jour · {{deleted}} supprimées",
@@ -17771,6 +17772,7 @@
       "openWorkdirFailed": "Impossible d'ouvrir le dossier"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
       "status": {
         "running": "En cours",
         "success": "Réussie",

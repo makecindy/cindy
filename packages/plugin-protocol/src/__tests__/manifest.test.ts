@@ -2186,6 +2186,19 @@ describe('interactive page declarations', () => {
             file: 'ui/planner.html',
             csp: { connectDomains: ['https://api.example.com'] }
         }], tools: { help: { resourceUri: "ui://planner", visibility: ['model', 'app'] } } } } };
+  // #11918, unit: a new declaration must be valid at install, while historical
+  // snapshots keep their original approval data and all valid page declarations.
+  it.each(['240', NaN, Infinity, -Infinity, {}, null])('rejects an invalid initialHeight %s only for a new package', initialHeight => {
+    const resource = base.mcpApps.ui.resources[0];
+    const other = { uri: 'ui://other', file: 'ui/other.html', initialHeight: 180 };
+    const raw = { ...base, mcpApps: { ui: { ...base.mcpApps.ui, resources: [{ ...resource, initialHeight }, other] } } };
+    expect(validateGhostManifest(raw)).toMatchObject({ ok: false, reason: expect.stringContaining('resources[0].initialHeight') });
+    const stored = validateStoredGhostManifest(raw);
+    if (!stored.ok) throw new Error(stored.reason);
+    expect(getPluginToolUi(stored.manifest)).toEqual({ ...base.mcpApps.ui, resources: [resource, other] });
+    expect(stored.manifest.mcpApps).toEqual(raw.mcpApps);
+    expect(raw.mcpApps.ui.resources[0].initialHeight).toEqual(initialHeight);
+  });
   // Host button preference is presentation only, not a display-mode permission.
   it('preserves the optional Host fullscreen button preference without changing tools', () => {
     const resources = [{ ...base.mcpApps.ui.resources[0], hostFullscreenButton: false }];

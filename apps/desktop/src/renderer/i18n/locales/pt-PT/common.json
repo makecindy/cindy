@@ -17674,7 +17674,8 @@
         "title": "Importar automatizações do repositório",
         "description": "Origem: {{workingDir}}. Reveja as definições abaixo. A importação aplica estas alterações e ativa novas automatizações, que podem executar comandos e iniciar Agents com acesso total. Importe apenas conteúdo de confiança.",
         "accept": "Confirmar importação",
-        "removed": "Serão removidos: {{names}}"
+        "removed": "Serão removidos: {{names}}",
+        "fileMissing": "Importação ignorada. Não foi possível encontrar o ficheiro de automatizações em {{projectName}}."
       },
       "toast": {
         "summary": "adicionados {{inserted}} · atualizados {{updated}} · removidos {{deleted}}",
@@ -17771,6 +17772,7 @@
       "openWorkdirFailed": "Falha ao abrir a pasta"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "O tempo de espera expirou antes de a mensagem ser enviada. Quando a sessão de destino estiver livre, escolhe {{action}} para a executar.",
       "status": {
         "running": "Em execução",
         "success": "Sucesso",

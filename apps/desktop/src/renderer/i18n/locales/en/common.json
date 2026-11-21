@@ -17508,7 +17508,8 @@
         "title": "Import Repository Automations",
         "description": "Source: {{workingDir}}. Review the definitions below. Importing applies these changes and enables new automations, which can run commands and start Agents with full access. Import only content you trust.",
         "accept": "Confirm Import",
-        "removed": "Will remove: {{names}}"
+        "removed": "Will remove: {{names}}",
+        "fileMissing": "Import skipped. The automation file in {{projectName}} could not be found."
       },
       "toast": {
         "summary": "added {{inserted}} · updated {{updated}} · removed {{deleted}}",
@@ -17605,6 +17606,7 @@
       "openWorkdirFailed": "Failed to open folder"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
       "status": {
         "running": "Running",
         "success": "Success",

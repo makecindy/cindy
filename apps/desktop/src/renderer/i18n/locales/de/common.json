@@ -17508,7 +17508,8 @@
         "title": "Repository-Automatisierungen importieren",
         "description": "Quelle: {{workingDir}}. Prüfe die folgenden Definitionen. Der Import übernimmt diese Änderungen und aktiviert neue Automatisierungen. Diese können Befehle ausführen und Agents mit Vollzugriff starten. Importiere nur vertrauenswürdige Inhalte.",
         "accept": "Import bestätigen",
-        "removed": "Wird entfernt: {{names}}"
+        "removed": "Wird entfernt: {{names}}",
+        "fileMissing": "Import übersprungen. Die Automatisierungsdatei in {{projectName}} wurde nicht gefunden."
       },
       "toast": {
         "summary": "{{inserted}} hinzugefügt · {{updated}} aktualisiert · {{deleted}} entfernt",
@@ -17605,6 +17606,7 @@
       "openWorkdirFailed": "Ordner konnte nicht geöffnet werden"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "Die Wartezeit ist abgelaufen, bevor die Eingabe gesendet wurde. Sobald die Zielsitzung frei ist, wähle {{action}}, um sie auszuführen.",
       "status": {
         "running": "Wird ausgeführt",
         "success": "Erfolgreich",
