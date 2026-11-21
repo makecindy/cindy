@@ -170,13 +170,15 @@ export function useRemoteBotSync(): void {
         // Every host answers the V1 task-card list (newer ones read-only from stored rows):
         // the children a teammate started there keep their "opened by" mark. Read serially
         // per host; never per task row. Stored rows no longer change, so an ordinary refresh
-        // only reads a teammate whose attribution is unknown or whose main chat changed.
+        // only reads a teammate whose attribution is unknown or whose main chat changed. A failed
+        // read stays unconfirmed (its retry entry) until one succeeds, even though the row already
+        // carries the new main chat next to the previous attribution.
         for (const bot of bots) {
           if (!current() || generations.get(deviceId) !== epoch) return;
           if (!bot.sessionId) continue;
           const old = previous.get(bot.id);
           const retryKey = `${deviceId}\n${bot.id}\n${bot.sessionId}`;
-          if (!refreshTasks && ((old?.delegatedSessionIds !== undefined && old.sessionId === bot.sessionId)
+          if (!refreshTasks && ((old?.delegatedSessionIds !== undefined && old.sessionId === bot.sessionId && !delegationRetryAt.has(retryKey))
             || Math.max(delegationRetryAt.get(retryKey) ?? 0, delegationRetryAt.get(deviceId) ?? 0) > Date.now())) continue;
           try {
             const tasks = await readLegacyDelegations(deviceId, bot.sessionId);
@@ -301,6 +303,7 @@ const legacyDelegationHosts = new Set<string>();
 /**
  * When an ordinary refresh may retry a failed attribution read: `deviceId\nbotId\nsessionId` after
  * a failure, or `deviceId` (the whole host) after a stalled read. Pushes and re-reads bypass it.
+ * A per-teammate entry also marks that attribution unconfirmed until a read succeeds.
  */
 const delegationRetryAt = new Map<string, number>();
 const DELEGATION_READ_TIMEOUT_MS = 10_000;

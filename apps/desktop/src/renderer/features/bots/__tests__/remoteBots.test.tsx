@@ -358,6 +358,34 @@ it('reads creation attribution once, then only on delegation pushes, keeping it 
   } finally { vi.useRealTimers(); }
 });
 
+// Unit, same rule: a teammate's main chat changed and the read for it failed. The row already
+// shows the new chat next to the previous attribution; that must not count as confirmed.
+// Minimal input: sessionId changes, first read fails, a later ordinary refresh after the backoff.
+it('retries attribution for a changed main chat until a read succeeds', async () => {
+  h.devices = [host('a')];
+  let roster = collection();
+  let response: unknown = { ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: 'child' }] };
+  h.invoke.mockImplementation(async (_device, channel) => channel === REMOTE_RESOURCE_LIST_CHANNEL ? roster : response);
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current[0]?.delegatedSessionIds).toEqual(['child']));
+  roster = collection();
+  roster.items[0].links = [{ rel: 'conversation', target: { kind: 'session', sessionId: 'moved' } }];
+  response = { ok: false, errorCode: 'HOST_NOT_READY' };
+  vi.useFakeTimers();
+  try {
+    act(() => h.status({ status: 'online' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(taskReads()).toBe(2);
+    expect(result.current[0]).toMatchObject({ sessionId: 'moved', delegatedSessionIds: ['child'] });
+    response = { ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: 'moved-child' }] };
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+    act(() => h.status({ status: 'online' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(taskReads()).toBe(3);
+    expect(result.current[0].delegatedSessionIds).toEqual(['moved-child']);
+  } finally { vi.useRealTimers(); }
+});
+
 // Unit, same rule: the display cache keeps attribution across launches; a teammate cached
 // without it (never read successfully) is still read once. Before, a missing field restored as [].
 it('reads attribution only for cached teammates that do not have it yet', async () => {
