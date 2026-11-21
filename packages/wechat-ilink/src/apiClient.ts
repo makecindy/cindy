@@ -178,6 +178,17 @@ function combineSignal(
 }
 
 /** Stateless JSON/HTTP client. Tokens and cursor persistence remain host-owned. */
+/**
+ * Single source of truth for which raw sync entries count as messages.
+ * Entries failing this check are silently dropped by messagesFrom, so
+ * transport scans the raw list with it to keep malformed drops observable.
+ */
+export function isValidMessageEntry(entry: unknown): entry is IlinkMessage {
+  return (
+    entry !== null && typeof entry === "object" && !Array.isArray(entry)
+  );
+}
+
 export class IlinkApiClient {
   private readonly fetchImpl: FetchLike;
   private readonly baseUrl: URL;
@@ -563,12 +574,7 @@ export class IlinkApiClient {
         true,
       );
     }
-    return response.msgs.filter(
-      (message): message is IlinkMessage =>
-        message !== null &&
-        typeof message === "object" &&
-        !Array.isArray(message),
-    );
+    return response.msgs.filter(isValidMessageEntry);
   }
 
   messagesFrom(response: Record<string, unknown>): IlinkMessage[] {

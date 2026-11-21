@@ -1,11 +1,17 @@
-import { IlinkApiClient, type IlinkApiClientOptions } from "./apiClient.js";
+import {
+  IlinkApiClient,
+  isValidMessageEntry,
+  type IlinkApiClientOptions,
+} from "./apiClient.js";
 import { IlinkAuthorization } from "./auth.js";
-import { decodeInboundMessage } from "./codec.js";
+import { decodeInboundMessageWithReason } from "./codec.js";
 import { WechatIlinkError } from "./errors.js";
 import type {
   WechatAuthChallenge,
   WechatAuthorizationObserver,
   WechatCredentials,
+  WechatInboundDropReason,
+  WechatInboundMessage,
   WechatMediaRef,
   WechatPollResult,
   WechatSendMediaRequest,
@@ -129,16 +135,29 @@ export class TencentIlinkTransport implements WechatTransport {
         true,
       );
     }
-    const messages = this.api
-      .messagesFrom(response)
-      .map(decodeInboundMessage)
-      .filter((message) => message !== null);
+    const droppedMessageReasons: WechatInboundDropReason[] = [];
+    const messages: WechatInboundMessage[] = [];
+    // messagesFrom validates and silently filters non-object entries before
+    // decoding; scan the raw list so those drops stay observable too (#10899).
+    // A non-array msgs list already threw above, so msgs is an array here.
+    const rawList = response.msgs;
+    if (Array.isArray(rawList)) {
+      for (const entry of rawList) {
+        if (!isValidMessageEntry(entry)) droppedMessageReasons.push("malformed-message");
+      }
+    }
+    for (const raw of this.api.messagesFrom(response)) {
+      const outcome = decodeInboundMessageWithReason(raw);
+      if (outcome.message) messages.push(outcome.message);
+      else if (outcome.dropReason) droppedMessageReasons.push(outcome.dropReason);
+    }
     return {
       cursor:
         typeof response.get_updates_buf === "string"
           ? response.get_updates_buf
           : cursor,
       messages,
+      ...(droppedMessageReasons.length > 0 ? { droppedMessageReasons } : {}),
       suggestedTimeoutMs:
         typeof response.longpolling_timeout_ms === "number"
           ? response.longpolling_timeout_ms
