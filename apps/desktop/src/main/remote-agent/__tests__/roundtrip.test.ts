@@ -1862,7 +1862,7 @@ describe('shared startup lease budget', () => {
     const runs = new Map<string, Run>();
     const sessions = new Map<string, string>();
     const disposed: string[] = [];
-    let mcpSessionCount = 0;
+    const mcpSessions = new Set<string>();
     const pendingClose = deferred();
     const prepare = deferred();
     const allocation = deferred();
@@ -1872,7 +1872,8 @@ describe('shared startup lease budget', () => {
     const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
       startFailure: '', startFailureName: 'AgentStartupStoppedError', localFailure: '',
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
-      blockClose: false, blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false,
+      blockClose: false, failClose: false, maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
+      blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false,
       directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false, rejectHandoff: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => emit(run, { t: 'started', handle: { id: 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
@@ -1913,7 +1914,7 @@ describe('shared startup lease budget', () => {
       if (request.op === 'standby-admit') return { ok: true, result: { generation: request.admissionId, leaseDurationMs: 360_000 } };
       if (request.op === 'caps') {
         if (state.delayCaps) { const ms = state.delayCaps; state.delayCaps = 0; await vi.advanceTimersByTimeAsync(ms); }
-        return { ok: true, result: { version: 1, maxRuns: 10, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
+        return { ok: true, result: { version: 1, maxRuns: state.maxRuns, idleReclaimMinutes: state.idleReclaimMinutes, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
           virtualWorkspace: true, directGuestExecution: true, ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
           agents: [{ kind: 'codex', available: true }] } };
       }
@@ -1926,11 +1927,12 @@ describe('shared startup lease budget', () => {
             message: '[REMOTE_AGENT_INVALID] this shared task is not authorized on this computer' } };
         }
         sessions.set(request.runId!, request.payload!.json!.sessionId);
-        mcpSessionCount = 1;
+        mcpSessions.add(request.payload!.json!.sessionId);
         if (state.loseOpenAck) return { ok: false, error: { code: 'INVOKE_TIMEOUT', message: 'open acknowledgement lost' } };
       }
       if (request.op === 'close') {
         if (state.blockClose) await pendingClose.promise;
+        if (state.failClose) return { ok: false, error: { code: 'IPC_ERROR', message: 'close unconfirmed' } };
         const run = runs.get(request.runId!);
         if (run) emit(run, { t: 'closed', reason: 'closed' });
       }
@@ -1951,7 +1953,7 @@ describe('shared startup lease budget', () => {
         if (state.blockPrepare) await prepare.promise;
         return { mcpBridge: { servers: [{ name: 'fixture', url: 'http://fixture.invalid/' }] },
           disposeSessionCtx: () => { disposed.push(ctx.sessionId!); },
-          closeSessionInstance: () => { mcpSessionCount = 0; },
+          closeSessionInstance: () => { mcpSessions.delete(ctx.sessionId!); },
         } as never;
       },
       makerMemory: () => undefined, captureKnownFileBefore: async () => undefined, noteOpaqueTurnChange() {},
@@ -1962,7 +1964,8 @@ describe('shared startup lease budget', () => {
     historyOpenLink.mockResolvedValue(undefined);
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
-    return { owner, target, generation, state, calls, runs, disposed, mcpSessionCount: () => mcpSessionCount, pendingClose, prepare, allocation, emit, started, guestSwitch, renewals,
+    return { owner, target, generation, state, calls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
+      pendingClose, prepare, allocation, emit, started, guestSwitch, renewals,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
@@ -2692,30 +2695,71 @@ describe('shared startup lease budget', () => {
     const f = fixture(); f.state.ready = true;
     const handle = await f.open('historical');
     try {
-      expect(f.mcpSessionCount()).toBe(1);
-      const run = [...f.runs.values()].at(-1)!;
-      f.emit(run, { t: 'closed', reason: 'closed', idleReclaimed: true });
-      await flush();
-      expect(f.mcpSessionCount()).toBe(0);
-      await handle.send({ type: 'user', content: 'reconnect after reclaim' });
-      expect(f.mcpSessionCount()).toBe(1);
+      for (let round = 0; round < 5; round++) {
+        expect(f.mcpSessionCount()).toBe(1);
+        const run = [...f.runs.values()].at(-1)!;
+        f.emit(run, { t: 'closed', reason: 'ended', idleReclaimed: true });
+        await flush();
+        expect(f.mcpSessionCount()).toBe(0);
+        await handle.send({ type: 'user', content: 'reconnect after reclaim' });
+        const reopened = [...f.runs.values()].at(-1)!;
+        expect(reopened.runId).not.toBe(run.runId);
+        expect(f.mcpSessionCount()).toBe(1);
+        f.emit(reopened, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+        await flush();
+      }
     } finally { await handle.close(); }
   });
 
+  // MCP heap regression: exercise the controller's real pool via a one-slot
+  // executor. The idle-reclaimed test does not cover the controller-initiated
+  // close whose stream event is ignored in releasing state. Integration tier,
+  // with native run replies and the MCP count supplied at the boundary.
+  it.each([false, true])('keeps or cleans MCP during a pool release (close failure=%s)', async failClose => {
+    const f = fixture();
+    Object.assign(f.state, { ready: true, maxRuns: 1, idleReclaimMinutes: 1, duration: 30 * 60_000, failClose });
+    const handle = await f.open('historical');
+    let sibling: Awaited<ReturnType<typeof f.open>> | undefined;
+    try {
+      const firstRun = [...f.runs.values()].at(-1)!;
+      expect(f.mcpSessionCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(60_001);
+      sibling = await f.open('sibling');
+      expect(f.calls.filter(call => call.op === 'close').map(call => call.runId)).toEqual([firstRun.runId]);
+      expect(f.disposed).toEqual([]);
+      expect(f.mcpSessionCount()).toBe(failClose ? 1 : 0);
+      expect(f.mcpSessionCount('sibling')).toBe(1);
+      if (!failClose) {
+        await sibling.close();
+        sibling = undefined;
+        await handle.send({ type: 'user', content: 'wake after pool release' });
+        expect(f.mcpSessionCount()).toBe(1);
+        const lastSend = f.calls.filter(call => call.method === 'send').at(-1);
+        expect(lastSend?.runId).toBe([...f.runs.values()].at(-1)!.runId);
+        expect(lastSend?.runId).not.toBe(firstRun.runId);
+      }
+    } finally {
+      f.state.failClose = false;
+      await sibling?.close();
+      await handle.close();
+    }
+  });
+
   // 测试价值
-  // - 生产入口与可观察结果：同一 startRemoteAgentSession 在 missing /
-  //   controller-disconnected 后保持 MCP 计数，missing 路径可继续 reconnect。
+  // - 生产入口与可观察结果：同一 startRemoteAgentSession 在断链或未知原因后保持
+  //   MCP 计数，missing 路径可继续 reconnect。
   // - Bug／规则依据：2a 远程断链兼容红线，链路暂断不能猜进程已结束。
   // - 现有覆盖缺口：已有 close 事件用例没有覆盖两类可重连 reason 与 MCP 计数。
   // - 最小失败输入：打开 run 后注入单个 runClient.onLost(reason)，再发送一条消息。
   // - tier：integration。
-  it.each(['missing', 'controller-disconnected'] as const)('retains MCP instance across %s and reconnects the run', async reason => {
+  it.each(['missing', 'controller-disconnected', 'future-close-reason'] as const)('retains MCP on unconfirmed remote end (%s)', async reason => {
     const f = fixture(); f.state.ready = true;
     const handle = await f.open('historical');
     try {
       expect(f.mcpSessionCount()).toBe(1);
       const run = [...f.runs.values()].at(-1)!;
-      run.onLost(reason, { code: 'DEVICE_OFFLINE', message: 'temporary link loss' });
+      if (reason === 'missing') run.onLost(reason, { code: 'DEVICE_OFFLINE', message: 'temporary link loss' });
+      else f.emit(run, { t: 'closed', reason });
       await flush();
       expect(f.mcpSessionCount()).toBe(1);
       if (reason === 'missing') {

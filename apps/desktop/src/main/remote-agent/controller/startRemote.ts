@@ -645,12 +645,19 @@ async function prepareAndStartRemoteAgentSession(
     && controller?.isQuiet() === true
     && resumableAfterRelease();
 
-  /** 连接池让出名额：只结束对方的 Agent 进程，本机部分与对话记录都留着。 */
+  function closeRunMcpInstance(runId: string): void {
+    try { mcp.closeSessionInstance?.(); }
+    catch (error) {
+      deps.log?.warn('remote agent: closing ended run MCP instance failed', { runId, error: String(error) });
+    }
+  }
+
   /** 结束对方的这个 Agent 进程，本机部分留着，状态回到已让出(调用前已置为 releasing)。 */
   async function closeRun(client: RemoteAgentRunClient): Promise<void> {
     try {
       // 用 close 而不是 detach：detach 不结束对方的进程，名额让不出来。
       await client.close('close', 'navigation');
+      closeRunMcpInstance(client.runId);
     } catch (error) {
       deps.log?.warn('remote agent: closing a released connection failed', { runId: client.runId, error: String(error) });
       // 没送到：对方可能还占着名额，连接池继续给它占位并再试一次 close。
@@ -814,15 +821,12 @@ async function prepareAndStartRemoteAgentSession(
           closedEarly = { reason, message: error?.message };
           return;
         }
-        const runEnded = idleReclaimed || !['missing', 'provider-restarting', 'aborted', 'controller-disconnected'].includes(reason);
-        if (runEnded) {
-          try { mcp.closeSessionInstance?.(); }
-          catch (closeError) {
-            deps.log?.warn('remote agent: closing ended run MCP instance failed', {
-              runId: client.runId, error: String(closeError),
-            });
-          }
-        }
+        // 'ended' is normal run/event-stream completion; 'closed' is the
+        // executor's explicit run close. Poll failures and other causes leave
+        // cleanup to task disposal. The executor also reports idleReclaimed if
+        // native close fails: it only reclaims quiet runs with no in-flight
+        // tool calls, and the next send starts a new run.
+        if (idleReclaimed || reason === 'ended' || reason === 'closed') closeRunMcpInstance(client.runId);
         deps.onTaskGrantRenewable?.(false);
         // 对方按闲置收回了它的 Agent 进程(它只收回不忙的任务)：与连接池让出名额一样，本机部分与对话都留着，
         // 要它干活时带原来的会话 id 连回。

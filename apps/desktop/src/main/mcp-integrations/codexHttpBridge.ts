@@ -131,6 +131,7 @@ interface DispatchOpts {
   ownerSessionInstanceId?: string;
   /** owner 的注册是否仍在;初始化请求跨越注销时据此自行关闭,不依赖注销时的那次扫描。 */
   isOwnerLive?: (sessionId: string) => boolean;
+  isInstanceGenerationCurrent?: () => boolean;
   /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
   threadInstanceQuery: string | null;
 }
@@ -291,6 +292,9 @@ async function startCodexHttpBridge(
   const threadContextStore = createCodexMcpThreadContextStore();
   const toolCancellation = new AppToolCancellation();
   const discoveryContexts = new Map<string, LiziMcpSessionContext>();
+  // Only in-flight handshakes can miss the instance cleanup scan. Drop their
+  // generation records when the last request settles so ended IDs cannot pile up.
+  const instanceHandshakes = new Map<string, { generation: number; pending: number }>();
   // sessionId → ctx (远端 cc 的身份通道, 经 ?session= query 路由, 见 interface 注释)。
   const sessionCtxById = new Map<string, LiziMcpSessionContext>();
   // sessionId → per-session bearer token 注册代次(pi 会话, 见 interface 注释)。
@@ -455,26 +459,43 @@ async function startCodexHttpBridge(
         return;
       }
 
-      await dispatchToTransport({
-        req,
-        res,
-        createMcpServer,
-        transports,
-        serverName,
-        log,
-        threadContextStore,
-        toolCancellation,
-        discoveryContexts,
-        remoteAppServer,
-        appServer,
-        pluginId: opts.pluginIdByServerName?.[serverName],
-        sessionTokenCtx,
-        ownerSessionId: sessionQuery ?? undefined,
-        ownerSessionInstanceId: sessionTokenCtx?.sessionInstanceId ?? instanceQuery ?? undefined,
-        isOwnerLive: (id) => sessionCtxById.has(id),
-        threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
-        remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
-      });
+      const ownerSessionInstanceId = sessionTokenCtx?.sessionInstanceId ?? instanceQuery ?? undefined;
+      const handshakeInstance = req.method === 'POST' && !req.headers['mcp-session-id']
+        ? ownerSessionInstanceId : undefined;
+      const handshake = handshakeInstance === undefined ? undefined
+        : instanceHandshakes.get(handshakeInstance) ?? { generation: 0, pending: 0 };
+      if (handshake && handshakeInstance !== undefined) {
+        handshake.pending++;
+        instanceHandshakes.set(handshakeInstance, handshake);
+      }
+      const generation = handshake?.generation;
+      try {
+        await dispatchToTransport({
+          req,
+          res,
+          createMcpServer,
+          transports,
+          serverName,
+          log,
+          threadContextStore,
+          toolCancellation,
+          discoveryContexts,
+          remoteAppServer,
+          appServer,
+          pluginId: opts.pluginIdByServerName?.[serverName],
+          sessionTokenCtx,
+          ownerSessionId: sessionQuery ?? undefined,
+          ownerSessionInstanceId,
+          isOwnerLive: (id) => sessionCtxById.has(id),
+          isInstanceGenerationCurrent: handshake ? () => handshake.generation === generation : undefined,
+          threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
+          remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
+        });
+      } finally {
+        if (handshake && handshakeInstance !== undefined && --handshake.pending === 0) {
+          instanceHandshakes.delete(handshakeInstance);
+        }
+      }
     } catch (err) {
       log.error('request handler threw', {
         message: err instanceof Error ? err.message : String(err),
@@ -570,6 +591,8 @@ async function startCodexHttpBridge(
   };
 
   const closeSessionInstance = (sessionInstanceId: string): void => {
+    const handshake = instanceHandshakes.get(sessionInstanceId);
+    if (handshake) handshake.generation++;
     let closed = 0;
     for (const transports of transportsByServer.values()) {
       for (const [mcpSessionId, entry] of transports) {
@@ -736,6 +759,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     ownerSessionId,
     ownerSessionInstanceId,
     isOwnerLive,
+    isInstanceGenerationCurrent,
     threadInstanceQuery,
     remoteBotHelper,
     remoteAppServer,
@@ -933,10 +957,10 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   try {
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res, body);
-    // 注销时的扫描只看得到已入表的会话;这条 initialize 在 ctx 检查之后、入表之前若遇到
-    // 注销,会错过那次扫描。入表发生在 handleRequest 内,所以在它返回后复查 owner。
-    if (ownerSessionId !== undefined && isOwnerLive && !isOwnerLive(ownerSessionId)
-      && transport.sessionId) {
+    // The scan only sees transports already in the table. Recheck both
+    // lifetimes once initialize has inserted its transport.
+    const ownerGone = ownerSessionId !== undefined && isOwnerLive && !isOwnerLive(ownerSessionId);
+    if (transport.sessionId && (ownerGone || isInstanceGenerationCurrent?.() === false)) {
       transports.delete(transport.sessionId);
       void transport.close().catch((e: unknown) => {
         log.warn('transport close threw', { message: (e as Error).message });
