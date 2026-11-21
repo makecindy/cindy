@@ -15417,10 +15417,11 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
   // recovery hook and input queue. Another Grok model exposes account-wide exclusion.
   // #10700: an accepted automatic replacement can later fail. This case verifies
   // both models in the history details while the banner keeps the backup signal.
-  it.each(['success', 'failure'])('resends the original input to GPT after the xAI billing 403 (%s)', async outcome => {
+  it.each(['success', 'failure', 'same-route retry then failure'])('resends the original input to GPT after the xAI billing 403 (%s)', async outcome => {
     const { h, guard, fail } = availabilityHarness();
     const sid = 'pi-billing';
     const item = availabilityInput();
+    const modelGroupInputs = new WeakSet<object>([item.createOpts]);
     const candidates: ModelGroupCandidate[] = [
       { agentKind: 'pi', providerId: 'xai', model: 'grok-4.7' },
       { agentKind: 'pi', providerId: 'xai', model: 'grok-other' },
@@ -15441,7 +15442,8 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const persistSuppressedError = vi.fn(() => 'model-fallback-error-row');
     const book = new AutoResumeBookkeeping({
       persistSuppressedError, markOutcome: vi.fn(), rollbackGuardPendingResume: vi.fn(),
-      abandonTakeover: (id, message, token, persistId) => h.coordinator.abandonAutoResume(id, message, token, persistId),
+      abandonTakeover: (id, message, token, persistId, details) =>
+        h.coordinator.abandonAutoResume(id, message, token, persistId, details),
     });
     h.onUiRetry.mockImplementation((id, clientId, source, token) => {
       book.claimSuppressedErrorForRetry(id, clientId, source);
@@ -15449,7 +15451,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     });
     const hooks = createInterruptedTurnAutoResumeHooks<Session>({
       inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs: new WeakSet(), modelGroupInputs: new WeakSet([item.createOpts]),
+      botFallbackInputs: new WeakSet(), modelGroupInputs,
       saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(), getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map(), pendingSessionRuntimeFallbackRebuilds: new Set(),
       providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
@@ -15508,6 +15510,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const send = h.sendToAgent.getMockImplementation()!;
     h.sendToAgent.mockImplementation(async (...args) => {
       if (!liveSend) throw new Error('Engine was closed and has not been bootstrapped');
+      // The host rechecks the live model-group binding for each dispatch,
+      // including the continuation clone with a fresh createOpts object.
+      if (args[2]) modelGroupInputs.add(args[2]);
       const clientId = args[3].persistUserMessage?.clientId;
       if (clientId) book.markReplacementDispatching(sid, clientId);
       const result = await send(...args);
@@ -15536,6 +15541,19 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       }
       expect(row.model).toBe('gpt-6.1-terra');
       expect(guard.noteAttemptEvent(sid, firstAttempt!)).toBe(true);
+      if (outcome === 'same-route retry then failure') {
+        const transient = 'The replacement provider did not start streaming';
+        h.setRunning(false);
+        h.coordinator.onTurnEvent(sid, 'error', transient, { reason: 'turn_no_event_timeout' });
+        const retryAttempt = h.coordinator.getAutoResumeAttemptToken(sid);
+        expect(retryAttempt).not.toBeNull();
+        book.stashSuppressedError(sid, { message: transient }, retryAttempt);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await flush();
+        expect(row.model).toBe('gpt-6.1-terra');
+        expect(codexSend).toHaveBeenCalledTimes(2);
+        expect(guard.noteAttemptEvent(sid, retryAttempt!)).toBe(true);
+      }
       const backupError = 'HTTP 429: Backup provider rate limit exceeded.';
       h.setRunning(false);
       h.coordinator.onTurnEvent(sid, 'error', backupError, { errorStatus: 429 });
@@ -15545,9 +15563,11 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       book.stashSuppressedError(sid, { message: backupError }, secondAttempt);
       await vi.advanceTimersByTimeAsync(30_000);
       await flush();
-      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(outcome === 'same-route retry then failure' ? 3 : 2);
       expect(h.coordinator.getProjection(sid)).toMatchObject({
-        error: backupError, errorPersistId: 'model-fallback-error-row',
+        error: backupError,
+        errorPersistId: 'model-fallback-error-row',
+        modelFallbackDetails: `grok-4.7: ${primaryError}\n\ngpt-6.1-terra: ${backupError}`,
       });
       expect(persistSuppressedError).toHaveBeenCalledExactlyOnceWith(sid, {
         message: backupError,

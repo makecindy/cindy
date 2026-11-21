@@ -101,7 +101,7 @@ export interface AutoResumeBookkeepingDeps {
   /** 回滚守卫的 pendingResume（不回滚会让该会话之后的中断永远被判成「上一次还在路上」）。 */
   rollbackGuardPendingResume: (sessionId: string, attemptToken?: number) => void;
   /** 清 coordinator 的接管态；带 message 时把红横幅回落出来。 */
-  abandonTakeover: (sessionId: string, message?: string, attemptToken?: number, persistId?: string) => void;
+  abandonTakeover: (sessionId: string, message?: string, attemptToken?: number, persistId?: string, modelFallbackDetails?: string) => void;
   /** 已接管的自动续跑最终没能继续；Schedule runner 用它结束同一个逻辑 run。 */
   onAutoResumeFailed?: (sessionId: string, attemptToken?: number) => void;
   log?: (message: string, fields?: Record<string, unknown>) => void;
@@ -168,7 +168,7 @@ export class AutoResumeBookkeeping {
     const history = failedClientId && switchedInput?.clientId === failedClientId
       ? switchedInput.history
       : failedClientId && previous?.replacementDispatching && previous.retryOwnerClientId === failedClientId
-        ? previous.modelGroupSwitch
+        ? this.modelFallbackHistoryForEntry(sessionId, previous)
         : undefined;
     this.switchedModelInputs.delete(sessionId);
     this.modelFallbackAttempts.delete(sessionId);
@@ -194,11 +194,18 @@ export class AutoResumeBookkeeping {
     };
   }
 
+  private modelFallbackHistoryForEntry(sessionId: string, entry: SuppressedTurnErrorEntry): ModelFallbackHistory | undefined {
+    if (entry.modelGroupSwitch) return entry.modelGroupSwitch;
+    const attempt = this.modelFallbackAttempts.get(sessionId);
+    if (attempt && attempt.token === entry.attemptToken) return attempt.history;
+    return undefined;
+  }
+
   private rememberSwitchedInput(sessionId: string, entry: SuppressedTurnErrorEntry): void {
-    if (!entry.modelGroupSwitch || !entry.retryOwnerClientId) return;
-    this.switchedModelInputs.set(sessionId, {
-      clientId: entry.retryOwnerClientId, history: entry.modelGroupSwitch,
-    });
+    const history = this.modelFallbackHistoryForEntry(sessionId, entry);
+    if (history && entry.retryOwnerClientId) {
+      this.switchedModelInputs.set(sessionId, { clientId: entry.retryOwnerClientId, history });
+    }
   }
 
   isCurrentAttempt(sessionId: string, attemptToken: number): boolean {
@@ -641,7 +648,7 @@ export class AutoResumeBookkeeping {
       if (surfaceError && entry?.groupTerminal) this.deps.finalizeBotGroupSuppressedTerminal?.(entry.groupTerminal);
     }
     if (surfaceError && detail?.modelFallbackDetails && persistedId) {
-      this.deps.abandonTakeover(sessionId, detail.message, token, persistedId);
+      this.deps.abandonTakeover(sessionId, detail.message, token, persistedId, detail.modelFallbackDetails);
     } else {
       this.deps.abandonTakeover(sessionId, surfaceError ? detail?.message : undefined, token);
     }

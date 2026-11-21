@@ -2719,6 +2719,7 @@ export interface SessionChatState {
    * 否则点关闭/重试无法 dismiss 即将落库的那一行。
    */
   errorPersistId: string | null;
+  liveModelFallbackDetails?: { message: string; persistId: string; text: string };
   /**
    * 本视图已对这次 live 错误点过重试或关闭。尾部横幅跳过该 id,避免同一错误再弹。
    * 离开视图不清这个字段——点过才算处置;未点就离开,回来仍应看到持久化卡。
@@ -3023,7 +3024,7 @@ export interface SessionChatState {
   lastAgentMeta: import('@/lib/ccAgent.types').AgentMeta | null;
 }
 
-export type SessionChatLightState = Pick<
+export type SessionChatLightState = { modelFallbackDetails?: string } & Pick<
   SessionChatState,
   | 'agentStatus'
   | 'isStreaming'
@@ -5323,6 +5324,11 @@ function applyInputProjection(
       errorReason: projectionErrorReason,
       toolLoop: projectionToolLoop,
       outputLimit: projectionOutputLimit,
+      liveModelFallbackDetails:
+        projection.error && typeof projection.errorPersistId === 'string' && projection.errorPersistId
+          && typeof projection.modelFallbackDetails === 'string' && projection.modelFallbackDetails
+          ? { message: projection.error, persistId: projection.errorPersistId, text: projection.modelFallbackDetails }
+          : undefined,
       // 进入凭证切换等待态时同步清 stale recoverableError:等待中的消息永不 dispatch,
       // 没有 stream/turn-done 事件替它清 —— 残留会让视图的 error(=recoverableError
       // 回落)遮住等待横幅,复现"静默排队"(review P2 2026-07-04)。
@@ -10510,6 +10516,7 @@ function visibleAskUser(state: SessionChatState): PendingAskUser | null {
 }
 
 function selectLightState(state: SessionChatState): SessionChatLightState {
+  const fallback = state.liveModelFallbackDetails;
   return {
     agentSwitchIntent: state.agentSwitchIntent,
     agentStatus: state.agentStatus,
@@ -10523,6 +10530,8 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     errorRetryText: state.errorRetryText,
     errorCanContinue: state.errorCanContinue,
     errorPersistId: state.errorPersistId,
+    modelFallbackDetails: fallback && fallback.message === state.error && fallback.persistId === state.errorPersistId
+      ? fallback.text : undefined,
     disposedErrorPersistId: state.disposedErrorPersistId,
     credentialSwitchWait: state.credentialSwitchWait,
     usageLimitWait: state.usageLimitWait,
@@ -10581,6 +10590,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.errorRetryText === b.errorRetryText &&
     a.errorCanContinue === b.errorCanContinue &&
     a.errorPersistId === b.errorPersistId &&
+    a.modelFallbackDetails === b.modelFallbackDetails &&
     a.disposedErrorPersistId === b.disposedErrorPersistId &&
     a.credentialSwitchWait === b.credentialSwitchWait &&
     a.usageLimitWait === b.usageLimitWait &&

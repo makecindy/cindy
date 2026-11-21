@@ -212,6 +212,7 @@ interface UseCCAgentChatReturn {
   errorCanContinue?: boolean;
   /** live 终态错误绑定的持久化 error 行 clientId;无则没有 persist 续跑依据。 */
   errorPersistId: string | null;
+  modelFallbackDetails?: string;
   /** 本视图已处置的 persistId;尾部横幅跳过,避免同一错误再弹。 */
   disposedErrorPersistId: string | null;
   /** 凭证切换等待态(main 透传):挡路会话结束后自动重发,渲染等待横幅。 */
@@ -920,6 +921,7 @@ export function useCCAgentChat(
     errorRetryText: lightState.errorRetryText,
     errorCanContinue: lightState.errorCanContinue,
     errorPersistId: lightState.errorPersistId,
+    modelFallbackDetails: lightState.modelFallbackDetails,
     disposedErrorPersistId: lightState.disposedErrorPersistId,
     credentialSwitchWait: lightState.credentialSwitchWait,
     usageLimitWait: lightState.error ? (lightState.usageLimitWait ?? null) : null,
