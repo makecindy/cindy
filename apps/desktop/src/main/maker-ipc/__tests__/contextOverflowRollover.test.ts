@@ -2004,6 +2004,7 @@ describe('createContextOverflowRollover', () => {
     const rollover = createContextOverflowRollover(deps);
     await expect(rollover.prepareUnhealthySession('s1', { hasPendingFollowup: true })).resolves.toBe(true);
     expect(deps.commitRebuild).toHaveBeenCalled();
+    expect((deps.commitRebuild.mock.calls[0] as unknown[] | undefined)?.[1]).toContain('Continue');
   });
 
   it('rebuilds before send when host auto-compact has latched a deterministic failure', async () => {

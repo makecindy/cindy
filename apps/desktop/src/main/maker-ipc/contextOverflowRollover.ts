@@ -1262,7 +1262,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // lastUser 若不在 handoff 窗口里（index < 0），窗口全是其后的 tool/assistant，算已完成。
     const pendingOutbound =
       lastUserIndex >= 0 &&
-      source.slice(lastUserIndex + 1).every((message) => message.role === 'error');
+      source.slice(lastUserIndex + 1).every((message) => message.role === 'error') &&
+      sendContext?.hasPendingFollowup !== true;
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     const replaySource = await deps.listReplayMessages?.(sessionId) ?? source;
     const pendingIndex = pendingOutbound

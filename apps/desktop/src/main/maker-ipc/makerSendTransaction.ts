@@ -1248,7 +1248,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         );
       }
       await deps.prepareUnhealthySession?.(sessionId, {
-        hasPendingFollowup: nextInputChars > 0 && typeof requestedSendOpts.retryUserClientId !== 'string',
+        hasPendingFollowup: (nextInputChars > 0 || typeof clientId === 'string')
+          && typeof requestedSendOpts.retryUserClientId !== 'string',
         isExplicitRetry: typeof requestedSendOpts.retryUserClientId === 'string',
       });
       let sess = deps.getSession(sessionId);
