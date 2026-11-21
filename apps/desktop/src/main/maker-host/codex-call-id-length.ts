@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { shortenResponsesItemId, type RecoveryRule, type RequestTransform } from '@cindy/anthropic-compat-proxy';
+import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from 'node:zlib';
+import { shortenResponsesItemId, type RecoveryRule, type RequestTransform, type ResponseObserver } from '@cindy/anthropic-compat-proxy';
 import { resolveProviderCompatibilityProfile } from '@cindy/model-compat';
 
 function callId(item: unknown): string | undefined {
@@ -79,3 +80,56 @@ export const responsesCallIdLengthRule: RecoveryRule = {
   threadIdHeaders: ['thread-id'],
   useUpstreamModel: true,
 };
+
+const MAX_CALL_ID_ERROR_BYTES = 16 * 1024;
+
+function decodeCallIdError(body: Buffer, encoding: string | undefined): string | null {
+  const options = { maxOutputLength: MAX_CALL_ID_ERROR_BYTES };
+  try {
+    switch (encoding?.trim().toLowerCase()) {
+      case undefined:
+      case '':
+      case 'identity': return body.toString('utf8');
+      case 'gzip':
+      case 'x-gzip': return gunzipSync(body, options).toString('utf8');
+      case 'br': return brotliDecompressSync(body, options).toString('utf8');
+      case 'deflate':
+        try { return inflateSync(body, options).toString('utf8'); }
+        catch { return inflateRawSync(body, options).toString('utf8'); }
+      default: return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** Learn from final errors delivered to Codex, including the result of an attachment retry. */
+export function createResponsesCallIdLimitObserver(
+  remember: (threadId: string, model: string, upstreamBase: string) => void,
+): ResponseObserver {
+  return ctx => {
+    if ((ctx.status !== 400 && ctx.status !== 422) || ctx.method !== 'POST' || !isResponsesReplayPath(ctx.url)) return null;
+    const threadId = ctx.requestHeaders['thread-id']?.trim();
+    if (!threadId) return null;
+
+    const chunks: Buffer[] = [];
+    let size = 0;
+    return {
+      onData: chunk => {
+        if (size > MAX_CALL_ID_ERROR_BYTES) return;
+        size += chunk.length;
+        if (size > MAX_CALL_ID_ERROR_BYTES) chunks.length = 0;
+        else chunks.push(chunk);
+      },
+      onEnd: () => {
+        if (!chunks.length) return;
+        const error = decodeCallIdError(Buffer.concat(chunks, size), ctx.responseHeaders['content-encoding']);
+        if (!error || !responsesCallIdLengthRule.matches(error)) return;
+        let request: unknown;
+        try { request = JSON.parse(ctx.requestBody.toString('utf8')); } catch { return; }
+        if (request && typeof request === 'object' && 'model' in request && typeof request.model === 'string'
+          && shortenCodexCallIds(request)) remember(threadId, request.model, ctx.upstreamBase);
+      },
+    };
+  };
+}

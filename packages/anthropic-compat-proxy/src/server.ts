@@ -1179,7 +1179,7 @@ function forward(
     // xAI 对不可反序列化 / 解不开的 encrypted_content 可能回 422 invalid-argument, 不能只认 400。
     // 2xx 流式响应 / 其它 4xx5xx / 无适用规则走下面原有的 writeHead + pipe, 零额外延迟。
     const activeRules = (status === 400 || status === 422)
-      ? recoveryRules.filter((r) => r.enabled() && (canRetry || r.unrecoverableCode || r.onTerminalRejection))
+      ? recoveryRules.filter((r) => r.enabled() && (canRetry || r.unrecoverableCode))
       : [];
     const recover413 = status === 413 && canRetry && recoverUpstreamOversized;
     const recoverSize400 = status === 400 && canRetry && recoverRequestSize;
@@ -1467,18 +1467,8 @@ function forward(
         if (forwardLifecycle?.onComplete) {
           notifyForwardLifecycle(() => forwardLifecycle.onComplete?.(status));
         }
-        const matchedTerminalRules = activeRules.filter(rule => rule.matches(decodedText));
-        if (!canRetry) {
-          for (const rule of matchedTerminalRules) {
-            if (!rule.onTerminalRejection) continue;
-            const threadId = selectedHeaderValue(headers, rule.threadIdHeaders ?? DEFAULT_THREAD_ID_HEADERS);
-            const model = threadId && extractBodyModel(body);
-            if (!threadId || !model) continue;
-            try { rule.onTerminalRejection(body, threadId, model, formatUpstreamBase(actualTarget)); }
-            catch { /* Learning must preserve the upstream error response. */ }
-          }
-        }
-        const recoveryCode = matchedTerminalRules
+        const recoveryCode = activeRules
+          .filter((rule) => rule.matches(decodedText))
           .map((rule) => rule.unrecoverableCode?.(body))
           .find((code) => !!code);
         if (recoveryCode) {

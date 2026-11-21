@@ -3819,6 +3819,8 @@ describe('codex proxy host', () => {
     const attempts: Array<{ image: boolean; callId: string }> = [];
     const long = 'x'.repeat(86);
     const error = { error: { message: "Invalid 'input[0].call_id': maximum length 64." } };
+    const oversizedError = JSON.stringify(error) + ' '.repeat(20 * 1024);
+    let finishStream: (() => void) | undefined;
     const upstream = createServer(async (req, res) => {
       let raw = '';
       for await (const chunk of req) raw += chunk;
@@ -3826,8 +3828,19 @@ describe('codex proxy host', () => {
       const image = raw.includes('data:image/png;base64,');
       attempts.push({ image, callId });
       const status = image ? 413 : callId.length > 64 ? 400 : 200;
+      if (status === 400 && req.headers['x-test-slow-error']) {
+        finishStream = () => res.end(oversizedError.slice(8));
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.write(oversizedError.slice(0, 8));
+        return;
+      }
+      if (status === 400) {
+        res.writeHead(status, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+        res.end(gzipSync(JSON.stringify(error)));
+        return;
+      }
       res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(status === 400 ? error : {}));
+      res.end('{}');
     });
     await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
     const upstreamBase = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
@@ -3838,6 +3851,7 @@ describe('codex proxy host', () => {
         transformRequest: opts.transformRequest,
         oversizedRequestRecovery: opts.oversizedRequestRecovery,
         recoveryRules: opts.recoveryRules,
+        responseObserver: opts.responseObserver,
       }));
     try {
       await host.ensureCodexProxyReady();
@@ -3849,9 +3863,11 @@ describe('codex proxy host', () => {
           type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(8000, 2).toString('base64')}`,
         }] },
       ] };
-      const post = (threadId: string) => fetch(`${proxy.url}/responses`, {
-        method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': threadId },
+      const post = (threadId: string, slow = false) => fetch(`${proxy.url}/responses`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': threadId,
+          ...(slow ? { 'x-test-slow-error': '1' } : {}) },
         body: JSON.stringify(history),
+        ...(slow ? { signal: AbortSignal.timeout(2000) } : {}),
       });
       const rejected = await post('limited-thread');
       expect(rejected.status).toBe(400);
@@ -3869,7 +3885,19 @@ describe('codex proxy host', () => {
       expect(unrelated.status).toBe(400);
       expect(await unrelated.json()).toEqual(error);
       expect(attempts.slice(4)).toEqual([{ image: true, callId: long }, { image: false, callId: long }]);
+
+      // The terminal status must arrive before the provider finishes a large error.
+      const streaming = await post('stream-thread', true);
+      expect(streaming.status).toBe(400);
+      expect(finishStream).toBeTypeOf('function');
+      finishStream!();
+      expect(await streaming.text()).toBe(oversizedError);
+      const afterOversized = await post('stream-thread');
+      expect(afterOversized.status).toBe(400);
+      expect(await afterOversized.json()).toEqual(error);
+      expect(attempts.slice(-2)).toEqual([{ image: true, callId: long }, { image: false, callId: long }]);
     } finally {
+      finishStream?.();
       await host.disposeCodexProxy();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));

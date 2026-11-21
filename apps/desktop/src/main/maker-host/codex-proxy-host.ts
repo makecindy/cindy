@@ -93,7 +93,7 @@ import {
   type ChatBridgeCapabilities,
 } from '@cindy/responses-chat-bridge';
 import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
-import { isResponsesReplayPath, responsesCallIdLengthRule, shortenCodexCallIds, shortenOpenAiReplayCallIds } from './codex-call-id-length.js';
+import { createResponsesCallIdLimitObserver, isResponsesReplayPath, responsesCallIdLengthRule, shortenCodexCallIds, shortenOpenAiReplayCallIds } from './codex-call-id-length.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -428,9 +428,6 @@ const CODEX_BODY_RECOVERY_RULES = [
     ...responsesCallIdLengthRule,
     onRetry: (threadId: string, model: string, upstreamBase?: string) => {
       if (upstreamBase) responsesCallIdLengthStripController.markActive(threadId, model, upstreamBase);
-    },
-    onTerminalRejection: (body: Buffer, threadId: string, model: string, upstreamBase: string) => {
-      if (responsesCallIdLengthRule.strip(body)) responsesCallIdLengthStripController.markActive(threadId, model, upstreamBase);
     },
   },
   responsesReasoningContentRecoveryRule,
@@ -3901,6 +3898,8 @@ async function createCodexProxyHandle(
         return record && ctx.status >= 200 && ctx.status < 300
           ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
       },
+      createResponsesCallIdLimitObserver((threadId, model, upstreamBase) =>
+        responsesCallIdLengthStripController.markActive(threadId, model, upstreamBase)),
       createCodexResponseObserver(),
       createProviderUpstreamErrorObserver({
         agent: 'codex',
