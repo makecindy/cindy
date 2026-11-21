@@ -482,6 +482,22 @@ export default function (pi) {
     return { ok: true, text: bits.join('\n') };
   }
 
+  function readSlice(id, raw, params) {
+    var offset = typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
+    if (offset >= raw.length && raw.length > 0) {
+      return { content: [{ type: 'text', text: 'Offset ' + offset + ' is past the end of ' + id + ' (' + raw.length + ' chars).' }], isError: true };
+    }
+    var rest = raw.slice(offset);
+    if (rest.length <= RECOVERY_READ_MAX_CHARS) return { content: [{ type: 'text', text: rest }] };
+    var next = offset + RECOVERY_READ_MAX_CHARS;
+    return {
+      content: [{
+        type: 'text',
+        text: rest.slice(0, RECOVERY_READ_MAX_CHARS) + '\n\n[truncated: ' + raw.length + ' chars total, ' + (raw.length - next) + ' remaining. Call cindy_toolfold_read again with offset: ' + next + ' to continue.]',
+      }],
+    };
+  }
+
   function pinOriginal(callId) {
     var key = String(callId);
     var chars = foldedIds[key];
@@ -535,21 +551,17 @@ export default function (pi) {
             : 'no folded or truncated round-trip with that id exists in this session.';
         return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': ' + reason }], isError: true };
       }
-      if (!giants.has(String(id))) pinOriginal(id);
       var raw = String(original.text || '');
-      var offset = typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
-      if (offset >= raw.length && raw.length > 0) {
-        return { content: [{ type: 'text', text: 'Offset ' + offset + ' is past the end of ' + id + ' (' + raw.length + ' chars).' }], isError: true };
+      if (!giants.has(String(id))) {
+        if (raw.length > RECOVERY_READ_MAX_CHARS) {
+          // 分块读取折叠记录：转存进 giant 注册表，而不是 pin 住整条历史。
+          // pin 会把整段原文留在下一次请求里，120k 的切片反而要付 300k 的上下文代价。
+          if (!admitGiant(String(id), raw)) pinOriginal(id);
+        } else {
+          pinOriginal(id);
+        }
       }
-      var rest = raw.slice(offset);
-      if (rest.length <= RECOVERY_READ_MAX_CHARS) return { content: [{ type: 'text', text: rest }] };
-      var next = offset + RECOVERY_READ_MAX_CHARS;
-      return {
-        content: [{
-          type: 'text',
-          text: rest.slice(0, RECOVERY_READ_MAX_CHARS) + '\n\n[truncated: ' + raw.length + ' chars total, ' + (raw.length - next) + ' remaining. Call cindy_toolfold_read again with offset: ' + next + ' to continue.]',
-        }],
-      };
+      return readSlice(String(id), raw, params);
     },
   });
 

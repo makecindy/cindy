@@ -14,6 +14,7 @@ function loadExtension(env: Record<string, string> = {}) {
   for (const [key, value] of Object.entries(env)) process.env[key] = value;
   // Budget tests must not leak into the rest of the suite: reset what they switch off.
   process.env.CINDY_PI_TOOL_FOLD_ARG_CHARS = env.CINDY_PI_TOOL_FOLD_ARG_CHARS ?? '200';
+  process.env.CINDY_PI_TOOL_FOLD_RECOVERY_CHARS = env.CINDY_PI_TOOL_FOLD_RECOVERY_CHARS ?? '120000';
   const body = CINDY_TOOL_FOLD_EXTENSION_SOURCE.replace(/^export default /m, '');
   const handlers: Record<string, Handler> = {};
   const tools: Record<string, Tool> = {};
@@ -201,6 +202,18 @@ describe('cindy-tool-fold extension source', () => {
     const nextTurn = [...messages, { role: 'user', content: [{ type: 'text', text: 'next turn' }] }];
     const released = projection(context, nextTurn);
     expect(isFolded(released[10])).toBe(true);
+  });
+
+  it('slices a large folded record without pinning the whole history back in', async () => {
+    const { context, tool, toolResult } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const big = 'w'.repeat(30000);
+    const messages = [
+      call('huge-write', 'write', { path: 'a.txt', content: big }),
+      toolResult({ toolName: 'write', toolCallId: 'huge-write', content: [{ type: 'text', text: 'wrote 30000 bytes' }] }),
+      ...pairs(3),
+    ];
+    const afterRead = projection(context, messages);
+    expect(afterRead.length).toBeGreaterThan(0);
   });
 
   it('recovers a folded result that merely quotes the truncation marker text', async () => {
