@@ -1056,6 +1056,114 @@ describe('Scheduler', () => {
     await local.scheduler.stop();
   });
 
+  // Codex P1 on #11577:CAS 败者后的回读超时,迟到的结果不能丢。原实现把回读的
+  // promise 丢在超时里,迟到收口另起一次读 —— 那次更慢(或失败)时,这一行的
+  // 结果就丢了,缓存一直停在旧的(已过期)截止时间,临近的触发要等到下一次
+  // DB sync 才恢复;每轮 tick 还能再堆一次读。
+  it('reconciles the expiry cache from the original fallback read when it is late', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 30 });
+    const createdAt = local.clock.now();
+    const expireAt = createdAt + 2_000;
+    const schedule = await local.scheduler.create({ ...baseInput, intervalMs: 1_000, expireAt });
+    const realUpdate = local.storage.update.bind(local.storage);
+    const realGet = local.storage.get.bind(local.storage);
+    // CAS 败者:这一行已被别的实例改过,过期写入拿不到行。
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) =>
+      patch.status === 'expired' ? Promise.resolve(null) : realUpdate(id, patch, expected),
+    );
+    // 别的实例延长了截止时间并重新排期。
+    const extended: Schedule = {
+      ...schedule,
+      expireAt: createdAt + 3_600_000,
+      nextFireAt: createdAt + 1_500,
+      updatedAt: createdAt + 1_200,
+    };
+    let releaseRead!: (value: Schedule | null) => void;
+    let reads = 0;
+    let reconciled = false;
+    vi.spyOn(local.storage, 'get').mockImplementation(async (id: string) => {
+      if (id !== schedule.id) return realGet(id);
+      reads += 1;
+      // 第一次(CAS 败者后的回读)很慢,超时之后才回来。
+      if (reads === 1) return await new Promise<Schedule | null>((resolve) => { releaseRead = resolve; });
+      // 对齐之前再读 —— 旧代码的重试读就是这样挂死的(结果也就丢了)。
+      if (!reconciled) return new Promise<Schedule | null>(() => {});
+      return realGet(id);
+    });
+
+    // 第一轮:把这一行同步进内存(还没有过期)。
+    await local.scheduler.tick();
+    // 别的实例改了行:内存里那份还是旧的(截止时间已过)。
+    local.storage.schedules.set(schedule.id, extended);
+    local.clock.setTo(expireAt);
+    // 第二轮:过期扫描 → CAS 败者 → 回读超上限。
+    await local.scheduler.tick();
+
+    // 迟到的回读回来:缓存必须用这一行对齐(任务重新 active、已排期)。
+    releaseRead(extended);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    reconciled = true;
+    // 只有原来那一读:不能再靠另起一次读来兜底。
+    expect(reads).toBe(1);
+
+    // 第三轮:任务照常派发 —— 旧截止时间那一份已被换掉。
+    local.clock.setTo(expireAt + 1);
+    await local.scheduler.tick();
+    expect(local.fireCalls).toHaveLength(1);
+  });
+
+  // Codex P1 on #11577:补排重试卡死时,后续 tick 不能对同一条任务再起一份。
+  // pendingReplans 的条目要等这次补排 settle 才摘掉,而预闸门超时只放弃「等」——
+  // 活儿还在跑。存储故障期间每 tick 再起一份就是无界的存储调用堆积,反而饿死
+  // 本来要保住的 due-fire。
+  it('keeps a stalled replan single-flight across ticks', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        preGateStorageTimeoutMs: 30,
+        logger: { warn: vi.fn(), error: vi.fn() },
+        runnerImpl: (_s, ctx) => new Promise<FireResult>(() => {
+          ctx.signal.addEventListener('abort', () => {});
+        }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      const realGet = h.storage.get.bind(h.storage);
+      let replanReads = 0;
+      vi.spyOn(h.storage, 'get').mockImplementation(async (id: string) => {
+        if (id !== sch.id) return realGet(id);
+        replanReads += 1;
+        // 第一次(强制收口那次的补排)失败 → 条目留在 pendingReplans 等重试;
+        // 之后的补排重试挂死 —— 存储卡死的形态。
+        if (replanReads === 1) throw new Error('storage unavailable');
+        return new Promise<Schedule | null>(() => {});
+      });
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      // 跨过无进展阈值 → abort;跨过宽限 → 强制收口 → 补排(这一次失败,条目上膛)。
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(replanReads).toBe(1);
+
+      // 之后的每轮 tick 都会重试补排:挂死的那一次不能被重复发起。
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanReads).toBe(2);
+
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 
   it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
     const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';
