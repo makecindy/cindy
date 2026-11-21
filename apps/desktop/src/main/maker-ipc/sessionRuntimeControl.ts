@@ -564,6 +564,7 @@ export function pickSessionRuntimeFallback(params: {
   visitedRoutes: readonly string[];
   maxHops: number;
   currentHop: number;
+  hasImages?: boolean;
 }): SessionRuntimeProfile | null {
   if (params.currentHop >= params.maxHops) return null;
   const visited = new Set(params.visitedRoutes);
@@ -620,7 +621,13 @@ export function pickSessionRuntimeFallback(params: {
     }
   }
 
+  const preferImageInput = params.hasImages && params.current.agentKind === 'pi';
+  if (preferImageInput) {
+    // Stable sort keeps the existing source/model priority within each capability tier.
+    candidates.sort((a, b) => Number(b.model.supportsImageInput === true) - Number(a.model.supportsImageInput === true));
+  }
   for (const candidate of candidates) {
+    if (preferImageInput && candidate.model.supportsImageInput === false) continue;
     const key = routeKey({
       agentKind: params.current.agentKind,
       providerId: candidate.providerId,

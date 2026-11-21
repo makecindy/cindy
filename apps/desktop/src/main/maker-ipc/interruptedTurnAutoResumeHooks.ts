@@ -1,5 +1,5 @@
 import type { AgentInputCoordinatorDeps } from './agent-input-coordinator.js';
-import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { recoveryRequiresImageInput, type AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { canRecoverUndeliveredOrcaReport } from '../../shared/sharedTaskRecovery.js';
 import type { AutoResumeBookkeeping, SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
 import {
@@ -11,6 +11,7 @@ import {
 } from './interruptedTurnAutoResume.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
+import type { SessionRuntimeFallbackContext } from './sessionRuntimeFallback.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
 
@@ -47,7 +48,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     attemptToken: number,
     requireRouteChange: boolean,
     isCurrent: () => boolean,
-    groupRecovery?: { accountUnavailable: boolean; hasImages: boolean },
+    recovery?: SessionRuntimeFallbackContext,
   ): Promise<RuntimeFallbackResult<RuntimeSession>>;
   pendingSessionRuntimeFallbackRebuilds: { delete(session: RuntimeSession): unknown };
   providerGroupHeldErrors: { stash(sessionId: string, holdId: number, detail: unknown): void };
@@ -122,6 +123,10 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       const modelGroupInput = modelGroupInputs?.has(item.createOpts) === true;
       const configuredInput = modelGroupInput || botFallbackInputs.has(item.createOpts);
       const requireRouteChange = configuredInput && isBotCandidateUnavailable(signals);
+      const hasImages = recoveryRequiresImageInput(item);
+      const groupRecovery = modelGroupInput
+        ? { accountUnavailable: isModelGroupConnectionOutOfCredit(signals), hasImages }
+        : undefined;
       const reportPreparation = signals.reason === 'orca-report-preparation';
       const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
       const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
@@ -206,10 +211,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   settlePausedResumeIntoHistory
                     ? () => ownsAttempt() && !inputCoordinator.isExecutionPaused(sessionId)
                     : isCurrent,
-                  ...(modelGroupInput ? [{
-                    accountUnavailable: isModelGroupConnectionOutOfCredit(signals),
-                    hasImages: item.files?.some(file => file.category === 'image') === true,
-                  }] as const : []),
+                  ...(groupRecovery || hasImages ? [groupRecovery ?? { hasImages }] as const : []),
                 );
               fallbackRebuildSession = fallback.session;
               if (!mayContinue()) return;

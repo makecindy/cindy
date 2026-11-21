@@ -722,6 +722,27 @@ describe('session runtime control state', () => {
 });
 
 describe('session runtime fallback selection', () => {
+  it.each([
+    [true, true, true, 'vision'],
+    [true, false, true, 'unknown'],
+    [true, false, false, undefined],
+    [false, true, true, 'text'],
+  ] as const)('picks an eligible Pi route with images=%s, visual=%s, unknown=%s', (hasImages, vision, unknown, expected) => {
+    const piProvider = (id: string, supportsImageInput?: boolean, isDefault = false): ProviderView => {
+      const base = provider(id, [{ id: isDefault ? 'alternative' : 'active' }]);
+      return { ...base, agents: ['pi'], routing: { pi: { upstream: 'https://example.test/v1', authStrategy: 'none', wireProtocol: 'openai-chat' } },
+        models: { pi: [{ ...base.models.codex![0]!, mode: 'chat', supportsImageInput,
+        ...(isDefault ? { newSessionDefault: ['pi'] } : {}),
+      }] } };
+    };
+    const providers = [piProvider('active', true), piProvider('text', false)];
+    if (unknown) providers.push(piProvider('unknown'));
+    if (vision) providers.push(piProvider('vision', true, true));
+    const input = { providers, current: { ...current, agentKind: 'pi' as const, model: 'active', providerId: 'active' },
+      visitedRoutes: [], maxHops: 2, currentHop: 0, hasImages };
+    expect(pickSessionRuntimeFallback(input)?.providerId).toBe(expected);
+  });
+
   it('normalizes a user axis patch against the pending target capabilities', () => {
     const fixed = provider('xd', [
       { id: 'gpt-fixed', efforts: [], fast: false },

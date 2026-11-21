@@ -24,6 +24,7 @@ import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskAction
 import { isBotCandidateUnavailable } from '../botCandidateRecovery.js';
 import { computeModelGroupSwitchOffer } from '../../model-groups/switchOffer.js';
 import { createSessionRuntimeFallback } from '../sessionRuntimeFallback.js';
+import { pickSessionRuntimeFallback } from '../sessionRuntimeControl.js';
 import { performSessionAgentSwitch, type AgentSwitchSessionRow } from '../sessionAgentSwitchHandler.js';
 import * as delegationHistory from '../botDelegationHistory.js';
 import { modelGroupCandidateKey, type ModelGroupCandidate } from '../../../shared/modelGroups.js';
@@ -15503,6 +15504,68 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       expect(h.coordinator.getProjection(sid).error).toBeNull();
       expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
     } finally { explicitModel.mockRestore(); vi.useRealTimers(); }
+  });
+
+  // #11802 review / unit: existing picker tests cannot detect lost or misclassified
+  // attachments between Pi error events and the second recovery's route selection.
+  it.each([
+    { ext: '.png', toolResult: true, expected: 'vision' },
+    { ext: '.gif', toolResult: false, expected: 'text' },
+  ])('picks the second recovery route for $ext input', async ({ ext, toolResult, expected }) => {
+    const { h, guard, fail } = availabilityHarness();
+    const sid = 'pi-attachment-recovery';
+    const item = availabilityInput();
+    const file = { id: 'attachment', name: 'attachment' + ext, path: '/fixture/attachment' + ext,
+      ext, size: 1, category: 'image' as const, mimeType: toolResult ? 'image/png' : 'image/gif' };
+    const current = { agentKind: 'pi' as const, providerId: 'active', model: item.model, effort: null, fastMode: false };
+    const providers: Parameters<typeof pickSessionRuntimeFallback>[0]['providers'] = ['text', 'vision'].map(id => ({
+      id, name: id, source: 'builtin', connected: true, agents: ['pi'], auth: { method: 'none' },
+      routing: { pi: { upstream: 'https://example.test/v1', authStrategy: 'none', wireProtocol: 'openai-chat' } },
+      models: { pi: [{ id: item.model, name: item.model, contextWindow: 100_000, mode: 'chat',
+        efforts: ['medium'], defaultEffort: 'medium', supportsImageInput: id === 'vision' }] },
+    }));
+    let pickedProvider: string | null | undefined;
+    const hooks = createInterruptedTurnAutoResumeHooks<Session>({
+      inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard,
+      autoResumeBookkeeping: new AutoResumeBookkeeping({
+        persistSuppressedError: vi.fn(), markOutcome: vi.fn(), rollbackGuardPendingResume: vi.fn(), abandonTakeover: vi.fn(),
+      }),
+      botFallbackInputs: new WeakSet(), saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      getStableSessionForTurnBoundary: () => null, pendingContinuationOnlyAutoResumeRebuilds: new Map(),
+      pendingSessionRuntimeFallbackRebuilds: new Set(), providerGroupHeldErrors: { stash: vi.fn() },
+      providerGroupHeldTerminals: { stash: vi.fn() }, pendingSchedulerAutoResumeRunBySession: new Map(),
+      notifySchedulerAutoResumeFailed: vi.fn(), autoResumeAttemptToken: () => null, log: mocks.logger,
+      maybeApplySessionRuntimeFallback: async (_id, attempt, _token, _required, _isCurrent, recovery) => {
+        if (attempt === 2) {
+          pickedProvider = pickSessionRuntimeFallback({ providers, current, visitedRoutes: [], maxHops: 2,
+            currentHop: 0, hasImages: recovery?.hasImages })?.providerId;
+        }
+        return { session: null, outcome: 'unchanged' };
+      },
+    });
+    h.isResumableTurnErrorCandidate.mockImplementation(hooks.canRecoverTurn);
+    h.onResumableTurnError.mockImplementation(hooks.onResumableTurnError);
+    h.setAgentKind('pi');
+    vi.useFakeTimers();
+    try {
+      h.coordinator.enqueue(sid, { ...item, files: [file] });
+      await flush();
+      expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({
+        content: expect.arrayContaining([expect.objectContaining({ type: toolResult ? 'image' : 'file' })]),
+      });
+      await fail(sid, { toolResult });
+      await vi.advanceTimersByTimeAsync(3_000);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      if (toolResult) {
+        expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+      }
+      expect(guard.noteAttemptEvent(sid, 1)).toBe(true);
+      await fail(sid);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flush();
+      expect(pickedProvider).toBe(expected);
+    } finally { vi.useRealTimers(); }
   });
 
   // PR #6936 review: the generated continuation carries originalSyntheticTrigger='continue'.
