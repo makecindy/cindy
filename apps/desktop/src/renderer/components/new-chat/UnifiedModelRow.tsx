@@ -368,6 +368,7 @@ export function UnifiedModelRow({
               {...(provider?.name !== undefined ? { name: provider.name } : {})}
               {...(provider?.routing !== undefined ? { routing: provider.routing } : {})}
               {...(provider?.logoKind !== undefined ? { logoKind: provider.logoKind } : {})}
+              customIcon={provider?.customIcon}
               colorClass="text-[var(--text-secondary)]"
               withMargin={false}
             />

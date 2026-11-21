@@ -10061,7 +10061,7 @@
         "git-summary": "Résumés des modifications",
         "hook-generation": "Scripts d’automatisation",
         "automation-verification": "Vérification des imports",
-        "plugin-text": "Texte des extensions",
+        "plugin-text": "Texte des plugins",
         "voice-dialogue": "Conversations vocales",
         "voice-exit": "Décisions de fin d’appel",
         "voice-refinement": "Amélioration du texte vocal",

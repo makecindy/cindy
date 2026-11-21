@@ -220,19 +220,105 @@ it('dials a device of the account again when its connection drops while the dire
 });
 
 /** 测试价值
+ * - 生产入口与可观察结果：PortableSocket.openWithBindings 到业务层第一条 hello（Desktop worker、Node Host 与手机共用）。
+ *   刚打开的一方不等任何计时器就拨目录里在线的设备，不论设备号大小；打开时中转连不上的，等第一份实时目录到了再拨；
+ *   这一轮拨完以后恢复「设备号小的先拨」。
+ * - Bug／规则依据：2026-11-21 真机（Redmi K40，设备号比账号下七台电脑都大）：冷启动、后台超过 10 秒回前台，每次都要等满
+ *   LATE_DIAL_MS（0.8 到 1.2 秒）才自己拨，期间七台电脑没有一台拨进来（它们还抱着上一个进程的连接）；设备号小的手机不用等。
+ * - 现有覆盖缺口：上一条覆盖已经开着的一方；没有「刚打开」这一轮，也没有打开时中转不通的情形。
+ * - 最小失败输入：一台在线、设备号更小的同账号设备；打开时中转可用或不可用。
+ * - tier：unit，真实路由与证书，内存传输，计时器用替身（不推进）；两行合计约 30 毫秒。 */
+it.each([['the relay is there', true], ['the relay comes back later', false]] as const)(
+  'dials every online device at once after opening, whatever the ids, when %s', async (_name, relayUp) => {
+    const local = generateIdentity('z-local'), remote = generateIdentity('b-remote'), later = generateIdentity('c-later');
+    const { root, bootstrap } = createPrivateNetwork('Arrival dial', local);
+    const view = (identity: typeof remote, online: boolean): DeviceView => ({
+      certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity, role: 'member' }),
+      name: identity.deviceId, online, remoteControlEnabled: true, capabilities: [] });
+    const device = view(remote, true), second = view(later, false);
+    const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device, second], delegations: [],
+      send() {}, presence() {}, onDatagram() {}, close() {} });
+    const keyOf = (identity: typeof remote) => Buffer.from(identity.transportKey, 'base64url').toString('hex');
+    const connect = vi.fn(async (entry: RosterEntry): Promise<PeerChannel> => ({ remoteId: entry.id, send() {}, onData() {}, onClose() {}, close() {}, path: () => 'relay' }));
+    let attempts = 0;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const socket = await AgentNetSocket.openWithBindings({
+      client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
+        connect: async () => { if (!relayUp && attempts++ === 0) throw new Error('offline'); return uplink; } },
+      userId: bootstrap.ownerCertificate.subject, cachedDirectory: [device, second], directoryExpiresAt: Date.now() + 60_000,
+      bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, connect, close: async () => undefined }) },
+    });
+    try {
+      socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+      if (!relayUp) {
+        // The cached directory says nothing about who is online now: nothing to dial until the relay answers.
+        expect(connect).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connect.mock.calls.map(([entry]) => entry.id)).toEqual([keyOf(remote)]);
+      expect(socket.pathTo('b-remote')).toBe('relay');
+      // Past that first round a device that comes online is the one that dials (the lower id); this side only if it does not.
+      uplink.devices = [device, { ...second, online: true }];
+      uplink.emit('directory');
+      await vi.advanceTimersByTimeAsync(700);
+      expect(connect).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(connect.mock.calls.map(([entry]) => entry.id)).toEqual([keyOf(remote), keyOf(later)]);
+    } finally { vi.useRealTimers(); socket.close(); }
+  });
+
+/** 测试价值
+ * - 生产入口与可观察结果：PortableSocket.openWithBindings 接中转数据包的入口。传输层建好之前中转送来的包，建好后原样交给传输层，
+ *   最多留 EARLY_DATAGRAMS 个；建好以后的包直接交。
+ * - Bug／规则依据：中转在本机连上的那一刻就向其它设备通告本机上线（`agent-net-relay` 的 `announce`），按通告拨过来的设备，
+ *   第一个握手包在传输层建好之前（手机上约 50 毫秒）就到了。原来这个包被丢掉，对方要等核心 200 毫秒后重发；
+ *   刚打开的一方现在自己也立刻拨，留下这个包两边才在第一个来回就落到同一条连接上。
+ * - 现有覆盖缺口：集成测试两端几乎同时打开，没有「一端的包先到、传输层后建好」的顺序。
+ * - 最小失败输入：传输层建好之前到的 40 个包，建好之后到的 1 个包。
+ * - tier：unit，内存传输，无计时器；约 10 毫秒。 */
+it('hands the transport the datagrams that arrived before it existed', async () => {
+  const local = generateIdentity('z-local'), remote = generateIdentity('b-remote');
+  const { root, bootstrap } = createPrivateNetwork('Early datagrams', local);
+  const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
+  let fromRelay: (id: string, data: Uint8Array) => void = () => undefined;
+  const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const,
+    devices: [{ certificate, name: 'Remote', online: true, remoteControlEnabled: true, capabilities: [] } as DeviceView], delegations: [],
+    send() {}, presence() {}, onDatagram(handler: typeof fromRelay) { fromRelay = handler; }, close() {} });
+  const got: number[] = [];
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
+      connect: async () => uplink },
+    userId: bootstrap.ownerCertificate.subject,
+    bindings: { verifyCertificate, createTransport: async (request) => {
+      for (let i = 0; i < 40; i++) fromRelay('b-remote', Uint8Array.of(i));
+      expect(got).toEqual([]);
+      request.relay!.uplink.onDatagram((id, data) => { if (id === 'b-remote') got.push(data[0]!); });
+      return { id: 'local', dial: {}, connect: async () => { throw new Error('unused'); }, close: async () => undefined };
+    } },
+  });
+  try {
+    expect(got).toEqual(Array.from({ length: 32 }, (_, i) => i));
+    fromRelay('b-remote', Uint8Array.of(99));
+    expect(got.at(-1)).toBe(99);
+    expect(got).toHaveLength(33);
+  } finally { socket.close(); }
+});
+
+/** 测试价值
  * - 生产入口与可观察结果：PortableSocket 在名册里看到同账号设备在线后的拨号（Desktop worker、Node Host 与手机共用）。
- *   设备号大的一方平时不拨；对方的拨号迟迟不来时自己拨过去，对方按时拨进来时一次也不拨。
+ *   已经开着的一方看到设备号更小的设备上线，平时不拨；对方的拨号迟迟不来时自己拨过去，对方按时拨进来时一次也不拨。
  * - Bug／规则依据：2026-11-21 真机，手机被强杀后重启，设备号比手机小、只能经中转的电脑抱着旧连接不再拨，
  *   手机这边也不拨，这台电脑在手机上离线 20 秒到 15 分钟。
  * - 现有覆盖缺口：上一条只覆盖设备号小的一方在连接断开后重拨，没有「该对方拨、对方不拨」的情形。
- * - 最小失败输入：一台在线、设备号更小的同账号设备，以及它拨进来或不拨进来两种情况。
+ * - 最小失败输入：本机先开着，之后目录里一台设备号更小的同账号设备上线，以及它拨进来或不拨进来两种情况。
  * - tier：unit，真实路由与证书，内存传输，计时器用替身推进；两行合计约 30 毫秒。 */
 it.each([['never comes', false], ['comes in time', true]] as const)(
-  'dials the lower-id device itself only when that device\'s dial %s', async (_name, dialsIn) => {
+  'dials the lower-id device that came online later itself only when that device\'s dial %s', async (_name, dialsIn) => {
     const local = generateIdentity('z-local'), remote = generateIdentity('b-remote');
     const { root, bootstrap } = createPrivateNetwork('Late dial', local);
     const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
-    const device: DeviceView = { certificate, name: 'Remote', online: true, remoteControlEnabled: true, capabilities: [] };
+    const device: DeviceView = { certificate, name: 'Remote', online: false, remoteControlEnabled: true, capabilities: [] };
     const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
       send() {}, presence() {}, onDatagram() {}, close() {} });
     const remoteId = Buffer.from(remote.transportKey, 'base64url').toString('hex');
@@ -251,6 +337,8 @@ it.each([['never comes', false], ['comes in time', true]] as const)(
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+      uplink.devices = [{ ...device, online: true }];
+      uplink.emit('directory');
       if (dialsIn) incoming(channel());
       // Not before the other side had its chance: the delay is LATE_DIAL_MS within ±20%.
       await vi.advanceTimersByTimeAsync(700);
