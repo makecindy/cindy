@@ -59,6 +59,7 @@ function makeHost() {
         return true;
       },
       read: (key) => secrets.get(key) ?? null,
+      readResult: (key) => secrets.has(key) ? { kind: 'value', value: secrets.get(key)! } : { kind: 'missing' },
       remove: (key) => void secrets.delete(key),
       isAvailable: () => true,
     },
@@ -881,4 +882,24 @@ describe("DingTalkIM", () => {
     expect([...secrets.keys()]).toEqual([]);
     expect(im.getStatus()).toEqual({ kind: "idle" });
   });
+});
+
+// #11767 P1, unit: actual clear must stop transport and reject retained/error
+// credentials; existing clear tests only used successful map deletion.
+it.each(['retained','error','unavailable','throw'] as const)('rejects unconfirmed revocation (%s)', async mode => {
+  const {host,secrets} = makeHost();
+  const client = new FakeClient(); const im = new DingTalkIM(host,{clientFactory:()=>client,fetcher:validCredentialFetcher()});
+  const remove=host.secrets.remove, read=host.secrets.readResult;
+  host.secrets.remove=key=>{if(key==='dingtalk-bot-app-key'){if(mode==='throw')throw new Error('busy');return;}remove(key);};
+  if(mode==='error')host.secrets.readResult=()=>({kind:'error'});
+  if(mode==='unavailable')host.secrets.readResult=undefined;
+  try {
+    await im.init();
+    await expect(im.clearCredentials()).rejects.toThrow('DINGTALK_CREDENTIAL_CLEAR_FAILED');
+    expect(client.connected).toBe(false);
+    expect(secrets.has('dingtalk-bot-app-key')).toBe(true);
+    host.secrets.remove=remove;host.secrets.readResult=read;
+    await im.clearCredentials();
+    expect(secrets.has('dingtalk-bot-app-key')).toBe(false);
+  } finally {await im.dispose();}
 });

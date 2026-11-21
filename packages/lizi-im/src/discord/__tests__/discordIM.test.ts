@@ -20,6 +20,7 @@ function makeHost() {
         return true;
       },
       read: (key) => secrets.get(key) ?? null,
+      readResult: (key) => secrets.has(key) ? { kind: 'value', value: secrets.get(key)! } : { kind: 'missing' },
       remove: (key) => void secrets.delete(key),
       isAvailable: () => true,
     },
@@ -267,4 +268,29 @@ describe('Discord completed-input delivery identity', () => {
       expect(h.post).not.toHaveBeenCalled();
     } finally { await im.dispose(); }
   });
+});
+
+// #11767 P1, unit: actual disconnect must stop the gateway before reporting
+// a retained credential/read failure; prior tests covered successful deletion only.
+it.each(['retained', 'error', 'unavailable', 'throw'] as const)('rejects unconfirmed revocation (%s)', async mode => {
+  const {host,secrets} = makeHost();
+  secrets.set('discord-bot-token','invalid-token');
+  const gateway = fakeGateway();
+  const destroy = vi.fn(async () => {});
+  const factory: typeof gateway.factory = ev => ({...gateway.factory(ev),destroy});
+  const im = new DiscordIM(host,{gatewayFactory:factory,ipc:false});
+  const original = host.secrets.remove;
+  const originalRead = host.secrets.readResult;
+  host.secrets.remove = key => { if(key==='discord-bot-token') {if(mode==='throw')throw new Error('busy');return;} original(key); };
+  if(mode==='error')host.secrets.readResult = () => ({kind:'error'});
+  if(mode==='unavailable')host.secrets.readResult = undefined;
+  try {
+    await im.init();
+    expect((await im.disconnect()).status.kind).toBe('error');
+    expect(destroy).toHaveBeenCalled();
+    expect(secrets.has('discord-bot-token')).toBe(true);
+    host.secrets.remove=original;host.secrets.readResult=originalRead;
+    expect((await im.disconnect()).status.kind).toBe('idle');
+    expect(secrets.has('discord-bot-token')).toBe(false);
+  } finally {await im.dispose();}
 });

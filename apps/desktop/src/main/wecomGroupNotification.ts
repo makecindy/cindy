@@ -31,7 +31,7 @@ export interface WecomGroupNotificationPublisher {
 }
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-type SecretStore = Pick<typeof ownerScopedImSecrets, 'read' | 'write' | 'remove'>;
+type SecretStore = Pick<typeof ownerScopedImSecrets, 'read' | 'readResult' | 'write' | 'remove'>;
 
 function parseWebhookUrl(raw: string): URL {
   const trimmed = raw.trim();
@@ -208,6 +208,12 @@ export class WecomGroupNotificationService implements WecomGroupNotificationPubl
   clear(): WecomGroupNotificationState {
     this.configGeneration += 1;
     this.secrets.remove(WEBHOOK_SECRET_NAME);
+    // remove is best-effort: a locked atomic backup can retain the webhook.
+    // Only confirmed absence permits clearing the disabled flag; otherwise
+    // the retained webhook would become enabled by the legacy default.
+    if (this.secrets.readResult?.(WEBHOOK_SECRET_NAME).kind !== 'missing') {
+      throw new Error('WECOM_GROUP_WEBHOOK_CLEAR_FAILED');
+    }
     this.secrets.remove(ENABLED_SETTING_NAME);
     return { configured: false, enabled: false };
   }

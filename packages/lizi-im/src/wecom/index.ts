@@ -255,12 +255,17 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     this.pendingResponses.clear();
     this.inboundTails.clear();
     this.seenMessageIds.clear();
-    this.host.secrets.remove(this.key(BOT_ID_SECRET_KEY));
-    this.host.secrets.remove(this.key(BOT_SECRET_SECRET_KEY));
-    this.host.secrets.remove(this.key(OWNER_USER_ID_SECRET_KEY));
+    let removed = true;
+    for (const key of [BOT_ID_SECRET_KEY, BOT_SECRET_SECRET_KEY, OWNER_USER_ID_SECRET_KEY]) {
+      try {
+        this.host.secrets.remove(this.key(key));
+        if (this.host.secrets.readResult?.(this.key(key)).kind !== 'missing') removed = false;
+      } catch { removed = false; }
+    }
     this.botId = "";
     this.ownerUserId = "";
-    this.setStatus({ kind: "idle" });
+    this.setStatus(removed ? { kind: "idle" }
+      : { kind: "error", reason: secretWriteFailedReason() });
     return this.getConfigState();
   }
 

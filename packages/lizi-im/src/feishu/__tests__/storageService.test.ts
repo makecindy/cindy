@@ -6,6 +6,7 @@ let failNextKey: string | null = null;
 const secrets = {
   isAvailable: () => true,
   read: (key: string) => values.get(key) ?? null,
+  readResult: (key: string): import('../../types.js').IMSecretReadResult => values.has(key) ? {kind:'value',value:values.get(key)!} : {kind:'missing'},
   write: (key: string, value: string) => {
     if (failNextKey === key) {
       failNextKey = null;
@@ -90,4 +91,24 @@ describe('IM service credential storage', () => {
       service: 'feishu',
     });
   });
+});
+
+// #11767 P1, unit: actual clearAll must distinguish retained/error/missing;
+// previous coverage checked only credential writes, never failed revocation.
+it.each(['retained', 'error', 'unavailable', 'throw'] as const)('rejects unconfirmed revocation (%s)', mode => {
+  values.set('feishu_bot_app_id', 'invalid-test-app');
+  values.set('feishu_bot_app_secret', 'invalid-test-secret');
+  const remove = vi.spyOn(secrets, 'remove').mockImplementation(key => {
+    if (key === 'feishu_bot_app_id') { if (mode === 'throw') throw new Error('busy'); return; }
+    values.delete(key);
+  });
+  const read = vi.spyOn(secrets, 'readResult');
+  if (mode === 'error') read.mockReturnValue({kind:'error'});
+  if (mode === 'unavailable') (secrets as Partial<typeof secrets>).readResult = undefined;
+  try {
+    expect(() => storage.clearAll()).toThrow('FEISHU_CREDENTIAL_CLEAR_FAILED');
+    expect(values.has('feishu_bot_app_secret')).toBe(false);
+  } finally { remove.mockRestore(); read.mockRestore(); }
+  storage.clearAll();
+  expect(storage.readCredentials()).toBeNull();
 });

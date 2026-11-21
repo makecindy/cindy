@@ -261,7 +261,17 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (api && url) await api.unregisterWebhook(url).catch(() => this.log.warn('iMessage callback cleanup failed; local receiver is stopped'));
     if (this.host.accountScope && (account === null || !this.host.accountScope.isCurrent(account))) return;
     this.webhookUrl = null;
-    for (const key of BLUEBUBBLES_SECRET_KEYS) this.host.secrets.remove(this.key(key));
+    let removed = true;
+    for (const key of BLUEBUBBLES_SECRET_KEYS) {
+      try {
+        this.host.secrets.remove(this.key(key));
+        if (this.host.secrets.readResult?.(this.key(key)).kind !== 'missing') removed = false;
+      } catch { removed = false; }
+    }
+    if (!removed) {
+      this.setStatus({ kind: 'error', reason: 'BLUEBUBBLES_CREDENTIAL_CLEAR_FAILED' });
+      throw new Error('BLUEBUBBLES_CREDENTIAL_CLEAR_FAILED');
+    }
   }
 
   async init(): Promise<void> {

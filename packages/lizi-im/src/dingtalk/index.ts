@@ -477,13 +477,21 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
 
   private async clearAndDisconnect(): Promise<void> {
     await this.stopConnection();
-    this.host.secrets.remove(this.key(APP_KEY_SECRET));
-    this.host.secrets.remove(this.key(APP_SECRET_SECRET));
-    this.host.secrets.remove(this.key(OWNER_USER_ID_SECRET));
+    let removed = true;
+    for (const key of [APP_KEY_SECRET, APP_SECRET_SECRET, OWNER_USER_ID_SECRET]) {
+      try {
+        this.host.secrets.remove(this.key(key));
+        if (this.host.secrets.readResult?.(this.key(key)).kind !== 'missing') removed = false;
+      } catch { removed = false; }
+    }
     this.ownerUserId = "";
     this.targetByUserId.clear();
     this.seenMessageIds.clear();
     this.rejectPendingReplies("DINGTALK_CREDENTIALS_CLEARED");
+    if (!removed) {
+      this.setStatus({ kind: "error", reason: "DINGTALK_CREDENTIAL_CLEAR_FAILED" });
+      throw new Error("DINGTALK_CREDENTIAL_CLEAR_FAILED");
+    }
     this.setStatus({ kind: "idle" });
   }
 

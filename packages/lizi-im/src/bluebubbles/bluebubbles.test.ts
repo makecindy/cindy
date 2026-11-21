@@ -1682,3 +1682,19 @@ it('registers and removes only its exact callback while preserving an existing b
   expect(rows.map(row => row.id)).toEqual([1]);
   expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
 });
+
+// #11767 P1, unit with existing local receiver: clear must close ingress and
+// reject retained/error secrets, absent from the happy-path clear test.
+it.each(['retained','error','unavailable','throw'] as const)('rejects unconfirmed revocation (%s)', async mode => {
+  const f=await fixture(); const remove=f.host.secrets.remove, read=f.host.secrets.readResult;
+  f.host.secrets.remove=key=>{if(key==='test-bluebubbles-password'){if(mode==='throw')throw new Error('busy');return;}remove(key);};
+  if(mode==='error')f.host.secrets.readResult=()=>({kind:'error'});
+  if(mode==='unavailable')f.host.secrets.readResult=undefined;
+  await expect(f.im.clearCredentials()).rejects.toThrow('BLUEBUBBLES_CREDENTIAL_CLEAR_FAILED');
+  expect(f.im.getStatus().kind).toBe('error');
+  expect(f.secrets.has('test-bluebubbles-password')).toBe(true);
+  await expect(f.webhook('after-clear')).rejects.toThrow();
+  f.host.secrets.remove=remove;f.host.secrets.readResult=read;
+  await f.im.clearCredentials();
+  expect(f.secrets.has('test-bluebubbles-password')).toBe(false);
+});

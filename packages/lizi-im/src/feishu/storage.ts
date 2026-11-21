@@ -77,10 +77,14 @@ export function writeCredentials(creds: BotCredentials): boolean {
 
 export function clearAll(): void {
   const secrets = getHost().secrets;
-  secrets.remove(K(KEY_APP_ID));
-  secrets.remove(K(KEY_APP_SECRET));
-  secrets.remove(K(KEY_SERVICE));
-  secrets.remove(K(KEY_OWNER_OPEN_ID));
+  let removed = true;
+  for (const key of [KEY_APP_ID, KEY_APP_SECRET, KEY_SERVICE, KEY_OWNER_OPEN_ID]) {
+    try {
+      secrets.remove(K(key));
+      if (secrets.readResult?.(K(key)).kind !== 'missing') removed = false;
+    } catch { removed = false; }
+  }
+  if (!removed) throw new Error('FEISHU_CREDENTIAL_CLEAR_FAILED');
 }
 
 export function readAppId(): string | null {

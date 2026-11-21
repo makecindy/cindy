@@ -13,6 +13,7 @@ vi.mock('../logger', () => ({
 vi.mock('../im/ownerScopedStorage', () => ({
   ownerScopedImSecrets: {
     read: vi.fn(() => null),
+    readResult: vi.fn(() => ({ kind: 'missing' })),
     write: vi.fn(() => true),
     remove: vi.fn(),
   },
@@ -45,6 +46,7 @@ function createSecrets(initialUrl: string | null = null, initialEnabled: string 
   if (initialEnabled !== null) values.set(ENABLED_SETTING_NAME, initialEnabled);
   return {
     read: vi.fn((name: string) => values.get(name) ?? null),
+    readResult: vi.fn((name: string) => values.has(name) ? { kind: 'value' as const, value: values.get(name)! } : { kind: 'missing' as const }),
     write: vi.fn((name: string, next: string) => {
       values.set(name, next);
       return true;
@@ -191,6 +193,25 @@ describe('WeCom group notification security boundary', () => {
     await expect(publish).resolves.toBeUndefined();
     await expect(testing).rejects.toThrow('WECOM_GROUP_CONFIG_CHANGED');
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  // #11600: failed credential revocation must not clear the disabled flag
+  // and accidentally re-enable a retained webhook. Unit consumer failure/retry.
+  it.each(['retained', 'read-error', 'no-read-result'])('fails closed on %s during clear and permits retry', async failure => {
+    const secrets = createSecrets('https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=invalid-test-key', 'false');
+    const fetchImpl = vi.fn(async () => response({ errcode: 0 }));
+    const service = new WecomGroupNotificationService(fetchImpl, secrets);
+    secrets.remove.mockImplementationOnce(() => {});
+    const readResult = secrets.readResult;
+    const failingSecrets = { ...secrets, readResult: failure === 'no-read-result' ? undefined : failure === 'read-error' ? () => ({ kind: 'error' as const }) : readResult };
+    const failingService = new WecomGroupNotificationService(fetchImpl, failingSecrets);
+    expect(() => failingService.clear()).toThrow('WECOM_GROUP_WEBHOOK_CLEAR_FAILED');
+    expect(secrets.read(ENABLED_SETTING_NAME)).toBe('false');
+    expect(new WecomGroupNotificationService(fetchImpl, secrets).getState()).toMatchObject({ configured: true, enabled: false });
+    await expect(service.publishMarkdown('must not send')).rejects.toThrow('WECOM_GROUP_NOTIFICATIONS_DISABLED');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(service.clear()).toEqual({ configured: false, enabled: false });
+    expect(new WecomGroupNotificationService(fetchImpl, secrets).getState()).toEqual({ configured: false, enabled: false });
   });
 
   it('does not persist a webhook when the test call fails', async () => {
