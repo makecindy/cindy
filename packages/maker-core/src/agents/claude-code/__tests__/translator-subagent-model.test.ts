@@ -690,6 +690,108 @@ describe('Claude Code assistant text streaming contract', () => {
       { text: 'world', isFinal: false },
     ]);
   });
+
+  it('strips leaked synthetic system-notification tails across stream deltas, assistant, and result (#11696)', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    const leakedTail = [
+      'user',
+      '<system-reminder>',
+      '[SYSTEM NOTIFICATION - NOT USER INPUT]',
+      '<task-notification><task-id>task-123</task-id><status>completed</status></task-notification>',
+      '</system-reminder>',
+    ].join('\n');
+    const rawFull = `后台任务已启动。\n${leakedTail}`;
+
+    for (const [uuid, text] of [
+      ['stream-notif-1', '后台任务已启动。'],
+      ['stream-notif-2', '\nuser\n<system-'],
+      ['stream-notif-3', 'reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\n'],
+      ['stream-notif-4', '<task-notification><task-id>task-123</task-id><status>completed</status></task-notification>\n</system-reminder>'],
+    ] as const) {
+      translateSdkMessage(
+        {
+          type: 'stream_event',
+          uuid,
+          session_id: 'sdk-session',
+          parent_tool_use_id: null,
+          event: { type: 'content_block_delta', delta: { type: 'text_delta', text } },
+        },
+        queue,
+        ctx,
+      );
+    }
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        uuid: 'assistant-leaked-notif',
+        session_id: 'sdk-session',
+        parent_tool_use_id: null,
+        message: {
+          model: 'gemini-4-neon',
+          content: [{ type: 'text', text: rawFull }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        result: rawFull,
+        total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await collect(queue);
+    const textEvents = events.filter((event) => event.type === 'text');
+    expect(textEvents.map((event) => event.data)).toEqual([
+      { text: '后台任务已启动。', isFinal: false },
+      { text: '\n', isFinal: false },
+      { text: '后台任务已启动。', isFinal: true },
+    ]);
+    const doneEvent = events.find((event) => event.type === 'done');
+    expect((doneEvent?.data as { result?: string } | undefined)?.result).toBe('后台任务已启动。');
+  });
+
+  it('drops a standalone leaked synthetic system notification without marking the turn silent-stop (#11696)', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    const standalone = [
+      'user',
+      '<system-reminder>',
+      '[SYSTEM NOTIFICATION - NOT USER INPUT]',
+      '<task-notification><task-id>t1</task-id></task-notification>',
+      '</system-reminder>',
+    ].join('\n');
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        uuid: 'assistant-standalone-notif',
+        session_id: 'sdk-session',
+        parent_tool_use_id: null,
+        message: {
+          model: 'gemini-4-neon',
+          content: [{ type: 'text', text: standalone }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const textEvents = (await collect(queue)).filter((event) => event.type === 'text');
+    expect(textEvents).toEqual([]);
+    expect(ctx.turn.hasEmittedText).toBe(false);
+    expect(ctx.turn.uiEmittedText).toBe('');
+    expect(ctx.turn.lastAssistantMsgHadSubstance).toBe(true);
+  });
 });
 
 describe('Claude Code translator subagent model attribution', () => {

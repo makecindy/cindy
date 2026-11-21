@@ -2474,6 +2474,14 @@ describe('codex internal citation 归一化 (#785)', () => {
     ['无 path 引用和停止串后恢复正文', ':codex-file-citation{line=2}<|eos|> 后'],
     ['文件路径内嵌 web 引用', '前 :codex-file-citation{path="a\uE200cite\uE202turn1\uE201b.md"} 后'],
     ['web 引用载荷内嵌文件引用', '前 \uE200cite\uE202:codex-file-citation{path="a.md"}\uE201 后'],
+    [
+      '正文后泄漏系统通知',
+      '正文。\nuser\n<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification><task-id>t1</task-id></task-notification>\n</system-reminder>',
+    ],
+    [
+      '围栏代码内系统通知示例',
+      '```xml\nuser\n<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\n</system-reminder>\n```',
+    ],
   ])('dedicated delta 任意切分保持全文转换语义：%s', async (_name, raw) => {
     const chunkings = Array.from({ length: raw.length + 1 }, (_, split) => [raw.slice(0, split), raw.slice(split)]);
     chunkings.push(raw.split(''));
