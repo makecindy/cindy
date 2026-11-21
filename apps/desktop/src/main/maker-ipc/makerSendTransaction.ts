@@ -2237,11 +2237,23 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         }
         if (reconnect && reconnectInput && sess.agentDeviceId && !sendAccepted && userMessagePersisted && persistUserMessage) {
           const offer = reconnect.takeOffer(err);
-          if (!offer) throw err;
+          if (!offer) {
+            deps.log.warn('send: remote agent switch credential abandoned', {
+              sessionId, reason: 'no-credential',
+            });
+            throw err;
+          }
           // The stopped open and its offer prove nothing was sent. If a new
           // input already took over, retire this input without blocking it.
-          reconnectInput.signal.throwIfAborted();
-          if (requestedSendOpts.signal?.aborted || !reconnectInput.isCurrent() || !reconnect.isCurrent()) throw err;
+          const abandoned = reconnectInput.signal.aborted ? 'input-cancelled'
+            : requestedSendOpts.signal?.aborted ? 'stop'
+              : !reconnectInput.isCurrent() ? 'new-input'
+                : !reconnect.isCurrent() ? 'share-unavailable' : null;
+          if (abandoned) {
+            deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: abandoned });
+            reconnectInput.signal.throwIfAborted();
+            throw err;
+          }
           const assertCurrent = () => {
             requestedSendOpts.signal?.throwIfAborted();
             if (!reconnectInput.isCurrent() || !reconnect.isCurrent()) throw err;
@@ -2249,7 +2261,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           deps.onSharedReconnectClaimed?.(sessionId, persistUserMessage.clientId);
           requestedSendOpts.onUndispatchedRetry?.();
           try {
-            if (await reconnect.close()) {
+            const closed = await reconnect.close().catch((error: unknown) => {
+              deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'close-failed' });
+              throw error;
+            });
+            if (closed) {
               assertCurrent();
               return await dispatch(undefined, outgoingMessage, so, sessionId, createOpts, dispatchProductTurn,
                 {
@@ -2262,6 +2278,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                   expectedClearBoundaryMs: persistUserMessage.expectedClearBoundaryMs,
                 });
             }
+            deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'close-not-closed' });
           } catch (error) {
             // A newer manual input can take over while the replacement is
             // opening. Keep that cancellation distinct from a quota error.
