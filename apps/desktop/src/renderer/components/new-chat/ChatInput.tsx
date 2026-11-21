@@ -662,6 +662,7 @@ interface ChatInputProps {
   modelMemoryOverride?: ModelMemoryAccessors;
   /** Initial model from session data. When provided, overrides activeModel. */
   initialModel?: string;
+  draftModelPending?: boolean;
   /** Initial effort from session data. null explicitly means the model has no effort selector. */
   initialEffort?: Effort | null;
   /** 持久化基线档（session.runtimeBaseline.effort）。投影把 effort 折成 null→''（如远程
@@ -1246,6 +1247,7 @@ export function ChatInput({
   catalogHostDeviceId,
   modelMemoryOverride,
   initialModel,
+  draftModelPending,
   initialEffort,
   baselineEffort,
   initialProviderId,
@@ -10142,6 +10144,7 @@ export function ChatInput({
                   )}
                 >
                   {!sessionModelLoading && <ModelSelector
+                    draftModelPending={draftModelPending}
                     openRequest={modelPickerRequest}
                     onOpenRequestConsumed={onModelPickerRequestConsumed}
                     sshCodex={sshCodexCatalog}

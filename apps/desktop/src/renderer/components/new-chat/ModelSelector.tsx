@@ -778,6 +778,7 @@ export type ModelSelectorProps = ModelSelectorBaseProps & ModelSelectorSource;
 export interface ModelSelectorBaseProps {
   /** Nonzero request from a terminal-error recovery action; selection still uses the normal transaction. */
   openRequest?: number;
+  draftModelPending?: boolean;
   onOpenRequestConsumed?: (nonce: number) => void;
   'data-setting-id'?: string;
   /** 语义同 ModelSelectorContentProps.pluginModels。 */
@@ -4405,7 +4406,8 @@ export function ModelSelector({
   providersOverrideState,
   taskSourceProvider,
   sshCodex,
-  modelId,
+  modelId: selectedModelId,
+  draftModelPending = false,
   currentSelection,
   onReconnectSource,
   effort,
@@ -4464,6 +4466,7 @@ export function ModelSelector({
   onNavigateToProviders,
   agentSwitch,
 }: ModelSelectorProps) {
+  const modelId = draftModelPending ? '' : selectedModelId;
   const { t, i18n } = useTranslation();
   // 插件引擎的显示名：在自己另一台电脑上的带电脑名。
   const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
@@ -4634,7 +4637,7 @@ export function ModelSelector({
     pi,
     providers: remoteProviders,
   });
-  const remoteModelLoading = providersOverrideState?.status === 'loading' ||
+  const remoteModelLoading = draftModelPending || providersOverrideState?.status === 'loading' ||
     (sshCodexCurrent && sshCodex?.status === 'loading') || (!!deviceId && remoteModelListStatus === 'loading');
   const localModelLoading = !deviceId && !providersOverride && !sshCodexCurrent && !localProviders.loadFailed && (
     localProviders.loading ||
