@@ -98,6 +98,7 @@ import {
 import { CONTINUE_AFTER_ERROR_PROMPT, syntheticTriggerKind } from '../../shared/interruptedTurn.js';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import { attachSessionReferenceMetadata } from '../../shared/sessionReferenceMetadata.js';
+import type { AgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 import { collectInlineMessageReferenceKeys } from '@cindy/maker-shared/agent-input-projection';
 import {
   appendRecoveryCheckpointPrompt,
@@ -352,6 +353,8 @@ export type AgentInputSendResult =
     };
 
 export interface AgentInputCoordinatorDeps {
+  /** The live session's host-reconciled send_to_session route; undefined until its runtime identity is known. */
+  sendToSessionHint?: (sessionId: string) => AgentSendToSessionHint | undefined;
   /** Revalidate a saved report against the current account's active Orca link. */
   canRestoreOrcaReport?: (sessionId: string, item: AgentInputQueuedMessage) => Promise<boolean>;
   awaitQueuePersistence?: (sessionId: string) => Promise<void>;
@@ -3020,7 +3023,9 @@ export class AgentInputCoordinator {
         taskActionInputGuard(sessionId, item),
         beforeMutation ? assertSteerAuthority : undefined,
       );
-      await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
+      await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts, {
+        sendToSession: this.deps.sendToSessionHint?.(sessionId),
+      }), {
         ...(opts?.beforeMutation ? { beforeProviderStart: async () => {
           try { await opts.beforeMutation!(); }
           catch (error) { authorizationFailed = true; throw error; }
@@ -5827,7 +5832,9 @@ export class AgentInputCoordinator {
         head.persistedContent,
         referenceContexts,
       );
-      const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
+      const makerUserMessage = buildMakerUserMessage(head, referenceContexts, {
+        sendToSession: this.deps.sendToSessionHint?.(sessionId),
+      });
       if (requiresOrcaReportPersistence(head)) {
         // A crash after allocation may leave a committed grant without a user
         // row. Persist the uncertain attempt before entering the startup path;

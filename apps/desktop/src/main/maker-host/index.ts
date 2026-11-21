@@ -1080,6 +1080,7 @@ export function getMaker(): Maker {
         // Reading a status must not put the other computer under control, old versions included.
         invokeStatus: (deviceId: string) => invokeDeviceValue(remoteBackgroundInvoke, deviceId, MACHINE_STATUS_CHANNEL, []),
       },
+      // bootstrap-electron.ts passes supportsRemoteSessionHandoff from this same injection.
       historyRemote: createHistoryRemoteDeps({
         listDevices: () => handleListDevices(deviceDirectoryDeps()),
         invoke: remoteInvoke,

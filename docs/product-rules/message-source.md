@@ -56,6 +56,30 @@
 - 切换引擎、上下文滚动、重建式分叉从落库数据重建交接摘要时，按 `agentMeta` 重新生成
   来源标记；`[UI_ACTION_TRIGGER]` 合成行仍不进交接。
 
+### 引用会话与来信附发送方式（2026-11-21）
+
+`send_to_session` 不在顶层工具里，助手曾在用户已引用目标会话时找不到入口、改用错误工具（2026-11-19、11-20）。
+因此在两处给出完整调用方式，这是「只陈述事实」的有意例外：
+
+- 引用普通会话：`[Referenced conversation]` 块内追加一行 Action，写明联系它的调用方式（Claude/Codex：
+  `cindy_helper` 的 `call_tool`，name 为 `send_to_session`；Pi：`cindy_mcp_call_tool`），并说明引用本身不是发送指令，
+  是否发送看用户这句话。目标在另一台电脑时只在 Action 行写 `deviceId::sessionId`，`Session ID` 行不变；
+  当前任务不能跨电脑投递时只说明不能直接发。
+- 其他任务发来的消息：实时 `[消息来源]` 后追加一句回复方式，并说明只在用户要求或确实需要时回复，
+  不主动只为说「收到」「好的」回复。群聊来源（`groupThread` / `groupRequest`）不加，群里的回复走最终答复。
+- 只在当前任务实际能调用 `send_to_session` 时出现，判据与 `cindy_helper` 的挂载一致（Review、SSH 上的
+  Claude/Codex、插件引擎没有）；跨电脑写法跟随宿主是否注入跨电脑投递。判据只取运行中任务在启动时由宿主核实的身份，
+  不读排队快照：Review 与插件引擎在排队时都记成内置引擎，启动时才恢复。任务还没启动时（例如重启后的第一条消息）不加，
+  有待生效的引擎切换时也不加（发送事务先切换引擎再投递，运行中的旧引擎不是收消息的那个），宁可少给，不给不存在的工具。
+  排队派发和上下文重建在发送事务之前生成提示，统一走 `register.ts` 的 `confirmedSendToSessionHint`；发送事务里的
+  `[消息来源]` 在切换完成后才生成，直接读最终任务。
+- 同样只进当次发给模型的输入，不进 `getAgentFacingText` 的默认投影、落库正文和交接摘要；上下文重建时沿用重建前
+  运行中任务的同一份判据。
+- 实现：`agentInputProjection.ts`（`resolveAgentSendToSessionHint`）、`messageSource.ts`
+  （`buildMessageSourceReplyHint`）、`messageSourceNote.ts`；回归见 `agentInputProjection.test.ts`、
+  `messageSourceNote.test.ts`、`contextOverflowRollover.test.ts`、`agentInputQueue.test.ts` 与
+  `apps/desktop/scripts/session-handoff.e2e.mjs`。
+
 ### 代输入续接（2026-10-13）
 
 - 代输入结束时宿主给 Agent 发一条隐藏续接，首句 `[Input handoff ended]` 声明这是宿主事实、
