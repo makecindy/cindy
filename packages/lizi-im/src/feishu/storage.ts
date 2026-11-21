@@ -76,6 +76,7 @@ export function writeCredentials(creds: BotCredentials): boolean {
 }
 
 export function clearAll(): void {
+  getHost().managedCards?.clear(getScope().secretKeyPrefix);
   const secrets = getHost().secrets;
   secrets.remove(K(KEY_APP_ID));
   secrets.remove(K(KEY_APP_SECRET));
@@ -106,6 +107,7 @@ export function writeOwnerOpenId(openId: string): boolean {
 }
 
 export function clearOwnerOpenId(): void {
+  getHost().managedCards?.clear(getScope().secretKeyPrefix);
   getHost().secrets.remove(K(KEY_OWNER_OPEN_ID));
 }
 

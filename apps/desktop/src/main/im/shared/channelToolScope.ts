@@ -66,7 +66,7 @@ export type FeishuToolTransport = Pick<
   | 'unpinMessage'
   | 'recallMessage'
   | 'callApi'
->;
+> & Partial<Pick<FeishuIM, 'sendManagedCard' | 'updateManagedCard'>>;
 
 export interface FeishuToolScope {
   channel: 'feishu';

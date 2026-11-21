@@ -73,6 +73,7 @@ import {
 import { fetchPublicImageBytes } from './publicImageFetch';
 import { buildPersonalBotCommandMenu } from './shared/botCommands';
 import { shouldAnnounceFeishuLifecycle } from './feishu/lifecycleAnnouncements';
+import { managedCardStorage } from './feishu/managedCardStorage';
 // lizi-im 传输层文案随界面语言：注册一次解析器，缺 key 时回退包内中文。
 import './transportText';
 
@@ -86,6 +87,7 @@ function resolveManagedImageAbsPath(url: string): string {
 }
 
 const host: IMHost = {
+  managedCards: managedCardStorage,
   accountScope: imHostAccountScope,
   paths: {
     feishuMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'feishu-media'),
