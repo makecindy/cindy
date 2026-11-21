@@ -60,6 +60,7 @@ import { OutsideTapProvider } from '@/platform/OutsideTap';
 import '@/i18n';
 import { LocaleProvider } from '@/i18n/useLocale';
 import { WallpaperProvider } from '@/theme/WallpaperProvider';
+import { supportsAppWallpaper } from '@/theme/wallpaper';
 import { ThemeProvider, useTheme } from '@/theme/ThemeProvider';
 import { createNavigationTheme } from '@/theme/navigationTheme';
 import { MobileLoginHandoffStage } from '@/components/MobileLoginHandoffStage';
@@ -467,7 +468,7 @@ function RootAfterEndpoints() {
   return <RootAfterUpdateChannel channel={channelGate.channel} />;
 }
 
-const PlatformWallpaperProvider = Platform.OS === 'ios' ? WallpaperProvider : Fragment;
+const PlatformWallpaperProvider = supportsAppWallpaper(Platform.OS) ? WallpaperProvider : Fragment;
 
 function RootLayout() {
   useEffect(() => startLocalDiagnostics(), []);

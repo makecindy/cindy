@@ -1,5 +1,5 @@
 import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
-import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
+import { supportsAppWallpaper, useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
 import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 import { SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
 import Constants from 'expo-constants';
@@ -983,7 +983,7 @@ export default function SettingsScreen() {
               value={t(`settings.appearance.options.${themePreference}`)}
             />
           </NativePullDownMenu>
-          {Platform.OS === 'ios' && <ActionInfoRow
+          {supportsAppWallpaper(Platform.OS) && <ActionInfoRow
             label={wallpaperLabel}
             value={wallpaperName}
             accessibilityLabel={`${wallpaperLabel}: ${wallpaperName}`}

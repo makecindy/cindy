@@ -1,7 +1,8 @@
 import { Redirect } from 'expo-router';
 import { Platform } from 'react-native';
 import { WallpaperSettings } from '@/settings/WallpaperSettings';
+import { supportsAppWallpaper } from '@/theme/wallpaper';
 
 export default function WallpaperPage() {
-  return Platform.OS === 'ios' ? <WallpaperSettings /> : <Redirect href="/settings" />;
+  return supportsAppWallpaper(Platform.OS) ? <WallpaperSettings /> : <Redirect href="/settings" />;
 }

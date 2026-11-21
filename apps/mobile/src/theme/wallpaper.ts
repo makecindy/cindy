@@ -2,6 +2,10 @@ import { createContext, useContext } from 'react';
 import type { ThemeMode } from './tokens';
 import type { ImagePickerAsset } from 'expo-image-picker';
 
+export function supportsAppWallpaper(platform: string) {
+  return platform === 'ios';
+}
+
 // The focal point keeps the subject in view as a full-width landscape scene
 // is cropped for a portrait phone viewport.
 export const wallpaperSources = {
