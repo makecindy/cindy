@@ -1,0 +1,152 @@
+name: vendor-update
+
+# Daily: bring the Agent runtimes (Claude Code, Claude Agent SDK, Codex, Pi, ripgrep) to the newest
+# upstream releases that are at least 24 hours old (mise's default minimum_release_age), run the
+# smoke + maker-core integration gate on the real binaries, and open or refresh the
+# chore/vendor-pins pull request. A failing gate leaves the pins alone and fails this run.
+#
+# Two jobs, because the gate executes freshly downloaded upstream code:
+#   gate  — read-only token, no persisted git credentials, no secrets; runs the binaries and
+#           uploads only the passing version numbers.
+#   pr    — holds the write token but never runs vendor code: it re-downloads the recorded
+#           versions, verifies upstream checksums, rewrites the pins and opens the PR.
+#
+# One bad upstream release does not hold back the others: when the failing tests point only at
+# runtimes bumped in this run, those stay on their previous pins, the rest are gated again and still
+# land, and the run ends red listing the rejected releases.
+#
+# Release builds (package-desktop.mjs, default --vendors pinned) run on the signing machine and never
+# execute these runtimes, so every pin must pass this gate before it lands: pull requests that change a
+# pin, the SDK version or the gate itself run the gate job alone on the PR's pins (--gate-only).
+#
+# PRs opened with the default GITHUB_TOKEN do not start client-ci and need the repository setting
+# "Allow GitHub Actions to create and approve pull requests". Set the VENDOR_UPDATE_TOKEN secret
+# (GitHub App or fine-grained token: contents + pull requests write) so the PR gets normal CI.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/claude/latest.json'
+      - 'tools/codex/latest.json'
+      - 'tools/codex-package/latest.json'
+      - 'tools/pi/latest.json'
+      - 'tools/ripgrep/latest.json'
+      - 'packages/maker-core/package.json'
+      - 'packages/maker-cc-manager/package.json'
+      - 'pnpm-lock.yaml'
+      - 'scripts/vendor-update.mjs'
+      - 'scripts/smoke-claude-sdk.mjs'
+      - '.github/workflows/vendor-update.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vendor-update-${{ github.event_name == 'pull_request' && github.ref || 'daily' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    if: github.repository == 'makecindy/cindy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      NODE_OPTIONS: '--max-old-space-size=8192'
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          XDT_SKIP_AGENT_BIN_INSTALL: '1'
+
+      - name: Run the gate on this pull request's pins
+        if: github.event_name == 'pull_request'
+        run: node scripts/vendor-update.mjs --gate-only
+
+      - name: Update runtimes and run the gate
+        if: github.event_name != 'pull_request'
+        run: node scripts/vendor-update.mjs --record="$RUNNER_TEMP/vendors.json"
+
+      - name: Upload passing versions
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vendor-versions
+          path: ${{ runner.temp }}/vendors.json
+          retention-days: 7
+
+  pr:
+    needs: gate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.VENDOR_UPDATE_TOKEN || github.token }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Download passing versions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: vendor-versions
+          path: ${{ runner.temp }}/vendor-versions
+
+      # No dependency install and no gate here: the updaters only download, verify upstream
+      # checksums and unpack; the lockfile is resolved with --lockfile-only --ignore-scripts.
+      - name: Rewrite pins and open the PR
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          node scripts/vendor-update.mjs --versions-from="$RUNNER_TEMP/vendor-versions/vendors.json" --pins-only --open-pr
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.VENDOR_UPDATE_TOKEN || github.token }}
+
+      # The other runtimes still land above; a rejected upstream release keeps this run red until
+      # someone adapts Cindy to it (or it is fixed upstream).
+      - name: Report rejected upstream releases
+        run: |
+          node -e '
+            const { rejected = [] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).vendors;
+            for (const c of rejected) console.log(`::error title=${c.kind} ${c.to} rejected::kept ${c.from}; failed: ${c.reason}`);
+            process.exit(rejected.length ? 1 : 0);
+          ' "$RUNNER_TEMP/vendor-versions/vendors.json"

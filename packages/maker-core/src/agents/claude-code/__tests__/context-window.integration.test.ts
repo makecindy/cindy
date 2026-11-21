@@ -11,7 +11,7 @@ import { buildClaudeEnv, applyClaudeContextWindow } from '../env-builder.js';
 import { createAsyncQueue } from '../../shared/async-queue.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../..');
-const binary = path.join(root, 'apps/claude-code-bin', `${process.platform}-${process.arch}`,
+const binary = process.env.CINDY_TEST_CLAUDE_BINARY || path.join(root, 'apps/claude-code-bin', `${process.platform}-${process.arch}`,
   process.platform === 'win32' ? 'claude.exe' : 'claude');
 
 /** Query.close() requests termination; Windows retains cwd until the process closes. */

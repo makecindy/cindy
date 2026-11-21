@@ -27,6 +27,16 @@
 //              仅存的 CDN 依赖,显式 x.y.z 则不再碰 CDN manifest。
 //              (agent 侧车二进制走缓存优先的 ensureBinary:已就位且版本
 //              匹配 pin 时跳过下载;首次打包仍需网络拉一次,之后可离线。)
+//   --vendors  latest|pinned|<build-info.json>
+//              Agent 运行时(Claude Code / Agent SDK / Codex / Pi / ripgrep)的版本来源。
+//              有版本打包缺省 pinned:打包机持有签名密钥,只按仓库 pin 下载并校验上游
+//              SHA-256,不执行任何上游代码。升到上游最新由无凭证的 vendor-update CI 每天
+//              完成(冒烟 + maker-core 集成测试通过才开 pin PR,改 pin 的 PR 也跑同一测试门)。
+//              latest = 打包前在本机升到上游最新(发布满 24 小时、不降级),用真实二进制跑同一
+//              测试门,失败即恢复原 pin 并中止;<build-info.json> = 复用另一平台已测过的同一组
+//              版本。这两种会在本机运行上游代码,不要在持有签名密钥的机器上用。版本无关包
+//              缺省不处理。结果写入 build-info.json 的 vendors;latest 升级了 pin 时打包结束后
+//              自动推 chore/vendor-pins 分支并开/更新 PR。
 //   --skip-smoke                    跳过 packaged smoke test(调试用)
 //   --allow-unsigned                有版本打包放行无签名(win 缺 CINDY_WIN_SIGN_CMD /
 //                                   mac 缺 APPLE_APP_PASSWORD 时降级 ad-hoc)
@@ -47,6 +57,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureBinary } from '../../../scripts/ensure-agent-binaries.mjs';
+import { openPinPullRequest, updateVendors, verifyPinnedVendors } from '../../../scripts/vendor-update.mjs';
 import { desktopClientBuildEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
 import { desktopLogUploadBuildEnv } from '../../../scripts/shared/log-upload-build-env.mjs';
 import {
@@ -546,6 +557,29 @@ async function main() {
   console.log(`    version:  ${versionless ? `(版本无关,占位 ${version},不参与热更新)` : version}`);
   console.log('='.repeat(60));
 
+  // Agent 运行时在 forge 之前定版:SDK 会被打进 bundle,Linux 回退下载读的 pin 也在构建时内联。
+  // pinned(有版本打包缺省):本机持有签名密钥,只下载并按 pin 校验 SHA-256,不执行任何上游代码;
+  // pin 合入前已由无凭证的 vendor-update CI 跑过冒烟与集成测试。latest / <build-info.json> 会在本机
+  // 下载并运行上游二进制做测试门,失败时 updateVendors 已恢复原 pin,这里直接中止。
+  const vendorsMode = args.vendors;
+  let vendors = null;
+  let vendorsDirtyBefore = [];
+  if (vendorsMode === 'pinned') {
+    console.log('==> Agent runtimes: pinned — verifying upstream SHA-256, not executing');
+    const { verified, components } = await verifyPinnedVendors({ platforms: archs.map((a) => `${platform}-${a}`) });
+    vendors = { mode: 'pinned', changes: [], gate: [], verified, components };
+  } else if (vendorsMode) {
+    const target = vendorsMode === 'latest'
+      ? vendorsMode
+      : JSON.parse(fs.readFileSync(path.resolve(vendorsMode), 'utf8')).vendors?.components;
+    if (!target) throw new Error(`--vendors ${vendorsMode}: build-info.json 里没有 vendors.components`);
+    console.log(`==> Agent runtimes: ${typeof target === 'string' ? target : `versions from ${vendorsMode}`} + smoke/integration gate`);
+    if (!versionless) console.log('WARN: 这会在本机运行刚下载的上游二进制;本机若持有签名密钥,请改用缺省的 --vendors pinned。');
+    const { changes, steps, dirtyBefore, components, rejected } = await updateVendors({ target });
+    vendors = { mode: typeof target === 'string' ? target : 'from-build-info', changes, gate: steps, components, rejected };
+    vendorsDirtyBefore = dirtyBefore;
+  }
+
   // Linux 只校验 sqlite-vec 等原生运行资产。Claude/Codex/Pi 各平台都不进安装包
   // (forge extraResource 不含它们),由 packaged runtime 首启时复用系统 CLI 或
   // 从 CDN 安装到 userData(仅 Linux 的 Claude/Codex 另有系统 CLI / 官方下载
@@ -676,6 +710,7 @@ async function main() {
         files,
         signing,
         mcpAppsManual,
+        vendors,
       });
       buildInfoPath = path.join(artifactDir, 'build-info.json');
       fs.writeFileSync(buildInfoPath, JSON.stringify(buildInfo, null, 2) + '\n');
@@ -698,6 +733,15 @@ async function main() {
   }
   if (versionless) {
     console.log('注意: 版本无关包(0.0.0)不参与热更新,仅供本地/社区使用,不能作为发布产物。');
+  }
+  // 升级后的 pin 自动提交回仓库:推到 chore/vendor-pins 并开/更新 PR(与每日任务共用分支)。
+  // 安装包已产出,这一步失败只告警,不推翻本次打包。
+  if (vendors?.changes.length) {
+    try {
+      openPinPullRequest({ changes: vendors.changes, steps: vendors.gate, dirtyBefore: vendorsDirtyBefore });
+    } catch (err) {
+      console.warn(`WARN: 升级后的 pin 未能自动提交(${err.message});请提交 tools/*/latest.json、SDK package.json 与 pnpm-lock.yaml。`);
+    }
   }
 }
 

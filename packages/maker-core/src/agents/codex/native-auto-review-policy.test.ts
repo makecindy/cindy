@@ -10,7 +10,7 @@ describe("native auto-review continuation configuration", () => {
     expect(nativeAutoReviewContinuationConfig(`cindy/${packagedRuntime.version} (macOS)`, {})["auto_review.policy"])
       .toBeTruthy();
   });
-  it.each(["0.153.4", "0.156.0", "0.159.2", "0.166.0"])("uses %s's verified complete policy", (version) => {
+  it.each(["0.153.4", "0.156.0", "0.159.2", "0.166.0", "0.167.0"])("uses %s's verified complete policy", (version) => {
     expect(nativeAutoReviewContinuationConfig(`cindy/${version} (macOS)`, {})["auto_review.policy"])
       .toBe(`${currentPolicy.trim()}\n\n## Scoped continuation of authorized work\n${AUTO_REVIEW_CONTINUATION_POLICY}`);
   });
@@ -37,7 +37,8 @@ describe("native auto-review continuation configuration", () => {
     "codex/0.159.3",
     "codex/0.166.0-alpha",
     "codex/0.166.1",
-    "codex/0.167.0",
+    "codex/0.167.0-alpha",
+    "codex/0.167.1",
   ])(
     "never substitutes a policy copied from a different runtime: %s",
     (version) => {
@@ -55,7 +56,7 @@ describe("native auto-review continuation configuration", () => {
   ])(
     "retains custom/managed policy and ambiguous configuration: %j",
     (config) => {
-      for (const version of ["0.145.0", "0.153.4", "0.156.0", "0.159.2", "0.166.0"]) {
+      for (const version of ["0.145.0", "0.153.4", "0.156.0", "0.159.2", "0.166.0", "0.167.0"]) {
         expect(nativeAutoReviewContinuationConfig(`codex/${version}`, config)).toEqual({});
       }
     },
