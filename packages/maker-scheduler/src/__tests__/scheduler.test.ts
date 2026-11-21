@@ -818,14 +818,17 @@ describe('Scheduler', () => {
       return realUpdate(id, patch, expected);
     });
     local.clock.setTo(expireAt + 1);
-    for (const _round of [1, 2]) {
+    const runTick = async () => {
       const settled = await Promise.race([
         local.scheduler.tick().then(() => 'tick' as const),
         // real-wait: 挂死哨兵 —— 必须显著大于修复路径的 20ms storage 上限,让旧代码的无界 await 稳定判 hung 而非偶发竞态
         new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
       ]);
       expect(settled).toBe('tick');
-    }
+    };
+    // 连跑两轮:修复前第二轮会再发一条 UPDATE,修复后在途写入期间不再重发。
+    await runTick();
+    await runTick();
     expect(expiryWrites).toBe(1);
     expect(local.fireCalls).toHaveLength(0);
   });
