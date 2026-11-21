@@ -527,6 +527,17 @@ export class Scheduler extends EventEmitter {
    * 一条 schedule 同时只保留一次在途过期写入,settle 前不再重发,也不派发。
    */
   private readonly pendingExpireWrites = new Map<string, Promise<Schedule | null>>();
+  /**
+   * 生命周期代次:每次 stop() +1。
+   *
+   * 用来给「stop 之前发起、stop 之后才回来」的回调划界 —— 典型是存储挂死时那次
+   * 永不 settle 的过期写入:它 settle 之后仍会走进迟到收口。stop() 已经清掉了
+   * activeSchedules,过期快照检查因此「查无新版」而判定为最新,旧账号的结果会被
+   * 写回缓存并广播 changed —— 切账号(resetScheduler)后新主人会收到上一段生命
+   * 周期的时间线(Codex P1 on #11577)。代次变了就说明这份结果属于上一段生命周期,
+   * 一律不再改本地状态、不再发事件。
+   */
+  private lifecycleGeneration = 0;
   // 同一 schedule 的用户态 CRUD 必须把“持久化写入 + activeSchedules 同步”视作一个
   // 临界区。否则 update 恢复 expired 的 await 返回后，pause 可能先删缓存，旧 update
   // 再把 active 快照加回来。不同 schedule 仍可并发，避免全局锁拖慢无关任务。
@@ -822,6 +833,13 @@ export class Scheduler extends EventEmitter {
     // silenceRun 文档一致 —— 标记丢失的安全方向就是照常通知。
     this.silencedRuns.clear();
     this.activeSchedules.clear();
+    // 生命周期换代:stop 之前发起、之后才回来的回调(迟到过期写入收口)不得再改
+    // 本地状态或广播事件(Codex P1 on #11577)。
+    this.lifecycleGeneration += 1;
+    // 挂死的过期写入不会 settle,它的登记不能跨生命周期留着:否则重启后的调度器
+    // 会以为「这条任务还有在途过期写入」而永远不再发过期写入。promise 本身取消
+    // 不了,但它的迟到结果已被上面的代次挡住。
+    this.pendingExpireWrites.clear();
     this.emitRuntimeState();
     await Promise.all(interrupted.map(async (run) => {
       await this.storage.updateRun(run.runId, {
@@ -1099,8 +1117,12 @@ export class Scheduler extends EventEmitter {
 
   /** 过期写入在超时后才 settle 时的迟到收口(见 expireSchedule catch)。 */
   private armExpireLateApply(scheduleId: string, update: Promise<Schedule | null>): void {
+    // 记下发起时的生命周期代次:stop() 之后回来的结果属于上一段生命周期(切账号、
+    // 重启),不能再改缓存、不能再广播(Codex P1 on #11577)。
+    const generation = this.lifecycleGeneration;
     void update.then(
       (late) => {
+        if (generation !== this.lifecycleGeneration) return;
         if (late) {
           // 迟到快照可能已经被更新的一版取代:过期写入已提交但回包晚于上限时,
           // 用户可能在回包前延长了截止时间 —— update() 把重新 active 的新行放回
@@ -1116,6 +1138,7 @@ export class Scheduler extends EventEmitter {
         }
         void this.storage.get(scheduleId).then(
           (current) => {
+            if (generation !== this.lifecycleGeneration) return;
             if (!current) return;
             this.refreshAutomaticDispatchSchedules(current);
             if (current.status === 'active') this.activeSchedules.set(current.id, current);
@@ -1131,15 +1154,35 @@ export class Scheduler extends EventEmitter {
   /**
    * 迟到的过期快照是不是已经被更新的一版取代。
    *
-   * 两条判据都指向「这条任务在我们写过期之后被人动过」:缓存里有一份更新的行
+   * 判据都指向「这条任务在我们写过期之后被人动过」:当前这一版比迟到快照更新
    * (updatedAt 更晚),或者截止时间被改过(延长后任务重新 active)。两条都不成立
    * 时,迟到快照就是当前最新版本,照常应用。
+   *
+   * 「当前这一版」不能只看 activeSchedules:到点被放行派发的任务会从
+   * activeSchedules 里摘走(见 tick 的删除),只留在 automaticDispatchSchedules
+   * 里。只查前者会把已经重新 active、并且正在派发途中的任务当成「查无此行」
+   * 而接受迟到快照,进而用过期快照覆盖派发守卫、让 canDispatch 推迟一次本该
+   * 触发的运行(Codex P1 on #11577)。
    */
   private isStaleExpireResult(late: Schedule): boolean {
-    const cached = this.activeSchedules.get(late.id);
+    const cached = this.currentScheduleSnapshot(late.id);
     if (!cached) return false;
     if (cached.updatedAt > late.updatedAt) return true;
     return cached.expireAt !== late.expireAt;
+  }
+
+  /**
+   * 这条任务当前最新的一版快照:优先 activeSchedules,其次派发途中保留在
+   * automaticDispatchSchedules 的那一份(取 updatedAt 更晚的)。
+   */
+  private currentScheduleSnapshot(scheduleId: string): Schedule | undefined {
+    const cached = this.activeSchedules.get(scheduleId);
+    let newest = cached;
+    for (const snapshot of this.automaticDispatchSchedules.values()) {
+      if (snapshot.id !== scheduleId) continue;
+      if (!newest || snapshot.updatedAt > newest.updatedAt) newest = snapshot;
+    }
+    return newest;
   }
 
   /**
