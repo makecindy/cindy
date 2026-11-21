@@ -109,6 +109,56 @@ it('subscribes only for a live View and coalesces context without reopening it',
     expect(controller.context).toHaveBeenCalledOnce();
   } finally { if (container.hasChildNodes()) await act(async () => root.unmount()); container.remove(); }
 });
+
+// 测试价值
+// - 生产入口与结果：真实 McpAppCard iframe 挂载和主题/容器变化，观察外层 iframe 底色。
+// - Bug／规则依据：离开任务时子画面缺帧会露出 iframe 自身底色，底色应跟随最近的不透明卡片背景。
+// - 现有缺口：已有测试覆盖 iframe 生命周期，却没有覆盖缺帧时的背景兜底或主题切换。
+// - 最小输入与 tier：一张可见卡片、一次背景切换和一次无关上下文更新，renderer unit。
+it('paints the iframe backdrop from the nearest card background without recomputing on context updates', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div');
+  container.style.backgroundColor = 'rgb(18, 18, 18)';
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const changed = { current: () => {} };
+  const contextSource = {
+    read: vi.fn(() => ({ revision: 1 })),
+    subscribe: vi.fn((callback: () => void) => { changed.current = callback; return () => {}; }),
+  };
+  const computedStyle = vi.spyOn(window, 'getComputedStyle');
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="backdrop-task" clientId="backdrop-card" title="App" contextSource={contextSource} />));
+    container.querySelector('dialog')!.style.backgroundColor = 'transparent';
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const frame = container.querySelector('iframe')!;
+    expect(frame.style.backgroundColor).toBe('rgb(18, 18, 18)');
+
+    container.style.backgroundColor = 'rgb(245, 245, 245)';
+    await act(async () => {
+      document.documentElement.className = 'dark';
+      await Promise.resolve();
+    });
+    expect(frame.style.backgroundColor).toBe('rgb(245, 245, 245)');
+
+    const readsBefore = computedStyle.mock.calls.filter(([element]) => element === container).length;
+    await act(async () => changed.current());
+    const readsAfter = computedStyle.mock.calls.filter(([element]) => element === container).length;
+    expect(readsAfter).toBe(readsBefore);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 beforeEach(() => {
   vi.stubGlobal('crypto', webcrypto);
   vi.spyOn(webcrypto.subtle, 'digest').mockImplementation((...args) => {

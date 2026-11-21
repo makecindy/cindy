@@ -1,7 +1,7 @@
 /** This document owns the App transport. The top Renderer only observes UI state. */
 export function mcpAppDirectSandboxDocument(resourceUrl: string, bridgeUrl: string): string {
   const encode = (value: string) => JSON.stringify(value).replace(/</g, '\\u003c');
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style></head><body><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:light dark}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}</style></head><body><script>
 const frame=document.createElement('iframe');
 frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms');
 frame.setAttribute('allow',"camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'");
