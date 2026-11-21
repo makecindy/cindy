@@ -15754,7 +15754,7 @@
       "orcaFromWorkerBatch": "システムから報告された {{count}} 件の Worker 結果",
       "orcaFromWorkerNamed": "Worker「{{role}}」からのメッセージ",
       "orcaFromHost": "ホスト（Orca host）からのメッセージ",
-      "orcaHostNoticeDispatchClaim": "このターン、主張された派遣の記録がホストにありません。Lead にキュー ID か実際の結果を添えるよう伝えました。",
+      "orcaHostNoticeDispatchClaim": "このターンの宣言はホストの派遣記録と一致しません。Lead に修正を求めました。",
       "hookChannelFrom": "{{channel}} から",
       "deviceSentMobileNamed": "スマートフォン「{{name}}」から送信",
       "deviceSentMobile": "スマートフォンから送信",

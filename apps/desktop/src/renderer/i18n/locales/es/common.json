@@ -15923,7 +15923,7 @@
       "orcaFromWorkerBatch": "Informe del sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensaje del Worker \"{{role}}\"",
       "orcaFromHost": "Mensaje del host (Orca host)",
-      "orcaHostNoticeDispatchClaim": "El host no encontró ningún registro del envío declarado en este turno; se pidió al Lead que indique el id de cola o el resultado real.",
+      "orcaHostNoticeDispatchClaim": "La declaración del turno no coincide con el registro de envíos del host; se pidió al Lead que la corrija.",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado desde el teléfono \"{{name}}\"",
       "deviceSentMobile": "Enviado desde un teléfono",

@@ -15753,7 +15753,7 @@
       "orcaFromWorkerBatch": "系統回傳的 {{count}} 條 Worker 結果",
       "orcaFromWorkerNamed": "來自 Worker「{{role}}」的訊息",
       "orcaFromHost": "來自宿主（Orca host）的訊息",
-      "orcaHostNoticeDispatchClaim": "這條聲稱的派發在宿主記錄裡查不到，已提醒 Lead 補上排隊編號或實際派發結果。",
+      "orcaHostNoticeDispatchClaim": "這項回合聲明與宿主派發記錄不一致，已提醒 Lead 改正。",
       "hookChannelFrom": "來自 {{channel}}",
       "deviceSentMobileNamed": "從手機「{{name}}」傳送",
       "deviceSentMobile": "從手機傳送",

@@ -15754,7 +15754,7 @@
       "orcaFromWorkerBatch": "시스템이 반환한 Worker 결과 {{count}}개",
       "orcaFromWorkerNamed": "Worker \"{{role}}\"에서 온 메시지",
       "orcaFromHost": "호스트(Orca host)에서 온 메시지",
-      "orcaHostNoticeDispatchClaim": "이번 턴에 주장한 파견 기록이 호스트에 없습니다. Lead에 대기열 ID나 실제 결과를 붙이도록 요청했습니다.",
+      "orcaHostNoticeDispatchClaim": "이번 턴 선언이 호스트의 파견 기록과 일치하지 않습니다. Lead에 수정을 요청했습니다.",
       "hookChannelFrom": "{{channel}}에서",
       "deviceSentMobileNamed": "휴대폰 \"{{name}}\"에서 보냄",
       "deviceSentMobile": "휴대폰에서 보냄",

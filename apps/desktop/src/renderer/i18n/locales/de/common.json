@@ -15514,8 +15514,8 @@
         "unverified": "Turn-Erklärung unbestätigt",
         "notice": {
           "noDeclaration": "Für diesen Turn liegt keine Übergabe-Erklärung vor",
-          "declaredNotDispatched": "Die Erklärung nennt eine Übergabe an {{target}}, die der Host nie angenommen hat",
-          "dispatchedNotDeclared": "Der Host hat in diesem Turn an {{target}} übergeben, die Erklärung führt es nicht auf",
+          "declaredNotDispatched": "Die Erklärung nennt eine Übergabe an {{target}}, die Cindy nie angenommen hat",
+          "dispatchedNotDeclared": "Cindy hat in diesem Turn an {{target}} übergeben, die Erklärung führt es nicht auf",
           "unknownId": "Die zitierte Warteschlangen-ID {{id}} gehört zu keiner Übergabe",
           "body": "{{reason}}. Lead wurde gebeten, die Erklärung zu korrigieren."
         }
@@ -15781,8 +15781,8 @@
       "orcaFromWorker": "Nachricht vom Worker",
       "orcaFromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
       "orcaFromWorkerNamed": "Nachricht vom Worker „{{role}}“",
-      "orcaFromHost": "Nachricht vom Host (Orca host)",
-      "orcaHostNoticeDispatchClaim": "Der Host hat in diesem Turn keinen Nachweis für die behauptete Übergabe gefunden; der Lead wurde gebeten, die Queue-ID oder das tatsächliche Ergebnis zu nennen.",
+      "orcaFromHost": "Nachricht von Cindy (Orca host)",
+      "orcaHostNoticeDispatchClaim": "Die Übergabe-Erklärung und die Aufzeichnung von Cindy stimmen in diesem Turn nicht überein; der Lead wurde um Korrektur gebeten.",
       "hookChannelFrom": "Aus {{channel}}",
       "deviceSentMobileNamed": "Vom Smartphone „{{name}}“ gesendet",
       "deviceSentMobile": "Vom Smartphone gesendet",
