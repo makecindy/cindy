@@ -77,6 +77,7 @@ export const PORTS_ONLY_PI_READS = {
   resolvePiProjectTrustInput: undefined,
   resolvePiRuntimeModelDescriptor: undefined,
   resolvePiRuntimeModels: undefined,
+  resolvePiToolFoldEnabled: undefined,
   resolveRemotePiBinaryPath: undefined,
   spawnPiSubagentRunner: undefined,
 } as const satisfies UnreadPorts;
