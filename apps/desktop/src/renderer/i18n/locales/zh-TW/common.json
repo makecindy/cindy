@@ -17277,6 +17277,16 @@
       "imagePreview": {
         "loadFailed": "無法載入圖片",
         "viewLarge": "檢視大圖"
+      },
+      "gitStatus": {
+        "modified": "已修改",
+        "added": "新增",
+        "deleted": "已刪除",
+        "renamed": "已重新命名",
+        "copied": "已複製",
+        "typechange": "類型變更",
+        "untracked": "未追蹤",
+        "unmerged": "有衝突"
       }
     },
     "search": {

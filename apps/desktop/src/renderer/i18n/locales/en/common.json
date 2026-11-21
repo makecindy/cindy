@@ -17351,6 +17351,16 @@
       "imagePreview": {
         "loadFailed": "Failed to load image",
         "viewLarge": "View full size"
+      },
+      "gitStatus": {
+        "modified": "Modified",
+        "added": "Added",
+        "deleted": "Deleted",
+        "renamed": "Renamed",
+        "copied": "Copied",
+        "typechange": "Type changed",
+        "untracked": "Untracked",
+        "unmerged": "Conflicted"
       }
     },
     "search": {

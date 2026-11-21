@@ -17277,6 +17277,16 @@
       "imagePreview": {
         "loadFailed": "이미지를 불러올 수 없습니다",
         "viewLarge": "크게 보기"
+      },
+      "gitStatus": {
+        "modified": "수정됨",
+        "added": "추가됨",
+        "deleted": "삭제됨",
+        "renamed": "이름 변경됨",
+        "copied": "복사됨",
+        "typechange": "유형 변경됨",
+        "untracked": "추적되지 않음",
+        "unmerged": "충돌"
       }
     },
     "search": {

@@ -48,6 +48,7 @@ import {
   TREE_MIN_WIDTH,
   TREE_MAX_WIDTH,
 } from './useSessionScopedTreeWidth';
+import { useWorkdirGitChanges } from '@/features/cc-agent/workdir-browse/hooks/useWorkdirGitChanges';
 import {
   FileTreeView,
   type FileTreeViewHandle,
@@ -165,6 +166,8 @@ function FileBrowserBodyWithWorkdir({
   });
   const renderingHtml = !!state.selectedFilePath && state.previewHtmlPath === state.selectedFilePath
     && isHtmlFilePath(state.selectedFilePath);
+  // 文件树按 Git 状态着色（与左侧 workdir 浏览共用同一份只读数据源）。
+  const gitChanges = useWorkdirGitChanges(ctx.sessionId, workdir, deviceId);
   const fileContent = useFileContent(workdir, renderingHtml ? null : state.selectedFilePath, remoteHostId, deviceId, visible);
   const [treeOpen, setTreeOpen] = useState(false);
   const [previousEntry, setPreviousEntry] = useState<string | null>(null);
@@ -759,6 +762,8 @@ function FileBrowserBodyWithWorkdir({
               <div className="rsb-fbody-tree-scroll min-h-0 flex-1">
                 <FileTreeView
                   ref={fileTreeRef}
+                  gitFiles={gitChanges.files}
+                  gitDirectories={gitChanges.directories}
                   tree={tree}
                   scrollScope={ctx.tabId}
                   active={visible && treeOpen}

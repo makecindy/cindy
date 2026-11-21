@@ -17517,7 +17517,17 @@
         "loadFailed": "No se pudo cargar la imagen",
         "viewLarge": "Ver en tamaño completo"
       },
-      "activeSessionCount_many": "{{count}} sesiones activas"
+      "activeSessionCount_many": "{{count}} sesiones activas",
+      "gitStatus": {
+        "modified": "Modificado",
+        "added": "Añadido",
+        "deleted": "Eliminado",
+        "renamed": "Renombrado",
+        "copied": "Copiado",
+        "typechange": "Tipo cambiado",
+        "untracked": "Sin seguimiento",
+        "unmerged": "En conflicto"
+      }
     },
     "search": {
       "open": "Buscar",
