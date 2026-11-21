@@ -258,6 +258,7 @@ import {
   useShareSelectionRevision,
 } from '@/session/shareSelectionStore';
 import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/ComposerRichInput';
+import { restoreComposerFocusAfterAttachment } from '@/session/restoreComposerFocusAfterAttachment';
 import { createComposerDraftSource, useComposerVoiceDraftWriter, type ComposerDraftSource } from '@/session/composerDraftSource';
 import { InlineQueueSection } from '@/session/InlineQueueSection';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
@@ -1445,6 +1446,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // (依赖它做再编辑替换),而 onUploaded 闭包在此之前就要引用 decorate——回调
   // 均为延迟执行,经 ref 读最新实例即可。
   const composerAnnotationsRef = useRef<UseComposerImageAnnotationsResult | null>(null);
+  const restoreAttachmentEditing = useCallback(() => {
+    restoreComposerFocusAfterAttachment(composerInputRef, () => outboxSessionAliveRef.current === sessionId);
+  }, [sessionId]);
   // 本机附件(相册 / 拍照 / 文件)乐观上传:picker 一返回即进托盘,上传转后台。
   const {
     pendingUploads,
@@ -1494,9 +1498,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     onError: (message) => {
       setAttachmentError(message);
     },
-    onPicked: () => {
+    onPicked: (kind) => {
       setContextSheetOpen(false);
-      requestAnimationFrame(() => composerInputRef.current?.focus());
+      if (kind === 'media') restoreAttachmentEditing();
+      else requestAnimationFrame(() => composerInputRef.current?.focus());
     },
   });
   // The page only owns its composer. Accepted outbox records belong to the app bridge.
@@ -9033,18 +9038,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     setAttachmentError(null);
     // 候选带上选中序号:并发上传谁先传完都按选中顺序进托盘。
     enqueueUploads(contextSheetMediaUploadCandidates(fresh), { token: auth.getAccessToken() });
-    const restoreEditing = () => {
-      // The sheet hides the keyboard while WebView can retain DOM focus.
-      // Release it after dismissal so focus() can open the keyboard again.
-      composerInputRef.current?.blur();
-      requestAnimationFrame(() => composerInputRef.current?.focus());
-    };
-    if (dismiss) dismiss(restoreEditing);
+    if (dismiss) dismiss(restoreAttachmentEditing);
     else {
       setContextSheetOpen(false);
-      restoreEditing();
+      restoreAttachmentEditing();
     }
-  }, [auth, enqueueUploads, attachments.length, getPendingUploadCount, mediaAssetAttachments, uploadingMediaAssetIds, t]);
+  }, [auth, enqueueUploads, attachments.length, getPendingUploadCount, mediaAssetAttachments, uploadingMediaAssetIds, restoreAttachmentEditing, t]);
   const toggleMediaAssetAttachment = useCallback(
     (asset: ContextSheetMediaAsset, dismiss?: (afterClose: () => void) => void) => addMediaAssetAttachments([asset], dismiss),
     [addMediaAssetAttachments],

@@ -9,6 +9,7 @@ import { Platform } from 'react-native';
 import { ComposerRichInput, type ComposerRichInputHandle, type ComposerRichInputProps } from '@/session/ComposerRichInput';
 import { composerDocumentProjectedText, composerDocumentQuotes, composerDocumentsEqual, composerDocumentHasContent, normalizeComposerDocument, textComposerDocument, type ComposerDocument } from '@/session/composerDocument';
 import { createComposerDraftSource } from '@/session/composerDraftSource';
+import { restoreComposerFocusAfterAttachment } from '@/session/restoreComposerFocusAfterAttachment';
 
 // Execute the page's real cancellation/persistence callbacks with the mounted
 // editor below, without importing the unrelated native/network page UI.
@@ -113,6 +114,7 @@ function mount(hidden = false, pasteHandlers: Pick<ComposerRichInputProps, 'onPa
       page.id = id;
     }),
     setConfig: vi.fn(),
+    blur: vi.fn(),
     focus: vi.fn(),
     snapshot: vi.fn((requestId: number) => bridge.onMessage({ nativeEvent: { data: JSON.stringify({
       type: 'snapshot', requestId, documentId: page.id, document: page.document, pendingPaste: false,
@@ -135,6 +137,25 @@ function mount(hidden = false, pasteHandlers: Pick<ComposerRichInputProps, 'onPa
   };
   return { ref, page, send, onChangeDocument, onPasteImagesLoadFailed, renderDocument, renderPasteHandlers };
 }
+
+it.each([true, false])('restores the keyboard after media selection while the original task is active: %s (#11397)', (sameTask) => {
+  vi.useFakeTimers();
+  const { ref, page, send } = mount();
+  send({ type: 'ready' });
+  let active = true;
+  let hasDomFocus = true;
+  const openKeyboard = vi.fn();
+  page.blur.mockImplementation(() => { hasDomFocus = false; });
+  page.focus.mockImplementation(() => {
+    if (!hasDomFocus) openKeyboard();
+    hasDomFocus = true;
+  });
+  restoreComposerFocusAfterAttachment(ref, () => active);
+  expect(openKeyboard).not.toHaveBeenCalled();
+  active = sameTask;
+  act(() => vi.advanceTimersToNextFrame());
+  expect(openKeyboard).toHaveBeenCalledTimes(sameTask ? 1 : 0);
+});
 
 // #7508 / #7509, unit: the real WebView bridge must hand Send the visible document,
 // including preedit, without echoing it back into the IME. Earlier tests only covered

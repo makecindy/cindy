@@ -78,7 +78,7 @@ export interface UseMobileLocalAttachmentsOptions {
    *  失败由页面路由给对应乐观消息,不该落进 composer 错误条)。 */
   onError: (message: string | null, context?: { uploadLocalId?: string }) => void;
   /** picker 确认选图 / 拍下照片 / 选中文件后触发(页面用来关 Context 面板)。 */
-  onPicked?: () => void;
+  onPicked?: (kind: 'media' | 'document') => void;
 }
 
 /**
@@ -489,7 +489,7 @@ export function useMobileLocalAttachments(
           const accepted = candidates.slice(0, begun.remainingSlots);
           if (accepted.length === 0) return;
           enqueueUploads(accepted, { token: optionsRef.current.getAccessToken() });
-          optionsRef.current.onPicked?.();
+          optionsRef.current.onPicked?.('media');
           return;
         }
       }
@@ -525,7 +525,7 @@ export function useMobileLocalAttachments(
       // 立即入 pending 托盘(不先 await token):token 等待窗里任务已可被 waitForIdle 看到,
       // composer 抢发会等它落定而不是丢图;token 由任务开跑时自行等待(拿不到→该任务失败报错)。
       enqueueUploads(candidates, { token: optionsRef.current.getAccessToken() });
-      optionsRef.current.onPicked?.();
+      optionsRef.current.onPicked?.('media');
     } catch (err) {
       if (isAttachmentScopeActive()) optionsRef.current.onError(formatRemoteError(err));
     } finally {
@@ -563,7 +563,7 @@ export function useMobileLocalAttachments(
         size,
         mimeType: asset.mimeType || undefined,
       }], { token: optionsRef.current.getAccessToken() });
-      optionsRef.current.onPicked?.();
+      optionsRef.current.onPicked?.('document');
     } catch (err) {
       if (isAttachmentScopeActive()) optionsRef.current.onError(formatRemoteError(err));
     } finally {
