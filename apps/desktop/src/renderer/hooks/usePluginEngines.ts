@@ -123,6 +123,7 @@ export function usePluginEngines(enabled = true): readonly PluginEngineView[] {
 interface DeviceCatalogue {
   read(): Promise<void>;
   ensureLoaded(): void;
+  refreshForPicker(): void;
   prefetch(): Promise<void>;
   markStale(): void;
   evict(): void;
@@ -132,6 +133,11 @@ interface DeviceCatalogue {
 }
 
 let deviceCatalogues = new WeakMap<DataOwnerGeneration, Map<string, DeviceCatalogue>>();
+const activeRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
+
+/** Cooldown and follow-up read when a picker asks another computer's engine plugins to republish models. */
+export const DEVICE_PLUGIN_ENGINES_REFRESH_MS = 60_000;
+export const DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS = 2_500;
 
 function sameEngineViews(
   a: readonly PluginEngineView[] | null,
@@ -165,7 +171,15 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
   let deviceGeneration = 0;
   let lastReadAt = 0;
   let lastFailedAt = 0;
+  let lastRefreshAt = 0;
+  let refreshRereadTimer: ReturnType<typeof setTimeout> | undefined;
   let unsupported = false;
+  const clearRefreshTimer = () => {
+    if (refreshRereadTimer === undefined) return;
+    clearTimeout(refreshRereadTimer);
+    activeRefreshTimers.delete(refreshRereadTimer);
+    refreshRereadTimer = undefined;
+  };
   const subscribers = new Map<() => void, boolean>();
   const catalogue: DeviceCatalogue = {
     read() {
@@ -209,6 +223,39 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       if (lastFailedAt > 0 && Date.now() - lastFailedAt < DEVICE_PLUGIN_ENGINES_REREAD_MS) return;
       void catalogue.read();
     },
+    refreshForPicker() {
+      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId) || unsupported) return;
+      const refreshGeneration = deviceGeneration;
+      const now = Date.now();
+      const freshEnough =
+        current !== null && lastReadAt > 0 && now - lastReadAt < DEVICE_PLUGIN_ENGINES_REREAD_MS;
+      const ensureCurrent = freshEnough ? Promise.resolve() : catalogue.read();
+      void ensureCurrent.then(() => {
+        if (!isDataOwnerGenerationCurrent(owner) || refreshGeneration !== deviceGeneration || !(current?.length)) return;
+        const afterRead = Date.now();
+        if (lastRefreshAt > 0 && afterRead - lastRefreshAt < DEVICE_PLUGIN_ENGINES_REFRESH_MS) return;
+        const invoke = window.electronAPI?.deviceLink?.invoke;
+        if (!invoke) return;
+        lastRefreshAt = afterRead;
+        clearRefreshTimer();
+        void Promise.resolve(invoke(deviceId, PLUGIN_ENGINES_INVOKE.REFRESH, []))
+          .then(() => {
+            if (!isDataOwnerGenerationCurrent(owner) || refreshGeneration !== deviceGeneration) return;
+            clearRefreshTimer();
+            const timer = setTimeout(() => {
+              activeRefreshTimers.delete(timer);
+              if (refreshRereadTimer === timer) refreshRereadTimer = undefined;
+              if (isDataOwnerGenerationCurrent(owner) && refreshGeneration === deviceGeneration) {
+                void catalogue.read();
+              }
+            }, DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+            (timer as unknown as { unref?: () => void })?.unref?.();
+            refreshRereadTimer = timer;
+            activeRefreshTimers.add(timer);
+          })
+          .catch(() => undefined);
+      });
+    },
     prefetch() {
       if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return Promise.resolve();
       if (pending) return pending;
@@ -220,15 +267,19 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       return catalogue.read();
     },
     markStale() {
+      clearRefreshTimer();
       lastReadAt = 0;
       lastFailedAt = 0;
+      lastRefreshAt = 0;
       unsupported = false;
     },
     evict() {
       deviceGeneration += 1;
       pending = undefined;
+      clearRefreshTimer();
       lastReadAt = 0;
       lastFailedAt = 0;
+      lastRefreshAt = 0;
       unsupported = false;
       retainReportingPluginEngines(owner, deviceId, []);
       if (current !== null) {
@@ -276,23 +327,26 @@ function unreadSnapshot(): null {
   return null;
 }
 
-/** Reads on entry/reconnect when requested. The picker can also re-read on open. */
-export function useRemotePluginEngines(deviceId?: string, readOnEntry = false): {
+/** Reads on entry/reconnect when requested. `'once'` reuses an existing catalogue; `refresh` asks plugins to republish models. */
+export function useRemotePluginEngines(deviceId?: string, readOnEntry: boolean | 'once' = false): {
   engines: readonly PluginEngineView[] | null;
   read: () => void;
+  refresh: () => void;
 } {
   const owner = getDataOwnerGeneration();
   const catalogue = useMemo(() => deviceId ? deviceCatalogue(owner, deviceId) : null, [owner, deviceId]);
   const read = useCallback(() => { void catalogue?.read(); }, [catalogue]);
+  const refresh = useCallback(() => { catalogue?.refreshForPicker(); }, [catalogue]);
   useEffect(() => {
-    if (readOnEntry) read();
-  }, [readOnEntry, read]);
+    if (readOnEntry === true) read();
+    else if (readOnEntry === 'once') catalogue?.ensureLoaded();
+  }, [readOnEntry, read, catalogue]);
   const remoteEngines = useSyncExternalStore(
     catalogue?.subscribe ?? subscribeDisabled,
     catalogue?.snapshot ?? unreadSnapshot,
     unreadSnapshot,
   );
-  return { engines: remoteEngines, read };
+  return { engines: remoteEngines, read, refresh };
 }
 
 /**
@@ -416,6 +470,8 @@ export function usePluginEngineIdentity(
 export function resetPluginEnginesStoreForTests(): void {
   detachPush?.();
   detachPush = null;
+  for (const timer of activeRefreshTimers) clearTimeout(timer);
+  activeRefreshTimers.clear();
   listeners.clear();
   generation = 0;
   engines = NO_ENGINES;

@@ -422,7 +422,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           assertRuntimeOwnerCurrent();
           assertSharedTaskCurrent.admit();
         }
-        await persistSessionFields(sessionId, { model: target.model, ...(effort ? { effort } : {}) });
+        await persistSessionFields(sessionId, { model: target.model, effort: effort ?? '' });
         assertRuntimeOwnerCurrent();
         const response = { deferred: false, superseded: false, effectiveModelId: target.model };
         if (isDeviceLinkInvoke()) markRemoteSettingPersistedInsideHandler(response);

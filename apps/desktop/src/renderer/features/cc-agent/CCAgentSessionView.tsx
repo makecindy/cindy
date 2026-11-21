@@ -69,6 +69,7 @@ import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   isSamePluginEngineChoice,
   remotePluginEngineChoices,
+  resolvePluginEngineEffort,
   type PluginEngineChoice,
   type PluginEngineSelection,
 } from '@/lib/pluginEngineSelection';
@@ -2290,9 +2291,9 @@ function CCAgentSessionContent({
   const remotePluginCatalogue = useRemotePluginEngines(
     pluginEngineOnTaskComputer && !readOnly && (pluginEngineTask || pluginEngineSwitchEligible)
       && !remoteSessionUnavailable && !awaitingCreation ? pluginEngineDeviceId : undefined,
-    pluginEngineTask && viewVisible,
+    viewVisible ? (pluginEngineTask ? true : 'once') : false,
   );
-  const readPluginEngineCatalogue = pluginEngineDeviceId ? remotePluginCatalogue.read : undefined;
+  const refreshPluginEngineCatalogue = pluginEngineDeviceId ? remotePluginCatalogue.refresh : undefined;
   const pluginEngines = remotePluginCatalogue.engines ?? localPluginEngines;
   // 任务自己的引擎(pluginEngine)在下面 selectableDevices 之后解析：引擎可能在自己的另一台电脑上。
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
@@ -3797,7 +3798,12 @@ function CCAgentSessionContent({
       try {
         const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
         const result = await api.setModel(
-          sessionId, modelId, session.providerId, expectedRevision, effort ? { effort, fastMode: false } : undefined);
+          sessionId,
+          modelId,
+          session.providerId,
+          expectedRevision,
+          { effort: (effort || null) as Effort | null, fastMode: false },
+        );
         if (result?.superseded) return false;
         // Device Link publishes the authoritative task patch from the controlled computer.
         if (!pluginEngineDeviceId) void refreshServerSession();
@@ -3822,18 +3828,18 @@ function CCAgentSessionContent({
             modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
             effort: session.effort,
             onSelectModel: handlePluginEngineModelSelect,
-            // 引擎在另一台电脑上：打开模型菜单时重读那台的列表；就在这台时沿用本机的刷新。
+            // 引擎在另一台电脑上：打开模型菜单时请那台重报模型并复读列表；就在这台时沿用本机的刷新。
             readCatalogue: pluginEngineAgentDeviceId
-              ? (pluginEngineAgentIsThisComputer ? undefined : agentPluginCatalogue.read)
-              : readPluginEngineCatalogue,
+              ? (pluginEngineAgentIsThisComputer ? undefined : agentPluginCatalogue.refresh)
+              : refreshPluginEngineCatalogue,
             catalogueUnknown: pluginEngineAgentDeviceId
               ? agentDevicePluginEngines === null
               : !!pluginEngineDeviceId && remotePluginCatalogue.engines === null,
           }
         : undefined,
-    [pluginEngineTask, session, pluginEngine, pluginEngineChoiceLabel, handlePluginEngineModelSelect, readPluginEngineCatalogue,
+    [pluginEngineTask, session, pluginEngine, pluginEngineChoiceLabel, handlePluginEngineModelSelect, refreshPluginEngineCatalogue,
       pluginEngineDeviceId, remotePluginCatalogue.engines, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
-      agentPluginCatalogue.read, agentDevicePluginEngines, t],
+      agentPluginCatalogue.refresh, agentDevicePluginEngines, t],
   );
 
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
@@ -3843,9 +3849,15 @@ function CCAgentSessionContent({
     if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return false;
     if (hasPendingAgentSendDispatch(sessionId) || hasPendingAgentSwitchOperation(sessionId)) return false;
     const finishSwitch = beginAgentSwitchOperation(sessionId);
+    const targetEngine = switchablePluginEngines.find((item) => isSamePluginEngineChoice(item, selection));
+    const resolvedEffort = selection.effort ?? resolvePluginEngineEffort(
+      targetEngine,
+      selection.modelId,
+      pluginEngineSwitchIntent?.effort ?? (pluginEngineTask ? session.effort : undefined),
+    ) ?? undefined;
     const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
     const switchTo = () => api.switchSessionAgent(
-      sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false,
+      sessionId, 'acp', selection.modelId, selection.providerId, resolvedEffort ?? '', false,
       pluginEngineDeviceId ? undefined : { agentDeviceId: selection.deviceId ?? null },
     );
     try {
@@ -3859,15 +3871,14 @@ function CCAgentSessionContent({
           revision = result.sameEngineRevision;
           if (!pluginEngineDeviceId) makerChatStore.clearAgentSwitchIntent(sessionId);
         }
-        return await handlePluginEngineModelSelect(selection.modelId, selection.effort, revision);
+        return await handlePluginEngineModelSelect(selection.modelId, resolvedEffort, revision);
       }
       // 主进程先广播意图(sessions:patched)再回包，选择器随广播显示「下条：」。
       await switchTo();
       if (makerChatStore.getSnapshot(sessionId).agentStatus.isRunning) {
-        const engine = switchablePluginEngines.find((item) => isSamePluginEngineChoice(item, selection));
         toast.success(t('newChat.chatInput.agentSwitch.deferred', {
-          agent: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
-          model: engine?.models.find((item) => item.id === selection.modelId)?.displayName
+          agent: targetEngine ? pluginEngineChoiceLabel(targetEngine) : t('newChat.pluginEngines.genericName'),
+          model: targetEngine?.models.find((item) => item.id === selection.modelId)?.displayName
             ?? t('newChat.pluginEngines.defaultModel'),
         }), { duration: 4000 });
       }
@@ -3882,25 +3893,25 @@ function CCAgentSessionContent({
       finishSwitch();
     }
   }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
-    pluginEngineTask, pluginEngineAgentDeviceId, switchablePluginEngines, pluginEngineChoiceLabel,
-    handlePluginEngineModelSelect, t]);
+    pluginEngineTask, pluginEngineSwitchIntent, pluginEngineAgentDeviceId, switchablePluginEngines,
+    pluginEngineChoiceLabel, handlePluginEngineModelSelect, t]);
   // 打开模型选择器时：本机已装插件引擎请插件重报模型，同时读取同账号其他电脑开放的引擎(与新建任务一致)。
   // 引用必须稳定——选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。
   const hasLocalSessionPluginEnginesRef = useRef(false);
   hasLocalSessionPluginEnginesRef.current = localPluginEngines.length > 0;
   const readSessionPluginEngines = useCallback(() => {
     if (pluginEngineDeviceId) {
-      readPluginEngineCatalogue?.();
-      if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer) agentPluginCatalogue.read();
+      refreshPluginEngineCatalogue?.();
+      if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer) agentPluginCatalogue.refresh();
       return;
     }
     if (hasLocalSessionPluginEnginesRef.current) requestPluginEnginesRefresh();
     readDevicePluginEngines();
     if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !activePluginEngineInDeviceList) {
-      agentPluginCatalogue.read();
+      agentPluginCatalogue.refresh();
     }
-  }, [pluginEngineDeviceId, readPluginEngineCatalogue, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
-    agentPluginCatalogue.read, readDevicePluginEngines, activePluginEngineInDeviceList]);
+  }, [pluginEngineDeviceId, refreshPluginEngineCatalogue, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
+    agentPluginCatalogue.refresh, readDevicePluginEngines, activePluginEngineInDeviceList]);
   // 普通任务的选择器列出本机及同账号其他电脑开放的插件引擎(本机须已装对应插件)：
   // 当前选中的是待切到的引擎，或任务自己的引擎；待切到内置引擎时不选中任何插件引擎。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {

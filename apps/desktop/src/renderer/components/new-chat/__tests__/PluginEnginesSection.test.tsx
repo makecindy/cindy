@@ -116,8 +116,11 @@ import {
 import { engineIconKindOf } from '@/components/sidebar/VendorIcon';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
+  DEVICE_PLUGIN_ENGINES_REFRESH_MS,
+  DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS,
   findPluginEngine,
   hasRemotePluginEngineSubscribers,
+  markRemotePluginEnginesStale,
   resetPluginEnginesStoreForTests,
   useDevicesPluginEngines,
   useRemotePluginEngines,
@@ -230,6 +233,83 @@ it('reads the selected computer once and discards a former account’s directory
     cleanup();
     vi.unstubAllGlobals();
     setDataOwnerGeneration(before.dataOwnerId, before.generation);
+    resetPluginEnginesStoreForTests();
+  }
+});
+
+// 生产入口与可观察结果：useRemotePluginEngines(deviceId, 'once') 与 refresh()；被控电脑草稿／会话先加载一次引擎目录，
+// 打开模型选择器时经 maker:refresh-plugin-engines 请被控电脑插件重报模型，并在 2.5s 后复读出完整模型列表。
+// 规则依据：acp-plugin-bridge 远程控制电脑模型刷新(对端 plugin-engines-changed 只推本机窗口，控制端须触发 refresh 后复读)
+// 与 server-channel-review 冷却门禁(60s 内重复开面板不连发 refresh；断线重连 markStale 后允许立即重刷)。
+// 覆盖缺口：此前 Desktop 控制端从未调用 maker:refresh-plugin-engines，被控电脑未在本机打开过面板时永远只有「默认模型」。
+// 最小失败输入与 tier：unit；被控电脑初始 models=[]，打开面板调用 refresh() 后不触发 REFRESH 或 2.5s 后仍为空模型列表。
+it('asks the controlled computer to republish plugin engine models on picker refresh and re-reads once after cooldown', async () => {
+  vi.useFakeTimers();
+  const initialDsh = engine('dsh-plugin:dsh', 'DeepSeek Harness', { models: [] });
+  const publishedDsh = engine('dsh-plugin:dsh', 'DeepSeek Harness', {
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['low', 'high'], defaultEffort: 'high' }],
+  });
+  let remoteModelsPublished = false;
+  const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+    if (channel === PLUGIN_ENGINES_INVOKE.REFRESH) {
+      remoteModelsPublished = true;
+      return undefined;
+    }
+    if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
+      return [remoteModelsPublished ? publishedDsh : initialDsh];
+    }
+    return undefined;
+  });
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  try {
+    const first = renderHook(() => useRemotePluginEngines('computer-b', 'once'));
+    await act(async () => { await Promise.resolve(); });
+    expect(first.result.current.engines).toEqual([initialDsh]);
+    expect(invoke.mock.calls).toEqual([['computer-b', PLUGIN_ENGINES_INVOKE.LIST, []]]);
+
+    // Entering a second task on the same controlled computer reuses the loaded catalogue.
+    const second = renderHook(() => useRemotePluginEngines('computer-b', 'once'));
+    await act(async () => { await Promise.resolve(); });
+    expect(second.result.current.engines).toEqual([initialDsh]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    // Opening the model picker reuses the fresh snapshot (<15s), triggers REFRESH once,
+    // and re-reads published models once at 2.5s.
+    await act(async () => {
+      first.result.current.refresh();
+      await Promise.resolve();
+    });
+    expect(invoke.mock.calls).toEqual([
+      ['computer-b', PLUGIN_ENGINES_INVOKE.LIST, []],
+      ['computer-b', PLUGIN_ENGINES_INVOKE.REFRESH, []],
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(first.result.current.engines).toEqual([publishedDsh]);
+    expect(invoke).toHaveBeenCalledTimes(3);
+
+    // Re-opening immediately within the 15s read window and 60s refresh cooldown makes zero extra calls.
+    await act(async () => {
+      first.result.current.refresh();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
+
+    // After the controlled computer reconnects (markStale), refresh re-reads LIST and asks REFRESH again.
+    markRemotePluginEnginesStale('computer-b');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_MS);
+      first.result.current.refresh();
+      await Promise.resolve();
+    });
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(2);
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
     resetPluginEnginesStoreForTests();
   }
 });
