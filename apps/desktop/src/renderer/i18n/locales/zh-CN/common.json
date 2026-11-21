@@ -14094,6 +14094,8 @@
       "source": {
         "lastConfirmed": "上次刷新：{{time}}",
         "unconfirmed": "模型列表暂未更新",
+        "unreachable": "连不上 {{source}}",
+        "unreachableDetail": "连不上，请检查网络",
         "unavailable": "模型不可用",
         "reconnect": "重新连接",
         "manage": "管理来源",
@@ -22184,6 +22186,7 @@
     "picker": {
       "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
       "manage": "管理模型组",
+      "deviceTitle": "模型组 · {{device}}",
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
       "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
       "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"

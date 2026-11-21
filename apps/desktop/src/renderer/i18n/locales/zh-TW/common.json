@@ -14093,6 +14093,8 @@
       "source": {
         "lastConfirmed": "上次重新整理：{{time}}",
         "unconfirmed": "模型清單尚未更新",
+        "unreachable": "連不上 {{source}}",
+        "unreachableDetail": "連不上，請檢查網路",
         "unavailable": "模型無法使用",
         "reconnect": "重新連線",
         "manage": "管理來源",
@@ -22184,6 +22186,7 @@
     "picker": {
       "empty": "還沒有模型組。在設定裡把幾個來源合成一個模式，就能在這裡選它。",
       "manage": "管理模型組",
+      "deviceTitle": "模型組 · {{device}}",
       "switched": "「{{name}}」把這個任務換成了 {{model}}",
       "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。",
       "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。"

@@ -14,8 +14,10 @@ import {
   type PluginEngineChoice,
   type PluginEngineSelection,
 } from '@/lib/pluginEngineSelection';
-import { bindModelGroupSession, commitModelGroupDecision, modelGroupLocationNameFrom, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
-import { findModelGroupRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
+import { bindModelGroupSession, buildModelGroupRouteNote, commitModelGroupDecision, modelGroupLocationNameFrom, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
+import { modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
+import { bindDeviceModelGroupSession, commitDeviceModelGroupDecision, useDeviceModelGroups, useDevicesModelGroups, writeDeviceModelGroupRouteNote } from '../model-groups/remoteModelGroups';
+import { findModelGroupRoute, MODEL_GROUPS_DEFAULTS, type ModelGroupSelection } from '../../../shared/modelGroups';
 import type { GhostModelRoute, GhostPickerModel } from '../../../shared/ghost';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { useRemoteDraftDefaults, useRemoteDraftSelection, useRemoteDraftPush } from './useRemoteDraftDefaults';
@@ -1334,16 +1336,53 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       : undefined,
     [pluginEnginesAllowed, pluginEngineList, pluginEngineDevices, pluginEngineChoices, activePluginEngine, readPluginEngineCatalogues],
   );
-  // 模型组只在本机开的新任务提供(远程控制别的电脑、SSH、协同不提供)。草稿此刻选着在另一台电脑运行的模型也照样提供：
+  // 模型组：本机开的新任务列本机的模式；远程控制另一台电脑时列那台的模式，由那台按自己的规则选(model-groups.md §6.3)，
+  // 那台是旧版本时不列。SSH、协同不提供。草稿此刻选着在另一台电脑运行的模型也照样提供：
   // 路线自己决定这次在哪台运行(model-groups.md §3.1)。记住的那一项后来被删掉时按没选处理。
-  const modelGroupsAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca';
-  const { config: modelGroupsConfig } = useModelGroups(modelGroupsAllowed);
-  const activeModelGroup = useMemo(
-    () => (modelGroupsAllowed && !activePluginModel && findModelGroupRoute(modelGroupsConfig, draft.modelGroup)
-      ? draft.modelGroup
-      : null),
-    [modelGroupsAllowed, activePluginModel, modelGroupsConfig, draft.modelGroup],
+  const modelGroupsBaseAllowed = !effectiveRemoteHostId && draft.vendor !== 'orca';
+  const deviceLinkModelGroupsId = modelGroupsBaseAllowed && isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
+  const localModelGroups = useModelGroups(modelGroupsBaseAllowed && !isDeviceLinkDraft);
+  const deviceModelGroups = useDeviceModelGroups(deviceLinkModelGroupsId, true);
+  const modelGroupsAllowed = modelGroupsBaseAllowed && (!isDeviceLinkDraft || !!deviceModelGroups.config);
+  const modelGroupsConfig = isDeviceLinkDraft
+    ? deviceModelGroups.config ?? MODEL_GROUPS_DEFAULTS
+    : localModelGroups.config;
+  // 本机草稿：「其他电脑」那几段各列那台电脑自己的模式(在线的、自己账号的电脑；分享来的不列)。
+  // 草稿记住的那台即使此刻离线也读一次，选着它时按钮仍写得出名字。
+  const rememberedModelGroupDeviceId = !isDeviceLinkDraft ? draft.modelGroup?.deviceId ?? null : null;
+  const modelGroupDeviceIdsKey = modelGroupsBaseAllowed && !isDeviceLinkDraft
+    ? selectableDevices
+      .filter((device) => !isProviderShareAgentDeviceId(device.deviceId) && !isSharedTaskPeer(device.deviceId)
+        && (device.online || device.deviceId === rememberedModelGroupDeviceId))
+      .map((device) => device.deviceId).sort().join('\n')
+    : '';
+  const modelGroupDeviceIds = useMemo(() => (modelGroupDeviceIdsKey ? modelGroupDeviceIdsKey.split('\n') : []), [modelGroupDeviceIdsKey]);
+  const { groups: devicesModelGroups, read: readDevicesModelGroups } = useDevicesModelGroups(modelGroupDeviceIds);
+  // 草稿记住了另一台电脑的模式：进来就读一次，免得发送时还不知道那台的模式在不在。
+  useEffect(() => {
+    if (rememberedModelGroupDeviceId) readDevicesModelGroups();
+  }, [rememberedModelGroupDeviceId, readDevicesModelGroups]);
+  const modelGroupDevices = useMemo(
+    () => modelGroupDeviceIds.flatMap((deviceId) => {
+      const config = devicesModelGroups.get(deviceId)?.config;
+      return config && config.routes.length > 0
+        ? [{ deviceId, name: deviceDisplayName(deviceId, undefined, selectableDevices), config }]
+        : [];
+    }),
+    [modelGroupDeviceIds, devicesModelGroups, selectableDevices],
   );
+  const activeModelGroup = useMemo(() => {
+    const selection = draft.modelGroup;
+    if (!modelGroupsAllowed || activePluginModel || !selection) return null;
+    if (selection.deviceId) {
+      // 远程控制草稿只认被控那台的模式，不带位置；本机草稿里那台还没答复时先保留，发送时由那台决定。
+      if (isDeviceLinkDraft) return null;
+      const snapshot = devicesModelGroups.get(selection.deviceId);
+      if (!snapshot || snapshot.unsupported) return null;
+      return !snapshot.config || findModelGroupRoute(snapshot.config, selection) ? selection : null;
+    }
+    return findModelGroupRoute(modelGroupsConfig, selection) ? selection : null;
+  }, [modelGroupsAllowed, activePluginModel, modelGroupsConfig, draft.modelGroup, isDeviceLinkDraft, devicesModelGroups]);
   const modelGroupsProps = useMemo(
     () => modelGroupsAllowed
       ? {
@@ -1353,10 +1392,13 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             setAlternateModel(null);
             patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null });
           },
-          onManage: () => navigate('/settings?tab=model-groups'),
+          // 「管理模型组」只在本机：另一台电脑的模式在那台上改。
+          ...(isDeviceLinkDraft ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
+          ...(modelGroupDevices.length > 0 ? { devices: modelGroupDevices } : {}),
+          ...(modelGroupDeviceIds.length > 0 ? { readDevices: readDevicesModelGroups } : {}),
         }
       : undefined,
-    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate],
+    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate, isDeviceLinkDraft, modelGroupDevices, modelGroupDeviceIds, readDevicesModelGroups],
   );
   /** 组里没有能用的模型时，说明里写用户原来选的那个模型的显示名。 */
   const localProvidersForGroupNoteRef = useRef<ReturnType<typeof useProviders>['providers']>([]);
@@ -5048,8 +5090,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             : null;
           if (pluginModelAtSend && !isCurrentDataOwner()) return;
           // 模型组：建任务前按路线的选法选一个现在能用的来源；里面都用不了或组已删除时沿用原来的模型。
+          // 远程控制草稿由被控那台选；「其他电脑」段的模式由那台选(draftModelGroupRouting)。
+          const modelGroupDraftDeviceId = isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
+          const modelGroupOwner = modelGroupAtSend ? modelGroupOwnerDevice(modelGroupAtSend, modelGroupDraftDeviceId) : null;
           const modelGroupRoute = modelGroupAtSend
-            ? await resolveModelGroup(modelGroupAtSend, { hasImages: !!files?.some((file) => file.category === 'image') })
+            ? await resolveDraftModelGroup(modelGroupAtSend, {
+                draftDeviceId: modelGroupDraftDeviceId,
+                context: { hasImages: !!files?.some((file) => file.category === 'image') },
+              })
             : null;
           if (modelGroupAtSend && !isCurrentDataOwner()) return;
           const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
@@ -5082,7 +5130,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           const effectiveFastMode = routedTo ? false : sendBaseRoute.effectiveFastMode;
           // The first dispatch can fail before sendMessage resolves. Bind the selected local route
           // before dispatch, while committing the selection history only after acceptance.
-          const bindLocalGroupBeforeSend = modelGroupAtSend && modelGroupRoute?.outcome === 'routed' &&
+          const bindLocalGroupBeforeSend = modelGroupAtSend && !modelGroupOwner && modelGroupRoute?.outcome === 'routed' &&
             !modelGroupRoute.route.agentDeviceId && pluginRoute?.outcome !== 'routed';
           const prepareModelGroup = (sessionId: string) => bindLocalGroupBeforeSend
             ? bindModelGroupSession(sessionId, modelGroupAtSend!, modelGroupRoute.route) : undefined;
@@ -5091,6 +5139,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             writeModelGroupRouteNote(sessionId, modelGroupRoute, keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model), t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
             // 撞配额时据此提议换到同一条路线里的下一个来源(model-groups.md §6.1)。
             if (bindLocalGroupBeforeSend) commitModelGroupDecision(modelGroupRoute);
+            // 「其他电脑」段的模式：选路记录属于那台；任务在本机、Agent 在那台，不记本机的撞配额绑定。
+            else if (modelGroupOwner && modelGroupAtSend) commitDeviceModelGroupDecision(modelGroupOwner, modelGroupRoute);
             else if (modelGroupAtSend && pluginRoute?.outcome !== 'routed') void bindModelGroupSession(sessionId, modelGroupAtSend, modelGroupRoute);
           };
           // device-link:远程草稿就绪态以被控端为准(传 deviceId 走隧道查被控端 maker:agent:status);
@@ -5448,6 +5498,15 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }
             if (!remoteProjectsStore.getCreationPreview(presetSessionId)) return;
             rememberCreatedWorkspace();
+            // 被控那台的模式选出的来源：会话已建好(提交点)，请那台记下任务用着谁、提交选路记录、在任务里写说明。
+            if (modelGroupAtSend && modelGroupOwner) {
+              void bindDeviceModelGroupSession(modelGroupOwner, remoteSessionId, modelGroupAtSend, modelGroupRoute);
+              writeDeviceModelGroupRouteNote(modelGroupOwner, remoteSessionId, buildModelGroupRouteNote(
+                modelGroupRoute,
+                keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model),
+                t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName,
+              ));
+            }
             // remoteSessionId 到手就是**提交点**:对端会话已经建出来了。此后任何一步都不许再把它
             // 退化成「创建失败」—— 用户会照着提示重试,于是对端多出第二个会话,第一个空着永久滞留。
             // 钉归属 → 补临时行 → 触发回流这三条不变量、以及各自被 review 抓出来的理由,都在
@@ -6450,7 +6509,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           : null;
         if (goalPluginModel && !isCurrentDataOwner()) return;
         // 模型组：与 handleSend 同一流程。
-        const modelGroupRoute = goalModelGroup ? await resolveModelGroup(goalModelGroup, { hasImages: false }) : null;
+        const goalModelGroupDraftDeviceId = isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
+        const goalModelGroupOwner = goalModelGroup ? modelGroupOwnerDevice(goalModelGroup, goalModelGroupDraftDeviceId) : null;
+        const modelGroupRoute = goalModelGroup
+          ? await resolveDraftModelGroup(goalModelGroup, { draftDeviceId: goalModelGroupDraftDeviceId, context: { hasImages: false } })
+          : null;
         if (goalModelGroup && !isCurrentDataOwner()) return;
         const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
           ? pluginRoute.route
@@ -6649,6 +6712,15 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           }
           rememberCreatedWorkspace();
           goalSessionId = remoteSessionId;
+          // 同发送路径：被控那台的模式选的来源，由那台记录、提交并写说明。
+          if (goalModelGroup && goalModelGroupOwner) {
+            void bindDeviceModelGroupSession(goalModelGroupOwner, remoteSessionId, goalModelGroup, modelGroupRoute);
+            writeDeviceModelGroupRouteNote(goalModelGroupOwner, remoteSessionId, buildModelGroupRouteNote(
+              modelGroupRoute,
+              keptModelNameForGroupNote(goalBaseRoute.persistedAgentKind, goalBaseRoute.providerId, goalBaseRoute.model),
+              t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName,
+            ));
+          }
           if (remoteGoalTitle && remoteGoalTitlePreviewId !== remoteSessionId) {
             // 被控端没采用预设 id 时,把预览挪到回包里的真实 id 上。
             if (remoteGoalTitlePreviewId) {
@@ -6928,7 +7000,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           await window.electronAPI.maker.setGoal({ sessionId: newSession.id, objective, limits });
           writePluginModelRouteNote(newSession.id, pluginRoute);
           writeModelGroupRouteNote(newSession.id, modelGroupRoute, keptModelNameForGroupNote(goalBaseRoute.persistedAgentKind, goalBaseRoute.providerId, goalBaseRoute.model), t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
-          if (goalModelGroup && pluginRoute?.outcome !== 'routed') bindModelGroupSession(newSession.id, goalModelGroup, modelGroupRoute);
+          if (goalModelGroup && goalModelGroupOwner) commitDeviceModelGroupDecision(goalModelGroupOwner, modelGroupRoute);
+          else if (goalModelGroup && pluginRoute?.outcome !== 'routed') bindModelGroupSession(newSession.id, goalModelGroup, modelGroupRoute);
           void dispatchDeferredUiAssignment(newSession.id, deferredUiAssignment).catch((err) => {
             log.error('[draft goal] deferred Worker assignment failed', err);
             toast.error(t('newChat.collaboration.assignmentFailed'));

@@ -14093,6 +14093,8 @@
       "source": {
         "lastConfirmed": "上次重整：{{time}}",
         "unconfirmed": "模型录未新",
+        "unreachable": "{{source}} 不能达",
+        "unreachableDetail": "不能达，请察网路",
         "unavailable": "模型不可用",
         "reconnect": "重连",
         "manage": "理来源",
@@ -22184,6 +22186,7 @@
     "picker": {
       "empty": "尚无模型组。于设定合数源为一模式，即可于此择之。",
       "manage": "理模型组",
+      "deviceTitle": "模型组 · {{device}}",
       "switched": "「{{name}}」已将此差事易为 {{model}}",
       "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
       "chooseUnavailable": "「{{name}}」今无可用之源，未取之。"
