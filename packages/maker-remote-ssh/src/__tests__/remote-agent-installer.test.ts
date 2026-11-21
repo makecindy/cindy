@@ -141,11 +141,18 @@ describe('remote agent installer', () => {
     );
   });
 
+  // Each case runs probe + install, and each call spawns Git Bash with the full
+  // bootstrap script. Shared Windows PR runners occasionally exceed the default
+  // 5s budget (observed 6692ms → "Test timed out in 5000ms"). Only the Windows
+  // budget is widened — same pattern as pi-native-auto-compact (#5350); the
+  // fixture and every assertion stay as they are.
   it.each([
     { name: 'legacy standalone', complete: false, version: PINNED_CODEX_RELEASE_VERSION, ready: false },
     { name: 'old full package', complete: true, version: '0.0.1', ready: false },
     { name: 'current full package', complete: true, version: PINNED_CODEX_RELEASE_VERSION, ready: true },
-  ])('probe and bootstrap agree on $name readiness', async ({ complete, version, ready }) => {
+  ])('probe and bootstrap agree on $name readiness', {
+    timeout: process.platform === 'win32' ? 30_000 : 5_000,
+  }, async ({ complete, version, ready }) => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-readiness-'));
     try {
       // Simulate the POSIX remote home, never the developer home. All downloads
