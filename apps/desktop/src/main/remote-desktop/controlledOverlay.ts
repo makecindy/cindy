@@ -136,8 +136,9 @@ function clamp(bounds: Rectangle, area: Rectangle): Rectangle {
  * device it names, so a click always acts on exactly the device on screen. It
  * asks first, with an unticked checkbox to also revoke the device's access.
  * Both are local-only: the viewer cannot see them, its pointer passes through
- * them to what it does see beneath, and the confirmation never takes keyboard
- * focus, so the viewer can neither open nor answer it.
+ * them to what it does see beneath, a click arriving while that pointer is over
+ * them is ignored, and the confirmation never takes keyboard focus, so the viewer
+ * can neither open nor answer it.
  * (`closable: false` is avoided: on macOS it cancels window-list closes.)
  */
 export class ControlledOverlay {
@@ -159,8 +160,11 @@ export class ControlledOverlay {
   /** Whether the local-only windows currently let clicks through, and when they take them back. */
   private passThrough = false;
   private restTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Viewer pointer batches currently being injected. */
+  /** Viewer pointer batches currently being injected, and those of them over a local-only window. */
   private injecting = 0;
+  private injectingOver = 0;
+  /** When the viewer's pointer was last over a local-only window (start or end of its batch). */
+  private viewerOverAt = 0;
   /** Bumped when the overlay stops, so a late completion cannot affect the next lease. */
   private injectEpoch = 0;
   /** Last dragged origin, kept for this app run only. */
@@ -218,11 +222,19 @@ export class ControlledOverlay {
     this.restTimer = null;
     this.setPassThrough(over);
     this.injecting++;
+    if (over) {
+      this.injectingOver++;
+      this.viewerOverAt = Date.now();
+    }
     const epoch = this.injectEpoch;
     let finished = false;
     return () => {
       if (finished || epoch !== this.injectEpoch) return;
       finished = true;
+      if (over) {
+        this.injectingOver--;
+        this.viewerOverAt = Date.now();
+      }
       if (--this.injecting > 0 || !this.passThrough) return;
       this.restTimer = setTimeout(() => this.setPassThrough(false), VIEWER_POINTER_REST_MS);
     };
@@ -235,6 +247,18 @@ export class ControlledOverlay {
       this.shown ? this.window : null,
       confirmation?.isVisible() ? confirmation : null,
     ].filter((window): window is BrowserWindow => window !== null && !window.isDestroyed());
+  }
+
+  /** Whether a click on a local-only window may be the viewer's own: its pointer is over
+   * one of them in a batch being injected, or was within the rest delay. Pass-through
+   * keeps those clicks away, but the window server can still deliver a click injected
+   * right as it turns on, and a later batch clear of the windows turns it off before the
+   * click's navigation reaches Main. Such a click is dropped; the local user clicks again. */
+  private viewerMayHaveClicked(): boolean {
+    if (this.injectingOver === 0 && Date.now() - this.viewerOverAt >= VIEWER_POINTER_REST_MS)
+      return false;
+    log.debug('ignored a click on the overlay while the viewer pointer was over it');
+    return true;
   }
 
   private setPassThrough(on: boolean): void {
@@ -254,6 +278,8 @@ export class ControlledOverlay {
     this.restTimer = null;
     this.passThrough = false;
     this.injecting = 0;
+    this.injectingOver = 0;
+    this.viewerOverAt = 0;
     this.injectEpoch++;
     // An unanswered confirmation never outlives its lease: closing it cancels.
     const confirmation = this.confirmWindow;
@@ -431,7 +457,7 @@ export class ControlledOverlay {
         event.preventDefault();
         if (event.url === CHOICE_URL.cancel) return finish(null);
         const [base, query = ''] = event.url.split('?', 2);
-        if (base !== CHOICE_URL.disconnect) return;
+        if (base !== CHOICE_URL.disconnect || this.viewerMayHaveClicked()) return;
         finish(new URLSearchParams(query).get('revoke') === '1' ? 'revoke' : 'disconnect');
       });
       window.webContents.on('render-process-gone', () => finish(null));
@@ -573,7 +599,8 @@ export class ControlledOverlay {
     window.webContents.on('will-navigate', (event) => {
       event.preventDefault();
       const peer = linkedPeer(event.url);
-      if (peer && this.window === window) void this.confirmDisconnect(peer);
+      if (peer && this.window === window && !this.viewerMayHaveClicked())
+        void this.confirmDisconnect(peer);
     });
     window.webContents.on('render-process-gone', () =>
       this.fail(window, generation, new Error('overlay renderer gone')),

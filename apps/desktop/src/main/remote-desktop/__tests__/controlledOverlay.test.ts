@@ -450,6 +450,51 @@ it("lets the viewer's pointer pass through for each batch's whole injection", as
   }
 });
 
+// 2026-11-22 user report: the viewer, who cannot see the overlay, still hit its Disconnect.
+// Pass-through can lose the race with a click injected as it turns on, and a following batch
+// clear of the overlay turns it off before that click's navigation reaches Main.
+it("ignores Disconnect clicks that may be the viewer's own", async () => {
+  vi.useFakeTimers();
+  try {
+    const { overlay, disconnect } = fixture();
+    overlay.update(phone);
+    await settle();
+    // Centred pill: x 600–839, y 37–72; the confirmation covers x 520–919, y 388–537.
+    const window = state.windows[0];
+    const over = { x: 700, y: 50 };
+    const clear = { x: 100, y: 200 };
+
+    // Clicked while a batch over it is injecting, or just after it moved clear: no confirmation.
+    const batch = overlay.viewerPointer([over]);
+    clickDisconnect(window);
+    batch();
+    overlay.viewerPointer([clear])();
+    clickDisconnect(window);
+    await settle();
+    expect(state.windows).toHaveLength(1);
+
+    // Once the viewer's pointer has been away for the rest delay, the local click works.
+    vi.advanceTimersByTime(1000);
+    clickDisconnect(window);
+    await settle();
+    const confirmation = state.windows[1];
+    expect(confirmation.destroyed).toBe(false);
+
+    // The confirmation's Disconnect is guarded the same way and stays open.
+    overlay.viewerPointer([{ x: 800, y: 500 }])();
+    answer(confirmation, 'disconnect');
+    await settle();
+    expect(confirmation.destroyed).toBe(false);
+    expect(disconnect).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+    answer(confirmation, 'disconnect');
+    await settle();
+    expect(disconnect).toHaveBeenCalledWith('phone');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it('cancels every other navigation without acting', async () => {
   const { overlay, revoke, disconnect } = fixture();
   overlay.update(phone);
