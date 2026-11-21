@@ -522,6 +522,64 @@ describe('materializeQueuedOssAttachmentsDeferred — 出方向 files[] + persis
     expect(readFile).not.toHaveBeenCalled();
   });
 
+  // L337 / unit: a derived task may refer to a path on either computer. A failed
+  // image keeps its history reference without taking ownership of sibling blobs.
+  it.each(['ingest', 'resolve'] as const)('retains only the original failed image after uncertain-location %s', async stage => {
+    sessionRow.mockResolvedValue({ source: 'side-chat' });
+    const images = ['first', 'failed', 'last'].map(name => ({
+      url: `/fixture/${name}.png`, mimeType: 'image/png', originalName: `${name}.png`,
+    }));
+    const blobs = ['a', 'b', 'c'].map((letter, i) => ({
+      hash: letter.repeat(64), ext: '.png', url: `cindy-media://blobs/${letter.repeat(64)}.png`, refIds: [`ref-${i}`],
+    }));
+    const fault = new Error('fixture fault after source read');
+    let next = 0;
+    ingestMedia.mockImplementation(async () => {
+      const blob = blobs[next++];
+      if (stage === 'ingest' && blob === blobs[1]) throw fault;
+      return blob;
+    });
+    blobResolveSafe.mockImplementation((url: string) => {
+      if (url === blobs[1].url) throw fault;
+      return { absPath: '/blobs/' + url.split('/').at(-1), mimeType: 'image/png' };
+    });
+    deleteZeroRefBlobRecord.mockResolvedValue(true);
+    const item = { persistedContent: JSON.stringify({ text: 'three images', images }) };
+    const result = await materializeQueuedOssAttachmentsDeferred('derived', item);
+    const saved = JSON.parse((result.item as typeof item).persistedContent);
+    expect(saved).toEqual({ text: 'three images', images: [{ ...images[0], url: blobs[0].url }, images[1], { ...images[2], url: blobs[2].url }] });
+    expect(ingestMedia.mock.calls[1][0].buffer).toEqual(Buffer.from('image-bytes'));
+    expect(warn).toHaveBeenCalledWith('materialize local image path failed, leaving ref', { error: String(fault) });
+    expect(result.materializedParts?.map(part => part.refs[0])).toEqual([blobs[0].url, blobs[2].url]);
+    const failedRefs = stage === 'resolve' ? [['ref-1']] : [];
+    expect(removeRefById.mock.calls).toEqual(failedRefs);
+    expect(deleteBlobFile.mock.calls).toEqual(stage === 'resolve' ? [[blobs[1].hash, '.png']] : []);
+    await result.cleanupBeforeAcceptance?.();
+    await result.cleanupBeforeAcceptance?.();
+    expect(removeRefById.mock.calls).toEqual([...failedRefs, ['ref-0'], ['ref-2']]);
+  });
+
+  it('retains an uncertain-location raw image when its MIME cannot be identified', async () => {
+    sessionRow.mockResolvedValue(null);
+    const store = await import('../cindy-media/blobStore.desktop.js');
+    const identify = vi.spyOn(store, 'mimeForExt').mockReturnValueOnce(null);
+    try {
+      const item = { persistedContent: JSON.stringify({ images: [{ url: '/fixture/photo.png' }] }) };
+      await expect(materializeQueuedOssAttachmentsDeferred('unknown', item)).resolves.toMatchObject({ item });
+      expect(warn).toHaveBeenCalledWith('materialize local image path failed, leaving ref', expect.anything());
+      expect(readFile).not.toHaveBeenCalled();
+      expect(ingestMedia).not.toHaveBeenCalled();
+    } finally { identify.mockRestore(); }
+  });
+
+  it('rejects the complete known-local input after a raw image was read but ingest failed', async () => {
+    ingestMedia.mockRejectedValueOnce(new Error('fixture ingest failed'));
+    const item = { persistedContent: JSON.stringify({ images: [{ url: '/fixture/local.png' }] }) };
+    await expect(materializeQueuedOssAttachmentsDeferred('local', item)).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' });
+    expect(ingestMedia.mock.calls[0][0].buffer).toEqual(Buffer.from('image-bytes'));
+    expect(removeRefById).not.toHaveBeenCalled();
+  });
+
   it('本机绝对路径图片读取失败时整条拒绝，远端工作区路径保持远端引用', async () => {
     readFile.mockRejectedValue(new Error('ENOENT'));
     const item = {

@@ -748,17 +748,20 @@ async function materializeQueuedOssAttachmentsInternal(
       cleanup: () => (run ??= Promise.resolve().then(cleanup)),
     });
   };
-  let localCleanedUp = false;
-  const cleanupLocalMaterializations = async (): Promise<void> => {
-    if (localCleanedUp) return;
-    localCleanedUp = true;
-    for (const { cleanup } of localParts) {
+  const cleanupParts = async (parts: MaterializedAttachmentPart[]): Promise<void> => {
+    for (const { cleanup } of parts) {
       try {
         await cleanup();
       } catch (e) {
         log.warn('local OSS materialization cleanup failed', { error: String(e) });
       }
     }
+  };
+  let localCleanedUp = false;
+  const cleanupLocalMaterializations = async (): Promise<void> => {
+    if (localCleanedUp) return;
+    localCleanedUp = true;
+    await cleanupParts(localParts);
   };
   const cleanupBeforeAcceptance = async (): Promise<void> => {
     // Keep the remote OSS object retryable until the direct send is accepted.
@@ -815,26 +818,25 @@ async function materializeQueuedOssAttachmentsInternal(
     if (isLocalImagePathField(refStr)) {
       const taskLocation = await getLocation();
       if (taskLocation === 'ssh') return null;
+      const firstPart = localParts.length;
       try {
         const ext = path.extname(refStr).toLowerCase();
         const mimeType = cindyMediaBlobStore.mimeForExt(ext);
         if (!mimeType) throw new Error(`unsupported image ext: ${ext}`);
-        let buffer: Buffer;
-        if (taskLocation === 'unknown') {
-          // Derived sessions may still use this machine's files. Preserve the original
-          // reference if the source lives elsewhere, as older history readers expect.
-          try { buffer = await fs.readFile(refStr); }
-          catch (error) {
-            log.warn('materialize local image path failed, leaving ref', { error: String(error) });
-            return null;
-          }
-        } else {
-          buffer = await (ports.getTaskLocation ? readAttachmentSource(() => fs.readFile(refStr)) : fs.readFile(refStr));
-        }
+        const buffer = taskLocation === 'local' && ports.getTaskLocation
+          ? await readAttachmentSource(() => fs.readFile(refStr))
+          : await fs.readFile(refStr);
         const entry = await ingestIntoBlobStore({ buffer }, mimeType);
         byRef.set(refStr, entry);
         return entry;
       } catch (e) {
+        if (taskLocation === 'unknown') {
+          // Ingest may have registered this image before resolving its managed path.
+          // Materialization is sequential. Keep earlier successful parts in the transaction.
+          await cleanupParts(localParts.splice(firstPart));
+          log.warn('materialize local image path failed, leaving ref', { error: String(e) });
+          return null;
+        }
         log.warn('materialize local image path failed', { error: String(e) });
         rejectAttachmentTransfer(e);
       }
