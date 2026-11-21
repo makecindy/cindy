@@ -17927,7 +17927,8 @@
         "modelSelectorAria": "모델 선택기",
         "categoryListAria": "{{category}} 모델",
         "effortListAria": "추론 강도",
-        "boundLocationLocked": "연결된 작업은 원래 컴퓨터에서 실행됩니다. 그 컴퓨터의 모델을 선택하세요."
+        "boundLocationLocked": "연결된 작업은 원래 컴퓨터에서 실행됩니다. 그 컴퓨터의 모델을 선택하세요.",
+        "modelGroupTitle": "모델 그룹 “{{name}}”: 실행할 때마다 소스를 고릅니다"
       }
     },
     "toast": {

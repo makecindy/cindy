@@ -307,8 +307,23 @@ export interface SchedulerQueueDeps {
   cancelAutoResume?: (sessionId: string, runId: string) => void;
 }
 
+/**
+ * 设了模式的定时任务这一次运行的选路结果(model-groups.md §6.3)。`route` 覆盖 schedule 里存的具体模型，
+ * 只用于这一次运行；模式里都用不了、沿用存下的具体模型时为 undefined。
+ */
+export interface ScheduleModelGroupPick {
+  route?: Pick<Schedule, 'modelAgentKind' | 'model' | 'providerId' | 'effort' | 'modelAgentDeviceId'>;
+  /** 这次运行建好或唤醒了任务后调用一次：提交选路记录、记下任务用着哪个来源、在任务里写说明。 */
+  started(sessionId: string): void;
+}
+
 export interface MakerScheduleRunnerDeps {
   projectForNewTask?: ScheduleProjectLookup;
+  /**
+   * 模型组：每次运行前按模式的规则重新选一个来源(额度与时段按这一刻算)。模式已删除或拿不到结果时
+   * 返回 null，这次按存下的具体模型运行，与没选模式时一致。
+   */
+  pickScheduleModelGroup?: (schedule: Schedule) => Promise<ScheduleModelGroupPick | null>;
   maker: Maker;
   /** Use the ordinary task startup funnel, including provider-group allocation.
    * The funnel may update the options to the member it actually selected. */
@@ -1007,13 +1022,30 @@ export class MakerScheduleRunner implements ScheduleRunner {
         fastMode: undefined, modelAgentKind: undefined,
       };
     }
+    // 模型组：续跑沿用任务现在的来源；脚本与插件引擎任务不按模式选。
+    let modelGroupPick: ScheduleModelGroupPick | null = null;
+    if (!ctx.resumeSessionId && schedule.modelGroup && (schedule.executionMode ?? 'agent') !== 'script'
+      && schedule.agentKind !== 'acp' && this.deps.pickScheduleModelGroup) {
+      modelGroupPick = await this.deps.pickScheduleModelGroup(schedule).catch((error: unknown) => {
+        this.deps.logger.warn?.('[runner] model group pick failed; using the saved model', {
+          scheduleId: schedule.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      });
+      throwIfFireAborted(ctx.signal, 'runner entry');
+      if (modelGroupPick?.route) schedule = { ...schedule, ...modelGroupPick.route, fastMode: false };
+    }
     const holder: EphemeralSessionHolder = { assertOwner: ctx.assertFireContext };
     const closeQuietOutput = hidesScheduledTranscript(schedule)
       ? beginQuietScheduledOutput(schedule.id, ctx.runId)
       : undefined;
     try {
       throwIfFireAborted(ctx.signal, 'runner entry');
-      return await this.fireInner(schedule, ctx, holder, enqueuePrompt);
+      const result = await this.fireInner(schedule, ctx, holder, enqueuePrompt);
+      // 顺延(没真跑)不算用了这次选路；真跑了才提交、记绑定、写说明。
+      if (modelGroupPick && !result.deferred && result.sessionId) modelGroupPick.started(result.sessionId);
+      return result;
     } finally {
       closeQuietOutput?.();
       holder.releaseAgentSwitchLock?.();
