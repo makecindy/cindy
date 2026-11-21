@@ -33,10 +33,8 @@ const identityWith = (seed: string) => ({
 }) as never;
 const SEED = Buffer.alloc(32, 7).toString('base64url');
 
-/** A cold start: nothing is recorded as verified yet. Returns the modules and how often Ed25519 really ran since. */
-async function coldStart() {
-  // reset-modules: 被测行为就是 App 重启——「验过的签名」只记在进程内存里，重启后为空，生产代码没有也不该有清空它的入口
-  vi.resetModules();
+/** The modules as the app has them after a start, and how often Ed25519 really ran since. */
+async function started() {
   const { ed25519 } = await import('@noble/curves/ed25519');
   const verify = vi.spyOn(ed25519, 'verify');
   const cache = await import('@/device-link/agentNetDirectoryCache');
@@ -47,11 +45,15 @@ async function coldStart() {
 beforeEach(() => { stored.clear(); vi.restoreAllMocks(); });
 
 it('reads an intact roster back without verifying its certificates again', async () => {
-  const writer = await coldStart();
+  // reset-modules: 「验过的签名」只记在进程内存里；写入发生在上一次运行
+  vi.resetModules();
+  const writer = await started();
   await writer.cache.writeMobileAgentNetDirectory(identityWith(SEED), devices);
   expect(writer.verify).toHaveBeenCalledTimes(devices.length);
 
-  const { cache, protocol, verify } = await coldStart();
+  // reset-modules: 被测行为就是 App 重启后的第一次读取，此时「验过的签名」为空
+  vi.resetModules();
+  const { cache, protocol, verify } = await started();
   const read = await cache.readMobileAgentNetDirectory(identityWith(SEED));
   expect(read?.devices).toEqual(devices);
   // The connection that follows checks the same certificates (AgentNetSocket.updateDirectory, authorized): still no Ed25519.
@@ -63,12 +65,16 @@ it.each([
   ['a changed certificate', (raw: string) => raw.replace(devices[0].certificate.transportKey, computers[1].transportKey)],
   ['a record written with another key', (raw: string) => raw],
 ] as const)('reads nothing from %s and does not take its certificates for verified', async (name, change) => {
-  const writer = await coldStart();
+  // reset-modules: 「验过的签名」只记在进程内存里；写入发生在上一次运行
+  vi.resetModules();
+  const writer = await started();
   await writer.cache.writeMobileAgentNetDirectory(identityWith(name === 'a record written with another key' ? Buffer.alloc(32, 9).toString('base64url') : SEED), devices);
   const [slot, raw] = [...stored.entries()][0];
   stored.set(slot, change(raw));
 
-  const { cache, protocol, verify } = await coldStart();
+  // reset-modules: 被测行为就是 App 重启后的第一次读取，此时「验过的签名」为空
+  vi.resetModules();
+  const { cache, protocol, verify } = await started();
   expect(await cache.readMobileAgentNetDirectory(identityWith(SEED))).toBeNull();
   expect(verify).not.toHaveBeenCalled();
   // Nothing was recorded: the certificate as stored still has to pass a real verification, and the changed one fails it.

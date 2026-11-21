@@ -118,7 +118,12 @@ export class NativeTransport implements Transport {
   /** The relay UDP credentials last given to the engine (`undefined`: none given yet). */
   private relayCredentials: object | null | undefined = undefined;
   private relayUdpUp = false;
-  /** When the relay's UDP path was last set up (this transport, new credentials), and the dials waiting for it (RELAY_UDP_DIAL_WAIT_MS). */
+  /**
+   * The credentials `relayUdpUp` is about and when they were first seen here, and the dials waiting for their path
+   * (RELAY_UDP_DIAL_WAIT_MS). New credentials (the relay reconnected) start over: the path of the previous ones being up
+   * says nothing about theirs.
+   */
+  private relayUdpFor: object | null = null;
   private relayUdpSince = now();
   private relayUdpWaiters: Array<() => void> = [];
   private relayUdpServer: string | undefined;
@@ -207,17 +212,23 @@ export class NativeTransport implements Transport {
     const server = this.relayUdpServer, read = this.options.relay?.udpCredentials;
     if (!server || !read || !this.identity.udpPort || !this.supports('relay-udp-v2')) return;
     const credentials = read() ?? null;
+    this.noteRelayCredentials(credentials);
     if (credentials === this.relayCredentials) return;
     this.relayCredentials = credentials;
-    if (credentials) this.relayUdpSince = now();
     await this.call({ op: 'relayUdp', server, ...(credentials
       ? { session: toBase64Url(credentials.session), key: toBase64Url(credentials.key) } : { session: null }) });
   }
+  private noteRelayCredentials(credentials: object | null): void {
+    if (credentials === this.relayUdpFor) return;
+    this.relayUdpFor = credentials; this.relayUdpUp = false; this.relayUdpSince = now();
+  }
   /** See RELAY_UDP_DIAL_WAIT_MS. Resolves at once when the path is up, cannot come up, or has had its time. */
   private relayUdpSettled(): Promise<void> {
+    const credentials = this.options.relay?.udpCredentials?.() ?? null;
+    if (!credentials || this.closed || !this.enhanced || !this.identity.udpPort || !this.supports('relay-udp-v2')) return Promise.resolve();
+    this.noteRelayCredentials(credentials);
     const remaining = this.relayUdpSince + RELAY_UDP_DIAL_WAIT_MS - now();
-    if (this.relayUdpUp || remaining <= 0 || this.closed || !this.enhanced || !this.identity.udpPort
-      || !this.supports('relay-udp-v2') || !this.options.relay?.udpCredentials?.()) return Promise.resolve();
+    if (this.relayUdpUp || remaining <= 0) return Promise.resolve();
     return new Promise((resolve) => {
       const done = () => {
         clearTimeout(timer);
@@ -380,7 +391,8 @@ export class NativeTransport implements Transport {
       const deviceId = this.deviceForLink.get(packet.link);
       if (deviceId) this.options.relay?.uplink.send(deviceId, fromBase64Url(packet.data));
     }
-    this.relayUdpUp = result.relayUdp === true;
+    // What the engine reports is about the credentials it was given; newer ones seen meanwhile are not up yet.
+    this.relayUdpUp = result.relayUdp === true && this.relayUdpFor === this.relayCredentials;
     if (this.relayUdpUp) for (const done of [...this.relayUdpWaiters]) done();
     if (Array.isArray(result.mapped)) {
       const mapped = result.mapped.filter(value => value && typeof value.address === 'string' && value.address.length <= 128

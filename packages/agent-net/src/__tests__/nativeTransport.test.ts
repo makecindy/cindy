@@ -348,7 +348,7 @@ it('lets a native-wait engine wake it instead of polling on timers', async () =>
  * - 现有覆盖缺口：现有用例的引擎替身没有 UDP 端口，也没有中转凭据，走不到中转 UDP 这段。
  * - 最小失败输入：一个带 `relay-udp-v2` 的引擎替身、一份中转凭据、一次经中转的拨号，以及就绪／不就绪／没有凭据三种情况。
  * - tier：unit，引擎用替身，计时器用替身推进；三行合计约 30 毫秒。 */
-it.each(['comes up', 'never comes up', 'was not offered'] as const)(
+it.each(['comes up', 'never comes up', 'was not offered', 'was up for the previous credentials'] as const)(
   'holds a relay dial while the relay UDP path is coming up: the path %s', async (mode) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     const local = generateIdentity('native'), remote = generateIdentity('remote');
@@ -367,19 +367,26 @@ it.each(['comes up', 'never comes up', 'was not offered'] as const)(
         return value as T;
       }, async destroy() {},
     };
-    const credentials = mode === 'was not offered' ? null : { session: Uint8Array.of(1), key: Uint8Array.of(2) };
+    let credentials = mode === 'was not offered' ? null : { session: Uint8Array.of(1), key: Uint8Array.of(2) };
     const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, send() {}, onDatagram() {}, close() {} });
     let transport: NativeTransport | undefined;
     try {
       transport = await NativeTransport.create(engine, { admit: () => true, admittedPeers: () => [{ id: key, relayId: remote.deviceId }],
         relayIdOf: () => remote.deviceId, onIncoming: () => undefined,
         relay: { deviceId: local.deviceId, uplink: uplink as never, udpCredentials: () => credentials as never }, relayUdpServer: 'relay.example.test:3478' }, undefined, true);
+      if (mode === 'was up for the previous credentials') {
+        // The relay reconnected after its UDP path had been up for a while: new credentials, whose path is not up yet.
+        up = true;
+        await vi.advanceTimersByTimeAsync(1_100);
+        credentials = { session: Uint8Array.of(3), key: Uint8Array.of(4) };
+        up = false;
+      }
       const dial = transport.connect({ id: key, dial: { relayId: remote.deviceId } });
       await vi.advanceTimersByTimeAsync(20);
       // The engine has the credentials; the dial itself has not gone to it unless there was nothing to wait for.
       if (mode !== 'was not offered') expect(ops.includes('relayUdp')).toBe(true);
       expect(ops.includes('connect')).toBe(mode === 'was not offered');
-      if (mode === 'comes up') { up = true; await vi.advanceTimersByTimeAsync(60); }
+      if (mode === 'comes up' || mode === 'was up for the previous credentials') { up = true; await vi.advanceTimersByTimeAsync(60); }
       else await vi.advanceTimersByTimeAsync(190);
       expect(ops.includes('connect')).toBe(true);
       await vi.advanceTimersByTimeAsync(60);
