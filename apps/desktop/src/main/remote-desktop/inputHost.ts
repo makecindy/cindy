@@ -411,7 +411,7 @@ export class DesktopInputHost {
       throw error;
     }
   }
-  input(events: DesktopInput[]): void {
+  input(events: DesktopInput[]): void | Promise<boolean> {
     if (this.privacyPaused) return;
     if ((this.runtime.platform ?? process.platform) === 'linux') {
       if (!this.child) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
@@ -463,7 +463,7 @@ export class DesktopInputHost {
       const mapped = process.platform === 'win32' ? screen.dipToScreenPoint(point) : point;
       return { ...event, ...mapped };
     });
-    this.write(
+    return this.write(
       native,
       batch,
       points,
@@ -483,19 +483,20 @@ export class DesktopInputHost {
     batch?: { ready: Promise<void>; complete: () => void },
     points: { x: number; y: number }[] = [],
     wheel = false,
-  ): void {
+  ): Promise<boolean> {
     const child = this.child;
     const line = `${JSON.stringify(events)}\n`;
     const connection = this.windows;
     const bytes = Buffer.byteLength(line);
     if (this.queuedBytes + bytes > 32_768 || (!connection && (!child || child.stdin.destroyed))) {
+      batch?.complete();
       this.onFailure();
-      return;
+      return Promise.resolve(false);
     }
     this.queuedBytes += bytes;
     const generation = this.generation;
     const send = async () => {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation) return false;
       this.writing = this.writing.then(async () => {
         if (generation !== this.generation) return;
         // Local-only windows must pass this batch's pointer through for as long as it is
@@ -533,11 +534,13 @@ export class DesktopInputHost {
         }
       });
       await this.writing;
+      return generation === this.generation;
     };
     // Waiting for an Agent primitive must not hold up empty native heartbeats.
-    void (batch ? batch.ready.then(send) : send())
+    return (batch ? batch.ready.then(send) : send())
       .catch(() => {
         if (generation === this.generation) this.onFailure();
+        return false;
       })
       .finally(() => {
         batch?.complete();
