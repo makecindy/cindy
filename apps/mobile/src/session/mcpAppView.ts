@@ -58,14 +58,17 @@ export class McpAppView {
     this.placeholder = placeholder;
     this.state = { loading: true, height: placeholder };
     const sdkOwner = getMobileAuthOwner();
-    const linkEpoch = getUserCloseEpoch?.(deviceId);
+    let linkEpoch: number | undefined;
+    const currentLinkEpoch = () => getUserCloseEpoch?.(deviceId);
     const released = () => viewSlots.released(sdkOwner, deviceId, deviceId);
     this.controller = new McpAppController(
       (id, input) => {
+        if (input.op === 'open' || input.op === 'open-resource') linkEpoch = currentLinkEpoch();
+        const operationLinkEpoch = typeof input.openId === 'string' ? currentLinkEpoch() : undefined;
         const send = (request: Record<string, unknown>) => {
           const preSend = () => {
             if (!isMobileAuthOwnerCurrent(sdkOwner)) throw new Error('MCP_APP_OWNER_CHANGED');
-            if (getUserCloseEpoch?.(deviceId) !== linkEpoch) throw new Error('MCP_APP_LINK_CLOSED');
+            if (currentLinkEpoch() !== linkEpoch) throw new Error('MCP_APP_LINK_CLOSED');
             if (request.op === 'open' && this.closing) throw new Error('MCP_APP_OPEN_CANCELLED');
           };
           preSend();
@@ -90,8 +93,12 @@ export class McpAppView {
           const result = await send(input);
           if (input.op === 'teardown') released();
           return result;
-        }, typeof input.openId === 'string' ? getUserCloseEpoch?.(deviceId) : undefined,
-          onUserClose ? closed => onUserClose(deviceId, closed) : undefined);
+        }, operationLinkEpoch,
+          onUserClose ? closed => {
+            const unwatch = onUserClose(deviceId, closed);
+            if (currentLinkEpoch() !== operationLinkEpoch) closed();
+            return unwatch;
+          } : undefined);
       }, sessionId, clientId,
       (message) => {
         if (this.disposed) return;

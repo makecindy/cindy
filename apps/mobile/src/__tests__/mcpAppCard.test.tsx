@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { mcpAppSandboxDocument } from '@cindy/maker-shared/mcp-apps';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { McpAppView } from '../session/mcpAppView';
+import { MCP_APP_DEFAULT_HEIGHT, McpAppView } from '../session/mcpAppView';
 import { MessageListVisibility, MessageListVisibilityContext } from '../session/messageListVisibility';
 import { MessageListRevealContext, MessageListKeepKeyboardContext } from '../session/messageListReveal';
 
@@ -30,6 +30,41 @@ it('keeps focus geometry local and rejects invalid or stale focus events', async
   receive({ top: 10, bottom: 20 });
   expect(view.state.focus).toBeUndefined();
   expect(invoke).not.toHaveBeenCalled();
+});
+
+/* #11917 regression: the real mobile View must cancel a quota wait when the
+ * device closes in the gap between the slot check and close-listener setup.
+ * Minimal failure: open reports MCP_APP_VIEW_LIMIT, the close epoch advances
+ * during listener registration, and a later release must not reopen the card. */
+it('cancels a quota wait when the device closes before its close listener is ready', async () => {
+  let epoch = 0;
+  let registered = false;
+  const getEpoch = vi.fn(() => epoch);
+  const onUserClose = vi.fn((_device: string, _listener: () => void) => {
+    registered = true;
+    // Simulate closeLink completing just before this subscription is installed.
+    epoch++;
+    return () => {};
+  });
+  const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => {
+    const input = (args[1] ?? {}) as { op?: string };
+    if (input.op === 'open') throw new Error('MCP_APP_VIEW_LIMIT');
+    return {};
+  });
+  const view = new McpAppView(invoke, 'device', 'task', 'card', () => {}, () => {}, async () => {}, 0,
+    MCP_APP_DEFAULT_HEIGHT, false, getEpoch, onUserClose);
+  let completed = false;
+  const opening = view.open({});
+  opening.then(() => { completed = true; });
+  try {
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(registered).toBe(true);
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(completed).toBe(true);
+    expect(invoke.mock.calls.filter(([, , args]) => (args[1] as { op?: string }).op === 'open')).toHaveLength(1);
+  } finally {
+    await view.close();
+  }
 });
 
 // #10431 unit: actual card focus and keyboard callbacks must reveal the input

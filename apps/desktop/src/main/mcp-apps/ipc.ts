@@ -304,8 +304,13 @@ export function registerMcpAppsIpc(
       const input = raw as Record<string, unknown>;
       const peer = typeof input.deviceId === 'string' ? input.deviceId : caller;
       const remoteOpen = typeof input.deviceId === 'string' && typeof input.openId === 'string';
-      return await slots.control(owner, caller, peer, input, dispatch, remoteOpen ? getRemoteLinkCloseEpoch(peer) : 0,
-        remoteOpen ? closed => onRemoteLinkClosed(peer, closed) : undefined);
+      const linkEpoch = remoteOpen ? getRemoteLinkCloseEpoch(peer) : 0;
+      return await slots.control(owner, caller, peer, input, dispatch, linkEpoch,
+        remoteOpen ? closed => {
+          const unwatch = onRemoteLinkClosed(peer, closed);
+          if (getRemoteLinkCloseEpoch(peer) !== linkEpoch) closed();
+          return unwatch;
+        } : undefined);
     } catch (error) {
       // device-link serializes the execution Host's IPC prefix. Unwrap that
       // envelope before applying the same public-code boundary on the viewer.
