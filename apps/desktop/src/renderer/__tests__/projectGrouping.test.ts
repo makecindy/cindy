@@ -1296,6 +1296,27 @@ describe('sidebar teammate filter only narrows teammate content', () => {
     });
     expect(rows.map((project) => project.workingDir)).toEqual(['/work/empty']);
   });
+
+  // PR #11226 review (P2): with a teammate filter the rail re-sorts by visible tasks only. An empty
+  // ordinary project must use the same clock as buildMainListEntries (no task = 0), not its lastUsedAt.
+  it('orders an empty ordinary project by its visible tasks, like the expanded list', () => {
+    const day = (d: number) => `2026-01-0${d}T00:00:00.000Z`;
+    const input = sidebarGroupingInput(
+      [s({ id: 'p-user', workingDir: '/work/p', updatedAt: day(2) })],
+      [
+        { workingDir: '/work/e', lastUsedAt: day(3), knownAgentKinds: [] },
+        { workingDir: '/work/p', lastUsedAt: day(4), knownAgentKinds: [] },
+      ],
+      null,
+      sessionActivityMs,
+    );
+    const filter = {
+      session: (session: Session) => matchesSidebarTeammateFilter(session, ['patrol'], index),
+      project: (project: ProjectNode) => sidebarTeammateProjectVisible(project, ['patrol'], index),
+    };
+    const rows = sidebarProjectRows(groupSessions(input.sessions, input).projects, 'all', filter);
+    expect(rows.map((project) => project.workingDir)).toEqual(['/work/p', '/work/e']);
+  });
 });
 
 /* ============================== device-link 远程项目 ============================== */

@@ -280,7 +280,8 @@ export function sidebarProjectRows(
       (session) => session.pinnedAt == null && (teammateFilter === null || teammateFilter.session(session)),
     );
     const node = withProjectSessions(project, visible);
-    if (!teammateFilter || project.sessions.length === 0) return [node];
+    if (!teammateFilter) return [node];
+    // Same clock as buildMainListEntries: only visible tasks count, so an empty project sorts as 0.
     const latestActivityAt = visibleLatestActivityAt(project.sessions.filter(teammateFilter.session));
     return [latestActivityAt === project.latestActivityAt ? node : { ...node, latestActivityAt }];
   });
