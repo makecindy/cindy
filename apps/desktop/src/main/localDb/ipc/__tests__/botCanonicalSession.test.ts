@@ -2666,6 +2666,23 @@ describe('Bot canonical Session lifecycle', () => {
     // The topic's model context names its root; a rewound root is reported as unavailable, not guessed.
     const { readBotDmThreadContextNote } = await import('../../../maker-ipc/botDmThreadContext');
     expect((await readBotDmThreadContextNote(first.sessionId))?.text).toContain('Plan the launch post');
+    // Different roots must never reuse a lane or its model background. This covers
+    // the persistence half of the old-topic navigation regression, without moving history.
+    insert.run('m-second-root', 'second-root', chatId, 'assistant', JSON.stringify('Plan the team outing'), 4_000);
+    const historyBefore = h.sqlite!.prepare('SELECT * FROM messages ORDER BY id').all();
+    const secondRoot = { ...root, rootClientId: 'second-root', title: 'Plan the team outing' };
+    const second = await topicInvoke('local-db:bots:dm-thread:ensure', secondRoot);
+    expect(second).toMatchObject({ ok: true, created: true });
+    expect(second.sessionId).not.toBe(first.sessionId);
+    await expect(topicInvoke('local-db:bots:dm-thread:ensure', secondRoot))
+      .resolves.toEqual({ ok: true, sessionId: second.sessionId, created: false });
+    expect(h.sqlite!.prepare('SELECT * FROM messages ORDER BY id').all()).toEqual(historyBefore);
+    const secondNote = await readBotDmThreadContextNote(second.sessionId);
+    expect(secondNote?.text).toContain('Plan the team outing');
+    expect(secondNote?.text).not.toContain('Plan the launch post');
+    expect((await readBotDmThreadContextNote(first.sessionId))?.text).not.toContain('Plan the team outing');
+    expect(h.sqlite!.prepare('SELECT sdk_session_id FROM sessions WHERE id = ?').get(second.sessionId))
+      .toEqual({ sdk_session_id: null });
     await expect(readBotDmThreadContextNote(chatId)).resolves.toBeNull();
     const rootImage = `xdt-image://${chatId}/plan.png`;
     h.sqlite!.prepare("UPDATE messages SET content = ? WHERE id = 'm-root'")
