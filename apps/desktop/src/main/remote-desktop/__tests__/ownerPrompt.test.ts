@@ -83,6 +83,33 @@ it.each(['unavailable', 'locked', 'something-else'])(
   },
 );
 
+it('names the helper panel for the capture filter and drops the id when it closes', async () => {
+  const f = fixture();
+  const panels: Array<number | null> = [];
+  const starting = watchOwnerPrompt(
+    (answer) => f.answers.push(answer),
+    'remove the privacy screen',
+    {
+      resolveBinary: async () => '/helper',
+      spawn: () => f.child as unknown as ChildProcessWithoutNullStreams,
+    },
+    undefined,
+    (windowId) => panels.push(windowId),
+  );
+  await Promise.resolve();
+  // The helper prints its panel before the versioned greeting; the id is not an answer.
+  f.line('panel 4242\n');
+  f.line('ready owner-prompt\n');
+  const prompt = await starting;
+  expect(panels).toEqual([4242]);
+  expect(f.answers).toEqual([]);
+  f.child.emit('close');
+  expect(f.answers).toEqual(['unavailable']);
+  // A window number is reused once its window closes: the id must not outlive the panel.
+  expect(panels).toEqual([4242, null]);
+  await prompt.stop();
+});
+
 it('takes the prompt down through the helper and waits for the process to end', async () => {
   vi.useFakeTimers();
   const f = fixture();

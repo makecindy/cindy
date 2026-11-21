@@ -317,6 +317,16 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   let ownerPromptLowered = false;
   // A start still waiting for the helper's `ready`; the display can be released first.
   let ownerPromptStart: AbortController | null = null;
+  // The helper draws its Touch ID control in a window of its own. Modern ScreenCaptureKit
+  // ignores `sharingType`, and Main's capture filter only excludes ids it is handed, so
+  // both the masks and that panel are published together: a remote viewer that starts its
+  // lease between two ticks cannot catch the control in its first frames.
+  let coverWindowIds: number[] = [];
+  let ownerPromptWindowId: number | null = null;
+  const publishExcludedWindows = () =>
+    deps.excludedWindows(
+      ownerPromptWindowId === null ? coverWindowIds : [...coverWindowIds, ownerPromptWindowId],
+    );
   /** The last display request the controller made, so a session change can re-evaluate. */
   let displayRequested = false;
   const raiseOwnerPrompt = () => {
@@ -335,6 +345,11 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     // for its `ready` (the cover would otherwise stay below the Dock and menu bar).
     raiseOwnerPrompt();
     start?.abort();
+    // The panel may still be closing: its id is no longer a window Main should filter.
+    if (ownerPromptWindowId !== null) {
+      ownerPromptWindowId = null;
+      publishExcludedWindows();
+    }
     if (!prompt) return;
     void prompt.stop();
   };
@@ -373,6 +388,14 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
       t('awayGuard.verifyReason'),
       undefined,
       start.signal,
+      (windowId) => {
+        // A late id from a helper this cover already let go of is not published: the
+        // prompt has been stopped and its replacement may reuse the number.
+        if (generation !== ownerPromptGeneration) return;
+        if (ownerPromptWindowId === windowId) return;
+        ownerPromptWindowId = windowId;
+        publishExcludedWindows();
+      },
     )
       .then((prompt) => {
         if (ownerPromptStart === start) ownerPromptStart = null;
@@ -460,7 +483,10 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
 
   const masks = new PrivacyScreen(
     // Persistent covers must also be excluded when a viewer reconnects.
-    deps.excludedWindows,
+    (ids) => {
+      coverWindowIds = ids;
+      publishExcludedWindows();
+    },
     // The helper or a mask ended on its own: never leave the desktop without a lock.
     async (): Promise<false | void> => {
       const transition = coverLockTransition;

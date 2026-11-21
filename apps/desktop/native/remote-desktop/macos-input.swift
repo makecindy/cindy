@@ -1119,6 +1119,8 @@ final class OwnerPromptPanel {
   func close() {
     panel.orderOut(nil)
   }
+  /** The window Main excludes from remote capture; ScreenCaptureKit ignores sharingType. */
+  var windowNumber: Int { panel.windowNumber }
 }
 // `--owner-prompt <reason>`: while the privacy screen itself keeps the display awake,
 // the owner's Touch ID check stays armed so a finger on the sensor uncovers the screen
@@ -1147,6 +1149,14 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
   var panel = OwnerPromptPanel(context: context, alpha: 0.02)
   var answered = false
   var retried = false
+  // Main needs this id for its capture exclusion filter: `sharingType = .none` alone is
+  // ignored by modern ScreenCaptureKit, which only filters ids it was handed
+  // (`macos-capture.m`). A window that keeps its id until it closes stays out of frames
+  // even when a remote lease starts in the middle of a two-second tick.
+  func announce(_ panel: OwnerPromptPanel) {
+    print("panel \(panel.windowNumber)"); fflush(stdout)
+  }
+  announce(panel)
   func arm(_ context: LAContext) {
     let started = DispatchTime.now()
     context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
@@ -1156,11 +1166,19 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
       if !success, !retried, instant,
         code == LAError.notInteractive.rawValue || code == LAError.systemCancel.rawValue {
         retried = true
-        panel.close()
-        let visible = LAContext()
-        visible.localizedFallbackTitle = ""
-        panel = OwnerPromptPanel(context: visible, alpha: 1)
-        arm(visible)
+        // The reply block runs on LocalAuthentication's own queue, and AppKit only builds
+        // and orders windows on the main thread: swap the visible fallback there, then ask
+        // again. `answered` is re-checked on the main thread in case the prompt was taken
+        // down while this hop was queued.
+        DispatchQueue.main.async {
+          guard !answered else { return }
+          panel.close()
+          let visible = LAContext()
+          visible.localizedFallbackTitle = ""
+          panel = OwnerPromptPanel(context: visible, alpha: 1)
+          announce(panel)
+          arm(visible)
+        }
         return
       }
       answered = true

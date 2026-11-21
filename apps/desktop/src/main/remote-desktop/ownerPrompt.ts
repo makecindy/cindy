@@ -16,16 +16,26 @@ export interface OwnerPrompt {
   stop(): Promise<void>;
 }
 
+export interface OwnerPromptRuntime {
+  resolveBinary(): Promise<string>;
+  spawn(binary: string, args: string[]): ChildProcessWithoutNullStreams;
+}
+
 export async function watchOwnerPrompt(
   onAnswer: (answer: OwnerAnswer) => void,
   reason: string,
-  runtime = {
+  runtime: OwnerPromptRuntime = {
     resolveBinary: resolveDesktopInputBinary,
     spawn: (binary: string, args: string[]): ChildProcessWithoutNullStreams =>
       spawn(binary, args, { stdio: 'pipe', windowsHide: true }),
   },
   /** The cover no longer holds the display while the helper is still starting. */
   signal?: AbortSignal,
+  /**
+   * The helper's own Touch ID panel, by window id, for the remote-capture exclusion
+   * filter; `null` once the prompt is gone, since the id names a window that must exist.
+   */
+  onPanel?: (windowId: number | null) => void,
 ): Promise<OwnerPrompt> {
   if (signal?.aborted) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
   // Resolving the helper can take a while (a cold build of the native source, a slow
@@ -45,10 +55,14 @@ export async function watchOwnerPrompt(
   });
   const timer = setTimeout(() => settle?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE')), 5000);
   timer.unref();
+  // The exclusion id only names a window that exists: drop it as soon as the prompt is
+  // gone, so a later capture never filters against a reused window number.
+  const clearPanel = () => onPanel?.(null);
   const emit = (answer: OwnerAnswer) => {
     if (done) return;
     done = true;
     clearTimeout(timer);
+    clearPanel();
     // Answers only mean something once the prompt is up: anything earlier is a helper
     // this build cannot use, and the cover has to stay guarded. Such a helper is often an
     // older build that ignored the unknown switch and keeps reading stdin in a mode of its
@@ -82,6 +96,7 @@ export async function watchOwnerPrompt(
     if (done) return;
     done = true;
     clearTimeout(timer);
+    clearPanel();
     requestStop();
     settle?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE'));
     settle = undefined;
@@ -93,6 +108,7 @@ export async function watchOwnerPrompt(
     if (started) return emit('unavailable');
     done = true;
     clearTimeout(timer);
+    clearPanel();
     settle?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE'));
   });
   child.stdout.on('data', (data: Buffer) => {
@@ -113,6 +129,12 @@ export async function watchOwnerPrompt(
         settle?.();
         settle = undefined;
       } else if (line === 'verified' || line === 'denied') emit(line);
+      // The helper names its own panel so Main can keep it out of remote frames: modern
+      // ScreenCaptureKit ignores `sharingType` and filters only ids it is handed.
+      else if (line.startsWith('panel ')) {
+        const windowId = Number(line.slice('panel '.length));
+        if (Number.isSafeInteger(windowId) && windowId > 0) onPanel?.(windowId);
+      }
       // No Touch ID, a locked session or an unusable build: the cover stays in charge.
       else emit('unavailable');
     }
@@ -133,6 +155,7 @@ export async function watchOwnerPrompt(
     stop: () => {
       if (done) return closed;
       done = true;
+      clearPanel();
       return closed.finally(requestStop());
     },
   };

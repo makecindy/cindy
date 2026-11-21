@@ -27,6 +27,7 @@ const prompt = vi.hoisted(() => ({
   watch: vi.fn(),
   stop: vi.fn(async () => {}),
   signals: [] as AbortSignal[],
+  panels: [] as Array<(windowId: number | null) => void>,
   resolve: (() => {}) as (value: unknown) => void,
 }));
 
@@ -67,6 +68,10 @@ vi.mock('../ownerPrompt', () => ({
     prompt.signals.push(
       rest[0] instanceof AbortSignal ? rest[0] : (rest[1] as AbortSignal),
     );
+    const onPanel = rest.find((value) => typeof value === 'function') as
+      | ((windowId: number | null) => void)
+      | undefined;
+    if (onPanel) prompt.panels.push(onPanel);
     prompt.watch(onAnswer, reason);
     return new Promise((resolve) => {
       prompt.resolve = resolve;
@@ -163,6 +168,7 @@ beforeEach(() => {
   prompt.watch.mockReset();
   prompt.stop.mockClear();
   prompt.signals.length = 0;
+  prompt.panels.length = 0;
   // Keep process methods: vitest reports errors through process.listeners.
   vi.stubGlobal(
     'process',
@@ -184,9 +190,12 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   let computerInUse = false;
   // A remote viewer: the same screen goes into its video, its clicks are desktop clicks.
   let remoteInUse = false;
+  const excluded: number[][] = [];
   const sessionChanges: Array<() => void> = [];
   startAwayGuard({
-    excludedWindows: () => {},
+    excludedWindows: (ids: number[]) => {
+      excluded.push([...ids]);
+    },
     needsDisplay: () => needsDisplay,
     enabled: () => true,
     delaySeconds: () => 30,
@@ -266,10 +275,19 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   prompt.resolve({ stop: prompt.stop });
   await settle();
 
+  // The helper names its own panel so Main can keep it out of a viewer's frames: modern
+  // ScreenCaptureKit ignores `sharingType` and filters only ids it is handed.
+  const onPanel = prompt.panels.at(-1);
+  expect(onPanel).toBeTypeOf('function');
+  onPanel?.(4242);
+  expect(excluded.at(-1)).toContain(4242);
+
   // A viewer that connects while the cover is up takes the prompt down on the next tick.
   remoteInUse = true;
   await vi.advanceTimersByTimeAsync(2_000);
   await settle();
   expect(prompt.stop).toHaveBeenCalledTimes(3);
   expect(mask.level).toBe('screen-saver');
+  // A closed panel's id is dropped: window numbers get reused.
+  expect(excluded.at(-1)).not.toContain(4242);
 });
