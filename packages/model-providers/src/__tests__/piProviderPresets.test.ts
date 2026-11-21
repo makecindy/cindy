@@ -2,7 +2,7 @@ import { sourceProviderForPreset } from '../providerPresetIdentity.js';
 import { describe, expect, it } from 'vitest';
 import { appendPiProviderPresets } from '../piProviderPresets.js';
 import { PROVIDER_MODEL_CATALOG } from '../providerModelCatalog.js';
-import { buildUserProvider } from '../user-provider.js';
+import { buildUserProvider, withConnectionDefaultHeaders } from '../user-provider.js';
 import { modelProtocolComparison } from '../modelProtocol.js';
 
 const nativeApis: Record<string, Record<string, string>> = {
@@ -94,4 +94,113 @@ it('selects a direct Messages endpoint for a Messages model and carries its cont
     outbound: 'openai-responses', mode: 'matching', localConversion: false,
   });
   expect(provider.models.pi![0].defaultEnabled).toBe(true);
+});
+
+// #11326: github-copilot 官方端点按第一跳请求头判定客户端身份,静态目录里每个模型都写了同一份。
+// 动态发现合并进来的新模型没有这份资料,只能继承连接级默认值,否则三端请求都会被拒。
+describe('github-copilot connection defaults', () => {
+  it('sinks the IDE identity headers onto the connection so discovered models inherit them', () => {
+    const copilot = appendPiProviderPresets([]).find(preset => preset.id === 'github-copilot');
+    expect(copilot).toBeTruthy();
+    const rowHeaders = PROVIDER_MODEL_CATALOG.providers['github-copilot'][0]!.execution.pi.headers!;
+    expect(Object.keys(rowHeaders).length).toBeGreaterThan(0);
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      // 连接级值与目录里各模型写的完全一致,不是另抄的一份。
+      expect(copilot!.runtimes[agent]?.headers, agent).toEqual(rowHeaders);
+    }
+  });
+
+  it('backfills preset headers onto an existing connection that only carries catalogPresetId', () => {
+    const preset = appendPiProviderPresets([]).find(entry => entry.id === 'github-copilot')!;
+    const rowHeaders = PROVIDER_MODEL_CATALOG.providers['github-copilot'][0]!.execution.pi.headers!;
+    // 存量连接:runtimes 是创建时快照的,只有 catalogPresetId 与 baseUrl,没有 headers。
+    const provider = buildUserProvider({
+      id: 'copilot-legacy', name: 'Copilot',
+      runtimes: {
+        pi: {
+          baseUrl: preset.runtimes.pi!.baseUrl,
+          catalogPresetId: 'github-copilot',
+          models: [{ id: 'gpt-6.2-sol', name: 'GPT-6.2 Sol' }],
+        },
+      },
+    }, { presets: [preset] });
+    expect(provider.routing.pi?.headerOverride).toEqual(rowHeaders);
+
+    // 用户改过端点的连接不补:那条连接不再代表预设声明的上游。
+    const custom = buildUserProvider({
+      id: 'copilot-custom', name: 'Copilot custom',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://my-gateway.example.com/v1',
+          catalogPresetId: 'github-copilot',
+          models: [{ id: 'gpt-6.2-sol', name: 'GPT-6.2 Sol' }],
+        },
+      },
+    }, { presets: [preset] });
+    expect(custom.routing.pi?.headerOverride).toBeUndefined();
+  });
+
+  it('backfills connection default headers on read for stored configs', () => {
+    const rowHeaders = PROVIDER_MODEL_CATALOG.providers['github-copilot'][0]!.execution.pi.headers!;
+    // 存量入库记录：只有 catalogPresetId，没有 headers。
+    const stored = {
+      id: 'copilot-legacy', name: 'Copilot',
+      runtimes: { pi: { baseUrl: 'https://api.individual.githubcopilot.com', catalogPresetId: 'github-copilot', models: [] } },
+    };
+    const patched = withConnectionDefaultHeaders(stored as never);
+    expect(patched.runtimes.pi?.headers).toEqual(rowHeaders);
+    // 不写库、不改原对象。
+    expect((stored.runtimes.pi as { headers?: unknown }).headers).toBeUndefined();
+
+    // 已有 headers 的连接原样返回（同一个引用）。
+    const own = { ...stored, runtimes: { pi: { ...stored.runtimes.pi, headers: { 'X-Own': '1' } } } };
+    expect(withConnectionDefaultHeaders(own as never)).toBe(own);
+
+    // 非预设连接不受影响。
+    const other = { id: 'mine', name: 'Mine', runtimes: { pi: { baseUrl: 'https://example.com/v1', models: [] } } };
+    expect(withConnectionDefaultHeaders(other as never)).toBe(other);
+  });
+
+  it('does not hand the Copilot identity to a custom gateway that kept catalogPresetId', () => {
+    const relay = {
+      id: 'copilot-relay', name: 'Relay',
+      runtimes: { pi: { baseUrl: 'https://my-gateway.example.com/v1', catalogPresetId: 'github-copilot', models: [] } },
+    };
+    expect(withConnectionDefaultHeaders(relay as never)).toBe(relay);
+  });
+
+  it('recognises business / enterprise Copilot hosts, and keeps unreadable header state intact', () => {
+    const rowHeaders = PROVIDER_MODEL_CATALOG.providers['github-copilot'][0]!.execution.pi.headers!;
+    for (const host of ['api.githubcopilot.com', 'api.individual.githubcopilot.com',
+      'api.business.githubcopilot.com', 'api.enterprise.githubcopilot.com']) {
+      const stored = {
+        id: `copilot-${host}`, name: 'Copilot',
+        runtimes: { pi: { baseUrl: `https://${host}`, catalogPresetId: 'github-copilot', models: [] } },
+      };
+      const patched = withConnectionDefaultHeaders(stored as never) as {
+        runtimes: { pi?: { headers?: Record<string, string> } };
+      };
+      expect(patched.runtimes.pi?.headers, host).toEqual(rowHeaders);
+    }
+
+    // 密文头读不出来时（headersState='unknown'）不补默认值：否则会把状态翻成 configured，
+    // 用公开默认值掩盖一次真实的读取失败。
+    const unreadable = {
+      id: 'copilot-unknown', name: 'Copilot',
+      runtimes: { pi: {
+        baseUrl: 'https://api.individual.githubcopilot.com',
+        catalogPresetId: 'github-copilot', headersState: 'unknown' as const, models: [],
+      } },
+    };
+    expect(withConnectionDefaultHeaders(unreadable as never)).toBe(unreadable);
+  });
+
+  it('keeps runtime headers a caller already set', () => {
+    const own = { 'X-Own-Header': '1' };
+    const [preset] = appendPiProviderPresets([{
+      id: 'github-copilot', name: 'GitHub Copilot', regionHint: 'global',
+      runtimes: { pi: { baseUrl: 'https://api.individual.githubcopilot.com', headers: own, models: [] } },
+    }]);
+    expect(preset!.runtimes.pi?.headers).toEqual(own);
+  });
 });

@@ -1,6 +1,7 @@
 /** Pure Pi catalog projection shared by the desktop and headless launchers.
  * Keep protocol, endpoint, model limits and per-provider credential isolation together. */
-import { providerPresetModelRecord, providerModelAdapterId, providerBaseUrlForApi } from '@cindy/model-providers';
+import { providerPresetModelRecord, providerModelAdapterId, providerBaseUrlForApi, copilotConnectionHeadersFor } from '@cindy/model-providers';
+import { isKnownNoVisionModel } from '@cindy/model-providers/vision-capability';
 import type { PiNativeApi, PiNativeModelSpec, PiNativeProviderSpec, PiNativeProvidersResult } from '@cindy/maker-core';
 import { PI_REASONING_EFFORTS, resolvePiModelRoute, runtimeCustomProviderId } from '@cindy/model-providers';
 import { providerCatalogForPi, providerModelRecord, providerModelGenerationRecord } from '@cindy/model-providers';
@@ -371,10 +372,21 @@ export function buildPiNativeProvidersFromConfigs(
       onSkip?.(cfg.id, 'pi protocol not configured for provider default');
       continue;
     }
+    // 存量 github-copilot 连接的 runtime 是创建时快照：连接级 IDE 身份头不在 rt.headers 里，
+    // 而 Pi 直连路径只读这里（不走 Provider.routing 的回填）。缺省时按预设取连接级默认值，
+    // 刷新发现的新模型才不会裸发请求（#11326）。
+    const configuredHeaders = rt.headers && Object.keys(rt.headers).length > 0 ? rt.headers : undefined;
+    const connectionHeaders =
+      configuredHeaders
+      ?? (rt.catalogPresetId === 'github-copilot' ? copilotConnectionHeadersFor(rt.baseUrl) : undefined);
+    // 这套 IDE 头是**身份**不是**鉴权**：它不能替代 API key。下面「没有 key 且没有 header」的
+    // 跳过判据必须能区分两种 header —— 用户自己配的（可能承载自定义网关的鉴权）与这里合成的
+    // 身份默认值。否则凭据被移除 / safeStorage 读失败时会漏出一个没有 apiKeyEnvVar 的半残 provider。
+    const headersAreIdentityDefaults = configuredHeaders === undefined && connectionHeaders !== undefined;
     const headers =
-      rt.headers && Object.keys(rt.headers).length > 0
+      connectionHeaders && Object.keys(connectionHeaders).length > 0
         ? Object.fromEntries(
-            Object.entries(rt.headers).map(([name, value]) => {
+            Object.entries(connectionHeaders).map(([name, value]) => {
               const envVar = uniqueEnvVar(`${cfg.id}_HEADER_${name}`);
               env[envVar] = value;
               return [name, `$${envVar}`];
@@ -384,7 +396,7 @@ export function buildPiNativeProvidersFromConfigs(
     let apiKeyEnvVar: string | undefined;
     if (authMethod === 'apiKey') {
       const key = readKey(cfg.id, 'pi');
-      if (!key && !headers) {
+      if (!key && (!headers || headersAreIdentityDefaults)) {
         onSkip?.(cfg.id, 'apiKey provider missing pi key and custom headers');
         continue;
       }
@@ -500,7 +512,13 @@ export function buildPiNativeProvidersFromConfigs(
             ? { maxTokens: resolved?.maxOutput ?? bundledModel?.maxTokens } : {}),
           ...(m.supportsImageInput !== undefined
             ? { input: (m.supportsImageInput ? ['text', 'image'] : ['text']) as Array<'text' | 'image'> }
-            : bundledModel?.input ? { input: [...bundledModel.input] } : {}),
+            : bundledModel?.input ? { input: [...bundledModel.input] }
+            // 目录稀疏 / 预设没带能力位时，最后一道是 visionCapability 的保守名单：
+            // 已知纯文本型号（glm-5.3 等）显式声明 ['text']，别把「没声明」拖到 Pi 的
+            // 乐观缺省 ['text','image'] 上 —— 智谱 v4 对 image_url 直接 400(code 1210,
+            // #11296)，图片进历史后每轮重放、会话死锁。
+            // 按实际发出的 wireId 判定：公开别名（id）可能不含型号特征。
+            : isKnownNoVisionModel(m.selectedInterface?.wireModelId ?? m.id) ? { input: ['text'] as Array<'text' | 'image'> } : {}),
           ...(resolved?.thinkingToggle && resolved.efforts.length === 0 && bundledModel?.reasoning
             ? {
                 // A switch has no UI intensity ladder. Preserve Pi's native

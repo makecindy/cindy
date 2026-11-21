@@ -22,6 +22,19 @@ const labels: Record<string, string> = {
 
 const wire = providerWireProtocolForApi;
 
+/**
+ * github-copilot 的 IDE 身份标头。官方端点按第一跳请求头判定客户端身份，静态目录里
+ * 每个模型各写一份**完全相同**的值；动态发现合并进来的新模型没有这份资料，只能继承
+ * 连接级默认值，否则三端请求都会被拒（#11326）。这里按目录实际取值下沉，不另抄一份。
+ */
+export function copilotConnectionHeaders(): Record<string, string> | undefined {
+  for (const row of PROVIDER_MODEL_CATALOG.providers['github-copilot'] ?? []) {
+    const headers = row.execution.pi.headers;
+    if (headers && Object.keys(headers).length > 0) return { ...headers };
+  }
+  return undefined;
+}
+
 /** New client bridge capability; existing endpoints and model membership stay authoritative. */
 export function withClaudeProviderRuntime(preset: ProviderPreset): ProviderPreset {
   if (preset.runtimes['claude-code']) return preset;
@@ -35,6 +48,32 @@ export function withClaudeProviderRuntime(preset: ProviderPreset): ProviderPrese
 }
 
 /** Add concrete portable connections; cloud identity/OAuth providers require their own setup. */
+/**
+ * 只有端点仍指向官方 Copilot 上游时才给这套 IDE 身份头 —— 用户把预设改成自建网关后，
+ * 那条连接的请求不该再自称 GitHub Copilot 客户端。
+ */
+export function copilotConnectionHeadersFor(baseUrl: string | undefined): Record<string, string> | undefined {
+  if (!baseUrl) return undefined;
+  return isOfficialCopilotEndpoint(baseUrl) ? copilotConnectionHeaders() : undefined;
+}
+
+/**
+ * 官方 Copilot 账号端点。静态目录的每一行目前都写 individual，但 business / enterprise
+ * 账号直连时 runtime 里存的是各自的 host（口径与 `copilotModelsUrl` 一致）—— 只按目录行去重
+ * 会把这两类账号的合法连接判成自建网关。
+ */
+const OFFICIAL_COPILOT_HOST_RE = /^api\.(?:(?:individual|business|enterprise)\.)?githubcopilot\.com$/i;
+
+export function isOfficialCopilotEndpoint(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.port && OFFICIAL_COPILOT_HOST_RE.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function appendPiProviderPresets(presets: readonly ProviderPreset[]): ProviderPreset[] {
   const portablePresets = presets.map(withClaudeProviderRuntime);
   const out = portablePresets.map(preset => {
@@ -105,7 +144,15 @@ export function appendPiProviderPresets(presets: readonly ProviderPreset[]): Pro
       modelsUrl: 'https://inference-api.nousresearch.com/v1/models', models: [],
     }])),
   });
-  return out.map(preset => ({ ...preset, runtimes: Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => {
+  const sharedCopilotHeaders = copilotConnectionHeaders();
+  return out.map(preset => {
+    // 连接级默认值:只在 runtime 自己没有 headers 时补,不覆盖调用方/用户已设的值。
+    const runtimes = preset.id === 'github-copilot' && sharedCopilotHeaders
+      ? Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [
+        agent, runtime && !runtime.headers ? { ...runtime, headers: sharedCopilotHeaders } : runtime,
+      ])) as ProviderPreset['runtimes']
+      : preset.runtimes;
+    return { ...preset, runtimes: Object.fromEntries(Object.entries(runtimes).map(([agent, runtime]) => {
     if (!runtime) return [agent, runtime];
     return [agent, { ...runtime, models: runtime.models.map(originalModel => {
       const model = providerInterfaceModelRoute(originalModel, agent as 'claude-code' | 'codex' | 'pi', preset.id, runtime.baseUrl, true);
@@ -119,7 +166,7 @@ export function appendPiProviderPresets(presets: readonly ProviderPreset[]): Pro
       };
       const current = routeOf(runtime, model);
       const candidates = [current];
-      for (const [otherAgent, other] of Object.entries(preset.runtimes)) {
+      for (const [otherAgent, other] of Object.entries(runtimes)) {
         if (!other || otherAgent === agent || JSON.stringify(other.headers ?? {}) !== JSON.stringify(runtime.headers ?? {})) continue;
         const sibling = other.models.find(m => m.id === model.id);
         if (!sibling) continue;
@@ -133,5 +180,6 @@ export function appendPiProviderPresets(presets: readonly ProviderPreset[]): Pro
       if (selected === current) return current.model;
       return { ...selected.model, id: model.id, name: model.name, defaultEnabled: model.defaultEnabled, api: selected.api, ...(agent === 'pi' ? { piApi: selected.api } : {}), route: selected.route };
     }) }];
-  })) }));
+    })) };
+  });
 }

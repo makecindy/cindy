@@ -538,6 +538,40 @@ describe('mergeWithBundled presets 兜底', () => {
     );
   });
 
+  it('远端旧预设缺连接级标头时从 bundled 补齐（#11326）', () => {
+    const bundledCopilot = BUNDLED_CATALOG.presets!.find((preset) => preset.id === 'github-copilot')!;
+    const bundledHeaders = bundledCopilot.runtimes.pi!.headers!;
+    expect(Object.keys(bundledHeaders).length).toBeGreaterThan(0);
+    // 模拟旧远端目录：同 id 预设但没有 headers 字段（该字段是后加的）。
+    const staleRemote = {
+      ...bundledCopilot,
+      runtimes: {
+        ...bundledCopilot.runtimes,
+        pi: (({ headers: _headers, ...rest }) => rest)(bundledCopilot.runtimes.pi!),
+      },
+    };
+    const merged = mergeWithBundled(minimalCatalog({ presets: [staleRemote] }));
+    expect(merged.presets?.find((preset) => preset.id === 'github-copilot')?.runtimes.pi?.headers)
+      .toEqual(bundledHeaders);
+  });
+
+  it('远端同 id 预设改到自建网关时不继承 bundled 的连接级标头（#11326）', () => {
+    const bundledCopilot = BUNDLED_CATALOG.presets!.find((preset) => preset.id === 'github-copilot')!;
+    const relay = {
+      ...bundledCopilot,
+      runtimes: {
+        ...bundledCopilot.runtimes,
+        pi: {
+          ...(({ headers: _headers, ...rest }) => rest)(bundledCopilot.runtimes.pi!),
+          baseUrl: 'https://my-gateway.example.com/v1',
+        },
+      },
+    };
+    const merged = mergeWithBundled(minimalCatalog({ presets: [relay] }));
+    expect(merged.presets?.find((preset) => preset.id === 'github-copilot')?.runtimes.pi?.headers)
+      .toBeUndefined();
+  });
+
   it('远端没带 presets → 回落 bundled 的', () => {
     const merged = mergeWithBundled(minimalCatalog());
     expect(merged.presets).toEqual(BUNDLED_CATALOG.presets);
