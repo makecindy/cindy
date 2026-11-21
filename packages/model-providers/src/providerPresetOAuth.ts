@@ -28,11 +28,22 @@ export function providerPresetOAuth(id: string): OAuthProviderDescriptor | undef
       flow: 'device-code', deviceAuthorizationUrl: 'https://auth.kimi.com/api/oauth/device_authorization',
       tokenUrl: 'https://auth.kimi.com/api/oauth/token', clientId: '17e5f671-d194-4dfb-9706-5516cb48c098', scopes: '',
     };
+    // Devin CLI OAuth (oh-my-pi auth/devin.kdl): PKCE + JSON token body, no client_id.
+    case 'devin': return {
+      authorizeUrl: 'https://app.devin.ai/auth/cli/continue',
+      tokenUrl: 'https://api.devin.ai/auth/cli/token',
+      clientId: '',
+      scopes: '',
+      redirectPort: 59653,
+      extraAuthParams: { prompt: 'select_account' },
+    };
     default: return undefined;
   }
 }
 
-export function providerOAuthContract(oauth: OAuthProviderDescriptor): 'openrouter' | 'copilot' | 'nous' | 'minimax' | undefined {
+export function providerOAuthContract(oauth: OAuthProviderDescriptor): 'openrouter' | 'copilot' | 'nous' | 'minimax' | 'devin' | undefined {
+  if (oauth.flow !== 'device-code' && oauth.authorizeUrl === 'https://app.devin.ai/auth/cli/continue'
+    && oauth.tokenUrl === 'https://api.devin.ai/auth/cli/token') return 'devin';
   if (oauth.flow !== 'device-code' && oauth.authorizeUrl === 'https://openrouter.ai/auth'
     && oauth.tokenUrl === 'https://openrouter.ai/api/v1/auth/keys') return 'openrouter';
   if (oauth.flow === 'device-code' && oauth.deviceAuthorizationUrl === 'https://github.com/login/device/code'

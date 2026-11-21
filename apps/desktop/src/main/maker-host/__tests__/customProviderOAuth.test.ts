@@ -7,7 +7,13 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { buildUserProvider, type CustomProviderConfig } from '@cindy/model-providers';
+import {
+  BUNDLED_CATALOG,
+  buildUserProvider,
+  providerPresetOAuth,
+  providerPresetOAuthRuntimes,
+  type CustomProviderConfig,
+} from '@cindy/model-providers';
 
 import {
   mergeDiscoveredModelsIntoConfig,
@@ -72,6 +78,28 @@ describe('validateCustomProviderConfig auth 段', () => {
       bad({ ...DEVICE_OAUTH, deviceAuthorizationUrl: 'http://auth.acme.example/device' }).ok,
     ).toBe(false);
     expect(bad({ ...DEVICE_OAUTH, redirectPort: 9123 }).ok).toBe(false);
+  });
+
+  it('Devin 固定 OAuth 合同允许空 clientId（创建配置路径）', () => {
+    const oauth = providerPresetOAuth('devin');
+    const preset = BUNDLED_CATALOG.presets?.find((entry) => entry.id === 'devin');
+    expect(oauth).toBeDefined();
+    expect(preset).toBeDefined();
+    expect(oauth!.clientId).toBe('');
+    const config: CustomProviderConfig = {
+      id: 'devin-acct',
+      name: preset!.name,
+      auth: { method: 'oauth', oauth: oauth! },
+      runtimes: providerPresetOAuthRuntimes(preset!),
+    };
+    expect(validateCustomProviderConfig(config)).toEqual({ ok: true });
+    // Non-Devin empty clientId still rejected.
+    expect(
+      validateCustomProviderConfig({
+        ...BASE,
+        auth: { method: 'oauth', oauth: { ...OAUTH, clientId: '' } },
+      }).ok,
+    ).toBe(false);
   });
 
   it('apiKey method 不允许携带 oauth 描述符；非法 method 拒绝', () => {
