@@ -80,13 +80,14 @@ describe('isContextOverflowErrorData', () => {
 // The broadcast hold the desktop's delivery and the Node Host share: only a terminal overflow-class
 // error of a local task is held for recovery; a remote task, a retried error or another error is not.
 describe('holdsContextRecoveryBroadcast', () => {
-  const local = { remoteHostId: null };
+  const local = { remoteHostId: null, agentKind: 'pi' as const };
   const error = (data: Record<string, unknown>) => ({ type: 'error', data } as never);
   it.each([
     ['previous compaction model denied', { reason: CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON }],
     ['context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }],
     ['oversized history', { reason: CODEX_HISTORY_OVERSIZED_REASON, message: 'history too large' }],
     ['unsupported request option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON, message: 'option refused' }],
+    ['raw Pi request-body 413', { message: '413 length limit exceeded' }],
   ])('holds a terminal %s error of a local task', (_kind, data) => {
     expect(holdsContextRecoveryBroadcast(local, error(data))).toBe(true);
   });

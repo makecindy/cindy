@@ -38,6 +38,7 @@ import {
   isContextOverflowErrorData,
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
+  isPiRequestBodyTooLargeErrorData,
 } from './contextOverflowRollover.js';
 import { isTerminalTurnErrorEvent, type SessionListActivityTracker } from './sessionTurnActivityTracker.js';
 import { botGroupRuntimeFailureCode } from './botGroupRuntimeFailure.js';
@@ -311,6 +312,7 @@ export function finishSessionTerminalEvent(
       isContextOverflowErrorData: data => isContextOverflowErrorData(data),
       isOversizedHistoryErrorData: data => isOversizedHistoryErrorData(data),
       isUnsupportedRequestOptionErrorData: data => isUnsupportedRequestOptionErrorData(data),
+      isPiRequestBodyTooLargeErrorData: data => isPiRequestBodyTooLargeErrorData(data),
       reserveTurnErrorPersistId: (...args) => reserveTurnErrorPersistId(...args),
       releaseReservedTurnErrorPersistId: (...args) => releaseReservedTurnErrorPersistId(...args),
       onTurnErrorEvent: (...args) => onTurnErrorEvent(...args),

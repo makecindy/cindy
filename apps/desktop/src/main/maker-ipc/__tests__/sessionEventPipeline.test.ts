@@ -1476,6 +1476,28 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  it('claims and suppresses a raw Pi request-body 413 terminal', async () => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: 'pi' });
+    h.activity.setSessionInTurn('task', true);
+    const tryRecover = vi.fn(async () => true);
+    (h.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = {
+      claim: vi.fn(() => 'claimed' as const),
+      tryRecover,
+    };
+    h.emit(event('error', { message: '413 length limit exceeded' }));
+    expect(tryRecover).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ message: '413 length limit exceeded' }),
+      { instanceId: undefined, generation: undefined },
+    );
+    expect(effects.fn('broadcast')).not.toHaveBeenCalled();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.deps.overflowSuppressedBroadcasts.size).toBe(0);
+    await h.dispose();
+  });
+
   it('flushes a suppressed compat error when no rollover owner can surface it', async () => {
     const h = harness();
     h.activity.setSessionInTurn('task', true);

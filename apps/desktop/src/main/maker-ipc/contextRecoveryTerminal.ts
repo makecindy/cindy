@@ -14,6 +14,7 @@ export interface ContextRecoveryTerminalPorts {
   isContextOverflowErrorData: typeof rollover.isContextOverflowErrorData;
   isOversizedHistoryErrorData: typeof rollover.isOversizedHistoryErrorData;
   isUnsupportedRequestOptionErrorData: typeof rollover.isUnsupportedRequestOptionErrorData;
+  isPiRequestBodyTooLargeErrorData: typeof rollover.isPiRequestBodyTooLargeErrorData;
   reserveTurnErrorPersistId: typeof persist.reserveTurnErrorPersistId;
   releaseReservedTurnErrorPersistId: typeof persist.releaseReservedTurnErrorPersistId;
   onTurnErrorEvent: typeof persist.onTurnErrorEvent;
@@ -47,7 +48,8 @@ export function claimContextRecoveryTerminal(ports: ContextRecoveryTerminalPorts
             generation: event.sessionTurnGeneration,
           }, ports.isContextOverflowErrorData(attributedEvent.data)
             || ports.isOversizedHistoryErrorData(attributedEvent.data)
-            || ports.isUnsupportedRequestOptionErrorData(attributedEvent.data)) ?? 'idle')
+            || ports.isUnsupportedRequestOptionErrorData(attributedEvent.data)
+            || (session.agentKind === 'pi' && ports.isPiRequestBodyTooLargeErrorData(attributedEvent.data))) ?? 'idle')
         : 'idle';
   return overflowClaim;
 }
