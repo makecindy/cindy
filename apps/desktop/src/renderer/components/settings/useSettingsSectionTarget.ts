@@ -7,6 +7,7 @@ export function useSettingsSectionTarget(
   navigationKey: string,
   fallbackTargetId?: string,
   onRevealTarget?: (target: HTMLElement) => void,
+  onTargetMissing?: () => void,
 ) {
   useEffect(() => {
     const container = scrollRef.current;
@@ -37,7 +38,10 @@ export function useSettingsSectionTarget(
       const next = exact?.getClientRects().length && !exact.closest('[inert]')
         ? exact
         : (fallbackTargetId ? document.getElementById(fallbackTargetId) : null);
-      if (!next || !container.contains(next)) return;
+      if (!next || !container.contains(next)) {
+        if (!exact) onTargetMissing?.();
+        return;
+      }
       const changed = next !== target;
       if (changed) {
         if (timer !== undefined) window.clearTimeout(timer);
@@ -88,5 +92,5 @@ export function useSettingsSectionTarget(
       if (timer !== undefined) window.clearTimeout(timer);
       target?.classList.remove('settings-search-target-highlight');
     };
-  }, [targetId, fallbackTargetId, navigationKey, scrollRef, onRevealTarget]);
+  }, [targetId, fallbackTargetId, navigationKey, scrollRef, onRevealTarget, onTargetMissing]);
 }

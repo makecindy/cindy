@@ -101,6 +101,24 @@ describe('settings definition and navigation', () => {
     expect(target.classList.contains('settings-search-target-highlight')).toBe(true);
   });
 
+  // Unit: a deep link whose exact control is inside a keepMounted section must
+  // open that section even when the control is not mounted until after reveal.
+  it('opens an advanced disclosure when the exact target is not mounted yet', async () => {
+    function MissingDisclosurePage() {
+      const ref = useRef<HTMLDivElement>(null);
+      const [open, setOpen] = useState(false);
+      const revealTarget = useCallback(() => setOpen(true), []);
+      useSettingsSectionTarget('settings-browser-target', ref, 'advanced-missing', undefined, undefined, revealTarget);
+      return <div ref={ref}>
+        {open && <div id="settings-browser-target">Browser target</div>}
+      </div>;
+    }
+
+    const view = render(<MissingDisclosurePage />);
+    await act(async () => { vi.advanceTimersByTime(0); });
+    expect(view.getByText('Browser target')).toBeTruthy();
+  });
+
   // Unit, PR #11473: the first frame observes only the Suspense fallback.
   // Replacing it with an initially collapsed section can clamp the scroll
   // before the animation grows the page. Test the final scroll position.

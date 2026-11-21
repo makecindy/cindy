@@ -392,12 +392,26 @@ function SettingsViewContent() {
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;
   const searchNavigation = useMemo(() => ({ entry: searchEntry, activation: searchActivation }), [searchEntry, searchActivation]);
+  const advancedFallbackTargetIds = useMemo(
+    () => new Set<string>([
+      generalSettings.agentResource.targetId,
+      generalSettings.gitSafety.targetId,
+      generalSettings.piExtensions.targetId,
+      generalSettings.experimental.targetId,
+    ]),
+    [],
+  );
+  const revealAdvancedIfMissing = useMemo(
+    () => advancedFallbackTargetIds.has(searchEntry?.fallbackTargetId ?? '') ? () => setAdvancedOpen(true) : undefined,
+    [advancedFallbackTargetIds, searchEntry?.fallbackTargetId],
+  );
   useSettingsSectionTarget(
     searchEntry?.targetId ?? null,
     contentScrollRef,
     `${navigationKey}:${searchActivation}`,
     searchEntry?.fallbackTargetId,
     revealAdvancedTarget,
+    revealAdvancedIfMissing,
   );
 
   // 旧「工具密钥」「第三方平台」深链落到设置里的插件分区,不再离开设置。
