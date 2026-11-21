@@ -7006,6 +7006,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       providers: import('@cindy/model-providers').ProviderView[];
       providerOrder: string[];
       disabledProviders?: Record<string, boolean>;
+      hiddenProviders?: Record<string, boolean>;
     }> => ipcRenderer.invoke('maker:provider:list'),
     setProviderRemoteAccess: (input: { providerId: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
       ipcRenderer.invoke('maker:provider:remote-access:set', input),
@@ -7337,6 +7338,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       input:
         | { kind: 'model'; providerId: string; modelIds: string[]; disabled: boolean }
         | { kind: 'provider'; providerId: string; disabled: boolean; remoteDeviceId?: string }
+        // provider-hidden = 只从模型选择器里收起,不是准入(见 disableOverrides.ts)。
+        | { kind: 'provider-hidden'; providerId: string; hidden: boolean; remoteDeviceId?: string }
         // reset = 恢复默认:删除该供应商整组停用 override(含陈旧条目),遵循
         // configuration-and-overrides.md §4 的「删 override 跟随默认」语义。
         | { kind: 'reset'; providerId: string },
