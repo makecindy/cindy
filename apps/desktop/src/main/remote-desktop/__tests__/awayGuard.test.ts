@@ -93,6 +93,20 @@ describe('AwayGuardController', () => {
     expect(guard.masked).toBe(false);
   });
 
+  it('uncovers after the system verified the owner, and starts the absence again', async () => {
+    // User decision 2026-11-17: resting a finger on the Touch ID sensor while the cover
+    // keeps the display awake is the owner coming back, so it uncovers instead of locking.
+    const { state, guard, away } = setup();
+    await away(AWAY_MS);
+    expect(guard.masked).toBe(true);
+    guard.ownerPresent();
+    expect(guard.masked).toBe(false);
+    expect(state.events).toEqual(['show', 'hide']);
+    expect(state.awake).toBe(false);
+    await away(1_000);
+    expect(guard.masked).toBe(false);
+  });
+
   it('holds the display only while work needs it, and keeps a cover until the lock', async () => {
     const { state, guard, away } = setup();
     state.working = false;

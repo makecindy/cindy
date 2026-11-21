@@ -185,6 +185,20 @@ export class AwayGuardController {
     if (this.mask === 'none') this.deps.keepDisplayAwake(false);
   }
 
+  /** The system verified the owner on the cover: uncover, never lock
+   * (docs/product-rules/privacy-screen.md, user decision 2026-11-17). */
+  ownerPresent(): void {
+    this.remoteExit = false;
+    this.previewUntil = 0;
+    this.ownerInputAt = this.deps.now();
+    if (this.mask !== 'none') {
+      this.mask = 'none';
+      this.deps.hideMasks();
+      this.deps.log('masks released', { reason: 'verified' });
+    }
+    this.deps.keepDisplayAwake(false);
+  }
+
   /** The masks or the helper went away on their own (input lock, window loss). */
   masksEnded(): void {
     this.remoteExit = false;

@@ -4,6 +4,8 @@ import { resolveDesktopOutboundProxy } from '../maker-host/outbound-proxy-resolv
 import { createComputerRuntime } from './computer.js';
 export type { ComputerDriverInstallResult, ComputerDriverUpdateCheck, ComputerDriverPermissionGrantResult, ComputerMcpDepsOptions, ActivityTimeoutOptions, CuaDriverReleaseAsset, ComputerDriverUpdateProgress } from './computer.js';
 export const {
+  openComputerUseSessions,
+  onComputerUseSessionsChange,
   getComputerDriverAppBundlePath,
   resetComputerDriverPermissionProbeCacheForTests,
   isComputerDriverPermissionProbePaused,

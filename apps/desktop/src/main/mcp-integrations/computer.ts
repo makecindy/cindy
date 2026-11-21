@@ -645,6 +645,22 @@ const cuaDriverSessionGenerations = new Map<string, number>();
 const cuaDriverSessionNames = new Map<string, string>();
 let cuaDriverNamedRunSequence = 0;
 const cuaMcpSessionCloseVersions = new Map<string, number>();
+// The away cover keeps its Touch ID prompt off while the Agent drives this desktop:
+// Computer Use screenshots cover the whole display and desktop clicks are global.
+const computerUseListeners = new Set<() => void>();
+function onComputerUseSessionsChange(listener: () => void): () => void {
+  computerUseListeners.add(listener);
+  return () => void computerUseListeners.delete(listener);
+}
+function openComputerUseSessions(): number {
+  // Teardown counts as use: a session being cleaned up keeps native input alive until its
+  // client has closed (see the teardown invariant in cleanupComputerDriverSessionEntry),
+  // and a late capture or global click must still not meet a freshly armed system sheet.
+  return cuaMcpSessions.size + cuaMcpSessionCleanups.size;
+}
+function notifyComputerUseSessions(): void {
+  for (const listener of computerUseListeners) listener();
+}
 
 function getInstallCommand(): string {
   return process.platform === 'win32' ? WINDOWS_INSTALL_COMMAND : UNIX_INSTALL_COMMAND;
@@ -2334,7 +2350,10 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
       MCP_STARTUP_TIMEOUT_MS,
       `cua-driver mcp session ${sessionId} startup`,
     ).catch(async (err) => {
-      if (cuaMcpSessions.get(sessionId) === entry) cuaMcpSessions.delete(sessionId);
+      if (cuaMcpSessions.get(sessionId) === entry) {
+        cuaMcpSessions.delete(sessionId);
+        notifyComputerUseSessions();
+      }
       try {
         await client.close();
       } catch {
@@ -2348,6 +2367,7 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
     }),
   };
   cuaMcpSessions.set(sessionId, entry);
+  notifyComputerUseSessions();
   return entry;
 }
 
@@ -4073,10 +4093,13 @@ function cleanupComputerDriverSessionInternal(
     return Promise.resolve();
   }
   cuaMcpSessions.delete(sessionId);
+  notifyComputerUseSessions();
   const cleanup = cleanupComputerDriverSessionEntry(sessionId, entry)
     .finally(() => {
       if (cuaMcpSessionCleanups.get(sessionId) === cleanup) {
         cuaMcpSessionCleanups.delete(sessionId);
+        // Only now is the native side done with this desktop: let the cover re-arm.
+        notifyComputerUseSessions();
       }
     });
   cuaMcpSessionCleanups.set(sessionId, cleanup);
@@ -4152,5 +4175,5 @@ async function dispose(): Promise<void> {
   powerMonitorHooked = false;
   await cleanupAllComputerDriverSessions();
 }
-return { dispose, getComputerDriverAppBundlePath, resetComputerDriverPermissionProbeCacheForTests, isComputerDriverPermissionProbePaused, pauseComputerDriverPermissionProbe, resumeComputerDriverPermissionProbe, isInstallLockHolderAlive, clearStaleCuaInstallLock, sampleInstallProcessTree, runProcessWithActivityTimeout, installIdleTimeoutForPlatform, buildCuaInstallerProxyEnv, listComputerWindowsForAtMention, resetAtMentionWindowCacheForTests, getComputerDriverStatus, installComputerDriver, extractDriverSemver, compareSemver, resolveCuaDriverHostArch, getCuaDriverReleaseAssetName, resetComputerDriverUpdateStateForTests, checkComputerDriverUpdate, extractCurlOutputPath, matchAssetSizeByFilename, updateComputerDriver, getComputerDriverAppIcon, resetComputerDriverAppIconCacheForTests, cancelComputerDriverPermissionGrant, grantComputerDriverPermissions, USER_INPUT_ACTIVE_WINDOW_MS, resetDesktopInputGuardStateForTests, seedDesktopScreenLocked, isDesktopScreenLocked, msSinceForeignDesktopInput, setPhysicalInputShielded, assertNoRecentUserInput, callComputerDriverTool, cleanupComputerDriverSession, cleanupAllComputerDriverSessions, getComputerMcpDeps };
+return { dispose, openComputerUseSessions, onComputerUseSessionsChange, getComputerDriverAppBundlePath, resetComputerDriverPermissionProbeCacheForTests, isComputerDriverPermissionProbePaused, pauseComputerDriverPermissionProbe, resumeComputerDriverPermissionProbe, isInstallLockHolderAlive, clearStaleCuaInstallLock, sampleInstallProcessTree, runProcessWithActivityTimeout, installIdleTimeoutForPlatform, buildCuaInstallerProxyEnv, listComputerWindowsForAtMention, resetAtMentionWindowCacheForTests, getComputerDriverStatus, installComputerDriver, extractDriverSemver, compareSemver, resolveCuaDriverHostArch, getCuaDriverReleaseAssetName, resetComputerDriverUpdateStateForTests, checkComputerDriverUpdate, extractCurlOutputPath, matchAssetSizeByFilename, updateComputerDriver, getComputerDriverAppIcon, resetComputerDriverAppIconCacheForTests, cancelComputerDriverPermissionGrant, grantComputerDriverPermissions, USER_INPUT_ACTIVE_WINDOW_MS, resetDesktopInputGuardStateForTests, seedDesktopScreenLocked, isDesktopScreenLocked, msSinceForeignDesktopInput, setPhysicalInputShielded, assertNoRecentUserInput, callComputerDriverTool, cleanupComputerDriverSession, cleanupAllComputerDriverSessions, getComputerMcpDeps };
 }

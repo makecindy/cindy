@@ -1,3 +1,19 @@
+/** Which biometry this Mac offers, as Apple names it (`LAContext.biometryType`). */
+export type DesktopBiometry = 'touchid' | 'faceid' | 'opticid' | 'none';
+
+/** Apple's user-facing names; the system prompt uses the same words. */
+export function biometryLabel(type: DesktopBiometry): string {
+  switch (type) {
+    case 'faceid':
+      return 'Face ID';
+    case 'opticid':
+      return 'Optic ID';
+    default:
+      // No biometry never shows the prompt, and an unreadable answer keeps today's copy.
+      return 'Touch ID';
+  }
+}
+
 /** Settings → App behavior → Keep working while away (macOS). Local app renderer only. */
 export interface AwayGuardState {
   /** macOS 14+ only; other platforms hide the setting. */
@@ -7,6 +23,8 @@ export interface AwayGuardState {
   delaySeconds: AwayGuardDelaySeconds | null;
   /** Accessibility access of the input helper that turns local input into the lock. */
   permission: 'granted' | 'missing' | 'unknown';
+  /** Names the owner's biometry the way Apple does ("Touch ID" / "Face ID"). */
+  biometry: DesktopBiometry;
 }
 
 export const AWAY_GUARD_DELAY_OPTIONS = [30, 60, 120, 300] as const;

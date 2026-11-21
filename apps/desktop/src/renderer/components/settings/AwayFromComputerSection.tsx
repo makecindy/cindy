@@ -17,7 +17,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { SETTINGS_HINT, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useAwayGuardSetting } from '@/hooks/useAwayGuardSetting';
 import { useKeepAwakeSetting } from '@/hooks/useKeepAwakeSetting';
-import { isAwayGuardDelaySeconds } from '../../../shared/awayGuard';
+import { biometryLabel, isAwayGuardDelaySeconds } from '../../../shared/awayGuard';
 import { awayFromComputerSettings } from './AwayFromComputerSection.settings-search';
 import { BehaviorRow } from './BehaviorRow';
 
@@ -29,6 +29,8 @@ export function AwayFromComputerSection() {
   const platform = window.electronAPI?.platform;
   // Hyprland draws its cover in the compositor; there is no preview there yet.
   const canPreview = platform !== 'linux';
+  // Copy names the owner's biometry the way Apple does (Touch ID / Face ID / Optic ID).
+  const biometry = biometryLabel(awayGuard.state?.biometry ?? 'none');
 
   const rows: { key: string; node: ReactNode }[] = [
     {
@@ -68,6 +70,7 @@ export function AwayFromComputerSection() {
               : platform === 'linux'
                 ? 'settings.windowBehavior.awayGuard.hintLinux'
                 : awayFromComputerSettings.awayGuard.descriptionKey,
+            { biometry },
           )}
           checked={privacyOn}
           disabled={awayGuard.busy}
@@ -95,7 +98,7 @@ export function AwayFromComputerSection() {
                 </Button>
                 {awayGuard.preview === 'starting' ? (
                   <p className={SETTINGS_HINT}>
-                    {t('settings.windowBehavior.awayGuard.previewStarting')}
+                    {t('settings.windowBehavior.awayGuard.previewStarting', { biometry })}
                   </p>
                 ) : awayGuard.preview === 'unavailable' ? (
                   <p className={SETTINGS_HINT} role="alert">

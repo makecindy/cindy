@@ -668,6 +668,7 @@ import { markStartupMilestone } from './startupTimeline';
 import {
   isLinuxAwayCoverUp,
   registerRemoteDesktopIpc,
+  remoteDesktop,
   setAwayCaptureExcludedWindows,
   startLinuxAwayCover,
 } from './remote-desktop';
@@ -678,6 +679,8 @@ import {
   seedDesktopScreenLocked,
   msSinceForeignDesktopInput,
   setPhysicalInputShielded,
+  openComputerUseSessions,
+  onComputerUseSessionsChange,
 } from './mcp-integrations/computer.desktop.js';
 import * as usageReporting from './product-token-usage/reporting.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
@@ -5343,6 +5346,15 @@ const registerIpcHandlers = () => {
       enabled: () => readWindowBehaviorSettings().awayGuard,
       delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
       screenLocked: isDesktopScreenLocked,
+      // The Agent driving this desktop must not find a system prompt in its screenshots
+      // or under its desktop clicks (2026-11-18 user decision).
+      computerInUse: () => openComputerUseSessions() > 0,
+      onComputerInUseChange: onComputerUseSessionsChange,
+      // A remote viewer receives this same screen: the system sheet must not sit in its
+      // video or under its injected clicks (docs/product-rules/privacy-screen.md).
+      // A viewer that just disconnected may still have injected input landing: the native
+      // helper keeps ownership until it closes (inputHost waits up to 1.5 s for that).
+      remoteInUse: () => remoteDesktop.hasActiveLease || remoteDesktop.leaseJustEnded(),
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });

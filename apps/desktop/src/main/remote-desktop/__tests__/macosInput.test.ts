@@ -58,6 +58,8 @@ it.skipIf(process.platform !== 'darwin')(
         ['--away-guard'],
         ['--lock-screen'],
         ['--verify-owner', 'remove the privacy screen'],
+        ['--owner-prompt', 'remove the privacy screen'],
+        ['--biometry'],
         ['--request-permission'],
         ['--clipboard-version'],
         ['--clipboard-content-version'],

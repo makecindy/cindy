@@ -170,7 +170,39 @@ The helper consumes all physical input; only a deliberate press (key down, mouse
 button down, a modifier going down, or a real scroll of 30+ points within a second)
 turns into the system lock. Releases, pointer drift, Caps Lock and stray
 scroll ticks are swallowed without locking, because idle mice, wireless receivers and
-some keypads emit them on their own (`AwayInputGate`). The owner unlocks with
+some keypads emit them on their own (`AwayInputGate`). While the cover itself keeps the
+display awake, Main also arms the owner's Touch ID check (`--owner-prompt`): resting a
+finger on the sensor verifies the owner and uncovers without locking, while keys and
+clicks still turn into the lock. The check lives only as long as the cover holds the
+display awake, and goes when the cover locks, ends, or enters the lock-failed state; it
+never unlocks a locked Mac.
+
+The check is not the standard authentication alert. The helper owns a transparent panel
+(`sharingType = .none`) above the cover and puts an `LAAuthenticationView`
+(`LocalAuthenticationEmbeddedUI`) in it, so the system keeps drawing and judging the
+prompt. The panel sits at 2% opacity — invisible on purpose (2026-11-20 user request) —
+because a system that refuses to verify against a control the user cannot see is the only
+thing that can stop it: an instant `LAErrorNotInteractive` / `systemCancel` re-mounts the
+same control at full opacity and asks once more. Cindy still only chooses size and place.
+The helper prints its panel's window number (`panel <id>`) before the versioned greeting
+and Main feeds that id into the away-capture exclusion filter alongside the mask ids:
+modern ScreenCaptureKit ignores `sharingType` and only excludes ids the caller supplies,
+so a viewer whose lease starts between two away-guard ticks still gets frames without
+the control. The id is dropped from the filter the moment the panel closes, since window
+numbers are reused. Mounting is still suppressed while any
+Computer Use session is open (`openComputerUseSessions` / `onComputerUseSessionsChange`)
+and while a remote viewer holds a lease (`RemoteDesktopController.hasActiveLease`,
+including the few seconds after one ends, when native input may still be landing):
+those paths capture the whole display, and a bare-touch signal cannot tell the owner
+from anyone else who happens to touch the sensor.
+
+Taking the control down goes through the helper's `stop` command, including a start that
+is still waiting for `ready owner-prompt`. The greeting is versioned on purpose — an
+older shipped helper ignores the unknown switch, falls through to its generic input loop
+and would also print a bare `ready`; Main treats anything but `ready owner-prompt` as
+"this build cannot show the control", so touch-to-return is never promised by a helper
+that cannot keep it.
+The owner unlocks with
 Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
 is up. Covering every Space briefly makes Electron a background app, so Main brings the
 Cindy window that was focused back to the front after unlock. Away masks are

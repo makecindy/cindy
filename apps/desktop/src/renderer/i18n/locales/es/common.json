@@ -1148,10 +1148,10 @@
   },
   "awayGuard": {
     "status": "Cindy está trabajando",
-    "hint": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
+    "hint": "Cualquier tecla bloquea; desbloquea con tu huella o contraseña. Mientras aparece el aviso del sistema, pon el dedo en {{biometry}} y vuelves sin más.",
     "lockFailed": {
       "status": "Cindy no pudo bloquear esta Mac",
-      "hint": "Toca la computadora para volver a intentar el bloqueo. Si sigue sin bloquearse, verifícate con Touch ID o tu contraseña para quitar la pantalla. También puedes cerrar la tapa o pulsar el botón de encendido.",
+      "hint": "Toca la computadora para volver a intentar el bloqueo. Si sigue sin bloquearse, verifícate con {{biometry}} o tu contraseña para quitar la pantalla. También puedes cerrar la tapa o pulsar el botón de encendido.",
       "hintWindows": "Toca la computadora para volver a intentar el bloqueo. Si sigue sin bloquearse, verifícate con Windows Hello o tu PIN para quitar la pantalla. También puedes presionar la tecla del logotipo de Windows + L."
     },
     "hintWindows": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
@@ -2535,10 +2535,10 @@
       "macRestartNote": "En macOS, reinicia la aplicación para que los cambios surtan efecto.",
       "awayGuard": {
         "label": "Usar pantalla de privacidad en lugar de bloquear",
-        "hint": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con Touch ID o tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
+        "hint": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con {{biometry}} o tu contraseña, o, mientras aparece el aviso del sistema, pon el dedo en {{biometry}} y vuelves sin más. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
         "permission": "Permite a Cindy en Ajustes del Sistema > Privacidad y seguridad > Accesibilidad para que pueda bloquear la pantalla en cuanto alguien toque esta Mac. Hasta entonces, la pantalla se apaga y se bloquea como siempre.",
         "preview": "Probar ahora",
-        "previewStarting": "Suelta el mouse y el teclado. En 3 segundos aparecerá la pantalla de privacidad; presiona cualquier tecla para bloquear y luego desbloquea para probarlo.",
+        "previewStarting": "Suelta el mouse y el teclado. En 3 segundos aparecerá la pantalla de privacidad; pon el dedo en {{biometry}} para volver (mientras aparece el aviso del sistema) o presiona cualquier tecla para bloquear.",
         "previewUnavailable": "No se pudo mostrar la pantalla de privacidad. Reinicia Cindy e inténtalo de nuevo.",
         "delay": {
           "30": "30 s",
