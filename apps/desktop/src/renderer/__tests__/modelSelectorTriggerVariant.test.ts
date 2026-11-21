@@ -1455,14 +1455,18 @@ describe('ModelSelector trigger variants', () => {
   // A complete empty list and a failed read previously rendered the same red error.
   it('keeps Astra identifiable and retries an unconfirmed subscription catalog', async () => {
     const source = { id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'], routing: { codex: {} } };
-    providersRef.providers = [{ ...source, subscriptionReadUnavailable: true, models: { codex: [] } }];
+    providersRef.providers = [{
+      ...source, connected: false, subscriptionReadUnavailable: true, subscriptionModelsConfirmedAt: 123,
+      models: { codex: [] },
+      subscriptionDisplayModels: { codex: [{ id: 'gpt-6.2-astra', name: 'Astra from last confirmed list', efforts: ['high'] }] },
+    }];
     const props = { remoteAgent: undefined, modelId: 'gpt-6.2-astra', effort: 'high' as Effort,
       onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'codex' as const, currentProviderId: 'openai',
       actualRoute: true, sourceDisconnected: true, unifiedPanel: true, onReconnectSource: vi.fn() };
     const refresh = vi.fn(async () => ({ ok: true }));
     Object.assign(window.electronAPI.maker, { refreshBuiltinProviderModels: refresh });
     const view = render(React.createElement(ModelSelector, props));
-    const trigger = screen.getByRole('button', { name: /模型列表暂未更新.*astra/i });
+    const trigger = screen.getByRole('button', { name: /模型列表暂未更新.*Astra from last confirmed list/i });
     fireEvent.click(trigger);
     const retry = await screen.findByRole('button', { name: '重新读取模型' });
     await act(async () => { fireEvent.click(retry); });
