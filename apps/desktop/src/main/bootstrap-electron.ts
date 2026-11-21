@@ -1397,6 +1397,7 @@ function installHostClientMode(): boolean {
   // to the Host instance and to the account the windows show.
   const hostIpcLog = createLogger('host-ipc');
   const ipcProxy = createHostIpcProxy({
+    preconditionMessage: () => t('ipcError.PRECONDITION_FAILED'),
     baseUrl: delegation.baseUrl,
     token: delegation.token,
     instanceId: delegation.instanceId,

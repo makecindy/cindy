@@ -1,3 +1,4 @@
+import { holdError, releaseFailure } from './agent/profile-hold.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -117,6 +118,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
     setSessionModel: async (id, model) => {
+      if (model === 'release-refusal') throw holdError(releaseFailure());
+
       modelChoices.push({ id, model, origin: readDeviceLinkModelSelectionOrigin() });
       return { deferred: true };
     },
@@ -190,6 +193,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.ok(listing.result.entries.some(entry => entry.name === 'mobile-created-project' && entry.kind === 'dir'));
   const stat = await clients[0].invoke('host', { channel: 'fs:stat-path', args: [{ path: createdDir }] });
   assert.deepEqual(stat.result, { kind: 'dir', resolvedPath: createdDir });
+  const refused = await clients[2].invoke('host', { channel: 'maker:set-model', args: ['task', 'release-refusal'] });
+  assert.deepEqual(refused, { ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] ' + releaseFailure().message } });
   // A full round trip from the desktop controller must preview and mutate the Host's project.
   const projectArchive = input => clients[2].invoke('host', { channel: 'local-db:sessions:project-archive',
     args: [{ directory: '/project', ...input }] });
