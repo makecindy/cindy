@@ -2,7 +2,9 @@
 export const HISTORY_IMAGE_VIEW_HINT =
   '发现历史中的受管图片地址，请先用 media 工具的 resolve_local_path 查看，取不到再请用户重发。';
 
-const MANAGED_IMAGE_URL = /(?:cindy-media:\/\/[^\s"'<>`]+\.(?:png|jpe?g|gif|webp|bmp|avif|svg|heic|heif|tiff?)(?:[?#][^\s"'<>`]*)?|xdt-image:\/\/[^\s"'<>`]+)/i;
+// Both schemes can also hold documents (for example a cached PDF), so require an image
+// suffix at the end of the path for each of them.
+const MANAGED_IMAGE_URL = /(?:cindy-media|xdt-image):\/\/[^\s"'<>`]+\.(?:png|jpe?g|gif|webp|bmp|avif|svg|heic|heif|tiff?)(?=[?#]|[^\w./-]|$)/i;
 
 /** Detect one or more managed image references without copying or rewriting history content. */
 export function containsManagedImageReference(value: unknown, seen = new Set<object>()): boolean {

@@ -54,11 +54,16 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('search_chat_history tool', () => {
-  it('adds one image viewing hint when a hit context contains a managed image', async () => {
+  // 测试价值：经 MCP registry 调用真实 search_chat_history；命中上下文里只含一种图片地址时也要给提示，
+  // 两种地址分开断言，删掉任一种识别都会失败。最小失败输入：上下文只含一个图片地址。tier：unit。
+  it.each([
+    ['cindy-media', 'cindy-media://blobs/' + 'b'.repeat(64) + '.jpg'],
+    ['xdt-image', 'xdt-image://s1/legacy-cache.jpg'],
+  ])('adds one image viewing hint when a hit context contains a %s image address', async (_scheme, content) => {
     const { registry } = setup(makeResult({
       hits: [{ messageId: 'm1', sessionId: 's1', role: 'user', createdAt: 1000, snippet: null,
         score: 1, ftsRank: null, vectorRank: null, vectorDistance: null, context: [{
-          id: 'm1', sessionId: 's1', role: 'user', content: 'cindy-media://blobs/' + 'b'.repeat(64) + '.jpg xdt-image://s1/legacy-cache',
+          id: 'm1', sessionId: 's1', role: 'user', content,
           toolUseId: null, agentMeta: null, createdAt: 1000, rewindAt: null, isHit: true,
         }] }],
     }));

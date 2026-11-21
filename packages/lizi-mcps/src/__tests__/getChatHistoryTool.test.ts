@@ -41,39 +41,39 @@ describe('get_chat_history remote errors', () => {
 });
 
 describe('get_chat_history cursor pagination', () => {
-  it('adds one image viewing hint when history content contains a managed image', async () => {
-    const history = {
-      listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
-      getMessages: vi.fn(async () => ({ ok: true as const, page: {
-        items: [{ id: 'm1', sessionId: 'task', sessionWorkingDir: null, sessionAgentKind: 'cc', sessionTitle: 'Task',
-          role: 'user', content: { text: 'see cindy-media://blobs/' + 'a'.repeat(64) + '.png and xdt-image://task/cache-entry' }, toolUseId: null,
-          agentMeta: null, createdAt: 1000, rewindAt: null }], nextCursor: null, hasMore: false,
-      } })),
-    } satisfies XdtHelperHistoryDeps;
+  // 测试价值
+  // - 生产入口与可观察结果：经 MCP registry 调用真实 get_chat_history，观察可选字段 image_view_hint。
+  // - Bug／规则依据：历史里出现受管图片地址时，模型要先用 resolve_local_path 打开；两种地址各自都要能识别，
+  //   而两种地址也都可能指向文档（例如缓存的 PDF），文档不能被提示成图片。
+  // - 现有覆盖缺口：此前正例把两种地址放在同一条消息里，删掉任一种识别都测不出来。
+  // - 最小失败输入：一条只含某一种地址的消息（图片后缀 / .pdf）。
+  // - tier：unit；覆盖工具注册、历史读取和可选提示字段。
+  const historyWithText = (text: string) => ({
+    listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
+    getMessages: vi.fn(async () => ({ ok: true as const, page: {
+      items: [{ id: 'm1', sessionId: 'task', sessionWorkingDir: null, sessionAgentKind: 'cc', sessionTitle: 'Task',
+        role: 'user', content: { text }, toolUseId: null,
+        agentMeta: null, createdAt: 1000, rewindAt: null }], nextCursor: null, hasMore: false,
+    } })),
+  }) satisfies XdtHelperHistoryDeps;
+
+  it.each([
+    ['cindy-media', 'see cindy-media://blobs/' + 'a'.repeat(64) + '.png'],
+    ['xdt-image', 'see xdt-image://task/cache-entry.png'],
+  ])('adds one image viewing hint for a %s image address', async (_scheme, text) => {
     const registry = new XdtHelperToolRegistry();
-    registerGetChatHistoryTool(registry, { history });
+    registerGetChatHistoryTool(registry, { history: historyWithText(text) });
     const result = parseText(await registry.call('get_chat_history', { session_ids: ['task'] })) as Record<string, unknown>;
     expect(result.image_view_hint).toContain('resolve_local_path');
     expect(result.image_view_hint).toContain('重发');
   });
 
-  // 测试价值
-  // - 生产入口与可观察结果：真实 get_chat_history 工具输出走受管媒体地址识别。
-  // - Bug／规则依据：文档附件也使用 cindy-media://，不能把非图片误提示为可查看图片。
-  // - 现有覆盖缺口：图片正例没有覆盖带 .pdf 的受管文件地址。
-  // - 最小失败输入：一条只含 cindy-media://blobs/<hash>.pdf 的用户消息。
-  // - tier：unit；覆盖工具注册、历史读取和可选提示字段。
-  it('does not add an image viewing hint for a managed PDF attachment', async () => {
-    const history = {
-      listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
-      getMessages: vi.fn(async () => ({ ok: true as const, page: {
-        items: [{ id: 'm-pdf', sessionId: 'task', sessionWorkingDir: null, sessionAgentKind: 'cc', sessionTitle: 'Task',
-          role: 'user', content: { text: 'see cindy-media://blobs/' + 'd'.repeat(64) + '.pdf' }, toolUseId: null,
-          agentMeta: null, createdAt: 1000, rewindAt: null }], nextCursor: null, hasMore: false,
-      } })),
-    } satisfies XdtHelperHistoryDeps;
+  it.each([
+    ['cindy-media', 'see cindy-media://blobs/' + 'd'.repeat(64) + '.pdf'],
+    ['xdt-image', 'see xdt-image://feishu-media-files/doc-token.pdf'],
+  ])('does not add an image viewing hint for a %s PDF attachment', async (_scheme, text) => {
     const registry = new XdtHelperToolRegistry();
-    registerGetChatHistoryTool(registry, { history });
+    registerGetChatHistoryTool(registry, { history: historyWithText(text) });
     const result = parseText(await registry.call('get_chat_history', { session_ids: ['task'] }));
     expect(result).not.toHaveProperty('image_view_hint');
   });
