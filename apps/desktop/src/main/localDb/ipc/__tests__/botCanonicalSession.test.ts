@@ -2284,33 +2284,21 @@ describe('Bot canonical Session lifecycle', () => {
     expect(await remoteList()).toEqual([expect.objectContaining({ id: discovered.id })]);
   });
 
-  it('freezes provider, model, effort, and Fast Mode into the canonical Session', async () => {
-    await invoke('local-db:bots:create', {
-      id: 'bot-model-profile',
-      name: 'Model Profile Bot',
-      capabilities: {
-        harness: 'codex',
-        providerId: 'openai',
-        model: 'gpt-5.6-sol',
-        effort: 'xhigh',
-        fastMode: true,
-        permissions: 'ask',
-      },
+  // The profile and SQLite-backed chat must reopen on the selected harness even without built-in credentials.
+  it.each([
+    { harness: 'codex', model: 'gpt-5.6-sol', providerId: 'openai', effort: 'xhigh', fastMode: true },
+    { harness: 'acp', model: 'chosen', providerId: 'acp-plugin:sample:engine', effort: 'high', fastMode: false },
+  ])('saves and reopens the $harness model in the canonical companion chat', async route => {
+    const bot = await invoke('local-db:bots:create', {
+      id: 'bot-model-profile', name: 'Model Profile Bot',
+      capabilities: { ...(route.harness === 'acp' ? { modelChainOverride: [route] } : route), permissions: 'ask' },
     });
-
-    const created = await invoke('local-db:bots:create-canonical-session', {
-      botId: 'bot-model-profile',
-      expectedCanonicalSessionId: null,
-      expectedProfileVersion: 1,
-    });
-
-    expect(created.session).toMatchObject({
-      agentKind: 'codex',
-      providerId: 'openai',
-      model: 'gpt-5.6-sol',
-      effort: 'xhigh',
-      fastMode: true,
-    });
+    const request = { botId: bot.id, expectedProfileVersion: 1 };
+    const created = await invoke('local-db:bots:create-canonical-session', { ...request, expectedCanonicalSessionId: null });
+    const reopened = await invoke('local-db:bots:create-canonical-session', { ...request, expectedCanonicalSessionId: created.session.id });
+    const { harness, ...model } = route;
+    expect(reopened.session).toMatchObject({ id: created.session.id, agentKind: harness, ...model });
+    expect((await invoke('local-db:bots:get', bot.id)).capabilities.modelChain).toEqual([route]);
   });
 
   it.each([

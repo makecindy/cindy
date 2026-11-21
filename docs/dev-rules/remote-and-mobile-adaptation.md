@@ -7,6 +7,22 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 手机首次建链失败与中继累计确认滞后（2026-11-21）
+
+Agent-Net 名册报告同账号设备在线时，负责先拨号的一端如果首次握手失败，复用该对端已有的退避重拨。
+计时到期再检查在线与授权状态；收到新的在线名册时仍立即尝试连接。测试从首次失败和已连接后断开两种入口验证。
+Device Link 的网络提示在防抖期间收到有效帧，就已取得该提示之后的中继可达证据，后台读取可以继续。
+中继可靠流队头尚未确认时，后面的已发送推送最多提前重传一次；累计确认推进后，新的队头恢复正常重传。
+积压只影响这一个目标流，业务结果仍按原期限和预算发送；不重置共享连接，不引入应用操作重放，不改 wire。
+
+自建中转兼容：本次仅调整客户端拨号、发送侧重传调度与后台请求准入，沿用已有帧、累计确认、
+设备签名和能力协商；`packages/device-link-relay` 的通用转发无需识别这些本地时序，
+已部署中转可继续使用，无需服务端同步修改或版本升级。
+2026-11-22 在本 PR 分支实测：共享客户端 `pnpm --filter @cindy/device-link test` 1347 项、
+自建中转 `pnpm --filter @cindy/device-link-relay test` 61 项及
+`pnpm --filter @cindy/device-link-relay run interop` 2 项均通过；
+互通覆盖真实自建中转的加入、设备签名通信、自动重连与 SDK 版本矩阵。
+
 ## 远程 Agent 控制请求与发送取消（2026-11-18）
 
 `maker:remote-agent:v1` 按请求内容区分优先级：发送、插话、停止、关闭以及内联交互／回调／错误回复
@@ -1698,8 +1714,11 @@ userData 的 `logs/`。按 `sessionRef`（任务 ID 前 8 位）与 `runRef`（r
 每阶段先输出 `status=started`，结束输出 `ok` / `failed`、`durationMs` 和 `elapsedMs`；
 `stage=total` 汇总本端总耗时与 `stagesMs`。使用各端自己的单调时钟，不相减不同电脑的
 墙钟；`remote-open` 包含 transport 与 host 的等待，不能把三侧耗时相加。配置收集仍为
-best-effort，因此某项失败而总启动成功是合法结果。只记录固定阶段名、关联标识、结果和
-耗时，不记录配置正文、路径、消息、凭证或错误正文，不改变日志上报白名单。
+best-effort，因此某项失败而总启动成功是合法结果。只记录固定阶段名、关联标识、结果、
+耗时及下列固定诊断计数，不记录配置正文、路径、消息、凭证或错误正文，不改变日志上报白名单。
+控制端 `side=transport` 的 `stage=total` 可带 `payload`。其中 `uploadBytes` 和 `chunks` 是
+计划上传的 gzip 字节数与分段数，分段准备完成后，即使上传失败也会记录。内联载荷两项均为
+零，分段准备失败时省略未知的值。`fieldBytes` 记录固定载荷字段各自序列化后的 UTF-8 字节数。
 运行端 `stage=total` 另带 `execServer`：`shortcutEnabled`、`ancestorLevels`（收到的祖先快照层数）、
 `connections`（识别到的执行环境连接数）、`answered`（本地回答数）、`forwarded`（转发消息数）。
 计数仅覆盖创建至 started/失败，不含首轮消息及后续工具调用；只含布尔值和计数，无路径与 RPC 内容。

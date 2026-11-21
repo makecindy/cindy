@@ -153,10 +153,15 @@ export function mcpAppHistoryText(record: McpAppRecord): string {
 
 /** Public history has no server identity, tool inputs, schema or View-only result. */
 export interface McpAppHistory {
+  initialHeight?: number;
   plugin?: { name: string; source?: Pick<PluginInstallationSource, 'kind'> };
   customMcp?: true | { name: string };
   title: string;
   text: string;
+}
+
+export function mcpAppInitialHeight(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(80, Math.min(720, Math.round(value))) : undefined;
 }
 
 function parseHistoryPlugin(value: unknown): McpAppHistory['plugin'] {
@@ -172,7 +177,8 @@ export function parseMcpAppHistory(content: unknown): McpAppHistory | undefined 
   if (record) {
     const plugin = parseHistoryPlugin((record.tool._meta as Record<string, unknown> | undefined)?.['cindy/plugin']);
     const customMcp = parseMcpAppCustomMcp((record.tool._meta as Record<string, unknown> | undefined)?.['cindy/custom-mcp']) ?? true;
-    return { title: plugin?.name ?? (customMcp !== true ? customMcp.name : typeof record.tool.title === 'string' ? record.tool.title : record.tool.name),
+    const initialHeight = plugin && mcpAppInitialHeight((record.tool._meta as Record<string, unknown> | undefined)?.['cindy/initial-height']);
+    return { ...(initialHeight !== undefined ? { initialHeight } : {}), title: plugin?.name ?? (customMcp !== true ? customMcp.name : typeof record.tool.title === 'string' ? record.tool.title : record.tool.name),
       text: mcpAppHistoryText(record), ...(plugin ? { plugin } : { customMcp }) };
   }
   if (!content || typeof content !== 'object' || Array.isArray(content)) return;
@@ -182,7 +188,8 @@ export function parseMcpAppHistory(content: unknown): McpAppHistory | undefined 
   if (summary.version === 1 && typeof summary.title === 'string' && typeof summary.text === 'string') {
     const plugin = parseHistoryPlugin(summary.plugin);
     const customMcp = parseMcpAppCustomMcp(summary.customMcp);
-    return { title: summary.title, text: summary.text,
+    const initialHeight = plugin && mcpAppInitialHeight(summary.initialHeight);
+    return { title: summary.title, text: summary.text, ...(initialHeight !== undefined ? { initialHeight } : {}),
       ...(plugin ? { plugin } : customMcp ? { customMcp } : {}) };
   }
 }
@@ -199,6 +206,7 @@ export function projectMcpAppContent(content: unknown, marked = false): unknown 
   // Unknown/malformed cards must not fall back to sending the private original.
   const history = parseMcpAppHistory(value);
   return { mcpAppHistory: { version: 1, title: history?.title ?? '', text: history?.text ?? '',
+    ...(history?.initialHeight !== undefined ? { initialHeight: history.initialHeight } : {}),
     ...(history?.plugin ? { plugin: history.plugin } : {}), ...(history?.customMcp ? { customMcp: history.customMcp } : {}) } };
 }
 

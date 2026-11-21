@@ -18,6 +18,7 @@ import {
   AgentStartupCleanupPendingError,
   AgentStartupStoppedError,
   BaseAgent,
+  isolatedBotProfile,
   type AgentDeps,
   type AgentSessionHandle,
   type PiExtraSpawnConfig,
@@ -183,6 +184,7 @@ export class AcpAgent extends BaseAgent {
     }
 
     const logger = this.deps.logger.child(`acp:${harnessKey}`);
+    const botMcpPolicy = isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy;
     let extra: PiExtraSpawnConfig | null = null;
     // Hosted for another computer: Cindy tools are that computer's and arrive through the tunnel,
     // so this computer's own tool bridge (and its installed plugins, memory, sessions) stays out.
@@ -196,6 +198,7 @@ export class AcpAgent extends BaseAgent {
           workingDir: opts.workingDir,
           ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           memoryEnabled: opts.makerMemoryEnabled === true,
+          ...(botMcpPolicy ? { botMcpPolicy } : {}),
           ...(opts.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
           // The external agent's own sub-agents may call tools; Cindy cannot attest who called. A host
           // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
@@ -216,9 +219,19 @@ export class AcpAgent extends BaseAgent {
       }
     };
 
+    // Only a host-provided companion profile supplies the identity for this chat.
+    const companionBriefing = opts.botRuntimeProfile ? [
+      opts.botProfilePrompt ?? '',
+      opts.botProfileContextPrompt ?? '',
+      opts.makerMemoryEnabled && opts.makerMemoryIndexSnapshot?.trim()
+        ? opts.makerMemoryIndexSnapshot
+        : '',
+      opts.botUserProfilePrompt ?? '',
+    ].filter((part) => part.trim()).join('\n\n') : '';
     // The workspace note comes first: without it the agent has no way to know where the project is.
     const briefing = [
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
+      companionBriefing,
       opts.pluginEngineBriefing ?? '',
     ].filter((part) => part.trim()).join('\n\n');
     const open = async (): Promise<AcpSession> => {
@@ -235,9 +248,11 @@ export class AcpAgent extends BaseAgent {
           ...(hosted ? { requiredMcpServers: [DEVICE_HOSTED_EXEC_MCP_SERVER] } : {}),
           ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
           ...(opts.model ? { model: opts.model } : {}),
+          ...(opts.botRuntimeProfile ? { requireSelectedModel: true } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
           ...(briefing ? { briefing } : {}),
+          ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           logger,
           onEnded: disposeBridge,
         });

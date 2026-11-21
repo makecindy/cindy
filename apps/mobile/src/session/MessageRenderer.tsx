@@ -4084,7 +4084,7 @@ function MessageBubble({
       {item.message.systemCardType === 'mcp-app' ? (
         <ViewabilityGatedMcpAppCard deviceId={actions.remoteDeviceId} sessionId={item.message.source.sessionId}
           clientId={item.message.source.clientId} title={String(item.message.systemCardData?.title ?? '')}
-          plugin={item.message.systemCardData?.plugin} customMcp={item.message.systemCardData?.customMcp}
+          plugin={item.message.systemCardData?.plugin} customMcp={item.message.systemCardData?.customMcp} initialHeight={item.message.systemCardData?.initialHeight}
           fallbackText={String(item.message.systemCardData?.fallbackText ?? '')} />
       ) : item.message.systemCardType ? (
         <MobileSystemCard
