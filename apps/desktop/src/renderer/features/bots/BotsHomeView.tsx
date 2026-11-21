@@ -936,9 +936,23 @@ export function BotsHomeView() {
   );
   useRegisterContentHeader(headerContent);
 
+  // The hand-off below keys on the fields that decide it, not on the row's
+  // identity: a roster refresh that only moves previews or unread counts must
+  // not restart the main-chat validation. It reads the latest row via this ref,
+  // synced by the effect declared just before it.
+  const selectedBotRef = useRef(selectedBot);
   useEffect(() => {
+    selectedBotRef.current = selectedBot;
+  });
+  const selectedBotId = selectedBot?.id;
+  const selectedBotStatus = selectedBot?.status;
+  const selectedInvitationPending =
+    !!selectedBot?.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId;
+
+  useEffect(() => {
+    const selectedBot = selectedBotRef.current;
     if (needsProviderConnection || needsModelSelection) return;
-    if (selectedBot?.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId) return;
+    if (selectedInvitationPending) return;
     if (!selectedBot || shouldDeferCanonicalBotSessionNavigation({ settingsOpen, addRequested }))
       return;
     if (selectedBot.status !== 'active') {
@@ -947,6 +961,8 @@ export function BotsHomeView() {
     }
 
     const canonicalSessionId = canonicalBotSessionId(selectedBot);
+    // Creation's CAS needs the current profile version, which a later refresh may have advanced.
+    const latestBot = () => (selectedBotRef.current?.id === selectedBot.id ? selectedBotRef.current : selectedBot);
     let cancelled = false;
     // Read existing history even without a route; only reconstruction needs one.
     const deferReconstruction = () => {
@@ -962,7 +978,7 @@ export function BotsHomeView() {
           if (session.status !== 'active') {
             if (deferReconstruction()) return;
             setIsCreatingSession(true);
-            const next = await createCanonicalSession(selectedBot);
+            const next = await createCanonicalSession(latestBot());
             if (!cancelled) {
               setIsCreatingSession(false);
               if (next) navigate(`/bots/${selectedBot.id}/session/${next.id}`, { replace: true });
@@ -975,7 +991,7 @@ export function BotsHomeView() {
             // arbitrary existing Session. Preserve the existing task and create a
             // fresh Bot-owned Session instead.
             setIsCreatingSession(true);
-            const next = await createCanonicalSession(selectedBot);
+            const next = await createCanonicalSession(latestBot());
             if (!cancelled) {
               setIsCreatingSession(false);
               if (next) navigate(`/bots/${selectedBot.id}/session/${next.id}`, { replace: true });
@@ -998,7 +1014,7 @@ export function BotsHomeView() {
           // row disappeared. Passing null can never repair that state because
           // main correctly sees a non-null canonical pointer. Preserve the
           // observed id so a concurrent recovery still loses the CAS safely.
-          const next = await createCanonicalSession(selectedBot, canonicalSessionId, true).catch(
+          const next = await createCanonicalSession(latestBot(), canonicalSessionId, true).catch(
             () => null,
           );
           if (!cancelled) {
@@ -1016,7 +1032,7 @@ export function BotsHomeView() {
     const attemptToken = Symbol('bot-canonical-create');
     creatingBotRef.current = { botId: selectedBot.id, token: attemptToken };
     setIsCreatingSession(true);
-    void createCanonicalSession(selectedBot)
+    void createCanonicalSession(latestBot())
       .then((session) => {
         if (cancelled) return;
         navigate(`/bots/${selectedBot.id}/session/${session.id}`, { replace: true });
@@ -1040,7 +1056,10 @@ export function BotsHomeView() {
   }, [
     addRequested,
     createCanonicalSession,
-    selectedBot,
+    selectedBotId,
+    selectedBotStatus,
+    currentCanonicalId,
+    selectedInvitationPending,
     sessionId,
     settingsOpen,
     navigate,
