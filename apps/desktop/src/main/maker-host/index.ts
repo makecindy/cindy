@@ -148,7 +148,6 @@ import {
   captureLocalWorkerReport,
   getOrcaWorkerReportQueue,
   getSessionActiveInputClientIds,
-  getSessionInputProvenance,
   isActiveInputOwnerAuthored,
   isActiveInputAccountScoped,
   isSessionInTurn,
@@ -1337,7 +1336,6 @@ export function getMaker(): Maker {
       }),
       deliverReport: (sessionId, ids, send) => deliverRemoteWorkerReport(sessionId, ids, send, result => !result.isError),
       getActiveInputClientIds: getSessionActiveInputClientIds,
-      getAcceptedInputProvenance: sessionId => getSessionInputProvenance(sessionId).input,
       captureReportSettlement: captureRemoteWorkerReportSettlement,
     });
     // Cindy Make 个人版任务专属工具:只有 sessions.source='cindy-make' 的任务在
