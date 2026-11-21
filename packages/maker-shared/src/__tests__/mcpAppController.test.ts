@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { McpAppController, McpAppViewSlots, McpAppWindowLimitError, type AppRpc } from '../mcpAppController.js';
+import { isMcpAppOpenRejectedBeforeAllocation, McpAppController, McpAppViewSlots, McpAppWindowLimitError, type AppRpc } from '../mcpAppController.js';
 const document = {
   viewId: 'view',
   html: '<html></html>',
@@ -70,7 +70,7 @@ describe('MCP App transport lifecycle', () => {
 
   // PR #11917, unit: observe real queued open results and executor calls. A grant
   // that did not create a View may serve only cards refused before that release.
-  it.each(['MCP_APP_SERVER_CHANGED', 'MCP_APP_TOOL_UNAVAILABLE', 'MCP_APP_RESOURCE_MISSING', 'MCP_APP_OPEN_TIMEOUT'])('returns a grant after definitive open failure %s', async reason => {
+  it.each(['MCP_APP_SERVER_CHANGED', 'MCP_APP_TOOL_UNAVAILABLE', 'MCP_APP_RESOURCE_MISSING'])('returns a grant after definitive open failure %s', async reason => {
     const slots = new McpAppViewSlots();
     let full = true;
     const attempts: string[] = [];
@@ -90,6 +90,56 @@ describe('MCP App transport lifecycle', () => {
     await flush();
     expect(attempts).toEqual(['first', 'second', 'first', 'second']);
     expect(await second).toEqual({ viewId: 'second' });
+  });
+
+  it.each(['MCP_APP_OPEN_TIMEOUT', 'MCP_APP_OPEN_CANCELLED'])('keeps the remote slot reserved after an ambiguous open failure %s', async reason => {
+    const slots = new McpAppViewSlots();
+    let full = true;
+    const control = (card: string, op: string, send?: Parameters<McpAppViewSlots['control']>[4]) =>
+      slots.control('owner', 'window', 'peer', { op, openId: card }, send ?? (async () => {
+        if (full) throw new Error('MCP_APP_VIEW_LIMIT');
+        return { viewId: card };
+      }));
+    await expect(control('first', 'open')).rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    await expect(control('second', 'open')).rejects.toThrow('MCP_APP_VIEW_LIMIT');
+    const first = control('first', 'wait-for-view-slot', never);
+    let secondResumed = false;
+    const second = control('second', 'wait-for-view-slot', never).then(() => { secondResumed = true; });
+    full = false;
+    slots.released('owner', 'window', 'peer');
+    await first;
+    await expect(control('first', 'open', async () => { throw new Error(reason); })).rejects.toThrow(reason);
+    await flush();
+    expect(secondResumed).toBe(false);
+    slots.cancelCaller('window');
+    await second;
+  });
+
+  it.each([
+    ['MCP_APP_SERVER_CHANGED', true],
+    ['MCP_APP_TOOL_UNAVAILABLE', true],
+    ['MCP_APP_TOOL_NOT_VISIBLE', true],
+    ['MCP_APP_TOOL_LIST_TOO_LARGE', true],
+    ['MCP_APP_CARD_UNAVAILABLE', true],
+    ['MCP_APP_CARD_TOO_LARGE', true],
+    ['MCP_APP_SOURCE_UNAVAILABLE', true],
+    ['MCP_APP_VIEW_UNAVAILABLE', true],
+    ['MCP_APP_SESSION_UNAVAILABLE', true],
+    ['MCP_APP_RESOURCE_MISSING', true],
+    ['MCP_APP_RESOURCE_NOT_FOUND', true],
+    ['MCP_APP_RESOURCE_TOO_LARGE', true],
+    ['MCP_APP_INVALID_RESOURCE', true],
+    ['MCP_APP_INVALID_PAGINATION', true],
+    ['MCP_APP_FILES_LOCAL_ONLY', true],
+    ['MCP_APP_CONNECTION_CLOSED', true],
+    ['MCP_APP_CONNECTION_LIMIT', true],
+    ['MCP_PLUGIN_UNAVAILABLE', true],
+    ['MCP_PLUGIN_CSP_DOMAIN_NOT_DECLARED', true],
+    ['MCP_APP_OPEN_TIMEOUT', false],
+    ['MCP_APP_OPEN_CANCELLED', false],
+    ['DEVICE_LINK_TIMEOUT', false],
+  ] as const)('classifies open outcome %s from the host lifecycle', (code, expected) => {
+    expect(isMcpAppOpenRejectedBeforeAllocation(new Error(code))).toBe(expected);
   });
 
   it('preserves executor capacity when an open only gets as far as a local reservation', async () => {

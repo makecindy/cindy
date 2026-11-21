@@ -43,10 +43,19 @@ function withoutCapacity(release: Release, caller: string, peer: string, limit?:
   return { ...release, window: limit === 'pending' ? 'document' : 'pending' };
 }
 
-// These rejections precede publication of the requested View. A transport timeout
-// or a disconnected executor may have lost the reply after allocation.
+// A code is a definitive pre-allocation rejection only when the Host either
+// throws before `views.set` (host.ts:447-519, protocol.ts:92-100,
+// connection.ts:92-206) or catches the post-publication error and awaits
+// `disposeView` before returning it (host.ts:1094-1097). The retained groups
+// map to those paths: SERVER_CHANGED, TOOL_UNAVAILABLE/NOT_VISIBLE/LIST_TOO_LARGE,
+// CARD_UNAVAILABLE/TOO_LARGE, SOURCE/VIEW/SESSION_UNAVAILABLE,
+// RESOURCE_MISSING/NOT_FOUND/TOO_LARGE, INVALID_RESOURCE/PAGINATION,
+// FILES_LOCAL_ONLY, CONNECTION_CLOSED/LIMIT, and plugin unavailable/CSP errors.
+// OPEN_TIMEOUT and OPEN_CANCELLED are intentionally excluded. openSource races
+// those abort reasons outside openView (host.ts:376-386), so the View may still
+// be allocated while the caller has already received the error.
 export function isMcpAppOpenRejectedBeforeAllocation(error: unknown): boolean {
-  return /\bMCP_APP_(?:SERVER_CHANGED|TOOL_(?:UNAVAILABLE|NOT_VISIBLE|LIST_TOO_LARGE)|OPEN_(?:TIMEOUT|CANCELLED)|CARD_(?:UNAVAILABLE|TOO_LARGE)|(?:SOURCE|VIEW|SESSION)_UNAVAILABLE|RESOURCE_(?:MISSING|NOT_FOUND|TOO_LARGE)|INVALID_(?:RESOURCE|PAGINATION)|FILES_LOCAL_ONLY|CONNECTION_(?:CLOSED|LIMIT))\b/.test(String(error))
+  return /\bMCP_APP_(?:SERVER_CHANGED|TOOL_(?:UNAVAILABLE|NOT_VISIBLE|LIST_TOO_LARGE)|CARD_(?:UNAVAILABLE|TOO_LARGE)|(?:SOURCE|VIEW|SESSION)_UNAVAILABLE|RESOURCE_(?:MISSING|NOT_FOUND|TOO_LARGE)|INVALID_(?:RESOURCE|PAGINATION)|FILES_LOCAL_ONLY|CONNECTION_(?:CLOSED|LIMIT))\b/.test(String(error))
     || /\bMCP_PLUGIN_(?:UNAVAILABLE|CSP_DOMAIN_NOT_DECLARED)\b/.test(String(error));
 }
 
