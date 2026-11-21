@@ -17505,7 +17505,8 @@
         "title": "Import Repository Automations",
         "description": "Source: {{workingDir}}. Review the definitions below. Importing applies these changes and enables new automations, which can run commands and start Agents with full access. Import only content you trust.",
         "accept": "Confirm Import",
-        "removed": "Will remove: {{names}}"
+        "removed": "Will remove: {{names}}",
+        "fileMissing": "Import skipped. The automation file in {{projectName}} could not be found."
       },
       "toast": {
         "summary": "added {{inserted}} · updated {{updated}} · removed {{deleted}}",

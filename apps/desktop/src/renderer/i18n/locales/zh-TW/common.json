@@ -17431,7 +17431,8 @@
         "title": "匯入儲存庫自動化",
         "description": "來源：{{workingDir}}。請檢查下方設定。匯入會套用這些變更並啟用新增的自動化，它們可以執行命令、啟動具有完整存取權限的 Agent。請僅匯入你信任的內容。",
         "accept": "確認匯入",
-        "removed": "將刪除：{{names}}"
+        "removed": "將刪除：{{names}}",
+        "fileMissing": "找不到「{{projectName}}」中的自動化檔案，已略過匯入"
       },
       "toast": {
         "summary": "新增 {{inserted}} · 更新 {{updated}} · 刪除 {{deleted}}",
