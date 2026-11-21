@@ -62,12 +62,12 @@ describe('applyTeammateTemplate', () => {
     const sha = (text: string) => createHash('sha256').update(text).digest('hex');
     const oldStandard = '---\nname: hand-off\n---\n\n# Hand-off\n\n- Pick the project.\n- Do not ask a task to send its result back.\n- Read results against the ask.\n';
     const newStandard = (extra = '') => `---\nname: hand-off\n---\n\n# Hand-off\n\n- Pick the project.\n- Ask every task to report back.\n- Read results against the ask.\n${extra}\n${OWN_RULES_HEADING}\n\nRules go here.\n`;
-    const setUp = async (current: string, tracked: boolean) => {
+    const setUp = async (current: string, tracked: boolean, startedFrom = oldStandard) => {
       dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-layered-'));
       await fs.mkdir(path.join(dir, '.agents/skills/hand-off'), { recursive: true });
       await fs.mkdir(path.join(dir, '.cindy'), { recursive: true });
       await fs.writeFile(path.join(dir, skill), current);
-      await fs.writeFile(path.join(dir, TEAMMATE_TEMPLATE_RECORD), JSON.stringify({ version: 1, files: tracked ? { [skill]: sha(oldStandard) } : {} }));
+      await fs.writeFile(path.join(dir, TEAMMATE_TEMPLATE_RECORD), JSON.stringify({ version: 1, files: tracked ? { [skill]: sha(startedFrom) } : {} }));
     };
     const upgrade = (version: number, standard: string, readPrevious?: (relative: string, hash: string) => Promise<string | null>) =>
       applyTeammateTemplate(dir, 'Mimi', version, { [skill]: standard }, readPrevious);
@@ -111,6 +111,16 @@ describe('applyTeammateTemplate', () => {
       await upgrade(2, newStandard('\n## Start a task\n'), async (_relative, hash) => hash === sha(oldStandard) ? standard : null);
       const text = await read();
       expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain('### Start a task only after the owner explicitly approves');
+    });
+
+    // Review r4652449180: deleting a plain paragraph rule is a customization too, not only a list item.
+    it('keeps the removal of a plain paragraph the new standard still has', async () => {
+      const paragraph = 'Answer whoever asked in the group.';
+      const standard = oldStandard.replace('# Hand-off\n', `# Hand-off\n\n${paragraph}\n`);
+      await setUp(oldStandard, true, standard);
+      await upgrade(2, newStandard(`${paragraph}\n`), async (_relative, hash) => hash === sha(standard) ? standard : null);
+      const text = await read();
+      expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain(`- Leave out from the standard above: ${paragraph}`);
     });
 
     it('keeps an own skill that predates the template, for the teammate to tidy', async () => {

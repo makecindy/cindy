@@ -62,9 +62,10 @@ function layeredContent(current: string, previousStandard: string | null, next: 
   // the own section, so it does not read as a section of the standard.
   const kept = contentLines(standard).filter(line => !known.has(line.trim()))
     .map(line => line.replace(/^\s*#{1,2}(?=\s)/, '###'));
-  // A standard line the teammate removed, still in the new standard: keep the removal.
+  // A standard line the teammate removed, still in the new standard: keep the removal, for list
+  // items and plain paragraphs alike (a heading's removal shows in the lines it held).
   const removed = previousStandard === null ? [] : contentLines(standardPart(previousStandard).standard)
-    .filter(line => /^\s*(?:[-*]|\d+\.)\s/.test(line) && !contentLines(standard).some(mine => mine.trim() === line.trim())
+    .filter(line => !/^\s*#/.test(line) && !contentLines(standard).some(mine => mine.trim() === line.trim())
       && contentLines(standardPart(next).standard).some(theirs => theirs.trim() === line.trim()))
     .map(line => `- Leave out from the standard above: ${line.trim().replace(/^(?:[-*]|\d+\.)\s+/, '')}`);
   const additions = [...kept, ...removed];
