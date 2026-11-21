@@ -25,7 +25,7 @@
  * scheme check below skips regardless of order.
  */
 
-import type { Definition, Image, ImageReference, Link, Root } from 'mdast';
+import type { Definition, Root } from 'mdast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 
@@ -49,10 +49,9 @@ const remarkPreserveRawLocalDestinations: Plugin<[], Root> = () => {
     visit(tree, 'definition', (node) => {
       if (!definitions.has(node.identifier)) definitions.set(node.identifier, node);
     });
-    visit(tree, ['image', 'imageReference', 'link'], (node) => {
-      const typed = node as Image | ImageReference | Link;
-      const target: Definition | Image | Link | undefined =
-        node.type === 'imageReference' ? definitions.get(node.identifier) : (typed as Image | Link);
+    visit(tree, ['image', 'imageReference', 'link', 'linkReference'], (node) => {
+      if (node.type !== 'image' && node.type !== 'imageReference' && node.type !== 'link' && node.type !== 'linkReference') return;
+      const target = 'identifier' in node ? definitions.get(node.identifier) : node;
       if (!target) return;
       const hostlessImage =
         (node.type === 'image' || node.type === 'imageReference') &&
@@ -62,10 +61,10 @@ const remarkPreserveRawLocalDestinations: Plugin<[], Root> = () => {
       const prop = node.type === 'image' || node.type === 'imageReference'
         ? RAW_LOCAL_IMAGE_SRC_PROP
         : RAW_LOCAL_LINK_HREF_PROP;
-      typed.data = {
-        ...typed.data,
+      node.data = {
+        ...node.data,
         hProperties: {
-          ...(typed.data?.hProperties ?? {}),
+          ...(node.data?.hProperties ?? {}),
           [prop]: target.url,
         },
       };

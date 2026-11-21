@@ -39,7 +39,7 @@ import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeDisplayMathFences } from './normalizeDisplayMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
-import remarkDisambiguateLocalLinks from './remarkDisambiguateLocalLinks';
+import rehypeDisambiguateLocalLinks, { LINK_CODE_LABEL_PROP } from './rehypeDisambiguateLocalLinks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkBareSpaceLocalImages from './remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
@@ -253,7 +253,6 @@ export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   remarkHtmlImages,
   remarkBareSpaceLocalImages,
   remarkSessionLinks,
-  remarkDisambiguateLocalLinks,
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
 ];
@@ -276,6 +275,11 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeMathBlockMarker,
   rehypeHighlightShared,
   rehypeFencedCodeMarker,
+];
+const REHYPE_PLUGINS_PRIVILEGED: PluggableList = [
+  rehypeSlug,
+  rehypeDisambiguateLocalLinks,
+  ...REHYPE_PLUGINS.slice(1),
 ];
 
 /** MarkdownRenderer 与所有“实际是否渲染”判定共用的输入归一化。 */
@@ -1988,7 +1992,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         // react-markdown gives us a node tree; nodeToText collapses it safely.
         const text = nodeToText(children);
         const safeProps = omitMarkdownInternalProps(props as Record<string, unknown>);
-        if (!allowPrivilegedLinks) {
+        delete safeProps[LINK_CODE_LABEL_PROP];
+        if (!allowPrivilegedLinks || node?.properties[LINK_CODE_LABEL_PROP]) {
           return (
             <code className={cn(INLINE_CODE_CLASS)} {...safeProps}>
               {children}
@@ -2119,7 +2124,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             remarkPlugins={
               allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS
             }
-            rehypePlugins={REHYPE_PLUGINS}
+            rehypePlugins={allowPrivilegedLinks ? REHYPE_PLUGINS_PRIVILEGED : REHYPE_PLUGINS}
             components={components}
             urlTransform={urlTransform}
             wordFadeState={wordFadeState}
@@ -2130,7 +2135,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       ) : (
         <ReactMarkdown
           remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
-          rehypePlugins={REHYPE_PLUGINS}
+          rehypePlugins={allowPrivilegedLinks ? REHYPE_PLUGINS_PRIVILEGED : REHYPE_PLUGINS}
           components={components}
           urlTransform={urlTransform}
           skipHtml

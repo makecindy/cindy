@@ -318,6 +318,45 @@ describe('remote home references', () => {
     );
   });
 
+  it.each(['local', 'device'] as const)('opens the authored destination when clicking its code label on %s', async kind => {
+    const origin = kind === 'local' ? { kind } : { kind, deviceId: 'remote-a' };
+    const authored = '/external/A/guide.html';
+    const shadow = '/work/A/guide.html';
+    localResolve.mockImplementation(async ({ href: target }) => ({
+      status: 'unique', candidates: [target === 'A/guide.html' ? shadow : target], kind: 'file',
+    }));
+    chatStat.mockImplementation(async ({ absPath }) => ({ verdict: [authored, shadow].includes(absPath) ? 'file' : 'nonfile' }));
+    const view = render(reply('[`guide.html`](/external/A/guide.html) [`guide.html`](/external/B/guide.html)', 'remote-a', '/work', origin));
+    await act(async () => {});
+    await act(async () => fireEvent.click(view.getByText('A/guide.html', { selector: 'code' })));
+    expect(openHtmlFileByPreference).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(openHtmlFileByPreference).mock.calls[0]?.[1]).toBe(authored);
+  });
+
+  it.each([
+    ['file URL', '[guide.html](file:///workspace/A/guide.html) [guide.html](file://localhost/workspace/B/guide.html)'],
+    ['reference', '[guide.html][a] [guide.html][b]\n\n[a]: /workspace/A/guide.html\n[b]: /workspace/B/guide.html'],
+  ])('distinguishes same-name %s links', async (_kind, content) => {
+    const view = render(reply(content, 'unused', '/workspace', { kind: 'local' }));
+    await act(async () => {});
+    expect(view.getAllByRole('link').map(link => link.textContent)).toEqual(['A/guide.html', 'B/guide.html']);
+  });
+
+  it('keeps the original heading anchor when a file label is expanded', async () => {
+    const view = render(reply('## [guide.html](/a/guide.html)\n\n[guide.html](/b/guide.html) [Jump](#guidehtml)'));
+    await act(async () => {});
+    const heading = view.getByRole('heading', { name: 'a/guide.html' });
+    heading.scrollIntoView = vi.fn();
+    await act(async () => fireEvent.click(view.getByRole('link', { name: 'Jump' })));
+    expect(heading.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('avoids a label already used for a different file', async () => {
+    const view = render(reply('[guide.html](/work/A/guide.html) [guide.html](/work/B/guide.html) [A/guide.html](/else/A/guide.html)'));
+    await act(async () => {});
+    expect(view.getAllByRole('link').map(link => link.textContent)).toEqual(['work/A/guide.html', 'B/guide.html', 'A/guide.html']);
+  });
+
   it('explains multiple matches when an authored local link is clicked', async () => {
     const view = render(reply('[notes.html](docs/notes.html)', 'unused', '/workspace', { kind: 'local' }));
     await act(async () => {});
