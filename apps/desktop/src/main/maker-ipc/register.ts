@@ -18157,13 +18157,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const generation = getSessionRuntimeControlSnapshot(session.id).generation;
       const access = providerShareAccessEpoch(shareId);
       const recovery = providerGroupService.trackGuestStartRecovery(session.id);
+      let loggedRecoveryFailure: string | null = null;
+      const logRecoveryFailure = (reason: string): void => {
+        if (loggedRecoveryFailure === reason) return;
+        loggedRecoveryFailure = reason;
+        log.warn('provider group reconnect recovery unavailable', { sessionId: session.id, reason });
+      };
       return {
         signal: recovery.signal,
-        isCurrent: () => recovery.isCurrent() && sessionRuntimeControlOwnerEpochMatches(owner)
-          && getSessionRuntimeControlSnapshot(session.id).generation === generation
-          && !isAppSessionBoundaryPending()
-          && providerShareAccessEpoch(shareId) === access
-          && findReceivedShare(shareId)?.status === 'active',
+        isCurrent: () => {
+          if (!recovery.isCurrent()) { logRecoveryFailure('recovery-superseded'); return false; }
+          if (!sessionRuntimeControlOwnerEpochMatches(owner)) { logRecoveryFailure('runtime-owner-changed'); return false; }
+          if (getSessionRuntimeControlSnapshot(session.id).generation !== generation) { logRecoveryFailure('runtime-refreshed'); return false; }
+          if (isAppSessionBoundaryPending()) { logRecoveryFailure('app-session-boundary'); return false; }
+          if (providerShareAccessEpoch(shareId) !== access || findReceivedShare(shareId)?.status !== 'active') {
+            logRecoveryFailure('share-unavailable');
+            return false;
+          }
+          return true;
+        },
         close: async () => (await withRehydrateCloseSuppressed(session.id, () =>
           maker.closeSessionIfCurrent(live, 'runtime-refresh', { onlyIfIdle: true }))) === 'closed',
         takeOffer: takeStoppedSharedReconnectOffer,
