@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   enabled: true,
   uploads: [] as string[],
   reads: 0,
+  failNextSync: false,
   auth: { initialized: true, isAuthenticated: true, accountGeneration: 1,
     user: { id: 'fixture-user' }, apiFetch: async () => ({}) },
 }));
@@ -35,6 +36,10 @@ vi.mock('@/notifications/pushNotifications', () => ({
   configureForegroundNotificationBehavior() {}, registerNotificationActionCategories: async () => {}, isPushSupported: () => true,
   readPushEnabled: async () => state.enabled, retryPendingUnregister: async () => {},
   syncPushRegistration: async (opts: { deviceToken?: { type: 'ios'; data: string } }) => {
+    if (state.failNextSync) {
+      state.failNextSync = false;
+      throw new Error('temporarily offline');
+    }
     let token = opts.deviceToken;
     if (!token) {
       if (++state.reads > 3) throw Error('recursive native registration');
@@ -49,7 +54,7 @@ vi.mock('@/notifications/pushNotifications', () => ({
 const roots: ReturnType<typeof createRoot>[] = [];
 afterEach(async () => {
   await act(async () => { for (const root of roots) root.unmount(); });
-  roots.length = 0; state.uploads = []; state.reads = 0; state.enabled = true;
+  roots.length = 0; state.uploads = []; state.reads = 0; state.failNextSync = false; state.enabled = true;
   vi.unstubAllGlobals();
 });
 
@@ -94,6 +99,30 @@ it('keeps the same registration after a profile refresh and resyncs on account s
     });
     expect(state.reads).toBe(2);
     expect(state.uploads.length).toBeGreaterThan(uploads.length);
+  } finally {
+    state.auth = auth;
+  }
+});
+
+// A cached session can render offline and recover without changing its account ID.
+it('recovers a failed initial registration on profile refresh, then stops repeating it', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  const root = createRoot(document.createElement('div'));
+  roots.push(root);
+  const auth = state.auth;
+  try {
+    state.failNextSync = true;
+    await act(async () => { root.render(createElement(PushNotificationsBridge)); });
+    expect(state.uploads).toEqual([]);
+    const refreshProfile = () => act(async () => {
+      state.auth = { ...auth, user: { ...auth.user } };
+      root.render(createElement(PushNotificationsBridge));
+    });
+    await refreshProfile();
+    expect(state.uploads).toContain('initial-token');
+    const uploads = [...state.uploads];
+    await refreshProfile();
+    expect(state.uploads).toEqual(uploads);
   } finally {
     state.auth = auth;
   }

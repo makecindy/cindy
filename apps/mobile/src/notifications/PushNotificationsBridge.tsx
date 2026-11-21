@@ -38,6 +38,8 @@ type NotificationResponse = Parameters<
 export function PushNotificationsBridge() {
   const auth = useAuth();
   const pushAccountId = auth.user?.id;
+  const previousProfile = useRef(auth.user);
+  const onProfileRefresh = useRef<(() => void) | null>(null);
   const { i18n: { language } } = useTranslation();
   const router = useRouter();
   const pathname = usePathname();
@@ -82,18 +84,59 @@ export function PushNotificationsBridge() {
     if (!isPushSupported()) return;
     if (!auth.initialized || !auth.isAuthenticated || !pushAccountId) return;
     let cancelled = false;
-    void (async () => {
-      // 只用当前会话补偿当前区域的注销，再按本机开关同步注册状态。
-      await retryPendingUnregister(apiFetchRef.current).catch(() => undefined);
-      if (cancelled) return;
-      const enabled = await readPushEnabled();
-      if (cancelled || !enabled) return;
-      await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current }).catch(() => undefined);
-    })();
+    let needsRetry = false;
+    let profileRetryAvailable = true;
+    let recoveryWhileRunning = false;
+    let running = false;
+    async function reconcile() {
+      running = true;
+      needsRetry = false;
+      try {
+        await retryPendingUnregister(apiFetchRef.current).catch(() => undefined);
+        if (cancelled) return;
+        const enabled = await readPushEnabled();
+        if (cancelled || !enabled) return;
+        const result = await syncPushRegistration({ enabled: true, apiFetch: apiFetchRef.current });
+        needsRetry = result === 'local-only';
+      } catch {
+        needsRetry = true;
+      } finally {
+        running = false;
+        const replay = recoveryWhileRunning;
+        recoveryWhileRunning = false;
+        if (!cancelled && needsRetry && replay) void reconcile();
+      }
+    }
+    function recover() {
+      if (running) recoveryWhileRunning = true;
+      else if (needsRetry) void reconcile();
+    }
+    // An auth refresh during registration may itself have been caused by the
+    // PUT. Allow one profile-triggered retry per foreground visit.
+    onProfileRefresh.current = () => {
+      if (!profileRetryAvailable || (!running && !needsRetry)) return;
+      profileRetryAvailable = false;
+      recover();
+    };
+    const foreground = AppState.addEventListener('change', state => {
+      if (state !== 'active') return;
+      profileRetryAvailable = true;
+      recover();
+    });
+    void reconcile();
     return () => {
       cancelled = true;
+      onProfileRefresh.current = null;
+      foreground.remove();
     };
   }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, pushAccountId, selfHostedRelay, agentNetPreferences.generation]);
+
+  useEffect(() => {
+    if (previousProfile.current?.id === auth.user?.id && previousProfile.current !== auth.user) {
+      onProfileRefresh.current?.();
+    }
+    previousProfile.current = auth.user;
+  }, [auth.user]);
 
   // APNs token 轮换 → 重新上报(仅开关开启且已登录时)
   useEffect(() => {
