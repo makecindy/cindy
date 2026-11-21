@@ -3,7 +3,7 @@
  * Node Host. Bodies moved from createDesktopProviderService.ts; platform readers
  * and the in-memory catalog publisher are ports. Runtime imports stay in bindings.
  */
-import type { Catalog } from '@cindy/model-providers';
+import type { Catalog, CatalogModel } from '@cindy/model-providers';
 import type { readPool, readProviderBoundAccountIds } from '../subscription-accounts/store.js';
 import type { readMergedProviderAccount, accountProviderId, readCreatedSubscriptionProvidersIfReadable } from '../subscription-accounts/placement.js';
 import type { readSubscriptionPoolCodexModels, readSubscriptionPoolClaudeModels } from '../subscription-accounts/runtime.js';
@@ -40,6 +40,14 @@ export function publishSubscriptionPoolProviders(ports: SubscriptionPoolPublishe
   }
 }
 
+/** Combined account catalogs do not identify the account that will execute a Pi request. */
+function withoutMembershipSource(model: CatalogModel, preserveExplicit = false): CatalogModel {
+  if (model.membershipSource === undefined || (preserveExplicit && model.membershipSource === 'user-configured')) return model;
+  const next = { ...model };
+  delete next.membershipSource;
+  return next;
+}
+
 /** Apply account membership to both selectable and full routing snapshots. */
 export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: SubscriptionPoolCatalogPorts, routingCatalog = false, include?: (p: Catalog['providers'][number]) => boolean): Catalog {
   const pool = ports.readPool('openai');
@@ -63,11 +71,22 @@ export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: Subscrip
     const legacy = provider.auth.native === 'codex' && aliases && Object.hasOwn(aliases, provider.id);
     if (provider.id !== 'openai' && provider.subscriptionPool !== 'openai' && !legacy) return provider;
     const pooledModels = ports.readSubscriptionPoolCodexModels(provider.id, routingCatalog ? { includeBoundAccounts: true } : undefined);
-    if (pooledModels === null) return provider;
+    if (pooledModels === null) {
+      // Created pools mirror the builtin catalog. Until their own discovery is
+      // available, none of those markers establishes this pool's model source.
+      if (provider.subscriptionPool !== 'openai' || !provider.models.pi) return provider;
+      return { ...provider, models: { ...provider.models, pi: provider.models.pi.map(model => withoutMembershipSource(model)) } };
+    }
     const openai = ports.getActiveCatalogWithCodexModels(pooledModels).providers.find(entry => entry.id === 'openai');
     if (!openai) return provider;
     if (provider.id === 'openai') return openai;
-    if (provider.subscriptionPool === 'openai') return { ...provider, models: openai.models };
+    if (provider.subscriptionPool === 'openai') return { ...provider, models: {
+      ...openai.models,
+      // Account/public evidence comes from this pool's targeted projection, but
+      // an explicit builtin addition is not this separate connection's setting.
+      ...(openai.models.pi ? { pi: openai.models.pi.map(model => model.membershipSource === 'user-configured'
+        ? withoutMembershipSource(model) : model) } : {}),
+    } };
     // Preserve the imported login's configured membership only while it belongs here,
     // or while this old id is a compatibility route for that login after a merge.
     const originalAccount = pool?.accounts.find(account => account.id === aliases![provider.id]);
@@ -76,8 +95,13 @@ export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: Subscrip
       && (routingCatalog || (!!originalAccount && !originalAccount.paused && ports.codexAccountState(provider.id).authenticated))
     );
     return { ...provider, models: Object.fromEntries(provider.agents.map(agent => {
-      const models = new Map((keepOriginal ? provider.models[agent] ?? [] : []).map(model => [model.id, model]));
-      for (const model of openai.models[agent] ?? []) if (!models.has(model.id)) models.set(model.id, model);
+      const original = keepOriginal ? provider.models[agent] ?? [] : [];
+      const pooled = openai.models[agent] ?? [];
+      const combinedPi = agent === 'pi' && original.length > 0 && pooled.length > 0;
+      const models = new Map(original.map(model => [model.id, combinedPi ? withoutMembershipSource(model, true) : model]));
+      for (const model of pooled) if (!models.has(model.id))
+        models.set(model.id, agent === 'pi' && (combinedPi || model.membershipSource === 'user-configured')
+          ? withoutMembershipSource(model) : model);
       return [agent, [...models.values()]];
     })) };
   }) };
@@ -112,9 +136,11 @@ export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: Subscrip
     const imported = lenders.get(provider.id);
     if (!imported) return provider;
     const models = Object.fromEntries(provider.agents.map(agent => {
-      const models = new Map((provider.models[agent] ?? []).map(model => [model.id, model]));
+      const combinedPi = agent === 'pi' && imported.some(source => (source.models.pi?.length ?? 0) > 0);
+      const models = new Map((provider.models[agent] ?? []).map(model =>
+        [model.id, combinedPi ? withoutMembershipSource(model, provider.subscriptionPool !== 'openai') : model]));
       for (const source of imported) for (const model of source.models[agent] ?? [])
-        if (!models.has(model.id)) models.set(model.id, model);
+        if (!models.has(model.id)) models.set(model.id, combinedPi ? withoutMembershipSource(model) : model);
       return [agent, [...models.values()]];
     }));
     return { ...provider, models };

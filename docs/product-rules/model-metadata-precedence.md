@@ -137,6 +137,14 @@ Pi 显式列表提供公共成员（包括空数组与退役条目）；缺字�
 服务器声明的新模型不要求先出现在 Pi SDK 名单中；有明确原生协议
 即可构造 models.json。OpenAI 订阅仍使用专用 Codex Responses 认证传输。
 
+OpenAI 订阅的 Pi 候选按连接携带可选 `membershipSource`：`account-catalog`
+表示当前或恢复的账号目录列出，`public-catalog` 表示仅公共声明／随包目录提供成员，
+`user-configured` 表示用户显式 addition。它只说明选型依据，不证明实时授权；账号目录
+可能过期或省略隐藏型号，缺席不能推导为不支持。自动选型在满足任务需求和用户指定
+路线的候选中优先参考账号目录；不据此删除公共成员、阻止显式选择或切换付费来源。
+该字段不是可继承的公共模型资料，API-key／自定义连接和旧端缺失时按未知处理。
+工具与跨端降级约定见[模型选型依据](../dev-rules/protocol-compatibility/model-selection-evidence.md)。
+
 独立 OpenAI 账号恢复后，Pi 与 Codex 根使用同一份账号成员快照：优先当前发现结果，
 尚无结果时复用该账号已保存的 Codex 清单。这里只补成员和可移植资料，不把 Codex
 运行时的用户配置当成 Pi 覆盖；思考档位按 Pi 支持的档位及公共资料解析，Pi 专属

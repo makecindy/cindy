@@ -165,15 +165,20 @@ describe('Orca provider routing snapshot wiring', () => {
 describe('localAvailableModels (#6970)', () => {
   // Automation model discovery previously discarded pricing/effort data before it
   // reached tools. Same-id routes must retain their own rates; no credentials cross.
+  // #11865, unit: extend the production local/device discovery projections with
+  // one same-id Pi pair whose account/public membership evidence differs. Earlier
+  // metadata coverage did not exercise the evidence needed for autonomous selection.
   it.each(['claude-code', 'codex', 'pi'] as const)('preserves source-specific prices and known/unknown efforts for %s automation discovery', async (agent) => {
     const base = BUNDLED_CATALOG.providers.find(p => p.id === 'xd')!;
     const seed = base.models.pi![0]!;
     const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [
-      { ...base, id: 'first', access: { kind: 'api' }, models: { [agent]: [{ ...seed, id: 'same',
+      { ...base, id: 'first', access: agent === 'pi' ? { kind: 'subscription', product: 'test' } : { kind: 'api' }, models: { [agent]: [{ ...seed, id: 'same',
+        ...(agent === 'pi' ? { membershipSource: 'public-catalog' as const } : {}),
         cost: { input: 0, output: 0.5 }, currency: 'USD', efforts: ['low'], defaultEffort: 'low',
         route: { baseUrl: 'https://private.invalid', wireProtocol: 'openai-chat' },
       }] } },
       { ...base, id: 'second', access: { kind: 'subscription', product: 'test' }, models: { [agent]: [{ ...seed, id: 'same',
+        ...(agent === 'pi' ? { membershipSource: 'account-catalog' as const } : {}),
         cost: undefined, currency: undefined, efforts: [], defaultEffort: null, effortsUnknown: true,
       }] } },
     ] };
@@ -185,9 +190,11 @@ describe('localAvailableModels (#6970)', () => {
       routing.resolveDefaultProviderIdForModel, agent);
     for (const models of [local, deviceAvailableModels(views, agent)]) {
       expect(models[0]?.providers).toMatchObject([
-        { id: 'first', access: { kind: 'api' }, modelDetails: { cost: { input: 0, output: 0.5 }, currency: 'USD', efforts: ['low'] } },
+        { id: 'first', access: { kind: agent === 'pi' ? 'subscription' : 'api' }, modelDetails: { cost: { input: 0, output: 0.5 }, currency: 'USD', efforts: ['low'] } },
         { id: 'second', access: { kind: 'subscription' }, modelDetails: { cost: undefined, efforts: [], defaultEffort: null, effortsUnknown: true } },
       ]);
+      expect(models[0]?.providers.map(provider => provider.modelDetails?.membershipSource))
+        .toEqual(agent === 'pi' ? ['public-catalog', 'account-catalog'] : [undefined, undefined]);
       expect(JSON.stringify(models)).not.toContain('private.invalid');
     }
   });

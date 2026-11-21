@@ -1915,6 +1915,8 @@ describe('OrcaWorkerCreationService', () => {
   it('honors an explicit fast request for a Pi worker on a fast-capable model', async () => {
     // Pi 也支持 Fast:显式 fast:true 必须被消费(此前两处判定只认 codex,静默丢弃)。
     // lead.fastMode 默认 false —— 若 pi 未接线,结果会退回 false,构成有效判别。
+    // #11865, unit: public-only catalog evidence must not reject or reroute an
+    // explicit Pi selection. Previously this createWorker case had no evidence.
     const { deps, service } = createDeps({
       getAvailableModels: vi.fn((agent: AgentKind) => (
         agent === 'pi'
@@ -1922,7 +1924,16 @@ describe('OrcaWorkerCreationService', () => {
           : [{ id: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', supportsFastMode: true }]
       )),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
-        pi: [{ id: 'xd', name: 'XD Gateway', models: ['pi-fast-model'], fastModels: ['pi-fast-model'] }],
+        pi: [
+          { id: 'openai', name: 'ChatGPT', models: ['pi-fast-model'], fastModels: ['pi-fast-model'],
+            modelDetailsByModel: { 'pi-fast-model': {
+              contextWindow: 128_000, efforts: ['low', 'medium', 'high'], defaultEffort: 'high', membershipSource: 'public-catalog',
+            } } },
+          { id: 'other-account', name: 'Other account', models: ['pi-fast-model'], fastModels: ['pi-fast-model'],
+            modelDetailsByModel: { 'pi-fast-model': {
+              contextWindow: 128_000, efforts: ['low', 'medium', 'high'], defaultEffort: 'high', membershipSource: 'account-catalog',
+            } } },
+        ],
       })),
     });
 
@@ -1933,6 +1944,7 @@ describe('OrcaWorkerCreationService', () => {
         agent: 'pi',
         label: 'reviewer',
         model: 'pi-fast-model',
+        providerId: 'openai',
         fast: true,
       }),
     ).resolves.toMatchObject({
@@ -1946,6 +1958,7 @@ describe('OrcaWorkerCreationService', () => {
     expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
       agentKind: 'pi',
       model: 'pi-fast-model',
+      providerId: 'openai',
       fastMode: true,
     }));
   });

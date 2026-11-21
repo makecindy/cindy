@@ -53,6 +53,59 @@ describe('list_available_models tool', () => {
     expect(listAvailableModels).toHaveBeenCalledWith({ agent: 'codex' });
   });
 
+  // #11865, unit: registry.call must expose each route's membership evidence.
+  // Existing provider tests cover old hosts but lose modelDetails entirely. The
+  // minimal regression is one Pi model offered by two accounts with different evidence.
+  it('preserves per-provider Pi membership evidence without exposing other host metadata', async () => {
+    const listAvailableModels = vi.fn(async () => ({
+      ok: true as const,
+      agentDeviceId: 'model-pc',
+      pi: [{
+        id: 'chatgpt/gpt-5.4-mini', label: 'GPT-5.4 Mini', defaultProviderId: 'account-a',
+        providers: [
+          { id: 'account-a', name: 'Account A', modelDetails: {
+            membershipSource: 'public-catalog' as const,
+            route: { baseUrl: 'https://private.invalid' },
+          } },
+          { id: 'account-b', name: 'Account B', modelDetails: { membershipSource: 'account-catalog' as const } },
+          { id: 'manual', name: 'Manual', modelDetails: { membershipSource: 'user-configured' as const } },
+          { id: 'legacy', name: 'Legacy' },
+          // Simulate a newer or malformed host without claiming its unknown value is evidence.
+          { id: 'unknown', name: 'Unknown', modelDetails: { membershipSource: 'future-value' as 'public-catalog' } },
+        ],
+      }, {
+        id: 'chatgpt/gpt-6.2-sol', label: 'GPT-6.2 Sol', defaultProviderId: 'account-a',
+        providers: [{ id: 'account-a', name: 'Account A', modelDetails: { membershipSource: 'account-catalog' as const } }],
+      }, {
+        id: 'chatgpt/hidden-manual', label: 'Manual model', defaultProviderId: 'account-a',
+        providers: [{ id: 'account-a', name: 'Account A', modelDetails: { membershipSource: 'user-configured' as const } }],
+      }],
+    }));
+    const registry = new XdtHelperToolRegistry();
+    registerListAvailableModelsTool(registry, { listAvailableModels });
+
+    const result = parse(await registry.call('list_available_models', { agent: 'pi', provider_device_id: 'model-pc' }));
+
+    expect(result.provider_device_id).toBe('model-pc');
+    expect(result.pi).toEqual([{
+      id: 'chatgpt/gpt-5.4-mini', label: 'GPT-5.4 Mini', tier: 'standard', default_provider_id: 'account-a',
+      providers: [
+        { provider_id: 'account-a', provider_name: 'Account A', membership_source: 'public-catalog' },
+        { provider_id: 'account-b', provider_name: 'Account B', membership_source: 'account-catalog' },
+        { provider_id: 'manual', provider_name: 'Manual', membership_source: 'user-configured' },
+        { provider_id: 'legacy', provider_name: 'Legacy' },
+        { provider_id: 'unknown', provider_name: 'Unknown' },
+      ],
+    }, {
+      id: 'chatgpt/gpt-6.2-sol', label: 'GPT-6.2 Sol', tier: 'standard', default_provider_id: 'account-a',
+      providers: [{ provider_id: 'account-a', provider_name: 'Account A', membership_source: 'account-catalog' }],
+    }, {
+      id: 'chatgpt/hidden-manual', label: 'Manual model', tier: 'standard', default_provider_id: 'account-a',
+      providers: [{ provider_id: 'account-a', provider_name: 'Account A', membership_source: 'user-configured' }],
+    }]);
+    expect(JSON.stringify(result)).not.toContain('private.invalid');
+  });
+
   it('passes the calling task so a task whose agent runs on another computer lists that computer', async () => {
     const listAvailableModels = vi.fn(async () => ({ ok: true as const, codex: [] }));
     const registry = new XdtHelperToolRegistry();

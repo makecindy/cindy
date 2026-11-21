@@ -839,6 +839,7 @@ function alignOpenAiPiWithAccount(
     ...model,
     id: normalizePiModelId('openai', model.id),
   }));
+  const accountIds = new Set(account.map((model) => model.id));
   const ordered = account.length > 0 ? sortModelsByOrder(applyAccountOrder(pi, account)) : [...pi];
   return ordered.map((model) => {
     const bare = model.id.startsWith(CHATGPT_MODEL_PREFIX)
@@ -847,9 +848,13 @@ function alignOpenAiPiWithAccount(
     const entry =
       registry?.models.find((candidate) => candidate.id === `openai/${bare}`) ??
       findModelRegistryRoute(registry, 'openai', bare)?.entry;
-    return entry?.defaultEnabled === false && model.defaultEnabled !== false
-      ? { ...model, defaultEnabled: false }
-      : model;
+    return {
+      ...model,
+      // The Pi union remains valid; account listing is selection evidence, not
+      // entitlement. Recompute per connection instead of trusting static markers.
+      membershipSource: accountIds.has(model.id) ? 'account-catalog' : 'public-catalog',
+      ...(entry?.defaultEnabled === false ? { defaultEnabled: false } : {}),
+    };
   });
 }
 
@@ -1844,6 +1849,7 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
       const model: CatalogModel = {
         ...applyExistingModelLocalPatch(provider.id, 'pi', addition, localOverrides),
         id, piApi,
+        ...(isOpenAiSubscriptionProvider(provider) ? { membershipSource: 'user-configured' as const } : {}),
         ...(existing ? { contextWindowMax: Math.max(
           existing.contextWindowMax ?? existing.contextWindow, addition.contextWindow,
         ) } : {}),

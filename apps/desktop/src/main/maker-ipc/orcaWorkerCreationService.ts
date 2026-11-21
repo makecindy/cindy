@@ -81,6 +81,7 @@ export interface OrcaWorkerProviderSnapshot {
   modelDetailsByModel?: Readonly<Record<string, Pick<CatalogModel,
     'description' | 'contextWindow' | 'efforts' | 'defaultEffort' | 'effortsUnknown' | 'supportsFastMode'
     | 'supportsUltrafastMode' | 'supportsToolCalls' | 'cost' | 'currency' | 'costDiscount' | 'displayPricing'
+    | 'membershipSource'
   >>>;
   /**
    * 运行 model id 对应的 Model Registry 稳定身份。缺失表示目录无法证明该路由 model

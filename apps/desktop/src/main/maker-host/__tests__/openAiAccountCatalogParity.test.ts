@@ -47,6 +47,74 @@ afterEach(() => {
 });
 
 describe('OpenAI account catalog identity', () => {
+  // Test value (#11865): getActiveCatalog must retain the Pi union while exposing
+  // per-connection membership evidence to model discovery. Existing parity tests
+  // checked membership/capabilities but could not distinguish public Mini from
+  // account-listed Sol. Minimal input: public [Mini, Sol], account [Sol]. Unit:
+  // in-memory catalog/discovery setters; no account requests or runtime processes.
+  it('distinguishes account and public Pi membership without restricting API routes', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.providers.find(p => p.id === 'openai')!.models.pi = [
+      { id: 'chatgpt/gpt-5.4-mini', name: 'Mini', contextWindow: 272000,
+        efforts: ['low'], defaultEffort: 'low', piApi: 'openai-responses',
+        // Even a stale/static marker cannot manufacture account evidence.
+        membershipSource: 'account-catalog' },
+      { id: 'chatgpt/gpt-6.1-sol', name: 'Sol', contextWindow: 272000,
+        efforts: ['low'], defaultEffort: 'low', piApi: 'openai-responses' },
+    ];
+    setActiveCatalog(catalog, { authorityCatalog: catalog });
+    seedBuiltinAccount('gpt-6.1-sol');
+    setCustomProviders([account(), buildUserProvider({
+      id: 'api-independent', name: 'API connection', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl: 'https://api.example/v1', wireProtocol: 'openai-responses',
+        models: [{ id: 'chatgpt/gpt-5.4-mini', name: 'API Mini', api: 'openai-responses' }],
+      } },
+    })]);
+    setDiscoveredProviderModels(accountId, 'codex', accountListModels(['gpt-5.4-mini']));
+    expect(entry('openai', 'pi', 'chatgpt/gpt-5.4-mini').membershipSource).toBe('public-catalog');
+    expect(entry('openai', 'pi', 'chatgpt/gpt-6.1-sol').membershipSource).toBe('account-catalog');
+    expect(entry(accountId, 'pi', 'chatgpt/gpt-5.4-mini').membershipSource).toBe('account-catalog');
+    expect(entry(accountId, 'pi', 'chatgpt/gpt-6.1-sol').membershipSource).toBe('public-catalog');
+    const api = getActiveCatalog().providers.find(p => p.id === 'api-independent')!;
+    expect(api.routing.pi).toMatchObject({ upstream: 'https://api.example/v1', authStrategy: 'api-key-header' });
+    expect(api.models.pi).toEqual([expect.objectContaining({ id: 'chatgpt/gpt-5.4-mini' })]);
+    expect(api.models.pi![0]!.membershipSource).toBeUndefined();
+
+    // Fresh omission removes account evidence, not a public Pi member. A valid
+    // empty account catalog also cannot turn public declarations into discovery.
+    seedBuiltinAccount('gpt-5.4-mini');
+    expect(entry('openai', 'pi', 'chatgpt/gpt-6.1-sol').membershipSource).toBe('public-catalog');
+    seedBuiltinAccount();
+    expect(getActiveCatalog().providers.find(p => p.id === 'openai')!.models.pi)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'chatgpt/gpt-5.4-mini', membershipSource: 'public-catalog' }),
+        expect.objectContaining({ id: 'chatgpt/gpt-6.1-sol', membershipSource: 'public-catalog' }),
+      ]));
+    expect(entry(accountId, 'pi', 'chatgpt/gpt-5.4-mini').membershipSource).toBe('account-catalog');
+  });
+
+  it('keeps explicit Pi additions distinct from account evidence and restores their original source on removal', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    seedBuiltinAccount('gpt-6.1-sol');
+    setCustomProviders([account()]);
+    const addition = { agents: ['pi'],
+      base: { name: 'Explicit model', contextWindow: 120000, efforts: ['low'], defaultEffort: 'low' } };
+    setLocalCatalogOverrides(sanitizeModelCatalogOverrides({
+      additions: { 'openai:gpt-5.4-mini': addition, 'openai:gpt-hidden-fixture': addition },
+      patches: { 'openai:chatgpt/gpt-6.1-sol': { perAgent: { pi: { contextWindow: 234567 } } } },
+    }).overrides);
+    for (const id of ['chatgpt/gpt-5.4-mini', 'chatgpt/gpt-hidden-fixture']) {
+      expect(entry('openai', 'pi', id)).toMatchObject({ membershipSource: 'user-configured', contextWindow: 120000 });
+    }
+    expect(entry('openai', 'pi', 'chatgpt/gpt-6.1-sol'))
+      .toMatchObject({ membershipSource: 'account-catalog', contextWindow: 234567 });
+    expect(entry(accountId, 'pi', 'chatgpt/gpt-5.4-mini').membershipSource).toBe('public-catalog');
+    expect(entry(accountId, 'pi', 'chatgpt/gpt-hidden-fixture')).toBeUndefined();
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    expect(entry('openai', 'pi', 'chatgpt/gpt-5.4-mini').membershipSource).toBe('public-catalog');
+    expect(entry('openai', 'pi', 'chatgpt/gpt-hidden-fixture')).toBeUndefined();
+  });
+
   it('keeps saved Ultrafast scoped through active catalog and desktop/mobile capability projection', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     seedBuiltinAccount('gpt-6.1-sol');
@@ -221,7 +289,7 @@ describe('OpenAI account catalog identity', () => {
     }]);
     for (let refresh = 0; refresh < 2; refresh++) {
       const pi = entry(accountId, 'pi', `chatgpt/${id}`);
-      expect(pi).toMatchObject({ piApi: 'openai-responses' });
+      expect(pi).toMatchObject({ piApi: 'openai-responses', membershipSource: 'account-catalog' });
       expect(pi.efforts).toContain('high');
       expect(pi.efforts).not.toContain('ultra');
       expect(pi.defaultEffort).not.toBe('ultra');
@@ -231,7 +299,8 @@ describe('OpenAI account catalog identity', () => {
     // A new account snapshot replaces restored membership, without leaking to other accounts.
     setDiscoveredProviderModels(accountId, 'codex', accountListModels(['gpt-next-account-model']));
     expect(entry(accountId, 'pi', `chatgpt/${id}`)).toBeUndefined();
-    expect(entry(accountId, 'pi', 'chatgpt/gpt-next-account-model')).toBeDefined();
+    expect(entry(accountId, 'pi', 'chatgpt/gpt-next-account-model'))
+      .toMatchObject({ membershipSource: 'account-catalog' });
   });
 
   it('does not reapply restored Codex-only effort settings as Pi user settings', () => {
