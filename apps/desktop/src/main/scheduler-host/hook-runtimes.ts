@@ -7,8 +7,8 @@
  * 找不到真实运行时时,xdt-node 明确 fail-closed(见 pre-run-hook),不使用
  * 正式包已关闭的 Electron RunAsNode。
  *
- * 结果按执行目录 + TTL 缓存,让"用户刚装完或修复 node"无需重启也能
- * 在几分钟后被感知。调用方取消或本轮预算耗尽不会写成全局不可用缓存。
+ * 结果按执行目录存入有界 LRU + TTL 缓存,让"用户刚装完或修复 node"无需重启也能
+ * 在几分钟后被感知。调用方取消或本轮预算耗尽不会写成不可用缓存。
  */
 
 import { spawn } from 'node:child_process';
@@ -99,7 +99,77 @@ export interface SystemNodeInterpreterOptions {
   readVersions?: (directory: string) => string[] | Promise<string[]>;
 }
 
+const INTERPRETER_CACHE_MAX_ENTRIES = 32;
 const cachedInterpreters = new Map<string, { value: string | null; at: number }>();
+
+interface InflightInterpreter {
+  promise: Promise<string | null>;
+  controller: AbortController;
+  waiters: number;
+  completed: boolean;
+}
+
+const inflightInterpreters = new Map<string, InflightInterpreter>();
+
+function getCachedInterpreter(cwd: string, now: number): { value: string | null } | null {
+  const entry = cachedInterpreters.get(cwd);
+  if (!entry) return null;
+  if (now - entry.at >= CACHE_TTL_MS) {
+    cachedInterpreters.delete(cwd);
+    return null;
+  }
+  // Map 迭代顺序即 LRU 顺序:命中后移到末尾。
+  cachedInterpreters.delete(cwd);
+  cachedInterpreters.set(cwd, entry);
+  return { value: entry.value };
+}
+
+function setCachedInterpreter(cwd: string, value: string | null): void {
+  const now = Date.now();
+  for (const [key, entry] of cachedInterpreters) {
+    if (now - entry.at >= CACHE_TTL_MS) cachedInterpreters.delete(key);
+  }
+  cachedInterpreters.delete(cwd);
+  cachedInterpreters.set(cwd, { value, at: now });
+  while (cachedInterpreters.size > INTERPRETER_CACHE_MAX_ENTRIES) {
+    const oldest = cachedInterpreters.keys().next().value;
+    if (oldest === undefined) break;
+    cachedInterpreters.delete(oldest);
+  }
+}
+
+/** fs 读目录本身不可取消;等待侧竞争 signal,迟到结果直接丢弃。 */
+function awaitDirectoryVersions(
+  readVersions: (directory: string) => string[] | Promise<string[]>,
+  directory: string,
+  signal: AbortSignal,
+): Promise<string[] | null> {
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => signal.removeEventListener('abort', onAbort);
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(null);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve()
+      .then(() => readVersions(directory))
+      .then((versions) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(signal.aborted ? null : versions);
+      }, (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      });
+  });
+}
 
 interface VersionRoot {
   directory: string;
@@ -110,7 +180,7 @@ async function versionManagerCandidates(
   env: NodeJS.ProcessEnv,
   home: string,
   readVersions: (directory: string) => string[] | Promise<string[]>,
-  shouldStop: () => boolean,
+  signal: AbortSignal,
 ): Promise<string[]> {
   const current: string[] = [];
   const roots: VersionRoot[] = [];
@@ -140,14 +210,14 @@ async function versionManagerCandidates(
 
   const candidates = [...current];
   for (const root of roots) {
-    if (shouldStop()) return [];
-    let versions: string[];
+    if (signal.aborted) return [];
+    let versions: string[] | null;
     try {
-      versions = await readVersions(root.directory);
+      versions = await awaitDirectoryVersions(readVersions, root.directory, signal);
     } catch {
       continue;
     }
-    if (shouldStop()) return [];
+    if (versions === null) return [];
     versions = versions
       .filter(version => /^v?\d/.test(version))
       .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))
@@ -161,64 +231,124 @@ function quoteNodeExecutable(executable: string): string {
   return process.platform === 'win32' ? `"${executable}"` : `'${executable.replace(/'/g, `'\\''`)}'`;
 }
 
+/** 共享探测只监听共享 signal;每个调用者的独立 budget 在等待侧处理。 */
+async function discoverSystemNodeInterpreter(
+  cwd: string,
+  options: SystemNodeInterpreterOptions,
+  signal: AbortSignal,
+): Promise<string | null> {
+  if (signal.aborted) return null;
+  const pathAvailable = await probeCommand('node --version', undefined, { signal, cwd });
+  if (signal.aborted) return null;
+  if (pathAvailable) return 'node';
+
+  const env = options.env ?? process.env;
+  const home = options.home ?? os.homedir();
+  const probe = options.probeExecutable ?? ((executable: string, probeOptions?: ProbeOptions) =>
+    probeCommand(executable, ['--version'], probeOptions));
+  const readVersions = options.readVersions ?? (async (directory: string) => readdir(directory));
+  const candidates = await versionManagerCandidates(env, home, readVersions, signal);
+  if (signal.aborted) return null;
+  // 最多 4 个并发探测;每个进程自身有 3 秒上限,调用者另有独立总预算。
+  for (let offset = 0; offset < candidates.length; offset += 4) {
+    const batch = candidates.slice(offset, offset + 4);
+    const results = await Promise.all(batch.map(async executable => {
+      try {
+        return await probe(executable, { signal, cwd });
+      } catch {
+        return false;
+      }
+    }));
+    if (signal.aborted) return null;
+    const available = results.findIndex(Boolean);
+    if (available >= 0) return quoteNodeExecutable(batch[available]);
+  }
+  return null;
+}
+
+function createInflightInterpreter(
+  cwd: string,
+  options: SystemNodeInterpreterOptions,
+): InflightInterpreter {
+  const controller = new AbortController();
+  const entry: InflightInterpreter = {
+    promise: Promise.resolve(null),
+    controller,
+    waiters: 0,
+    completed: false,
+  };
+  entry.promise = discoverSystemNodeInterpreter(cwd, options, controller.signal)
+    .catch(() => null)
+    .then((value) => {
+      if (!controller.signal.aborted) setCachedInterpreter(cwd, value);
+      return value;
+    })
+    .finally(() => {
+      entry.completed = true;
+      if (inflightInterpreters.get(cwd) === entry) inflightInterpreters.delete(cwd);
+    });
+  inflightInterpreters.set(cwd, entry);
+  return entry;
+}
+
+/** 独立等待共享结果;只有最后一个等待者离开才会取消底层共享探测。 */
+function waitForInterpreter(
+  entry: InflightInterpreter,
+  options: SystemNodeInterpreterOptions,
+): Promise<string | null> {
+  if (options.signal?.aborted || (options.timeoutMs !== undefined && options.timeoutMs <= 0)) {
+    return Promise.resolve(null);
+  }
+  entry.waiters += 1;
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onCancel);
+      entry.waiters -= 1;
+      if (entry.waiters === 0 && !entry.completed) entry.controller.abort();
+      resolve(value);
+    };
+    const onCancel = (): void => finish(null);
+    if (options.timeoutMs !== undefined) {
+      timer = setTimeout(onCancel, options.timeoutMs);
+      timer.unref?.();
+    }
+    options.signal?.addEventListener('abort', onCancel, { once: true });
+    entry.promise.then(finish);
+  });
+}
+
 /**
  * 返回可替换命令首 token 的 Node 解释器。PATH 失效时，继续发现常见版本管理器
- * 已安装的运行时；候选必须实际 `--version` 成功才可使用。结果带同一 TTL 缓存，
- * 避免每次定时触发都扫描目录或重复探测。
+ * 已安装的运行时；候选必须实际 `--version` 成功才可使用。同一 cwd 合并在途探测，
+ * 各调用者保留独立取消与预算;完成结果使用有界 LRU + TTL 缓存。
  */
 export async function resolveSystemNodeInterpreter(
   options: SystemNodeInterpreterOptions = {},
 ): Promise<string | null> {
-  if (options.signal?.aborted) return null;
+  if (options.signal?.aborted || (options.timeoutMs !== undefined && options.timeoutMs <= 0)) return null;
   const cwd = options.cwd?.trim() ? options.cwd : os.homedir();
-  const now = Date.now();
-  const cachedInterpreter = cachedInterpreters.get(cwd);
-  if (!options.forceProbe && cachedInterpreter && now - cachedInterpreter.at < CACHE_TTL_MS) {
-    return cachedInterpreter.value;
+  if (!options.forceProbe) {
+    const cached = getCachedInterpreter(cwd, Date.now());
+    if (cached) return cached.value;
   }
-  const deadline = options.timeoutMs === undefined ? undefined : now + Math.max(0, options.timeoutMs);
-  const remaining = (): number | undefined => deadline === undefined ? undefined : deadline - Date.now();
-  if (options.signal?.aborted || (remaining() ?? 1) <= 0) return null;
-  let value: string | null = null;
-  const pathAvailable = await probeCommand('node --version', undefined, {
-    signal: options.signal, timeoutMs: remaining(), cwd,
-  });
-  if (options.signal?.aborted || (remaining() ?? 1) <= 0) return null;
-  if (pathAvailable) {
-    value = 'node';
-  } else {
-    const env = options.env ?? process.env;
-    const home = options.home ?? os.homedir();
-    const probe = options.probeExecutable ?? ((executable: string, probeOptions?: ProbeOptions) =>
-      probeCommand(executable, ['--version'], probeOptions));
-    const readVersions = options.readVersions ?? (async (directory: string) => readdir(directory));
-    const candidates = await versionManagerCandidates(env, home, readVersions, () =>
-      options.signal?.aborted === true || (remaining() ?? 1) <= 0);
-    if (options.signal?.aborted || (remaining() ?? 1) <= 0) return null;
-    // 最多 4 个并发探测,既保持优先级,也把 PATH 失效后的最坏等待限制在约 12 秒。
-    for (let offset = 0; offset < candidates.length; offset += 4) {
-      const batch = candidates.slice(offset, offset + 4);
-      const results = await Promise.all(batch.map(async executable => {
-        try {
-          return await probe(executable, { signal: options.signal, timeoutMs: remaining(), cwd });
-        } catch {
-          return false;
-        }
-      }));
-      if (options.signal?.aborted || (remaining() ?? 1) <= 0) return null;
-      const available = results.findIndex(Boolean);
-      if (available >= 0) {
-        value = quoteNodeExecutable(batch[available]);
-        break;
-      }
-    }
+  let entry = inflightInterpreters.get(cwd);
+  if (entry?.completed || entry?.controller.signal.aborted) {
+    inflightInterpreters.delete(cwd);
+    entry = undefined;
   }
-  cachedInterpreters.set(cwd, { value, at: Date.now() });
-  return value;
+  entry ??= createInflightInterpreter(cwd, options);
+  return waitForInterpreter(entry, options);
 }
 
-/** 测试辅助:清缓存。 */
+/** 测试辅助:取消在途探测并清缓存。 */
 export function __resetHookRuntimeCacheForTest(): void {
+  for (const entry of inflightInterpreters.values()) entry.controller.abort();
+  inflightInterpreters.clear();
   cached = null;
   cachedInterpreters.clear();
 }
