@@ -773,7 +773,8 @@ describe('notificationService — channels 分发', () => {
     getSessionNotificationTurnSignal.mockReturnValue({
       id: 'signal:2', fallbackEventId: 'turn:300:400:signal-2', ended: true,
     });
-    await invokeHandler(payload); // turn B's own terminal
+    await invokeHandler(payload, windowEvent(1)); // turn B's own terminal
+    await invokeHandler(payload, windowEvent(2)); // duplicate from a second renderer, same product turn key
     expect(notificationCtor).toHaveBeenCalledTimes(1);
     expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
     expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);

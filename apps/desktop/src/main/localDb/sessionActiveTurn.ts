@@ -245,36 +245,49 @@ function queueSessionTurnStarted(sessionId: string, durable: boolean): Promise<v
  * A Desktop silent continuation starts a new SDK segment in the same product
  * turn. Advance the interruption marker without allocating a new notification
  * identity. Only a confirmed non-dispatch may settle this exact marker.
+ * A write exception can leave a live continuation without recovery evidence.
+ * Losing the scope or matching no row still rejects admission.
  */
 export async function markSessionSilentContinuationStarted(
   sessionId: string,
   owner: CurrentDbClientSnapshot,
   isCurrent: () => boolean,
-): Promise<() => Promise<void>> {
+): Promise<(() => Promise<void>) | { writeError: unknown }> {
   const startedAt = Date.now();
   const turn = _notificationTurns.get(sessionId);
   const canWrite = () =>
     !isEndedWriteSuppressed() && getCurrentDbClientSnapshot() === owner && isCurrent();
   const db = owner.client.drizzle;
   const continuation = { startedAt, clientEpoch: owner.clientEpoch };
+  let failedWrite: { writeError: unknown } | undefined;
   await chainWrite(sessionId, async () => {
     if (!canWrite()) throw new Error('Silent continuation is no longer current');
-    const result = await db.update(sessions)
+    const update = db.update(sessions)
       .set({ activeTurnStartedAt: startedAt })
       .where(and(
         eq(sessions.id, sessionId),
         lt(sql`COALESCE(${sessions.activeTurnStartedAt}, 0)`, startedAt),
         lt(sql`COALESCE(${sessions.lastTurnEndedAt}, 0)`, startedAt),
-      )).run();
-    if (result.changes !== 1) throw new Error('Silent continuation start marker was not saved');
-    if (turn && _notificationTurns.get(sessionId) === turn && getCurrentDbClientSnapshot() === owner) {
-      // A normal terminal may arrive synchronously when provider send starts.
-      // It must capture a new end while keeping this product turn's dedupe key.
+      ));
+    let changes: number | undefined;
+    try {
+      changes = (await update.run()).changes;
+    } catch (writeError) {
+      if (!canWrite()) throw writeError;
+      failedWrite = { writeError };
+    }
+    if (!failedWrite && changes !== 1) {
+      throw new Error('Silent continuation start marker was not saved');
+    }
+    if (turn && _notificationTurns.get(sessionId) === turn && canWrite()) {
+      // Track the live segment even if the durable write failed. A synchronous
+      // terminal must capture its new end under the same product turn's key.
       turn.continuation = continuation;
       turn.endedAt = undefined;
     }
   }, true);
 
+  if (failedWrite) return failedWrite;
   return async () => {
     if (isEndedWriteSuppressed() || getCurrentDbClientSnapshot() !== owner) return;
     const notifyContext = captureTurnEndedPersistedContext();

@@ -14,7 +14,7 @@ type SilentStopSession = NonNullable<ReturnType<Maker['getSession']>>;
 
 interface SilentContinuationMarkers {
   isCurrent(allowClosedSession?: boolean): boolean;
-  start(canDispatch: () => boolean): Promise<() => Promise<void>>;
+  start(canDispatch: () => boolean): Promise<(() => Promise<void>) | { writeError: unknown }>;
 }
 
 /** What settling a silent-stop turn end reads and acts through (the desktop: register.ts). */
@@ -151,9 +151,19 @@ export async function handleSilentStopTurnEndWithPorts(
             });
             if (continuationMarkers && !signal?.aborted) {
               assertCurrent();
-              settleUndispatchedMarker = await continuationMarkers.start(
+              const marker = await continuationMarkers.start(
                 () => !signal?.aborted && session.getTurnGeneration() === generation + 1,
               );
+              if (typeof marker === 'function') {
+                settleUndispatchedMarker = marker;
+              } else {
+                if (signal?.aborted) throw marker.writeError;
+                assertCurrent();
+                log.warn('silent-stop continuation start marker write failed', {
+                  sessionId: session.id,
+                  error: marker.writeError instanceof Error ? marker.writeError.message : String(marker.writeError),
+                });
+              }
             }
           },
         },

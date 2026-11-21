@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { Session, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { handleDesktopSilentStopTurnEnd } from '../../maker-ipc/silentStopTurnEnd.desktop.js';
 import { ProductTurnWallClockTracker } from '../../maker-ipc/turnWallClock.js';
-import { SilentStopAutoResumeGuard } from '../../maker-ipc/silentStopAutoResume.js';
+import { SILENT_STOP_RESUME_BUDGET, SilentStopAutoResumeGuard } from '../../maker-ipc/silentStopAutoResume.js';
 import { SilentStopTurnLeaseGate } from '../../maker-ipc/sessionTurnLease.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -24,6 +24,8 @@ import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, getCurrentDbClientSnapshot, setCurrentDbClient } from '../client/current.js';
 import * as schema from '../schema.js';
 import { listErrorTailPendingRows } from '../sessionActiveTurn.js';
+
+type SilentStopTestPorts = Parameters<typeof handleDesktopSilentStopTurnEnd>[4];
 
 const feature = vi.hoisted(() => ({ enabled: false }));
 vi.mock('@cindy/maker-shared/cindy-make-feature', async (importOriginal) => ({
@@ -48,7 +50,7 @@ describe('sessionActiveTurn', () => {
     rawDb = null;
   });
 
-  function createTestDbClient(filename = ':memory:', reopen = false): DbClient {
+  function createTestDbClient(filename = ':memory:', reopen = false, userId = 'test-user'): DbClient {
     const dbHandle = new Database(filename);
     rawDb = dbHandle;
     if (!reopen) dbHandle.exec(`
@@ -120,7 +122,7 @@ describe('sessionActiveTurn', () => {
       dispose: async () => {},
     };
     currentClient = client;
-    setCurrentDbClient(client, 'test-user');
+    setCurrentDbClient(client, userId);
     return client;
   }
 
@@ -582,7 +584,7 @@ describe('sessionActiveTurn', () => {
   });
 
   async function silentContinuation({
-    deferPreviousEnd = false, reject = false, missingTask = false,
+    deferPreviousEnd = false, reject = false,
   } = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'cindy-l341-'));
     onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
@@ -590,7 +592,7 @@ describe('sessionActiveTurn', () => {
     const markers = await import('../sessionActiveTurn.js');
     const id = 'continued';
     const db = createTestDbClient(file);
-    if (!missingTask) await seedSession(db, id);
+    await seedSession(db, id);
     const ownerDb = getCurrentDbClientSnapshot();
     const startedAt = Date.now();
     let now = startedAt;
@@ -613,7 +615,13 @@ describe('sessionActiveTurn', () => {
     productClock.start(id, startedAt);
     const settle = vi.fn(async () => {});
     const surface = vi.fn(async () => {});
-    const hiddenMessage = vi.fn(async () => ({} as never));
+    const hiddenMessage = vi.fn<SilentStopTestPorts['createDbMessage']>(async (sessionId, row) => {
+      await db.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [row.clientId, row.clientId, sessionId, row.role, JSON.stringify(row.content), JSON.stringify(row.agentMeta), now],
+      );
+      return {} as never;
+    });
     const events: AgentEvent[] = [];
     let wake: (() => void) | undefined;
     let closed = false;
@@ -627,7 +635,7 @@ describe('sessionActiveTurn', () => {
       sentStartedAt = row?.active_turn_started_at;
       if (reject) throw new TurnDispatchRejectedError('fixture rejects without sending');
     });
-    const session = new Session({ id, workDir: dir, agentKind: 'claude-code', capabilities: {} as never,
+    const createRuntime = () => new Session({ id, workDir: dir, agentKind: 'claude-code', capabilities: {} as never,
       handle: {
         agentKind: 'claude-code', send,
         close: async () => { closed = true; wake?.(); },
@@ -640,6 +648,7 @@ describe('sessionActiveTurn', () => {
           }
         },
       } as unknown as AgentSessionHandle, logger: log, turnStallMs: 0 });
+    const session = createRuntime();
     onTestFinished(() => session.close());
     const emit = (event: AgentEvent) => { events.push(event); wake?.(); };
     const done = vi.fn(() => {
@@ -671,12 +680,29 @@ describe('sessionActiveTurn', () => {
       return markers.listInterruptedPendingSessionIds();
     };
     return {
-      db, file, id, markers, run, reopen, hiddenMessage, settle, surface, send, productClock,
+      db, file, id, markers, run, reopen, hiddenMessage, settle, surface, send, productClock, log,
+      hiddenRows: () => db.query("SELECT role, content, json_extract(agent_meta, '$.autoResume') AS autoResume FROM messages WHERE session_id = ?", [id]),
+      failStartWrite(onWrite = () => {}) {
+        const sqlite = rawDb!;
+        sqlite.function('on_continuation_marker_write', () => { onWrite(); return null; });
+        sqlite.exec(`
+          CREATE TEMP TRIGGER reject_continuation_start BEFORE UPDATE OF active_turn_started_at ON sessions
+          BEGIN
+            SELECT on_continuation_marker_write();
+            SELECT RAISE(ABORT, 'fixture continuation marker write failed');
+          END;
+        `);
+      },
       sentStartedAt: () => sentStartedAt,
       done, releaseFinalEnd, releasePreviousEnd,
       startedAt, oldEndedAt, resumedAt, tick: () => (now += 100),
       clockResult: () => clockResult, emit, session,
       unbindSession: () => { boundSession = undefined; },
+      replaceBoundSession() {
+        const replacement = createRuntime();
+        boundSession = replacement;
+        onTestFinished(() => replacement.close());
+      },
     };
   }
 
@@ -697,6 +723,13 @@ describe('sessionActiveTurn', () => {
     await h.markers.drainSessionActiveTurnWrites(h.id);
     release?.();
     expect(await h.reopen()).toEqual([h.id]);
+    if (boundary === 'logout') {
+      rawDb!.close();
+      const other = createTestDbClient(':memory:', false, 'next-user');
+      await seedSession(other, h.id, { startedAt: h.startedAt, endedAt: h.oldEndedAt });
+      await seedSession(other, 'next-user-interrupted', { startedAt: h.startedAt });
+      expect(await h.markers.listInterruptedPendingSessionIds()).toEqual(['next-user-interrupted']);
+    }
   });
 
   it('keeps the product clock and notification identity across a silent continuation and its real done', async () => {
@@ -723,6 +756,8 @@ describe('sessionActiveTurn', () => {
       await h.markers.drainSessionActiveTurnWrites(h.id);
       expect((await readMarks(h.db, h.id))?.last_turn_ended_at).toBe(h.oldEndedAt);
       expect(h.markers.getContinuedProductTurnStartedAt(h.id, h.resumedAt, h.db)).toBe(h.startedAt);
+      h.markers._setBootAtMsForTests(h.resumedAt + 1);
+      expect(await h.markers.listInterruptedPendingSessionIds()).toEqual([h.id]);
       expect(h.productClock.start(h.id)).toBe(false);
       h.tick();
     } finally {
@@ -741,6 +776,54 @@ describe('sessionActiveTurn', () => {
     await Promise.resolve();
     await h.markers.drainSessionActiveTurnWrites(h.id);
     expect((await readMarks(h.db, h.id))?.last_turn_ended_at).toBe(doneAt);
+    expect(await h.reopen()).toEqual([]);
+  });
+
+  // L341 follow-up / standard. Exercise the real Desktop adapter, Session and
+  // SQLite statement. A live owner's rejected marker UPDATE must not turn a
+  // valid hidden continuation into a user-visible send failure.
+  it('dispatches a silent continuation once when only its SQLite start marker fails', async () => {
+    const h = await silentContinuation();
+    const statement = vi.fn();
+    h.failStartWrite(statement);
+    const before = h.markers.getSessionNotificationTurnSignal(h.id);
+    const patch = vi.fn();
+    h.markers.setOnSessionTurnEndedPersisted(patch);
+    await h.run();
+    expect(statement).toHaveBeenCalledOnce();
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(h.sentStartedAt()).toBe(h.startedAt);
+    expect(h.surface).not.toHaveBeenCalled();
+    expect(h.settle).not.toHaveBeenCalled();
+    expect(h.log.warn).toHaveBeenCalledExactlyOnceWith('silent-stop continuation start marker write failed', {
+      sessionId: h.id, error: 'fixture continuation marker write failed',
+    });
+    expect(h.log.debug.mock.calls.filter(([message]) => message === 'silent-stop auto-resume granted')).toEqual([
+      ['silent-stop auto-resume granted', { sessionId: h.id, budgetLeft: SILENT_STOP_RESUME_BUDGET - 1, resumeCount: 1 }],
+    ]);
+    expect(await h.hiddenRows()).toEqual([{ role: 'user', content: JSON.stringify('继续'), autoResume: 1 }]);
+    expect(h.productClock.start(h.id)).toBe(false);
+    expect(h.markers.getSessionNotificationTurnSignal(h.id)).toMatchObject({ id: before?.id, ended: false });
+    expect(patch).not.toHaveBeenCalled();
+    h.markers._setBootAtMsForTests(h.resumedAt + 1);
+    expect(await h.markers.listInterruptedPendingSessionIds()).toEqual([]);
+
+    const doneAt = h.tick();
+    h.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+    await vi.waitFor(() => expect(h.done).toHaveBeenCalledOnce());
+    expect(h.clockResult()).toBe(doneAt - h.startedAt);
+    expect(h.markers.getSessionNotificationTurnSignal(h.id)).toMatchObject({
+      id: before?.id, ended: true, fallbackEventId: expect.stringContaining(`turn:${h.resumedAt}:${doneAt}:`),
+    });
+    h.releaseFinalEnd();
+    await Promise.resolve();
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    // The live clock and completion advance. The already closed durable pair
+    // still belongs to the preceding segment whose start was saved.
+    expect(patch).toHaveBeenCalledExactlyOnceWith(h.id, h.oldEndedAt, undefined);
+    expect(await readMarks(h.db, h.id)).toEqual({
+      active_turn_started_at: h.startedAt, last_turn_ended_at: h.oldEndedAt,
+    });
     expect(await h.reopen()).toEqual([]);
   });
 
@@ -778,12 +861,68 @@ describe('sessionActiveTurn', () => {
     expect((await readMarks(h.db, h.id))?.last_turn_ended_at).toBe(h.oldEndedAt);
   });
 
-  it('does not dispatch if no task row can record the continuation', async () => {
-    const h = await silentContinuation({ missingTask: true });
+  it.each(['removed task', 'newer start'] as const)('does not dispatch a silent continuation against a %s', async (target) => {
+    const h = await silentContinuation();
+    const storeHidden = h.hiddenMessage.getMockImplementation()!;
+    h.hiddenMessage.mockImplementationOnce(async (...args) => {
+      const row = await storeHidden(...args);
+      if (target === 'removed task') await h.db.exec('DELETE FROM sessions WHERE id = ?', [h.id]);
+      else await h.db.exec('UPDATE sessions SET active_turn_started_at = ? WHERE id = ?', [h.resumedAt + 1, h.id]);
+      return row;
+    });
     await h.run();
     expect(h.send).not.toHaveBeenCalled();
-    expect(h.surface).toHaveBeenCalledWith(h.id, 'dispatch-error');
+    expect(h.surface).toHaveBeenCalledExactlyOnceWith(h.id, 'dispatch-error');
+    expect(h.log.warn).toHaveBeenCalledExactlyOnceWith('silent-stop auto-resume send failed', {
+      sessionId: h.id, error: 'Silent continuation start marker was not saved',
+    });
+    expect(await readMarks(h.db, h.id)).toEqual(target === 'removed task'
+      ? undefined
+      : { active_turn_started_at: h.resumedAt + 1, last_turn_ended_at: h.oldEndedAt });
   });
+
+  it.each(['cancelled', 'new owner', 'new instance', 'new generation'] as const)(
+    'keeps the silent continuation fenced if SQLite fails after %s',
+    async (boundary) => {
+      const h = await silentContinuation();
+      const oldHandle = rawDb!;
+      const originalSignal = h.markers.getSessionNotificationTurnSignal(h.id);
+      let other: DbClient | undefined;
+      const statement = vi.fn(() => {
+        if (boundary === 'cancelled') expect(h.session.cancelPendingSend()).toBe(true);
+        if (boundary === 'new owner') {
+          other = createTestDbClient(':memory:', false, 'next-user');
+          rawDb!.prepare("INSERT INTO sessions (id, active_turn_started_at, last_turn_ended_at, created_at, updated_at) VALUES (?, ?, ?, 0, 0)")
+            .run(h.id, h.startedAt, h.oldEndedAt);
+          onTestFinished(() => { oldHandle.close(); });
+        }
+        if (boundary === 'new instance') h.replaceBoundSession();
+        // Simulate the observed successor generation. Session itself serializes
+        // reservations. The previous test checks the real newer SQLite start.
+        if (boundary === 'new generation') {
+          vi.spyOn(h.session, 'getTurnGeneration').mockReturnValue(h.session.getTurnGeneration() + 1);
+        }
+      });
+      h.failStartWrite(statement);
+      await h.run();
+      expect(statement).toHaveBeenCalledOnce();
+      expect(h.send).not.toHaveBeenCalled();
+      expect(h.log.warn).not.toHaveBeenCalledWith('silent-stop continuation start marker write failed', expect.anything());
+      expect(h.markers.getSessionNotificationTurnSignal(h.id)).toEqual(originalSignal);
+      expect(await readMarks(h.db, h.id)).toEqual({
+        active_turn_started_at: h.startedAt, last_turn_ended_at: h.oldEndedAt,
+      });
+      if (other) {
+        expect(await readMarks(other, h.id)).toEqual({
+          active_turn_started_at: h.startedAt, last_turn_ended_at: h.oldEndedAt,
+        });
+      }
+      if (boundary === 'new owner' || boundary === 'new instance' || boundary === 'new generation') {
+        expect(h.surface).not.toHaveBeenCalled();
+        expect(h.settle).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each(['owner', 'runtime'])('stops a silent continuation superseded during hidden-message persistence by a new %s', async (replacement) => {
     const h = await silentContinuation();
