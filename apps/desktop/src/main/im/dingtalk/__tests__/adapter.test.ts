@@ -99,6 +99,26 @@ describe('dingtalk turn permission boundary', () => {
     expect(adapter.turnPermissionPolicyFor?.(baseEvent)).toBeUndefined();
   });
 
+  it('guest direct messages keep their own speaker and confirmation boundary', async () => {
+    const event = {
+      ...baseEvent,
+      senderId: 'guest-user',
+      speaker: { id: 'guest-user', name: '访客', isOwner: false },
+    } satisfies IMMessageEvent;
+    const policy = adapter.turnPermissionPolicyFor?.(event);
+    expect(policy?.autoReviewContext).toMatchObject({ requesterAuthority: 'guest' });
+    expect(policy?.forceConfirmToolCall('file_change', {})).toBe(true);
+    expect(adapter.channelNoteSourceFor?.(event)).toMatchObject({
+      chatKind: 'direct',
+      senderId: 'guest-user',
+      senderName: '访客',
+      senderIsOwner: false,
+    });
+    await expect(adapter.prepareAgentTurnText?.(event)).resolves.toEqual({
+      agentText: '[发言人] 访客 · id:guest-user\nrun task',
+    });
+  });
+
   it('directs unsupported permission modes to Cindy, not an unsupported chat command', () => {
     const copy = adapter.ui.error!.permissionModeUnsupported;
     const message = typeof copy === 'function' ? copy('bypassPermissions') : copy;

@@ -679,7 +679,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     if (!this.ownerUserId) {
       if (isGroup || !this.claimOwner(envelope.senderId)) return;
     }
-    if (!isGroup && envelope.senderId !== this.ownerUserId) return;
+    const isOwner = envelope.senderId === this.ownerUserId;
 
     const content = parseInboundContent(envelope);
     if (
@@ -720,12 +720,12 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       messageId: envelope.messageId,
       text,
       invoked: isGroup && envelope.mentioned,
-      ...(isGroup
+      ...(isGroup || !isOwner
         ? {
             speaker: {
               id: envelope.senderId,
               name: envelope.senderName,
-              isOwner: envelope.senderId === this.ownerUserId,
+              isOwner,
             },
           }
         : {}),

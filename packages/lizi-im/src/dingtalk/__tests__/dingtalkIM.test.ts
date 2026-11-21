@@ -360,7 +360,7 @@ describe("DingTalkIM", () => {
     expect(outboundMessageTypes).toEqual(["sampleText", "sampleImageMsg"]);
   });
 
-  it("claims the first direct sender, acknowledges immediately, and drops other direct users", async () => {
+  it("claims the first direct sender and isolates later direct users in guest lanes", async () => {
     const { host, secrets } = makeHost();
     const client = new FakeClient();
     const im = new DingTalkIM(host, {
@@ -391,8 +391,12 @@ describe("DingTalkIM", () => {
       }),
       "callback-2",
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(received).toHaveLength(1);
+    await vi.waitFor(() => expect(received).toHaveLength(2));
+    expect(received[1]).toMatchObject({
+      senderId: "other-user",
+      text: "ignored",
+      speaker: { id: "other-user", name: "Owner", isOwner: false },
+    });
   });
 
   it("routes mentioned group messages to one lane with speaker metadata", async () => {
