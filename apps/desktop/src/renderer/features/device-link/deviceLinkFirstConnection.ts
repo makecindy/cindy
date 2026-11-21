@@ -9,7 +9,7 @@
  *
  * App-lifetime singleton (same shape as useDeviceLinkDeviceList): one status listener per window.
  */
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { useDeviceLinkDeviceListRequestState } from './useDeviceLinkDeviceList';
 
 /**
@@ -17,6 +17,12 @@ import { useDeviceLinkDeviceListRequestState } from './useDeviceLinkDeviceList';
  * client's DEFAULT_TIMING. Twice the 15 s chat grace in RemoteBotSessionView.
  */
 export const FIRST_CONNECTION_WINDOW_MS = 30_000;
+/**
+ * A window timer this late (wall clock) means the computer slept through it: the window opened
+ * at suspend (the client goes `connecting` before sleep, and waking sends no new status). Hidden
+ * windows' timers are throttled by about a minute at most, so this needs a real sleep.
+ */
+const SLEPT_THROUGH_MS = 2 * 60_000;
 
 type LinkStatus = 'stopped' | 'connecting' | 'online';
 let started = false;
@@ -32,13 +38,28 @@ function openWindow(durationMs: number): void {
   if (windowTimer !== null) clearTimeout(windowTimer);
   windowOpen = true;
   const token = ++windowToken;
+  const openedAt = Date.now();
   windowTimer = setTimeout(() => {
     // An earlier window's timer never closes a newer one.
     if (token !== windowToken) return;
     windowTimer = null;
-    windowOpen = false;
-    notify();
+    // Slept through it: the connection after waking gets its own window. Each extension
+    // needs another real sleep, so an awake computer always reaches the end.
+    if (linkStatus !== 'online' && Date.now() - openedAt > Math.max(0, durationMs) + SLEPT_THROUGH_MS) {
+      openWindow(FIRST_CONNECTION_WINDOW_MS);
+      return;
+    }
+    closeWindow();
   }, Math.max(0, durationMs));
+}
+
+function closeWindow(): void {
+  if (windowTimer !== null) clearTimeout(windowTimer);
+  windowTimer = null;
+  windowToken += 1;
+  if (!windowOpen) return;
+  windowOpen = false;
+  notify();
 }
 
 // The launch window counts from renderer start (not from whenever a chat first
@@ -84,5 +105,10 @@ export function useDeviceLinkFirstConnectionPending(): boolean {
   const open = useSyncExternalStore(subscribe, () => windowOpen);
   const status = useSyncExternalStore(subscribe, () => linkStatus);
   const directory = useDeviceLinkDeviceListRequestState();
-  return open && (status !== 'online' || directory.status !== 'ready');
+  const settled = status === 'online' && directory.status === 'ready';
+  // Settled once: later directory refreshes (another device's presence, a rename) briefly
+  // return to `loading` and must not turn a confirmed offline view back into "connecting".
+  // Only the next real relay drop opens a new window.
+  useEffect(() => { if (open && settled) closeWindow(); }, [open, settled]);
+  return open && !settled;
 }

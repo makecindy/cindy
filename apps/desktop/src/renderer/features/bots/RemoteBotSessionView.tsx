@@ -223,15 +223,15 @@ function RemoteBotSessionGate() {
       <p className="text-14 text-[var(--text-secondary)]">
         {failed
           ? t('bots.sessionLoadFailedDescription')
-          : bot && !bot.online
-            ? connecting
-              ? t('ccAgent.sidebar.machineSwitcher.connecting')
-              : t('bots.remote.offlineDescription', { name: bot.name, device: bot.deviceName })
-            : !sessionId
-              ? t('bots.remote.preparing')
-              : t('ccAgent.common.loading')}
+          : connecting && !bot?.online
+            ? t('ccAgent.sidebar.machineSwitcher.connecting')
+            : bot && !bot.online
+              ? t('bots.remote.offlineDescription', { name: bot.name, device: bot.deviceName })
+              : !sessionId
+                ? t('bots.remote.preparing')
+                : t('ccAgent.common.loading')}
       </p>
-      {!failed && bot && (bot.online ? sessionId : connecting) ? <Spinner size={18} /> : null}
+      {!failed && (bot?.online ? sessionId : connecting) ? <Spinner size={18} /> : null}
       {failed ? (
         <Button
           variant="secondary"
