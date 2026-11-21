@@ -39,8 +39,14 @@ const REDIAL_MAX_MS = 30_000;
  * its own is older than REDIAL_TAKEOVER_MS (`adopt`), and until then drops it, which schedules the next try here.
  * 2026-11-21, a phone killed and started again: the relay-only computer with the lower id stayed offline on the phone for
  * 20 seconds to 15 minutes; the computers with higher ids, which the phone dials, were back at once.
+ * A socket that has only just opened does not wait at all: see `arriving`.
  */
 const LATE_DIAL_MS = 1_000;
+/**
+ * Datagrams kept from before the transport existed (`receive`). A dial is a few packets; anything beyond this is traffic of a
+ * connection the previous process had, which the new transport would drop anyway.
+ */
+const EARLY_DATAGRAMS = 32;
 /** Declared with session support between devices of one account: presence travels on the session (`presence` message). */
 const SESSION_PRESENCE_FEATURE = 'presence-v1';
 /**
@@ -105,6 +111,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private transport!: Transport;
   private uplink: SocketUplink | null = null;
   private receiveDatagram: ((id: string, data: Uint8Array) => void) | null = null;
+  private early: { id: string; data: Uint8Array }[] | null = [];
   private roster = new Map<string, DeviceView>();
   /** Which members of this account's directory this node accepts (restrictPeers); null: all of them. */
   private peerRule: { allowed: Set<string> | null; refused: Set<string> } = { allowed: null, refused: new Set() };
@@ -120,6 +127,16 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private sentRequests = new Map<string, { peer: string; at: number; frame: Envelope }>();
   private closed = false;
   private ready = false;
+  /**
+   * From opening until this socket has dialed from its first live directory. A socket that has just opened is the one side
+   * that knows there is no connection: the process started, or the phone came back and opened a new socket. The devices
+   * already there may still hold their end of the connection the previous socket had (LATE_DIAL_MS) and then do not dial,
+   * so this side dials every device the directory has online, whatever the ids, and waits for nobody. 2026-11-21, a phone
+   * whose id is higher than every computer's: not one of seven computers dialed it within the 0.8 to 1.2 seconds it then
+   * waited, on any cold start or return to the foreground; the same phone with a lower id was connected 0.9 seconds sooner.
+   * A device that is dialing this one at the same moment ends up on one connection as any simultaneous dial does (`adopt`).
+   */
+  private arriving = true;
   private localHello: HelloPayload | null = null;
   private reconnect: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
@@ -160,7 +177,9 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
           .map(id => ({ id: socket.transportKeyHex(id)!, relayId: id })),
         onIncoming: (channel) => socket.adopt(channel, false),
       });
-      socket.uplink?.onDatagram((id, data) => socket.receiveDatagram?.(id, data));
+      socket.uplink?.onDatagram((id, data) => socket.receive(id, data));
+      const early = socket.early ?? []; socket.early = null;
+      for (const { id, data } of early) socket.receiveDatagram?.(id, data);
       const dial = socket.transport.dial as { udp?: { port: number } };
       if (options.bindings.createDiscovery && options.lanDiscovery !== false && dial.udp && !options.client.delegation) {
         socket.lan = options.bindings.createDiscovery({ networkId: options.client.certificate.networkId, port: dial.udp.port,
@@ -510,16 +529,33 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
   }
   private dialRoster(): void {
-    if (this.ready) for (const [id, view] of this.roster) if (!this.peers.has(id)) {
+    if (!this.ready) return;
+    for (const [id, view] of this.roster) if (!this.peers.has(id)) {
       this.presence(id, false);
       this.dialOnline(id, view);
     }
+    this.arrived();
   }
-  /** A device the directory has online and this side is not connected to: the lower id dials now, the other side if that dial does not come (LATE_DIAL_MS). */
+  /**
+   * A device the directory has online and this side is not connected to: the lower id dials now, the other side if that
+   * dial does not come (LATE_DIAL_MS). A socket that has just opened dials now whatever the ids (`arriving`).
+   */
   private dialOnline(id: string, view: DeviceView): void {
     if (!view.online || id === this.deviceId || !this.memberAccepted(id)) return;
     if (this.deviceId < id) void this.dial(id).catch(() => undefined);
+    else if (this.arriving) void this.dial(id).catch(() => this.scheduleRedial(id));
     else this.scheduleRedial(id);
+  }
+  /** The directory just dialed from was the relay's, not the cached one a socket opens with while the relay is unreachable. */
+  private arrived(): void { if (this.uplink) this.arriving = false; }
+  /**
+   * A datagram from the relay. The relay announces this device to the others as soon as its connection is up, which is
+   * before the transport exists (about 50 ms on a phone): a device that dials on that announcement has its first handshake
+   * packet here by then. Dropped, as before 2026-11-21, its dial waited for the core to send the packet again (200 ms).
+   */
+  private receive(id: string, data: Uint8Array): void {
+    if (this.receiveDatagram) this.receiveDatagram(id, data);
+    else if (this.early && this.early.length < EARLY_DATAGRAMS) this.early.push({ id, data });
   }
   private memberAccepted(deviceId: string): boolean {
     return !this.peerRule.refused.has(deviceId) && (this.peerRule.allowed === null || this.peerRule.allowed.has(deviceId));
@@ -596,7 +632,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (this.resendWhenRelayBack) { this.resendWhenRelayBack = false; this.transport?.networkChanged?.(); }
     this.updateDirectory(uplink.devices, true, uplink.delegations ?? []);
     this.options.onDelegationRequests?.(uplink.delegationRequests ?? []);
-    uplink.onDatagram((id, data) => this.receiveDatagram?.(id, data));
+    uplink.onDatagram((id, data) => this.receive(id, data));
     uplink.on('directory', () => {
       this.updateDirectory(uplink.devices, true, uplink.delegations ?? []);
       this.options.onDelegationRequests?.(uplink.delegationRequests ?? []);
@@ -647,6 +683,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         this.presence(id, false);
         this.dialOnline(id, view);
       }
+      this.arrived();
       for (const peer of this.peers.values()) {
         if (peer.info) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });
         this.sendPresence(peer);
