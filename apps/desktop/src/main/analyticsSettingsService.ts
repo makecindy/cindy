@@ -27,7 +27,7 @@ import {
   readAnalyticsSettings,
   setAnalyticsEnabled,
 } from './analytics-settings-store';
-import { acceptCurrentLegalTerms, readAcceptedLegalTermsVersion } from './legal-terms-store';
+import { acceptCurrentLegalTerms, readLegalTermsConsentStatus } from './legal-terms-store';
 import { createLogger } from './logger';
 import { onQuit } from './lifecycle';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
@@ -36,7 +36,6 @@ import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
   type AnalyticsSettingsPayload,
 } from '../shared/analyticsSettings';
-import { LEGAL_TERMS_VERSION } from '../shared/legalTermsVersion';
 
 const log = createLogger('analytics-settings');
 
@@ -104,14 +103,14 @@ export function analyticsSettingsPayload(): AnalyticsSettingsPayload {
 }
 
 /**
- * 只问同意过隐私政策的人:企业 SSO 与「跳过登录」本来就被登录页协议门豁免,没有同意记录,
- * 也就不会被协议更新弹窗拦住。读失败按「不需要」处理(fail open):弹窗会挡住整个主界面,
- * 一次设置文件读取故障不能把用户锁在外面。
+ * 只问同意过隐私政策的人:「跳过登录」与企业 SSO 被登录页协议门豁免。设备上的同意记录不区分
+ * 当前是哪类账号,所以 renderer 还要只对个人账号(membershipKind === 'personal')弹窗。
+ * 记录读不了按「不需要」处理(fail open):弹窗会挡住整个应用,一次读取故障不能把用户锁在外面。
  */
 function isLegalTermsUpdateRequired(privacyConsentAccepted: boolean): boolean {
   if (!privacyConsentAccepted) return false;
   try {
-    return readAcceptedLegalTermsVersion() !== LEGAL_TERMS_VERSION;
+    return readLegalTermsConsentStatus() === 'outdated';
   } catch (err) {
     log.warn('read legal terms consent failed (non-fatal)', err);
     return false;

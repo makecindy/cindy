@@ -42,15 +42,45 @@ const store = createOverrideSettingsFile<LegalTermsConsent>({
   log,
   label: 'legal-terms',
   maxBytes: 4096,
+  // 读不了(权限 / 损坏 / 超限)时保留原文件、不回落成「从未同意」:那会把已同意的人挡在外面。
+  preserveUnreadableFile: true,
 });
 
-export function readAcceptedLegalTermsVersion(): string | null {
-  return store.read().acceptedVersion;
+/**
+ * 本进程内已同意的版本。盘写失败(只读目录、权限)时仍以它为准,保证点了「同意」就能继续用,
+ * 不会因为一次落盘故障被反复拦住;下次启动再按盘上记录判断。
+ */
+let acceptedThisSession: string | null = null;
+
+/**
+ * 本机同意记录相对当前版本的状态。
+ * - current:已同意当前版本
+ * - outdated:没有记录,或记录的是旧版本
+ * - unknown:记录文件存在但读不了——调用方按「不需要确认」处理(fail open)
+ */
+export function readLegalTermsConsentStatus(): 'current' | 'outdated' | 'unknown' {
+  if (acceptedThisSession === LEGAL_TERMS_VERSION) return 'current';
+  const { acceptedVersion } = store.read();
+  if (store.isUnreadable()) return 'unknown';
+  return acceptedVersion === LEGAL_TERMS_VERSION ? 'current' : 'outdated';
 }
 
-/** 记录用户已同意当前版本协议。幂等。 */
+/** 记录用户已同意当前版本协议。幂等;落盘失败只记日志,本进程内仍视为已同意。 */
 export function acceptCurrentLegalTerms(): void {
-  if (store.read().acceptedVersion === LEGAL_TERMS_VERSION) return;
-  store.writePatch({ acceptedVersion: LEGAL_TERMS_VERSION });
-  log.info('legal terms accepted', { version: LEGAL_TERMS_VERSION });
+  acceptedThisSession = LEGAL_TERMS_VERSION;
+  try {
+    if (!store.isUnreadable() && store.read().acceptedVersion === LEGAL_TERMS_VERSION) return;
+    store.writePatch({ acceptedVersion: LEGAL_TERMS_VERSION });
+    log.info('legal terms accepted', { version: LEGAL_TERMS_VERSION });
+  } catch (err) {
+    log.warn('persist legal terms consent failed; treating as accepted for this session', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
+
+export const __testing = {
+  resetSession(): void {
+    acceptedThisSession = null;
+  },
+};

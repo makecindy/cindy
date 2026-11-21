@@ -103,7 +103,8 @@ const fakeLegalTerms: { acceptedVersion: string | null } = { acceptedVersion: nu
 vi.mock('../legal-terms-store', async () => {
   const { LEGAL_TERMS_VERSION } = await import('../../shared/legalTermsVersion');
   return {
-    readAcceptedLegalTermsVersion: () => fakeLegalTerms.acceptedVersion,
+    readLegalTermsConsentStatus: () =>
+      fakeLegalTerms.acceptedVersion === LEGAL_TERMS_VERSION ? 'current' : 'outdated',
     acceptCurrentLegalTerms: () => {
       fakeLegalTerms.acceptedVersion = LEGAL_TERMS_VERSION;
     },

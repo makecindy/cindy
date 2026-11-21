@@ -10,6 +10,7 @@ import { AddAccountLoginPage } from '@/components/login/AddAccountLoginPage';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { GuestRoute } from '@/components/auth/GuestRoute';
 import { LocalDbGate } from '@/components/auth/LocalDbGate';
+import { LegalTermsUpdateGate } from '@/components/auth/LegalTermsUpdateGate';
 import { CCAgentFeatureLayout } from '@/features/cc-agent/CCAgentFeatureLayout';
 import { CCAgentIndexRedirect } from '@/features/cc-agent/CCAgentIndexRedirect';
 import { SecondaryWindowBootGate } from '@/features/cc-agent/SecondaryWindowBootGate';
@@ -73,7 +74,12 @@ export const router = createHashRouter([
           // 只挂 SidebarWindowLayout(50px chrome + RightSidebarShell),不挂完整壳。
           {
             path: 'sidebar-window',
-            element: <SidebarWindowLayout />,
+            element: (
+              <>
+                <SidebarWindowLayout />
+                <LegalTermsUpdateGate />
+              </>
+            ),
             errorElement: <RouteErrorFallback variant="section" />,
           },
           {

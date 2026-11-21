@@ -25,9 +25,12 @@ vi.mock('../../../../shared/brandRegion', () => ({
 
 const auth = vi.hoisted(() => ({
   mode: 'cloud' as 'signed-out' | 'local' | 'cloud',
+  user: { membershipKind: 'personal' as 'personal' | 'org' } as { membershipKind: 'personal' | 'org' } | null,
   logout: vi.fn(async () => undefined),
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth }));
+
+import { isAppInteractionLocked } from '@/lib/appInteractionLock';
 
 import { LegalTermsUpdateGate } from '../LegalTermsUpdateGate';
 import { LEGAL_LINKS } from '../../../../shared/legalLinks';
@@ -57,6 +60,7 @@ const electronAPI = {
 
 beforeEach(() => {
   auth.mode = 'cloud';
+  auth.user = { membershipKind: 'personal' };
   electronAPI.getAnalyticsSettings.mockResolvedValue(payload(true));
   Object.assign(window, { electronAPI });
 });
@@ -106,6 +110,28 @@ describe('LegalTermsUpdateGate', () => {
 
     act(() => broadcast?.(payload(false)));
     expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+  });
+
+  // 弹窗只挡住鼠标与焦点不够:全局快捷键在 window 捕获阶段只看交互锁。
+  it('holds the app interaction lock while open and releases it after agreeing', async () => {
+    render(<LegalTermsUpdateGate />);
+    await screen.findByTestId('login-consent-dialog');
+    expect(isAppInteractionLocked()).toBe(true);
+
+    fireEvent.click(screen.getByText('legalTermsUpdate.agree'));
+    await act(async () => {});
+    expect(isAppInteractionLocked()).toBe(false);
+  });
+
+  // 企业组织账号(SSO)被登录页协议门豁免;设备上的旧同意记录(如升级前跳过登录留下的)
+  // 不能让它被拦住。
+  it('never shows for an organization (enterprise SSO) account', async () => {
+    auth.user = { membershipKind: 'org' };
+    render(<LegalTermsUpdateGate />);
+    await act(async () => {});
+
+    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(isAppInteractionLocked()).toBe(false);
   });
 
   it('never shows in local mode (skip login)', async () => {
