@@ -127,6 +127,10 @@ function IntroSpecimen() {
   );
 }
 
+const looseDrag = ctx.case === 'loose-drag-list' || ctx.case === 'loose-drag-text';
+const manualOrder = ctx.case === 'dialogue-order' || looseDrag;
+if (looseDrag) localStorage.setItem('sidebar.mainListMode', ctx.case === 'loose-drag-list' ? 'list' : 'text');
+
 function StructureSpecimen() {
   const filter = useSidebarFilter(hidden, snapshot);
   const task = {
@@ -137,7 +141,7 @@ function StructureSpecimen() {
   const report: Session = { ...task, id: 'report', title: '每日自动巡检', source: 'scheduler' };
   const teammate: Session = { ...task, id: 'teammate', title: '伙伴的例行整理', source: 'bot',
     companion: { id: 'demo', role: 'routine', taskProjectDir: task.workingDir } };
-  const source = [task, report, teammate];
+  const source = manualOrder ? [task, sessions[2]] : [task, report, teammate];
   const inboxSessions = filterSidebarTasks([task, ...sessions.slice(1), report], filter.inbox, new Map());
   const inboxPriority = { ...priorityContext, attentionSessionIds: new Set(['report', 'waiting']) };
   const { hasUnread, now: inboxNow } = useInboxUnread(inboxSessions, [], inboxPriority, () => false);
@@ -153,12 +157,12 @@ function StructureSpecimen() {
       <ProjectsSection
         unclassified={[]}
         projects={projects}
-        dialogues={[]}
+        dialogues={manualOrder ? [sessions[1]] : []}
         inboxSessions={inboxSessions}
         inboxNow={inboxNow}
         allKnownProjects={allProjects}
         allProjectKeysForOrder={projects.map((p) => p.projectKey)}
-        filter={{ ...filter, groupBy: 'project', groupDevice: true, groupDialogue: true }}
+        filter={{ ...filter, groupBy: 'project', groupDevice: !manualOrder, groupDialogue: !looseDrag, projectOrder: manualOrder ? 'custom' : filter.projectOrder }}
         collapsed={new Set(projectCollapsed ? projects.map((p) => p.projectKey) : [])}
         isAllCollapsed={projectCollapsed}
         priorityContext={inboxPriority}
@@ -241,7 +245,7 @@ void mountPage({
   },
   render: () => (
     <WorktreeProvider>
-      {ctx.case === 'intro' ? <IntroSpecimen /> : ctx.case === 'structure' ? <StructureSpecimen /> : <Specimen />}
+      {ctx.case === 'intro' ? <IntroSpecimen /> : (ctx.case === 'structure' || manualOrder) ? <StructureSpecimen /> : <Specimen />}
     </WorktreeProvider>
   ),
 });

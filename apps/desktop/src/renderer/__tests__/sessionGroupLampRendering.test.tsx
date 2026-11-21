@@ -6,7 +6,11 @@ import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@t
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getStartingSessionIds, markSessionStarting, resetSessionStartingStoreForTests, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import * as sidebarOwnerStorage from '@/lib/sidebarOwnerStorage';
+import { __testing as ownerStorage } from '@/lib/sidebarOwnerStorage';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
+import { useSidebarFilter, MANUAL_PROJECT_ORDER_KEY, PROJECT_ORDER_KEY } from '@/features/cc-agent/hooks/useSidebarFilter';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
 import {
   applyRemoteSessionActivity,
@@ -24,14 +28,21 @@ vi.mock('react-i18next', () => ({
 // The teammate data adapter owns auth/presence. This fixture exercises task mode switching.
 vi.mock('@/features/bots/useTeammateInboxEntries', () => ({ useTeammateInboxEntries: () => [] }));
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children: ReactNode }) => children }));
-vi.mock('@/features/device-link/useMachineSwitcher', () => ({ useEffectiveSelectedMachineId: () => 'all' }));
+const remoteOrder = vi.hoisted(() => ({
+  snapshot: { authoritative: true, available: true, projectOrder: 'custom', manualProjectOrder: ['local:/A', 'local:/B', 'local:/C'] },
+  apply: vi.fn(),
+}));
+const machine = vi.hoisted(() => ({ selection: 'all' as 'all' | string[] }));
+vi.mock('@/features/device-link/useMachineSwitcher', () => ({ useEffectiveSelectedMachineId: () => machine.selection }));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
 vi.mock('@/hooks/useSidebarCardMode', () => ({ useSidebarMainViewMode: () => ({ mode: 'text' }) }));
 vi.mock('@cindy/maker-shared/cindy-make-feature', () => ({ CINDY_MAKE_ENABLED: true }));
-vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', () => ({
-  projectOrderWriteScopeForSelection: () => ({ kind: 'viewer' }),
-  useLocalHostProjectOrder: () => ({ snapshot: { manualProjectOrder: [] } }),
-  useRemoteHostProjectOrders: () => ({ orders: new Map() }),
+vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../features/cc-agent/hooks/useRemoteHostProjectOrders')>(),
+  useLocalHostProjectOrder: () => ({ snapshot: {
+    authoritative: true, available: true, projectOrder: 'custom', manualProjectOrder: ['local:/B', 'local:/A'],
+  } }),
+  useRemoteHostProjectOrders: () => ({ orders: new Map([['remote', remoteOrder.snapshot]]), apply: remoteOrder.apply }),
 }));
 vi.mock('../features/cc-agent/sidebar/MainListScopeHeader', () => ({ MainListScopeHeader: ({ fold }: { fold: { label: string; onClick: () => void } | null }) => fold ? <button onClick={fold.onClick}>{fold.label}</button> : null }));
 // main 633e27c76 起设备段头包了远程桌面快捷入口(挂 device-link presence 订阅,需要
@@ -92,6 +103,7 @@ function groupProps(groupDevice: boolean): ProjectsSectionProps {
 }
 
 beforeEach(() => {
+  machine.selection = 'all';
   localStorage.clear();
   localStorage.setItem('sidebar.collapse.projectSessionLimit', '1');
   // ProjectsSection 渲染时读 window.electronAPI.platform 做项目键比较(main 897de9031);
@@ -379,9 +391,250 @@ describe('Sidebar group context menus', () => {
 // so they never mount SortableList. Reuse this real ProjectsSection/ProjectNode
 // unit harness with two projects in custom order; selectors come from the actual
 // SortableJS instance, and its real onEnd must persist the reordered projects.
+function manualProjects(names: string[]) {
+  return names.map(name => ({
+    projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name, scope: 'local' as const,
+    sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
+    remoteHostId: null, deviceLinkDeviceId: null, deviceLinkDeviceName: null, deviceLinkConnectionStatus: null,
+  }));
+}
+
+function dropBefore(container: HTMLElement, id: string, before: string) {
+  const row = container.querySelector<HTMLElement>(`[data-sortable-id="${id}"]`)!;
+  const list = row.parentElement!;
+  const oldIndex = Array.from(list.children).indexOf(row);
+  list.insertBefore(row, list.querySelector(`[data-sortable-id="${before}"]`));
+  const sortable = Sortable.get(list)!;
+  act(() => sortable.option('onEnd')!.call(sortable, Object.assign(new Event('end'), {
+    item: row, from: list, oldIndex, newIndex: Array.from(list.children).indexOf(row),
+  }) as SortableEvent));
+}
+
 describe('Manual project sorting', () => {
+  it.each([false, true])('drags the dialogue header and restores its position (collapsed=%s)', collapsed => {
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { platform: 'win32' } });
+    setDataOwnerGeneration('dialogue-sort-test');
+    ownerStorage.setOwnerAuthorityReader(dataOwnerId => ({
+      dataOwnerId, ownerGeneration: 1, claimed: true, canInitialize: true, pinnedLegacyConsumed: true,
+    }));
+    try {
+      const p = groupProps(false);
+      p.projects = ['A', 'B'].map((name) => ({
+        projectKey: 'local:C:/Work/' + name, workingDir: 'C:/Work/' + name, displayName: name,
+        scope: 'local', sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
+        remoteHostId: null, deviceLinkDeviceId: null,
+        deviceLinkDeviceName: null, deviceLinkConnectionStatus: null,
+      }));
+      p.allProjectKeysForOrder = p.projects.map(project => project.projectKey);
+      p.filter.manualProjectOrder = p.allProjectKeysForOrder.slice();
+      p.filter.projectOrder = 'custom';
+      const view = render(<ProjectsSection {...p} />);
+      if (collapsed) fireEvent.click(groupHeader());
+      const header = groupHeader();
+      const row = header.closest<HTMLElement>('[data-sortable-id]')!;
+      const list = row.parentElement!;
+      const sortable = Sortable.get(list)!;
+      expect(header.matches(sortable.option('handle') as string)).toBe(true);
+      expect(header.closest(sortable.option('filter') as string)).toBeNull();
+      expect(row).toBe(list.lastElementChild);
+      const children = Array.from(row.querySelectorAll('[data-testid]'), el => el.getAttribute('data-testid'));
+      list.insertBefore(row, list.children[1]);
+      act(() => sortable.option('onEnd')!.call(sortable, Object.assign(new Event('end'), {
+        item: row, from: list, oldIndex: 2, newIndex: 1,
+      }) as SortableEvent));
+      expect(list.children[1]).toBe(row);
+      expect(Array.from(row.querySelectorAll('[data-testid]'), el => el.getAttribute('data-testid'))).toEqual(children);
+      expect(p.filter.setManualProjectOrder).not.toHaveBeenCalled();
+      view.unmount();
+      // Filtered sessions can spell the same Windows project path differently.
+      p.projects = p.projects.map(project => ({ ...project, projectKey: project.projectKey.toLowerCase() }));
+      p.allProjectKeysForOrder = p.projects.map(project => project.projectKey);
+      const reopened = render(<ProjectsSection {...p} filter={{ ...p.filter, projectOrder: 'activity' }} />);
+      reopened.rerender(<ProjectsSection {...p} />);
+      expect(groupHeader().closest('[data-sortable-id]')?.previousElementSibling?.getAttribute('data-sortable-id'))
+        .toBe(p.allProjectKeysForOrder[0]);
+      expect(groupHeader().closest('[data-sortable-id]')?.nextElementSibling?.getAttribute('data-sortable-id'))
+        .toBe(p.allProjectKeysForOrder[1]);
+    } finally {
+      ownerStorage.setOwnerAuthorityReader(null);
+      setDataOwnerGeneration(null);
+    }
+  });
+
+  // Unit: a second renderer receives storage events after a completed viewer reorder.
+  // Either key may wake it first; its next drag must operate on the same layout as a fresh mount.
+  it.each(['projects', 'dialogue'])('refreshes the complete viewer order on the first %s storage event', first => {
+    const owner = 'cross-window-sort';
+    setDataOwnerGeneration(owner, 1);
+    const snapshot = {
+      dataOwnerId: owner,
+      ownerGeneration: 1,
+      pinnedOrderIsAuthoritative: true,
+      pinnedOrder: [],
+      hiddenProjectKeys: [],
+      hiddenMainViewGhostIds: [],
+    };
+    Object.assign(window.electronAPI, {
+      sidebarSettings: {
+        loadSnapshot: () => snapshot,
+        onPinnedOrderChanged: () => () => {},
+        claimLegacyRendererOwner: () => ({
+          ...snapshot, claimed: true, canInitialize: true, pinnedLegacyConsumed: true,
+        }),
+      },
+    });
+    const p = groupProps(false);
+    p.projects = manualProjects(['A', 'B', 'C']);
+    p.allProjectKeysForOrder = p.projects.map(project => project.projectKey);
+    const [a, b, c] = p.allProjectKeysForOrder;
+    const projectKey = sidebarOwnerStorage.sidebarOwnerStorageKey(MANUAL_PROJECT_ORDER_KEY, owner);
+    const dialogueKey = sidebarOwnerStorage.sidebarOwnerStorageKey('cc-agent.sidebar.dialogueGroupOrder', owner);
+    localStorage.setItem(PROJECT_ORDER_KEY, 'custom');
+    localStorage.setItem(projectKey, JSON.stringify([a, b, c]));
+    const hidden = new Set<string>();
+    function Sidebar() {
+      const filter = useSidebarFilter(hidden, snapshot);
+      return <ProjectsSection {...p} filter={{ ...filter, groupDevice: false, groupDialogue: true }} />;
+    }
+    try {
+      const view = render(<Sidebar />);
+      dropBefore(view.container, 'dialogue-group', b);
+      const order = (container: HTMLElement) => Array.from(container.querySelectorAll('[data-sortable-id]'),
+        row => row.getAttribute('data-sortable-id'));
+      expect(order(view.container)).toEqual([a, 'dialogue-group', b, c]);
+      // Simulate the other renderer committing B/C, preserving the dialogue slot.
+      const positions = JSON.parse(localStorage.getItem(dialogueKey)!);
+      positions[Object.keys(positions)[0]].next = c;
+      localStorage.setItem(projectKey, JSON.stringify([a, c, b]));
+      localStorage.setItem(dialogueKey, JSON.stringify(positions));
+      act(() => window.dispatchEvent(new StorageEvent('storage', { key: first === 'projects' ? projectKey : dialogueKey })));
+      expect(order(view.container)).toEqual([a, 'dialogue-group', c, b]);
+      dropBefore(view.container, b, a);
+      const expected = order(view.container);
+      expect(expected).toEqual([b, a, 'dialogue-group', c]);
+      view.unmount();
+      expect(order(render(<Sidebar />).container)).toEqual(expected);
+    } finally {
+      setDataOwnerGeneration(null);
+    }
+  });
+
+  it('uses the selected host order inside device sections before the dialogue group has a saved position', () => {
+    machine.selection = ['local'];
+    const p = groupProps(true);
+    p.projects = manualProjects(['A', 'B']);
+    p.dialogues = p.dialogues.map(session => ({
+      ...session, deviceLinkDeviceId: undefined, updatedAt: '2026-10-01T00:00:00Z',
+    }));
+    render(<ProjectsSection {...p} />);
+    const list = groupHeader().closest('[data-sortable-id]')!.parentElement!;
+    expect(Array.from(list.children, row => row.getAttribute('data-sortable-id')))
+      .toEqual(['local:/B', 'local:/A', 'dialogue-group']);
+  });
+
+  it.each([
+    { hidden: 'A', dialogueIndex: 1, expected: ['A', 'dialogue-group', 'C', 'B'] },
+    { hidden: 'C', dialogueIndex: 2, expected: ['B', 'A', 'dialogue-group', 'C'] },
+    { hidden: 'dialogue-group', dialogueIndex: 1, expected: ['A', 'dialogue-group', 'C', 'B'] },
+  ])('preserves the dialogue slot when $hidden is filtered out during project sorting', ({ hidden, dialogueIndex, expected }) => {
+    setDataOwnerGeneration('filtered-project-sort');
+    ownerStorage.setOwnerAuthorityReader(dataOwnerId => ({
+      dataOwnerId, ownerGeneration: 1, claimed: true, canInitialize: true, pinnedLegacyConsumed: true,
+    }));
+    try {
+      const p = groupProps(false);
+      const projects = manualProjects(['A', 'B', 'C']);
+      p.projects = projects;
+      p.allProjectKeysForOrder = projects.map(project => project.projectKey);
+      p.filter.manualProjectOrder = [...p.allProjectKeysForOrder];
+      p.filter.projectOrder = 'custom';
+      const view = render(<ProjectsSection {...p} />);
+      dropBefore(view.container, 'dialogue-group', p.allProjectKeysForOrder[dialogueIndex]);
+      const visible = p.allProjectKeysForOrder.filter(key => key !== 'local:/' + hidden);
+      view.rerender(<ProjectsSection {...p}
+        projects={projects.filter(project => visible.includes(project.projectKey))}
+        dialogues={hidden === 'dialogue-group' ? [] : p.dialogues} />);
+      const [first, second] = visible.slice(-2);
+      dropBefore(view.container, second, first);
+      const saved = vi.mocked(p.filter.setManualProjectOrder).mock.lastCall![0];
+      view.unmount();
+      render(<ProjectsSection {...p} filter={{ ...p.filter, manualProjectOrder: [...saved] }} />);
+      const list = groupHeader().closest('[data-sortable-id]')!.parentElement!;
+      expect(Array.from(list.children, row => row.getAttribute('data-sortable-id')?.replace('local:/', ''))).toEqual(expected);
+    } finally {
+      ownerStorage.setOwnerAuthorityReader(null);
+      setDataOwnerGeneration(null);
+    }
+  });
+
+  it.each([
+    { kind: 'transient' }, { kind: 'unavailable' }, { kind: 'ok' },
+    { kind: 'ok', later: 'repeat' }, { kind: 'ok', later: 'move group' },
+    { kind: 'ok', later: 'remount then move' }, { kind: 'ok', later: 'remount only' },
+  ])('keeps the dialogue placement on remote $kind (next gesture: $later)', async ({ kind, later }) => {
+    machine.selection = ['remote'];
+    setDataOwnerGeneration('remote-reorder');
+    ownerStorage.setOwnerAuthorityReader(dataOwnerId => ({
+      dataOwnerId, ownerGeneration: 1, claimed: true, canInitialize: true, pinnedLegacyConsumed: true,
+    }));
+    const original = remoteOrder.snapshot;
+    try {
+      const p = groupProps(false);
+      p.projects = manualProjects(['A', 'B', 'C']).map(project => ({
+        ...project, projectKey: 'device:remote:' + project.workingDir, deviceLinkDeviceId: 'remote',
+      }));
+      p.allProjectKeysForOrder = p.projects.map(project => project.projectKey);
+      const [a, b, c] = p.allProjectKeysForOrder;
+      p.filter.projectOrder = 'custom';
+      const acknowledgements: Array<() => void> = [];
+      remoteOrder.apply.mockImplementation(() => new Promise(resolve => {
+        acknowledgements.push(() => {
+          if (kind === 'ok') remoteOrder.snapshot = { ...original, manualProjectOrder: ['local:/A', 'local:/C', 'local:/B'] };
+          if (kind === 'unavailable') remoteOrder.snapshot = { ...original, available: false };
+          resolve({ kind, snapshot: remoteOrder.snapshot });
+        });
+      }));
+      let view = render(<ProjectsSection {...p} />);
+      const order = (container: HTMLElement) => Array.from(container.querySelectorAll('[data-sortable-id]'), row => row.getAttribute('data-sortable-id'));
+      dropBefore(view.container, 'dialogue-group', b);
+      dropBefore(view.container, c, b);
+      expect(remoteOrder.apply).toHaveBeenCalledWith('remote', { manualProjectOrder: [a, c, b], projectOrder: 'custom' });
+      expect(order(view.container)).toEqual([a, 'dialogue-group', b, c]);
+      if (later === 'repeat') dropBefore(view.container, c, b);
+      if (later?.startsWith('remount')) {
+        view.unmount();
+        view = render(<ProjectsSection {...p} />);
+      }
+      const explicitMove = later === 'move group' || later === 'remount then move';
+      if (explicitMove) dropBefore(view.container, 'dialogue-group', a);
+      for (const acknowledge of acknowledgements) await act(async () => acknowledge());
+      if (kind === 'unavailable') {
+        p.filter.manualProjectOrder = [...vi.mocked(p.filter.setManualProjectOrder).mock.lastCall![0]];
+      } else {
+        expect(p.filter.setManualProjectOrder).not.toHaveBeenCalled();
+      }
+      const expected = kind === 'transient' ? [a, 'dialogue-group', b, c]
+        : explicitMove ? ['dialogue-group', a, c, b] : [a, 'dialogue-group', c, b];
+      if (later?.startsWith('remount')) {
+        view.rerender(<ProjectsSection {...p} />);
+        expect(order(view.container)).toEqual(expected);
+      }
+      view.unmount();
+      const reopened = render(<ProjectsSection {...p} />);
+      expect(order(reopened.container)).toEqual(expected);
+    } finally {
+      remoteOrder.snapshot = original;
+      remoteOrder.apply.mockReset();
+      ownerStorage.setOwnerAuthorityReader(null);
+      setDataOwnerGeneration(null);
+    }
+  });
+
   it('leaves the real project header draggable and persists a completed reorder', () => {
-    const p = props(false);
+    const p = groupProps(false);
+    const writePreference = vi.spyOn(sidebarOwnerStorage, 'writeSidebarOwnerStorage');
+    p.filter.groupAutomation = true;
+    p.dialogues = p.dialogues.map((session, index) => index === 0 ? { ...session, source: 'scheduler' } : session);
     p.projects = ['First', 'Second'].map((name) => ({
       projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name,
       scope: 'local', sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
@@ -403,12 +656,16 @@ describe('Manual project sorting', () => {
 
     // Sortable owns pointer geometry; replay its drop boundary against the real
     // list and DOM move rather than copying its reorder or persistence logic.
-    list.append(moved);
+    const automation = list.querySelector('[data-sortable-id="automations-group"]');
+    expect(automation?.nextElementSibling?.getAttribute('data-sortable-id')).toBe('dialogue-group');
+    list.insertBefore(moved, automation);
     act(() => {
       sortable.option('onEnd')!.call(sortable, Object.assign(new Event('end'), {
         item: moved, from: list, oldIndex: 0, newIndex: 1,
       }) as SortableEvent);
     });
+    expect(writePreference.mock.calls.filter(([key]) => key === 'cc-agent.sidebar.dialogueGroupOrder')).toHaveLength(0);
+    writePreference.mockRestore();
     expect(p.filter.setManualProjectOrder).toHaveBeenCalledWith(
       ['local:/Second', 'local:/First'], p.allProjectKeysForOrder,
     );

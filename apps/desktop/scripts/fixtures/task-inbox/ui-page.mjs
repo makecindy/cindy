@@ -11,6 +11,9 @@ export default {
     },
   },
   cases: {
+    'loose-drag-list': { about: 'Drag an ungrouped task from the whole list row in manual project order' },
+    'loose-drag-text': { about: 'Drag an ungrouped task from the whole text row in manual project order' },
+    'dialogue-order': { about: 'Drag the dialogue group between projects, collapse it, and verify its position' },
     structure: {
       about: 'Switch modes and filter automation tasks from the inbox menu',
       // Leave room next to the sidebar for its cascading desktop menus.
@@ -32,6 +35,56 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('loose-drag-')) {
+      const row = page.locator('[data-sortable-id] [data-session-id="waiting"]');
+      await row.waitFor();
+      const drag = await row.evaluate(node => {
+        const transfer = new DataTransfer();
+        node.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+        node.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: transfer }));
+        return {
+          draggable: node.draggable,
+          id: transfer.getData('application/x-cindy-session-id'),
+          hasLink: Boolean(transfer.getData('application/x-cindy-session-link')),
+        };
+      });
+      assert.deepEqual(drag, { draggable: true, id: 'waiting', hasLink: true });
+      return;
+    }
+    if (ui.case === 'dialogue-order') {
+      const header = page.locator('[data-dialogue-sort-handle]');
+      await header.waitFor();
+      const row = page.locator('[data-sortable-id="dialogue-group"]');
+      const list = row.locator('..');
+      const order = () => list.locator(':scope > [data-sortable-id]').evaluateAll(nodes =>
+        nodes.map(node => node.getAttribute('data-sortable-id')));
+      const [a, b, group] = await order();
+      assert.equal(group, 'dialogue-group');
+      const target = page.locator('[data-project-header]').nth(1);
+      const from = await header.boundingBox();
+      const to = await target.boundingBox();
+      await page.mouse.move(from.x + 45, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(to.x + 45, to.y + 2, { steps: 18 });
+      await page.waitForTimeout(200);
+      await page.mouse.up();
+      assert.deepEqual(await order(), [a, group, b]);
+      await header.click();
+      assert.deepEqual(await order(), [a, group, b]);
+      await ui.capture('dialogue-between-projects');
+      // Drag the folded header to both ends of the same list.
+      for (const [targetIndex, fraction, expected] of [[0, 0.1, [group, a, b]], [1, 0.9, [a, b, group]]]) {
+        const start = await header.boundingBox();
+        const end = await page.locator('[data-project-header]').nth(targetIndex).boundingBox();
+        await page.mouse.move(start.x + 45, start.y + start.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(end.x + 45, end.y + end.height * fraction, { steps: 20 });
+        await page.waitForTimeout(200);
+        await page.mouse.up();
+        assert.deepEqual(await order(), expected);
+      }
+      return;
+    }
     if (ui.case === 'reply') {
       const scroller = page.locator('[data-inbox-scroller]');
       const working = page.locator('section').filter({ has: page.locator('button', { hasText: await ui.t('ccAgent.sidebar.inbox.working') }) });
