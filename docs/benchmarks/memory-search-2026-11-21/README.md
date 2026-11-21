@@ -133,5 +133,5 @@
 ../../node_modules/.bin/eslint src/memory/fts.ts src/memory/__tests__/fts.test.ts
 ```
 
-结果：`fts.test.ts` 58 通过，`src/memory` 157 通过 / 1 跳过（排除既有的 git 集成用例），
+结果：`fts.test.ts` 62 通过，`src/memory` 161 通过 / 1 跳过（排除既有的 git 集成用例），
 `tsc` 与 `eslint` 通过。

@@ -80,6 +80,21 @@ describe('MemoryFts', () => {
     expect(new Set(filenames).size).toBe(filenames.length);
   });
 
+  it('MATCH 命中不足 limit 时用 LIKE-only 结果补满, 不产生重复', () => {
+    // 1 条整 token 命中 + 4 条只有子串命中: 期望 MATCH 的在首位, 其余按相关度
+    // 补满到 limit, 已被 MATCH 返回的 filename 不再出现。
+    fts.upsert(record('project_token.md', '缓存 说明'));
+    for (let i = 0; i < 4; i++) fts.upsert(record(`project_sub_${i}.md`, `缓存位置说明 ${i}`));
+
+    const hits = fts.search('缓存', { limit: 4 });
+    expect(hits.map((h) => h.filename)).toEqual([
+      'project_token.md',
+      'project_sub_0.md',
+      'project_sub_1.md',
+      'project_sub_2.md',
+    ]);
+  });
+
   it('type filter 对 MATCH 与 LIKE 兜底都生效', () => {
     fts.upsert(record('project_a.md', '边界索引配置说明'));
     fts.upsert(record('feedback_b.md', '边界相关反馈'));
@@ -170,6 +185,8 @@ describe('MemoryFts', () => {
   //   「甲×24 登录 乙×74 缓存 丙×198 日志」合并窗口缩到 99 → 「缓存」被切掉;
   //   「cache CACHE CaChE logs auth」 → 单 cache 记录靠大小写变体凑满覆盖率门槛。
   // - tier: unit (真 better-sqlite3 内存库, 无真实 I/O; 整文件约 1.5s)。
+  // - 正常路径对照 (修复前不失败, 守住改动没跑偏): MATCH 不足 limit 时补满且不重复、
+  //   首尾命中不加多余省略号、超 3 段只留前 3 段、大小写重复词的片段仍是单窗口。
   it('短语零命中时多词按 OR 兜底, 覆盖更多词的排前面', () => {
     // 旧实现把整条 query 当一个 LIKE 子串: 「登录 缓存」只有在原文出现
     // 「登录 缓存」字面串时才命中, 这里两条都不会被捞到 (0 命中)。
@@ -376,6 +393,30 @@ describe('MemoryFts', () => {
     expect(snippet.length).toBeLessThanOrEqual(240);
   });
 
+  it('多词片段: 命中贴着正文首尾时不加多余省略号', () => {
+    fts.upsert(record('project_edges.md', `登录${'甲'.repeat(200)}缓存`));
+    const [hit] = fts.search('登录 缓存');
+    const snippet = hit?.snippet ?? '';
+    // 首段起点是 0、末段终点是正文末尾 → 两端都不该有省略号
+    expect(snippet.startsWith('<mark>登录</mark>')).toBe(true);
+    expect(snippet.endsWith('<mark>缓存</mark>')).toBe(true);
+    expect(snippet.split('…').length).toBe(2); // 只有段间那一个省略号
+  });
+
+  it('多词片段: 超过 3 段时只保留前 3 段 (已声明上限)', () => {
+    fts.upsert(
+      record(
+        'project_four.md',
+        `登录${'甲'.repeat(90)}缓存${'乙'.repeat(90)}日志${'丙'.repeat(90)}边界`,
+      ),
+    );
+    const [hit] = fts.search('登录 缓存 日志 边界');
+    const snippet = hit?.snippet ?? '';
+    for (const term of ['登录', '缓存', '日志']) expect(snippet).toContain(`<mark>${term}</mark>`);
+    expect(snippet).not.toContain('<mark>边界</mark>');
+    expect(snippet.split('…').length).toBe(4); // 3 段 + 2 个段间省略号
+  });
+
   it('多词片段: 三个分离的词各取一段, 总长不超过 240', () => {
     fts.upsert(
       record('project_three_windows.md', `登录${'甲'.repeat(90)}缓存${'乙'.repeat(90)}日志${'丙'.repeat(90)}`),
@@ -482,6 +523,8 @@ describe('MemoryFts', () => {
 
     const dup = fts.search('缓存 缓存');
     expect(dup[0]?.score).toBe(fts.search('缓存')[0]?.score);
+    // 重复词去重后是单个词 → 仍走单窗口片段, 与直接查一个词完全一致
+    expect(dup[0]?.snippet).toBe(fts.search('缓存')[0]?.snippet);
   });
 
   it('重复词按大小写不敏感去重, 不抬高覆盖率门槛', () => {
@@ -493,6 +536,16 @@ describe('MemoryFts', () => {
 
     const hits = fts.search('cache CACHE CaChE logs auth');
     expect(hits.map((h) => h.filename)).toEqual(['project_all_terms.md']);
+  });
+
+  it('重复词大小写不同按一个词处理: 片段仍是单窗口且每处都标记', () => {
+    // 去重前是两个词（会走多窗口），去重后是单个词 → 单窗口覆盖整段短正文、
+    // 大小写不同的两处都要被 <mark> 标出。
+    fts.upsert(record('project_case_dup.md', 'MyCache 配置说明 mycache 备份'));
+    const [hit] = fts.search('MyCache mycache');
+    const snippet = hit?.snippet ?? '';
+    expect(snippet.includes('…')).toBe(false);
+    expect(snippet.match(/<mark>mycache<\/mark>/gi)?.length).toBe(2);
   });
 
   it('超过 8 个词只取前 8 个', () => {
