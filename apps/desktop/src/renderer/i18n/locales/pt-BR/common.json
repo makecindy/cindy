@@ -17671,7 +17671,8 @@
         "title": "Importar automações do repositório",
         "description": "Origem: {{workingDir}}. Revise as definições abaixo. A importação aplica estas alterações e ativa novas automações, que podem executar comandos e iniciar Agents com acesso total. Importe apenas conteúdo confiável.",
         "accept": "Confirmar importação",
-        "removed": "Serão removidos: {{names}}"
+        "removed": "Serão removidos: {{names}}",
+        "fileMissing": "Importação ignorada. Não foi possível encontrar o arquivo de automações em {{projectName}}."
       },
       "toast": {
         "summary": "adicionados {{inserted}} · atualizados {{updated}} · removidos {{deleted}}",
