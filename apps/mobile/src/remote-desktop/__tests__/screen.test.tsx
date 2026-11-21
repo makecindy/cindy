@@ -4820,6 +4820,36 @@ describe("remote desktop controls", () => {
         .at(-1)?.topInset,
     ).toBe(64);
   });
+  // Unit: remote field taps previously needed the toolbar button. Exercise the real
+  // relay input and keyboard-hide listener; manual toggles never tested reopening.
+  it("opens the phone keyboard only for an editable tap and keeps a dismissed keyboard down", async () => {
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const op = args[2][0].op;
+      if (op === "editableClick") return { editable: args[2][0].sequence === 2 };
+      const result = await original(...args);
+      return op === "capabilities" ? { ...result, editableClick: true } : result;
+    });
+    await connect();
+    const panel = () => host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]');
+    const tap = async (sequence: number) => {
+      await act(async () => fixture.message!({ nativeEvent: { data: JSON.stringify({
+        type: "input", epoch: "lease", sequence, fieldTap: true, events: [
+          { kind: "button", button: 0, down: true, x: 0.5, y: 0.5 },
+          { kind: "button", button: 0, down: false, x: 0.5, y: 0.5 },
+        ],
+      }) } }));
+      await act(async () => vi.advanceTimersByTimeAsync(120));
+    };
+    await tap(1);
+    expect(panel()).toBeNull();
+    await tap(2);
+    expect(panel()).not.toBeNull();
+    act(() => fixture.keyboardListeners.keyboardDidShow({ endCoordinates: { screenY: 510, height: 334 } }));
+    act(() => fixture.keyboardListeners.keyboardDidHide({}));
+    await act(async () => vi.advanceTimersByTimeAsync(150));
+    expect(panel()).toBeNull();
+  });
   it("overlays landscape keyboards and includes their measured occlusion", async () => {
     fixture.size = { width: 844, height: 390 };
     act(() => root.render(<RemoteDesktopScreen />));

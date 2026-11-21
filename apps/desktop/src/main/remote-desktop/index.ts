@@ -108,6 +108,7 @@ import {
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
+  isEditableDesktopPoint,
   setDesktopDisplayMode,
   readDesktopInputPermission,
   resolveDesktopInputBinary,
@@ -1099,6 +1100,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       : systemAudioMuteGuard.restore('remote-desktop'),
   viewerHidden: setViewerHidden,
   videoBackground: setVideoBackground,
+  editableAt: process.platform === 'darwin' ? isEditableDesktopPoint : undefined,
   displayModes: readDesktopDisplayModes,
   displayPresent: async (displayId) => {
     if (nativeWayland()) {

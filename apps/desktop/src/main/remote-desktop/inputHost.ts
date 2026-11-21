@@ -627,6 +627,23 @@ export class DesktopInputHost {
   }
 }
 
+/** Fractions use the same global display coordinates as pointer injection. */
+export async function isEditableDesktopPoint(displayId: string, x: number, y: number): Promise<boolean> {
+  const display = screen.getAllDisplays().find((item) => String(item.id) === displayId);
+  if (!display) return false;
+  const { bounds } = display;
+  try {
+    const { stdout } = await exec(await resolveBinary(), ['--editable-at',
+      String(Math.round(bounds.x + x * (bounds.width - 1))),
+      String(Math.round(bounds.y + y * (bounds.height - 1))),
+    ], { timeout: 1200, maxBuffer: 128 });
+    return stdout.trim() === 'editable';
+  } catch {
+    // Older signed helpers and apps with unavailable accessibility both keep manual input.
+    return false;
+  }
+}
+
 /** Native mode IDs come only from this computer's current display enumeration. */
 export async function readDesktopDisplayModes(
   displayId: string,
