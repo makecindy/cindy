@@ -102,6 +102,18 @@ export default {
       await menu.press('Escape');
       assert.equal(await menu.getAttribute('aria-expanded'), 'false');
       await page.locator('#settings-panel-appearance').waitFor({ state: 'visible' });
+      await menu.click();
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.personalization'), exact: true }).click();
+      const draft = page.getByRole('textbox', { name: await ui.t('settings.personalization.ariaLabel'), exact: true });
+      await draft.fill('Unsaved instructions #8380');
+      await menu.click();
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.personalization'), exact: true }).click();
+      assert.equal(await draft.inputValue(), 'Unsaved instructions #8380', 'opening navigation must preserve an unsaved draft');
+      // A real external store update while disconnected must be observed on return.
+      await menu.click();
+      await page.evaluate(() => window.settingsFixtureSetPrompt('External saved instructions #8380'));
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.personalization'), exact: true }).click();
+      await page.waitForFunction(() => document.querySelector('textarea')?.value === 'External saved instructions #8380');
       // Crossing the breakpoint must restore the wide navigation and clear its transient state.
       await page.setViewportSize({ width: 800, height: 600 });
       await page.getByRole('tab', { name: await ui.t('settings.tabs.general'), exact: true }).waitFor({ state: 'visible' });

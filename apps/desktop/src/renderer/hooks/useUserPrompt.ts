@@ -6,7 +6,7 @@
  * 避免无谓的 hook context 依赖。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 
 import {
   getUserPrompt,
@@ -18,15 +18,13 @@ export function useUserPrompt(): {
   value: string;
   setValue: (next: string) => void;
 } {
-  const [value, setValueState] = useState<string>(getUserPrompt);
+  const value = useSyncExternalStore(subscribeUserPrompt, getUserPrompt);
 
   const setValue = useCallback((next: string) => {
     setUserPrompt(next);
     // 走 store.setUserPrompt 之后，subscribe 回调会更新本地 state，
     // 这里不重复 setValueState。
   }, []);
-
-  useEffect(() => subscribeUserPrompt(setValueState), []);
 
   return { value, setValue };
 }

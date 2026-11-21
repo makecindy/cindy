@@ -1,4 +1,5 @@
 import { SETTINGS_SEARCH_ENTRIES } from '../../../src/renderer/components/settings/settingsSearchCatalog';
+import { setUserPrompt } from '../../../src/renderer/lib/userPromptStore';
 import { SettingsView } from '../../../src/renderer/components/settings/SettingsView';
 import { ctx, mountPage, subscription, forbid } from '../../ui-page/harness';
 import { WallpaperSettingsProvider } from '../../../src/renderer/hooks/useWallpaperSettings';
@@ -7,7 +8,7 @@ import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../../src/shared/appearanceSettings';
 
 const settingsFixtureReads = { relay: 0, remoteDesktop: 0 };
-Object.assign(window, { settingsFixtureReads });
+Object.assign(window, { settingsFixtureReads, settingsFixtureSetPrompt: setUserPrompt });
 const read = <T,>(value: T) => async () => value;
 const state = <T extends object>(defaults: T) => ({ ...defaults, defaults, isCustomized: false, customizedKeys: [] });
 const voiceSettings = getDefaultVoiceInputSettings(ctx.platform);
@@ -71,6 +72,8 @@ void mountPage({
       recentWorkdirs: { list: read([]) },
     },
     maker: {
+      onProvidersChanged: subscription('providers'), onChatEmbeddingChanged: subscription('chat-embedding'),
+      chatEmbeddingGet: read(state({ enabled: false })),
       usage: { getHistory: read({ generatedAt: 1793577600000, todayKey: '2026-11-02', days: [], modelDaily: [], models: [], streak: { current: 0, longest: 0 }, totals: { today: zeroMoney, last30Days: zeroMoney, last30DaysWithEstimatedValue: zeroMoney, last30DaysEstimatedValue: zeroMoney, todayTokens: 0, last30DaysTokens: 0 }, anomaly: { isAnomalous: false, trailing7DayAvg: null } }), onTodaySpendChanged: subscription('spend'), onTodayTokensChanged: subscription('tokens'), onModelPricingChanged: subscription('pricing') },
       agent: { getBinaryVersion: read({ version: '1.0.0' }) },
       piKernel: { getState: read({ currentVersion: '0.0.0', restartRequired: false, operation: null, official: { release: null, checkedAt: null, error: false }, upstream: { release: null, checkedAt: null, error: false } }) },

@@ -2,7 +2,7 @@ import { personalizationDetailsSettings } from './PersonalizationDetails.setting
 import { useSettingDefinition } from './useSettingDefinition';
 import { Button } from '@/components/ui/button';
 import { SettingsCard, SettingsField } from '@/components/ui/settings-rows';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -17,10 +17,14 @@ export function UserPromptSection() {
   const setting = useSettingDefinition(personalizationDetailsSettings.userInstructions);
 
   const [draft, setDraft] = useState(value);
+  const previousValue = useRef(value);
 
   // 外部 storage 变化（其他 window 实例 setValue 触发的 storage event）时刷新草稿。
   // 单 Electron 窗口里几乎不会触发，留作兜底。
   useEffect(() => {
+    // Activity reconnects Effects even when the saved value has not changed.
+    if (previousValue.current === value) return;
+    previousValue.current = value;
     setDraft(value);
   }, [value]);
 
