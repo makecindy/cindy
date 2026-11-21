@@ -29,6 +29,7 @@ export function registerScheduleListModelsTool(
       '查本机定时任务可用的 Agent 运行位置与模型。不传 agentDeviceId 列本机的模型，并在 locations 里给出同账号其它在线电脑与分享来的供应商；传 locations[].agentDeviceId 列那里的模型。' +
       '要让任务每次新建时在别处运行：schedule_create / schedule_update 传同一个 agentDeviceId；model 取 codex / claude_code / pi 列表项的 id，providerId 取该模型 providers[].id（名称为 providers[].name，默认来源为 defaultProviderId）。' +
       'providers[].modelDetails 是该来源的实际目录资料，包含可用推理档位、速度及已知价格；cost 固定为 USD/百万 token；currency 只对应 displayPricing，优先按该来源展示报价与适用折扣比较。按任务能力与同币种价格推荐经济型号，不凭名称或前缀猜价格，缺价不等于免费，订阅参考价不等于实际扣费。保留用户已有选择，不批量改自动化。' +
+      'modelDetails.membershipSource 是可选的连接级选型依据：account-catalog 表示当前或恢复的账号目录列出，public-catalog 表示仅公共目录候选，user-configured 表示用户显式配置；缺失表示未知，均不保证上游授权。自主推荐时在满足需求和用户指定路线的候选中优先 account-catalog；不因目录缺席判定不支持，不自动切换账号或付费来源。' +
       '只用于本机的定时任务；其它电脑上的定时任务不能设运行位置。' +
       '列本机且不传 agent 时还会返回 pluginEngines：本机插件提供的执行引擎 [{providerId, name, available, message?, models:[{id, label, efforts?}]}]；用它时 agentKind 与 modelAgentKind 都传 acp，providerId 传该项 providerId，model 传 models[].id，只能每次新建任务在本机运行。',
     inputShape: {

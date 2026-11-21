@@ -333,6 +333,13 @@ export interface ModelInterfaceSnapshot {
 export interface CatalogModel {
   opaqueModelId?: true;
   discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
+  /**
+   * Host-derived Pi subscription membership evidence for this connection only.
+   * Account catalogs may be restored snapshots, not live entitlement checks;
+   * public-only or missing evidence does not mean the upstream rejects the model.
+   * Never inherited through public model metadata or used to restrict a route.
+   */
+  membershipSource?: 'account-catalog' | 'public-catalog' | 'user-configured';
   interfaceUnavailable?: boolean;
   selectedInterface?: ModelInterfaceSnapshot;
   availableInterfaces?: ModelInterfaceSnapshot[];

@@ -91,9 +91,9 @@ function routableModels(provider: ProviderView, kind: AgentKind): CatalogModel[]
 /** Do not expose route URLs, auth or the whole provider config through model discovery. */
 function modelDetails(model: CatalogModel): NonNullable<OrcaWorkerProviderSnapshot['modelDetailsByModel']>[string] {
   const { description, contextWindow, efforts, defaultEffort, effortsUnknown, supportsFastMode,
-    supportsUltrafastMode, supportsToolCalls, cost, currency, costDiscount, displayPricing } = model;
+    supportsUltrafastMode, supportsToolCalls, cost, currency, costDiscount, displayPricing, membershipSource } = model;
   return { description, contextWindow, efforts, defaultEffort, effortsUnknown, supportsFastMode,
-    supportsUltrafastMode, supportsToolCalls, cost, currency, costDiscount, displayPricing };
+    supportsUltrafastMode, supportsToolCalls, cost, currency, costDiscount, displayPricing, membershipSource };
 }
 
 /** 那台电脑上某种 Agent 可选的模型(各来源去重，按来源顺序)。 */

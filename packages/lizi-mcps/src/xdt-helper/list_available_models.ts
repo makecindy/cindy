@@ -1,5 +1,5 @@
 /**
- * xdt-helper/list_available_models.ts —— 列出每个 agent 当前 host 支持的 model。
+ * xdt-helper/list_available_models.ts —— 列出每个 agent 当前 host 的 model 目录候选。
  * 用于 send_to_session 新建普通任务或 create_worker 前确认 model 名拼写, Codex 和 Claude Code 模型不可跨用。
  */
 
@@ -11,11 +11,14 @@ import type { ControlResult } from '../lizi_xdtHelperMcpServer.js';
 import { okPayload, errorPayload } from './_payload.js';
 import { LOCAL_AGENT_DEVICE, toHostAgentDeviceId } from './create_worker.js';
 
+/** Per-connection catalog evidence, not a live authorization or capability probe. */
+type ModelMembershipSource = 'account-catalog' | 'public-catalog' | 'user-configured';
+
 export interface ModelDescriptor {
   id: string;
   label: string;
-  /** 当前已连接且可为该 agent 路由此模型的来源。 */
-  providers?: Array<{ id: string; name: string }>;
+  /** 当前已连接且在目录中为该 agent 声明此模型的来源。 */
+  providers?: Array<{ id: string; name: string; modelDetails?: { membershipSource?: ModelMembershipSource } }>;
   /** 未显式指定来源时,host 当前会采用的 provider id。 */
   defaultProviderId?: string | null;
 }
@@ -27,7 +30,7 @@ interface TaggedModel {
   id: string;
   label: string;
   tier: ModelTier;
-  providers?: Array<{ provider_id: string; provider_name: string }>;
+  providers?: Array<{ provider_id: string; provider_name: string; membership_source?: ModelMembershipSource }>;
   default_provider_id?: string | null;
 }
 
@@ -48,6 +51,10 @@ function isBudgetWireModel(modelId: string): boolean {
   );
 }
 
+function isMembershipSource(value: unknown): value is ModelMembershipSource {
+  return value === 'account-catalog' || value === 'public-catalog' || value === 'user-configured';
+}
+
 function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefined {
   if (!models) return undefined;
   return models.map((m) => ({
@@ -56,10 +63,14 @@ function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefin
     tier: isBudgetWireModel(m.id) ? 'budget' : 'standard',
     ...(m.providers
       ? {
-          providers: m.providers.map((provider) => ({
-            provider_id: provider.id,
-            provider_name: provider.name,
-          })),
+          providers: m.providers.map((provider) => {
+            const source = provider.modelDetails?.membershipSource;
+            return {
+              provider_id: provider.id,
+              provider_name: provider.name,
+              ...(isMembershipSource(source) ? { membership_source: source } : {}),
+            };
+          }),
         }
       : {}),
     ...(m.defaultProviderId !== undefined
@@ -111,7 +122,7 @@ function toToolAgentDeviceId(value: string | null): string {
 }
 
 const DESCRIPTION = [
-  '列出每个 agent 当前 host 支持的 model id 清单, 用于 send_to_session 新建普通任务或 create_worker 前确认 model 名拼写。',
+  '列出每个 agent 当前 host 的 model id 目录候选, 用于 send_to_session 新建普通任务或 create_worker 前确认 model 名拼写与来源；列入目录不保证上游账号准入。',
   'Codex 和 Claude Code 支持的 model 完全不同, 不可跨用。',
   '',
   '普通任务使用 device 选择任务电脑、provider_device_id 选择供应商位置；execution_device_id / agent_device_id 是兼容旧名。位置参数同时给新旧名时必须一致。',
@@ -126,7 +137,9 @@ const DESCRIPTION = [
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- pi: Pi agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- plugin_engines: 仅在任务电脑本机、且不传 agent 时出现：插件提供的执行引擎 [{provider_id, name, available, message?, models:[{id, label, efforts?}]}]。available=false 的引擎当前不能用(message 是插件给的原因)。用它创建 Worker 时 agent 传 acp、provider_id 传该项 provider_id、model 传 models[].id(default = 由引擎自己选)。插件引擎只在本机运行，不能配 execution_device_id / agent_device_id。',
-  '- providers: 当前已连接且实际提供该模型的来源 [{provider_id, provider_name}]。普通任务按精确 model 使用宿主默认来源，不传 provider_id；显式创建 Worker 时可把选定的 provider_id 传给 create_worker/create_workers。',
+  '- providers: 当前已连接且在目录中声明该模型的来源 [{provider_id, provider_name, membership_source?}]。普通任务按精确 model 使用宿主默认来源，不传 provider_id；显式创建 Worker 时可把选定的 provider_id 传给 create_worker/create_workers。',
+  '- membership_source: 该来源的选型依据。account-catalog = 当前或恢复的账号目录列出；public-catalog = 仅公共 Pi 目录候选；user-configured = 用户显式添加。缺失表示未知（旧 host 或其它路由），不表示不支持。账号目录也可能过期，最终准入由上游决定。',
+  '自主选择 ChatGPT 订阅模型时，在用户允许的型号、来源和位置范围内优先 account-catalog；不要把公共候选当成账号已支持。保留用户明确选择与显式添加的型号，不凭目录缺席拒绝，也不据此切换到 API key、付费网关或其它账号。',
   '- default_provider_id: 未显式选择来源时 host 当前解析出的默认来源；providers 只有一项时直接使用该项。',
   '',
   'tier 字段 (用于精准选型, 不要靠 label 推断):',

@@ -8,7 +8,7 @@
  * - tier：unit（纯函数，端口全部是假实现）。
  */
 import { describe, expect, it } from 'vitest';
-import type { Catalog } from '@cindy/model-providers';
+import type { Catalog, CatalogModel } from '@cindy/model-providers';
 
 import { projectSubscriptionPoolCatalog, type SubscriptionPoolCatalogPorts } from '../subscriptionPoolCatalog.js';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
@@ -47,6 +47,65 @@ const pool = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe('projectSubscriptionPoolCatalog', () => {
+  // #11865: the public production projection combines connection catalogs, so a
+  // retained public marker must not conceal imported account evidence or claim
+  // the eventual executor was checked. Existing tests cover members/capabilities,
+  // not this metadata boundary. Unit: fake ports, conflicting same-ID Pi entries.
+  it.each(['lender', 'legacy'] as const)('keeps combined Pi membership evidence unknown at the %s merge boundary', (boundary) => {
+    const targetModels: CatalogModel[] = [
+      { ...model('shared', 1), membershipSource: 'public-catalog' },
+      { ...model('own-explicit', 2), membershipSource: 'user-configured' },
+      { ...model('only-target', 3), membershipSource: 'account-catalog' },
+    ];
+    const sourceModels: CatalogModel[] = [
+      { ...model('shared', 10), membershipSource: 'account-catalog' },
+      { ...model('own-explicit', 20), membershipSource: 'account-catalog' },
+      { ...model('borrowed', 30), membershipSource: 'account-catalog' },
+      { ...model('borrowed-explicit', 40), membershipSource: 'user-configured' },
+    ];
+    const targetId = boundary === 'lender' ? 'openai' : 'acct-a';
+    const target = { ...catalog().providers[0]!, id: targetId, agents: ['pi' as const], models: { pi: targetModels } };
+    const source = { ...catalog().providers[1]!, agents: ['pi' as const], models: { pi: sourceModels } };
+    const input: Catalog = { ...catalog(), providers: boundary === 'lender' ? [target, source] : [target] };
+    const projected = projectSubscriptionPoolCatalog(input, {
+      ...basePorts,
+      readPool: () => pool() as never,
+      codexAccountState: () => ({ authenticated: true }),
+      accountProviderId: () => targetId,
+      readSubscriptionPoolCodexModels: () => boundary === 'legacy' ? [model('pooled')] : null,
+      getActiveCatalogWithCodexModels: () => ({ ...catalog(), providers: [{ ...source, id: 'openai' }] }),
+    });
+    const models = projected.providers.find(provider => provider.id === targetId)!.models.pi!;
+    expect(models.map(entry => entry.id)).toEqual(['shared', 'own-explicit', 'only-target', 'borrowed', 'borrowed-explicit']);
+    expect(models.find(entry => entry.id === 'shared')).toMatchObject({ contextWindow: 1 });
+    expect(models.find(entry => entry.id === 'shared')!.membershipSource).toBeUndefined();
+    expect(models.find(entry => entry.id === 'borrowed')!.membershipSource).toBeUndefined();
+    expect(models.find(entry => entry.id === 'borrowed-explicit')!.membershipSource).toBeUndefined();
+    expect(models.find(entry => entry.id === 'own-explicit'))
+      .toMatchObject({ contextWindow: 2, membershipSource: 'user-configured' });
+    expect(models.find(entry => entry.id === 'only-target')!.membershipSource).toBeUndefined();
+    // Projection does not rewrite the individual account catalogs.
+    expect(targetModels[0]!.membershipSource).toBe('public-catalog');
+    expect(sourceModels[0]!.membershipSource).toBe('account-catalog');
+  });
+
+  it.each([false, true])('preserves targeted account evidence without borrowing builtin additions on a legacy route (original available: %s)', (keepOriginal) => {
+    const target = { ...catalog().providers[1]!, agents: ['pi' as const], models: { pi: keepOriginal ? [] : [model('old')] } };
+    const discovered: CatalogModel = { ...model('pooled'), membershipSource: 'account-catalog' };
+    const builtinExplicit: CatalogModel = { ...model('builtin-explicit'), membershipSource: 'user-configured' };
+    const projected = projectSubscriptionPoolCatalog({ ...catalog(), providers: [target] }, {
+      ...basePorts,
+      readPool: () => pool() as never,
+      codexAccountState: () => ({ authenticated: keepOriginal }),
+      accountProviderId: () => 'acct-a',
+      readSubscriptionPoolCodexModels: () => [model('pooled')],
+      getActiveCatalogWithCodexModels: () => ({ ...catalog(), providers: [
+        { ...catalog().providers[0]!, agents: ['pi'], models: { pi: [discovered, builtinExplicit] } },
+      ] }),
+    });
+    expect(projected.providers[0]!.models.pi).toEqual([discovered, model(builtinExplicit.id)]);
+  });
+
   // Unit: local send, remote guest recovery and scheduling all consume provider views.
   // Discovery must retain the native metadata those existing tasks used before the upgrade.
   it.each([{ discovered: null }, { discovered: [] }, { discovered: [model('claude-current')] }])('retains historical Claude routing metadata with discovery $discovered', async ({ discovered }) => {
@@ -97,16 +156,40 @@ describe('projectSubscriptionPoolCatalog', () => {
     ] };
     const discoveredId = kind === 'anthropic' ? 'claude-opus-99-9' : 'gpt-6';
     const read = (id: string = kind) => id === independent ? [model(discoveredId)] : [];
+    const builtinExplicit: CatalogModel = { ...model('chatgpt/builtin-explicit'), membershipSource: 'user-configured' };
     const output = projectSubscriptionPoolCatalog(input, { ...basePorts,
       readPool: () => null, codexAccountState: () => ({ authenticated: true }),
       readSubscriptionPoolCodexModels: kind === 'openai' ? read : () => null,
       readSubscriptionPoolClaudeModels: kind === 'anthropic' ? read : () => null,
-      getActiveCatalogWithCodexModels, getActiveCatalogWithClaudeModels,
+      getActiveCatalogWithCodexModels: (models) => {
+        const projected = getActiveCatalogWithCodexModels(models);
+        return { ...projected, providers: projected.providers.map(provider => provider.id === 'openai'
+          ? { ...provider, models: { ...provider.models, pi: [...provider.models.pi ?? [], builtinExplicit] } }
+          : provider) };
+      },
+      getActiveCatalogWithClaudeModels,
     });
     expect(output.providers[0]!.models[agent]).toEqual(kind === 'anthropic' ? input.providers[0]!.models[agent] : []);
     expect(output.providers[0]!.models[agent]?.some(entry => entry.id === discoveredId)).toBe(false);
     expect(output.providers[1]!.models[agent]?.map(entry => entry.id)).toContain(discoveredId);
     expect(output.providers[1]!.name).toBe(input.providers[1]!.name);
+    if (kind === 'openai') {
+      const inheritedPi: CatalogModel[] = [builtinExplicit,
+        { ...model('chatgpt/builtin-account'), membershipSource: 'account-catalog' },
+        { ...model('chatgpt/builtin-public'), membershipSource: 'public-catalog' }];
+      const pending = projectSubscriptionPoolCatalog({ ...input, providers: [
+        { ...input.providers[1]!, models: { pi: inheritedPi } },
+      ] }, { ...basePorts, readPool: () => null, codexAccountState: () => ({ authenticated: true }) });
+      expect(pending.providers[0]!.models.pi).toEqual([
+        model(builtinExplicit.id), model('chatgpt/builtin-account'), model('chatgpt/builtin-public'),
+      ]);
+      // A created pool mirrors builtin models, not that connection's explicit configuration.
+      expect(output.providers[0]!.models.pi?.find(entry => entry.id === builtinExplicit.id)).toEqual(builtinExplicit);
+      expect(output.providers[1]!.models.pi?.find(entry => entry.id === builtinExplicit.id))
+        .toMatchObject({ id: builtinExplicit.id, contextWindow: builtinExplicit.contextWindow });
+      expect(output.providers[1]!.models.pi?.find(entry => entry.id === builtinExplicit.id)?.membershipSource).toBeUndefined();
+      expect(output.providers[1]!.models.pi?.find(entry => entry.id === `chatgpt/${discoveredId}`)?.membershipSource).toBe('account-catalog');
+    }
   });
 
   it('adds models of active, signed-in pool accounts to openai without replacing its own', () => {
