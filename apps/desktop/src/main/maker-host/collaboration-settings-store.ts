@@ -7,6 +7,7 @@
  *  - softLimit: 5
  *  - hardLimit: 8
  *  - idleReleaseMinutes: 0 (disabled)
+ *  - dispatchClaimVerification: true（Lead 派单主张对账，见 docs/dev-rules/orca-team-architecture.md）
  */
 
 import { app } from 'electron';
@@ -25,12 +26,14 @@ export interface CollaborationSettings {
   workerSoftLimit: number;
   workerHardLimit: number;
   workerIdleReleaseMinutes: number;
+  dispatchClaimVerification: boolean;
 }
 
 const DEFAULTS: CollaborationSettings = {
   workerSoftLimit: 5,
   workerHardLimit: 8,
   workerIdleReleaseMinutes: 0,
+  dispatchClaimVerification: true,
 };
 
 function settingsFilePath(): string {
@@ -50,6 +53,10 @@ function normalize(raw: unknown): CollaborationSettings {
       typeof r.workerIdleReleaseMinutes === 'number'
         ? clamp(r.workerIdleReleaseMinutes, 0, 120)
         : DEFAULTS.workerIdleReleaseMinutes,
+    dispatchClaimVerification:
+      typeof r.dispatchClaimVerification === 'boolean'
+        ? r.dispatchClaimVerification
+        : DEFAULTS.dispatchClaimVerification,
   };
 }
 

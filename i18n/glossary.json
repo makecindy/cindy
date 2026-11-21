@@ -1411,6 +1411,38 @@
       "note": "中文用「关闭」（现状 6:4）。同一个 chat 模块里，errorBanner 写「关闭错误提示」、interruptedBanner 写「忽略此中断提示」。条件禁用：「忽略」是 Ignore 的正确译法、「知道了」是 Got it 的正确译法，只在英文源为 Dismiss 时才算违规。"
     },
     {
+      "id": "dispatch-claim",
+      "status": "proposed",
+      "en": "Dispatch claim",
+      "translations": {
+        "zh-CN": "派发主张",
+        "zh-TW": "派發主張",
+        "ja": "派遣主張",
+        "ko": "파견 주장",
+        "es": "envío declarado",
+        "fr": "envoi annoncé",
+        "de": "Übergabe",
+        "pt-PT": "envio declarado",
+        "pt-BR": "envio declarado",
+        "zh-Hant-x-lzh": "遣單",
+        "zh-Hans-x-lzh": "遣单"
+      },
+      "minorityByDesign": {
+        "zh-Hant-x-lzh": "文言变体按既定的「遣單」说法，与繁体版的「派發主張」同指 Lead 声称已派给 Worker 这件事；文言不直译「主张」而作「之议」。",
+        "zh-Hans-x-lzh": "文言变体按既定的「遣单」说法，与简体版的「派发主张」同指 Lead 声称已派给 Worker 这件事；文言不直译「主张」而作「之议」。"
+      },
+      "checkCase": false,
+      "forbidden": {
+        "zh-CN": [{ "text": "派单", "whenEn": "dispatch" }],
+        "zh-TW": [{ "text": "派單", "whenEn": "dispatch" }],
+        "zh-Hans-x-lzh": [{ "text": "派单", "whenEn": "dispatch" }],
+        "zh-Hant-x-lzh": [{ "text": "派單", "whenEn": "dispatch" }],
+        "ko": [{ "text": "발송", "whenEn": "dispatch" }],
+        "de": [{ "text": "Versand", "whenEn": "dispatch" }]
+      },
+      "note": "Lead 声称已把任务派给 Worker 的说法。宿主按本轮派发记录核对：声称与记录不符时先要求 Lead 用队列编号补证，仍不符才升级落卡。中文用「派发主张」，与仓库既有的「派发任务」一致；「派单」是同一条 PR 早期文案里的另一种写法，已统一弃用。日语用「派遣主張」，韩语用「파견 주장」，德语用「Übergabe」（移交），西语、法语、葡语用 envío declarado、envoi annoncé、envio declarado 的「声明」形式。文言变体另有「遣单」，按 minorityByDesign 声明。"
+    },
+    {
       "id": "dissolve-group",
       "status": "proposed",
       "en": "Dissolve group",

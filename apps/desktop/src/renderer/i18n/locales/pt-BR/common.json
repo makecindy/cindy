@@ -5612,7 +5612,9 @@
       "workerHardLimit": "Limite rígido de Workers",
       "workerHardLimitHint": "Número máximo de Workers permitidos. Deve ser >= ao limite flexível.",
       "idleRelease": "Liberação por inatividade (minutos)",
-      "idleReleaseHint": "Defina 0 para desativar a liberação automática em segundo plano; valores positivos liberam Workers após esse número de minutos de inatividade."
+      "idleReleaseHint": "Defina 0 para desativar a liberação automática em segundo plano; valores positivos liberam Workers após esse número de minutos de inatividade.",
+      "dispatchClaimVerification": "Verificar envios declarados",
+      "dispatchClaimVerificationHint": "Confere se o Lead realmente enviou o trabalho antes de dar uma tarefa como enviada. Uma afirmação sem respaldo é corrigida uma vez e, depois, você é notificado."
     },
     "agentResource": {
       "saveFailed": "Falha ao salvar. Tente novamente.",
@@ -15645,6 +15647,17 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "unverified": "Envio não verificado",
+        "notice": {
+          "claim": "O Lead diz ter enviado",
+          "claimTarget": "O Lead diz ter enviado para {{target}}",
+          "noDispatch": "Mas o host não aceitou nenhum envio neste turno",
+          "notDispatched": "Mas o host não tem envio para {{target}} registrado neste turno",
+          "unknownId": "Mas o id de fila citado {{id}} não corresponde a nenhum envio",
+          "body": "{{claim}}. {{reason}}. Citação da resposta deste turno: “{{quote}}”. O Lead foi solicitado a reenviar."
+        }
+      },
       "help": {
         "title": "Comandos disponíveis",
         "builtInCommands": "Comandos integrados",
@@ -15906,6 +15919,8 @@
       "orcaFromWorker": "Mensagem do Worker",
       "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensagem do Worker \"{{role}}\"",
+      "orcaFromHost": "Mensagem do host (Orca host)",
+      "orcaHostNoticeDispatchClaim": "O host não encontrou registro do envio declarado neste turno; o Lead foi solicitado a informar o id da fila ou o resultado real.",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado do celular \"{{name}}\"",
       "deviceSentMobile": "Enviado do celular",

@@ -20,6 +20,7 @@ import type {
   CollabDispatchSuccessOutcome,
   CollabDirectDispatchResult,
 } from './collabSendOutcome.js';
+import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice.js';
 import { resolveCollabDispatchResult } from './collabSendOutcome.js';
 import type {
   AgentInputSendOpts,
@@ -70,6 +71,8 @@ export interface DispatchOrcaInterAgentMessageParams {
   reportClientId?: string;
   /** 宿主盖章：仅系统兜底回报可进入 Lead 队列合批；主动回报/派单不设置。 */
   autoBridge?: true;
+  /** 宿主自己的通知（不是某个 Worker 说的）：正文给模型读，卡片另挂本地化摘要。 */
+  hostNotice?: OrcaHostNoticeKind;
   /** 发送方显式选择；缺省排队。steer 只在目标正在运行时插进当前 turn。 */
   delivery?: 'queue' | 'steer';
   /** 可选, 随消息发给目标的本机图片绝对路径; 仅本机 session 支持, SSH 远端目标拒绝。 */
@@ -488,6 +491,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         displayText: params.rawContent,
         ...(senderSessionId ? { senderSessionId } : {}),
         ...(params.autoBridge ? { autoBridge: true } : {}),
+        ...(params.hostNotice ? { hostNotice: params.hostNotice } : {}),
       };
     };
     let steerFallbackReason: OrcaSteerFallbackReason | undefined;
@@ -818,6 +822,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         senderLabel,
         displayText: params.rawContent,
         ...(senderSessionId ? { senderSessionId } : {}),
+        ...(params.hostNotice ? { hostNotice: params.hostNotice } : {}),
       },
       createOpts,
     });

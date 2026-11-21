@@ -5511,7 +5511,9 @@
       "workerHardLimit": "Worker 硬上限",
       "workerHardLimitHint": "允許建立的最大 Worker 數量，必須大於等於軟上限。",
       "idleRelease": "空閒釋放（分鐘）",
-      "idleReleaseHint": "設為 0 時關閉背景自動釋放；正數表示閒置超過該時長後自動釋放。"
+      "idleReleaseHint": "設為 0 時關閉背景自動釋放；正數表示閒置超過該時長後自動釋放。",
+      "dispatchClaimVerification": "核對派發主張",
+      "dispatchClaimVerificationHint": "Lead 聲稱已派給 Worker 時，依宿主派發記錄核對。不實的主張先糾正一次，仍不實則提醒你。"
     },
     "agentResource": {
       "saveFailed": "儲存失敗，請重試。",
@@ -15475,6 +15477,17 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "unverified": "派發未經核實",
+        "notice": {
+          "claim": "Lead 稱已派發",
+          "claimTarget": "Lead 稱已派給 {{target}}",
+          "noDispatch": "宿主這一輪沒有接受任何派發",
+          "notDispatched": "宿主這一輪沒有派往 {{target}} 的記錄",
+          "unknownId": "引用的排隊編號 {{id}} 不對應任何派發",
+          "body": "{{claim}}。{{reason}}。引文取自它這輪回覆：「{{quote}}」。已要求 Lead 重派。"
+        }
+      },
       "help": {
         "title": "可用命令",
         "builtInCommands": "內建命令",
@@ -15736,6 +15749,8 @@
       "orcaFromWorker": "來自 Worker 的訊息",
       "orcaFromWorkerBatch": "系統回傳的 {{count}} 條 Worker 結果",
       "orcaFromWorkerNamed": "來自 Worker「{{role}}」的訊息",
+      "orcaFromHost": "來自宿主（Orca host）的訊息",
+      "orcaHostNoticeDispatchClaim": "這條聲稱的派發在宿主記錄裡查不到，已提醒 Lead 補上排隊編號或實際派發結果。",
       "hookChannelFrom": "來自 {{channel}}",
       "deviceSentMobileNamed": "從手機「{{name}}」傳送",
       "deviceSentMobile": "從手機傳送",

@@ -3,12 +3,23 @@ import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
+import type { OrcaDispatchClaimNotice } from '../../shared/orcaDispatchReceipt.js';
+import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice.js';
 import type {
   CollabDispatchFailureOutcome,
   CollabDispatchQueuedOutcome,
   CollabDispatchSuccessOutcome,
 } from './collabSendOutcome.js';
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
+import {
+  describeDispatchClaimVerdict,
+  dispatchFactsForTurn,
+  dropLeadDispatchFact,
+  noteLeadDispatchFact,
+  readDispatchClaim,
+  settleDispatchClaimIncident,
+  verifyDispatchClaim,
+} from './orcaDispatchClaims.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
 import { isOrcaCollaborationMessage } from './orcaQueueNote.js';
 import {
@@ -504,13 +515,22 @@ export interface OrcaTeamServiceDeps {
   }>;
   /** Synchronous coordinator projection used when the stop adapter cannot return a result. */
   getWorkerQueuePaused(sessionId: string): boolean;
+  /**
+   * 宿主 -> Lead 队列的唯一入口：Worker 回报与派单主张纠正文都走这里。
+   * 纠正消息没有具体 Worker，`workerId` 省略时按宿主来源呈现。
+   */
   sendAutoBridgeToLead(
     leadSessionId: string,
     message: string,
     workerId: string,
     report?: WorkerTerminalTurnParams['remoteReport'],
     reportClientId?: string,
+    hostNotice?: OrcaHostNoticeKind,
   ): Promise<{ accepted: boolean; reportRejected?: true }>;
+  /** 补派一轮仍无凭据时的升级：落一张会话内纠正卡（不进模型）+ 红点 + 既有通知通道。 */
+  escalateDispatchClaim?(leadSessionId: string, notice: OrcaDispatchClaimNotice): void;
+  /** 能力开关，缺省开启；关闭后完全不判定也不修改结果。 */
+  readDispatchClaimVerificationEnabled?(): boolean;
   /**
    * 读取目标 session 输入队列的当前快照(pendingQueue + steering 中的 clientId)。
    * 实现方(register.ts)须先 ensureQueueRestored 再读,保证崩溃恢复条目可见。
@@ -662,6 +682,12 @@ export interface OrcaTeamService {
   /** Synchronous product boundary; never call for a suppressed vendor terminal. */
   noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void;
   handleWorkerTerminalTurn(params: WorkerTerminalTurnParams): Promise<void>;
+  /** Lead 收口对账：本轮声称已派但无派发凭据时唤醒补派，仍不一致才升级。 */
+  handleLeadTurnSettled(params: {
+    leadSessionId: string;
+    turnGeneration: number;
+    finalText: string;
+  }): Promise<void>;
 }
 
 /** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
@@ -1463,6 +1489,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         await rollbackAccepted();
         return { result, wasLiveBeforeDispatch };
       }
+      // 派发凭据只认宿主这次成功落地的投递，供 Lead 收口时的主张对账使用。
+      const dispatchGeneration = deps.getLiveSession(link.leadSessionId)?.getTurnGeneration?.() ?? 0;
+      const workerLabel = target.label ?? target.role ?? target.id;
+      const delivery = result.mode === 'queued' ? 'queued' : 'direct';
+      noteLeadDispatchFact(link.leadSessionId, {
+        dispatchId: result.clientId,
+        turnGeneration: dispatchGeneration,
+        workerId: target.id,
+        workerLabel,
+        delivery,
+        ...(delivery === 'queued' ? { queuedMessageId: result.clientId } : {}),
+        at: Date.now(),
+      });
       if (result.mode === 'dispatched') {
         // The dependency result is the direct vendor-dispatch settlement. Keep this idempotent
         // fallback even though the dispatcher also reports commit through the callback.
@@ -2104,6 +2143,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             },
     });
     if (!controlled.ok) return mapWorkerQueueControlFailure(controlled);
+    dropLeadDispatchFact(params.callerLeadSessionId, params.queuedMessageId);
     deps.log.info('orca lead cancelled queued worker message', {
       workerId: found.worker.id,
       workerSessionId: found.worker.sessionId,
@@ -2392,7 +2432,84 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     },
     captureWorkerTerminalTurn,
     noteWorkerProductTerminal,
-    async handleWorkerTurnStarted(sessionId) {
+    /**
+   * Lead 收口对账：只在 lead 文本声称已派、而本轮凭据不支撑时动手；
+   * 首次唤醒补派一次（队列消息，开一轮），补派轮仍不一致则升级为会话内纠正卡 + 提醒。
+   */
+
+  async handleLeadTurnSettled(params: {
+    leadSessionId: string;
+    turnGeneration: number;
+    finalText: string;
+  }): Promise<void> {
+    if (deps.readDispatchClaimVerificationEnabled?.() === false) return;
+    // 没有 worker 的会话不是协同 Lead：普通对话里的同款措辞不参与判定。
+    const workers = await deps.listWorkersByLead(params.leadSessionId);
+    if (workers.length === 0) return;
+
+    const roster = workers.map((worker) => ({ id: worker.id, label: worker.label ?? worker.role ?? worker.id }));
+    const reading = readDispatchClaim(params.finalText, roster);
+    // 不带派发主张的普通回复不清账：账本只由「有据的派发主张」结束。
+    // 否则升级后的静默被一句普通回复解除，下一轮不实主张又从头唤醒一遍。
+    if (!reading.claimed) return;
+
+    const facts = dispatchFactsForTurn(params.leadSessionId, params.turnGeneration);
+    const verdict = verifyDispatchClaim(reading, facts);
+    const action = settleDispatchClaimIncident(params.leadSessionId, verdict.consistent);
+    if (!action) return;
+
+    const reason = verdict.consistent ? '' : describeDispatchClaimVerdict(verdict);
+    const lines = (intro: string) =>
+      [
+        intro,
+        reason ? `${reason}.` : '',
+        reading.quote ? `Your turn said: "${reading.quote}"` : '',
+        'A dispatch counts only with a real accepted result: direct or steered delivery returns ok=true with wake_kind resumed / already-active / steered, and a queued delivery also returns the queued_message_id. Cite that identifier when you report a queued dispatch.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+    if (action === 'wake') {
+      const delivered = await deps.sendAutoBridgeToLead(
+        params.leadSessionId,
+        lines("[Orca host] Your dispatch claim is not backed by this turn's dispatch records."),
+        '',
+        undefined,
+        undefined,
+        'dispatch-claim',
+      );
+      const accepted = delivered.accepted;
+      deps.log.info('orca lead dispatch claim wake', {
+        leadSessionId: params.leadSessionId,
+        accepted,
+        reason,
+        facts: facts.length,
+      });
+      return;
+    }
+
+    // 升级只在主张与凭据不一致时发生（settle 的契约）；这里显式收窄，卡片才有原因可写。
+    if (verdict.consistent) return;
+
+    // 升级不再开新 turn：只会在会话里落一张宿主纠正卡并提醒主人。
+    deps.escalateDispatchClaim?.(params.leadSessionId, {
+      state: 'unverified',
+      version: 1,
+      // 正文不在这里拼：同一行记录会在手机、其他语言界面上重读。
+      targets: reading.targets.map(entry => entry.label),
+      reason: verdict.reason,
+      detail: verdict.detail,
+      quote: reading.quote,
+      at: Date.now(),
+    });
+    deps.log.warn('orca lead dispatch claim escalated', {
+      leadSessionId: params.leadSessionId,
+      reason,
+      facts: facts.length,
+    });
+  },
+
+  async handleWorkerTurnStarted(sessionId) {
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
 

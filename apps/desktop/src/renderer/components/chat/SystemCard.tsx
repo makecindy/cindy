@@ -1,6 +1,7 @@
 import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
 import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
 import { isImportSourceId } from '../../../shared/sessionImport';
+import { ORCA_DISPATCH_CLAIM_QUOTE_MAX } from '../../../shared/orcaDispatchReceipt';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
@@ -14,6 +15,7 @@ import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCa
 import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 import { useState, type ReactNode } from 'react';
 import type { PluginModelRouteNote } from '@/lib/ccAgent.types';
+import type { ChatMessage } from '@/lib/makerChatStore';
 import {
   ArrowLeftRight,
   ArrowRight,
@@ -39,6 +41,12 @@ import {
 } from '@/lib/autoResumePresentation';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
+import {
+  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+  ACTIVITY_ROW_RADIUS_CLASS,
+} from './activityRowChrome';
 import { Spinner } from '@/components/ui/spinner';
 import { LearnStatusCard } from '@/features/learn/LearnStatusCard';
 import {
@@ -54,48 +62,14 @@ import {
 import { BotDirectMessageCard } from '@/features/bots/BotDirectMessageCard';
 import { VoiceCallCard, VoiceCallTaskEntry } from '@/features/bots/voice/VoiceCallTranscript';
 import { readVoiceCallRecord } from '@/../shared/voiceConversation';
-import {
-  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
-  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
-  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
-  ACTIVITY_ROW_RADIUS_CLASS,
-} from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { PLUGIN_ENGINE_DEFAULT_MODEL } from '@/../shared/pluginEngines';
 import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 
 interface SystemCardProps {
-  cardType:
-    | 'plugin-model-route'
-    | 'voice-call'
-    | 'voice-call-task'
-    | 'mcp-app'
-    | 'input-handoff'
-    | 'cindy-make-doctor'
-    | 'cindy-make'
-    | 'help'
-    | 'cost'
-    | 'context'
-    | 'pwd'
-    | 'status'
-    | 'compact'
-    | 'cmd'
-    | 'goal-complete'
-    | 'goal-resumed'
-    | 'cindy-make-complete'
-    | 'learn'
-    | 'review'
-    | 'auto-resume'
-    | 'auto-resume-pending'
-    | 'agent-switch'
-    | 'bot-session-task-message'
-    | 'bot-session-task'
-    | 'bot-session-task-result'
-    | 'bot-direct-message'
-    | 'bot-authorization'
-    | 'context-rebuild'
-    | 'session-import';
+  /** 与消息流同一个来源：卡片类型由 ChatMessage 定义，避免两处联合各自漂移。 */
+  cardType: NonNullable<ChatMessage['systemCardType']>;
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
@@ -1455,6 +1429,54 @@ function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
   );
 }
 
+function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
+  const { t, i18n } = useTranslation();
+  // 正常派单不落卡：Lead 的正文就是记录，宿主只在主张对不上凭据时落这张升级卡。
+  if (data?.state !== 'unverified') return null;
+  const label = t('chat.systemCard.orcaDispatch.unverified');
+  // 正文按查看者当前语言拼：同一行记录会在手机、英文桌面上重读。
+  const labels = Array.isArray(data?.targets)
+      ? data.targets.filter((target): target is string => typeof target === 'string' && target !== '')
+      : [];
+    const detail = typeof data?.detail === 'string' ? data.detail : '';
+    const rawQuote = typeof data?.quote === 'string' ? data.quote : '';
+    const target = labels.length
+      ? new Intl.ListFormat(i18n.language || 'en', { style: 'long', type: 'conjunction' }).format(labels)
+      : '';
+    const claim = target
+      ? t('chat.systemCard.orcaDispatch.notice.claimTarget', { target })
+      : t('chat.systemCard.orcaDispatch.notice.claim');
+    const reason =
+      data?.reason === 'target-not-dispatched'
+        ? t('chat.systemCard.orcaDispatch.notice.notDispatched', { target: detail })
+        : data?.reason === 'unknown-message-id'
+          ? t('chat.systemCard.orcaDispatch.notice.unknownId', { id: detail })
+          : t('chat.systemCard.orcaDispatch.notice.noDispatch');
+    const quote =
+      rawQuote.length > ORCA_DISPATCH_CLAIM_QUOTE_MAX
+        ? `${rawQuote.slice(0, ORCA_DISPATCH_CLAIM_QUOTE_MAX - 1)}…`
+        : rawQuote;
+    const body = t('chat.systemCard.orcaDispatch.notice.body', { claim, reason, quote });
+    return (
+      <div
+        className="flex w-full items-start gap-1.5 px-2 py-[3px]"
+        role="note"
+        aria-label={label}
+      >
+        <span className="shrink-0 text-12 leading-[1.5] text-[var(--error-fg)]">{label}</span>
+        <span aria-hidden className="shrink-0 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+          ·
+        </span>
+        <span
+          className="min-w-0 whitespace-normal text-left text-12 leading-[1.5] text-[var(--text-secondary)]"
+          title={body}
+        >
+          {body}
+        </span>
+      </div>
+    );
+  }
+
 const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
   'no-visible-result': 'chat.systemCard.review.noResult',
   'reviewer-closed': 'chat.systemCard.review.failure.reviewerClosed',
@@ -1620,6 +1642,8 @@ export function SystemCard({
       return <ContextRebuildCard data={data} />;
     case 'session-import':
       return <SessionImportCard data={data} />;
+    case 'orca-dispatch':
+      return <OrcaDispatchCard data={data} />;
     case 'learn':
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':

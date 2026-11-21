@@ -5554,7 +5554,9 @@
       "workerHardLimit": "Hartes Worker-Limit",
       "workerHardLimitHint": "Maximal zulässige Anzahl an Workern. Muss >= dem weichen Limit sein.",
       "idleRelease": "Bei Inaktivität freigeben (Minuten)",
-      "idleReleaseHint": "Setze den Wert auf 0, um die automatische Freigabe im Hintergrund zu deaktivieren. Positive Werte geben Worker nach dieser Anzahl inaktiver Minuten frei."
+      "idleReleaseHint": "Setze den Wert auf 0, um die automatische Freigabe im Hintergrund zu deaktivieren. Positive Werte geben Worker nach dieser Anzahl inaktiver Minuten frei.",
+      "dispatchClaimVerification": "Übergaben prüfen",
+      "dispatchClaimVerificationHint": "Prüft, ob der Lead wirklich einen Auftrag übergeben hat, bevor er eine Übergabe als erfolgt meldet. Eine unbelegte Angabe wird einmal korrigiert, danach wirst du benachrichtigt."
     },
     "agentResource": {
       "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
@@ -15504,6 +15506,17 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "unverified": "Übergabe nicht bestätigt",
+        "notice": {
+          "claim": "Laut Lead wurde übergeben",
+          "claimTarget": "Laut Lead wurde an {{target}} übergeben",
+          "noDispatch": "Der Host hat in diesem Turn keine Übergabe angenommen",
+          "notDispatched": "Der Host hat in diesem Turn keine Übergabe an {{target}} verzeichnet",
+          "unknownId": "Die zitierte Queue-ID {{id}} gehört zu keiner Übergabe",
+          "body": "{{claim}}. {{reason}}. Zitat aus der Antwort dieses Turns: „{{quote}}“. Der Lead wurde um eine erneute Übergabe gebeten."
+        }
+      },
       "help": {
         "title": "Verfügbare Befehle",
         "builtInCommands": "Integrierte Befehle",
@@ -15765,6 +15778,8 @@
       "orcaFromWorker": "Nachricht vom Worker",
       "orcaFromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
       "orcaFromWorkerNamed": "Nachricht vom Worker „{{role}}“",
+      "orcaFromHost": "Nachricht vom Host (Orca host)",
+      "orcaHostNoticeDispatchClaim": "Der Host hat in diesem Turn keinen Nachweis für die behauptete Übergabe gefunden; der Lead wurde gebeten, die Queue-ID oder das tatsächliche Ergebnis zu nennen.",
       "hookChannelFrom": "Aus {{channel}}",
       "deviceSentMobileNamed": "Vom Smartphone „{{name}}“ gesendet",
       "deviceSentMobile": "Vom Smartphone gesendet",

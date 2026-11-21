@@ -5612,7 +5612,9 @@
       "workerHardLimit": "Límite máximo de Workers",
       "workerHardLimitHint": "Máximo de Workers permitidos. Debe ser mayor o igual que el umbral de advertencia.",
       "idleRelease": "Liberación por inactividad (minutos)",
-      "idleReleaseHint": "Usa 0 para no liberar Workers automáticamente en segundo plano. Un valor positivo libera los Workers tras ese número de minutos de inactividad."
+      "idleReleaseHint": "Usa 0 para no liberar Workers automáticamente en segundo plano. Un valor positivo libera los Workers tras ese número de minutos de inactividad.",
+      "dispatchClaimVerification": "Verificar los envíos declarados",
+      "dispatchClaimVerificationHint": "Comprueba que el Lead realmente envió el encargo antes de dar una tarea por enviada. Una afirmación sin respaldo se corrige una vez y después se te avisa."
     },
     "agentResource": {
       "saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
@@ -15645,6 +15647,17 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "unverified": "Envío no verificado",
+        "notice": {
+          "claim": "El Lead afirma haber enviado",
+          "claimTarget": "El Lead afirma haber enviado a {{target}}",
+          "noDispatch": "Pero el host no aceptó ningún envío en este turno",
+          "notDispatched": "Pero el host no tiene ningún envío a {{target}} registrado en este turno",
+          "unknownId": "Pero el id de cola citado {{id}} no corresponde a ningún envío",
+          "body": "{{claim}}. {{reason}}. Cita de su respuesta de este turno: «{{quote}}». Se pidió al Lead que reenvíe."
+        }
+      },
       "help": {
         "title": "Comandos disponibles",
         "builtInCommands": "Comandos integrados",
@@ -15906,6 +15919,8 @@
       "orcaFromWorker": "Mensaje de Worker",
       "orcaFromWorkerBatch": "Informe del sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensaje del Worker \"{{role}}\"",
+      "orcaFromHost": "Mensaje del host (Orca host)",
+      "orcaHostNoticeDispatchClaim": "El host no encontró ningún registro del envío declarado en este turno; se pidió al Lead que indique el id de cola o el resultado real.",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado desde el teléfono \"{{name}}\"",
       "deviceSentMobile": "Enviado desde un teléfono",

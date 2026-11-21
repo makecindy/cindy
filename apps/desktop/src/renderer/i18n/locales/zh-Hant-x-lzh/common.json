@@ -5511,7 +5511,9 @@
       "workerHardLimit": "Worker 硬限",
       "workerHardLimitHint": "許建立之 Worker 最大數，須不小於軟上限。",
       "idleRelease": "閒時釋放（分鐘）",
-      "idleReleaseHint": "設為 0 則闔後臺自動釋放；正數謂閒逾此時長即自釋放。"
+      "idleReleaseHint": "設為 0 則闔後臺自動釋放；正數謂閒逾此時長即自釋放。",
+      "dispatchClaimVerification": "核遣單之議",
+      "dispatchClaimVerificationHint": "Lead 雲已遣於 Worker 者，按宿主所記核之。虛言先正一次，再虛則告。"
     },
     "agentResource": {
       "saveFailed": "存之未成，請再試。",
@@ -15467,6 +15469,17 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "unverified": "遣單無據，待核",
+        "notice": {
+          "claim": "Lead 稱已遣單",
+          "claimTarget": "Lead 稱已遣往 {{target}}",
+          "noDispatch": "然宿未納一單",
+          "notDispatched": "然宿無遣往 {{target}} 之記",
+          "unknownId": "然所引隊號 {{id}} 無對應之單",
+          "body": "{{claim}}。{{reason}}。引文取自其此輪之覆：「{{quote}}」。已命 Lead 重遣。"
+        }
+      },
       "help": {
         "title": "可用指令",
         "builtInCommands": "內建指令",
@@ -15728,6 +15741,8 @@
       "orcaFromWorker": "Worker 之訊",
       "orcaFromWorkerBatch": "系統所報 Worker 結果凡 {{count}}",
       "orcaFromWorkerNamed": "Worker「{{role}}」之訊",
+      "orcaFromHost": "宿主（Orca host）來訊",
+      "orcaHostNoticeDispatchClaim": "此單於宿無據，已命 Lead 補其隊號或實果。",
       "hookChannelFrom": "自 {{channel}} 來",
       "deviceSentMobileNamed": "自手機「{{name}}」所遣",
       "deviceSentMobile": "自手機所遣",

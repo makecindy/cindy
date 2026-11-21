@@ -696,15 +696,15 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     const remote = (sessionId: string) => runtime.isRemote(sessionId);
     const wrapped: OrcaTeamServiceDeps = {
       ...base,
-      sendAutoBridgeToLead: (lead, message, workerId, report) => report
+      sendAutoBridgeToLead: (lead, message, workerId, report, reportClientId, hostNotice) => report
         ? runtime.runReportDelivery(report.proxySessionId, report.inputClientIds,
           async (clientId, onRejected) => {
-            const result = await base.sendAutoBridgeToLead(lead, message, workerId, undefined, clientId);
+            const result = await base.sendAutoBridgeToLead(lead, message, workerId, undefined, clientId, hostNotice);
             if (!result.accepted && result.reportRejected) onRejected();
             return result;
           },
           result => result.accepted, { messageId: report.messageId, alreadyReported: { accepted: true } })
-        : base.sendAutoBridgeToLead(lead, message, workerId),
+        : base.sendAutoBridgeToLead(lead, message, workerId, report, reportClientId, hostNotice),
       // 远端 Worker 在本机永远没有活会话；只有运行设备正在跑时才视为在线，
       // 否则按「已恢复」派发(恢复本身是空操作)，wake_kind 与实际一致。
       getLiveSession: (sessionId) =>

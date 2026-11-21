@@ -1279,9 +1279,12 @@ export function UserMessage({
 
   const orcaWorkerRole =
     automationOrigin?.kind === 'session' ? automationOrigin.orcaSenderLabel : undefined;
+  const orcaHostNotice =
+    automationOrigin?.kind === 'session' ? automationOrigin.orcaHostNotice : undefined;
   const orcaBatchCount = automationOrigin?.kind === 'session' ? automationOrigin.orcaAutoBridgeBatchCount : undefined;
-  const orcaCardTitle =
-    orcaBatchCount
+  const orcaCardTitle = orcaHostNotice
+    ? t('chat.userMessage.orcaFromHost')
+    : orcaBatchCount
       ? t('chat.userMessage.orcaFromWorkerBatch', { count: orcaBatchCount })
       : orcaCommunication?.orcaSource === 'lead'
         ? t('chat.userMessage.orcaFromLead')
@@ -1467,6 +1470,11 @@ export function UserMessage({
                   <ChevronRight size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
                 )}
               </button>
+              {orcaHostNotice === 'dispatch-claim' && (
+                <p className="border-t border-[var(--msg-tool-card-border)] px-3 py-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
+                  {t('chat.userMessage.orcaHostNoticeDispatchClaim')}
+                </p>
+              )}
               {orcaExpanded && (
                 <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
                   <pre data-selection-quote-body="" className="chat-content-text m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">

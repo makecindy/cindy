@@ -5554,7 +5554,9 @@
       "workerHardLimit": "Worker Hard Limit",
       "workerHardLimitHint": "Maximum number of Workers allowed. Must be greater than or equal to the soft limit.",
       "idleRelease": "Idle Release (minutes)",
-      "idleReleaseHint": "Set 0 to disable background auto-release; positive values release workers after this many idle minutes."
+      "idleReleaseHint": "Set 0 to disable background auto-release; positive values release workers after this many idle minutes.",
+      "dispatchClaimVerification": "Verify dispatch claims",
+      "dispatchClaimVerificationHint": "Check that the Lead really dispatched before it reports a task as sent. An unbacked claim gets one correction and then a notification."
     },
     "agentResource": {
       "saveFailed": "Failed to save. Try again.",
@@ -15541,6 +15543,17 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "unverified": "Dispatch not verified",
+        "notice": {
+          "claim": "Lead said it dispatched",
+          "claimTarget": "Lead said it dispatched to {{target}}",
+          "noDispatch": "The host accepted no dispatch this turn",
+          "notDispatched": "The host has no record of dispatching to {{target}} this turn",
+          "unknownId": "The queued message id {{id}} matches no dispatch",
+          "body": "{{claim}}. {{reason}}. Quoted from its reply this turn: “{{quote}}”. Lead has been asked to re-dispatch."
+        }
+      },
       "help": {
         "title": "Available Commands",
         "builtInCommands": "Built-in Commands",
@@ -15802,6 +15815,8 @@
       "orcaFromWorker": "Message from Worker",
       "orcaFromWorkerBatch": "System report: {{count}} Worker results",
       "orcaFromWorkerNamed": "Message from Worker “{{role}}”",
+      "orcaFromHost": "Message from the host (Orca host)",
+      "orcaHostNoticeDispatchClaim": "The host found no record of the dispatch this turn; the Lead was asked to cite the queue id or the actual result.",
       "hookChannelFrom": "From {{channel}}",
       "deviceSentMobileNamed": "Sent from phone “{{name}}”",
       "deviceSentMobile": "Sent from phone",
