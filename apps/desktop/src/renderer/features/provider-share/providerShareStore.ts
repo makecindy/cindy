@@ -20,7 +20,7 @@ import { hasDeviceProvidersInterest, hasSubscriptionShareCatalog, isSubscription
 import { hasDeviceCapabilitiesInterest } from '@/hooks/useAgentCapabilities';
 import {
   evictRemotePluginEngines,
-  hasRemotePluginEngineSubscribers,
+  hasRemotePluginEngineInterest,
   markRemotePluginEnginesStale,
   prefetchRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
@@ -278,7 +278,7 @@ function invalidateShareCatalogs(
       if (mustClear || options?.retireShareIds?.has(shareId)) evictRemotePluginEngines(deviceId);
       else {
         markRemotePluginEnginesStale(deviceId);
-        if (hasRemotePluginEngineSubscribers(deviceId)) void prefetchRemotePluginEngines(deviceId);
+        if (hasRemotePluginEngineInterest(deviceId)) void prefetchRemotePluginEngines(deviceId);
       }
       continue;
     }
@@ -303,7 +303,7 @@ function invalidateShareCatalogs(
       if (share.status === 'active' && share.hostOnline && share.hostCapable
         && options?.refreshShareIds?.has(share.shareId) && !changed.includes(share.shareId)) {
         markRemotePluginEnginesStale(deviceId);
-        if (hasRemotePluginEngineSubscribers(deviceId)) void prefetchRemotePluginEngines(deviceId);
+        if (hasRemotePluginEngineInterest(deviceId)) void prefetchRemotePluginEngines(deviceId);
       }
       continue;
     }
@@ -545,7 +545,7 @@ export function ensureProviderShareReceivedStarted(): void {
       if (continuity?.remainingMs === 0) evictRemotePluginEngines(push.deviceId);
       else {
         markRemotePluginEnginesStale(push.deviceId);
-        if (hasRemotePluginEngineSubscribers(push.deviceId)) void prefetchRemotePluginEngines(push.deviceId);
+        if (hasRemotePluginEngineInterest(push.deviceId)) void prefetchRemotePluginEngines(push.deviceId);
       }
       return;
     }
