@@ -1149,6 +1149,10 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
   var panel = OwnerPromptPanel(context: context, alpha: 0.02)
   var answered = false
   var retried = false
+  // The check that is live right now. The visible retry arms its own context, so the stop
+  // path must invalidate that one: killing the process alone leaves a biometric request
+  // behind, and the original context has already answered by then.
+  var armed = context
   // Main needs this id for its capture exclusion filter: `sharingType = .none` alone is
   // ignored by modern ScreenCaptureKit, which only filters ids it was handed
   // (`macos-capture.m`). A window that keeps its id until it closes stays out of frames
@@ -1158,6 +1162,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
   }
   announce(panel)
   func arm(_ context: LAContext) {
+    armed = context
     let started = DispatchTime.now()
     context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
       guard !answered else { return }
@@ -1198,7 +1203,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
     // Killing this process alone leaves the prompt on screen for about ten seconds.
     DispatchQueue.main.async {
       answered = true
-      context.invalidate()
+      armed.invalidate()
       panel.close()
       print("stopped"); fflush(stdout); exit(0)
     }
