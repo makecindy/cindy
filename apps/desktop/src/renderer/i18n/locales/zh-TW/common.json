@@ -6607,6 +6607,7 @@
           "guide": {
             "usageLabel": "怎麼用",
             "usageBody": "在 X 上發一則推文 @askmycindy，任務就會派到這臺裝置上執行，結論會以回覆傳回給你。",
+            "usageBodyOnDevice": "在 X 上發一則推文 @askmycindy，任務就會派到「{{device}}」上執行，結論會以回覆傳回給你。",
             "riskLabel": "回覆是公開的",
             "riskPublicBody": "回覆是公開推文，任何人都能看到。適合公開提問、解決問題；不適合處理私事，以免暴露隱私。",
             "riskWorkdirBody": "X 任務都落在 X 連線設定裡的預設專案，Agent 能讀寫其中檔案，而結論會公開回覆 —— 預設專案指到私密儲存庫時，檔案內容可能隨之公開。",

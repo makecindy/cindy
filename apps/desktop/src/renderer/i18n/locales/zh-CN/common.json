@@ -6607,6 +6607,7 @@
           "guide": {
             "usageLabel": "怎么用",
             "usageBody": "在 X 上发一条推文 @askmycindy，任务就会派到这台设备上执行，结论以回帖发回给你。",
+            "usageBodyOnDevice": "在 X 上发一条推文 @askmycindy，任务就会派到「{{device}}」上执行，结论以回帖发回给你。",
             "riskLabel": "回帖是公开的",
             "riskPublicBody": "回复是公开推文，任何人都能看到。适合公开提问、解决问题；不适合处理私事，以免暴露隐私。",
             "riskWorkdirBody": "X 任务都落在 X 连接设置里的默认项目，Agent 能读写其中文件，而结论会公开回帖 —— 默认项目指到私密仓库时，文件内容可能随之公开。",

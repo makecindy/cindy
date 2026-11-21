@@ -6717,6 +6717,7 @@
           "guide": {
             "usageLabel": "Como utilizar",
             "usageBody": "Publique no X mencionando @askmycindy e a tarefa é enviada para execução neste dispositivo; o resultado é devolvido como resposta.",
+            "usageBodyOnDevice": "Publique no X mencionando @askmycindy e a tarefa é enviada para execução em {{device}}; o resultado é devolvido como resposta.",
             "riskLabel": "As respostas são públicas",
             "riskPublicBody": "As respostas são públicas e visíveis para qualquer pessoa. Use esta funcionalidade para questões e problemas públicos, não para assuntos privados que possam expor a sua privacidade.",
             "riskWorkdirBody": "Cada tarefa do X é executada no projeto predefinido nas definições de ligação ao X. O Agent pode ler e escrever ficheiros nesse projeto, e a sua conclusão é tornada pública — se esse projeto apontar para um repositório privado, o conteúdo dos ficheiros também poderá tornar-se público.",
