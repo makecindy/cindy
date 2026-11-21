@@ -5,8 +5,13 @@ import path from 'node:path';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Logger } from '@cindy/maker-core';
+import type { LiziMcpSessionContext } from '@cindy/mcps';
 
-import { startCodexHttpBridge, type CodexHttpBridge } from '../codexHttpBridge.desktop.js';
+import {
+  startCodexHttpBridge,
+  withMcpRouteIdentity,
+  type CodexHttpBridge,
+} from '../codexHttpBridge.desktop.js';
 
 const REPO = path.resolve(__dirname, '../../../../../..');
 const ARCH = `${process.platform}-${process.arch}`;
@@ -62,24 +67,24 @@ export async function runClaudeCliProbe(): Promise<CliProbeResult> {
   });
   try {
     const config = path.join(root, 'mcp.json');
-    fs.writeFileSync(
-      config,
-      JSON.stringify({
-        mcpServers: {
-          fixture: {
-            type: 'http',
-            url: bridge.url('fixture'),
-            headers: { Authorization: `Bearer ${bridge.token}` },
-          },
-        },
-      }),
-    );
-    const normal = await runOne({ bridge, config, home, configDir, signal: undefined });
-    const sigterm = await runOne({ bridge, config, home, configDir, signal: 'SIGTERM' });
+    const rounds = [];
+    for (let i = 1; i <= 5; i++) {
+      rounds.push(
+        await runOne({
+          bridge,
+          config,
+          home,
+          configDir,
+          signal: i % 2 === 0 ? 'SIGTERM' : undefined,
+          instance: `claude-cli-${i}`,
+          round: i,
+        }),
+      );
+    }
     return {
       engine: 'claude-code',
-      lifecycle: 'real CLI normal exit and SIGTERM',
-      rounds: [normal, sigterm],
+      lifecycle: 'real CLI five restarts, normal exit and SIGTERM',
+      rounds,
       finalAfterOwnerClose: bridge.mcpSessionCount(),
     };
   } finally {
@@ -95,6 +100,8 @@ async function runOne(input: {
   home: string;
   configDir: string;
   signal?: NodeJS.Signals;
+  instance: string;
+  round: number;
 }): Promise<{
   round: number;
   instance: string;
@@ -103,6 +110,29 @@ async function runOne(input: {
   remaining: number;
 }> {
   const before = input.bridge.mcpSessionCount();
+  const context: LiziMcpSessionContext = {
+    agentKind: 'claude-code',
+    sessionId: 'real-cli-task',
+    sessionInstanceId: input.instance,
+    workingDir: input.home,
+    vendorOptions: {},
+  };
+  const threadId = `real-cli-thread-${input.round}`;
+  input.bridge.registerThreadContext(threadId, context);
+  fs.writeFileSync(
+    input.config,
+    JSON.stringify({
+      mcpServers: {
+        fixture: {
+          type: 'http',
+          url: withMcpRouteIdentity(input.bridge.url('fixture'), {
+            sessionInstanceId: input.instance,
+          }),
+          headers: { Authorization: `Bearer ${input.bridge.token}` },
+        },
+      },
+    }),
+  );
   const child = spawn(
     CLAUDE,
     [
@@ -146,13 +176,16 @@ async function runOne(input: {
       resolve();
     }, 2_000).unref();
   });
+  const maxBeforeClose = Math.max(maxSeen, input.bridge.mcpSessionCount());
+  input.bridge.closeSessionInstance(input.instance);
   const remaining = input.bridge.mcpSessionCount();
+  input.bridge.unregisterThreadContext(threadId, input.instance);
   maxSeen = Math.max(maxSeen, remaining);
   return {
-    round: input.signal ? 2 : 1,
+    round: input.round,
     instance: input.signal ? 'sigterm' : 'normal',
     created: maxSeen - before,
-    closed: maxSeen - remaining,
+    closed: maxBeforeClose - remaining,
     remaining,
   };
 }

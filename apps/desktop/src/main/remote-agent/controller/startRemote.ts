@@ -103,6 +103,8 @@ export interface PreparedRemoteMcp {
   /** 本任务可用的本机 MCP 服务(名字 → 带本任务身份的地址与请求头)。 */
   servers: Map<string, LocalMcpTarget>;
   dispose(): void;
+  /** Close only the transports owned by a confirmed remote Agent process run. */
+  closeSessionInstance?(): void;
 }
 
 export interface StartRemoteAgentDeps {
@@ -811,6 +813,15 @@ async function prepareAndStartRemoteAgentSession(
         if (!opened) {
           closedEarly = { reason, message: error?.message };
           return;
+        }
+        const runEnded = idleReclaimed || !['missing', 'provider-restarting', 'aborted', 'controller-disconnected'].includes(reason);
+        if (runEnded) {
+          try { mcp.closeSessionInstance?.(); }
+          catch (closeError) {
+            deps.log?.warn('remote agent: closing ended run MCP instance failed', {
+              runId: client.runId, error: String(closeError),
+            });
+          }
         }
         deps.onTaskGrantRenewable?.(false);
         // 对方按闲置收回了它的 Agent 进程(它只收回不忙的任务)：与连接池让出名额一样，本机部分与对话都留着，

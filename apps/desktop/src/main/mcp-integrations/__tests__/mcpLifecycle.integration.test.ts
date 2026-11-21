@@ -70,7 +70,7 @@ function initializeBody(id: number): string {
 async function initialize(
   bridge: CodexHttpBridge,
   serverName: string,
-  identity?: { sessionId: string; sessionInstanceId: string },
+  identity?: { sessionId?: string; sessionInstanceId: string },
   sessionToken?: string,
   id = 1,
 ): Promise<string> {
@@ -170,14 +170,15 @@ async function runOwnedReplacementScenario(
         bridge.unregisterSessionCtx(ownerSessionId);
         roundResult.closed = beforeRoundClose - bridge.mcpSessionCount();
         roundResult.remaining = bridge.mcpSessionCount();
+      } else {
+        bridge.closeSessionInstance(instance);
+        roundResult.closed = roundResult.remaining - bridge.mcpSessionCount();
+        roundResult.remaining = bridge.mcpSessionCount();
       }
       rounds.push(roundResult);
     }
-    const beforeClose = bridge.mcpSessionCount();
     if (!options.closeAfterRound) bridge.unregisterSessionCtx(ownerSessionId);
     const finalAfterOwnerClose = bridge.mcpSessionCount();
-    if (!options.closeAfterRound)
-      rounds[rounds.length - 1].closed = beforeClose - finalAfterOwnerClose;
     return { engine, lifecycle, rounds, finalAfterOwnerClose };
   } finally {
     await bridge.shutdown();
@@ -194,14 +195,23 @@ async function runCodexReplacementScenario(): Promise<ScenarioResult> {
     const rounds: RoundResult[] = [];
     for (let round = 1; round <= ROUNDS; round++) {
       const instance = `codex-${round}`;
+      bridge.registerThreadContext(`thread-${round}`, {
+        agentKind: 'codex',
+        sessionId: 'task-codex',
+        sessionInstanceId: instance,
+        workingDir: '/tmp/mcp-lifecycle-probe',
+        vendorOptions: {},
+      });
       const before = bridge.mcpSessionCount();
       for (const serverName of SERVER_NAMES)
-        await initialize(bridge, serverName, undefined, undefined, round);
+        await initialize(bridge, serverName, { sessionInstanceId: instance }, undefined, round);
+      const created = bridge.mcpSessionCount() - before;
+      bridge.closeSessionInstance(instance);
       rounds.push({
         round,
         instance,
-        created: bridge.mcpSessionCount() - before,
-        closed: 0,
+        created,
+        closed: created,
         remaining: bridge.mcpSessionCount(),
       });
     }
@@ -266,13 +276,8 @@ describe('MCP bridge lifecycle accumulation probe', () => {
       expect(result.rounds.map((round) => round.created)).toEqual(
         Array.from({ length: ROUNDS }, () => SERVER_NAMES.length),
       );
-      const closesEachRound = result.lifecycle === 'control session close then reopen';
-      expect(result.rounds.map((round) => round.remaining)).toEqual(
-        closesEachRound ? [0, 0, 0, 0, 0] : [3, 6, 9, 12, 15],
-      );
-      expect(result.rounds.map((round) => round.closed)).toEqual(
-        closesEachRound ? [3, 3, 3, 3, 3] : [0, 0, 0, 0, 15],
-      );
+      expect(result.rounds.map((round) => round.remaining)).toEqual([0, 0, 0, 0, 0]);
+      expect(result.rounds.map((round) => round.closed)).toEqual([3, 3, 3, 3, 3]);
       expect(result.finalAfterOwnerClose).toBe(0);
     }
     writeReport(results);
@@ -281,9 +286,63 @@ describe('MCP bridge lifecycle accumulation probe', () => {
   it('records five rounds for local Codex instance replacement', async () => {
     const result = await runCodexReplacementScenario();
     expect(result.rounds.map((round) => round.created)).toEqual([3, 3, 3, 3, 3]);
-    expect(result.rounds.map((round) => round.remaining)).toEqual([3, 6, 9, 12, 15]);
-    expect(result.finalAfterOwnerClose).toBe(15);
+    expect(result.rounds.map((round) => round.remaining)).toEqual([0, 0, 0, 0, 0]);
+    expect(result.rounds.map((round) => round.closed)).toEqual([3, 3, 3, 3, 3]);
+    expect(result.finalAfterOwnerClose).toBe(0);
     writeReport([result]);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：同一个 sessionInstanceId 连续建立两条 HTTP MCP
+  //   会话并调用工具，确认没有“断链就猜进程结束”的关闭动作。
+  // - Bug／规则依据：2a 远程断链兼容边界，仍在运行的 run 必须保留在途工具。
+  // - 现有覆盖缺口：已有 bridge 测试只覆盖 session 注销，没有验证实例关闭接口
+  //   不会被重连路径误用。
+  // - 最小失败输入：同一实例两个 transport，第二个 transport 发 tools/call。
+  // - tier：integration。
+  it('keeps a live run MCP transport available across a reconnect', async () => {
+    let bridge: CodexHttpBridge | null = await startCodexHttpBridge({
+      serverFactories: { cindy_orca: createFixtureServer },
+      logger: noopLogger,
+    });
+    try {
+      const context: LiziMcpSessionContext = {
+        agentKind: 'claude-code',
+        sessionId: 'live-run',
+        sessionInstanceId: 'live-instance',
+        workingDir: '/tmp/mcp-lifecycle-probe',
+        vendorOptions: {},
+      };
+      bridge.registerSessionCtx('live-run', context);
+      const token = 'live-run-token';
+      bridge.registerSessionToken('live-run', token);
+      const identity = { sessionId: 'live-run', sessionInstanceId: 'live-instance' };
+      const first = await initialize(bridge, 'cindy_orca', identity, token, 1);
+      const second = await initialize(bridge, 'cindy_orca', identity, token, 2);
+      expect(bridge.mcpSessionCount()).toBe(2);
+      const response = await fetch(withMcpRouteIdentity(bridge.url('cindy_orca'), identity), {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: 'application/json, text/event-stream',
+          'content-type': 'application/json',
+          'mcp-session-id': second,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 3,
+          method: 'tools/call',
+          params: { name: 'fixture_ping', arguments: {} },
+        }),
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(bridge.mcpSessionCount()).toBe(2);
+      expect(first).not.toBe(second);
+    } finally {
+      await bridge?.shutdown();
+      bridge = null;
+    }
   });
 
   it.skipIf(!REAL_CLI)(

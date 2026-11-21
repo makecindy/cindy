@@ -65,6 +65,8 @@ export interface CodexHttpBridge {
    * 误删新 query 刚注册的 ctx。
    */
   unregisterSessionCtx(sessionId: string, expectedCtx?: LiziMcpSessionContext): void;
+  /** Close transports created by one confirmed Agent process instance. */
+  closeSessionInstance(sessionInstanceId: string): void;
   /**
    * per-session bearer token (pi 会话用)。按会话隔离,冻结伙伴仅能访问实际挂载的 server:
    * pi 每个会话在 spawn 前生成独立 token,经 env-file 交给远端进程 —— 单个
@@ -125,6 +127,8 @@ interface DispatchOpts {
   sessionTokenCtx?: LiziMcpSessionContext;
   /** 经 `?session=` 路由时的 Cindy sessionId;新建的 MCP 会话归它所有,随它注销而关闭。 */
   ownerSessionId?: string;
+  /** URL/session context instance that owns a newly initialized transport. */
+  ownerSessionInstanceId?: string;
   /** owner 的注册是否仍在;初始化请求跨越注销时据此自行关闭,不依赖注销时的那次扫描。 */
   isOwnerLive?: (sessionId: string) => boolean;
   /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
@@ -135,6 +139,7 @@ interface SessionTransport {
   transport: StreamableHTTPServerTransport;
   mcpServer: McpServer;
   ownerSessionId?: string;
+  ownerSessionInstanceId?: string;
 }
 
 /** One policy-controlled tools/call that must not reach its MCP transport. */
@@ -262,6 +267,10 @@ function countLiveBridgeMcpSessions(): number {
   let n = 0;
   for (const bridge of liveBridges) n += bridge.mcpSessionCount();
   return n;
+}
+
+function closeLiveBridgeMcpSessionInstance(sessionInstanceId: string): void {
+  for (const bridge of liveBridges) bridge.closeSessionInstance(sessionInstanceId);
 }
 
 async function startCodexHttpBridge(
@@ -464,6 +473,7 @@ async function startCodexHttpBridge(
         pluginId: opts.pluginIdByServerName?.[serverName],
         sessionTokenCtx,
         ownerSessionId: sessionQuery ?? undefined,
+        ownerSessionInstanceId: sessionTokenCtx?.sessionInstanceId ?? instanceQuery ?? undefined,
         isOwnerLive: (id) => sessionCtxById.has(id),
         threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
         remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
@@ -562,6 +572,23 @@ async function startCodexHttpBridge(
     if (closed > 0) log.info('closed MCP sessions of ended session', { session: prefixId(sessionId), closed });
   };
 
+  const closeSessionInstance = (sessionInstanceId: string): void => {
+    let closed = 0;
+    for (const transports of transportsByServer.values()) {
+      for (const [mcpSessionId, entry] of transports) {
+        if (entry.ownerSessionInstanceId !== sessionInstanceId) continue;
+        transports.delete(mcpSessionId);
+        closed++;
+        void entry.transport.close().catch((e: unknown) => {
+          log.warn('transport close threw', { message: (e as Error).message });
+        });
+      }
+    }
+    if (closed > 0) log.info('closed MCP sessions of ended Agent instance', {
+      instance: prefixId(sessionInstanceId), closed,
+    });
+  };
+
   const shutdown = async (): Promise<void> => {
     liveBridges.delete(bridge);
     log.info('shutting down http bridge', {
@@ -638,6 +665,7 @@ async function startCodexHttpBridge(
       if (!sessionCtxById.delete(sessionId)) return;
       closeSessionOwnedTransports(sessionId);
     },
+    closeSessionInstance,
     registerSessionToken: (sessionId, sessionToken) => {
       const generation = nextTokenGeneration++;
       sessionTokenBySessionId.set(sessionId, { token: sessionToken, generation });
@@ -709,6 +737,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     pluginId,
     sessionTokenCtx,
     ownerSessionId,
+    ownerSessionInstanceId,
     isOwnerLive,
     threadInstanceQuery,
     remoteBotHelper,
@@ -893,7 +922,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
-      transports.set(newId, { transport, mcpServer, ownerSessionId });
+      transports.set(newId, { transport, mcpServer, ownerSessionId, ownerSessionInstanceId });
       log.debug('mcp session initialized', { serverName, sessionId: newId });
     },
   });
@@ -1183,5 +1212,5 @@ function extractCodexThreadIdFromMessage(message: unknown): string | undefined {
 function prefixId(value: string | undefined): string | null {
   return value ? value.slice(0, 8) : null;
 }
-return { selectRemoteInjectableServerNames, computeRemoteMcpFingerprint, withMcpRouteIdentity, countLiveBridgeMcpSessions, startCodexHttpBridge };
+return { selectRemoteInjectableServerNames, computeRemoteMcpFingerprint, withMcpRouteIdentity, countLiveBridgeMcpSessions, closeLiveBridgeMcpSessionInstance, startCodexHttpBridge };
 }

@@ -335,7 +335,7 @@ import {
   setCodexEnvironmentShutdownHook,
   unregisterCodexMcpThreadContext,
 } from '../mcp-integrations/codexEnvironment.desktop.js';
-import { REMOTE_ALLOWED_SERVER_NAMES, type CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.desktop.js';
+import { REMOTE_ALLOWED_SERVER_NAMES, closeLiveBridgeMcpSessionInstance, type CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.desktop.js';
 import { setRemoteMcpBridgeTokenRotatedHook } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import type { BotToolsetContext } from '../../shared/botRemoteCapabilities.js';
 import { isBotToolsetProviderAvailable } from './botToolsetAvailability.js';
@@ -1435,8 +1435,13 @@ export function getMaker(): Maker {
         beforeKnownFileWrite: captureKnownFileBefore,
         noteOpaqueWrite: noteOpaqueTurnChange,
       },
-      registerLocalAgentProcess: ({ pid, kind, role, sessionId }) =>
-        registerAgentProcess(pid, kind, role, sessionId),
+      registerLocalAgentProcess: ({ pid, kind, role, sessionId, sessionInstanceId }) => {
+        const dispose = registerAgentProcess(pid, kind, role, sessionId);
+        return () => {
+          dispose?.();
+          if (sessionInstanceId) closeLiveBridgeMcpSessionInstance(sessionInstanceId);
+        };
+      },
       reviewAutoPermissionAction,
       toolLoopReviewer: reviewToolLoop,
       // 每个 session 的 cc 子进程 debug 写到 sessions/<id>/cc-debug.raw.log (logger 拼路径

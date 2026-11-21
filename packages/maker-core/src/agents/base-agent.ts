@@ -164,6 +164,8 @@ export interface PiExtraSpawnConfig {
    * close() 时调用且要求幂等。只要拿到 bridge（包括匿名会话）就应提供。
    */
   disposeSessionCtx?: () => void;
+  /** Close only the transports owned by a confirmed Agent process instance. */
+  closeSessionInstance?: () => void;
 }
 
 /** pi models.json 原生 provider 的 api 形态(BYOM 用;不过 anthropic-compat 代理)。 */
@@ -465,6 +467,7 @@ export interface LocalAgentProcessRegistration {
    * 不触发登记,宿主可忽略。
    */
   sessionId?: string | null;
+  sessionInstanceId?: string;
 }
 
 export interface CodexLocalCredentialModeSwitchContext {

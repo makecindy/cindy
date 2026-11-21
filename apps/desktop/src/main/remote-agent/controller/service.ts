@@ -778,6 +778,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         return {
           servers: mcpTargets(extra),
           dispose: () => extra?.disposeSessionCtx?.(),
+          closeSessionInstance: () => extra?.closeSessionInstance?.(),
         };
       },
       capture: ({ kind, opts: startOpts }): ExecutorCaptureHooks | undefined => {
