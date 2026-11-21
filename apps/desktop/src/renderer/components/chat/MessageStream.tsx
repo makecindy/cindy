@@ -1410,8 +1410,12 @@ export function collectSessionImageSrcs(
     if (item.type === 'fork_origin') {
       continue;
     } else if (item.type === 'tool_media') {
-      for (const m of item.items) {
-        if (m.kind === 'image' && m.url) push(m.url);
+      for (const [index, m] of item.items.entries()) {
+        if (m.kind === 'image' && m.url)
+          push(m.url, {
+            galleryId: `tool:${item.key}:image:${index}`,
+            name: previewSourceName(m.url, 'image'),
+          });
       }
     } else if (item.type === 'ghost_card') {
       if (ghostCards) {
@@ -1425,27 +1429,38 @@ export function collectSessionImageSrcs(
         }
       }
       // 回锚媒体渲染在卡片及其衍生卡之后，画廊顺序必须与 DOM 一致。
-      for (const media of item.media ?? []) {
-        if (media.kind === 'image' && media.url) push(media.url);
+      for (const [index, media] of (item.media ?? []).entries()) {
+        if (media.kind === 'image' && media.url)
+          push(media.url, {
+            galleryId: `ghost-media:${item.key}:image:${index}`,
+            name: previewSourceName(media.url, 'image'),
+          });
       }
     } else if (item.type === 'message') {
       const msg = item.message;
       if (msg.role === 'user' && msg.images) {
-        for (const img of msg.images) {
+        for (const [index, img] of msg.images.entries()) {
+          const galleryId = `message:${msg.clientId}:image:${index}`;
           if ('url' in img) {
             // 标注元数据只在本地会话下发:远程会话里 annotationSourceUrl 指向
             // 被控端本机缓存,控制端拿不到原图,翻页保持普通烧录图预览(与
             // ChatImageView 直接点击分支的 displaySrc !== src 防御同口径)。
-            const meta =
-              !mediaOrigin && img.annotationSourceUrl && img.annotationStrokes?.length
+            const meta = {
+              galleryId,
+              ...(img.originalName ? { name: img.originalName } : {}),
+              ...(!mediaOrigin && img.annotationSourceUrl && img.annotationStrokes?.length
                 ? {
                     annotationSourceUrl: img.annotationSourceUrl,
                     annotationStrokes: img.annotationStrokes,
                   }
-                : undefined;
+                : {}),
+            };
             push(img.url, meta);
           } else {
-            push(`data:${img.mimeType};base64,${img.base64}`);
+            push(`data:${img.mimeType};base64,${img.base64}`, {
+              galleryId,
+              ...(img.originalName ? { name: img.originalName } : {}),
+            });
           }
         }
       } else if (msg.role === 'assistant' && ghostCards) {
@@ -2819,7 +2834,15 @@ function renderItemKeyForClientId(items: readonly RenderItem[], clientId: string
  * 'tool_media' item(工具段外的产物流)与 'ghost_card' item 的回锚媒体
  * (卡正下方)。加新 kind 只需改 extractToolResultMedia + 这里加分支。
  */
-function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId?: string }) {
+function ToolMediaList({
+  items,
+  sessionId,
+  galleryIdPrefix,
+}: {
+  items: ToolMediaItem[];
+  sessionId?: string;
+  galleryIdPrefix?: string;
+}) {
   const mediaKeyCounts = new Map<string, number>();
   return (
     <>
@@ -2835,6 +2858,7 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
               <ChatImageView
                 src={m.url}
                 filename={`tool-image-${i + 1}`}
+                galleryId={galleryIdPrefix ? `${galleryIdPrefix}:image:${i}` : undefined}
                 variant="tool-output"
                 modelFile={m.modelFile}
                 sessionId={sessionId}
@@ -2893,6 +2917,7 @@ function ShareableToolMedia({
   renderItemKey,
   items,
   sessionId,
+  galleryIdPrefix,
   selectionActive,
   replyColumnSpacer,
 }: {
@@ -2900,6 +2925,7 @@ function ShareableToolMedia({
   renderItemKey?: string;
   items: ToolMediaItem[];
   sessionId?: string;
+  galleryIdPrefix?: string;
   selectionActive: boolean;
   replyColumnSpacer?: ReactNode;
 }) {
@@ -2915,9 +2941,9 @@ function ShareableToolMedia({
       {shareable && selectionActive ? <ShareMessageCheckbox clientId={shareId} /> : null}
       {replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, (
         <div className="flex flex-col gap-2">
-          <ToolMediaList items={items} sessionId={sessionId} />
+          <ToolMediaList items={items} sessionId={sessionId} galleryIdPrefix={galleryIdPrefix} />
         </div>
-      )) : <ToolMediaList items={items} sessionId={sessionId} />}
+      )) : <ToolMediaList items={items} sessionId={sessionId} galleryIdPrefix={galleryIdPrefix} />}
     </div>
   );
 }
@@ -4235,6 +4261,20 @@ export function MessageStream({
     () => toRemoteMediaOrigin(sessionFileValue.origin, sessionFileValue.workingDir),
     [sessionFileValue],
   );
+  // 已加载任务历史内全部图片的有序集合。每条消息各持一份会把翻图限制在单条消息里，
+  // 用户逐条发送的图片就只能开一张关一张。打开任一张时固定这份顺序，
+  // 查看器按它翻页；新到的消息不插入已打开的查看器。
+  const sessionImageGallery = useMemo(
+    () =>
+      collectSessionImageSrcs(
+        renderMetadataItems,
+        galleryMediaOrigin,
+        ghostCardSnapshot,
+        isSessionStreaming,
+      ),
+    [renderMetadataItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
+  );
+
   const messageImageCollections = useMemo(
     () =>
       new Map(
@@ -6760,7 +6800,7 @@ export function MessageStream({
                           value={messageAttachmentCollections.get(item.key) ?? null}
                         >
                           <ImageGalleryContext.Provider
-                            value={messageImageCollections.get(item.key) ?? null}
+                            value={sessionImageGallery}
                           >
                             {(() => {
                     if (!messageViewport.shouldMount(viewportEntries[itemIndex])) {
@@ -6931,6 +6971,7 @@ export function MessageStream({
                               shareId={`${item.key}:media`}
                               items={item.media}
                               sessionId={sessionId}
+                              galleryIdPrefix={`ghost-media:${item.key}`}
                               selectionActive={shareSelectionActive}
                             />
                           ) : null}
@@ -6954,6 +6995,7 @@ export function MessageStream({
                           shareId={item.key}
                           items={item.items}
                           sessionId={sessionId}
+                          galleryIdPrefix={`tool:${item.key}`}
                           selectionActive={shareSelectionActive}
                           replyColumnSpacer={botReplyColumnSpacer}
                         />

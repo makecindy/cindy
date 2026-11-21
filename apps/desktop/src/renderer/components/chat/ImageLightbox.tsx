@@ -318,7 +318,36 @@ function isDirectCacheable(src: string): boolean {
 
 /** 左右翻页圆形按钮的内联样式。lightbox overlay 不走 Tailwind,这里同样用内联。 */
 export function ImageLightbox(props: ImageLightboxProps) {
-  const items = useOpeningCollection(props.annotationFallbackSrc ?? props.src);
+  const source = props.annotationFallbackSrc ?? props.src;
+  // 集合身份也在打开时固定:查看期间新到的附件不能让查看器换一种组件。
+  const openingCollection = useOpeningCollection(source);
+  const [collectionItems] = useState(() => openingCollection);
+  const sessionImages = useContext(ImageGalleryContext);
+  // 纯图片消息优先走已加载任务历史的画廊：同一条消息里的附件集合可能只包含其中一张，
+  // 逐条发送的图片更是各成一组；两者都会把翻页限制在局部。
+  // 这个选择在打开时定死：查看期间新到的图片不能让组件从集合查看器切成
+  // 画廊查看器,否则未保存的标注会随卸载丢失。
+  // 只有原集合的每一项都能在历史画廊里找到时，才允许切换到画廊；
+  // 消息里的 PDF、文件型图片（如 SVG 存在 files 里）不在画廊中，切过去会丢失同条附件。
+  const sessionGalleryCoversCollection =
+    openingCollection?.every(
+      (item) =>
+        sessionImages?.some(
+          (image) => image.src === item.source || image.galleryId === item.id,
+        ) ?? false,
+    ) ?? true;
+  const [preferSessionGallery] = useState(
+    () =>
+      props.enableGallery === true &&
+      (sessionImages?.length ?? 0) > 1 &&
+      sessionGalleryCoversCollection &&
+      (sessionImages?.some(
+        (image) =>
+          image.src === source ||
+          (props.galleryId !== undefined && image.galleryId === props.galleryId),
+      ) ?? false),
+  );
+  const items = preferSessionGallery ? null : collectionItems;
   return items ? (
     <AttachmentCollectionPreview
       items={items}
@@ -415,6 +444,11 @@ function ImageLightboxContent({
     !failedAnnotationSources.has(currentItem.annotationSourceUrl)
       ? currentItem.annotationSourceUrl
       : currentItem.src;
+  // 翻页后标题跟随当前图片;第一项仍优先用入口传入的原始文件名。
+  const currentName =
+    index === gallery.start && filename
+      ? filename
+      : (currentItem.name ?? previewSourceName(currentItem.src, t('attachmentPreview.image')));
   const isClosingRef = useRef(false);
   // 右键菜单位置；行为与 LightboxImage 缩略图保持一致。
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -699,6 +733,7 @@ function ImageLightboxContent({
   // 初始笔迹(编辑模式)与初始视口本来就是正确状态,首帧清空会把
   // initialStrokes 抹掉。
   const indexEffectRanRef = useRef(false);
+  const renderedSrcRef = useRef(currentSrc);
   useEffect(() => {
     if (!indexEffectRanRef.current) {
       indexEffectRanRef.current = true;
@@ -715,9 +750,14 @@ function ImageLightboxContent({
     resetDraftStroke();
     setRedoStack([]);
     replaceStrokes([...baselineStrokesRef.current]);
-    setNaturalSize(null);
+    // 同一 URL 的不同条目不会重新触发 <img> 的 onLoad;尺寸只在来源变化时清空,
+    // 否则翻到重复图片后标注/原始尺寸会一直不可用。
+    if (renderedSrcRef.current !== currentSrc) {
+      renderedSrcRef.current = currentSrc;
+      setNaturalSize(null);
+    }
     // biome-ignore lint/correctness/useExhaustiveDependencies: galleryItems 挂载时固定。
-  }, [index, resetViewport]);
+  }, [currentSrc, index, resetViewport]);
 
   // 滚轮 / 触控板。native listener + passive:false 才能 preventDefault,阻止事件穿透
   // 到底下的聊天区,也阻止 Chromium 对 ctrl+wheel 的页面级缩放。路由见
@@ -1022,8 +1062,11 @@ function ImageLightboxContent({
   async function materializeAnnotatedImage(
     outMimeOverride?: 'image/png' | 'image/jpeg',
   ): Promise<{ blob: Blob; mimeType: string }> {
-    const source = await loadImageSourceBase64(currentSrc);
-    return burnInAnnotations(source, strokesRef.current, outMimeOverride);
+    // 读图 IPC 期间用户可能继续翻页或改笔迹;导出必须固定点击那一刻的图与笔迹。
+    const src = currentSrc;
+    const strokes = strokesRef.current.map((stroke) => ({ ...stroke, points: [...stroke.points] }));
+    const source = await loadImageSourceBase64(src);
+    return burnInAnnotations(source, strokes, outMimeOverride);
   }
 
   // 挂载后触发淡入。
@@ -1458,7 +1501,7 @@ function ImageLightboxContent({
       }}
     >
         <PreviewHeader
-          name={filename ?? previewSourceName(currentSrc, t('attachmentPreview.image'))}
+          name={currentName}
           detail={
             currentNaturalSize ? `${currentNaturalSize.w} × ${currentNaturalSize.h}` : undefined
           }
@@ -1841,7 +1884,7 @@ function ImageLightboxContent({
                       key={item.galleryId ?? `${itemIndex}:${item.src}`}
                       onClick={() => setIndex(itemIndex)}
                     >
-                      {itemIndex + 1}. {previewSourceName(item.src, t('attachmentPreview.image'))}
+                      {itemIndex + 1}. {item.name ?? previewSourceName(item.src, t('attachmentPreview.image'))}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
