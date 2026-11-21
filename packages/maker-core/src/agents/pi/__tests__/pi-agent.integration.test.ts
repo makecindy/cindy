@@ -358,6 +358,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-agent-int-'));
     server = createServer((req, res) => {
+      req.setEncoding('utf8');
       let body = '';
       req.on('data', (c) => { body += c; });
       req.on('end', () => {
@@ -2284,6 +2285,273 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     },
   );
+
+  it.each(['Plan:', 'Here is the plan.', 'Plan:\n```\n1. Example action with long title\n```'].flatMap(plan => [{ plan, thinking: false }, { plan, thinking: true }]).concat([{ plan: '1.5.2 is the pinned runtime', thinking: true }]))('8933 does not confirm a bodyless response: %j', { timeout: 60_000 }, async ({ plan, thinking }) => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-empty-plan-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'empty-plan', workingDir, model: 'pi-test-model', planMode: true });
+      const resolver = vi.fn(async () => ({ kind: 'ask_user_question', answers: {} }));
+      handle.setInteractionResolver!(resolver as never);
+      let response = anthropicStreamBody(plan);
+      if (thinking) response = response.replace('"type":"text","text":""', '"type":"thinking","thinking":""')
+        .replace('"type":"text_delta","text":', '"type":"thinking_delta","thinking":');
+      scriptedResponses.push(response);
+      const before = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Prepare the plan.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBe(before + 1), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      expect(resolver).not.toHaveBeenCalled();
+      const state = readFileSync(handle.id, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+        .filter(entry => entry.type === 'custom' && entry.customType === 'plan-mode').at(-1)?.data;
+      expect(state).toMatchObject({ enabled: true, todos: [] });
+      expect(JSON.parse(seenRequests[before]!.body).tools.some((tool: { name: string }) => tool.name === 'write')).toBe(false);
+    } finally {
+      scriptedResponses.length = 0;
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  it('8933 restores plan-only tools after ignoring an interrupted JSONL tail', { timeout: 60_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-partial-plan-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'partial-plan', workingDir, model: 'pi-test-model' });
+      await handle.send({ type: 'user', content: 'Seed the session.' });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      const nativeId = handle.id;
+      await handle.close();
+      writeFileSync(nativeId, readFileSync(nativeId, 'utf8')
+        + '\n{"type":"custom","customType":"plan-mode","data":{"enabled":true,"todos":[{"text":"interrupted');
+      expect(await sessionJsonlScan.scanPiSessionJsonl(nativeId)).toBeNull();
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'partial-plan-resume', workingDir, model: 'pi-test-model', resumeSessionId: nativeId, planMode: true });
+      const before = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Inspect only; do not implement.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBe(before + 1), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      const tools = JSON.parse(seenRequests[before]!.body).tools.map((tool: { name: string }) => tool.name);
+      expect(tools).not.toContain('write');
+      expect(tools).not.toContain('edit');
+    } finally {
+      scriptedResponses.length = 0;
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['mixed', 'Plan:\n1. **读取项目文件**\n2. **实现交互**\n3. **验证**\n4. **交付**\n5. **检查移动端布局**',
+      ['读取项目文件', '实现交互', '验证', '交付', '检查移动端布局']],
+    ['all-short', 'Plan:\n1. **验证**\n2. **交付**', ['验证', '交付']],
+    ['long-control', 'Plan:\n1. Read all project files carefully.\n2. Verify the complete implementation.',
+      ['Read all project files carefully.', 'Verify the complete implementation.']],
+    ['unnumbered', '先验证，再交付。', ['先验证，再交付。']],
+    ['duplicate', 'Plan:\n1. 实现\n1. 验证', ['Plan:\n1. 实现\n1. 验证']],
+    ['thinking-only', 'Plan:\n1. **验证**\n2. **交付**', ['验证', '交付']],
+    ['thinking-visible', 'Plan:\n1. **验证**\n2. **交付**', ['验证', '交付']],
+    ['thinking-headerless', '1. 验证\n2. 交付', ['验证', '交付']],
+    ['thinking-separated', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-detail-paragraph', '1. 验证\n\nDetails...\n\n2. 交付', ['验证', '交付']],
+    ['thinking-duplicate', '1. 验证\n\n1. 交付', ['1. 验证\n\n1. 交付']],
+    ['thinking-repeated-ones', '1. 实现\n\n1. 验证\n\n1. 交付\n\n1. 审查', ['1. 实现\n\n1. 验证\n\n1. 交付\n\n1. 审查']],
+    ['thinking-unsafe-prefix', '0. 保留\n1. 验证\n\n1. 交付\n2. 审查', ['0. 保留\n1. 验证\n\n1. 交付\n2. 审查']],
+    ['thinking-empty-prefix', '1. [ ]\n2. 验证\n\n1. 交付\n2. 审查', ['1. [ ]\n2. 验证\n\n1. 交付\n2. 审查']],
+    ['thinking-phases', 'Implementation:\n1. 实现\n2. 交付\n\nVerification:\n1. 验证\n2. 审查', ['Implementation:\n1. 实现\n2. 交付\n\nVerification:\n1. 验证\n2. 审查']],
+    ['thinking-markdown-phases', '## Build\n1. 实现\n2. 交付\n\n## Review\n1. 验证\n2. 审查', ['## Build\n1. 实现\n2. 交付\n\n## Review\n1. 验证\n2. 审查']],
+    ['thinking-indented-phases', '  ## Build\n1. 实现\n2. 交付\n\n  ## Review\n1. 验证\n2. 审查', ['  ## Build\n1. 实现\n2. 交付\n\n  ## Review\n1. 验证\n2. 审查']],
+    ['thinking-empty-heading', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-heading-intro', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-visible-whole', 'Plan:\n1. Investigate alternatives', ['1. 实现\n1. 验证']],
+    ['thinking-visible-prose', 'Plan:\n1. Investigate alternatives', ['先验证，再交付。']],
+    ['thinking-final-lists', 'Options:\n1. A\n2. B\n\nFinal steps:\n1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-final-headerless', 'Options:\n1. A\n2. B\n\n1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-analysis-final', 'Analysis:\n1. A\n2. B\n\n1. 验证\n2. 交付', ['验证', '交付']],
+    ['thinking-options-phase', 'Options:\n1. A\n2. B\n\nImplementation:\n1. 验证\n2. 交付', ['验证', '交付']],
+    ['thinking-bold-options', '## **Options**\n1. A\n2. B\n\n1. 验证\n2. 交付', ['验证', '交付']],
+    ['thinking-single-option', 'Options:\n1. A\n\n1. 验证\n2. 交付', ['验证', '交付']],
+  ])('8933 preserves and confirms the native %s plan', { timeout: 60_000 }, async (_name, plan, titles) => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-short-plan-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({
+        sessionId: 'short-plan', workingDir, model: 'pi-test-model', planMode: true,
+      });
+      const resolver = vi.fn(async (request: { questions: Array<{ question: string }> }) => ({
+        kind: 'ask_user_question', answers: { [request.questions[0]!.question]: 'Stay in plan mode' },
+      }));
+      handle.setInteractionResolver!(resolver as never);
+      let response = anthropicStreamBody(plan as string);
+      if (String(_name).startsWith('thinking')) {
+        response = response.replace('"type":"text","text":""', '"type":"thinking","thinking":""')
+          .replace('"type":"text_delta","text":', '"type":"thinking_delta","thinking":');
+        if (['thinking-visible', 'thinking-empty-heading', 'thinking-heading-intro', 'thinking-visible-whole', 'thinking-visible-prose'].includes(String(_name))) response = response.replace('event: message_delta', sse([
+          { event: 'content_block_start', data: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } } },
+          { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: _name === 'thinking-empty-heading' ? 'Plan:' : _name === 'thinking-heading-intro' ? 'Plan:\nHere is the plan.' : _name === 'thinking-visible-whole' ? '1. 实现\n1. 验证' : _name === 'thinking-visible-prose' ? '先验证，再交付。' : 'Here is the plan.' } } },
+          { event: 'content_block_stop', data: { type: 'content_block_stop', index: 1 } },
+        ]) + 'event: message_delta');
+      }
+      scriptedResponses.push(response);
+      const before = seenRequests.length;
+      const events: AgentEvent[] = [];
+      const done = (async () => {
+        for await (const event of handle!.events()) {
+          events.push(event);
+          if (event.type === 'done') break;
+        }
+      })();
+      await handle.send({ type: 'user', content: 'Prepare the plan without implementing it.' });
+      await done;
+      expect(events.filter(event => event.type === 'error')).toEqual([]);
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(seenRequests).toHaveLength(before + 1);
+      const entries = readFileSync(handle.id, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const state = entries.filter(entry => entry.type === 'custom' && entry.customType === 'plan-mode').at(-1)?.data;
+      expect(state.todos).toEqual((titles as string[]).map((text, i) => ({ step: i + 1, text, completed: false })));
+      expect(state).toMatchObject({ enabled: true, executing: false });
+      const request = JSON.parse(seenRequests[before]!.body);
+      expect(request.tools.map((tool: { name: string }) => tool.name)).not.toContain('write');
+    } finally {
+      scriptedResponses.length = 0;
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true, 'empty-heading'])('8933 preserves sparse ids and full details through execution, progress and resume (headerless thinking=%s)', { timeout: 60_000 }, async thinking => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-ids-'));
+    let handle: AgentSessionHandle | undefined;
+    const plan = (thinking ? '' : 'Plan:\n') + '2. **实现**\n\nImplementation details.\n5. **验证**\n9. **交付**\n\nKeep this full acceptance detail exactly.';
+    const latestState = () => readFileSync(handle!.id, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+      .filter(entry => entry.type === 'custom' && entry.customType === 'plan-mode').at(-1)?.data;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({
+        sessionId: 'sparse-plan', workingDir, model: 'pi-test-model', planMode: true,
+      });
+      const resolver = vi.fn(async (request: { questions: Array<{ question: string }> }) => ({
+        kind: 'ask_user_question', answers: { [request.questions[0]!.question]: 'Execute the plan (track progress)' },
+      }));
+      handle.setInteractionResolver!(resolver as never);
+      let response = anthropicStreamBody(plan);
+      if (thinking) response = response.replace('"type":"text","text":""', '"type":"thinking","thinking":""')
+        .replace('"type":"text_delta","text":', '"type":"thinking_delta","thinking":');
+      if (thinking === 'empty-heading') response = response.replace('event: message_delta', sse([
+        { event: 'content_block_start', data: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } } },
+        { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '计划：' } } },
+        { event: 'content_block_stop', data: { type: 'content_block_stop', index: 1 } },
+      ]) + 'event: message_delta');
+      scriptedResponses.push(response, anthropicStreamBody('Verified. [DONE:5]'));
+      const before = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Prepare the plan.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBe(before + 2), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(seenRequests[before + 1]!.body).toContain(jsonStringContent(plan));
+      expect(latestState().todos).toEqual([
+        { step: 2, text: '实现', completed: false }, { step: 5, text: '验证', completed: true },
+        { step: 9, text: '交付', completed: false },
+      ]);
+      const nativeId = handle.id;
+      await handle.close();
+      handle = await new PiAgent(buildDeps()).startSession({
+        sessionId: 'sparse-plan-resume', workingDir, model: 'pi-test-model', resumeSessionId: nativeId,
+      });
+      scriptedResponses.push(anthropicStreamBody('Implemented. [DONE:2]'));
+      const next = seenRequests.length;
+      const done = (async () => { for await (const event of handle!.events()) if (event.type === 'done') break; })();
+      await handle.send({ type: 'user', content: 'Continue the remaining plan.' });
+      await done;
+      expect(seenRequests[next]!.body).toContain(jsonStringContent('Remaining steps:\n2. 实现\n9. 交付'));
+      expect(latestState().todos.map((todo: { step: number; completed: boolean }) => [todo.step, todo.completed]))
+        .toEqual([[2, true], [5, true], [9, false]]);
+      expect(JSON.parse(seenRequests[next]!.body).tools.map((tool: { name: string }) => tool.name)).toContain('write');
+    } finally {
+      scriptedResponses.length = 0;
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['cancel', 'refine'] as const)('8933 keeps native %s read-only for an unnumbered plan', { timeout: 60_000 }, async action => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-cancel-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({
+        sessionId: 'unparsed-plan-action', workingDir, model: 'pi-test-model', planMode: true,
+      });
+      const resolver = vi.fn(async (request: { questions: Array<{ question: string }> }) => ({
+        kind: 'ask_user_question', answers: action === 'cancel' ? {} : {
+          [request.questions[0]!.question]: request.questions[0]!.question === 'Refine the plan:'
+            ? 'Preserve the additional acceptance condition.'
+            : 'Refine the plan',
+        },
+      }));
+      handle.setInteractionResolver!(resolver as never);
+      scriptedResponses.push(anthropicStreamBody('先验证，再交付。'));
+      // The refinement's next turn is ordinary native followUp behavior. End its
+      // confirmation explicitly instead of creating an unbounded refine loop.
+      if (action === 'refine') resolver.mockImplementationOnce(async request => ({
+        kind: 'ask_user_question', answers: { [request.questions[0]!.question]: 'Refine the plan' },
+      })).mockImplementationOnce(async request => ({
+        kind: 'ask_user_question', answers: { [request.questions[0]!.question]: 'Preserve the additional acceptance condition.' },
+      })).mockImplementation(async () => ({ kind: 'ask_user_question', answers: {} }));
+      const before = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Prepare the plan.' });
+      await vi.waitFor(() => expect(resolver).toHaveBeenCalled(), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      const requests = seenRequests.slice(before);
+      expect(requests).toHaveLength(action === 'refine' ? 2 : 1);
+      expect(requests.every(request => !JSON.parse(request.body).tools.some((tool: { name: string }) => tool.name === 'write'))).toBe(true);
+      if (action === 'refine') expect(requests[1]!.body).toContain('Preserve the additional acceptance condition.');
+    } finally {
+      scriptedResponses.length = 0;
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  it('8933 keeps ordinary tools after approving a large unnumbered plan', { timeout: 60_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-full-plan-'));
+    let handle: AgentSessionHandle | undefined;
+    const plan = '完整验收条件：' + '保留全文并验证后交付。'.repeat(7000);
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({
+        sessionId: 'large-unparsed-plan', workingDir, model: 'pi-test-model', planMode: true,
+      });
+      handle.setInteractionResolver!(async request => request.kind === 'ask_user_question'
+        ? { kind: 'ask_user_question', answers: { [request.questions[0]!.question]: 'Execute the plan (track progress)' } }
+        : { kind: 'permission', behavior: 'deny' });
+      scriptedResponses.push(anthropicStreamBody(plan), anthropicStreamBody('Completed the whole plan. [DONE:1]'));
+      const before = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Prepare the complete plan.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBe(before + 2), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      expect(seenRequests[before + 1]!.body).toContain(jsonStringContent(plan));
+      expect(seenRequests[before + 1]!.body.includes('[DONE:1]')).toBe(true);
+      expect(handle.getExecutionPlanMode!()).toBe(false);
+      const next = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Continue normally.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBe(next + 1), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      expect(seenRequests).toHaveLength(next + 1);
+      expect(JSON.parse(seenRequests[next]!.body).tools.map((tool: { name: string }) => tool.name)).toContain('write');
+      expect(seenRequests[next]!.body).not.toContain('Remaining steps:');
+      const nativeId = handle.id;
+      await handle.close();
+      handle = await new PiAgent(buildDeps()).startSession({
+        sessionId: 'large-unparsed-plan-resume', workingDir, model: 'pi-test-model', resumeSessionId: nativeId,
+      });
+      const resumed = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Continue after resuming.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBe(resumed + 1), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      expect(seenRequests[resumed]!.body).not.toContain('Remaining steps:');
+    } finally {
+      scriptedResponses.length = 0;
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   it('re-syncs native plan execution before the next ordinary message', { timeout: 60_000 }, async () => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-execute-'));

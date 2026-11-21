@@ -38,6 +38,7 @@ import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
 import { readPiGlobalContext } from './global-context.js';
 import { findPiCloudContextFile, piCloudContextDisplayPath } from './startup-context-diagnostic.js';
 import { scanPiSessionJsonl } from './session-jsonl-scan.js';
+import { buildPiPlanModeExtensionSource, CINDY_PLAN_MODE_EXTENSION_FILENAME } from './plan-mode-source.js';
 
 /**
  * 轮 40-w4-t5 CRITICAL:远端 agentHome 是 POSIX 路径($HOME/... 或展开后的
@@ -4036,6 +4037,12 @@ export class PiAgent extends BaseAgent {
       /* 缺失 → 不挂载 plan-mode */
     }
 
+    // Wrap the version-matched native extension without editing its installation.
+    const planModeSource = !reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable
+      ? buildPiPlanModeExtensionSource(planModeExtPath) : '';
+    const planModeAdapterPath = joinRemotePosixPath(extensionsDir, CINDY_PLAN_MODE_EXTENSION_FILENAME);
+    if (planModeSource) await writeFile(planModeAdapterPath, planModeSource);
+
     // Project resources have exactly one authority: the host-owned PR3 trust
     // snapshot. Freeze it once per new runtime, then assemble only its eligible
     // skills. Missing/throwing authorities and paths fail closed; never infer
@@ -4270,7 +4277,7 @@ export class PiAgent extends BaseAgent {
         '--extension',
         bridgeExtensionPath,
         ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
-        ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+        ...(planModeSource ? ['--extension', planModeAdapterPath] : []),
         ...(loadProjectResourcesInPlace ? projectResourceArgs : []),
       ];
       args = buildArgs(loadProjectResourcesInPlace ? piProjectResourceCliArgs(projectResourceCli) : []);
@@ -5910,6 +5917,7 @@ export class PiAgent extends BaseAgent {
           .update(CINDY_BRIDGE_EXTENSION_SOURCE)
           .update('\n')
           .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
+          .update(planModeSource ? '\n' + planModeSource : '')
           .digest('hex')
           .slice(0, 16);
         // 追加提示词本体在文件里，命令行不再带它；指纹进 env 才让提示词变化

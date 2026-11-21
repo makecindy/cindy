@@ -19,6 +19,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 import { CINDY_BRIDGE_EXTENSION_SOURCE } from "../cindy-bridge-source.js";
 import { CINDY_SUBAGENT_EXTENSION_SOURCE } from "../cindy-subagent-source.js";
+import { buildPiPlanModeExtensionSource } from '../plan-mode-source.js';
 import { piCacheRouteKey } from '../cache-compatibility.js';
 import * as piSubagentRuns from '../pi-subagent-runs.js';
 
@@ -8733,6 +8734,7 @@ describe("Pi provider-aware model routing", () => {
       .update(CINDY_BRIDGE_EXTENSION_SOURCE)
       .update("\n")
       .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
+      .update('\n' + buildPiPlanModeExtensionSource('/remote/examples/extensions/plan-mode/index.ts'))
       .digest("hex")
       .slice(0, 16);
     expect(capturedRemoteEnvs).toHaveLength(2);
