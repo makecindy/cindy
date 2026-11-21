@@ -1000,9 +1000,17 @@ export class Scheduler extends EventEmitter {
                 dispatchReadTimeout = err;
                 void readPromise.then(
                   (value) => {
-                    if (value && this.automaticDispatchSchedules.get(runId) === previous) {
-                      this.automaticDispatchSchedules.set(runId, value);
-                    }
+                    if (!value) return;
+                    if (this.automaticDispatchSchedules.get(runId) !== previous) return;
+                    // 单飞复用在途读时,它可能发端于本地快照前进之前:读发起后用户
+                    // 改短了截止时间,update() 已把守卫换成新版(updatedAt 更晚),
+                    // 而这一次读要回来的是改期前那一行(更长的 expireAt)。旧回包
+                    // 会通过身份 guard 把派发快照退回长截止时间,canDispatch 因而
+                    // 在用户新截止时间之后仍放行(Codex P2 on #11577)。判据只比
+                    // 版本,不带 expireAt:这里要收到的本就是「别处改过之后的那
+                    // 一行」,拿 expireAt 判旧会把合法的新版一起拒掉。
+                    if (this.isSupersededSnapshot(value)) return;
+                    this.automaticDispatchSchedules.set(runId, value);
                   },
                   () => undefined,
                 );
@@ -1014,8 +1022,11 @@ export class Scheduler extends EventEmitter {
           }
           if (this.tickHandle !== tickHandle) return;
           // An awaited read must not overwrite a newer local edit or reinsert
-          // a dispatch guard whose attempt has already finished.
+          // a dispatch guard whose attempt has already finished. 同理,等回来的
+          // 这一版也不能比本地快照更旧(见上面迟到收口的版本判据):单飞复用的
+          // 在途读发端于用户改期之前时,回包里是改期前那一行。
           if (current && this.automaticDispatchSchedules.get(runId) === previous) {
+            if (this.isSupersededSnapshot(current)) continue;
             this.automaticDispatchSchedules.set(runId, current);
           }
         }
@@ -1212,8 +1223,7 @@ export class Scheduler extends EventEmitter {
         // isStaleExpireResult 的 expireAt 那一项 —— CAS 败者回读回来的正是「别的
         // 实例改过之后的那一行」,expireAt 天然与缓存不同,拿它判旧会把合法的新版
         // 一起拒掉(见 getExpiryFallbackRead)。
-        const cached = this.currentScheduleSnapshot(current.id);
-        if (cached && current.updatedAt < cached.updatedAt) return true;
+        if (this.isSupersededSnapshot(current)) return true;
         this.refreshAutomaticDispatchSchedules(current);
         if (current.status === 'active') this.activeSchedules.set(current.id, current);
         else this.activeSchedules.delete(schedule.id);
@@ -1285,8 +1295,7 @@ export class Scheduler extends EventEmitter {
             // 这次回读要拿到的正是「别的实例改过之后的那一行」,它的 expireAt 天然
             // 与缓存不同,拿 expireAt 判旧会把合法的新版一起拒掉,回读就白做了
             // (见 reconciles the expiry cache … 一例)。
-            const cached = this.currentScheduleSnapshot(current.id);
-            if (cached && current.updatedAt < cached.updatedAt) return;
+            if (this.isSupersededSnapshot(current)) return;
             this.refreshAutomaticDispatchSchedules(current);
             if (current.status === 'active') this.activeSchedules.set(current.id, current);
             else this.activeSchedules.delete(current.id);
@@ -1365,6 +1374,23 @@ export class Scheduler extends EventEmitter {
       if (!newest || snapshot.updatedAt > newest.updatedAt) newest = snapshot;
     }
     return newest;
+  }
+
+  /**
+   * 存储回来的这一版是不是已经被本地更新的一版取代(只比版本 updatedAt)。
+   *
+   * 所有「等存储期间本地可能已经前进」的收口共用这一把尺子:过期写入在预算内
+   * 回来、迟到的 UPDATE / CAS 败者回读、派发守卫的 fallback 回读。回读发起的
+   * 时刻可能早于用户后来的改期,回包里带的仍是改期前那一行 —— 拿它盖掉缓存或
+   * 派发守卫,就把已作废的截止时间重新放了出来。
+   *
+   * 判据**不能**带上 expireAt 那一项(见 isStaleExpireResult 为什么不用于回读):
+   * CAS 败者回读要拿到的正是「别的实例改过之后的那一行」,它的 expireAt 天然与
+   * 缓存不同,拿 expireAt 判旧会把合法的新版一起拒掉,回读就白做了。
+   */
+  private isSupersededSnapshot(current: Schedule): boolean {
+    const cached = this.currentScheduleSnapshot(current.id);
+    return Boolean(cached && current.updatedAt < cached.updatedAt);
   }
 
   /**
