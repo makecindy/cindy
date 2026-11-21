@@ -1018,6 +1018,9 @@ importers:
       '@cindy/agent-net-protocol':
         specifier: workspace:*
         version: link:../agent-net-protocol
+      '@cindy/device-link-relay':
+        specifier: workspace:*
+        version: link:../device-link-relay
       '@cindy/device-link-sharing':
         specifier: workspace:*
         version: link:../device-link-sharing

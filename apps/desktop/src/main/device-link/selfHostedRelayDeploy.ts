@@ -18,6 +18,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 import { RELAY_VERSION } from '@cindy/device-link-relay';
+import { configureTurn, ETURNAL_SHA256, stageTurnRuntime, stopTurn } from './selfHostedRelayTurnDeploy.js';
 import type { Bootstrap } from '@cindy/agent-net-relay';
 import { createLogger } from '../logger.js';
 import { ensureRemoteHostReady, getRemoteSshPool } from '../remote-ssh/index.js';
@@ -246,6 +247,7 @@ const INSPECT_SCRIPT = `
 NODE=${INSTALL_DIR}/node/bin/node
 STATE=${DATA_DIR}/relay-state.json
 if [ -f /etc/cindy-relay/nginx/state.json ]; then echo "NGINX_MANAGED yes"; fi
+if [ -f /etc/systemd/system/cindy-relay-turn.service ]; then echo "TURN_MANAGED yes"; fi
 if [ -x "$NODE" ]; then echo "NODE $("$NODE" --version 2>/dev/null)"; fi
 if [ -f "$STATE" ]; then
   if [ -x "$NODE" ]; then
@@ -336,6 +338,7 @@ echo "SHA $(sha256sum ${INSTALL_DIR}/relay.new.mjs | cut -d' ' -f1)"
 const CONFIGURE_SCRIPT = `
 set -e
 ADDRESS="$1"; LISTEN="$2"; ACME_LISTEN="$2"; PUBLIC_URL="$3"; REPLACE="$4"; ACME_DIRECTORY="$5"; MODE="$6"; PORT="$7"; CHALLENGE_PORT="$8"; AGENT_NET="$9"; shift 9
+TURN_STAGED="$1"; shift
 if [ "$AGENT_NET" = 1 ] && [ "$MODE" = direct ]; then MODE=ingress; LISTEN=127.0.0.1; PORT=47820; fi
 NODE=${INSTALL_DIR}/node/bin/node
 if ! id cindy-relay >/dev/null 2>&1; then
@@ -343,7 +346,13 @@ if ! id cindy-relay >/dev/null 2>&1; then
     || useradd -r -d ${DATA_DIR} -s /sbin/nologin cindy-relay
 fi
 systemctl stop cindy-relay >/dev/null 2>&1 || true
-if [ "$REPLACE" = 1 ]; then rm -rf ${DATA_DIR}; fi
+if [ "$REPLACE" = 1 ]; then
+  rm -f ${INSTALL_DIR}/paired-turn.ready
+  if [ -f /etc/systemd/system/cindy-relay-turn.service ]; then
+    ${stopTurn}
+  fi
+  rm -rf ${DATA_DIR}
+fi
 install -d -m 700 -o cindy-relay -g cindy-relay ${DATA_DIR}
 mv -f ${INSTALL_DIR}/relay.new.mjs ${INSTALL_DIR}/relay.mjs
 if [ ! -f ${DATA_DIR}/relay-state.json ]; then
@@ -353,7 +362,8 @@ fi
 chown -R cindy-relay:cindy-relay ${DATA_DIR}
 rm -f ${DATA_DIR}/status.json
 EXTRA=""
-if [ "$MODE" = ingress ]; then EXTRA=" --tls-at-ingress"; fi
+if [ "$TURN_STAGED" = 1 ]; then EXTRA=" --paired-turn $MODE"; fi
+if [ "$MODE" = ingress ]; then EXTRA="$EXTRA --tls-at-ingress"; fi
 CAPS=""
 if [ "$MODE" != nginx-existing ]; then
   EXTRA="$EXTRA --acme-identifier $ADDRESS --acme-http-host $ACME_LISTEN --acme-http-port $CHALLENGE_PORT"
@@ -458,6 +468,7 @@ if [ -n "$3" ]; then AUTH=" --auth-issuer $3 --auth-region $4"; fi
 if [ -n "$5" ]; then AUTH="$AUTH --auth-peer-issuer $5 --auth-peer-region $6"; fi
 if [ "$1" = 1 ]; then
   GATEWAY=" --legacy-upstream http://127.0.0.1:47820 --tls-material ${DATA_DIR}/tls/material.json --gateway-host $2 --gateway-port 443"
+  if [ "$7" = 1 ]; then GATEWAY="$GATEWAY --paired-turn"; fi
   CAPS=CAP_NET_BIND_SERVICE
 fi
 umask 077
@@ -535,6 +546,7 @@ if [ -f /etc/cindy-relay/nginx/state.json ]; then
   rm -f /etc/systemd/system/cindy-relay-nginx.timer /etc/systemd/system/cindy-relay-nginx.service
 fi
 systemctl disable --now cindy-relay >/dev/null 2>&1 || true
+${stopTurn}
 systemctl disable --now cindy-agent-net >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/cindy-agent-net.service
 rm -f /etc/systemd/system/cindy-relay.service /etc/systemd/system/cindy-relay.service.new
@@ -788,6 +800,17 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
   }
 
   params.onStep('upload');
+  // An existing Nginx owns TLS, so it keeps its current HTTP/WSS deployment.
+  // Never open another public port. Other deployments stage optional media
+  // before stopping the existing relay; failure leaves the HTTPS upgrade usable.
+  const stagedTurn = useNginx ? null : await remote.root(stageTurnRuntime, [arch, ETURNAL_SHA256[arch]], {
+    timeoutMs: 60_000, label: 'relay-deploy-turn-runtime',
+  }).catch((error: unknown) => {
+    params.assertCurrent?.();
+    if (error instanceof Error && error.message === 'relay-deploy-turn-runtime timed out after 60000ms') return null;
+    throw error;
+  });
+  const hasTurn = stagedTurn?.exitCode === 0 && parseLines(stagedTurn.stdout).has('TURN_STAGED');
   const uploaded = expectOk(
     await remote.root(UPLOAD_SCRIPT, [], {
       input: bundle,
@@ -856,6 +879,7 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
         String(port),
         String(challengePort),
         agentNetBundle ? '1' : '0',
+        hasTurn ? '1' : '0',
         ...initArgs,
       ],
       { timeoutMs: 180_000, label: 'relay-deploy-configure' },
@@ -878,7 +902,7 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
       const bootstrap = params.agentNetBootstrap();
       if (bootstrap.networkId !== 'private:' + init.relayId || bootstrap.rootPublicKey !== init.ownerPublicKey) throw new RelayDeployError('RELAY_MISMATCH');
       expectOk(await remote.root(AGENT_NET_CONFIGURE_SCRIPT, [useNginx ? '0' : '1', ipv6 ? '::' : '0.0.0.0', authIssuer,
-        authRegion, peerIssuer, params.agentNetAuthPeer?.region ?? ''], {
+        authRegion, peerIssuer, params.agentNetAuthPeer?.region ?? '', hasTurn ? '1' : '0'], {
         input: Buffer.from(JSON.stringify(bootstrap)), timeoutMs: 120_000, label: 'relay-deploy-agent-net-configure',
       }), 'AGENT_NET_START_FAILED');
     }
@@ -891,7 +915,23 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
       try { await params.verifyAgentNet(params.baseUrl); }
       catch { throw new RelayDeployError('AGENT_NET_VERIFY_FAILED'); }
     }
-    if (useNginx) await nginxAction(remote, 'commit');
+    if (useNginx) { await nginxAction(remote, 'commit'); nginxPrepared = false; }
+    // HTTPS, authenticated WSS routing and any Nginx transaction are now
+    // committed. Optional TURN provisioning never extends their restart window.
+    if (hasTurn) {
+      const media = await remote.root(configureTurn, [params.replaceExisting ? '1' : '0', init.relayId], {
+        timeoutMs: 60_000, label: 'relay-deploy-turn-configure',
+      }).catch((error: unknown) => {
+        params.assertCurrent?.();
+        if (error instanceof Error && error.message === 'relay-deploy-turn-configure timed out after 60000ms') return null;
+        throw error;
+      });
+      if (media?.exitCode !== 0) {
+        expectOk(await remote.root(stopTurn, [], { label: 'relay-deploy-turn-disable' }), 'DEPLOY_FAILED');
+      }
+    } else if (first(inspected, 'TURN_MANAGED') === 'yes') {
+      expectOk(await remote.root(stopTurn, [], { label: 'relay-deploy-turn-disable' }), 'DEPLOY_FAILED');
+    }
     return { relayVersion: RELAY_VERSION };
   } catch (error) {
     if (nginxPrepared) {

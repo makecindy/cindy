@@ -21,7 +21,11 @@ import { identifierFor } from './csr';
 import { RelayError } from './errors';
 import type { RelayLogger } from './logger';
 import { readTlsFiles, startRelayServer } from './server';
-import { initializeRelay } from './store';
+import { initializeRelay, RelayStore } from './store';
+import { checkPairedTurn, pairedTurnConfig } from './turn';
+import { networkInterfaces } from 'node:os';
+import { writeFileSync } from 'node:fs';
+import { readFile, readlink } from 'node:fs/promises';
 import { RELAY_VERSION } from './version';
 import { manageNginx } from './nginx';
 import { lookup } from 'node:dns/promises';
@@ -183,6 +187,14 @@ async function main(): Promise<void> {
     const port = parsePort(flags.get('port'), 47820, 'port');
     const dataDir = required(flags, 'data');
     const host = flags.get('host') ?? '127.0.0.1';
+    const turn = flags.get('paired-turn');
+    let turnUrl: string | undefined;
+    if (turn) {
+      if (!['direct', 'ingress'].includes(turn)) throw new RelayError('BAD_REQUEST', 'invalid paired TURN mode');
+      const published = new URL(required(flags, 'public-url'));
+      if (published.protocol !== 'https:' || published.username || published.password) throw new RelayError('BAD_REQUEST', 'invalid public TURN address');
+      turnUrl = `turns:${published.hostname}:${published.port || 443}?transport=tcp`;
+    }
     const acme = flags.has('acme-identifier') ? await prepareAcme(flags, dataDir) : null;
     let material = acme?.material ?? null;
     const handle = await startRelayServer({
@@ -191,6 +203,12 @@ async function main(): Promise<void> {
       port,
       tls: material && !flags.has('tls-at-ingress') ? { cert: material.cert, key: material.key } : certPath && keyPath ? await readTlsFiles(certPath, keyPath) : undefined,
       publicUrl: flags.get('public-url'),
+      turnUrl,
+      turnReady: turn ? async id => {
+        try { return (await readFile('/opt/cindy-relay/paired-turn.ready', 'utf8')).trim() === id; }
+        catch { return false; }
+      } : undefined,
+      turnSocket: turn === 'direct' ? '/run/cindy-relay-turn.sock' : undefined,
       trustProxyHeaders: flags.has('trust-proxy'),
       logger: stderrLogger,
       certificateExpiresAt: () => (material ? new Date(material.notAfter).toISOString() : null),
@@ -221,6 +239,25 @@ async function main(): Promise<void> {
     };
     process.once('SIGINT', shutdown);
     process.once('SIGTERM', shutdown);
+    return;
+  }
+  if (command === 'turn-check-network') {
+    const host = (await readFile('/run/cindy-relay-turn-ingress/host.netns', 'utf8')).trim();
+    const current = await readlink('/proc/self/ns/net');
+    if (!host || current === host || Object.keys(networkInterfaces()).some(name => name !== 'lo')) {
+      throw new Error('TURN_PRIVATE_NETWORK_REQUIRED');
+    }
+    return;
+  }
+  if (command === 'turn-config') {
+    // The installer opens a root-only output file before dropping to the relay
+    // identity. Keep the derived configuration out of the SSH output and logs.
+    const store = await RelayStore.open(required(flags, 'data'), () => {});
+    writeFileSync(3, pairedTurnConfig(store.mediaSigningKey));
+    return;
+  }
+  if (command === 'turn-check') {
+    await checkPairedTurn('/run/cindy-relay-turn.sock');
     return;
   }
   throw new RelayError('BAD_REQUEST', 'usage: relay <init|serve> [options] | relay --version');

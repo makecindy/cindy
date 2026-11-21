@@ -30,6 +30,7 @@ import {
   fetchRelayInfo,
   issueRelayDeviceCert,
   parseRelayJoinLink,
+  parseDesktopIceConfig,
   RelayJoinError,
   submitRelayPairRequest,
   waitForRelayApproval,
@@ -65,7 +66,8 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setup(options: { publicUrl?: string; trustProxyHeaders?: boolean; agentNet?: boolean } = {}): Promise<Harness> {
+async function setup(options: { publicUrl?: string; trustProxyHeaders?: boolean; agentNet?: boolean;
+  turnUrl?: string; turnReady?: (relayId: string) => Promise<boolean> } = {}): Promise<Harness> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'cindy-relay-test-'));
   const owner = createDeviceCredential();
   const ownerKey = createRelaySigningKey(crypto);
@@ -244,6 +246,27 @@ function rawRequest(port: number, upgrade = false): Promise<string> {
 }
 
 describe('device-link relay wire contract', () => {
+  // V1 media used to return 404 even for an authenticated owner. Exercise the
+  // real HTTP route and client parser, including readiness and device removal.
+  // Unit, same disposable relay fixture as the other wire-contract tests.
+  it('issues scoped ICE tickets to paired devices only after media is ready', async () => {
+    let ready = false;
+    const endpoint = 'turns:relay.example.test:443?transport=tcp';
+    const h = await setup({ turnUrl: endpoint, turnReady: async () => ready });
+    const get = (credential?: string) => api(h.base, 'GET', '/api/device-link/ice-servers', { credential });
+    expect((await get(h.ownerCredential)).status).toBe(404);
+    ready = true;
+    expect((await get()).status).toBe(401);
+    const member = await pair(h, 'media-viewer');
+    const owner = await get(h.ownerCredential), viewer = await get(member);
+    const entries = parseDesktopIceConfig(viewer.json, h.clock.now);
+    expect(entries[0].urls).toContain(endpoint);
+    expect(entries[0].urls.some(url => url.startsWith('stun:'))).toBe(true);
+    expect(entries[0].credential).not.toBe(owner.json.iceServers[0].credential);
+    expect((await get(member)).json).toEqual(viewer.json);
+    await api(h.base, 'DELETE', '/api/device-link/devices/media-viewer', { credential: h.ownerCredential });
+    expect((await get(member)).status).toBe(401);
+  });
   // 上传开始时签名 URL 被消费,但流仍持有声明大小的配额;过期也不能让并发上传绕过总量。
   // 生产 MediaStore 入口 + 真实文件/流,仅响应对象为桩,无网络与真实等待。tier: unit。
   it('keeps in-flight uploads in the storage quota until completion or failure', async () => {
