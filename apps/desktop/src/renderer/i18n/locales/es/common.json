@@ -17768,6 +17768,7 @@
       "openWorkdirFailed": "No se pudo abrir la carpeta"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
       "status": {
         "running": "En ejecución",
         "success": "Éxito",

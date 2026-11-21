@@ -17528,6 +17528,7 @@
       "openWorkdirFailed": "打开文件夹失败"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "排队等待超时，提示词未发送。目标任务空闲后可点击「{{action}}」补跑。",
       "status": {
         "running": "运行中",
         "success": "成功",

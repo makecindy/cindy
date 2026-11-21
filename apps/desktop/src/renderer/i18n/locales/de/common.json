@@ -17602,6 +17602,7 @@
       "openWorkdirFailed": "Ordner konnte nicht geöffnet werden"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "Die Wartezeit ist abgelaufen, bevor die Eingabe gesendet wurde. Sobald die Zielsitzung frei ist, wähle {{action}}, um sie auszuführen.",
       "status": {
         "running": "Wird ausgeführt",
         "success": "Erfolgreich",
