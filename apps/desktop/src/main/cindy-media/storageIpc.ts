@@ -56,6 +56,10 @@ export interface StorageIpcDeps {
   clearChatAttachmentsDir?: () => Promise<void>;
   getLegacyImagesDirStats?: () => Promise<FixedDirectoryStats>;
   getChatAttachmentsDirStats?: () => Promise<FixedDirectoryStats>;
+  /** 「边做边压」的影子原文目录(pi 扩展 compaction-spine)。 */
+  openSpineDir?: () => Promise<boolean>;
+  clearSpineDir?: () => Promise<void>;
+  getSpineDirStats?: () => Promise<FixedDirectoryStats>;
   clearRemoteMediaMemory?: () => void;
 }
 
@@ -206,8 +210,43 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
       }
     },
 
+    async openSpineDir(): Promise<{ opened: boolean }> {
+      if (!deps.openSpineDir) {
+        throwIpcError('INTERNAL', 'spine directory opener is unavailable');
+      }
+      try {
+        return { opened: await deps.openSpineDir() };
+      } catch (err) {
+        log.warn('open spine directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to open spine directory');
+      }
+    },
+
+    async clearSpineDir(): Promise<void> {
+      if (!deps.clearSpineDir) {
+        throwIpcError('INTERNAL', 'spine directory cleaner is unavailable');
+      }
+      try {
+        await deps.clearSpineDir();
+      } catch (err) {
+        log.warn('clear spine directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to clear spine directory');
+      }
+    },
+
+    /** 只报影子原文目录的占用:实验功能行用它显示体积,不值得走全量 stats。 */
+    async spineStats(): Promise<FixedDirectoryStats> {
+      return deps.getSpineDirStats?.() ?? { bytes: 0, fileCount: 0 };
+    },
+
     async stats(): Promise<StorageStatsResult> {
       try {
+        // 影子原文不进这里:存储页不展示它(实验功能行用 spineStats 单独取),而全树遍历
+        // 一旦在此抛错会把整页统计拖成 success:false。
         const [blobs, deadDirs, legacyImages, chatAttachments, remoteMedia] = await Promise.all([
           ledger.getStorageStats(deps.db),
           legacyDeadDirs.scanDeadDirs(deps.legacyRootDir),

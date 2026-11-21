@@ -22,6 +22,7 @@ import {
 } from '@/hooks/useExperimentalFeatures';
 import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { LspBetaCell } from './LspBetaCell';
+import { LiveCompactCell } from './LiveCompactCell';
 import { BetaChannelCell } from './BetaChannelCell';
 import { additionalSettings } from './AdditionalSettings.settings-search';
 
@@ -33,6 +34,7 @@ export function ExperimentalSection() {
   });
   const rows: { key: string; node: ReactNode }[] = [
     { key: 'lsp', node: <LspBetaCell /> },
+    { key: 'live-compact', node: <LiveCompactCell /> },
     ...(betaChannelSupported ? [{ key: 'beta-channel', node: <BetaChannelCell /> }] : []),
     ...EXPERIMENTAL_FEATURES.map((feature) => ({
       key: feature.key,
