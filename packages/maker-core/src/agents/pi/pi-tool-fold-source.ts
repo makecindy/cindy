@@ -54,6 +54,7 @@ export const CINDY_TOOL_FOLD_ENV_NAMES = [
   'CINDY_PI_TOOL_FOLD_GIANT_BUDGET',
   'CINDY_PI_TOOL_FOLD_MAX_FOLDED',
   'CINDY_PI_TOOL_FOLD_ARG_CHARS',
+  'CINDY_PI_TOOL_FOLD_RECOVERY_CHARS',
 ] as const;
 
 export const CINDY_TOOL_FOLD_EXTENSION_SOURCE = String.raw`/**
@@ -97,9 +98,9 @@ export default function (pi) {
   var disabled = process.env.CINDY_PI_TOOL_FOLD;
   if (disabled === 'off' || disabled === '0') return;
 
-  // 权限门只对「本扩展真的注册了恢复工具」的会话免除审批。同名外部工具（原生扩展
-  // 自己也注册 cindy_toolfold_read 时）不该蹭到这份豁免，所以用进程内标志而不是按名字判。
-  try { globalThis[Symbol.for('cindy.pi.toolFold')] = true; } catch (err) { /* ignore */ }
+  // 单次恢复读取上限：整段回灌巨型载荷会顶穿下一次请求的上下文窗口，而原文不在
+  // transcript 里，模型无法靠重读自救。超限就切片，并在尾部告诉它怎么续读。
+  var RECOVERY_READ_MAX_CHARS = intEnv('CINDY_PI_TOOL_FOLD_RECOVERY_CHARS', 120000, 1000, 4000000);
 
   function intEnv(name, fallback, min, max) {
     var raw = Number(process.env[name]);
@@ -517,6 +518,7 @@ export default function (pi) {
         // 上限按 Pi 可能发出的最长调用 id 定：Gemini 历史里出现过 2,000+ 字符的 id，
         // 折叠/截断提示写的是完整 id，约束必须容得下它，否则提示要求的值取不回原文。
         call_id: { type: 'string', minLength: 1, maxLength: 4096, description: 'Tool call id from the folded or truncated record.' },
+        offset: { type: 'integer', minimum: 0, description: 'Character offset to continue from when the previous read stopped at the per-read limit.' },
       },
       required: ['call_id'],
       additionalProperties: false,
@@ -534,7 +536,20 @@ export default function (pi) {
         return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': ' + reason }], isError: true };
       }
       if (!giants.has(String(id))) pinOriginal(id);
-      return { content: [{ type: 'text', text: original.text }] };
+      var raw = String(original.text || '');
+      var offset = typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
+      if (offset >= raw.length && raw.length > 0) {
+        return { content: [{ type: 'text', text: 'Offset ' + offset + ' is past the end of ' + id + ' (' + raw.length + ' chars).' }], isError: true };
+      }
+      var rest = raw.slice(offset);
+      if (rest.length <= RECOVERY_READ_MAX_CHARS) return { content: [{ type: 'text', text: rest }] };
+      var next = offset + RECOVERY_READ_MAX_CHARS;
+      return {
+        content: [{
+          type: 'text',
+          text: rest.slice(0, RECOVERY_READ_MAX_CHARS) + '\n\n[truncated: ' + raw.length + ' chars total, ' + (raw.length - next) + ' remaining. Call cindy_toolfold_read again with offset: ' + next + ' to continue.]',
+        }],
+      };
     },
   });
 

@@ -502,6 +502,27 @@ describe('cindy-tool-fold extension source', () => {
     const live = await tool.execute('t2', { call_id: 'giant-8' });
     expect(String(live.content![0].text)).toContain(`payload 8 ${'g'.repeat(25000)}`);
   });
+  it('slices a giant recovery at the per-read limit and resumes from an offset', async () => {
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const big = 'body ' + 'z'.repeat(22000);
+    toolResult({ toolName: 'bash', toolCallId: 'giant-8', content: [{ type: 'text', text: big }] });
+    projection(context, [
+      call('giant-8', 'bash', { command: 'make giant 8' }),
+      { role: 'toolResult', toolCallId: 'giant-8', toolName: 'bash', content: [{ type: 'text', text: 'body zzz…' }] } as unknown as { content: Block[] },
+    ]);
+    const first = await tool.execute('t1', { call_id: 'giant-8' });
+    const firstText = String(first.content![0].text);
+    // 一次回灌 22k 字符会顶穿下一次请求的上下文窗口；切片后必须告诉模型怎么续读。
+    expect(firstText.length).toBeLessThan(big.length);
+    expect(firstText).toContain('remaining');
+    expect(firstText).toContain('offset');
+    const resumeAt = Number(/offset: (\d+)/.exec(firstText)![1]);
+    expect(resumeAt).toBeGreaterThan(0);
+    const rest = await tool.execute('t2', { call_id: 'giant-8', offset: resumeAt });
+    expect(rest.isError).toBeUndefined();
+    expect(String(rest.content![0].text)).not.toContain('past the end');
+  });
+
   it('forwards every knob the extension reads to remote Pi sessions', () => {
     // A knob that exists in the extension but is missing from the forward list is
     // silently ignored on remote sessions (the default applies instead).
