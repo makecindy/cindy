@@ -32,6 +32,7 @@ import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 import {
   canOfferCodexHistoryRecovery,
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
   isRemoteCompactEncryptedContentError,
@@ -462,6 +463,7 @@ export function ErrorBanner({
       sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' },
     ).format(resumeDate);
   })();
+  const isAccountUsageLimitText = isAccountUsageLimitReachedText(error);
   // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
@@ -625,8 +627,17 @@ export function ErrorBanner({
           : 'chat.errorBanner.codexUsageLimit',
       );
     }
+  } else if (usageLimitResumeAt) {
+    // 被控端已确认是账号用量上限并排好了自动继续：直接说发生了什么，
+    // 「将于 X 自动继续」在操作区，原始报错留在可展开的详情里。
+    displayError = t('chat.errorBanner.usageLimitReached');
   } else if (isQuotaExhausted) {
     displayError = t('providerError.QUOTA_EXCEEDED');
+  } else if (isAccountUsageLimitText) {
+    // 没有排自动继续（已取消、共享中、拿不到可靠时刻等）但原文明说到了用量上限。
+    displayError = usageLimitResetAt
+      ? t('chat.errorBanner.usageLimitReachedWithReset', { resetAt: usageLimitResetAt })
+      : t('chat.errorBanner.usageLimitReachedNoReset');
   } else if (terminalRateLimitRetryProgress) {
     // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
     // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
@@ -708,6 +719,8 @@ export function ErrorBanner({
     isStreamInterrupted ||
     showUnwrappedRaw ||
     isCodexUsageLimitError ||
+    Boolean(usageLimitResumeAt) ||
+    isAccountUsageLimitText ||
     terminalRateLimitRetryProgress ||
     isClaudeGatewayOpusPlanMismatch ||
     isClaudeSubscriptionOpusPlanMismatch ||

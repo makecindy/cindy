@@ -286,6 +286,7 @@ import { ensureCurrentAccountProviderReadiness } from './account-provider-readin
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
 import {
+  getRejectedCodexDownshiftModel,
   armCodexHttpRecovery,
   clearCodexProxyAuthInjection,
   ensureCodexControlPlaneProxyReady,
@@ -1954,6 +1955,7 @@ export function getMaker(): Maker {
         }),
       getCodexSubagentIdentity: ({ childThreadId }) =>
         getObservedCodexSubagentIdentity(childThreadId),
+      getRejectedCodexDownshiftModel,
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);

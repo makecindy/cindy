@@ -7,6 +7,7 @@ import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import { setActiveCatalog } from '../active-catalog.js';
 import { createCodexSpawnConfig } from '../codexSpawnConfigCore.js';
 import { prepareCodexBrowserCompanion } from '../codex-browser-companion.js';
+import { prepareCodexCustomContextCatalog } from '../codex-custom-context-catalog.js';
 
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { warn: vi.fn(), error: vi.fn() },
@@ -166,7 +167,7 @@ type Ports = Parameters<typeof createCodexSpawnConfig>[0];
 type Context = Parameters<ReturnType<typeof createCodexSpawnConfig>>[1];
 const provider = buildUserProvider({ id: 'fixture-provider', name: 'Fixture', runtimes: { codex: {
   baseUrl: 'https://provider.invalid/v1', wireProtocol: 'openai-responses', supportsImageGeneration: true,
-  models: [{ id: 'fixture-model', name: 'Fixture model' }],
+  models: [{ id: 'fixture-model', name: 'Fixture model' }, { id: 'owner-only', name: 'Owner only' }],
 } } });
 
 function routeFixture() {
@@ -244,6 +245,26 @@ describe('Codex launch requires its local route', () => {
     const config = await f.prepare([], { credentialMode: 'gateway-key' });
     expect(config.codexProxyActive).toBe(true);
     expect(config.codexCustomProviderRoutes).toEqual(expect.arrayContaining([expect.objectContaining({ providerId: provider.id })]));
+  });
+
+  it('freezes only granted models for previous-model compaction on a shared connection', async () => {
+    const f = routeFixture();
+    f.ready();
+    const catalogPath = path.join(scratch, 'fixture-catalog.json');
+    await fs.writeFile(catalogPath, JSON.stringify({ models: [] }));
+    vi.mocked(prepareCodexCustomContextCatalog).mockResolvedValueOnce({ catalogPath, extraArgs: [] });
+    const prepare = createCodexSpawnConfig({
+      ...f.ports,
+      getDesktopSelectableCatalog: () => ({ ...BUNDLED_CATALOG, providers: [provider] }),
+      resolveDesktopModelContextProviderId: () => provider.id,
+    });
+    const config = await prepare([], {
+      ...guest, deviceHostedGuestProviderId: provider.id, deviceHostedGuestModelIds: ['fixture-model'],
+      hostPurpose: 'custom-context', customContextHostKey: 'context-fixture', customContextProviderId: provider.id,
+      customContextModel: 'fixture-model', customContextWindow: 272_000,
+    });
+    expect(config.contextProviderModels).toEqual(['fixture-model']);
+    await config.onHostRetired?.();
   });
 
   it('leaves remote materialization independent of the local proxy', async () => {

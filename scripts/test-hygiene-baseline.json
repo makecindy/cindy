@@ -710,9 +710,6 @@
     "apps/desktop/src/renderer/__tests__/sidebarSessionTime.test.ts": {
       "sourceReads": 2
     },
-    "apps/desktop/src/renderer/__tests__/sidebarUpgradeDefaults.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/renderer/__tests__/sidebarUpperSingleButton.test.ts": {
       "sourceReads": 2
     },

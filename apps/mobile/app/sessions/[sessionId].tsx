@@ -1,6 +1,7 @@
 import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
 import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
 import { projectAliasComparisonKey, projectDirectoryName } from '@cindy/maker-shared/project-alias-sync';
+import { patchSessionWithDeleteTarget } from '@cindy/maker-shared/device-link-contract';
 import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { playHaptic } from '@/platform/haptics';
@@ -194,7 +195,7 @@ import { HistoryViewHandoff, historyAfter, isHistoryViewUnavailable } from '@cin
 import { SideChatsSheet } from '@/session/SideChatsSheet';
 import { useSideChatCount } from '@/session/useSideChatCount';
 import { SessionTaskLayout, type SessionTaskChrome } from '@/session/SessionTaskLayout';
-import { buildMobileSessionRenderWindow } from '@/session/mobileHistoryRender';
+import { buildMobileSessionRenderWindow, mobileSessionHistoryBoundary } from '@/session/mobileHistoryRender';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { InteractionPanel, type MobilePlanViewerState } from '@/session/InteractionPanel';
@@ -443,6 +444,7 @@ import {
   findPluginEngine,
   isPluginEngineEffort,
   isPluginEngineSessionKind,
+  pluginEngineExecutionDeviceId,
   pluginEngineModelName,
   pluginEngineSessionCapabilities,
   resolvePluginEngineEffort,
@@ -1253,7 +1255,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const currentSession = useRemoteSessionDetail(deviceId, sessionId);
   const sideChatParent = useRemoteSessionDetail(deviceId, currentSession?.source === 'side-chat' ? (currentSession.parentSessionId ?? '')
       : '');
-  const sideChatBoundary = currentSession?.source === 'side-chat' ? Date.parse(currentSession.createdAt) : undefined;
+  const sideChatBoundary = mobileSessionHistoryBoundary(currentSession);
   const unfilteredHistoryView = useRemoteHistoryView(deviceId, sessionId, maker,
     () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
   const historyView = useMemo(() => ({ ...unfilteredHistoryView,
@@ -1909,6 +1911,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 模型、思考深度与权限模式换成引擎自己的(pluginEngineSessionCapabilities)。
   const pluginEngineTask = isPluginEngineSessionKind(currentSession?.agentKind);
   const pluginEngineSwitchIntent = currentSession?.pluginEngineSwitchIntent ?? null;
+  const currentPluginEngineIsRemote = !!currentSession?.agentDeviceId && currentSession.agentDeviceId !== deviceId;
+  const pluginEngineTargetId = pluginEngineExecutionDeviceId(currentSession?.agentDeviceId, pluginEngineSwitchIntent);
+  const pluginEngineTargetIsRemote = !!pluginEngineTargetId && pluginEngineTargetId !== deviceId;
   // 换到 / 换出插件引擎只限被控电脑本机的普通任务，与 Desktop 的切换准入一致。
   const pluginEngineSwitchEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
     // Agent 在另一台电脑的任务照样可以：选插件引擎时 Agent 回到被控电脑(被控端负责换位置)。
@@ -1917,7 +1922,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     && (currentSession.source == null || currentSession.source === 'desktop')
     && currentSession.status !== 'archived';
   const pluginEngines = usePluginEngines(maker, deviceId, pluginEngineTask || pluginEngineSwitchEligible);
-  const currentPluginEngine = pluginEngineTask
+  const currentPluginEngine = pluginEngineTask && !currentPluginEngineIsRemote
     ? findPluginEngine(pluginEngines.engines, currentSession?.providerId)
     : null;
   const capabilities = useMemo(
@@ -3180,7 +3185,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 图标用插件自己的；待切到时与内置引擎意图一样写「引擎 · 模型」。
   const composerPluginEngine = pluginEngineSwitchIntent
     ? {
-        engine: findPluginEngine(pluginEngines.engines, pluginEngineSwitchIntent.providerId),
+        engine: pluginEngineTargetIsRemote ? null : findPluginEngine(pluginEngines.engines, pluginEngineSwitchIntent.providerId),
         modelId: pluginEngineSwitchIntent.model,
         effort: pluginEngineSwitchIntent.effort ?? null,
         pending: true,
@@ -3197,9 +3202,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const modelSummary = [model, level ? t(`models.options.effortLevels.${level}`, { defaultValue: level }) : null]
       .filter(Boolean).join(' · ');
     const name = engine?.name ?? t('models.pluginEngines.genericName');
+    const executionDeviceName = pluginEngineTargetIsRemote
+      ? deviceDisplayName(pluginEngineTargetId, remoteAgentCatalogs.find((catalog) => catalog.deviceId === pluginEngineTargetId)?.name)
+      : null;
+    const source = executionDeviceName ? `${name} · ${executionDeviceName}` : name;
+    const label = pending || pluginEngineTargetIsRemote ? `${source} · ${modelSummary}` : modelSummary;
     return {
-      label: pending ? `${name} · ${modelSummary}` : modelSummary,
-      accessibility: pending ? t('session.screen.nextAgentSwitch', { agent: name, model: modelSummary }) : modelSummary,
+      label,
+      accessibility: pending ? t('session.screen.nextAgentSwitch', { agent: source, model: modelSummary }) : label,
       iconDataUrl: engine?.iconDataUrl ?? null,
     };
   })();
@@ -9458,7 +9468,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 与内置引擎之间一样登记意图，下一条消息交接。
   const selectComposerPluginEngine = useCallback(async (selection: MobilePluginEngineSelection): Promise<boolean> => {
     if (!canUseRemoteSessionControls || !currentSession || controlBusy || !deviceId) return false;
-    if (pluginEngineTask && selection.providerId === currentSession.providerId) {
+    if (pluginEngineTask && !currentPluginEngineIsRemote && selection.providerId === currentSession.providerId) {
       const effort = selection.effort ?? null;
       return runControlAction(async () => {
         // 选回当前引擎 = 撤销挂着的切换(desktop 按同引擎处理，只清意图)。
@@ -9486,12 +9496,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       pluginEngineSwitchIntent: {
         providerId: selection.providerId,
         model: selection.modelId,
+        agentDeviceId: null,
         ...(selection.effort ? { effort: selection.effort } : {}),
       },
     });
     try {
       await maker.switchSessionAgent(
-        sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false);
+        sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false,
+        currentPluginEngineIsRemote ? { agentDeviceId: null } : undefined);
       return true;
     } catch (err) {
       if (agentSwitchWriteSeqRef.current === seq) {
@@ -9509,13 +9521,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (agentSwitchWriteSeqRef.current === seq) setControlBusy(false);
     }
   }, [canUseRemoteSessionControls, controlBusy, currentSession, deviceId, maker, pluginEngineSwitchEligible,
-    pluginEngineTask, runControlAction, sessionAgentSwitchSupported, sessionId]);
+    currentPluginEngineIsRemote, pluginEngineTask, runControlAction, sessionAgentSwitchSupported, sessionId]);
   // 模型选择器里的插件引擎：当前选中的是待切到的引擎，或插件引擎任务自己的引擎；插件引擎任务待切到
   // 内置引擎时不选中任何引擎(内置那一行显示为下一条消息的选择)。
   const composerPluginEngineOptions = useMemo(() => {
     if (!pluginEngineSwitchEligible && !pluginEngineTask) return undefined;
     if (!currentSession || pluginEngines.engines.length === 0) return undefined;
-    const active: MobilePluginEngineSelection | null = pluginEngineSwitchIntent
+    const active: MobilePluginEngineSelection | null = pluginEngineTargetIsRemote ? null : pluginEngineSwitchIntent
       ? {
           providerId: pluginEngineSwitchIntent.providerId,
           modelId: pluginEngineSwitchIntent.model,
@@ -9535,7 +9547,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       onOpen: pluginEngines.refresh,
     };
   }, [agentSwitchIntent, currentSession, pluginEngineSwitchEligible, pluginEngineSwitchIntent, pluginEngineTask,
-    pluginEngines.engines, pluginEngines.refresh, selectComposerPluginEngine]);
+    pluginEngineTargetIsRemote, pluginEngines.engines, pluginEngines.refresh, selectComposerPluginEngine]);
 
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
     setModelSheetOpen(false);
@@ -10043,6 +10055,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const { rpcDeviceId, shardId } = resolveSessionWriteDevices(sessionId, session, deviceId)
       ?? { rpcDeviceId: deviceId, shardId: deviceId };
     const leavesDetailScreen = patch.status === 'deleted';
+    const deleteTarget = leavesDetailScreen
+      ? session.sideChatPromoted ? 'task' : session.source === 'side-chat' ? 'side-chat' : undefined
+      : undefined;
     if (leavesDetailScreen) {
       goBackToHome();
     }
@@ -10062,12 +10077,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           write.isLatest,
           // preSend:重连等待(最长 1.5s)之后、真正出网之前再查一次让位——本页同
           // 字段连续两次操作时,前笔在等待中被取代不得再发出(review P2)。
-          (assertStillLatest) => invoke<RemoteSession>(
+          (assertStillLatest) => patchSessionWithDeleteTarget(patch, deleteTarget, body => invoke<RemoteSession>(
             rpcDeviceId,
             'local-db:sessions:patch-meta',
-            [sessionId, patch],
+            [sessionId, body],
             { preSend: assertStillLatest },
-          ),
+          )),
+          deleteTarget ? 1 : undefined,
         )), write.isLatest);
         if (updated && write.isLatest()) {
           // 字段级对账 + updatedAt 单调下限(同首页):整对象覆盖会冲掉其它字段

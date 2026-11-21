@@ -467,6 +467,21 @@ it.each(['paused', 'removed', 'signed-out', 'unknown', 'exhausted', 'cooling', '
   },
 );
 
+// Unit regression: admission must explain a model cooldown alongside a signed-out
+// sibling, without exposing identities or applying the cooldown to other models.
+it('explains an unbound task blocked by a model limit and a signed-out account', async () => {
+  const until = Date.now() + 60_000;
+  h.cooling = { anthropic: { default: { 'claude:fable': until } } };
+  h.read.mockImplementation(async (_kind: string, dir: string) => ({
+    authenticated: dir.endsWith('default'), identity: dir,
+  }));
+  await expect(acquireSubscriptionAccount('anthropic', 'claude-fable-5-2', []))
+    .rejects.toThrow(new Error(`[SUBSCRIPTION_POOL_MODEL_LIMITED] Subscription usage limit for this model\nresetAtMs=${until}\notherAccountSignedOut=true`));
+  const lease = await acquireSubscriptionAccount('anthropic', 'claude-opus-5-5', []);
+  expect(lease?.accountId).toBe('default');
+  lease?.release();
+});
+
 it('reads round capacity without advancing the account cursor or reserving a slot', async () => {
   h.pools.anthropic!.strategy = 'round';
   for (let i = 0; i < 2; i++) expect(await readSubscriptionPoolScheduling('anthropic', 'claude-sonnet-5'))
@@ -862,7 +877,7 @@ describe('owner-only subscription identity', () => {
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
     await refreshSubscriptionPoolCodexModels(true);
     await refreshSubscriptionPoolCodexModels(true);
-    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
   });
 
@@ -881,8 +896,8 @@ describe('owner-only subscription identity', () => {
   });
 
   // Unit: reopening the owner's runtime discards memory; transient failure must still
-  // retain Astra, and two complete matching responses can confirm a real contraction.
-  it('recovers persisted membership and corroborates a conflicting smaller model list once', async () => {
+  // retain Astra even across repeated fallback replies; only consistent native evidence confirms removal.
+  it('recovers persisted membership without confirming repeated conflicting fallback lists', async () => {
     h.pools.openai = { strategy: 'order', accounts: [account('second')] };
     h.rpc.mockResolvedValue({ data: [{ id: 'astra' }, { id: 'sol', supportedReasoningEfforts: [] }] });
     h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: ['astra', 'sol'].map(slug => ({
@@ -905,7 +920,45 @@ describe('owner-only subscription identity', () => {
     await refreshSubscriptionPoolCodexModels(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
     await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: [{ slug: 'sol', supported_in_api: true, visibility: 'list' }] }));
+    await refreshSubscriptionPoolCodexModels(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+    // Unrelated disk-only ids are not a contraction of this account's verified list.
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: ['sol', 'disk-only'].map(slug => ({
+      slug, supported_in_api: true, visibility: 'list',
+    })) }));
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }, { id: 'new-model' }] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol', 'new-model']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+  });
+
+  // Unit regression: a restart followed by a slow RPC used to hide a verified model
+  // until the request finished. Assert the published directory while the real refresh is pending.
+  it('publishes the same-workspace disk snapshot before discovery finishes', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }] });
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    const owner = h.owner;
+    h.owner = 'another-owner';
+    readSubscriptionPoolCodexModels();
+    h.owner = owner;
+    await refreshSubscriptionPool('openai');
+    let finish!: (value: unknown) => void;
+    h.rpc.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = refreshSubscriptionPoolCodexModels();
+    try {
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra']);
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    } finally {
+      finish({ data: [{ id: 'astra' }] });
+      await pending;
+    }
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
   });
 
@@ -1422,6 +1475,7 @@ describe('pooled Codex model discovery', () => {
       let complete!: (value: unknown) => void;
       h.rpc.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
       const pending = refreshSubscriptionPoolCodexModels(true);
+      await vi.waitFor(() => expect(complete).toBeTypeOf('function'));
       h.owner = 'next-owner';
       const beforeLate = push.mock.calls.length;
       complete({ data: [{ id: 'stale-model' }], nextCursor: null });
@@ -1655,6 +1709,7 @@ describe('pooled Codex model discovery', () => {
     let complete!: (value: unknown) => void;
     h.rpc.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
     const old = refreshSubscriptionPoolCodexModels();
+    await vi.waitFor(() => expect(complete).toBeTypeOf('function'));
     h.owner = 'next-owner';
     complete({ data: [{ id: 'old-owner-model' }], nextCursor: null });
     await old;
@@ -1675,7 +1730,9 @@ describe('pooled Codex model discovery', () => {
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['new-owner-model']);
     await refreshSubscriptionPool('openai', true);
     h.rpc.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const callsBeforeLogin = h.rpc.mock.calls.length;
     const beforeLogin = refreshSubscriptionPoolCodexModels();
+    await vi.waitFor(() => expect(h.rpc.mock.calls.length).toBeGreaterThan(callsBeforeLogin));
     h.read.mockResolvedValue({ authenticated: true, identity: 'different-login' });
     await refreshSubscriptionPool('openai', true);
     complete({ data: [{ id: 'stale-login-model' }], nextCursor: null });
@@ -4725,7 +4782,7 @@ describe('native account assignment on the executing computer', () => {
       expect(next?.account.configDir).toBe('anthropic/second');
       next?.release();
     } else if (backup === 'exhausted') {
-      await expect(acquireSubscriptionAccount('anthropic', model, ['task:new'])).rejects.toThrow('No subscription account');
+      await expect(acquireSubscriptionAccount('anthropic', model, ['task:new'])).rejects.toThrow('[SUBSCRIPTION_POOL_MODEL_LIMITED]');
     }
     expect(await readSubscriptionPoolModelAvailability('anthropic', 'claude-opus-5-5')).toBe(true);
   });
@@ -5057,7 +5114,7 @@ describe('native account assignment on the executing computer', () => {
         }
         if (provider === 'anthropic') {
           await expect(acquireSubscriptionAccount(provider, 'claude-sonnet', []))
-            .rejects.toThrow('No subscription account is available');
+            .rejects.toThrow('[SUBSCRIPTION_POOL_MODEL_LIMITED]');
         } else {
           const next = await acquireSubscriptionAccount(provider, 'gpt-6', []);
           expect(next?.account.configDir).toBe('openai/default');

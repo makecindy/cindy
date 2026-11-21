@@ -160,6 +160,7 @@ import { useCollapsedProjects } from './hooks/useCollapsedProjects';
 import { useSessionDisplayRunningState } from './hooks/useSessionDisplayRunningState';
 import { useOrcaWorkerAttentionWatcher } from './hooks/useOrcaWorkerAttentionWatcher';
 import { usePublishedAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
+import { readRemoteScheduleIndex } from '../device-link/refreshRemoteSessions';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, useSidebarFilterGc, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
@@ -223,7 +224,9 @@ import {
 import { advanceViewedPriorityHold, partitionCindyMakeSessions, sortSessionsForMainList } from './lib/mainListModel';
 import { toStoredSessionTitle } from './lib/sessionDisplayTitle';
 import {
+  getVisibleInboxTargets,
   getVisibleSidebarSessionIds,
+  isSessionRemovalRouteCurrent,
   pickSessionIdAfterRemoval,
 } from './lib/sessionRemovalNavigation';
 import { onRequestSessionSwitch, pickAdjacentSessionId } from './lib/sessionSwitchCommands';
@@ -1035,28 +1038,30 @@ function ExpandedView({
         }
         void refreshPendingAlerts();
       }
-      const unreadRunIds = sessionIds.flatMap(
-        (sessionId) =>
-          (deviceId
-            ? remoteProjectsStore.getSessionScheduleInfo(sessionId)
-            : scheduleSessionIndex.get(sessionId)
-          )?.unreadRunIds ?? [],
-      );
-      if (unreadRunIds.length === 0) return;
-      const { processed, failed, firstError } = await markScheduleRunsReadAndSync(
-        unreadRunIds,
-        deviceId,
-      );
-      if (announce && processed.length > 0) {
+      let index = scheduleSessionIndex;
+      if (deviceId) {
+        try {
+          index = await readRemoteScheduleIndex(deviceId);
+        } catch (error) {
+          toast.error(t('ccAgent.layout.markAllReadFailed', { error: String(error) }));
+          return false;
+        }
+      }
+      const unreadRunIds = sessionIds.flatMap(id => index.get(id)?.unreadRunIds ?? []);
+      if (!deviceId && unreadRunIds.length === 0) return true;
+      // Refresh the remote mirror even on a no-op: another device may already have read the run.
+      const { processed, failed, firstError } = await markScheduleRunsReadAndSync(unreadRunIds, deviceId);
+      if (announce && processed.length > 0 && firstError === undefined) {
         toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
       }
-      if (failed.length > 0) {
+      if (failed.length > 0 || firstError !== undefined) {
         toast.error(
           t('ccAgent.layout.markAllReadFailed', {
             error: firstError ?? String(failed.length),
           }),
         );
       }
+      return failed.length === 0 && firstError === undefined;
     },
     [scheduleSessionIndex, t],
   );
@@ -3239,6 +3244,28 @@ function ExpandedView({
         toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
         return true;
       };
+      // Snapshot the displayed queue before the inbox hides the clicked row. At commit,
+      // skip siblings the user has since completed and respect any intervening navigation.
+      const inbox = action === 'complete' && viewedSessionIdRef.current === sessionId
+        ? sidebarScrollRef.current?.querySelector('[data-task-inbox-section="inbox"]')
+        : null;
+      const anchor = `session:${sessionId}`;
+      const order = inbox ? [...getVisibleInboxTargets(inbox).keys()] : [];
+      const advanceInbox = () => {
+        if (!inbox?.isConnected || !isSessionRemovalRouteCurrent(sessionId)) return;
+        const available = getVisibleInboxTargets(inbox);
+        available.delete(anchor);
+        const remaining = [...available.keys()];
+        const removed = new Set(order.filter(id => !available.has(id)));
+        // Removing the last of the first 20 rows can reveal another task below it.
+        const original = new Set(order);
+        const queue = [...order, ...remaining.filter(id => !original.has(id))];
+        const key = pickSessionIdAfterRemoval(queue, removed, anchor) ?? remaining[0];
+        const next = key ? available.get(key) : undefined;
+        if (next && 'route' in next) navigate(next.route);
+        else if (next) void handleSessionClick(next.sessionId);
+        else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
+      };
       // 收件箱「完成」遇到绑着启用中自动化的任务，只把这轮结果标为已读、任务回到进行中，
       // 不归档：归档会回收 worktree，下一轮又从快照重建，安静的一轮放回已归档再删一次
       // （2026-11-18 用户决定，task-inbox.md）。读不到绑定时按无绑定处理，照常归档。
@@ -3248,7 +3275,9 @@ function ExpandedView({
         ]).then((names) => names.get(sessionId) ?? [], () => []);
         if (boundNames.length > 0) {
           if (await blockedByAttachment()) return;
-          await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
+          const read = await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
+          if (!read) return;
+          advanceInbox();
           // The inbox owns the reactive placement of this explicit successful action.
           return 'marked-read' as const;
         }
@@ -3258,8 +3287,8 @@ function ExpandedView({
       // 例外:worktree 有未提交改动(归档会顺带回收 worktree)、或任务绑定了
       // active 自动化(后续运行会恢复原任务),这时升级到确认弹窗展示对应提醒。
       if (isArchiveLike) {
-        await runSessionAction(sessionId, 'archive', {
-          activeSessionId: viewedSessionIdRef.current,
+        const archived = await runSessionAction(sessionId, 'archive', {
+          activeSessionId: inbox ? null : viewedSessionIdRef.current,
           prepareArchive: async (isCurrent) => {
             // 接管拦截先结算:被接管时不该弹任何归档确认。
             if (await blockedByAttachment()) return false;
@@ -3308,6 +3337,7 @@ function ExpandedView({
             return confirmed;
           },
         });
+        if (archived) advanceInbox();
         return;
       }
       if (action === 'delete') {
@@ -3330,6 +3360,8 @@ function ExpandedView({
       closeOwnedSharedTask,
       archiveBlockedByRunning,
       confirmTaskArchive,
+      handleSessionClick,
+      navigate,
       markSessionsRead,
       runSessionAction,
       unarchiveSession,
@@ -3358,6 +3390,7 @@ function ExpandedView({
     await runSessionAction(sessionId, action, {
       activeSessionId: viewedSessionId,
       deleteRedirectRoute,
+      deleteTarget: action === 'delete' && session?.sideChatPromoted ? 'task' : undefined,
     });
     setConfirm(CONFIRM_INITIAL);
   }, [closeOwnedSharedTask, viewedSessionId, confirm, resolveSessionRemovalRedirect, runSessionAction, sessionsById, t]);
@@ -3408,7 +3441,8 @@ function ExpandedView({
           // 先固定本次状态写目标:关闭远端控制后,复制库里与 sticky origin 同 ID 的任务
           // 必须按本地任务删除；真正远端任务仍固定经隧道写被控端。
           const statusWriteTarget = await sessionService.resolveStatusWriteTarget(session.id);
-          await sessionService.setStatus(session.id, 'deleted', statusWriteTarget);
+          await sessionService.setStatus(session.id, 'deleted', statusWriteTarget, undefined,
+            session.sideChatPromoted ? 'task' : undefined);
           makerChatStore.purgeSession(session.id);
           discardComposerDraft(session.id);
           // RSB 布局偏好(fraction / treeWidth / collapsed)走 localStorage 是
