@@ -58,10 +58,23 @@ function layeredContent(current: string, previousStandard: string | null, next: 
   const { standard, own } = standardPart(current);
   const known = new Set(contentLines(standardPart(next).standard).map(line => line.trim()));
   if (previousStandard !== null) for (const line of contentLines(standardPart(previousStandard).standard)) known.add(line.trim());
-  // A heading the teammate added stays with the rules under it (it may scope them); nested under
-  // the own section, so it does not read as a section of the standard.
-  const kept = contentLines(standard).filter(line => !known.has(line.trim()))
-    .map(line => line.replace(/^\s*#{1,2}(?=\s)/, '###'));
+  // A kept rule keeps its scope: it goes under the heading it sat under, whether the teammate
+  // added that heading or the standard has it ("In a group" rules stay group rules). Headings are
+  // nested under the own section, so they do not read as sections of the standard.
+  const demote = (heading: string) => heading.replace(/^\s*#{1,2}(?=\s)/, '###');
+  const kept: string[] = [];
+  let scope: string | null = null;
+  for (const line of contentLines(standard)) {
+    const text = line.trim();
+    if (/^#{1,6}\s/.test(text)) {
+      if (!known.has(text)) { kept.push(demote(text)); scope = null; }
+      else scope = /^#\s/.test(text) ? null : text; // the skill's title is not a scope
+      continue;
+    }
+    if (known.has(text)) continue;
+    if (scope) { kept.push(demote(scope)); scope = null; }
+    kept.push(line);
+  }
   // A standard line the teammate removed, still in the new standard: keep the removal, for list
   // items and plain paragraphs alike (a heading's removal shows in the lines it held).
   const removed = previousStandard === null ? [] : contentLines(standardPart(previousStandard).standard)

@@ -123,6 +123,16 @@ describe('applyTeammateTemplate', () => {
       expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain(`- Leave out from the standard above: ${paragraph}`);
     });
 
+    // Review r4652498991: a rule added under an unchanged standard heading keeps that scope, so a
+    // group-only restriction does not become a global one.
+    it('keeps the section a rule was added under', async () => {
+      const standard = oldStandard.replace('# Hand-off\n', '# Hand-off\n\n## In a group\n\n- Answer whoever asked.\n\n## Start a task\n');
+      await setUp(standard.replace('- Answer whoever asked.\n', '- Answer whoever asked.\n- Never create a task.\n'), true, standard);
+      await upgrade(2, newStandard('\n## In a group\n\n- Answer whoever asked.\n'), async (_relative, hash) => hash === sha(standard) ? standard : null);
+      const text = await read();
+      expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain('### In a group\n- Never create a task.');
+    });
+
     it('keeps an own skill that predates the template, for the teammate to tidy', async () => {
       await setUp('---\nname: hand-off\n---\n\n# Hand-off\n\n- Pick the project.\n- Design reviews go straight to the owner.\n', false);
       await upgrade(2, newStandard());
