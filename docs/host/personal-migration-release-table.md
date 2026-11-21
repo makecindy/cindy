@@ -355,7 +355,11 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 
 - SSH 任务只在处理函数的忙碌判断与原生运行时判断不一致、真实进入凭据延期时，仍可能走现有的 `handleModelDidChange → resetFastMode`。切换失败后保留旧模型，Fast 已关。该场景的设置与登记快照不同，不带 `previousSettingsRetained`，显示原提示。独立关闭 Fast 的行为留作后续。
 - SQLite 回执报错后，以同一会话锁内的实际任务行为准。完整候选已经落库时继续发布，行与写前相同则清登记、不重试。读回暂不可用时保持队列闸门，直到能够安全校准队首。没有可用的读回或读回介于两种结果之间的情况下仍可能继续等待。
-- 直发调用经过 `register.ts` 的发送锁桥。Goal 的 `resumeOnOpen` 和 `fireTurn` 收到 `CREDENTIAL_SWITCH_BUSY` 时走现有恢复或派发失败处理，阻塞目标。IM 的 `turnRunner` 走发送前失败处理，回报本条失败。定时任务 `runner` 只对 `ScheduledModelSelectionBusyError` 走普通撞忙顺延，凭据忙碌从直发入口按现有运行失败处理。这三条是源码核对。普通输入协调器接收带阻塞任务的凭据忙碌回执，保留并唤醒队首。
+- 一次写入未确认后，重裁无可用路线等拒绝没有为该次写入提供读回证据。即使此时任务行可读，未确认标记也会在失败出口先安排重试，队首继续等待。这是后续回执核定项。
+- 发送外的配置跟随在锁内尝试应用时，如果起初判断空闲、运行时才判忙并抛错，会取消自己的暂存，等下一次配置对账。入场即判忙时保留原暂存。发送途中撞忙则保留队首和配置意图，沿用发送重试。
+- 只有当前任务自己阻塞时沿用选择器的待选显示，跨任务横幅不渲染。本任务专用的等待文案留作后续。
+- 直发经过 `register.ts` 的发送锁桥，凭据忙碌以 `CredentialModeSwitchBusyError` 抛出。Goal 的 `resumeOnOpen` 和 `fireTurn` 走现有恢复或派发失败处理，阻塞目标。IM 的 `turnRunner` 按发送前失败回报本条，只有 `SESSION_RUNNING` 走该入口的忙碌重排。定时任务 `runner` 将普通直发的凭据忙碌交给既有运行失败处理，显式调度模型设置中的同类竞态由模型设置入口转换为 `ScheduledModelSelectionBusyError`，沿既有撞忙顺延判据。三条均为源码核对。普通输入队列才将忙碌异常转成含阻塞任务的 `CREDENTIAL_SWITCH_BUSY` 回执，保留并唤醒队首。
+- 后台测试 `L342 controller bridge fixture` 在常规后台测试中跳过。它由桌面兼容套件 `l342SignedCompatibility.test.tsx` 设置 `CINDY_L342_TEST_BRIDGE=1`，在子进程里执行实际的 Host 结算与 SQLite 读回。
 
 ### 第 3 条的附件准入和验证范围
 
