@@ -41,7 +41,19 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-run-markers-'));
 });
 
+type ProcessWithCreationTime = NodeJS.Process & { getCreationTime?: () => Date | null };
+
+const originalProcessCreationTimeDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  'getCreationTime',
+);
+
 afterEach(() => {
+  if (originalProcessCreationTimeDescriptor) {
+    Object.defineProperty(process, 'getCreationTime', originalProcessCreationTimeDescriptor);
+  } else {
+    delete (process as ProcessWithCreationTime).getCreationTime;
+  }
   vi.restoreAllMocks();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -87,6 +99,18 @@ function makeStore(
   });
 }
 
+function makeStoreWithDefaultProcessStart(opts: { pid: number; now: () => Date }) {
+  return new RunMarkerStore({
+    dir: tmpDir,
+    pid: opts.pid,
+    version: '0.0.2',
+    now: opts.now,
+    isPidAlive: () => false,
+    bootTimeMs: () => null,
+    warn: () => {},
+  });
+}
+
 describe('RunMarkerStore state machine', () => {
   it('begin() persists a running marker with pid/version/heartbeat', () => {
     const store = makeStore({ pid: 42, now: () => new Date('2026-07-07T12:00:00.000Z') });
@@ -111,6 +135,40 @@ describe('RunMarkerStore state machine', () => {
     store.begin();
 
     const m = readMarker(42);
+    expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
+    expect(m.heartbeatAt).toBe('2026-07-07T12:00:21.000Z');
+  });
+
+  it('begin() prefers the Electron process creation time by default', () => {
+    const processStartedAt = new Date('2026-07-07T12:00:00.000Z');
+    const now = new Date('2026-07-07T12:00:21.000Z');
+    Object.defineProperty(process, 'getCreationTime', {
+      configurable: true,
+      value: () => processStartedAt,
+    });
+    const store = makeStoreWithDefaultProcessStart({ pid: 43, now: () => now });
+
+    store.begin();
+
+    const m = readMarker(43);
+    expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
+    expect(m.heartbeatAt).toBe('2026-07-07T12:00:21.000Z');
+  });
+
+  it('begin() falls back to process uptime when creation time is unavailable', () => {
+    const now = new Date('2026-07-07T12:00:21.000Z');
+    Object.defineProperty(process, 'getCreationTime', {
+      configurable: true,
+      value: () => {
+        throw new Error('creation time unavailable');
+      },
+    });
+    vi.spyOn(process, 'uptime').mockReturnValue(21);
+    const store = makeStoreWithDefaultProcessStart({ pid: 44, now: () => now });
+
+    store.begin();
+
+    const m = readMarker(44);
     expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
     expect(m.heartbeatAt).toBe('2026-07-07T12:00:21.000Z');
   });
