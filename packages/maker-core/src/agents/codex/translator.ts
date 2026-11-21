@@ -2828,7 +2828,14 @@ export function translateAccountRateLimitsUpdated(
   void ctx;
   queue.push({
     type: 'account_usage',
-    data: normalizeAccountRateLimitSnapshot(params.rateLimits),
+    // 权威额度更新必须带上观测时刻：主进程 mergeCodexAccountUsageSnapshot 用
+    // `incoming.updatedAt ?? previous.updatedAt` 合并，协议层不带时间戳时新数值会
+    // 继承上一次观测的旧时间，界面于是显示「数据更新于 1375 分钟前」(#11093)。
+    data: {
+      ...normalizeAccountRateLimitSnapshot(params.rateLimits),
+      // 重放缓存快照时沿用 host 记下的观测时刻, 只有缺时间戳(旧调用方)才现取。
+      updatedAt: params.observedAt ?? Date.now(),
+    },
     source: 'codex',
   });
 }

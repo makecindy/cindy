@@ -1067,7 +1067,14 @@ export type RateLimitSnapshot = AccountRateLimitSnapshot;
 
 export interface AccountRateLimitsUpdatedNotification {
   method: 'account/rateLimits/updated';
-  params: { rateLimits: RateLimitSnapshot };
+  params: {
+    rateLimits: RateLimitSnapshot;
+    /**
+     * 收到这条通知的本地时刻（epoch ms）。由 app-server host 在**首次收到**时打上，
+     * 随后缓存与 replay 都沿用同一个值 —— 重放旧快照不能被当成一次新观测（#11093）。
+     */
+    observedAt?: number;
+  };
 }
 
 /**

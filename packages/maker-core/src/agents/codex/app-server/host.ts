@@ -1516,7 +1516,11 @@ export class AppServerHost {
     // 账号级 notification — 没有 threadId, 走全局 fan-out 路径:
     // 缓存最近 snapshot (给新 subscribe replay) + 广播给所有 active subscriber 各一份。
     if (method === 'account/rateLimits/updated') {
-      const p = params as AccountRateLimitsUpdatedNotification['params'];
+      const raw = params as AccountRateLimitsUpdatedNotification['params'];
+      // 观测时刻在**首次收到**时打上并随缓存一起保存: subscribeThread 会把缓存快照重放给
+      // 新订阅者, 若那时才取 Date.now(), 旧额度就会被标成新数据（#11093）。
+      const p: AccountRateLimitsUpdatedNotification['params'] =
+        typeof raw.observedAt === 'number' ? raw : { ...raw, observedAt: Date.now() };
       // replay 快照始终跟随最新一条 (哪怕内容未变), 新 subscriber 拿到的与旧行为一致。
       const limitKey = p.rateLimits?.limitId;
       const rawJson = JSON.stringify(p.rateLimits ?? null);

@@ -485,6 +485,37 @@ describe('translateAccountRateLimitsUpdated', () => {
   });
 });
 
+describe('translateAccountRateLimitsUpdated timestamp (#11093)', () => {
+  it('stamps the observation time so a fresh value cannot inherit the previous snapshot time', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const before = Date.now();
+    translateAccountRateLimitsUpdated({
+      rateLimits: { primary: { usedPercent: 78, windowMinutes: 300 } },
+    }, q, makeCtx(newCodexRuntimeState()));
+    const after = Date.now();
+
+    const [event] = await collect(q);
+    const data = (event?.data ?? {}) as { primary?: { usedPercent?: number }; updatedAt?: number };
+    expect(data.primary?.usedPercent).toBe(78);
+    expect(typeof data.updatedAt).toBe('number');
+    expect(data.updatedAt).toBeGreaterThanOrEqual(before);
+    expect(data.updatedAt).toBeLessThanOrEqual(after);
+  });
+
+  it('reuses the host-supplied observation time when the snapshot is replayed', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    // host 在首次收到时打上 observedAt；重放时必须沿用，不能把旧额度标成新数据。
+    const observedAt = Date.now() - 90 * 60_000;
+    translateAccountRateLimitsUpdated({
+      rateLimits: { primary: { usedPercent: 96, windowMinutes: 300 } },
+      observedAt,
+    }, q, makeCtx(newCodexRuntimeState()));
+
+    const [event] = await collect(q);
+    expect((event?.data as { updatedAt?: number }).updatedAt).toBe(observedAt);
+  });
+});
+
 describe('Codex generation timing', () => {
   it('includes TTFT and thinking while excluding a tool interval', async () => {
     let now = 4_000;
