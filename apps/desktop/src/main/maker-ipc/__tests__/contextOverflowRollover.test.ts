@@ -1957,6 +1957,7 @@ describe('createContextOverflowRollover', () => {
     const deps = makeDeps([
       msg('user', 'Continue', 'u1'),
       msg('error', JSON.stringify({ message: '413 length limit exceeded' }), 'e1'),
+      msg('user', 'Continue with a shorter follow-up', 'u2'),
     ]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active', agentKind: 'pi', remoteHostId: null, clearedAt: null,
@@ -1968,6 +1969,22 @@ describe('createContextOverflowRollover', () => {
     await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
     expect(deps.commitRebuild).toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps Pi native retry available after the first raw request-body 413', async () => {
+    const deps = makeDeps([
+      msg('user', 'Retry the failed request', 'u1'),
+      msg('error', JSON.stringify({ message: '413 length limit exceeded' }), 'e1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active', agentKind: 'pi', remoteHostId: null, clearedAt: null,
+      sdkSessionId: '/tmp/pi-session', contextTokens: 0, contextWindow: 1_000_000,
+      model: 'test-model', providerId: 'local-test',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
   });
 
   it('rebuilds before send when host auto-compact has latched a deterministic failure', async () => {

@@ -1205,8 +1205,16 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // recovery guard shared with ordinary Sessions (Codex manages its own limit).
     const pressure = sessionRow.agentKind !== 'codex' && shouldRebuildForContextPressure(usedTokens, window);
     const compactFailed = liveUsage?.needsRollover === true;
+    // An explicit Pi Retry reuses the failed native transcript entry so Pi can
+    // perform its one-shot native compact. Only a later, newly persisted user
+    // message is the short-follow-up path that needs Cindy's handoff rebuild.
+    const hasFollowupAfterRawPi413 = sessionRow.agentKind === 'pi' && source.some((message, index) =>
+      message.role === 'user' && source.slice(0, index).some(previous =>
+        previous.role === 'error' && isPiRequestBodyTooLargeErrorData(errorContentToData(previous.content))),
+    );
     const piByteRecoveryFailed = sessionRow.agentKind === 'pi'
-      && (isPiRequestBodyRecoveryExhausted(lastError) || isPiRequestBodyTooLargeErrorData(lastError));
+      && (isPiRequestBodyRecoveryExhausted(lastError)
+        || (isPiRequestBodyTooLargeErrorData(lastError) && hasFollowupAfterRawPi413));
     const tokenViolated =
       isContextOverflowErrorData(lastError, sessionRow.agentKind) ||
       isPiPromptRpcTimeoutError(lastError) ||
