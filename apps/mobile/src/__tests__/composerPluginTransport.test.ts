@@ -1,39 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import ts from 'typescript';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { buildGhostToolsJson, expandGhostCommand } from '@cindy/maker-shared/ghost-command';
 import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import type { QueuedRemoteMessage } from '@/session/types';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
-
-const bridgeSource = ts.createSourceFile('MobileOutboxBridge.tsx', readFileSync(resolve(
-  process.cwd(), 'src/session/MobileOutboxBridge.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let enqueueSource = '';
-function findOutboxEnqueue(node: ts.Node) {
-  if (ts.isCallExpression(node) && node.expression.getText(bridgeSource) === 'createDurableOutboxDelivery') {
-    const options = node.arguments[0];
-    if (ts.isObjectLiteralExpression(options)) {
-      const enqueue = options.properties.find((property) => property.name?.getText(bridgeSource) === 'enqueue');
-      if (enqueue && ts.isPropertyAssignment(enqueue)) enqueueSource = enqueue.initializer.getText(bridgeSource);
-    }
-  }
-  ts.forEachChild(node, findOutboxEnqueue);
-}
-findOutboxEnqueue(bridgeSource);
-if (!enqueueSource) throw new Error('Missing durable outbox enqueue callback');
-
-function outboxSender(invokeOwned: (record: DurableOutboxRecord) => RemoteInvoke) {
-  const maker = (record: DurableOutboxRecord) => createMobileMakerTransport({
-    deviceId: record.deviceId, invoke: invokeOwned(record),
-  });
-  const compiled = ts.transpileModule(`function create(maker, invokeOwned, unarchiveSessionAfterSend, ownerInvoke) { return ${enqueueSource}; }`,
-    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function(`${compiled}; return create;`)()(maker, invokeOwned, async () => {}, invokeOwned) as
-    (record: DurableOutboxRecord) => Promise<unknown>;
-}
+import { enqueueMobileOutboxRecord } from '@/session/mobileOutboxSessionAdapter';
 
 const plugin = { manifest: { id: 'art', name: 'Art', command: 'art',
   tools: [{ name: 'draw', description: 'Draw an image', parameters: { type: 'object' } }] }, enabled: true };
@@ -60,7 +32,7 @@ describe('actual durable outbox plugin delivery', () => {
     row.clearBoundaryMs = clearBoundaryMs;
     const original = structuredClone(row);
     const { invoke } = harness();
-    await outboxSender(() => invoke as RemoteInvoke)(row);
+    await enqueueMobileOutboxRecord(row, invoke as RemoteInvoke);
     expect(invoke.mock.calls[0]).toEqual(['task-host', 'ghosts:composer-list', ['/project']]);
     const [device, channel, args] = invoke.mock.calls.at(-1)!;
     expect([device, channel]).toEqual(['task-host', 'maker:input:enqueue']);
@@ -72,7 +44,7 @@ describe('actual durable outbox plugin delivery', () => {
     const row = record();
     const { invoke } = harness();
     invoke.mockRejectedValueOnce(Object.assign(new Error('unsupported'), { code: 'CHANNEL_NOT_ALLOWED' }));
-    const send = outboxSender(() => invoke as RemoteInvoke);
+    const send = (record: DurableOutboxRecord) => enqueueMobileOutboxRecord(record, invoke as RemoteInvoke);
     await send(row);
     expect((invoke.mock.calls.at(-1)![2][1] as QueuedRemoteMessage).text).toBe('$art cat');
     await send(row);
@@ -90,11 +62,11 @@ describe('actual durable outbox plugin delivery', () => {
       }
       return {};
     });
-    const invokeOwned = () => (async (...args: Parameters<RemoteInvoke>) => {
+    const invokeOwned = (async (...args: Parameters<RemoteInvoke>) => {
       if (!owned) throw new Error('OUTBOX_STALE_WRITE');
       return invoke(...args);
     }) as RemoteInvoke;
-    await expect(outboxSender(invokeOwned)(record())).rejects.toThrow();
+    await expect(enqueueMobileOutboxRecord(record(), invokeOwned)).rejects.toThrow();
     expect(invoke.mock.calls.filter((call) => call[1] === 'maker:input:enqueue')).toHaveLength(0);
   });
 });

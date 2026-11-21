@@ -547,6 +547,14 @@
     "chooseExistingFolder": "Escolher pasta existente",
     "changeMainDirectory": "Alterar"
   },
+  "composerFollowUp": {
+    "title": "Envio de mensagens",
+    "label": "Enviar durante uma tarefa",
+    "queue": "Colocar na fila",
+    "steer": "Orientar",
+    "description": "A fila espera o fim do turno atual. Orientar tenta enviar a mensagem no turno atual.",
+    "saveFailed": "Não foi possível salvar a configuração. Tente novamente."
+  },
   "navigation": {
     "unavailable": "Não foi possível abrir as configurações do computador de destino. Verifique se está online e permite controle remoto; atualize o Cindy se estiver em uma versão antiga."
   }

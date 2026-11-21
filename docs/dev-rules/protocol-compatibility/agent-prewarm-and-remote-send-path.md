@@ -36,3 +36,9 @@ projection 见过 `inputDeliveryVersion: 1`、并从 projection / enqueue 回包
 projection 后重发（被控端拒绝时尚未收下，不产生重复）。旧被控端不回 `inputDeliveryVersion`，
 Mobile 始终走原流程。Mobile 学到的这些结论绑定 device-link 连接代次，重连后清空并重新确认。
 没有新的 push、数据库迁移或 Mobile 原生指纹变化。
+
+手机的默认插话只在同一连接的 `maker:input:get-projection` 明确返回 `automaticSteer: true`
+时启用。手机发送 `maker:input:steer` 时带 `automaticSteer: true`，Desktop 在受理及发给 Agent 前
+复核暂停状态，只尝试当前轮，拒绝后由手机走普通入队。已经收下或保留待核对的消息继续沿用原
+clientId 对账。手动插话保持既有语义。旧 Desktop 及未声明该能力的 Node Host 继续排队。
+中转透传既有通道及其参数，不需要升级。

@@ -56,6 +56,7 @@ import type { DurableOutboxRecord } from "./durableOutbox";
 import {
   canConnectOutboxPeer,
   createOutboxMessageLeases,
+  enqueueMobileOutboxRecord,
   createOutboxSessionAccess,
   outboxNeedsReconciliation,
   outboxSessionKey,
@@ -138,6 +139,7 @@ export function MobileOutboxBridge() {
     // Learned from this host's own projection / enqueue replies. A first send in
     // a task whose boundary is known needs no projection round trip.
     const durableHosts = new Map<string, number>();
+    const automaticSteerHosts = new Map<string, number>();
     const knownClearBoundaries = new Map<string, { epoch: number; value: number | null }>();
     // What a host answered belongs to the connection it answered on: a host that
     // restarted or was replaced by an older build must be asked again.
@@ -146,7 +148,7 @@ export function MobileOutboxBridge() {
     const learnProjection = (r: DurableOutboxRecord, projection: unknown) => {
       if (!projection || typeof projection !== 'object') return;
       const epoch = connectionEpochFor(r.deviceId);
-      const value = projection as { inputDeliveryVersion?: unknown; clearBoundaryMs?: unknown };
+      const value = projection as Partial<DeliveryProjection>;
       if (value.inputDeliveryVersion === 1) durableHosts.set(r.deviceId, epoch);
       if (value.clearBoundaryMs === null
         || (typeof value.clearBoundaryMs === 'number' && Number.isFinite(value.clearBoundaryMs))) {
@@ -174,6 +176,15 @@ export function MobileOutboxBridge() {
       dismissCancelled: dismissRecoveredPrecreatedSession,
       store: remoteSessionStore,
     });
+    const unarchiveAfterSend = (r: DurableOutboxRecord) => {
+      // Bind to the account owner because reconciliation may remove the outbox record.
+      void unarchiveSessionAfterSend(
+        r.item.sessionId,
+        r.deviceId,
+        ownerInvoke,
+        () => createMobileMakerTransport({ deviceId: r.deviceId, invoke: ownerInvoke }).getSession(r.item.sessionId),
+      );
+    };
     const delivery = createDurableOutboxDelivery({
       store: mobileDurableOutbox,
       isCurrent,
@@ -181,7 +192,8 @@ export function MobileOutboxBridge() {
       sessionPolicy,
       projection: async (r) => {
         captureProjectionEpoch(r);
-        return invoke<DeliveryProjection>(
+        const epoch = connectionEpochFor(r.deviceId);
+        const projection = await invoke<DeliveryProjection>(
           r.deviceId,
           "maker:input:get-projection",
           [
@@ -191,6 +203,12 @@ export function MobileOutboxBridge() {
             },
           ],
         );
+        if (projection.automaticSteer !== true) return projection;
+        if (connectionEpochFor(r.deviceId) !== epoch) {
+          return { ...projection, automaticSteer: undefined };
+        }
+        automaticSteerHosts.set(r.deviceId, epoch);
+        return projection;
       },
       knownProjection: (r) => {
         const epoch = connectionEpochFor(r.deviceId);
@@ -203,6 +221,7 @@ export function MobileOutboxBridge() {
           ...EMPTY_INPUT_PROJECTION,
           sessionId: r.item.sessionId,
           inputDeliveryVersion: 1,
+          ...(automaticSteerHosts.get(r.deviceId) === epoch ? { automaticSteer: true } : {}),
           clearBoundaryMs: boundary.value,
         };
       },
@@ -312,25 +331,36 @@ export function MobileOutboxBridge() {
           guard();
         }
       },
+      steer: async (r) => {
+        const sessionId = r.item.sessionId;
+        const turnEnded = new Error("OUTBOX_STEER_TURN_ENDED");
+        const checkTurn = () => {
+          const status = remoteSessionStore.getSessionRunStatus(sessionId);
+          const projection = remoteSessionStore.getInputProjection(sessionId);
+          if (!status.isRunning || status.startedAt !== r.steerTurnStartedAt
+            || automaticSteerHosts.get(r.deviceId) !== connectionEpochFor(r.deviceId)
+            || projection.queuePaused || projection.queueAbortPending || projection.queueInteractionLocks.length) {
+            throw turnEnded;
+          }
+        };
+        try {
+          checkTurn();
+          const transport = createMobileMakerTransport({ deviceId: r.deviceId, invoke: invokeOwned(r, checkTurn) });
+          const accepted = await transport.input.steer(sessionId, r.prepared!, {
+            automaticSteer: true,
+            touchUserSend: true,
+            ...(r.clearBoundaryMs !== undefined ? { expectedClearBoundaryMs: r.clearBoundaryMs } : {}),
+          });
+          if (accepted) unarchiveAfterSend(r);
+          return accepted;
+        } catch (error) {
+          if (error === turnEnded) return false;
+          throw error;
+        }
+      },
       enqueue: async (r) => {
-        const projection = await maker(r).input.enqueue(
-          r.item.sessionId,
-          r.prepared!,
-          {
-            sendAtMs: r.sendAtMs,
-            ...(r.clearBoundaryMs !== undefined
-              ? { expectedClearBoundaryMs: r.clearBoundaryMs }
-              : {}),
-          },
-        );
-        // 电脑已接收这条消息(离线时是重连后才送达):在已归档任务里发消息即取消归档。
-        // 绑账号归属而不绑这条待发记录:消息对账后记录会被清走,取消归档不能随之失效。
-        void unarchiveSessionAfterSend(
-          r.item.sessionId,
-          r.deviceId,
-          ownerInvoke,
-          () => createMobileMakerTransport({ deviceId: r.deviceId, invoke: ownerInvoke }).getSession(r.item.sessionId),
-        );
+        const projection = await enqueueMobileOutboxRecord(r, invokeOwned(r));
+        unarchiveAfterSend(r);
         return projection;
       },
       cancel: async (r) => {

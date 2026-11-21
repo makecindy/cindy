@@ -40,6 +40,8 @@ export interface DurableOutboxDeliveryDeps {
     upload: DurableUpload,
   ): Promise<RemoteSerializedAttachment>;
   enqueue(record: DurableOutboxRecord): Promise<InputProjection>;
+  /** False means the host did not accept the steer, so enqueue is safe. */
+  steer?(record: DurableOutboxRecord): Promise<boolean>;
   /** Recheck resource ownership before recording that an external write has started. */
   beforeEnqueue?(record: DurableOutboxRecord): Promise<void>;
   cancel(record: DurableOutboxRecord): Promise<boolean>;
@@ -352,11 +354,20 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       }
       await deps.beforeEnqueue?.(record);
       if (!current(record) || !deps.canRun(record)) return;
-      // This write precedes every external enqueue. Crash recovery therefore knows it must reconcile.
-      await update({ state: "sending", enqueueStarted: true, error: undefined });
-      let result: InputProjection;
+      const steer = deps.steer && record.steerTurnStartedAt !== undefined
+        && projection.inputDeliveryVersion === 1 && projection.automaticSteer === true
+        && isDurableOutboxUnsent(record) ? deps.steer : undefined;
+      // On an uncertain steer, reconcile by clientId before allowing any resend.
+      await update({ state: "sending", enqueueStarted: true, error: undefined, ...(steer ? { retrySafe: false } : {}) });
+      let result: InputProjection | undefined;
       try {
-        result = await deps.enqueue(record);
+        const steered = steer ? await steer(record) : false;
+        if (!current(record)) return;
+        if (!steered) {
+          if (steer) await update({ retrySafe: true, steerTurnStartedAt: undefined });
+          if (!current(record) || !deps.canRun(record)) return;
+          result = await deps.enqueue(record);
+        }
       } catch (error) {
         // The host refused the known boundary before accepting anything. Undo
         // only that local preparation and ask the host once, like the first send
@@ -379,12 +390,12 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         throw error;
       }
       if (!current(record)) return;
-      deps.applyProjection(record, result);
-      const durableEnqueue = record.prepared?.durableDelivery === true &&
+      if (result) deps.applyProjection(record, result);
+      const durableAcceptance = record.prepared?.durableDelivery === true &&
         projection.inputDeliveryVersion === 1;
-      if (durableEnqueue) await deps.accepted?.(record);
-      await update(durableEnqueue
-        ? { state: "host-owned" }
+      if (durableAcceptance) await deps.accepted?.(record);
+      await update(durableAcceptance
+        ? { state: "host-owned", retrySafe: true }
         : { state: "confirming", error: deps.confirmationMessage });
       attempts.delete(id(record));
       due.set(id(record), Date.now() + 1_000);
@@ -392,7 +403,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       trace("send accepted", {
         client: record.item.clientId.slice(-8),
         knownProjection: knownProjection !== undefined,
-        durable: durableEnqueue,
+        durable: durableAcceptance,
         clickToAcceptedMs: Date.now() - record.createdAt,
         deliverMs: Date.now() - startedAt,
         ...stagesMs,
@@ -424,7 +435,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
                 : "failed",
         error: deps.describe(error),
         failedUploadSlot: uploadingSlot,
-        ...(!isDurableOutboxSettled(record) && deps.mediaFailed?.(error) && record.uploads.length
+        ...(!isDurableOutboxSettled(record) && !(record.steerTurnStartedAt !== undefined && record.enqueueStarted && !record.retrySafe)
+          && deps.mediaFailed?.(error) && record.uploads.length
           ? { refreshUploads: true }
           : {}),
       }).catch(() => undefined);

@@ -547,6 +547,14 @@
     "chooseExistingFolder": "Choose existing folder",
     "changeMainDirectory": "Change"
   },
+  "composerFollowUp": {
+    "title": "Sending messages",
+    "label": "Send while a task is running",
+    "queue": "Queue",
+    "steer": "Steer",
+    "description": "Queue waits for the current turn to finish. Steer tries to send into the current turn.",
+    "saveFailed": "Couldn’t save the setting. Try again."
+  },
   "navigation": {
     "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
   }

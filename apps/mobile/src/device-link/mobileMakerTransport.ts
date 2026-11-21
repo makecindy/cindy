@@ -881,7 +881,12 @@ export interface MobileMakerTransport {
     steer(
       sessionId: string,
       item: QueuedRemoteMessage,
-      opts?: { removeFromQueue?: boolean; touchUserSend?: boolean },
+      opts?: {
+        removeFromQueue?: boolean;
+        touchUserSend?: boolean;
+        automaticSteer?: true;
+        expectedClearBoundaryMs?: number | null;
+      },
     ): Promise<boolean>;
     stop(
       sessionId: string,

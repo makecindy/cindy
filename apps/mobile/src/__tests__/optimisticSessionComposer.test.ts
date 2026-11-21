@@ -241,7 +241,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     // The transport must use the record-scoped adapter, whose delayed pre-send
     // invalidation is exercised by cindyMakeOutboxBridge.test.ts.
     expect(bridge).toContain('invoke: invokeOwned(r),');
-    expect(delivery).toMatch(/await update\(\{\s*state: ["']sending["'],\s*enqueueStarted: true,\s*error: undefined\s*\}\)/);
+    expect(delivery).toMatch(/await update\(\{[^}]*state: ["']sending["'][^}]*enqueueStarted: true/);
     expect(delivery).toContain('record.retrySafe && projection.inputDeliveryVersion === 1');
     expect(delivery).not.toContain('createOutboxClientId');
   });

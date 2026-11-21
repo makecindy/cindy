@@ -547,6 +547,14 @@
     "chooseExistingFolder": "选择已有文件夹",
     "changeMainDirectory": "更改"
   },
+  "composerFollowUp": {
+    "title": "遣讯",
+    "label": "差事方行时遣讯",
+    "queue": "排队",
+    "steer": "插话",
+    "description": "排队则俟此轮既毕。插话则试遣其讯入此轮。",
+    "saveFailed": "未能存，请再试。"
+  },
   "navigation": {
     "unavailable": "未能开启彼机设置。请验其在线且已允远控；版本旧则先更新 Cindy。"
   }
