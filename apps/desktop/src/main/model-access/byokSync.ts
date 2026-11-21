@@ -1,8 +1,10 @@
 import type { ByokCache } from './byokCache.js';
+import { ServerApiError } from '../serverApiClient.js';
 import { isDeepStrictEqual } from 'node:util';
 import {
   BYOK_CREDENTIALS_PATH,
   BYOK_PROVIDERS_PATH,
+  BYOK_PROVIDERS_V1_PATH,
   parseByokCredentialsResponse,
   parseByokProvidersResponse,
   type ByokCredential,
@@ -154,16 +156,24 @@ export function createByokSync(deps: ByokSyncDependencies) {
     if (!current(generation)) return;
     status = { ...status, state: 'syncing' };
     try {
-      const raw = await deadline(
-        deps.fetch(BYOK_PROVIDERS_PATH, { method: 'GET', cache: 'no-store' }),
-      );
+      const options = { method: 'GET', cache: 'no-store' } as const;
+      const raw = await deadline(deps.fetch(BYOK_PROVIDERS_PATH, options)).catch((error: unknown) => {
+        if (current(generation) && error instanceof ServerApiError && error.statusCode === 400) {
+          return deadline(deps.fetch(BYOK_PROVIDERS_V1_PATH, options));
+        }
+        throw error;
+      });
       if (!current(generation)) return;
       const parsed = parseByokProvidersResponse(raw);
       if (!parsed.ok || parsed.value.organizationId !== owner!.organizationId)
         throw new Error('BYOK_INVALID_DIRECTORY');
+      // A directory may switch versions or update presentation while keeping its routing revision.
       if (
         catalog?.revision === parsed.value.revision &&
-        !isDeepStrictEqual(catalog, parsed.value)
+        !isDeepStrictEqual(
+          catalog.providers.map((provider) => ({ ...provider, icon: undefined })),
+          parsed.value.providers.map((provider) => ({ ...provider, icon: undefined })),
+        )
       ) {
         throw new Error('BYOK_DIRECTORY_REVISION_CONFLICT');
       }

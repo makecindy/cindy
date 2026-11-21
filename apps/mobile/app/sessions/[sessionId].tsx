@@ -7786,6 +7786,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 providerId={composerPillSourceId}
                 routing={composerPillSourceProvider?.routing}
                 logoKind={composerPillSourceProvider?.logoKind}
+                customIcon={composerPillSourceProvider?.customIcon}
                 remote={Boolean(nextAgentDeviceId)}
               />
             ) : null}
