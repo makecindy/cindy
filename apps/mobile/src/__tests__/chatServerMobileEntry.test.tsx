@@ -47,6 +47,7 @@ import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
 import { createDurableOutbox } from '@/session/durableOutbox';
 import { enqueueChatMessage } from '@/chat/chatOutbox';
 import { createChatOutboxDelivery } from '@/chat/chatOutbox';
+import { useChatOutboxDelivery } from '@/chat/useChatOutboxDelivery';
 import { createChatServerClient } from '@/chat/chatServerClient';
 import { forgetChatMessages } from '@/chat/chatMessageCache';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
@@ -70,7 +71,7 @@ async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
   const runner = createChatOutboxDelivery({ store: mobileDurableOutbox,
     client: createChatServerClient((path, method = 'GET', body) => h.auth.apiFetch(`/v1${path}`, { method, body, baseUrl: 'https://chat.example.invalid', assertCurrent() {} })),
-    current: () => true, canRun: () => true, accessLost: forgetChatMessages });
+    current: () => true, accessLost: forgetChatMessages });
   await runner.run();
 }
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -521,6 +522,33 @@ it('lists and opens an existing joined server group with all computers and the r
   expect(h.auth.apiFetch.mock.calls.every(([, options]) => options.baseUrl === 'https://chat.example.invalid')).toBe(true);
   await act(async () => { await send({ text: 'hello', clientId: 'fixture-operation', mentions: { all: false, botIds: [] } }); });
   expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'fixture-operation', content: [{ type: 'text', text: 'hello' }], mentions: [] } }));
+});
+// Regression: tapping send and immediately switching apps used to leave the message
+// in the ledger until the next foreground, because the root runner required an active
+// AppState. Delivery must follow the execution time the OS gives us, not the foreground.
+it('keeps delivering a queued group message while the app is already in the background', async () => {
+  const owner = getMobileAuthOwner();
+  const deliveryRoot = createRoot(document.createElement('div'));
+  const appState = (await import('react-native')).AppState as unknown as { currentState: string };
+  function Delivery() { useChatOutboxDelivery(owner.accountKey); return null; }
+  const posted = () => h.auth.apiFetch.mock.calls.some(([path, options]) =>
+    path === `/v1/conversations/${id}/messages` && options?.method === 'POST');
+  try {
+    showChat = true; await render();
+    expect(chat.state.kind).toBe('ready');
+    // Queued by the send button while the user is still in the app.
+    await act(async () => { await chat.act('send', { text: 'sent while away', clientId: 'background-send', mentions: { all: false, botIds: [] } }); });
+    expect(posted()).toBe(false);
+    // The user has already switched apps when the root runner picks the ledger up.
+    appState.currentState = 'background';
+    await act(async () => { deliveryRoot.render(createElement(Delivery)); });
+    for (let tick = 0; tick < 20 && !posted(); tick++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(appState.currentState).toBe('background');
+    expect(posted()).toBe(true);
+  } finally {
+    await act(async () => { deliveryRoot.unmount(); });
+    appState.currentState = 'active';
+  }
 });
 // #6907: the hook must pass direct-room scope to the real client's quote projection (unit tier).
 it('keeps the account owner label when quoting from a direct phone entry', async () => {
@@ -1123,7 +1151,7 @@ it.each([
     if (method === 'POST') { posted.push(body); if (posted.length === 1) throw new Error('response lost'); return { id: self } as T; }
     throw new Error('Unexpected request');
   });
-  const delivery = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  const delivery = () => createChatOutboxDelivery({ store, client, current: () => true, accessLost: async () => {} });
   await delivery().run();
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', enqueueStarted: true, chat: { body: { operationId: 'lost-response', mentions: [id] } } });
   expect(posted[0]).toMatchObject({ content: [{ type: 'text', text: 'saved offline' }, ...(withMedia ? [{ type: 'media', mediaId: id, caption: 'report.pdf' }] : [])] });
@@ -1178,7 +1206,7 @@ it('keeps an uncertain send frozen and uncancellable when a later attempt is rej
     await expect(chat.pendingAction!('uncertain-first', 'cancel')).rejects.toThrow('MESSAGE_ALREADY_SENDING');
     // The background runner retries the already frozen POST using its original ID.
     const client = createChatServerClient((path, method = 'GET', body) => h.auth.apiFetch(`/v1${path}`, { method, body, assertCurrent() {} }));
-    await createChatOutboxDelivery({ store: mobileDurableOutbox, client, current: () => true, canRun: () => true, accessLost: forgetChatMessages }).run();
+    await createChatOutboxDelivery({ store: mobileDurableOutbox, client, current: () => true, accessLost: forgetChatMessages }).run();
   });
   expect(posted).toHaveLength(2); expect(posted[1]).toEqual(posted[0]);
   expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({ state: 'failed', enqueueStarted: true });
@@ -1265,7 +1293,7 @@ it('restores a failed share after restart, keeps its body, and does not block la
     }),
     load: async () => ({ snapshot: { room, members: [], messages: [], cursor: '1' }, messages: [], before: null }),
   } as any;
-  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, accessLost: async () => {} });
   await enqueueChatMessage(store, account, id, { clientId: 'topic-and-main', text: 'reply', threadRootId: self,
     mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
   await runner().run();
@@ -1321,7 +1349,7 @@ it.each([false, true])('recovers an off-window share after restart without resen
     return [];
   });
   const client = createChatServerClient(request as any);
-  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, accessLost: async () => {} });
   h.historyWriteFails = !alreadyShared;
   await runner().run();
   expect(store.getSnapshot()).toHaveLength(1);
@@ -1360,7 +1388,7 @@ describe('two-stage topic delivery boundaries', () => {
       }), load: async () => ({ snapshot: { room, members: [], messages: [], cursor: '1' }, messages: [], before: null }),
     } as any;
     const accessLost = vi.fn(async () => {});
-    const runner = createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost });
+    const runner = createChatOutboxDelivery({ store, client, current: () => true, accessLost });
     await enqueueChatMessage(store, account, id, { clientId: 'both', text: 'reply', threadRootId: self,
       mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
     return { storage, account, store, client, runner, accessLost };
@@ -1383,7 +1411,7 @@ describe('two-stage topic delivery boundaries', () => {
     const body = { operationId: `thread-share:${reply}`, content: [], mentions: [self] };
     await store.update(row, { chat: { ...row.chat!, shareToMain: { state: 'pending', body } } });
     const restored = createDurableOutbox(storage); await restored.activate(account);
-    const resumed = createChatOutboxDelivery({ store: restored, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+    const resumed = createChatOutboxDelivery({ store: restored, client, current: () => true, accessLost: async () => {} });
     await resumed.run();
     expect(client.send).toHaveBeenCalledTimes(1); expect(client.shareToMain.mock.calls[0][3].body).toEqual(body);
     const { settleChatOutbox } = await import('@/chat/chatOutbox');

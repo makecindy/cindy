@@ -20,7 +20,6 @@ function harness(sessions: Array<{ id: string; source?: string; deviceLinkDevice
     getRecords: () => owner.records,
     guard: () => { if (!owner.current) throw new Error('OUTBOX_OWNER_CHANGED'); },
     isCurrent: () => owner.current,
-    isForeground: () => true,
     canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
     isCreationHeld: () => owner.creationHeld,
     hasCreationTask,

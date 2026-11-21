@@ -105,7 +105,6 @@ export function MobileOutboxBridge() {
       guard,
       invoke: (deviceId, channel, args, options) => latest.current.link.invoke(deviceId, channel, args, options),
       readSession: (record) => maker(record).getSession(record.item.sessionId),
-      isForeground: () => AppState.currentState !== "background" && AppState.currentState !== "inactive",
       canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
       isCreationHeld: isDurableOutboxCreationHeld,
       hasCreationTask: (sessionId) => getNewSessionCreationTask(sessionId) !== null,

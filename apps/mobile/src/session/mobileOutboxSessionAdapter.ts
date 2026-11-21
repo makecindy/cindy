@@ -48,7 +48,6 @@ export interface OutboxSessionAccessDeps {
     options: { preSend(): void },
   ): Promise<unknown>;
   readSession(record: DurableOutboxRecord): Promise<RemoteSession>;
-  isForeground(): boolean;
   canConnect(deviceId: string): boolean;
   isCreationHeld(sessionId: string): boolean;
   hasCreationTask(sessionId: string): boolean;
@@ -89,8 +88,10 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
     });
     return read;
   };
+  // 发送只受「系统还给 App 执行时间」与连接约束:切走后的几秒里链路还在就要发完,
+  // 前台不是发送前提,锁屏与挂起由系统自己截断。
   const canRun = (record: DurableOutboxRecord) =>
-    !record.chat && deps.isForeground() &&
+    !record.chat &&
     (hidden(record) ||
       isDurableOutboxSettled(record) ||
       (!record.suspended &&
