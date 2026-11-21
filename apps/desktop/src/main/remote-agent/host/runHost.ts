@@ -2171,12 +2171,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const relayDeps = deps.groupRelay;
     const decision = decideProviderGroupFailure(failure, phase);
     const failureDescription = describeProviderGroupFailure(failure, decision);
+    // Only internal enums, the bracketed error code and the HTTP status. Some engines put
+    // the upstream error text into sdkError, so it stays out of this log.
     const failureDetails = {
       ...(failureDescription.action ? { action: failureDescription.action } : {}),
       ...(failureDescription.cause ? { cause: failureDescription.cause } : {}),
       ...(failureDescription.why ? { why: failureDescription.why } : {}),
       ...(failureDescription.code ? { code: failureDescription.code } : {}),
-      ...(failureDescription.sdkError ? { sdkError: failureDescription.sdkError } : {}),
       ...(failureDescription.errorStatus !== undefined ? { errorStatus: failureDescription.errorStatus } : {}),
     };
     const logDecision = (outcome: 'issued' | 'not-issued', reason: string, localSwitch?: string): void => {

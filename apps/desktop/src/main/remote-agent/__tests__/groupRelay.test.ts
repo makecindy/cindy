@@ -2193,7 +2193,9 @@ describe('provider group "switch to another computer" for shared users', () => {
     });
     const task = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
     try {
-      env.memberStarted.mini[0].emit(USAGE_LIMIT_ERROR);
+      // Pi puts the upstream error text into sdkError; it must not reach the decision log.
+      env.memberStarted.mini[0].emit({ type: 'error', data: { message: 'You have hit your usage limit', isTerminal: true,
+        usageLimit: true, sdkError: 'upstream body quoting private-notes.md from the chat' } } as AgentEvent);
       await waitFor(() => switchTokenIn(task.stream) !== undefined);
       const decision = logs.find(item => item.message === 'remote agent group switch decision');
       expect(decision?.meta).toMatchObject({ cause: 'usage-limit', outcome: 'issued', reason: 'replacement-available' });
@@ -2201,6 +2203,7 @@ describe('provider group "switch to another computer" for shared users', () => {
       expect(serialized).not.toContain('usage limit');
       expect(serialized).not.toContain('providerId');
       expect(serialized).not.toContain('token');
+      expect(serialized).not.toContain('private-notes');
     } finally {
       await task.client.close('close', 'navigation');
       await env.owner.dispose();
