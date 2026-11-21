@@ -27,6 +27,18 @@ vi.mock('../messageLinkActions', async (original) => ({
 vi.mock('@/features/right-sidebar/lib/openInSidebarFileBrowser', () => ({ openDirInSidebarFileBrowser: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 
+const parsedMarkdownLengths = vi.hoisted(() => [] as number[]);
+vi.mock('react-markdown', async (original) => {
+  const module = await original<typeof import('react-markdown')>();
+  return {
+    ...module,
+    default: (props: Parameters<typeof module.default>[0]) => {
+      if (props.children) parsedMarkdownLengths.push(props.children.length);
+      return module.default(props);
+    },
+  };
+});
+
 // #11145: real MarkdownRenderer entry, unlike the pure stat-cache tests, must
 // turn an inline ~/ reference into an actionable file on its owning device.
 // Minimal failing input: `~/Documents/report.html` in /remote/project.
@@ -316,6 +328,30 @@ describe('remote home references', () => {
       'session', '/workspace/B/docs/guide.html', expect.any(Function),
       expect.objectContaining({ origin: local }), undefined,
     );
+  });
+
+  // #11851: the real renderer should reuse completed blocks on tail updates.
+  // The label tests do not detect reparses. DOM/unit tier, measured in characters.
+  it.each([
+    ['web links', '[first](https://example.com/a)', '[second](https://example.com/b)'],
+    ['images', '![first](/A/guide.png)', '![second](/B/guide.png)'],
+    ['fenced code', '~~~text\n[guide.html](/A/guide.html)\n~~~', '~~~text\n[guide.html](/B/guide.html)\n~~~'],
+    ['prose', 'First paragraph', 'Second paragraph'],
+    ['distinct files', '[a.html](/A/a.html)', '[b.html](/B/b.html)'],
+  ])('only reparses the growing tail after completed %s', (_label, first, second) => {
+    vi.useFakeTimers();
+    try {
+      const prefix = [first, 'Completed text. '.repeat(3_500), second, ''].join('\n\n');
+      const frame = (tail: string) => reply(prefix + tail, 'unused', '/workspace', { kind: 'local' }, true);
+      const view = render(frame('Tail'));
+      parsedMarkdownLengths.length = 0;
+      view.rerender(frame('Tail updated'));
+      act(() => vi.advanceTimersByTime(500));
+      expect(view.container.textContent?.endsWith('Tail updated')).toBe(true);
+      expect(parsedMarkdownLengths).toEqual(['Tail updated'.length]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(['local', 'device'] as const)('opens the authored destination when clicking its code label on %s', async kind => {

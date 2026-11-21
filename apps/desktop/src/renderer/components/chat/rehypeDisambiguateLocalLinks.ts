@@ -21,6 +21,20 @@ function addLabelOwner(owners: Map<string, Set<string>>, label: string, path: st
   else owners.set(label, new Set([path]));
 }
 
+export function localLinkLabelPath(href: string): string | undefined {
+  const target = classifyMarkdownLinkTarget(href);
+  if (target.kind !== 'local-candidate') return undefined;
+  return (target.href.toLowerCase().startsWith('file://')
+    ? resolveLocalPath('file://' + target.href.slice('file://'.length), '')
+    : target.href).replaceAll('\\', '/');
+}
+
+export function absoluteFileLabelName(path: string, label: string): string | undefined {
+  if (!/^(?:\/(?!\/)|[A-Za-z]:\/)/.test(path) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(path)) return undefined;
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  return name && label === label.trim() && splitLocalLineSuffix(label).href === name ? name : undefined;
+}
+
 // Run after heading IDs are assigned. Reference links are already expanded
 // here, and neither heading anchors nor authored destinations need rewriting.
 const rehypeDisambiguateLocalLinks: Plugin<[], Root> = () => (tree) => {
@@ -40,20 +54,14 @@ const rehypeDisambiguateLocalLinks: Plugin<[], Root> = () => (tree) => {
 
     const href = link.properties[RAW_LOCAL_LINK_HREF_PROP];
     if (typeof href !== 'string') return;
-    const target = classifyMarkdownLinkTarget(href);
-    if (target.kind !== 'local-candidate') return;
-    const path = (target.href.toLowerCase().startsWith('file://')
-      ? resolveLocalPath('file://' + target.href.slice('file://'.length), '')
-      : target.href).replaceAll('\\', '/');
+    const path = localLinkLabelPath(href);
+    if (path === undefined) return;
     addLabelOwner(existingLabels, node.value, path);
     if (link.properties[BARE_PATH_ATTR] !== undefined) return;
-    if (!/^(?:\/(?!\/)|[A-Za-z]:\/)/.test(path) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(path)) return;
-
+    const name = absoluteFileLabelName(path, node.value);
+    if (!name) return;
     const segments = path.split('/');
-    const name = segments.at(-1);
-    const label = splitLocalLineSuffix(node.value).href;
-    if (!name || label !== name || node.value !== node.value.trim()) return;
-    const entry = { node, path, segments, suffix: node.value.slice(label.length) };
+    const entry = { node, path, segments, suffix: node.value.slice(name.length) };
     const group = groups.get(name);
     if (group) group.push(entry);
     else groups.set(name, [entry]);

@@ -58,6 +58,7 @@ import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
 import {
   getStreamingMarkdownThrottleInterval,
   splitStreamingMarkdownChunks,
+  type StreamingLocalLinkCache,
   STREAMING_MARKDOWN_THROTTLE_BASE_MS,
 } from './streamingMarkdownChunks';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
@@ -1875,12 +1876,16 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
     () => normalizeMarkdownRendererContent(repairedContent, emitSourceLines),
     [repairedContent, emitSourceLines],
   );
+  const streamingLinkCache = useMemo<StreamingLocalLinkCache | undefined>(
+    () => isStreaming && allowPrivilegedLinks && !emitSourceLines ? new Map() : undefined,
+    [isStreaming, allowPrivilegedLinks, emitSourceLines],
+  );
   const streamingChunks = useMemo(
     () =>
       isStreaming && !emitSourceLines
-        ? splitStreamingMarkdownChunks(renderedContent, allowPrivilegedLinks)
+        ? splitStreamingMarkdownChunks(renderedContent, streamingLinkCache)
         : [{ start: 0, content: renderedContent }],
-    [allowPrivilegedLinks, emitSourceLines, isStreaming, renderedContent],
+    [emitSourceLines, isStreaming, renderedContent, streamingLinkCache],
   );
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到

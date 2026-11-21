@@ -26,6 +26,7 @@
  */
 
 import type { Definition, Root } from 'mdast';
+import type { Properties } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 
@@ -35,7 +36,7 @@ export const RAW_LOCAL_LINK_HREF_PROP = 'data-cindy-raw-local-link-href';
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
-function isLocalDestination(url: string): boolean {
+export function isLocalDestination(url: string): boolean {
   return (
     WINDOWS_ABSOLUTE_PATH_RE.test(url) ||
     url.startsWith('file://') ||
@@ -61,10 +62,11 @@ const remarkPreserveRawLocalDestinations: Plugin<[], Root> = () => {
       const prop = node.type === 'image' || node.type === 'imageReference'
         ? RAW_LOCAL_IMAGE_SRC_PROP
         : RAW_LOCAL_LINK_HREF_PROP;
+      const data: (typeof node.data & { hProperties?: Properties }) | undefined = node.data;
       node.data = {
-        ...node.data,
+        ...data,
         hProperties: {
-          ...(node.data?.hProperties ?? {}),
+          ...data?.hProperties,
           [prop]: target.url,
         },
       };
