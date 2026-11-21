@@ -572,8 +572,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
    */
   private dialOnline(id: string, view: DeviceView): void {
     if (!view.online || id === this.deviceId || !this.memberAccepted(id)) return;
-    if (this.deviceId < id) void this.dial(id).catch(() => undefined);
-    else if (this.arriving) void this.dial(id).catch(() => this.scheduleRedial(id));
+    if (this.deviceId < id || this.arriving) void this.dial(id).catch(() => this.scheduleRedial(id));
     else this.scheduleRedial(id);
   }
   /** The directory just dialed from was the relay's, not the cached one a socket opens with while the relay is unreachable. */

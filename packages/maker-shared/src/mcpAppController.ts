@@ -330,6 +330,9 @@ export class McpAppHeightGuard {
   resize(width: number): void {
     if (this.width === width) return;
     this.width = width;
+    this.reset();
+  }
+  reset(): void {
     this.samples = [];
     this.locked = undefined;
   }
@@ -352,3 +355,5 @@ export class McpAppHeightGuard {
     return height;
   }
 }
+
+export { McpAppMeasuredHeights, parseMcpAppMeasurements } from './mcpAppMeasuredHeights.js';

@@ -3583,7 +3583,9 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
     }
   });
 
-  it('不能顺延的任务(一次性)排队超时 → 可见失败,不静默消失', async () => {
+  // #8351: unit, real runner.fire; existing coverage only required an arbitrary failure.
+  // A never-accepted once prompt must retain timeout/cause/recovery, not an Agent failure.
+  it('一次性排队超时 → 保留未派发原因和补跑指引,不报 Agent 失败', async () => {
     vi.useFakeTimers();
     try {
       const harness = createSessionHarness(async () => ({ accepted: true }));
@@ -3591,17 +3593,22 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
       const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
 
       const firePromise = runner.fire(heartbeatSchedule({ recurring: false }), createFireContext());
-      // 先挂上 rejection handler 再推进假时钟:fire 会在 advance 期间同步 reject,
-      // 此时若还没有 handler,Node 会报 unhandled rejection 污染整个测试文件。
-      const rejection = expect(firePromise).rejects.toThrow();
+      const settled = firePromise.then(value => ({ value }), error => ({ error }));
       await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
       await vi.advanceTimersByTimeAsync(
         QUEUED_DISPATCH_MAX_WAIT_MS + QUEUED_DISPATCH_TRACK_POLL_MS,
       );
 
-      await rejection;
+      expect(await settled).toMatchObject({ value: {
+        sessionId: SESSION_ID, skipped: true,
+        resultText: expect.stringMatching(/\[QUEUE_WAIT_TIMEOUT\].*not dispatched.*30min/),
+      } });
       expect(queue.removeCalls).toEqual([{ sessionId: SESSION_ID, clientId: 'client-1' }]);
-      expect(notifier.notify).toHaveBeenCalled();
+      expect(harness.send).not.toHaveBeenCalled();
+      expect(notifier.notify).not.toHaveBeenCalled();
+      // Withdrawal must also prevent a late coordinator acceptance from dispatching.
+      await queue.accept();
+      expect(harness.send).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
