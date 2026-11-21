@@ -59,6 +59,8 @@ vi.mock('@/session/TeammateCreateController', () => ({ useTeammateCreateControll
   h.createOptions = options;
   return { renderTrigger: (trigger: unknown) => trigger, press: () => {}, label: 'create', sheets: null };
 } }));
+// 「伙伴集」表单走原生 FormSheet 链;本用例只验证首页段落,与其它子表单一样用替身隔离。
+vi.mock('@/session/BuddySetSheet', () => ({ BuddySetSheet: () => null }));
 vi.mock('@/session/TeammateList', () => ({
   useTeammateEntries: (items: any[], groups: any[] = [], query = '') => [...items.map(row => ({ kind: 'bot', row })), ...groups.map(row => ({ kind: 'group', row }))].filter(entry => entry.row.item.display.title.includes(query)),
   useTeammateRowRenderer: (options: any) => (entry: any) => el('button', { key: entry.row.key,
