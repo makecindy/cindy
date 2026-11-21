@@ -3297,8 +3297,10 @@ const RenderItemView = memo(function RenderItemView({
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
             )}
             renderText={(text, index) => (
+              // 排队/待发送正文仍是可读内容:待答 ask 卡锁住输入框时,主人要能长按
+              // 选中并复制刚排队的话,再粘到自定义答案里。发送锁不能降级为阅读锁。
               <MarkdownBody key={`text:${index}`} text={text} streaming={false}
-                selectable={false} pinContentWidth={false}
+                selectable pinContentWidth={false}
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
             )}
             resolveRemoteMedia={actions.onResolveRemoteMedia}

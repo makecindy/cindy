@@ -3,7 +3,7 @@
  * 消息来源标签渲染:设备(查看者自己发的不标)、插件、共享任务作者(气泡上方)、
  * 脱敏自动化、本机 IM 卡片(保留普通用户操作)。沿用 pluginAttachmentBubble 的 RN 替身。
  */
-import { act, createElement, useImperativeHandle, useMemo, useState } from "react";
+import { act, createElement, useImperativeHandle, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 // This suite renders zh-CN only. Keep the real i18n initializer, Chinese catalog
@@ -335,8 +335,11 @@ vi.mock("@/session/CompanionMessageActions", () => ({
 vi.mock("@/session/CompanionMessageCard", () => ({
   CompanionMessageCard: () => null,
 }));
+// Only the pending-send container is replaced; MessageRenderer's own renderText
+// callback (and its selectable gate) stays production code under test.
 vi.mock("@/session/PendingSendBubble", () => ({
-  PendingSendBubble: () => null,
+  PendingSendBubble: ({ item, renderText }: { item: { clientId: string; text: string }; renderText: (text: string, index: number) => ReactNode }) =>
+    createElement("div", { "data-testid": `pendingSend.body.${item.clientId}` }, item.text ? renderText(item.text, 0) : null),
 }));
 vi.mock("@/session/messageActions", async (original) => ({
   ...(await original<object>()),
@@ -1028,6 +1031,68 @@ describe("table-heavy assistant replies", () => {
 });
 
 vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
+// 测试价值
+// - 生产入口与可观察结果：真实 MessageRenderer 的 pending_send 分支通过 renderText
+//   挂真实 MarkdownBody；PendingSendBubble 容器用最小替身转发该回调。用户长按排队
+//   气泡正文应能进入 iOS 原生 UITextView 选区，DOM 上表现为 data-selectable="true"
+//   的原生文本根。
+// - Bug／规则依据：手机端正文直接长按选字是优先能力
+//   (docs/product-rules/cindy-bots-runtime.md §「私聊引用回复」2026-10-25 修订)。
+//   待答 ask 卡锁住输入框时，主人排队中的消息一直是 pending_send 气泡，正文
+//   原先被显式设为不可选，复制/粘贴整条路径都不可达。
+// - 现有覆盖缺口：相邻用例只覆盖完成态消息或自定义引用菜单，没有 pending_send
+//   正文的可选性；pendingSend 触摸用例只验证分享态轻点，不验证原生长按选字。
+// - 最小失败输入：一个 queued pending_send 项 + onQuoteSelection 缺省（模拟
+//   待答 ask 卡的发送锁）；修复前正文渲染 data-selectable="false"。
+// - tier：unit（jsdom 替身验证真实生产组件的原生选择根，真实系统菜单另需设备验收）。
+// - 实测耗时：7.35s 实墙（既有 49 条用例的 RN / LegendList mock 收集约 5s，
+//   本用例只新增一条；未超过 10s 上限）。
+describe("queued message text while an ask card blocks the composer", () => {
+  it("keeps pending-send body natively selectable without quote-to-composer", () => {
+    const pendingItem = {
+      type: 'pending_send',
+      key: 'message-queued-1',
+      clientId: 'queued-1',
+      text: 'Copy this queued sentence',
+      sentInlineTokens: [],
+      phase: 'queued',
+      queueIndex: 1,
+      thumbs: [],
+      fileCount: 0,
+      fileNames: [],
+      attachmentCount: 0,
+      uploadedCount: 0,
+      errorText: null,
+      actions: null,
+      hint: null,
+    };
+    const pendingSend = {
+      selectedClientId: null,
+      onSelect: vi.fn(),
+      onRemove: vi.fn(),
+      onBeginEdit: vi.fn(),
+      onSteer: vi.fn(),
+      onMove: vi.fn(),
+      onRetryOutbox: vi.fn(),
+      onRemoveOutbox: vi.fn(),
+    };
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    act(() => root.render(<MessageRenderer items={[pendingItem as any]} pendingSend={pendingSend} />));
+    try {
+      const body = host.querySelector('[data-testid="pendingSend.body.queued-1"]');
+      expect(body).not.toBeNull();
+      const selectable = body!.querySelector('[data-selectable="true"]');
+      expect(selectable).not.toBeNull();
+      expect(selectable!.textContent).toContain('Copy this queued sentence');
+      expect(body!.querySelector('[data-native-text-view]')).not.toBeNull();
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+});
 
 // Regression: tapping a cross-device source must reach the page's routing callback intact.
 it('opens cross-device source labels while redacted sources remain inert', () => {
