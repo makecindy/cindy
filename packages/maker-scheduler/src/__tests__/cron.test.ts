@@ -54,6 +54,19 @@ describe('parseCron', () => {
 });
 
 describe('nextRun', () => {
+  it.each([
+    ['0 0 * * 1', '2026-11-02T00:00:00Z'],
+    ['0 0 */1 * 1', '2026-11-02T00:00:00Z'],
+    ['0 0 */2 * 1', '2026-11-09T00:00:00Z'],
+    ['0 0 15 * */2', '2026-11-15T00:00:00Z'],
+    ['0 0 */3 * */2', '2026-10-31T00:00:00Z'],
+    ['0 0 */2,2 * 1', '2026-11-02T00:00:00Z'],
+    ['0 0 1-31 * 1', '2026-10-28T00:00:00Z'],
+  ])('keeps Vixie day-field wildcard semantics for %s', (expr, expected) => {
+    const from = Date.parse('2026-10-27T12:00:00Z');
+    expect(nextRun(expr, from, 'UTC')).toBe(Date.parse(expected));
+  });
+
   it('every 5 minutes (UTC) — from 12:03 → 12:05', () => {
     const from = Date.UTC(2026, 0, 1, 12, 3, 0);
     const next = nextRun('*/5 * * * *', from, 'UTC');
@@ -293,6 +306,11 @@ describe('nextRun', () => {
 });
 
 describe('cronToHuman', () => {
+  it('still describes stepped day constraints when their wildcard flag changes matching', () => {
+    expect(cronToHuman('0 0 */2 * *')).toBe('At 00:00 on day-of-month 1,...,31');
+    expect(cronToHuman('0 0 * * */2')).toBe('At 00:00 on Sun,Tue,Thu,Sat');
+  });
+
   it('prebakes common patterns', () => {
     expect(cronToHuman('* * * * *')).toBe('Every minute');
     expect(cronToHuman('*/5 * * * *')).toBe('Every 5 minutes');
