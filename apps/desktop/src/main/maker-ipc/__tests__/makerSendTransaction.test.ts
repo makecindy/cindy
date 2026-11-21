@@ -1829,7 +1829,7 @@ describe('maker SEND transaction', () => {
     const factory = vi.spyOn(logger, 'createLogger').mockReturnValueOnce(probe);
     onTestFinished(() => factory.mockRestore());
     const normalizer = createAttachmentNormalizer({
-      getTempDir: () => root, isLocalTask: async () => true, imageCacheStore: createImageCacheStore(() => root),
+      getTempDir: () => root, getTaskLocation: async () => 'local', imageCacheStore: createImageCacheStore(() => root),
       cindyMediaBlobStore: blobs, cindyMediaLedger: { removeRefById: vi.fn(), deleteZeroRefBlobRecord: vi.fn() },
       ingestMedia: vi.fn(), isRemoteAttachmentRef, parseRemoteAttachmentRef, materializeRemoteAttachment: fetchFile, removeRemote: release,
     });

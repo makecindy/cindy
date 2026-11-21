@@ -52,10 +52,12 @@ export interface AttachmentNormalizerIO {
   removeRemote: ReturnType<typeof import('../device-link/mediaTransfer.js').createMediaTransfer>['removeRemote'];
 }
 
+type TaskLocation = 'local' | 'ssh' | 'unknown';
+
 export interface AttachmentNormalizerPorts extends AttachmentNormalizerIO {
   getTempDir(): string;
   /** Desktop verifies paths in its filesystem namespace. Host performs its own admission checks. */
-  isLocalTask?(sessionId: string): Promise<boolean>;
+  getTaskLocation?(sessionId: string): Promise<TaskLocation>;
   /** Preserve the launcher's existing error contract after rolling back this materialization. */
   rejectAttachment?(cause: unknown): never;
   isRemoteAttachmentRef: typeof import('../device-link/remoteAttachment.js').isRemoteAttachmentRef;
@@ -408,7 +410,7 @@ async function normalizeUserMessage(
   // A DB read is task admission, not a transfer failure. Only bare local paths need it.
   const checksLocalPaths = msg.content.some(block => (block.type === 'file' || block.type === 'image')
     && !block.base64 && typeof block.path === 'string' && path.isAbsolute(block.path))
-    && await ports.isLocalTask?.(sessionId);
+    && await ports.getTaskLocation?.(sessionId) === 'local';
   try {
     for (const raw of msg.content) {
       if (raw.type !== 'image' && raw.type !== 'file') {
@@ -496,7 +498,7 @@ async function normalizeUserMessage(
         rejectAttachmentTransfer();
       }
 
-      if (!raw.base64 && path.isAbsolute(block.path) && (checksLocalPaths || (ports.isLocalTask && isManagedImageUrl(raw.path)))) {
+      if (!raw.base64 && path.isAbsolute(block.path) && (checksLocalPaths || (ports.getTaskLocation && isManagedImageUrl(raw.path)))) {
         if (!await isAttachmentReadable(block.path, replay, cachedImage && !!managedUrl)) {
           cleanedImages++;
           continue;
@@ -687,10 +689,10 @@ async function materializeQueuedOssAttachmentsInternal(
   const files = Array.isArray(it.files) ? it.files : null;
   const pcStr = typeof it.persistedContent === 'string' ? it.persistedContent : null;
 
-  let local: Promise<boolean> | undefined;
-  const isLocal = () => local ??= ports.isLocalTask?.(sessionId) ?? Promise.resolve(true);
+  let location: Promise<TaskLocation> | undefined;
+  const getLocation = () => location ??= ports.getTaskLocation?.(sessionId) ?? Promise.resolve('local');
   const inlinePaths = new Set<string>();
-  if (ports.isLocalTask) {
+  if (ports.getTaskLocation) {
     for (const file of [...(files ?? []), ...(Array.isArray(it.contextFiles) ? it.contextFiles : [])]) {
       if (!file || typeof file !== 'object') continue;
       const source = file.url || file.path;
@@ -704,7 +706,7 @@ async function materializeQueuedOssAttachmentsInternal(
       if (typeof source !== 'string') continue;
       if (file.base64 && path.isAbsolute(source)) { inlinePaths.add(source); continue; }
       const managed = isManagedImageUrl(source);
-      if (!managed && (!path.isAbsolute(source) || !await isLocal())) continue;
+      if (!managed && (!path.isAbsolute(source) || await getLocation() !== 'local')) continue;
       try {
         const cached = !managed ? undefined : source.startsWith('xdt-image://')
           ? ports.imageCacheStore.resolveSafe(source) : ports.cindyMediaBlobStore.resolveSafe(source);
@@ -811,12 +813,25 @@ async function materializeQueuedOssAttachmentsInternal(
     const cached = byRef.get(refStr);
     if (cached) return cached;
     if (isLocalImagePathField(refStr)) {
-      if (!await isLocal()) return null;
+      const taskLocation = await getLocation();
+      if (taskLocation === 'ssh') return null;
       try {
         const ext = path.extname(refStr).toLowerCase();
         const mimeType = cindyMediaBlobStore.mimeForExt(ext);
         if (!mimeType) throw new Error(`unsupported image ext: ${ext}`);
-        const entry = await ingestIntoBlobStore({ buffer: await (ports.isLocalTask ? readAttachmentSource(() => fs.readFile(refStr)) : fs.readFile(refStr)) }, mimeType);
+        let buffer: Buffer;
+        if (taskLocation === 'unknown') {
+          // Derived sessions may still use this machine's files. Preserve the original
+          // reference if the source lives elsewhere, as older history readers expect.
+          try { buffer = await fs.readFile(refStr); }
+          catch (error) {
+            log.warn('materialize local image path failed, leaving ref', { error: String(error) });
+            return null;
+          }
+        } else {
+          buffer = await (ports.getTaskLocation ? readAttachmentSource(() => fs.readFile(refStr)) : fs.readFile(refStr));
+        }
+        const entry = await ingestIntoBlobStore({ buffer }, mimeType);
         byRef.set(refStr, entry);
         return entry;
       } catch (e) {

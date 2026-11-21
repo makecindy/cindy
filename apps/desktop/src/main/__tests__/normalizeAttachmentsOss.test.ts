@@ -3,6 +3,7 @@
  * presign-get 下载 → 写临时文件 → block.path 变本地路径 → 用后删 OSS。失败拒绝整条消息。
  */
 import assert from 'node:assert/strict';
+import { parseUserContent } from '../../renderer/lib/imageRef.js';
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -77,8 +78,9 @@ vi.mock('../device-link/peerAttachmentStore', () => ({ copyPeerAttachment }));
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../device-link/mediaTransfer.desktop.js', () => ({ downloadToFile, removeRemote }));
 
+const warn = vi.hoisted(() => vi.fn());
 vi.mock('../logger.js', () => ({
-  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn, error: vi.fn() }),
 }));
 
 import {
@@ -497,6 +499,27 @@ describe('materializeQueuedOssAttachmentsDeferred — 出方向 files[] + persis
     // files[] 分支只处理 OSS 引用:裸路径原样(喂 agent 走 path 读文件)。
     const f = out.files as Array<{ path: string }>;
     expect(f[0].path).toBe('/workdir/assets/photo.png');
+  });
+
+  // L337 / unit: raw paths cannot render as history thumbnails. Exercise the actual writer and history parser.
+  it('ingests available images for tasks with uncertain locality and keeps unreadable historical references', async () => {
+    const file = { url: '/fixture/notes.png', mimeType: 'image/png', originalName: 'notes.png' };
+    const item = { persistedContent: JSON.stringify({ text: 'notes', images: [file] }) };
+    for (const row of [null, { remoteHostId: null, workingDir: null }, { source: 'review' },
+      { source: 'side-chat', workingDir: '/work' }, { agentDeviceId: 'other-computer' }]) {
+      sessionRow.mockResolvedValue(row);
+      const result = await materializeQueuedOssAttachmentsDeferred('task', item);
+      const history = parseUserContent((result.item as typeof item).persistedContent);
+      expect(history.images).toEqual([{ ...file, url: BLOB_URL }]);
+    }
+    expect(ingestMedia).toHaveBeenCalledTimes(5);
+    readFile.mockRejectedValueOnce(Object.assign(new Error('fixture was removed'), { code: 'ENOENT' }));
+    await expect(materializeQueuedOssAttachmentsDeferred('unknown', item)).resolves.toMatchObject({ item });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('materialize local image'), expect.objectContaining({ error: expect.stringContaining('fixture was removed') }));
+    sessionRow.mockResolvedValue({ remoteHostId: 'ssh' });
+    readFile.mockClear();
+    await expect(materializeQueuedOssAttachmentsDeferred('ssh', item)).resolves.toMatchObject({ item });
+    expect(readFile).not.toHaveBeenCalled();
   });
 
   it('本机绝对路径图片读取失败时整条拒绝，远端工作区路径保持远端引用', async () => {

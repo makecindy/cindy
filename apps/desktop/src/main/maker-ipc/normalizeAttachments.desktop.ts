@@ -18,10 +18,11 @@ export const {
   cleanupSessionTempAttachments, cleanupOrphanedTempAttachments,
 } = createAttachmentNormalizer({
   getTempDir: () => app.getPath('temp'),
-  isLocalTask: async id => {
+  getTaskLocation: async id => {
     const row = await getSessionRowSnapshotStrict(id);
+    if (row?.remoteHostId) return 'ssh';
     return row?.remoteHostId === null && row.agentDeviceId === null && !!row.workingDir &&
-      row.source !== 'side-chat' && row.source !== 'review';
+      row.source !== 'side-chat' && row.source !== 'review' ? 'local' : 'unknown';
   },
   imageCacheStore: {
     resolveSafe: (...args) => imageCacheStore.resolveSafe(...args),

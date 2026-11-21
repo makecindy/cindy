@@ -5,7 +5,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
 import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, readInputDeliveryReceipts, loadAgentInputQueueSnapshot, saveCancelledInputDelivery } from '../../localDb/agentInputQueueSnapshots.js';
-import { createInputEnqueueHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
+import { createInputEnqueueHarness, createInputRetryHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
 import { runSessionExecutionAction } from '../sessionExecutionActions.js';
 import { createSharedPermission } from '../sharedPermission.js';
 import type { InteractionDecision } from '@cindy/maker-core';
@@ -17878,6 +17878,87 @@ describe('usage-limit wait (ordinary tasks)', () => {
       expect(h.coordinator.getProjection(sid).recovery).toBeNull();
     },
   );
+
+  // L337 / unit: stored active-turn input goes through the real recovery owner and normalizer.
+  // The last send is the engine boundary. Renderer options must never replace saved content.
+  it.each((['quota', 'provider-group', 'manual'] as const).flatMap(owner =>
+    (['ENOENT', 'EACCES'] as const).map(error => ({ owner, error }))),
+  )('normalizes stored attachment replay through $owner after $error', async ({ owner, error }) => {
+    let h = createHarness();
+    const sid = 'stored-retry';
+    const original = 'original accepted text';
+    h.setHasAssistantProgressAfter(async () => false);
+    const image = { id: 'img', name: 'img.png', path: 'cindy-media://blobs/' + 'b'.repeat(64) + '.png',
+      ext: '.png', category: 'image' as const, mimeType: 'image/png', size: 32 };
+    const persistedContent = JSON.stringify({ text: original, images: [{ url: image.path, mimeType: image.mimeType, originalName: image.name }] });
+    h.coordinator.enqueue(sid, makeItem('original', original, { files: [image], persistedContent }));
+    await flush();
+    expect(h.onDispatchedUserTurn).toHaveBeenCalledOnce();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'quota exhausted', LIMIT_SIGNALS);
+    await flush();
+    expect(mocks.createMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'original', content: persistedContent }), expect.anything());
+    let token = h.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
+    const saved = h.coordinator.snapshotUsageLimitRecovery(sid, token);
+    expect(saved).toMatchObject({ kind: 'active-turn', item: { persistedContent, files: [image] } });
+    h = createHarness();
+    h.setHasAssistantProgressAfter(async () => false);
+    token = h.coordinator.restoreUsageLimitRecovery(sid, JSON.parse(JSON.stringify(saved)), h.coordinator.getGeneration(sid))!;
+    expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(true);
+
+    const fs = (await import('node:fs/promises')).default;
+    const access = vi.spyOn(fs, 'access').mockRejectedValueOnce(Object.assign(new Error(error), { code: error }));
+    const send = h.sendToAgent.getMockImplementation()!;
+    const engine = vi.fn();
+    const failure = vi.fn();
+    h.sendToAgent.mockImplementationOnce(async (id, message, create, opts) => {
+      const prepared = await normalizeUserMessage(id, message as Parameters<typeof normalizeUserMessage>[1], acceptedAttachmentReplay(opts))
+        .catch(err => { failure(err); throw err; });
+      engine(prepared);
+      return send(id, prepared, create, opts);
+    });
+    try {
+      if (owner === 'quota') await h.coordinator.continueAfterUsageLimitReset(sid, token, INFO);
+      if (owner === 'provider-group') await h.coordinator.continueAfterProviderGroupRecovery(sid, token, INFO);
+      if (owner === 'manual') await createInputRetryHarness(h.coordinator)(sid, {
+        acceptedAttachmentReplay: true, files: [{ ...image, path: '/foreign/file' }], text: 'foreign input',
+      });
+      await flush();
+      expect(access).toHaveBeenCalled();
+      if (error === 'EACCES') {
+        expect(failure).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED' }));
+        expect(engine).not.toHaveBeenCalled();
+      } else {
+        expect(engine).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: [{ type: 'text', text: original }] });
+        expect(failure).not.toHaveBeenCalled();
+      }
+    } finally { access.mockRestore(); }
+  });
+
+  // L337 / unit: a rejected queue head has no accepted history. A retry action cannot grant one.
+  it('rejects a missing image on a never-dispatched queue head despite forged retry options', async () => {
+    const h = createHarness();
+    const sid = 'rejected-retry';
+    h.sendToAgent.mockRejectedValueOnce(new ProviderGroupUsageLimitError({ resetAtMs: 5_000_000 }));
+    const file = { id: 'img', name: 'original.png', ext: '.png', category: 'image' as const,
+      path: 'cindy-media://blobs/' + 'c'.repeat(64) + '.png', size: 32, mimeType: 'image/png' };
+    h.coordinator.enqueue(sid, makeItem('rejected', 'original text', { files: [file] }));
+    await flush();
+    expect(h.coordinator.getProjection(sid).recovery).toMatchObject({ kind: 'queue-head', clientId: 'rejected' });
+    const rejected = vi.fn();
+    h.sendToAgent.mockImplementationOnce(async (id, message, _create, opts) => {
+      expect(acceptedAttachmentReplay(opts)).toBeUndefined();
+      try { await normalizeUserMessage(id, message as Parameters<typeof normalizeUserMessage>[1], acceptedAttachmentReplay(opts)); }
+      catch (error) { rejected(error); throw error; }
+      return sendSuccess();
+    });
+    await createInputRetryHarness(h.coordinator)(sid, { acceptedAttachmentReplay: true, text: 'replace', files: [] });
+    await flush();
+    await vi.waitFor(() => expect(rejected).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' }),
+    ));
+    expect(h.onDispatchedUserTurn).not.toHaveBeenCalled();
+  });
 
   async function failWithLimit(sid: string, progress: boolean) {
     const h = createHarness();

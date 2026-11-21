@@ -1409,7 +1409,7 @@ export class AgentInputCoordinator {
   private readonly restoredUsageLimitRecoveries = new WeakSet<object>();
   /** Provenance survives a quota restore without reviving the expired FireContext. */
   private readonly quotaScheduleOrigins = new WeakMap<object, NonNullable<AgentInputQueuedMessage['origin']>>();
-  private readonly interruptedReplayItems = new WeakSet<AgentInputQueuedMessage>();
+  private readonly acceptedHistoryReplays = new WeakSet<AgentInputQueuedMessage>();
   private readonly retrySwitchRevisions = new WeakMap<AgentInputQueuedMessage, number>();
   private readonly scheduledQuotaRetryItems = new WeakSet<object>();
   /** The quota classification belongs to the recovery, and survives runtime/token replacement. */
@@ -3945,7 +3945,9 @@ export class AgentInputCoordinator {
           },
         });
       }
-      if (opts?.auto && !usageWait) this.interruptedReplayItems.add(item);
+      // This copy comes from the main process's saved active turn (or restored
+      // active-turn receipt). Queue-head failures have never crossed that boundary.
+      this.acceptedHistoryReplays.add(item);
       inheritTelegramQuestionRetry(recovery.item, item);
       if ((opts?.auto && attemptToken !== null) || usageWait) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
@@ -5858,7 +5860,7 @@ export class AgentInputCoordinator {
       const reconnectRecovery = this.manualUiInputs.has(head) ? new AbortController() : undefined;
       active.reconnectRecovery = reconnectRecovery;
       const result = await this.deps.sendToAgent(sessionId, wireUserMessage, head.createOpts, {
-        ...(this.interruptedReplayItems.has(head) ? { [ACCEPTED_ATTACHMENT_REPLAY]: true as const } : {}),
+        ...(this.acceptedHistoryReplays.has(head) ? { [ACCEPTED_ATTACHMENT_REPLAY]: true as const } : {}),
         ...(appMessageGuard || taskActionGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
           try {
             await appMessageGuard?.();

@@ -194,6 +194,7 @@ describe('inline attachment temporary files', () => {
 
   // L337 / unit: the same selected resource must have the same admission on send and enqueue.
   it('checks confirmed local paths and preserves inline bytes and unknown location', async () => {
+    vi.mocked(cindyMediaBlobStore.mimeForExt).mockReturnValue('image/png');
     const gone = path.join(tempRoot.value, 'old.png');
     const file = { type: 'image', path: gone, ext: '.png', category: 'image', mimeType: 'image/png' };
     const message = (block: typeof file | (typeof file & { base64: string })) => ({ type: 'user' as const, content: [block] });
