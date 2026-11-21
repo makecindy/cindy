@@ -7,6 +7,7 @@
  * 这些行不带 ☆(收藏只记本机的模式)，也没有管理入口(那台的模式在那台上改)。
  */
 import { Settings2, Star, Waypoints } from 'lucide-react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
@@ -46,6 +47,11 @@ interface PickerRow {
 
 export function useModelGroupPickerRows(config: ModelGroupsConfig, deviceId?: string): PickerRow[] {
   const { t } = useTranslation();
+  return buildModelGroupPickerRows(config, t, deviceId);
+}
+
+/** 选择器里一个模式的一行：名字与「来源数 · 选法 · 推理强度」。 */
+export function buildModelGroupPickerRows(config: ModelGroupsConfig, t: TFunction, deviceId?: string): PickerRow[] {
   const hint = (route: ModelGroupRoute) => [
     t('modelGroups.sourceCount', { count: route.candidates.length }),
     t(`modelGroups.strategy.${route.strategy}.title`),

@@ -1259,8 +1259,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 供应商时提前提示 + 拦截创建,不让用户发出注定失败的首条消息。unknown 不拦截。
   // 选了另一台电脑的模型时不按被控电脑判:那一行来自那台已连接的供应商,登录由那台核对。
   // 插件引擎自带登录(由引擎自己的配置管理)，同样不按被控电脑的内置 Harness 判。
+  // 选着模式时来源由被控电脑在发送时选(只选已连接的)，不按草稿底层模型提示；模式没选到来源、沿用原模型时，
+  // 创建路径再按原模型核对(model-groups.md §6)。
   const agentAuthVerdict = useMemo(
-    () => remoteAgentPick || activePluginEngine ? ("ready" as const)
+    () => remoteAgentPick || activePluginEngine || activeHostModelGroup ? ("ready" as const)
         : agentAuthGateVerdict({
       providers: deviceProviders.providers,
       loading: deviceProviders.loading,
@@ -1268,7 +1270,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       agentKind: draft.agentKind,
     }),
     [deviceProviders.providers, deviceProviders.loading, deviceProviders.error, draft.agentKind, remoteAgentPick,
-      activePluginEngine],
+      activePluginEngine, activeHostModelGroup],
   );
   // 创建前的 fresh 鉴权确认(绕过缓存现拉):true = 确认无已连接供应商,应拦截。
   // 空目录 / 拉取失败(旧被控端 / 瞬断)与 agentAuthGateVerdict 的 unknown 同语义,
@@ -1425,8 +1427,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
           : null,
       ].filter(Boolean).join(' · ')
     : null;
-  // 选着模式时写模式名：用哪个来源由被控电脑在发送时决定。
-  const pillModelSummary = activeHostModelGroup?.name ?? pluginEnginePillSummary ?? (remoteAgentPick
+  // 草稿底层模型的名字：模式没选到来源、沿用原模型时，说明里写它。
+  const basePillModelSummary = pluginEnginePillSummary ?? (remoteAgentPick
     ? [
         remoteAgentModelName || remoteAgentPick.model,
         effortLabelFromRuntime({ currentModel: null, effortOptions: runtimeOptions.effortOptions }, remoteAgentPick.effort),
@@ -1436,6 +1438,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       : draft.model.trim()
         ? runtimeSummary.modelSummary
         : t('session.new.noModelSelected'));
+  // 选着模式时写模式名：用哪个来源由被控电脑在发送时决定。
+  const pillModelSummary = activeHostModelGroup?.name ?? basePillModelSummary;
   const pillAccessibilityModel = activePluginEngine
     ? [activePluginEngine.engine.name, pillModelSummary].join(' · ')
     : remoteAgentCatalog?.name
@@ -4233,7 +4237,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // 模型组：建任务前请被控电脑按模式选一个现在能用的来源，只用于这次新建(记住的草稿与偏好不变)；
       // 那台没有能用的来源或模式已删除时沿用原来的模型。
       const modelGroupAtSend = activeHostModelGroup && !collabDraft && !effectiveDraft.pluginEngine ? activeHostModelGroup : null;
-      const keptModelNameAtSend = pillModelSummary;
+      const keptModelNameAtSend = basePillModelSummary;
       let modelGroupResult: HostModelGroupResult | null = null;
       if (modelGroupAtSend) {
         modelGroupResult = await resolveHostModelGroup(maker, modelGroupAtSend.id, {
@@ -4513,6 +4517,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     draft,
     remoteAgentPick,
     pluginEnginePick,
+    activeHostModelGroup,
+    basePillModelSummary,
+    remoteAgentCatalogs,
     finishVoiceRecording,
     flushRecoveredDraft,
     leaveForeignOutboxRecovery,
@@ -4632,6 +4639,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     };
     try {
       if (!isCurrentOwner()) return;
+      // 模型组：与普通创建同一流程，先请被控电脑按模式选来源，再按实际要用的来源核对登录；目标文本就是
+      // 第一条消息(没有附件)。选到了来源就不按草稿底层模型拦；沿用原模型时照常核对原模型。
+      const goalModelGroup = activeHostModelGroup && !collabDraft && !pluginEnginePick ? activeHostModelGroup : null;
+      const goalKeptModelName = basePillModelSummary;
+      const goalModelGroupResult = goalModelGroup
+        ? await resolveHostModelGroup(maker, goalModelGroup.id, { hasImages: false })
+        : null;
+      if (goalModelGroup && (!isCurrentOwner() || !ensureDeviceAlive())) return;
+      const goalModeRouted = goalModelGroupResult?.outcome === 'routed';
       // 鉴权门禁(review P2:goal 模式与普通创建同屏同 agent,同样要拦):goal.set 会吞掉
       // fireTurn 的鉴权失败,用户会被带进一个永远跑不起来的目标会话——比普通路径更需要
       // 提前拦截。判定与 create() 完全同款:缓存判死先现拉确认;ready/unknown 与建链并行重验。
@@ -4649,7 +4665,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // Agent 在另一台电脑运行时登录在那台:不按被控电脑的登录拦(agentAuthVerdict 此时恒为 ready)。
       const freshAuth: Promise<{ unauthenticated: boolean; fresh: DeviceProvidersPayload | null;
         }> =
-        agentAuthVerdict === 'unauthenticated' || remoteAgentPick || pluginEnginePick
+        agentAuthVerdict === 'unauthenticated' || remoteAgentPick || pluginEnginePick || goalModeRouted
           ? Promise.resolve({ unauthenticated: false, fresh: null })
           : confirmAgentUnauthenticated(draft.agentKind, selectedDeviceId);
       if (!isCurrentOwner()) return;
@@ -4716,13 +4732,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // 选了插件引擎：任务按该引擎在被控电脑本机创建(Agent 不在另一台电脑)。
       let effectiveDraft = applyPluginEnginePick(
         applyRemoteAgentPick(draft, remoteAgentPick), pluginEnginePick);
-      // 模型组：与普通创建同一流程，目标文本就是第一条消息(没有附件)。
-      const goalModelGroup = activeHostModelGroup && !collabDraft && !effectiveDraft.pluginEngine ? activeHostModelGroup : null;
-      const goalKeptModelName = pillModelSummary;
-      const goalModelGroupResult = goalModelGroup
-        ? await resolveHostModelGroup(maker, goalModelGroup.id, { hasImages: false })
-        : null;
-      if (goalModelGroup && (!isCurrentOwner() || !ensureDeviceAlive())) return;
+      // 模型组选到的来源(开头已选好)：覆盖这次创建的模型、来源与 Agent 所在电脑。
       effectiveDraft = applyHostModelGroupRoute(effectiveDraft, goalModelGroupResult);
       if (
         worktreeIntent.applicable
@@ -4921,7 +4931,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         // 「rows.length > 0」条件会让零已连接来源场景漏过门禁。fetchDeviceProvidersFresh
         // 成功已按代际写回缓存,缓存即未过滤的原始 providers。
         const rawProviders = getCachedDeviceProviders(guardDeviceId)?.providers ?? [];
-        if (rawProviders.length > 0
+        if (!goalModeRouted && rawProviders.length > 0
           && connectedProvidersForAgent(rawProviders, draft.agentKind).length === 0) {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
@@ -4978,7 +4988,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         // (与下方设备切换同路径,不裸 return 留 retain-only)。
         if (guardResult.catalogKnown) {
           const rawProviders = getCachedDeviceProviders(guardDeviceId)?.providers ?? [];
-          if (rawProviders.length > 0
+          if (!goalModeRouted && rawProviders.length > 0
             && connectedProvidersForAgent(rawProviders, draft.agentKind).length === 0) {
             const pwt = precreatedWorktree;
             const decision = await resolveStartedDowngradeOrCommit({
@@ -5291,6 +5301,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     draft,
     remoteAgentPick,
     pluginEnginePick,
+    activeHostModelGroup,
+    basePillModelSummary,
+    remoteAgentCatalogs,
     goalBusy,
     leaveForeignOutboxRecovery,
     maker,

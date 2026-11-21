@@ -4,10 +4,12 @@
  *
  * 读取按需：进入页面时每台电脑读一次，15 秒内复用上次的答案；那台是旧版本(没有该 channel)时 5 分钟内不再问，
  * 之后再问一次：那台升级后不必重开 App 就能看到它的模式。
+ * 缓存按账号与登录代次隔离：换账号时清空，旧账号的迟到结果不写入。
  */
 import { useEffect, useMemo, useState } from 'react';
 import type { TFunction } from 'i18next';
 
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import type { MobileMakerTransport as MakerTransport } from '@/device-link/mobileMakerTransport';
 import { parseCompanionModelGroups, type CompanionModelGroup } from './companionProfileData';
 import type { NewSessionDraft } from './newSession';
@@ -26,6 +28,13 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>();
+subscribeMobileAuthOwner(() => cache.clear());
+
+/** 当前账号下这台电脑的缓存键；没登录或正在换账号时为 null(不读、不显示)。 */
+function cacheKey(deviceId: string): string | null {
+  const owner = getMobileAuthOwner();
+  return owner.accountKey && !owner.switching ? `${owner.accountKey}\u0000${owner.generation}\u0000${deviceId}` : null;
+}
 
 /** 测试用。 */
 export function resetHostModelGroupsCacheForTests(): void {
@@ -35,14 +44,19 @@ export function resetHostModelGroupsCacheForTests(): void {
 type ModelGroupsTransport = Pick<MakerTransport, 'listModelGroups'>;
 
 export function readHostModelGroups(deviceId: string, maker: ModelGroupsTransport): Promise<void> {
-  const entry = cache.get(deviceId) ?? { groups: null, unsupported: false, readAt: 0 };
-  cache.set(deviceId, entry);
+  const key = cacheKey(deviceId);
+  if (!key) return Promise.resolve();
+  const owner = getMobileAuthOwner();
+  const entry = cache.get(key) ?? { groups: null, unsupported: false, readAt: 0 };
+  cache.set(key, entry);
   if (entry.pending) return entry.pending;
   const reuseFor = entry.unsupported ? UNSUPPORTED_REREAD_MS : REREAD_MS;
   if (entry.readAt > 0 && Date.now() - entry.readAt < reuseFor) return Promise.resolve();
   entry.readAt = Date.now();
   const run = maker.listModelGroups()
     .then((raw) => {
+      // 读取期间换了账号：这份答案属于旧账号，不写入(换账号时缓存已清空)。
+      if (!isMobileAuthOwnerCurrent(owner)) return;
       if (raw === null) {
         entry.unsupported = true;
         entry.groups = null;
@@ -65,18 +79,22 @@ export function useHostModelGroups(
   enabled: boolean,
 ): HostModelGroup[] | null {
   const [, setVersion] = useState(0);
+  // 换账号：缓存已清空，重新渲染为「还没读到」，再按新账号读。
+  const [ownerGeneration, setOwnerGeneration] = useState(() => getMobileAuthOwner().generation);
+  useEffect(() => subscribeMobileAuthOwner(() => setOwnerGeneration(getMobileAuthOwner().generation)), []);
   useEffect(() => {
     if (!enabled || !deviceId || !maker) return;
     let cancelled = false;
     void readHostModelGroups(deviceId, maker).then(() => { if (!cancelled) setVersion((value) => value + 1); });
     return () => { cancelled = true; };
-  }, [enabled, deviceId, maker]);
+  }, [enabled, deviceId, maker, ownerGeneration]);
   return enabled && deviceId ? cachedHostModelGroups(deviceId) : null;
 }
 
 /** 上次读到的那台电脑的模式；没读到或不支持时为 null。 */
 export function cachedHostModelGroups(deviceId: string): HostModelGroup[] | null {
-  const entry = cache.get(deviceId);
+  const key = cacheKey(deviceId);
+  const entry = key ? cache.get(key) : undefined;
   return entry && !entry.unsupported ? entry.groups : null;
 }
 

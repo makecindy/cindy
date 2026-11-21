@@ -9573,7 +9573,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (!currentSession || !canUseRemoteSessionControls || controlBusy) return false;
     const group = sessionHostModelGroups?.find((item) => item.id === id);
     const deviceAtStart = deviceId;
-    const result = await resolveHostModelGroup(maker, id, undefined, { agentDeviceId: currentSession.agentDeviceId ?? null });
+    // 已挂着「下一条消息换到另一台电脑」时按那台挑：换模型会沿用它，两边必须是同一台(与电脑端一致)。
+    const result = await resolveHostModelGroup(maker, id, undefined, { agentDeviceId: nextAgentDeviceId ?? null });
     if (deviceIdRef.current !== deviceAtStart) return false;
     if (!result || result.outcome !== 'routed') {
       showTransientNotice(t('models.modelGroups.picker.switchUnavailable', { name: result?.groupName || group?.name || '' }));
@@ -9595,8 +9596,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     applyHostModelGroupResult(maker, sessionId, id, result, null);
     showTransientNotice(t('models.modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
     return true;
-  }, [currentSession, canUseRemoteSessionControls, controlBusy, sessionHostModelGroups, deviceId, maker, selectUnifiedComposerModel,
-    sessionId, showTransientNotice, t]);
+  }, [currentSession, canUseRemoteSessionControls, controlBusy, sessionHostModelGroups, deviceId, maker, nextAgentDeviceId,
+    selectUnifiedComposerModel, sessionId, showTransientNotice, t]);
   const composerModelGroupOptions = useHostModelGroupPickerOptions(
     sessionModelGroupsEligible ? sessionHostModelGroups : null, null, switchSessionByModelGroup, t,
   );

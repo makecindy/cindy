@@ -629,6 +629,10 @@ it('lists another computer\'s modes in its own cell and picks them for that comp
   // 另一台电脑的模式不带收藏 ☆，也没有管理入口(那台的模式在那台上改)。
   expect(document.querySelector('[data-model-group-favorite="mode"]')).toBeNull();
   expect(document.querySelector('[data-model-groups-manage]')).toBeNull();
+  // Typing in search switches to the all view (PR #11866 review r4650525981): that computer's matching
+  // mode stays listed under its own title instead of disappearing.
+  await act(async () => fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Studio mode' } }));
+  expect(screen.getByText('modelGroups.picker.deviceTitle')).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByText('Studio mode')));
   expect(onSelect).toHaveBeenCalledWith({ type: 'route', id: 'mode', deviceId: 'desk-2' });
 });
