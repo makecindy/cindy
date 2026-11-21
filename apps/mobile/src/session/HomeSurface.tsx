@@ -1,3 +1,5 @@
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
+import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
 import { useOrcaQuestionRows } from './orcaQuestionRows';
 import { sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
 import { ProjectPickerIcon } from './ProjectPickerIcon';
@@ -528,7 +530,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const screenFocused = routeFocused;
   const screenFocusedRef = useRef(screenFocused);
   screenFocusedRef.current = screenFocused;
-  const styles = useThemedStyles(makeStyles);
+  const styles = useHomeStyles();
   const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
   // 项目筛选按账号身份存取(项目 key 跨账号无效);其余视图偏好仍按设备共用。
@@ -3619,6 +3621,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       style={[styles.safeArea, { paddingLeft: embedded ? 0 : edgePadding.paddingLeft, paddingRight: embedded ? 0 : edgePadding.paddingRight }]}
       testID="devices.screen"
     >
+      {!embedded && <WallpaperBackdrop />}
       {nativeHomeHeader && active ? (
         <HomeNativeStackHeader
           keepMenuTopLeft={keepMenuTopLeft}
@@ -4296,7 +4299,7 @@ function ProjectRow({
   const hostKeys = new Set(project.sessions.map(item => item.session.remoteHostId
     ? `remote:${encodeURIComponent(item.session.remoteHostId)}:${project.workingDir}` : `local:${project.workingDir}`));
   const hostKey = hostKeys.size === 1 ? Array.from(hostKeys)[0]! : null;
-  const styles = useThemedStyles(makeStyles);
+  const styles = useHomeStyles();
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 折叠豁免要命令式读会话运行态,而派生链稳定化后本组件不再逐 emit 重渲染(cell 经
@@ -4850,8 +4853,9 @@ function HomeSessionRowInner({
   const activeSessionId = useContext(ActiveHomeSession);
   const active = item.session.id === activeSessionId || !!(activeSessionId && item.automationGroup?.sessionIds.includes(activeSessionId));
   const prepareDisclosure = useDisclosurePrepare();
-  const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
+  const styles = useHomeStyles();
+  const { colors, mode } = useTheme();
+  const { selected: wallpaper } = useWallpaper();
   const { t, i18n } = useTranslation();
   // 运行态走订阅而非命令式读取:行已 memo 化,父层不再逐 emit 重渲染,命令式读取会 stale。
   const latestItem = latestMobileSessionRow(item);
@@ -4955,7 +4959,7 @@ function HomeSessionRowInner({
         onPressIn={group && !groupRowOpensPrimary && !selectionMode ? () => prepareDisclosure(true) : undefined}
         style={({ pressed }) => [
           styles.sessionListRow,
-          active && { backgroundColor: colors.surfaceChip },
+          active && { backgroundColor: wallpaper === 'none' ? colors.surfaceChip : wallpaperRaisedFill(colors.surfaceChip, mode) },
           !showPreviewLine && styles.sessionListRowSingleLine,
           pressed && styles.pressed,
         ]}
@@ -5195,7 +5199,7 @@ function AutomationGroupChildren({
   testID: string;
   titleTestIDPrefix?: string;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useHomeStyles();
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 折叠豁免要命令式读子会话运行态,而父行(HomeSessionRow)已 memo 化、不再逐 emit
@@ -5404,9 +5408,15 @@ function pruneHomeDeviceConnectionStates(
   return changed ? next : current;
 }
 
-const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  ...homeListStyles(colors),
-  safeArea: { flex: 1, backgroundColor: colors.surface },
+function useHomeStyles() {
+  const { selected } = useWallpaper();
+  return useThemedStyles(selected === 'none' ? makeStyles : makeWallpaperStyles);
+}
+
+const makeWallpaperStyles = (colors: ThemeColors) => makeStyles(colors, 'transparent');
+const makeStyles = (colors: ThemeColors, listSurface: string = colors.surface) => StyleSheet.create({
+  ...homeListStyles(colors, listSurface),
+  safeArea: { flex: 1, backgroundColor: listSurface },
   pressed: mobileInteractionStyles.pressed,
   disabled: { opacity: 0.45 },
   homeChrome: {
@@ -5611,11 +5621,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     marginTop: spacing.sm,
   },
   homeList: {
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     flex: 1,
   },
   listContent: {
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     flexGrow: 1,
     paddingBottom: LEGACY_HOME_LIST_BOTTOM_RESERVE,
     paddingTop: 0,
@@ -5634,7 +5644,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.caption,
   },
   projectGroup: {
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     // 全宽分割线挂在项目组的顶部与底部:把整个项目块与上方/下方的普通对话分开,
     // 而非分隔项目头与其下属会话(项目头 → 内容之间保持连续无线)。
     borderBottomColor: colors.border,
@@ -5672,7 +5682,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     right: spacing.lg,
   },
   projectChildren: {
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
   },
   viewAllRow: {
     alignItems: 'center',
@@ -5693,7 +5703,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   automationGroupBlock: {
     // 自动化组(组行 + 展开的子行)整体成块:上下各一根全宽分割线,与项目组(projectGroup)
     // 同款,把任务块和普通对话在视觉上区分开。
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
@@ -5704,7 +5714,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderTopWidth: 0,
   },
   automationGroupChildren: {
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
   },
   automationViewAllRowDivider: {
     // 仅非块模式(项目组内部的自动化组)画自己的下线;块模式下块底线负责,不再叠一根。
