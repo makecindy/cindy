@@ -99,6 +99,31 @@ it('expands a restored-open sidebar and closes without a renderer-derived shrink
   expect(result.current.collapsed).toBe(true);
 });
 
+// Codex review P2 on #11561: a superseded invocation rejecting after the newer
+// reply armed its resize listener must not detach that listener — the release
+// ref already belongs to the newer transition, so a late rejection must no-op.
+it('a late rejection from a superseded request leaves the active listener armed', async () => {
+  const resolvers: ((delta: number) => void)[] = [];
+  const rejectors: ((err: Error) => void)[] = [];
+  window.electronAPI = { windowSidebarExpansion: vi.fn(
+    () => new Promise<number>((done, reject) => { resolvers.push(done); rejectors.push(reject); }),
+  ) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  rerender({ collapsed: true });
+  // The newer request (close) replies first and arms its resize listener.
+  await act(async () => { resolvers[1](-400); });
+  expect(result.current.frozenWidth).toBe(800);
+  // The superseded open request only rejects now.
+  await act(async () => { rejectors[0](new Error('superseded')); });
+  act(() => {
+    window.innerWidth = 600;
+    window.dispatchEvent(new Event('resize'));
+  });
+  expect(result.current).toEqual({ collapsed: true, instant: true });
+});
+
 // Bug: leaving the chat route retracts the expansion; returning must expand again
 // instead of adopting the shrunken window (repeated navigation narrowed it 1800 → 1399 → 998).
 it('re-expands when returning to a sidebar route after it was retracted', async () => {
