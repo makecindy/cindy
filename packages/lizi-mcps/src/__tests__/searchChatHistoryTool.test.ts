@@ -262,8 +262,8 @@ describe('search_chat_history tool', () => {
 
 describe('search_chat_history cloud companion rooms', () => {
   const room = { teammateId: 'bot_a', teammateName: 'Cindy', messageId: 'm1', role: 'assistant' as const, text: 'brew', createdAt: 2_000 };
-  const call = async (input: Record<string, unknown>, opts: { session?: string; scoped?: boolean } = {}) => {
-    const searchCompanionRooms = vi.fn(async () => ({ hits: [room], failed: [{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }], incomplete: true }));
+  const call = async (input: Record<string, unknown>, opts: { session?: string; scoped?: boolean; hits?: Array<typeof room> } = {}) => {
+    const searchCompanionRooms = vi.fn(async () => ({ hits: opts.hits ?? [room], failed: [{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }], incomplete: true }));
     const registry = new XdtHelperToolRegistry();
     registerSearchChatHistoryTool(registry, {
       history: {
@@ -285,6 +285,17 @@ describe('search_chat_history cloud companion rooms', () => {
     expect(payload.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['m1']);
     expect(payload.cloud_hits[0].createdAt).toBe('1970-01-01T00:00:02.000Z');
     expect(payload.cloud_failed).toEqual([{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }]);
+  });
+
+  // 测试价值：经 MCP registry 调用真实 search_chat_history；图片地址只出现在其他电脑伙伴的 cloud_hits 里、
+  // 本机没有命中时，也要给 image_view_hint（Codex 审阅指出）。最小失败输入：一条云端伙伴消息只含图片地址。tier：unit。
+  it('adds the image viewing hint when only a cloud companion hit has a managed image', async () => {
+    const hits = [{ ...room, text: 'see cindy-media://blobs/' + 'c'.repeat(64) + '.png' }];
+    const { payload } = await call({}, { session: 's1', hits });
+    expect(payload.hits).toEqual([]);
+    expect(payload.image_view_hint).toContain('resolve_local_path');
+    const { payload: plain } = await call({}, { session: 's1' });
+    expect(plain).not.toHaveProperty('image_view_hint');
   });
 
   it('keeps long room messages to one page and says where to continue', async () => {

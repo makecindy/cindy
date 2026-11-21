@@ -244,7 +244,9 @@ export function registerSearchChatHistoryTool(
         ...(cloudPage?.continueTo ? { cloud_continue_to: cloudPage.continueTo } : {}),
         ...(cloud?.failed.length ? { cloud_failed: cloud.failed } : {}),
         hits: outputHits,
-        ...(containsManagedImageReference(outputHits) ? { image_view_hint: HISTORY_IMAGE_VIEW_HINT } : {}),
+        // Cloud hits are companion messages from other computers; their image URLs need the same hint.
+        ...(containsManagedImageReference([outputHits, cloudPage?.hits ?? []])
+          ? { image_view_hint: HISTORY_IMAGE_VIEW_HINT } : {}),
         sessions: Object.fromEntries(Object.entries(result.sessions).map(([id, meta]) => [id, {
           ...meta,
           ...(deps.history.sessionUrl ? { sessionUrl: deps.history.sessionUrl(id) } : {}),
