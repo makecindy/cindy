@@ -29,6 +29,7 @@ const PENDING_DIR = path.join('.cindy', 'template');
 export const OWN_RULES_HEADING = '## Your own rules';
 const OWN_RULES_INTRO = 'Rules the owner asked for, or that you settled with the owner, go in this section. They take precedence over the standard text above. Cindy replaces everything above this section when it updates the standard and keeps this section as it is.';
 const CHANGES_NOTE = 'Changes made to an earlier version of this skill\'s standard, kept when Cindy updated it. Lines starting with + were added and lines starting with - removed; the other lines are that earlier standard, showing where each change was made. Keep the intent of these changes, in the section they were made in, together with the standard above. Where a change touches text the standard no longer has, decide whether it still applies. You may rewrite what still applies as plain rules in this section and then remove this block.';
+const HEADER_NOTE = 'Frontmatter lines from the earlier version of this skill that the updated header does not have (for example a changed standard field). Decide whether to put them back in the header above, then remove this block.';
 const EARLIER_NOTE = 'This skill\'s earlier version, kept when Cindy took over its standard. Keep in this section, as plain rules, only what the owner asked for that the standard above does not already say, then remove this block.';
 const LAYERED_FILES = new Set(['.agents/skills/hand-off/SKILL.md']);
 /** The standard text last written to a layered file: what a later change is compared with. */
@@ -60,8 +61,10 @@ function frontmatterFields(text: string): Map<string, string> {
   const fields = new Map<string, string>();
   let key: string | null = null;
   for (const line of match ? match[1].split('\n') : []) {
-    const top = /^([A-Za-z0-9_][^:\s]*)\s*:/.exec(line);
-    if (top) { key = top[1]; fields.set(key, line); }
+    // A top-level key starts at column 0 (bare, or in single or double quotes); indented and list
+    // lines continue the field before them.
+    const top = /^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)'|([^\s#'"-][^:]*?))\s*:(?:\s|$)/.exec(line);
+    if (top) { key = top[1] ?? top[2]?.replace(/''/g, "'") ?? top[3].trim(); fields.set(key, line); }
     else if (key) fields.set(key, `${fields.get(key)}\n${line}`);
   }
   return fields;
@@ -108,8 +111,15 @@ function layeredContent(rawCurrent: string, rawPrevious: string | null, next: st
   // The new standard's own section brings its intro; an earlier copy of it is not an own rule.
   const nextOwn = new Set(next.slice(standardPart(next).standard.length).split('\n').map(line => line.trim()).filter(Boolean));
   const ownRules = own.split('\n').filter(line => !nextOwn.has(line.trim())).join('\n').trim();
-  const sections = [ownRules, carried].filter(Boolean);
   const header = mergedHeader(next, current, previousStandard);
+  // Any frontmatter line the merged header does not carry and the starting standard did not have
+  // (a changed standard field, or a form the merge did not recognize) is kept for the teammate.
+  const headerLines = (text: string | null) => new Set((text === null ? '' : FRONTMATTER.exec(text)?.[1] ?? '').split('\n').filter(line => line.trim()));
+  const merged = headerLines(header);
+  const started = headerLines(previousStandard);
+  const leftover = [...headerLines(current)].filter(line => !merged.has(line) && !started.has(line));
+  const headerNote = leftover.length ? `${HEADER_NOTE}\n\n${fenced('yaml', leftover.join('\n'))}` : '';
+  const sections = [ownRules, carried, headerNote].filter(Boolean);
   return sections.length ? `${header.trimEnd()}\n\n${sections.join('\n\n')}\n` : header;
 }
 

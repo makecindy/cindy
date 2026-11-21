@@ -128,6 +128,18 @@ describe('applyTeammateTemplate', () => {
       expect(text).toBe(newStandard().replace('name: hand-off\n', 'name: hand-off\ndisable-model-invocation: true\nmetadata:\n  displayName: Handover\n'));
     });
 
+    // Review r4652956774: a quoted key is a field of its own; any header line the merge does not
+    // carry (here a changed standard field) is kept for the teammate instead of dropped.
+    it('keeps quoted frontmatter keys and hands over header lines it cannot merge', async () => {
+      const mine = oldStandard.replace('name: hand-off\n', 'name: handover\n"disable-model-invocation": true\n');
+      await setUp(mine, true);
+      await upgrade(2, newStandard());
+      const text = await read();
+      expect(/^---\n([\s\S]*?)\n---\n/.exec(text)![1]).toContain('"disable-model-invocation": true');
+      expect(/^---\n([\s\S]*?)\n---\n/.exec(text)![1]).toMatch(/^name: hand-off$/m);
+      expect(ownOf(text)).toContain('````yaml\nname: handover\n````');
+    });
+
     it('keeps an own skill that predates the template whole, for the teammate to tidy', async () => {
       const mine = '---\nname: hand-off\n---\n\n# Hand-off\n\n- Design reviews go straight to the owner.\n';
       await setUp(mine, false);
