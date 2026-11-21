@@ -19,6 +19,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import { remoteInvocationModels } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
@@ -136,11 +137,13 @@ export function useOwnRemoteProviders(): readonly OwnRemoteProvider[] {
 function RemoteProviderIcon({ provider, size }: { provider: ProviderView; size: number }) {
   return (
     <RemoteSourceMark markSize={size}>
-      {isProviderLogoKind(provider.logoKind) || hasProviderLogo(provider.id, provider.routing) ? (
-        <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={provider.logoKind} size={size} />
-      ) : (
-        <span className="text-15 font-medium leading-none">{providerMonogram(provider.name)}</span>
-      )}
+      <CustomProviderIcon svg={provider.customIcon} size={size}>
+        {isProviderLogoKind(provider.logoKind) || hasProviderLogo(provider.id, provider.routing) ? (
+          <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={provider.logoKind} size={size} />
+        ) : (
+          <span className="text-15 font-medium leading-none">{providerMonogram(provider.name)}</span>
+        )}
+      </CustomProviderIcon>
     </RemoteSourceMark>
   );
 }

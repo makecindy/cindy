@@ -58,6 +58,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
+import { withSubscriptionDisplayModels } from '@/lib/localCatalogSnapshot';
 import { LocalModelCatalogNotice } from '@/components/new-chat/LocalModelCatalogNotice';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { codexRecoveryActionKey, codexRecoveryDescriptionKey } from '@/hooks/codexAuthRecovery';
@@ -143,7 +144,11 @@ import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { CindyMark } from '@/components/icons/CindyMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
@@ -315,10 +320,15 @@ function RemoteProviderAccessRow({
 
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
 function providerIcon(p: ProviderView, size: number): ReactNode {
-  if (isProviderLogoKind(p.logoKind) || hasProviderLogo(p.id, p.routing)) {
-    return <ProviderLogoMark providerId={p.id} routing={p.routing} logoKind={p.logoKind} size={size} />;
-  }
-  return <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>;
+  return (
+    <CustomProviderIcon svg={p.customIcon} size={size}>
+      {isProviderLogoKind(p.logoKind) || hasProviderLogo(p.id, p.routing) ? (
+        <ProviderLogoMark providerId={p.id} routing={p.routing} logoKind={p.logoKind} size={size} />
+      ) : (
+        <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>
+      )}
+    </CustomProviderIcon>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2662,7 +2672,8 @@ export function ProvidersSection() {
   const { dataOwnerId } = useAuth();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
-  const { providers, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
+  const { providers: currentProviders, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
+  const providers = useMemo(() => currentProviders.map(withSubscriptionDisplayModels), [currentProviders]);
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
@@ -3546,13 +3557,26 @@ export function ProvidersSection() {
 
   // 「分享 {供应商}」管理页：设置内的子页面，返回回到该供应商的详情。只替换主体内容，
   // 下方的添加 / 编辑 / 导入弹窗层保持挂载，不会因打开管理页而丢失正在填写的内容。
+  const shareManageIsPluginEngine = Boolean(shareManageProviderId && pluginEngineKeyFromProviderId(shareManageProviderId));
+  const shareManagePluginEngines = usePluginEngines(shareManageIsPluginEngine);
+  const shareManagePluginEngine = shareManageIsPluginEngine && shareManageProviderId
+    ? shareManagePluginEngines.find((engine) => engine.providerId === shareManageProviderId) ?? null
+    : null;
   const shareManageProvider = shareManageRemote?.provider ?? (shareManageProviderId ? byId.get(shareManageProviderId) ?? null : null);
   const shareManagePage = shareManageProviderId ? (
     <ProviderShareManagePage
       key={`${shareManageRemote?.deviceId ?? 'local'}:${shareManageProviderId}`}
       providerId={shareManageProviderId}
-      providerName={shareManageProvider ? providerDisplayName(shareManageProvider, t) : shareManageProviderId}
-      providerIcon={shareManageProvider ? providerIcon(shareManageProvider, 18) : null}
+      providerName={
+        shareManageIsPluginEngine
+          ? (shareManagePluginEngine?.name ?? shareManageProviderId)
+          : (shareManageProvider ? providerDisplayName(shareManageProvider, t) : shareManageProviderId)
+      }
+      providerIcon={
+        shareManageIsPluginEngine
+          ? <PluginEngineIcon size={18} iconDataUrl={shareManagePluginEngine?.iconDataUrl} />
+          : (shareManageProvider ? providerIcon(shareManageProvider, 18) : null)
+      }
       deviceId={shareManageRemote?.deviceId}
       deviceName={shareManageRemote?.deviceName}
       initialGroup={shareManageRemote?.group}
@@ -3560,11 +3584,13 @@ export function ProvidersSection() {
       // 供应商还没加载出来时不判「未开放」；生成链接时 main 会再校验。
       gate={providerShareGate({
         remoteControlEnabled: shareManageRemote ? true : remoteControlEnabled,
-        invocationEnabled: !shareManageProvider || shareManageProvider.remoteInvocationEnabled === true,
+        invocationEnabled: shareManageIsPluginEngine
+          ? (!shareManagePluginEngine || shareManagePluginEngine.remoteUse?.enabled === true)
+          : (!shareManageProvider || shareManageProvider.remoteInvocationEnabled === true),
       })}
       onBack={() => {
         if (shareManageRemote) setSelectedRemoteKey(shareManageRemote.key);
-        else setSelectedId(shareManageProviderId);
+        else if (!shareManageIsPluginEngine) setSelectedId(shareManageProviderId);
         setShareManageProviderId(null);
         setShareManageRemote(null);
       }}

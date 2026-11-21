@@ -1,5 +1,5 @@
 import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
-import { normalizeBotModelChain, type BotModelRoute } from '../../../shared/botModelChain.js';
+import { parseRemoteBotModelChain, type BotModelRoute } from '../../../shared/botModelChain.js';
 import { createHash } from 'node:crypto';
 import { resolveRemoteText, type RemoteActionDescriptor, type RemoteActionInvokeResponse, type RemoteLocalizedText, type RemoteResource } from '@cindy/device-link';
 import type { BotRemoteSettingsDeps, createBotRemoteSettingsResource } from './botRemoteSettingsResource.js';
@@ -148,8 +148,8 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
         if (input.modelChain !== undefined) {
           let value: unknown;
           try { value = JSON.parse(string(input.modelChain, 4000)); } catch { fail(); }
-          const chain = normalizeBotModelChain(value);
-          if (!Array.isArray(value) || value.length !== 1 || chain.length !== 1 || !['claude', 'codex', 'pi'].includes(value[0]?.harness)) fail();
+          const chain = parseRemoteBotModelChain(value);
+          if (chain?.length !== 1) return fail();
           capabilities = { modelChainOverride: deps.fillModelGroups ? await deps.fillModelGroups(chain) : chain };
           deps.assertOwner(owner);
         }

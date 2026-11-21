@@ -197,6 +197,7 @@ function harness(options: {
     setWtBranchPreferenceSaving: vi.fn(), setWtBranchSync: vi.fn(), setWtBranchPreferenceError: vi.fn(),
     setWtBaseRepo: vi.fn(), setWtSourceBranch: vi.fn(), setWtSupportsRecoveryKeyDiscard: vi.fn(),
     setWtConfirmedIneligible: vi.fn(), setWtPreferenceSaving: vi.fn(),
+    setRemoteDraftPluginEngine: vi.fn(),
   };
   const applyDraftTarget = callback<(request: unknown) => void>('applyDraftTarget', bindings);
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
@@ -337,6 +338,7 @@ describe('Agent location chosen on a controlled new-task draft', () => {
     const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
       localModelIssue: null, localAlternate: null, setAlternateModel: vi.fn(), usesDeviceCatalog: true,
       setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(), setDlSel: vi.fn(),
+      setRemoteDraftPluginEngine: vi.fn(),
       normalizeDbAgentKind, dbToMakerAgentKind, modelCatalogKey, patchDraft,
       effectiveAgentDeviceId: undefined, isDeviceLinkDraft: true, deviceLinkInitial: null,
       controlledModelRoute: { catalogHostDeviceId: 'task-device' },
@@ -1457,6 +1459,7 @@ describe('the remote draft holder follows the displayed model', () => {
     const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
       ...bindings, localModelIssue: null, localAlternate: null, setAlternateModel: vi.fn(),
       setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(),
+      setRemoteDraftPluginEngine: vi.fn(),
       normalizeDbAgentKind, dbToMakerAgentKind, setDlSel: vi.fn(), patchDraft: vi.fn(),
       catalogDeviceId: 'target-device', usesDeviceCatalog: true,
       dlRuntimeTouchedRef: { current: false }, dlExplicitChoiceRef: { current: false },
@@ -1582,6 +1585,9 @@ describe('the seeded source is pinned only by an explicit model or source choice
       patchActiveTuplePrefs: vi.fn(),
       patchActivePrefs: vi.fn(),
       pushActiveDraftPref: vi.fn(),
+      activePluginEngine: null,
+      dlPluginEngine: null,
+      setRemoteDraftPluginEngine: vi.fn(),
     };
     // 显式来源(用户为这个目标**明确选过**的那家)。没有显式选择时是 null。
     const explicitProviderId = () => callback<() => string | null>('explicitDraftProviderId', {

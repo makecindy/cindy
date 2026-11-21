@@ -41,6 +41,16 @@ it('ignores forged App requests and Host responses from the Renderer, relaying o
   receive({ source: f.frame.contentWindow, data: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-escape' } });
   expect(f.parent.postMessage).not.toHaveBeenCalled();
 });
+// PR #11917, unit: an authenticated poll can report revocation before the
+// document-removal notice arrives. Exercise the script that runs in the frame.
+it.each(['MCP_PLUGIN_UNAVAILABLE', 'MCP_APP_SERVER_CHANGED'])('preserves %s from an outstanding sandbox poll', async code => {
+  const f = fixture();
+  f.pending[0](Response.json({ code }, { status: 410 }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.parent.postMessage).toHaveBeenCalledWith({
+    jsonrpc: '2.0', method: 'ui/notifications/sandbox-failed', params: { code },
+  }, '*');
+});
 it('gives the UI only display state while keeping Host results on the direct App transport', async () => {
   const f = fixture();
   const result = { jsonrpc: '2.0', id: 1, result: { private: 'tool-result' } };

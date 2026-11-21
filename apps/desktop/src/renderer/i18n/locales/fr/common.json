@@ -576,7 +576,8 @@
       "calloutUnknown": "Si vous ne connaissez pas cette personne, refusez ; le lien cesse de fonctionner une fois la demande refusée.",
       "approve": "Approuver le partage",
       "reject": "Refuser la demande",
-      "later": "Décider plus tard"
+      "later": "Décider plus tard",
+      "calloutPluginEngine": "{{name}} peut l’utiliser sans installer le plugin ni le CLI sur son ordinateur, avec la connexion et le quota CLI de cet ordinateur."
     },
     "apply": {
       "loading": "Lecture du lien de partage…",
@@ -8638,7 +8639,8 @@
           "description": "Lorsque cette option est activée, vos autres ordinateurs peuvent exécuter des tâches avec ce moteur. L’Agent s’exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur. Les fichiers et les commandes restent sur l’ordinateur où se trouve la tâche.",
           "unsupported": "Ce plugin ne permet pas encore d’utiliser son moteur depuis d’autres ordinateurs.",
           "remoteControlOff": "Cet ordinateur n’autorise pas encore le contrôle à distance : les autres ordinateurs ne peuvent donc pas utiliser ce moteur.",
-          "ariaLabel": "Autoriser vos autres ordinateurs à utiliser {{engine}}"
+          "ariaLabel": "Autoriser vos autres ordinateurs à utiliser {{engine}}",
+          "descriptionShareable": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous le partagez peuvent exécuter des tâches avec ce moteur sans installer le plugin. L’Agent s’exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur. Les fichiers et les commandes restent sur l’ordinateur où se trouve la tâche."
         },
         "githubRelease": {
           "title": "Mises à jour du plugin",
@@ -10068,7 +10070,7 @@
         "git-summary": "Résumés des modifications",
         "hook-generation": "Scripts d’automatisation",
         "automation-verification": "Vérification des imports",
-        "plugin-text": "Texte des extensions",
+        "plugin-text": "Texte des plugins",
         "voice-dialogue": "Conversations vocales",
         "voice-exit": "Décisions de fin d’appel",
         "voice-refinement": "Amélioration du texte vocal",
@@ -14270,6 +14272,8 @@
       "source": {
         "lastConfirmed": "Dernière actualisation : {{time}}",
         "unconfirmed": "Liste des modèles non actualisée",
+        "unreachable": "Impossible de joindre {{source}}",
+        "unreachableDetail": "Connexion impossible. Vérifiez le réseau.",
         "unavailable": "Modèle indisponible",
         "reconnect": "Se reconnecter",
         "manage": "Gérer la source",
@@ -17678,7 +17682,8 @@
         "title": "Importer les automatisations du dépôt",
         "description": "Source : {{workingDir}}. Vérifiez les définitions ci-dessous. L’importation applique ces modifications et active les nouvelles automatisations, qui peuvent exécuter des commandes et lancer des Agents avec un accès complet. Importez uniquement du contenu de confiance.",
         "accept": "Confirmer l’importation",
-        "removed": "Suppressions prévues : {{names}}"
+        "removed": "Suppressions prévues : {{names}}",
+        "fileMissing": "Importation ignorée. Le fichier d’automatisation est introuvable dans {{projectName}}."
       },
       "toast": {
         "summary": "{{inserted}} ajoutées · {{updated}} mises à jour · {{deleted}} supprimées",
@@ -17775,6 +17780,7 @@
       "openWorkdirFailed": "Impossible d'ouvrir le dossier"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
       "status": {
         "running": "En cours",
         "success": "Réussie",
@@ -21748,6 +21754,7 @@
       "reviewed": "Examiné",
       "verified-publisher": "Éditeur vérifié"
     },
+    "viewLimit": "Trop de pages sont ouvertes. Faites défiler ou repliez une autre page pour que celle-ci s’ouvre automatiquement.",
     "pluginRevoked": "Le plugin a été désactivé ou modifié. Cette page n'est plus disponible.",
     "pluginCspRejected": "La page a demandé un domaine non déclaré et a été bloquée.",
     "filesOnExecutionComputer": "Afficher le contenu du fichier sur l'ordinateur d'exécution",
