@@ -11618,16 +11618,16 @@ interface InputProjectionOperation {
  */
 function beginInputProjectionOperation(
   sessionId: string,
-  pinnedDeviceId?: string,
+  pinnedDeviceId?: string | null,
 ): InputProjectionOperation {
   // Queue controls are still writes to the session owner. The live mirror can
   // be empty for a short window while relay subscriptions are rebuilding, but
   // stickySessionOrigin retains the last authoritative device and prevents a
   // weak-link click from falling back to the controller's local maker.
-  const routedDeviceId = pinnedDeviceId ?? getStickySessionDeviceId(sessionId);
+  const routedDeviceId = pinnedDeviceId === undefined ? getStickySessionDeviceId(sessionId) : pinnedDeviceId ?? undefined;
   const origin = routedDeviceId;
   return {
-    api: routedDeviceId ? makerApiForDevice(routedDeviceId) : makerApiFor(sessionId),
+    api: routedDeviceId ? makerApiForDevice(routedDeviceId) : window.electronAPI.maker,
     origin,
     ...(pinnedDeviceId ? { pinnedDeviceId } : {}),
     dataOwner: getDataOwnerGeneration(),
@@ -18750,7 +18750,7 @@ export { UI_ACTION_TRIGGER_PREFIX };
  * error-tail banner) toasts or恢复红条。
  */
 
-function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
+function sendUiTriggerCore(sessionId: string, prompt: string, deviceId?: string | null): Promise<void> {
   // 已拿到发送 token(Agent 切换在途时 sendUiTrigger 直接拒绝、走不到这里),之后一定发出:
   // 同 sendMessageCore,只在这里作废关闭错误的待补标意图。
   _disposedLiveErrorIntents.delete(sessionId);
@@ -18758,8 +18758,8 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
   // UI triggers can be invoked from an error card while the mirror is being
   // reseeded. Pin every mutation in this attempt to the device that owned the
   // session when the action started.
-  const remoteDeviceId = getStickySessionDeviceId(sessionId);
-  const triggerApi = remoteDeviceId ? makerApiForDevice(remoteDeviceId) : makerApiFor(sessionId);
+  const targetDeviceId = deviceId === undefined ? getStickySessionDeviceId(sessionId) ?? null : deviceId;
+  const operation = beginInputProjectionOperation(sessionId, targetDeviceId);
   // Freeze the row the user acted on before session lookup / dispatch. A fast
   // continuation failure may append a new error before send resolves; that new
   // error must keep its retry banner.
@@ -18768,18 +18768,23 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
     : null;
   // device-link 远程会话:get/enqueue 都走传输层(getSessionFor 远程读被控 row,
   // makerApiFor(...) 远程隧道到被控端 coordinator)。
-  return getSessionFor(sessionId)
+  return getSessionFor(sessionId, targetDeviceId)
     .catch((err) => {
+      if (deviceId !== undefined) throw err;
       log.warn('sendUiTrigger: fetch session for createOpts failed', err);
       return null;
     })
     .then((session) => {
+      if (!isDataOwnerGenerationCurrent(operation.dataOwner)) throw new Error('Task owner changed');
+      if (deviceId !== undefined && (session?.id !== sessionId || !session.workingDir)) {
+        throw new Error('Task is unavailable on the selected device');
+      }
       if (!session?.workingDir) {
         // 行缺失兜底:direct send,行为与旧实现一致。
         // 无 pendingQueue 可取消，continue 在直发 accepted 后 durable ack；成功后再 dismiss
         // 尾部 error（主路径 enqueue 不能在排队阶段 dismiss，否则取消后续跑后入口丢失）。
         const sendDirect = (ackInterruptedTurnOnDispatch = false) =>
-          triggerApi
+          operation.api
             .send(sessionId, { type: 'user', content: prompt }, undefined, {
               userName: currentUserName ?? undefined,
               ...(ackInterruptedTurnOnDispatch ? { ackInterruptedTurnOnDispatch: true } : {}),
@@ -18822,13 +18827,20 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
         // 远端 SSH 会话:重启后 lazy-create 缺它会把远端 workingDir 当本地路径。
         ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       };
+      if (deviceId !== undefined) {
+        queued.createOpts.agentKind = dbAgentKindToMakerKind(session.agentKind);
+        queued.createOpts.fastMode = session.fastMode ?? false;
+        queued.createOpts.providerId = session.providerId;
+        queued.createOpts.resumeSessionId = session.sdkSessionId ?? undefined;
+        queued.createOpts.remoteHostId = session.remoteHostId ?? undefined;
+        queued.createOpts.makerMemoryEnabled = targetDeviceId ? undefined : getMakerMemoryEnabled();
+      }
       // #2194 (Codex review P1): 本地 UI 触发器（silent-stop「继续」/ 中断横幅
       // 「继续任务」/ Mivo 触发）是本端点击意图——合成行虽不渲染气泡，但点击后
       // 用户要看到续跑产出，必须按本端发送登记以触发强制回底；未读计数对
       // isSyntheticTrigger 行一律跳过，不会因此产生幻影未读。direct-send 兜底
       // 分支的 clientId 由执行端生成，renderer 无从登记（行缺失的稀有路径）。
       markLocalSentUserMessage(sessionId, queued.clientId);
-      const operation = beginInputProjectionOperation(sessionId, remoteDeviceId);
       return operation.api.input
         .enqueue(sessionId, queued, { sendAtMs: Date.now() })
         .then((projection) => {
@@ -18841,12 +18853,12 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
     });
 }
 
-function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
+function sendUiTrigger(sessionId: string, prompt: string, deviceId?: string | null): Promise<void> {
   if (!sessionId) return Promise.reject(new Error('sendUiTrigger: empty sessionId'));
   return withAgentSendDispatch(
     sessionId,
     () => Promise.reject(new Error('Agent switch is still in progress')),
-    () => sendUiTriggerCore(sessionId, prompt),
+    () => sendUiTriggerCore(sessionId, prompt, deviceId),
   );
 }
 

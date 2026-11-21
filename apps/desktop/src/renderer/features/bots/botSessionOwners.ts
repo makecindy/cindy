@@ -126,7 +126,7 @@ export interface SessionEntryNavigatorDeps {
   /** Asks main to dispose the card of this island click (see BotSessionEntryTarget). */
   consumeAlert: (sessionId: string, islandEntryId: string) => void;
   /** `isLatest` lets the ordinary path drop its own late async route result too. */
-  openOrdinary: (sessionId: string, messageClientId: string | undefined, isLatest: () => boolean, deviceId?: string) => void;
+  openOrdinary: (sessionId: string, messageClientId: string | undefined, isLatest: () => boolean, deviceId?: string | null) => void;
 }
 
 export interface SessionEntryNavigator {
@@ -188,12 +188,12 @@ export function createSessionEntryNavigator(
       void deps.isRemoteDevice(deviceId).then((remote) => {
         if (!isLatest() || committedSinceOpen.size > 0) return;
         if (remote) deps.openOrdinary(sessionId, messageClientId, isLatest, deviceId);
-        else openLocal();
+        else openLocal(null);
       }).catch(() => undefined);
       return;
     }
     openLocal();
-    function openLocal() {
+    function openLocal(localDevice?: null) {
       const known = deps.readKnownBotRoute(sessionId);
       // Background tasks keep their ordinary page with message anchors and visible-session reporting.
       if (known && !known.route.startsWith('/cc-agent/')) {
@@ -201,7 +201,9 @@ export function createSessionEntryNavigator(
         return;
       }
       let movedToBotPage = false;
-      deps.openOrdinary(sessionId, messageClientId, () => isLatest() && !movedToBotPage && committedSinceOpen.size === 0);
+      const current = () => isLatest() && !movedToBotPage && committedSinceOpen.size === 0;
+      if (localDevice === null) deps.openOrdinary(sessionId, messageClientId, current, null);
+      else deps.openOrdinary(sessionId, messageClientId, current);
       if (known) return;
       const ordinaryRoute = `/cc-agent/${encodeURIComponent(sessionId)}`;
       void deps.resolveBotRoute(sessionId).then((target) => {

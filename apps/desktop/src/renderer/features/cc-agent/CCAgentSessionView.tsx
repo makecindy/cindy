@@ -982,7 +982,10 @@ function CCAgentSessionContent({
   const { enabled: silentEncryptedRetryEnabled } = useSilentEncryptedRetry();
   // 从 Automations 的 RunHistoryCard 跳过来的 navigate 会带 state.from='automations'，
   // 在聊天区左上角显示一个返回按钮；点别的 session 入口（不带 state）时按钮自然消失。
-  const navState = location.state as { from?: string; sourceSessionId?: unknown } | null;
+  const navState = location.state as { from?: string; sourceSessionId?: unknown; localTaskSessionId?: string } | null;
+  const retryDeviceId = ownsWindowRoute && paramSessionId === sessionId
+    ? new URLSearchParams(location.search).get('device') ?? (navState?.localTaskSessionId === sessionId ? null : undefined)
+    : undefined;
   const cameFromAutomations = navState?.from === 'automations';
   // /review 审查任务不在任务列表里,从来源任务的审查卡片进入时带上来源 id,
   // 左上角给出回到来源任务的返回按钮(侧栏收起时这是唯一的回路)。
@@ -5328,9 +5331,9 @@ function CCAgentSessionContent({
     if (!sessionId || !canContinueError || isHistoryRecoveryPending()) return;
     invalidateHistoryRecoveryNavigation();
     await rebuildClaudeSubscriptionSessionBeforeRetry(errorReason);
-    await makerChatStore.sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT);
+    await makerChatStore.sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT, retryDeviceId);
   }, [canContinueError, errorReason, invalidateHistoryRecoveryNavigation, isHistoryRecoveryPending,
-    rebuildClaudeSubscriptionSessionBeforeRetry, sessionId]);
+    rebuildClaudeSubscriptionSessionBeforeRetry, retryDeviceId, sessionId]);
 
   // 点击 Cancel 关闭报错 banner 同样是处置(用户选择不管它了)。
   const handleDismissError = useCallback(() => {

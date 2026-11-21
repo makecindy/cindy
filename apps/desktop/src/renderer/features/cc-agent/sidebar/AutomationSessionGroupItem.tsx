@@ -356,7 +356,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     const collapsedRef = useRef(collapsed);
     collapsedRef.current = collapsed;
     const handleChildSessionClick = useCallback<SessionClickHandler>(
-      (id, modifiers) => {
+      (id, modifiers, session) => {
         if (
           !collapsedRef.current &&
           !showAllRef.current &&
@@ -364,7 +364,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
         ) {
           freezeCurrentLayoutRef.current(id);
         }
-        onSessionClick(id, modifiers);
+        onSessionClick(id, modifiers, session);
       },
       [onSessionClick],
     );
