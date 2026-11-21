@@ -622,4 +622,18 @@ describe('useProviderShareAgentDevices', () => {
     expect(catalog.refresh).toHaveBeenCalledWith('share:c', revoked, { retireOnly: true });
     expect(catalog.refresh).not.toHaveBeenCalledWith('share:a', expect.anything());
   });
+
+  it('separates plugin engine shares into pluginEngineDevices while keeping nameFor/isKnown/isReceived universal', async () => {
+    initial = [
+      share({ shareId: 'builtin', providerId: 'anthropic', providerLabel: 'Anthropic' }),
+      share({ shareId: 'plugin', providerId: 'acp-plugin:dsh-acp:dsh', providerLabel: 'DeepSeek Harness' }),
+    ];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.devices).toEqual([{ deviceId: 'share:builtin', name: 'from Magi' }]);
+    expect(result.current.pluginEngineDevices).toEqual([{ deviceId: 'share:plugin', name: 'from Magi' }]);
+    expect(result.current.nameFor('share:plugin')).toBe('from Magi');
+    expect(result.current.isKnown('share:plugin')).toBe(true);
+    expect(result.current.isReceived('share:plugin')).toBe(true);
+  });
 });

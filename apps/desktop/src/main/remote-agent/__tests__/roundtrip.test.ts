@@ -198,10 +198,13 @@ function fakeHostedAgent(input: HostedStartInput, credentialPaths?: string[]): A
     });
     return response.json() as Promise<{ result: { tools: unknown[] } }>;
   };
+  let currentModel = input.options.model;
   return {
     id: 'sdk-session-1',
     agentKind: input.kind,
-    model: input.options.model,
+    get model() {
+      return currentModel;
+    },
     async send(message, opts) {
       hostSends.push({ message, opts: opts ?? {} });
       running = true;
@@ -254,7 +257,9 @@ function fakeHostedAgent(input: HostedStartInput, credentialPaths?: string[]): A
     },
     isTurnRunning: () => running,
     async setPermissionMode() {},
-    async setModel() {},
+    async setModel(next: string) {
+      currentModel = next;
+    },
   };
 }
 
@@ -1831,13 +1836,109 @@ describe('a plugin engine of another computer', () => {
     host.dispose();
   });
 
-  it('is neither declared nor opened for a shared user', async () => {
+  it('is neither declared nor opened for a shared user when guest plugin engines are not wired', async () => {
     const { host, started } = createPluginEngineHost({ guest: true });
     const caps = await host.handle(CONTROLLER, { op: 'caps' }) as { pluginEngines?: boolean };
     expect(caps.pluginEngines).toBeUndefined();
     await expect(host.handle(CONTROLLER, { op: 'open', runId: randomUUID(), agentKind: 'acp', payload: { json: {} } }))
       .rejects.toThrow(/REMOTE_AGENT_UNSUPPORTED/);
     expect(started).toHaveLength(0);
+    host.dispose();
+  });
+
+  it('runs a shared plugin engine for an invited friend with guestWorkspace, model-access revalidation, and turn usage accounting', async () => {
+    let offered = true;
+    const allowedModels = new Set(['deepseek-v4']);
+    const started: PluginEngineHostedStartInput[] = [];
+    const guestUsages: Array<Record<string, unknown>> = [];
+    let forceHandshakeModel: string | null = null;
+    let closedForcedHandle = false;
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => {
+        hostInputs.push(input);
+        return fakeHostedAgent(input);
+      },
+      pluginEngines: {
+        canUse: () => true,
+        isOffered: (providerId, _c, model) =>
+          providerId === ENGINE && offered && (model === undefined || allowedModels.has(model)),
+        start: async (input) => {
+          started.push(input);
+          const base = fakeHostedAgent({ ...input, kind: 'pi' });
+          const forced = forceHandshakeModel;
+          return {
+            ...base,
+            ...(forced ? {
+              model: forced,
+              close: async () => {
+                closedForcedHandle = true;
+                await base.close();
+              },
+            } : {}),
+            agentKind: 'acp' as const,
+            negotiatedCapabilities: ENGINE_CAPABILITIES as unknown as AgentSessionHandle['negotiatedCapabilities'],
+          };
+        },
+      },
+      controllerTrust: () => 'guest',
+      recordGuestUsage: (controller, record) => { guestUsages.push({ controller, ...record }); },
+      isControllerAuthorized: () => authorized,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+
+    const caps = await host.handle(CONTROLLER, { op: 'caps' }) as { pluginEngines?: boolean };
+    expect(caps.pluginEngines).toBe(true);
+
+    // Disallowed model rejected before starting any engine process.
+    await expect(startRemoteAgentSession('acp', {
+      sessionId: 'guest-disallowed', workingDir: project, model: 'secret-model', providerId: ENGINE, permissionMode: 'default',
+    }, makeDeps(host))).rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+    expect(started).toHaveLength(0);
+
+    // Post-handshake fallback to an unapproved default model is closed immediately before any turn can run.
+    forceHandshakeModel = 'unapproved-default';
+    await expect(startRemoteAgentSession('acp', {
+      sessionId: 'guest-fallback-blocked', workingDir: project, model: 'deepseek-v4', providerId: ENGINE, permissionMode: 'default',
+    }, makeDeps(host))).rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+    expect(started).toHaveLength(1);
+    expect(closedForcedHandle).toBe(true);
+    forceHandshakeModel = null;
+
+    const handle = await startRemoteAgentSession('acp', {
+      sessionId: 'guest-plugin-task', workingDir: project, model: 'deepseek-v4', providerId: ENGINE, permissionMode: 'default',
+    }, makeDeps(host));
+    expect(started).toHaveLength(2);
+    expect(started[1].guest).toBe(true);
+    expect(hostInputs).toHaveLength(0);
+
+    handle.setInteractionResolver(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+    const reader = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'done') break;
+      }
+    })();
+    await handle.send({ type: 'user', content: [{ type: 'text', text: 'hi' }] }, { messageUuid: 'gp1' });
+    await reader;
+    expect(guestUsages).toEqual([expect.objectContaining({
+      controller: CONTROLLER,
+      kind: 'acp',
+      providerId: ENGINE,
+      samples: [expect.objectContaining({ model: 'deepseek-v4', turns: 1 })],
+    })]);
+
+    await expect(handle.setModel!('secret-model')).rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+
+    // Owner revokes model access mid-session: revalidateModelAccess closes the active guest run.
+    allowedModels.clear();
+    host.revalidateModelAccess();
+    await expect(handle.send({ type: 'user', content: [{ type: 'text', text: 'again' }] }, { messageUuid: 'gp2' }))
+      .rejects.toThrow();
+
+    offered = false;
+    await handle.close({ reason: 'navigation' });
     host.dispose();
   });
 });

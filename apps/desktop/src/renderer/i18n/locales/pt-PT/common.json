@@ -576,7 +576,8 @@
       "calloutUnknown": "Se não reconhecer esta pessoa, recuse; a ligação deixa de funcionar assim que o pedido for recusado.",
       "approve": "Aprovar partilha",
       "reject": "Recusar pedido",
-      "later": "Decidir mais tarde"
+      "later": "Decidir mais tarde",
+      "calloutPluginEngine": "{{name}} pode utilizá-lo sem instalar o plugin nem a CLI no próprio computador, usando a sessão e a quota da CLI deste computador."
     },
     "apply": {
       "loading": "A ler ligação de partilha…",
@@ -8631,7 +8632,8 @@
           "description": "Quando ativo, os seus outros computadores podem executar tarefas com este motor. O Agent é executado neste computador, usando a sessão e a quota deste computador. Os ficheiros e os comandos permanecem no computador onde a tarefa está.",
           "unsupported": "Este plugin ainda não permite usar o motor dele a partir de outros computadores.",
           "remoteControlOff": "Este computador ainda não permite controlo remoto, pelo que outros computadores não podem utilizar este motor.",
-          "ariaLabel": "Permitir que os seus outros computadores usem {{engine}}"
+          "ariaLabel": "Permitir que os seus outros computadores usem {{engine}}",
+          "descriptionShareable": "Quando ativo, os seus outros computadores e as pessoas com quem o partilha podem executar tarefas com este motor sem instalar o plugin. O Agent é executado neste computador, usando a sessão e a quota deste computador. Os ficheiros e os comandos permanecem no computador onde a tarefa está."
         },
         "githubRelease": {
           "title": "Atualizações do plugin",

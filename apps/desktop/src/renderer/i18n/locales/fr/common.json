@@ -576,7 +576,8 @@
       "calloutUnknown": "Si vous ne connaissez pas cette personne, refusez ; le lien cesse de fonctionner une fois la demande refusée.",
       "approve": "Approuver le partage",
       "reject": "Refuser la demande",
-      "later": "Décider plus tard"
+      "later": "Décider plus tard",
+      "calloutPluginEngine": "{{name}} peut l’utiliser sans installer le plugin ni le CLI sur son ordinateur, avec la connexion et le quota CLI de cet ordinateur."
     },
     "apply": {
       "loading": "Lecture du lien de partage…",
@@ -8631,7 +8632,8 @@
           "description": "Lorsque cette option est activée, vos autres ordinateurs peuvent exécuter des tâches avec ce moteur. L’Agent s’exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur. Les fichiers et les commandes restent sur l’ordinateur où se trouve la tâche.",
           "unsupported": "Ce plugin ne permet pas encore d’utiliser son moteur depuis d’autres ordinateurs.",
           "remoteControlOff": "Cet ordinateur n’autorise pas encore le contrôle à distance : les autres ordinateurs ne peuvent donc pas utiliser ce moteur.",
-          "ariaLabel": "Autoriser vos autres ordinateurs à utiliser {{engine}}"
+          "ariaLabel": "Autoriser vos autres ordinateurs à utiliser {{engine}}",
+          "descriptionShareable": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous le partagez peuvent exécuter des tâches avec ce moteur sans installer le plugin. L’Agent s’exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur. Les fichiers et les commandes restent sur l’ordinateur où se trouve la tâche."
         },
         "githubRelease": {
           "title": "Mises à jour du plugin",

@@ -567,7 +567,8 @@
       "calloutUnknown": "Wenn du diese Person nicht kennst, lehne ab. Nach der Ablehnung funktioniert der Link nicht mehr.",
       "approve": "Freigabe genehmigen",
       "reject": "Anfrage ablehnen",
-      "later": "Später entscheiden"
+      "later": "Später entscheiden",
+      "calloutPluginEngine": "{{name}} kann die Engine nutzen, ohne das Plugin oder die CLI auf dem eigenen Computer zu installieren, und verwendet dabei die CLI-Anmeldung und das Kontingent dieses Computers."
     },
     "apply": {
       "loading": "Freigabelink wird gelesen…",
@@ -8559,7 +8560,8 @@
           "description": "Wenn aktiviert, können deine anderen Computer Aufgaben mit dieser Engine ausführen. Der Agent läuft auf diesem Computer und nutzt dessen Anmeldung und Kontingent. Dateien und Befehle bleiben auf dem Computer, auf dem die Aufgabe liegt.",
           "unsupported": "Dieses Plugin unterstützt die Nutzung seiner Engine von anderen Computern aus noch nicht.",
           "remoteControlOff": "Dieser Computer ermöglicht noch keine Fernsteuerung, sodass andere Computer diese Engine nicht nutzen können.",
-          "ariaLabel": "Deinen anderen Computern die Nutzung von {{engine}} erlauben"
+          "ariaLabel": "Deinen anderen Computern die Nutzung von {{engine}} erlauben",
+          "descriptionShareable": "Wenn aktiviert, können deine anderen Computer und Personen, mit denen du teilst, Aufgaben mit dieser Engine ausführen, ohne das Plugin zu installieren. Der Agent läuft auf diesem Computer und nutzt dessen Anmeldung und Kontingent. Dateien und Befehle bleiben auf dem Computer, auf dem die Aufgabe liegt."
         },
         "githubRelease": {
           "title": "Plugin-Updates",

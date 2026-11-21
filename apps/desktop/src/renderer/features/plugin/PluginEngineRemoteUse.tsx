@@ -3,9 +3,9 @@
  *
  * One card per engine in the plugin's configuration section, drawn by Cindy (never by the plugin's
  * own settings page, which could otherwise open this computer on the user's behalf). Turning it on
- * lets the user's other computers run tasks on this engine: the agent runs here with this
- * computer's sign-in and quota, the task's files and commands stay on the computer the task is on.
- * Shared users never get plugin engines, so the copy does not mention sharing.
+ * lets the user's other computers (and invited friends when `shareSupported` / `guestWorkspace` is
+ * published by the plugin) run tasks on this engine: the agent runs here with this computer's
+ * sign-in and quota, while the task's files and commands stay on the computer the task is on.
  *
  * The levels follow an ordinary provider's row: this computer must allow remote control first, and
  * the plugin must offer the mode for that engine; otherwise the switch stays visible but cannot be
@@ -18,6 +18,10 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import { Switch } from '@/components/ui/switch';
+import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
+import { pendingRequestCountByProvider } from '@/features/provider-share/providerShareFormat';
+import { providerShareManagePath } from '@/features/provider-share/providerShareNavigation';
+import { useProviderSharePendingRequests } from '@/features/provider-share/providerShareStore';
 import { usePluginEngines } from '@/hooks/usePluginEngines';
 import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
 import { toast } from '@/lib/toast';
@@ -41,17 +45,22 @@ function EngineRemoteUseCard({
   engine,
   named,
   remoteControlEnabled,
+  pendingShareCount,
+  onManageShare,
   surfaceClassName,
 }: {
   engine: PluginEngineView;
   /** The plugin provides several engines: the card names the one it is about. */
   named: boolean;
   remoteControlEnabled: boolean;
+  pendingShareCount: number;
+  onManageShare?: (engine: PluginEngineView) => void;
   surfaceClassName: string;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const supported = engine.remoteUse?.supported === true;
+  const shareSupported = supported && engine.remoteUse?.shareSupported === true;
   const stored = engine.remoteUse?.enabled === true;
   const [enabled, setEnabled] = useState(stored);
   const [busy, setBusy] = useState(false);
@@ -86,10 +95,22 @@ function EngineRemoteUseCard({
           ) : !supported ? (
             t('settings.ghosts.detail.engineRemoteUse.unsupported')
           ) : (
-            t('settings.ghosts.detail.engineRemoteUse.description')
+            t(shareSupported
+              ? 'settings.ghosts.detail.engineRemoteUse.descriptionShareable'
+              : 'settings.ghosts.detail.engineRemoteUse.description')
           )}
         </p>
       </div>
+      {shareSupported ? (
+        <ProviderShareEntryButton
+          groupSize={null}
+          pendingCount={pendingShareCount}
+          onOpen={() => {
+            if (onManageShare) onManageShare(engine);
+            else navigate(providerShareManagePath(engine.providerId));
+          }}
+        />
+      ) : null}
       <Switch
         checked={supported && enabled}
         disabled={busy || !remoteControlEnabled || !supported}
@@ -120,14 +141,20 @@ function EngineRemoteUseCard({
 /** The cards for the engines `usePluginRemoteUseEngines` returned; nothing until the remote-control state is known. */
 export function PluginEngineRemoteUseCards({
   engines,
+  onManageShare,
   surfaceClassName,
 }: {
   engines: readonly PluginEngineView[];
+  onManageShare?: (engine: PluginEngineView) => void;
   surfaceClassName: string;
 }) {
   const remoteControlEnabled = useRemoteControlEnabled();
+  const pendingRequests = useProviderSharePendingRequests();
   // Not read yet: leave the cards out rather than flash the "remote control is off" explanation.
   if (engines.length === 0 || remoteControlEnabled === null) return null;
+  const pendingCounts = pendingRequestCountByProvider(
+    pendingRequests.filter((item) => !item.hostDeviceId).map((item) => item.share),
+  );
   return (
     <>
       {engines.map((engine) => (
@@ -136,6 +163,8 @@ export function PluginEngineRemoteUseCards({
           engine={engine}
           named={engines.length > 1}
           remoteControlEnabled={remoteControlEnabled}
+          pendingShareCount={pendingCounts.get(engine.providerId) ?? 0}
+          onManageShare={onManageShare}
           surfaceClassName={surfaceClassName}
         />
       ))}

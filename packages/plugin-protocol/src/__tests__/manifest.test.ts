@@ -1,5 +1,10 @@
 import { getPluginHostUi, getPluginToolUi, parseGhostUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
 import { hostUiApprovalSubjects } from '../hostUi.js';
+import {
+  GHOST_HARNESS_GUEST_WORKSPACE_ARG,
+  GHOST_HARNESS_REMOTE_WORKSPACE_ARG,
+  parseGhostHarnessAvailability,
+} from '../pluginHarnesses.js';
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANUAL_DESCRIPTION_MAX_CHARS,
@@ -141,6 +146,28 @@ describe('Ghost manifest contract', () => {
       const v2 = validateGhostManifest({ ...validManifest, slots: ['tool', 'node'], node, harnesses: [harness] });
       expect(v2.ok).toBe(true);
       if (v2.ok) expect(v2.manifest.harnesses).toBeUndefined();
+    });
+
+    it('keeps guestWorkspace availability only alongside available and remoteWorkspace, and locks CLI flag literals', () => {
+      expect(GHOST_HARNESS_REMOTE_WORKSPACE_ARG).toBe('--cindy-remote-workspace');
+      expect(GHOST_HARNESS_GUEST_WORKSPACE_ARG).toBe('--cindy-guest-workspace');
+      const parsed = parseGhostHarnessAvailability({
+        harnesses: [
+          { id: 'both', available: true, remoteWorkspace: true, guestWorkspace: true },
+          { id: 'remote-only', available: true, remoteWorkspace: true, guestWorkspace: 'yes' },
+          { id: 'guest-without-remote', available: true, guestWorkspace: true },
+          { id: 'offline', available: false, remoteWorkspace: true, guestWorkspace: true },
+        ],
+      }, ['both', 'remote-only', 'guest-without-remote', 'offline']);
+      expect(parsed).toEqual({
+        ok: true,
+        harnesses: [
+          { id: 'both', available: true, remoteWorkspace: true, guestWorkspace: true },
+          { id: 'remote-only', available: true, remoteWorkspace: true },
+          { id: 'guest-without-remote', available: true },
+          { id: 'offline', available: false },
+        ],
+      });
     });
   });
 

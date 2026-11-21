@@ -93,7 +93,7 @@ function enginePermissionModes(harness: PluginHarness): Pick<PluginEngineView, '
  * (and Electron) in with it. Until it is supplied, no engine reads as opened.
  */
 export interface PluginEngineRemoteUseAccess {
-  read(harness: Pick<PluginHarness, 'key' | 'remoteWorkspace'>): NonNullable<PluginEngineView['remoteUse']>;
+  read(harness: Pick<PluginHarness, 'key' | 'remoteWorkspace' | 'guestWorkspace'>): NonNullable<PluginEngineView['remoteUse']>;
   set(key: string, enabled: boolean): Promise<NonNullable<PluginEngineView['remoteUse']>>;
   onChange(listener: () => void): () => void;
 }
@@ -112,7 +112,11 @@ function toView(harness: PluginHarness): PluginEngineView {
     ...(harness.reportsUsage ? { reportsUsage: true } : {}),
     models: engineModels(harness),
     ...enginePermissionModes(harness),
-    remoteUse: remoteUseAccess?.read(harness) ?? { supported: harness.remoteWorkspace === true, enabled: false },
+    remoteUse: remoteUseAccess?.read(harness) ?? {
+      supported: harness.remoteWorkspace === true,
+      enabled: false,
+      shareSupported: harness.remoteWorkspace === true && harness.guestWorkspace === true,
+    },
   };
 }
 
