@@ -452,27 +452,39 @@ fn an_idle_connection_whose_peer_is_gone_is_declared_dead() {
 
 /// 测试价值：同一入口上，这一端自己停了很久（手机进程被冻结、电脑休眠）再醒来。离上次听到对端早就超过判死时限，
 /// 但那段时间这一端没有在听：对端还在时醒来探测一次就有回音，连接不能断；对端真没了，要接连探测几次都没有回音才判死。
-/// 没有这条时 `an_idle_connection_whose_peer_is_gone_is_declared_dead` 的规则会在醒来的第一个计时器上把好连接判死。
-/// 最小输入：一条空闲的连接，时钟一次跳过两个判死时限，跳完以后对端在或不在。Rust integration，虚拟时间。
+/// 停之前已经有一次探测没等到回音时也一样（PR #11856 审阅：那次探测丢了、这一端随后停了，醒来的第一个计时器
+/// 不能拿它判死）。没有这两条时 `an_idle_connection_whose_peer_is_gone_is_declared_dead` 的规则会把好连接判死。
+/// 最小输入：一条空闲的连接，停之前探测有回音或正好丢了，时钟一次跳过两个判死时限，跳完以后对端在或不在。
+/// Rust integration，虚拟时间。
 #[test]
 fn waking_after_a_long_stop_probes_before_giving_up() {
-    for peer_alive in [true, false] {
+    for (probe_lost_before, peer_alive) in [(false, true), (false, false), (true, true), (true, false)] {
+        let label = format!("probe lost before the stop: {probe_lost_before}, peer alive: {peer_alive}");
         let mut duo = Duo::new();
         duo.upload(&[1; 20_000]);
-        assert!(duo.run_until(duo.now + 20_000_000, &|duo| duo.in_flight.is_empty()));
+        assert!(duo.run_until(duo.now + 20_000_000, &|duo| duo.in_flight.is_empty()), "{label}");
+        if probe_lost_before {
+            // 服务端下一次探测（最多 15 秒后）等不到回音，之后每秒一次，这样过了几秒才停。
+            let probes = duo.server.security_stats().silence_pings;
+            duo.uplink = false;
+            assert!(duo.run_until(duo.now + 20_000_000, &|duo| duo.server.security_stats().silence_pings >= probes + 3), "{label}");
+            assert!(!duo.server.is_dead(), "{label}");
+        }
         // 两端都停了一分钟：谁也没有运行，线上也没有包。
         duo.in_flight.clear();
         duo.now += 60_000_000;
         duo.uplink = peer_alive;
         let woke = duo.now;
         let died = duo.run_until(woke + 20_000_000, &|duo| duo.server.is_dead());
-        assert_eq!(died, !peer_alive, "peer alive: {peer_alive}");
+        assert_eq!(died, !peer_alive, "{label}");
         if peer_alive {
-            assert!(!duo.client.is_dead() && duo.client.is_established() && duo.server.is_established());
+            assert!(!duo.client.is_dead() && duo.client.is_established() && duo.server.is_established(), "{label}");
         } else {
             let waited = duo.now - woke;
-            assert!((2_000_000..=5_000_000).contains(&waited), "gave up {waited} us after waking");
+            assert!((2_000_000..=5_000_000).contains(&waited), "{label}: gave up {waited} us after waking");
         }
+        // 时钟跳过去的那一下，两端到期的计时器各算一次；之后不能再空转。
+        assert!(duo.spurious_wakes <= 2, "{label}: {} spurious wakes", duo.spurious_wakes);
     }
 }
 

@@ -138,6 +138,8 @@ MUTANTS = [
      "        if self.silent_past_deadline(now_us) {\n            self.dead = true;\n            return;\n        }\n", ""),
     ("安静探测：空闲判死，到时限不醒来", "src/secure.rs",
      "                    consider(self.silence_deadline(self.connection.last_heard()));\n", ""),
+    ("安静探测：空闲判死，停之前的探测照算", "src/secure.rs",
+     "            self.silence_sent_at = None;\n", ""),
     ("安静探测：空闲判死，刚醒来不等探测发够", "src/secure.rs",
      "            && now_us >= self.silence_deadline(heard)\n", ""),
     ("包长：收包按发包上限截", "src/secure.rs",

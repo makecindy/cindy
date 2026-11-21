@@ -1,8 +1,8 @@
 # 空闲的连接也判死（2026-11-21）
 
-核心指纹 `0d0df395c3f6`（算法同前几轮：`src/*.rs` 按 LF 逐个 SHA-256，按 `sha256sum` 的格式排好再取 SHA-1），逐文件见
+核心指纹 `815d083b7cfe`（算法同前几轮：`src/*.rs` 按 LF 逐个 SHA-256，按 `sha256sum` 的格式排好再取 SHA-1），逐文件见
 [`source-sha256.json`](source-sha256.json)。与主干 `6639c854cc` 的核心相比只改了 `src/secure.rs`、`sim/tests/migration.rs`、
-`sim/mutants.py` 和 `README.md`，`prebuilt/core.wasm` 与 `prebuilt/manifest.json` 按新源码重编（367810 → 368186 字节，
+`sim/mutants.py` 和 `README.md`，`prebuilt/core.wasm` 与 `prebuilt/manifest.json` 按新源码重编（367810 → 368255 字节，
 导出的函数和参数不变）。核心 `[dependencies]` 仍为空，线格式不变，两端不需要同时更新。
 
 ## 起因
@@ -24,6 +24,8 @@
 - 这一端自己停过（手机进程被冻结、电脑休眠）再醒来时，离上次听到对端可能早就超过判死时限，但那段时间这一端没有在听。
   所以还要求眼下这一串探测是一次接一次发的、已经发够 `SILENCE_PROBE_INTERVALS`（3）个间隔：隔了两个间隔以上才再探测，
   算新的一串；这一串没发够之前，过了时限也接着探测。醒来后对端还在，一个往返就有回音；真没了，约 3 秒后判死。
+- 停之前已经发过探测、还没等到回音的情形也一样：两次处理计时器之间隔了两个探测间隔以上（探测没有回音时本来每个间隔都要醒一次），
+  说明这一端停过，停之前的探测不算数，醒来从头探测（`tick_established`；PR #11856 审阅指出最初的写法会拿停之前那次探测当场判死）。
 - 到判死的时刻要醒来判一次（`next_wake`），否则探测停了以后没有任何计时器。
 
 不改的：有数据在途时的判死、探测的间隔和包、关闭通知、换路径的逻辑。
@@ -36,26 +38,28 @@ streams 15、sharing 24、bursts 5、traversal 6、udp 2，共 143 项。新增�
 | 用例 | 断言 |
 |---|---|
 | `an_idle_connection_whose_peer_is_gone_is_declared_dead` | 两端空闲、对端一直回探测时 90 秒不判死；一个方向的包从此送不到，另一端在 14–31 秒内判死（最后一次听到对端最多是 15 秒前），判死前线上不超过 40 个包；它停了以后这一端也在 31 秒内判死；没有空转 |
-| `waking_after_a_long_stop_probes_before_giving_up` | 时钟一次跳过 60 秒（两端都没运行）：对端还在时两端都不判死；对端没了时醒来 2–5 秒后判死 |
+| `waking_after_a_long_stop_probes_before_giving_up` | 时钟一次跳过 60 秒（两端都没运行），停之前探测有回音、或正好有三次以上探测没等到回音，共四种组合：对端还在时两端都不判死；对端没了时醒来 2–5 秒后判死；跳过去之后不空转 |
 
 `idle_connections_only_keep_alive`（空闲一分钟线上不超过 12 个包、不判死）和换网随机矩阵（`random_moves_deliver_intact_streams`，
 6 个固定种子加 100 个随机种子）不变。
 
-**变异检验**（`python sim/mutants.py 空闲判死`，三个都被抓到）：
+**变异检验**（`python sim/mutants.py 空闲判死`，四个都被抓到）：
 
 | 变异 | 抓到它的用例 |
 |---|---|
 | 探测没有回音也不判死 | 两个新用例 |
 | 到判死的时刻不醒来 | `an_idle_connection_whose_peer_is_gone_is_declared_dead` |
+| 停之前的探测照算 | `waking_after_a_long_stop_probes_before_giving_up` |
 | 刚醒来不等探测发够 | `waking_after_a_long_stop_probes_before_giving_up` |
 
 **回环 UDP 加真实时钟**（手机用的原生引擎 `agent-net-native`，两个引擎走本机真实 UDP，临时测试，未提交）：
-两端空闲 40 秒，谁也不判死；之后一端不再运行，另一端 22.1 秒后报告连接已断。
+两端空闲 40 秒，谁也不判死；之后一端不再运行，另一端 22.1 秒后报告连接已断（在补上「停之前的探测不算数」之前的版本上跑的，
+这条规则只在本端自己停过时起作用，这个测试里没有）。
 
 **电脑端**：`packages/agent-net` 在重编的 WASM 上 `vitest run`，140 通过、5 跳过。
 
 **真机**（小米 Android 17，带新核心的测试包；对端是没有这次改动的电脑：局域网直连 5 台，经官方中转 2 台，其中一台是正式版 0.1.143）：
-App 在前台空闲 6 分钟，7 条连接没有一条断开重连。
+App 在前台空闲 6 分钟，7 条连接没有一条断开重连（同样是补上那条规则之前的版本）。
 
 ## 没测的
 

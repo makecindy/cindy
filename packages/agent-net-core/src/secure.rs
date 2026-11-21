@@ -814,6 +814,8 @@ pub struct SecureConnection<C: Crypto> {
     silence_sent_at: Option<u64>,
     /// 眼下这一串一次接一次的探测是从什么时候开始的：对端回了、或者隔了很久才再探测，都重新算。
     silence_started_at: u64,
+    /// 上一次处理计时器的时间：隔得太久说明这一端停过，见 `tick_established`。
+    ticked_at: u64,
     /// 最近一次因为这一端换了网络而从头量的时间。
     moved_at: Option<u64>,
     /// 最近一次路径验证通过、数据换到新路径的时间。
@@ -852,6 +854,7 @@ impl<C: Crypto> SecureConnection<C> {
             silence_heard: 0,
             silence_sent_at: None,
             silence_started_at: 0,
+            ticked_at: 0,
             moved_at: None,
             switched_at: None,
             last_id_challenge: None,
@@ -1561,6 +1564,14 @@ impl<C: Crypto> SecureConnection<C> {
         self.stats.path_failures += self.paths.expire(now_us);
         self.retain_connection_id_paths();
         self.connection.tick(now_us);
+        // 这一端停过（两次处理计时器之间隔了两个探测间隔以上，探测还没有回音时本来每个间隔都要醒一次）：
+        // 停之前发的探测不算数，那段时间这一端没有在听，醒来从头探测（`SILENCE_PROBE_INTERVALS`）。
+        if now_us.saturating_sub(self.ticked_at) > 2 * self.silence_interval()
+            && self.silence_sent_at.is_some_and(|sent| sent >= self.connection.last_heard())
+        {
+            self.silence_sent_at = None;
+        }
+        self.ticked_at = now_us;
         if self.silent_past_deadline(now_us) {
             self.dead = true;
             return;
