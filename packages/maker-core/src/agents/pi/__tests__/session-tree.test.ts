@@ -5,6 +5,7 @@ import {
   normalizePiSessionTree,
   piContextTokensFromTree,
   piRetryBranch,
+  piBranchImageQuotaRejected,
   userDraftTextFromPiEntry,
 } from '../session-tree.js';
 
@@ -118,6 +119,41 @@ describe('pi session tree adapter', () => {
     expect(piRetryBranch(retryTree([{
       type: 'message', message: { role: 'assistant', stopReason: 'error', content: [], errorMessage },
     }]), '0')).toEqual({ parentId: null, requestTooLarge });
+  });
+
+  // #8724: image count is independent of bytes/tokens. Corrupt media must stay an error.
+  it.each([
+    ['400 {"error":{"message":"too many images in request","type":"invalid_media"}}', true],
+    ['400 maximum number of images is 100', true],
+    ['Exceeded maximum number of images (50) allowed', true],
+    ['Too many images', true],
+    ['400 invalid_media: image decoding failed', false],
+    ['400 invalid_media', false],
+    ['400 unsupported image format', false],
+    ['context window exceeded', false],
+  ])('classifies only explicit image-count rejection: %s', (errorMessage, requestTooLarge) => {
+    expect(piRetryBranch(retryTree([{
+      type: 'message', message: { role: 'assistant', stopReason: 'error', content: [], errorMessage },
+    }]), '0')).toEqual({ parentId: null, requestTooLarge });
+  });
+
+  it('requires the latest active failure and exact user identity for retained-history recovery', () => {
+    const quota = { type: 'message', message: { role: 'assistant', stopReason: 'error', content: [],
+      errorMessage: 'too many images in request' } };
+    const tool = { type: 'message', message: { role: 'toolResult', content: [{ type: 'text', text: 'done' }] } };
+    const branch = (tail: Array<Record<string, unknown>>) => [
+      { id: '0', type: 'message', message: { role: 'user' } },
+      ...tail.map((entry, index) => ({ ...entry, id: String(index + 1) })),
+    ];
+    const entries = branch([tool, quota, ...settings, { type: 'context_edit', targetId: '2', replacement: null }]);
+    expect(piBranchImageQuotaRejected(entries, '0')).toBe(true);
+    expect(piBranchImageQuotaRejected(entries, '1')).toBe(false);
+    expect(piBranchImageQuotaRejected(entries, 'missing')).toBe(false);
+    for (const tail of [tool, emptyFailure, { type: 'compaction', summary: 'already compacted' },
+      { type: 'message', message: { role: 'assistant', stopReason: 'stop', content: [] } },
+      { type: 'context_edit', targetId: '2', replacement: 'new context' }]) {
+      expect(piBranchImageQuotaRejected(branch([quota, tail]), '0')).toBe(false);
+    }
   });
 
   it('still protects a context edit that replaces message content', () => {

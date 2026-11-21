@@ -703,6 +703,7 @@ export interface RemoteAgentWireSendOptions {
   logTitle?: string;
   messageUuid?: string;
   retryTranscriptUserEntryId?: string;
+  continueTranscriptUserEntryId?: string;
   userName?: string;
   planMode?: boolean;
   throwOnStartFailure?: boolean;
@@ -748,6 +749,7 @@ export async function encodeSendOptions(
     logTitle: opts.logTitle,
     messageUuid: opts.messageUuid,
     retryTranscriptUserEntryId: opts.retryTranscriptUserEntryId,
+    continueTranscriptUserEntryId: opts.continueTranscriptUserEntryId,
     userName: opts.userName,
     planMode: opts.planMode,
     throwOnStartFailure: opts.throwOnStartFailure,
@@ -815,6 +817,7 @@ export async function decodeSendOptions(value: unknown, callbacks: DecodeSendCal
     logTitle: optString(value.logTitle, 1024),
     messageUuid: optString(value.messageUuid, 128),
     retryTranscriptUserEntryId: optString(value.retryTranscriptUserEntryId, 256),
+    continueTranscriptUserEntryId: optString(value.continueTranscriptUserEntryId, 256),
     userName: optString(value.userName, 256),
     planMode: optBool(value.planMode),
     throwOnStartFailure: optBool(value.throwOnStartFailure),

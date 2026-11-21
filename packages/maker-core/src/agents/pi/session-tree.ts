@@ -140,6 +140,25 @@ export function normalizePiSessionTree(data: unknown): SessionTreeSnapshot {
   return { roots, leafId, activePathIds: reversed.reverse() };
 }
 
+/** Explicit provider image-count evidence; invalid_media alone also covers corrupt files. */
+export function isPiImageQuotaRejection(error: unknown): boolean {
+  return typeof error === 'string' && /\b(?:too many images|maximum number of images)\b/i.test(error);
+}
+
+/** Shared with the generated native bridge; inspect metadata without copying tool/media content. */
+export function piBranchImageQuotaRejected(branch: readonly { id?: string; type?: string; replacement?: unknown; message?: { role?: string; stopReason?: string; errorMessage?: unknown } }[], entryId: string): boolean {
+  const index = branch.findIndex(entry => entry.id === entryId);
+  if (index < 0 || branch[index]?.type !== 'message' || branch[index]?.message?.role !== 'user') return false;
+  for (let i = branch.length - 1; i > index; i--) {
+    const entry = branch[i];
+    if (entry.type === 'model_change' || entry.type === 'thinking_level_change' ||
+        (entry.type === 'context_edit' && entry.replacement === null)) continue;
+    return entry.type === 'message' && entry.message?.role === 'assistant' &&
+      entry.message.stopReason === 'error' && isPiImageQuotaRejection(entry.message.errorMessage);
+  }
+  return false;
+}
+
 /** Retry empty failures, allowing model/effort changes and omission-only context edits that do not produce output. */
 export function piRetryBranch(data: unknown, entryId: string): {
   parentId: string | null; requestTooLarge: boolean;
@@ -170,7 +189,7 @@ export function piRetryBranch(data: unknown, entryId: string): {
       throw new Error('Pi retry would discard output or session state');
     }
     hasFailedResponse = true;
-    requestTooLarge ||= /(?:\b413\b|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(
+    requestTooLarge ||= isPiImageQuotaRejection(message.errorMessage) || /(?:\b413\b|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(
       typeof message.errorMessage === 'string' ? message.errorMessage : '',
     );
   }

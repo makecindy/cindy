@@ -19,6 +19,8 @@ $ErrorActionPreference = 'Stop'
 $mutex = [System.Threading.Mutex]::new($false, $env:CINDY_SINGLETON_MUTEX_NAME)
 $acquired = $false
 try {
+  [Console]::Out.WriteLine('{"status":"waiting"}')
+  [Console]::Out.Flush()
   try {
     $acquired = $mutex.WaitOne([int]$env:CINDY_SINGLETON_WAIT_MS)
   } catch [System.Threading.AbandonedMutexException] {
@@ -96,6 +98,7 @@ try {
 
 type BarrierStatus =
   | { status: 'started' }
+  | { status: 'waiting' }
   | { status: 'locked' }
   | { status: 'acquired' }
   | { status: 'busy' }
@@ -177,6 +180,9 @@ function waitForBarrierStatus(
           return;
         }
         if (status.status === 'started') {
+          // Mutex initialization is still startup, bounded by the original
+          // 15s deadline. Only waiting proves native contention has begun.
+        } else if (status.status === 'waiting') {
           armTimeout(timeoutMs + 1_000, 'waiting for');
         } else if (status.status === 'locked') {
           // Native preparation + message-window 探测只在 mutex 安全持有后发生。
@@ -215,6 +221,7 @@ function parseBarrierStatus(line: string): BarrierStatus {
   const value = JSON.parse(line) as Partial<BarrierStatus>;
   if (
     value.status === 'started' ||
+    value.status === 'waiting' ||
     value.status === 'locked' ||
     value.status === 'acquired' ||
     value.status === 'busy'

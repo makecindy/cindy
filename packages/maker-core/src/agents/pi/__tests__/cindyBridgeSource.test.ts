@@ -3009,3 +3009,49 @@ it('leaves a direct tool alone when its required name is not the Cindy envelope'
   expect(requests).toHaveLength(1);
   expect(requests[0].params).toEqual({ name: 'write_file', arguments: { content: 'text' } });
 });
+
+// #8724/P1 unit: execute the generated read-only command against native-shaped entries.
+// Prior tree tests do not cover serialization at the extension boundary. Even a
+// >16MiB tool result must produce only a bounded nonce/boolean receipt, no mutation.
+it('projects continuation quota status in Pi without returning tool history', async () => {
+  const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf("  pi.registerCommand('cindy-continuation-status',");
+  const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf("  pi.registerCommand('cindy-branch-switch',", start);
+  let handler: (args: string, ctx: any) => Promise<void>;
+  runInNewContext(ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText, { pi: { registerCommand: (_name: string, command: any) => { handler = command.handler; } } });
+  const branch = [
+    { type: 'message', id: 'accepted', message: { role: 'user' } },
+    { type: 'message', id: 'tool', message: { role: 'toolResult', content: 'x'.repeat(16 * 1024 * 1024) } },
+    { type: 'message', id: 'failure', message: { role: 'assistant', stopReason: 'error', errorMessage: 'Too many images' } },
+    { type: 'model_change', id: 'model' },
+    { type: 'context_edit', id: 'edit', replacement: null },
+  ];
+  const notify = vi.fn();
+  const getBranch = vi.fn(() => branch);
+  const ctx = { isIdle: () => true, sessionManager: { getBranch }, ui: { notify } };
+  const nonce = 'fixture-continuation-nonce';
+  const invoke = (entryId: string) => handler!(encodeURIComponent(JSON.stringify({ nonce, entryId })), ctx);
+  await invoke('accepted');
+  const message = notify.mock.calls[0][0] as string;
+  expect(message.length).toBeLessThan(256);
+  expect(message).toBe('cindy:continuation-status:' + JSON.stringify({ nonce, imageQuotaRejected: true }));
+  expect(branch[1].message!.content!.length).toBe(16 * 1024 * 1024);
+  expect(branch).toHaveLength(5);
+  await invoke('missing');
+  expect(notify.mock.lastCall![0]).toContain('"imageQuotaRejected":false');
+  branch[2].message!.errorMessage = 'invalid_media';
+  await invoke('accepted');
+  expect(notify.mock.lastCall![0]).toContain('"imageQuotaRejected":false');
+  branch[2].message!.errorMessage = 'Exceeded maximum number of images (50) allowed';
+  await invoke('accepted');
+  expect(notify.mock.lastCall![0]).toContain('"imageQuotaRejected":true');
+  ctx.isIdle = () => false;
+  getBranch.mockClear();
+  await invoke('accepted');
+  expect(notify.mock.lastCall![0]).toContain('"imageQuotaRejected":false');
+  expect(getBranch).not.toHaveBeenCalled();
+  notify.mockClear();
+  await handler!('invalid-json', ctx);
+  expect(notify).not.toHaveBeenCalled();
+});

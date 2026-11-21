@@ -38,6 +38,18 @@ it('roundtrips the project memory locator without requiring it from older sender
   expect(decodeStartOptions({ model: 'm', makerMemoryProjectDir: 7 }).makerMemoryProjectDir).toBeUndefined();
 });
 
+// #8724 unit codec: old senders omit the additive continuation id; malformed ids cannot enable recovery.
+it('roundtrips retained-history recovery identity independently of replacement retry', async () => {
+  const callbacks = { onTranscriptUserEntry: vi.fn(), onInteractionStateChange: vi.fn(), writeAttachment: vi.fn() };
+  const encoded = await encodeSendOptions({ continueTranscriptUserEntryId: 'accepted-native-entry' }, async () => Buffer.alloc(0));
+  const decoded = await decodeSendOptions(JSON.parse(JSON.stringify(encoded.wire)), callbacks);
+  expect(decoded.continueTranscriptUserEntryId).toBe('accepted-native-entry');
+  expect(decoded.retryTranscriptUserEntryId).toBeUndefined();
+  for (const value of [{}, { continueTranscriptUserEntryId: 7 }, { continueTranscriptUserEntryId: 'x'.repeat(257) }]) {
+    expect((await decodeSendOptions(value, callbacks)).continueTranscriptUserEntryId).toBeUndefined();
+  }
+});
+
 it('encodes only application isolation, never its private URL, token, path or target', () => {
   const encoded = encodeStartOptions({ sessionId: 'client', workingDir: '/workspace', model: 'm', [LOCAL_AGENT_CLIENT]: {
     url: 'http://127.0.0.1:12345/private', token: 'private-token', storageDirectory: '/private-history', agentDeviceId: 'share:private', mcpName: 'hhh', hostToolsOnly: true,

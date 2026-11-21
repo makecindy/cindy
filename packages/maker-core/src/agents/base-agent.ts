@@ -2341,6 +2341,8 @@ export interface SendOptions {
   onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
   /** Exact accepted Pi input replaced by a zero-output retry; never match by text. */
   retryTranscriptUserEntryId?: string;
+  /** Exact accepted Pi input whose retained history is being continued; never rewind it. */
+  continueTranscriptUserEntryId?: string;
   /**
    * 当前用户的展示名 (host / renderer 在调 send 时提供)。仅用于 turn-start 时
    * push status event 的文案 — agent 拼成 "<userName> Just Wait ..." 让 UI 个人化;

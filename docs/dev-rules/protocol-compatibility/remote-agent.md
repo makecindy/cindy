@@ -573,6 +573,20 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
     回归见 `remote-agent/__tests__/connectionPool.test.ts`、`execServerProjection.e2e.test.ts`(中继忙闲)，以及真实 Claude Code / Codex / Pi 的
     `claudeHosted` / `codexHosted` / `piHosted.e2e.test.ts`(共用 `poolHarness.ts`)。
 
+## Pi 图片数量拒收后的续跑（#8724）
+
+既有 `send` options 新增可选 `continueTranscriptUserEntryId`，与零产出替换用的
+`retryTranscriptUserEntryId` 分开。任务电脑从原接受输入的持久映射解析身份；运行端核对
+当前原生分支和最新失败后，最多 compact 一次，再发送保留工具成果的续跑，不回退或重放工具。
+两者同时存在时仅执行既有零产出替换路径，不叠加恢复。
+
+新运行端收到旧请求（字段缺省）保持原行为；旧运行端丢弃新字段，仍发送原续跑，可能继续
+遇到图片数量拒收，不会误当零产出替换。缺失或已换窗的身份不按文本猜测。
+沿用 `maker:remote-agent:v1`，官方／自建中转和供应商组透传原业务载荷，无新 op、能力位、
+权限、数据库或服务端修改。恢复仅作用于这个任务，不重建共享连接。回滚后旧端仍能读原历史。
+回归见 `plumbing.test.ts`、`makerSendTransaction.test.ts` 与 `pi-provider-routing.test.ts`；
+codec／替身 RPC 不等同于线上跨设备实测。
+
 ## 项目文件记忆（2026-11-13）
 
 `RemoteAgentWireStartOptions.makerMemoryProjectDir?: string` 是任务电脑的普通 Markdown 目录定位，

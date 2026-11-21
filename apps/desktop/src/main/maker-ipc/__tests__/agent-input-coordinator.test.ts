@@ -5539,6 +5539,24 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(hasTelegramQuestionRoute(h.sendToAgent.mock.calls[1][3][TELEGRAM_QUESTION_ORIGIN])).toBe(true);
   });
 
+  // #8724: the retained-history retry must carry identity without requesting a rewind.
+  it('retains the original input identity on retries after completed tool progress', async () => {
+    const h = createHarness();
+    const sid = 'image-quota-progress-retry';
+    h.setHasAssistantProgressAfter(async () => true);
+    h.coordinator.enqueue(sid, makeItem('image-task', 'take screenshots and act'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', '400 too many images in request');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1][3]).toMatchObject({ continueUserClientId: 'image-task' });
+    expect(h.sendToAgent.mock.calls[1][3].retryUserClientId).toBeUndefined();
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
+  });
+
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
     // retry-supersede:零产出克隆重发会在历史里留下两条一模一样的 user 行
     // (旧行 + 克隆行)。克隆行落库并派发成功后必须软删旧行,且锚定的是
@@ -5588,6 +5606,50 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
     expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]?.supersedesUserClientId).toBeUndefined();
+  });
+
+  // R1 unit: stable authority lineage is not the currently accepted native turn.
+  it('continues the accepted replacement after zero-output retry then quota-limited tool progress', async () => {
+    const h = createHarness();
+    const sid = 'replacement-then-quota';
+    h.setHasAssistantProgressAfter(async () => false);
+    h.coordinator.enqueue(sid, makeItem('original-hidden-after-retry', 'perform the task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'network error');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    const replacementId = h.sendToAgent.mock.calls[1][3].persistUserMessage!.clientId;
+    expect(h.supersedeRetriedUserTurn).toHaveBeenCalledExactlyOnceWith(sid, {
+      supersededUserClientId: 'original-hidden-after-retry', retryUserClientId: replacementId,
+    });
+    h.setHasAssistantProgressAfter(async () => true);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', '400 too many images in request');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    const options = h.sendToAgent.mock.calls[2][3];
+    expect(options.continueUserClientId).toBe(replacementId);
+    expect(options.retryUserClientId).toBeUndefined();
+    expect(h.onDispatchedUserTurn.mock.calls[2][1].retrySourceClientId).toBe('original-hidden-after-retry');
+    expect(h.supersedeRetriedUserTurn).toHaveBeenCalledOnce();
+    const continuationId = options.persistUserMessage!.clientId;
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', '400 too many images in request');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent.mock.calls[3][3].continueUserClientId).toBe(continuationId);
+    h.setHasAssistantProgressAfter(async () => false);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'network error');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent.mock.calls[4][3].continueUserClientId).toBeUndefined();
+    expect(h.onDispatchedUserTurn.mock.calls[4][1].continueUserClientId).toBeUndefined();
   });
 
   it('chained zero-progress retries anchor each supersede on the previous clone', async () => {
@@ -13930,7 +13992,8 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     const sid = 'replace-after-clear';
     await h.coordinator.ensureQueueRestored(sid);
     h.setRunning(true);
-    h.coordinator.enqueue(sid, { ...makeItem('q-1', 'before'), retrySourceClientId: 'original-retry-source' });
+    h.coordinator.enqueue(sid, { ...makeItem('q-1', 'before'), retrySourceClientId: 'original-retry-source',
+      continueUserClientId: 'accepted-replacement' });
     await flush();
 
     const projected = h.coordinator.getProjection(sid).pendingQueue[0];
@@ -13940,7 +14003,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 
     // 模拟旧调用方从脱敏投影重建整条消息。coordinator 的最终替换边界仍须
     // 锚定首次 host receipt，避免编辑后持久化出一个无接收时间的快照。
-    expect(h.coordinator.replaceQueuedMessage(sid, 'q-1', makeItem('q-1', 'after'))).toBe(true);
+    expect(h.coordinator.replaceQueuedMessage(sid, 'q-1', { ...makeItem('q-1', 'after'), continueUserClientId: 'forged' })).toBe(true);
     await flush();
     const snapshot = h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? [];
     const acceptedAtMs = authoritative?.hostAcceptedAtMs;
@@ -13949,6 +14012,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
       text: 'after',
       hostAcceptedAtMs: acceptedAtMs,
       retrySourceClientId: 'original-retry-source',
+      continueUserClientId: 'accepted-replacement',
     });
 
     const restarted = createHarness();
@@ -13956,7 +14020,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     restarted.setLoadQueueSnapshot(async () => snapshot);
     await restarted.coordinator.ensureQueueRestored(sid);
     expect(restarted.coordinator.getProjection(sid).pendingQueue).toEqual([
-      expect.objectContaining({ clientId: 'q-1', text: 'after' }),
+      expect.objectContaining({ clientId: 'q-1', text: 'after', continueUserClientId: 'accepted-replacement' }),
     ]);
   });
 

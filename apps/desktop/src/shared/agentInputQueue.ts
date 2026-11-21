@@ -501,6 +501,8 @@ export interface AgentInputQueuedMessage {
   supersedesUserClientId?: string;
   /** Stable retry provenance; unlike supersedes, never hides a user message. */
   retrySourceClientId?: string;
+  /** Exact accepted input being continued; separate from stable retry provenance. */
+  continueUserClientId?: string;
 }
 
 export type AgentInputDelivery = 'turn' | 'steer';

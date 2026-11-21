@@ -244,6 +244,8 @@ export interface AgentInputSendOpts {
   readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
   /** Main-owned identity of the zero-output user turn being replaced. */
   retryUserClientId?: string;
+  /** Accepted source input for retained-history recovery, never a replacement. */
+  continueUserClientId?: string;
   toolsDisabled?: boolean;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: string;
   readonly [AUTO_REVIEW_USER_INTENT]?: string;
@@ -3838,6 +3840,7 @@ export class AgentInputCoordinator {
           // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行
           // 一并误藏(窗口从更早的行一直铺到本条)。
           retrySourceClientId: recovery.item.retrySourceClientId ?? recovery.item.supersedesUserClientId ?? recovery.item.clientId,
+          continueUserClientId: recovery.item.clientId,
           supersedesUserClientId: undefined,
           // 自动恢复不是计划批准：保留原 Plan/权限选项，不能因隐藏 CONTINUE
           // 降到 Full access。人工 Retry 仍沿用既有合成 UI 动作策略。
@@ -3934,6 +3937,7 @@ export class AgentInputCoordinator {
           // 自动 clone 自身会被 renderer 隐藏，不能再软删原始可见 user 行；人工 Retry
           // 才用可见克隆取代旧行。显式覆盖也避免继承上一轮的隐藏标记。
           retrySourceClientId: recovery.item.retrySourceClientId ?? recovery.item.supersedesUserClientId ?? recovery.item.clientId,
+          continueUserClientId: undefined,
           supersedesUserClientId: automatic ? undefined : recovery.item.clientId,
           chatMessage: {
             ...(retryItem ?? recovery.item).chatMessage,
@@ -4168,6 +4172,7 @@ export class AgentInputCoordinator {
       }
       // Editing content cannot erase or forge the host's stable retry lineage.
       replacement.retrySourceClientId = current.retrySourceClientId;
+      replacement.continueUserClientId = current.continueUserClientId;
     }
     return replacement;
   }
@@ -4269,6 +4274,7 @@ export class AgentInputCoordinator {
         this.restoredOrcaReports.add(replacement);
       }
       replacement.retrySourceClientId = survivor.retrySourceClientId;
+      replacement.continueUserClientId = survivor.continueUserClientId;
     }
 
     const removed = presentTargets.slice(1);
@@ -5873,7 +5879,8 @@ export class AgentInputCoordinator {
             throw error;
           }
         } } : {}),
-        ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
+        ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId }
+          : head.continueUserClientId ? { continueUserClientId: head.continueUserClientId } : {}),
         [TELEGRAM_QUESTION_ORIGIN]: telegramQuestionAnswerOrigin(head),
         [ASYNC_QUESTION_ANSWER]: head.clientId.startsWith('question-reply:') ? true : undefined,
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),
