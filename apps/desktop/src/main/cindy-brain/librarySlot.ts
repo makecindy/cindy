@@ -1040,8 +1040,8 @@ export class GhostLibrarySlot {
       if (epoch.ghostId === ghostId) this.writeEpochByStream.delete(streamId);
     }
     const teardown = (async () => {
-      await session.sql.dispose().catch(() => {});
-      await session.vault.invalidate().catch(() => {});
+      const sqlClosed = await session.sql.dispose().then(() => true, () => false);
+      await session.vault.invalidate(sqlClosed).catch(() => {});
       if (this.extraDirGrant?.ghostId === ghostId) {
         await this.syncAgentReadonlyExtraDir(ghostId, null);
       }
@@ -1130,7 +1130,7 @@ export class GhostLibrarySlot {
     if (reason) return fail('PATH_INVALID', `dbPath 非法:${reason}`, 'INVALID_REQUEST');
     const abs = await session.vault.resolveDbTarget(dbPath as string);
     if (abs === null) return fail('PATH_INVALID', 'dbPath 越界或目标不可用作数据库', 'INVALID_REQUEST');
-    const gate = await session.vault.prepareExternalMutation();
+    const gate = await session.vault.prepareExternalMutation(abs);
     if (gate) return vaultFail(gate);
     return { abs };
   }

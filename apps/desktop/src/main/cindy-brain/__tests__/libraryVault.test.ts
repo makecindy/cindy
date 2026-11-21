@@ -773,8 +773,11 @@ describe('LibraryVault', () => {
         ok: true, from: 'stream.txt', to: 'renamed.txt',
       });
       expect(await vault.delete({ path: 'renamed.txt' })).toEqual({ ok: true, path: 'renamed.txt', existed: true });
-      expect(await vault.prepareExternalMutation()).toBeNull();
-      await fs.promises.writeFile(path.join(libraryRoot, 'external.sqlite'), 'database');
+      const db = path.join(libraryRoot, 'external.sqlite');
+      expect(await vault.prepareExternalMutation(db)).toBeNull();
+      await fs.promises.writeFile(db, 'database');
+      await fs.promises.writeFile(db + '-wal', 'journal');
+      expect(await vault.delete({ path: 'external.sqlite-wal' })).toMatchObject({ ok: true, existed: true });
       await vault.invalidate();
       expect(await makeVault({ limits: { usageScanFuse: 0 } }).open()).toMatchObject({
         ok: true, state: 'ready', fileCount: 1, usedBytes: 8,

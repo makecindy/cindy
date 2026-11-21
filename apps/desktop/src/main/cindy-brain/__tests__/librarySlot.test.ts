@@ -186,6 +186,39 @@ describe('GhostLibrarySlot', () => {
     expect(await fs.promises.readFile(ledgerPath, 'utf8')).toBe(ledger);
   });
 
+  it('超限旧库正常关闭 SQLite 后仍可写，且账本计入数据库增长', async () => {
+    const root = path.join(defaultRootBase, GHOST_ID);
+    const metadata = path.join(root, '.cindy-library');
+    await fs.promises.mkdir(metadata, { recursive: true });
+    const dbPath = 'library.sqlite';
+    const filename = path.join(root, dbPath);
+    const db = new Database(filename);
+    try {
+      db.exec('CREATE TABLE works (data BLOB)');
+    } finally {
+      db.close();
+    }
+    await fs.promises.writeFile(path.join(metadata, 'usage.json'), JSON.stringify({
+      files: 1, bytes: (await fs.promises.stat(filename)).size, mutations: 1, updatedAt: 1,
+    }));
+    createVault.mockImplementation((deps: LibraryVaultDeps) => new LibraryVault({
+      ...deps, limits: { usageScanFuse: 0 },
+    }));
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath })).toMatchObject({ ok: true });
+    expect(await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'db.exec', dbPath, sql: 'INSERT INTO works VALUES (zeroblob(16384))',
+    })).toMatchObject({ ok: true });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'asset.txt', content: 'abc' }))
+      .toMatchObject({ ok: true });
+    await slot.disposeAll();
+    const usedBytes = (await fs.promises.stat(filename)).size + 3;
+    expect(await readLibraryUsageSnapshot(root)).toMatchObject({ checkpoint: 'clean', files: 2, bytes: usedBytes });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'open' }))
+      .toMatchObject({ ok: true, state: 'ready', fileCount: 2, usedBytes });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'asset.txt', content: 'abcd' }))
+      .toMatchObject({ ok: true });
+  });
+
   function pauseNextLibraryRootResolution() {
     let resume!: () => void;
     let entered!: () => void;

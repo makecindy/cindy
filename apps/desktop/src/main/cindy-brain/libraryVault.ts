@@ -375,6 +375,7 @@ export class LibraryVault {
   private usage: UsageLedger = { files: 0, bytes: 0, updatedAt: 0, mutations: 0 };
   private usageDirectory: { dev: number; ino: number } | null = null;
   private usageNeedsRescan = false;
+  private readonly sqliteUsage = new Map<string, { target: string; size: number | null }>();
   private usageDirtyOnDisk = false;
   private usageChanged = false;
   private usagePrepareFailed = false;
@@ -979,8 +980,34 @@ export class LibraryVault {
 
   private async recordUsageMutationUnlocked(): Promise<void> {
     this.usage.mutations += 1;
-    if (this.usage.mutations % USAGE_BATCH_SIZE === 0 && !this.usageNeedsRescan) {
+    if (this.usage.mutations % USAGE_BATCH_SIZE === 0 && !this.usageNeedsRescan && this.sqliteUsage.size === 0) {
       if (!(await this.persistUsageUnlocked('dirty', false))) this.deps.log?.warn('library usage persist failed', {});
+    }
+  }
+
+  private async fileUsageSize(target: string): Promise<number | null> {
+    try {
+      const entry = await fs.promises.lstat(target);
+      return entry.isFile() ? entry.size : null;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  private accountFileUsageChange(target: string, priorSize: number | null, nextSize: number | null): void {
+    const tracked = this.sqliteUsage.get(foldCase(target));
+    const before = tracked ? tracked.size : priorSize;
+    this.usage.bytes = Math.max(0, this.usage.bytes + (nextSize ?? 0) - (before ?? 0));
+    this.usage.files = Math.max(0, this.usage.files + Number(nextSize !== null) - Number(before !== null));
+    if (tracked) tracked.size = nextSize;
+  }
+
+  private async settleSqliteUsageUnlocked(): Promise<void> {
+    for (const { target } of this.sqliteUsage.values()) {
+      const resolved = await this.resolveTarget(path.relative(this.root, target).split(path.sep).join('/'));
+      if (!('target' in resolved)) throw new Error('SQLite usage path unavailable');
+      this.accountFileUsageChange(target, null, await this.fileUsageSize(resolved.target));
     }
   }
 
@@ -1011,6 +1038,7 @@ export class LibraryVault {
     let files = 0;
     let bytes = 0;
     let visited = 0;
+    const trackedSizes = new Map<string, number>();
     const stack: string[] = [this.root];
     while (stack.length > 0) {
       const dir = stack.pop()!;
@@ -1030,7 +1058,12 @@ export class LibraryVault {
         if (entry.isDirectory()) stack.push(full);
         else if (entry.isFile()) {
           try {
-            bytes += (await fs.promises.stat(full)).size;
+            const size = (await fs.promises.stat(full)).size;
+            bytes += size;
+            if (this.sqliteUsage.size > 0) {
+              const key = foldCase(full);
+              if (this.sqliteUsage.has(key)) trackedSizes.set(key, size);
+            }
             files += 1;
           } catch (err) {
             if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return { files: 0, bytes: 0, tripped: false, incomplete: true };
@@ -1038,6 +1071,7 @@ export class LibraryVault {
         }
       }
     }
+    for (const [key, tracked] of this.sqliteUsage) tracked.size = trackedSizes.get(key) ?? null;
     return { files, bytes, tripped: false, incomplete: false };
   }
 
@@ -1117,7 +1151,6 @@ export class LibraryVault {
       if (disk) return disk;
       const checkpoint = await this.prepareUsageMutationUnlocked();
       if (checkpoint) return checkpoint;
-      const existedBytes = st && st.isFile() ? st.size : 0;
       const w = await this.atomicWrite(resolved.target, decoded.bytes, {
         ifNotExists: req.ifNotExists === true,
       });
@@ -1126,8 +1159,7 @@ export class LibraryVault {
         return w;
       }
       // 用量增量记账(files/bytes);覆盖写扣除旧体积。
-      this.usage.bytes += decoded.bytes.byteLength - existedBytes;
-      if (!st) this.usage.files += 1;
+      this.accountFileUsageChange(resolved.target, st?.isFile() ? st.size : null, decoded.bytes.byteLength);
       await this.recordUsageMutationUnlocked();
       return {
         ok: true as const,
@@ -1303,7 +1335,6 @@ export class LibraryVault {
         return resolved;
       }
       const prior = await this.lstatTarget(resolved.target);
-      const existedBytes = prior && prior.isFile() ? prior.size : 0;
       const publishing = path.join(path.dirname(resolved.target), `.cindy-library-publish-${randomUUID()}.tmp`);
       try {
         req.assertCurrent?.();
@@ -1315,6 +1346,7 @@ export class LibraryVault {
         req.assertCurrent?.();
         await replaceFile(publishing, resolved.target);
       } catch (err) {
+        this.usageNeedsRescan = true;
         await this.abortStreamUnlocked(stream.streamId).catch(() => {});
         return this.tmpFailure(err, '分块提交失败(主机 IO 错误)');
       } finally {
@@ -1327,8 +1359,7 @@ export class LibraryVault {
       }
       this.streams.delete(stream.streamId);
       this.deps.onStreamClosed?.(stream.streamId);
-      this.usage.bytes += stream.totalBytes - existedBytes;
-      if (!prior) this.usage.files += 1;
+      this.accountFileUsageChange(resolved.target, prior?.isFile() ? prior.size : null, stream.totalBytes);
       await this.recordUsageMutationUnlocked();
       return { ok: true as const, path: stream.relPath, bytes: stream.totalBytes, sha256 };
     });
@@ -1614,6 +1645,9 @@ export class LibraryVault {
           }
           removedBytes = usage.bytes;
           removedFiles = usage.files;
+          for (const { target } of this.sqliteUsage.values()) {
+            if (isInsideDir(resolved.target, target)) this.accountFileUsageChange(target, null, null);
+          }
         } else {
           try {
             await fs.promises.rmdir(resolved.target);
@@ -1631,8 +1665,7 @@ export class LibraryVault {
         } catch (err) {
           return this.tmpFailure(err, '删除文件失败(主机 IO 错误)');
         }
-        removedBytes = st.isFile() ? st.size : 0;
-        removedFiles = st.isFile() ? 1 : 0;
+        this.accountFileUsageChange(resolved.target, st.isFile() ? st.size : null, null);
         // 空目录剪枝(向上 rmdir 到根为止,遇非空即停):不剪则目录残骸永久
         // 计入用量扫描(与 fsSlot 同教训)。
         let dir = path.dirname(resolved.target);
@@ -1663,19 +1696,20 @@ export class LibraryVault {
       let entries: fs.Dirent[];
       try {
         entries = await fs.promises.readdir(cur, { withFileTypes: true });
-      } catch {
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') this.usageNeedsRescan = true;
         continue;
       }
       for (const entry of entries) {
         if (isLibraryPublishTempName(entry.name)) continue;
         const full = path.join(cur, entry.name);
         if (entry.isDirectory()) stack.push(full);
-        else if (entry.isFile()) {
-          files += 1;
+        else if (entry.isFile() && !this.sqliteUsage.has(foldCase(full))) {
           try {
             bytes += (await fs.promises.stat(full)).size;
-          } catch {
-            /* 竞态,跳过 */
+            files += 1;
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') this.usageNeedsRescan = true;
           }
         }
       }
@@ -1734,10 +1768,8 @@ export class LibraryVault {
         return fail('INTERNAL', '重命名就位校验失败(identity 不一致)');
       }
       // 账本:文件数不变;覆盖替换时扣掉被替换文件的体积与计数。
-      if (prior && prior.isFile()) {
-        this.usage.bytes = Math.max(0, this.usage.bytes - prior.size);
-        this.usage.files = Math.max(0, this.usage.files - 1);
-      }
+      this.accountFileUsageChange(src.target, st.size, null);
+      this.accountFileUsageChange(dst.target, prior?.isFile() ? prior.size : null, st.size);
       await this.recordUsageMutationUnlocked();
       // 源空目录剪枝(rename 腾出的父目录不残留)。
       let dir = path.dirname(src.target);
@@ -1862,17 +1894,28 @@ export class LibraryVault {
   }
 
   getLiveUsageSnapshot(): { usedBytes: number; fileCount: number } | null {
-    if (!this.opened || this.effectiveState() !== 'ready' || this.usageNeedsRescan) return null;
+    if (!this.opened || this.effectiveState() !== 'ready' || this.usageNeedsRescan || this.sqliteUsage.size > 0) return null;
     return { usedBytes: this.usage.bytes, fileCount: this.usage.files };
   }
 
-  async prepareExternalMutation(): Promise<LibraryFailure | null> {
+  async prepareExternalMutation(databasePath: string): Promise<LibraryFailure | null> {
     return this.runSerialized(async () => {
       const gate = this.requireWritable(false);
       if (gate) return gate;
       const checkpoint = await this.prepareUsageMutationUnlocked();
-      if (!checkpoint) this.usageNeedsRescan = true;
-      return checkpoint;
+      if (checkpoint) return checkpoint;
+      try {
+        for (const suffix of ['', '-wal', '-shm', '-journal']) {
+          const target = databasePath + suffix;
+          const key = foldCase(target);
+          if (!this.sqliteUsage.has(key)) {
+            this.sqliteUsage.set(key, { target, size: await this.fileUsageSize(target) });
+          }
+        }
+      } catch {
+        this.usageNeedsRescan = true;
+      }
+      return null;
     });
   }
 
@@ -1905,11 +1948,11 @@ export class LibraryVault {
   }
 
   /** owner 切换/宿主收口:作废在途流并拒绝后续操作(实例弃用,不可重开)。 */
-  async invalidate(): Promise<void> {
+  async invalidate(checkpointAllowed = true): Promise<void> {
     await this.runSerialized(async () => {
       if (this.invalidated) return;
       this.invalidated = true;
-      const canCheckpoint = this.opened && this.state !== 'unavailable' && this.usageChanged
+      const canCheckpoint = checkpointAllowed && this.opened && this.state !== 'unavailable' && this.usageChanged
         && !this.usageTripped && !this.usageScanIncomplete && !this.usagePrepareFailed;
       this.state = 'unavailable';
       this.unavailableReason = 'io';
@@ -1918,7 +1961,9 @@ export class LibraryVault {
       }
       if (!canCheckpoint) return;
       try {
-        if (this.usageNeedsRescan && await this.isUsageDirectoryCurrent()) await this.rescanUsageUnlocked();
+        if (!(await this.isUsageDirectoryCurrent())) return;
+        if (this.usageNeedsRescan) await this.rescanUsageUnlocked();
+        else await this.settleSqliteUsageUnlocked();
         if (!this.usageTripped && !this.usageScanIncomplete && !(await this.persistUsageUnlocked('clean', true))) {
           this.deps.log?.warn('library usage checkpoint at close failed', {});
         }
