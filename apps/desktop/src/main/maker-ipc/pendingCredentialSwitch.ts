@@ -528,16 +528,7 @@ export class PendingCredentialSwitchService {
     reason: string,
   ): Promise<void> {
     if (resolved.apply) {
-      // Desktop publishes the provider to memory before persistence. With a permit,
-      // the assembly commits it alongside the SQLite write so a hold cannot split them.
-      if (!this.deps.settlementPermit) setSessionProvider(sessionId, resolved.providerId);
-      // 裁决改了落地路由(reroute / 丢弃停用显式来源 / 全停换模型或清空):回写 DB
-      // —— renderer 在 deferred 接受时已按请求值落盘 sessions 行,不纠正的话下一次
-      // 懒 resume 按停用路由重建(resume 免裁决)。回写必须 **await 且先于**删登记 /
-      // 唤醒队列:排队消息在唤醒后立刻按 DB 懒 resume,fire-and-forget 会让它抢在
-      // 替换模型落库前用停用目标重建(PR #744 review 第十五轮);await 期间 pending
-      // 仍在,coordinator 的 pending 门保持关闭。失败留痕后仍收口(队列不能永久
-      // 冻结;内存 store 已是权威路由,DB 差异在下次显式切换收敛)。
+      // Publish the provider and release the queue only after the route write succeeds.
       const modelChanged = !!resolved.model && resolved.model !== target.model;
       const routeChanged = resolved.providerId !== target.providerId || modelChanged;
       // 恒写幂等回正(最后收口者赢,PR #744 review 第二十三轮):旧登记的 finalizer 在
@@ -579,7 +570,7 @@ export class PendingCredentialSwitchService {
         // await 期间用户可能改选 / 取消:本次让位,新登记有自己的收口路径。
         if (this.pending.get(sessionId) !== target || !this.permitted(sessionId, target)) return;
       }
-      if (this.deps.settlementPermit && getSessionProvider(sessionId) !== resolved.providerId) {
+      if (getSessionProvider(sessionId) !== resolved.providerId) {
         setSessionProvider(sessionId, resolved.providerId);
       }
       this.deps.logger?.info(`pending credential switch applied on ${reason}`, {

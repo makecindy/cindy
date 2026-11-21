@@ -559,7 +559,7 @@ describe('PendingCredentialSwitchService', () => {
         [{ id: sessionId, agentKind: 'claude-code', remoteHostId: null, isTurnRunning: () => false }],
         { resolveRoute, retryDelayMs: 60_000 },
       );
-      h.persistRoute.mockRejectedValueOnce(new Error('disk on fire'));
+      h.persistRoute.mockRejectedValue(new Error('disk on fire'));
 
       h.service.register(sessionId, {
         model: 'claude-opus-5',
@@ -572,6 +572,20 @@ describe('PendingCredentialSwitchService', () => {
       expect(h.service.has(sessionId)).toBe(true);
       expect(h.onApplied).not.toHaveBeenCalled();
       expect(h.broadcastApplied).not.toHaveBeenCalled();
+      expect(getSessionProvider(sessionId)).toBe('openai');
+      await h.service.onTurnSettled(sessionId);
+      expect(h.persistRoute).toHaveBeenCalledTimes(2);
+      const receipt = Promise.withResolvers<void>();
+      h.persistRoute.mockReturnValueOnce(receipt.promise);
+      const finishing = h.service.onTurnSettled(sessionId);
+      await vi.waitFor(() => expect(h.persistRoute).toHaveBeenCalledTimes(3));
+      expect(getSessionProvider(sessionId)).toBe('openai');
+      expect(h.onApplied).not.toHaveBeenCalled();
+      receipt.resolve();
+      await finishing;
+      expect(getSessionProvider(sessionId)).toBe('anthropic');
+      expect(h.service.has(sessionId)).toBe(false);
+      expect(h.onApplied).toHaveBeenCalledExactlyOnceWith(sessionId);
     });
 
     it('目录里一个启用对话模型都没有 ⇒ 只清显式来源(store null + DB 回写 null)', async () => {
