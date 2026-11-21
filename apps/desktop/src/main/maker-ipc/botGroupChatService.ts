@@ -210,7 +210,7 @@ export interface BotGroupChatServiceDeps {
    * A task this computer runs, for its group card: title, state and recorded pull request; null
    * when the task is gone (bot-group-chat.md §10).
    */
-  readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string; model?: string } | null>;
+  readGroupTaskStatus?: (taskId: string, options?: { model?: boolean }) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string; model?: string } | null>;
   /** Main-owned exact input liveness, including queue/steering and automatic recovery. No I/O. */
   isGroupInputLive?: (sessionId: string, clientId: string) => boolean;
   /** The task whose `send_to_session` a turn answered (bot-group-chat.md §10); defaults to the stored message. */

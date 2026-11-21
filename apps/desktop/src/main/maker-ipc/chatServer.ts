@@ -2993,7 +2993,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       assistantTasks.noteDelivered(roomId, sessionId, scope, source.seq);
       // The requester's other devices learn at once where this runs; later renewals repeat it.
       if (selfDeviceId) {
-        const model = (await deps.readGroupTaskStatus?.(sessionId).catch(() => null))?.model;
+        const model = (await deps.readGroupTaskStatus?.(sessionId, { model: true }).catch(() => null))?.model;
         run.executor = { deviceId: selfDeviceId, sessionId, ...(model ? { model } : {}) };
         if (live()) void checkLease(run);
       }

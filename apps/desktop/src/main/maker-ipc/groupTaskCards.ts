@@ -50,6 +50,12 @@ export interface GroupTaskCardsDeps {
 const FOLLOW_MS = 7 * 24 * 60 * 60_000;
 /** A new task counts as started for this long before a card without a turn end reads as idle. */
 const STARTING_MS = 120_000;
+/**
+ * Between turn ends, a card no turn is running in (idle, failed) is looked at this often: a turn its
+ * owner starts in the task, a rename or a newly recorded PR shows within it. Cards inside a turn, or
+ * with something still to post or edit, are looked at every pass; a turn's end looks at all at once.
+ */
+const RESTING_SYNC_MS = 60_000;
 /** A message that could not reach the group is retried with backoff, then dropped. */
 const POST_ATTEMPTS = 8;
 /** Turn ends a card remembers, so the same end seen again posts nothing again. */
@@ -216,6 +222,9 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
 
   let syncing = false;
   let syncAgain = false;
+  let restingSyncedAt = 0;
+  const followed = (card: ChatLiveTaskCardRecord) => card.state === 'running' || card.state === 'waiting'
+    || !!card.outbox?.length || card.editRetryAt !== undefined;
   /**
    * One pass over this computer's cards: posts what is waiting and brings each card in step with
    * its task. `soon`: a turn just ended; if a pass is under way, run another right after it.
@@ -224,11 +233,13 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
     if (syncing) { if (soon) syncAgain = true; return; }
     if (!deps.current() || !deps.readTask) return;
     syncing = true;
+    const all = soon || Date.now() - restingSyncedAt >= RESTING_SYNC_MS;
+    if (all) restingSyncedAt = Date.now();
     try {
       for (const [messageId, card] of Object.entries(deps.store().read())) {
         if (!deps.current()) return;
         if (Date.now() - card.createdAt > FOLLOW_MS) { update(messageId, () => null); continue; }
-        if (!mine(card)) continue;
+        if (!mine(card) || !all && !followed(card)) continue;
         await postOutbox(messageId);
         const task = await deps.readTask(card.taskId).catch(() => undefined);
         if (task === undefined) continue;
@@ -261,7 +272,7 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
       warn('Group task cards could not be refreshed')(error);
     } finally {
       syncing = false;
-      if (syncAgain) { syncAgain = false; void sync(); }
+      if (syncAgain) { syncAgain = false; void sync(true); }
     }
   }
 

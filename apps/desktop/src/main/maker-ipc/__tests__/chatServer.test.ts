@@ -2040,6 +2040,15 @@ describe('Chat Server result delivery and refresh', () => {
       content: [expect.objectContaining({ data: expect.objectContaining({ state: 'idle', prUrl: 'https://github.com/makecindy/cindy/pull/42' }) })] }) }]);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(edits).toHaveLength(1);
+    // An idle card is not read every 15 s heartbeat (each read is a session row, runtime and PR lookup),
+    // yet a turn its owner starts in the task, with no turn end yet, still shows within a minute.
+    vi.mocked(deps.readGroupTaskStatus!).mockClear();
+    state = 'running';
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(deps.readGroupTaskStatus).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(edits).toHaveLength(2);
+    expect(edits[1]!.body).toMatchObject({ content: [expect.objectContaining({ data: expect.objectContaining({ state: 'running' }) })] });
   });
 
   // bot-group-chat.md §10 (#10009 review): the card is saved only once its POST returns, and a fast
