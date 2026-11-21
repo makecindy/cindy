@@ -76,19 +76,25 @@ const creationPreviews = new Map<string, CreationPreview>();
 const shards = new Map<string, DeviceShard>();
 let mergedScheduleIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
 let unreadScheduleRows: ReadonlySet<string> = new Set();
+let failedScheduleRows: ReadonlySet<string> = new Set();
 function recomputeScheduleIndex(): void {
   const next = new Map<string, AutomationScheduleSessionInfo>();
   const nextUnreadRows = new Set<string>();
+  const nextFailedRows = new Set<string>();
   for (const shard of shards.values()) {
     for (const [id, info] of shard.scheduleIndex ?? []) {
       next.set(id, info);
-      if (info.hasUnreadRun) nextUnreadRows.add(sessionRowKey({ id, deviceLinkDeviceId: shard.deviceId }));
+      const row = sessionRowKey({ id, deviceLinkDeviceId: shard.deviceId });
+      if (info.hasUnreadRun) nextUnreadRows.add(row);
+      if (info.hasUnreadFailedRun) nextFailedRows.add(row);
     }
   }
   if (JSON.stringify([...next]) !== JSON.stringify([...mergedScheduleIndex]))
     mergedScheduleIndex = next;
   if (nextUnreadRows.size !== unreadScheduleRows.size || [...nextUnreadRows].some(key => !unreadScheduleRows.has(key)))
     unreadScheduleRows = nextUnreadRows;
+  if (nextFailedRows.size !== failedScheduleRows.size || [...nextFailedRows].some(key => !failedScheduleRows.has(key)))
+    failedScheduleRows = nextFailedRows;
 }
 const subs = new Set<() => void>();
 // A cold renderer has not read its cache or discovered devices yet. An empty
@@ -1689,6 +1695,10 @@ export function useRemoteScheduleIndex(): ReadonlyMap<string, AutomationSchedule
 
 export function useRemoteUnreadScheduleRows(): ReadonlySet<string> {
   return useSyncExternalStore(subscribe, () => unreadScheduleRows, () => unreadScheduleRows);
+}
+
+export function useRemoteFailedScheduleRows(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, () => failedScheduleRows, () => failedScheduleRows);
 }
 
 export function useRemoteSessionScheduleBindings(

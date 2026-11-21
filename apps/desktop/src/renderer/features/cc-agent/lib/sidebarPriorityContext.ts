@@ -1,9 +1,18 @@
+import { useMemo } from 'react';
 import { getStartingSessionIds } from '@/lib/sessionStartingStore';
 import type { Session } from '@/lib/ccAgent.types';
 import type { RemoteSessionActivityPhase } from '@/features/device-link/remoteSessionActivityStore';
 import { liveTaskPriorityRank } from '@cindy/maker-shared/live-task-priority';
 import { sessionRowKey } from '../sidebar/sessionRowKey';
 import type { MainListPriorityContext } from './mainListModel';
+import { useRemoteFailedScheduleRows } from '@/features/device-link/remoteProjectsStore';
+import { useRemoteOrcaQuestionLeadRows } from './orcaLeadWorkerAttention';
+
+export function useRemoteSidebarWaitingRows(): ReadonlySet<string> {
+  const failedRuns = useRemoteFailedScheduleRows();
+  const pendingQuestions = useRemoteOrcaQuestionLeadRows();
+  return useMemo(() => new Set([...failedRuns, ...pendingQuestions]), [failedRuns, pendingQuestions]);
+}
 
 /** Click capture and list sorting must see the same local and remote activity. */
 export function sidebarPriorityContext(
@@ -23,7 +32,7 @@ export function sidebarPriorityContext(
       // Preserve a new send before its first host push; terminal evidence still ends the old turn.
       remotePriorityByRow.set(rowKey, liveTaskPriorityRank({
         running: phase === 'running' || (!phase && starting.has(session.id)),
-        waiting: phase === 'needs-interaction' || phase === 'error',
+        waiting: phase === 'needs-interaction' || phase === 'error' || ctx.remoteWaitingRows?.has(rowKey) === true,
         unread: phase === 'completed' || ctx.remoteUnreadScheduleRows?.has(rowKey) === true,
       }));
     }

@@ -7,7 +7,10 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }) }));
+vi.mock('react-i18next', async (original) => ({
+  ...await original<typeof import('react-i18next')>(),
+  useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }),
+}));
 import { applyRemoteSessionActivity, clearRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { remoteProjectsStore, useRemoteUnreadScheduleRows } from '@/features/device-link/remoteProjectsStore';
 const following = vi.hoisted(() => new Set<Session>());
@@ -23,6 +26,8 @@ import type { TeammateInboxEntry } from '@/features/bots/teammateInbox';
 import { markSessionStarting, clearSessionStarting } from '@/lib/sessionStartingStore';
 import { TaskInbox } from '../TaskInbox';
 import { useInboxUnread } from '../useInboxUnread';
+import { useSessionAttentionKindsWithOrcaLeads } from '../../lib/orcaLeadWorkerAttention';
+import { useRemoteSidebarWaitingRows } from '../../lib/sidebarPriorityContext';
 beforeEach(() => following.clear());
 afterEach(() => { cleanup(); clearRemoteSessionActivity(); remoteProjectsStore.clear(); });
 // The controller still has a running flag when the host sends the unread result.
@@ -102,6 +107,48 @@ it('keeps an unread remote automation in Pending when there is no activity repla
   expect(working.querySelector('[data-device]')?.getAttribute('data-device')).toBe('other');
   act(() => publish('studio', []));
   expect(pending.querySelector('[data-device]')).toBeNull();
+});
+
+it.each(['worker question', 'failed automation'] as const)('keeps a remote %s Pending on the owning device only', source => {
+  const fromWorker = source === 'worker question';
+  const lead = { id: 'same-task', title: 'Task', status: 'active', orcaRole: 'lead' } as Session;
+  const worker = { id: 'same-worker', title: 'Worker', status: 'active', orcaRole: 'worker', orcaLeadSessionId: lead.id } as Session;
+  const tasks = ['studio', 'other'].map(deviceLinkDeviceId => ({ ...lead, deviceLinkDeviceId }));
+  for (const device of ['other', 'studio']) {
+    remoteProjectsStore.setDeviceSessions(device, device, [lead, worker]);
+    if (fromWorker) applyRemoteSessionActivity(device, { sessionId: lead.id, phase: 'running', attention: false });
+  }
+  const publish = (pending: boolean) => {
+    if (fromWorker) {
+      remoteProjectsStore.applyPatch('studio', worker.id, { orcaHasPendingQuestion: pending });
+    } else {
+      remoteProjectsStore.setDeviceScheduleIndex('studio', new Map([[lead.id, {
+        scheduleId: 'scheduled', scheduleName: 'Scheduled', hasUnreadRun: true,
+        unreadRunIds: ['run'], unreadFailedRunIds: pending ? ['run'] : [], hasUnreadFailedRun: pending,
+      }]]));
+    }
+  };
+  publish(true);
+  function Inbox() {
+    const kinds = useSessionAttentionKindsWithOrcaLeads();
+    const remoteUnreadScheduleRows = useRemoteUnreadScheduleRows();
+    const remoteWaitingRows = useRemoteSidebarWaitingRows();
+    const empty = new Set<string>();
+    const waiting = kinds.get(lead.id) === 'awaiting' || !fromWorker ? new Set([lead.id]) : empty;
+    const priorityContext = { runningSessionIds: empty, attentionSessionIds: waiting, waitingSessionIds: waiting, remoteUnreadScheduleRows, remoteWaitingRows };
+    return <TaskInbox sessions={tasks} priorityContext={priorityContext} isTeammateTask={() => !fromWorker}
+      runningSessionIds={empty} attachedSessionIds={empty} notifications={waiting}
+      onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />;
+  }
+  const view = render(<Inbox />);
+  const [pending, working] = view.container.querySelectorAll('section');
+  const inSection = (section: Element, device: string) => section.querySelector('[data-device="' + device + '"]');
+  expect(inSection(pending, 'studio')).not.toBeNull();
+  expect(inSection(pending, 'other')).toBeNull();
+  if (fromWorker) expect(inSection(working, 'other')).not.toBeNull();
+  act(() => publish(false));
+  expect(inSection(pending, 'studio')).toBeNull();
+  if (fromWorker) expect(inSection(working, 'studio')).not.toBeNull();
 });
 
 it('commits explicit moves before another restore while hovering another task’s Done button', () => {
