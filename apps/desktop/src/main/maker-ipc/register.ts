@@ -13158,7 +13158,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           externalAuthorizedDelivery: params.externalAuthorizedDelivery,
           origin: params.origin,
         })) {
-          await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
+          await inputCoordinator.ensureQueueRestored(params.targetSessionId);
           inputCoordinator.releaseCrashRestoredPausedQueue(params.targetSessionId, 'persisted-authorized-release');
         }
         await params.onAccepted?.(true);

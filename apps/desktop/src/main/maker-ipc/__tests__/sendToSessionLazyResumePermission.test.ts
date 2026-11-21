@@ -795,7 +795,7 @@ describe('bot dispatch files-branch pause-release flag', () => {
 // #7512 review P1:用户行已落库时 dispatch 在入队前返回 already-active,授权盖章
 // 到不了协调器。已授权的重试要放行崩溃恢复暂停,且不能再入队第二条。
 describe('bot dispatch persisted-row pause release', () => {
-  function persistedHarness() {
+  function persistedHarness(ensureQueueRestored: () => Promise<void> = async () => {}) {
     const releaseCrashRestoredPausedQueue = vi.fn();
     const enqueue = vi.fn();
     const dbChain = {
@@ -807,7 +807,7 @@ describe('bot dispatch persisted-row pause release', () => {
     const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, {
       getDbClient: () => ({ drizzle: { select: () => dbChain } }),
       inputCoordinator: {
-        ensureQueueRestored: async () => {},
+        ensureQueueRestored,
         shouldQueueNewTurn: () => false,
         enqueue,
         releaseCrashRestoredPausedQueue,
@@ -843,6 +843,31 @@ describe('bot dispatch persisted-row pause release', () => {
     expect(result).toMatchObject({ ok: true, wakeKind: 'already-active' });
     expect(releaseCrashRestoredPausedQueue).not.toHaveBeenCalled();
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('does not acknowledge an authorized persisted retry when queue restoration fails', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：dispatchBotSessionMessage；恢复失败必须拒绝且不调用 onAccepted，服务端才会保留重试。
+    // - Bug／规则依据：#7512 Codex P2，不能吞掉队列恢复失败并确认重复投递。
+    // - 现有覆盖缺口：既有用例只覆盖恢复成功和非授权重复，没有恢复异常分支。
+    // - 最小失败输入：已有用户行 + 外部授权投递 + ensureQueueRestored reject。
+    // - tier：guard；执行 register.ts 的真实派发闭包，覆盖持久化回执边界。
+    // - 实测耗时：15.23s wall；该既有 guard 文件收集耗时 10.47s，新增断言执行 59ms。
+    const restoreError = new Error('queue snapshot read failed');
+    const ensureQueueRestored = vi.fn(async () => { throw restoreError; });
+    const { h, releaseCrashRestoredPausedQueue } = persistedHarness(ensureQueueRestored);
+    const onAccepted = vi.fn();
+
+    await expect(h.dispatchBotSessionMessage({
+      targetSessionId: 'child',
+      clientId: 'chat-direct:execution-1:message-1',
+      message: 'room message',
+      externalAuthorizedDelivery: true,
+      onAccepted,
+    })).rejects.toBe(restoreError);
+    expect(ensureQueueRestored).toHaveBeenCalledOnce();
+    expect(releaseCrashRestoredPausedQueue).not.toHaveBeenCalled();
+    expect(onAccepted).not.toHaveBeenCalled();
   });
 });
 
