@@ -14,6 +14,8 @@
     归入后台读取(`invokePolicy.ts`)，选择器打开时每台电脑读一次，15 秒内复用。
   - `model-groups:resolve`：请那台按自己的模式选。选择只带 `{ type: 'route', id }`(控制端去掉位置字段，被控端也会去掉)；
     `context.hasImages` 与 `location.agentDeviceId`(进行中的任务只在它所在的位置里选)沿用本机接口的语义。
+    可选 `remoteInvocableOnly: true`：Agent 将在这台为另一台电脑运行，只用这台开了「允许被远程调用」的连接，
+    其余连接这次按没有连接处理(旧被控端不认识该字段时不会被问到：旧被控端整段不显示)。
     返回那台的选路结果；`route.agentDeviceId` 是**那台电脑眼里的**运行位置。
   - `model-groups:commit`、`model-groups:bind-session`：与本机接口相同。会话 id 是那台电脑上的任务 id。
   - `model-groups:route-note`(新)：`{ sessionId, note }`。远程不能裸写消息(`local-db:messages:create` 不放行)，
@@ -24,7 +26,9 @@
 - **权限**：上面五个接口在被控端只接受同账号本人控制的设备(`readDeviceLinkModelSelectionOrigin() === 'owner'`，
   与远程选模型同一判据)；分享来的任务等受限控制端回 `PRECONDITION_FAILED`。本机调用仍走可信主界面闸。
 - **「其他电脑」那一段**：本机草稿记住的选择带 `deviceId`(`ModelGroupSelection.deviceId`，只在本机草稿里，不上传)。
-  发送时请那台按自己的模式、`location: { agentDeviceId: null }`(只用那台自己的来源)选，任务建在本机、Agent 在那台运行，
+  只给已列在「其他电脑」那一段的电脑(至少开放了一个允许被远程调用的来源)显示。
+  发送时请那台按自己的模式、`location: { agentDeviceId: null }` 与 `remoteInvocableOnly: true`(只用那台自己的、
+  允许被远程调用的来源)选，任务建在本机、Agent 在那台运行，
   与选「其他电脑」那一段里的普通模型同一条路径；说明写在本机，选路记录提交给那台，不记本机的撞配额绑定。
 - **旧被控端**：没有这些准入 → `CHANNEL_NOT_ALLOWED` → 控制端记为「那台不支持模型组」，不列模式，按普通模型照常工作。
   新被控端 + 旧控制端：旧控制端不调用这些接口，行为不变。

@@ -203,6 +203,11 @@ export interface ModelGroupResolveRequest {
    * 省略 = 不限(新任务)。
    */
   location?: { agentDeviceId: string | null };
+  /**
+   * 另一台电脑的本机选择器「其他电脑」那一段选了这台的模式：Agent 将在这台为那台运行，
+   * 只能用这台开了「允许被远程调用」的来源(model-groups.md §3.1、§6.3)。其余来源按用不了处理。
+   */
+  remoteInvocableOnly?: boolean;
 }
 
 function text(value: unknown, max: number): string {

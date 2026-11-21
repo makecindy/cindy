@@ -96,6 +96,7 @@ export function registerModelGroupsIpc(): void {
       dryRun: value.dryRun === true,
       ...(context?.hasImages === true ? { context: { hasImages: true } } : {}),
       ...(rawLocation ? { location: { agentDeviceId: locationId } } : {}),
+      ...(value.remoteInvocableOnly === true ? { remoteInvocableOnly: true } : {}),
     };
     return resolver.resolve(request);
   });

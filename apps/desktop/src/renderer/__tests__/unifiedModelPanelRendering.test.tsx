@@ -608,14 +608,19 @@ it('shows the model-groups rail only while modes exist', async () => {
 it('lists another computer\'s modes in its own cell and picks them for that computer', async () => {
   const onSelect = vi.fn();
   const readDevices = vi.fn();
-  renderPanel({
-    remoteAgent: { devices: [{ deviceId: 'desk-2', name: 'Studio' }], selectedDeviceId: null },
-    modelGroups: {
-      config: { routes: [] }, active: null, onSelect, onManage: vi.fn(), readDevices,
-      devices: [{ deviceId: 'desk-2', name: 'Studio', config: { routes: [{ id: 'mode', name: 'Studio mode', strategy: 'order', candidates: [] }] } }],
-    },
-  });
+  const modelGroups = {
+    config: { routes: [] }, active: null, onSelect, onManage: vi.fn(), readDevices,
+    devices: [{ deviceId: 'desk-2', name: 'Studio', config: { routes: [{ id: 'mode', name: 'Studio mode', strategy: 'order' as const, candidates: [] }] } }],
+  };
+  const remoteAgent = { devices: [{ deviceId: 'desk-2', name: 'Studio' }], selectedDeviceId: null };
+  // 那台一个允许被远程调用的来源都没有：它不在「其他电脑」那一段，模式也不列(选了也跑不起来)。
+  const closed = renderPanel({ remoteAgent, modelGroups });
   expect(readDevices).toHaveBeenCalled();
+  expect(document.querySelector('[data-rail-item="model-groups:desk-2"]')).toBeNull();
+  closed.unmount();
+  remoteProvidersRef.providers = providersRef.providers.map((provider) => ({ ...provider as object, remoteInvocationEnabled: true }));
+  onTestFinished(() => { remoteProvidersRef.providers = []; });
+  renderPanel({ remoteAgent, modelGroups });
   // 本机没有模式：本机「模型组」一格不出现；那台电脑的一格照常出现。
   expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
   const cell = document.querySelector('[data-rail-item="model-groups:desk-2"]');

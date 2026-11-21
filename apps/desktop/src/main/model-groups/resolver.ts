@@ -258,7 +258,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         }
       : target.route;
     const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');
-    const views = await deps.views();
+    const allViews = await deps.views();
+    // 为另一台电脑跑 Agent 时只认允许被远程调用的连接：别的连接在这次选路里按没有连接处理。
+    const views = request.remoteInvocableOnly ? allViews.filter((view) => view.remoteInvocationEnabled === true) : allViews;
     const facts = await inspect(route, views);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,

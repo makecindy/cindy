@@ -29,7 +29,8 @@ export async function resolveDraftModelGroup(
   if (draftDeviceId) return resolveDeviceModelGroup(draftDeviceId, selection, context);
   if (!selection.deviceId) return resolveModelGroup(selection, context);
   const owner = selection.deviceId;
-  // 只选那台电脑自己的来源：它眼里的「另一台电脑」或分享，这台不一定连得上。
-  const result = await resolveDeviceModelGroup(owner, selection, context, { agentDeviceId: null });
+  // 只选那台电脑自己的、允许被远程调用的来源：它眼里的「另一台电脑」或分享这台不一定连得上；
+  // Agent 在那台为这台运行，与选「其他电脑」那一段里的普通模型同一条件。
+  const result = await resolveDeviceModelGroup(owner, selection, context, { agentDeviceId: null }, { remoteInvocableOnly: true });
   return result?.outcome === 'routed' ? { ...result, route: { ...result.route, agentDeviceId: owner } } : result;
 }

@@ -1928,6 +1928,12 @@ function ModelSelectorContentView({
         : [];
     });
   }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold, remoteDisable, remoteAgentDeviceId, currentProviderId]);
+  // 其他电脑的模式只在那台电脑已列在「其他电脑」那一段时出现：选了它，Agent 在那台运行，只能用那台开了
+  // 「允许被远程调用」的来源(model-groups.md §3.1、§6.3)。
+  const deviceModelGroupChoices = useMemo(() => {
+    const devices = new Set(remoteAgentGroups.map((group) => group.deviceId));
+    return (modelGroups?.devices ?? []).filter((device) => devices.has(device.deviceId));
+  }, [remoteAgentGroups, modelGroups?.devices]);
   // 目录还在读或读取失败的其他电脑(分享不算):收藏区里它们的收藏置灰列出,不当作模型已下架。
   const remoteAgentUnavailableDeviceIds = useMemo(
     () =>
@@ -3832,9 +3838,9 @@ function ModelSelectorContentView({
               favoritesPinned: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />,
               favoritesPinnedHasRows: favoriteModelGroupCount > 0,
             } : {})}
-            {...(modelGroups?.devices?.length ? {
+            {...(modelGroups && deviceModelGroupChoices.length ? {
               // 其他电脑自己的模式：每台一格，排进那台电脑那一段；由那台选来源(model-groups.md §6.3)。
-              deviceModelGroupTabs: modelGroups.devices.map((device) => ({ deviceId: device.deviceId, name: device.name })),
+              deviceModelGroupTabs: deviceModelGroupChoices.map((device) => ({ deviceId: device.deviceId, name: device.name })),
               renderDeviceModelGroups: (deviceId: string) => (
                 <ModelGroupsPickerSection picker={modelGroups} query="" deviceId={deviceId} onPicked={() => onDismiss?.()} />
               ),

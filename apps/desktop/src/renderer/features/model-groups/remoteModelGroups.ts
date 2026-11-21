@@ -181,12 +181,14 @@ export async function resolveDeviceModelGroup(
   selection: ModelGroupSelection,
   context?: ModelGroupResolveRequest['context'],
   location?: ModelGroupResolveRequest['location'],
+  options?: { remoteInvocableOnly?: boolean },
 ): Promise<ModelGroupResolveResult | null> {
   try {
     const request: ModelGroupResolveRequest = {
       selection: modelGroupSelectionForOwner(selection),
       ...(context ? { context } : {}),
       ...(location ? { location } : {}),
+      ...(options?.remoteInvocableOnly ? { remoteInvocableOnly: true } : {}),
     };
     return await invoke<ModelGroupResolveResult>(deviceId, MODEL_GROUPS_IPC.RESOLVE, [request]);
   } catch (err) {

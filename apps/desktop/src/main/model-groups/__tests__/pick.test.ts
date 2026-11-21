@@ -403,6 +403,20 @@ describe('createModelGroupResolver with sources on other computers', () => {
     expect(there).toMatchObject({ outcome: 'routed', route: { providerId: 'a', agentDeviceId: 'dev-2' } });
   });
 
+  // model-groups.md §3.1、§6.3：另一台电脑的「其他电脑」段选了这台的模式，Agent 在这台为它运行，
+  // 只能用允许被远程调用的连接。失效后果：选到不开放的连接，那台建任务时被这台拒绝。
+  it('uses only remote-callable connections when another computer runs the agent here', async () => {
+    const local = { agentKind: 'codex', providerId: 'b', model: 'gpt' } as const;
+    const open = { ...view('a', 'ChatGPT Pro'), remoteInvocationEnabled: true } as ProviderView;
+    const { resolver } = make(groups('order', [local, { agentKind: 'codex', providerId: 'a', model: 'gpt' }]),
+      { views: async () => [open, view('b', 'API')] });
+    const plain = await resolver.resolve({ selection, location: { agentDeviceId: null } });
+    expect(plain).toMatchObject({ outcome: 'routed', route: { providerId: 'b' } });
+    const forRemote = await resolver.resolve({ selection, location: { agentDeviceId: null }, remoteInvocableOnly: true });
+    expect(forRemote).toMatchObject({ outcome: 'routed', route: { providerId: 'a' } });
+    expect(forRemote.trace[0]).toMatchObject({ state: 'skipped', why: 'unavailable' });
+  });
+
   it('keeps a candidate saved without a location on this computer and reads nothing elsewhere', async () => {
     const saved = normalizeModelGroupsConfig({ routes: [{ id: 'r1', name: '旧路线', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'a', model: 'gpt' }] }] });
     const { deps, resolver } = make(saved);
