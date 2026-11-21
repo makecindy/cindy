@@ -137,7 +137,7 @@ import {
 } from '../providerShareCrossRegion';
 import { DeviceLinkError, PROVIDER_METADATA_TRUST_MS, providerShareHostPeer } from '@cindy/device-link';
 import { sha256Hex } from '../providerShareApi';
-import { captureProviderShareGroupRecovery, getConfirmedReceivedShareIds, getReceivedSharesSnapshot, onProviderShareReceivedChanged, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTarget, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
+import { captureProviderShareGroupRecovery, findReceivedShare, getConfirmedReceivedShareIds, getReceivedSharesSnapshot, onProviderShareReceivedChanged, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTarget, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
 import { createProviderGroupRemoteClient } from '../../provider-group/remoteClient';
 
 const share = {
@@ -1125,6 +1125,28 @@ describe('cross-region provider share', () => {
       expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });
     await refreshProviderShareCrossRegion('global');
     expect(getCrossRegionReceived().map(item => item.shareId)).toEqual(['share-x']);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实受邀者名单刷新与 findReceivedShare 入口，覆盖跨区拒绝后的租约与新任务分流。
+  // - Bug／规则依据：跨区名单暂时拒绝时已有 Agent Net 租约仍可继续，新的选择必须立即停用来源。
+  // - 现有覆盖缺口：拒绝测试只检查目标错误和恢复，未锁住 existingLease 对 findReceivedShare 的区别。
+  // - 最小失败输入：一次完整跨区名单成功后，下一次 /session 暂时返回 503。
+  // - tier：unit；使用假的服务端接口，但走生产名单刷新和路由判断。
+  it('keeps an existing cross-region lease during an unavailable list refresh', async () => {
+    state.responses.set('/session', { credential: CREDENTIAL,
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await refreshReceivedShares('initial');
+    await refreshProviderShareCrossRegion('global');
+    expect(findReceivedShare('share-x')).toMatchObject({ shareId: 'share-x' });
+
+    state.responses.set('/session', Object.assign(new Error('unavailable'), { statusCode: 503 }));
+    await refreshProviderShareCrossRegion('global');
+    expect(state.calls.filter(call => call.path.endsWith('/session'))).toHaveLength(2);
+    expect(getCrossRegionReceived()).toMatchObject([{ shareId: 'share-x' }]);
+    expect(findReceivedShare('share-x')).toBeNull();
+    expect(findReceivedShare('share-x', { existingLease: true })).toMatchObject({ shareId: 'share-x' });
   });
 
   it('keeps the bounded peer directory when the cross-region switch is disabled', async () => {

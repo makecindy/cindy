@@ -515,7 +515,7 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       state.expiresAt = expiresAt;
       const previousShares = state.shares;
       state.shares = preserveNewerHostOnline(previousShares, shares, requestedHostOnlineSequence);
-      for (const share of shares) state.knownShareIds.add(share.shareId);
+      state.knownShareIds = new Set(shares.map(share => share.shareId));
       state.listConfirmed = true;
       state.listUnavailable = false;
       noteSharePermissions(previousShares, state.shares);
@@ -539,23 +539,21 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       if (isCurrent()) {
         const wasConfirmed = target.listConfirmed;
         target.listConfirmed = false;
+        target.listUnavailable = true;
         log.warn('cross-region session refresh failed', { region, error: error instanceof Error ? error.message : String(error) });
         if (isAuthoritativeShareListDenial(error)) {
           // Retire this region's directory immediately. A refusal does not
           // count as a successful membership response for preference cleanup.
           target.shares = [];
           target.loaded = true;
-          target.listUnavailable = true;
           target.client?.stop();
           target.client = null;
           target.credential = null;
           target.expiresAt = 0;
           rt.events.changed();
         } else if (wasConfirmed) {
-          target.listUnavailable = true;
           rt.events.changed();
         }
-        if (!isAuthoritativeShareListDenial(error)) target.listUnavailable = true;
         // 退避重试：1 → 2 → 4 … 最多 30 分钟；关闭跨区开关等确定性错误同样按退避慢慢重试。
         target.failures += 1;
         if (target.timer) clearTimeout(target.timer);
@@ -681,7 +679,7 @@ export function isCrossRegionShareListUnavailable(shareId: string): boolean {
 export function getUnavailableCrossRegionShareIds(): string[] {
   const rt = runtime;
   if (!rt || !current(rt)) return [];
-  return [...rt.regions.values()].flatMap(state => state.listUnavailable ? [...state.knownShareIds] : []);
+  return [...rt.regions.values()].flatMap(state => state.listConfirmed ? [] : state.shares.map(share => share.shareId));
 }
 
 /** Per-region display budgets from successful cross-region list requests.

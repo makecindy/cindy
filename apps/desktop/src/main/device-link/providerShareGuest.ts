@@ -208,10 +208,7 @@ function unavailableShareIds(rt: Runtime): Set<string> {
 /** A missing row is removable only after a complete successful response. */
 function isReceivedShareListUnavailable(rt: Runtime | null, shareId: string): boolean {
   if (!rt || !current(rt)) return true;
-  const found = allReceived(rt).find(share => share.shareId === shareId);
-  // A healthy peer-region listing remains usable while the local listing is down.
-  if (found && found.owner.region !== getActiveAuthRealm()) return false;
-  if (rt.unavailable.has(shareId) || (rt.listUnavailable && rt.knownShareIds.has(shareId))) return true;
+  if (rt.unavailable.has(shareId) || (rt.listUnavailable && rt.received.some(share => share.shareId === shareId))) return true;
   return rt.fetchedAt === 0 || (!rt.listConfirmed && rt.knownShareIds.has(shareId));
 }
 
@@ -319,14 +316,10 @@ export function parseProviderShareAgentDeviceId(value: string | null | undefined
 }
 
 export function findReceivedShare(shareId: string, options?: { existingLease: true }): ProviderShareReceived | null {
-  const found = allReceived(runtime).find((share) => share.shareId === shareId) ?? null;
-  if (found && found.owner.region !== getActiveAuthRealm()) {
-    return isCrossRegionShareListUnavailable(shareId) ? null : found;
-  }
   if (runtime?.unavailable.has(shareId)) return null;
   if (!options?.existingLease && runtime?.listUnavailable && runtime.received.some(share => share.shareId === shareId)) return null;
   if (!options?.existingLease && isCrossRegionShareListUnavailable(shareId)) return null;
-  return found;
+  return allReceived(runtime).find((share) => share.shareId === shareId) ?? null;
 }
 
 /** A saved preference is effective only while this owner's share is currently usable. */
@@ -364,11 +357,10 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
   const shareId = parseProviderShareAgentDeviceId(agentDeviceId);
   if (!shareId) return agentDeviceId;
   const share = findReceivedShare(shareId);
-  if (share && share.status === 'active') return providerShareHostPeer(share.shareId, share.hostDeviceId);
-  if (isReceivedShareListUnavailable(runtime, shareId) || isCrossRegionShareListUnavailable(shareId)) {
-    throw new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE);
-  }
   if (!share) {
+    if (isReceivedShareListUnavailable(runtime, shareId) || isCrossRegionShareListUnavailable(shareId)) {
+      throw new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE);
+    }
     let hidden = false;
     try { hidden = providerShareHiddenByEncryptedOnly(shareId); } catch { /* unreadable settings/vault: keep the removed verdict */ }
     if (hidden) throw new Error('[REMOTE_AGENT_SHARE_LEGACY_DISABLED] encrypted-only connections block this older share');
@@ -516,7 +508,11 @@ export function refreshReceivedShares(reason: string): Promise<void> {
             }
           }
           rt.received = received;
-          for (const share of received) rt.knownShareIds.add(share.shareId);
+          if (rt.authorityIncomplete) {
+            for (const share of received) rt.knownShareIds.add(share.shareId);
+          } else {
+            rt.knownShareIds = new Set(received.map(share => share.shareId));
+          }
           rt.unavailable = unavailable;
           rt.listConfirmed = !rt.authorityIncomplete;
           rt.listUnavailable = false;
