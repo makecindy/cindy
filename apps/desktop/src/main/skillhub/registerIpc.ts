@@ -14,6 +14,7 @@ import path from 'node:path';
 import type { Maker } from '@cindy/maker-core';
 import type { BuiltInSkillDescriptor } from '../maker-host/built-in-skills';
 import { BrowserWindow, dialog, ipcMain } from 'electron';
+import { paletteSkillListReuse } from '../maker-ipc/paletteSkillListCache';
 import { getCurrentDataOwnerId } from '../authManager';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState';
 import { ensureReady as ensureLocalDbReady } from '../localDb';
@@ -176,6 +177,9 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     return JSON.stringify([fs.realpathSync.native(source), st.dev, st.ino]);
   };
   const broadcastLocalChange = () => {
+    // Activation, import and uninstall all land here; the palette snapshot has to
+    // drop even when no composer is mounted to hear the announcement below.
+    paletteSkillListReuse.clear();
     if (options.remoteIsRelayOnline && !isAppSessionBoundaryPending()) tapWindowBroadcast(REMOTE_RESOURCE_CHANGED_CHANNEL, { collectionId: 'skills' }, getSafeDataOwnerPushStamp());
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {

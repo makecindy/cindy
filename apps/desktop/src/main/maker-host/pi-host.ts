@@ -149,7 +149,7 @@ const piNativeProviderResolver = createPiNativeProviderResolver({
   hasGrokOAuthLogin: (...args) => hasGrokOAuthLogin(...args),
   listCustomProvidersWithSecureHeaders: () => listCustomProvidersWithSecureHeaders(),
   readCustomProviderKey: (...args) => readCustomProviderKey(...args),
-  ensureSharedGlobalSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
+  ensureSharedGlobalSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills().then(() => undefined),
   ensureManagedOllamaReadyForSession: (input) => ensureManagedOllamaReadyForSession(input),
   getUserDataDir: () => app.getPath('userData'),
 });

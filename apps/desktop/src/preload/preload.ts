@@ -7476,7 +7476,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:review:start', input),
     listAgentCommands: (
       agentKind: 'claude-code' | 'codex' | 'pi',
-      params: { sessionId?: string; allowManagedPiPackagePreview?: boolean } = {},
+      params: {
+        sessionId?: string;
+        allowManagedPiPackagePreview?: boolean;
+        forceReload?: boolean;
+      } = {},
     ): Promise<{
       success: boolean;
       error?: string;

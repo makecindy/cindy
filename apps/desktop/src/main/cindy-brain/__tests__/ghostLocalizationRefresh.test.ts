@@ -54,7 +54,8 @@ function routing(activeComputer = true) {
 it('projects a locale change without installation effects, while real roster changes still reconcile', () => {
   const r = routing();
   r.callbacks.refreshGhostLocalization('zh-CN');
-  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts });
+  // A projection-only push must tell the composer the roster did not move.
+  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts, rosterChanged: false });
   expect(r.contextChanged).toHaveBeenCalledOnce();
   expect(r.remote).toHaveBeenCalledOnce();
   const { apps, ...installation } = r.installation;
@@ -63,6 +64,7 @@ it('projects a locale change without installation effects, while real roster cha
   // Task engine names are chosen by UI language, so a locale change re-projects the engine list.
   expect(r.harnesses).toHaveBeenCalledOnce();
   r.callbacks.broadcastGhostsChanged(r.ghosts);
+  expect(r.push).toHaveBeenLastCalledWith('ghosts:changed', { ghosts: r.ghosts, rosterChanged: true });
   expect(apps).toHaveBeenCalledTimes(2);
   for (const effect of Object.values(installation)) expect(effect).toHaveBeenCalledOnce();
   expect(r.harnesses).toHaveBeenCalledTimes(2);
@@ -77,7 +79,8 @@ it('skips computer approval reconciliation when no plugin has a live computer ru
   r.callbacks.broadcastGhostsChanged(r.ghosts);
   expect(r.installation.computer).not.toHaveBeenCalled();
   expect(r.installation.apps).toHaveBeenCalledOnce();
-  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts });
+  // 这次是花名册真的动了（非投影），所以带上 rosterChanged: true。
+  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts, rosterChanged: true });
 });
 
 it('publishes only the changed directory policy and retains setup and remote invalidation', () => {
