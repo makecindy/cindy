@@ -15,7 +15,7 @@ import { parseJsonLine, readFirstLine, readLines } from '../lineReader.js';
 import type { NormalizedImage, NormalizedMessage, ReadContext, ScanContext, SourceAdapter, SourceListResult, SourceSession } from '../types.js';
 import { envDir, firstNonEmpty, isRecord, makeTitle, parseDataUrl, parseMaybeJson, str, stringifyOutput, toMs, walkFiles } from './common.js';
 
-interface DeepSeekLocator { file: string }
+interface DeepSeekLocator { file: string; home?: string }
 
 const SESSION_FILE = /^session(?:\.v(\d+))?\.jsonl(?:\.zstd?)?$/;
 
@@ -25,7 +25,7 @@ function textOf(content: unknown): string {
   return content.map((b) => (isRecord(b) && str(b.type) === 'text' ? str(b.text) : '')).filter(Boolean).join('\n\n');
 }
 
-function imagesOf(content: unknown): NormalizedImage[] {
+function imagesOf(content: unknown, home?: string): NormalizedImage[] {
   if (!Array.isArray(content)) return [];
   const out: NormalizedImage[] = [];
   for (const b of content) {
@@ -34,7 +34,10 @@ function imagesOf(content: unknown): NormalizedImage[] {
     const mimeType = firstNonEmpty(att.mimeType, att.mediaType, att.mime);
     const data = str(att.data);
     const url = str(att.url);
-    if (mimeType && data) out.push({ mimeType, base64Data: data });
+    const digest = /^sha256:([a-f0-9]{64})$/.exec(str(att.attachmentId))?.[1];
+    // DSH attachment-local v1 stores immutable objects by digest, not by display name.
+    if (home && digest && mimeType) out.push({ mimeType, filePath: path.join(home, 'attachments', 'v1', 'objects', digest.slice(0, 2), digest) });
+    else if (mimeType && data) out.push({ mimeType, base64Data: data });
     else if (url) {
       const parsed = parseDataUrl(url);
       if (parsed) out.push(parsed);
@@ -44,18 +47,31 @@ function imagesOf(content: unknown): NormalizedImage[] {
 }
 
 /** 一个 dsh 事件 → 统一消息。seenCalls 用来避免助手消息里的 tool-call 与单独的 tool/call 事件重复。 */
-export function parseDeepSeekEvent(ev: Record<string, unknown>, index: number, seenCalls: Set<string>): NormalizedMessage[] {
+export function parseDeepSeekEvent(ev: Record<string, unknown>, index: number, seenCalls: Set<string>, seenUsers = new Set<string>(), home?: string): NormalizedMessage[] {
   const type = str(ev.type);
   const data = isRecord(ev.data) ? ev.data : {};
   const createdAt = toMs(ev.time);
   const key = typeof ev.seq === 'number' && Number.isFinite(ev.seq) ? `s${ev.seq}` : `i${index}`;
-  if (type === 'user/message') {
-    const msg = isRecord(data.content) || Array.isArray(data.content) ? data : isRecord(data.message) ? data.message : data;
-    const source = isRecord(msg.source) ? str(msg.source.kind) : 'user';
-    if (source && source !== 'user') return [];
-    const text = textOf(msg.content).trim();
-    const images = imagesOf(msg.content);
-    return text || images.length ? [{ key, role: 'user', content: text, ...(images.length ? { images } : {}), createdAt }] : [];
+  if (type === 'user/message' || type === 'agent/inbox/spliced') {
+    const inbox = type === 'agent/inbox/spliced';
+    const messages = inbox ? (Array.isArray(data.inserted) ? data.inserted : [])
+      : [isRecord(data.content) || Array.isArray(data.content) ? data : isRecord(data.message) ? data.message : data];
+    const out: NormalizedMessage[] = [];
+    for (const [i, msg] of messages.entries()) {
+      if (!isRecord(msg) || (inbox && str(msg.role) !== 'user')) continue;
+      // User-role records also carry synthetic context. Preserve older logs without source,
+      // but an explicit producer must identify a human prompt (not cron, skills, etc.).
+      if (msg.source !== undefined && (!isRecord(msg.source) || str(msg.source.kind) !== 'user')) continue;
+      const text = textOf(msg.content).trim();
+      const images = imagesOf(msg.content, home);
+      if (!text && !images.length) continue;
+      const id = str(msg.id);
+      // A queued prompt is logged again as user/message when claimed by the loop.
+      if (id && seenUsers.has(id)) continue;
+      if (id) seenUsers.add(id);
+      out.push({ key: inbox ? `${key}-${i}` : key, role: 'user', content: text, ...(images.length ? { images } : {}), createdAt });
+    }
+    return out;
   }
   if (type === 'assistant/message') {
     const msg = isRecord(data.message) ? data.message : data;
@@ -97,6 +113,47 @@ function titleOf(data: unknown): string {
   return firstNonEmpty(data.title, data.text, data.value);
 }
 
+/** Inbox is a queue, not a second transcript: prefer claimed messages and omit canceled entries. */
+function* parseDeepSeekEvents(events: Record<string, unknown>[], seeded: boolean, home: string): Iterable<NormalizedMessage> {
+  const seedEnd = seeded ? events.findLastIndex((ev) => str(ev.type) === 'session/end-seed') : -1;
+  const start = seedEnd + 1;
+  const claimed = new Set<string>();
+  const canceled = new Set<string>();
+  const queues = new Map<string, string[]>();
+  for (let i = start; i < events.length; i += 1) {
+    const ev = events[i]!;
+    const data = isRecord(ev.data) ? ev.data : {};
+    if (str(ev.type) === 'user/message') {
+      const msg = isRecord(data.message) ? data.message : data;
+      if (str(msg.id) && parseDeepSeekEvent(ev, i, new Set(), new Set(), home).length) claimed.add(str(msg.id));
+    }
+    if (str(ev.type) !== 'agent/inbox/spliced' || !Array.isArray(data.inserted)) continue;
+    const target = str(data.target);
+    if (target !== 'next-turn' && target !== 'next-step') continue;
+    const queue = queues.get(target) ?? [];
+    const offset = data.start;
+    const count = data.removedCount ?? 0;
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset > queue.length
+      || typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0 || offset + count > queue.length) continue;
+    const key = typeof ev.seq === 'number' && Number.isFinite(ev.seq) ? `s${ev.seq}` : `i${i}`;
+    const removed = queue.slice(offset, offset + count);
+    if (data.outcome === 'canceled') for (const key of removed) canceled.add(key);
+    queues.set(target, [...queue.slice(0, offset), ...data.inserted.map((_, j) => `${key}-${j}`), ...queue.slice(offset + count)]);
+  }
+  const seenCalls = new Set<string>();
+  const seenUsers = new Set<string>();
+  const seenInboxUsers = new Set(claimed);
+  for (let i = start; i < events.length; i += 1) {
+    let ev = events[i]!;
+    const inbox = str(ev.type) === 'agent/inbox/spliced';
+    if (inbox && isRecord(ev.data) && Array.isArray(ev.data.inserted)) {
+      const key = typeof ev.seq === 'number' && Number.isFinite(ev.seq) ? `s${ev.seq}` : `i${i}`;
+      ev = { ...ev, data: { ...ev.data, inserted: ev.data.inserted.map((msg, j) => canceled.has(`${key}-${j}`) ? null : msg) } };
+    }
+    yield* parseDeepSeekEvent(ev, i, seenCalls, inbox ? seenInboxUsers : seenUsers, home);
+  }
+}
+
 async function list(ctx: ScanContext): Promise<SourceListResult> {
   const home = envDir('DSH_HOME', ctx.homeDir) ?? path.join(ctx.homeDir, '.dsh');
   // 每个会话目录只取版本号最高的那代文件。
@@ -127,14 +184,18 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
       let title = '';
       let firstUser = '';
       let lastAt = 0;
+      const events: Record<string, unknown>[] = [];
       for await (const line of readLines(f.file, { maxBytes: 512 * 1024 })) {
         const ev = parseJsonLine(line);
         if (!ev) continue;
         lastAt = Math.max(lastAt, toMs(ev.time));
         if (str(ev.type) === 'session/title') title = titleOf(ev.data) || title;
-        if (!firstUser && str(ev.type) === 'user/message') {
-          const m = parseDeepSeekEvent(ev, 0, new Set()).find((x) => x.role === 'user');
-          if (m && typeof m.content === 'string') firstUser = m.content;
+        if (str(ev.type) !== 'session') events.push(ev);
+      }
+      for (const m of parseDeepSeekEvents(events, header.isSeeded === true, home)) {
+        if (m.role === 'user' && typeof m.content === 'string' && m.content) {
+          firstUser = m.content;
+          break;
         }
       }
       const shown = makeTitle(title || firstUser, '');
@@ -148,7 +209,7 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
         updatedAt: Math.max(lastAt, Math.floor(f.mtimeMs)),
         archived: false,
         sizeBytes: f.size,
-        locator: JSON.stringify({ file: f.file } satisfies DeepSeekLocator),
+        locator: JSON.stringify({ file: f.file, home } satisfies DeepSeekLocator),
         ...(Number(header.version) > 4 ? { unsupportedVersion: `v${Number(header.version)}` } : {}),
       });
     } catch {
@@ -159,10 +220,9 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
 }
 
 async function* read(session: SourceSession, ctx: ReadContext): AsyncIterable<NormalizedMessage> {
-  const { file } = JSON.parse(session.locator) as DeepSeekLocator;
+  const { file, home = path.resolve(path.dirname(file), '../../..') } = JSON.parse(session.locator) as DeepSeekLocator;
   const events: Record<string, unknown>[] = [];
   let header: Record<string, unknown> | null = null;
-  let seedEnd = -1;
   for await (const line of readLines(file, { signal: ctx.signal, onBytes: ctx.onBytes })) {
     const ev = parseJsonLine(line);
     if (!ev) continue;
@@ -170,14 +230,11 @@ async function* read(session: SourceSession, ctx: ReadContext): AsyncIterable<No
       header = ev;
       continue;
     }
-    if (str(ev.type) === 'session/end-seed') seedEnd = events.length;
     events.push(ev);
   }
-  const start = header?.isSeeded === true && seedEnd >= 0 ? seedEnd + 1 : 0;
-  const seenCalls = new Set<string>();
-  for (let i = start; i < events.length; i += 1) {
+  for (const message of parseDeepSeekEvents(events, header?.isSeeded === true, home)) {
     if (ctx.signal?.aborted) return;
-    yield* parseDeepSeekEvent(events[i]!, i, seenCalls);
+    yield message;
   }
 }
 

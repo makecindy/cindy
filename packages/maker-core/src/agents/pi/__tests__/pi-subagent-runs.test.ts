@@ -1367,10 +1367,19 @@ describe('PI durable subagent run store', () => {
       usePlatform('linux');
       stubKill();
       stubProbes({ aliveProbes: Number.MAX_SAFE_INTEGER });
+      // This case models a runner that remains alive forever. Keep the
+      // command-line observation deterministic instead of routing the fixture
+      // through the host's real ps/proc probe: CI scheduling must not decide
+      // whether this bounded reclaim assertion reaches its 5s test limit.
+      let asyncProbeCount = 0;
+      childProcess.asyncProbe = async () => {
+        asyncProbeCount += 1;
+        return { stdout: `node ${runnerScript} config.json`, stderr: '' };
+      };
 
       await expect(killVerifiedPiSubagentRunner(runner())).resolves.toBe(false);
       // One pre-kill identity check plus the bounded confirmation poll.
-      expect(childProcess.spawnSync.mock.calls.length).toBeGreaterThan(1);
+      expect(asyncProbeCount).toBeGreaterThan(1);
     });
 
     it('signals the runner pid with SIGTERM before SIGKILL and never a process group', async () => {
