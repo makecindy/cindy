@@ -11,7 +11,9 @@ import {
 } from '../state/modelVisibilityPrefs';
 
 const writeFailure = vi.hoisted(() => vi.fn());
+const resolveModelPricePresentation = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/toast', () => ({ toast: { error: writeFailure } }));
+vi.mock('@/lib/modelPricePresentation', () => ({ resolveModelPricePresentation }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { price?: string }) => values?.price ? `${key} ${values.price}` : key, i18n: { resolvedLanguage: 'en' } }) }));
 vi.mock('../components/ui/confirm-dialog-provider', () => ({
@@ -83,6 +85,7 @@ beforeEach(async () => {
 afterEach(() => {
   cleanup();
   __resetForTest();
+  resolveModelPricePresentation.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -142,6 +145,57 @@ it('waits for the shared lock and reports asynchronous write failures', async ()
     await waitFor(() => expect(writeFailure).toHaveBeenCalledWith('settings.providers.models.visibilityWriteFailed'));
     expect(enabled('pi')).toBe(true);
   } finally { vi.unstubAllGlobals(); }
+});
+
+// 测试价值
+// - 生产入口与可观察结果：真实渲染 UnifiedModelList，断言设置页模型行是否显示价格档和折扣徽标。
+// - Bug／规则依据：本 PR 修复的 displayPricing 展示回归，规则正本为 model-catalog-maintenance.md 的 Gateway 复杂价目展示。
+// - 现有覆盖缺口：DisplayPricingDetails 和 ModelAdvancedDrawer 覆盖详情入口，但没有覆盖列表行的 displayPricing 分支。
+// - 最小失败输入：一个带 displayPricing + currency 的对话模型和一个同样带字段的图像模型，二者共享可用 token 报价。
+// - tier：unit，使用现有 jsdom 渲染 harness，不启动 Electron 或外部服务。
+it('keeps chat pricing marks and hides them for display-priced media rows', () => {
+  const displayPricing = { items: [{ label: 'Output', price: 1, unit: 'token', quantity: 1_000_000 }] };
+  const chatModel = {
+    ...models[0],
+    id: 'deepseek-chat',
+    name: 'DeepSeek Chat',
+    displayPricing,
+    currency: 'USD' as const,
+  };
+  const imageModel = {
+    id: 'deepseek-image',
+    name: 'DeepSeek Image',
+    mode: 'image_generation' as const,
+    displayPricing,
+    currency: 'USD' as const,
+  };
+  const pricedProvider: ProviderView = {
+    ...provider,
+    agents: ['claude-code'],
+    models: { 'claude-code': [chatModel], codex: [], pi: [] },
+    imageModels: [imageModel],
+  };
+  resolveModelPricePresentation.mockImplementation(({ modelId }: { modelId: string }) => {
+    if (modelId !== chatModel.id && modelId !== imageModel.id) return null;
+    return {
+      kind: 'priced',
+      current: { inputPerMtok: 0.5, outputPerMtok: 1, currency: 'USD' },
+      original: { inputPerMtok: 1, outputPerMtok: 2, currency: 'USD' },
+      discount: 0.5,
+    };
+  });
+  window.localStorage.setItem('xdt:modelListCollapsedGroups:v3', JSON.stringify({ image: false }));
+  try {
+    render(<UnifiedModelList provider={pricedProvider} />);
+    const chatRow = screen.getByText(chatModel.name).parentElement!;
+    const imageRow = screen.getByText(imageModel.name).parentElement!;
+    expect(chatRow.querySelector('[data-price-tier]')).toBeTruthy();
+    expect(chatRow.querySelector('[data-discount-badge]')).toBeTruthy();
+    expect(imageRow.querySelector('[data-price-tier]')).toBeNull();
+    expect(imageRow.querySelector('[data-discount-badge]')).toBeNull();
+  } finally {
+    window.localStorage.removeItem('xdt:modelListCollapsedGroups:v3');
+  }
 });
 
 // Unit: real standalone entries have empty modalities and no defaultEnabled;

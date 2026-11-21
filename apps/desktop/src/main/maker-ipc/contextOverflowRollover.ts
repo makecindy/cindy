@@ -22,6 +22,7 @@ import {
 import {
   projectAgentFacingText,
   readAgentInputReferences,
+  type AgentSendToSessionHint,
 } from '@cindy/maker-shared/agent-input-projection';
 
 import {
@@ -355,6 +356,7 @@ export function planContextOverflowRollover(
 export function withReplaySourceNotes(
   wire: OverflowReplayWireMessage,
   agentMeta: Record<string, unknown> | null | undefined,
+  sendToSession?: AgentSendToSessionHint,
 ): OverflowReplayWireMessage {
   if (!agentMeta) return wire;
   const sourceNote = buildWireMessageSourceNote(
@@ -363,6 +365,7 @@ export function withReplaySourceNotes(
     {
       visibleText: typeof wire === 'string' ? wire : extractPlainText(wire.content),
       autoResume: agentMeta.autoResume === true,
+      sendToSession,
     },
   );
   const device = readMessageSourceDevice(agentMeta);
@@ -379,8 +382,9 @@ export function withReplaySourceNotes(
 function replayWireWithSourceNotes(
   sourceWire: OverflowReplayWireMessage,
   plan: Extract<OverflowRolloverPlan, { action: 'rebuild' }>,
+  sendToSession?: AgentSendToSessionHint,
 ): unknown {
-  const withNotes = withReplaySourceNotes(sourceWire, plan.sourceUserAgentMeta);
+  const withNotes = withReplaySourceNotes(sourceWire, plan.sourceUserAgentMeta, sendToSession);
   return withNotes === sourceWire ? plan.sourceUserAgentFacingWireContent : withNotes;
 }
 
@@ -447,6 +451,8 @@ export function findLatestRebuildableError(
 }
 
 export interface ContextOverflowRolloverDeps {
+  /** Confirmed send_to_session route of the session about to be replayed; sampled before close. */
+  sendToSessionHint?(sessionId: string): AgentSendToSessionHint | undefined;
   getSessionRow(sessionId: string): Promise<{
     status: string;
     source?: string | null;
@@ -743,6 +749,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
+      // Sampled while the source runtime is still live; the replay below goes through the send transaction.
+      const sendToSession = deps.sendToSessionHint?.(sessionId);
       if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) {
         deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
         return false;
@@ -849,7 +857,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         const replay = await deps.replayUserMessage(
           sessionId,
           plan.sourceUserContent,
-          replayWireWithSourceNotes(sourceWire, plan),
+          replayWireWithSourceNotes(sourceWire, plan, sendToSession),
           {
             signal,
             // 保留同一 Pi 会话历史：失败轮的 error assistant 会被 pi-ai 序列化时
@@ -963,7 +971,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       const replay = await deps.replayUserMessage(
         sessionId,
         oversized ? CODEX_HISTORY_CONTINUE_MESSAGE : plan.sourceUserContent,
-        oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan),
+        oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan, sendToSession),
         oversized ? {
           signal,
           continueFromHistory: true,

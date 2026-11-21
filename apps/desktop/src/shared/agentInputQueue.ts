@@ -31,6 +31,7 @@ import {
   projectLiteralUserText,
   readAgentInputReferences,
   type AgentInputReference,
+  type AgentSendToSessionHint,
 } from '@cindy/maker-shared/agent-input-projection';
 
 export type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
@@ -967,11 +968,16 @@ export function serializeSessionReferencePayload(
 }
 
 /** Immutable semantic projection shared by Ghost, titles, turn and steer. */
-export function getAgentFacingText(queued: AgentInputQueuedMessage): string {
+export function getAgentFacingText(
+  queued: AgentInputQueuedMessage,
+  options: { sendToSession?: AgentSendToSessionHint } = {},
+): string {
+  const sendToSession = queued.toolsDisabled === true ? undefined : options.sendToSession;
   const text = projectAgentFacingText({
     text: queued.text,
     quotesEncoded: queued.chatMessage.quotesEncoded === true,
     agentReferences: queued.agentReferences,
+    sendToSession,
   });
   // Host text-only welcomes stay synthetic in queue/history projections, not in model input.
   return queued.toolsDisabled === true && text.startsWith(UI_ACTION_TRIGGER_PREFIX)
@@ -1220,9 +1226,12 @@ export function deriveAutoTitleSeed(
 export function buildMakerUserMessage(
   queued: AgentInputQueuedMessage,
   sessionReferenceContexts: AgentInputSessionReferenceContext[] = [],
+  options: { sendToSession?: AgentSendToSessionHint } = {},
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
-  const facingText = getAgentFacingText(queued);
+  // The route comes from the live session's host-reconciled identity. Queued createOpts are only a
+  // snapshot: Review and plugin-engine identity are restored at start, so they cannot decide it.
+  const facingText = getAgentFacingText(queued, { sendToSession: options.sendToSession });
   // 主机内部消息只在排队行 / 历史里需要隐藏前缀;发给模型的正文不带它。
   const authoredText = queued.agentOmitsTriggerPrefix === true && facingText.startsWith(UI_ACTION_TRIGGER_PREFIX)
     ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)

@@ -115,7 +115,11 @@ import {
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
-import { persistSessionFieldsWith, REMOTE_PERSIST_FIELDS } from '../sessionFieldPersistence.js';
+import {
+  persistSessionFieldsWith,
+  REMOTE_PERSIST_FIELDS,
+  type PersistSessionFieldsOptions,
+} from '../sessionFieldPersistence.js';
 import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
@@ -866,11 +870,12 @@ export async function persistSessionPermissionModeIfAuto(sessionId: string): Pro
 export async function persistSessionFields(
   sessionId: string,
   patch: Record<string, unknown>,
+  options?: PersistSessionFieldsOptions,
 ): Promise<void> {
   return persistSessionFieldsWith({
     captureOwnerScope, isOwnerScopeCurrent, broadcastSessionPatched,
     applyContextWindowBudget: () => registeredSessionIpcOpts.applyContextWindowBudget,
-  }, sessionId, patch);
+  }, sessionId, patch, options);
 }
 
 const MAX_LIMIT = 1000;

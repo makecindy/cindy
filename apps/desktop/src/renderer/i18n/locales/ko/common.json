@@ -563,7 +563,8 @@
       "calloutUnknown": "요청한 사람을 모른다면 거절하세요. 거절하면 이 링크는 더 이상 사용할 수 없습니다.",
       "approve": "공유 승인",
       "reject": "요청 거절",
-      "later": "나중에 처리"
+      "later": "나중에 처리",
+      "calloutPluginEngine": "{{name}}님은 자신의 컴퓨터에 플러그인이나 CLI를 설치하지 않고도 이 컴퓨터의 CLI 로그인과 할당량으로 사용할 수 있습니다."
     },
     "apply": {
       "loading": "공유 링크를 읽는 중…",
@@ -8516,7 +8517,8 @@
           "description": "켜면 내 다른 컴퓨터에서 이 엔진으로 작업을 실행할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다. 파일과 명령은 작업이 있는 컴퓨터에 그대로 남습니다.",
           "unsupported": "이 플러그인은 아직 다른 컴퓨터에서 엔진을 사용하는 것을 지원하지 않습니다.",
           "remoteControlOff": "이 컴퓨터는 아직 원격 제어를 허용하지 않아 다른 컴퓨터에서 이 엔진을 사용할 수 없습니다.",
-          "ariaLabel": "내 다른 컴퓨터에서 {{engine}} 사용 허용"
+          "ariaLabel": "내 다른 컴퓨터에서 {{engine}} 사용 허용",
+          "descriptionShareable": "켜면 내 다른 컴퓨터와 공유받은 사람이 플러그인을 설치하지 않고도 이 엔진으로 작업을 실행할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다. 파일과 명령은 작업이 있는 컴퓨터에 그대로 남습니다."
         },
         "githubRelease": {
           "title": "플러그인 업데이트",
@@ -14094,6 +14096,8 @@
       "source": {
         "lastConfirmed": "마지막 새로고침: {{time}}",
         "unconfirmed": "모델 목록을 갱신하지 못함",
+        "unreachable": "{{source}}에 연결할 수 없음",
+        "unreachableDetail": "연결할 수 없습니다. 네트워크를 확인하세요",
         "unavailable": "모델 사용 불가",
         "reconnect": "다시 연결",
         "manage": "소스 관리",
@@ -17431,7 +17435,8 @@
         "title": "저장소 자동화 가져오기",
         "description": "출처: {{workingDir}}. 아래 설정을 확인하세요. 가져오면 변경 사항이 적용되고 새 자동화가 활성화됩니다. 명령을 실행하고 전체 액세스 권한으로 Agent를 시작할 수 있으므로 신뢰하는 내용만 가져오세요.",
         "accept": "가져오기 확인",
-        "removed": "삭제 예정: {{names}}"
+        "removed": "삭제 예정: {{names}}",
+        "fileMissing": "가져오기를 건너뛰었습니다. {{projectName}}에서 자동화 파일을 찾을 수 없습니다."
       },
       "toast": {
         "summary": "추가 {{inserted}} · 업데이트 {{updated}} · 삭제 {{deleted}}",
@@ -17528,6 +17533,7 @@
       "openWorkdirFailed": "폴더를 열지 못했습니다"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "대기 시간이 초과되어 프롬프트가 전송되지 않았습니다. 대상 세션이 유휴 상태가 되면 {{action}}을 선택하여 실행하세요.",
       "status": {
         "running": "실행 중",
         "success": "성공",
@@ -21456,6 +21462,7 @@
       "reviewed": "검토됨",
       "verified-publisher": "확인된 게시자"
     },
+    "viewLimit": "열린 페이지가 너무 많습니다. 다른 페이지를 화면 밖으로 스크롤하거나 접으면 이 페이지가 자동으로 열립니다.",
     "pluginRevoked": "플러그인이 비활성화되거나 변경되어 이 페이지를 사용할 수 없습니다.",
     "pluginCspRejected": "페이지에서 선언되지 않은 도메인을 요청하여 로드를 차단했습니다.",
     "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인하세요",
@@ -22186,6 +22193,7 @@
     "picker": {
       "empty": "아직 모델 그룹이 없습니다. 설정에서 소스 몇 개를 모드로 묶으면 여기서 선택할 수 있습니다.",
       "manage": "모델 그룹 관리",
+      "deviceTitle": "모델 그룹 · {{device}}",
       "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",
       "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
       "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다."

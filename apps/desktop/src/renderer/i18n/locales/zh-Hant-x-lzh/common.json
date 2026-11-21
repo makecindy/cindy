@@ -563,7 +563,8 @@
       "calloutUnknown": "若君不識申請之人，請拒之；拒後此連結即廢。",
       "approve": "許分享",
       "reject": "拒其請",
-      "later": "容後再理"
+      "later": "容後再理",
+      "calloutPluginEngine": "{{name}} 用之時無須於己機安設法器或 CLI，徑用此機之 CLI 登門與限額。"
     },
     "apply": {
       "loading": "方讀分享連結…",
@@ -8502,7 +8503,8 @@
           "description": "啟之，則君之他機可用此引擎行差事；Agent 行於此機，用此機之登門與限額；檔案與指令仍留於差事所在之機。",
           "unsupported": "此法器尚未許他機用其引擎。",
           "remoteControlOff": "此機尚未許同名籍之裝置遠端控制，他機不可用此引擎。",
-          "ariaLabel": "許君之他機用 {{engine}}"
+          "ariaLabel": "許君之他機用 {{engine}}",
+          "descriptionShareable": "啟之，則君之他機與所共之友無須安設法器，即可用此引擎行差事；Agent 行於此機，用此機之登門與限額；檔案與指令仍留於差事所在之機。"
         },
         "githubRelease": {
           "title": "插件更新",
@@ -14093,6 +14095,8 @@
       "source": {
         "lastConfirmed": "上次重整：{{time}}",
         "unconfirmed": "模型錄未新",
+        "unreachable": "{{source}} 不能達",
+        "unreachableDetail": "不能達，請察網路",
         "unavailable": "模型不可用",
         "reconnect": "重連",
         "manage": "理來源",
@@ -17431,7 +17435,8 @@
         "title": "納儲存庫之自運",
         "description": "來源：{{workingDir}}。請檢查下方設定。匯入會套用這些變更並啟用新增自運，它們可以執行命令、啟動具有完整存取權限的 Agent。請僅匯入你信任的內容。",
         "accept": "確認匯入",
-        "removed": "將刪除：{{names}}"
+        "removed": "將刪除：{{names}}",
+        "fileMissing": "「{{projectName}}」中未見自運卷，故未納入"
       },
       "toast": {
         "summary": "增 {{inserted}} · 更 {{updated}} · 刪 {{deleted}}",
@@ -17528,6 +17533,7 @@
       "openWorkdirFailed": "啟卷匣未成"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "排候逾時，提示詞未發。待所繫任務閒，按「{{action}}」補行。",
       "status": {
         "running": "方行",
         "success": "成",
@@ -21456,6 +21462,7 @@
       "reviewed": "已審",
       "verified-publisher": "發佈者已驗"
     },
+    "viewLimit": "所開之頁過多。移他頁出屏，或收之，此頁即自開。",
     "pluginRevoked": "法器已停用或已變更，此頁已失效",
     "pluginCspRejected": "此頁請求未宣告之網域，已拒其載入",
     "filesOnExecutionComputer": "卷之內容請於執行之機覽之",
@@ -22186,6 +22193,7 @@
     "picker": {
       "empty": "尚無模型組。於設定合數源為一模式，即可於此擇之。",
       "manage": "理模型組",
+      "deviceTitle": "模型組 · {{device}}",
       "switched": "「{{name}}」已將此差事易為 {{model}}",
       "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。",
       "chooseUnavailable": "「{{name}}」今無可用之源，未取之。"

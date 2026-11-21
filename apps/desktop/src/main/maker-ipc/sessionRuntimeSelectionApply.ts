@@ -51,7 +51,7 @@ import { CredentialModeSwitchBusyError } from '../maker-host/codex-credential-sw
 import { withSendToSessionLock } from './sendToSessionLock.js';
 import type { ModelWindowSwitchPreparationResult } from './contextOverflowRollover.js';
 import type { createContextOverflowRollover } from './contextOverflowRollover.js';
-import type { SessionRuntimeAxisPatch, SessionRuntimeMutationSource, SessionRuntimeProfile } from './sessionRuntimeControl.js';
+import type { FallbackRouteProfile, SessionRuntimeAxisPatch, SessionRuntimeMutationSource, SessionRuntimeProfile } from './sessionRuntimeControl.js';
 import type { MakerSessionAgentSwitchHandlerDeps, PendingAgentSwitchRegistry } from './sessionAgentSwitchHandler.js';
 import type { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
 import {
@@ -91,7 +91,7 @@ export type InternalRuntimeSelectionOptions = {
   expectedGeneration?: number;
   deferWhileRunning?: boolean;
   applyingPendingGeneration?: number;
-  previousProfile?: SessionRuntimeProfile;
+  previousProfile?: FallbackRouteProfile;
   /** Effective profile observed by the Agent CAS read; axis-only patches use it as the live base. */
   effectiveProfile?: SessionRuntimeProfile;
   credentialSelectionAxes?: { effort: boolean; fastMode: boolean };
@@ -397,7 +397,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       }
       const live = makerPort.getSession(sessionId);
       if (runtimeStatus.agentKind === 'acp') {
-        if (internalOptions.source !== 'user' || (live && live.agentKind !== 'acp')) {
+        if ((internalOptions.source !== 'user' && internalOptions.source !== 'fallback') || (live && live.agentKind !== 'acp')) {
           return { deferred: false, superseded: true };
         }
         if (!runtimeStatus.providerId || !acpHarnessKeyFromProviderId(runtimeStatus.providerId)
@@ -432,9 +432,23 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           assertRuntimeOwnerCurrent();
           assertSharedTaskCurrent.admit();
         }
-        await persistSessionFields(sessionId, { model: target.model, ...(effort ? { effort } : {}) });
+        await persistSessionFields(sessionId, { model: target.model, effort: effort ?? '' }, { allowEmptyEffort: true });
         assertRuntimeOwnerCurrent();
-        const response = { deferred: false, superseded: false, effectiveModelId: target.model };
+        const generation = internalOptions.source === 'fallback'
+          ? acceptSessionRuntimeMutation({
+              sessionId, source: 'fallback', deferred: false, previousProfile: internalOptions.previousProfile,
+              profile: { agentKind: 'acp', agentDeviceId: runtimeStatus.agentDeviceId, providerId: runtimeStatus.providerId,
+                model: target.model, effort: effort ?? null, fastMode: false },
+            })
+          : recordUserSessionRuntimeMutation(sessionId);
+        const response = {
+          deferred: false,
+          superseded: false,
+          generation,
+          persistedRoute: true as const,
+          effectiveModelId: target.model,
+          effectiveProviderId: runtimeStatus.providerId,
+        };
         if (isDeviceLinkInvoke()) markRemoteSettingPersistedInsideHandler(response);
         return response;
       }

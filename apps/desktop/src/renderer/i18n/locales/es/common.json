@@ -576,7 +576,8 @@
       "calloutUnknown": "Si no reconoces a esta persona, rechaza la solicitud; el enlace deja de funcionar una vez rechazada.",
       "approve": "Aprobar uso compartido",
       "reject": "Rechazar solicitud",
-      "later": "Decidir más tarde"
+      "later": "Decidir más tarde",
+      "calloutPluginEngine": "{{name}} puede usarlo sin instalar el complemento ni la CLI en su computadora, usando el inicio de sesión y la cuota de la CLI de esta computadora."
     },
     "apply": {
       "loading": "Leyendo el enlace para compartir…",
@@ -7968,7 +7969,7 @@
           "loading": "Buscando y descargando…",
           "invalid": "Introduce una URL de un repositorio o una etiqueta de release de GitHub.",
           "not-found": "Esta versión no está disponible. Comprueba el enlace y tu acceso al repositorio.",
-          "ambiguous": "Este enlace contiene varios plugins. Elige una release con un solo paquete o instala el archivo directamente.",
+          "ambiguous": "Este enlace contiene varios complementos. Elige una release con un solo paquete o instala el archivo directamente.",
           "installedAlready": "Este plugin ya está instalado. Puedes actualizarlo en sus ajustes."
         },
         "installedSection": "Instalado",
@@ -8631,7 +8632,8 @@
           "description": "Cuando está activado, tus otras computadoras pueden ejecutar tareas con este motor. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea.",
           "unsupported": "Este complemento todavía no permite usar su motor desde otras computadoras.",
           "remoteControlOff": "Esta computadora aún no permite el control remoto, por lo que otras computadoras no pueden usar este motor.",
-          "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}"
+          "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}",
+          "descriptionShareable": "Cuando está activado, tus otras computadoras y las personas con quienes lo compartas pueden ejecutar tareas con este motor sin instalar el complemento. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea."
         },
         "githubRelease": {
           "title": "Actualizaciones del complemento",
@@ -12132,7 +12134,7 @@
       "core": {
         "group": "Habilidad principal",
         "name": "Núcleo del amigo",
-        "hint": "Tareas, otros amigos, modelos, herramientas y plugins, memoria. Se actualiza con Cindy.",
+        "hint": "Tareas, otros amigos, modelos, herramientas y complementos, memoria. Se actualiza con Cindy.",
         "meta": "Común a todos los amigos · Siempre activa · Se actualiza con Cindy",
         "note": "La coordinación que tiene cada amigo. No se puede desactivar ni editar. Para que trabaje de otra forma, díselo en el chat y lo guardará como su propia habilidad.",
         "covers": "Incluye",
@@ -14263,6 +14265,8 @@
       "source": {
         "lastConfirmed": "Última actualización: {{time}}",
         "unconfirmed": "Lista de modelos sin actualizar",
+        "unreachable": "No se puede conectar con {{source}}",
+        "unreachableDetail": "Sin conexión. Revisa la red.",
         "unavailable": "Modelo no disponible",
         "reconnect": "Reconectar",
         "manage": "Administrar fuente",
@@ -17671,7 +17675,8 @@
         "title": "Importar automatizaciones del repositorio",
         "description": "Origen: {{workingDir}}. Revisa las definiciones siguientes. La importación aplica estos cambios y activa las nuevas automatizaciones, que pueden ejecutar comandos e iniciar Agents con acceso completo. Importa solo contenido de confianza.",
         "accept": "Confirmar importación",
-        "removed": "Se eliminarán: {{names}}"
+        "removed": "Se eliminarán: {{names}}",
+        "fileMissing": "Se omitió la importación porque no se encontró el archivo de automatizaciones en {{projectName}}."
       },
       "toast": {
         "summary": "Agregados: {{inserted}} · actualizados: {{updated}} · eliminados: {{deleted}}",
@@ -17768,6 +17773,7 @@
       "openWorkdirFailed": "No se pudo abrir la carpeta"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
       "status": {
         "running": "En ejecución",
         "success": "Éxito",
@@ -21741,6 +21747,7 @@
       "reviewed": "Revisado",
       "verified-publisher": "Editor verificado"
     },
+    "viewLimit": "Hay demasiadas páginas abiertas. Desplaza otra página fuera de la vista o ciérrala para que esta se abra automáticamente.",
     "pluginRevoked": "El complemento se desactivó o cambió. Esta página ya no está disponible.",
     "pluginCspRejected": "La página solicitó un dominio no declarado y se bloqueó.",
     "filesOnExecutionComputer": "Ver el contenido del archivo en la computadora de ejecución",
@@ -22488,6 +22495,7 @@
     "picker": {
       "empty": "Aún no hay grupos de modelos. Combina varias fuentes en un modo en Ajustes para elegirlo aquí.",
       "manage": "Gestionar grupos de modelos",
+      "deviceTitle": "Grupos de modelos · {{device}}",
       "switched": "«{{name}}» cambió esta tarea a {{model}}",
       "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo.",
       "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó."

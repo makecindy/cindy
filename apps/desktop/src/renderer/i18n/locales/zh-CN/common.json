@@ -563,7 +563,8 @@
       "calloutUnknown": "如果你不认识申请人，请拒绝；拒绝后这条链接作废。",
       "approve": "同意分享",
       "reject": "拒绝申请",
-      "later": "稍后处理"
+      "later": "稍后处理",
+      "calloutPluginEngine": "{{name}} 使用时无需在自己的电脑上安装插件或 CLI，会使用这台电脑上的 CLI 登录和配额。"
     },
     "apply": {
       "loading": "正在读取分享链接…",
@@ -8516,7 +8517,8 @@
           "description": "开启后，你的其他电脑可以用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。",
           "unsupported": "这个插件还不支持让其他电脑使用它的引擎。",
           "remoteControlOff": "这台电脑还没有允许同账号设备远程控制，其他电脑不能使用这个引擎。",
-          "ariaLabel": "允许你的其他电脑使用 {{engine}}"
+          "ariaLabel": "允许你的其他电脑使用 {{engine}}",
+          "descriptionShareable": "开启后，你的其他电脑和分享的好友无需安装插件即可用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。"
         },
         "githubRelease": {
           "title": "插件更新",
@@ -14094,6 +14096,8 @@
       "source": {
         "lastConfirmed": "上次刷新：{{time}}",
         "unconfirmed": "模型列表暂未更新",
+        "unreachable": "连不上 {{source}}",
+        "unreachableDetail": "连不上，请检查网络",
         "unavailable": "模型不可用",
         "reconnect": "重新连接",
         "manage": "管理来源",
@@ -17431,7 +17435,8 @@
         "title": "导入仓库自动化",
         "description": "来源：{{workingDir}}。请检查下方配置。导入会应用这些变更并启用新增的自动化，它们可以执行命令、启动拥有完全访问权限的 Agent。请仅导入你信任的内容。",
         "accept": "确认导入",
-        "removed": "将删除：{{names}}"
+        "removed": "将删除：{{names}}",
+        "fileMissing": "找不到「{{projectName}}」中的自动化文件，已跳过导入"
       },
       "toast": {
         "summary": "新增 {{inserted}} · 更新 {{updated}} · 删除 {{deleted}}",
@@ -17528,6 +17533,7 @@
       "openWorkdirFailed": "打开文件夹失败"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "排队等待超时，提示词未发送。目标任务空闲后可点击「{{action}}」补跑。",
       "status": {
         "running": "运行中",
         "success": "成功",
@@ -21456,6 +21462,7 @@
       "reviewed": "已审核",
       "verified-publisher": "发布者已验证"
     },
+    "viewLimit": "同时打开的页面太多。滚动或收起其他页面后，这里会自动打开。",
     "pluginRevoked": "插件已停用或发生变化，此页面已失效",
     "pluginCspRejected": "页面申请了未声明的域名，已拒绝加载",
     "filesOnExecutionComputer": "文件内容请在执行电脑查看",
@@ -22186,6 +22193,7 @@
     "picker": {
       "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
       "manage": "管理模型组",
+      "deviceTitle": "模型组 · {{device}}",
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
       "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
       "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"

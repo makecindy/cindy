@@ -7342,7 +7342,7 @@ const MessageItem = memo(function MessageItem({
         return sessionId ? (
           <McpAppCard sessionId={sessionId} clientId={message.clientId}
             title={String(message.systemCardData?.title ?? '')}
-            plugin={message.systemCardData?.plugin} customMcp={message.systemCardData?.customMcp}
+            plugin={message.systemCardData?.plugin} customMcp={message.systemCardData?.customMcp} initialHeight={message.systemCardData?.initialHeight}
             fallbackText={String(message.systemCardData?.fallbackText ?? '')} />
         ) : null;
       }

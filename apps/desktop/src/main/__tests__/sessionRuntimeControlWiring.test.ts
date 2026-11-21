@@ -23,6 +23,7 @@ import {
   type ContextRecoveryTerminalPorts,
 } from '../maker-ipc/contextRecoveryTerminal';
 import { isTerminalTurnErrorEvent } from '../maker-ipc/sessionTurnActivityTracker';
+import { resolveAgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 
 const mainRoot = resolve(__dirname, '..');
 const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8').replace(
@@ -1893,15 +1894,17 @@ describe('scheduled session bootstrap wiring', () => {
 async function recoveryAssembly<Result = Record<string, (...args: unknown[]) => unknown>>(bindings: Record<string, unknown>) {
   let rowReader: ts.VariableStatement | undefined;
   let assembly: ts.ExpressionStatement | undefined;
+  let hintReader: ts.FunctionDeclaration | undefined;
   function visit(node: ts.Node): void {
     if (ts.isVariableStatement(node) && node.declarationList.declarations.some(d => d.name.getText(registerAst) === 'readContextRecoverySession')) rowReader = node;
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'confirmedSendToSessionHint') hintReader = node;
     if (ts.isExpressionStatement(node) && ts.isBinaryExpression(node.expression)
       && node.expression.left.getText(registerAst) === 'contextOverflowRolloverHolder') assembly = node;
     ts.forEachChild(node, visit);
   }
   visit(registerAst);
-  if (!rowReader || !assembly) throw new Error('Desktop recovery assembly is missing');
-  const code = ts.transpileModule(`let contextOverflowRolloverHolder;\n${rowReader.getText(registerAst)}\n${assembly.getText(registerAst)}\nreturn contextOverflowRolloverHolder;`,
+  if (!rowReader || !assembly || !hintReader) throw new Error('Desktop recovery assembly is missing');
+  const code = ts.transpileModule(`let contextOverflowRolloverHolder;\n${rowReader.getText(registerAst)}\n${hintReader.getText(registerAst)}\n${assembly.getText(registerAst)}\nreturn contextOverflowRolloverHolder;`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, removeComments: true } }).outputText;
   // Load newly extracted production functions from their real imports. Existing
   // Desktop IO remains injected. This same guard runs unchanged before/after
@@ -1932,7 +1935,9 @@ function recoveryFixture() {
   const db = { clientEpoch: 1, client: { drizzle: { select: () => query } } };
   const coordinator = { clearError: vi.fn(() => { order.push('clear'); return { status: 'idle' }; }),
     hasPendingQueuedWork: vi.fn(() => false), getInputAbortSignal: () => new AbortController().signal };
+  const pendingSwitch = new Map<string, unknown>();
   const bindings: Record<string, unknown> = {
+    agentSwitchPending: { get: (sessionId: string) => pendingSwitch.get(sessionId) },
     createContextOverflowRollover: (deps: unknown) => deps,
     getDbClient: () => db.client, getCurrentDbClientSnapshot: () => ({ ...db }),
     captureDataOwnerBroadcastScope: () => 'owner', isDataOwnerBroadcastScopeCurrent: () => current,
@@ -1972,8 +1977,43 @@ function recoveryFixture() {
     },
     withSendToSessionLock: vi.fn(), withRehydrateCloseSuppressed: vi.fn(),
   };
-  return { bindings, row, order, db, coordinator, setCurrent: (value: boolean) => { current = value; } };
+  return { bindings, row, order, db, coordinator, pendingSwitch, setCurrent: (value: boolean) => { current = value; } };
 }
+
+describe('local-application visible task host', () => {
+  it('opens a local-application task without a send_to_session route', async () => {
+    let call: ts.ExpressionStatement | undefined;
+    const visit = (node: ts.Node): void => {
+      if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
+        && node.expression.expression.getText(registerAst) === 'installLocalAgentVisibleSessionHost') call = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(registerAst);
+    if (!call) throw new Error('local-application host registration is missing');
+    const code = ts.transpileModule(call.getText(registerAst),
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+    let factory: ((localMaker: unknown) => { open(opts: Record<string, unknown>): Promise<Record<string, unknown>> }) | undefined;
+    const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active', sdkSessionId: null }] };
+    const bindings: Record<string, unknown> = {
+      installLocalAgentVisibleSessionHost: (f: typeof factory) => { factory = f; },
+      activeOwnerScopeKey: () => 'owner', throwIpcError: (code: string) => { throw new Error(code); }, t: (key: string) => key,
+      withSendToSessionLock: (_id: string, run: () => unknown) => run(),
+      getDbClient: () => ({ drizzle: { select: () => query } }), sessions: {}, eq: vi.fn(),
+      persistSessionFields: vi.fn(async () => {}), wireSessionToIpc: vi.fn(), broadcastSessionCreated: vi.fn(),
+      agentHandoffPending: { consume: vi.fn() },
+      // Real resolver and host capability: an ordinary claude-code task would get the cindy_helper route.
+      resolveAgentSendToSessionHint, options: { supportsRemoteSessionHandoff: true },
+    };
+    new Function(...Object.keys(bindings), code)(...Object.values(bindings));
+    const session: Record<string, unknown> = { id: 'local', close: vi.fn() };
+    const localMaker = { getSession: () => undefined, createSession: vi.fn(async () => session) };
+    const opened = await factory!(localMaker).open({ id: 'local', agentKind: 'claude-code', providerId: 'p' });
+    // PR #11894 review: LOCAL_AGENT_CLIENT replaces the MCP set with the application's endpoint,
+    // so cindy_helper is never mounted and no route may be projected for this task.
+    expect(opened).toBe(session);
+    expect(opened.sendToSessionHint).toBeUndefined();
+  });
+});
 
 describe('Desktop recovery assembly ordering and fences', () => {
   // L343 / guard: run the register.ts binding and the real claim/settlement and
@@ -2095,6 +2135,26 @@ describe('Desktop recovery assembly ordering and fences', () => {
       }
     },
   );
+
+  it('projects a send_to_session route only from the live session that will receive the message', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    const hint = { agentKind: 'claude-code', supportsRemote: true };
+    (h.bindings.maker as { getSession: ReturnType<typeof vi.fn> }).getSession.mockReturnValue({ sendToSessionHint: hint });
+    expect(deps.sendToSessionHint('s')).toBe(hint);
+    // PR #11894 review: the send transaction applies a pending engine switch before dispatch, so the
+    // old runtime's route would point the next engine (Pi, or a plugin engine without cindy_helper)
+    // at the wrong or a missing tool. Queued dispatch reads the same predicate.
+    h.pendingSwitch.set('s', { targetAgentKind: 'acp' });
+    expect(deps.sendToSessionHint('s')).toBeUndefined();
+    // A steer reaches the running runtime without the send transaction's switch, so it keeps the route.
+    expect(deps.sendToSessionHint('s', 'live')).toBe(hint);
+    h.pendingSwitch.set('s', { targetAgentKind: 'pi' });
+    expect(deps.sendToSessionHint('s')).toBeUndefined();
+    // A same-engine model/provider selection (SET_MODEL) keeps the identical helper route.
+    h.pendingSwitch.set('s', { targetAgentKind: 'claude-code', sameAgentSelection: true });
+    expect(deps.sendToSessionHint('s')).toBe(hint);
+    expect(registerSource).toMatch(/new AgentInputCoordinator\(\{\s*sendToSessionHint: confirmedSendToSessionHint,/);
+  });
 
   it('reads an active companion role only while its link and profile are active', async () => {
     const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);

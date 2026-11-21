@@ -37,6 +37,7 @@ import {
   crossRegionWithdraw,
   getCrossRegionReceived,
   isCrossRegionShareListUnavailable,
+  hasUnconfirmedCrossRegionReceivedList,
   getMembershipConfirmedCrossRegionReceivedRegions,
   getUnavailableCrossRegionShareIds,
   getConfirmedCrossRegionRegionBudgets,
@@ -95,6 +96,8 @@ interface Runtime {
   authorityIncomplete: boolean;
   listConfirmed: boolean;
   listUnavailable: boolean;
+  /** Shares explicitly left during this runtime keep the original removed verdict. */
+  leftShareIds: Set<string>;
   /** The service retains member IDs for the same share/account across approvals. */
   knownMembers: Map<string, string>;
   departureScope: string;
@@ -216,6 +219,8 @@ function invalidateShareMetadataTarget(share: ProviderShareReceived, keepDenialN
 function emitChanged(rt: Runtime): Promise<void> | void {
   if (!current(rt)) return;
   const received = allReceived(rt);
+  // Leaving removes the row before the next list; seeing it again means a newer membership.
+  for (const share of received) rt.leftShareIds.delete(share.shareId);
   const permissionFingerprint = JSON.stringify(received.map(share => [share.shareId, share.memberId,
     share.providerId, share.hostDeviceId, share.status]));
   if (permissionFingerprint !== metadataPermissionFingerprint) {
@@ -349,10 +354,17 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
   if (!shareId) return agentDeviceId;
   const share = findReceivedShare(shareId);
   if (!share) {
+    const removed = () => new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
+    // Definite answers first: the user left it on this computer, or a local setting hides this older share.
+    if (runtime?.leftShareIds.has(shareId)) throw removed();
     let hidden = false;
     try { hidden = providerShareHiddenByEncryptedOnly(shareId); } catch { /* unreadable settings/vault: keep the removed verdict */ }
     if (hidden) throw new Error('[REMOTE_AGENT_SHARE_LEGACY_DISABLED] encrypted-only connections block this older share');
-    throw new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
+    if (!runtime || !current(runtime) || !runtime.listConfirmed || runtime.unavailable.has(shareId)
+      || hasUnconfirmedCrossRegionReceivedList()) {
+      throw new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE);
+    }
+    throw removed();
   }
   if (share.status !== 'active') throw new Error('[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share');
   return providerShareHostPeer(share.shareId, share.hostDeviceId);
@@ -437,6 +449,7 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
     unavailable: new Set(), authorityIncomplete: false,
     listConfirmed: false,
     listUnavailable: false,
+    leftShareIds: new Set(),
     knownMembers: new Map(),
     departureScope: JSON.stringify([getActiveAuthRealm(), scope]),
     timer: null,
@@ -748,6 +761,7 @@ export async function leaveProviderShare(memberId: string): Promise<void> {
   const noteLeft = () => {
     if (left) return;
     left = true;
+    if (shareId) rt.leftShareIds.add(shareId);
     const ids = pendingDepartures.get(rt.departureScope)?.ids ?? new Set<string>();
     ids.add(memberId);
     pendingDepartures.set(rt.departureScope, { ids, revision: ++leftMemberSequence });
