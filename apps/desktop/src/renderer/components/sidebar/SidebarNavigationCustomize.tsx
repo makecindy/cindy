@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
-import { MAIN_VIEW_ICONS } from './GhostMainViewNavEntries';
+import { GhostMainViewNavIcon } from './GhostMainViewNavEntries';
 import {
   DEFAULT_SIDEBAR_NAVIGATION_VISIBLE,
   SIDEBAR_NAVIGATION_ITEMS,
@@ -77,9 +77,11 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
   // The same icon the entry shows in the sidebar, so each row is recognisable at a glance.
   const iconFor = (id: SidebarNavigationEntryId) => {
     const ghostId = ghostIdOfEntry(id);
-    if (ghostId === null) return SIDEBAR_NAVIGATION_ITEM_ICONS[id as SidebarNavigationItemId];
-    const app = apps.get(ghostId);
-    return app ? MAIN_VIEW_ICONS[app.icon] : Puzzle;
+    const app = ghostId === null ? undefined : apps.get(ghostId);
+    if (app) return <GhostMainViewNavIcon item={app} />;
+    const Icon =
+      ghostId === null ? SIDEBAR_NAVIGATION_ITEM_ICONS[id as SidebarNavigationItemId] : Puzzle;
+    return <Icon aria-hidden="true" size={15} strokeWidth={1.8} className="shrink-0" />;
   };
   const toggle = (id: SidebarNavigationEntryId) => {
     setDraft((current) => {
@@ -190,7 +192,6 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
         className="flex flex-col gap-0.5"
         renderItem={(id) => {
           const visible = isChecked(id);
-          const Icon = iconFor(id);
           return (
             // The whole row toggles; the checkbox stays the focusable control, and its
             // keyboard activation bubbles here as the same click.
@@ -214,12 +215,7 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
               >
                 {visible && <Check size={12} strokeWidth={2.5} aria-hidden />}
               </button>
-              <Icon
-                aria-hidden="true"
-                size={15}
-                strokeWidth={1.8}
-                className="shrink-0 text-[var(--sidebar-nav-text)]"
-              />
+              <span className="shrink-0 text-[var(--sidebar-nav-text)]">{iconFor(id)}</span>
               <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-primary)]">
                 {labelFor(id)}
               </span>

@@ -17,11 +17,12 @@
 - `mainView.html` 必须是包内安全相对路径且文件真实存在；`title` 可省略，省略时
   回退插件 `name`。声明过基础 title 后，locale 文件可用
   `"mainView": { "title": "Workspace" }` 翻译；没有基础 title 时不要声明该翻译；
-- `mainView.icon` 可省略，省略时使用 `puzzle`。它只控制主视图的左侧导航入口，不会
-  替代或修改根级 `icon` 品牌图片。可用值与 Cindy 系统图标名完全一致：
+- `mainView.icon` 可省略，省略时使用 `puzzle`。新版 Host 在左侧导航（展开、
+  收起、更多菜单及自定义列表）优先显示根级 `icon` 品牌图片；图片缺失或加载失败时
+  使用系统图标。旧版 Host 继续显示系统图标。可用值与 Cindy 系统图标名完全一致：
   `puzzle`、`globe`、`code`、`folder`、`database`、`chart-column`、
   `image`、`message-circle`、`calendar-days`；不接受别名、任意图标名或图片路径；
-- `mainView.preferredIcon` 可选，用于侧栏、自定义导航与新增页签菜单。支持上述图标以及
+- `mainView.preferredIcon` 可选，用于导航图片的回退以及新增页签菜单。支持上述图标以及
   `tablet-smartphone`、`contact-round`、`podcast`、`workflow`。客户端不认识首选名称时使用
   `mainView.icon`，两项都省略时使用拼图。插件品牌图仍由根级 `icon` 指定。
 - `mainView.open` 可省略(缺省 `page`:左侧导航入口点开后撑满内容区)。`sidebar` =
