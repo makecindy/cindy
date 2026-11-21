@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { extractIpcError } from '../../utils/ipcError';
 import { RemoteDesktopPermissions } from './RemoteDesktopPermissions';
+import { remoteControlSettings } from './RemoteControlSection.settings-search';
 
 /** The failed setup step the helper reported, such as `service-create 5`. */
 const SETUP_DETAIL = /^[a-z-]+(?:\/[a-z-]+)? -?\d+$/;
@@ -72,6 +73,7 @@ export function RemoteDesktopSetting() {
           )}
         </div>
         <Switch
+          data-setting-id={remoteControlSettings.devices.id}
           aria-label={t('remoteDesktop.allow')}
           disabled={busy}
           checked={enabled}
@@ -118,6 +120,7 @@ export function RemoteDesktopSetting() {
             )}
           </div>
           <Button
+            data-settings-search-action="Install or remove the Windows lock-screen service on this device"
             disabled={
               busy || windowsSupport === 'installRequired' || windowsSupport === 'unavailable'
             }
