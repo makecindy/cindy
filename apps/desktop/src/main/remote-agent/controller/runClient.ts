@@ -34,7 +34,7 @@ import {
 } from '@cindy/device-link';
 
 import { LineSplitter } from '../eventLog';
-import { remoteAgentStartupTiming } from '../startupTiming';
+import { openPayloadFieldBytes, remoteAgentStartupTiming, type StartupPayloadStats } from '../startupTiming';
 import { isRetryableLinkError, RemoteAgentPoller, type PolledRun, type RemoteAgentInvoke } from './poller';
 import { isDeliveryBackpressure, RemoteAgentDeliveryGate } from './deliveryPressure';
 
@@ -269,8 +269,15 @@ export class RemoteAgentRunClient implements PolledRun {
       runId: this.runId,
     });
     let status: 'ok' | 'failed' = 'failed';
+    let payloadStats: StartupPayloadStats | undefined;
     try {
       const payload = await timing.measure('payload-upload', () => this.payload(openPayload, this.newId(), requireActive));
+      const uploaded = 'uploadId' in payload ? payload : undefined;
+      payloadStats = {
+        uploadBytes: uploaded?.bytes ?? 0,
+        chunks: uploaded?.chunks ?? 0,
+        fieldBytes: openPayloadFieldBytes(openPayload),
+      };
       if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       requireActive?.();
       const started = new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -297,7 +304,7 @@ export class RemoteAgentRunClient implements PolledRun {
       status = 'ok';
       return result;
     } finally {
-      timing.finish(status);
+      timing.finish(status, undefined, payloadStats);
     }
   }
 
