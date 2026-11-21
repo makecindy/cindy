@@ -142,11 +142,33 @@ export interface RunMarkerStoreDeps {
   pid: number;
   version: string;
   now?: () => Date;
+  /** 当前进程的真实启动时刻;默认优先读取 Electron 的创建时间,再回退到 uptime。 */
+  processStartedAt?: (now: Date) => Date | null;
   /** 探活钩子,默认 process.kill(pid, 0);测试注入 */
   isPidAlive?: (pid: number) => boolean;
   /** 本次系统启动时刻(epoch ms),读不到返回 null;默认由 os.uptime() 推算。测试注入 */
   bootTimeMs?: () => number | null;
   warn?: (msg: string, err?: unknown) => void;
+}
+
+function defaultProcessStartedAt(now: Date): Date {
+  try {
+    const getCreationTime = (process as NodeJS.Process & { getCreationTime?: () => Date | null })
+      .getCreationTime;
+    const creationTime = getCreationTime?.call(process);
+    if (
+      creationTime instanceof Date &&
+      Number.isFinite(creationTime.getTime()) &&
+      creationTime.getTime() <= now.getTime()
+    ) {
+      return creationTime;
+    }
+  } catch {
+    // Electron may omit getCreationTime on an older runtime; uptime remains deterministic.
+  }
+
+  const uptimeMs = process.uptime() * 1000;
+  return Number.isFinite(uptimeMs) && uptimeMs >= 0 ? new Date(now.getTime() - uptimeMs) : now;
 }
 
 function defaultIsPidAlive(pid: number): boolean {
@@ -168,6 +190,7 @@ export class RunMarkerStore {
   private readonly pid: number;
   private readonly version: string;
   private readonly now: () => Date;
+  private readonly processStartedAt: (now: Date) => Date | null;
   private readonly isPidAlive: (pid: number) => boolean;
   private readonly bootTimeMs: () => number | null;
   private readonly warn: (msg: string, err?: unknown) => void;
@@ -179,6 +202,7 @@ export class RunMarkerStore {
     this.pid = deps.pid;
     this.version = deps.version;
     this.now = deps.now ?? (() => new Date());
+    this.processStartedAt = deps.processStartedAt ?? defaultProcessStartedAt;
     this.isPidAlive = deps.isPidAlive ?? defaultIsPidAlive;
     this.bootTimeMs = deps.bootTimeMs ?? defaultBootTimeMs;
     this.warn = deps.warn ?? ((msg, err) => log.warn(msg, err));
@@ -211,11 +235,13 @@ export class RunMarkerStore {
 
   /** 本实例启动:写 running 标记。 */
   begin(): void {
-    const nowIso = this.now().toISOString();
+    const now = this.now();
+    const nowIso = now.toISOString();
+    const startedAt = this.processStartedAt(now) ?? now;
     this.current = {
       pid: this.pid,
       version: this.version,
-      startedAt: nowIso,
+      startedAt: startedAt.toISOString(),
       heartbeatAt: nowIso,
       heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
       state: 'running',

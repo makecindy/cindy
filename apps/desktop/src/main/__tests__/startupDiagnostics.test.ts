@@ -42,6 +42,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -66,13 +67,20 @@ function writeMarker(marker: Partial<RunMarker> & { pid: number }): string {
 }
 
 function makeStore(
-  opts: { pid?: number; alivePids?: number[]; now?: () => Date; bootTimeMs?: number | null } = {},
+  opts: {
+    pid?: number;
+    alivePids?: number[];
+    now?: () => Date;
+    processStartedAt?: (now: Date) => Date | null;
+    bootTimeMs?: number | null;
+  } = {},
 ) {
   return new RunMarkerStore({
     dir: tmpDir,
     pid: opts.pid ?? 111,
     version: '0.0.2',
     now: opts.now,
+    processStartedAt: opts.processStartedAt ?? ((now) => now),
     isPidAlive: (pid) => (opts.alivePids ?? []).includes(pid),
     bootTimeMs: () => opts.bootTimeMs ?? null,
     warn: () => {},
@@ -91,6 +99,20 @@ describe('RunMarkerStore state machine', () => {
     expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
     expect(m.heartbeatAt).toBe('2026-07-07T12:00:00.000Z');
     expect(m.heartbeatIntervalMs).toBeGreaterThan(0);
+  });
+
+  it('begin() records process start instead of delayed marker write time', () => {
+    const processStartedAt = new Date('2026-07-07T12:00:00.000Z');
+    const store = makeStore({
+      pid: 42,
+      now: () => new Date('2026-07-07T12:00:21.000Z'),
+      processStartedAt: () => processStartedAt,
+    });
+    store.begin();
+
+    const m = readMarker(42);
+    expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
+    expect(m.heartbeatAt).toBe('2026-07-07T12:00:21.000Z');
   });
 
   it('heartbeat() refreshes heartbeatAt without touching state', () => {
