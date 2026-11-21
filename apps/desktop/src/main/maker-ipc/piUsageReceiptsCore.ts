@@ -120,11 +120,23 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
   const currency = confirmedOwnerCurrency(owner);
   if (!currency) return;
   const referencePricing = getReferenceModelPricing();
+  const piOpaqueModelIds = context.opaqueModelIdsByAgent?.pi;
   const priced = receipts.filter(r => r.needsPricing).map(({ row, segment, model, route, subscription, unpriced }) => {
     const pricing = route === 'xd-gateway' ? gatewayPricing : referencePricing;
     const segments = unpriced ? [] : [{ ...segment,
       priceVariant: segment.priceVariant ?? (segment.id?.startsWith('pi:') && context.piFastMode ? 'priority' : 'standard'),
     }];
+    const isMainRequest = !segment.id?.startsWith('pi-child:');
+    const normalizedContextModel = context.selectedModel
+      ? normalizeModelIdForPricing(context.selectedModel)
+      : undefined;
+    const isSelectedOpaque = Boolean(
+      isMainRequest &&
+      piOpaqueModelIds?.length &&
+      (!normalizedContextModel ||
+        normalizedContextModel === 'unknown' ||
+        piOpaqueModelIds.includes(normalizedContextModel)),
+    );
     const money = subscription
       ? computePriceQuoteTurnMoney(row,
         (context.providerId ? getCodexProviderSubscriptionValuePrice(context.providerId, model, pricing, undefined, undefined, 'pi') : undefined)
@@ -132,7 +144,12 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
       : resolveTurnCost({ rawModel: model, agent: 'pi', tokens: row,
         sdkCostDelta: route === 'provider-api' || unpriced ? undefined : segment.costUsd,
         pricing, context: { providerId: context.providerId, billingRoute: route,
-          region: CURRENT_CINDY_REGION, accessKind: context.accessKind }, segments }).money;
+          region: CURRENT_CINDY_REGION, accessKind: context.accessKind,
+          ...(isMainRequest && normalizedContextModel && normalizedContextModel !== 'unknown'
+            ? { selectedModel: normalizedContextModel }
+            : {}),
+          ...(isSelectedOpaque ? { opaqueModelId: true } : {}),
+          opaqueModelIds: piOpaqueModelIds }, segments }).money;
     // BYOM reference estimates stay message-only, as in the legacy turn path.
     const ledgerMoney = money?.kind === 'actual-cost' || subscription ? money : null;
     // A resolved message-only estimate is final without ledger spend. Only a

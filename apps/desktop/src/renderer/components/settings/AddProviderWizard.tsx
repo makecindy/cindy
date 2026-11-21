@@ -1031,6 +1031,7 @@ export function AddProviderWizard({
           discoveredSources: { ...existing?.discoveredSources, [agent]: m.discoveredSource },
           discoverySnapshotIds: { ...existing?.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
           opaqueModelIds: { ...existing?.opaqueModelIds, [agent]: m.opaqueModelId },
+          ...(m.discoveredCost ? { discoveredCosts: { ...existing?.discoveredCosts, [agent]: m.discoveredCost } } : {}),
           ...(m.route ? { routes: { ...existing?.routes, [agent]: m.route } } : {}),
         });
       }
@@ -1208,9 +1209,13 @@ export function AddProviderWizard({
               existing.name !== m.name ||
               m.discoveredSource || m.discoverySnapshotId || m.opaqueModelId ||
               existing.discoveredSources?.[agent] || existing.discoverySnapshotIds?.[agent] ||
-              m.discoveredCost ||
+              m.discoveredCost || existing.discoveredCosts?.[agent] ||
               m.discoveredMetadata || existing.speechReference
             ) {
+              const nextDiscoveredCosts = { ...existing.discoveredCosts };
+              if (m.discoveredCost) nextDiscoveredCosts[agent] = m.discoveredCost;
+              else delete nextDiscoveredCosts[agent];
+              const hasDiscoveredCosts = Object.keys(nextDiscoveredCosts).length > 0;
               next.set(m.id, {
                 ...existing,
                 speechReference: false,
@@ -1221,7 +1226,7 @@ export function AddProviderWizard({
                 discoveredSources: { ...existing.discoveredSources, [agent]: m.discoveredSource },
                 discoverySnapshotIds: { ...existing.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
                 opaqueModelIds: { ...existing.opaqueModelIds, [agent]: m.opaqueModelId || existing.opaqueModelIds?.[agent] },
-                ...(m.discoveredCost ? { discoveredCosts: { ...existing.discoveredCosts, [agent]: m.discoveredCost } } : {}),
+                discoveredCosts: hasDiscoveredCosts ? nextDiscoveredCosts : undefined,
                 agents: mergedAgents,
                 discoveredMetadata: {
                   ...existing.discoveredMetadata,
@@ -1402,7 +1407,7 @@ export function AddProviderWizard({
             const discoveredMetadata = m.discoveredMetadata?.[agent] ?? {};
             // Current picks own visibility; an old disabled draft must not override
             // a checked row. Leave checked models on the existing default contract.
-            const { defaultEnabled: _oldEnabled, ...draftModel }: Partial<ProviderRuntimeModelConfig> =
+            const { defaultEnabled: _oldEnabled, discoveredCost: _oldCost, ...draftModel }: Partial<ProviderRuntimeModelConfig> =
               detected?.config.runtimes[agent]?.models.find(model => model.id === m.id) ?? {};
             return {
               ...draftModel,
@@ -2257,6 +2262,7 @@ export function AddProviderWizard({
         <div className="flex items-center justify-between px-4 pb-4 pt-2">
           <button
             type="button"
+            data-settings-search-action="Return to the previous wizard step or custom provider form"
             onClick={() => {
               if (savingRef.current) return;
               if (step === 2 && detected && onReturnCustom && sel?.kind === 'preset') {
@@ -2282,7 +2288,7 @@ export function AddProviderWizard({
                       const saved = original.models.find(row => row.id === id);
                       // Only checked rows return to the custom form. Do not
                       // resurrect an older disabled flag on this second save path.
-                      const { defaultEnabled: _oldEnabled, ...selectedModel }: Partial<ProviderRuntimeModelConfig> = saved ?? {};
+                      const { defaultEnabled: _oldEnabled, discoveredCost: _oldCost, ...selectedModel }: Partial<ProviderRuntimeModelConfig> = saved ?? {};
                       return { ...(!selectedModel.interfaceId && !selectedModel.api && !selectedModel.piApi && !selectedModel.route
                         && model.interfaceIds?.[target] ? { interfaceId: model.interfaceIds[target] } : {}),
                         ...selectedModel, id, name: model.name,
@@ -2290,6 +2296,7 @@ export function AddProviderWizard({
                         discoveredSource: model.discoveredSources?.[target],
                         discoverySnapshotId: model.discoverySnapshotIds?.[target],
                         opaqueModelId: model.opaqueModelIds?.[target] || saved?.opaqueModelId,
+                        ...(model.discoveredCosts?.[target] ? { discoveredCost: model.discoveredCosts[target] } : {}),
                         ...(saved?.route ?? model.routes?.[target] ? { route: saved?.route ?? model.routes?.[target] } : {}),
                       };
                     }) : original.models;
