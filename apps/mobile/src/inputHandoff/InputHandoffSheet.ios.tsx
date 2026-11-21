@@ -80,6 +80,8 @@ const sheetRow = (colors: { sheetActionSurface: string; sheetActionBorder: strin
   strokeBorder({ color: colors.sheetActionBorder, shape: "roundedRectangle", cornerRadius, style: { lineWidth: 1 } }),
 ];
 const FIELD_HEIGHT = 50;
+/** Window heights below this get the compact header. */
+const COMPACT_HEIGHT = 760;
 const BUTTON_HEIGHT = 52;
 
 export function InputHandoffSheet(props: InputHandoffSheetProps) {
@@ -146,7 +148,8 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
         <Group key={`${width}:${fontScale}`} modifiers={[presentationDragIndicator("visible"), presentationDetents([{ height: sheetHeight }])]}>
           <VStack spacing={spacing.lg} modifiers={[padding({ top: 28, leading: SIDE, trailing: SIDE, bottom: spacing.md })]}>
             <VStack modifiers={[frame({ maxWidth: Infinity }), layoutPriority(1), onGeometryChange(setHeaderSize)]}>
-              <SheetHeader snapshot={snapshot} compact={fields.length > 3 || width > height || fontScale > 1.3} />
+              {/* Short screens (iPhone SE, a folded iPhone Duo) drop the icon so the fields stay in view. */}
+              <SheetHeader snapshot={snapshot} compact={fields.length > 3 || width > height || height < COMPACT_HEIGHT || fontScale > 1.3} />
             </VStack>
             <ScrollView modifiers={[frame({ maxHeight: bodySize.height || Infinity }), scrollDismissesKeyboard("interactively"), ...(geometry ? [geometry] : [])]}>
               <VStack spacing={spacing.lg} modifiers={[frame({ maxWidth: Infinity }), padding({ bottom: spacing.sm })]}>
@@ -265,7 +268,8 @@ function SheetHeader({ snapshot, compact }: { snapshot: InputHandoffSnapshot; co
         color={colors.textPrimary}
         modifiers={[frame({ width: 60, height: 60 }), ...sheetRow(colors, radius.container)]}
       /> : null}
-      <Text modifiers={[font({ textStyle: "title3", weight: "semibold" }), multilineTextAlignment("center"), padding({ top: spacing.xs })]}>
+      {/* Wraps in full: when the sheet is short, the fields scroll instead of the purpose being cut. */}
+      <Text modifiers={[font({ textStyle: "title3", weight: "semibold" }), multilineTextAlignment("center"), fixedSize({ horizontal: false, vertical: true }), padding({ top: spacing.xs })]}>
         {snapshot.purpose}
       </Text>
       <HStack spacing={4}>
@@ -513,11 +517,11 @@ function QuietLink({ label, disabled = false, onPress }: { label: string; disabl
 
 /** React Native content (screenshot step, sign-in code) inside the native sheet. */
 function Embedded({ children }: { children: ReactNode }) {
-  // The hosted view sizes to its content, so the width is given outright.
-  const { width } = useWindowDimensions();
+  // Width comes from the sheet, height from the content. The sheet can be narrower than the
+  // window (iPhone Duo keeps its status bar on the side), so a window-derived width overflows.
   return (
-    <RNHostView matchContents>
-      <View style={{ width: width - SIDE * 2 }}>{children}</View>
+    <RNHostView matchContents={{ vertical: true }}>
+      <View>{children}</View>
     </RNHostView>
   );
 }
