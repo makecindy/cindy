@@ -18,11 +18,14 @@ import { matchScopedWindowForModel } from '../../../shared/claudeSubscriptionUsa
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { CHATGPT_MODEL_PREFIX } from '../../../shared/subscriptionModels';
+import { preferredAntigravityBuckets } from '../../../shared/antigravityAccounts';
+import type { SubscriptionCodexUsageBucket } from '../../../shared/subscriptionAccounts';
 import { RESET_PENDING_MAX_MS } from '../status/quotaResetRollup';
 import {
   providerWeeklyQuotaSource,
   poolCodexBuckets,
   useProviderUsageSnapshots,
+  weeklyQuota,
   type ProviderGroupUsage,
   type ProviderUsageScope,
   type ProviderUsageSnapshots,
@@ -161,8 +164,9 @@ interface QuotaWindow {
 }
 
 function matchAntigravityBucketForModel(
-  buckets: readonly NonNullable<NonNullable<SourceUsage['antigravity']>['usage']>[number][],
+  buckets: readonly SubscriptionCodexUsageBucket[],
   modelId: string,
+  nowMs: number,
 ) {
   if (buckets.length === 0) return null;
   if (buckets.length === 1) return buckets[0]!;
@@ -176,23 +180,22 @@ function matchAntigravityBucketForModel(
     const matched = byName(/gpt/i);
     if (matched) return matched;
   }
+  const preferred = preferredAntigravityBuckets(buckets);
   if (id.includes('gemini')) {
-    if (id.includes('flash')) {
-      const matched = byName(/flash/i);
+    const variant = /\b(flash|pro|ultra)\b/.exec(id)?.[1];
+    if (variant) {
+      const pattern = new RegExp(`\\b${variant}\\b`, 'i');
+      const matched = preferred.find(bucket => pattern.test(bucket.limitName ?? ''));
       if (matched) return matched;
     }
-    if (id.includes('pro') || id.includes('ultra')) {
-      const matched = byName(/pro|ultra/i);
-      if (matched) return matched;
-    }
-    const matched = byName(/gemini/i);
-    if (matched) return matched;
   }
-  return buckets.reduce((tightest, bucket) => {
-    const maxOf = (b: typeof bucket) =>
-      Math.max(b.primary?.usedPercent ?? -1, b.secondary?.usedPercent ?? -1);
-    return maxOf(bucket) > maxOf(tightest) ? bucket : tightest;
-  }, buckets[0]!);
+  const liveUsage = (bucket: SubscriptionCodexUsageBucket) => Math.max(
+    weeklyQuota(bucket.primary?.usedPercent, bucket.primary?.resetsAt, nowMs)?.usedPercent ?? -1,
+    weeklyQuota(bucket.secondary?.usedPercent, bucket.secondary?.resetsAt, nowMs)?.usedPercent ?? -1,
+  );
+  return preferred.reduce((tightest, bucket) => {
+    return liveUsage(bucket) > liveUsage(tightest) ? bucket : tightest;
+  });
 }
 
 function modelSourceQuota(
@@ -206,7 +209,7 @@ function modelSourceQuota(
   if (!usage) return { plan: null, windows: [] };
   if (usage.source === 'antigravity') {
     const buckets = usage.antigravity?.usage ?? [];
-    const bucket = matchAntigravityBucketForModel(buckets, modelId);
+    const bucket = matchAntigravityBucketForModel(buckets, modelId, nowMs);
     const windows: QuotaWindow[] = [];
     if (bucket?.primary && typeof bucket.primary.usedPercent === 'number' && Number.isFinite(bucket.primary.usedPercent)) {
       windows.push({

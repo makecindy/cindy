@@ -1,6 +1,6 @@
 import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
 import { useAntigravitySubscriptionUsage } from '@/hooks/useAntigravityUsage';
-import type { AntigravityAccountsView } from '../../../shared/antigravityAccounts';
+import { summarizeAntigravityQuota, type AntigravityAccountsView } from '../../../shared/antigravityAccounts';
 import type { KimiCodingUsageSnapshot } from '../../../shared/kimiCodingUsage';
 import type { OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
 import { useEffect, useMemo, useState } from 'react';
@@ -256,20 +256,9 @@ export function useWeeklyQuotaFromSnapshots({ source, codex, claude, xai, kimi, 
     return () => clearInterval(timer);
   }, [source]);
   if (source === 'antigravity') {
-    const buckets = antigravity?.usage ?? [];
-    let worstWeekly: ProviderWeeklyQuota | null = null;
-    let worstSession: ProviderWeeklyQuota | null = null;
-    for (const bucket of buckets) {
-      const secondary = weeklyQuota(bucket.secondary?.usedPercent, bucket.secondary?.resetsAt, nowMs);
-      if (secondary && (!worstWeekly || secondary.usedPercent > worstWeekly.usedPercent)) {
-        worstWeekly = secondary;
-      }
-      const primary = weeklyQuota(bucket.primary?.usedPercent, bucket.primary?.resetsAt, nowMs);
-      if (primary && (!worstSession || primary.usedPercent > worstSession.usedPercent)) {
-        worstSession = primary;
-      }
-    }
-    return worstWeekly ?? worstSession;
+    const { primary, secondary } = summarizeAntigravityQuota(antigravity?.usage ?? [], nowMs);
+    const window = secondary ?? primary;
+    return weeklyQuota(window?.usedPercent, window?.resetsAt, nowMs);
   }
   if (source === 'kimi') {
     const window = kimi?.windows.find(w => w.id === 'limit_7d');

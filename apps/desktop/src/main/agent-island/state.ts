@@ -682,7 +682,7 @@ export function applyAgentIslandEvent(
   // A plugin engine's work after its turn shows only while the background-work signal holds
   // the session running (setAgentIslandSessionBackgroundWork). On its own it would open a
   // run that no turn end closes, and a new entry starts out as running.
-  if (event.turnScope === 'background' && meta.agentKind === 'acp'
+  if (event.turnScope === 'background' && (meta.agentKind === 'acp' || meta.agentKind === 'antigravity')
     && !state.sessions.get(meta.sessionId)?.running) return false;
 
   const session = getOrCreateSession(state, meta, now);

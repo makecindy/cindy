@@ -2629,7 +2629,8 @@ function CCAgentSessionContent({
   // 插件引擎回答完仍在自己干活:状态栏用插件引擎文案,消息流按进行中显示
   // (Agent 还没报完成的工具调用带转圈)。内置引擎的后台子任务 / 命令不走这里。
   const pluginEngineBackgroundWork =
-    backgroundTasksActive && backgroundModelActive && isPluginEngineKind(session?.agentKind);
+    backgroundTasksActive && backgroundModelActive &&
+    (isPluginEngineKind(session?.agentKind) || session?.agentKind === 'antigravity');
   // SSH 与 device-link 镜像的 task 终态都可能在断连窗口丢失，不能用本地事件永久撑住状态栏。
   const runningWorkflow = useMemo(
     () => (isRemoteSession || remoteDeviceId ? null : summarizeRunningWorkflow(taskUpdates)),

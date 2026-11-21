@@ -7,12 +7,13 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { pathToFileURL } from 'node:url';
-import { AntigravityAgent, probeAntigravityRuntime } from './antigravity-agent.js';
+import { AntigravityAgent, probeAntigravityRuntime, type AntigravityHost } from './antigravity-agent.js';
 import { createConsoleLogger } from '../../interfaces/logger.js';
 import { TASK_SYSTEM_PROMPT } from '../base-agent.js';
 import { AcpSubscriptionSession } from './subscription-session.js';
 import { personalSubscriptionEnv } from './transport.js';
 import type { AcpTransport, AcpRecord } from './client.js';
+import type { AntigravityCommandExit } from '../../types/events.js';
 function setup(authFails = false, holdPrompt = false, version?: string, protocolVersion = 1) {
   const sent: AcpRecord[] = []; const received = new Set<(line: string) => void>();
   const transport: AcpTransport = {
@@ -103,9 +104,14 @@ describe('Antigravity subscription ACP', () => {
 });
 
 describe('AntigravityAgent native Cindy contract', () => {
-  function makeAgent(h: ReturnType<typeof setup>) {
+  function makeAgent(
+    h: ReturnType<typeof setup>,
+    overrides?: Partial<Awaited<ReturnType<AntigravityHost['connect']>>>,
+  ) {
     const allowed = vi.fn(async () => {});
-    const connect = vi.fn(async () => ({ transport: h.transport, assertSubscriptionOnly: h.policy }));
+    const connect = vi.fn<AntigravityHost['connect']>(async () => ({
+      transport: h.transport, assertSubscriptionOnly: h.policy, ...overrides,
+    }));
     const agent = new AntigravityAgent({ binaryPath: '/official/agy', runtimeConfig: {}, logger: createConsoleLogger('test'), auth: {
       getState: async () => ({ authenticated: false }), triggerLogin: async () => ({ authenticated: false }), logout: async () => {}, getAuthEnv: async () => ({}),
     } }, { connect, assertGenerationAllowed: allowed, modelsChanged: vi.fn() });
@@ -141,7 +147,19 @@ describe('AntigravityAgent native Cindy contract', () => {
     } }, { connect, assertGenerationAllowed: async () => {}, modelsChanged: vi.fn() });
     const handle = await agent.startSession({ workingDir: '/workspace', providerId: 'google-antigravity-subscription', model: 'gemini-test', permissionMode: 'ask' });
     await handle.setPlanMode!(true);
+    const events = handle.events()[Symbol.asyncIterator]();
+    first.inbound({ method: 'session/update', params: { sessionId: 'native-1', update: {
+      sessionUpdate: 'tool_call', toolCallId: 'old-process-tool',
+    } } });
+    expect((await events.next()).value).toMatchObject({ type: 'tool_use', turnScope: 'background' });
     await handle.setPermissionMode!('bypassPermissions');
+    // Unit: process replacement used to silently forget an open ID, leaving its published tool active.
+    expect((await events.next()).value).toMatchObject({
+      type: 'tool_result_full', turnScope: 'background', data: { toolUseId: 'old-process-tool', isError: true },
+    });
+    expect((await events.next()).value).toMatchObject({
+      type: 'tool_result', turnScope: 'background', data: { toolUseIds: ['old-process-tool'], summary: 'failed' },
+    });
     expect(connect).toHaveBeenLastCalledWith('/workspace', expect.objectContaining({ permissionMode: 'bypassPermissions', resumeSessionId: 'native-1' }));
     expect(second.sent.find(x => x.method === 'session/load')?.params).toMatchObject({ sessionId: 'native-1' });
     expect(second.sent.find(x => x.method === 'session/set_mode')?.params).toEqual({ sessionId: 'native-1', modeId: 'plan' });
@@ -222,7 +240,9 @@ describe('AntigravityAgent native Cindy contract', () => {
     expect(h.sent.find(x => x.method === 'session/prompt')?.params).toMatchObject({ prompt: [{ type: 'text', text: 'hello' }] });
     await handle.close();
   });
-  it('delivers and finalizes a wake immediately after the prompt reply without a second send', async () => {
+  // Unit: native terminal tool_call must close the same card as tool_call_update.
+  // The latter was the only form covered, leaving background work open after a valid reply.
+  it.each(['tool_call', 'tool_call_update'])('delivers and finalizes a wake after the prompt reply with terminal %s', async (terminalUpdate) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const h = setup(false, true);
     await h.session.close();
@@ -237,12 +257,18 @@ describe('AntigravityAgent native Cindy contract', () => {
       const prompt = h.sent.find(x => x.method === 'session/prompt')!;
       h.inbound({ id: prompt.id, result: { stopReason: 'end_turn' } });
       // Same stdout batch as the reply, before promise continuations run.
+      update({ sessionUpdate: terminalUpdate, toolCallId: 'background-tool', status: 'completed' });
       update({ sessionUpdate: 'tool_call_update', toolCallId: 'background-tool', status: 'completed' });
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'background-tool', status: 'completed',
+        content: [{ type: 'content', content: { type: 'text', text: 'Command output' } }] });
       update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Work finished.' } });
       expect((await events.next()).value).toMatchObject({ type: 'tool_use' });
       expect((await events.next()).value).toMatchObject({ type: 'done', data: { status: 'completed' } });
       expect((await events.next()).value).toMatchObject({ type: 'tool_result_full', turnScope: 'background' });
       expect((await events.next()).value).toMatchObject({ type: 'tool_result', turnScope: 'background' });
+      expect((await events.next()).value).toMatchObject({
+        type: 'tool_result_full', turnScope: 'background', data: { fullText: 'Command output' },
+      });
       expect((await events.next()).value).toMatchObject({ type: 'text', turnScope: 'background', data: { text: 'Work finished.', isFinal: false } });
       await vi.advanceTimersByTimeAsync(2_000);
       expect((await events.next()).value).toMatchObject({ type: 'text', turnScope: 'background', data: { text: 'Work finished.', isFinal: true, isFullText: true } });
@@ -280,6 +306,62 @@ describe('AntigravityAgent native Cindy contract', () => {
       await handle.close();
     }
   });
+
+  // Unit, cd245937: cover progress and a native exit for a run_command that
+  // has no ACP result at turn end. Existing ACP tests only send terminal frames.
+  it('emits exact background command activity without losing a later ACP result', async () => {
+    const h = setup(false, true);
+    await h.session.close();
+    const stopWatching = vi.fn();
+    let commandExited!: (exit: AntigravityCommandExit) => void;
+    const watchCommandExits = vi.fn((_sessionId: string, onExit: typeof commandExited) => {
+      commandExited = onExit;
+      return stopWatching;
+    });
+    const { agent } = makeAgent(h, { watchCommandExits });
+    const handle = await agent.startSession({ workingDir: '/workspace', providerId: 'google-antigravity-subscription', model: 'gemini-test', permissionMode: 'ask' });
+    const update = (type: string, data: AcpRecord) => h.inbound({
+      method: 'session/update', params: { sessionId: 'native-1', update: { sessionUpdate: type, toolCallId: 'call-1', ...data } },
+    });
+    try {
+      const events = handle.events()[Symbol.asyncIterator]();
+      await handle.send({ type: 'user', content: 'start a command' });
+      expect((await events.next()).value).toMatchObject({ type: 'status' });
+      update('tool_call', { name: 'run_command', kind: 'execute', status: 'in_progress', rawInput: { WaitMsBeforeAsync: 8000 } });
+      expect((await events.next()).value).toMatchObject({ type: 'tool_use', data: { toolUseId: 'call-1' } });
+      h.inbound({ id: h.sent.at(-1)?.id, result: { stopReason: 'end_turn' } });
+      expect((await events.next()).value).toMatchObject({ type: 'done' });
+      expect(watchCommandExits).toHaveBeenCalledExactlyOnceWith('native-1', expect.any(Function));
+
+      await handle.send({ type: 'user', content: 'next prompt' });
+      expect((await events.next()).value).toMatchObject({ type: 'status' });
+      update('tool_call_update', { status: 'in_progress', title: 'same operation' });
+      commandExited({ taskId: 'native-1/task-22', toolUseId: 'other-call' });
+      update('tool_call_update', { status: 'in_progress', rawOutput: { output: 'new command output' } });
+      expect((await events.next()).value).toMatchObject({
+        type: 'antigravity_tool_activity', turnScope: 'background', data: { kind: 'tool_progress', toolUseId: 'call-1' },
+      });
+
+      const exit = { taskId: 'native-1/task-21', toolUseId: 'call-1' };
+      update('tool_call_update', { status: 'in_progress', rawOutput: { output: 'new command output' } });
+      commandExited(exit);
+      commandExited(exit);
+      expect((await events.next()).value).toMatchObject({
+        type: 'antigravity_tool_activity', turnScope: 'background', data: { kind: 'command_exited', ...exit },
+      });
+      expect(stopWatching).toHaveBeenCalledOnce();
+
+      update('tool_call_update', { status: 'completed', content: [{ content: { type: 'text', text: 'Late command output' } }] });
+      expect((await events.next()).value).toMatchObject({
+        type: 'tool_result_full', turnScope: 'background', data: { toolUseId: 'call-1', fullText: 'Late command output' },
+      });
+      expect((await events.next()).value).toMatchObject({ type: 'tool_result', turnScope: 'background' });
+      expect(handle.isTurnRunning?.()).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it.each(['cancelled', 'error'] as const)('settles a dispatched prompt on %s', async (outcome) => {
     const h = setup(false, true);
     await h.session.close();
@@ -348,13 +430,17 @@ describe('AntigravityAgent native Cindy contract', () => {
     await handle.close();
     await expect(agent.startSession({ ...options, botRuntimeProfile: { ...profile, projectContext: false } })).rejects.toThrow('ANTIGRAVITY_LOCAL_SESSION_ONLY');
   });
-  it('translates text and tool output into Cindy events without losing the final answer', async () => {
+  // Unit: some calls first appear in a terminal update. They still need a
+  // tool_use anchor so the persist pipeline can attach the native result.
+  it.each([false, true])('translates text and tool output in order (terminal-only=%s)', async (terminalOnly) => {
     const h = setup(); await h.session.close(); const { agent } = makeAgent(h);
     const handle = await agent.startSession({ workingDir: '/workspace', model: 'gemini-test', permissionMode: 'ask', providerId: 'google-antigravity-subscription' });
     const update = (data: AcpRecord) => h.inbound({ method: 'session/update', params: { sessionId: 'native-1', update: data } });
     update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Checking' } });
-    update({ sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'read_file', rawInput: { path: '/workspace/readme' } });
-    update({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'file contents' } }] });
+    const tool = { toolCallId: 'tool-1', title: 'read_file', rawInput: { path: '/workspace/readme' } };
+    if (!terminalOnly) update({ sessionUpdate: 'tool_call', ...tool });
+    update({ sessionUpdate: 'tool_call_update', ...tool, status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: 'file contents' } }] });
     const iterator = handle.events()[Symbol.asyncIterator]();
     const events = [];
     for (let i = 0; i < 5; i++) events.push((await iterator.next()).value);

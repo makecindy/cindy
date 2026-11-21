@@ -3452,20 +3452,21 @@ describe('plugin engine work after its turn', () => {
   const snapshot = (state: ReturnType<typeof createAgentIslandState>) =>
     buildAllSessionActivitySnapshots(state).find((entry) => entry.sessionId === 'agy');
 
-  it('shows running only while the background-work signal holds it, then settles without a new reminder', () => {
+  it.each(['acp', 'antigravity'] as const)('%s shows running only while the background-work signal holds it', (agentKind) => {
+    const engine = { ...meta, agentKind };
     const state = createAgentIslandState();
-    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
-    applyAgentIslandEvent(state, meta, doneEvent(), 2_000);
+    applyAgentIslandEvent(state, engine, statusEvent(true, 'Working'), 1_000);
+    applyAgentIslandEvent(state, engine, doneEvent(), 2_000);
     expect(snapshot(state)).toMatchObject({ phase: 'completed', attention: true });
 
-    applyAgentIslandEvent(state, meta, background(toolUseEvent('push')), 2_100);
+    applyAgentIslandEvent(state, engine, background(toolUseEvent('push')), 2_100);
     expect(snapshot(state)?.phase).toBe('completed');
 
-    expect(setAgentIslandSessionBackgroundWork(state, meta, true, 2_200)).toBe(true);
-    applyAgentIslandEvent(state, meta, background(toolUseEvent('push')), 2_300);
+    expect(setAgentIslandSessionBackgroundWork(state, engine, true, 2_200)).toBe(true);
+    applyAgentIslandEvent(state, engine, background(toolUseEvent('push')), 2_300);
     expect(snapshot(state)).toMatchObject({ phase: 'running', detail: expect.stringMatching(/\S/) });
 
-    expect(setAgentIslandSessionBackgroundWork(state, meta, false, 60_000)).toBe(true);
+    expect(setAgentIslandSessionBackgroundWork(state, engine, false, 60_000)).toBe(true);
     expect(snapshot(state)).toMatchObject({ phase: 'completed', attention: true, completionNotification: 'silent' });
   });
 

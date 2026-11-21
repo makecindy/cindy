@@ -4,15 +4,19 @@ export { isAntigravitySubscriptionModel } from './model-policy.js';
 import { BaseAgent, AgentStartupStoppedError, TASK_SYSTEM_PROMPT, type AgentDeps, type AgentSessionHandle, type StartSessionOptions, type SendOptions } from '../base-agent.js';
 import type { AuthState, Effort, PermissionMode, UserMessage } from '../../types/common.js';
 import type { Capabilities } from '../../types/capabilities.js';
-import type { AgentEvent, InteractionResolver, UsageSnapshot } from '../../types/events.js';
+import type { AgentEvent, AntigravityCommandExit, AntigravityToolActivity, InteractionResolver, UsageSnapshot } from '../../types/events.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import { AcpSubscriptionSession, type AcpDiscoveredModel } from './subscription-session.js';
 import { record, type AcpRecord, type AcpResponse, type AcpTransport } from './client.js';
+import { normalizeToolCallFields, type AcpToolCallStatus } from './protocol.js';
+import { acpToolDisplayName } from './translator.js';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const BACKGROUND_IDLE_MS = 2_000;
 const CANCEL_GRACE_MS = 15_000;
+const RECENT_TOOL_RESULTS_LIMIT = 512;
 
 /** Validate the selected executable's protocol without loading a user session or authenticating. */
 export async function probeAntigravityRuntime(transport: AcpTransport, cwd: string): Promise<void> {
@@ -35,7 +39,16 @@ interface AntigravityConnection {
   sessionScope?: string;
   useCachedAuthentication?: boolean;
   mcpServers?: AcpRecord[];
+  watchCommandExits?(sessionId: string, onExit: (exit: AntigravityCommandExit) => void): () => void;
   dispose?(): void;
+}
+
+interface OpenAntigravityTool {
+  background: boolean;
+  status?: AcpToolCallStatus;
+  outputHash?: string;
+  nativeCommand?: true;
+  nativeExitTaskId?: string;
 }
 export interface AntigravityHost {
   connect(cwd: string, opts?: StartSessionOptions): Promise<AntigravityConnection>;
@@ -205,9 +218,55 @@ export class AntigravityAgent extends BaseAgent {
     let control: Promise<void> | undefined; let usable = true; let lastModel = opts.model; let lastEffort: Effort | undefined = opts.effort;
     let turnController: AbortController | undefined;
     let cancelTurn: (() => void) | undefined;
-    const toolIsBackground = new Map<string, boolean>();
+    const openTools = new Map<string, OpenAntigravityTool>();
+    const settledTools = new Map<string, { background: boolean; awaitingOutput: boolean }>();
+    const watchedCommandCalls = new Set<string>();
+    let stopWatchingCommandExits: (() => void) | undefined;
     const emit = (type: AgentEvent['type'], data: unknown, background = false) => {
       queue.push({ type, data, source: 'antigravity', ...(background ? { turnScope: 'background' as const } : {}) });
+    };
+    const emitToolActivity = (activity: AntigravityToolActivity) => emit('antigravity_tool_activity', activity, true);
+    const stopCommandWatch = () => {
+      watchedCommandCalls.clear();
+      stopWatchingCommandExits?.();
+      stopWatchingCommandExits = undefined;
+    };
+    const unwatchCommandCall = (toolUseId: string) => {
+      if (watchedCommandCalls.delete(toolUseId) && watchedCommandCalls.size === 0) stopCommandWatch();
+    };
+    const watchCommandCall = (toolUseId: string) => {
+      const current = connection;
+      if (!current.watchCommandExits || watchedCommandCalls.has(toolUseId)) return;
+      watchedCommandCalls.add(toolUseId);
+      stopWatchingCommandExits ??= current.watchCommandExits(id, (exit) => {
+        if (closed || current !== connection || !watchedCommandCalls.has(exit.toolUseId) || current.isCurrent?.() === false) return;
+        const call = openTools.get(exit.toolUseId);
+        if (!call) return;
+        call.nativeExitTaskId = exit.taskId;
+        // The native task can end before ACP returns the tool result. Keep the
+        // call and its original turn scope until that result actually arrives.
+        emitToolActivity({ kind: 'command_exited', ...exit });
+        unwatchCommandCall(exit.toolUseId);
+      });
+    };
+    const finishTool = (toolUseId: string, fullText: string, isError: boolean, awaitingOutput = false) => {
+      const call = openTools.get(toolUseId);
+      if (!call) return;
+      const { background } = call;
+      openTools.delete(toolUseId);
+      unwatchCommandCall(toolUseId);
+      settledTools.set(toolUseId, { background, awaitingOutput });
+      if (settledTools.size > RECENT_TOOL_RESULTS_LIMIT) {
+        const oldest = settledTools.keys().next().value;
+        if (oldest !== undefined) settledTools.delete(oldest);
+      }
+      emit('tool_result_full', { toolUseId, fullText, isError }, background);
+      emit('tool_result', { toolUseIds: [toolUseId], summary: isError ? 'failed' : 'done' }, background);
+    };
+    const interruptOpenTools = () => {
+      for (const toolUseId of openTools.keys()) {
+        finishTool(toolUseId, 'Interrupted before the tool finished.', true);
+      }
     };
     const flushBackgroundText = () => {
       if (backgroundTimer) clearTimeout(backgroundTimer);
@@ -222,10 +281,15 @@ export class AntigravityAgent extends BaseAgent {
       onClose() {
         if (current !== connection || closed) return;
         closed = true; usable = false; turnController?.abort();
+        stopCommandWatch();
         // Only release the event stream after this process has stopped. Session's
         // normal stream-end lifecycle then rebuilds on the next user send; no replay.
         void session.close().then(() => {
-          try { current.dispose?.(); } finally { flushBackgroundText(); queue.end(); }
+          try { current.dispose?.(); } finally {
+            flushBackgroundText();
+            interruptOpenTools();
+            queue.end();
+          }
         }).catch(() => {
           thisAgent.deps.logger.warn('ACP cleanup pending after connection closed', { code: 'ACP_PROCESS_EXIT_UNCONFIRMED' });
         });
@@ -257,25 +321,56 @@ export class AntigravityAgent extends BaseAgent {
             }
             emit(type === 'agent_message_chunk' ? 'text' : 'thinking', { text: content.text, isFinal: false }, background);
           }
-        } else if (type === 'tool_call') {
-          if (background) flushBackgroundText();
-          else {
-            if (currentText) emit('text', { text: currentText, isFinal: true, isFullText: true });
-            currentText = '';
+        } else if (type === 'tool_call' || type === 'tool_call_update') {
+          const tool = normalizeToolCallFields(update);
+          if (!tool) return;
+          const toolUseId = tool.toolCallId;
+          const isError = tool.status === 'failed';
+          const terminal = tool.status === 'completed' || isError;
+          const fullText = (tool.content ?? []).map(block => record(record(block).content))
+            .filter(block => block.type === 'text').map(block => String(block.text ?? '')).join('\n');
+          const settled = settledTools.get(toolUseId);
+          if (settled) {
+            if (terminal && settled.awaitingOutput && fullText) {
+              settled.awaitingOutput = false;
+              emit('tool_result_full', { toolUseId, fullText, isError }, settled.background);
+            }
+            return;
           }
-          const toolUseId = String(update.toolCallId ?? '');
-          const toolName = String(update.title ?? update.kind ?? 'Antigravity');
-          toolIsBackground.set(toolUseId, background);
-          emit('tool_use', { toolUseId, ...parseMessageToolUse({ role: 'tool_use', toolUseId, content: { toolName, input: record(update.rawInput) } }) }, background);
-        } else if (type === 'tool_call_update' && (update.status === 'completed' || update.status === 'failed')) {
-          const toolUseId = String(update.toolCallId ?? '');
-          const content = Array.isArray(update.content) ? update.content.map(record) : [];
-          const fullText = content.map(block => record(block.content)).filter(block => block.type === 'text').map(block => String(block.text ?? '')).join('\n');
-          const isError = update.status === 'failed';
-          const backgroundTool = toolIsBackground.get(toolUseId) ?? background;
-          emit('tool_result_full', { toolUseId, fullText, isError }, backgroundTool);
-          emit('tool_result', { toolUseIds: [toolUseId], summary: isError ? 'failed' : 'done' }, backgroundTool);
-          toolIsBackground.delete(toolUseId);
+          let call = openTools.get(toolUseId);
+          const alreadyOpen = call !== undefined;
+          if (!call) {
+            // An unrecognized update can be a late metadata patch, not a new call.
+            if (type === 'tool_call_update' && tool.status === undefined) return;
+            if (background) flushBackgroundText();
+            else if (currentText) {
+              emit('text', { text: currentText, isFinal: true, isFullText: true });
+              currentText = '';
+            }
+            const content = {
+              toolName: acpToolDisplayName({ ...tool, kind: tool.kind ?? 'Antigravity' }),
+              input: type === 'tool_call' || tool.title || tool.name ? record(tool.rawInput) : {},
+            };
+            call = { background };
+            openTools.set(toolUseId, call);
+            emit('tool_use', { toolUseId, ...parseMessageToolUse({ role: 'tool_use', toolUseId, content }) }, background);
+          }
+          if (terminal) {
+            finishTool(toolUseId, fullText, isError, !fullText);
+            return;
+          }
+          if (tool.name === 'run_command') call.nativeCommand = true;
+          if (call.background && call.nativeCommand && !call.nativeExitTaskId) watchCommandCall(toolUseId);
+          const started = tool.status === 'in_progress' && call.status !== 'in_progress';
+          if (tool.status) call.status = tool.status;
+          const rawOutput = record(tool.rawOutput).output;
+          const output = fullText || (typeof rawOutput === 'string' ? rawOutput : '');
+          const outputHash = output ? createHash('sha256').update(output).digest('hex') : undefined;
+          const newOutput = outputHash !== undefined && outputHash !== call.outputHash;
+          if (outputHash) call.outputHash = outputHash;
+          if (alreadyOpen && call.background && !call.nativeExitTaskId && (started || newOutput)) {
+            emitToolActivity({ kind: 'tool_progress', toolUseId });
+          }
         }
       },
       async requestPermission(input, signal) {
@@ -301,8 +396,10 @@ export class AntigravityAgent extends BaseAgent {
     } catch (error) { await session.close(); connection.dispose?.(); throw new AgentStartupStoppedError(error); }
     const reconnect = async (next: PermissionMode | undefined): Promise<void> => {
       usable = false;
+      stopCommandWatch();
       await session.close(); connection.dispose?.();
-      toolIsBackground.clear();
+      flushBackgroundText();
+      interruptOpenTools();
       if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
       assertCurrent();
       const replacement = await this.host.connect(opts.workingDir, { ...opts, permissionMode: next, resumeSessionId: scope + id, planMode: plan });
@@ -378,13 +475,14 @@ export class AntigravityAgent extends BaseAgent {
           const cancelled = cancelledByCaller || result.stopReason === 'cancelled';
           release();
           if (text) emit('text', { text, isFinal: true, isFullText: true });
-          for (const [toolUseId, background] of toolIsBackground) {
-            if (background) continue;
+          for (const [toolUseId, call] of openTools) {
+            if (call.background) continue;
             if (cancelled || 'error' in outcome) {
-              toolIsBackground.delete(toolUseId);
-              emit('tool_result_full', { toolUseId, fullText: 'Interrupted before the tool finished.', isError: true });
-              emit('tool_result', { toolUseIds: [toolUseId], summary: 'failed' });
-            } else toolIsBackground.set(toolUseId, true);
+              finishTool(toolUseId, 'Interrupted before the tool finished.', true);
+            } else {
+              call.background = true;
+              if (call.nativeCommand) watchCommandCall(toolUseId);
+            }
           }
           if ('error' in outcome && !cancelledByCaller) {
             emit('error', { message: outcome.error.message, isTerminal: true });
@@ -460,7 +558,17 @@ export class AntigravityAgent extends BaseAgent {
         await session.setMode(nativeMode(permission, enabled)); plan = enabled;
       }),
       getPlanMode: () => plan,
-      close: async () => { closed = true; cancelTurn?.(); await control?.catch(() => {}); await session.close(); connection.dispose?.(); flushBackgroundText(); queue.end(); },
+      close: async () => {
+        closed = true;
+        stopCommandWatch();
+        cancelTurn?.();
+        await control?.catch(() => {});
+        await session.close();
+        connection.dispose?.();
+        flushBackgroundText();
+        interruptOpenTools();
+        queue.end();
+      },
     };
   }
 }

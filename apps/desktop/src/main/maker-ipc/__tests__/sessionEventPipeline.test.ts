@@ -1165,6 +1165,25 @@ describe('production Session event pipeline', () => {
     }
   });
 
+  // Unit, cd245937: native command progress must reach the background tracker
+  // without publishing a new chat event or recording another tool call.
+  it('keeps Antigravity command lifecycle events in the host', async () => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: 'antigravity' });
+    try {
+      const progress = event('antigravity_tool_activity', { kind: 'command_exited', taskId: 'native-1', toolUseId: 'call-1' }, {
+        source: 'antigravity', turnScope: 'background',
+      });
+      h.emit(progress);
+      expect(effects.fn('observePluginEngineEvent')).toHaveBeenCalledWith('task', expect.objectContaining({
+        type: progress.type, data: progress.data,
+      }));
+      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
+    } finally {
+      await h.dispose();
+    }
+  });
+
   it('preserves ordinary Pi text without the Host recovery marker', async () => {
     const h = harness();
     const data = { isFinal: true, text: 'partial: restart-cindy-to-refresh-packages' };

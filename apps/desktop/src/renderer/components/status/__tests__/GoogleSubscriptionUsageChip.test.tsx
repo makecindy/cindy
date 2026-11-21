@@ -30,20 +30,25 @@ const quota: AntigravityAccountsView = {
     secondary: { windowMinutes: 10080, usedPercent: 60, resetsAt: null },
   }, {
     limitId: 'claude', limitName: 'Claude', updatedAt: Date.now(),
-    primary: { windowMinutes: 300, usedPercent: 20, resetsAt: null },
-    secondary: null,
+    primary: { windowMinutes: 300, usedPercent: 90, resetsAt: null },
+    secondary: { windowMinutes: 10080, usedPercent: 98, resetsAt: null },
   }],
 };
 
 describe('Google usage presentation', () => {
-  // Tier: renderer unit. A scoped response must reach the visible quota card on demand.
-  it('loads the active account quota on open and renders its groups and windows', async () => {
+  // Renderer unit: the task chip previously showed only a label until clicked.
+  // A more depleted Claude group must not replace the inline Gemini windows.
+  it('shows the active Gemini quota before opening and keeps all groups in the details', async () => {
     setDataOwnerGeneration('owner', 3);
     const antigravityAccounts = vi.fn(async () => quota);
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { openExternal, antigravityAccounts } });
     render(<GoogleSubscriptionUsageChip />);
-    expect(antigravityAccounts).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Google usage' }));
+    const trigger = screen.getByRole('button', { name: 'Google usage' });
+    await screen.findByText('5 hours 75% left');
+    expect(trigger.textContent).toContain('Weekly 40% left');
+    expect(trigger.textContent).not.toContain('2% left');
+    expect(screen.queryByText('Gemini · 5 hours')).toBeNull();
+    fireEvent.click(trigger);
     expect(await screen.findByText('Gemini · 5 hours')).toBeTruthy();
     expect(screen.getByText('Gemini · Weekly')).toBeTruthy();
     expect(screen.getByText('Claude · 5 hours')).toBeTruthy();
@@ -61,14 +66,16 @@ describe('Google usage presentation', () => {
       .mockImplementationOnce(() => new Promise<AntigravityAccountsView>(resolve => { resolveOld = resolve; }));
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { openExternal, antigravityAccounts } });
     const view = render(<GoogleSubscriptionUsageChip />);
-    fireEvent.click(screen.getByRole('button', { name: 'Google usage' }));
     await act(async () => setDataOwnerGeneration('another-owner', 4));
     await act(async () => resolveOld(quota));
+    expect(screen.getByRole('button', { name: 'Google usage' }).textContent).toBe('Google usage');
+    fireEvent.click(screen.getByRole('button', { name: 'Google usage' }));
     expect(screen.queryByText('owner@example.test')).toBeNull();
     expect(screen.queryByText('Gemini · 5 hours')).toBeNull();
     expect(antigravityAccounts).toHaveBeenLastCalledWith({ action: 'usage' }, { dataOwnerId: 'another-owner', ownerGeneration: 4 });
-    view.rerender(<GoogleSubscriptionUsageChip readLocalQuota={false} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Google usage' }));
+    view.unmount();
+    setDataOwnerGeneration('remote-task-viewer', 5);
+    render(<GoogleSubscriptionUsageChip readLocalQuota={false} />);
     fireEvent.click(screen.getByRole('button', { name: 'Google usage' }));
     expect(antigravityAccounts).toHaveBeenCalledTimes(2);
   });

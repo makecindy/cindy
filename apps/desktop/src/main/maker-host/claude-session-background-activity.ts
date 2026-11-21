@@ -32,14 +32,14 @@
  * 状态栏、任务列表、「全部停止」与归档守卫因此照常生效;从没有回合外工作的插件
  * 不会触发。判定在上式之外再并上两条(仍要求 !turnRunning && lastTurnEndAt > 0):
  *      engineActivityAt >= lastTurnEndAt && now - engineActivityAt <= ACTIVITY_WINDOW_MS
- *   || 有未完成的工具调用 && now - max(engineActivityAt, lastTurnEndAt) <= PLUGIN_ENGINE_OPEN_WORK_CAP_MS
+ *   || 有尚未到期的活动工具调用或原生命令
  * 回合外事件本身就是确定信号,不需要 proxy 那段收尾宽限。插件引擎的这部分另外通知
  * Agent Island(setPluginEngineBackgroundWorkListener),其他设备与手机的任务列表也显示运行中;
  * 内置引擎不经过这条通知。
  */
 
 import type { ResponseObserver } from '@cindy/anthropic-compat-proxy';
-import type { AgentEvent } from '@cindy/maker-core';
+import type { AgentEvent, AntigravityToolActivity } from '@cindy/maker-core';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('claude-bg-activity');
@@ -58,9 +58,8 @@ const STREAM_TOUCH_THROTTLE_MS = 5_000;
  */
 const COMMAND_WORK_END_GRACE_MS = 5_000;
 /**
- * 插件引擎留着未完成的工具调用时,最多亮这么久没有新动静。maker-core 在 30 分钟无动静时
- * 收尾这些调用(ACP_OPEN_TOOL_QUIET_CAP_MS),结果到达后按上面的静默窗熄灭;这里多留 1 分钟,
- * 只兜住另一台电脑上运行的引擎断开、收尾结果到不了的情况。
+ * 未配对的工具调用最多撑到进入后台 31 分钟，到期只清活动记录，迟到结果仍可展示。
+ * 通用 ACP 保留已有的滚动静默窗，回合外的新输出可以延长尚未过期的后台活动。
  */
 const PLUGIN_ENGINE_OPEN_WORK_CAP_MS = 31 * 60_000;
 /** 插件引擎回合外算作「在工作」的输出(状态类事件不算)。 */
@@ -72,6 +71,13 @@ const PLUGIN_ENGINE_WORK_EVENT_TYPES: ReadonlySet<string> = new Set([
   'tool_result_full',
 ]);
 
+interface EngineWork {
+  /** null means the work started in an ongoing foreground turn. */
+  deadline: number | null;
+  /** New in this turn, or explicitly observed making progress since it began. */
+  observed: boolean;
+}
+
 interface SessionActivityState {
   lastActivityAt: number;
   /** 最近一次 turn 结束时刻;0 = 本次 app 生命周期内还没跑完过 turn。 */
@@ -81,8 +87,9 @@ interface SessionActivityState {
   offTimer: NodeJS.Timeout | null;
   /** 插件引擎最近一次回合外输出的时刻;0 = 没有。 */
   engineActivityAt: number;
-  /** 插件引擎已开始、还没报完成的工具调用。 */
-  engineOpenTools: Set<string>;
+  engineOpenTools: Map<string, EngineWork>;
+  engineOpenToolsUntil: number;
+  antigravity: boolean;
   /** 已通知 Agent Island 的「插件引擎仍在回合外工作」。 */
   engineActive: boolean;
   /** 最近一次快照:该会话是否有仍在运行、会自己结束的后台命令(不含长驻服务)。 */
@@ -128,7 +135,9 @@ function ensureState(sessionId: string): SessionActivityState {
       active: false,
       offTimer: null,
       engineActivityAt: 0,
-      engineOpenTools: new Set(),
+      engineOpenTools: new Map(),
+      engineOpenToolsUntil: 0,
+      antigravity: false,
       engineActive: false,
       commandWork: false,
       commandWorkActive: false,
@@ -141,17 +150,38 @@ function ensureState(sessionId: string): SessionActivityState {
 
 /** 插件引擎这两条单独能撑住「后台活动」到何时;0 = 撑不住。 */
 function engineActiveUntil(st: SessionActivityState): number {
-  let until = 0;
-  if (st.engineActivityAt > 0 && st.engineActivityAt >= st.lastTurnEndAt) {
-    until = st.engineActivityAt + ACTIVITY_WINDOW_MS;
+  const outputUntil = st.engineActivityAt > 0 && st.engineActivityAt >= st.lastTurnEndAt
+    ? st.engineActivityAt + ACTIVITY_WINDOW_MS
+    : 0;
+  return Math.max(outputUntil, engineOpenToolsDeadline(st));
+}
+
+function acpProgressDeadline(st: SessionActivityState): number {
+  return !st.antigravity && st.engineActivityAt > 0
+    ? st.engineActivityAt + PLUGIN_ENGINE_OPEN_WORK_CAP_MS
+    : 0;
+}
+
+function engineOpenToolsDeadline(st: SessionActivityState): number {
+  return st.engineOpenToolsUntil > 0 ? Math.max(st.engineOpenToolsUntil, acpProgressDeadline(st)) : 0;
+}
+
+function refreshEngineOpenToolDeadlines(
+  st: SessionActivityState,
+  now: number,
+  turnEnded = false,
+): void {
+  st.engineOpenToolsUntil = 0;
+  const progressDeadline = acpProgressDeadline(st);
+  for (const [id, item] of st.engineOpenTools) {
+    if (item.deadline === null && turnEnded) item.deadline = now + PLUGIN_ENGINE_OPEN_WORK_CAP_MS;
+    if (item.deadline === null) continue;
+    if (Math.max(item.deadline, progressDeadline) < now) {
+      st.engineOpenTools.delete(id);
+    } else if (!st.antigravity || item.observed) {
+      st.engineOpenToolsUntil = Math.max(st.engineOpenToolsUntil, item.deadline);
+    }
   }
-  if (st.engineOpenTools.size > 0) {
-    until = Math.max(
-      until,
-      Math.max(st.engineActivityAt, st.lastTurnEndAt) + PLUGIN_ENGINE_OPEN_WORK_CAP_MS,
-    );
-  }
-  return until;
 }
 
 /** 当前输入下「后台活动」保持到何时;0 = 现在就不成立。 */
@@ -226,6 +256,9 @@ function armOffTimer(sessionId: string, st: SessionActivityState): void {
 
 function evaluate(sessionId: string, st: SessionActivityState): void {
   const now = Date.now();
+  if (st.engineOpenToolsUntil > 0 && engineOpenToolsDeadline(st) < now) {
+    refreshEngineOpenToolDeadlines(st, now);
+  }
   const next = shouldBeActive(st, now);
   setActive(sessionId, st, next);
   if (next) armOffTimer(sessionId, st);
@@ -233,24 +266,54 @@ function evaluate(sessionId: string, st: SessionActivityState): void {
 
 /**
  * 插件引擎(ACP)任务的事件:记下未完成的工具调用与回合外输出,再重评。
- * 只给 agentKind === 'acp' 的任务调用;回合内的工具调用也要记,回合结束时仍未完成的
+ * 只给 ACP 和 Antigravity 任务调用;回合内的工具调用也要记,回合结束时仍未完成的
  * 那些就是 Agent 还在跑的工作。
  */
 export function observePluginEngineEvent(sessionId: string, event: AgentEvent): void {
   const data =
     event.data && typeof event.data === 'object' ? (event.data as Record<string, unknown>) : {};
+  const antigravity = event.source === 'antigravity';
   const background = event.turnScope === 'background' && PLUGIN_ENGINE_WORK_EVENT_TYPES.has(event.type);
   let st = states.get(sessionId);
-  if (event.type === 'tool_use' && typeof data.toolUseId === 'string' && data.toolUseId) {
+  if (event.type === 'antigravity_tool_activity' && antigravity) {
+    const activity = event.data as AntigravityToolActivity;
+    const call = st?.engineOpenTools.get(activity.toolUseId);
+    if (!st || !call) return;
+    if (activity.kind === 'command_exited') {
+      // The native receipt supplies the linked ACP call ID. Its task ID is in
+      // a separate namespace and does not complete or replace the tool result.
+      st.engineOpenTools.delete(activity.toolUseId);
+    } else {
+      call.observed = true;
+    }
+    refreshEngineOpenToolDeadlines(st, Date.now());
+  } else if (event.type === 'tool_use' && typeof data.toolUseId === 'string' && data.toolUseId) {
     st ??= ensureState(sessionId);
-    st.engineOpenTools.add(data.toolUseId);
+    if (antigravity) st.antigravity = true;
+    if (!st.engineOpenTools.has(data.toolUseId)) {
+      const now = Date.now();
+      const deadline = st.turnRunning && !background ? null : now + PLUGIN_ENGINE_OPEN_WORK_CAP_MS;
+      st.engineOpenTools.set(data.toolUseId, { deadline, observed: true });
+      refreshEngineOpenToolDeadlines(st, now);
+    }
   } else if (event.type === 'tool_result' && st) {
     const ids = Array.isArray(data.toolUseIds) ? data.toolUseIds : [data.toolUseId];
-    for (const id of ids) if (typeof id === 'string') st.engineOpenTools.delete(id);
+    let removed = false;
+    for (const id of ids) {
+      if (typeof id === 'string') removed = st.engineOpenTools.delete(id) || removed;
+    }
+    if (removed) refreshEngineOpenToolDeadlines(st, Date.now());
   }
-  if (background) {
+  // Antigravity tool results can arrive long after the work ended. The call ID
+  // handles their bookkeeping without treating history delivery as new work.
+  if (background && (!antigravity || event.type === 'text' || event.type === 'thinking')) {
     st ??= ensureState(sessionId);
-    st.engineActivityAt = Date.now();
+    if (antigravity) st.antigravity = true;
+    const now = Date.now();
+    if (st.engineOpenToolsUntil > 0 && engineOpenToolsDeadline(st) < now) {
+      refreshEngineOpenToolDeadlines(st, now);
+    }
+    st.engineActivityAt = now;
   }
   if (st && !st.turnRunning) evaluate(sessionId, st);
 }
@@ -304,13 +367,17 @@ export function noteClaudeSessionTurnState(sessionId: string, running: boolean):
   if (st.turnRunning === running) return;
   st.turnRunning = running;
   if (running) {
+    if (st.antigravity) {
+      for (const call of st.engineOpenTools.values()) call.observed = false;
+      st.engineOpenToolsUntil = 0;
+    }
     // turn 期间的 API 活动是正常主线流量,后台横幅熄灭。
     setActive(sessionId, st, false, { turnStarting: true });
   } else {
     st.lastTurnEndAt = Date.now();
+    refreshEngineOpenToolDeadlines(st, st.lastTurnEndAt, true);
     // turn 刚结束:此刻的 lastActivityAt 必然 ≤ lastTurnEndAt,proxy 信号不会立即误亮;
-    // 之后若仍有请求进来(后台子 agent),record 路径会重新评估点亮。插件引擎回合结束时
-    // 仍有未完成的工具调用则立即点亮(Agent 还在跑它们)。
+    // 之后若仍有请求进来(后台子 agent),record 路径会重新评估点亮。
     evaluate(sessionId, st);
   }
   evaluateCommandWork(sessionId, st);

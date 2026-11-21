@@ -20,8 +20,15 @@ export default {
       await slider.focus(); await page.keyboard.press('End');
       assert.equal(await page.getByTestId('selected-thought').textContent(), ui.data.flash ? 'high' : 'xhigh');
     }
+    const trigger = page.getByRole('button', { name: await ui.t('googleSubscription.usage') });
+    if (ui.data.quota) {
+      await trigger.getByText(await ui.t('todaySpend.codex.windowSegment', {
+        label: await ui.t('quotaCard.fiveHourLabel'), remaining: '75%',
+      })).waitFor();
+      assert.ok((await trigger.textContent()).includes('40%'));
+    }
     await ui.capture('model-controls');
-    await page.getByRole('button', { name: await ui.t('googleSubscription.usage') }).click();
+    await trigger.click();
     const card = page.getByTestId('quota-hover-card');
     if (ui.data.quota) {
       await card.getByText(`Gemini Models · ${await ui.t('quotaCard.fiveHourLabel')}`).waitFor();

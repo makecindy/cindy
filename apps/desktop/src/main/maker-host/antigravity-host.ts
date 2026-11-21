@@ -14,6 +14,7 @@ import { outboundFetch } from './outbound-fetch.desktop.js';
 import { antigravityConnected, setAntigravityState } from './antigravity-state.js';
 
 import { assertVerifiedAntigravityBinary, supportsAntigravityRuntime } from './antigravity-runtime.js';
+import { watchAntigravityCommandExits } from './antigravity-command-exits.js';
 
 import { downloadAntigravityRelease, fetchAntigravityRelease, managedAntigravityPlatform } from './antigravity-download.js';
 
@@ -249,6 +250,7 @@ function createAntigravityAgent(
           useCachedAuthentication: stableSession && !antigravityNativeResumeId(opts.resumeSessionId, sessionScope) && binding.id !== LEGACY_PROFILE,
           mcpServers: tools?.mcpServers, dispose: tools?.dispose,
           transport: tracked,
+          watchCommandExits: (sessionId, onExit) => watchAntigravityCommandExits(geminiHome(binding.id), sessionId, onExit),
           assertSubscriptionOnly: async () => checkPolicy(binding),
           assertGenerationAllowed: async () => {
             assertCurrentBinding(binding);

@@ -1,5 +1,5 @@
 import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
-import type { AntigravityAccountsView } from '../../shared/antigravityAccounts.js';
+import { summarizeAntigravityQuota, type AntigravityAccountsView } from '../../shared/antigravityAccounts.js';
 import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
@@ -866,8 +866,9 @@ export function antigravitySource(
   const activeAccount = view?.accounts.find((account) => account.id === view.activeId);
   const identity = activeAccount?.identity?.trim() || null;
   const buckets = view?.usage ?? [];
-  let sessionWindow: MenubarWindowInput | null = null;
-  let weekWindow: MenubarWindowInput | null = null;
+  const summary = summarizeAntigravityQuota(buckets, nowMs);
+  const sessionWindow = windowFromCodex(summary.primary, nowMs);
+  const weekWindow = windowFromCodex(summary.secondary, nowMs);
   const scopedWindows: MenubarWindowInput[] = [];
   let updatedAtMs: number | null = null;
   for (const bucket of buckets) {
@@ -880,12 +881,6 @@ export function antigravitySource(
         : null;
     const primary = windowFromCodex(toRateWindow(bucket.primary), nowMs);
     const secondary = windowFromCodex(toRateWindow(bucket.secondary), nowMs);
-    if (primary && (!sessionWindow || primary.usedPercent > sessionWindow.usedPercent)) {
-      sessionWindow = { ...primary, kind: 'session' };
-    }
-    if (secondary && (!weekWindow || secondary.usedPercent > weekWindow.usedPercent)) {
-      weekWindow = { ...secondary, kind: 'week' };
-    }
     if (bucket.limitName) {
       const tightest = secondary && primary
         ? (secondary.usedPercent >= primary.usedPercent ? secondary : primary)
@@ -900,8 +895,8 @@ export function antigravitySource(
     }
   }
   const windows: MenubarWindowInput[] = [
-    ...(sessionWindow ? [sessionWindow] : []),
-    ...(weekWindow ? [weekWindow] : []),
+    ...(sessionWindow ? [{ ...sessionWindow, kind: 'session' as const }] : []),
+    ...(weekWindow ? [{ ...weekWindow, kind: 'week' as const }] : []),
     ...(buckets.length > 1 ? scopedWindows : []),
   ];
   const accountKeys: string[] = [];
