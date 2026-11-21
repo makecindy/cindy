@@ -897,6 +897,8 @@ import {
 } from './piIdleReleaseWatcher.js';
 import {
   ackSessionTurnEndedDurable,
+  clearSilentContinuationMarkers,
+  forgetSilentContinuationProjection,
   hasAssistantProgressAfterMessage,
   getRecoveryContextSnapshot,
   markSessionTurnEnded,
@@ -2628,8 +2630,8 @@ export function broadcastSessionCreated(sessionId: string): void {
  * 收尾分支直接调 markSessionTurnEnded(时序类 review 反馈已三次命中此点,
  * 2026-07-06 收敛为单点)。
  */
-function markTurnEndedAfterPersistDrain(sessionId: string): void {
-  markSessionTurnEndedAfterBarrier(sessionId, drainPersistQueue());
+function markTurnEndedAfterPersistDrain(sessionId: string, event?: AgentEvent): void {
+  markSessionTurnEndedAfterBarrier(sessionId, drainPersistQueue(), event);
 }
 
 // ─── Orca collab service holder ───────────────────────────────────────────
@@ -5884,10 +5886,10 @@ async function handleSilentStopTurnEnd(
   doneAt: number,
   turnLeaseId: string,
   turnOrigin: SendOrigin | undefined,
-  ownerDb: ReturnType<typeof getCurrentDbClientSnapshot>,
+  owner: Pick<ReturnType<typeof getActiveAppSession>, 'mode' | 'dataOwnerId'>,
 ): Promise<void> {
   await handleDesktopSilentStopTurnEnd(session, doneAt, turnLeaseId, turnOrigin, {
-    ownerDb,
+    owner,
     getBoundSession: () => sessionBindings.getSession(session.id),
     silentStopTurnLeaseGate, agentInputCoordinatorHolder, silentStopAutoResumeGuard, sessionListActivityTracker,
     productTurnWallClockTracker, advanceRuntimeRecoveryNotice, createDbMessage, settleSilentStopDone,
@@ -6031,7 +6033,10 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
         sessionTurnActivityTracker.deleteSession(session.id);
         sessionListActivityTracker.deleteSession(session.id);
         sessionTurnBoundaryGenerationById.delete(session.id);
-        markSessionTurnEnded(session.id);
+        markSessionTurnEnded(session.id, undefined, {
+          sessionInstanceId: session.instanceId, sessionTurnGeneration: session.getTurnGeneration(),
+        });
+        forgetSilentContinuationProjection(session.id, session.instanceId);
       },
       notifyGoalIdle: () => notifyGoalIdleAfterTurnSettled(session.id),
       cancelGoalResume: () => goalDeferredResumeCancelObserver?.(session.id),
@@ -6042,6 +6047,7 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
 /** Called only when the outgoing Maker is actually discarded, not on any error status. */
 export function releaseSessionBindingsForOwnerBoundary(): void {
   sessionBindings.releaseForOwnerBoundary();
+  clearSilentContinuationMarkers();
 }
 
 let pluginTaskServiceForCurrentOwner: (() => PluginTaskService) | null = null;
@@ -6364,8 +6370,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   };
   const ownerDb = getCurrentDbClientSnapshot();
   const ownerEventDependencies = Object.create(sessionEventDependencies) as SessionEventDependencies;
+  const { mode, dataOwnerId } = getActiveAppSession();
   const continueSilentStop: SessionEventDependencies['handleSilentStopTurnEnd'] =
-    (runtime, doneAt, turnLeaseId, origin) => handleSilentStopTurnEnd(runtime, doneAt, turnLeaseId, origin, ownerDb);
+    (runtime, doneAt, turnLeaseId, origin) => handleSilentStopTurnEnd(runtime, doneAt, turnLeaseId, origin, { mode, dataOwnerId });
   Object.defineProperty(ownerEventDependencies, 'handleSilentStopTurnEnd', { value: continueSilentStop });
   Object.defineProperty(ownerEventDependencies, 'onPluginTaskTerminal', {
     value: (...args: Parameters<NonNullable<SessionEventDependencies['onPluginTaskTerminal']>>) => {

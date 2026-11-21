@@ -167,6 +167,7 @@ const desktopGuardInclude = [
   'src/renderer/features/cc-agent/__tests__/sessionSlashDispatch.guard.test.ts',
   // Host and desktop source contracts: lines the Node Host copies or wires as the desktop does.
   'src/main/maker-host/__tests__/hostDesktopSourceContracts.guard.test.ts',
+  'src/main/maker-ipc/__tests__/silentStopRegisterWiring.guard.test.ts',
   // Usage cores shared with the Host: desktop code reaches them only through wrappers that bind every port they use.
   'src/main/__tests__/usageCorePortWiring.guard.test.ts',
   // Build fuses and Node worker entrypoints are a cross-file packaging contract.

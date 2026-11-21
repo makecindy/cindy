@@ -20,7 +20,7 @@ import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js'
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
 import { scheduleNativeHistoryBackupCleanup } from '../../remote-agent/controller/nativeHistoryBackup.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
-import { getContinuedProductTurnStartedAt, isEndedWriteSuppressed } from '../sessionActiveTurn.js';
+import { getSilentContinuationTiming, isEndedWriteSuppressed } from '../sessionActiveTurn.js';
 import { writeSessionListActivity } from '../sessionActivityWrite.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
 import {
@@ -1520,7 +1520,7 @@ export function registerSessionIpc(
     const dbClient = getDbClient();
     const row = await selectSessionWithCount(dbClient.drizzle, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    const productStartedAt = getContinuedProductTurnStartedAt(sid, row.activeTurnStartedAt, dbClient);
+    const productStartedAt = getSilentContinuationTiming(sid, row.activeTurnStartedAt, dbClient)?.startedAt ?? undefined;
     return projectSessionDetail(row, opts.resolveContextWindow, productStartedAt);
   });
 

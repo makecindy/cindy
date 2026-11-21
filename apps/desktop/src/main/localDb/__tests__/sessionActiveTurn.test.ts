@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Session, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
+import { beginAppSessionBoundary, commitVolatileAppSession, getActiveAppSession } from '../../appSessionState.js';
 import { handleDesktopSilentStopTurnEnd } from '../../maker-ipc/silentStopTurnEnd.desktop.js';
 import { ProductTurnWallClockTracker } from '../../maker-ipc/turnWallClock.js';
 import { SILENT_STOP_RESUME_BUDGET, SilentStopAutoResumeGuard } from '../../maker-ipc/silentStopAutoResume.js';
@@ -591,9 +592,11 @@ describe('sessionActiveTurn', () => {
     const file = join(dir, 'sessions.sqlite');
     const markers = await import('../sessionActiveTurn.js');
     const id = 'continued';
+    const initialOwner = getActiveAppSession();
+    const owner = commitVolatileAppSession('cloud', 'test-user');
+    onTestFinished(() => { commitVolatileAppSession(initialOwner.mode, initialOwner.dataOwnerId); });
     const db = createTestDbClient(file);
     await seedSession(db, id);
-    const ownerDb = getCurrentDbClientSnapshot();
     const startedAt = Date.now();
     let now = startedAt;
     vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -616,7 +619,7 @@ describe('sessionActiveTurn', () => {
     const settle = vi.fn(async () => {});
     const surface = vi.fn(async () => {});
     const hiddenMessage = vi.fn<SilentStopTestPorts['createDbMessage']>(async (sessionId, row) => {
-      await db.exec(
+      await getCurrentDbClientSnapshot()!.client.exec(
         'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
         [row.clientId, row.clientId, sessionId, row.role, JSON.stringify(row.content), JSON.stringify(row.agentMeta), now],
       );
@@ -630,8 +633,8 @@ describe('sessionActiveTurn', () => {
     let releaseFinalEnd!: () => void;
     const finalBarrier = new Promise<void>((resolve) => { releaseFinalEnd = resolve; });
     const send = vi.fn(async () => {
-      expect(hiddenMessage).toHaveBeenCalledOnce();
-      const row = await readMarks(db, id);
+      expect(hiddenMessage.mock.calls.length).toBeGreaterThan(0);
+      const row = await readMarks(getCurrentDbClientSnapshot()!.client, id);
       sentStartedAt = row?.active_turn_started_at;
       if (reject) throw new TurnDispatchRejectedError('fixture rejects without sending');
     });
@@ -651,12 +654,19 @@ describe('sessionActiveTurn', () => {
     const session = createRuntime();
     onTestFinished(() => session.close());
     const emit = (event: AgentEvent) => { events.push(event); wake?.(); };
-    const done = vi.fn(() => {
+    const done = vi.fn((event: AgentEvent) => {
       clockResult = productClock.finish(id);
-      markers.markSessionTurnEndedAfterBarrier(id, finalBarrier);
+      markers.markSessionTurnEndedAfterBarrier(id, finalBarrier, event);
     });
+    const silentDone = Promise.withResolvers<AgentEvent>();
     session.onEvent((event) => {
-      if (event.type === 'done') done();
+      if (event.type !== 'done') return;
+      if ((event.data as { silentStop?: boolean })?.silentStop) {
+        markers.markSessionTurnEndedAfterBarrier(id, Promise.resolve(), event);
+        silentDone.resolve(event);
+      } else {
+        done(event);
+      }
     });
     const guard = new SilentStopAutoResumeGuard({ isEnabled: () => true, now: () => now, log });
     now = startedAt;
@@ -664,8 +674,8 @@ describe('sessionActiveTurn', () => {
     now = resumedAt;
     gate.schedule(id, session, 'lease');
     let boundSession: Session | undefined = session;
-    const run = () => handleDesktopSilentStopTurnEnd(session, oldEndedAt, 'lease', undefined, {
-      ownerDb, getBoundSession: () => boundSession,
+    const run = (doneAt = oldEndedAt, lease = 'lease') => handleDesktopSilentStopTurnEnd(session, doneAt, lease, undefined, {
+      owner, getBoundSession: () => boundSession,
       silentStopTurnLeaseGate: gate, agentInputCoordinatorHolder: null, silentStopAutoResumeGuard: guard,
       sessionListActivityTracker: { captureContinuation: () => () => {} },
       productTurnWallClockTracker: productClock, advanceRuntimeRecoveryNotice: () => {},
@@ -693,10 +703,14 @@ describe('sessionActiveTurn', () => {
           END;
         `);
       },
+      reopenCurrentConnection() {
+        rawDb!.close();
+        return createTestDbClient(file, true);
+      },
       sentStartedAt: () => sentStartedAt,
-      done, releaseFinalEnd, releasePreviousEnd,
+      done, silentDone, releaseFinalEnd, releasePreviousEnd,
       startedAt, oldEndedAt, resumedAt, tick: () => (now += 100),
-      clockResult: () => clockResult, emit, session,
+      advance: (ms: number) => (now += ms), clockResult: () => clockResult, emit, session, guard, gate,
       unbindSession: () => { boundSession = undefined; },
       replaceBoundSession() {
         const replacement = createRuntime();
@@ -725,10 +739,13 @@ describe('sessionActiveTurn', () => {
     expect(await h.reopen()).toEqual([h.id]);
     if (boundary === 'logout') {
       rawDb!.close();
-      const other = createTestDbClient(':memory:', false, 'next-user');
+      commitVolatileAppSession('cloud', 'next-user');
+      const other = createTestDbClient(h.file + '.other', false, 'next-user');
       await seedSession(other, h.id, { startedAt: h.startedAt, endedAt: h.oldEndedAt });
       await seedSession(other, 'next-user-interrupted', { startedAt: h.startedAt });
       expect(await h.markers.listInterruptedPendingSessionIds()).toEqual(['next-user-interrupted']);
+      commitVolatileAppSession('cloud', 'test-user');
+      expect(await h.reopen()).toEqual([h.id]);
     }
   });
 
@@ -750,12 +767,14 @@ describe('sessionActiveTurn', () => {
     await Promise.race([inProvider.promise, continuation]);
     try {
       expect(h.send).toHaveBeenCalledOnce();
-      expect(h.markers.getSessionNotificationTurnSignal(h.id)).toMatchObject({ id: signal?.id, ended: false });
+      expect(h.markers.getSessionNotificationTurnSignal(h.id)).toEqual(signal);
       h.releasePreviousEnd();
       await Promise.resolve();
       await h.markers.drainSessionActiveTurnWrites(h.id);
       expect((await readMarks(h.db, h.id))?.last_turn_ended_at).toBe(h.oldEndedAt);
-      expect(h.markers.getContinuedProductTurnStartedAt(h.id, h.resumedAt, h.db)).toBe(h.startedAt);
+      expect(h.markers.getSilentContinuationTiming(h.id, h.resumedAt, h.db)).toEqual({
+        startedAt: h.startedAt, endedAt: h.oldEndedAt,
+      });
       h.markers._setBootAtMsForTests(h.resumedAt + 1);
       expect(await h.markers.listInterruptedPendingSessionIds()).toEqual([h.id]);
       expect(h.productClock.start(h.id)).toBe(false);
@@ -766,10 +785,7 @@ describe('sessionActiveTurn', () => {
     }
     const doneAt = Date.now();
     expect(h.clockResult()).toBe(doneAt - h.startedAt);
-    expect(h.markers.getSessionNotificationTurnSignal(h.id)).toMatchObject({
-      id: signal?.id, ended: true,
-      fallbackEventId: expect.stringContaining(`turn:${h.resumedAt}:${doneAt}:`),
-    });
+    expect(h.markers.getSessionNotificationTurnSignal(h.id)).toEqual(signal);
     expect((await readMarks(h.db, h.id))?.last_turn_ended_at).toBe(h.oldEndedAt);
     h.markers.freezeSessionActiveTurnMarkers(); // A real done already captured its end.
     h.releaseFinalEnd();
@@ -803,7 +819,7 @@ describe('sessionActiveTurn', () => {
     ]);
     expect(await h.hiddenRows()).toEqual([{ role: 'user', content: JSON.stringify('继续'), autoResume: 1 }]);
     expect(h.productClock.start(h.id)).toBe(false);
-    expect(h.markers.getSessionNotificationTurnSignal(h.id)).toMatchObject({ id: before?.id, ended: false });
+    expect(h.markers.getSessionNotificationTurnSignal(h.id)).toEqual(before);
     expect(patch).not.toHaveBeenCalled();
     h.markers._setBootAtMsForTests(h.resumedAt + 1);
     expect(await h.markers.listInterruptedPendingSessionIds()).toEqual([]);
@@ -812,9 +828,7 @@ describe('sessionActiveTurn', () => {
     h.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
     await vi.waitFor(() => expect(h.done).toHaveBeenCalledOnce());
     expect(h.clockResult()).toBe(doneAt - h.startedAt);
-    expect(h.markers.getSessionNotificationTurnSignal(h.id)).toMatchObject({
-      id: before?.id, ended: true, fallbackEventId: expect.stringContaining(`turn:${h.resumedAt}:${doneAt}:`),
-    });
+    expect(h.markers.getSessionNotificationTurnSignal(h.id)).toEqual(before);
     h.releaseFinalEnd();
     await Promise.resolve();
     await h.markers.drainSessionActiveTurnWrites(h.id);
@@ -827,12 +841,196 @@ describe('sessionActiveTurn', () => {
     expect(await h.reopen()).toEqual([]);
   });
 
+  it.each(['quit freeze', 'logout suppression'] as const)(
+    'keeps the old pair when a hidden continuation reaches the marker after %s',
+    async (boundary) => {
+      const h = await silentContinuation();
+      const persistHidden = h.hiddenMessage.getMockImplementation()!;
+      let release: (() => void) | undefined;
+      h.hiddenMessage.mockImplementationOnce(async (...args) => {
+        const row = await persistHidden(...args);
+        if (boundary === 'quit freeze') h.markers.freezeSessionActiveTurnMarkers();
+        else release = h.markers.beginSessionTurnEndedSuppression();
+        return row;
+      });
+      try {
+        await h.run();
+        expect(await readMarks(h.db, h.id)).toEqual({
+          active_turn_started_at: h.startedAt, last_turn_ended_at: h.oldEndedAt,
+        });
+        expect(h.surface).not.toHaveBeenCalled();
+        expect(h.send).toHaveBeenCalledOnce();
+      } finally {
+        release?.();
+      }
+    },
+  );
+
+  it('settles an already observed real done on the admitted file while another account is installed', async () => {
+    const h = await silentContinuation();
+    await h.run();
+    const endedAt = h.tick();
+    h.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+    await vi.waitFor(() => expect(h.done).toHaveBeenCalledOnce());
+    const originalHandle = rawDb!;
+    onTestFinished(() => { originalHandle.close(); });
+    const other = createTestDbClient(h.file + '.other', false, 'next-user');
+    await seedSession(other, h.id, { startedAt: h.resumedAt, endedAt: h.oldEndedAt });
+    const release = h.markers.beginSessionTurnEndedSuppression();
+    commitVolatileAppSession('cloud', 'next-user');
+    try {
+      h.releaseFinalEnd();
+      await h.markers.drainSessionActiveTurnWrites(h.id);
+      expect(await readMarks(h.db, h.id)).toEqual({
+        active_turn_started_at: h.resumedAt, last_turn_ended_at: endedAt,
+      });
+      expect(await readMarks(other, h.id)).toEqual({
+        active_turn_started_at: h.resumedAt, last_turn_ended_at: h.oldEndedAt,
+      });
+      h.markers._setBootAtMsForTests(endedAt + 100);
+      expect(await h.markers.listInterruptedPendingSessionIds()).toEqual([h.id]);
+      setCurrentDbClient(h.db, 'test-user');
+      commitVolatileAppSession('cloud', 'test-user');
+      expect(await h.markers.listInterruptedPendingSessionIds()).toEqual([]);
+    } finally {
+      setCurrentDbClient(other, 'next-user');
+      release();
+    }
+  });
+
+  it('keeps the original dispatch during a pending account boundary', async () => {
+    const h = await silentContinuation();
+    const release = beginAppSessionBoundary();
+    try {
+      await h.run();
+      expect(h.send).toHaveBeenCalledOnce();
+      expect(h.surface).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  });
+
+  it('keeps the original settlement during a pending account boundary', async () => {
+    const h = await silentContinuation();
+    h.guard.noteSessionReset(h.id);
+    const release = beginAppSessionBoundary();
+    try {
+      await h.run();
+      expect(h.send).not.toHaveBeenCalled();
+      expect(h.settle).toHaveBeenCalledExactlyOnceWith(h.id, 'skip', 'lease', h.session, 0);
+      expect(await readMarks(h.db, h.id)).toEqual({
+        active_turn_started_at: h.startedAt, last_turn_ended_at: h.oldEndedAt,
+      });
+    } finally {
+      release();
+    }
+  });
+
+  it('marks the replacement connection to the same account file', async () => {
+    const h = await silentContinuation();
+    const replacement = h.reopenCurrentConnection();
+    commitVolatileAppSession('cloud', 'test-user', true);
+    await h.run();
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(h.sentStartedAt()).toBe(h.resumedAt);
+    expect(await readMarks(replacement, h.id)).toEqual({
+      active_turn_started_at: h.resumedAt, last_turn_ended_at: h.oldEndedAt,
+    });
+    expect(await h.reopen()).toEqual([h.id]);
+  });
+
+  it('retires the projection on close only for the matching Session instance', async () => {
+    const h = await silentContinuation();
+    await h.run();
+    h.markers.forgetSilentContinuationProjection(h.id, 'old-instance');
+    expect(h.markers.getSilentContinuationTiming(h.id, h.resumedAt, h.db)).toBeDefined();
+    await h.session.close();
+    h.markers.forgetSilentContinuationProjection(h.id, h.session.instanceId);
+    expect(h.markers.getSilentContinuationTiming(h.id, h.resumedAt, h.db)).toBeUndefined();
+  });
+
+  it('keeps the original product timing through two continuations and retires it on a new input', async () => {
+    const h = await silentContinuation();
+    const originalSignal = h.markers.getSessionNotificationTurnSignal(h.id);
+    await h.run();
+    h.guard.noteTurnStarted(h.id);
+    expect(h.productClock.start(h.id)).toBe(false);
+    const firstDone = h.tick();
+    h.emit({ type: 'done', source: 'claude-code', data: { silentStop: true } } as AgentEvent);
+    const observed = await h.silentDone.promise;
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    expect(await readMarks(h.db, h.id)).toEqual({
+      active_turn_started_at: h.resumedAt, last_turn_ended_at: firstDone,
+    });
+
+    expect(h.gate.schedule(h.id, observed, 'lease-2')).toBe(true);
+    const secondStart = h.advance(6000);
+    await h.run(firstDone, 'lease-2');
+    expect(h.send).toHaveBeenCalledTimes(2);
+    expect((await h.hiddenRows())).toHaveLength(2);
+    expect(h.markers.getSilentContinuationTiming(h.id, secondStart, h.db)).toEqual({
+      startedAt: h.startedAt, endedAt: h.oldEndedAt,
+    });
+    expect(h.productClock.start(h.id)).toBe(false);
+    const doneAt = h.tick();
+    h.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+    await vi.waitFor(() => expect(h.done).toHaveBeenCalledOnce());
+    h.releaseFinalEnd();
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    expect(h.clockResult()).toBe(doneAt - h.startedAt);
+    expect(h.markers.getSessionNotificationTurnSignal(h.id)).toEqual(originalSignal);
+
+    const nextStart = h.tick();
+    await h.session.send('new user input');
+    h.markers.markSessionTurnStarted(h.id);
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    expect(h.markers.getSilentContinuationTiming(h.id, secondStart, h.db)).toBeUndefined();
+    expect(h.markers.getSessionNotificationTurnSignal(h.id)?.id).not.toBe(originalSignal?.id);
+    expect((await readMarks(h.db, h.id))?.active_turn_started_at).toBe(nextStart);
+  });
+
+  it('restores both original DB timestamps after a normal provider send error', async () => {
+    const h = await silentContinuation();
+    h.send.mockRejectedValueOnce(new Error('fixture send error after onDispatching'));
+    await h.run();
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(h.surface).toHaveBeenCalledExactlyOnceWith(h.id, 'dispatch-error');
+    expect(h.settle).toHaveBeenCalledOnce();
+    expect(await readMarks(h.db, h.id)).toEqual({
+      active_turn_started_at: h.startedAt, last_turn_ended_at: h.oldEndedAt,
+    });
+  });
+
+  it.each([
+    ['started', 1], ['started', 0], ['ended', 1], ['ended', 0],
+  ] as const)('keeps dispatch when a clock rollback prevents advancing past %s (+%s)', async (field, ahead) => {
+    const h = await silentContinuation();
+    const value = Date.now() + ahead;
+    const startedAt = field === 'started' ? value : h.startedAt;
+    const endedAt = field === 'ended' ? value : h.oldEndedAt;
+    await h.db.exec('UPDATE sessions SET active_turn_started_at = ?, last_turn_ended_at = ? WHERE id = ?', [startedAt, endedAt, h.id]);
+    await h.run();
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(h.surface).not.toHaveBeenCalled();
+    expect(h.log.warn).toHaveBeenCalledExactlyOnceWith('silent-stop continuation start marker write failed', {
+      sessionId: h.id, error: 'marker row did not advance',
+    });
+    expect(await readMarks(h.db, h.id)).toEqual({
+      active_turn_started_at: startedAt, last_turn_ended_at: endedAt,
+    });
+  });
+
   it('settles the marker on an explicit provider rejection and keeps the failure outcome', async () => {
     const h = await silentContinuation({ reject: true });
     await h.run();
     expect(h.send).toHaveBeenCalledOnce();
     expect(h.surface).toHaveBeenCalledWith(h.id, 'dispatch-not-accepted');
     expect(h.settle).toHaveBeenCalledOnce();
+    await h.markers.drainSessionActiveTurnWrites(h.id);
+    expect(await readMarks(h.db, h.id)).toEqual({
+      active_turn_started_at: h.startedAt, last_turn_ended_at: h.oldEndedAt,
+    });
     expect(await h.reopen()).toEqual([]);
   });
 
@@ -861,7 +1059,7 @@ describe('sessionActiveTurn', () => {
     expect((await readMarks(h.db, h.id))?.last_turn_ended_at).toBe(h.oldEndedAt);
   });
 
-  it.each(['removed task', 'newer start'] as const)('does not dispatch a silent continuation against a %s', async (target) => {
+  it.each(['removed task', 'newer start'] as const)('leaves the product dispatch in place when the marker matches no row: %s', async (target) => {
     const h = await silentContinuation();
     const storeHidden = h.hiddenMessage.getMockImplementation()!;
     h.hiddenMessage.mockImplementationOnce(async (...args) => {
@@ -871,10 +1069,10 @@ describe('sessionActiveTurn', () => {
       return row;
     });
     await h.run();
-    expect(h.send).not.toHaveBeenCalled();
-    expect(h.surface).toHaveBeenCalledExactlyOnceWith(h.id, 'dispatch-error');
-    expect(h.log.warn).toHaveBeenCalledExactlyOnceWith('silent-stop auto-resume send failed', {
-      sessionId: h.id, error: 'Silent continuation start marker was not saved',
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(h.surface).not.toHaveBeenCalled();
+    expect(h.log.warn).toHaveBeenCalledExactlyOnceWith('silent-stop continuation start marker write failed', {
+      sessionId: h.id, error: target === 'removed task' ? 'marker row not available' : 'marker row did not advance',
     });
     expect(await readMarks(h.db, h.id)).toEqual(target === 'removed task'
       ? undefined
@@ -882,7 +1080,7 @@ describe('sessionActiveTurn', () => {
   });
 
   it.each(['cancelled', 'new owner', 'new instance', 'new generation'] as const)(
-    'keeps the silent continuation fenced if SQLite fails after %s',
+    'keeps the original Session outcome if the marker write fails after %s',
     async (boundary) => {
       const h = await silentContinuation();
       const oldHandle = rawDb!;
@@ -906,8 +1104,8 @@ describe('sessionActiveTurn', () => {
       h.failStartWrite(statement);
       await h.run();
       expect(statement).toHaveBeenCalledOnce();
-      expect(h.send).not.toHaveBeenCalled();
-      expect(h.log.warn).not.toHaveBeenCalledWith('silent-stop continuation start marker write failed', expect.anything());
+      expect(h.send).toHaveBeenCalledTimes(boundary === 'cancelled' ? 0 : 1);
+      expect(h.log.warn).toHaveBeenCalledWith('silent-stop continuation start marker write failed', expect.anything());
       expect(h.markers.getSessionNotificationTurnSignal(h.id)).toEqual(originalSignal);
       expect(await readMarks(h.db, h.id)).toEqual({
         active_turn_started_at: h.startedAt, last_turn_ended_at: h.oldEndedAt,
@@ -917,14 +1115,14 @@ describe('sessionActiveTurn', () => {
           active_turn_started_at: h.startedAt, last_turn_ended_at: h.oldEndedAt,
         });
       }
-      if (boundary === 'new owner' || boundary === 'new instance' || boundary === 'new generation') {
-        expect(h.surface).not.toHaveBeenCalled();
-        expect(h.settle).not.toHaveBeenCalled();
+      if (boundary === 'cancelled') {
+        expect(h.surface).toHaveBeenCalledExactlyOnceWith(h.id, 'dispatch-not-accepted');
+        expect(h.settle).toHaveBeenCalledOnce();
       }
     },
   );
 
-  it.each(['owner', 'runtime'])('stops a silent continuation superseded during hidden-message persistence by a new %s', async (replacement) => {
+  it.each(['owner', 'runtime'])('skips marking when hidden-message persistence sees a replacement %s', async (replacement) => {
     const h = await silentContinuation();
     const replacementDb = new Database(':memory:');
     try {
@@ -937,7 +1135,11 @@ describe('sessionActiveTurn', () => {
         return {} as never;
       });
       await h.run();
-      expect(h.send).not.toHaveBeenCalled();
+      if (replacement === 'owner') {
+        expect(getActiveAppSession().dataOwnerId).toBe('test-user');
+        expect(getCurrentDbClientSnapshot()?.userId).toBe('next-user');
+      }
+      expect(h.send).toHaveBeenCalledOnce();
       expect(h.surface).not.toHaveBeenCalled();
       expect(h.settle).not.toHaveBeenCalled();
       expect((await readMarks(h.db, h.id))?.active_turn_started_at).toBe(h.startedAt);

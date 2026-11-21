@@ -662,7 +662,7 @@ describe('shared turn files moved out of register.ts', () => {
     expect(registerSource.slice(start, end)).toContain(
       'await handleDesktopSilentStopTurnEnd(session, doneAt, turnLeaseId, turnOrigin, {',
     );
-    expect(registerSource).toContain('handleSilentStopTurnEnd(runtime, doneAt, turnLeaseId, origin, ownerDb)');
+    expect(registerSource).toContain('handleSilentStopTurnEnd(runtime, doneAt, turnLeaseId, origin, { mode, dataOwnerId })');
   });
 
   // 原在 silentStopContinuationBinding.test.ts “binds the reserved generation via the extracted helper and rolls back

@@ -110,7 +110,6 @@ export function createHostSilentStop<Turn>(ports: HostSilentStopPorts<Turn>) {
 
   function turnEndPorts(sessionId: string, turn: Turn, guard: SilentStopAutoResumeGuard): SilentStopTurnEndPorts {
     return explicitPorts<SilentStopTurnEndPorts>({
-      continuationMarkers: undefined, // The Host executor already holds the product turn marker.
       silentStopTurnLeaseGate: gate,
       agentInputCoordinatorHolder: {
         // While the profile is held, its writes are the desktop's; once an account boundary or the shutdown

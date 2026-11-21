@@ -1,6 +1,6 @@
-import { isAppSessionBoundaryPending } from '../appSessionState.js';
-import { getCurrentDbClientSnapshot, type CurrentDbClientSnapshot } from '../localDb/client/current.js';
-import { isEndedWriteSuppressed, markSessionSilentContinuationStarted } from '../localDb/sessionActiveTurn.js';
+import { getActiveAppSession, type ActiveAppSession } from '../appSessionState.js';
+import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
+import { forgetSilentContinuationProjection, markSessionSilentContinuationStarted } from '../localDb/sessionActiveTurn.js';
 import {
   handleSilentStopTurnEndWithPorts,
   type SilentStopTurnEndPorts,
@@ -9,7 +9,7 @@ import {
 type SharedArguments = Parameters<typeof handleSilentStopTurnEndWithPorts>;
 
 type DesktopSilentStopTurnEndPorts = SilentStopTurnEndPorts & {
-  ownerDb: CurrentDbClientSnapshot | null;
+  owner: Pick<ActiveAppSession, 'mode' | 'dataOwnerId'>;
   getBoundSession(): SharedArguments[0] | undefined;
 };
 
@@ -18,22 +18,27 @@ export async function handleDesktopSilentStopTurnEnd(
   doneAt: SharedArguments[1],
   turnLeaseId: SharedArguments[2],
   turnOrigin: SharedArguments[3],
-  { ownerDb, getBoundSession, ...ports }: DesktopSilentStopTurnEndPorts,
+  { owner, getBoundSession, ...ports }: DesktopSilentStopTurnEndPorts,
 ): Promise<void> {
-  if (!ownerDb) return;
-  const isCurrent = (allowClosedSession = false) => {
-    const bound = getBoundSession();
-    return getCurrentDbClientSnapshot() === ownerDb &&
-      !isAppSessionBoundaryPending() && !isEndedWriteSuppressed() &&
-      (bound === session || (allowClosedSession && !bound && session.getStatus() === 'closed'));
+  const getOwnerDb = () => {
+    const current = getActiveAppSession();
+    const snapshot = getCurrentDbClientSnapshot();
+    return owner.dataOwnerId && current.mode === owner.mode && current.dataOwnerId === owner.dataOwnerId
+      && snapshot?.userId === owner.dataOwnerId ? snapshot.client : null;
   };
   await handleSilentStopTurnEndWithPorts(session, doneAt, turnLeaseId, turnOrigin, {
     ...ports,
-    continuationMarkers: {
-      isCurrent,
-      start: canDispatch => markSessionSilentContinuationStarted(
-        session.id, ownerDb, () => isCurrent() && canDispatch(),
-      ),
+    settleSilentStopDone: (...args) => {
+      if (getOwnerDb() && getBoundSession() === session) {
+        forgetSilentContinuationProjection(session.id, session.instanceId, args[4]);
+      }
+      return ports.settleSilentStopDone(...args);
     },
-  });
+  }, (generation, signal) => markSessionSilentContinuationStarted(
+    session.id, session.instanceId, generation, getOwnerDb,
+    () => !signal?.aborted && getBoundSession() === session && session.getTurnGeneration() === generation,
+    error => ports.log.warn('silent-stop continuation start marker write failed', {
+      sessionId: session.id, error: error instanceof Error ? error.message : String(error),
+    }),
+  ));
 }

@@ -140,7 +140,7 @@ export interface FinishSessionTerminalEventDeps {
     event: AgentEvent,
   ) => void;
   readonly log: Pick<ReturnType<typeof createLogger>, 'warn'>;
-  readonly markTurnEndedAfterPersistDrain: (sessionId: string) => void;
+  readonly markTurnEndedAfterPersistDrain: (sessionId: string, event: AgentEvent) => void;
   readonly turnModelPromiseBySession: Map<string, Promise<string>>;
   readonly workerTurnStartSequencer: Pick<
     ReturnType<typeof createWorkerTurnStartSequencer>,
@@ -487,7 +487,7 @@ export function finishSessionTerminalEvent(
       );
     }
     if (!isContinuationBoundary) {
-      deps.markTurnEndedAfterPersistDrain(session.id);
+      deps.markTurnEndedAfterPersistDrain(session.id, event);
       if (event.type === 'done' && event.source === 'pi' && turnBoundaryAssistantPersistId) {
         deps.saveRemoteNativeHistory?.(session.id, event.data, turnBoundaryAssistantPersistId, drainPersistQueue());
       }

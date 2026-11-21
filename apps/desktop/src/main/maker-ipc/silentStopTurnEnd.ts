@@ -12,11 +12,6 @@ import type { SilentStopFailureCause } from './silentStopFailure.js';
 
 type SilentStopSession = NonNullable<ReturnType<Maker['getSession']>>;
 
-interface SilentContinuationMarkers {
-  isCurrent(allowClosedSession?: boolean): boolean;
-  start(canDispatch: () => boolean): Promise<(() => Promise<void>) | { writeError: unknown }>;
-}
-
 /** What settling a silent-stop turn end reads and acts through (the desktop: register.ts). */
 export interface SilentStopTurnEndPorts {
   silentStopTurnLeaseGate: Pick<SilentStopTurnLeaseGate, 'claim'>;
@@ -30,8 +25,6 @@ export interface SilentStopTurnEndPorts {
   productTurnWallClockTracker: Pick<ProductTurnWallClockTracker, 'preserveForContinuation'>;
   advanceRuntimeRecoveryNotice(session: SilentStopSession): void;
   createDbMessage: typeof createDbMessageType;
-  /** Desktop's durable interruption marker; the Node Host owns its marker separately. */
-  continuationMarkers?: SilentContinuationMarkers;
   settleSilentStopDone(
     sessionId: string,
     outcome: 'skip' | 'exhausted',
@@ -60,11 +53,12 @@ export async function handleSilentStopTurnEndWithPorts(
   {
     silentStopTurnLeaseGate, agentInputCoordinatorHolder, silentStopAutoResumeGuard, sessionListActivityTracker,
     productTurnWallClockTracker, advanceRuntimeRecoveryNotice, createDbMessage, settleSilentStopDone,
-    surfaceSilentStopExhaustedBanner, continuationMarkers, log,
+    surfaceSilentStopExhaustedBanner, log,
   }: SilentStopTurnEndPorts,
+  /** Best-effort Desktop recovery evidence, after the hidden input is saved. */
+  startContinuationMarker?: (generation: number, signal?: AbortSignal) => Promise<(() => void) | undefined>,
 ): Promise<void> {
   const generation = session.getTurnGeneration();
-  if (continuationMarkers && !continuationMarkers.isCurrent()) return;
   if (!silentStopTurnLeaseGate.claim(session.id, turnLeaseId)) {
     log.debug('ignored superseded silent-stop decision timer', {
       sessionId: session.id,
@@ -95,14 +89,8 @@ export async function handleSilentStopTurnEndWithPorts(
           adoptedGeneration,
         ),
     });
-    let settleUndispatchedMarker: (() => Promise<void>) | undefined;
-    let dispatchStarted = false;
-    const assertCurrent = () => {
-      if (continuationMarkers && (!continuationMarkers.isCurrent() ||
-        session.getTurnGeneration() !== generation + 1)) {
-        throw new Error('Silent continuation is no longer current');
-      }
-    };
+    let undoMarker: (() => void) | undefined;
+    let reservedGeneration: number | undefined;
     try {
       // The next Claude running boundary belongs to the same user-visible turn.
       // Mark it before send(), which may synchronously emit status events.
@@ -112,20 +100,17 @@ export async function handleSilentStopTurnEndWithPorts(
         { type: 'user', content: SILENT_STOP_RESUME_PROMPT },
         {
           origin: turnOrigin,
-          onDispatching: () => {
-            if (continuationMarkers) assertCurrent();
-            advanceRuntimeRecoveryNotice(session);
-            dispatchStarted = true;
-          },
-          ...(continuationMarkers && { afterTurnReserved: assertCurrent }),
+          onDispatching: () => advanceRuntimeRecoveryNotice(session),
           // 预约(onTurnReserved)在 binding.sendOpts；语义与不变量见
           // silentStopContinuationBinding.ts 文件头。
           ...binding.sendOpts,
+          ...(startContinuationMarker && {
+            onTurnReserved: (reserved: number) => {
+              binding.sendOpts.onTurnReserved(reserved);
+              reservedGeneration = reserved;
+            },
+          }),
           onAccepted: async (signal) => {
-            if (continuationMarkers) {
-              assertCurrent();
-              if (signal?.aborted) return;
-            }
             await createDbMessage(session.id, {
               clientId,
               role: 'user',
@@ -149,21 +134,8 @@ export async function handleSilentStopTurnEndWithPorts(
                   : {}),
               },
             });
-            if (continuationMarkers && !signal?.aborted) {
-              assertCurrent();
-              const marker = await continuationMarkers.start(
-                () => !signal?.aborted && session.getTurnGeneration() === generation + 1,
-              );
-              if (typeof marker === 'function') {
-                settleUndispatchedMarker = marker;
-              } else {
-                if (signal?.aborted) throw marker.writeError;
-                assertCurrent();
-                log.warn('silent-stop continuation start marker write failed', {
-                  sessionId: session.id,
-                  error: marker.writeError instanceof Error ? marker.writeError.message : String(marker.writeError),
-                });
-              }
+            if (reservedGeneration !== undefined && !signal?.aborted) {
+              undoMarker = await startContinuationMarker?.(reservedGeneration, signal);
             }
           },
         },
@@ -175,20 +147,17 @@ export async function handleSilentStopTurnEndWithPorts(
         context: `maker-ipc.silent-stop.auto-resume sessionId=${session.id}`,
       });
       if (!outcome.dispatched) {
-        if (settleUndispatchedMarker) await settleUndispatchedMarker();
-        if (continuationMarkers && (!continuationMarkers.isCurrent() ||
-          session.getTurnGeneration() !== generation)) return;
         silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
         // Session 在派发确认前失败会回滚 turnGeneration;绑定必须跟着回滚,
         // 否则失败收口合成的 done 会因 generation 不匹配被 ownership 守卫丢弃,
         // 形成与本次修复对称的反向僵尸(输入边界永久忙)。
         binding.rollbackBinding();
+        undoMarker?.();
         log.warn('silent-stop auto-resume send not accepted', {
           sessionId: session.id,
           reason: outcome.reason,
         });
         await surfaceSilentStopExhaustedBanner(session.id, 'dispatch-not-accepted');
-        if (continuationMarkers && !continuationMarkers.isCurrent()) return;
         await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
       } else {
         // 只在供应商确认派发后丢弃原结束时间；未派发或抛出时由失败收口按原时间提交。
@@ -196,19 +165,14 @@ export async function handleSilentStopTurnEndWithPorts(
         log.info('silent-stop auto-resume dispatched', { sessionId: session.id });
       }
     } catch (err) {
-      // An exception after provider entry may be an unconfirmed dispatch.
-      // Session owns its transport fence and terminal handling.
-      if (!dispatchStarted && settleUndispatchedMarker) await settleUndispatchedMarker();
-      if (continuationMarkers && (!continuationMarkers.isCurrent(dispatchStarted) ||
-        session.getTurnGeneration() !== generation)) return;
       silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
       binding.rollbackBinding();
+      undoMarker?.();
       log.warn('silent-stop auto-resume send failed', {
         sessionId: session.id,
         error: err instanceof Error ? err.message : String(err),
       });
       await surfaceSilentStopExhaustedBanner(session.id, 'dispatch-error');
-      if (continuationMarkers && !continuationMarkers.isCurrent(dispatchStarted)) return;
       await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
     }
     return;

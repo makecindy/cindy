@@ -25,6 +25,11 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@cindy/maker-core';
 import type { BrowserWindow } from 'electron';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { getTableConfig } from 'drizzle-orm/sqlite-core';
+import type { DbClient } from '../localDb/client/DbClient';
+import { botProfiles, botSessionLinks, messages, sessions } from '../localDb/schema';
 
 const chatWindow = vi.hoisted(() => ({ url: 'file:///app/index.html#/bots/groups/group-1' }));
 vi.mock('../deepLink', () => ({
@@ -150,10 +155,111 @@ vi.mock('../messagePersistBroadcaster.desktop', () => ({
 }));
 const drainSessionActiveTurnWrites = vi.fn((_sessionId: string): Promise<void> => Promise.resolve());
 const getSessionNotificationTurnSignal = vi.fn((_sessionId: string): { id: string; fallbackEventId: string; ended: boolean } | undefined => undefined);
+const getSilentContinuationTiming = vi.fn<typeof import('../localDb/sessionActiveTurn').getSilentContinuationTiming>();
 vi.mock('../localDb/sessionActiveTurn', () => ({
   drainSessionActiveTurnWrites: (sessionId: string) => drainSessionActiveTurnWrites(sessionId),
   getSessionNotificationTurnSignal: (sessionId: string) => getSessionNotificationTurnSignal(sessionId),
+  getSilentContinuationTiming: (...args: Parameters<typeof getSilentContinuationTiming>) => getSilentContinuationTiming(...args),
 }));
+
+// L341 / unit with real SQLite and the real notification handler. A recovery
+// start must keep the pre-continuation mobile ID and include the same reply.
+// In the marked case a real late idle must still be filtered by the new row.
+it.each(['parent', 'two continuations'] as const)('keeps the original mobile preview for %s', async (scenario) => {
+  const { initNotificationService } = await freshService();
+  const { clearCurrentDbClient, setCurrentDbClient } = await import('../localDb/client/current');
+  const marker = await vi.importActual<typeof import('../localDb/sessionActiveTurn')>('../localDb/sessionActiveTurn');
+  const preview = await vi.importActual<typeof import('../localDb/sessionNotificationPreview')>('../localDb/sessionNotificationPreview');
+  const sqlite = new Database(':memory:');
+  const db = drizzle(sqlite);
+  const client = { drizzle: db } as unknown as DbClient;
+  for (const table of [sessions, messages, botProfiles, botSessionLinks]) {
+    const { name, columns } = getTableConfig(table);
+    sqlite.exec(`CREATE TABLE "${name}" (${columns.map(column => `"${column.name}" ${column.getSQLType()}`).join(', ')})`);
+  }
+  const task = 'silent-notice';
+  const time = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  const completion = { sessionId: task, title: 'Task', kind: 'done', channels: { desktop: true, mobile: true } };
+  const event = (generation: number) => ({ sessionInstanceId: 'silent-notice-runtime', sessionTurnGeneration: generation });
+  setCurrentDbClient(client, 'notification-fixture');
+  try {
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    getSessionNotificationTurnSignal.mockImplementation(marker.getSessionNotificationTurnSignal);
+    drainSessionActiveTurnWrites.mockImplementation(marker.drainSessionActiveTurnWrites);
+    if (marker.getSilentContinuationTiming) getSilentContinuationTiming.mockImplementation(marker.getSilentContinuationTiming);
+    readSessionNotificationPreview.mockImplementation(preview.readSessionNotificationPreview);
+
+    db.insert(sessions).values({ id: task, source: 'desktop', clearedAt: 1030, createdAt: 0, updatedAt: 0 }).run();
+    for (const [id, text, at] of [['cleared', 'Cleared text', 1020], ['visible', 'Original product reply', 1040]] as const) {
+      db.insert(messages).values({
+        id, clientId: id, sessionId: task, role: 'assistant', content: JSON.stringify(text), createdAt: at,
+        agentMeta: JSON.stringify({ turnCompleted: true, assistantPhase: 'final_answer' }),
+      }).run();
+    }
+    marker.markSessionTurnStarted(task);
+    await marker.drainSessionActiveTurnWrites(task);
+    time.mockReturnValue(1100);
+    marker.markSessionTurnEnded(task);
+    await marker.drainSessionActiveTurnWrites(task);
+    const originalSignal = marker.getSessionNotificationTurnSignal(task);
+    expect(originalSignal).toMatchObject({ ended: true, fallbackEventId: expect.stringContaining('turn:1000:1100:') });
+    const warn = vi.fn();
+    if (scenario === 'two continuations') {
+      time.mockReturnValue(1200);
+      await marker.markSessionSilentContinuationStarted(task, 'silent-notice-runtime', 2, () => client, () => true, warn);
+      time.mockReturnValue(1300);
+      marker.markSessionTurnEndedAfterBarrier(task, Promise.resolve(), event(2));
+      await marker.drainSessionActiveTurnWrites(task);
+      time.mockReturnValue(1400);
+      await marker.markSessionSilentContinuationStarted(task, 'silent-notice-runtime', 3, () => client, () => true, warn);
+      expect(warn).not.toHaveBeenCalled();
+      expect(db.select().from(sessions).get()).toMatchObject({ activeTurnStartedAt: 1400, lastTurnEndedAt: 1300 });
+      expect(await preview.readSessionNotificationPreview(task)).toMatchObject({
+        eventId: 'turn:1000:1100', reply: { clientId: 'visible' },
+      });
+      // A different durable start must use its own unfinished pair even while
+      // the old product signal is still in memory.
+      db.update(sessions).set({ activeTurnStartedAt: 1450 }).run();
+      expect(await preview.readSessionNotificationPreview(task)).toEqual({ suppress: true });
+      db.update(sessions).set({ activeTurnStartedAt: 1400 }).run();
+    }
+
+    time.mockReturnValue(1500);
+    const final = Promise.withResolvers<void>();
+    marker.markSessionTurnEndedAfterBarrier(task, final.promise, event(3));
+    // Production notification drains the existing history barrier before the marker.
+    drainPersistQueue.mockReturnValueOnce(final.promise);
+    await invokeHandler(completion, windowEvent(1));
+    expect(notificationCtor).not.toHaveBeenCalled();
+    final.resolve();
+    await flushAsync();
+    await invokeHandler(completion, windowEvent(2));
+    expect(marker.getSessionNotificationTurnSignal(task)).toEqual(originalSignal);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledExactlyOnceWith({
+      sessionId: task, title: 'Task', kind: 'done', generation: 7,
+      detail: 'Original product reply', eventId: 'turn:1000:1100', reply: true,
+    });
+    expect(JSON.stringify(await preview.readSessionNotificationPreview(task))).toBe(JSON.stringify({
+      reply: { clientId: 'visible', text: 'Original product reply' }, eventId: 'turn:1000:1100',
+    }));
+    db.update(sessions).set({ clearedAt: 1050 }).run();
+    expect(await preview.readSessionNotificationPreview(task)).toHaveProperty('reply', undefined);
+
+    time.mockReturnValue(2000);
+    marker.markSessionTurnStarted(task);
+    await marker.drainSessionActiveTurnWrites(task);
+    expect(await preview.readSessionNotificationPreview(task)).toEqual({ suppress: true });
+    await invokeHandler(completion);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+  } finally {
+    getSilentContinuationTiming.mockReset();
+    time.mockRestore();
+    clearCurrentDbClient(client);
+    marker._resetSessionActiveTurnStateForTests();
+    sqlite.close();
+  }
+});
 
 interface FakeFeishuIM {
   getOwnerOpenId: ReturnType<typeof vi.fn>;
