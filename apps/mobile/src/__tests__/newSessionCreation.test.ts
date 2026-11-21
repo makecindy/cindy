@@ -12,6 +12,7 @@ import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { createDurableOutbox, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { buildOutboxItem } from '@/session/sessionOutbox';
+import { DeviceLinkTopicRegistry } from '@/device-link/topicRegistry';
 import { createOutboxMessageLeases, outboxNeedsReconciliation, outboxSessionIsHidden } from '@/session/mobileOutboxSessionAdapter';
 
 const recoveryStorage = vi.hoisted(() => new Map<string, string>());
@@ -751,31 +752,39 @@ describe('newSessionCreation pipeline', () => {
     expect(remoteSessionStore.getSessions().find(s => s.id === 's11')?.pendingLocalCreation).toBe(false);
   });
 
-  // Unit regression for review r4648673906: a transient subscribe rejection
-  // must recover without holding up enqueue. Existing pending-ACK tests never
-  // rejected a subscription; fake time exposes the missing retry at 250ms.
-  it.each(['BACKPRESSURE', 'DEVICE_LINK_BUSY', 'PRECONDITION_FAILED', 'owner-changed'])(
-    'recovers the background subscription without blocking the first message: %s', async (code) => {
+  // Unit regression r4651047066: exercise the real creation pipeline and topic
+  // registry. Pending ACK tests did not release owners during an async gap.
+  // Neither delayed linking nor subscription backoff may resurrect a released
+  // page owner; another peer must retain its own subscription throughout.
+  it.each(['link', 'backoff'])(
+    'does not resurrect released page subscriptions after %s', async (gap) => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       try {
+        const registry = new DeviceLinkTopicRegistry();
+        registry.trackSubscribe('new-session:dev-1', 'dev-1', ['sessions']);
+        registry.trackSubscribe('home', 'dev-2', ['sessions']);
         const maker = makeMaker();
         const params = makeParams('s11', maker);
-        const subscribe = vi.fn(async (_owner: string, _device: string, _topics: string[]) => {});
-        let attempts = 0;
-        subscribe.mockImplementation(async owner => {
-          if (!owner.startsWith('new-session:')) return;
-          attempts += 1;
-          if (attempts === 1) throw new Error(code === 'owner-changed' ? 'BACKPRESSURE' : code);
-        });
-        params.transport.subscribe = subscribe;
+        let finishLink!: () => void;
+        const linking = new Promise<void>(resolve => { finishLink = resolve; });
+        params.transport.openLink = async () => { if (gap === 'link') await linking; };
+        params.transport.subscribe = async (owner, device, topics) => {
+          registry.trackSubscribe(owner, device, topics);
+          if (owner.startsWith('new-session:')) throw new Error('BACKPRESSURE');
+        };
         startNewSessionCreation(params);
+        await flushPipeline();
+        // Releasing the form must retain the task page's shared list topic.
+        expect(registry.untrackSubscribe('new-session:dev-1', 'dev-1')).toEqual([]);
+        expect(registry.hasTopic('dev-1', 'sessions')).toBe(true);
+        registry.untrackSubscribe('session:s11', 'dev-1');
+        finishLink();
         await flushPipeline();
         expect(maker.input.enqueue).toHaveBeenCalledOnce();
         expect(getNewSessionCreationTask('s11')).toBeNull();
-        expect(attempts).toBe(1);
-        if (code === 'owner-changed') setMobileAuthOwner('owner-b');
-        await vi.advanceTimersByTimeAsync(250);
-        expect(attempts).toBe(['BACKPRESSURE', 'DEVICE_LINK_BUSY'].includes(code) ? 2 : 1);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(registry.snapshotDevice('dev-1')).toBeNull();
+        expect(registry.hasTopic('dev-2', 'sessions')).toBe(true);
       } finally {
         vi.useRealTimers();
       }

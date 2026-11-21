@@ -13,7 +13,7 @@
  *                                用户走正常 handleSend 重发)
  *
  * 幂等与重试口径:
- *  - openLink / subscribe 幂等,走 withTransientRemoteRetry;
+ *  - openLink 幂等,走 withTransientRemoteRetry；订阅恢复由挂载页面的既有流程负责；
  *  - createSession **不盲重**:瞬态失败先 probe getSession(id)——命中说明上一次
  *    invoke 已在被控端生效只是回执丢了,直接继续;NOT_FOUND 才退避重建(串行,
  *    防 maker-core spawn 窗口内同 id 并发双起 SDK 进程);
@@ -1280,14 +1280,9 @@ async function runPipeline(task: InternalTask): Promise<void> {
       await openLink(params.deviceId);
       assertTaskOwnerCurrent(task);
     });
-    // Subscription intents are registered synchronously. Their ACK is not a
-    // prerequisite for an authorized invoke or for durably accepting the input.
-    void withTransientRemoteRetry(async () => {
-      // Keep the existing bounded recovery for rejected subscriptions in the
-      // background, and never re-register the old owner's intent after sign-out.
-      assertTaskOwnerCurrent(task);
-      await subscribe(`new-session:${params.deviceId}`, params.deviceId, ['sessions']);
-    }).catch(() => undefined);
+    // The synchronous session owner above already holds `sessions`. Do not
+    // acquire the New Session route's owner here: the form may have unmounted
+    // while linking. Mounted pages own their existing cancellable ACK recovery.
     // 建链完成、订阅意图登记后再启动鉴权 fresh revalidate。无需等待订阅 ACK，
     // 但不能与建链并行：listProviders 可能在建链完成
     // 前就返回旧目录快照(来源 A),而建链期间工作站已替换为 B,后续拿旧 A 快照
