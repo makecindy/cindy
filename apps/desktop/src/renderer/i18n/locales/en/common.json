@@ -1362,6 +1362,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
     "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
+    "MODEL_CATALOG_UNCONFIRMED": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
     "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
     "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
     "INVALID_PARAMS": "Some input isn’t valid. Check it and try again.",
@@ -13095,6 +13096,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "An automatic review provider has exhausted its quota. Check its usage or billing, or customize Auxiliary models in Settings on the computer running the Agent. Actions that need review still require your confirmation.",
           "autoReviewNoAvailableModel": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
           "autoReviewUnavailable": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
           "autoReviewUnavailableWechat": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
@@ -14146,6 +14148,8 @@
       "source": {
         "lastConfirmed": "Last refreshed: {{time}}",
         "unconfirmed": "Model list not up to date",
+        "unreachable": "Can't reach {{source}}",
+        "unreachableDetail": "Can't connect. Check your network.",
         "unavailable": "Model unavailable",
         "reconnect": "Reconnect",
         "manage": "Manage source",
@@ -15126,6 +15130,9 @@
       "usageLimitAutoContinueTitle": "If you haven't acted by the time the usage limit resets, this task continues automatically",
       "usageLimitAutoContinueCancel": "Cancel",
       "usageLimitAutoContinueCancelTitle": "Cancel automatic continuation. The error and Retry stay available.",
+      "usageLimitReached": "This model account has reached its usage limit",
+      "usageLimitReachedWithReset": "This model account has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
+      "usageLimitReachedNoReset": "This model account has reached its usage limit. Wait for the limit to reset, or switch to another model before retrying.",
       "codexOrganizationUsageLimitWithReset": "The connected Codex account is managed by your organization and has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
       "codexOrganizationUsageLimit": "The connected Codex account is managed by your organization and has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
       "codexUsageLimitWithReset": "The connected Codex account has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
@@ -15144,7 +15151,7 @@
       "switchClaudeSubscriptionTitle": "Switch this session to the Claude.ai subscription and retry",
       "switchingClaudeSubscription": "Switching to Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Couldn’t switch to Claude.ai or retry this session: {{msg}}",
-      "codexAppServerRetired": "The Codex service was restarted or replaced. The current request was interrupted; run it again.",
+      "codexAppServerRetired": "The connection to Codex was lost. The current request was interrupted. You can continue in this session.",
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click “Sync auth” to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "The “{{provider}}” connection on this computer could not authenticate. Check its sign-in status in settings, then return to this task after restoring the connection.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
@@ -15197,6 +15204,7 @@
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
+      "pluginEngineStatus": "Still working in the background…",
       "bashWorkStatus_one": "Working in the background ({{count}} command)…",
       "bashServiceStatus_one": "{{count}} background service running",
       "bashWorkStatus_other": "Working in the background ({{count}} commands)…",
@@ -15231,6 +15239,7 @@
       "continueFailed_other": "{{count}} sessions couldn't resume. Open them to try again."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
       "actionScheduled": "Authorization expired for this action. The next run is still scheduled.",
       "actionExpired": "Task authorization expired for this action. Check the latest automation run.",
       "actionRecovered": "Authorization expired for this action. A later run of the same automation succeeded.",
@@ -15901,11 +15910,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Context compaction failed during the switch because this connection cannot use the previous model.",
       "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
+      "MODEL_CATALOG_UNCONFIRMED": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
       "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
       "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
       "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "An automatic review provider has exhausted its quota. Check its usage or billing, or customize Auxiliary models in Settings on the computer running the Agent. Actions that need review still require your confirmation.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
@@ -16130,7 +16142,6 @@
       "opened": "Opened a preview page"
     },
     "sideChat": {
-      "openPage": "Open full task page",
       "returnMain": "Back to main task",
       "new": "New side chat",
       "mainWindowDescription": "Side chats currently run in the main window. Your conversation is saved.",
@@ -16138,6 +16149,14 @@
       "commandDescription": "Open a side chat with this task's context. Optional text becomes a draft question.",
       "title": "Side chat",
       "context": "Uses completed context from when you opened it. The main task keeps running. History stays until you close this tab.",
+      "viewCollaboration": "View collaboration",
+      "openConversation": "Open conversation",
+      "openFromTaskList": "Also available in the task list on the left.",
+      "returnToSideChat": "Back to side chat",
+      "reopenSideChat": "Reopen side chat",
+      "origin": "This conversation started in a side chat.",
+      "originNamed": "This conversation started in a side chat from “{{title}}”.",
+      "originUnavailable": "This conversation started in a side chat. The original task is unavailable.",
       "opening": "Opening…",
       "notReady": "Wait for the main task to complete its first reply.",
       "unsupported": "This task's agent runs in another execution environment. Side chat is not available here yet.",
@@ -16146,9 +16165,10 @@
       "mainTaskOnly": "Open a side chat from the main task.",
       "sharedTaskUnavailable": "Side chats are not available in shared tasks.",
       "archivedTask": "Unarchive this task to open a side chat.",
-      "closeTitle": "Close side chat?",
-      "closeDescription": "This follow-up will stop and its history will be deleted. The main task keeps running.",
-      "closeConfirm": "Close and delete",
+      "closeTitle": "Close and archive this follow-up?",
+      "closeDescription": "The matching task in the left sidebar will also be archived.",
+      "closeDescriptionRunning": "The matching task in the left sidebar will also be archived, and its workers will stop.",
+      "closeConfirm": "Close and archive",
       "closeFailed": "Could not close the side chat. Try again."
     },
     "botStartedTasks": {
@@ -16164,9 +16184,19 @@
       "toggle": "Show or hide the reply from “{{title}}”",
       "openTask": "Open task"
     },
+    "geminiRateLimit": {
+      "retried": "Retried automatically after the Gemini rate limit",
+      "title": "Gemini’s per-minute input token limit was reached.",
+      "exhausted": "Gemini is still rate limited after one retry. You can retry manually.",
+      "retryIn": "Retrying automatically in {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source. This task stays with its assigned account.",
-      "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source. This task stays with its assigned account.",
+      "poolModelLimited": "Subscription usage for this model has reached its limit. You can switch models now.",
+      "poolRetryUntil": "Retry after {{resetAt}}.",
+      "poolOtherSignedOut": "Another subscription account is signed out. You can sign in on the computer running the task and retry.",
+      "poolUnavailable": "No subscription account is available for this model. Switch models or check the accounts on the computer running the task.",
+      "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source.",
+      "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source.",
       "loginRequired": "The subscription account used by this task needs sign-in. Sign in again on the computer running the task, then retry.",
       "signingIn": "The subscription account used by this task is signing in. Retry after sign-in finishes.",
       "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",
@@ -17029,7 +17059,41 @@
             "token": "Using fallback token",
             "recheck": "Check connection",
             "summary": "Manage GitHub repositories, issues, pull requests, and Actions.",
-            "otherMethods": "Other connection methods"
+            "otherMethods": "Other connection methods",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App access",
+            "all": "All repositories",
+            "selected": "Selected repositories",
+            "visible": "Visible repositories: {{count}}",
+            "unknownCount": "Repository count unavailable",
+            "permissions": "Permissions",
+            "read": "Read only",
+            "write": "Read and write",
+            "admin": "Admin",
+            "loading": "Loading access…",
+            "missing": "Connect the GitHub App on this computer to view access.",
+            "unavailable": "Access details unavailable.",
+            "empty": "No installations visible to this account.",
+            "suspended": "Installation suspended",
+            "events": "Repositories subscribed to events on this computer: {{count}}",
+            "manage": "Manage repository access",
+            "names": {
+              "actions": "Actions",
+              "administration": "Repository administration",
+              "checks": "Checks",
+              "contents": "Repository contents",
+              "deployments": "Deployments",
+              "issues": "Issues",
+              "members": "Organization members",
+              "metadata": "Metadata",
+              "organization_events": "Organization events",
+              "pull_requests": "Pull requests",
+              "repository_hooks": "Repository webhooks",
+              "statuses": "Commit statuses",
+              "workflows": "Workflow files"
+            }
           },
           "app": {
             "title": "Repository events",
@@ -17042,6 +17106,21 @@
             "repositories": "Choose repositories",
             "disconnect": "Disconnect events",
             "connect": "Connect GitHub App"
+          },
+          "connection": {
+            "operations": "Repository operations",
+            "operationsMissing": "Repository access is not authorized yet",
+            "checking": "Checking GitHub connection…",
+            "mismatch": "Operations and notifications use different accounts. Check the accounts and reconnect.",
+            "ready": "GitHub account connected.",
+            "close": "Close",
+            "incomplete": "Account linked. Authorize repository operations on this computer to finish.",
+            "eventsOnly": "This account receives repository events. Its name alone does not confirm authorization on this computer.",
+            "connect": "Connect GitHub",
+            "alternative": "Use local GitHub sign-in",
+            "cliDescription": "Keep using your local sign-in. Personal notifications and other features unsupported by GitHub Apps still require it.",
+            "disconnect": "Disconnect GitHub App",
+            "repositories": "Repositories watched: {{count}}"
           }
         },
         "unresolved": "Unresolved review threads: {{count}}",
@@ -22196,6 +22275,7 @@
     "picker": {
       "empty": "No model groups yet. Combine a few sources into a mode in Settings to pick it here.",
       "manage": "Manage model groups",
+      "deviceTitle": "Model groups · {{device}}",
       "switched": "“{{name}}” switched this task to {{model}}",
       "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
       "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected."

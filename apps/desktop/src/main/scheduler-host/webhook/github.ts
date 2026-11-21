@@ -18,6 +18,7 @@ export interface GithubAppStatus {
   repositories?: string[];
   unavailable?: string[];
   /** Optional capabilities; absent on older servers. */
+  userAuthorization?: boolean;
   prSubscriptions?: boolean;
   dailyQuotaExempt?: boolean;
   automationSubscriptions?: boolean;

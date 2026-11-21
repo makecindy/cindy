@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
     "MODEL_SELECTION_UNAVAILABLE": "所择模型于此供方下已不可用。请于规制中察连接，或另择可用之模型。",
+    "MODEL_CATALOG_UNCONFIRMED": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未易毕。请察错误详情，俟 Harness 就绪而后再试。",
     "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
     "INVALID_PARAMS": "参数无效，请察之而后再试。",
@@ -13042,6 +13043,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "自动审模型之额度已尽。请于运行 Agent 之电脑查用量或计费，或于设置自定辅助模型。需审之操作，仍待君确认。",
           "autoReviewNoAvailableModel": "无可用之自动审批模型。请于运行 Agent 之电脑，在「模型供应商」启用并连接审批供应商，或于设置自定「辅助模型」。待审之举仍由君确认。",
           "autoReviewUnavailable": "自动审批暂不能断，须审批之操作已改由君确认。欲少受扰，可将差事切至「完全访问」，然风险更高。",
           "autoReviewUnavailableWechat": "自动审批暂不能断，须审批之操作已改由君确认。个人微信不可用「完全访问」，请径确认此举。",
@@ -14091,6 +14093,8 @@
       "source": {
         "lastConfirmed": "上次重整：{{time}}",
         "unconfirmed": "模型录未新",
+        "unreachable": "{{source}} 不能达",
+        "unreachableDetail": "不能达，请察网路",
         "unavailable": "模型不可用",
         "reconnect": "重连",
         "manage": "理来源",
@@ -15052,6 +15056,9 @@
       "usageLimitAutoContinueTitle": "耗用上限重置之时，若君尚未处置，此差事将自续",
       "usageLimitAutoContinueCancel": "罢",
       "usageLimitAutoContinueCancelTitle": "罢其自续；谬误与再试仍留",
+      "usageLimitReached": "模型名籍，耗用已达上限",
+      "usageLimitReachedWithReset": "模型名籍，耗用已达上限，预计于 {{resetAt}} 恢复。",
+      "usageLimitReachedNoReset": "模型名籍，耗用已达上限。请俟上限重置，或易他模型，再试。",
       "codexOrganizationUsageLimitWithReset": "今所连者乃企业 Codex 名籍，耗用已达上限，预计于 {{resetAt}} 恢复。",
       "codexOrganizationUsageLimit": "今所连者乃企业 Codex 名籍，耗用已达上限。请俟上限重置，或易他可用名籍，再试。",
       "codexUsageLimitWithReset": "今所连之 Codex 名籍，耗用已达上限，预计于 {{resetAt}} 恢复。",
@@ -15070,7 +15077,7 @@
       "switchClaudeSubscriptionTitle": "将此差事易为 Claude.ai 订阅并再试",
       "switchingClaudeSubscription": "方易为 Claude.ai…",
       "claudeSubscriptionSwitchFailed": "未能易为 Claude.ai 或再试此差事：{{msg}}",
-      "codexAppServerRetired": "Codex 之服已重启或更替；今之请求已断，请再行之。",
+      "codexAppServerRetired": "Codex 之连线已断，所请遂中止。可于此差事续行。",
       "codexAuthMissing": "远程 Codex 尚未同步登录之态（401 Unauthorized）。点右侧「同步登录」，将此机 Codex 凭证推至远程 Cindy Codex home，再试遣之。",
       "codexAuthMissingLocal": "本机的「{{provider}}」连接未通过验证。请前往该连接的设置检查登录状态，修复后回到此差事继续。",
       "codexSessionExpired": "OpenAI 连接须更新。重连 ChatGPT 即可续之；{{appName}} 不会令系统 Codex CLI 注销，亦不请君重连他模型来源。",
@@ -15123,6 +15130,7 @@
     },
     "backgroundActivity": {
       "status": "后台子差事方行，模型耗用未止…",
+      "pluginEngineStatus": "后台续作未辍…",
       "bashWorkStatus_one": "后台犹作（令 {{count}} 道）…",
       "bashServiceStatus_one": "后台常役方行（{{count}} 件）",
       "bashWorkStatus_other": "后台犹作（令 {{count}} 道）…",
@@ -15157,6 +15165,7 @@
       "continueFailed_other": "有 {{count}} 件差事未能续，可开差事再试。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
       "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
@@ -15827,11 +15836,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 另立 SSH 差事。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所连者无权用前一模型，故易模型时未能压缩上下文。",
       "MODEL_SELECTION_UNAVAILABLE": "所择模型于此供方下已不可用。请于规制中察其连接，或另择可用之模型。",
+      "MODEL_CATALOG_UNCONFIRMED": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未易毕。请览谬误详情，待 Harness 就绪再试。",
       "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
       "REMOTE_DAEMON_CLOSED": "远程连接中断，或方更新。此轮已终，请再遣。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远程差事不能取此机之卷／图附件。请径贴其内容。",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自动审模型之额度已尽。请于运行 Agent 之电脑查用量或计费，或于设置自定辅助模型。需审之操作，仍待君确认。",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "无可用之自动审批模型。请于运行 Agent 之电脑，在「模型供应商」启用并连接审批供应商，或于设置自定「辅助模型」。待审之举仍由君确认。",
       "AUTO_REVIEW_UNAVAILABLE": "自动审批暂不能断，须审批之操作已改由君确认。欲少受扰，可将差事切至「完全访问」，然风险更高。",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自动审批暂不能断，须审批之操作已改由君确认。个人微信不可用「完全访问」，请径确认此举。",
@@ -16048,7 +16060,6 @@
     },
     "sessionLoading": "差事方载",
     "sideChat": {
-      "openPage": "启全差事页",
       "returnMain": "归主差事",
       "new": "增旁问",
       "mainWindowDescription": "旁问今于主窗中用之。所问之录犹存。",
@@ -16056,6 +16067,14 @@
       "commandDescription": "依主差事开旁问。可于命令后附问，以为追问草稿。",
       "title": "旁问",
       "context": "以开启时已成之上下文为据；主差事照常行之。阖此分页前，所问之录犹存。",
+      "viewCollaboration": "观协同",
+      "openConversation": "启此对话",
+      "openFromTaskList": "亦可自左栏任务表开启。",
+      "returnToSideChat": "返回侧栏追问",
+      "reopenSideChat": "重启侧栏追问",
+      "origin": "此对话出自侧栏追问。",
+      "originNamed": "此对话出自「{{title}}」之侧栏追问。",
+      "originUnavailable": "此对话出自侧栏追问，原差事今不可启。",
       "opening": "方启…",
       "notReady": "主差事尚未答一回，且稍安勿躁。",
       "unsupported": "此 Agent 之远程差事暂不支持旁问。",
@@ -16064,9 +16083,10 @@
       "mainTaskOnly": "请自主差事开旁问。",
       "sharedTaskUnavailable": "共事不可开旁问。",
       "archivedTask": "请先解封存，再开旁问。",
-      "closeTitle": "阖旁问？",
-      "closeDescription": "将止而删此番追问，主差事不受其扰。",
-      "closeConfirm": "阖而删之",
+      "closeTitle": "闭而藏此追问乎？",
+      "closeDescription": "左列所载之追问亦将归档。",
+      "closeDescriptionRunning": "左列所载之追问亦将归档，协同诸 Worker 将止。",
+      "closeConfirm": "关闭归档",
       "closeFailed": "删追问未成，请稍后再试。"
     },
     "pluginModelRoute": {
@@ -16090,9 +16110,19 @@
       "toggle": "启闭「{{title}}」之覆书",
       "openTask": "启差事"
     },
+    "geminiRateLimit": {
+      "retried": "依 Gemini 所请，已自试",
+      "title": "Gemini 每分钟所入已达其限",
+      "exhausted": "已自试一次，仍受限。可稍后再试。",
+      "retryIn": "{{seconds}} 秒后自试"
+    },
     "subscriptionAccountError": {
-      "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
-      "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
+      "poolModelLimited": "此模型订阅之额已尽，可先易模型。",
+      "poolRetryUntil": "俟 {{resetAt}} 后可再试。",
+      "poolOtherSignedOut": "另有订阅账号已退出，可于行此任务之机重新登录而试。",
+      "poolUnavailable": "此模型无可用订阅账号。可易模型，或于行此任务之机查账号。",
+      "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。",
+      "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。",
       "loginRequired": "此差事所用订阅账号需要重新登录。请在执行差事的电脑上重新登录该账号，再重试。",
       "signingIn": "此差事所用订阅账号正在登录，请完成登录后重试。",
       "unavailable": "此差事所系订阅账号，无法用于本次请求。请于执行差事的电脑检查模型供方的账号设置，或另选模型来源。",
@@ -16955,7 +16985,41 @@
             "token": "今用备用 Token",
             "recheck": "察连接",
             "summary": "掌 GitHub 仓库、Issues、PR 与 Actions。",
-            "otherMethods": "他种连接之法"
+            "otherMethods": "他种连接之法",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App 访问权限",
+            "all": "所有仓库",
+            "selected": "指定仓库",
+            "visible": "当前账号可见 {{count}} 个仓库",
+            "unknownCount": "暂时无法读取仓库数",
+            "permissions": "权限明细",
+            "read": "只读",
+            "write": "可读写",
+            "admin": "管理",
+            "loading": "正在读取授权范围…",
+            "missing": "在这台电脑上连接 GitHub App 后即可查看授权范围。",
+            "unavailable": "暂时无法读取授权明细。",
+            "empty": "当前账号没有可见的安装记录。",
+            "suspended": "此安装已暂停",
+            "events": "这台电脑订阅了 {{count}} 个仓库的事件",
+            "manage": "管理仓库访问权限",
+            "names": {
+              "actions": "Actions",
+              "administration": "仓库管理",
+              "checks": "检查结果",
+              "contents": "仓库内容",
+              "deployments": "部署",
+              "issues": "Issue",
+              "members": "组织成员",
+              "metadata": "仓库元数据",
+              "organization_events": "组织事件",
+              "pull_requests": "拉取请求",
+              "repository_hooks": "仓库 Webhook",
+              "statuses": "提交状态",
+              "workflows": "工作流文件"
+            }
           },
           "app": {
             "title": "仓库之变",
@@ -16968,6 +17032,21 @@
             "repositories": "择仓库",
             "disconnect": "断事件之连",
             "connect": "连 GitHub App"
+          },
+          "connection": {
+            "operations": "仓库操作",
+            "operationsMissing": "尚未获得仓库操作授权",
+            "checking": "正在检查 GitHub 连接…",
+            "mismatch": "操作账号与通知账号不同，请核对后重新连接。",
+            "ready": "GitHub 账号已连接。",
+            "close": "闭之",
+            "incomplete": "账号已绑定，请补充此电脑的操作授权。",
+            "eventsOnly": "此账号用于仓库通知；显示账号名字不代表此电脑已获得操作授权。",
+            "connect": "连接 GitHub",
+            "alternative": "使用本机 GitHub 登录",
+            "cliDescription": "可沿用本机登录；个人通知等 GitHub App 不支持的功能仍需要此方式。",
+            "disconnect": "断开 GitHub App 连接",
+            "repositories": "正在关注 {{count}} 个仓库"
           }
         },
         "unresolved": "{{count}} 条未决之 review 评论",
@@ -22107,6 +22186,7 @@
     "picker": {
       "empty": "尚无模型组。于设定合数源为一模式，即可于此择之。",
       "manage": "理模型组",
+      "deviceTitle": "模型组 · {{device}}",
       "switched": "「{{name}}」已将此差事易为 {{model}}",
       "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
       "chooseUnavailable": "「{{name}}」今无可用之源，未取之。"

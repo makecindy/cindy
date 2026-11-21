@@ -99,6 +99,10 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 vi.mock('@/state/deviceLinkModelMirror', () => ({ useDeviceLinkModelMirrorVersion: () => 0 }));
+vi.mock('@/hooks/useDevicesProviders', () => {
+  const directories = new Map();
+  return { useDevicesProviders: () => directories };
+});
 
 import { ModelSelector, ModelSelectorContent } from '../ModelSelector';
 import { PermissionSelector } from '../PermissionSelector';
@@ -108,10 +112,22 @@ import {
   pluginEngineSessionCreateFields,
   remotePluginEngineChoices,
   resolveActivePluginEngine,
+  resolvePluginEngineSessionSwitchEffort,
 } from '@/lib/pluginEngineSelection';
 import { engineIconKindOf } from '@/components/sidebar/VendorIcon';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { findPluginEngine, resetPluginEnginesStoreForTests, useRemotePluginEngines } from '@/hooks/usePluginEngines';
+import {
+  DEVICE_PLUGIN_ENGINES_REFRESH_MS,
+  DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS,
+  DEVICE_PLUGIN_ENGINES_REREAD_MS,
+  findPluginEngine,
+  hasRemotePluginEngineSubscribers,
+  markRemotePluginEnginesStale,
+  resetPluginEnginesStoreForTests,
+  useDevicesPluginEngines,
+  usePluginEngineIdentity,
+  useRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
 import { PLUGIN_ENGINES_INVOKE, type PluginEngineView } from '../../../../shared/pluginEngines';
 
 const modes: PluginEngineView['permissionModes'] = [
@@ -224,16 +240,193 @@ it('reads the selected computer once and discards a former account’s directory
   }
 });
 
+// 生产入口与可观察结果：useRemotePluginEngines(deviceId, 'once') 与 refresh()；被控电脑草稿／会话先加载一次引擎目录，
+// 打开模型选择器时经 maker:refresh-plugin-engines 请被控电脑插件重报模型，并在 2.5s 后复读出完整模型列表。
+// 规则依据：acp-plugin-bridge 远程控制电脑模型刷新(对端 plugin-engines-changed 只推本机窗口，控制端须触发 refresh 后复读)
+// 与 server-channel-review 冷却门禁(60s 内重复开面板不连发 refresh；断线重连 markStale 后允许立即重刷)。
+// 覆盖缺口：此前 Desktop 控制端从未调用 maker:refresh-plugin-engines，被控电脑未在本机打开过面板时永远只有「默认模型」。
+// 最小失败输入与 tier：unit；被控电脑初始 models=[]，打开面板调用 refresh() 后不触发 REFRESH 或 2.5s 后仍为空模型列表。
+it('asks the controlled computer to republish plugin engine models on picker refresh and re-reads once after cooldown', async () => {
+  vi.useFakeTimers();
+  const initialDsh = engine('dsh-plugin:dsh', 'DeepSeek Harness', { models: [] });
+  const publishedDsh = engine('dsh-plugin:dsh', 'DeepSeek Harness', {
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['low', 'high'], defaultEffort: 'high' }],
+  });
+  let remoteModelsPublished = false;
+  const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+    if (channel === PLUGIN_ENGINES_INVOKE.REFRESH) {
+      remoteModelsPublished = true;
+      return undefined;
+    }
+    if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
+      return [remoteModelsPublished ? publishedDsh : initialDsh];
+    }
+    return undefined;
+  });
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  try {
+    const first = renderHook(() => useRemotePluginEngines('computer-b', 'once'));
+    await act(async () => { await Promise.resolve(); });
+    expect(first.result.current.engines).toEqual([initialDsh]);
+    expect(invoke.mock.calls).toEqual([['computer-b', PLUGIN_ENGINES_INVOKE.LIST, []]]);
+
+    // Entering a second task on the same controlled computer reuses the loaded catalogue.
+    const second = renderHook(() => useRemotePluginEngines('computer-b', 'once'));
+    await act(async () => { await Promise.resolve(); });
+    expect(second.result.current.engines).toEqual([initialDsh]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    // Opening the model picker reuses the fresh snapshot (<15s), triggers REFRESH once,
+    // and re-reads published models once at 2.5s.
+    await act(async () => {
+      first.result.current.refresh();
+      await Promise.resolve();
+    });
+    expect(invoke.mock.calls).toEqual([
+      ['computer-b', PLUGIN_ENGINES_INVOKE.LIST, []],
+      ['computer-b', PLUGIN_ENGINES_INVOKE.REFRESH, []],
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(first.result.current.engines).toEqual([publishedDsh]);
+    expect(invoke).toHaveBeenCalledTimes(3);
+
+    // Re-opening immediately within the 15s read window and 60s refresh cooldown makes zero extra calls.
+    await act(async () => {
+      first.result.current.refresh();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
+
+    // After the controlled computer reconnects (markStale), refresh re-reads LIST and asks REFRESH again.
+    markRemotePluginEnginesStale('computer-b');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_MS);
+      first.result.current.refresh();
+      await Promise.resolve();
+    });
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(2);
+
+    // Leaving or hiding the picker view cancels the pending 2.5s re-read even while sidebar rows remain mounted.
+    const sidebarRow = renderHook(() => usePluginEngineIdentity(publishedDsh.providerId, 'computer-b'));
+    const callsBeforeLeave = invoke.mock.calls.length;
+    first.unmount();
+    second.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(invoke.mock.calls).toHaveLength(callsBeforeLeave);
+    sidebarRow.unmount();
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    resetPluginEnginesStoreForTests();
+  }
+});
+
+// 生产入口与可观察结果：useRemotePluginEngines 空初始目录复读 + resolvePluginEngineSessionSwitchEffort；
+// 被控电脑初始无引擎时后续重开面板仍可发现新装插件，跨插件引擎切换模型使用目标模型默认档位而非旧引擎档位。
+// 规则依据：server-channel-review(15s 冷却后可重新读取空目录、离开页面后在途 refresh 不再安排定时器)与模型选择器行展示一致性。
+// 覆盖缺口：此前空目录未保留远程读取或离开后在途 refresh 仍挂定时器，且跨插件引擎切换误带入旧引擎的 high 档位。
+// 最小失败输入与 tier：unit；在途 refresh 返回前卸载视图仍触发延迟 LIST，或引擎 A(high)切到引擎 B(默认 low)提交了 high。
+it('discovers newly enabled remote engines after an initially empty list, stops in-flight refresh on leave, and keeps cross-engine default effort', async () => {
+  vi.useFakeTimers();
+  const newlyEnabled = engine('agy-plugin:agy', 'Antigravity', { models: [] });
+  const newlyPublished = engine('agy-plugin:agy', 'Antigravity', {
+    models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'low' }],
+  });
+  let hasEngineOnPeer = false;
+  let modelsPublishedOnPeer = false;
+  let finishRefresh!: () => void;
+  const invoke = vi.fn((_deviceId: string, channel: string) => {
+    if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
+      if (!hasEngineOnPeer) return Promise.resolve([]);
+      return Promise.resolve([modelsPublishedOnPeer ? newlyPublished : newlyEnabled]);
+    }
+    if (channel === PLUGIN_ENGINES_INVOKE.REFRESH) {
+      return new Promise<void>((resolve) => {
+        finishRefresh = () => {
+          modelsPublishedOnPeer = true;
+          resolve();
+        };
+      });
+    }
+    return Promise.resolve(undefined);
+  });
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  try {
+    const draft = renderHook(
+      ({ active }) => useRemotePluginEngines('computer-b', 'once', active),
+      { initialProps: { active: true } },
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(draft.result.current.engines).toEqual([]);
+
+    // User installs/enables a plugin on computer B and opens the picker after the 15s read cooldown.
+    hasEngineOnPeer = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REREAD_MS);
+      draft.result.current.refresh();
+      await Promise.resolve();
+    });
+    expect(draft.result.current.engines).toEqual([newlyEnabled]);
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
+
+    // Leaving before the in-flight REFRESH resolves prevents scheduling a delayed LIST download while away.
+    const callsWhenLeaving = invoke.mock.calls.length;
+    draft.rerender({ active: false });
+    await act(async () => {
+      finishRefresh();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS);
+    });
+    expect(invoke.mock.calls).toHaveLength(callsWhenLeaving);
+
+    // Returning within the 15s/60s cooldown completes the owed post-REFRESH LIST read once without re-sending REFRESH.
+    draft.rerender({ active: true });
+    await act(async () => { await Promise.resolve(); });
+    expect(draft.result.current.engines).toEqual([newlyPublished]);
+    expect(invoke.mock.calls).toHaveLength(callsWhenLeaving + 1);
+    expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
+
+    // Same plugin engine carries over explicit 'high'; switching to a different plugin engine uses its own 'low' default.
+    expect(
+      resolvePluginEngineSessionSwitchEffort(
+        { providerId: newlyPublished.providerId, modelId: 'gemini-3-pro' },
+        newlyPublished,
+        { providerId: newlyPublished.providerId, effort: 'high' },
+      ),
+    ).toBe('high');
+    expect(
+      resolvePluginEngineSessionSwitchEffort(
+        { providerId: newlyPublished.providerId, modelId: 'gemini-3-pro' },
+        newlyPublished,
+        { providerId: 'acp-plugin:dsh-plugin:dsh', effort: 'high' },
+      ),
+    ).toBe('low');
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    resetPluginEnginesStoreForTests();
+  }
+});
+
 describe('plugin engines in the new-task picker', () => {
   it.each([
-    ['no engine installed', undefined, false],
-    ['engines installed', [dsh, gemini, known], true],
-  ] as const)('shows the 「插件引擎」 group and one rail tab per engine only when engines exist (%s)', (_label, engines, shown) => {
+    ['no engine installed', undefined, []],
+    ['only an unauthenticated/unavailable engine installed', [gemini], []],
+    ['engines installed', [dsh, gemini, known], ['DeepSeek Harness', 'OpenCode']],
+  ] as const)('shows the 「插件引擎」 group and rail tabs only for usable engines (%s)', (_label, engines, expectedNames) => {
     renderDraftPicker(engines ? { engines, active: null, onSelect: vi.fn() } : undefined);
     expect(screen.getByText('Opus 5')).toBeTruthy();
-    expect(screen.queryByRole('group', { name: 'Plugin engines' }) !== null).toBe(shown);
+    expect(screen.queryByRole('group', { name: 'Plugin engines' }) !== null).toBe(expectedNames.length > 0);
     for (const name of ['DeepSeek Harness', 'Gemini CLI', 'OpenCode']) {
-      expect(screen.queryByRole('button', { name }) !== null).toBe(shown);
+      expect(screen.queryByRole('button', { name }) !== null).toBe((expectedNames as readonly string[]).includes(name));
     }
   });
 
@@ -260,18 +453,15 @@ describe('plugin engines in the new-task picker', () => {
     expect(onSelect).toHaveBeenCalledWith({ providerId: dsh.providerId, modelId: PLUGIN_ENGINE_DEFAULT_MODEL });
   });
 
-  it('lists engines by name, keeps an unavailable one disabled with its hint, and selects the engine default', () => {
+  // 2026-11-20 实机反馈：本机只安装了插件但尚未登录(unavailable)时不应在模型列表冗余占位；仅已选中的当前任务引擎保留状态提示。
+  it('hides unavailable engines from the picker unless one is already the active task choice, and selects the engine default', () => {
     const onSelect = vi.fn();
-    renderDraftPicker({ engines: [dsh, gemini, known], active: null, onSelect });
+    const view = renderDraftPicker({ engines: [dsh, gemini, known], active: null, onSelect });
     const group = screen.getByRole('group', { name: 'Plugin engines' });
 
-    // Unavailable: visible, not selectable, with the plugin's own install hint.
-    const geminiGroup = within(group).getByRole('group', { name: 'Gemini CLI' });
-    expect(within(geminiGroup).getByText('Install with npm i -g gemini-cli')).toBeTruthy();
-    const geminiRow = within(geminiGroup).getByRole('option');
-    expect(geminiRow.getAttribute('aria-disabled')).toBe('true');
-    fireEvent.click(geminiRow);
-    expect(onSelect).not.toHaveBeenCalled();
+    // Unavailable and not active: completely omitted from both the rail and the model list.
+    expect(within(group).queryByRole('group', { name: 'Gemini CLI' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Gemini CLI' })).toBeNull();
 
     // 'unknown' is selectable and offers its last-seen models instead of a default entry. Like a
     // built-in row, each row shows the model name and a source line (the engine).
@@ -285,6 +475,20 @@ describe('plugin engines in the new-task picker', () => {
     expect(dshGroup.querySelector('[role="option"] img')?.getAttribute('src')).toBe(DSH_ICON);
     fireEvent.click(within(dshGroup).getByRole('option', { name: /Default model/ }));
     expect(onSelect).toHaveBeenCalledWith({ providerId: 'acp-plugin:dsh-plugin:dsh', modelId: PLUGIN_ENGINE_DEFAULT_MODEL });
+
+    // Already-active task engine that later became unavailable stays visible with its disabled hint.
+    view.unmount();
+    renderDraftPicker({
+      engines: [gemini],
+      active: { providerId: gemini.providerId, modelId: PLUGIN_ENGINE_DEFAULT_MODEL },
+      onSelect,
+    });
+    const activeGeminiGroup = within(screen.getByRole('group', { name: 'Plugin engines' })).getByRole('group', { name: 'Gemini CLI' });
+    expect(within(activeGeminiGroup).getByText('Install with npm i -g gemini-cli')).toBeTruthy();
+    const geminiRow = within(activeGeminiGroup).getByRole('option');
+    expect(geminiRow.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(geminiRow);
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
   // 第三期(2026-11-20)：自己另一台电脑上的引擎。同一个插件两台都装时 providerId 相同，只有所在电脑不同。
@@ -312,34 +516,175 @@ describe('plugin engines in the new-task picker', () => {
     expect(onSelect).toHaveBeenLastCalledWith({ providerId: dsh.providerId, modelId: PLUGIN_ENGINE_DEFAULT_MODEL, deviceId: 'computer-b' });
   });
 
-  it('starts a task on another computer’s engine with that computer, and never falls back to this computer’s engine', () => {
-    const offered = { supported: true, enabled: true };
-    const choices = remotePluginEngineChoices(
-      [{ deviceId: 'computer-b', name: 'Studio Mac' }, { deviceId: 'computer-c', name: null }],
-      new Map<string, readonly PluginEngineView[] | null>([
-        ['computer-b', [
-          { ...dsh, remoteUse: offered },
-          // Not opened for remote use, plugin without the mode, reported unavailable, an older Cindy: none is offered.
-          { ...known, remoteUse: { supported: true, enabled: false } },
-          { ...agy, remoteUse: { supported: false, enabled: false } },
-          { ...gemini, remoteUse: offered },
-          engine('old-plugin:old', 'Older Cindy'),
-        ]],
-        // Not answered yet: offers nothing for now.
-        ['computer-c', null],
-      ]),
-      (deviceId, name) => name ?? deviceId,
+  // 生产入口与可观察结果：ModelSelector 触发器展开统一模型面板时才调用 pluginEngines.readCatalogue，关闭态不预读。
+  // Bug／规则依据：ModelSelector 直接渲染 ModelSelectorContentView 而跳过了 ModelSelectorContent，导致伙伴/新任务打开选择器时未触发插件重报模型与远端电脑引擎读取。
+  // 现有覆盖缺口：此前单测直接裸渲染 ModelSelectorContent，未经过 ModelSelector 弹层挂载路径。
+  // 最小失败输入与 tier：unit（jsdom），渲染关闭态 ModelSelector 后点击触发器打开统一面板。
+  it('refreshes the plugin engine catalogue when opening ModelSelector, not while closed', async () => {
+    const readCatalogue = vi.fn();
+    render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-5',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: 'anthropic',
+        onProviderChange: vi.fn(),
+        onUnifiedSelect: vi.fn(),
+        vendorKey: 'cc',
+        remoteAgent: undefined,
+        triggerVariant: 'settings',
+        unifiedPanel: true,
+        pluginEngines: { engines: [dsh], active: null, onSelect: vi.fn(), readCatalogue },
+      }),
     );
+    expect(readCatalogue).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button'));
+    });
+    expect(await screen.findByRole('listbox', { name: 'Models' })).toBeTruthy();
+    expect(readCatalogue).toHaveBeenCalledTimes(1);
+  });
+
+  // Unified selector §1.2: clicking an offered remote engine waits for host admission before
+  // closing. A slower failure leaves the same list available for a retry (jsdom unit).
+  it('keeps the picker open while a remote choice is pending or fails, then closes on success', async () => {
+    let finish!: (accepted: boolean) => void;
+    const onSelect = vi.fn()
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }))
+      .mockResolvedValueOnce(true);
+    const remote = { ...dsh, deviceId: 'studio', deviceName: 'Studio' };
+    render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-5',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: 'anthropic',
+        onProviderChange: vi.fn(),
+        onUnifiedSelect: vi.fn(),
+        vendorKey: 'cc',
+        remoteAgent: undefined,
+        triggerVariant: 'settings',
+        unifiedPanel: true,
+        pluginEngines: { engines: [remote], active: null, onSelect, readCatalogue: vi.fn() },
+      }),
+    );
+    await act(async () => { fireEvent.click(screen.getByRole('button')); });
+    const group = () => screen.getByRole('group', { name: 'DeepSeek Harness · Studio' });
+    const row = () => within(group()).getByRole('option', { name: /Default model/ });
+    fireEvent.click(row());
+    fireEvent.click(row());
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(onSelect).toHaveBeenCalledWith({ providerId: remote.providerId, modelId: 'default', deviceId: 'studio' });
+    await act(async () => { finish(false); });
+    expect(group()).toBeTruthy();
+    await act(async () => { fireEvent.click(row()); });
+    expect(screen.queryByRole('group', { name: 'DeepSeek Harness · Studio' })).toBeNull();
+  });
+
+  // The reconnect hook uses hasRemotePluginEngineSubscribers to decide whether a device needs an
+  // automatic list. A mounted picker candidate reads only when opened (engineering §8.3, unit).
+  it('loads remote picker candidates on demand without registering them for reconnect prefetch', async () => {
+    const deviceId = 'picker-candidate';
+    const invoke = vi.fn(async () => [dsh]);
+    vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+    try {
+      const picker = renderHook(() => useDevicesPluginEngines([deviceId]));
+      expect(hasRemotePluginEngineSubscribers(deviceId)).toBe(false);
+      expect(invoke).not.toHaveBeenCalled();
+      await act(async () => { picker.result.current.read(); });
+      expect(picker.result.current.catalogues.get(deviceId)).toEqual([dsh]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Browsing the task computer from a remote plugin engine must explicitly relocate when a
+  // local built-in model is selected, even when the panel starts by showing the task computer.
+  it('returns to the task computer when selecting a local model from an active remote engine', async () => {
+    const onRelocate = vi.fn(async () => true);
+    const remote = { ...dsh, deviceId: 'studio', deviceName: 'Studio' };
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'default',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: remote.providerId,
+        onProviderChange: vi.fn(),
+        vendorKey: 'cc',
+        actualRoute: true,
+        sessionEngineFilter: { currentAgent: 'claude-code', onCrossEngineSelect: vi.fn() },
+        remoteAgent: { devices: [{ deviceId: 'studio', name: 'Studio' }], selectedDeviceId: 'studio', onRelocate },
+        pluginEngines: {
+          engines: [remote],
+          active: { providerId: remote.providerId, modelId: 'default', deviceId: 'studio' },
+          onSelect: vi.fn(),
+        },
+      }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('option', { name: /Opus 5/ }));
+    });
+    expect(onRelocate).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'anthropic', modelId: 'claude-opus-5', agentDevice: null,
+    }));
+  });
+
+  // 生产入口与可观察结果：remotePluginEngineChoices + ModelSelectorContent；本机未装该插件时不展示远端共享插件引擎；
+  // 本机装了但未登录(unavailable)时隐藏本机置灰项、只展示远端可用项；组织命名空间与其它组织隔离。
+  // 依据：2026-11-20 用户实机反馈第 2、3 条。
+  // 覆盖缺口：此前 remotePluginEngineChoices 未过滤本机未安装插件，且本机未登录项在列表冗余占位。
+  // 最小失败输入与 tier：unit（jsdom），本机未装插件返回空；本机装 _ns__local__dsh-plugin(未登录) + 远端 _root__dsh-plugin(可用)。
+  it('offers another computer’s engine only when its plugin is installed here, hides an unauthenticated local copy, and never falls back to this computer’s engine', () => {
+    const offered = { supported: true, enabled: true };
+    const remoteCatalogues = new Map<string, readonly PluginEngineView[] | null>([
+      ['computer-b', [
+        { ...engine('_root__dsh-plugin:dsh', 'DeepSeek Harness'), remoteUse: offered },
+        // Not installed on this computer: hidden even though opened on computer-b.
+        { ...engine('cursor-plugin:cursor', 'Cursor'), remoteUse: offered },
+        // Different organization namespace: never matched to a local non-org install.
+        { ...engine('_ns__acme__dsh-plugin:dsh', 'Acme DSH'), remoteUse: offered },
+        // Not opened for remote use, plugin without the mode, reported unavailable, an older Cindy: none is offered.
+        { ...known, remoteUse: { supported: true, enabled: false } },
+        { ...agy, remoteUse: { supported: false, enabled: false } },
+        { ...gemini, remoteUse: offered },
+        engine('old-plugin:old', 'Older Cindy'),
+      ]],
+      // Not answered yet: offers nothing for now.
+      ['computer-c', null],
+    ]);
+    const devices = [{ deviceId: 'computer-b', name: 'Studio Mac' }, { deviceId: 'computer-c', name: null }];
+
+    // Without the plugin installed on this computer, nothing from computer-b is shown.
+    expect(remotePluginEngineChoices(devices, remoteCatalogues, (id, name) => name ?? id, [])).toEqual([]);
+    expect(remotePluginEngineChoices(devices, remoteCatalogues, (id, name) => name ?? id, [known])).toEqual([]);
+
+    // Installed locally (even unauthenticated / unavailable, and via .cindy `_ns__local__`): remote engine is offered.
+    const localUnauthenticatedDsh = engine('_ns__local__dsh-plugin:dsh', 'DeepSeek Harness', {
+      availability: { state: 'unavailable', reason: 'not-signed-in', message: 'Please sign in' },
+    });
+    const choices = remotePluginEngineChoices(devices, remoteCatalogues, (id, name) => name ?? id, [localUnauthenticatedDsh, known, agy, gemini]);
     expect(choices.map((choice) => [choice.providerId, choice.deviceId, choice.deviceName])).toEqual([
-      [dsh.providerId, 'computer-b', 'Studio Mac'],
+      ['acp-plugin:_root__dsh-plugin:dsh', 'computer-b', 'Studio Mac'],
     ]);
 
-    const remote = resolveActivePluginEngine([dsh, ...choices], { providerId: dsh.providerId, deviceId: 'computer-b', modelId: 'default' });
+    // Rendering [localUnauthenticatedDsh, ...choices] hides the unauthenticated local engine and shows only Studio Mac's engine.
+    renderDraftPicker({ engines: [localUnauthenticatedDsh, ...choices], active: null, onSelect: vi.fn() });
+    expect(screen.queryByRole('button', { name: 'DeepSeek Harness' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'DeepSeek Harness · Studio Mac' })).toBeTruthy();
+
+    const remote = resolveActivePluginEngine([dsh, ...choices], {
+      providerId: 'acp-plugin:_root__dsh-plugin:dsh', deviceId: 'computer-b', modelId: 'default',
+    });
     expect(pluginEngineSessionCreateFields(remote!)).toEqual({
-      agentKind: 'acp', providerId: dsh.providerId, model: 'default', effort: '', agentDeviceId: 'computer-b',
+      agentKind: 'acp', providerId: 'acp-plugin:_root__dsh-plugin:dsh', model: 'default', effort: '', agentDeviceId: 'computer-b',
     });
     // The computer stopped offering it: the draft reads as "no engine chosen", not as this computer's engine.
-    expect(resolveActivePluginEngine([dsh], { providerId: dsh.providerId, deviceId: 'computer-b', modelId: 'default' })).toBeNull();
+    expect(resolveActivePluginEngine([dsh], {
+      providerId: 'acp-plugin:_root__dsh-plugin:dsh', deviceId: 'computer-b', modelId: 'default',
+    })).toBeNull();
     // This computer's engine carries no computer.
     expect(pluginEngineSessionCreateFields(resolveActivePluginEngine([dsh, ...choices], { providerId: dsh.providerId, modelId: 'default' })!))
       .not.toHaveProperty('agentDeviceId');

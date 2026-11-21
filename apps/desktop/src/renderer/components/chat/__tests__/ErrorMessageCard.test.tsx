@@ -131,6 +131,16 @@ describe('ErrorMessageCard', () => {
     expect(screen.getByText(raw)).toBeTruthy();
   });
 
+  // History rows of a subscription usage limit showed the same generic summary as the banner did.
+  it('names an account usage limit in history and still offers the original', () => {
+    const raw = "You've hit your session limit · resets 1:20am (Asia/Shanghai)";
+    render(createElement(ErrorMessageCard, { message: raw }));
+    expect(screen.getByText('chat.errorBanner.usageLimitReached')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+  });
+
   it('localizes LiteLLM envelopes and still offers the original', () => {
     const raw =
       'OpenAI API error (400): {"message":"litellm.BadRequestError: XaiException - too long"}';

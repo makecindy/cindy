@@ -162,6 +162,11 @@ interface AgentIslandSessionState {
   permissionRequestId: string | null;
   permissionCanAllowForSession: boolean;
   running: boolean;
+  /**
+   * `running` comes from a plugin engine still working after answering its prompt
+   * (see setAgentIslandSessionBackgroundWork), not from a turn.
+   */
+  backgroundWork?: boolean;
   completedUntil: number | null;
   errorUntil: number | null;
   /** Whether this terminal error belongs to a flow that deliberately emits a paired done. */
@@ -674,6 +679,11 @@ export function applyAgentIslandEvent(
   if (event.type === 'thinking' && !foreground) return false;
   const assistantText = event.type === 'text' ? assistantTextFromEvent(event) : null;
   if (event.type === 'text' && !assistantText) return false;
+  // A plugin engine's work after its turn shows only while the background-work signal holds
+  // the session running (setAgentIslandSessionBackgroundWork). On its own it would open a
+  // run that no turn end closes, and a new entry starts out as running.
+  if (event.turnScope === 'background' && meta.agentKind === 'acp'
+    && !state.sessions.get(meta.sessionId)?.running) return false;
 
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
@@ -720,6 +730,7 @@ export function applyAgentIslandEvent(
       return true;
     }
     if (isRunning === true) {
+      session.backgroundWork = false;
       if (!session.running) { session.workingPhase = 'thinking'; session.workingTools.clear(); }
       if (isCompactingWorkingStatus(status)) session.workingPhase = 'compacting';
       else if (status && session.workingPhase === 'compacting') session.workingPhase = 'thinking';
@@ -809,6 +820,7 @@ export function applyAgentIslandEvent(
   if (event.type === 'done') {
     clearAssistantStream(session);
     session.running = false;
+    session.backgroundWork = false;
     session.currentToolUseId = null;
     session.toolDetailUntil = null;
     // Codex ask_user / plan_review can outlive a successful turn, and an input
@@ -1101,6 +1113,51 @@ export function acknowledgeAgentIslandSessionRead(
   return wasUnread || hadDeferredReveal || hadReveal || hadCompletionDwell || hadErrorDwell
     ? 'cleared'
     : 'noop';
+}
+
+/**
+ * A plugin engine keeps working after answering its prompt. While that lasts the session
+ * is shown running (sidebar, other devices, phone) with no new reminder; when it ends the
+ * session returns to completed silently, keeping whatever unread state the turn's own
+ * completion left. A turn starting meanwhile takes the run over through its own status.
+ */
+export function setAgentIslandSessionBackgroundWork(
+  state: AgentIslandState,
+  meta: AgentIslandSessionMeta,
+  active: boolean,
+  now: number,
+  options: { turnStarting?: boolean } = {},
+): boolean {
+  if (active) {
+    const existing = state.sessions.get(meta.sessionId);
+    if (existing?.running || (existing && existing.pendingInteractionIds.size > 0)) return false;
+    const session = getOrCreateSession(state, meta, now);
+    applyMeta(session, meta);
+    markSessionRunning(state, session, now);
+    session.backgroundWork = true;
+    session.phase = 'running';
+    session.interactionKind = undefined;
+    session.workingPhase = 'processing';
+    session.workingTools.clear();
+    touchSessionActivity(session, now);
+    return true;
+  }
+  const session = state.sessions.get(meta.sessionId);
+  if (!session?.backgroundWork) return false;
+  session.backgroundWork = false;
+  if (!session.running) return false;
+  if (options.turnStarting) {
+    // The turn's running status follows and opens a fresh run.
+    session.running = false;
+    return true;
+  }
+  if (session.pendingInteractionIds.size > 0) {
+    session.running = false;
+    return true;
+  }
+  return completeAgentIslandSessionWithoutAttention(state, meta.sessionId, now, {
+    preserveAttention: session.unread,
+  });
 }
 
 export function completeAgentIslandSessionWithoutAttention(

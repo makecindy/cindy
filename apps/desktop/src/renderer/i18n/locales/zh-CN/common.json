@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
     "MODEL_SELECTION_UNAVAILABLE": "所选模型在该供应商下已不可用。请在设置中检查连接，或重新选择可用模型。",
+    "MODEL_CATALOG_UNCONFIRMED": "暂时无法确认模型列表。已保留你选择的模型，可刷新模型列表后重试。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切换。请查看错误详情，待 Harness 就绪后重试。",
     "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
     "INVALID_PARAMS": "参数无效，请检查后重试。",
@@ -13042,6 +13043,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "自动审批模型的配额已耗尽。在运行 Agent 的电脑上检查用量或计费，或在设置中自定义辅助模型。需要审批的操作仍需由你确认。",
           "autoReviewNoAvailableModel": "没有可用的自动审批模型。请在运行 Agent 的电脑上，前往「模型供应商」启用并连接审批供应商，或在设置中自定义「辅助模型」。需要审批的操作仍由你确认。",
           "autoReviewUnavailable": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。想少被打断，可以把任务切到「完全访问」，但风险更高。",
           "autoReviewUnavailableWechat": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。个人微信不能使用「完全访问」，请直接确认这次操作。",
@@ -14092,6 +14094,8 @@
       "source": {
         "lastConfirmed": "上次刷新：{{time}}",
         "unconfirmed": "模型列表暂未更新",
+        "unreachable": "连不上 {{source}}",
+        "unreachableDetail": "连不上，请检查网络",
         "unavailable": "模型不可用",
         "reconnect": "重新连接",
         "manage": "管理来源",
@@ -15061,6 +15065,9 @@
       "usageLimitAutoContinueTitle": "用量上限重置后，如果你还没处理，这个任务会自动继续",
       "usageLimitAutoContinueCancel": "取消",
       "usageLimitAutoContinueCancelTitle": "取消自动继续，错误与重试仍保留",
+      "usageLimitReached": "模型账号已达到用量上限",
+      "usageLimitReachedWithReset": "模型账号已达到用量上限，预计于 {{resetAt}} 恢复。",
+      "usageLimitReachedNoReset": "模型账号已达到用量上限。请等待用量上限重置，或切换其他模型后再重试。",
       "codexOrganizationUsageLimitWithReset": "当前连接的是企业 Codex 账号，已达到用量上限，预计于 {{resetAt}} 恢复。",
       "codexOrganizationUsageLimit": "当前连接的是企业 Codex 账号，已达到用量上限。请等待用量上限重置，或切换其他可用账号后再重试。",
       "codexUsageLimitWithReset": "当前连接的 Codex 账号已达到用量上限，预计于 {{resetAt}} 恢复。",
@@ -15079,7 +15086,7 @@
       "switchClaudeSubscriptionTitle": "把当前任务切换到 Claude.ai 订阅并重试",
       "switchingClaudeSubscription": "正在切换到 Claude.ai…",
       "claudeSubscriptionSwitchFailed": "无法切换到 Claude.ai 或重试当前任务：{{msg}}",
-      "codexAppServerRetired": "Codex 服务已重启或更换；当前请求已中断，请重新运行。",
+      "codexAppServerRetired": "与 Codex 的连接已断开，本次请求已中断。你可以在当前任务中继续。",
       "codexAuthMissing": "远端 Codex 还没同步登录态（401 Unauthorized）。点击右侧「同步登录态」把本机 Codex 凭证推到远端 Cindy Codex home，然后重试发送。",
       "codexAuthMissingLocal": "本机的「{{provider}}」连接未通过验证。请前往该连接的设置检查登录状态，修复后回到此任务继续。",
       "codexSessionExpired": "OpenAI 连接需要更新。重新连接 ChatGPT 后即可继续；{{appName}} 不会退出系统 Codex CLI，也不会要求你重新连接其他模型来源。",
@@ -15132,6 +15139,7 @@
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
+      "pluginEngineStatus": "正在后台继续工作…",
       "bashWorkStatus_one": "正在后台工作（{{count}} 个命令）…",
       "bashServiceStatus_one": "后台服务运行中（{{count}} 个）",
       "bashWorkStatus_other": "正在后台工作（{{count}} 个命令）…",
@@ -15166,6 +15174,7 @@
       "continueFailed_other": "有 {{count}} 个任务没能继续，可以打开任务后重试。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "暂时无法确认模型列表。已保留你选择的模型，可刷新模型列表后重试。",
       "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
@@ -15836,11 +15845,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "当前连接无法使用上一个模型，切换模型时的上下文压缩失败。",
       "MODEL_SELECTION_UNAVAILABLE": "所选模型在该供应商下已不可用。请在设置中检查连接，或重新选择可用模型。",
+      "MODEL_CATALOG_UNCONFIRMED": "暂时无法确认模型列表。已保留你选择的模型，可刷新模型列表后重试。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切换。请查看错误详情，待 Harness 就绪后重试。",
       "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
       "REMOTE_DAEMON_CLOSED": "远端连接中断了，可能正在更新。这一轮已经结束，请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自动审批模型的配额已耗尽。在运行 Agent 的电脑上检查用量或计费，或在设置中自定义辅助模型。需要审批的操作仍需由你确认。",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "没有可用的自动审批模型。请在运行 Agent 的电脑上，前往「模型供应商」启用并连接审批供应商，或在设置中自定义「辅助模型」。需要审批的操作仍由你确认。",
       "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。想少被打断，可以把任务切到「完全访问」，但风险更高。",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。个人微信不能使用「完全访问」，请直接确认这次操作。",
@@ -16056,7 +16068,6 @@
       "opened": "打开了一个预览页面"
     },
     "sideChat": {
-      "openPage": "打开完整任务页",
       "returnMain": "返回主任务",
       "new": "新建侧边追问",
       "mainWindowDescription": "侧边追问目前在主窗口中使用。追问记录仍然保留。",
@@ -16064,6 +16075,14 @@
       "commandDescription": "基于主任务打开侧边追问。可在命令后附上问题，作为追问草稿。",
       "title": "侧边追问",
       "context": "基于打开时主任务已完成的上下文追问，主任务会继续运行。追问记录会保留到关闭此标签页为止。",
+      "viewCollaboration": "查看协同",
+      "openConversation": "打开对话",
+      "openFromTaskList": "也可从左侧任务列表打开。",
+      "returnToSideChat": "回到侧边追问",
+      "reopenSideChat": "重新打开侧边追问",
+      "origin": "这条对话来自侧边追问。",
+      "originNamed": "这条对话来自「{{title}}」的侧边追问。",
+      "originUnavailable": "这条对话来自侧边追问，原任务当前无法打开。",
       "opening": "正在打开…",
       "notReady": "请先等待主任务完成一次回答。",
       "unsupported": "此任务的 Agent 运行在其他执行环境中，暂不支持侧边追问。",
@@ -16072,9 +16091,10 @@
       "mainTaskOnly": "请从主任务打开侧边追问。",
       "sharedTaskUnavailable": "共享任务不支持侧边追问",
       "archivedTask": "请先取消归档，再打开侧边追问",
-      "closeTitle": "关闭侧边追问？",
-      "closeDescription": "将停止并删除本次追问，主任务不受影响。",
-      "closeConfirm": "关闭并删除",
+      "closeTitle": "关闭并归档这条追问？",
+      "closeDescription": "左侧任务列表中的这条追问也会归档。",
+      "closeDescriptionRunning": "左侧任务列表中的这条追问也会归档，协同 Worker 将停止。",
+      "closeConfirm": "关闭并归档",
       "closeFailed": "关闭侧边追问失败，请稍后重试。"
     },
     "botStartedTasks": {
@@ -16090,9 +16110,19 @@
       "toggle": "展开或收起「{{title}}」的回信",
       "openTask": "打开任务"
     },
+    "geminiRateLimit": {
+      "retried": "已按 Gemini 建议的时间自动重试",
+      "title": "Gemini 每分钟输入量已达上限",
+      "exhausted": "已自动重试一次，Gemini 仍受限。稍后可手动重试。",
+      "retryIn": "{{seconds}} 秒后自动重试"
+    },
     "subscriptionAccountError": {
-      "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
-      "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
+      "poolModelLimited": "当前模型的订阅额度已达上限。可以先切换模型。",
+      "poolRetryUntil": "可在 {{resetAt}} 后重试。",
+      "poolOtherSignedOut": "另有订阅账号已登出，可在执行任务的电脑上重新登录后重试。",
+      "poolUnavailable": "当前模型没有可用的订阅账号。请切换模型，或在执行任务的电脑上检查账号状态。",
+      "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。",
+      "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。",
       "loginRequired": "此任务使用的订阅账号需要重新登录。请在执行任务的电脑上重新登录该账号，再重试。",
       "signingIn": "此任务使用的订阅账号正在登录，请完成登录后重试。",
       "unavailable": "此任务绑定的订阅账号无法用于本次请求。请在执行任务的电脑上检查模型供应商中的账号设置，或选择其他模型来源。",
@@ -16955,7 +16985,41 @@
             "token": "当前使用备用 Token",
             "recheck": "检查连接",
             "summary": "管理 GitHub 仓库、Issues、PR 和 Actions。",
-            "otherMethods": "其他连接方式"
+            "otherMethods": "其他连接方式",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App 访问权限",
+            "all": "所有仓库",
+            "selected": "指定仓库",
+            "visible": "当前账号可见 {{count}} 个仓库",
+            "unknownCount": "暂时无法读取仓库数",
+            "permissions": "权限明细",
+            "read": "只读",
+            "write": "可读写",
+            "admin": "管理",
+            "loading": "正在读取授权范围…",
+            "missing": "在这台电脑上连接 GitHub App 后即可查看授权范围。",
+            "unavailable": "暂时无法读取授权明细。",
+            "empty": "当前账号没有可见的安装记录。",
+            "suspended": "此安装已暂停",
+            "events": "这台电脑订阅了 {{count}} 个仓库的事件",
+            "manage": "管理仓库访问权限",
+            "names": {
+              "actions": "Actions",
+              "administration": "仓库管理",
+              "checks": "检查结果",
+              "contents": "仓库内容",
+              "deployments": "部署",
+              "issues": "Issue",
+              "members": "组织成员",
+              "metadata": "仓库元数据",
+              "organization_events": "组织事件",
+              "pull_requests": "拉取请求",
+              "repository_hooks": "仓库 Webhook",
+              "statuses": "提交状态",
+              "workflows": "工作流文件"
+            }
           },
           "app": {
             "title": "仓库事件",
@@ -16968,6 +17032,21 @@
             "repositories": "选择仓库",
             "disconnect": "断开事件连接",
             "connect": "连接 GitHub App"
+          },
+          "connection": {
+            "operations": "仓库操作",
+            "operationsMissing": "尚未获得仓库操作授权",
+            "checking": "正在检查 GitHub 连接…",
+            "mismatch": "操作账号与通知账号不同，请核对后重新连接。",
+            "ready": "GitHub 账号已连接。",
+            "close": "关闭",
+            "incomplete": "账号已绑定，请补充此电脑的操作授权。",
+            "eventsOnly": "此账号用于仓库通知；显示账号名字不代表此电脑已获得操作授权。",
+            "connect": "连接 GitHub",
+            "alternative": "使用本机 GitHub 登录",
+            "cliDescription": "可沿用本机登录；个人通知等 GitHub App 不支持的功能仍需要此方式。",
+            "disconnect": "断开 GitHub App 连接",
+            "repositories": "正在关注 {{count}} 个仓库"
           }
         },
         "unresolved": "{{count}} 条未解决的 review 评论",
@@ -22107,6 +22186,7 @@
     "picker": {
       "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
       "manage": "管理模型组",
+      "deviceTitle": "模型组 · {{device}}",
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
       "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
       "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"

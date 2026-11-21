@@ -378,7 +378,15 @@ export interface CodexSessionMcpConfigInput {
   vendorOptions?: Record<string, unknown>;
 }
 
+export interface CodexDownshiftModelRejection {
+  model: string;
+  /** A bridge receipt has already verified an explicit model denial in the upstream body. */
+  transport: 'http' | 'bridge';
+}
+
 export interface CodexExtraSpawnConfig {
+  /** Exact root-connection model IDs frozen with the custom context catalog. */
+  contextProviderModels?: readonly string[];
   extraArgs: string[];
   extraEnv: Record<string, string>;
   /** Host 路由要求更强的 Codex 进程凭证时，冷启动以该模式重建 app-server。 */
@@ -487,6 +495,8 @@ export interface RefreshLocalModelsOptions {
    * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
    */
   onSupportedModels?: (models: unknown[]) => void;
+  /** Claude discovery hosts may classify failures instead of receiving false. */
+  throwOnError?: boolean;
   /** Codex: route a complete live snapshot to this caller instead of OAuth discovery. */
   onModelsListed?: (models: readonly CodexModelListItem[]) => void | Promise<void>;
 }
@@ -1404,6 +1414,9 @@ export interface AgentDeps {
      */
     reasoningEffort?: Effort | '';
   }) => void;
+
+  /** Original model of the local root's rejected native pre-turn downshift request, if observed. */
+  getRejectedCodexDownshiftModel?: (sessionId: string, threadId: string, turnId: string) => CodexDownshiftModelRejection | undefined;
 
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
   getCodexSubagentIdentity?: (args: { childThreadId: string }) => {

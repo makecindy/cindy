@@ -25,18 +25,30 @@ describe('dispatched model boundaries', () => {
       fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true,
     });
   });
-  // Unit regression: fallback resumes use hidden UI triggers; the former
-  // dispatch gate skipped their model boundary even after a successful switch.
-  it.each([true, false])('records a hidden recovery dispatch only when autoResume=%s', async (autoResume) => {
+  // Unit regressions #10082/#8635: actual dispatch must suppress hidden control
+  // inputs, including attachment envelopes, but retain automatic recovery model
+  // boundaries. Earlier coverage only exercised bare text. No IO or native APIs.
+  it.each([true, false].flatMap(autoResume => [
+    { autoResume, content: '[UI_ACTION_TRIGGER] Continue.' },
+    { autoResume, content: JSON.stringify({ text: '[UI_ACTION_TRIGGER] Continue.', images: [], files: [] }) },
+  ]))('records a hidden dispatch only when autoResume=$autoResume: $content', async ({ autoResume, content }) => {
     const publish = vi.fn(async () => {});
     const record = vi.fn(async () => true);
     await recordTurnModelChange({ ...previous, model: 'backup-model' }, {
-      input: { content: '[UI_ACTION_TRIGGER] Continue.', autoResume },
+      input: { content, autoResume },
       readPrevious: async () => previous, record, publish,
     });
     expect(record).toHaveBeenCalledTimes(autoResume ? 1 : 0);
     expect(publish.mock.calls).toEqual(autoResume
       ? [[{ fromModel: 'owner-model', toModel: 'backup-model', modelOnly: true }]] : []);
+  });
+  it('records a real attachment input even when it quotes a hidden trigger', async () => {
+    const publish = vi.fn(async () => {});
+    await recordTurnModelChange({ ...previous, model: 'other' }, {
+      input: { content: JSON.stringify({ text: 'Explain [UI_ACTION_TRIGGER]', files: [] }), autoResume: false },
+      readPrevious: async () => previous, record: async () => true, publish,
+    });
+    expect(publish).toHaveBeenCalledWith({ fromModel: previous.model, toModel: 'other', modelOnly: true });
   });
   it('does not publish a separator when its input disappeared before persistence', async () => {
     const publish = vi.fn(async () => {});

@@ -18,6 +18,7 @@ import {
   type PluginEnginePermissionMode,
   type PluginEngineView,
 } from '../../shared/pluginEngines';
+import { isOrganizationPluginNamespace, parsePluginStoragePart } from '../../shared/pluginIdentity';
 import type { PermissionMode } from '@/lib/userPreferences.types';
 
 export { PLUGIN_ENGINE_DEFAULT_MODEL };
@@ -89,6 +90,47 @@ export function isPluginEngineSelectable(engine: PluginEngineView): boolean {
 }
 
 /**
+ * Engines shown in a model picker: engines reported unavailable (for example, plugin installed
+ * locally without signing in) stay out of the picker unless one is already the active choice.
+ */
+export function visiblePluginEngineChoices<T extends PluginEngineChoice>(
+  engines: readonly T[],
+  active?: { providerId: string; deviceId?: string | null } | null,
+): T[] {
+  return engines.filter((engine) => isPluginEngineSelectable(engine) || isSamePluginEngineChoice(active, engine));
+}
+
+function parseHarnessIdentity(providerId: string): { storagePart: string; harnessId: string } | null {
+  const key = pluginEngineKeyFromProviderId(providerId);
+  if (!key) return null;
+  const separator = key.lastIndexOf(':');
+  if (separator <= 0 || separator >= key.length - 1) return null;
+  return { storagePart: key.slice(0, separator), harnessId: key.slice(separator + 1) };
+}
+
+/**
+ * Whether two engine entries come from the same plugin harness across computers of the same
+ * account. Public/root (`foo` / `_root__foo`) and local (`.cindy` / GitHub release `_ns__local__foo`)
+ * installs of the same plugin id match; organization-scoped plugins match only the same org.
+ */
+export function sameInstalledPluginHarness(
+  a: Pick<PluginEngineView, 'providerId'>,
+  b: Pick<PluginEngineView, 'providerId'>,
+): boolean {
+  const left = parseHarnessIdentity(a.providerId);
+  const right = parseHarnessIdentity(b.providerId);
+  if (!left || !right || left.harnessId !== right.harnessId) return false;
+  if (left.storagePart === right.storagePart) return true;
+  const leftIdentity = parsePluginStoragePart(left.storagePart);
+  const rightIdentity = parsePluginStoragePart(right.storagePart);
+  if (!leftIdentity || !rightIdentity || leftIdentity.ghostId !== rightIdentity.ghostId) return false;
+  if (isOrganizationPluginNamespace(leftIdentity.namespace) || isOrganizationPluginNamespace(rightIdentity.namespace)) {
+    return leftIdentity.namespace === rightIdentity.namespace;
+  }
+  return true;
+}
+
+/**
  * The draft's remembered engine, if it can still start a task. A removed or unavailable engine
  * reads as "not selected", so the draft falls back to its built-in model like a removed plugin model.
  */
@@ -124,6 +166,23 @@ export function resolvePluginEngineEffort(
   const offered = model?.efforts ?? [];
   if (isPluginEngineEffort(requested) && offered.includes(requested)) return requested;
   return model?.defaultEffort && offered.includes(model.defaultEffort) ? model.defaultEffort : null;
+}
+
+/**
+ * Effort for an in-session plugin engine pick: carries over the active effort only when staying on
+ * the same plugin engine (and computer); switching to another engine uses the target model's own
+ * default level, matching what the picker rows display.
+ */
+export function resolvePluginEngineSessionSwitchEffort(
+  selection: PluginEngineSelection,
+  targetEngine: Pick<PluginEngineView, 'models'> | null | undefined,
+  currentActive?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
+): PluginEngineEffort | undefined {
+  if (selection.effort) return selection.effort;
+  const carriedEffort = currentActive && isSamePluginEngineChoice(selection, currentActive)
+    ? currentActive.effort
+    : undefined;
+  return resolvePluginEngineEffort(targetEngine, selection.modelId, carriedEffort) ?? undefined;
 }
 
 /**
@@ -207,16 +266,22 @@ export function pluginEngineSessionCreateFields(selection: ActivePluginEngine): 
 /**
  * The engines other computers of this account offer, as picker choices. `catalogues` holds what
  * each computer last answered (null = not read yet or unreachable: it offers nothing for now);
- * only engines opened there for remote use and able to run are kept. Shared providers are not
- * computers of this account and never offer plugin engines.
+ * only engines opened there for remote use, able to run, and whose plugin is also installed on the
+ * task's computer (`installedEngines`) are kept. Shared providers are not computers of this account
+ * and never offer plugin engines.
  */
 export function remotePluginEngineChoices(
   devices: readonly { deviceId: string; name?: string | null }[],
   catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>,
   displayName: (deviceId: string, name?: string | null) => string,
+  installedEngines: readonly Pick<PluginEngineView, 'providerId'>[],
 ): PluginEngineChoice[] {
+  if (installedEngines.length === 0) return [];
   return devices.flatMap((device) =>
     (catalogues.get(device.deviceId) ?? [])
-      .filter((engine) => !!pluginEngineKeyFromProviderId(engine.providerId) && isPluginEngineOfferedRemotely(engine))
+      .filter((engine) =>
+        !!pluginEngineKeyFromProviderId(engine.providerId)
+        && isPluginEngineOfferedRemotely(engine)
+        && installedEngines.some((installed) => sameInstalledPluginHarness(installed, engine)))
       .map((engine) => ({ ...engine, deviceId: device.deviceId, deviceName: displayName(device.deviceId, device.name) })));
 }

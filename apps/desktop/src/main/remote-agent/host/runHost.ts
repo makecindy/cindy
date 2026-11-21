@@ -86,7 +86,7 @@ import {
   type RelayRunFailure,
 } from './groupRelay';
 import { PROVIDER_GROUP_LOCAL_MEMBER_KEY, type ProviderGroupUsageLimit } from '../../../shared/providerGroup';
-import { decideProviderGroupFailure, providerGroupFailureSignals, providerGroupUnavailableError } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, describeProviderGroupFailure, providerGroupFailureSignals, providerGroupUnavailableError } from '../../provider-group/failurePolicy';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
 import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
@@ -2169,12 +2169,35 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     localAccountRecovery = true,
   ): Promise<string | null> {
     const relayDeps = deps.groupRelay;
-    if (!relayDeps || !run.providerId || !run.hostSessionId) return null;
+    const decision = decideProviderGroupFailure(failure, phase);
+    const failureDescription = describeProviderGroupFailure(failure, decision);
+    // Only internal enums, the bracketed error code and the HTTP status. Some engines put
+    // the upstream error text into sdkError, so it stays out of this log.
+    const failureDetails = {
+      ...(failureDescription.action ? { action: failureDescription.action } : {}),
+      ...(failureDescription.cause ? { cause: failureDescription.cause } : {}),
+      ...(failureDescription.why ? { why: failureDescription.why } : {}),
+      ...(failureDescription.code ? { code: failureDescription.code } : {}),
+      ...(failureDescription.errorStatus !== undefined ? { errorStatus: failureDescription.errorStatus } : {}),
+    };
+    const logDecision = (outcome: 'issued' | 'not-issued', reason: string, localSwitch?: string): void => {
+      const details = { runId: run.id, phase, outcome, reason, ...failureDetails,
+        ...(localSwitch ? { localSwitch } : {}) };
+      if (outcome === 'issued') deps.log?.info('remote agent group switch decision', details);
+      else deps.log?.warn('remote agent group switch decision', details);
+    };
+    if (!relayDeps || !run.providerId || !run.hostSessionId) {
+      logDecision('not-issued', 'not-group-routed');
+      return null;
+    }
     // An ordinary shared provider can grow into a local account pool without becoming a
     // computer group. Its old native sessions still need a handoff before selecting again.
     // Reuse the guest/task switch token and round budget; never move an old native ID.
     const round = groupSwitchRounds.get(key(run.controller, run.hostSessionId));
-    const decision = decideProviderGroupFailure(failure, phase);
+    let unavailableReason: string | undefined;
+    if (!run.acceptsGroupSwitch) unavailableReason = 'not-accepted';
+    else if (member.memberKey === PROVIDER_GROUP_LOCAL_MEMBER_KEY && !deps.canSwitchLocalAccount) unavailableReason = 'blocked';
+    else if (round && now() - round.at <= GROUP_SWITCH_ROUND_MS && round.tried.has(member.memberKey)) unavailableReason = 'already-tried';
     if (localAccountRecovery && member.memberKey === PROVIDER_GROUP_LOCAL_MEMBER_KEY && run.acceptsGroupSwitch
       && deps.canSwitchLocalAccount && decision.action === 'switch'
       && (decision.cause === 'usage-limit' || decision.cause === 'auth')
@@ -2183,11 +2206,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const authorizedModel = run.authorizedModel;
       const providerId = run.providerId;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let probeTimedOut = false;
       let available = false;
       try {
         available = await Promise.race([
           deps.canSwitchLocalAccount({ providerId: run.providerId, hostSessionId: run.hostSessionId, model }),
-          new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 2_000); }),
+          new Promise<false>(resolve => {
+            timer = setTimeout(() => { probeTimedOut = true; resolve(false); }, 2_000);
+          }),
         ]);
       } catch { /* An optional probe cannot replace the original failure. */ }
       finally { if (timer) clearTimeout(timer); }
@@ -2196,19 +2222,31 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (run.closing || run.abortRequested || run.lastSendCallId !== sendCallId
         || run.authorizedModel !== authorizedModel || run.providerId !== providerId
         || !deps.isOwnerCurrent(run.owner) || !deps.isControllerAuthorized(run.controller)
-        || !deps.providerAccess?.isAllowed(run.providerId, run.controller, model, run.sessionId)) return null;
+        || !deps.providerAccess?.isAllowed(run.providerId, run.controller, model, run.sessionId)) {
+        logDecision('not-issued', 'probe-invalidated');
+        return null;
+      }
       if (available) {
         const exclude = noteGroupSwitchTried(run, member);
         exclude.delete(member.memberKey);
+        logDecision('issued', 'switchAvailable');
         return issueGroupSwitchToken(run, exclude);
       }
+      unavailableReason = probeTimedOut ? 'probe-timeout' : 'blocked';
     }
     const canSwitch = phase === 'start'
       ? relayDeps.noteStartFailure(run.providerId, member, failure.message ?? '', model)
       : relayDeps.noteRunFailure(run.providerId, member, failure, model);
-    if (!canSwitch) return null;
+    if (!canSwitch) {
+      logDecision('not-issued', !run.acceptsGroupSwitch ? 'not-accepted'
+        : decision.action === 'switch' ? 'group-declined' : 'failure-not-switchable', unavailableReason);
+      return null;
+    }
     // 旧版受邀者不认识这个状态：照旧只转出原来的错误。
-    if (!run.acceptsGroupSwitch) return null;
+    if (!run.acceptsGroupSwitch) {
+      logDecision('not-issued', 'not-accepted', unavailableReason);
+      return null;
+    }
     const exclude = noteGroupSwitchTried(run, member);
     const next = await relayDeps.plan({
       kind: builtinKindOf(run.kind),
@@ -2218,12 +2256,16 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       reshareKey: reshareKeyForGuest(run.controller),
     }).catch(() => null);
     const canMove = next?.kind === 'member' || (next?.kind === 'local' && deps.isAgentAvailable(builtinKindOf(run.kind)));
-    if (!canMove || run.closing) return null;
+    if (!canMove || run.closing) {
+      logDecision('not-issued', run.closing ? 'run-closing' : 'no-replacement', unavailableReason);
+      return null;
+    }
     deps.log?.info('remote agent: offered the shared user another computer in the provider group', {
       runId: run.id,
       from: member.memberKey,
       tried: exclude.size,
     });
+    logDecision('issued', 'replacement-available', unavailableReason);
     return issueGroupSwitchToken(run, exclude);
   }
 

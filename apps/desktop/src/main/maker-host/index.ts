@@ -166,8 +166,7 @@ import { tryGetSharedTaskHost } from '../device-link/sharedTaskRuntime.js';
 import { runWithSharedTaskCallerGuard } from '../device-link/sharedTaskApi.js';
 import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } from '../device-link/providerShareCrossRegion.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
-import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
-import { isProviderShareCredentialConsentSkipped } from '../device-link/providerShareGuestPrefs.js';
+import { parseProviderShareAgentDeviceId, skipsReceivedShareCredentialConsent } from '../device-link/providerShareGuest.js';
 import { t } from '../i18n.desktop.js';
 import { MACHINE_STATUS_CHANNEL } from '@cindy/device-link';
 import { invokeDeviceValue } from '../maker-ipc/orcaRemoteWorkers.js';
@@ -286,6 +285,7 @@ import { ensureCurrentAccountProviderReadiness } from './account-provider-readin
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
 import {
+  getRejectedCodexDownshiftModel,
   armCodexHttpRecovery,
   clearCodexProxyAuthInjection,
   ensureCodexControlPlaneProxyReady,
@@ -1952,6 +1952,7 @@ export function getMaker(): Maker {
         }),
       getCodexSubagentIdentity: ({ childThreadId }) =>
         getObservedCodexSubagentIdentity(childThreadId),
+      getRejectedCodexDownshiftModel,
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);
@@ -2563,10 +2564,7 @@ export function getMaker(): Maker {
         // 受邀者任务读写凭证类文件时，本机确认卡上的说明(provider-sharing.md §9 第 7 条)。
         sharedProviderCredentialNotice: () => t('newChat.sharedProviderCredential.description'),
         // 受邀者在「分享给我的供应商」里对这个分享打开了「信任 {分享者}」：不弹卡，与本机任务一致。
-        skipSharedProviderCredentialConsent: (deviceId) => {
-          const shareId = parseProviderShareAgentDeviceId(deviceId);
-          return shareId !== null && isProviderShareCredentialConsentSkipped(shareId);
-        },
+        skipSharedProviderCredentialConsent: skipsReceivedShareCredentialConsent,
         logger: desktopMakerLogger,
       }),
       makerMemory: makerMemoryManager,
@@ -2946,7 +2944,7 @@ export function getMaker(): Maker {
     // Anthropic 清单只来自 Claude Code SDK:maker 就绪后主动读一次,不等用户先跑任务
     // (旧缓存也可能缺少 SDK 只以简称返回的当前型号)。登录 / 认领后由对应收口再次请求。
     setAnthropicModelProbe((onSupportedModels, account) =>
-      makerRef.refreshAgentLocalModels('claude-code', { onSupportedModels,
+      makerRef.refreshAgentLocalModels('claude-code', { onSupportedModels, throwOnError: true,
         ...(account ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: account } : {}) }),
     );
     requestAnthropicModelProbe();
