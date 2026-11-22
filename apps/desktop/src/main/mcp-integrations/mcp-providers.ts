@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { gateBuiltinMcpProviders } from './provider-gate.js';
 import { createIMessageMcpServer } from './imessageMcpServer';
+import { resolveIMessageLaneScope } from '../im/imessage/laneScope';
 import { createDiscordMcpServer } from './discordMcpServer';
 import { DiscordOperationError } from '@cindy/im';
 import { createTerminalToolExecutor } from '../terminal/terminalToolAccess.js';
@@ -103,7 +104,7 @@ import { getBrowserMcpDeps } from './browser.desktop.js';
 import { getComputerMcpDeps } from './computer.desktop.js';
 import { discordIm, feishuIm, wechatIm } from '../im';
 import { directDeliveryFile, prepareDirectDelivery } from '../im/imessage/directDelivery';
-import { getBotFeishuTransport, getBotIMessageDirectTarget } from '../im/shared/botImConnectionRuntime';
+import { getBotFeishuTransport, getBotIMessageDirectTarget, getBotIMessageLaneTarget } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
 import { readChannelToolScope } from '../im/shared/channelToolScope';
 import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
@@ -1723,6 +1724,17 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           assertCurrent();
           return receipt;
         },
+        laneScope: (context) => resolveIMessageLaneScope(context, {
+          session: getTaskActionSession,
+          input: id => getTaskActionInputState(id),
+          channelLink: async id => (await tryGetDbClient()?.queryOne<{ botId: string; routeKey: string | null }>(
+            `SELECT l.bot_id AS botId, l.route_key AS routeKey FROM bot_session_links l
+             JOIN bot_profiles p ON p.id = l.bot_id AND p.status = 'active'
+             JOIN sessions s ON s.id = l.session_id AND s.status = 'active' AND s.source = 'bot'
+             WHERE l.session_id = ? AND l.role = 'channel' AND l.archived_at IS NULL`, [id])) ?? null,
+          target: getBotIMessageLaneTarget,
+          boundary: () => isAppSessionBoundaryPending() ? Symbol('pending') : `${activeOwnerScopeKey()}`,
+        }),
       }) }),
   });
 

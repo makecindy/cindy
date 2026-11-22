@@ -119,6 +119,8 @@ export interface IMessageToolScope {
   chatKind: 'direct' | 'group';
   requesterIsOwner: boolean;
   companion: true;
+  /** Host-resolved lane scopes (no inbound lease): throws once the turn it was resolved for is gone. */
+  assertCurrent?: () => void;
 }
 
 export interface DiscordToolScope {
