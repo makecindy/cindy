@@ -67,6 +67,19 @@ export class MobileAgentNetEngine implements NativeEnginePort {
     if (this.destroyed || !agentNetNative?.wait) throw new Error('AGENT_NET_ENGINE_CLOSED');
     return agentNetNative.wait(this.handle, maxMs);
   } : undefined;
+  /** Only binaries that have it (see `AgentNetNativeModule.io`); the transport also checks the engine's features. */
+  io = agentNetNative?.io ? async (input: Uint8Array, waitMs = 0, kick = false): Promise<Uint8Array> => {
+    if (this.destroyed || !agentNetNative?.io) throw new Error('AGENT_NET_ENGINE_CLOSED');
+    this.assertCurrent();
+    const output: Uint8Array | ArrayBuffer = await agentNetNative.io(this.handle, input, waitMs, kick);
+    try { this.assertCurrent(); }
+    catch (error) { void this.destroy(); throw error; }
+    if (this.destroyed) throw new Error('AGENT_NET_ENGINE_CLOSED');
+    return output instanceof Uint8Array ? output : new Uint8Array(output);
+  } : undefined;
+  kick = agentNetNative?.kick ? (): void => {
+    if (!this.destroyed) agentNetNative?.kick?.(this.handle);
+  } : undefined;
   sign(text: string): Promise<string> { return this.command({ op: 'sign', text }); }
   random(): Promise<string> { return this.command({ op: 'random' }); }
   async destroy(): Promise<void> {
