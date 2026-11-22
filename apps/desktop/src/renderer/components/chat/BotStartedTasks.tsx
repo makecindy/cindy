@@ -137,8 +137,10 @@ export function useLinkedTaskStatus(sessionId: string, hostSessionId: string | u
   const selfDeviceId = useOptionalAuthDeviceId();
   const target = parseSourceSessionTarget(sessionId);
   const id = target?.sessionId ?? sessionId;
-  const explicitDevice = target?.deviceId && target.deviceId !== selfDeviceId ? target.deviceId : undefined;
-  const deviceId = explicitDevice ?? getStickySessionDeviceId(hostSessionId);
+  // Same choice as useOpenLinkedTask: the receipt's device wins over the computer hosting the chat;
+  // only then is this computer's own id read as local.
+  const targetDevice = target?.deviceId ?? getStickySessionDeviceId(hostSessionId);
+  const deviceId = targetDevice && targetDevice !== selfDeviceId ? targetDevice : undefined;
   const run = useSyncExternalStore(makerChatStore.subscribeAll,
     () => (deviceId ? undefined : makerChatStore.getRunningSnapshot().get(id)));
   const localLive = useAgentIslandActivity(deviceId ? '' : id);

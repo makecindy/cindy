@@ -193,6 +193,22 @@ describe('sidebar-embedded session navigation boundary', () => {
     }
   });
 
+  // Review of #12031: in a chat hosted on another computer, a receipt naming this computer
+  // (`this-mac::id`) fell back to the chat's computer and read the wrong feed. Unit tier.
+  it('reads this computer for a receipt that names it, even in a remote chat', () => {
+    mocks.getSessionDeviceId.mockImplementation((id) => id === 'host-chat' ? 'chat-mac' : undefined);
+    const sessionId = `own-task-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      render(<BotStartedTasksFooter hostSessionId="host-chat" tasks={[{ sessionId: `this-mac::${sessionId}`, title: 'Own', created: true }]} />);
+      act(() => makerChatStore.__applyStatusUpdateForTest(sessionId, {
+        sessionId, status: 'Working', tokenUsage: 1, costUsd: 0, contextTokens: 1, contextWindow: 10, isRunning: true,
+      }));
+      expect(screen.getByTestId('bot-started-task-status').getAttribute('data-status')).toBe('running');
+    } finally {
+      act(() => makerChatStore.purgeSession(sessionId));
+    }
+  });
+
   it.each([
     { name: 'a pending approval outranks running', input: { run: { isRunning: true, hasError: false, hasPendingAskUser: false, hasPendingPermission: true, hasPendingPlanReview: false, hasPendingPluginSetup: false }, livePhase: undefined, attention: undefined, known: true }, expected: 'needs-action' },
     { name: 'a known local task with no activity is idle', input: { run: undefined, livePhase: undefined, attention: 'done' as const, known: true }, expected: 'idle' },
