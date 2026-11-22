@@ -6,20 +6,21 @@
  * - 生产入口与可观察结果：挂载真实 ImageLightbox / AttachmentCollectionPreview /
  *   useImagePreviewWindow 纯几何入口，断言无遮罩、无滚动锁、标题栏拖动移动整个浮窗、
  *   停靠/调整尺寸改变面板矩形、Esc 与关闭按钮仍工作、放大后图片内容仍走 pan；
- *   换图后显示新源、重操作浮窗后键盘焦点归位、Esc 只关最上层、集合方向键不抢背景。
+ *   换图后显示新源、重操作浮窗后键盘焦点归位、Esc 只关最上层、集合方向键不抢背景；
+ *   混合集合从图片切到文档后清除旧图片面板的键盘范围。
  * - Bug／规则依据：主人 2026-11-20 报告「预览窗无法拖动且盖住主要对话区域」；
  *   #11952 review threads 指出复用浮窗换图、键盘焦点归属、多浮窗 Esc 与集合方向键
- *   的对称路径；DESIGN.md §4 Dialog & Modal 图片预览例外、
- *   product-rules/attachment-preview.md「打开与返回」、engineering-conventions.md §3.2。
+ *   的对称路径；后续 thread 指出混合集合卸载时 scopeRef 清理失效。
  * - 现有覆盖缺口：chatMediaLightboxFocus / ImageLightboxAnnotate 只覆盖焦点、标注和
- *   图片点击；没有覆盖浮窗位置、非模态背景交互、视口边界、换源与多浮窗叠放。
+ *   图片点击；没有覆盖浮窗位置、非模态背景交互、视口边界、换源、多浮窗叠放，
+ *   也没有覆盖图片切到非图片查看器后共享集合键盘范围的生命周期。
  * - 最小失败输入：1280×800 视口打开一张图；标题栏 pointerdown→pointermove→pointerup；
  *   320×600 视口或超出视口的 resize 位移；rerender 换 src；背景焦点按方向键；
- *   两个浮窗同时挂载后按一次 Escape。
- * - tier：unit（进程内 DOM，无真实 I/O）。
- * - 实测耗时：单独运行 13.20s 墙钟（Vitest 10.35s：transform 3.52s /
- *   setup 2.02s / collect 3.97s / 用例本体 2.02s）。超过 10s 的原因是真实 Desktop
- *   jsdom + i18n + Radix Tooltip 生产组件收集成本；10 条用例合并在同一文件，未再新增小文件。
+ *   两个浮窗同时挂载后按一次 Escape；图片→文档混合集合切换后在文档焦点按方向键。
+ * - tier：unit（进程内 DOM，无真实 I/O；仅文档查看器用最小替身隔离文件 I/O）。
+ * - 实测耗时：单独运行 9.99s 墙钟（Vitest 7.75s：transform 2.78s /
+ *   setup 1.84s / collect 2.73s / 用例本体 1.71s）。超过 5s 的原因是真实 Desktop
+ *   jsdom + i18n + Radix Tooltip 生产组件收集成本；11 条用例合并在同一文件，未再新增小文件。
  */
 
 import React from 'react';
@@ -36,6 +37,20 @@ import {
   dockPreviewRect,
   resizePreviewRect,
 } from '@/components/chat/imagePreviewWindow';
+
+// Only the document viewer is stubbed: collection routing, the real image
+// preview and the shared keyboard listener remain production code.
+vi.mock('../TextLightbox', async () => {
+  const { createElement } = await import('react');
+  return {
+    TextLightbox: ({ fileName }: { fileName: string }) =>
+      createElement(
+        'div',
+        { 'data-lightbox-layer': '', role: 'dialog', 'aria-label': fileName },
+        createElement('button', { type: 'button' }, 'document control'),
+      ),
+  };
+});
 
 const SRC = 'cindy-media://blobs/source.png';
 const NEXT_SRC = 'cindy-media://blobs/next.png';
@@ -305,5 +320,26 @@ describe('ImageLightbox non-modal window', () => {
     node.focus();
     fireEvent.keyDown(node, { key: 'ArrowRight' });
     await waitFor(() => expect(previewImage().getAttribute('src')).toBe(NEXT_SRC));
+  });
+
+  it('clears the image keyboard scope after a mixed collection switches to a document', async () => {
+    const items: AttachmentCollectionItem[] = [
+      { id: 'first', name: 'first.png', source: SRC, kind: 'image', media: true },
+      { id: 'second', name: 'second.txt', source: '/second.txt', kind: 'text' },
+    ];
+    render(
+      <AttachmentCollectionContext.Provider value={items}>
+        <ImageLightbox src={SRC} onClose={vi.fn()} />
+      </AttachmentCollectionContext.Provider>,
+    );
+    const imagePanel = panels().at(-1)!;
+    imagePanel.focus();
+    fireEvent.keyDown(imagePanel, { key: 'ArrowRight' });
+    await screen.findByRole('dialog', { name: 'second.txt' });
+
+    const documentControl = screen.getByRole('button', { name: 'document control' });
+    documentControl.focus();
+    fireEvent.keyDown(documentControl, { key: 'ArrowLeft' });
+    await waitFor(() => expect(previewImage().getAttribute('src')).toBe(SRC));
   });
 });

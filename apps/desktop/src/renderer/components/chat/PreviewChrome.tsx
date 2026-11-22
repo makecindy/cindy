@@ -119,6 +119,7 @@ export function PreviewHeader({
   actions,
   menu,
   onMenuClose,
+  menuScopeId,
   isDraggable = false,
   onPointerDown,
 }: {
@@ -129,6 +130,8 @@ export function PreviewHeader({
   actions?: ReactNode;
   menu?: ReactNode;
   onMenuClose?: () => void;
+  /** Links portaled menus back to the preview that opened them. */
+  menuScopeId?: string;
   /** 图片预览用:整条标题栏作为移动浮窗的手势区域;其它查看器保持原状。 */
   isDraggable?: boolean;
   onPointerDown?: PointerEventHandler<HTMLElement>;
@@ -184,6 +187,7 @@ export function PreviewHeader({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
+              data-preview-menu-scope={menuScopeId}
               onEscapeKeyDown={(event) => event.stopPropagation()}
               align="end"
             >
@@ -236,10 +240,12 @@ export function PreviewFooter({
   children,
   className,
   collectionOnly = false,
+  menuScopeId,
 }: {
   children?: ReactNode;
   className?: string;
   collectionOnly?: boolean;
+  menuScopeId?: string;
 }) {
   const collection = useContext(ActivePreviewCollection);
   const { t } = useTranslation();
@@ -277,6 +283,7 @@ export function PreviewFooter({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
+              data-preview-menu-scope={menuScopeId}
               className="max-h-72 overflow-auto"
               onEscapeKeyDown={(event) => event.stopPropagation()}
             >

@@ -56,7 +56,7 @@ import {
   type PreviewResizeDirection,
   type PreviewWindowMode,
 } from './imagePreviewWindow';
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { Button } from '@/components/ui/button';
@@ -88,7 +88,12 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
-import { isLightboxCovered, lightboxOwnsShortcutTarget } from '@/lib/lightboxLayer';
+import {
+  isLightboxCovered,
+  isPreviewMenuTarget,
+  lightboxOwnsInteractionTarget,
+  lightboxOwnsShortcutTarget,
+} from '@/lib/lightboxLayer';
 import { extractIpcError } from '@/utils/ipcError';
 import { getMimeType, extractExt, type AttachedFile } from '@/lib/fileTypes';
 import {
@@ -524,6 +529,9 @@ function ImageLightboxContent({
   leaveGuardRef,
 }: ImageLightboxContentProps) {
   const { t } = useTranslation();
+  // Stable identity for this preview's portaled menus; the interaction guard
+  // uses it to distinguish our menus from the conversation behind the float.
+  const previewScopeId = useId();
   // 会话全量图片列表(MessageStream 下发);非聊天场景无 Provider 时为 null。
   const restorePreviewFocus = usePreviewFocusReturn();
   const sessionImages = useContext(ImageGalleryContext);
@@ -843,10 +851,13 @@ function ImageLightboxContent({
   requestCloseRef.current = requestClose;
   useEffect(() => {
     const scope = activeCollection?.scopeRef;
-    if (!scope) return;
-    scope.current = overlayRef.current;
+    const panel = overlayRef.current;
+    if (!scope || !panel) return;
+    scope.current = panel;
+    // React clears the ref before passive-effect cleanup. Compare with the
+    // captured node so a mixed collection never keeps a removed image panel.
     return () => {
-      if (scope.current === overlayRef.current) scope.current = null;
+      if (scope.current === panel) scope.current = null;
     };
   }, [activeCollection?.scopeRef]);
   useEffect(() => {
@@ -1262,6 +1273,9 @@ function ImageLightboxContent({
     const handler = (e: KeyboardEvent) => {
       // 放弃确认框打开期间,按键归确认框(含关闭它的那次 Esc)。
       if (confirmPendingRef.current || e.defaultPrevented || isEditableKeyboardTarget(e.target)) return;
+      // Portaled menus from this preview own their keyboard work; do not turn
+      // menu arrows/Enter into image shortcuts or a second Escape close.
+      if (isPreviewMenuTarget(e.target, overlayRef.current)) return;
       if (e.key === 'Escape') {
         const overlay = overlayRef.current;
         if (!overlay || isLightboxCovered(overlay)) return;
@@ -1668,10 +1682,14 @@ function ImageLightboxContent({
   const annotationGuardActive = hasUnsavedStrokeChanges();
   useEffect(() => {
     if (!annotationGuardActive) return;
+    const panel = overlayRef.current;
+    if (!panel || isLightboxCovered(panel)) return;
     focusPreviewPanel();
     const blockBackgroundKeys = (event: KeyboardEvent) => {
+      const activePanel = overlayRef.current;
+      if (!activePanel || isLightboxCovered(activePanel)) return;
       if (event.key === 'Escape' || confirmPendingRef.current || event.defaultPrevented) return;
-      if (lightboxOwnsShortcutTarget(event.target, overlayRef.current)) return;
+      if (lightboxOwnsInteractionTarget(event.target, activePanel)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       focusPreviewPanel();
@@ -1696,6 +1714,7 @@ function ImageLightboxContent({
       ref={overlayRef}
       data-lightbox-layer
       data-preview-window-mode={panelMode}
+      data-preview-scope-id={previewScopeId}
       role="dialog"
       aria-modal={false}
       tabIndex={-1}
@@ -1721,6 +1740,7 @@ function ImageLightboxContent({
           actions={<ImagePreviewWindowActions mode={panelMode} onDock={dock} />}
           isDraggable
           onPointerDown={handleHeaderPointerDown}
+          menuScopeId={previewScopeId}
           onMenuClose={() => {
             lastMenuCloseAt.current = performance.now();
           }}
@@ -1893,6 +1913,7 @@ function ImageLightboxContent({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent
+            data-preview-menu-scope={previewScopeId}
             align="start"
             sideOffset={2}
           >
@@ -1952,7 +1973,7 @@ function ImageLightboxContent({
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
-        <PreviewFooter>
+        <PreviewFooter menuScopeId={previewScopeId}>
           <LightboxToolbarButton
             label={t('chat.mermaidLightbox.zoomOut')}
             disabled={scale <= IMAGE_MIN_SCALE}
@@ -1980,7 +2001,7 @@ function ImageLightboxContent({
                 %
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent>
+            <DropdownMenuContent data-preview-menu-scope={previewScopeId}>
               <DropdownMenuItem onClick={resetViewport}>
                 {t('attachmentPreview.fit')}
               </DropdownMenuItem>
@@ -2087,7 +2108,10 @@ function ImageLightboxContent({
             {index + 1} / {galleryItems.length}
           </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent className="max-h-72 overflow-auto">
+                <DropdownMenuContent
+                  data-preview-menu-scope={previewScopeId}
+                  className="max-h-72 overflow-auto"
+                >
                   {galleryItems.map((item, itemIndex) => (
                     <DropdownMenuItem
                       key={item.galleryId ?? `${itemIndex}:${item.src}`}

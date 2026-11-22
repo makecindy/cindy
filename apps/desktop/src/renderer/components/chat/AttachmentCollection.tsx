@@ -15,7 +15,7 @@ import { VideoLightbox } from './VideoLightbox';
 import { createPortal } from 'react-dom';
 import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewScrim } from './PreviewChrome';
 import { Spinner } from '@/components/ui/spinner';
-import { lightboxOwnsShortcutTarget } from '@/lib/lightboxLayer';
+import { isPreviewMenuTarget, lightboxOwnsShortcutTarget } from '@/lib/lightboxLayer';
 const TextLightbox = lazy(() =>
   import('./TextLightbox').then((module) => ({ default: module.TextLightbox })),
 );
@@ -84,6 +84,7 @@ export function AttachmentCollectionPreview({
       // keys whose focus belongs to the conversation behind the float. Modal
       // viewers keep their existing document-level navigation.
       const panel = scopeRef.current;
+      if (panel && isPreviewMenuTarget(event.target, panel)) return;
       if (panel && !lightboxOwnsShortcutTarget(event.target, panel)) return;
       event.preventDefault();
       selectRef.current(index + (event.key === 'ArrowLeft' ? -1 : 1));

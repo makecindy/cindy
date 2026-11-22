@@ -9,6 +9,7 @@
  *   确认框,关闭确认框的那次 Esc 不会再次触发放弃;
  * - Space / 中键拖拽平移时不落笔;
  * - 笔迹未保存时暂不把背景发送/清空路径暴露给键盘,避免托盘卸载静默丢笔迹;
+ *   当前浮窗自己打开的标题栏「更多」与比例菜单仍保留方向键 / Enter。
  * - 历史标注图原图丢失时退回烧录图,而不是提示丢失并关闭。
  */
 
@@ -443,6 +444,29 @@ describe('ImageLightbox annotate mode', () => {
     fireEvent.keyDown(input, { key: 'a' });
     expect(onBackgroundKeyDown).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(document.body.querySelector('[data-lightbox-layer]'));
+  });
+
+  it.each([
+    ['titlebar more', label('attachmentPreview.more')],
+    ['scale', /%/],
+  ])('keeps %s menu keyboard work inside the unsaved-annotation guard', async (_case, name) => {
+    render(<ImageLightbox src={SRC} onClose={vi.fn()} annotationEdit={{ onSave: vi.fn() }} />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 20, y: 20 }, { x: 120, y: 80 });
+    expect(document.body.querySelector('[data-preview-unsaved-guard]')).not.toBeNull();
+
+    const trigger = screen.getByRole('button', { name });
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    const menu = await screen.findByRole('menu');
+    const panel = document.body.querySelector<HTMLElement>('[data-lightbox-layer]');
+    expect(menu.getAttribute('data-preview-menu-scope')).toBe(panel?.getAttribute('data-preview-scope-id'));
+
+    const onMenuKeyDown = vi.fn();
+    menu.addEventListener('keydown', onMenuKeyDown);
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    expect(onMenuKeyDown).toHaveBeenCalledTimes(2);
   });
 });
 
