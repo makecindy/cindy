@@ -1622,7 +1622,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       {dragOver ? (
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 z-50"
+          className="pointer-events-none absolute inset-0 z-float"
           style={{
             backgroundColor: 'var(--drop-overlay-bg)',
             border: '2px dashed var(--drop-overlay-border)',

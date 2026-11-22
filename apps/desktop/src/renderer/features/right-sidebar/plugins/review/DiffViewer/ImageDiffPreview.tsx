@@ -82,7 +82,7 @@ function ImageSidePanel({
   return (
     <div
       className={cn(
-        'min-w-0 overflow-hidden rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)]',
+        'min-w-0 overflow-hidden rounded-lg border border-[var(--border-default)] bg-[var(--surface)]',
         muted && 'opacity-85',
       )}
     >
@@ -172,7 +172,7 @@ export function ImageDiffPreview({
 
   if (state.status === 'loading') {
     return (
-      <div className="flex min-h-[160px] items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] text-12 text-[var(--text-tertiary)]">
+      <div className="flex min-h-[160px] items-center justify-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] text-12 text-[var(--text-tertiary)]">
         <Spinner size={16} />
         <span>{t('rightSidebar.review.imagePreview.loading')}</span>
       </div>
@@ -181,7 +181,7 @@ export function ImageDiffPreview({
 
   if (state.status === 'error') {
     return (
-      <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-4 py-6 text-center text-12 text-[var(--text-tertiary)]">
+      <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-4 py-6 text-center text-12 text-[var(--text-tertiary)]">
         <ImageIcon size={18} />
         <span>{t('rightSidebar.review.imagePreview.loadFailed')}</span>
         <span className="max-w-full truncate text-11">{state.message}</span>
@@ -191,7 +191,7 @@ export function ImageDiffPreview({
 
   if (panels.length === 0) {
     return (
-      <div className="flex min-h-[160px] items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] text-12 text-[var(--text-tertiary)]">
+      <div className="flex min-h-[160px] items-center justify-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] text-12 text-[var(--text-tertiary)]">
         <ImageIcon size={18} />
         <span>{t('rightSidebar.review.imagePreview.missing')}</span>
       </div>

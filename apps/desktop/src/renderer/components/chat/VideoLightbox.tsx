@@ -37,6 +37,7 @@ import { registerMedia } from '@/lib/mediaPlaybackBus';
 import { useVideoContextMenu } from './useVideoContextMenu';
 import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewFooter, PreviewScrim } from './PreviewChrome';
 import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 interface VideoLightboxProps {
   src: string;
@@ -201,7 +202,7 @@ function VideoLightboxContent({
       className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
-        zIndex: 9999,
+        zIndex: Z_INDEX_LAYERS.fullscreen,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -341,7 +342,7 @@ function VideoLightboxContent({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            align="start" sideOffset={2} className="z-[10000]"
+            align="start" sideOffset={2}
             portalContainer={portalContainer}
             style={portalContainer ? { pointerEvents: 'auto' } : undefined}
             onCloseAutoFocus={restoreVideoFocus}

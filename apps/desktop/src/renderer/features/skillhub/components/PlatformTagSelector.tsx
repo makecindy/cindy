@@ -71,7 +71,7 @@ export function PlatformTagSelector({
           event.stopPropagation();
         }}
         // Above the publish Dialog; as wide as the trigger; long tag lists scroll.
-        className="z-[10010] max-h-52 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto overscroll-contain"
+        className="max-h-52 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto overscroll-contain"
       >
         {categories.map((category) => (
           <DropdownMenuCheckboxItem

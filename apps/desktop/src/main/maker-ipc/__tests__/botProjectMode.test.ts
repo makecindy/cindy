@@ -39,6 +39,7 @@ vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ 
 
 import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
+import { OWN_RULES_HEADING } from '../botProjectTemplate.js';
 
 // Evaluate the actual generated check with real SQLite, in-process. The hook
 // protocol has its own process tests; retain one real spawn below. Repeated
@@ -317,7 +318,9 @@ describe('moveTeammateMemoryIntoProject', () => {
 });
 
 // 2026-11-09 review: a V1 teammate that already had its own hand-off skill lost it to the
-// starter template's copy during the upgrade. The teammate's own skill must win.
+// starter template's copy during the upgrade. The teammate's own rules must win. Since 2026-11-22
+// the skill is layered: the standard text is Cindy's and the V1 rules move into "Your own rules",
+// which take precedence over the standard, so they are neither lost nor stuck on an old standard.
 describe('prepareBotProjectWorkspace', () => {
   let root = '';
   afterEach(async () => { if (root) await fs.rm(root, { recursive: true, force: true }); });
@@ -332,7 +335,8 @@ describe('prepareBotProjectWorkspace', () => {
 
     const { workingDir } = await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
     const skill = path.join(workingDir, '.agents', 'skills', 'hand-off');
-    await expect(fs.readFile(path.join(skill, 'SKILL.md'), 'utf8')).resolves.toBe(own);
+    const text = await fs.readFile(path.join(skill, 'SKILL.md'), 'utf8');
+    expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain('Owner-specific handover');
     await expect(fs.readFile(path.join(skill, 'checklist.md'), 'utf8')).resolves.toBe('company checklist');
   });
 

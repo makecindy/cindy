@@ -576,7 +576,8 @@
       "calloutUnknown": "Si vous ne connaissez pas cette personne, refusez ; le lien cesse de fonctionner une fois la demande refusée.",
       "approve": "Approuver le partage",
       "reject": "Refuser la demande",
-      "later": "Décider plus tard"
+      "later": "Décider plus tard",
+      "calloutPluginEngine": "{{name}} peut l’utiliser sans installer le plugin ni le CLI sur son ordinateur, avec la connexion et le quota CLI de cet ordinateur."
     },
     "apply": {
       "loading": "Lecture du lien de partage…",
@@ -3806,6 +3807,7 @@
         "connecting": "Connexion…",
         "rename": "Renommer",
         "suspended": "Désactivé",
+        "hidden": "Masqué",
         "unconfigured": "Non configuré"
       },
       "button": {
@@ -3816,7 +3818,9 @@
         "cancel": "Annuler",
         "retry": "Relancer la détection des modèles",
         "retrying": "Nouvelle détection…",
-        "enableProvider": "Activer le fournisseur"
+        "enableProvider": "Activer le fournisseur",
+        "showProvider": "Afficher",
+        "hideInstead": "Masquer à la place"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4202,7 +4206,7 @@
         "paymentRequired": "Payant",
         "paymentUnlock": "Payer pour débloquer",
         "enableModel": "Activer ce modèle",
-        "capabilityGroupHint": "Non affiché dans le sélecteur de modèles de conversation. L'interrupteur contrôle la visibilité dans la fonctionnalité concernée.",
+        "capabilityGroupHint": "Non affiché dans le sélecteur de modèles. L'interrupteur détermine si la fonctionnalité concernée peut utiliser le modèle.",
         "accessWriteFailed": "Impossible d'enregistrer la modification. Veuillez réessayer.",
         "visibilityWriteFailed": "Impossible d'enregistrer le paramètre de visibilité du modèle. Réessayez, ou redémarrez Cindy si le problème persiste.",
         "disabledGroup": "Désactivés",
@@ -4346,22 +4350,22 @@
           "aria": "Filtrer par type de modèle",
           "chat": "Conversation"
         },
-        "hiddenGroup": "Non affichés",
+        "hiddenGroup": "Masqués",
         "management": {
           "brand": "Fabricant"
         },
         "manage": {
           "title": "Modèles",
-          "selected": "{{count}} sélectionné(s)",
-          "hint": "Utilisez les interrupteurs pour choisir vos modèles de conversation.",
+          "selected": "{{count}} affiché(s)",
+          "hint": "Les interrupteurs déterminent quels modèles apparaissent dans le sélecteur de modèles. En désactiver un le masque seulement ; vous pouvez toujours le choisir sous « Masqués », en bas du sélecteur.",
           "menu": "Gérer",
           "arrange": "Organiser la liste",
           "byBrand": "Grouper par fabricant",
           "byName": "Trier par nom de modèle",
-          "selection": "Sélection des modèles",
-          "showAll": "Sélectionner tous les modèles",
-          "hideAll": "Effacer la sélection",
-          "reset": "Restaurer la sélection par défaut",
+          "selection": "Afficher dans le sélecteur de modèles",
+          "showAll": "Afficher tous les modèles",
+          "hideAll": "Masquer tous les modèles",
+          "reset": "Restaurer l'affichage par défaut",
           "connectionRequired": "Connectez-vous pour utiliser ces modèles. Vos sélections sont enregistrées."
         },
         "modelCount_many": "{{count}} modèles"
@@ -4378,7 +4382,8 @@
         "groupNote": "{{device}} a fait de ce fournisseur un groupe de fournisseurs. Lorsque vous lancez une tâche avec celui-ci, {{device}} l'attribue à l'un des ordinateurs ci-dessous selon la stratégie du groupe, et la déplace vers un autre si cet ordinateur rencontre un problème. Tant que {{device}} est en ligne, utilisez Accès distant et partage ici pour gérer le groupe et ses partages.",
         "groupMembersTitle": "Ordinateurs du groupe",
         "groupMembersFailed": "Impossible d'obtenir pour le moment l'état des ordinateurs du groupe.",
-        "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs"
+        "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs",
+        "hiddenBanner": "Masqué dans le sélecteur de modèles sur cet ordinateur. Les favoris et les sessions qui l'utilisent ne sont pas affectés."
       },
       "genericOAuth": {
         "subtitle": "Compte d'abonnement",
@@ -4422,7 +4427,8 @@
           "rejected": "Ce fournisseur a refusé la requête. La liste ci-dessous provient de la dernière actualisation réussie. Réessayez plus tard ou utilisez un autre fournisseur.",
           "empty": "Ce fournisseur n'a renvoyé aucun modèle utilisable cette fois-ci. La liste ci-dessous provient de la dernière actualisation réussie. Vérifiez les accès de votre compte, puis réessayez."
         },
-        "suspendedBanner": "Ce fournisseur est désactivé. Les identifiants sont conservés ; activez-le pour utiliser à nouveau ses modèles.",
+        "suspendedBanner": "Ce fournisseur est désactivé : les nouvelles sessions et les fonctions en arrière-plan ne l'utilisent plus. Les identifiants sont conservés. Pour simplement le retirer du sélecteur de modèles, masquez-le à la place.",
+        "hiddenBanner": "Masqué dans le sélecteur de modèles. Les sessions et les fonctions en arrière-plan qui l'utilisent ne sont pas affectées, et vous pouvez toujours le choisir sous « Masqués », en bas du sélecteur.",
         "remoteAccess": {
           "label": "Autoriser l'utilisation à distance",
           "description": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. L'Agent s'exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur.",
@@ -4632,7 +4638,9 @@
       },
       "menu": {
         "disableProvider": "Désactiver ce fournisseur",
-        "enableProvider": "Activer ce fournisseur"
+        "enableProvider": "Activer ce fournisseur",
+        "hideProvider": "Masquer dans le sélecteur de modèles",
+        "showProvider": "Afficher dans le sélecteur de modèles"
       },
       "builtinApiKey": {
         "subtitle": "Connexion par clé API",
@@ -7110,7 +7118,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Inclus dans l'écran de confidentialité : cet ordinateur ne se met pas en veille."
+      "keepAwakeIncluded": "Inclus dans l'écran de confidentialité : cet ordinateur ne se met pas en veille.",
+      "localNetwork": {
+        "label": "Réseau local",
+        "deniedHint": "Sans cette autorisation, les ordinateurs et téléphones du même réseau ne peuvent pas se connecter directement à cet ordinateur. Ils passent par le relais, ce qui est plus lent.",
+        "settingsHint": "Activez Cindy dans Réglages Système › Confidentialité et sécurité › Réseau local. Le changement s’applique dès votre retour."
+      }
     },
     "imBot": {
       "beta": "Bêta",
@@ -8631,7 +8644,8 @@
           "description": "Lorsque cette option est activée, vos autres ordinateurs peuvent exécuter des tâches avec ce moteur. L’Agent s’exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur. Les fichiers et les commandes restent sur l’ordinateur où se trouve la tâche.",
           "unsupported": "Ce plugin ne permet pas encore d’utiliser son moteur depuis d’autres ordinateurs.",
           "remoteControlOff": "Cet ordinateur n’autorise pas encore le contrôle à distance : les autres ordinateurs ne peuvent donc pas utiliser ce moteur.",
-          "ariaLabel": "Autoriser vos autres ordinateurs à utiliser {{engine}}"
+          "ariaLabel": "Autoriser vos autres ordinateurs à utiliser {{engine}}",
+          "descriptionShareable": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous le partagez peuvent exécuter des tâches avec ce moteur sans installer le plugin. L’Agent s’exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur. Les fichiers et les commandes restent sur l’ordinateur où se trouve la tâche."
         },
         "githubRelease": {
           "title": "Mises à jour du plugin",
@@ -10061,7 +10075,7 @@
         "git-summary": "Résumés des modifications",
         "hook-generation": "Scripts d’automatisation",
         "automation-verification": "Vérification des imports",
-        "plugin-text": "Texte des extensions",
+        "plugin-text": "Texte des plugins",
         "voice-dialogue": "Conversations vocales",
         "voice-exit": "Décisions de fin d’appel",
         "voice-refinement": "Amélioration du texte vocal",
@@ -11020,6 +11034,13 @@
         "enabled": "Activé"
       },
       "close": "Fermer la fenêtre de téléchargement"
+    },
+    "localNetwork": {
+      "title": "Autoriser l’accès au réseau local",
+      "relayOnly": "Vos autres appareils ne peuvent joindre cet ordinateur que par le relais, ce qui est plus lent. Autorisez l’accès pour que les appareils du même réseau se connectent directement.",
+      "controlEnabled": "Les appareils du même réseau ne peuvent contrôler cet ordinateur directement qu’avec l’accès au réseau local. Sinon, ils passent par le relais.",
+      "allow": "Autoriser",
+      "dismiss": "Plus tard"
     }
   },
   "bots": {
@@ -14263,6 +14284,8 @@
       "source": {
         "lastConfirmed": "Dernière actualisation : {{time}}",
         "unconfirmed": "Liste des modèles non actualisée",
+        "unreachable": "Impossible de joindre {{source}}",
+        "unreachableDetail": "Connexion impossible. Vérifiez le réseau.",
         "unavailable": "Modèle indisponible",
         "reconnect": "Se reconnecter",
         "manage": "Gérer la source",
@@ -14286,6 +14309,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Impossible de lire les modèles de cet ordinateur pour le moment",
         "favoritesGroup": "Favoris",
         "recentGroup": "Récents",
+        "hiddenGroup": "Masqués ({{count}})",
+        "hiddenGroupHint": "Les fournisseurs et modèles masqués restent sélectionnables",
         "recentEmpty": "Aucun modèle récent pour le moment : choisissez un modèle et il apparaîtra ici",
         "favoritesSaveFailed": "Impossible d'enregistrer les modifications des favoris",
         "favoritesCleanupFailed": "Impossible de retirer les favoris liés aux partages de fournisseur révoqués",
@@ -17669,7 +17694,8 @@
         "title": "Importer les automatisations du dépôt",
         "description": "Source : {{workingDir}}. Vérifiez les définitions ci-dessous. L’importation applique ces modifications et active les nouvelles automatisations, qui peuvent exécuter des commandes et lancer des Agents avec un accès complet. Importez uniquement du contenu de confiance.",
         "accept": "Confirmer l’importation",
-        "removed": "Suppressions prévues : {{names}}"
+        "removed": "Suppressions prévues : {{names}}",
+        "fileMissing": "Importation ignorée. Le fichier d’automatisation est introuvable dans {{projectName}}."
       },
       "toast": {
         "summary": "{{inserted}} ajoutées · {{updated}} mises à jour · {{deleted}} supprimées",
@@ -17766,6 +17792,7 @@
       "openWorkdirFailed": "Impossible d'ouvrir le dossier"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
       "status": {
         "running": "En cours",
         "success": "Réussie",
@@ -21740,6 +21767,7 @@
       "reviewed": "Examiné",
       "verified-publisher": "Éditeur vérifié"
     },
+    "viewLimit": "Trop de pages sont ouvertes. Faites défiler ou repliez une autre page pour que celle-ci s’ouvre automatiquement.",
     "pluginRevoked": "Le plugin a été désactivé ou modifié. Cette page n'est plus disponible.",
     "pluginCspRejected": "La page a demandé un domaine non déclaré et a été bloquée.",
     "filesOnExecutionComputer": "Afficher le contenu du fichier sur l'ordinateur d'exécution",

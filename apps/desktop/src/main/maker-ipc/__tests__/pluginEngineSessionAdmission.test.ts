@@ -12,6 +12,7 @@
  * - tier：unit(纯函数，引擎列表由调用方传入)。
  */
 import { describe, expect, it } from 'vitest';
+import { providerShareGuestPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 import type { PluginHarness } from '../../cindy-brain/pluginHarnesses.js';
 import type { SessionOpenBody } from '../../localDb/sessionOpening.js';
 import { admitPluginEngineSession as admitWith, admitPluginEngineSwitchTarget } from '../pluginEngineSessionAdmission.js';
@@ -77,25 +78,26 @@ describe('opening a task on a plugin engine', () => {
       'DeepSeek Harness 当前不可用：Run npm i -g @deepseek-ai/dsh'],
     ['the plugin was turned off or removed', body(), [], '提供这个引擎的插件已停用或卸载'],
     ['no engine id', body({ providerId: 'anthropic' }), [harness({ state: 'available' })], '缺少引擎标识'],
-    ['a provider someone shared', body({ agentDeviceId: 'share:6f1c' }), [harness({ state: 'available' })], '不提供插件引擎'],
+    ['a raw provider-share wire peer', body({ agentDeviceId: providerShareGuestPeer('s1', 'm1', 'd1') }), [harness({ state: 'available' })], '无效的插件引擎运行位置'],
+    ['a shared-task peer', body({ agentDeviceId: sharedTaskGuestPeer('t1', 'm1', 'd1') }), [harness({ state: 'available' })], '无效的插件引擎运行位置'],
     ['an SSH host', body({ remoteHostId: 'host-1' }), [harness({ state: 'available' })], '不能在 SSH 工作区里运行'],
   ] as const)('refuses with a reason when %s', (_label, input, harnesses, message) => {
     expect(() => admitPluginEngineSession(input, harnesses)).toThrow(message);
   });
 
-  // 第三期(2026-11-20)：引擎可以是自己账号另一台电脑上的。这台不必装这个插件，所以不按本机的引擎列表拒绝
-  // (那台是否开放它，由那台在任务启动时核对)；分享来的供应商不是自己的电脑，上面的用例仍然拒绝。
-  // 最小失败输入：本机没有任何插件引擎、agentDeviceId 指向自己的另一台电脑。
-  it('admits an engine of another computer of the same account without needing the plugin here', () => {
-    expect(admitPluginEngineSession(body({ agentDeviceId: 'mac-mini', model: '', effort: 'high', fastMode: true }), [])).toMatchObject({
+  // 引擎可以是自己账号另一台电脑上的，也可以是朋友分享过来的(`share:<id>`)；使用端免装插件，不按本机引擎列表拒绝
+  // (执行电脑是否开放 remoteWorkspace / guestWorkspace 由执行电脑在任务启动时核对)。
+  // 最小失败输入：本机没有任何插件引擎、agentDeviceId 指向另一台电脑或 `share:6f1c`。
+  it.each(['mac-mini', 'share:6f1c'])('admits an engine of %s without needing the plugin installed here', (agentDeviceId) => {
+    expect(admitPluginEngineSession(body({ agentDeviceId, model: '', effort: 'high', fastMode: true }), [])).toMatchObject({
       agentKind: 'acp',
       providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
-      agentDeviceId: 'mac-mini',
+      agentDeviceId,
       model: 'default',
       effort: 'high',
       fastMode: false,
     });
-    expect(admitPluginEngineSession(body({ agentDeviceId: 'mac-mini', effort: 'turbo' }), []).effort).toBe('');
+    expect(admitPluginEngineSession(body({ agentDeviceId, effort: 'turbo' }), []).effort).toBe('');
   });
 });
 

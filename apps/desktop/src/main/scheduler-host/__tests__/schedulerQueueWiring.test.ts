@@ -48,7 +48,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   prepareScheduledModelPreferencesUnderLock: vi.fn(), recordDispatchedModel: vi.fn(),
   broadcastSessionCreated: vi.fn(), cancelSchedulerAutoResume: vi.fn(),
   enqueueSchedulerPrompt: vi.fn(), hasQueuedSchedulerPrompt: vi.fn(),
-  isSchedulerAutoResumePending: vi.fn(), isSchedulerPromptTracked: vi.fn(), releaseQueuedSchedulerPrompt: vi.fn(),
+  isSchedulerAutoResumePending: vi.fn(), isSchedulerSharedReconnectPending: vi.fn(), isSchedulerPromptTracked: vi.fn(), releaseQueuedSchedulerPrompt: vi.fn(),
   isSchedulerTargetSessionBusy: vi.fn(), onSchedulerAutoResumeFailed: vi.fn(),
   removeQueuedSchedulerPrompt: vi.fn(),
 }));

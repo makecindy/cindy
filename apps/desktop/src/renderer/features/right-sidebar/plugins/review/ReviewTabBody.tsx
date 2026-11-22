@@ -1440,7 +1440,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           </div>
         </div>
         {effectiveWriteDisabledReasons.length > 0 && (
-          <div className="mt-2 flex items-start gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-2.5 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
+          <div className="mt-2 flex items-start gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-2.5 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
             <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
             <span>
               {t('rightSidebar.review.writeDisabledNotice', {
@@ -1982,7 +1982,7 @@ function CommitOrPushDropdown({
         onKeyDown={handleKeyDown}
         className="w-[min(22rem,calc(100vw-24px))] p-2"
       >
-        <div className="flex min-w-0 items-center gap-2 rounded-[8px] bg-[var(--surface-chip)] px-2.5 py-2 text-12">
+        <div className="flex min-w-0 items-center gap-2 rounded-lg bg-[var(--surface-chip)] px-2.5 py-2 text-12">
           <GitBranch size={13} className="shrink-0 text-[var(--text-tertiary)]" />
           <span className="min-w-0 flex-1 truncate font-medium text-[var(--text-primary)]">
             {branchLabel}
@@ -2003,7 +2003,7 @@ function CommitOrPushDropdown({
             }}
             rows={4}
             placeholder={t('rightSidebar.review.commit.placeholder')}
-            className="min-h-[92px] w-full resize-none rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-12 leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+            className="min-h-[92px] w-full resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-12 leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
           />
         </div>
         <DropdownMenuItem
@@ -2211,7 +2211,7 @@ function FileJumpPopover({
           event.preventDefault();
           requestAnimationFrame(() => inputRef.current?.focus());
         }}
-        className="w-[280px] rounded-[12px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)]"
+        className="w-[280px] rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)]"
       >
         <div onKeyDown={handleKeyDown}>
           <label className="relative block">
@@ -2247,7 +2247,7 @@ function FileJumpPopover({
                   onMouseEnter={() => setSelectedIndex(index)}
                   onClick={() => selectResult(result)}
                   className={cn(
-                    'flex h-9 w-full min-w-0 flex-col justify-center rounded-[8px] px-2 text-left hover:bg-[var(--cmd-palette-item-hover)]',
+                    'flex h-9 w-full min-w-0 flex-col justify-center rounded-lg px-2 text-left hover:bg-[var(--cmd-palette-item-hover)]',
                     index === selectedIndex && 'bg-[var(--cmd-palette-item-hover)]',
                   )}
                 >
@@ -3561,7 +3561,7 @@ export function BatchActionPill({
   return (
     <div
       data-review-batch-action-pill="true"
-      className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 overflow-hidden rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_92%,transparent)] p-1 shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm"
+      className="pointer-events-none absolute bottom-3 left-1/2 z-page-overlay flex -translate-x-1/2 items-center gap-1 overflow-hidden rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_92%,transparent)] p-1 shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm"
       style={{ maxWidth: 'calc(100% - 16px)' }}
     >
       {writeAction.sectionDiscardVisible && writeAction.onSectionDiscard && (
@@ -3951,7 +3951,7 @@ export function CappedSourceView({
 
 function CappedFileState({ icon, title, desc }: { icon: ReactNode; title: string; desc: string }) {
   return (
-    <div className="m-3 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-3 text-12 leading-relaxed text-[var(--text-secondary)]">
+    <div className="m-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-3 text-12 leading-relaxed text-[var(--text-secondary)]">
       <div className="flex items-center gap-2 font-medium text-[var(--text-primary)]">
         <span className="text-[var(--text-tertiary)]">{icon}</span>
         <span>{title}</span>
@@ -4759,7 +4759,7 @@ function FileRow({
           <span
             data-review-action-reveal="file"
             className={cn(
-              'absolute right-3 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1',
+              'absolute right-3 top-1/2 z-raised flex -translate-y-1/2 items-center gap-1',
               reviewActionRevealClass('file', fileActionsPending),
             )}
           >
@@ -4791,12 +4791,12 @@ function FileRow({
       {expanded && (
         <div className="min-w-0 px-3 pb-3">
           {showRenamePartialNotice && (
-            <div className="mb-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
+            <div className="mb-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
               {t('rightSidebar.review.renamePartialNotice')}
             </div>
           )}
           {showTypechangePartialNotice && (
-            <div className="mb-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
+            <div className="mb-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
               {t('rightSidebar.review.typechangePartialNotice')}
             </div>
           )}
