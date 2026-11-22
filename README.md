@@ -107,6 +107,49 @@ billing still apply; the free client does not mean unlimited model usage.
 Linux users: see the [Ubuntu, Arch Linux and Omarchy installation guide](docs/linux.md)
 for installation, updates, keyring setup and migration from a manual install.
 
+<details>
+<summary>Can I set up a buddy offline, before any model inference?</summary>
+
+**Skip Sign-In** lets you enter the desktop interface offline without a Cindy
+account (shown as **Not signed in**). Server-backed capabilities are unavailable.
+It does not supply a model or defer inference.
+
+- **Creating a named buddy from scratch needs an available model.** In
+  **Buddies → + → New buddy**, choose a model that can actually run. Without one,
+  creation is blocked with “Choose an available model above to continue.”
+- **The first hello starts automatically during preparation**, not when you send
+  your first message. For an ordinary new buddy, preparation is marked ready
+  once the runtime accepts the greeting turn; it does not wait for the complete
+  reply to appear. The built-in Cindy can already be listed while waiting for a
+  model. While that initial preparation is pending or failed, name,
+  self-introduction, personality, and **What you know about me** remain read-only.
+  Model settings are still available: use **Change Model** or retry preparation
+  for the same buddy.
+- **There is no supported hand-authored declaration / zero-inference setup
+  route** to create a named buddy, edit its profile, personality and preferences,
+  save, and verify them after restart before any inference. This includes Linux
+  Global **0.1.143**. Internal profile-only APIs, changing preparation state, or
+  directly editing the database are not supported setup procedures.
+- **Import is not a general declaration-text format.** Hermes / OpenClaw import
+  can save recognized source data before completing setup, but requires that
+  source's application state. Native buddy packages are limited to the bundled,
+  validated catalog, not user-authored packages. The `create_teammate` agent tool
+  requires an existing buddy session; it is not a standalone no-model setup tool.
+- **A compatible, available local model can run offline inference.** Configure
+  it under **Settings → Providers**, then select it for the buddy. It still
+  performs inference, including the ordinary first hello; local inference is
+  not zero-inference initialization.
+
+<!-- Contract evidence for #12024: source review at v0.1.143 (55d3b6ac45ea68c489122ed891148699fb55e477)
+and current main, not an independent Linux runtime test. See
+apps/desktop/src/renderer/features/bots/{BotRosterView.tsx,botStore.ts,BotsHomeView.tsx},
+apps/desktop/src/main/localDb/ipc/bots.ts,
+apps/desktop/src/main/maker-ipc/botInvitation.ts,
+apps/desktop/src/main/bot-import/{host.ts,sources.ts,nativePackage.ts}, and
+packages/lizi-mcps/src/xdt-helper/create_teammate.ts. -->
+
+</details>
+
 <h3 align="center">A few people noticed.</h3>
 
 <p align="center">
