@@ -1,7 +1,7 @@
 /** This document owns the App transport. The top Renderer only observes UI state. */
-export function mcpAppDirectSandboxDocument(resourceUrl: string, bridgeUrl: string): string {
+export function mcpAppDirectSandboxDocument(resourceUrl: string, bridgeUrl: string, scheme: 'light' | 'dark' = 'light'): string {
   const encode = (value: string) => JSON.stringify(value).replace(/</g, '\\u003c');
-  return `<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:light dark}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}</style></head><body><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:${scheme === 'dark' ? 'dark' : 'light'}}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}</style></head><body><script>
 const frame=document.createElement('iframe');
 frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms');
 frame.setAttribute('allow',"camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'");
@@ -27,8 +27,13 @@ async function invoke(input){
  return response.json();
 }
 window.addEventListener('message',event=>{
- if(stopped||event.source!==frame.contentWindow)return;
  const message=event.data;
+ if(event.source===window.parent){
+  if(message?.type==='cindy:sandbox-color-scheme' && Object.keys(message).length===2 &&
+     (message.scheme==='light'||message.scheme==='dark'))document.documentElement.style.colorScheme=message.scheme;
+  return;
+ }
+ if(stopped||event.source!==frame.contentWindow)return;
  if(!message||message.jsonrpc!=='2.0'||typeof message.method==='string'&&message.method.startsWith('ui/notifications/sandbox-'))return;
  if(message.method==='ui/initialize'&&initialized){
   generation++;initialized=false;

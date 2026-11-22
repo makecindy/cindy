@@ -3,7 +3,7 @@ import { Maximize2 } from 'lucide-react';
 import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { McpAppPermissionPrompt } from './McpAppPermissionPrompt';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
-import { observeHostTheme } from '@/cindy-brain/ghostPanelTheme';
+import { observeHostTheme, readHostColorScheme } from '@/cindy-brain/ghostPanelTheme';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -321,6 +321,12 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       if (frame) frame.style.backgroundColor = findMcpAppBackdropColor(element);
     };
     backdropPaintRef.current = paintFrameBackdrop;
+    const syncSandboxScheme = () => {
+      if (frame?.contentWindow && localViewId) frame.contentWindow.postMessage(
+        { type: 'cindy:sandbox-color-scheme', scheme: readHostColorScheme() },
+        `cindy-mcp-app://${localViewId}`,
+      );
+    };
     // The same declared View may be placed on multiple messages in one task.
     const draftResourceKey = (key: string) => composerPlacement ? JSON.stringify([composerPlacement, key]) : key;
     // Drafts are stored per data owner. A delivery that arrives after an account
@@ -533,6 +539,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         frame.title = appTitle;
         frame.addEventListener('load', () => {
           if (disposed) return;
+          // A theme change during navigation can precede the wrapper's message listener.
+          syncSandboxScheme();
           if (phase === 'sandbox') phase = 'initialize';
           staticTimer = setTimeout(() => { if (!handshakeStarted) reveal(); }, 150);
         }, { once: true });
@@ -542,7 +550,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'",
         );
         frame.style.cssText = 'width:100%;height:100%;display:block;border:0;opacity:0;pointer-events:none';
-        frame.src = `cindy-mcp-app://${localViewId}/sandbox`;
+        frame.src = `cindy-mcp-app://${localViewId}/sandbox?scheme=${readHostColorScheme()}`;
         element.appendChild(frame);
         paintFrameBackdrop();
         maxTimer = setTimeout(reveal, 1_500);
@@ -553,6 +561,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     // Same-mode theme switches change only data-theme and the token stylesheet,
     // so watch the full host theme surface, as plugin panels do.
     const stopThemeObserver = observeHostTheme(() => {
+      syncSandboxScheme();
       paintFrameBackdrop();
       update();
     });

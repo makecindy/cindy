@@ -1,194 +1,209 @@
 /**
- * Explicit Electron regression for the MCP App missing-frame backdrop.
- * The fixture uses the production sandbox document and backdrop helper, then
- * deliberately leaves a white outer iframe backing layer when its transparent
- * App child is hidden. This is the deterministic equivalent of a compositor
- * frame gap and keeps the assertion independent of GPU timing.
- *
- * Compatibility coverage uses the same production sandbox document with a
- * legacy wrapper (without the new color-scheme declaration). It compares the
- * final card pixels for single-scheme and opaque App pages in both themes.
- * A transparent page is used for the reverse wrapper mutation in the light
- * theme. This does not claim to reproduce a real Mac compositor gap.
+ * Electron integration for #12124. A single transparent App suffices to expose a
+ * wrapper following system appearance instead of Cindy. jsdom cannot observe
+ * Chromium's opaque iframe canvas or capture a missing child surface.
+ * Hiding the inner iframe simulates a missing frame; it does not reproduce the
+ * intermittent macOS compositor bug. McpAppCard's unit tests cover its wiring.
  */
 import assert from 'node:assert/strict';
-import { build } from 'esbuild';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
-import { spawn } from 'node:child_process';
+import { build } from 'esbuild';
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(scriptDir, '../..');
-const temporary = await mkdtemp(path.join(os.tmpdir(), 'cindy-mcp-app-flash-backdrop-'));
-const helper = path.resolve(scriptDir, '../src/renderer/components/chat/mcpAppBackdrop.ts');
-const sandboxBridge = path.resolve(scriptDir, '../src/main/mcp-apps/sandboxBridge.ts');
+const require = createRequire(import.meta.url);
+const desktop = fileURLToPath(new URL('../', import.meta.url));
+const pages = ['undeclared', 'light', 'dark', 'both', 'opaque', 'host', 'lightcanvas', 'darkcanvas', 'wallpaper', 'gap'];
+const versions = ['before', 'after'];
+const viewport = { width: 260, height: pages.length * 40 };
+const themes = ['light', 'dark'];
+const settle = 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))';
 
-try {
-  const renderer = await build({
-    bundle: true,
-    write: false,
-    format: 'iife',
-    stdin: {
-      resolveDir: root,
-      contents: `
-        import { findMcpAppBackdropColor } from ${JSON.stringify(helper)};
-        window.paintMcpAppBackdrop = () => {
-          const card = document.querySelector('#card');
-          const frame = document.querySelector('#frame');
-          frame.style.backgroundColor = findMcpAppBackdropColor(card);
-        };
-      `,
-    },
+function appPage(page, host) {
+  const scheme = { light: 'light', dark: 'dark', both: 'light dark', host, lightcanvas: 'light', darkcanvas: 'dark' }[page];
+  const background = { opaque: '#535353', lightcanvas: 'Canvas', darkcanvas: 'Canvas' }[page] ?? 'transparent';
+  return `<!doctype html><html${scheme ? ` style="color-scheme:${scheme}"` : ''}><style>
+    html,body{margin:0;height:100%}body{background:${background}}</style><body></body></html>`;
+}
+
+function hostPage(host) {
+  const cards = pages.flatMap(page => versions.map(version => {
+    const query = version === 'after' ? '?scheme=' + host : '';
+    return `<div class="card ${page}"><iframe id="${version}-${page}" sandbox="allow-scripts allow-same-origin allow-forms"
+      src="cindy-mcp-app://${version}-${page}/sandbox${query}"></iframe></div>`;
+  }));
+  return `<!doctype html><html style="color-scheme:${host}"><style>
+    body{margin:0;display:grid;grid-template-columns:130px 130px}
+    .card{box-sizing:border-box;padding:4px;height:40px;background:light-dark(#f5f5f5,#1f1f1e)}
+    .wallpaper{background-image:linear-gradient(to right,#787878 50%,#999 50%)}
+    iframe{border:0;display:block;width:100%;height:100%}
+    </style><body>${cards.join('')}</body></html>`;
+}
+
+async function verify(directory) {
+  const { app, BrowserWindow, protocol, nativeTheme } = require('electron');
+  const { mcpAppDirectSandboxDocument } = require(path.join(directory, 'wrapper.cjs'));
+  app.setPath('userData', path.join(directory, 'profile'));
+  app.commandLine.appendSwitch('site-per-process');
+  app.commandLine.appendSwitch('force-color-profile', 'srgb');
+  protocol.registerSchemesAsPrivileged([{ scheme: 'cindy-mcp-app',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
+  await app.whenReady();
+  const renderer = await readFile(path.join(directory, 'renderer.js'), 'utf8');
+  let host;
+  protocol.handle('cindy-mcp-app', request => {
+    const url = new URL(request.url);
+    const [version, page] = url.hostname.split('-');
+    if (url.pathname === '/bridge') return Response.json([]);
+    let html;
+    if (url.pathname === '/sandbox') {
+      html = mcpAppDirectSandboxDocument(`cindy-mcp-app://${url.hostname}-view/resource`,
+        `cindy-mcp-app://${url.hostname}/bridge`, url.searchParams.get('scheme'));
+      // Hold the App and transport constant. This is the complete wrapper
+      // stylesheet at fb88e2a754; CI shallow checkouts need no historical refs.
+      if (version === 'before') html = html.replace(/<style>[^<]*<\/style>/,
+        '<style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style>');
+    } else if (url.pathname === '/resource') {
+      html = appPage(page, host);
+    } else return new Response(null, { status: 404 });
+    return new Response(html, { headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' } });
   });
-  const main = await build({
-    bundle: true,
-    write: false,
-    platform: 'node',
-    format: 'cjs',
-    external: ['electron'],
-    stdin: {
-      resolveDir: root,
-      contents: `
-        const assert = require('node:assert/strict');
-        const { app, BrowserWindow, nativeImage, nativeTheme, protocol } = require('electron');
-        const { mcpAppDirectSandboxDocument } = require(${JSON.stringify(sandboxBridge)});
-        const fs = require('node:fs');
-        const path = require('node:path');
-        const renderer = fs.readFileSync(${JSON.stringify(path.join(temporary, 'renderer.js'))}, 'utf8');
-        const profile = ${JSON.stringify(path.join(temporary, 'profile'))};
-        app.setPath('userData', profile);
-        app.commandLine.appendSwitch('site-per-process');
-        protocol.registerSchemesAsPrivileged([{scheme:'cindy-mcp-app',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
-        const cardColors = { light: 'rgb(245, 245, 245)', dark: 'rgb(31, 31, 30)' };
-        const compatibilityPages = {
-          transparent: '<!doctype html><html><head><style>html,body{margin:0;width:100%;height:100%;background:transparent}</style></head><body><main style="width:100%;height:100%;background:transparent"></main></body></html>',
-          light: '<!doctype html><html><head><style>:root{color-scheme:light}html,body{margin:0;width:100%;height:100%;background:Canvas}</style></head><body><main style="width:100%;height:100%;background:Canvas"></main></body></html>',
-          dark: '<!doctype html><html><head><style>:root{color-scheme:dark}html,body{margin:0;width:100%;height:100%;background:Canvas}</style></head><body><main style="width:100%;height:100%;background:Canvas"></main></body></html>',
-          opaque: '<!doctype html><html><head></head><body style="margin:0;width:100%;height:100%;background:rgb(12, 34, 56)"><main style="width:100%;height:100%;background:inherit"></main></body></html>',
-        };
-        const compatibilityWrapper = (resourceUrl, bridgeUrl, kind) => {
-          let html = mcpAppDirectSandboxDocument(resourceUrl, bridgeUrl);
-          if (kind === 'legacy') html = html.replace(':root{color-scheme:light dark}', '');
-          if (kind === 'opaque') html = html.replace('background:transparent', 'background:rgb(255,255,255)');
-          return html;
-        };
-        const pixelAt = (image, x, y) => {
-          const bitmap = image.toBitmap();
-          const offset = (y * image.getSize().width + x) * 4;
-          return [bitmap[offset + 2], bitmap[offset + 1], bitmap[offset], bitmap[offset + 3]];
-        };
-        const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-        app.whenReady().then(async () => {
-          protocol.handle('cindy-mcp-app', request => {
-            const url = new URL(request.url);
-            if (url.pathname === '/sandbox') {
-              return new Response(mcpAppDirectSandboxDocument('cindy-mcp-app://flash-view/resource?missing=1', 'cindy-mcp-app://flash-view/bridge'), {headers:{'content-type':'text/html'}});
+
+  const window = new BrowserWindow({ ...viewport, useContentSize: true, show: false,
+    webPreferences: { sandbox: true, contextIsolation: true, backgroundThrottling: false } });
+  const contents = window.webContents;
+  // Sample in CSS pixels on both Retina and standard-density displays.
+  async function capture() {
+    await contents.executeJavaScript(settle);
+    const image = (await contents.capturePage()).resize(viewport);
+    const bitmap = image.toBitmap();
+    return (x, y) => {
+      const i = 4 * (y * viewport.width + x);
+      return [bitmap[i + 2], bitmap[i + 1], bitmap[i]];
+    };
+  }
+  // capturePage can still return the preceding compositor surface after a DOM paint.
+  // Only wait for stable changes following the one-shot red freshness check.
+  async function captureChange(gapY, ready, stage) {
+    const deadline = performance.now() + 1_000;
+    let gap, card;
+    do {
+      const pixel = await capture();
+      gap = pixel(195, gapY);
+      card = pixel(10, 1);
+      if (ready(gap, card)) return pixel;
+    } while (performance.now() < deadline);
+    assert.fail(`${stage}: last gap RGB ${gap}, card RGB ${card}`);
+  }
+  try {
+    for (const system of themes) {
+      nativeTheme.themeSource = system;
+      assert.equal(nativeTheme.shouldUseDarkColors, system === 'dark');
+      for (host of themes) {
+        await window.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(hostPage(host)));
+        await contents.executeJavaScript(renderer);
+        // Remove only the nested App surface for the simulated gap. The real
+        // cross-origin wrapper stays visible and retains its own canvas.
+        for (const version of versions) {
+          const gap = contents.mainFrame.framesInSubtree.find(f => f.url.startsWith(`cindy-mcp-app://${version}-gap/sandbox`));
+          assert.ok(gap, 'missing production wrapper for the gap');
+          await gap.executeJavaScript('document.querySelector("iframe").style.visibility="hidden";' + settle);
+        }
+        const gapY = pages.indexOf('gap') * 40 + 20;
+        await contents.executeJavaScript('document.getElementById("after-gap").style.backgroundColor="red"');
+        const probe = await capture();
+        const red = probe(195, gapY);
+        // A display profile can transform CSS red (e.g. 234,51,35 on Mac).
+        // No other content in the scene is red.
+        assert.ok(red[0] > 200 && red[1] < 80 && red[2] < 80,
+          `host=${host} system=${system}: red iframe not visible (${red}); capture stale or wrapper opaque`);
+        await contents.executeJavaScript('paintBackdrops()');
+        const pixel = await captureChange(gapY, equalRgb, 'missing frame must expose the painted card background');
+        const card = pixel(10, 1);
+        for (const [index, page] of pages.entries()) {
+          if (page === 'gap') continue;
+          const y = index * 40 + 20;
+          const before = pixel(40, y), after = pixel(170, y);
+          console.log(JSON.stringify({ host, system, page, before, after, card }));
+          if (page === 'wallpaper') {
+            for (const x of [40, 90]) {
+              // Wherever the old App showed the underlying image, both stripes
+              // must still be visible. The exposed padding is the pixel reference.
+              const previous = pixel(x, y), stripe = pixel(x, index * 40 + 1);
+              const current = pixel(x + 130, y);
+              assert.ok(equalRgb(current, previous) || equalRgb(current, stripe));
             }
-            if (url.pathname === '/resource') {
-              return new Response('<!doctype html><html><body style="margin:0;background:transparent"><main style="height:100%;background:transparent"></main><script>document.documentElement.style.visibility="hidden"</script></body></html>', {headers:{'content-type':'text/html'}});
-            }
-            if (url.pathname === '/compat-sandbox') {
-              const variant = url.searchParams.get('variant') || 'transparent';
-              const kind = url.searchParams.get('wrapper') || 'current';
-              const resource = 'cindy-mcp-app://flash-view/compat-resource?variant=' + encodeURIComponent(variant);
-              return new Response(compatibilityWrapper(resource, 'cindy-mcp-app://flash-view/bridge', kind), {headers:{'content-type':'text/html'}});
-            }
-            if (url.pathname === '/compat-resource') {
-              const page = compatibilityPages[url.searchParams.get('variant')] || compatibilityPages.transparent;
-              return new Response(page, {headers:{'content-type':'text/html'}});
-            }
-            if (url.pathname === '/bridge') return new Response('[]', {headers:{'content-type':'application/json'}});
-            return new Response('not found', {status:404});
-          });
-          const window = new BrowserWindow({
-            show: false,
-            width: 220,
-            height: 180,
-            backgroundColor: '#1f1f1e',
-            webPreferences: { contextIsolation: true, sandbox: true },
-          });
-          const html = '<!doctype html><html><body style="margin:0;width:220px;height:180px;background:transparent"><div id="card" style="position:absolute;left:20px;top:20px;width:180px;height:140px;overflow:hidden"><iframe id="frame" title="MCP App" style="width:100%;height:100%;display:block;border:0;background-color:rgb(255,255,255)" src="cindy-mcp-app://flash-view/sandbox"></iframe></div><script>'+renderer.replace(/<\\/script/gi, '<\\\\/script')+'</script></body></html>';
-          await window.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-          await wait(300);
-          for (const theme of ['light', 'dark']) {
-            const color = cardColors[theme];
-            await window.webContents.executeJavaScript('document.querySelector("#card").style.backgroundColor=' + JSON.stringify(color) + ';document.querySelector("#frame").style.backgroundColor="rgb(255,255,255)"');
-            await wait(40);
-            const baseline = await window.webContents.capturePage({x:0,y:0,width:220,height:180});
-            const baselinePixel = pixelAt(baseline, 110, 90);
-            assert.deepEqual(baselinePixel.slice(0, 3), [255, 255, 255], theme + ' baseline must expose the simulated missing-frame white backing');
-            await window.webContents.executeJavaScript('window.paintMcpAppBackdrop(); new Promise(resolve => requestAnimationFrame(() => resolve()))');
-            // Wait for the outer iframe compositor surface to consume the style
-            // mutation before capturing.  The conformance suite runs several
-            // Electron fixtures back-to-back, where one animation frame can
-            // precede the surface commit even though the DOM style is updated.
-            await wait(50);
-            const fixed = await window.webContents.capturePage({x:0,y:0,width:220,height:180});
-            const fixedPixel = pixelAt(fixed, 110, 90);
-            const expected = theme === 'light' ? [245, 245, 245] : [31, 31, 30];
-            assert.deepEqual(fixedPixel.slice(0, 3), expected, theme + ' fixed backdrop must match the card');
-            console.log('FLASH_BACKDROP theme=' + theme + ' baseline=' + JSON.stringify(baselinePixel) + ' fixed=' + JSON.stringify(fixedPixel));
+          } else if (page.endsWith('canvas')) {
+            assert.deepEqual(after, before, `${host}/${system} must preserve the App's ${page} background`);
+            assert.notDeepEqual(before, card, 'Canvas control must paint its own background');
+          } else {
+            if (page === 'opaque') assert.deepEqual(before, [83, 83, 83], 'opaque App must be painted');
+            assert.ok(equalRgb(after, before) || (page !== 'opaque' && equalRgb(after, card)),
+              `${host}/${system} page ${page}: ${before} -> ${after}, card ${card}`);
           }
-          /*
-           * 测试价值
-           * - 生产入口与结果：sandboxBridge 生成的包装页加载真实跨源 App iframe，最终卡片像素可见。
-           * - Bug／规则依据：包装页新增 color-scheme 不得改变存量插件页面的最终背景（插件兼容红线）。
-           * - 现有覆盖缺口：单测只能检查字符串和 iframe 样式，不能观察嵌套 browsing context 的 UA 背景。
-           * - 最小失败输入与 tier：透明页、只声明 light/dark、显式不透明 body，Light/Dark integration。
-           */
-          const compatibilityWindow = new BrowserWindow({
-            show: false,
-            width: 220,
-            height: 180,
-            backgroundColor: '#1f1f1e',
-            webPreferences: { contextIsolation: true, sandbox: true },
-          });
-          const compatibilityPage = (wrapper, variant, theme) => '<!doctype html><html><body style="margin:0;width:220px;height:180px;background:transparent"><div id="compat-card" style="position:absolute;left:20px;top:20px;width:180px;height:140px;overflow:hidden;background-color:' + cardColors[theme] + '"><iframe style="width:100%;height:100%;display:block;border:0" src="cindy-mcp-app://flash-view/compat-sandbox?wrapper=' + wrapper + '&variant=' + variant + '"></iframe></div></body></html>';
-          const compatibilityPixel = async (wrapper, variant, theme) => {
-            nativeTheme.themeSource = theme;
-            await compatibilityWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(compatibilityPage(wrapper, variant, theme)));
-            await wait(200);
-            const image = await compatibilityWindow.webContents.capturePage({x:0,y:0,width:220,height:180});
-            return pixelAt(image, 110, 90);
-          };
-          for (const theme of ['light', 'dark']) {
-            for (const variant of ['light', 'dark', 'opaque']) {
-              const legacyPixel = await compatibilityPixel('legacy', variant, theme);
-              const currentPixel = await compatibilityPixel('current', variant, theme);
-              assert.deepEqual(currentPixel.slice(0, 3), legacyPixel.slice(0, 3), theme + ' ' + variant + ' page changed after wrapper color-scheme');
-              console.log('FLASH_BACKDROP_COMPAT theme=' + theme + ' variant=' + variant + ' legacy=' + JSON.stringify(legacyPixel) + ' current=' + JSON.stringify(currentPixel));
-            }
-            if (theme === 'light') {
-              const currentTransparent = await compatibilityPixel('current', 'transparent', theme);
-              const intentionallyOpaque = await compatibilityPixel('opaque', 'transparent', theme);
-              assert.notDeepEqual(intentionallyOpaque.slice(0, 3), currentTransparent.slice(0, 3), theme + ' reverse wrapper mutation must be detected');
-            }
-          }
-          await compatibilityWindow.destroy();
-          await window.destroy();
-          app.exit(0);
-        }).catch(error => { console.error(error); app.exit(1); });
-      `,
-    },
-  });
-  await writeFile(path.join(temporary, 'renderer.js'), renderer.outputFiles[0].text, 'utf8');
-  await writeFile(path.join(temporary, 'verify.cjs'), main.outputFiles[0].text, 'utf8');
-  const electron = createRequire(import.meta.url)('electron');
-  const code = await new Promise((resolve, reject) => {
-    const child = spawn(electron, [path.join(temporary, 'verify.cjs')], {
-      env: {...process.env, ELECTRON_RUN_AS_NODE: undefined},
-      windowsHide: true,
-      stdio: 'inherit',
+        }
+        const wrapper = contents.mainFrame.framesInSubtree.find(f => f.url.startsWith('cindy-mcp-app://after-gap/sandbox'));
+        assert.equal(await wrapper.executeJavaScript('getComputedStyle(document.documentElement).colorScheme'), host);
+        // Chromium versions can resolve "light dark" differently in an embedded document.
+        // Recreate the reviewer's failing condition by selecting the system scheme explicitly.
+        if (host !== system) {
+          await wrapper.executeJavaScript(`document.documentElement.style.colorScheme='${system}'; ${settle}`);
+          const mismatched = await captureChange(gapY, gap => !equalRgb(gap, card),
+            'a mismatched wrapper should obscure the fallback');
+          console.log(JSON.stringify({ host, system, forcedMismatchGap: mismatched(195, gapY), card }));
+          await wrapper.executeJavaScript("document.documentElement.style.removeProperty('color-scheme');" + settle);
+        }
+        const opposite = host === 'dark' ? 'light' : 'dark';
+        await contents.executeJavaScript(`
+          document.documentElement.style.colorScheme='${opposite}';
+          paintBackdrops();
+          document.getElementById('after-gap').contentWindow.postMessage(
+            {type:'cindy:sandbox-color-scheme',scheme:'${opposite}'}, 'cindy-mcp-app://after-gap');
+          ${settle}`);
+        assert.equal(await wrapper.executeJavaScript('document.documentElement.style.colorScheme'), opposite);
+        const switched = await captureChange(gapY, (gap, nextCard) => !equalRgb(nextCard, card) && equalRgb(gap, nextCard),
+          'live wrapper must expose the new card color');
+        console.log(JSON.stringify({ host, system, red, switchedGap: switched(195, gapY), gapBefore: pixel(65, gapY), gapAfter: pixel(195, gapY) }));
+      }
+    }
+  } finally {
+    window.destroy();
+  }
+}
+
+function equalRgb(color, other) {
+  return color.every((value, index) => value === other[index]);
+}
+
+if (process.versions.electron) {
+  const { app } = require('electron');
+  verify(process.argv[2]).then(() => app.exit(0), error => { console.error(error); app.exit(1); });
+} else {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'cindy-mcp-app-flash-'));
+  try {
+    await build({ absWorkingDir: desktop, entryPoints: ['src/main/mcp-apps/sandboxBridge.ts'],
+      bundle: true, platform: 'node', format: 'cjs', outfile: path.join(directory, 'wrapper.cjs') });
+    await build({ absWorkingDir: desktop, tsconfig: 'tsconfig.json', bundle: true, format: 'iife',
+      stdin: { resolveDir: desktop, contents: `
+        import { findMcpAppBackdropColor } from './src/renderer/components/chat/mcpAppBackdrop';
+        window.paintBackdrops = () => {
+          for (const frame of document.querySelectorAll('iframe[id^="after-"]'))
+            frame.style.backgroundColor = findMcpAppBackdropColor(frame.parentElement);
+        };
+        paintBackdrops();` }, outfile: path.join(directory, 'renderer.js') });
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(require('electron'), [fileURLToPath(import.meta.url), directory], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined }, windowsHide: true, stdio: 'inherit' });
+      const timer = setTimeout(() => { child.kill(); reject(new Error('闪白隔离 Electron 验证超时')); }, 30_000);
+      child.once('error', error => { clearTimeout(timer); reject(error); });
+      child.once('exit', code => { clearTimeout(timer); resolve(code); });
     });
-    const timer = setTimeout(() => { child.kill(); reject(new Error('闪白隔离 Electron 验证超时。')); }, 30_000);
-    child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('exit', code => { clearTimeout(timer); resolve(code); });
-  });
-  assert.equal(code, 0, '闪白隔离 Electron 验证失败');
-  console.log('FLASH_BACKDROP_VERDICT=passed (production sandbox wrapper, transparent App child, baseline mutation, Light/Dark pixels)');
-} finally {
-  await rm(temporary, {recursive: true, force: true});
+    assert.equal(result, 0, '闪白隔离 Electron 验证失败');
+    console.log('FLASH_BACKDROP_VERDICT=passed');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }

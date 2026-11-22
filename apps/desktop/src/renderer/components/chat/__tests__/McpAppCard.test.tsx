@@ -142,6 +142,8 @@ it('paints the iframe backdrop from the nearest card background without recomput
     read: vi.fn(() => ({ revision: 1 })),
     subscribe: vi.fn((callback: () => void) => { changed.current = callback; return () => {}; }),
   };
+  const previousScheme = document.documentElement.style.colorScheme;
+  document.documentElement.style.colorScheme = 'dark';
   const computedStyle = vi.spyOn(window, 'getComputedStyle');
   try {
     await act(async () => root.render(<McpAppCard sessionId="backdrop-task" clientId="backdrop-card" title="App" contextSource={contextSource} />));
@@ -149,13 +151,21 @@ it('paints the iframe backdrop from the nearest card background without recomput
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const frame = container.querySelector('iframe')!;
     expect(frame.style.backgroundColor).toBe('rgb(18, 18, 18)');
+    // PR #12124, renderer unit: mount under a dark Cindy theme, then switch
+    // before App initialization. Reassigning src here would discard its document.
+    expect(new URL(frame.src).searchParams.get('scheme')).toBe('dark');
+    const setSrc = vi.spyOn(HTMLIFrameElement.prototype, 'src', 'set');
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage');
 
     container.style.backgroundColor = 'rgb(245, 245, 245)';
     await act(async () => {
-      document.documentElement.className = 'dark';
+      document.documentElement.style.colorScheme = 'light';
       await Promise.resolve();
     });
     expect(frame.style.backgroundColor).toBe('rgb(245, 245, 245)');
+    expect(post).toHaveBeenCalledWith({ type: 'cindy:sandbox-color-scheme', scheme: 'light' }, 'cindy-mcp-app://view-1');
+    expect(container.querySelector('iframe')).toBe(frame);
+    expect(setSrc).not.toHaveBeenCalled();
 
     // A same-mode theme switch changes only data-theme (ThemeService.applyTheme).
     container.style.backgroundColor = 'rgb(240, 236, 228)';
@@ -175,6 +185,7 @@ it('paints the iframe backdrop from the nearest card background without recomput
     const readsAfter = computedStyle.mock.calls.filter(([element]) => element === container).length;
     expect(readsAfter).toBe(readsBefore);
   } finally {
+    document.documentElement.style.colorScheme = previousScheme;
     delete document.documentElement.dataset.theme;
     await act(async () => root.unmount());
     container.remove();

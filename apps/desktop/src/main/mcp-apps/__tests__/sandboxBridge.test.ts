@@ -16,12 +16,29 @@ function fixture() {
   const fetch = vi.fn<(url: string, input: { body: string }) => Promise<{ ok: boolean; json(): Promise<unknown> }>>(() => new Promise((resolve) => pending.push(resolve)));
   const window = { parent, addEventListener: (name: string, callback: (event: unknown) => void) =>
     handlers.set(name, callback) };
-  const document = { createElement: () => frame, body: { appendChild: vi.fn() } };
+  const style = { colorScheme: 'light' };
+  const document = { documentElement: { style }, createElement: () => frame, body: { appendChild: vi.fn() } };
   const html = mcpAppDirectSandboxDocument('cindy-mcp-app://view-view/resource', 'cindy-mcp-app://view/bridge');
   const script = html.slice(html.indexOf('<script>') + 8, html.indexOf('</script>'));
   new Script(script).runInNewContext({ window, document, fetch, setTimeout, clearTimeout });
-  return { handlers, parent, frame, fetch, pending };
+  return { handlers, parent, frame, fetch, pending, style };
 }
+
+// PR #12124, unit: an uninitialized App still needs live wrapper theming.
+// Exercise the emitted message handler; ordinary RPC relay tests cannot observe wrapper CSS.
+it('changes only the wrapper scheme on an exact theme message from its parent', () => {
+  const f = fixture();
+  const receive = f.handlers.get('message')!;
+  const theme = { type: 'cindy:sandbox-color-scheme', scheme: 'dark' };
+  for (const data of [{ ...theme, scheme: 'light dark' }, { ...theme, extra: true }, { scheme: 'dark' }])
+    receive({ source: f.parent, data });
+  receive({ source: f.frame.contentWindow, data: theme });
+  expect(f.style.colorScheme).toBe('light');
+  receive({ source: f.parent, data: theme });
+  expect(f.style.colorScheme).toBe('dark');
+  expect(f.frame.contentWindow.postMessage).not.toHaveBeenCalled();
+  expect(f.fetch).toHaveBeenCalledOnce(); // Only the initial poll.
+});
 
 it('ignores forged App requests and Host responses from the Renderer, relaying only the inner window', () => {
   const f = fixture();
