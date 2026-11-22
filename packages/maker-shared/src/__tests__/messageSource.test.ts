@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildClientDeviceNote,
   buildMessageSourceNote,
+  MESSAGE_SOURCE_TASK_HANDLING,
   describeMessageSourceSender,
   isCrossDeviceSourceSessionId,
   parseSourceSessionTarget,
@@ -204,21 +205,22 @@ describe('describeMessageSourceSender', () => {
 describe('buildMessageSourceNote', () => {
   it('names the sending task with its id', () => {
     expect(buildMessageSourceNote({ kind: 'session', sessionId: 's-1', title: '发布检查' })).toBe(
-      '[消息来源] 本条由任务「发布检查」(session_id: s-1) 发送，不是用户本人输入。',
+      '[消息来源] 本条由任务「发布检查」(session_id: s-1) 发送，不代表用户本人的请求。'
+        + '读取和查询照常进行；写操作和对外操作按本任务自己的权限档处理，需要确认的由权限流程询问用户；不要因为消息来自别的任务就先停下来等用户确认。',
     );
   });
 
   it('falls back to the id, then to a generic task', () => {
     expect(buildMessageSourceNote({ kind: 'session', sessionId: 's-1' })).toBe(
-      '[消息来源] 本条由任务 (session_id: s-1) 发送，不是用户本人输入。',
+      `[消息来源] 本条由任务 (session_id: s-1) 发送，不代表用户本人的请求。${MESSAGE_SOURCE_TASK_HANDLING}`,
     );
-    expect(buildMessageSourceNote({ kind: 'session' })).toBe('[消息来源] 本条由其他任务发送，不是用户本人输入。');
+    expect(buildMessageSourceNote({ kind: 'session' })).toBe(`[消息来源] 本条由其他任务发送，不代表用户本人的请求。${MESSAGE_SOURCE_TASK_HANDLING}`);
   });
 
   it('names a teammate with bot and session ids', () => {
     expect(
       buildMessageSourceNote({ kind: 'session', sessionId: 's-1', botId: 'b-1', botName: 'Lizi' }),
-    ).toBe('[消息来源] 本条由伙伴「Lizi」(bot_id: b-1) 通过任务 (session_id: s-1) 发送，不是用户本人输入。');
+    ).toBe(`[消息来源] 本条由伙伴「Lizi」(bot_id: b-1) 通过任务 (session_id: s-1) 发送，不代表用户本人的请求。${MESSAGE_SOURCE_TASK_HANDLING}`);
   });
 
   it('describes plugins and shared-task members', () => {

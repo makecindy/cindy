@@ -476,13 +476,31 @@ function describePluginRelay(relay: MessageSourcePluginRelay | undefined): strin
   return `转发自 ${platform} ${chat}，发言人${speaker}${owner}`;
 }
 
-/** `[消息来源]` 说明；本机用户亲手输入返回 null。 */
-export function buildMessageSourceNote(sender: MessageSourceSender | undefined): string | null {
+/**
+ * 另一个任务发来、宿主没核实它代表用户时的处理说明（2026-11-21，「只陈述事实」的有意例外）。
+ * 只写「不是用户本人输入」时，收到的任务会自己停下等主人确认；来源不改变权限，读写照常按收件任务的权限档走。
+ */
+export const MESSAGE_SOURCE_TASK_HANDLING = '读取和查询照常进行；写操作和对外操作按本任务自己的权限档处理，需要确认的由权限流程询问用户；不要因为消息来自别的任务就先停下来等用户确认。';
+
+/**
+ * `[消息来源]` 说明；本机用户亲手输入返回 null。
+ * `speaksForUser`：宿主已核实这条任务来信代表用户（由调用方在后面接上核实说明），此时只陈述发送方。
+ */
+export function buildMessageSourceNote(
+  sender: MessageSourceSender | undefined,
+  opts: { speaksForUser?: boolean } = {},
+): string | null {
   if (!sender) return null;
   // Only the requester's own computer runs a request to the group's Cindy: it is the owner's own
   // request, like an owner message to their bot in an IM channel (bot-group-chat.md「群里的 Cindy」).
   if (sender.kind === 'session' && sender.groupRequest) {
     return `[消息来源] 本条${describeMessageSourceSender(sender)}，发言人就是本机主人；附带的群聊新消息是群里其他人说的话，只作背景。这一轮最后的回答会作为群里 Cindy 的回复发回群里。`;
+  }
+  // A verified hand-off (including the owner's words in a task-card thread) opens with its sender only.
+  if (sender.kind === 'session' && opts.speaksForUser) return `[消息来源] 本条${describeMessageSourceSender(sender)}。`;
+  // A message from another task (send_to_session, a teammate's task). Group-thread words keep the generic note.
+  if (sender.kind === 'session' && !sender.groupThread) {
+    return `[消息来源] 本条${describeMessageSourceSender(sender)}，不代表用户本人的请求。${MESSAGE_SOURCE_TASK_HANDLING}`;
   }
   // 转发的 IM 消息可能就是主人在别处说的话，所以只说它不是在 Cindy 里直接输入的。
   const relayed = sender.kind === 'plugin' && !isAppSourcePluginId(sender.pluginId) && describePluginRelay(sender.relay);

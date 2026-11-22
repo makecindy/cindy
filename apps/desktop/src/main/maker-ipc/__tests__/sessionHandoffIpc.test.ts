@@ -13,6 +13,7 @@ import { formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildMessageSourceNote,
+  MESSAGE_SOURCE_TASK_HANDLING,
   messageSourceSenderFromMeta,
 } from '@cindy/maker-shared/message-source';
 import { DL_SESSION_HANDOFF_CHANNEL } from '@cindy/device-link';
@@ -272,7 +273,7 @@ describe('maker:session:handoff (receiving computer)', () => {
     const sender = messageSourceSenderFromMeta({ origin });
     expect(sender).toEqual({ kind: 'session', sessionId: 'device-A::sender-1', title: 'PR 跟进' });
     expect(buildMessageSourceNote(sender)).toBe(
-      '[消息来源] 本条由任务「PR 跟进」(session_id: device-A::sender-1) 发送，不是用户本人输入。',
+      `[消息来源] 本条由任务「PR 跟进」(session_id: device-A::sender-1) 发送，不代表用户本人的请求。${MESSAGE_SOURCE_TASK_HANDLING}`,
     );
   });
 
