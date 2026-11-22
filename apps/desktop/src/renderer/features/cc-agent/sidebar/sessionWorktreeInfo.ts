@@ -109,8 +109,9 @@ export function useTaskInfoWorktree(
   // Keep the raw row so an invalid worktree can be re-probed, but seed the
   // displayed liveness from the filtered snapshot. This prevents a remounted
   // task from briefly showing a stale managed badge before its probe settles.
-  const liveOfficial = useWorktreeForSession(session.id);
-  const official = useWorktreeForSession(session.id, { includeInvalid: observeTelemetry });
+  const resourcePath = session.deviceLinkDeviceId || session.remoteHostId ? null : session.worktreePath;
+  const liveOfficial = useWorktreeForSession(session.id, { resourcePath });
+  const official = useWorktreeForSession(session.id, { includeInvalid: observeTelemetry, resourcePath });
   const reportLiveness = useReportWorktreeLiveness();
   const managed = resolveManagedWorktree(official);
   const observedMeta = useObservedWorktreeForSession(session.id);

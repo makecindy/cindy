@@ -14274,6 +14274,12 @@
       "elapsed": "已等待 {{duration}}"
     },
     "worktree": {
+      "choose": "选择 worktree",
+      "createNew": "新建 worktree",
+      "existing": "已有 worktree",
+      "noExisting": "暂无已有 worktree",
+      "loadExistingFailed": "无法读取 worktree，点击重试",
+      "sharedHint": "独立上下文，与此 worktree 中的其他任务共享文件和分支",
       "detecting": "检测环境中…",
       "detectFailed": "环境检测失败，worktree 暂不可用",
       "gitMissing": "未检测到 git，请先安装",

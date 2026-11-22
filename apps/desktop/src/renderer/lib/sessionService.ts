@@ -99,6 +99,8 @@ export async function list(
 }
 
 export async function create(body?: {
+  reuseWorktreePath?: string;
+  reuseWorktreeSessionId?: string;
   id?: string;
   title?: string;
   workingDir?: string;

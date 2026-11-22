@@ -7,6 +7,8 @@
  */
 
 export interface WorktreeMeta {
+  ephemeral?: boolean;
+  pendingSessionTransfer?: { sessionId: string; delegationId: string; requestingBotId: string };
   sessionId: string;
   /** 形如 `pensive-lederberg`，由 main 侧生成或用户输入。 */
   name: string;

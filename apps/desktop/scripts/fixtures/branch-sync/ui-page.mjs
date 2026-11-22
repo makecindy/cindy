@@ -7,6 +7,7 @@ export default {
   notCovered:
     'Git processes, device-link transport and native task creation; covered by unit and Git integration tests',
   cases: {
+    reuse: { about: 'Compact worktree picker selects an existing tree without widening the closed label', viewport: { width: 360, height: 400 } },
     default: {
       about: 'Main-task capsule, selected-branch details, remote group and successful fetch',
     },
@@ -20,6 +21,27 @@ export default {
     'old-host': { about: 'Old controlled host has neither refresh button nor remote group' },
   },
   async check(page, ui) {
+    if (ui.case === 'reuse') {
+      const label = await ui.t('newChat.worktree.choose');
+      const picker = page.getByRole('button', { name: label, exact: true });
+      await picker.waitFor();
+      // PR #11152 / DESIGN.md §14.6: the selection test covered opening the
+      // menu, but a single icon trigger also needs a visible localized hint.
+      await picker.hover();
+      await page.getByRole('tooltip', { name: label, exact: true }).waitFor();
+      await ui.capture('worktree-picker-hint');
+      const width = await picker.evaluate(node => node.previousElementSibling.getBoundingClientRect().width);
+      await picker.click();
+      await page.getByRole('menuitemradio', { name: /merry-edison/ }).waitFor();
+      await ui.capture('worktree-options');
+      await page.getByRole('menuitemradio', { name: /merry-edison/ }).click();
+      assert.equal(await picker.evaluate(node => node.previousElementSibling.getBoundingClientRect().width), width);
+      await ui.capture('closed-reused');
+      await picker.click();
+      assert.equal(await page.getByRole('menuitemradio', { name: /merry-edison/ }).getAttribute('aria-checked'), 'true');
+      await ui.capture('selected-worktree');
+      return;
+    }
     const trigger = page.getByRole('button', {
       name: await ui.t('newChat.branchChip.label'),
       exact: true,

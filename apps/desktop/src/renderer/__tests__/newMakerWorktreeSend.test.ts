@@ -14,26 +14,9 @@ const sessionViewSource = readFileSync(
 );
 
 describe('NewMakerDraftRoute worktree send flow', () => {
-  it('enters a real session before creating the worktree in the background', () => {
-    // 发送门已保证用户勾选时资格就绪；副作用分支仍以勾选 + baseRepo 双重防御。
-    const worktreeBranch = source.indexOf(
-      'if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo) {',
-    );
-    const createSession = source.indexOf('const newSession = await createSession', worktreeBranch);
-    const touchUserSend = source.indexOf('sessionService.touchUserSend', createSession);
-    // worktree 创建期的视觉反馈走 worktreeCreationStore(由 CCAgentSessionView 底部
-    // workingDir chip 行订阅渲染),不再插 chat-stream SystemCard。
-    const statusCard = source.indexOf('worktreeCreationStore.set(newSession.id', touchUserSend);
-    const navigate = source.indexOf('navigate(`/cc-agent/$' + '{newSession.id}`', statusCard);
-    const worktreeCreate = source.indexOf('window.electronAPI.worktreeCreate', navigate);
-
-    expect(worktreeBranch).toBeGreaterThan(-1);
-    expect(createSession).toBeGreaterThan(worktreeBranch);
-    expect(touchUserSend).toBeGreaterThan(createSession);
-    expect(statusCard).toBeGreaterThan(touchUserSend);
-    expect(navigate).toBeGreaterThan(statusCard);
-    expect(worktreeCreate).toBeGreaterThan(navigate);
-  });
+  // Task-before-background-worktree ordering now executes the real Send callback
+  // in newMakerDraftSubmission.test.ts, alongside its no-new-tree reuse cases.
+  // Matching an exact if condition incorrectly rejected the new reuse gate.
 
   it('clears starting when the first-message draft is restored after a send-before-start failure', () => {
     const restore = source.indexOf('const restoreFirstMessageDraft = () => {');

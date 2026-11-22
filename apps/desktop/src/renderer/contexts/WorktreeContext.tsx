@@ -4,11 +4,11 @@
  *
  * worktree-parallel-sessions 前端方案 M2：
  *   - mount 时拉一次 listAll
- *   - create / restore 成功后由调用方按 sessionId 主动增量更新
+ *   - create 成功后由调用方按 sessionId 主动增量更新
  *   - Scheduler / hook 等 main 侧后台创建完成后，复用 sessions:created 按
  *     sessionId 增量发现 worktree
- *   - 归档/删除的 worktree 回收跑完后，由 main 的 `worktree:changed` 推送按
- *     sessionId 增量更新；启动只读取快照，外部删除由打开中的任务按需校验
+ *   - worktree 恢复或回收完成后，由 main 的 `worktree:changed` 推送实际
+ *     owner 的 sessionId；启动只读取快照，外部删除由打开中的任务按需校验
  *
  * 与项目内 AuthContext / EnvCheckContext 同
  * Provider+hooks 范式，不引入新状态库。
@@ -27,6 +27,7 @@ import {
 } from 'react';
 
 import type { WorktreeMeta } from '@/lib/worktree.types';
+import { workingDirEquals } from '../../shared/workingDir';
 import { createLogger } from '@/lib/logger';
 import {
   getDataOwnerGeneration,
@@ -297,7 +298,7 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
     });
   }, [refreshSession, observed, refreshObserved]);
 
-  // Renderer 主动创建/恢复时调用方会直接 refreshSession；Scheduler、hook-control
+  // Renderer 主动创建时调用方会直接 refreshSession；Scheduler、hook-control
   // 等后台入口只会在 session 建成后广播 sessions:created。这里同样只查该 session，
   // 没有 worktree 时 getForSession 返回 null，不会进入路径探测，更不会扫描全表。
   // 本机 emitSessionCreated 不带 ownerStamp；带 stamp 的是 device-link 转发，远端
@@ -344,11 +345,14 @@ export function useWorktrees(): Record<string, WorktreeMeta> {
 /** 单条快捷查询；徽标 (M4) / 各 session 视图都用它。 */
 export function useWorktreeForSession(
   sessionId: string | null | undefined,
-  opts?: { includeInvalid?: boolean },
+  opts?: { includeInvalid?: boolean; resourcePath?: string | null },
 ): WorktreeMeta | null {
   const { metas, rawMetas } = useCtx();
   if (!sessionId) return null;
-  return (opts?.includeInvalid ? rawMetas : metas)[sessionId] ?? null;
+  const entries = opts?.includeInvalid ? rawMetas : metas;
+  return entries[sessionId] ?? (opts?.resourcePath
+    ? Object.values(entries).find(meta => workingDirEquals(meta.path, opts.resourcePath)) ?? null
+    : null);
 }
 
 /** 仅同步当前任务已有探测的结果，不额外启动 Git，也不修改 main store。 */

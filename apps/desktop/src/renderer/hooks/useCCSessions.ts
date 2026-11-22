@@ -54,6 +54,8 @@ interface UseCCSessionsReturn {
    */
   effectiveIncludeArchived: ListStatusFilter;
   createSession: (opts?: {
+    reuseWorktreePath?: string;
+    reuseWorktreeSessionId?: string;
     id?: string;
     model?: string;
     effort?: string;
@@ -164,6 +166,8 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
 
   const createSession = useCallback(
     async (opts?: {
+      reuseWorktreePath?: string;
+      reuseWorktreeSessionId?: string;
       id?: string;
       model?: string;
       effort?: string;

@@ -46,6 +46,13 @@ export function pathKey(p: string | null | undefined): string | null {
 
 export type LiveSessionPathKeys = ReadonlySet<string> | null;
 
+export interface WorktreeRestoreRequester {
+  sessionId: string;
+  workingDir: string;
+  worktreePath: string;
+  isCurrent: () => boolean;
+}
+
 export interface LoadLiveSessionPathKeysOptions {
   /** 日志上下文（定位是哪条 worktree 的检查失败）。 */
   contextPath?: string;
@@ -54,6 +61,8 @@ export interface LoadLiveSessionPathKeysOptions {
    * 不构成"仍在用"；显式回收观察器存在时，其它终态会话仍需运行态证明才能排除。
    */
   excludeSessionId?: string;
+  /** A verified requester restoring its borrowed path. Runtime references still count. */
+  restoreRequester?: WorktreeRestoreRequester;
   /** 对当前实例的额外占用证据；跨实例租约始终必须完整可读。 */
   isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined;
 }
@@ -87,10 +96,14 @@ export async function loadLiveSessionPathKeys(
         keys.add(await physicalWorktreeKey(meta.path));
       }
     }
+    const requester = opts.restoreRequester;
     for (const row of rows) {
       const hasSubagentRuns = subagentReferences.has(row.id);
       // The same id in another database is not the row the caller just closed.
       if (!hasSubagentRuns && row.currentDatabase && opts.excludeSessionId && row.id === opts.excludeSessionId) continue;
+      if (!hasSubagentRuns && row.currentDatabase && requester && requester.isCurrent()
+        && row.id === requester.sessionId && pathKey(row.workingDir) === pathKey(requester.workingDir)
+        && pathKey(row.worktreePath) === pathKey(requester.worktreePath)) continue;
       const isTerminal = row.status === 'archived' || row.status === 'deleted';
       if (!hasSubagentRuns && row.source !== 'bot' && isTerminal && (!row.currentDatabase || opts.isSessionRuntimeAlive?.(row.id) !== true)) {
         continue;

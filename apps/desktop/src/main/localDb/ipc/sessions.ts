@@ -4,7 +4,7 @@ import { PROJECT_ARCHIVE_CHANNEL } from '../../../shared/projectArchive.js';
 import { runProjectArchive } from '../projectArchive.js';
 import { getSessionRowSnapshot, getSessionRowSnapshotStrict, type SessionRowSnapshot } from '../sessionDispatchSnapshot.js';
 import { commitProvisionalSession as commitSessionDraft, discardProvisionalSessionRow as discardSessionDraft } from '../sessionDraftLifecycle.js';
-import { createUserSession, withWorktreeMutation } from './createUserSession.js';
+import { createUserSession, withWorktreeMutation, type UserSessionCreatePorts } from './createUserSession.js';
 import {
   assertReviewSessionPatchAllowed,
   assertSessionWorkspaceKindPatch,
@@ -232,6 +232,7 @@ export interface SessionRecycleScope {
 }
 
 export interface RegisterSessionIpcOpts {
+  lookupRegisteredWorktree?: UserSessionCreatePorts['lookupRegisteredWorktree'];
   isBusyForProjectArchive?: (sessionId: string) => boolean;
   /** Use the same live catalog as runtime usage, without writing during reads. */
   resolveContextWindow?: (session: ContextWindowSession) => number | null;
@@ -649,7 +650,12 @@ function broadcastRecentWorkdirsChanged(path: string, ownerScope: OwnerScope): v
  */
 export function broadcastWorktreeChanged(sessionId: string): void {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('worktree:changed', { sessionId });
+    if (w.isDestroyed()) continue;
+    try {
+      w.webContents.send('worktree:changed', { sessionId });
+    } catch {
+      // A closing window must not prevent the other windows from refreshing.
+    }
   }
 }
 
@@ -1375,6 +1381,7 @@ export function registerSessionIpc(
     return createUserSession(body, {
       senderId: event.sender.id,
       userDataDir: app.getPath('userData'),
+      lookupRegisteredWorktree: opts.lookupRegisteredWorktree,
       notifyPluginSessionCreated: (input) => {
         void import('../../cindy-brain/index.js').then(m => m.notifyGhostSessionEvent('created', input)).catch(() => {});
       },

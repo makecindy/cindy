@@ -104,6 +104,7 @@ export interface RegisterLocalDbIpcOpts {
   requestWorktreeRecycle?: SessionWorktreeRecycle;
   /** 当前 worktree 绑定（worktreeStore 是 source of truth，DB 只存反范式快照）。 */
   lookupSessionWorktreeBinding?: (sessionId: string) => string | null;
+  lookupRegisteredWorktree?: RegisterSessionIpcOpts['lookupRegisteredWorktree'];
   /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
   /** Apply a persisted task-level context window budget to the live runtime. */
@@ -225,6 +226,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
     }));
 
   registerSessionIpc(getCurrentDbClientUserId, {
+    lookupRegisteredWorktree: opts.lookupRegisteredWorktree,
     isBusyForProjectArchive: isTaskBusyForArchive,
     resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,

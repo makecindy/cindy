@@ -70,6 +70,19 @@ test('shared worktree metadata loads under Node and uses the configured Host pro
   assert.equal(recycleJournalRoot(), path.join(profile, 'worktree-recycle'));
   assert.equal(await acquireWorktreeRuntimeLease('fixture-task', path.join(os.tmpdir(), 'cindy-unmanaged-project')), null);
 });
+
+// Unit, #11167 and architecture-invariants §5: Host must load the shared task
+// creation handler before an account is open. The metadata test above doesn't
+// load that handler, and the desktop suites provide Electron mocks.
+test('shared task creation loads under Node before an account is open', async () => {
+  const { createUserSession } = await import('../../desktop/src/main/localDb/ipc/createUserSession.js');
+  await assert.rejects(createUserSession({}, {
+    senderId: 0,
+    userDataDir: os.tmpdir(),
+    notifyPluginSessionCreated: () => assert.fail('no task should be created without an account'),
+  }), /\[PRECONDITION_FAILED\] Account changed/);
+});
+
 // architecture-invariants §5: the shared transfer must run in Node without the
 // Electron assembly. Desktop transport mocks cannot catch that load boundary.
 // Unit: download bytes through the real factory; a same-size corrupt response
