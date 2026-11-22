@@ -20,27 +20,27 @@ vi.mock('react-i18next', () => ({
 }));
 afterEach(cleanup);
 
-it('expires the displayed rate without losing history, including after remount', () => {
+it('keeps the panel reading after it stops being live for the status bar, including after remount', () => {
   vi.useFakeTimers();
   try {
     clearRateHistoryCache();
     function Probe({ tokens }: { tokens: number }) {
       const history = useRunningTokenRateHistory({ sessionKey: 'freshness', startedAt: 1,
         outputTokens: tokens, generationDurationMs: tokens * 10, generationReliable: true });
-      return <div data-testid="rate">{history.latestRate ?? 'waiting'}:{history.samples.length}</div>;
+      return <div data-testid="rate">{history.latestRate ?? 'waiting'}:{history.samples.length}:{history.latestRateFresh ? 'live' : 'old'}</div>;
     }
     const view = render(<Probe tokens={0} />);
     view.rerender(<Probe tokens={100} />);
-    expect(screen.getByTestId('rate').textContent).toBe('100:1');
+    expect(screen.getByTestId('rate').textContent).toBe('100:1:live');
     act(() => vi.advanceTimersByTime(59_999));
-    expect(screen.getByTestId('rate').textContent).toBe('100:1');
+    expect(screen.getByTestId('rate').textContent).toBe('100:1:live');
     act(() => vi.advanceTimersByTime(1));
-    expect(screen.getByTestId('rate').textContent).toBe('waiting:1');
+    expect(screen.getByTestId('rate').textContent).toBe('100:1:old');
     view.unmount();
     const again = render(<Probe tokens={100} />);
-    expect(screen.getByTestId('rate').textContent).toBe('waiting:1');
+    expect(screen.getByTestId('rate').textContent).toBe('100:1:old');
     again.rerender(<Probe tokens={200} />);
-    expect(screen.getByTestId('rate').textContent).toBe('100:2');
+    expect(screen.getByTestId('rate').textContent).toBe('100:2:live');
     again.unmount();
   } finally { clearRateHistoryCache(); vi.useRealTimers(); }
 });

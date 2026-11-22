@@ -347,13 +347,14 @@ describe('host token speed (Pi extension algorithm)', () => {
     expect(history.latestRate).toBe(70);
   });
 
-  it('keeps the latest speed when the final average arrives, and continues the axis next turn', () => {
+  it('keeps the latest speed when the final average arrives, and starts a new chart next turn', () => {
     let history = recordTokenSpeed(emptyRateHistory(null), { startedAt: 1, speed: speed(100, 1500) });
     history = recordTokenSpeed(history, { startedAt: 1, speed: speed(60, 2000, false) });
     expect(history.latestRate).toBe(100);
     expect(history.samples).toHaveLength(1);
+    // The figures beside the chart are this turn's: the chart is too.
     history = recordTokenSpeed(history, { startedAt: 2, speed: speed(50, 1100) });
-    expect(history.samples.map((sample) => sample.durationMs)).toEqual([1500, 2600]);
+    expect(history.samples.map((sample) => sample.durationMs)).toEqual([1100]);
   });
 
   it('has no current speed until the host has a reading, instead of showing 0 tok/s', () => {
@@ -484,14 +485,14 @@ describe('finished requests on the speed chart', () => {
     expect(formatThinkingShare(0, 0)).toBeNull();
   });
 
-  it('keeps earlier marks and restarts request numbering when the next turn begins', () => {
+  it('draws only the current turn when the next turn begins, so its strokes match its reasoning share', () => {
     let history = recordTokenSpeed(emptyRateHistory(null),
-      { startedAt: 1, speed: speed(1500, { index: 1, atMs: 1500, thinkingTokens: 40 }) });
+      { startedAt: 1, speed: speed(1500, { index: 1, atMs: 1500, thinkingTokens: 900, outputTokens: 1000 }) });
     history = recordTokenSpeed(history,
-      { startedAt: 2, speed: speed(1100, { index: 1, atMs: 1000, thinkingTokens: 900 }) });
-    expect(history.marks?.map((mark) => mark.thinkingTokens)).toEqual([40, 900]);
-    // The second turn continues the axis after the first: its mark is not left of the earlier one.
-    expect(history.marks![1].durationMs).toBeGreaterThanOrEqual(history.marks![0].durationMs);
+      { startedAt: 2, speed: speed(1100, { index: 1, atMs: 1000, thinkingTokens: 0, outputTokens: 200 }) });
+    // A turn that answered without reasoning reads 0%, with no earlier turn's long stroke beside it.
+    expect(history.marks).toEqual([{ durationMs: 1000, thinkingTokens: 0, requests: 1 }]);
+    expect(formatThinkingShare(history.turnThinkingTokens!, history.turnThinkingOutputTokens!)).toBe('0%');
   });
 
   it('reads a request mark from the wire and drops a malformed one without dropping the speed', () => {

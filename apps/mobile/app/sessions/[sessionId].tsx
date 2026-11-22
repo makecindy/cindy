@@ -13968,11 +13968,8 @@ function ComposerActivityStatus({
     && Number.isFinite(outputTokens)
     && Number.isFinite(generationDurationMs)
     && generationDurationMs > 0;
-  const rateText = !rateValue
-    ? null
-    : tokenSpeed?.measurement
-      ? t('session.screen.recentTokenRate', { rate: rateValue })
-      : t('session.screen.tokenRate', { rate: rateValue });
+  // The pill shows the speed itself; the details sheet says which reading it is.
+  const rateText = rateValue ? t('session.screen.tokenRate', { rate: rateValue }) : null;
   const showUsageMeta = !showElapsedOnly && (Boolean(rateText) || tokenUsage > 0);
   const usageMeta = (
     <View style={[pillStyles.composerActivityPill, styles.composerActivityMeta]}>

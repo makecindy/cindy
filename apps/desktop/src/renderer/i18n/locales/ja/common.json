@@ -15073,7 +15073,6 @@
     "runningStatus": {
       "currentRate": "直近の速度",
       "lastRequestRate": "直近のリクエストの平均",
-      "recentTokenRate": "直近 {{rate}} tok/s",
       "waitingSample": "計測中",
       "averageRate": "このターンの平均",
       "rateHistory": "生成速度の推移",

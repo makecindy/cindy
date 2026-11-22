@@ -310,12 +310,14 @@ export function receiveTokenSpeedSnapshot(
 
 /** Record a host speed snapshot into the same chart model as counter samples. */
 export function recordTokenSpeed(
-  history: RateHistory,
+  previous: RateHistory,
   input: { startedAt: number | null; speed: TokenSpeedSnapshot; now?: number },
 ): RateHistory {
   const { speed } = input;
-  const startedAt = input.startedAt ?? history.startedAt;
-  // A new turn restarts the host clock; keep earlier points and continue the axis after them.
+  const startedAt = input.startedAt ?? previous.startedAt;
+  // The chart belongs to one turn, like the average, peak, output and reasoning share
+  // shown beside it: a new turn starts an empty chart instead of continuing the last one.
+  const history = startedAt !== previous.startedAt ? emptyRateHistory(previous.startedAt) : previous;
   // Within the same turn, provisional wait credit can be trimmed down once a real speed settles.
   const sameTurn = startedAt !== null && history.startedAt === startedAt;
   const reset = history.startedAt !== startedAt || history.speedOffsetMs === undefined ||
