@@ -1803,6 +1803,8 @@
       "other": "其他",
       "lowAlert": "快用完时通知",
       "privacy": "隐藏个人信息",
+      "automaticCurrency": "自动",
+      "usageCurrency": "用量统计币种",
       "usageScope": "用量统计范围",
       "manageFoot": "管理模型供应商",
       "showSource": "在菜单里显示 {{name}}",
@@ -14489,6 +14491,7 @@
       "steerNotSent": "未发送，暂时无法插话，草稿已保留",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "credentialSwitchFailed": "模型来源切换失败，请重新选择。",
+      "credentialSwitchKeptSettings": "本次切换未完成，任务会继续使用原来的设置。",
       "modelSwitchContextGuard": {
         "warnToast": "这段对话已经用了 {{used}}，换过去大约会占新模型容量（{{total}}）的 {{pct}}%",
         "condensedToast": "为了适应新模型，较早的对话会压缩，完整的对话记录仍可查看。",
@@ -15764,6 +15767,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "上下文已满，这条消息未能处理。后面的消息会继续按顺序处理。",
       "attachmentPrefix": "附件：",
       "attachmentAttachedAria": "已附加 {{name}}",
       "saveAttachmentAs": "另存附件 {{name}}",
@@ -16566,6 +16570,9 @@
       "taskInfoSummaryNone": "无",
       "taskInfoSummarySeparator": "、",
       "taskInfo": {
+        "harness": "Harness 图标",
+        "project": "项目图标和名称",
+        "teammate": "伙伴头像",
         "time": "时间",
         "pr": "PR 状态",
         "worktree": "worktree",

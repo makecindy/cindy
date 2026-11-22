@@ -79,7 +79,7 @@ export function taskInboxSection(
   signals: Pick<LiveTaskPrioritySignals, 'waiting' | 'running'> & {
     unread?: boolean;
     following?: boolean;
-    /** The task belongs to a teammate (the same test as the task list's teammate filter). */
+    /** The teammate's own conversation or a task in its project (`isTeammateOwnInboxTask`); narrower than the task list's teammate filter. */
     teammate?: boolean;
   },
   nowMs: number,

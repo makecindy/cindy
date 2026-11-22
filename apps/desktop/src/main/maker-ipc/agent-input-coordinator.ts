@@ -1,3 +1,5 @@
+import type { ClaimedOversizedInput } from './contextOverflowRollover.js';
+import { ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionAnswerOrigin, inheritTelegramQuestionRetry } from './telegramQuestionReply.js';
@@ -231,6 +233,7 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  [ACCEPTED_ATTACHMENT_REPLAY]?: true;
   readonly [TELEGRAM_QUESTION_ORIGIN]?: import('@cindy/maker-core').SendOrigin;
   /** Host-proven non-dispatch: retain this input while preparation is retried. */
   onUndispatchedRetry?: () => void;
@@ -1381,6 +1384,9 @@ function isManualUiOrigin(origin: AgentInputQueuedMessage['origin']): boolean {
 }
 
 export class AgentInputCoordinator {
+  private readonly terminalRecoveryOwners = new WeakMap<object, {
+    instanceId: string; generation: number;
+  }>();
   // A direct Lead assignment bypasses the queue. Keep its receipt off the active input
   // boundary so ordinary sends, steering and successful terminals retain their semantics.
   private readonly directWorkerReceipts = new WeakMap<object, {
@@ -1431,6 +1437,7 @@ export class AgentInputCoordinator {
   private readonly restoredUsageLimitRecoveries = new WeakSet<object>();
   /** Provenance survives a quota restore without reviving the expired FireContext. */
   private readonly quotaScheduleOrigins = new WeakMap<object, NonNullable<AgentInputQueuedMessage['origin']>>();
+  private readonly acceptedHistoryReplays = new WeakSet<AgentInputQueuedMessage>();
   private readonly retrySwitchRevisions = new WeakMap<AgentInputQueuedMessage, number>();
   private readonly scheduledQuotaRetryItems = new WeakSet<object>();
   /** The quota classification belongs to the recovery, and survives runtime/token replacement. */
@@ -3980,6 +3987,9 @@ export class AgentInputCoordinator {
           },
         });
       }
+      // This copy comes from the main process's saved active turn (or restored
+      // active-turn receipt). Queue-head failures have never crossed that boundary.
+      this.acceptedHistoryReplays.add(item);
       inheritTelegramQuestionRetry(recovery.item, item);
       if ((opts?.auto && attemptToken !== null) || usageWait) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
@@ -4026,6 +4036,21 @@ export class AgentInputCoordinator {
     this.scheduleDrain(sessionId, 'retry');
     this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'retry');
     return { projection: this.getProjection(sessionId), outcome: 'resumed' };
+  }
+
+  /** Capture the failed input only while this exact terminal still owns the error being released. */
+  skippedOversizedInputClientId(sessionId: string, claim: ClaimedOversizedInput): string | undefined {
+    const state = this.states.get(sessionId);
+    const recovery = state?.recovery;
+    if (!state?.error || state.queuePaused || state.queuePausedByRestore || recovery?.kind !== 'active-turn' ||
+      recovery.item.clientId !== claim.inputClientId || recovery.item.autoResume ||
+      recovery.item.originalSyntheticTrigger) return;
+    const owner = this.terminalRecoveryOwners.get(recovery);
+    if (owner?.instanceId !== claim.instanceId || owner.generation !== claim.generation) return;
+    if (state.pendingQueue.some(item => item.clientId !== claim.inputClientId && !item.autoResume &&
+      !item.originalSyntheticTrigger && !isAutomaticOriginItem(item) && !item.botTaskCoordination && !item.sourcePlugin)) {
+      return claim.inputClientId;
+    }
   }
 
   clearError(sessionId: string): AgentInputProjection {
@@ -4682,6 +4707,12 @@ export class AgentInputCoordinator {
           allowSchedulerAutoResume: Boolean(schedulerItem && resumableCandidate) || scheduledQuota,
           persistedFailure: true,
         });
+        if (active?.persisted && state.recovery?.kind === 'active-turn' && meta?.sessionInstanceId &&
+          meta.sessionTurnGeneration !== undefined && active.vendorTurnGeneration === meta.sessionTurnGeneration) {
+          this.terminalRecoveryOwners.set(state.recovery, {
+            instanceId: meta.sessionInstanceId, generation: meta.sessionTurnGeneration,
+          });
+        }
         if (outcome === 'dropped-scheduler') {
           state.error = message ?? state.error;
           // **紧随的 done 必须被配对吃掉。**各 agent 的失败收尾都是 terminal error 后再补
@@ -5900,6 +5931,7 @@ export class AgentInputCoordinator {
         ? this.deps.getSchedulerRunSignal?.(sessionId, head)
         : undefined;
       const result = await this.deps.sendToAgent(sessionId, wireUserMessage, head.createOpts, {
+        ...(this.acceptedHistoryReplays.has(head) ? { [ACCEPTED_ATTACHMENT_REPLAY]: true as const } : {}),
         ...(appMessageGuard || taskActionGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
           try {
             await appMessageGuard?.();

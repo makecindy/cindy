@@ -57,7 +57,7 @@
   "remoteHostOfflineNote": "호스트 컴퓨터가 오프라인이 되면 공유가 자동 종료됩니다. 다시 연결한 후 공유를 시작하고 새 초대를 보내세요.",
   "tabCurrent": "현재 세션",
   "tabOwned": "내가 공유한 항목",
-  "startIntro": "파트너를 초대해 이 세션의 모든 내용을 함께 보고, 같은 Agent로 협업하세요.",
+  "startIntro": "동료를 초대해 이 세션의 모든 내용을 함께 보고, 같은 Agent로 협업하세요.",
   "runsOnThisDevice": "이 PC에서 실행 중",
   "inviteNotice": "초대를 가진 사용자는 로그인 후 참여할 수 있으며, 호스트와 동일한 Agent 권한을 갖습니다.",
   "offlineAutoClose": "호스트가 오프라인이 되면 공유는 자동으로 종료됩니다.",
