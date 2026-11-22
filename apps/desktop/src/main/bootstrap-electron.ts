@@ -7968,6 +7968,7 @@ const registerIpcHandlers = () => {
       app.getPath('userData'),
       app.getPath('appData'),
     ),
+    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
   });
   // 新电脑设置(docs/product-rules/new-device-setup-migration.md)：从同账号另一台电脑读取非秘密配置，

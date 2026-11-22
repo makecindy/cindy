@@ -113,6 +113,12 @@ export interface RegisterSkillhubIpcOptions {
   getMaker: () => Maker;
   getManagedSkillRoots: () => readonly string[];
   getBuiltInSkills?: () => readonly BuiltInSkillDescriptor[];
+  /**
+   * Joins the shared Skill preparation (built-in bundle and shared links) before a scan reads
+   * them. Startup only warms it up in the background, and that pass is rejected while a saved
+   * owner is still being restored.
+   */
+  prepareSharedSkills?: () => Promise<void>;
   getAllowedProjectRoots: () => Promise<readonly string[]>;
   marketService?: SkillhubMarketService;
   publishService?: SkillPublishService;
@@ -462,6 +468,14 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
         const scanOwnerId = getCurrentDataOwnerId();
         if (!scanOwnerId || isAppSessionBoundaryPending()) {
           throw new Error('active data owner is unavailable');
+        }
+        try {
+          await options.prepareSharedSkills?.();
+        } catch (error) {
+          // A broken optional Skill must not hide the rest of the list.
+          log.warn('[skillhub:scan] shared Skill preparation failed', {
+            error: error instanceof Error ? error.name : 'unknown',
+          });
         }
         const projects = await validateRequestedProjects(
           params?.projects,

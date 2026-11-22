@@ -337,6 +337,43 @@ describe('registerSkillhubIpc usage handlers', () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
+  // PR #12070 review: startup only warms the shared Skill preparation in the background, and
+  // that pass is rejected while a saved owner is restored. A scan must join the preparation
+  // before reading the built-in bundle, and a failed preparation must not hide the list.
+  it.each([
+    ['joins preparation before reading built-in Skills', false],
+    ['still lists when preparation fails', true],
+  ] as const)('skillhub:scan %s', async (_name, fails) => {
+    let prepared = false;
+    const descriptor = {
+      name: 'cindy-skill-creator',
+      absolutePath: path.join(fixtureRoot, 'prepared', 'cindy-skill-creator'),
+      nativeClaudePath: path.join(fixtureRoot, 'prepared-native', 'cindy-skill-creator'),
+    };
+    const { registerSkillhubIpc } = await import('../registerIpc');
+    registerSkillhubIpc({
+      getMaker: () => ({ listAgentSkills }) as never,
+      getManagedSkillRoots,
+      getBuiltInSkills: () => (prepared ? [descriptor] : []),
+      prepareSharedSkills: async () => {
+        await Promise.resolve();
+        if (fails) throw new Error('owner is not stable');
+        prepared = true;
+      },
+      getAllowedProjectRoots,
+      marketService: marketService as never,
+      publishService: { publish, cancel } as never,
+    });
+    scanAllSkills.mockResolvedValueOnce({ skills: [], sources: [] });
+
+    const result = await handlers.get('skillhub:scan')!({ sender: { id: 31, on: vi.fn(), once: vi.fn() } }, { projects: [] });
+
+    expect(result).toMatchObject({ success: true });
+    expect(scanAllSkills).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), expect.anything(), fails ? [] : [descriptor],
+    );
+  });
+
   it('rejects publishing a path absent from the sender latest scan', async () => {
     const event = { sender: { id: 13, on: vi.fn(), once: vi.fn() } };
 
