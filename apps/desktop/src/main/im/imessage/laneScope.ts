@@ -9,7 +9,7 @@ export interface IMessageLaneScopeDeps {
   /** The active channel lane link of this session, if any. */
   channelLink(sessionId: string): Promise<{ botId: string; routeKey: string | null } | null>;
   /** The connected chat that lane talks in. */
-  target(botId: string, routeKey: string): { im: Pick<BlueBubblesIM, 'sendText' | 'sendFile' | 'readHistory' | 'listChats' | 'health' | 'isGroup' | 'botContextId'>; chat: string } | null;
+  target(botId: string, routeKey: string): { im: IMessageToolScope['im'] & Pick<BlueBubblesIM, 'isGroup' | 'botContextId'>; chat: string } | null;
   /** Account / database boundary captured before and re-checked after the lookup. */
   boundary(): unknown;
 }
