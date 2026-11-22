@@ -138,8 +138,10 @@ const nodeRuntime: MainCompileCacheRuntime = {
 
 /**
  * Enables the cache for modules loaded after this call when the install allows it.
- * When it stays off, or `NODE_COMPILE_CACHE` already enabled another directory,
- * flush does nothing and pruning removes every build's directory.
+ * When it stays off, flush does nothing and pruning empties this flavor's namespace.
+ * When the launch environment (`NODE_COMPILE_CACHE`) already turned a cache on, that
+ * directory may be anywhere, even inside this namespace, so nothing is pruned; on an
+ * allowed install it is still flushed, because it is the cache this process uses.
  */
 export function startMainCompileCache(
   options: MainCompileCacheOptions,
@@ -149,11 +151,17 @@ export function startMainCompileCache(
   const ownRoot = path.join(root, options.isPackaged ? PACKAGED_DIR : SOURCE_DIR);
   let status = 'not-allowed';
   let enabled = false;
+  // A cache this launch did not create, at a directory it does not know.
+  let preEnabled = false;
+  // On an allowed install a pre-enabled cache is the one in use; a disallowed install never adopts it.
+  let flushable = false;
   if (mainCompileCacheAllowed(options)) {
     try {
       const result = runtime.enableCompileCache(path.join(ownRoot, options.buildId)).status;
       status = STATUS_NAMES[result] ?? String(result);
       enabled = result === compileCacheStatus.ENABLED;
+      preEnabled = result === compileCacheStatus.ALREADY_ENABLED;
+      flushable = enabled || preEnabled;
     } catch (error) {
       status = 'failed';
       log.warn('compile cache unavailable', { error: error instanceof Error ? error.name : 'unknown' });
@@ -161,6 +169,7 @@ export function startMainCompileCache(
   } else if (runtime.getCompileCacheDir()) {
     // NODE_COMPILE_CACHE at launch: already in use for the entry chunks and cannot be undone here.
     status = 'enabled-by-environment';
+    preEnabled = true;
   }
   // Status only, never the directory: it carries the userData path.
   if (status === 'enabled-by-environment') log.warn('compile cache enabled by the launch environment', { status });
@@ -170,7 +179,7 @@ export function startMainCompileCache(
   return {
     status,
     flush() {
-      if (!enabled) return;
+      if (!flushable) return;
       try {
         runtime.flushCompileCache();
       } catch (error) {
@@ -178,6 +187,8 @@ export function startMainCompileCache(
       }
     },
     async pruneUnused() {
+      // The environment's cache directory is unknown and may sit inside this namespace.
+      if (preEnabled) return;
       // Own namespace: every build except the one this launch uses.
       await removeEntries(ownRoot, (name) => name !== keep);
       // Root: only entries outside both namespaces (layouts from earlier builds of this

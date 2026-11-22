@@ -27,6 +27,7 @@ import {
  */
 
 const ENABLED = constants.compileCacheStatus.ENABLED;
+const ALREADY_ENABLED = constants.compileCacheStatus.ALREADY_ENABLED;
 const DISABLED = constants.compileCacheStatus.DISABLED;
 
 describe('mainCompileCacheAllowed', () => {
@@ -104,15 +105,19 @@ describe('startMainCompileCache', () => {
 
   // PR #12070 review cases:
   // - NODE_COMPILE_CACHE turns the cache on before app code runs; on a disallowed install it is
-  //   reported, never adopted.
+  //   reported, never adopted. Its directory is unknown and may sit inside a namespace, so a
+  //   pre-enabled cache prunes nothing; on an allowed install it is the cache in use and is flushed.
   // - A source run and the installed app may share one userData at the same time; each prunes only
   //   its own flavor namespace, so neither deletes the cache the other is using.
+  const all = ['0.0.0-legacy', 'packaged', 'source'];
+  const namespaces = ['packaged', 'source'];
   it.each([
-    ['enabled: keeps only the current build of its own flavor', devInstall, ENABLED, undefined, 'enabled', 1, 1, ['0.2.0-new'], ['0.9.0-pkg']],
-    ['Node reports disabled: empties only its own flavor', devInstall, DISABLED, undefined, 'disabled', 1, 0, [], ['0.9.0-pkg']],
-    ['install not allowed: never enables and empties only its own flavor', macInstall, ENABLED, undefined, 'not-allowed', 0, 0, ['0.1.0-old', '0.2.0-new'], []],
-    ['install not allowed, launch environment enabled it: reported, not adopted', macInstall, ENABLED, '/tmp/env-cache', 'enabled-by-environment', 0, 0, ['0.1.0-old', '0.2.0-new'], []],
-  ] as const)('%s', async (_name, install, nodeStatus, launchDir, status, enableCalls, flushes, sourceLeft, packagedLeft) => {
+    ['enabled: keeps only the current build of its own flavor', devInstall, ENABLED, undefined, 'enabled', 1, 1, ['0.2.0-new'], ['0.9.0-pkg'], namespaces],
+    ['Node reports disabled: empties only its own flavor', devInstall, DISABLED, undefined, 'disabled', 1, 0, [], ['0.9.0-pkg'], namespaces],
+    ['allowed install, launch environment enabled it: flushed, nothing pruned', devInstall, ALREADY_ENABLED, '/tmp/env-cache', 'already-enabled', 1, 1, ['0.1.0-old', '0.2.0-new'], ['0.9.0-pkg'], all],
+    ['install not allowed: never enables and empties only its own flavor', macInstall, ENABLED, undefined, 'not-allowed', 0, 0, ['0.1.0-old', '0.2.0-new'], [], namespaces],
+    ['install not allowed, launch environment enabled it: reported, not adopted, nothing pruned', macInstall, ENABLED, '/tmp/env-cache', 'enabled-by-environment', 0, 0, ['0.1.0-old', '0.2.0-new'], ['0.9.0-pkg'], all],
+  ] as const)('%s', async (_name, install, nodeStatus, launchDir, status, enableCalls, flushes, sourceLeft, packagedLeft, rootLeft) => {
     // A layout from earlier builds of this feature sits directly under the root.
     const dir = await profileWithEntries(['source', '0.1.0-old'], ['source', '0.2.0-new'], ['packaged', '0.9.0-pkg'], ['0.0.0-legacy']);
     const { calls, runtime } = fakeRuntime(nodeStatus, launchDir);
@@ -129,7 +134,7 @@ describe('startMainCompileCache', () => {
     expect(calls.flushes).toBe(flushes);
     expect(await listing(dir, 'source')).toEqual(sourceLeft);
     expect(await listing(dir, 'packaged')).toEqual(packagedLeft);
-    expect(await listing(dir)).toEqual(['packaged', 'source']);
+    expect(await listing(dir)).toEqual(rootLeft);
   });
 
   it('pruning tolerates a profile that never had a cache', async () => {
