@@ -16405,6 +16405,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "클라우드 컴퓨터 추가",
+        "preparingCloud": "클라우드 컴퓨터 준비 중",
+        "manageCloud": "클라우드 컴퓨터 관리",
         "allMachines": "전체",
         "localMachine": "이 기기",
         "connecting": "연결 중…",

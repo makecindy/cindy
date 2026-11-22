@@ -21,6 +21,9 @@
   "usageUpdateDesktopTitle": "Update Cindy on your computer",
   "usageUpdateDesktopCopy": "Cindy on your computer is too old to send usage to your phone. It will appear here after you update.",
   "management": {
+    "addCloud": "Add cloud computer",
+    "preparingCloud": "Cloud computer · preparing",
+    "manageCloud": "Manage cloud computer",
     "title": "Device Management",
     "openDevice": "View details for {{name}}",
     "details": "Device details",

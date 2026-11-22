@@ -16405,6 +16405,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "クラウドマシンを追加",
+        "preparingCloud": "クラウドマシンを準備中",
+        "manageCloud": "クラウドマシンを管理",
         "allMachines": "すべて",
         "localMachine": "このデバイス",
         "connecting": "接続中…",

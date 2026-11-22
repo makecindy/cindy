@@ -21,6 +21,9 @@
   "usageUpdateDesktopTitle": "Mettez à jour Cindy sur votre ordinateur",
   "usageUpdateDesktopCopy": "La version de Cindy sur votre ordinateur est trop ancienne pour envoyer la consommation à votre téléphone. Elle s’affichera ici automatiquement après la mise à jour.",
   "management": {
+    "addCloud": "Ajouter un ordinateur cloud",
+    "preparingCloud": "Ordinateur cloud en préparation",
+    "manageCloud": "Gérer l’ordinateur cloud",
     "title": "Gestion des appareils",
     "openDevice": "Voir les détails de {{name}}",
     "details": "Détails de l'appareil",

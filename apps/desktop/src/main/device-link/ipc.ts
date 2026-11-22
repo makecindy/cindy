@@ -1975,6 +1975,16 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     const p = (payload ?? {}) as { deviceId?: unknown; enabled?: unknown };
     return handleSetDeviceControlEnabled(deps, p.deviceId, p.enabled);
   });
+  ipcMain.handle(DEVICE_LINK_INVOKE.CLOUD_COMPUTER_ENTRY, async event => {
+    assertTrustedAppRendererEvent(event);
+    const [{serverApiFetch},{getClientEndpoint}] = await Promise.all([
+      import('../serverApiClient.desktop.js'), import('../clientEndpointsService.js'),
+    ]);
+    return serverApiFetch<unknown>('/api/model-access/personal/cloud-computer/entry', {
+      baseUrl:() => getClientEndpoint('modelAccessApiBaseUrl'), cache:'no-store',
+      timeoutMs:5000, redactErrorDetails:true, expectedErrors:[{status:403},{status:404}],
+    });
+  });
   ipcMain.handle(
     DEVICE_LINK_INVOKE.LIST_DEVICES,
     gated(() => handleListDevices(deps)),

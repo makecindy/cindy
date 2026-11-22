@@ -1,3 +1,4 @@
+import {initializeCloudHostAccess,readCloudGuest,cloudGuestAuthorization,cloudGuestSaved,markCloudGuestSaved} from '@cindy/auth-client/linux-cloud';
 import { readHostProcessStatus } from './control.mjs';
 import { getOrCreateHostDeviceId } from './auth/device-identity.mjs';
 /**
@@ -93,6 +94,11 @@ export async function runLoginCommand(argv, io = {}) {
   const out = io.stdout ?? ((line) => console.log(line));
   const err = io.stderr ?? ((line) => console.error(line));
   const { region, method } = parseLoginArgs(argv);
+  const orgArg = argv.find(arg => arg.startsWith('--org='));
+  const organization = orgArg?.slice('--org='.length).trim();
+  if (orgArg && (!organization || argv.includes('--cloud-guest'))) {
+    throw new Error('Use --org=<organization> with an interactive login.');
+  }
 
   const endpoints = readAuthEndpoints(region);
   const userDataDir = resolveHostDataDir();
@@ -121,8 +127,25 @@ export async function runLoginCommand(argv, io = {}) {
   const client = deps.createAuthClient ? deps.createAuthClient(clientOptions) : new CindyAuthClient(clientOptions);
 
   const noOpen = argv.includes('--no-open') || (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY);
-  out(noOpen ? 'Open the following Cindy login page on a device with a browser.' : 'Opening the Cindy login page in your browser…');
+
+  let cloudGuest;
+  if(argv.includes('--cloud-guest')){
+    const guest=await readCloudGuest();
+    if(!guest)throw new Error('Missing provisioned guest configuration');
+    if(await cloudGuestSaved(guest))return;
+    if (store.read(AUTH_SESSION_KEY)) {
+      if (!isGhostSkillProjectionBoundaryStableForOwner(guest.membershipId))
+        throw new Error('Guest profile already belongs to another account');
+      // The session and projection owner are committed atomically. Recover a crash before the first-boot marker.
+      await markCloudGuestSaved(guest);
+      return;
+    }
+    cloudGuest={guest,grant:await cloudGuestAuthorization(guest,deviceId,endpoints.authApiBaseUrl)};
+  }
+  if (!cloudGuest) out(noOpen ? 'Open the following Cindy login page on a device with a browser.' : 'Opening the Cindy login page in your browser…');
   const result = await runHostLogin({
+    cloudGuest,
+    organization,
     client,
     deviceId,
     store,
@@ -131,6 +154,7 @@ export async function runLoginCommand(argv, io = {}) {
     warn: err,
     admitAccount,
     persistSession: async (record, membership) => {
+      if (cloudGuest) await initializeCloudHostAccess(userDataDir);
       // The browser step can take minutes: check the desktop and serve again right before committing.
       await assertNoDesktopOnProfile(deps.scanDesktops ?? createDesktopScanner(userDataDir));
       const now = await (deps.readStatus ?? readHostProcessStatus)(userDataDir);
@@ -176,6 +200,7 @@ export async function runLoginCommand(argv, io = {}) {
       if (registration !== 'registered') err('This computer could not register with remote connections now; start Cindy Host and try signing in again if it stays unavailable.');
     },
   });
+  if(cloudGuest) await markCloudGuestSaved(cloudGuest.guest);
   out(`Signed in (${result.realm}). Cindy host will reuse this login on restart.`);
   // serve keeps its current session until it restarts (it does not adopt a new one while running).
   if (running.running === true) {

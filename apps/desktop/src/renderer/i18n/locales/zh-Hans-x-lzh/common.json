@@ -16405,6 +16405,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "增云机",
+        "preparingCloud": "云机备置中",
+        "manageCloud": "理云机",
         "allMachines": "诸机",
         "localMachine": "此机",
         "connecting": "方连…",

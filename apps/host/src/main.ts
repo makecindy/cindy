@@ -2,6 +2,7 @@
 import './boot-env.js';
 // Second: keeps unreadable user settings files instead of deleting them.
 import './boot-settings.js';
+import {confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
 import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutomaticIcon.js';
 import { readProjectIconImage, readProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
 import { createHostProjectInfoUpdate } from './project-info.js';
@@ -208,7 +209,7 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 const command = process.argv[2];
-const usage = 'cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]|stop]';
+const usage = 'cindy-host [serve|login [--region=cn|global] [--org=<domain-or-id>] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]|stop]';
 
 /** The status command's boundary category: the running Host's, else a lock-free read of the profile. */
 function readStatusSkillProjectionBoundary(processStatus: { running: boolean | null; runtime?: { skillProjectionBoundary?: string } }) {
@@ -478,6 +479,10 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
   }
   if (expectedOwner && expectedOwner !== membership.id) throw new HostAccountMismatchError();
   currentSessionToken = sessionToken;
+  if (process.platform==='linux' && endpoints.modelAccessApiBaseUrl) {
+    const base=endpoints.modelAccessApiBaseUrl;
+    confirmCloudGuestWhenOnline(()=>base,()=>currentSessionToken);
+  }
   currentDeviceId = verifiedDeviceId;
   remoteIdentityReady = canRegisterHostDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, ''));
   return { ...mapMembershipToAuthUser(membership, me.passportId), orgSlug: decodeAccessTokenOrgSlug(sessionToken) };

@@ -26,6 +26,8 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
 import { machineIdSync } from 'node-machine-id';
+import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
+import { enrollTestCloudDesktop } from './cloudDesktopTestEnrollment';
 import {
   AuthApiError,
   CindyAuthClient,
@@ -4965,6 +4967,9 @@ export async function updateServerProfile(
   };
 }
 
+let enterpriseGuestSignIn: Promise<void> | null = null;
+let cloudDesktopTestEnrollment: Promise<void> | null = null;
+
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
   if (authRefreshOverride) {
     receiveHostAuthState(await authRefreshOverride());
@@ -5121,7 +5126,53 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
       persistedSession = { version: 1, realm: AUTH_REGION, refreshToken: legacyToken };
     }
   }
+  if (persistedSession && process.platform==='linux') confirmCloudGuestWhenOnline(()=>getClientEndpointForRealm(activeAuthRealm,'modelAccessApiBaseUrl'),getAccessToken);
   if (!persistedSession) {
+    if (process.platform === 'linux' && !isPassiveSharedUserDataInstance()) {
+      const guest=await readCloudGuest();
+      if (guest && !await cloudGuestSaved(guest)) {
+        enterpriseGuestSignIn ??= (async () => {
+          const epoch=loginFlowEpoch;
+          const grant=await cloudGuestAuthorization(guest,deviceId,authServerUrl(AUTH_REGION));
+          const client=createAuthClient(AUTH_REGION);
+          const pair=await client.exchangeAuthorizationCode(grant.code,grant.verifier);
+          if (pair.status!=='ok') throw new Error('Cloud guest sign-in did not complete');
+          if (pair.membership.kind!=='org' || pair.membership.id!==guest.membershipId || pair.membership.orgId!==guest.organizationId || pendingAuthRealm || currentUser || epoch!==loginFlowEpoch) {
+            await client.logout(pair.accessToken);
+            throw new Error('Cloud guest owner changed');
+          }
+          // The account owner chose a controllable desktop at checkout. Apply this once to the freshly bound guest.
+          const { writeDeviceLinkSetting } = await import('./device-link/settings-store.desktop');
+          await writeDeviceLinkSetting('remoteControlEnabled', true);
+          await writeDeviceLinkSetting('remoteDesktopEnabled', true);
+          await completeLogin(pair,epoch);
+          await markCloudGuestSaved(guest);
+          confirmCloudGuestWhenOnline(()=>getClientEndpointForRealm(AUTH_REGION,'modelAccessApiBaseUrl'),getAccessToken);
+        })().finally(() => { enterpriseGuestSignIn = null; });
+        await enterpriseGuestSignIn;
+        return snapshotAuthState();
+      }
+    }
+    const socket = process.env.CINDY_CLOUD_DESKTOP_TEST_SOCKET;
+    if (socket && !app.isPackaged && process.platform === 'linux' && process.getuid && !isPassiveSharedUserDataInstance()) {
+      const epoch = loginFlowEpoch;
+      cloudDesktopTestEnrollment ??= enrollTestCloudDesktop(socket, process.getuid(), deviceId, async (code, verifier, id) => {
+        const client = createAuthClient(AUTH_REGION);
+        const pair = await client.exchangeAuthorizationCode(code, verifier);
+        if (pair.status !== 'ok') throw new Error('Cloud desktop authorization did not complete');
+        if (pair.membership.kind !== 'personal' || pair.membership.id !== id || pendingAuthRealm || currentUser) {
+          await client.logout(pair.accessToken);
+          throw new Error('Cloud desktop test identity changed');
+        }
+        await completeLogin(pair, epoch);
+      });
+      try {
+        await cloudDesktopTestEnrollment;
+        return snapshotAuthState();
+      } catch {
+        log.warn('Cloud desktop test enrollment unavailable');
+      }
+    }
     return finishColdStartSignedOut('cold-start-no-persisted-session');
   }
   const storedToken = persistedSession.refreshToken;
