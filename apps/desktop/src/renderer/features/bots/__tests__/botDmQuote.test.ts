@@ -29,7 +29,7 @@ describe('forwarded companion reply quotes', () => {
 
 describe('IM companion reply quotes', () => {
   const names = { owner: 'Chris', companion: 'Cindy' };
-  const content = '<p>原文 &amp; 记录<br>第二行</p>';
+  const content = '<p><strong>原文 &amp;</strong>\n<em>记录</em><br>第二行</p>';
   it.each(['feishu', 'lark'])('uses %s display text for live and newly saved quotes', (im) => {
     const message = { clientId: 'im', role: 'user' as const, content, hookSource: { im, userText: content } };
     const quote = botReplyQuoteFor(message)!;
@@ -49,6 +49,7 @@ describe('IM companion reply quotes', () => {
   });
 
   it('preserves other channels and older snapshots whose source is unloaded', () => {
+    const content = '<p>原文 &amp; 记录<br>第二行</p>';
     const message = { clientId: 'im', role: 'user' as const, content, hookSource: { im: 'slack', userText: content } };
     const quote = botReplyQuoteFor(message)!;
     expect(quote.excerpt).toBe(content);

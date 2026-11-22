@@ -354,9 +354,9 @@ describe('HookTaskCard attached context', () => {
   // Minimal unit input: the last, non-first user-text IM message in an idle task.
   // Standalone file: 6.69s Vitest / 7.64s command wall, including real message/editor imports.
   it.each([
-    ['slack', 'Slack', 'Please check the error'],
-    ['feishu', '飞书', '<p>Please check the error</p>'],
-  ])('opens the inline editor for %s and preserves the wire text on unchanged resend', async (im, channel, sourceText) => {
+    ['slack', 'Slack', 'Please check the error', 'Please check the error'],
+    ['feishu', '飞书', '<p>Please check<strong> the</strong>\n<em>error</em></p>', 'Please check the\nerror'],
+  ])('opens the inline editor for %s and preserves the wire text on unchanged resend', async (im, channel, sourceText, editText) => {
     render(
       <MemoryRouter>
         <ConfirmDialogProvider>
@@ -377,11 +377,11 @@ describe('HookTaskCard attached context', () => {
     );
     expect(screen.getByText(`Cindy · 来自 ${channel}`)).toBeTruthy();
     expect(screen.queryByRole('textbox')).toBeNull();
-    fireEvent.mouseEnter(screen.getByText('Please check the error').closest('[data-user-msg-id]')!);
+    fireEvent.mouseEnter(screen.getByText(editText.replace(/\s+/g, ' ')).closest('[data-user-msg-id]')!);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.messageActionBar.edit') }));
     });
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Please check the error');
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(editText);
     expect(screen.getByRole('button', { name: i18n.t('chat.userMessage.editCancel') })).toBeTruthy();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.userMessage.editSend') }));
@@ -426,6 +426,18 @@ describe('HookTaskCard attached context', () => {
 });
 
 describe('HookTaskCard IM text display', () => {
+  it.each(['feishu', 'lark'])('preserves inline line breaks in %s text and attached quotes', (im) => {
+    const content = '<p><strong>first</strong>\r\n<em>last</em></p>\n<p>Next<br>line</p>';
+    const expected = 'first\nlast\n\nNext\nline';
+    const { container } = render(<HookTaskCard im={im}
+      userText={resolveUserDisplayText({ content, hookSource: { im } })}
+      replyContext={'[演示成员] [时间未知] ' + content} replyMessageCount={1} />);
+    expect(container.querySelector('[data-selection-quote-body]')?.textContent).toBe(expected);
+    fireEvent.click(screen.getByRole('button', { name: '本条附带的上下文（1）' }));
+    expect(screen.getByRole('region', { name: '引用消息（1）' }).textContent)
+      .toContain('[演示成员] [时间未知] ' + expected);
+  });
+
   it('projects only paragraph-wrapped Feishu/Lark text and keeps literal native input', () => {
     const content = '<p>演示 &amp; &lt;p&gt;<br>第二行 <strong>正文</strong></p>';
     expect(resolveUserDisplayText({ content })).toBe(content);

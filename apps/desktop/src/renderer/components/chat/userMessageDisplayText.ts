@@ -85,7 +85,8 @@ function paragraphsAsText(fragment: string): string {
   if (codeWithMarkup.test(fragment) || remainingMarkup.test(fragment.replace(paragraphFormattingTags, ''))) {
     return fragment;
   }
-  const text = mailTextParagraphs(fragment).map((paragraph) => paragraph.text).join('\n\n');
+  const text = mailTextParagraphs(fragment, { preserveMultilineWhitespace: true })
+    .map((paragraph) => paragraph.text).join('\n\n');
   return text.trim() ? text : fragment;
 }
 
