@@ -1726,6 +1726,73 @@ describe('Scheduler', () => {
     await local.scheduler.stop();
   });
 
+  // Codex P2 on #11577:守卫回读单飞登记后,底层读永不 settle 时条目要等生命周期
+  // 切换才消失。存储恢复(listActive 成功)后、行已离开批量结果的守卫仍复用那份
+  // 孤儿读,永远发不出新点读 —— 别的实例写下的过期行刷不进 canDispatch,排队中的
+  // run 在用户过期之后仍被放行。钉住两半契约:楔住期间不重发(单飞),listActive
+  // 成功之后退役换新读(恢复)。
+  it('retires a wedged guard read after listActive recovers', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 30,
+      logger: { warn: vi.fn() },
+      // 派发停在途中:守卫快照留在 automaticDispatchSchedules。
+      runnerImpl: async () => new Promise<FireResult>(() => {}),
+    });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    const schedule = await local.scheduler.create({
+      ...baseInput, intervalMs: 15_000, expireAt: createdAt + 180_000,
+    });
+
+    local.clock.setTo(schedule.nextFireAt!);
+    void local.scheduler.tick().catch(() => undefined);
+    for (let i = 0; i < 100 && local.fireCalls.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(local.fireCalls).toHaveLength(1);
+
+    // 楔住形态:批量读不回包,这一条的点读也永不 settle(在途读成了孤儿)。
+    // 别的实例随后把行过期掉:它离开 listActive,本地只能靠点读得知。
+    const expiredRow: Schedule = {
+      ...schedule,
+      status: 'expired',
+      nextFireAt: undefined,
+      expireAt: createdAt + 60_000,
+      updatedAt: createdAt + 90_000,
+    };
+    let recovered = false;
+    let reads = 0;
+    vi.spyOn(local.storage, 'listActive').mockImplementation(() =>
+      recovered ? Promise.resolve([]) : new Promise<Schedule[]>(() => {}));
+    vi.spyOn(local.storage, 'get').mockImplementation((id: string) => {
+      if (id !== schedule.id) return Promise.resolve(null);
+      reads += 1;
+      return recovered
+        ? Promise.resolve(expiredRow)
+        : new Promise<Schedule | null>(() => {});
+    });
+
+    // 楚住期间:每轮同步都到点读分支,单飞必须压住不重发。
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(reads).toBe(1);
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(true);
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(reads).toBe(1);
+
+    // 存储恢复:listActive 应答(行已过期不在结果里),点读也恢复正常。
+    recovered = true;
+    local.storage.schedules.set(schedule.id, expiredRow);
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    // 孤儿读必须退役:新点读带回过期行,守卫不再放行。
+    expect(reads).toBe(2);
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(false);
+
+    await local.scheduler.stop();
+  });
+
   // Codex P2 on #11577:守卫回读按任务单飞之后,在途的那一次读可能发端于本地快照
   // 前进之前。用户改短截止时间,update() 换掉 automaticDispatchSchedules 里的那一版
   // (updatedAt 前进),而单飞复用的旧读回来的是改期前那一行(更长的 expireAt);

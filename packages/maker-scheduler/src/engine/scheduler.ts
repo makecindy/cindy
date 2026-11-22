@@ -595,6 +595,14 @@ export class Scheduler extends EventEmitter {
   private readonly validateModelSelection?: SchedulerOptions['validateModelSelection'];
   private readonly passive: boolean;
   private lastDbSyncAt = 0;
+  /**
+   * 成功 `listActive()` 的代次(见 tick 的 DB sync 块)。在途单飞回读按登记时的
+   * 代次比:登记之后 listActive 成功过,那份读就可能已是永不 settle 的孤儿,下次
+   * 需要时退役换新(getGuardFallbackRead / getExpiryFallbackRead)。存储整体楔住时
+   * listActive 不成功、代次不前进,单飞复用照旧 —— 故障期间未完成的 RPC 仍是一条
+   * 任务一份(Codex P2 on #11577)。
+   */
+  private listActiveGeneration = 0;
 
   // ── 并发闸门状态 ──────────────────────────────────────────────────────────
   // fireOne / runNow 包装层在第一次 await 前同步写入 attempts，tick 直接读取 Map.size。
@@ -640,9 +648,10 @@ export class Scheduler extends EventEmitter {
    * 在途的过期回读（key = scheduleId）。CAS 败者后要回读真实行,这一读也可能超上限;
    * 超时后迟到收口必须用**原来那次**读的结果 —— 另起一次读,那次更慢(或失败)时
    * 这一行就丢了,缓存一直停在旧的(已过期)截止时间。同一任务只保留一份在途读,
-   * 免得存储故障期间每 tick 堆一次读(Codex P1 on #11577)。
+   * 免得存储故障期间每 tick 堆一次读(Codex P1 on #11577)。值带登记时的 listActive
+   * 代次:登记之后 listActive 成功过,下次需要时退役换新读(Codex P2 on #11577)。
    */
-  private readonly pendingExpireReads = new Map<string, Promise<Schedule | null>>();
+  private readonly pendingExpireReads = new Map<string, { read: Promise<Schedule | null>; generation: number }>();
   /**
    * 在途的排期补偿（key = scheduleId，值带**这一轮 run** 的 runId）。补排卡死时
    * (预闸门超时只放弃「等」,活儿还在跑),后续 tick 不能再对同一条任务重入 ——
@@ -659,9 +668,11 @@ export class Scheduler extends EventEmitter {
    * 回读一次(Codex P2 on #11577),而读同样可能挂死:不登记在途读的话,之后每个
    * 30 秒的 DB sync 块都会把同样的读再发一遍,存储故障期间未完成的 RPC 工作无界
    * 增长,把认领和过期写入也挤掉(Codex P1 on #11577)。同一任务只保留一份在途读,
-   * settle 后清位;每条守卫仍各自挂上身份 guard 的迟到收口,迟到结果不丢。
+   * settle 后清位;每条守卫仍各自挂上身份 guard 的迟到收口,迟到结果不丢。值带登记
+   * 时的 listActive 代次:登记之后 listActive 成功过,下次需要时退役换新读
+   * (Codex P2 on #11577)。
    */
-  private readonly inFlightGuardReads = new Map<string, Promise<Schedule | null>>();
+  private readonly inFlightGuardReads = new Map<string, { read: Promise<Schedule | null>; generation: number }>();
   /**
    * 在途的僵尸清扫。与 inFlightReplans 同一类问题:markRunningAsInterrupted 永不
    * settle 时,预闸门超时只放弃「等」,活儿还在跑 —— 而清扫挂在每个 30 秒的 DB sync
@@ -960,6 +971,9 @@ export class Scheduler extends EventEmitter {
         }
         if (this.tickHandle !== tickHandle) return;
         if (actives) {
+          // 批量读成功落地 = 存储至少应答过一次。代次前进,此前登记的在途单飞读
+          // 在下次被需要时退役(见 getGuardFallbackRead / getExpiryFallbackRead)。
+          this.listActiveGeneration += 1;
           const previousSchedules = new Map(this.activeSchedules);
           this.activeSchedules.clear();
           const activeIds = new Set(actives.map((sch) => sch.id));
@@ -1322,14 +1336,20 @@ export class Scheduler extends EventEmitter {
   /**
    * 取一条任务在途的过期回读(CAS 败者后的那一次)。同一任务只保留一份:回读卡死
    * 时后续 tick 复用它,既不丢它最终的结果,也不堆出无界的读(Codex P1 on #11577)。
+   *
+   * 复用只在「登记之后 listActive 没有成功过」时成立。代次前进说明存储已经能应答,
+   * 此时还抱着那份可能永不 settle 的孤儿读,这一行的最新状态就永远对齐不进来
+   * (Codex P2 on #11577)。代次不前进(存储整体楔住)时照旧复用:故障期间未完成
+   * 的 RPC 仍是一条任务一份,不重新打开无界增长的口子。
    */
   private getExpiryFallbackRead(scheduleId: string): Promise<Schedule | null> {
     const existing = this.pendingExpireReads.get(scheduleId);
-    if (existing) return existing;
+    if (existing && existing.generation >= this.listActiveGeneration) return existing.read;
     const read = this.storage.get(scheduleId);
-    this.pendingExpireReads.set(scheduleId, read);
+    this.pendingExpireReads.set(scheduleId, { read, generation: this.listActiveGeneration });
     const clear = () => {
-      if (this.pendingExpireReads.get(scheduleId) === read) this.pendingExpireReads.delete(scheduleId);
+      const current = this.pendingExpireReads.get(scheduleId);
+      if (current?.read === read) this.pendingExpireReads.delete(scheduleId);
     };
     // 两个分支都挂 clear:拒绝的 promise 不能变成未处理的 rejection。
     void read.then(clear, clear);
@@ -1341,14 +1361,20 @@ export class Scheduler extends EventEmitter {
    * getExpiryFallbackRead 同一形状:同一任务只保留一份在途读,settle 后清位;
    * 读挂死时后续 tick 复用它,既不丢它最终的结果,也不堆出无界的读
    * (Codex P1 on #11577)。每条守卫仍各自挂上自己的迟到收口。
+   *
+   * 退役规则同 getExpiryFallbackRead。守卫这条路上孤儿读的伤害更直接:行已离开
+   * listActive 的守卫每个 30 秒同步都要点读,复用孤儿读就永远发不出新读,别的实例
+   * 写下的过期/新截止时间刷不进 canDispatch,排队中的 run 在用户过期之后仍被放行
+   * (Codex P2 on #11577)。
    */
   private getGuardFallbackRead(scheduleId: string): Promise<Schedule | null> {
     const existing = this.inFlightGuardReads.get(scheduleId);
-    if (existing) return existing;
+    if (existing && existing.generation >= this.listActiveGeneration) return existing.read;
     const read = this.storage.get(scheduleId);
-    this.inFlightGuardReads.set(scheduleId, read);
+    this.inFlightGuardReads.set(scheduleId, { read, generation: this.listActiveGeneration });
     const clear = () => {
-      if (this.inFlightGuardReads.get(scheduleId) === read) this.inFlightGuardReads.delete(scheduleId);
+      const current = this.inFlightGuardReads.get(scheduleId);
+      if (current?.read === read) this.inFlightGuardReads.delete(scheduleId);
     };
     void read.then(clear, clear);
     return read;
