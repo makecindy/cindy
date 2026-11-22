@@ -479,12 +479,21 @@ export function getDeviceProvidersGeneration(deviceId: string): number {
   return deviceGen.get(deviceId) ?? 0;
 }
 
+const routedProviderGenerations = new Map<string, number>();
+
+export function getRoutedProviderGeneration(deviceId: string): number {
+  return routedProviderGenerations.get(deviceId) ?? 0;
+}
+
 export function evictDeviceProviders(
   deviceId: string,
   options?: { retainDisplaySnapshot?: boolean; directOnly?: boolean; deferNotify?: boolean },
 ): number {
   // A provisional direct target must not evict the host's healthy routed aliases.
   if (!options?.directOnly) {
+    if (!parseModelCatalogKey(deviceId)) {
+      routedProviderGenerations.set(deviceId, getRoutedProviderGeneration(deviceId) + 1);
+    }
     for (const key of new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys()])) {
       const route = parseModelCatalogKey(key);
       if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {

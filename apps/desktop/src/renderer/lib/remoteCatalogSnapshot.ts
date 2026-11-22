@@ -10,6 +10,7 @@ import {
   getDeviceCapabilitiesGeneration,
   getInterestedDeviceCapabilityTargets,
   getMountedControlledDeviceCapabilityTargets,
+  getRoutedCapabilityGeneration,
   prefetchDeviceCapabilities,
 } from '@/hooks/useAgentCapabilities';
 import {
@@ -19,6 +20,7 @@ import {
   getDeviceProvidersGeneration,
   getInterestedDeviceProviderTargets,
   getMountedControlledDeviceProviderTargets,
+  getRoutedProviderGeneration,
   isDeviceProvidersGenerationCurrent,
   prefetchDeviceProviders,
 } from '@/hooks/useDeviceProviders';
@@ -31,13 +33,29 @@ const refreshes = new Map<
     generation: number;
     capabilitiesGeneration: number;
     needsRead: boolean;
+    endpointsAreCurrent: () => boolean;
   }
 >();
+
+function captureRouteEndpoints(deviceId: string): () => boolean {
+  const route = parseModelCatalogKey(deviceId);
+  const endpoints = route ? [route.taskDeviceId, route.agentDeviceId].map(key => ({
+    key,
+    providers: getRoutedProviderGeneration(key),
+    capabilities: getRoutedCapabilityGeneration(key),
+  })) : [];
+  // A detached route can disappear from the caches while its refresh is still queued.
+  // Direct-only eviction must leave the forwarded read alive.
+  return () => endpoints.every(({ key, providers, capabilities }) =>
+    getRoutedProviderGeneration(key) === providers
+    && getRoutedCapabilityGeneration(key) === capabilities);
+}
 
 function getCurrentRefresh(deviceId: string) {
   const refresh = refreshes.get(deviceId);
   return refresh && isDeviceProvidersGenerationCurrent(deviceId, refresh.generation)
-    && getDeviceCapabilitiesGeneration(deviceId) === refresh.capabilitiesGeneration ? refresh : undefined;
+    && getDeviceCapabilitiesGeneration(deviceId) === refresh.capabilitiesGeneration
+    && refresh.endpointsAreCurrent() ? refresh : undefined;
 }
 
 async function scheduleRefresh(
@@ -47,13 +65,15 @@ async function scheduleRefresh(
   schedule: ReturnType<typeof createCoalescedRefresh<void>>,
   read: () => Promise<unknown>,
 ): Promise<void> {
-  const refresh = { schedule, generation, capabilitiesGeneration, needsRead: false };
+  const endpointsAreCurrent = captureRouteEndpoints(deviceId);
+  const refresh = { schedule, generation, capabilitiesGeneration, needsRead: false, endpointsAreCurrent };
   refreshes.set(deviceId, refresh);
   try {
     await schedule(async () => {
       // A queued refresh must not reopen reads after disconnect or account change.
       if (!isDeviceProvidersGenerationCurrent(deviceId, generation)
-        || getDeviceCapabilitiesGeneration(deviceId) !== capabilitiesGeneration) return;
+        || getDeviceCapabilitiesGeneration(deviceId) !== capabilitiesGeneration
+        || !endpointsAreCurrent() || refreshes.get(deviceId)?.schedule !== schedule) return;
       await read();
     });
   } finally {
@@ -63,12 +83,16 @@ async function scheduleRefresh(
 
 /** A catalog notification invalidates display data while locations are being rediscovered. */
 export function invalidateControlledCatalogRoutes(taskDeviceId: string, catalogChanged: boolean): void {
-  const affected = catalogChanged ? [...refreshes.keys()]
+  const affected = [...refreshes.keys()]
     .filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId)
-    .map(key => ({ key, refresh: getCurrentRefresh(key) })) : [];
+    .map(key => ({ key, refresh: getCurrentRefresh(key) }));
   evictControlledDeviceProviders(taskDeviceId);
   evictControlledDeviceCapabilities(taskDeviceId);
   for (const { key, refresh } of affected) {
+    if (!catalogChanged) {
+      refreshes.delete(key);
+      continue;
+    }
     if (!refresh || refreshes.get(key) !== refresh) continue;
     // Preserve the active reader until discovery can schedule the replacement.
     refresh.generation = getDeviceProvidersGeneration(key);
@@ -132,6 +156,7 @@ export async function refreshRemoteCatalogSnapshot(deviceId: string, notificatio
     const { key } = target;
     const providers = getDeviceProvidersGeneration(key);
     const capabilities = getDeviceCapabilitiesGeneration(key);
+    const endpointsAreCurrent = captureRouteEndpoints(key);
     const read = () => Promise.all([prefetchDeviceProviders(key), prefetchDeviceCapabilities(key)]);
     if (target.previous) {
       // The cascade already evicted this route. Queue its trailing read now so
@@ -141,7 +166,7 @@ export async function refreshRemoteCatalogSnapshot(deviceId: string, notificatio
       idleRoutes.push(async () => {
         // The task host can be retired independently before its source reads.
         if (!isDeviceProvidersGenerationCurrent(key, providers)
-          || getDeviceCapabilitiesGeneration(key) !== capabilities) return;
+          || getDeviceCapabilitiesGeneration(key) !== capabilities || !endpointsAreCurrent()) return;
         await scheduleRefresh(key, providers, capabilities, createCoalescedRefresh<void>(), read);
       });
     }
