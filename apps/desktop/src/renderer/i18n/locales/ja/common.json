@@ -11072,6 +11072,11 @@
       "pinned": "固定済み",
       "needsAttention": "対応が必要",
       "duplicate": "仲間を複製",
+      "duplicating": "仲間を複製しています…",
+      "duplicateFailed": "仲間を複製できませんでした。",
+      "duplicateModelRequired": "複製する前に、設定で仲間のデフォルトのモデルを選択してください。",
+      "pinFailed": "仲間の固定を変更できませんでした。",
+      "hideFailed": "仲間の表示・非表示を変更できませんでした。",
       "moreActions": "{{name}} のその他の操作",
       "viewIcons": "アイコン",
       "showCollapsedTeammateAvatars": "折りたたみ時にアバターを表示",
@@ -12106,46 +12111,15 @@
     },
     "guided": {
       "title": "仲間を作成",
-      "reviewTitle": "新しい仲間",
-      "question": "期待することを簡単に書いてください。",
-      "placeholder": "例えば、日常の話をしながら英会話を練習して、表現を丁寧に直してほしい。",
       "generate": "仲間を生成",
-      "generating": "仲間の人物像を考えています…",
-      "generationFailed": "生成できませんでした。入力内容は残っています。もう一度お試しください。",
       "modelRequired": "上で利用可能なモデルを選択して続けてください。",
       "modelFollowsDefault": "仲間の既定モデルに従います。",
       "modelForThisBot": "この選択はこの仲間にのみ適用されます。",
-      "cindyDescription": "Cindy の使い方やツールの接続をお手伝いし、一緒にやり遂げます。",
-      "cindySummary": "Cindy の管理、ツールの接続、仕事のお手伝い。",
-      "openCindy": "Cindy を開く",
-      "addCindy": "Cindy を追加",
-      "done": "完了",
-      "editName": "名前を編集",
       "duplicateName": "同じ名前の仲間がいます。区別しやすい名前を選んでください。",
-      "introduction": "自己紹介",
-      "editIntroduction": "自己紹介を編集",
-      "refine": "仲間を調整",
-      "refinePlaceholder": "何を変えたいですか？例えば、もっと気さくでユーモアのある感じに。",
-      "back": "戻る",
-      "invite": "仲間を招待",
       "portrait": "アバター {{number}}",
       "upload": "画像をアップロード",
       "generateAvatar": "アバターを生成",
-      "useAvatar": "この画像を使う",
-      "examples": {
-        "english": {
-          "label": "英会話の練習",
-          "prompt": "日常の会話で英語を練習したい。辛抱強く聞いて、不自然な表現を丁寧に直してほしい。"
-        },
-        "ideas": {
-          "label": "アイデアを考える",
-          "prompt": "想像力と自分の意見を持つ創作仲間。文章や製品のアイデアを具体的な計画にしてほしい。"
-        },
-        "life": {
-          "label": "日々の話",
-          "prompt": "温かくユーモアがあり、すぐに助言せず日々の小さな話を聞いてくれる仲間。"
-        }
-      }
+      "useAvatar": "この画像を使う"
     },
     "import": {
       "title": "仲間をインポート",

@@ -11201,6 +11201,11 @@
       "pinned": "Épinglés",
       "needsAttention": "Action requise",
       "duplicate": "Dupliquer l’ami",
+      "duplicating": "Duplication de l’ami…",
+      "duplicateFailed": "Impossible de dupliquer l’ami.",
+      "duplicateModelRequired": "Pour dupliquer cet ami, choisissez d’abord un modèle par défaut pour les amis dans les Paramètres.",
+      "pinFailed": "Impossible de modifier l’épinglage de l’ami.",
+      "hideFailed": "Impossible de masquer ou d’afficher l’ami.",
       "moreActions": "Plus d'actions pour {{name}}",
       "viewIcons": "Icônes",
       "showCollapsedTeammateAvatars": "Afficher les avatars en mode réduit",
@@ -12250,46 +12255,15 @@
     },
     "guided": {
       "title": "Créer un ami",
-      "reviewTitle": "Votre nouvel ami",
-      "question": "Décrivez brièvement vos attentes.",
-      "placeholder": "Par exemple : aide-moi à pratiquer l'anglais grâce à des conversations du quotidien et des corrections bienveillantes.",
       "generate": "Créer l’ami",
-      "generating": "Création de votre ami…",
-      "generationFailed": "Impossible de générer votre ami. Votre idée est conservée ; veuillez réessayer.",
       "modelRequired": "Choisissez un modèle disponible ci-dessus pour continuer.",
       "modelFollowsDefault": "Suit le modèle par défaut des amis.",
       "modelForThisBot": "Ce choix s'applique uniquement à cet ami.",
-      "cindyDescription": "Je peux vous aider à utiliser Cindy, à connecter vos outils et à accomplir vos tâches ensemble.",
-      "cindySummary": "Gérer Cindy, connecter des outils et accomplir vos tâches.",
-      "openCindy": "Ouvrir Cindy",
-      "addCindy": "Ajouter Cindy",
-      "done": "Terminé",
-      "editName": "Modifier le nom",
       "duplicateName": "Ce nom est déjà pris. Choisissez un nom facile à distinguer.",
-      "introduction": "À propos de moi",
-      "editIntroduction": "Modifier la présentation",
-      "refine": "Ajuster l’ami",
-      "refinePlaceholder": "Que voudriez-vous changer ? Par exemple : moins formel et un peu plus enjoué.",
-      "back": "Retour",
-      "invite": "Inviter l’ami",
       "portrait": "Portrait {{number}}",
       "upload": "Importer une image",
       "generateAvatar": "Générer un portrait",
-      "useAvatar": "Utiliser ce portrait",
-      "examples": {
-        "english": {
-          "label": "Pratiquer l'anglais",
-          "prompt": "Pratique l'anglais avec moi à travers des conversations du quotidien. Sois patient et corrige avec bienveillance les expressions peu naturelles."
-        },
-        "ideas": {
-          "label": "Explorer des idées",
-          "prompt": "Un partenaire créatif imaginatif, qui a ses propres opinions et m'aide à transformer mes idées d'écriture et de produits en plans concrets."
-        },
-        "life": {
-          "label": "Parler de la vie",
-          "prompt": "Un ami chaleureux et drôle, qui écoute les petites choses de ma vie sans se précipiter pour donner des conseils."
-        }
-      }
+      "useAvatar": "Utiliser ce portrait"
     },
     "import": {
       "title": "Importer un ami",

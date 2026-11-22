@@ -11117,6 +11117,11 @@
       "pinned": "Angeheftet",
       "needsAttention": "Erfordert Aufmerksamkeit",
       "duplicate": "Freund duplizieren",
+      "duplicating": "Freund wird dupliziert…",
+      "duplicateFailed": "Der Freund konnte nicht dupliziert werden.",
+      "duplicateModelRequired": "Wähle zuerst in den Einstellungen ein Standardmodell für Freunde, um diesen Freund zu duplizieren.",
+      "pinFailed": "Das Anheften des Freundes konnte nicht geändert werden.",
+      "hideFailed": "Der Freund konnte nicht aus- oder eingeblendet werden.",
       "moreActions": "Weitere Aktionen für {{name}}",
       "viewIcons": "Symbole",
       "showCollapsedTeammateAvatars": "Avatare im eingeklappten Zustand anzeigen",
@@ -12151,46 +12156,15 @@
     },
     "guided": {
       "title": "Freund erstellen",
-      "reviewTitle": "Dein neuer Freund",
-      "question": "Beschreibe kurz deine Erwartungen.",
-      "placeholder": "Zum Beispiel: Hilf mir, durch Alltagsgespräche und durchdachte Korrekturen Englisch zu üben.",
       "generate": "Freund erstellen",
-      "generating": "Dein Freund wird gestaltet…",
-      "generationFailed": "Dein Freund konnte nicht erstellt werden. Deine Idee ist noch da. Versuch es erneut.",
       "modelRequired": "Wähle oben ein verfügbares Modell, um fortzufahren.",
       "modelFollowsDefault": "Verwendet das Standardmodell für Freunde.",
       "modelForThisBot": "Diese Auswahl gilt nur für diesen Freund.",
-      "cindyDescription": "Ich kann dir helfen, Cindy zu nutzen, deine Tools zu verbinden und gemeinsam Dinge zu erledigen.",
-      "cindySummary": "Cindy verwalten, Tools verbinden und Dinge erledigen.",
-      "openCindy": "Cindy öffnen",
-      "addCindy": "Cindy hinzufügen",
-      "done": "Fertig",
-      "editName": "Namen bearbeiten",
       "duplicateName": "Dieser Name ist vergeben. Wähle einen Namen, den du leicht unterscheiden kannst.",
-      "introduction": "Über mich",
-      "editIntroduction": "Vorstellung bearbeiten",
-      "refine": "Freund anpassen",
-      "refinePlaceholder": "Was würdest du ändern? Zum Beispiel: weniger förmlich und etwas verspielter.",
-      "back": "Zurück",
-      "invite": "Freund einladen",
       "portrait": "Porträt {{number}}",
       "upload": "Bild hochladen",
       "generateAvatar": "Porträt generieren",
-      "useAvatar": "Dieses Porträt verwenden",
-      "examples": {
-        "english": {
-          "label": "Englisch üben",
-          "prompt": "Übe mit mir Englisch in Alltagsgesprächen. Sei geduldig und korrigiere unnatürliche Formulierungen behutsam."
-        },
-        "ideas": {
-          "label": "Ideen erkunden",
-          "prompt": "Ein fantasievoller kreativer Freund mit eigener Meinung, der mir hilft, Schreib- und Produktideen zu konkreten Plänen auszuarbeiten."
-        },
-        "life": {
-          "label": "Über das Leben reden",
-          "prompt": "Ein herzlicher, witziger Begleiter, der mir bei den kleinen Dingen im Leben zuhört, ohne sofort Ratschläge zu geben."
-        }
-      }
+      "useAvatar": "Dieses Porträt verwenden"
     },
     "import": {
       "title": "Freund importieren",

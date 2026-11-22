@@ -68,7 +68,9 @@ import {
 } from './botListDisplay';
 import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
 import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, writeTeammatesViewMode, type TeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
+import { toast } from '@/lib/toast';
 import {
+  BotModelSelectionRequiredError,
   canonicalBotSessionId,
   duplicateBotProfile,
   setBotHidden,
@@ -192,6 +194,8 @@ export function TeammatesSection() {
   const [archiveBusy, setArchiveBusy] = useState(false);
   const archiveBusyRef = useRef(false);
   const [archiveError, setArchiveError] = useState('');
+  const [duplicatingBotId, setDuplicatingBotId] = useState<string | null>(null);
+  const duplicatingRef = useRef(false);
   const [now, setNow] = useState(() => Date.now());
   const [contextMenu, setContextMenu] = useState<{
     kind: 'bot' | 'group';
@@ -246,6 +250,34 @@ export function TeammatesSection() {
       }
       archiveBusyRef.current = false;
       setArchiveBusy(false);
+    }
+  };
+
+  // Roster writes are not optimistic: a failure leaves the row unchanged, so say so.
+  // The cause is unknown here, so the message names the action without advising a retry.
+  const rosterAction = (action: Promise<unknown>, failedKey: 'bots.list.pinFailed' | 'bots.list.hideFailed') => {
+    const owner = getDataOwnerGeneration();
+    action.catch(() => {
+      if (isDataOwnerGenerationCurrent(owner)) toast.error(t(failedKey));
+    });
+  };
+
+  // Duplicating reads the avatar and waits for the new profile; one at a time keeps names unique.
+  const duplicateBot = async (bot: BotProfile) => {
+    if (duplicatingRef.current) return;
+    duplicatingRef.current = true;
+    setDuplicatingBotId(bot.id);
+    const owner = getDataOwnerGeneration();
+    try {
+      const copy = await duplicateBotProfile(bot.id);
+      if (isDataOwnerGenerationCurrent(owner)) navigate(`/bots/${copy.id}`);
+    } catch (error) {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      toast.error(t(error instanceof BotModelSelectionRequiredError
+        ? 'bots.list.duplicateModelRequired' : 'bots.list.duplicateFailed'));
+    } finally {
+      duplicatingRef.current = false;
+      setDuplicatingBotId(null);
     }
   };
 
@@ -452,19 +484,19 @@ export function TeammatesSection() {
   );
 
   const renderBotContextMenu = (bot: BotProfile, selected: boolean) => renderContextMenu('bot', bot.id, <>
-        <DropdownMenuItem onSelect={() => void setBotPinned(bot.id, !bot.pinnedAt)}>
+        <DropdownMenuItem onSelect={() => rosterAction(setBotPinned(bot.id, !bot.pinnedAt), 'bots.list.pinFailed')}>
           <Pin size={14} className="mr-2" />
           {t(bot.pinnedAt ? 'bots.list.unpin' : 'bots.list.pin')}
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => {
-            void setBotHidden(bot.id, true).then(() => {
+            rosterAction(setBotHidden(bot.id, true).then(() => {
               if (!selected) return;
               const fallback = roster.visible.find(
                 (candidate) => candidate.id !== bot.id,
               );
               navigate(fallback ? `/bots/${fallback.id}` : '/bots');
-            });
+            }), 'bots.list.hideFailed');
           }}
         >
           <EyeOff size={14} className="mr-2" />
@@ -474,11 +506,8 @@ export function TeammatesSection() {
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              onSelect={() => {
-                void duplicateBotProfile(bot.id).then((copy) =>
-                  navigate(`/bots/${copy.id}`),
-                );
-              }}
+              disabled={duplicatingBotId !== null}
+              onSelect={() => void duplicateBot(bot)}
             >
               <Copy size={14} className="mr-2" />
               {t('bots.list.duplicate')}
@@ -883,7 +912,11 @@ export function TeammatesSection() {
                     {/* Reserve the timestamp column so status changes do not shift the preview. */}
                     <span className="flex min-w-10 shrink-0 self-stretch flex-col items-end justify-between whitespace-nowrap py-0.5">
                       <span data-teammate-timestamp className={cn('min-h-4 text-11 tabular-nums', mutedClass)}>{timestamp}</span>
-                      <span aria-hidden className="flex min-h-4 items-center justify-end" />
+                      <span className="flex min-h-4 items-center justify-end">
+                        {duplicatingBotId === bot.id ? (
+                          <Spinner size={12} role="status" aria-label={t('bots.list.duplicating')} className={mutedClass} />
+                        ) : null}
+                      </span>
                     </span>
                   </button>
                   {renderBotContextMenu(bot, selected)}
@@ -934,7 +967,7 @@ export function TeammatesSection() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => void setBotHidden(bot.id, false)}
+                          onClick={() => rosterAction(setBotHidden(bot.id, false), 'bots.list.hideFailed')}
                           className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--surface-hover)]"
                           aria-label={t('bots.list.unhideNamed', { name: bot.name })}
                         >
