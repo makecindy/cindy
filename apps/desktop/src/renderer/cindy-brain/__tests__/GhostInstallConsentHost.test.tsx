@@ -119,6 +119,33 @@ describe('GhostInstallConsentHost', () => {
     expect(unsubscribeDismiss).toHaveBeenCalledOnce();
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：真实 GhostConfirmDialogHost 收到 contentSelectable 载荷后，把它传给共享 ConfirmDialog；用户可选中并复制授权链接。
+  // - Bug／规则依据：PR #11697 P1（Host 授权链接既不能点击也不能选中复制）；DESIGN.md §4 Dialog & Modal、docs/dev-rules/protocol-compatibility.md append-only 降级。
+  // - 现有覆盖缺口：旧用例只覆盖取消、断链与权限文案，未覆盖授权链接可选中字段的跨进程透传。
+  // - 最小失败输入：确认载荷带 contentSelectable:true；修复前共享弹窗不收到该字段，正文仍 select-none。
+  // - tier：unit（真实 Host 组件 + 注入确认桥，无 Electron 窗口或外部浏览器）。
+  // - 实测耗时：4.96s（Desktop Vitest 单独运行既有 jsdom 文件；保留文件级 fixture，未新增逐用例环境或真实等待）。
+  it('passes contentSelectable to the shared confirm dialog for authorization links', async () => {
+    type ConfirmPayload = Parameters<Parameters<typeof window.electronAPI.ghosts.onConfirmRequest>[0]>[0];
+    let request: ((payload: ConfirmPayload) => void) | undefined;
+    const resolveConfirm = vi.fn(async () => ({ handled: true }));
+    Object.assign(window.electronAPI.ghosts, {
+      onConfirmRequest: (callback: typeof request) => { request = callback; return () => {}; },
+      onConfirmDismissed: () => () => {},
+      resolveConfirm,
+    });
+    mocks.confirm.mockResolvedValue(true);
+    render(<GhostConfirmDialogHost />);
+    const body = 'Authorization link: https://open.feishu.cn/verify?user_code=ABC';
+    await act(async () => request?.({ requestId: 'authorization', ghostId: 'feishu-local-cli',
+      ghostName: 'Feishu Local CLI', body, confirmText: null, cancelText: null, danger: false,
+      contentSelectable: true }));
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    expect(mocks.confirm.mock.calls[0][0]).toMatchObject({ description: body, contentSelectable: true });
+    await waitFor(() => expect(resolveConfirm).toHaveBeenCalledWith('authorization', true));
+  });
+
   // #9825 / 4560074079: a disconnected browser cannot receive the Host's
   // dismissal. Existing dismissal tests miss this. Unit: real dialog hosts,
   // two pending requests (visible/queued), late answers and a fresh connection.

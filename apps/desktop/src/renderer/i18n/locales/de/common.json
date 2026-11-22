@@ -1,4 +1,10 @@
 {
+  "feishuLocalCli": {
+    "setup": {
+      "importTerminal": "Eine vorhandene Feishu CLI-Anmeldung aus dem Terminal für dieses Konto in {{appName}} importieren? Autorisierungsdaten werden nicht im Chat angezeigt.",
+      "login": "Öffnen Sie diesen bestätigten HTTPS-Link auf dem Computer, auf dem Feishu CLI ausgeführt wird, genehmigen Sie die Anfrage und kehren Sie hierher zurück. Sie können den Link auswählen und kopieren: {{url}}"
+    }
+  },
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",

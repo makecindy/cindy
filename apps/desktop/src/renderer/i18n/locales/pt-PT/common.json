@@ -1,4 +1,10 @@
 {
+  "feishuLocalCli": {
+    "setup": {
+      "importTerminal": "Importar um início de sessão existente do Feishu CLI a partir do terminal para {{appName}} nesta conta? As informações de autorização não são apresentadas no chat.",
+      "login": "Abra esta ligação HTTPS verificada no computador onde o Feishu CLI está a ser executado, aprove o pedido e regresse aqui. Pode selecionar e copiar a ligação: {{url}}"
+    }
+  },
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Este local de execução do Pi não suporta fragmentos de instruções de sistema.",

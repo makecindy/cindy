@@ -1,4 +1,10 @@
 {
+  "feishuLocalCli": {
+    "setup": {
+      "importTerminal": "Import an existing terminal Feishu CLI login into {{appName}} for this account? Authorization details are not shown in chat.",
+      "login": "Open this verified HTTPS link on the computer running the Feishu CLI, approve the request, then return here. Select and copy the link: {{url}}"
+    }
+  },
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",

@@ -1717,6 +1717,8 @@ interface ElectronAPI {
         confirmText: string | null;
         cancelText: string | null;
         danger: boolean;
+        /** Optional: trusted Host authorization links can be selected and copied. */
+        contentSelectable?: boolean;
       }) => void,
     ) => () => void;
     /** confirm 槽回包:把用户的点击送回 main 结算挂起的管子请求。 */

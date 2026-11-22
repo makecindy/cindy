@@ -12,6 +12,8 @@ export interface HostConfirmationPayload {
   confirmText: string | null;
   cancelText: string | null;
   danger: boolean;
+  /** Allow selecting the verified authorization URL in the transient dialog. */
+  contentSelectable?: boolean;
 }
 
 export interface HostConfirmations {
@@ -37,8 +39,9 @@ function setupUnavailable(): SetupResult {
 }
 
 /**
- * Node Host uses the existing owner-bound confirmation bridge. The URL is shown
- * only in that transient card; tool results and logs keep a stable reason code.
+ * Node Host uses the existing owner-bound confirmation bridge. Both prompts are
+ * localized; the verified URL is shown only in a selectable transient dialog.
+ * Tool results and logs keep a stable reason code.
  */
 export function createFeishuLocalHostSetupAdapter(options: SetupAdapterOptions) {
   return async (input: FeishuLocalSetupInput): Promise<SetupResult> => {
@@ -57,7 +60,7 @@ export function createFeishuLocalHostSetupAdapter(options: SetupAdapterOptions) 
         throw new Error('OWNER_SCOPE_CHANGED');
       }
     };
-    const confirm = async (body: string): Promise<boolean> => {
+    const confirm = async (body: string, contentSelectable = false): Promise<boolean> => {
       assertCurrent();
       const accepted = await options.confirmations.confirm({
         ghostId: 'feishu-local-cli',
@@ -66,6 +69,7 @@ export function createFeishuLocalHostSetupAdapter(options: SetupAdapterOptions) 
         confirmText: options.t('remoteDesktop.connect'),
         cancelText: null,
         danger: false,
+        ...(contentSelectable ? { contentSelectable: true } : {}),
       });
       assertCurrent();
       return accepted;
@@ -78,7 +82,7 @@ export function createFeishuLocalHostSetupAdapter(options: SetupAdapterOptions) 
       }
       if (auth.state === 'ready' && !auth.reason_code && input.reauthorize !== true) return { ok: true };
       if (auth.reason_code === 'SETUP_REQUIRED') {
-        const accepted = await confirm('Import an existing terminal Feishu CLI login into Cindy for this account? No token is shown in chat.');
+        const accepted = await confirm(options.t('feishuLocalCli.setup.importTerminal'));
         if (!accepted) return setupUnavailable();
         const imported = await options.port.connect({
           mode: 'import-terminal',
@@ -99,7 +103,10 @@ export function createFeishuLocalHostSetupAdapter(options: SetupAdapterOptions) 
         onAuthorizationUrl: async (url) => {
           assertCurrent();
           if (!isValidVerificationUrl(url)) throw new Error('INVALID_VERIFICATION_URL');
-          const accepted = await confirm(`Open this verified HTTPS link on the computer running the Feishu CLI, approve the request, then return here: ${url}`);
+          const accepted = await confirm(
+            options.t('feishuLocalCli.setup.login').replaceAll('{{url}}', url),
+            true,
+          );
           if (!accepted) throw new Error('USER_CANCELLED');
         },
         assertCurrent,

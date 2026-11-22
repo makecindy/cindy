@@ -135,9 +135,23 @@ function hasResidualFormats(values: unknown[][]): boolean {
   }));
 }
 
+const IMAGE_CELL_TOKEN_KEYS = ['image_token', 'file_token', 'token'] as const;
+
+function isImageCellType(value: unknown): boolean {
+  return typeof value === 'string' && /^(?:embed-)?image$/i.test(value);
+}
+
+function isEmbeddedImageCell(cell: unknown, depth = 0): boolean {
+  if (depth > 3 || !cell || typeof cell !== 'object' || Array.isArray(cell)) return false;
+  const record = cell as Record<string, unknown>;
+  const hasToken = IMAGE_CELL_TOKEN_KEYS.some(key =>
+    typeof record[key] === 'string' && (record[key] as string).trim().length > 0);
+  if (hasToken && (isImageCellType(record.type) || isImageCellType(record.kind))) return true;
+  return ['value', 'image', 'embedImage', 'data'].some(key => isEmbeddedImageCell(record[key], depth + 1));
+}
+
 function hasEmbeddedImage(values: unknown[][]): boolean {
-  const text = JSON.stringify(values).toLowerCase();
-  return text.includes('embed-image') || text.includes('file_token') || text.includes('image_token');
+  return values.some(row => row.some(cell => isEmbeddedImageCell(cell)));
 }
 
 function samePayload(actual: ConfirmationPayload | null, expected: ConfirmationPayload): boolean {

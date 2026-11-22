@@ -1,4 +1,10 @@
 {
+  "feishuLocalCli": {
+    "setup": {
+      "importTerminal": "터미널에 저장된 기존 Feishu CLI 로그인을 이 계정의 {{appName}}로 가져오시겠습니까? 인증 정보는 채팅에 표시되지 않습니다.",
+      "login": "Feishu CLI가 실행 중인 컴퓨터에서 검증된 HTTPS 링크를 열고 요청을 승인한 뒤 여기로 돌아오세요. 링크를 선택해 복사할 수 있습니다: {{url}}"
+    }
+  },
   "runtimePlugins": {
     "save": "저장",
     "promptUnsupported": "이 Pi 실행 위치는 시스템 지시 추가를 지원하지 않습니다.",

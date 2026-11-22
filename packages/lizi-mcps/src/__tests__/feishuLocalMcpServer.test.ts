@@ -18,7 +18,7 @@ import type {
 interface FakeState {
   probe: FeishuLocalBinaryProbe;
   auth: FeishuLocalAuthState;
-  verifyImage: boolean;
+  imageReadback: unknown[][];
   verifyClear: boolean;
   verifyFormats: boolean;
   updateChecks: number;
@@ -40,7 +40,7 @@ function makeFakePort(): { port: FeishuLocalHostPort; state: FakeState } {
   const state: FakeState = {
     probe: { installed: true, binary_source: 'fixed-path', version: '1.0.57', version_supported: true },
     auth: { state: 'ready', identity_alias: 'Fixture User', scopes: [...FEISHU_LOCAL_REQUIRED_SCOPES] },
-    verifyImage: true,
+    imageReadback: [[{ type: 'embed-image', file_token: 'fixture-image-token' }]],
     verifyClear: true,
     verifyFormats: true,
     updateChecks: 0,
@@ -65,7 +65,7 @@ function makeFakePort(): { port: FeishuLocalHostPort; state: FakeState } {
         const includeIndex = argv.indexOf('--include');
         const include = includeIndex >= 0 ? argv[includeIndex + 1] ?? '' : '';
         if (range === 'A85:K85' || range === 'A92:K92') return okJson({ values: [['identity']] });
-        if (range === 'I92') return okJson({ values: state.verifyImage ? [[{ type: 'embed-image' }]] : [['text']] });
+        if (range === 'I92') return okJson({ values: state.imageReadback });
         if (range === 'I85') {
           if (include.includes('style')) {
             return okJson({ values: [[{ value: 'kept text', style: state.verifyFormats ? {} : { bold: true } }]] });
@@ -229,7 +229,7 @@ describe('cindy_feishu_local MCP server', () => {
 
   it('returns VERIFY_FAILED when readback does not contain the embedded image', async () => {
     const { port, state } = makeFakePort();
-    state.verifyImage = false;
+    state.imageReadback = [['text']];
     const base = {
       spreadsheet: 'fixture-token',
       sheet: { sheet_id: 'sheet-fixture' },
@@ -245,6 +245,54 @@ describe('cindy_feishu_local MCP server', () => {
       confirmation_token: dryRun.confirmation_token,
     });
     expect(write.reason_code).toBe('VERIFY_FAILED');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 MCP set_cell_image 写后回读只接受结构化图片单元格及有效 token；token 类普通文本返回 VERIFY_FAILED，结构化 image_token / file_token 和嵌套单元格才返回 verified:true。
+  // - Bug／规则依据：PR #11697 P2（JSON 文本子串被当作图片证据）及「写后验证必须依赖结构」不变量。
+  // - 现有覆盖缺口：旧用例只回读 `[['text']]`，未覆盖 `image_token`、`file_token`、`embed-image` 等关键词文本，也未覆盖有效 token 字段与嵌套单元格。
+  // - 最小失败输入：回读 `[['image_token']]`；修复前写入回执为 verified:true。
+  // - tier：unit（MCP 内存传输 + 注入 Host port，无真实 CLI 或飞书写入）。
+  // - 实测耗时：4.61s（`@cindy/mcps` Vitest 单独运行 `src/__tests__/feishuLocalMcpServer.test.ts`，38 条用例）。
+  it.each([
+    ['plain image_token text', [['image_token']]],
+    ['plain file_token text', [['file_token']]],
+    ['plain embed-image text', [['embed-image']]],
+    ['text object with token keyword', [[{ type: 'text', text: 'image_token' }]]],
+  ] as const)('does not verify %s as an embedded image', async (_name, values) => {
+    const { port, state } = makeFakePort();
+    state.imageReadback = values as unknown as unknown[][];
+    const base = {
+      spreadsheet: 'fixture-token', sheet: { sheet_id: 'sheet-fixture' }, cell: 'I92',
+      row_range: 'A92:K92', expected_row_hash: rowHash([['identity']]),
+      image_ref: 'cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png',
+    };
+    const dryRun = await callTool(port, 'set_cell_image', base);
+    const write = await callTool(port, 'set_cell_image', {
+      ...base, dry_run: false, confirmation_token: dryRun.confirmation_token,
+    });
+    expect(write.reason_code).toBe('VERIFY_FAILED');
+    expect(write.verified).toBeUndefined();
+  });
+
+  it.each([
+    ['file_token', [[{ type: 'embed-image', file_token: 'fixture-image-token' }]]],
+    ['image_token', [[{ type: 'image', image_token: 'fixture-image-token' }]]],
+    ['nested value', [[{ value: { type: 'embed-image', image_token: 'fixture-image-token' } }]]],
+  ] as const)('verifies a structured image cell with %s', async (_name, values) => {
+    const { port, state } = makeFakePort();
+    state.imageReadback = values as unknown as unknown[][];
+    const base = {
+      spreadsheet: 'fixture-token', sheet: { sheet_id: 'sheet-fixture' }, cell: 'I92',
+      row_range: 'A92:K92', expected_row_hash: rowHash([['identity']]),
+      image_ref: 'cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png',
+    };
+    const dryRun = await callTool(port, 'set_cell_image', base);
+    const write = await callTool(port, 'set_cell_image', {
+      ...base, dry_run: false, confirmation_token: dryRun.confirmation_token,
+    });
+    expect(write.ok).toBe(true);
+    expect(write.verified).toBe(true);
   });
 
   it('maps clear_cells to +cells-clear with --yes and never writes an empty string', async () => {
@@ -320,7 +368,7 @@ describe('cindy_feishu_local MCP server', () => {
   // - 现有覆盖缺口：只覆盖有界 A92:K92 与明确不覆盖的 A85:K85，未覆盖 `92:92` / `I:K`。
   // - 最小失败输入：row_range=`92:92` 或 `I:K`、目标 `I92`；修复前返回 INVALID_ARGS 且不调用 CLI。
   // - tier：unit（MCP 内存传输 + 纯 A1 解析，无真实进程或网络）。
-  // - 实测耗时：1.34s（`@cindy/mcps` Vitest 单独运行 `src/__tests__/feishuLocalMcpServer.test.ts`）。
+  // - 实测耗时：4.61s（`@cindy/mcps` Vitest 单独运行 `src/__tests__/feishuLocalMcpServer.test.ts`，38 条用例）。
   it.each([
     ['set_cell_image', '92:92', {
       spreadsheet: 'fixture-token', sheet: { sheet_id: 'sheet-fixture' }, cell: 'I92',

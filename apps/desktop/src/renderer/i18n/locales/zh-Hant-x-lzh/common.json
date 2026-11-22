@@ -1,4 +1,10 @@
 {
+  "feishuLocalCli": {
+    "setup": {
+      "importTerminal": "要將終端機中已有的 Feishu CLI 登入匯入 {{appName}} 的此帳號嗎？對話中不會顯示授權資訊。",
+      "login": "在執行 Feishu CLI 的電腦上開啟以下已驗證的 HTTPS 連結並完成授權，然後返回這裡。可選取並複製連結：{{url}}"
+    }
+  },
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之處不支援系統提示詞片段。",

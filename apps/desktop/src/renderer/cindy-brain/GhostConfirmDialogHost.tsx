@@ -34,7 +34,7 @@ export function GhostConfirmDialogHost() {
       if (!payload || typeof payload.requestId !== 'string' || typeof payload.body !== 'string') {
         return;
       }
-      const { requestId, ghostName, iconDataUrl, body, confirmText, cancelText, danger } = payload;
+      const { requestId, ghostName, iconDataUrl, body, confirmText, cancelText, danger, contentSelectable } = payload;
       if (pending.has(requestId)) return;
       const abort = new AbortController(); pending.set(requestId, abort);
       dismiss ??= window.electronAPI.ghosts?.onConfirmDismissed?.(({ requestId }) => pending.get(requestId)?.abort());
@@ -69,6 +69,7 @@ export function GhostConfirmDialogHost() {
             ...(confirmText ? { confirmText } : {}),
             ...(cancelText ? { cancelText } : {}),
             ...(danger ? { confirmVariant: 'destructive' as const } : {}),
+            ...(contentSelectable ? { contentSelectable: true } : {}),
           }, abort.signal);
           confirmed = confirmed && !abort.signal.aborted;
         } finally {

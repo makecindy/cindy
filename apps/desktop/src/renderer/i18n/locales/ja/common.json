@@ -1,4 +1,10 @@
 {
+  "feishuLocalCli": {
+    "setup": {
+      "importTerminal": "端末に保存されている既存の Feishu CLI ログインを、このアカウントの {{appName}} にインポートしますか？認証情報はチャットに表示されません。",
+      "login": "Feishu CLI を実行しているコンピューターで、確認済みの HTTPS リンクを開き、リクエストを承認してから、ここに戻ってください。リンクを選択してコピーできます：{{url}}"
+    }
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",
