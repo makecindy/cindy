@@ -324,9 +324,19 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   });
   await settle();
   expect(barrierSettled).toBe(false);
+  // A re-armed prompt must not drop the older, still-closing panel from the exclusion set:
+  // window numbers are only reused once that helper is gone.
+  remoteInUse = false;
+  await vi.advanceTimersByTimeAsync(2_000);
+  await settle();
+  expect(prompt.watch).toHaveBeenCalledTimes(4);
+  prompt.panels.at(-1)?.(7777);
+  expect(excluded.at(-1)).toContain(4242);
+  expect(excluded.at(-1)).toContain(7777);
   releaseStop?.();
   await settle();
   expect(barrierSettled).toBe(true);
-  // A closed panel's id is dropped once the helper is gone: window numbers get reused.
+  // A closed panel's id is dropped once its helper is gone: window numbers get reused.
   expect(excluded.at(-1)).not.toContain(4242);
+  expect(excluded.at(-1)).toContain(7777);
 });
