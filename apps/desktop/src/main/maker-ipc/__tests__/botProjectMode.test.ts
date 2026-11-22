@@ -269,24 +269,35 @@ describe('ensureBotProjectAutomations', () => {
     } finally { db.close(); }
   });
 
-  // #12080 review P2: the walk is bounded by entries visited, not by changes found, and memory
-  // comes first. Unit, real generated check: a 2,100-file Skill folder still finishes and the
-  // changed memory record is found.
-  it('bounds the walk of a large Skill folder and checks memory first', async () => {
+  // #12080 review P2 (Greptile, Codex): the walk is bounded by entries visited, memory first,
+  // and each folder level before the next, so a large resource folder in an earlier Skill can
+  // neither hold up the check nor hide a later Skill. Unit, real generated check: 2,100 old
+  // files in a-large/data, a new z-new/SKILL.md and a changed memory record.
+  it('bounds the walk of a large Skill folder without hiding later Skills', async () => {
     await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
     const db = new DatabaseSync(database.path);
     db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
       CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);`);
     db.close();
     const firedAt = Date.now();
-    const skill = path.join(workingDir, '.agents', 'skills', 'big', 'data');
-    await fs.mkdir(skill, { recursive: true });
-    await Promise.all(Array.from({ length: 2100 }, (_, i) => fs.writeFile(path.join(skill, `f${i}.txt`), '')));
+    const skills = path.join(workingDir, '.agents', 'skills');
+    const data = path.join(skills, 'a-large', 'data');
+    await fs.mkdir(data, { recursive: true });
+    await Promise.all(Array.from({ length: 2100 }, (_, i) => fs.writeFile(path.join(data, `f${i}.txt`), '')));
+    await fs.mkdir(path.join(skills, 'z-new'), { recursive: true });
+    await fs.writeFile(path.join(skills, 'z-new', 'SKILL.md'), 'New skill');
+    // The large folder is old material, the new Skill came after the last review.
+    const reviewed = firedAt - 1_000;
+    await fs.writeFile(path.join(root, '.memory-review-state-v1.json'), JSON.stringify({ reviewedAt: 0, since: reviewed }));
+    const old = reviewed / 1000 - 60;
+    await Promise.all(Array.from({ length: 2100 }, (_, i) => fs.utimes(path.join(data, `f${i}.txt`), old, old)));
     await fs.mkdir(path.join(workingDir, '.cindy', 'memory'), { recursive: true });
     await fs.writeFile(path.join(workingDir, '.cindy', 'memory', 'coffee.md'), 'Oat milk');
     const log: string[] = [];
     expect(await runMemoryCheck(workingDir, firedAt, { log })).toBe(0);
     expect(log.join('\n')).toContain('.cindy/memory/coffee.md');
+    expect(log.join('\n')).toContain('.agents/skills/z-new/SKILL.md');
+    expect(log.join('\n')).not.toContain('a-large/data');
     expect(log.join('\n')).toContain('Stopped after 2000 entries');
   });
 

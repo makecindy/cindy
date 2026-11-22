@@ -98,30 +98,35 @@ try {
 // reason enough for a review, at most once a week; a teammate with no new material never runs.
 const baseline = Math.max(since, reviewedAt);
 const changed = [];
-// Bounded walk, memory first: a large Skill folder cannot hold up the check.
+// Bounded walk, memory first, each folder level before the next: a Skill with a large resource
+// folder cannot hide a later Skill's SKILL.md from the check.
 const budget = 2000;
 let visited = 0;
 let truncated = false;
 // Memory records are Markdown. The supplied guide, the generated index (MEMORY.md is rewritten
 // whenever memory storage starts, even unchanged), the search index and receipts are not.
 const derived = ['.cindy/memory/README.md', '.cindy/memory/MEMORY.md'];
-function collect(dir, relative, memory) {
-  if (visited >= budget) { truncated = true; return; }
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return;
-    throw error;
-  }
-  for (const entry of entries) {
-    if (++visited > budget) { truncated = true; return; }
-    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-    const full = path.join(dir, entry.name);
-    const name = relative + '/' + entry.name;
-    if (entry.isDirectory()) collect(full, name, memory);
-    else if (entry.isFile() && (!memory || (entry.name.endsWith('.md') && !derived.includes(name)))
-      && fs.statSync(full).mtimeMs > baseline) changed.push(name);
+function collect(root, rootName, memory) {
+  const queue = [[root, rootName]];
+  for (let index = 0; index < queue.length; index++) {
+    if (visited >= budget) { truncated = true; return; }
+    const [dir, relative] = queue[index];
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (++visited > budget) { truncated = true; return; }
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      const full = path.join(dir, entry.name);
+      const name = relative + '/' + entry.name;
+      if (entry.isDirectory()) queue.push([full, name]);
+      else if (entry.isFile() && (!memory || (entry.name.endsWith('.md') && !derived.includes(name)))
+        && fs.statSync(full).mtimeMs > baseline) changed.push(name);
+    }
   }
 }
 collect(path.join(source.workspace, '.cindy', 'memory'), '.cindy/memory', true);
