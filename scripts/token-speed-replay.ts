@@ -404,6 +404,13 @@ export function replay(lines: CaptureLine[], driver?: SpeedDriver): ReplayResult
     }
     const end = lines.at(-1)?.t ?? 0;
     result.final = measure.snapshot(end);
+    // The last request can settle after the last published update: the panel still shows it.
+    const lastReading = result.final?.measurement?.latest;
+    if (lastReading?.kind === 'request' && lastReading.measuredAt !== lastRequestReadingAt) {
+      result.requestReadings += 1;
+      const server = truthByRequest[(result.final?.request?.index ?? 0) - 1];
+      if (server > 0) result.vsServer.push(lastReading.rate / server);
+    }
     if (result.final) history = recordTokenSpeed(history, { startedAt: 1, speed: result.final, now: end });
   } finally {
     Date.now = realNow;

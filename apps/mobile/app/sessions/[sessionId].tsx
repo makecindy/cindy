@@ -13930,7 +13930,10 @@ function ComposerActivityStatus({
     startedAt: samplerStartedAt,
     outputTokens,
     generationDurationMs,
-    generationReliable: generationReliable && visible && !reconnectAttempt && !sideTaskRunning,
+    // The host's own speed measurement stands on its own, and outlives the pill's visibility:
+    // the legacy usage-paired flag only covers the counters (it clears when a Claude turn has
+    // subagent output), and the card keeps the finished turn's reading.
+    generationReliable: (tokenSpeed ? true : generationReliable && visible) && !reconnectAttempt && !sideTaskRunning,
     tokenSpeed,
     streaming,
   });
@@ -13961,13 +13964,17 @@ function ComposerActivityStatus({
   const tokenA11yText = t('session.screen.tokenCountFull', { tokens: tokenCount });
   const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt);
   const showLiveRate = !showElapsedOnly && (tokenSpeed?.measurement || !tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0));
-  const rateValue = formatComposerActivityRateValue(showLiveRate ? rateHistory.latestRate : null);
-  const canShowRateDetails = !showElapsedOnly
-    && generationReliable
-    && outputTokens > 0
-    && Number.isFinite(outputTokens)
-    && Number.isFinite(generationDurationMs)
-    && generationDurationMs > 0;
+  // The pill shows only a live reading; the card keeps the last one.
+  const rateValue = formatComposerActivityRateValue(
+    showLiveRate && rateHistory.latestRateFresh ? rateHistory.latestRate : null,
+  );
+  const canShowRateDetails = !showElapsedOnly && (
+    (tokenSpeed !== undefined && tokenSpeed.tokens > 0)
+    || (generationReliable
+      && outputTokens > 0
+      && Number.isFinite(outputTokens)
+      && Number.isFinite(generationDurationMs)
+      && generationDurationMs > 0));
   // The pill shows the speed itself; the details sheet says which reading it is.
   const rateText = rateValue ? t('session.screen.tokenRate', { rate: rateValue }) : null;
   const showUsageMeta = !showElapsedOnly && (Boolean(rateText) || tokenUsage > 0);
@@ -14038,7 +14045,7 @@ function ComposerActivityStatus({
         totalOutputTokens={tokenSpeed?.totalOutputTokens}
         measuredAverage={tokenSpeed?.measurement?.average}
         generationDurationMs={generationDurationMs}
-        generationReliable={generationReliable && !showElapsedOnly}
+        generationReliable={(tokenSpeed ? true : generationReliable) && !showElapsedOnly}
         label={showUsageMeta ? `${elapsedText} · ${rateText ?? tokenA11yText}` : elapsedText}
       >
         {usageMeta}
